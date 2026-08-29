@@ -10,9 +10,8 @@ Kinemium is a sandbox engine written in Luau (Zune Runtime). It includes a custo
 # Notice
 Kinemium is an independent project not affiliated with, endorsed by, 
 or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
-Also this is a fork of 
 
-Brickadia (thank you zalthen!)
+this is a fork of Brickadia (thank you zalthen!)
 
 # Another notice
 This is the `Canary` repository, and includes unstable changes to the engine, Its advised to install a stable release from the [releases](https://github.com/quadigen/Kinemium-Engine/releases) page.
