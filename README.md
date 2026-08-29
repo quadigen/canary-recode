@@ -1,67 +1,151 @@
-# Blockadia [ DEMO ]
-<a href="https://discord.com/invite/xMPCsx3dNf"><img src="repo/BlockadiaCard.png"/></a>
+<img width="2727" height="978" alt="KinemiumFull" src="https://github.com/user-attachments/assets/1792beb7-d877-453d-ab3f-2d86cd434239" />
 
-The Game Engine built with freedom and ease-of-use in mind <br>
-Build games big and small with Luau, easy to learn and capable <br>
+[<img width="50" height="50" alt="image" src="https://github.com/user-attachments/assets/83c3a863-d290-487f-b073-fed9caa6832f" />
+](https://discord.gg/7byuxfYtAP)
 
-We have a discord server! Feel free to join: https://discord.com/invite/xMPCsx3dNf
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Qquaded/Kinemium-Engine)
+## Introduction
+Kinemium is a sandbox engine written in Luau (Zune Runtime). It includes a custom scripting language called Kilang, with Luau-style syntax and additional features.
 
-## API
+# Notice
+Kinemium is an independent project not affiliated with, endorsed by, 
+or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
+Also this is a fork of Brickadia (thank you zalthen!)
 
-Blockadia has a relatively small API right now but expect additions soon! If you know how to code, you can help out by creating a pull request!
+# Another notice
+This is the `Canary` repository, and includes unstable changes to the engine, Its advised to install a stable release from the [releases](https://github.com/quadigen/Kinemium-Engine/releases) page.
 
-Even with this API you can do a lot of things! Here's a quick overview of the API
-- Services
-	- `Workspace`
-	- `Lighting`
-	- `StarterGui`
-	- `RunService`
-	- `DebugVisualService`
-- Libraries
-	- `task`
-	- `Color3`
-	- `Random`
-	- `Signal`
-	- `UDim` & `UDim2`
-	- `Vector2` & `Vector3`
-- Objects (creatable from a script)
-	- `Part`
-	- `Sound`
-	- `Folder`
-	- `Model`
-	- `ScreenGui`
-	- `Frame`
-	- `TextLabel`
-	- `UICorner`
+# Features
+## Datatypes
+- Axes
+- BoundingBox
+- BrickColor
+- CFrame
+- Color3
+- Color4
+- ColorSequence
+- ColorSequenceKeypoint
+- CustomPhysicalProperties
+- NumberSequence
+- NumberSequenceKeypoint
+- Random
+- Ray
+- Region
+- Spring
+- UDim
+- UDim2
+- Vector2
+- Vector3
+- Enum
+- Faces / NormalId
+- Rect / Region3
+- And a whole lot more..
 
-# How to Use
+## Default Services
+- Debris
+- GuiSelectionService
+- HttpService
+- Lighting
+- LogService
+- Players
+- ReplicatedStorage
+- RunService
+- Selection
+- ServerScriptService
+- ServerStorage
+- StarterGui
+- TweenService
+- UserInputService
+- Workspace
 
-## Documentation
+## Kinemium Custom Services
+*(All custom services start with Kinemium.)*
+- KinemiumFFIService
+- KinemiumFontService
+- KinemiumIconLoader
+- KinemiumModService
+- KinemiumPhysicsService
+- KinemiumRaylib
+- KinemiumShaderService
 
-Documentation has not yet been started, but you can help out with documentation!
+# That's cool.. But how do I use this?
+Fortunately theres a tutorial:
 
-If you want to help with documentation, most methods and libraries are used in `main.luau` with short examples!
+- Clone the repo:
+```git clone --depth 1 https://github.com/Qquaded/Kinemium-Engine.git```
 
-## Building from the Source
+- Get zune *(skip this step if you have it already installed.)*<br>
+https://zune.sh/guides/install
 
-1. Clone repository
-```bash
-git clone https://www.github.com/Zalthen-dev/Blockadia.git
-cd Blockadia
-```
+- Run the engine<br>
+```zune run engine```<br>
+*This tutorial works with both Linux and Windows, MacOS support is coming soon.*
 
-2. Clone dependencies
-```bash
-cd vendor
-git clone https://github.com/raysan5/raylib.git
-git clone https://github.com/luau-lang/luau.git
-```
+# Commands
+Kinemium provides with several flags you can run with ```zune run game```<br>
+- headless (lets you run the engine without graphics)<br>
+- server (lets you run a server version of the engine, this is used for games and such)<br>
+- client (lets you run a client, it removes all the core UI only)<br>
+- kilang (lets you run kilang code in the terminal, you can add this flag with any other flag and it will still work)<br>
+- editor (enables studio UI)
 
-3. Build
-```bash
-cd ..
-cmake -S . -B .
-cmake --build .
-```
+# Multiplayer
+Kinemium provides multiplayer support with the ```server``` and ```client``` flags:
 
-The executable file will be created in the repository directory
+Making a server with an address and port:<br>
+```zune run game --server --address 0.0.0.0 --port 1234 --auth_token your_token```<br>
+
+Connecting a client:<br>
+```zune run game --client --address server_ip --port 1234 --auth_token your_token```<br>
+
+You can also just do --server and --client without any arguments and it will run on localhost.
+
+Running live on localhost:<br>
+```zune run game --server```<br>
+Connect a client:<br>
+```zune run game --client```<br>
+
+# Editor
+Kinemium has a built-in editor GUI that lets you playtest, script, build, and edit objects.
+
+Enabling Editor mode:<br>
+```zune run game --editor```<br>
+Running server with editor mode<br>
+```zune run game --server --editor```<br>
+
+# Examples
+example command with a flag:<br>
+```zune run game --client```<br>
+```zune run game --client --kilang```<br>
+```zune run game --server --kilang```<br>
+```zune run game --headless```<br>
+
+# Preview
+<img width="991" height="800" alt="image" src="https://github.com/user-attachments/assets/7e29dc74-0518-465a-a502-ea6ae0972bc3" />
+<img width="1391" height="944" alt="image" src="https://github.com/user-attachments/assets/419b7324-5586-467b-a8f5-774217e87ed7" />
+
+# How do I add scripts?
+Once you clone the github repo, you will find a folder called ```sandboxed``` inside the engine *(src)*<br>
+There are a set of predefined scripts in there as examples, but you can change any of them.
+
+# Can I make my games have modding support?
+Yes! there is a modding service called KinemiumModService (said up there)<br>
+This lets you add mods to your game, and you can set the environment of your said mods!
+
+# How do I spell Kinemium?
+Ki-nem-yum!!
+
+# This project uses
+- SDL3
+- SDL_Image
+- Google Filament
+- Google Skia
+- Manifold
+- Box2D
+- Jolt Physics
+- Luau
+- and most importantly.. Zune Runtime
+kv1.10.7
+
+# Do you like cats?
+<img width="444" height="200" alt="Silly Cat.... Hello.... Random Person...." src="https://github.com/user-attachments/assets/21672df2-d59e-4a6d-aee1-3b89c9263627" />
