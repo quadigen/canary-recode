@@ -1,0 +1,32 @@
+material {
+    name : "kine_glass",
+    shadingModel : lit,
+    blending : transparent,
+    // Cubemap refraction only bends the distant environment. Screen-space
+    // refraction also warps opaque scene geometry behind the glass.
+    refractionMode : screenspace,
+    refractionType : solid,
+    parameters : [
+        { type : float3, name : baseColor },
+        { type : float,  name : roughness },
+        { type : float,  name : ior },
+        { type : float,  name : thickness },
+        { type : float,  name : transmission },
+        { type : float3, name : absorption }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor.rgb = materialParams.baseColor;
+        material.roughness     = materialParams.roughness;
+        material.ior           = materialParams.ior;
+        material.thickness     = materialParams.thickness;
+        // BasePart.Transparency is passed as transmission. Use the same value
+        // for the blend opacity so Glass has no hidden opacity of its own.
+        material.transmission  = materialParams.transmission;
+        material.absorption    = materialParams.absorption;
+        material.baseColor.a   = 1.0 - materialParams.transmission;
+    }
+}

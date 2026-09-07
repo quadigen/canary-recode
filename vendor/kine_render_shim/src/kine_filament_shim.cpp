@@ -1,0 +1,6037 @@
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include "kine_filament_shim.h"
+
+#include "kine_default_package.h"
+
+#ifndef KINE_WITH_ASSIMP
+#define KINE_WITH_ASSIMP 0
+#endif
+#ifndef KINE_FILAMENT_USE_VULKAN
+#define KINE_FILAMENT_USE_VULKAN 0
+#endif
+#ifndef KINE_FILAMENT_ENABLE_VULKAN_READBACK
+#define KINE_FILAMENT_ENABLE_VULKAN_READBACK 0
+#endif
+
+#include <filament/Engine.h>
+#include <filament/Renderer.h>
+#include <filament/Scene.h>
+#include <filament/View.h>
+#include <filament/Camera.h>
+#include <filament/SwapChain.h>
+#include <filament/Texture.h>
+#include <filament/RenderTarget.h>
+#include <filament/Viewport.h>
+#include <filament/Material.h>
+#include <filament/MaterialInstance.h>
+#include <filament/RenderableManager.h>
+#include <filament/TransformManager.h>
+#include <filament/LightManager.h>
+#include <filament/ColorGrading.h>
+#include <filament/Options.h>
+#include <filament/VertexBuffer.h>
+#include <filament/IndexBuffer.h>
+#include <filament/InstanceBuffer.h>
+#include <filament/TextureSampler.h>
+#include <filament/Color.h>
+#include <filament/Skybox.h>
+#include <filament/IndirectLight.h>
+#include <filamat/MaterialBuilder.h>
+#include <filamat/Package.h>
+#include <filament-matp/Config.h>
+#include <filament-matp/MaterialParser.h>
+#include <backend/DriverEnums.h>
+#include <backend/Platform.h>
+#if KINE_FILAMENT_USE_VULKAN
+#include <backend/platforms/VulkanPlatform.h>
+#include "kine_vulkan_compositor.h"
+#endif
+#include <SDL3/SDL_properties.h>
+#include <SDL3/SDL_video.h>
+#include <SDL3/SDL_vulkan.h>
+#include <utils/EntityManager.h>
+#include <utils/Entity.h>
+#include <math/vec2.h>
+#include <math/vec3.h>
+#include <math/vec4.h>
+#include <math/mat4.h>
+#include "kine_neon_package.h"
+#include "kine_glass_package.h"
+#include "kine_water_package.h"
+#include "kine_decal_package.h"
+#include "kine_outline_package.h"
+#include "kine_gizmo_package.h"
+#include "kine_particle_package.h"
+#include "kine_terrain_package.h"
+
+#include <geometry/SurfaceOrientation.h>
+using namespace filament::geometry;
+
+#if KINE_FILAMENT_USE_VULKAN
+struct VkInstance_T;
+struct VkPhysicalDevice_T;
+struct VkDevice_T;
+struct VkQueue_T;
+#endif
+
+#if KINE_WITH_ASSIMP
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+#endif
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+class KineRuntimeMaterialConfig final : public matp::Config {
+public:
+    KineRuntimeMaterialConfig()
+    {
+        mPlatform = Platform::DESKTOP;
+#if KINE_FILAMENT_USE_VULKAN
+        mTargetApi = TargetApi::VULKAN;
+#else
+        mTargetApi = TargetApi::OPENGL;
+#endif
+        mOptimizationLevel = Optimization::PERFORMANCE;
+        mFeatureLevel = filament::backend::FeatureLevel::FEATURE_LEVEL_1;
+        mIncludeEssl1 = false;
+        mInsertLineDirectives = false;
+        mInsertLineDirectiveChecks = false;
+    }
+
+    Output* getOutput() const noexcept override { return nullptr; }
+    Input* getInput() const noexcept override { return nullptr; }
+    std::string toString() const noexcept override { return "Kinemium runtime material"; }
+    std::string toPIISafeString() const noexcept override { return toString(); }
+};
+
+#if !KINE_FILAMENT_USE_VULKAN
+#if defined(_WIN32)
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+    #include <GL/gl.h>
+    static void* kine_get_current_gl_context() { return (void*)wglGetCurrentContext(); }
+#elif defined(__APPLE__)
+    // Apple's OpenGL headers are deprecated as of 10.14+ but still ship and work;
+    // silence the barrage of warnings rather than fight the toolchain.
+    #define GL_SILENCE_DEPRECATION
+    #include <OpenGL/OpenGL.h>
+    #include <OpenGL/gl.h>
+    static void* kine_get_current_gl_context() { return (void*)CGLGetCurrentContext(); }
+#else
+    #include <GL/glx.h>
+    #include <GL/gl.h>
+    static void* kine_get_current_gl_context() { return (void*)glXGetCurrentContext(); }
+#endif
+
+// MSVC's bundled GL/gl.h only declares GL 1.1. These are core since GL 1.2/1.3
+// but the constant values are part of the stable GL spec, safe to hardcode.
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+#ifndef GL_TEXTURE0
+#define GL_TEXTURE0 0x84C0
+#endif
+
+// GL_RGBA / GL_UNSIGNED_BYTE are in GL 1.1 on all platforms.
+// glReadPixels is also GL 1.0, but on Windows MSVC's gl.h only has the
+// prototype if _WIN32 is defined and we include it correctly -- which we do
+// above.  No extra declaration needed.
+// glBindFramebuffer / GL_FRAMEBUFFER are OpenGL 3.0 core.
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#endif
+#ifndef GL_COLOR_ATTACHMENT0
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#endif
+
+// APIENTRY is only ever defined for us by <windows.h>. On Linux/macOS the GL
+// calling convention is just the platform default, so make it a no-op there
+// instead of hardcoding a Windows-only calling convention into these typedefs.
+#ifndef APIENTRY
+#define APIENTRY
+#endif
+
+typedef void    (APIENTRY* PFNGLBINDFRAMEBUFFERPROC)(GLenum, GLuint);
+typedef void    (APIENTRY* PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC)(GLenum, GLenum, GLenum, GLint*);
+typedef void    (APIENTRY* PFNGLGENFRAMEBUFFERSPROC)(GLsizei, GLuint*);
+typedef void    (APIENTRY* PFNGLDELETEFRAMEBUFFERSPROC)(GLsizei, const GLuint*);
+typedef void    (APIENTRY* PFNGLFRAMEBUFFERTEXTURE2DPROC)(GLenum, GLenum, GLenum, GLuint, GLint);
+
+#define GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME 0x8CD1
+
+static PFNGLBINDFRAMEBUFFERPROC          kine_glBindFramebuffer    = nullptr;
+static PFNGLGENFRAMEBUFFERSPROC          kine_glGenFramebuffers    = nullptr;
+static PFNGLDELETEFRAMEBUFFERSPROC       kine_glDeleteFramebuffers = nullptr;
+static PFNGLFRAMEBUFFERTEXTURE2DPROC     kine_glFramebufferTexture2D = nullptr;
+
+typedef void (APIENTRY* PFNGLBLITFRAMEBUFFERPROC)(GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLint,GLbitfield,GLenum);
+static PFNGLBLITFRAMEBUFFERPROC kine_glBlitFramebuffer = nullptr;
+
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#endif
+#ifndef GL_DRAW_FRAMEBUFFER
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#endif
+#ifndef GL_COLOR_BUFFER_BIT
+#define GL_COLOR_BUFFER_BIT 0x4000
+#endif
+
+static void kine_init_gl_ext() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+#if defined(_WIN32)
+    kine_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)wglGetProcAddress("glBlitFramebuffer");
+    kine_glBindFramebuffer     = (PFNGLBINDFRAMEBUFFERPROC)wglGetProcAddress("glBindFramebuffer");
+    kine_glGenFramebuffers     = (PFNGLGENFRAMEBUFFERSPROC)wglGetProcAddress("glGenFramebuffers");
+    kine_glDeleteFramebuffers  = (PFNGLDELETEFRAMEBUFFERSPROC)wglGetProcAddress("glDeleteFramebuffers");
+    kine_glFramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)wglGetProcAddress("glFramebufferTexture2D");
+#elif defined(__APPLE__)
+    kine_glBlitFramebuffer = &glBlitFramebuffer;
+    // Apple's OpenGL framework has always linked these directly (core since
+    // GL 3.0, and macOS's GL implementation tops out at 4.1 core) -- no
+    // runtime lookup needed or even possible via a "wgl/glX"-style API.
+    kine_glBindFramebuffer      = &glBindFramebuffer;
+    kine_glGenFramebuffers      = &glGenFramebuffers;
+    kine_glDeleteFramebuffers   = &glDeleteFramebuffers;
+    kine_glFramebufferTexture2D = &glFramebufferTexture2D;
+#else
+    kine_glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)glXGetProcAddress((const GLubyte*)"glBlitFramebuffer");
+    kine_glBindFramebuffer      = (PFNGLBINDFRAMEBUFFERPROC)glXGetProcAddress((const GLubyte*)"glBindFramebuffer");
+    kine_glGenFramebuffers      = (PFNGLGENFRAMEBUFFERSPROC)glXGetProcAddress((const GLubyte*)"glGenFramebuffers");
+    kine_glDeleteFramebuffers   = (PFNGLDELETEFRAMEBUFFERSPROC)glXGetProcAddress((const GLubyte*)"glDeleteFramebuffers");
+    kine_glFramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)glXGetProcAddress((const GLubyte*)"glFramebufferTexture2D");
+#endif
+}
+#endif
+
+using namespace filament;
+using namespace utils;
+
+// ---------------------------------------------------------------------------
+// Minimal embedded lit material (unlit flat color + optional texture).
+// Built with: matc -a opengl -p mobile -o default_lit.filamat default_lit.mat
+// We embed it as a raw byte array generated from the uberarchive shaders.
+// For now we use a very simple unlit material that takes baseColor + texture.
+// ---------------------------------------------------------------------------
+
+// Material data provided by kine_default_package.h
+// ---------------------------------------------------------------------------
+// Vertex layout for procedural meshes: position (float3) + normal (float3) + uv (float2)
+// ---------------------------------------------------------------------------
+struct KineVertex {
+    float px, py, pz;
+    float nx, ny, nz;
+    float u,  v;
+};
+
+struct vector3 { float x, y, z; };
+
+struct KineTerrainWeights {
+    float values[8];
+};
+
+struct KineSkinVertex {
+    uint8_t joints[4] = {0, 0, 0, 0};
+    float weights[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+};
+
+struct KineQuat {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float w = 1.0f;
+};
+
+struct KineVecKey {
+    float time = 0.0f;
+    math::float3 value{};
+};
+
+struct KineQuatKey {
+    float time = 0.0f;
+    KineQuat value{};
+};
+
+struct KineBone {
+    std::string name;
+    int parent = -1;
+    math::float3 bindTranslation{};
+    KineQuat bindRotation{};
+    math::float3 bindScale{1.0f, 1.0f, 1.0f};
+    math::mat4f bindLocal{};
+    math::mat4f inverseBind{};
+};
+
+struct KineAnimationChannel {
+    int bone = -1;
+    std::vector<KineVecKey> translations;
+    std::vector<KineQuatKey> rotations;
+    std::vector<KineVecKey> scales;
+};
+
+struct KineAnimation {
+    std::string name;
+    float duration = 0.0f;
+    std::vector<KineAnimationChannel> channels;
+};
+
+struct KineMesh {
+    VertexBuffer* vb       = nullptr;
+    IndexBuffer*  ib       = nullptr;
+    uint32_t      indexCount = 0;
+    std::vector<KineVertex>  vertices;
+    std::vector<KineTerrainWeights> terrainWeights;
+    std::vector<KineSkinVertex> skinVertices;
+    std::vector<uint16_t>    indices;
+    std::vector<KineBone> bones;
+    std::vector<math::mat4f> skinMatrices;
+    std::vector<KineAnimation> animations;
+    Box localBounds;
+};
+
+struct KineCpuMeshData {
+    std::vector<math::float3> positions;
+    std::vector<uint32_t> indices;
+};
+
+struct KineTexHandle {
+    Texture* tex         = nullptr;
+    Texture* normalTex   = nullptr;
+    Texture* ormTex      = nullptr;
+    Texture* heightTex   = nullptr;
+    float    heightScale = 0.0f;
+    Texture* terrainLayers[6] = {};
+    bool     ownsTextures = true;
+};
+
+// ---------------------------------------------------------------------------
+// Automatic instanced batching.
+//
+// Kine_Filament_DrawMeshEx no longer builds a Filament Entity per call. It
+// just records the world transform under a key describing "everything about
+// this draw that isn't the transform" (mesh + material kind + color/params +
+// shadow/culling flags). Calls that share a key are, by definition, the same
+// mesh drawn with the same material settings, so they can legally share one
+// MaterialInstance and be issued as a single GPU-instanced draw call.
+//
+// kine_update_batches() turns each accumulated batch into one or more
+// RenderableManager entities using InstanceBuffers. Stable batches retain
+// their entities, materials, and buffers across frames; animation only
+// uploads transforms and updates bounds. Batches bigger than
+// Engine::getMaxAutomaticInstances() are split into multiple draw calls.
+// ---------------------------------------------------------------------------
+
+struct KineBatchKey {
+    KineMesh* mesh          = nullptr;
+    KineFilamentShader* shader = nullptr;
+    uint64_t  streamId      = 0;
+    int       materialKind  = 0;
+    float     r = 0, g = 0, b = 0;
+    float     param1 = 0, param2 = 0, param3 = 0;
+    float     transmission  = 0;
+    float     particleUvOffsetY = 0;
+    bool      castShadow    = false;
+    bool      receiveShadow = false;
+    bool      culling       = true;
+
+    KineTexHandle* texture = nullptr;
+
+    bool operator==(const KineBatchKey& o) const noexcept
+    {
+        return mesh == o.mesh && shader == o.shader && streamId == o.streamId && materialKind == o.materialKind &&
+               r == o.r && g == o.g && b == o.b &&
+               param1 == o.param1 && param2 == o.param2 && param3 == o.param3 &&
+               transmission == o.transmission && particleUvOffsetY == o.particleUvOffsetY &&
+               castShadow == o.castShadow && receiveShadow == o.receiveShadow &&
+               culling == o.culling && texture == o.texture;
+    }
+};
+
+struct KineBatchKeyHash {
+    size_t operator()(const KineBatchKey& k) const noexcept
+    {
+        size_t h = std::hash<void*>()(k.mesh);
+        auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
+        mix(std::hash<void*>()(k.shader));
+        mix(std::hash<uint64_t>()(k.streamId));
+        mix(std::hash<int>()(k.materialKind));
+        mix(std::hash<float>()(k.r));
+        mix(std::hash<float>()(k.g));
+        mix(std::hash<float>()(k.b));
+        mix(std::hash<float>()(k.param1));
+        mix(std::hash<float>()(k.param2));
+        mix(std::hash<float>()(k.param3));
+        mix(std::hash<float>()(k.transmission));
+        mix(std::hash<float>()(k.particleUvOffsetY));
+        mix(std::hash<bool>()(k.castShadow));
+        mix(std::hash<bool>()(k.receiveShadow));
+        mix(std::hash<bool>()(k.culling));
+        mix(std::hash<void*>()(k.texture));
+        return h;
+    }
+};
+
+struct KinePendingBatch {
+    std::vector<math::mat4f> transforms;
+    uint64_t lastQueuedFrame = 0;
+    uint64_t transformHash = 1469598103934665603ULL;
+};
+
+struct KineBuiltBatch {
+    Entity            entity;
+    InstanceBuffer*   instanceBuffer = nullptr;
+    size_t             instanceCount = 0;
+};
+
+struct KinePersistentBatch {
+    MaterialInstance* matInst = nullptr;
+    std::vector<KineBuiltBatch> chunks;
+    uint64_t lastUsedFrame = 0;
+    uint64_t transformHash = 0;
+};
+
+struct KineFilamentInstanceBatch {
+    KineFilamentContext* ctx = nullptr;
+    KineBatchKey key;
+    MaterialInstance* matInst = nullptr;
+    std::vector<math::mat4f> transforms;
+    std::vector<KineBuiltBatch> chunks;
+};
+
+struct KineRetainedListState {
+    uint64_t version = 0;
+    bool initialized = false;
+    std::vector<KineBatchKey> keys;
+};
+
+struct KineDecalResource {
+    Entity entity;
+    MaterialInstance* material = nullptr;
+    KineMesh* mesh = nullptr;
+};
+
+struct KineFilamentShader {
+    KineFilamentContext* ctx = nullptr;
+    Material* material = nullptr;
+    std::unordered_map<std::string, std::vector<float>> uniforms;
+};
+
+struct KineFilamentContext {
+    Engine*          engine       = nullptr;
+    SwapChain*       swapChain    = nullptr;
+    Renderer*        renderer     = nullptr;
+    Scene*           scene        = nullptr;
+    View*            view         = nullptr;
+    Camera*          camera       = nullptr;
+    ColorGrading*    colorGrading = nullptr;
+    Entity           cameraEntity;
+    math::double3    cameraEye{0,0,0};
+    math::double3    cameraTarget{0,0,-1};
+    math::double3    cameraUp{0,1,0};
+    Texture*         colorTarget      = nullptr;
+    Texture*         depthTarget      = nullptr;
+    RenderTarget*    renderTarget     = nullptr;
+    unsigned int     colorTextureId   = 0;
+    unsigned int     readFboId        = 0;
+    void*            nativeWindow     = nullptr;
+    bool             renderToSwapChain = false;
+    bool             useFilamentOwnedCompositor = false;
+    bool             loggedFirstFrame = false;
+#if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
+    bool             readbackReady = false;
+    bool             readbackPending = false;
+#endif
+    int              viewportX = 0;
+    int              viewportY = 0;
+    int              viewportWidth = 0;
+    int              viewportHeight = 0;
+    int              width  = 0;
+    int              height = 0;
+    Texture* whiteTex = nullptr;
+
+    Material*        defaultMaterial = nullptr;
+    Entity           sunLight;
+
+    Material* neonMaterial  = nullptr;
+    Material* glassMaterial = nullptr;
+    Material* waterMaterial = nullptr;
+    Material* decalMaterial = nullptr;
+    Material* outlineMaterial = nullptr;
+    Material* gizmoMaterial = nullptr;
+    Material* particleMaterial = nullptr;
+    Material* terrainMaterial = nullptr;
+	KineFilamentShader* globalShader = nullptr;
+	KineFilamentShader* postProcessShader = nullptr;
+    std::unordered_set<KineFilamentShader*> runtimeShaders;
+    std::unordered_set<KineFilamentInstanceBatch*> instanceBatches;
+    KineMesh* particleQuadMesh = nullptr;
+    KineMesh* postProcessQuadMesh = nullptr;
+    Texture* postSceneColor = nullptr;
+    Texture* postSceneDepth = nullptr;
+    RenderTarget* postSceneTarget = nullptr;
+    Scene* postScene = nullptr;
+    View* postView = nullptr;
+    Camera* postCamera = nullptr;
+    Entity postCameraEntity;
+    Entity postQuadEntity;
+    MaterialInstance* postMaterialInstance = nullptr;
+    float     time = 0.0f;   // accumulate once per frame for animation
+
+    // Host GL context, captured at Create() time so we can hand control
+    // back after we've made Filament's own shared context current.
+    //   Windows : hostCtx = HGLRC,          hostDC = HDC
+    //   macOS   : hostCtx = CGLContextObj   (no separate "DC" concept)
+    //   Linux   : hostCtx = GLXContext,     hostDisplay = Display*,
+    //             hostDrawable = GLXDrawable
+    void*         hostCtx      = nullptr;
+    void*         hostDC       = nullptr;
+    void*         hostDisplay  = nullptr;
+    unsigned long hostDrawable = 0;
+
+#if KINE_FILAMENT_USE_VULKAN
+    std::unique_ptr<backend::Platform> vulkanPlatform;
+    backend::VulkanPlatform::VulkanSharedContext vulkanSharedContext;
+    void* vulkanCompositor = nullptr;
+#endif
+
+    Skybox*        skybox        = nullptr;
+    Texture*       skyTexture    = nullptr;
+    IndirectLight* indirectLight = nullptr;
+    void* filamentCtx = nullptr;
+    math::float4 skyColor = {0.53f, 0.81f, 0.92f, 1.0f};
+
+    // Batch keys and transform storage survive across frames. Stable scenes
+    // therefore update InstanceBuffers instead of rebuilding GPU resources.
+    std::unordered_map<KineBatchKey, KinePendingBatch, KineBatchKeyHash> pendingBatches;
+    std::unordered_map<KineBatchKey, KinePersistentBatch, KineBatchKeyHash> builtBatches;
+    std::unordered_map<uint64_t, KineRetainedListState> retainedLists;
+    uint64_t batchFrame = 1;
+    std::vector<KineDecalResource> decals;
+    std::vector<Entity> lights;
+#if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
+    std::vector<unsigned char> readbackPixels;
+#endif
+};
+
+#if KINE_FILAMENT_USE_VULKAN
+struct KineFilamentCompositorSwapChain : backend::Platform::SwapChain {};
+
+using KineFilamentVulkanPlatformBase = backend::VulkanPlatform;
+
+class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlatformBase {
+public:
+    KineFilamentCompositorVulkanPlatform(void* sdlWindow, int width, int height)
+        : mSdlWindow(sdlWindow),
+          mWidth(width),
+          mHeight(height) {}
+
+    ~KineFilamentCompositorVulkanPlatform() override
+    {
+        this->destroyCompositor();
+    }
+
+    KineVulkanCompositor* compositor() const noexcept
+    {
+        return mCompositor;
+    }
+
+    void setExtent(int width, int height) noexcept
+    {
+        mWidth = width;
+        mHeight = height;
+    }
+
+    void destroyCompositor() noexcept
+    {
+        if (mCompositor) {
+            Kine_VulkanCompositor_Destroy(mCompositor);
+            mCompositor = nullptr;
+        }
+    }
+
+    Customization getCustomization() const noexcept override
+    {
+        Customization customization{};
+        customization.transitionSwapChainImageLayoutForPresent = false;
+        return customization;
+    }
+
+    SwapChainBundle getSwapChainBundle(SwapChainPtr handle) override
+    {
+        (void)handle;
+        SwapChainBundle bundle{};
+        if (!mCompositor) {
+            return bundle;
+        }
+
+        KineVulkanCompositorInfo info{};
+        if (!Kine_VulkanCompositor_GetInfo(mCompositor, &info)) {
+            return bundle;
+        }
+
+        uint32_t count = Kine_VulkanCompositor_GetSwapchainImages(mCompositor, nullptr, 0);
+        std::vector<void*> images(count);
+        if (count > 0) {
+            Kine_VulkanCompositor_GetSwapchainImages(mCompositor, images.data(), count);
+        }
+
+        bundle.colors = utils::FixedCapacityVector<VkImage>::with_capacity(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            bundle.colors.push_back(reinterpret_cast<VkImage>(images[i]));
+        }
+
+        void* depthImage = nullptr;
+        uint32_t depthFormat = 0;
+        if (Kine_VulkanCompositor_GetDepthAttachment(mCompositor, &depthImage, &depthFormat)) {
+            bundle.depth = reinterpret_cast<VkImage>(depthImage);
+            bundle.depthFormat = static_cast<VkFormat>(depthFormat);
+        }
+        bundle.colorFormat = static_cast<VkFormat>(info.swapchainFormat);
+        bundle.extent = { info.width, info.height };
+        bundle.layerCount = 1;
+        bundle.isProtected = false;
+        if (!mLoggedBundle) {
+            fprintf(stderr,
+                "[Kine] Filament compositor bundle: colors=%u colorFormat=%u depth=%p depthFormat=%u extent=%ux%u\n",
+                count,
+                static_cast<uint32_t>(bundle.colorFormat),
+                static_cast<void*>(bundle.depth),
+                static_cast<uint32_t>(bundle.depthFormat),
+                bundle.extent.width,
+                bundle.extent.height);
+            mLoggedBundle = true;
+        }
+        return bundle;
+    }
+
+    VkResult acquire(SwapChainPtr handle, ImageSyncData* outImageSyncData) override
+    {
+        (void)handle;
+        if (!outImageSyncData || !mCompositor) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+
+        void* imageReadySemaphore = nullptr;
+        uint32_t imageIndex = ImageSyncData::INVALID_IMAGE_INDEX;
+        VkResult result = static_cast<VkResult>(Kine_VulkanCompositor_FilamentAcquire(
+            mCompositor,
+            &imageIndex,
+            &imageReadySemaphore));
+        if (result == VK_SUCCESS) {
+            outImageSyncData->imageIndex = imageIndex;
+            outImageSyncData->imageReadySemaphore = reinterpret_cast<VkSemaphore>(imageReadySemaphore);
+            if (!mLoggedAcquire) {
+                fprintf(stderr,
+                    "[Kine] Filament compositor acquire: image=%u readySemaphore=%p\n",
+                    imageIndex,
+                    imageReadySemaphore);
+                mLoggedAcquire = true;
+            }
+        }
+        return result;
+    }
+
+    VkResult present(SwapChainPtr handle, uint32_t index, VkSemaphore finishedDrawing) override
+    {
+        (void)handle;
+        if (!mCompositor) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if (!mLoggedPresent) {
+            fprintf(stderr,
+                "[Kine] Filament compositor present hook: image=%u finishedSemaphore=%p\n",
+                index,
+                static_cast<void*>(finishedDrawing));
+            mLoggedPresent = true;
+        }
+        return static_cast<VkResult>(Kine_VulkanCompositor_FilamentPresent(
+            mCompositor,
+            index,
+            reinterpret_cast<void*>(finishedDrawing)));
+    }
+
+    bool hasResized(SwapChainPtr handle) override
+    {
+        (void)handle;
+        return false;
+    }
+
+    bool isProtected(SwapChainPtr handle) override
+    {
+        (void)handle;
+        return false;
+    }
+
+    VkResult recreate(SwapChainPtr handle) override
+    {
+        (void)handle;
+        return VK_SUCCESS;
+    }
+
+    SwapChainPtr createSwapChain(void* nativeWindow, uint64_t flags = 0,
+            VkExtent2D extent = {0, 0}) override
+    {
+        (void)nativeWindow;
+        (void)flags;
+        if (extent.width > 0 && extent.height > 0) {
+            mWidth = static_cast<int>(extent.width);
+            mHeight = static_cast<int>(extent.height);
+        }
+        if (!mCompositor && mSdlWindow && mWidth > 0 && mHeight > 0) {
+            auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+                SDL_Vulkan_GetVkGetInstanceProcAddr());
+            PFN_vkGetDeviceProcAddr getDeviceProcAddr = nullptr;
+            if (getInstanceProcAddr && this->getInstance()) {
+                getDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
+                    getInstanceProcAddr(this->getInstance(), "vkGetDeviceProcAddr"));
+            }
+
+            KineVulkanCompositorBackend backend{};
+            backend.instance = this->getInstance();
+            backend.physicalDevice = this->getPhysicalDevice();
+            backend.device = this->getDevice();
+            backend.queue = this->getGraphicsQueue();
+            backend.graphicsQueueFamilyIndex = this->getGraphicsQueueFamilyIndex();
+            backend.maxApiVersion = VK_API_VERSION_1_1;
+            backend.getInstanceProcAddr = reinterpret_cast<void*>(getInstanceProcAddr);
+            backend.getDeviceProcAddr = reinterpret_cast<void*>(getDeviceProcAddr);
+
+            fprintf(stderr,
+                "[Kine] creating compositor from Filament Vulkan device queueFamily=%u queueIndex=%u size=%dx%d\n",
+                this->getGraphicsQueueFamilyIndex(),
+                this->getGraphicsQueueIndex(),
+                mWidth,
+                mHeight);
+            mCompositor = Kine_VulkanCompositor_CreateForSDLWindowWithBackend(
+                mSdlWindow,
+                mWidth,
+                mHeight,
+                &backend);
+            if (!Kine_VulkanCompositor_IsReady(mCompositor)) {
+                const char* error = Kine_VulkanCompositor_GetLastError(mCompositor);
+                fprintf(stderr,
+                    "[Kine] compositor-from-Filament creation failed: %s\n",
+                    error && error[0] ? error : "unknown error");
+                Kine_VulkanCompositor_Destroy(mCompositor);
+                mCompositor = nullptr;
+                return nullptr;
+            }
+        } else if (mCompositor &&
+                   !Kine_VulkanCompositor_Resize(mCompositor, mWidth, mHeight)) {
+            const char* error = Kine_VulkanCompositor_GetLastError(mCompositor);
+            fprintf(stderr,
+                "[Kine] compositor resize failed: %s\n",
+                error && error[0] ? error : "unknown error");
+            return nullptr;
+        }
+        return new KineFilamentCompositorSwapChain();
+    }
+
+    void destroy(SwapChainPtr handle) override
+    {
+        delete static_cast<KineFilamentCompositorSwapChain*>(handle);
+    }
+
+protected:
+    ExtensionSet getSwapchainInstanceExtensions() const override
+    {
+        ExtensionSet extensions;
+        uint32_t count = 0;
+        char const* const* required = SDL_Vulkan_GetInstanceExtensions(&count);
+        if (required) {
+            for (uint32_t i = 0; i < count; ++i) {
+                if (required[i]) {
+                    extensions.emplace(utils::CString(required[i]));
+                }
+            }
+        }
+#if defined(__APPLE__)
+        extensions.emplace(utils::CString("VK_KHR_portability_enumeration"));
+#endif
+        return extensions;
+    }
+
+    SurfaceBundle createVkSurfaceKHR(void* nativeWindow, VkInstance instance,
+            uint64_t flags) const noexcept override
+    {
+        (void)nativeWindow;
+        (void)instance;
+        (void)flags;
+        return { VK_NULL_HANDLE, {0, 0} };
+    }
+
+    VkInstance createVkInstance(VkInstanceCreateInfo const& createInfo) noexcept override
+    {
+        std::vector<const char*> extensions;
+        if (createInfo.enabledExtensionCount > 0 && createInfo.ppEnabledExtensionNames) {
+            extensions.assign(
+                createInfo.ppEnabledExtensionNames,
+                createInfo.ppEnabledExtensionNames + createInfo.enabledExtensionCount);
+        }
+#if defined(__APPLE__)
+        if (std::none_of(extensions.begin(), extensions.end(), [](const char* extension) {
+                return extension && std::strcmp(extension, "VK_KHR_portability_enumeration") == 0;
+            })) {
+            extensions.push_back("VK_KHR_portability_enumeration");
+        }
+#endif
+
+        VkInstanceCreateInfo compositorCreateInfo = createInfo;
+        compositorCreateInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        compositorCreateInfo.ppEnabledExtensionNames = extensions.data();
+#if defined(__APPLE__) && defined(VK_KHR_portability_enumeration)
+        compositorCreateInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
+        fprintf(stderr,
+            "[Kine] Filament Vulkan creating instance with %u extensions\n",
+            compositorCreateInfo.enabledExtensionCount);
+        VkInstance instance = KineFilamentVulkanPlatformBase::createVkInstance(compositorCreateInfo);
+        fprintf(stderr, "[Kine] Filament Vulkan instance created: %p\n",
+            static_cast<void*>(instance));
+        return instance;
+    }
+
+    VkDevice createVkDevice(VkDeviceCreateInfo const& createInfo) noexcept override
+    {
+        std::vector<const char*> extensions;
+        if (createInfo.enabledExtensionCount > 0 && createInfo.ppEnabledExtensionNames) {
+            extensions.assign(
+                createInfo.ppEnabledExtensionNames,
+                createInfo.ppEnabledExtensionNames + createInfo.enabledExtensionCount);
+        }
+        const bool hasSwapchain = std::any_of(
+            extensions.begin(),
+            extensions.end(),
+            [](const char* extension) {
+                return extension &&
+                    strcmp(extension, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0;
+            });
+        if (!hasSwapchain) {
+            extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        }
+#if defined(__APPLE__)
+        const bool hasPortabilitySubset = std::any_of(
+            extensions.begin(),
+            extensions.end(),
+            [](const char* extension) {
+                return extension && std::strcmp(extension, "VK_KHR_portability_subset") == 0;
+            });
+        if (!hasPortabilitySubset) {
+            extensions.push_back("VK_KHR_portability_subset");
+        }
+#endif
+
+        VkDeviceCreateInfo compositorCreateInfo = createInfo;
+        compositorCreateInfo.enabledExtensionCount =
+            static_cast<uint32_t>(extensions.size());
+        compositorCreateInfo.ppEnabledExtensionNames = extensions.data();
+
+        fprintf(stderr,
+            "[Kine] Filament Vulkan creating device with %u extensions and %u queue groups\n",
+            compositorCreateInfo.enabledExtensionCount,
+            compositorCreateInfo.queueCreateInfoCount);
+        VkDevice device = KineFilamentVulkanPlatformBase::createVkDevice(compositorCreateInfo);
+        fprintf(stderr, "[Kine] Filament Vulkan device created: %p\n",
+            static_cast<void*>(device));
+        return device;
+    }
+
+private:
+    KineVulkanCompositor* mCompositor = nullptr;
+    void* mSdlWindow = nullptr;
+    int mWidth = 0;
+    int mHeight = 0;
+    bool mLoggedBundle = false;
+    bool mLoggedAcquire = false;
+    bool mLoggedPresent = false;
+};
+#endif
+
+// Material kinds are in header
+
+// ---------------------------------------------------------------------------
+// Platform GL-context save/restore helpers.
+//
+// Create() needs to: (1) remember the host's current context, (2) drop it so
+// Filament's Engine::create() can set up its own shared context cleanly, and
+// (3) hand control back to the host once Filament is initialized. Destroy()
+// needs to (1) again on the way out so Filament's teardown calls land on the
+// right context.
+// ---------------------------------------------------------------------------
+
+#if !KINE_FILAMENT_USE_VULKAN
+static void kine_capture_host_context(KineFilamentContext* ctx)
+{
+#if defined(_WIN32)
+    ctx->hostCtx = (void*)wglGetCurrentContext();
+    ctx->hostDC  = (void*)wglGetCurrentDC();
+#elif defined(__APPLE__)
+    ctx->hostCtx = (void*)CGLGetCurrentContext();
+#else
+    ctx->hostCtx      = (void*)glXGetCurrentContext();
+    ctx->hostDisplay  = (void*)glXGetCurrentDisplay();
+    ctx->hostDrawable = (unsigned long)glXGetCurrentDrawable();
+#endif
+}
+
+static void kine_release_current_gl_context()
+{
+#if defined(_WIN32)
+    wglMakeCurrent(nullptr, nullptr);
+#elif defined(__APPLE__)
+    CGLSetCurrentContext(nullptr);
+#else
+    Display* dpy = glXGetCurrentDisplay();
+    if (dpy) glXMakeCurrent(dpy, None, nullptr);
+#endif
+}
+
+static void kine_restore_host_context(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->hostCtx) return;
+#if defined(_WIN32)
+    wglMakeCurrent((HDC)ctx->hostDC, (HGLRC)ctx->hostCtx);
+#elif defined(__APPLE__)
+    CGLSetCurrentContext((CGLContextObj)ctx->hostCtx);
+#else
+    if (ctx->hostDisplay)
+        glXMakeCurrent((Display*)ctx->hostDisplay,
+                        (GLXDrawable)ctx->hostDrawable,
+                        (GLXContext)ctx->hostCtx);
+#endif
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Embedded minimal unlit+texture material bytes.
+// Generated offline with:
+//   matc -a opengl -o kine_default.filamat kine_default.mat
+// and then xxd -i into this array.
+// Since we can't run matc at build time here, we use the uberarchive's
+// "defaultMaterial" entry by reading it at runtime from the SDK.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Procedural mesh generators
+// ---------------------------------------------------------------------------
+
+#if !KINE_FILAMENT_USE_VULKAN
+static unsigned int createGLColorTexture(int width, int height)
+{
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    if (id == 0) return 0;
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return (unsigned int)id;
+}
+#endif
+
+bool rebuildRenderTarget(KineFilamentContext* ctx, int width, int height)
+{
+#if !KINE_FILAMENT_USE_VULKAN
+    if (ctx->readFboId) { GLuint f=(GLuint)ctx->readFboId; kine_glDeleteFramebuffers(1,&f); ctx->readFboId=0; }
+#endif
+    if (ctx->renderTarget) { ctx->engine->destroy(ctx->renderTarget); ctx->renderTarget = nullptr; }
+    if (ctx->colorTarget)  { ctx->engine->destroy(ctx->colorTarget);  ctx->colorTarget  = nullptr; }
+    if (ctx->depthTarget)  { ctx->engine->destroy(ctx->depthTarget);  ctx->depthTarget  = nullptr; }
+
+    // engine->destroy() posts to a command queue — flush and wait so the backend
+    // has fully released the imported GL texture before we call glDeleteTextures.
+    ctx->engine->flushAndWait();
+
+#if !KINE_FILAMENT_USE_VULKAN
+    if (ctx->colorTextureId) {
+        GLuint old = (GLuint)ctx->colorTextureId;
+        glDeleteTextures(1, &old);
+        ctx->colorTextureId = 0;
+    }
+#endif
+
+#if KINE_FILAMENT_USE_VULKAN
+    ctx->colorTarget = Texture::Builder()
+        .width(uint32_t(width)).height(uint32_t(height)).levels(1)
+        .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE |
+               Texture::Usage::BLIT_SRC)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*ctx->engine);
+#else
+    unsigned int glId = createGLColorTexture(width, height);
+    if (glId == 0) return false;
+    ctx->colorTarget = Texture::Builder()
+        .width(uint32_t(width)).height(uint32_t(height)).levels(1)
+        .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8)
+        .import(glId)
+        .build(*ctx->engine);
+#endif
+    if (!ctx->colorTarget) return false;
+
+    ctx->depthTarget = Texture::Builder()
+        .width(uint32_t(width)).height(uint32_t(height)).levels(1)
+        .usage(Texture::Usage::DEPTH_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::DEPTH24)
+        .build(*ctx->engine);
+    if (!ctx->depthTarget) return false;
+
+    ctx->renderTarget = RenderTarget::Builder()
+        .texture(RenderTarget::AttachmentPoint::COLOR, ctx->colorTarget)
+        .texture(RenderTarget::AttachmentPoint::DEPTH, ctx->depthTarget) 
+        .build(*ctx->engine);
+    if (!ctx->renderTarget) return false;
+
+    ctx->view->setRenderTarget(ctx->renderTarget);
+    ctx->view->setViewport({0, 0, uint32_t(width), uint32_t(height)});
+    ctx->viewportX = 0;
+    ctx->viewportY = 0;
+    ctx->viewportWidth = width;
+    ctx->viewportHeight = height;
+#if KINE_FILAMENT_USE_VULKAN
+    ctx->colorTextureId = 0;
+#else
+    ctx->colorTextureId = glId;
+#endif
+    ctx->width  = width;
+    ctx->height = height;
+    return true;
+}
+
+static bool useDefaultSwapChainRenderTarget(KineFilamentContext* ctx, int width, int height)
+{
+    if (!ctx || !ctx->view) {
+        return false;
+    }
+
+    if (ctx->readFboId) {
+#if !KINE_FILAMENT_USE_VULKAN
+        GLuint f = (GLuint)ctx->readFboId;
+        kine_glDeleteFramebuffers(1, &f);
+#endif
+        ctx->readFboId = 0;
+    }
+    if (ctx->renderTarget) {
+        ctx->engine->destroy(ctx->renderTarget);
+        ctx->renderTarget = nullptr;
+    }
+    if (ctx->colorTarget) {
+        ctx->engine->destroy(ctx->colorTarget);
+        ctx->colorTarget = nullptr;
+    }
+    if (ctx->depthTarget) {
+        ctx->engine->destroy(ctx->depthTarget);
+        ctx->depthTarget = nullptr;
+    }
+    if (ctx->colorTextureId) {
+#if !KINE_FILAMENT_USE_VULKAN
+        GLuint old = (GLuint)ctx->colorTextureId;
+        glDeleteTextures(1, &old);
+#endif
+        ctx->colorTextureId = 0;
+    }
+
+    ctx->view->setRenderTarget(nullptr);
+    ctx->view->setViewport({0, 0, uint32_t(width), uint32_t(height)});
+    ctx->viewportX = 0;
+    ctx->viewportY = 0;
+    ctx->viewportWidth = width;
+    ctx->viewportHeight = height;
+    ctx->width = width;
+    ctx->height = height;
+    return true;
+}
+
+static void* getFilamentNativeWindowFromSDL(void* sdlWindow)
+{
+    if (!sdlWindow) {
+        return nullptr;
+    }
+
+    Uint64 flags = SDL_GetWindowFlags((SDL_Window*)sdlWindow);
+    SDL_PropertiesID props = SDL_GetWindowProperties((SDL_Window*)sdlWindow);
+    if (!props) {
+        fprintf(stderr, "[Kine] SDL_GetWindowProperties failed for Vulkan window, flags=0x%llx\n",
+            (unsigned long long)flags);
+        return nullptr;
+    }
+
+#if defined(_WIN32)
+    void* hwnd = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
+    if (hwnd) {
+        fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx hwnd=%p\n",
+            (unsigned long long)flags, hwnd);
+        return hwnd;
+    }
+    void* hdc = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HDC_POINTER, nullptr);
+    fprintf(stderr, "[Kine] SDL Vulkan native window missing HWND, flags=0x%llx hdc=%p\n",
+        (unsigned long long)flags, hdc);
+    return nullptr;
+#elif defined(__APPLE__)
+    void* cocoaWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+    fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx cocoaWindow=%p\n",
+        (unsigned long long)flags, cocoaWindow);
+    return cocoaWindow;
+#else
+    void* waylandSurface = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+    if (waylandSurface) {
+        fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx waylandSurface=%p\n",
+            (unsigned long long)flags, waylandSurface);
+        return waylandSurface;
+    }
+    Sint64 x11Window = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+    fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx x11Window=0x%llx\n",
+        (unsigned long long)flags, (unsigned long long)x11Window);
+    return x11Window ? (void*)(uintptr_t)x11Window : nullptr;
+#endif
+}
+
+static KineMesh* buildCube()
+{
+    auto* m = new KineMesh();
+
+    // 6 faces x 4 vertices = 24, 6 faces x 2 tris x 3 verts = 36 indices
+    const float n = 0.5f;
+    struct Face { float nx,ny,nz; float ax,ay,az; float bx,by,bz; };
+    Face faces[6] = {
+        { 0, 0,  1,  1, 0, 0,  0, 1, 0}, // +Z
+        { 0, 0, -1, -1, 0, 0,  0, 1, 0}, // -Z
+        { 1, 0,  0,  0, 1, 0,  0, 0, 1}, // +X
+        {-1, 0,  0,  0, 1, 0,  0, 0,-1}, // -X
+        { 0, 1,  0,  1, 0, 0,  0, 0,-1}, // +Y
+        { 0,-1,  0,  1, 0, 0,  0, 0, 1}, // -Y
+    };
+
+    for (int f = 0; f < 6; f++) {
+        uint16_t base = (uint16_t)(m->vertices.size());
+        float nx = faces[f].nx, ny = faces[f].ny, nz = faces[f].nz;
+        float ax = faces[f].ax, ay = faces[f].ay, az = faces[f].az;
+        float bx = faces[f].bx, by = faces[f].by, bz = faces[f].bz;
+        // center of this face
+        float cx = nx*n, cy = ny*n, cz = nz*n;
+        // 4 corners
+        float signs[4][2] = {{-1,-1},{1,-1},{1,1},{-1,1}};
+        for (auto& s : signs) {
+            KineVertex v;
+            v.px = cx + s[0]*ax*n + s[1]*bx*n;
+            v.py = cy + s[0]*ay*n + s[1]*by*n;
+            v.pz = cz + s[0]*az*n + s[1]*bz*n;
+            v.nx = nx; v.ny = ny; v.nz = nz;
+            v.u = (s[0]+1)*0.5f; v.v = (s[1]+1)*0.5f;
+            m->vertices.push_back(v);
+        }
+        m->indices.push_back(base+0); m->indices.push_back(base+1); m->indices.push_back(base+2);
+        m->indices.push_back(base+0); m->indices.push_back(base+2); m->indices.push_back(base+3);
+    }
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildDisplacedCube(int segments = 48)
+{
+    auto* m = new KineMesh();
+    const float n = 0.5f;
+    struct Face { float nx,ny,nz; float ax,ay,az; float bx,by,bz; };
+    const Face faces[6] = {
+        { 0, 0,  1,  1, 0, 0,  0, 1, 0},
+        { 0, 0, -1, -1, 0, 0,  0, 1, 0},
+        { 1, 0,  0,  0, 1, 0,  0, 0, 1},
+        {-1, 0,  0,  0, 1, 0,  0, 0,-1},
+        { 0, 1,  0,  1, 0, 0,  0, 0,-1},
+        { 0,-1,  0,  1, 0, 0,  0, 0, 1},
+    };
+
+    for (const Face& face : faces) {
+        const uint16_t base = (uint16_t)m->vertices.size();
+        for (int y = 0; y <= segments; ++y) {
+            const float v = (float)y / (float)segments;
+            const float sv = v - 0.5f;
+            for (int x = 0; x <= segments; ++x) {
+                const float u = (float)x / (float)segments;
+                const float su = u - 0.5f;
+                m->vertices.push_back({
+                    face.nx * n + face.ax * su + face.bx * sv,
+                    face.ny * n + face.ay * su + face.by * sv,
+                    face.nz * n + face.az * su + face.bz * sv,
+                    face.nx, face.ny, face.nz, u, v,
+                });
+            }
+        }
+
+        const int row = segments + 1;
+        for (int y = 0; y < segments; ++y) {
+            for (int x = 0; x < segments; ++x) {
+                const uint16_t i0 = base + (uint16_t)(y * row + x);
+                const uint16_t i1 = i0 + 1;
+                const uint16_t i3 = base + (uint16_t)((y + 1) * row + x);
+                const uint16_t i2 = i3 + 1;
+                m->indices.push_back(i0); m->indices.push_back(i1); m->indices.push_back(i2);
+                m->indices.push_back(i0); m->indices.push_back(i2); m->indices.push_back(i3);
+            }
+        }
+    }
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildSphere(int slices = 16, int stacks = 12)
+{
+    auto* m = new KineMesh();
+    for (int j = 0; j <= stacks; j++) {
+        float phi = (float)M_PI * j / stacks;
+        for (int i = 0; i <= slices; i++) {
+            float theta = 2.0f * (float)M_PI * i / slices;
+            KineVertex v;
+            v.nx = sinf(phi) * cosf(theta);
+            v.ny = cosf(phi);
+            v.nz = sinf(phi) * sinf(theta);
+            v.px = v.nx * 0.5f;
+            v.py = v.ny * 0.5f;
+            v.pz = v.nz * 0.5f;
+            v.u = (float)i / slices;
+            v.v = (float)j / stacks;
+            m->vertices.push_back(v);
+        }
+    }
+    for (int j = 0; j < stacks; j++) {
+        for (int i = 0; i < slices; i++) {
+            uint16_t a = (uint16_t)(j*(slices+1)+i);
+            uint16_t b = (uint16_t)(a+slices+1);
+            // Filament treats counter-clockwise triangles as front-facing. The
+            // original order pointed every sphere face inward.
+            m->indices.push_back(a);   m->indices.push_back(a+1); m->indices.push_back(b);
+            m->indices.push_back(b);   m->indices.push_back(a+1); m->indices.push_back(b+1);
+        }
+    }
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildCylinder(int slices = 24)
+{
+    auto* m = new KineMesh();
+    const float radius = 0.5f;
+    const float halfHeight = 0.5f;
+
+    // Smooth side wall. The seam is duplicated so cylindrical UVs do not wrap
+    // through the middle of a triangle.
+    for (int i = 0; i <= slices; ++i) {
+        const float u = static_cast<float>(i) / static_cast<float>(slices);
+        const float angle = u * 2.0f * static_cast<float>(M_PI);
+        const float x = cosf(angle);
+        const float z = sinf(angle);
+        m->vertices.push_back({x * radius, -halfHeight, z * radius, x, 0.0f, z, u, 0.0f});
+        m->vertices.push_back({x * radius,  halfHeight, z * radius, x, 0.0f, z, u, 1.0f});
+    }
+    for (int i = 0; i < slices; ++i) {
+        const uint16_t bottom = static_cast<uint16_t>(i * 2);
+        const uint16_t top = static_cast<uint16_t>(bottom + 1);
+        const uint16_t nextBottom = static_cast<uint16_t>(bottom + 2);
+        const uint16_t nextTop = static_cast<uint16_t>(bottom + 3);
+        m->indices.push_back(bottom); m->indices.push_back(top); m->indices.push_back(nextBottom);
+        m->indices.push_back(nextBottom); m->indices.push_back(top); m->indices.push_back(nextTop);
+    }
+
+    // Duplicate the cap vertices to preserve flat cap normals.
+    const uint16_t topCenter = static_cast<uint16_t>(m->vertices.size());
+    m->vertices.push_back({0.0f, halfHeight, 0.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f});
+    const uint16_t topRing = static_cast<uint16_t>(m->vertices.size());
+    for (int i = 0; i < slices; ++i) {
+        const float angle = static_cast<float>(i) / static_cast<float>(slices) * 2.0f * static_cast<float>(M_PI);
+        const float x = cosf(angle);
+        const float z = sinf(angle);
+        m->vertices.push_back({x * radius, halfHeight, z * radius, 0.0f, 1.0f, 0.0f,
+            x * 0.5f + 0.5f, z * 0.5f + 0.5f});
+    }
+
+    const uint16_t bottomCenter = static_cast<uint16_t>(m->vertices.size());
+    m->vertices.push_back({0.0f, -halfHeight, 0.0f, 0.0f, -1.0f, 0.0f, 0.5f, 0.5f});
+    const uint16_t bottomRing = static_cast<uint16_t>(m->vertices.size());
+    for (int i = 0; i < slices; ++i) {
+        const float angle = static_cast<float>(i) / static_cast<float>(slices) * 2.0f * static_cast<float>(M_PI);
+        const float x = cosf(angle);
+        const float z = sinf(angle);
+        m->vertices.push_back({x * radius, -halfHeight, z * radius, 0.0f, -1.0f, 0.0f,
+            x * 0.5f + 0.5f, z * 0.5f + 0.5f});
+    }
+
+    for (int i = 0; i < slices; ++i) {
+        const uint16_t currentTop = static_cast<uint16_t>(topRing + i);
+        const uint16_t nextTop = static_cast<uint16_t>(topRing + (i + 1) % slices);
+        m->indices.push_back(topCenter); m->indices.push_back(nextTop); m->indices.push_back(currentTop);
+
+        const uint16_t currentBottom = static_cast<uint16_t>(bottomRing + i);
+        const uint16_t nextBottom = static_cast<uint16_t>(bottomRing + (i + 1) % slices);
+        m->indices.push_back(bottomCenter); m->indices.push_back(currentBottom); m->indices.push_back(nextBottom);
+    }
+
+    m->indexCount = static_cast<uint32_t>(m->indices.size());
+    return m;
+}
+
+static KineMesh* buildPyramid()
+{
+    auto* m = new KineMesh();
+    // 4 triangular sides + 1 square base = 16 verts, 6 tris
+    const float h = 0.5f, b = 0.5f;
+    float apex[3] = {0, h, 0};
+    float base4[4][3] = {{-b,0,-b},{b,0,-b},{b,0,b},{-b,0,b}};
+    // Side faces
+    for (int i = 0; i < 4; i++) {
+        float* p0 = base4[i];
+        float* p1 = base4[(i+1)%4];
+        // Normal = cross(p1-p0, apex-p0)
+        float ax = p1[0]-p0[0], ay = p1[1]-p0[1], az = p1[2]-p0[2];
+        float bx = apex[0]-p0[0], by2 = apex[1]-p0[1], bz = apex[2]-p0[2];
+        float nx = ay*bz - az*by2, ny = az*bx - ax*bz, nz = ax*by2 - ay*bx;
+        float len = sqrtf(nx*nx+ny*ny+nz*nz)+1e-9f;
+        nx/=len; ny/=len; nz/=len;
+        uint16_t base = (uint16_t)m->vertices.size();
+        m->vertices.push_back({apex[0], apex[1], apex[2], nx, ny, nz, 0.5f, 1.0f});
+        m->vertices.push_back({p0[0],   p0[1],   p0[2],   nx, ny, nz, 0.0f, 0.0f});
+        m->vertices.push_back({p1[0],   p1[1],   p1[2],   nx, ny, nz, 1.0f, 0.0f});
+        m->indices.push_back(base); m->indices.push_back(base+1); m->indices.push_back(base+2);
+    }
+    // Base (square, two tris)
+    uint16_t base = (uint16_t)m->vertices.size();
+    for (auto& p : base4) {
+        float u = (p[0]/b+1)*0.5f, v2 = (p[2]/b+1)*0.5f;
+        m->vertices.push_back({p[0], p[1], p[2], 0,-1,0, u, v2});
+    }
+    m->indices.push_back(base); m->indices.push_back(base+2); m->indices.push_back(base+1);
+    m->indices.push_back(base); m->indices.push_back(base+3); m->indices.push_back(base+2);
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildDecalQuad()
+{
+    auto* m = new KineMesh();
+    m->vertices = {
+        {-0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f},
+        { 0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f},
+        { 0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f},
+        {-0.5f, 0.0f,  0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+    };
+    // The vertices carry +Y normals, so the triangle winding must face +Y as
+    // well. With the opposite winding Filament's double-sided material flipped
+    // the visible normal downward, preventing point and spot lights above a
+    // Texture/Decal from contributing.
+    m->indices = {0, 2, 1, 0, 3, 2};
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineMesh* buildParticleQuad()
+{
+    auto* m = new KineMesh();
+    m->vertices = {
+        {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+        { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        { 0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+        {-0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+    };
+    m->indices = {0, 1, 2, 0, 2, 3};
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+// Render-target textures use Filament's bottom-left origin. Particle sprites
+// intentionally invert V for image assets, so sharing their quad caused every
+// otherwise-pass-through post-process material to turn the scene upside down.
+static KineMesh* buildPostProcessQuad()
+{
+    auto* m = new KineMesh();
+    m->vertices = {
+        {-0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { 0.5f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f},
+        { 0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        {-0.5f,  0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+    };
+    m->indices = {0, 1, 2, 0, 2, 3};
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static void appendCuboid(KineMesh* m, float cx, float cy, float cz, float sx, float sy, float sz)
+{
+    const float x0 = cx - sx * 0.5f, x1 = cx + sx * 0.5f;
+    const float y0 = cy - sy * 0.5f, y1 = cy + sy * 0.5f;
+    const float z0 = cz - sz * 0.5f, z1 = cz + sz * 0.5f;
+
+    struct Face { float n[3]; float p[4][3]; };
+    const Face faces[6] = {
+        {{ 1, 0, 0}, {{x1,y0,z0},{x1,y1,z0},{x1,y1,z1},{x1,y0,z1}}},
+        {{-1, 0, 0}, {{x0,y0,z1},{x0,y1,z1},{x0,y1,z0},{x0,y0,z0}}},
+        {{ 0, 1, 0}, {{x0,y1,z0},{x0,y1,z1},{x1,y1,z1},{x1,y1,z0}}},
+        {{ 0,-1, 0}, {{x0,y0,z1},{x0,y0,z0},{x1,y0,z0},{x1,y0,z1}}},
+        {{ 0, 0, 1}, {{x0,y0,z1},{x1,y0,z1},{x1,y1,z1},{x0,y1,z1}}},
+        {{ 0, 0,-1}, {{x1,y0,z0},{x0,y0,z0},{x0,y1,z0},{x1,y1,z0}}},
+    };
+
+    for (const Face& f : faces) {
+        uint16_t base = (uint16_t)m->vertices.size();
+        m->vertices.push_back({f.p[0][0], f.p[0][1], f.p[0][2], f.n[0], f.n[1], f.n[2], 0, 0});
+        m->vertices.push_back({f.p[1][0], f.p[1][1], f.p[1][2], f.n[0], f.n[1], f.n[2], 0, 1});
+        m->vertices.push_back({f.p[2][0], f.p[2][1], f.p[2][2], f.n[0], f.n[1], f.n[2], 1, 1});
+        m->vertices.push_back({f.p[3][0], f.p[3][1], f.p[3][2], f.n[0], f.n[1], f.n[2], 1, 0});
+        m->indices.push_back(base + 0); m->indices.push_back(base + 1); m->indices.push_back(base + 2);
+        m->indices.push_back(base + 0); m->indices.push_back(base + 2); m->indices.push_back(base + 3);
+    }
+}
+
+static KineMesh* buildMoveGizmo()
+{
+    auto* m = new KineMesh();
+    appendCuboid(m, 0.55f, 0.0f, 0.0f, 1.10f, 0.045f, 0.045f);
+    appendCuboid(m, 1.17f, 0.0f, 0.0f, 0.22f, 0.16f, 0.16f);
+    appendCuboid(m, 0.0f, 0.55f, 0.0f, 0.045f, 1.10f, 0.045f);
+    appendCuboid(m, 0.0f, 1.17f, 0.0f, 0.16f, 0.22f, 0.16f);
+    appendCuboid(m, 0.0f, 0.0f, 0.55f, 0.045f, 0.045f, 1.10f);
+    appendCuboid(m, 0.0f, 0.0f, 1.17f, 0.16f, 0.16f, 0.22f);
+    appendCuboid(m, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+struct KineGizmoAxisMeshes {
+    KineMesh* x      = nullptr;
+    KineMesh* y      = nullptr;
+    KineMesh* z      = nullptr;
+    KineMesh* center = nullptr;
+};
+
+} // namespace
+
+struct KineFilamentGizmo {
+    int type = KINE_GIZMO_MOVE;
+    KineGizmoAxisMeshes axes;
+};
+
+namespace {
+
+static KineGizmoAxisMeshes buildMoveGizmoAxes()
+{
+    KineGizmoAxisMeshes g;
+
+    g.x = new KineMesh();
+    appendCuboid(g.x, 0.55f, 0.0f, 0.0f, 1.10f, 0.045f, 0.045f);
+    appendCuboid(g.x, 1.17f, 0.0f, 0.0f, 0.22f, 0.16f, 0.16f);
+    g.x->indexCount = (uint32_t)g.x->indices.size();
+
+    g.y = new KineMesh();
+    appendCuboid(g.y, 0.0f, 0.55f, 0.0f, 0.045f, 1.10f, 0.045f);
+    appendCuboid(g.y, 0.0f, 1.17f, 0.0f, 0.16f, 0.22f, 0.16f);
+    g.y->indexCount = (uint32_t)g.y->indices.size();
+
+    g.z = new KineMesh();
+    appendCuboid(g.z, 0.0f, 0.0f, 0.55f, 0.045f, 0.045f, 1.10f);
+    appendCuboid(g.z, 0.0f, 0.0f, 1.17f, 0.16f, 0.16f, 0.22f);
+    g.z->indexCount = (uint32_t)g.z->indices.size();
+
+    g.center = new KineMesh();
+    appendCuboid(g.center, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
+    g.center->indexCount = (uint32_t)g.center->indices.size();
+
+    return g;
+}
+
+static KineMesh* buildScaleGizmo()
+{
+    auto* m = new KineMesh();
+    appendCuboid(m, 0.50f, 0.0f, 0.0f, 1.00f, 0.04f, 0.04f);
+    appendCuboid(m, 1.08f, 0.0f, 0.0f, 0.20f, 0.20f, 0.20f);
+    appendCuboid(m, 0.0f, 0.50f, 0.0f, 0.04f, 1.00f, 0.04f);
+    appendCuboid(m, 0.0f, 1.08f, 0.0f, 0.20f, 0.20f, 0.20f);
+    appendCuboid(m, 0.0f, 0.0f, 0.50f, 0.04f, 0.04f, 1.00f);
+    appendCuboid(m, 0.0f, 0.0f, 1.08f, 0.20f, 0.20f, 0.20f);
+    appendCuboid(m, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineGizmoAxisMeshes buildScaleGizmoAxes()
+{
+    KineGizmoAxisMeshes g;
+
+    g.x = new KineMesh();
+    appendCuboid(g.x, 0.50f, 0.0f, 0.0f, 1.00f, 0.04f, 0.04f);
+    appendCuboid(g.x, 1.08f, 0.0f, 0.0f, 0.20f, 0.20f, 0.20f);
+    g.x->indexCount = (uint32_t)g.x->indices.size();
+
+    g.y = new KineMesh();
+    appendCuboid(g.y, 0.0f, 0.50f, 0.0f, 0.04f, 1.00f, 0.04f);
+    appendCuboid(g.y, 0.0f, 1.08f, 0.0f, 0.20f, 0.20f, 0.20f);
+    g.y->indexCount = (uint32_t)g.y->indices.size();
+
+    g.z = new KineMesh();
+    appendCuboid(g.z, 0.0f, 0.0f, 0.50f, 0.04f, 0.04f, 1.00f);
+    appendCuboid(g.z, 0.0f, 0.0f, 1.08f, 0.20f, 0.20f, 0.20f);
+    g.z->indexCount = (uint32_t)g.z->indices.size();
+
+    g.center = new KineMesh();
+    appendCuboid(g.center, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
+    g.center->indexCount = (uint32_t)g.center->indices.size();
+
+    return g;
+}
+
+static void appendTorus(KineMesh* m, int axis, float radius, float tubeRadius, int segments, int sides)
+{
+    uint16_t base = (uint16_t)m->vertices.size();
+    for (int i = 0; i < segments; ++i) {
+        float a = 2.0f * (float)M_PI * (float)i / (float)segments;
+        float ca = cosf(a), sa = sinf(a);
+        for (int j = 0; j < sides; ++j) {
+            float b = 2.0f * (float)M_PI * (float)j / (float)sides;
+            float cb = cosf(b), sb = sinf(b);
+            float r = radius + tubeRadius * cb;
+            float p[3] = {0,0,0};
+            float n[3] = {0,0,0};
+            if (axis == 0) {
+                p[0] = tubeRadius * sb; p[1] = r * ca; p[2] = r * sa;
+                n[0] = sb; n[1] = cb * ca; n[2] = cb * sa;
+            } else if (axis == 1) {
+                p[0] = r * ca; p[1] = tubeRadius * sb; p[2] = r * sa;
+                n[0] = cb * ca; n[1] = sb; n[2] = cb * sa;
+            } else {
+                p[0] = r * ca; p[1] = r * sa; p[2] = tubeRadius * sb;
+                n[0] = cb * ca; n[1] = cb * sa; n[2] = sb;
+            }
+            m->vertices.push_back({p[0], p[1], p[2], n[0], n[1], n[2], (float)i / segments, (float)j / sides});
+        }
+    }
+
+    for (int i = 0; i < segments; ++i) {
+        int ni = (i + 1) % segments;
+        for (int j = 0; j < sides; ++j) {
+            int nj = (j + 1) % sides;
+            uint16_t a = base + (uint16_t)(i * sides + j);
+            uint16_t b = base + (uint16_t)(ni * sides + j);
+            uint16_t c = base + (uint16_t)(ni * sides + nj);
+            uint16_t d = base + (uint16_t)(i * sides + nj);
+            m->indices.push_back(a); m->indices.push_back(b); m->indices.push_back(c);
+            m->indices.push_back(a); m->indices.push_back(c); m->indices.push_back(d);
+        }
+    }
+}
+
+static KineMesh* buildRotateGizmo()
+{
+    auto* m = new KineMesh();
+    appendTorus(m, 0, 0.85f, 0.018f, 64, 8);
+    appendTorus(m, 1, 0.85f, 0.018f, 64, 8);
+    appendTorus(m, 2, 0.85f, 0.018f, 64, 8);
+    appendCuboid(m, 0.0f, 0.0f, 0.0f, 0.07f, 0.07f, 0.07f);
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
+static KineGizmoAxisMeshes buildRotateGizmoAxes()
+{
+    KineGizmoAxisMeshes g;
+
+    g.x = new KineMesh();
+    appendTorus(g.x, 0, 0.85f, 0.018f, 64, 8);
+    g.x->indexCount = (uint32_t)g.x->indices.size();
+
+    g.y = new KineMesh();
+    appendTorus(g.y, 1, 0.85f, 0.018f, 64, 8);
+    g.y->indexCount = (uint32_t)g.y->indices.size();
+
+    g.z = new KineMesh();
+    appendTorus(g.z, 2, 0.85f, 0.018f, 64, 8);
+    g.z->indexCount = (uint32_t)g.z->indices.size();
+
+    return g;
+}
+
+#if KINE_WITH_ASSIMP
+static math::mat4f kine_from_assimp(const aiMatrix4x4& m)
+{
+    return math::mat4f(
+        math::float4{m.a1, m.b1, m.c1, m.d1},
+        math::float4{m.a2, m.b2, m.c2, m.d2},
+        math::float4{m.a3, m.b3, m.c3, m.d3},
+        math::float4{m.a4, m.b4, m.c4, m.d4});
+}
+
+static KineQuat kine_from_assimp(const aiQuaternion& q)
+{
+    return {q.x, q.y, q.z, q.w};
+}
+
+static void kine_collect_assimp_nodes(
+    aiNode* node,
+    const aiMatrix4x4& parentGlobal,
+    std::unordered_map<std::string, aiNode*>& nodes,
+    std::unordered_map<aiNode*, aiMatrix4x4>& globals)
+{
+    if (!node) return;
+    const aiMatrix4x4 global = parentGlobal * node->mTransformation;
+    nodes[node->mName.C_Str()] = node;
+    globals[node] = global;
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        kine_collect_assimp_nodes(node->mChildren[i], global, nodes, globals);
+    }
+}
+
+static void kine_add_vertex_influence(KineSkinVertex& skin, uint8_t joint, float weight)
+{
+    if (weight <= 0.0f) return;
+    int slot = -1;
+    for (int i = 0; i < 4; ++i) {
+        if (skin.weights[i] == 0.0f) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        slot = 0;
+        for (int i = 1; i < 4; ++i) {
+            if (skin.weights[i] < skin.weights[slot]) slot = i;
+        }
+        if (weight <= skin.weights[slot]) return;
+    }
+    skin.joints[slot] = joint;
+    skin.weights[slot] = weight;
+}
+
+static bool kine_append_assimp_node(
+    KineMesh* out,
+    const aiScene* scene,
+    aiNode* node,
+    const aiMatrix4x4& parentGlobal,
+    const std::unordered_map<std::string, int>& boneIndices)
+{
+    if (!out || !scene || !node) return false;
+    const aiMatrix4x4 global = parentGlobal * node->mTransformation;
+    const bool skinnedModel = !out->bones.empty();
+
+    for (unsigned int nodeMeshIndex = 0; nodeMeshIndex < node->mNumMeshes; ++nodeMeshIndex) {
+        const unsigned int sceneMeshIndex = node->mMeshes[nodeMeshIndex];
+        if (sceneMeshIndex >= scene->mNumMeshes) continue;
+        const aiMesh* src = scene->mMeshes[sceneMeshIndex];
+        if (!src || src->mNumVertices == 0 || src->mNumFaces == 0) continue;
+        if (out->vertices.size() + src->mNumVertices > 65535) return false;
+
+        const uint16_t base = (uint16_t)out->vertices.size();
+        aiMatrix3x3 normalMatrix(global);
+        normalMatrix.Inverse().Transpose();
+        for (unsigned int i = 0; i < src->mNumVertices; ++i) {
+            aiVector3D p = src->mVertices[i];
+            aiVector3D n = src->HasNormals() ? src->mNormals[i] : aiVector3D(0.0f, 1.0f, 0.0f);
+            if (!skinnedModel) {
+                p = global * p;
+                n = normalMatrix * n;
+                n.Normalize();
+            }
+            const aiVector3D uv = src->HasTextureCoords(0)
+                ? src->mTextureCoords[0][i]
+                : aiVector3D(0.0f, 0.0f, 0.0f);
+            out->vertices.push_back({p.x, p.y, p.z, n.x, n.y, n.z, uv.x, uv.y});
+            if (skinnedModel) {
+                KineSkinVertex skin;
+                for (float& value : skin.weights) value = 0.0f;
+                out->skinVertices.push_back(skin);
+            }
+        }
+
+        if (skinnedModel) {
+            for (unsigned int srcBoneIndex = 0; srcBoneIndex < src->mNumBones; ++srcBoneIndex) {
+                const aiBone* srcBone = src->mBones[srcBoneIndex];
+                if (!srcBone) continue;
+                const auto found = boneIndices.find(srcBone->mName.C_Str());
+                if (found == boneIndices.end()) continue;
+                for (unsigned int weightIndex = 0; weightIndex < srcBone->mNumWeights; ++weightIndex) {
+                    const aiVertexWeight& influence = srcBone->mWeights[weightIndex];
+                    if (influence.mVertexId >= src->mNumVertices) continue;
+                    kine_add_vertex_influence(
+                        out->skinVertices[(size_t)base + influence.mVertexId],
+                        (uint8_t)found->second,
+                        influence.mWeight);
+                }
+            }
+            for (unsigned int i = 0; i < src->mNumVertices; ++i) {
+                KineSkinVertex& skin = out->skinVertices[(size_t)base + i];
+                float total = 0.0f;
+                for (float weight : skin.weights) total += weight;
+                if (total <= 0.000001f) {
+                    skin.joints[0] = 0;
+                    skin.weights[0] = 1.0f;
+                } else {
+                    for (float& weight : skin.weights) weight /= total;
+                }
+            }
+        }
+
+        for (unsigned int i = 0; i < src->mNumFaces; ++i) {
+            const aiFace& face = src->mFaces[i];
+            if (face.mNumIndices != 3) continue;
+            out->indices.push_back(base + (uint16_t)face.mIndices[0]);
+            out->indices.push_back(base + (uint16_t)face.mIndices[1]);
+            out->indices.push_back(base + (uint16_t)face.mIndices[2]);
+        }
+    }
+
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        if (!kine_append_assimp_node(out, scene, node->mChildren[i], global, boneIndices)) return false;
+    }
+    return true;
+}
+
+static KineMesh* loadMeshWithAssimp(const char* path)
+{
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(
+        path,
+        aiProcess_Triangulate |
+        aiProcess_JoinIdenticalVertices |
+        aiProcess_GenSmoothNormals |
+        aiProcess_ImproveCacheLocality |
+        aiProcess_RemoveRedundantMaterials |
+        aiProcess_SortByPType
+    );
+    if (!scene || !scene->HasMeshes()) {
+        fprintf(stderr, "[Kine] Assimp failed to load mesh '%s': %s\n", path, importer.GetErrorString());
+        return nullptr;
+    }
+    auto* m = new KineMesh();
+    std::unordered_map<std::string, int> boneIndices;
+    std::unordered_map<std::string, aiMatrix4x4> inverseBinds;
+    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex) {
+        const aiMesh* src = scene->mMeshes[meshIndex];
+        if (!src) continue;
+        for (unsigned int srcBoneIndex = 0; srcBoneIndex < src->mNumBones; ++srcBoneIndex) {
+            const aiBone* srcBone = src->mBones[srcBoneIndex];
+            if (!srcBone) continue;
+            const std::string name = srcBone->mName.C_Str();
+            if (boneIndices.find(name) == boneIndices.end()) {
+                if (boneIndices.size() >= 255) {
+                    fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds Filament's 255 bone limit\n", path);
+                    delete m;
+                    return nullptr;
+                }
+                boneIndices[name] = (int)boneIndices.size();
+                inverseBinds[name] = srcBone->mOffsetMatrix;
+            }
+        }
+    }
+
+    std::unordered_map<std::string, aiNode*> nodes;
+    std::unordered_map<aiNode*, aiMatrix4x4> globals;
+    kine_collect_assimp_nodes(scene->mRootNode, aiMatrix4x4(), nodes, globals);
+    aiMatrix4x4 rootInverse = scene->mRootNode->mTransformation;
+    rootInverse.Inverse();
+
+    m->bones.resize(boneIndices.size());
+    for (const auto& entry : boneIndices) {
+        const std::string& name = entry.first;
+        const int index = entry.second;
+        KineBone& bone = m->bones[index];
+        bone.name = name;
+        bone.inverseBind = kine_from_assimp(inverseBinds[name]);
+
+        aiNode* node = nullptr;
+        const auto nodeIt = nodes.find(name);
+        if (nodeIt != nodes.end()) node = nodeIt->second;
+        aiNode* parent = node ? node->mParent : nullptr;
+        while (parent) {
+            const auto parentIt = boneIndices.find(parent->mName.C_Str());
+            if (parentIt != boneIndices.end()) {
+                bone.parent = parentIt->second;
+                break;
+            }
+            parent = parent->mParent;
+        }
+
+        aiMatrix4x4 local;
+        if (node) {
+            const aiMatrix4x4 boneGlobal = rootInverse * globals[node];
+            if (bone.parent >= 0) {
+                aiMatrix4x4 parentGlobal = rootInverse * globals[parent];
+                parentGlobal.Inverse();
+                local = parentGlobal * boneGlobal;
+            } else {
+                local = boneGlobal;
+            }
+        }
+        aiVector3D scaling(1.0f, 1.0f, 1.0f), position(0.0f, 0.0f, 0.0f);
+        aiQuaternion rotation;
+        local.Decompose(scaling, rotation, position);
+        bone.bindTranslation = {position.x, position.y, position.z};
+        bone.bindRotation = kine_from_assimp(rotation);
+        bone.bindScale = {scaling.x, scaling.y, scaling.z};
+        bone.bindLocal = kine_from_assimp(local);
+    }
+
+    if (!kine_append_assimp_node(m, scene, scene->mRootNode, aiMatrix4x4(), boneIndices)) {
+        fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds the current 65535 vertex limit\n", path);
+        delete m;
+        return nullptr;
+    }
+
+    if (m->vertices.empty() || m->indices.empty()) {
+        delete m;
+        return nullptr;
+    }
+
+    m->indexCount = (uint32_t)m->indices.size();
+    if (!m->bones.empty()) {
+        m->skinMatrices.resize(m->bones.size());
+        std::vector<math::mat4f> globalsByBone(m->bones.size());
+        for (size_t i = 0; i < m->bones.size(); ++i) {
+            globalsByBone[i] = m->bones[i].parent >= 0
+                ? globalsByBone[(size_t)m->bones[i].parent] * m->bones[i].bindLocal
+                : m->bones[i].bindLocal;
+            m->skinMatrices[i] = globalsByBone[i] * m->bones[i].inverseBind;
+        }
+    }
+
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex) {
+        const aiAnimation* sourceAnimation = scene->mAnimations[animationIndex];
+        if (!sourceAnimation) continue;
+        const double ticksPerSecond = sourceAnimation->mTicksPerSecond > 0.0
+            ? sourceAnimation->mTicksPerSecond
+            : 25.0;
+        KineAnimation animation;
+        animation.name = sourceAnimation->mName.length > 0
+            ? sourceAnimation->mName.C_Str()
+            : ("Animation" + std::to_string(animationIndex + 1));
+        animation.duration = (float)(sourceAnimation->mDuration / ticksPerSecond);
+        for (unsigned int channelIndex = 0; channelIndex < sourceAnimation->mNumChannels; ++channelIndex) {
+            const aiNodeAnim* sourceChannel = sourceAnimation->mChannels[channelIndex];
+            if (!sourceChannel) continue;
+            const auto boneIt = boneIndices.find(sourceChannel->mNodeName.C_Str());
+            if (boneIt == boneIndices.end()) continue;
+            KineAnimationChannel channel;
+            channel.bone = boneIt->second;
+            channel.translations.reserve(sourceChannel->mNumPositionKeys);
+            channel.rotations.reserve(sourceChannel->mNumRotationKeys);
+            channel.scales.reserve(sourceChannel->mNumScalingKeys);
+            for (unsigned int i = 0; i < sourceChannel->mNumPositionKeys; ++i) {
+                const aiVectorKey& key = sourceChannel->mPositionKeys[i];
+                channel.translations.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+            }
+            for (unsigned int i = 0; i < sourceChannel->mNumRotationKeys; ++i) {
+                const aiQuatKey& key = sourceChannel->mRotationKeys[i];
+                channel.rotations.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    kine_from_assimp(key.mValue)});
+            }
+            for (unsigned int i = 0; i < sourceChannel->mNumScalingKeys; ++i) {
+                const aiVectorKey& key = sourceChannel->mScalingKeys[i];
+                channel.scales.push_back({
+                    (float)(key.mTime / ticksPerSecond),
+                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+            }
+            animation.channels.push_back(std::move(channel));
+        }
+        m->animations.push_back(std::move(animation));
+    }
+    return m;
+}
+#endif
+
+static void uploadMesh(KineMesh* m, Engine* engine)
+{
+    if (!m || m->vertices.empty()) return;
+
+    math::float3 boundsMin{
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max()
+    };
+    math::float3 boundsMax{
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest()
+    };
+    for (const KineVertex& vertex : m->vertices) {
+        boundsMin.x = std::min(boundsMin.x, vertex.px);
+        boundsMin.y = std::min(boundsMin.y, vertex.py);
+        boundsMin.z = std::min(boundsMin.z, vertex.pz);
+        boundsMax.x = std::max(boundsMax.x, vertex.px);
+        boundsMax.y = std::max(boundsMax.y, vertex.py);
+        boundsMax.z = std::max(boundsMax.z, vertex.pz);
+    }
+    m->localBounds.set(boundsMin, boundsMax);
+
+    size_t vsize = m->vertices.size() * sizeof(KineVertex);
+    size_t isize = m->indices.size()  * sizeof(uint16_t);
+
+    // Build the tangent frame from the actual mesh topology and UVs. Filament
+    // 1.74's UV builder does not support strides for normals, so deinterleave
+    // all three inputs into contiguous temporary arrays first.
+    std::vector<math::float3> positions(m->vertices.size());
+    std::vector<math::float3> normals(m->vertices.size());
+    std::vector<math::float2> uvs(m->vertices.size());
+    for (size_t i = 0; i < m->vertices.size(); ++i) {
+        const KineVertex& vertex = m->vertices[i];
+        positions[i] = {vertex.px, vertex.py, vertex.pz};
+        normals[i] = {vertex.nx, vertex.ny, vertex.nz};
+        uvs[i] = {vertex.u, vertex.v};
+    }
+
+    std::vector<math::short4> quats(m->vertices.size());
+    auto orientation = SurfaceOrientation::Builder()
+        .vertexCount((uint32_t)m->vertices.size())
+        .normals(normals.data())
+        .uvs(uvs.data())
+        .positions(positions.data())
+        .triangleCount(m->indices.size() / 3)
+        .triangles(reinterpret_cast<const math::ushort3*>(m->indices.data()))
+        .build();
+    if (!orientation) {
+        fprintf(stderr, "[Kine] UV tangent generation failed; using normal-derived frames\n");
+        orientation = SurfaceOrientation::Builder()
+            .vertexCount((uint32_t)m->vertices.size())
+            .normals(normals.data())
+            .build();
+        if (!orientation) return;
+    }
+    orientation->getQuats(quats.data(), (uint32_t)m->vertices.size());
+
+    delete orientation;
+
+    const bool hasTerrainWeights = m->terrainWeights.size() == m->vertices.size();
+    const bool hasSkin = !m->bones.empty() && m->skinVertices.size() == m->vertices.size();
+    VertexBuffer::Builder vertexBufferBuilder;
+    vertexBufferBuilder
+        .vertexCount((uint32_t)m->vertices.size())
+        .bufferCount((hasTerrainWeights || hasSkin) ? 3 : 2)
+        .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, offsetof(KineVertex, px), sizeof(KineVertex))
+        .attribute(VertexAttribute::UV0,      0, VertexBuffer::AttributeType::FLOAT2, offsetof(KineVertex, u),  sizeof(KineVertex))
+        .attribute(VertexAttribute::TANGENTS, 1, VertexBuffer::AttributeType::SHORT4, 0, sizeof(math::short4))
+        .normalized(VertexAttribute::TANGENTS);
+    if (hasTerrainWeights) {
+        vertexBufferBuilder
+            .attribute(VertexAttribute::CUSTOM0, 2, VertexBuffer::AttributeType::FLOAT4, 0, sizeof(KineTerrainWeights))
+            .attribute(VertexAttribute::CUSTOM1, 2, VertexBuffer::AttributeType::FLOAT4, 4 * sizeof(float), sizeof(KineTerrainWeights));
+    } else if (hasSkin) {
+        vertexBufferBuilder
+            .attribute(VertexAttribute::BONE_INDICES, 2, VertexBuffer::AttributeType::UBYTE4,
+                offsetof(KineSkinVertex, joints), sizeof(KineSkinVertex))
+            .attribute(VertexAttribute::BONE_WEIGHTS, 2, VertexBuffer::AttributeType::FLOAT4,
+                offsetof(KineSkinVertex, weights), sizeof(KineSkinVertex));
+    }
+    m->vb = vertexBufferBuilder.build(*engine);
+
+    // buffer 0: interleaved position/normal/uv, as before
+    void* vcopy = malloc(vsize);
+    memcpy(vcopy, m->vertices.data(), vsize);
+    m->vb->setBufferAt(*engine, 0,
+        VertexBuffer::BufferDescriptor(vcopy, vsize,
+            [](void* buf, size_t, void*){ free(buf); }, nullptr));
+
+    // buffer 1: packed tangent-frame quaternions
+    size_t qsize = quats.size() * sizeof(math::short4);
+    void* qcopy = malloc(qsize);
+    memcpy(qcopy, quats.data(), qsize);
+    m->vb->setBufferAt(*engine, 1,
+        VertexBuffer::BufferDescriptor(qcopy, qsize,
+            [](void* buf, size_t, void*){ free(buf); }, nullptr));
+
+    if (hasTerrainWeights) {
+        const size_t weightSize = m->terrainWeights.size() * sizeof(KineTerrainWeights);
+        void* weightCopy = malloc(weightSize);
+        memcpy(weightCopy, m->terrainWeights.data(), weightSize);
+        m->vb->setBufferAt(*engine, 2,
+            VertexBuffer::BufferDescriptor(weightCopy, weightSize,
+                [](void* buf, size_t, void*){ free(buf); }, nullptr));
+    } else if (hasSkin) {
+        const size_t skinSize = m->skinVertices.size() * sizeof(KineSkinVertex);
+        void* skinCopy = malloc(skinSize);
+        memcpy(skinCopy, m->skinVertices.data(), skinSize);
+        m->vb->setBufferAt(*engine, 2,
+            VertexBuffer::BufferDescriptor(skinCopy, skinSize,
+                [](void* buf, size_t, void*){ free(buf); }, nullptr));
+    }
+
+    m->ib = IndexBuffer::Builder()
+        .indexCount(m->indexCount)
+        .bufferType(IndexBuffer::IndexType::USHORT)
+        .build(*engine);
+
+    void* icopy = malloc(isize);
+    memcpy(icopy, m->indices.data(), isize);
+    m->ib->setBuffer(*engine,
+        IndexBuffer::BufferDescriptor(icopy, isize,
+            [](void* buf, size_t, void*){ free(buf); }, nullptr));
+}
+
+bool rebuildRenderTarget(KineFilamentContext* ctx, unsigned int textureId, int width, int height)
+{
+    if (ctx->renderTarget) { ctx->engine->destroy(ctx->renderTarget); ctx->renderTarget = nullptr; }
+    if (ctx->colorTarget)  { ctx->engine->destroy(ctx->colorTarget);  ctx->colorTarget  = nullptr; }
+
+    ctx->engine->flushAndWait();
+
+
+    ctx->colorTarget = Texture::Builder()
+        .width(uint32_t(width))
+        .height(uint32_t(height))
+        .levels(1)
+        .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8)
+        .import(textureId)
+        .build(*ctx->engine);
+
+    if (!ctx->colorTarget) return false;
+
+    ctx->renderTarget = RenderTarget::Builder()
+        .texture(RenderTarget::AttachmentPoint::COLOR, ctx->colorTarget)
+        .build(*ctx->engine);
+
+    if (!ctx->renderTarget) return false;
+
+    ctx->view->setRenderTarget(ctx->renderTarget);
+    ctx->view->setViewport({0, 0, uint32_t(width), uint32_t(height)});
+
+    ctx->width  = width;
+    ctx->height = height;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Applies a batch's shared color/params to a freshly-created MaterialInstance.
+// Every draw call folded into a given batch was queued with an identical
+// KineBatchKey, so it's correct for all of that batch's GPU instances to
+// share one MaterialInstance built this way.
+// ---------------------------------------------------------------------------
+static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstance* mi, const KineBatchKey& key)
+{
+	KineFilamentShader* runtimeShader = key.shader ? key.shader : ctx->globalShader;
+	if (runtimeShader && runtimeShader->material) {
+		for (const auto& [name, values] : runtimeShader->uniforms) {
+			switch (values.size()) {
+				case 1: mi->setParameter(name.c_str(), values[0]); break;
+				case 2: mi->setParameter(name.c_str(), math::float2{values[0], values[1]}); break;
+				case 3: mi->setParameter(name.c_str(), math::float3{values[0], values[1], values[2]}); break;
+				case 4: mi->setParameter(name.c_str(), math::float4{values[0], values[1], values[2], values[3]}); break;
+				default: break;
+			}
+		}
+		return;
+	}
+	const float time = ctx->time;
+	Texture* whiteTex = ctx->whiteTex;
+    if (key.materialKind == KINE_MAT_GLASS) {
+        // Keep the dielectric surface mostly neutral; use absorption below
+        // for physically plausible colored transmission through the volume.
+        const math::float3 surfaceColor{
+            0.82f + key.r * 0.18f,
+            0.82f + key.g * 0.18f,
+            0.82f + key.b * 0.18f,
+        };
+        const math::float3 absorption{
+            (1.0f - std::clamp(key.r, 0.0f, 1.0f)) * 0.15f,
+            (1.0f - std::clamp(key.g, 0.0f, 1.0f)) * 0.15f,
+            (1.0f - std::clamp(key.b, 0.0f, 1.0f)) * 0.15f,
+        };
+        mi->setParameter("baseColor", RgbType::LINEAR, surfaceColor);
+        mi->setParameter("roughness",    key.param1);
+        mi->setParameter("ior",          key.param2);
+        mi->setParameter("thickness",    key.param3);
+        mi->setParameter("transmission", key.transmission);
+        mi->setParameter("absorption",   absorption);
+    } else if (key.materialKind == KINE_MAT_NEON) {
+        mi->setParameter("emissiveColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
+        mi->setParameter("intensity",     key.param1);
+    } else if (key.materialKind == KINE_MAT_WATER) {
+        mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
+        mi->setParameter("roughness",   key.param1);       // ~0.05-0.15 for calm water
+        mi->setParameter("ior",         key.param2);       // 1.33
+        mi->setParameter("thickness",   key.param3);
+        mi->setParameter("transmission", key.transmission);
+        mi->setParameter("time",        time);
+        mi->setParameter("waveScale",   4.0f);
+        mi->setParameter("waveSpeed",   1.0f);
+        mi->setParameter("foamAmount",  0.3f);
+    } else if (key.materialKind == KINE_MAT_OUTLINE) {
+        mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
+        mi->setParameter("thickness", key.param1);
+    } else if (key.materialKind == KINE_MAT_GIZMO) {
+        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
+    } else if (key.materialKind == KINE_MAT_PARTICLE) {
+        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, key.transmission});
+        mi->setParameter("uvScale", math::float2{key.param1, key.param2});
+        mi->setParameter("uvOffset", math::float2{key.param3, key.particleUvOffsetY});
+
+        TextureSampler clampSampler(
+            TextureSampler::MinFilter::LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::CLAMP_TO_EDGE
+        );
+
+        if (key.texture && key.texture->tex) {
+            mi->setParameter("hasTexture", 1.0f);
+            mi->setParameter("baseColorMap", key.texture->tex, clampSampler);
+        } else {
+            mi->setParameter("hasTexture", 0.0f);
+            mi->setParameter("baseColorMap", whiteTex, clampSampler);
+        }
+    } else if (key.materialKind == KINE_MAT_TERRAIN) {
+        TextureSampler repeatSampler(
+            TextureSampler::MinFilter::LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::REPEAT
+        );
+        static const char* layerNames[6] = {
+            "layer0", "layer1", "layer2", "layer3", "layer4", "layer5"
+        };
+        for (size_t i = 0; i < 6; ++i) {
+            Texture* layer = key.texture ? key.texture->terrainLayers[i] : nullptr;
+            mi->setParameter(layerNames[i], layer ? layer : whiteTex, repeatSampler);
+        }
+        mi->setParameter("roughness", key.param1 > 0.0f ? key.param1 : 0.9f);
+        mi->setParameter("tileScale", key.param3 > 0.0f ? key.param3 : 0.25f);
+    } else {
+        TextureSampler repeatSampler(
+            TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::REPEAT
+        );
+
+        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
+        mi->setParameter("roughness", key.param1);
+        mi->setParameter("metallic",  key.param2);
+
+        float uvs = (key.param3 > 0.0f) ? key.param3 : 1.0f;
+        mi->setParameter("uvScale", math::float2{uvs, uvs});
+
+        // --- albedo ---
+        if (key.texture && key.texture->tex) {
+            mi->setParameter("hasTexture",    1.0f);
+            mi->setParameter("baseColorMap",  key.texture->tex, repeatSampler);
+        } else {
+            mi->setParameter("hasTexture",    0.0f);
+            mi->setParameter("baseColorMap",  whiteTex, repeatSampler);
+        }
+
+        // --- normal map ---
+        if (key.texture && key.texture->normalTex) {
+            mi->setParameter("hasNormalMap", 1.0f);
+            mi->setParameter("normalMap",    key.texture->normalTex, repeatSampler);
+        } else {
+            mi->setParameter("hasNormalMap", 0.0f);
+            mi->setParameter("normalMap",    whiteTex, repeatSampler);
+        }
+
+        // --- ORM map ---
+        if (key.texture && key.texture->ormTex) {
+            mi->setParameter("hasOrmMap", 1.0f);
+            mi->setParameter("ormMap",    key.texture->ormTex, repeatSampler);
+        } else {
+            mi->setParameter("hasOrmMap", 0.0f);
+            mi->setParameter("ormMap",    whiteTex, repeatSampler);
+        }
+
+        // --- height map / parallax ---
+        if (key.texture && key.texture->heightTex) {
+            mi->setParameter("hasHeightMap", 1.0f);
+            mi->setParameter("heightMap",    key.texture->heightTex, repeatSampler);
+            mi->setParameter("heightScale",  key.texture->heightScale);
+        } else {
+            mi->setParameter("hasHeightMap", 0.0f);
+            mi->setParameter("heightMap",    whiteTex, repeatSampler);
+            mi->setParameter("heightScale",  0.0f);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filament culls all instances of a renderable against one shared box. Union
+// the real transformed mesh bounds so large, rotated, or elongated parts are
+// included in both the camera and shadow-caster passes.
+// ---------------------------------------------------------------------------
+static Box kine_compute_batch_bounds(
+    const KineMesh* mesh,
+    const math::mat4f* transforms,
+    size_t count)
+{
+    Box bounds = rigidTransform(mesh->localBounds, transforms[0]);
+    for (size_t i = 1; i < count; i++) {
+        bounds.unionSelf(rigidTransform(mesh->localBounds, transforms[i]));
+    }
+    return bounds;
+}
+
+static Box kine_compute_dynamic_batch_bounds(
+    const KineMesh* mesh,
+    const math::mat4f* transforms,
+    size_t count)
+{
+    constexpr float cellSize = 64.0f;
+    Box exact = kine_compute_batch_bounds(mesh, transforms, count);
+    const math::float3 minPoint = exact.center - exact.halfExtent;
+    const math::float3 maxPoint = exact.center + exact.halfExtent;
+    const math::float3 snappedMin{
+        std::floor(minPoint.x / cellSize) * cellSize,
+        std::floor(minPoint.y / cellSize) * cellSize,
+        std::floor(minPoint.z / cellSize) * cellSize,
+    };
+    const math::float3 snappedMax{
+        std::ceil(maxPoint.x / cellSize) * cellSize,
+        std::ceil(maxPoint.y / cellSize) * cellSize,
+        std::ceil(maxPoint.z / cellSize) * cellSize,
+    };
+    return Box{(snappedMin + snappedMax) * 0.5f, (snappedMax - snappedMin) * 0.5f};
+}
+
+static Material* kine_select_material(
+    KineFilamentContext* ctx, int materialKind, KineFilamentShader* shader = nullptr)
+{
+	if (shader && shader->ctx == ctx && shader->material) return shader->material;
+	if (ctx->globalShader && ctx->globalShader->material) return ctx->globalShader->material;
+    if (materialKind == KINE_MAT_GLASS) return ctx->glassMaterial;
+    if (materialKind == KINE_MAT_NEON) return ctx->neonMaterial;
+    if (materialKind == KINE_MAT_WATER) return ctx->waterMaterial;
+    if (materialKind == KINE_MAT_OUTLINE) return ctx->outlineMaterial;
+    if (materialKind == KINE_MAT_GIZMO) return ctx->gizmoMaterial;
+    if (materialKind == KINE_MAT_PARTICLE) return ctx->particleMaterial;
+    if (materialKind == KINE_MAT_TERRAIN) return ctx->terrainMaterial;
+    return ctx->defaultMaterial;
+}
+
+static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem& item, uint64_t streamId = 0)
+{
+    KineBatchKey key;
+    key.mesh = (KineMesh*)item.mesh;
+    key.shader = item.shader;
+    key.streamId = streamId;
+    key.materialKind = item.materialKind;
+    key.r = item.r;
+    key.g = item.g;
+    key.b = item.b;
+    key.param1 = item.param1;
+    key.param2 = item.param2;
+    key.param3 = item.param3;
+    key.transmission = item.transmission;
+    key.castShadow = (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0;
+    key.receiveShadow = (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0;
+    key.culling = (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0;
+    key.texture = (KineTexHandle*)item.tex;
+    return key;
+}
+
+static math::mat4f kine_draw_item_transform(const KineFilamentDrawItem& item)
+{
+    const float* mat4 = item.transform;
+    // KineFilamentDrawItem carries four consecutive affine rows. math::mat4f
+    // accepts columns, so gather the matching element from each row. This is
+    // an intentional conversion, not an accidental transpose.
+    return math::mat4f(
+        math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+    );
+}
+
+static void kine_destroy_instance_batch_chunks(KineFilamentInstanceBatch* batch)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine) return;
+    KineFilamentContext* ctx = batch->ctx;
+    for (KineBuiltBatch& chunk : batch->chunks) {
+        if (!chunk.entity.isNull()) {
+            ctx->scene->remove(chunk.entity);
+            ctx->engine->destroy(chunk.entity);
+            EntityManager::get().destroy(chunk.entity);
+        }
+        if (chunk.instanceBuffer) {
+            ctx->engine->destroy(chunk.instanceBuffer);
+        }
+    }
+    batch->chunks.clear();
+}
+
+static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine || batch->transforms.empty()) return false;
+    KineFilamentContext* ctx = batch->ctx;
+    KineMesh* mesh = batch->key.mesh;
+    if (!mesh || !mesh->vb || !mesh->ib) return false;
+
+    Material* base = kine_select_material(ctx, batch->key.materialKind, batch->key.shader);
+    if (!base) return false;
+
+    if (!batch->matInst) {
+        batch->matInst = base->createInstance();
+    }
+    kine_apply_material_params(ctx, batch->matInst, batch->key);
+
+    kine_destroy_instance_batch_chunks(batch);
+
+    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+
+    size_t offset = 0;
+    while (offset < batch->transforms.size()) {
+        const size_t count = std::min(maxInstances, batch->transforms.size() - offset);
+        const math::mat4f* chunkTransforms = batch->transforms.data() + offset;
+        const Box bounds = kine_compute_dynamic_batch_bounds(mesh, chunkTransforms, count);
+
+        InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
+        instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
+
+        Entity entity = EntityManager::get().create();
+        RenderableManager::Builder renderableBuilder(1);
+        renderableBuilder.boundingBox(bounds)
+            .material(0, batch->matInst)
+            .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mesh->vb, mesh->ib, 0, mesh->indexCount)
+            .culling(batch->key.culling)
+            .receiveShadows(batch->key.receiveShadow)
+            .castShadows(batch->key.castShadow)
+            .instances(count, instanceBuffer);
+        if (!mesh->bones.empty() && mesh->skinMatrices.size() == mesh->bones.size()) {
+            renderableBuilder.skinning(mesh->skinMatrices.size(), mesh->skinMatrices.data());
+        }
+        if (batch->key.materialKind == KINE_MAT_GLASS) {
+            // Filament reserves channels 0/1 for the opaque scene copies used
+            // by screen-space refraction.
+            renderableBuilder.channel(2).priority(0);
+        }
+        renderableBuilder.build(*ctx->engine, entity);
+
+        ctx->scene->addEntity(entity);
+        batch->chunks.push_back({entity, instanceBuffer, count});
+        offset += count;
+    }
+
+    return true;
+}
+
+static void kine_destroy_built_batches(KineFilamentContext* ctx);
+
+static bool kine_switch_global_shader(KineFilamentContext* ctx, KineFilamentShader* shader)
+{
+    if (!ctx || (shader && shader->ctx != ctx)) return false;
+    if (ctx->globalShader == shader) return true;
+
+    kine_destroy_built_batches(ctx);
+    ctx->globalShader = shader;
+
+    bool rebuilt = true;
+    for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+        if (!batch) continue;
+        kine_destroy_instance_batch_chunks(batch);
+        if (batch->matInst) {
+            ctx->engine->destroy(batch->matInst);
+            batch->matInst = nullptr;
+        }
+        rebuilt = kine_rebuild_instance_batch(batch) && rebuilt;
+    }
+    return rebuilt;
+}
+
+static void kine_destroy_post_process_pipeline(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine) return;
+    if (ctx->view) {
+        const int viewportWidth = ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width;
+        const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+        const int filamentY = std::clamp(
+            ctx->height - ctx->viewportY - viewportHeight,
+            0,
+            std::max(0, ctx->height - 1));
+        ctx->view->setRenderTarget(ctx->renderTarget);
+        ctx->view->setViewport({
+            int32_t(ctx->viewportX), int32_t(filamentY),
+            uint32_t(viewportWidth), uint32_t(viewportHeight)
+        });
+    }
+    if (ctx->postScene && !ctx->postQuadEntity.isNull()) {
+        ctx->postScene->remove(ctx->postQuadEntity);
+    }
+    if (!ctx->postQuadEntity.isNull()) {
+        ctx->engine->destroy(ctx->postQuadEntity);
+        EntityManager::get().destroy(ctx->postQuadEntity);
+        ctx->postQuadEntity.clear();
+    }
+    if (ctx->postMaterialInstance) {
+        ctx->engine->destroy(ctx->postMaterialInstance);
+        ctx->postMaterialInstance = nullptr;
+    }
+    if (!ctx->postCameraEntity.isNull()) {
+        ctx->engine->destroyCameraComponent(ctx->postCameraEntity);
+        EntityManager::get().destroy(ctx->postCameraEntity);
+        ctx->postCameraEntity.clear();
+        ctx->postCamera = nullptr;
+    }
+    if (ctx->postView) { ctx->engine->destroy(ctx->postView); ctx->postView = nullptr; }
+    if (ctx->postScene) { ctx->engine->destroy(ctx->postScene); ctx->postScene = nullptr; }
+    if (ctx->postSceneTarget) { ctx->engine->destroy(ctx->postSceneTarget); ctx->postSceneTarget = nullptr; }
+    if (ctx->postSceneColor) { ctx->engine->destroy(ctx->postSceneColor); ctx->postSceneColor = nullptr; }
+    if (ctx->postSceneDepth) { ctx->engine->destroy(ctx->postSceneDepth); ctx->postSceneDepth = nullptr; }
+}
+
+static void kine_apply_shader_uniforms(MaterialInstance* instance, KineFilamentShader* shader)
+{
+    if (!instance || !shader) return;
+    for (const auto& [name, values] : shader->uniforms) {
+        switch (values.size()) {
+            case 1: instance->setParameter(name.c_str(), values[0]); break;
+            case 2: instance->setParameter(name.c_str(), math::float2{values[0], values[1]}); break;
+            case 3: instance->setParameter(name.c_str(), math::float3{values[0], values[1], values[2]}); break;
+            case 4: instance->setParameter(name.c_str(), math::float4{values[0], values[1], values[2], values[3]}); break;
+            default: break;
+        }
+    }
+}
+
+static bool kine_build_post_process_pipeline(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine || !ctx->postProcessShader || !ctx->postProcessShader->material ||
+            !ctx->postProcessQuadMesh || !ctx->postProcessQuadMesh->vb || !ctx->postProcessQuadMesh->ib) return false;
+    Material* material = ctx->postProcessShader->material;
+    if (!material->isSampler("inputTexture")) return false;
+
+    kine_destroy_post_process_pipeline(ctx);
+    const int viewportWidth = ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width;
+    const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+    const int filamentY = std::clamp(
+        ctx->height - ctx->viewportY - viewportHeight,
+        0,
+        std::max(0, ctx->height - 1));
+    ctx->postSceneColor = Texture::Builder()
+        .width(uint32_t(viewportWidth)).height(uint32_t(viewportHeight)).levels(1)
+        .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8).build(*ctx->engine);
+    ctx->postSceneDepth = Texture::Builder()
+        .width(uint32_t(viewportWidth)).height(uint32_t(viewportHeight)).levels(1)
+        .usage(Texture::Usage::DEPTH_ATTACHMENT)
+        .format(Texture::InternalFormat::DEPTH24).build(*ctx->engine);
+    if (!ctx->postSceneColor || !ctx->postSceneDepth) {
+        kine_destroy_post_process_pipeline(ctx);
+        return false;
+    }
+    ctx->postSceneTarget = RenderTarget::Builder()
+        .texture(RenderTarget::AttachmentPoint::COLOR, ctx->postSceneColor)
+        .texture(RenderTarget::AttachmentPoint::DEPTH, ctx->postSceneDepth)
+        .build(*ctx->engine);
+    ctx->postScene = ctx->engine->createScene();
+    ctx->postView = ctx->engine->createView();
+    ctx->postCameraEntity = EntityManager::get().create();
+    ctx->postCamera = ctx->engine->createCamera(ctx->postCameraEntity);
+    ctx->postMaterialInstance = material->createInstance();
+    if (!ctx->postSceneTarget || !ctx->postScene || !ctx->postView || !ctx->postCamera || !ctx->postMaterialInstance) {
+        kine_destroy_post_process_pipeline(ctx);
+        return false;
+    }
+
+    TextureSampler sampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR,
+        TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    ctx->postMaterialInstance->setParameter("inputTexture", ctx->postSceneColor, sampler);
+    kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
+    if (material->hasParameter("intensity") &&
+            ctx->postProcessShader->uniforms.find("intensity") == ctx->postProcessShader->uniforms.end()) {
+        ctx->postMaterialInstance->setParameter("intensity", 1.0f);
+    }
+
+    ctx->postQuadEntity = EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox({{0, 0, 0}, {1, 1, 0.1f}})
+        .material(0, ctx->postMaterialInstance)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
+            ctx->postProcessQuadMesh->vb, ctx->postProcessQuadMesh->ib, 0, ctx->postProcessQuadMesh->indexCount)
+        .culling(false).castShadows(false).receiveShadows(false)
+        .build(*ctx->engine, ctx->postQuadEntity);
+    ctx->postScene->addEntity(ctx->postQuadEntity);
+    ctx->postCamera->setProjection(Camera::Projection::ORTHO, -0.5, 0.5, -0.5, 0.5, 0.1, 10.0);
+    ctx->postCamera->lookAt({0, 0, 1}, {0, 0, 0}, {0, 1, 0});
+    ctx->postView->setScene(ctx->postScene);
+    ctx->postView->setCamera(ctx->postCamera);
+    ctx->postView->setRenderTarget(ctx->renderTarget);
+    ctx->postView->setViewport({
+        int32_t(ctx->viewportX), int32_t(filamentY),
+        uint32_t(viewportWidth), uint32_t(viewportHeight)
+    });
+    ctx->postView->setPostProcessingEnabled(false);
+    ctx->view->setRenderTarget(ctx->postSceneTarget);
+    ctx->view->setViewport({0, 0, uint32_t(viewportWidth), uint32_t(viewportHeight)});
+    return true;
+}
+
+static void kine_destroy_batch_chunks(
+    KineFilamentContext* ctx,
+    KinePersistentBatch& batch)
+{
+    for (KineBuiltBatch& chunk : batch.chunks) {
+        if (!chunk.entity.isNull()) {
+            ctx->scene->remove(chunk.entity);
+            ctx->engine->destroy(chunk.entity);
+            EntityManager::get().destroy(chunk.entity);
+        }
+        if (chunk.instanceBuffer) {
+            ctx->engine->destroy(chunk.instanceBuffer);
+        }
+    }
+    batch.chunks.clear();
+}
+
+static void kine_destroy_persistent_batch(
+    KineFilamentContext* ctx,
+    KinePersistentBatch& batch)
+{
+    kine_destroy_batch_chunks(ctx, batch);
+    if (batch.matInst) {
+        ctx->engine->destroy(batch.matInst);
+        batch.matInst = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Turns every batch accumulated this frame (via Kine_Filament_DrawMeshEx)
+// into one GPU-instanced RenderableManager entity apiece, splitting into
+// multiple chunks/draw calls if a batch exceeds the engine's automatic
+// instancing limit. Called from Kine_Filament_RenderFrame, right before
+// rendering.
+// ---------------------------------------------------------------------------
+static void kine_update_batches(KineFilamentContext* ctx)
+{
+    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+
+    std::vector<std::pair<KineBatchKey, KinePendingBatch*>> sortedBatches;
+    sortedBatches.reserve(ctx->pendingBatches.size());
+    for (auto& kv : ctx->pendingBatches) {
+        if (kv.second.lastQueuedFrame == ctx->batchFrame &&
+            !kv.second.transforms.empty() && kv.first.mesh) {
+            sortedBatches.push_back({kv.first, &kv.second});
+        }
+    }
+    std::sort(sortedBatches.begin(), sortedBatches.end(),
+        [](const auto& a, const auto& b) {
+            return a.first.materialKind < b.first.materialKind;
+        });
+
+    for (auto& [key, pending] : sortedBatches) {
+        KineMesh* m = key.mesh;
+        if (!m->vb || !m->ib) continue;
+
+        Material* base = kine_select_material(ctx, key.materialKind, key.shader);
+        if (!base) continue;
+
+        KinePersistentBatch& batch = ctx->builtBatches[key];
+        batch.lastUsedFrame = ctx->batchFrame;
+        if (!batch.matInst) {
+            batch.matInst = base->createInstance();
+			kine_apply_material_params(ctx, batch.matInst, key);
+        }
+
+        std::vector<math::mat4f>& transforms = pending->transforms;
+        const size_t requiredChunks = (transforms.size() + maxInstances - 1) / maxInstances;
+        bool rebuildChunks = batch.chunks.size() != requiredChunks;
+        if (!rebuildChunks) {
+            for (size_t chunkIndex = 0; chunkIndex < requiredChunks; chunkIndex++) {
+                const size_t offset = chunkIndex * maxInstances;
+                const size_t count = std::min(maxInstances, transforms.size() - offset);
+                if (batch.chunks[chunkIndex].instanceCount != count) {
+                    rebuildChunks = true;
+                    break;
+                }
+            }
+        }
+
+        if (rebuildChunks) {
+            kine_destroy_batch_chunks(ctx, batch);
+        }
+		const bool transformsChanged = rebuildChunks || batch.transformHash != pending->transformHash;
+
+        size_t offset = 0;
+        size_t chunkIndex = 0;
+        while (offset < transforms.size()) {
+            const size_t count = std::min(maxInstances, transforms.size() - offset);
+            const math::mat4f* chunkTransforms = transforms.data() + offset;
+            if (rebuildChunks) {
+				const Box bounds = kine_compute_batch_bounds(m, chunkTransforms, count);
+                InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
+                instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
+
+                Entity entity = EntityManager::get().create();
+                RenderableManager::Builder renderableBuilder(1);
+                renderableBuilder.boundingBox(bounds)
+                    .material(0, batch.matInst)
+                    .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, m->vb, m->ib, 0, m->indexCount)
+                    .culling(key.culling)
+                    .receiveShadows(key.receiveShadow)
+                    .castShadows(key.castShadow)
+                    .instances(count, instanceBuffer);
+                if (!m->bones.empty() && m->skinMatrices.size() == m->bones.size()) {
+                    renderableBuilder.skinning(m->skinMatrices.size(), m->skinMatrices.data());
+                }
+                if (key.materialKind == KINE_MAT_GLASS) {
+                    // Glass is the first translucent material submitted after
+                    // Filament's opaque pass. This keeps other transparent
+                    // effects from being hidden behind its refractive surface.
+                    renderableBuilder.channel(2).priority(0);
+                }
+                renderableBuilder.build(*ctx->engine, entity);
+
+                ctx->scene->addEntity(entity);
+                batch.chunks.push_back({entity, instanceBuffer, count});
+			} else if (transformsChanged) {
+				const Box bounds = kine_compute_batch_bounds(m, chunkTransforms, count);
+                KineBuiltBatch& chunk = batch.chunks[chunkIndex];
+                chunk.instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
+                RenderableManager& rm = ctx->engine->getRenderableManager();
+                RenderableManager::Instance renderable = rm.getInstance(chunk.entity);
+                if (renderable.isValid()) {
+                    rm.setAxisAlignedBoundingBox(renderable, bounds);
+                }
+            }
+
+            offset += count;
+            chunkIndex++;
+        }
+		batch.transformHash = pending->transformHash;
+    }
+
+    // Retained water batches still need their time uniform advanced even
+    // when their transforms and material properties are unchanged.
+    for (auto& [key, batch] : ctx->builtBatches) {
+        if (batch.lastUsedFrame == ctx->batchFrame &&
+            key.materialKind == KINE_MAT_WATER && batch.matInst) {
+			kine_apply_material_params(ctx, batch.matInst, key);
+        }
+    }
+
+    for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
+        if (it->second.lastUsedFrame != ctx->batchFrame) {
+            kine_destroy_persistent_batch(ctx, it->second);
+            it = ctx->builtBatches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static void kine_finish_batch_frame(KineFilamentContext* ctx)
+{
+    ctx->batchFrame++;
+    for (auto it = ctx->pendingBatches.begin(); it != ctx->pendingBatches.end();) {
+        if (ctx->batchFrame - it->second.lastQueuedFrame > 120) {
+            it = ctx->pendingBatches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static void kine_destroy_built_batches(KineFilamentContext* ctx)
+{
+    for (auto& [key, batch] : ctx->builtBatches) {
+        (void)key;
+        kine_destroy_persistent_batch(ctx, batch);
+    }
+    ctx->builtBatches.clear();
+}
+
+static void kine_invalidate_batches(
+    KineFilamentContext* ctx,
+    const KineMesh* mesh,
+    const KineTexHandle* texture)
+{
+    auto matches = [mesh, texture](const KineBatchKey& key) {
+        return (mesh && key.mesh == mesh) || (texture && key.texture == texture);
+    };
+
+    for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
+        if (matches(it->first)) {
+            kine_destroy_persistent_batch(ctx, it->second);
+            it = ctx->builtBatches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = ctx->pendingBatches.begin(); it != ctx->pendingBatches.end();) {
+        if (matches(it->first)) {
+            it = ctx->pendingBatches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto& [streamId, state] : ctx->retainedLists) {
+        (void)streamId;
+        const size_t oldSize = state.keys.size();
+        state.keys.erase(
+            std::remove_if(state.keys.begin(), state.keys.end(), matches),
+            state.keys.end());
+        if (state.keys.size() != oldSize) {
+            state.initialized = false;
+        }
+    }
+}
+
+static void kine_destroy_decal(KineFilamentContext* ctx, KineDecalResource& decal)
+{
+    if (!decal.entity.isNull()) {
+        ctx->scene->remove(decal.entity);
+        ctx->engine->destroy(decal.entity);
+        EntityManager::get().destroy(decal.entity);
+        decal.entity = {};
+    }
+    if (decal.material) {
+        ctx->engine->destroy(decal.material);
+        decal.material = nullptr;
+    }
+    if (decal.mesh) {
+        if (decal.mesh->vb) ctx->engine->destroy(decal.mesh->vb);
+        if (decal.mesh->ib) ctx->engine->destroy(decal.mesh->ib);
+        delete decal.mesh;
+        decal.mesh = nullptr;
+    }
+}
+
+}
+
+static Material* buildDefaultMaterial(Engine* engine)
+{
+    return Material::Builder()
+        .package(KINE_DEFAULT_PACKAGE_KINE_DEFAULT_DATA, KINE_DEFAULT_PACKAGE_KINE_DEFAULT_SIZE)
+        .build(*engine);
+}
+
+static Material* buildWaterMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_WATER_PACKAGE_KINE_WATER_DATA, KINE_WATER_PACKAGE_KINE_WATER_SIZE)
+        .build(*engine);
+}
+
+static Material* buildNeonMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_NEON_PACKAGE_KINE_NEON_DATA, KINE_NEON_PACKAGE_KINE_NEON_SIZE)
+        .build(*engine);
+}
+
+static Material* buildGlassMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_GLASS_PACKAGE_KINE_GLASS_DATA, KINE_GLASS_PACKAGE_KINE_GLASS_SIZE)
+        .build(*engine);
+}
+
+static Material* buildDecalMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_DECAL_PACKAGE_KINE_DECAL_DATA, KINE_DECAL_PACKAGE_KINE_DECAL_SIZE)
+        .build(*engine);
+}
+
+static Material* buildOutlineMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_OUTLINE_PACKAGE_KINE_OUTLINE_DATA, KINE_OUTLINE_PACKAGE_KINE_OUTLINE_SIZE)
+        .build(*engine);
+}
+
+static Material* buildGizmoMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_GIZMO_PACKAGE_KINE_GIZMO_DATA, KINE_GIZMO_PACKAGE_KINE_GIZMO_SIZE)
+        .build(*engine);
+}
+
+static Material* buildParticleMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_PARTICLE_PACKAGE_KINE_PARTICLE_DATA, KINE_PARTICLE_PACKAGE_KINE_PARTICLE_SIZE)
+        .build(*engine);
+}
+
+static Material* buildTerrainMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_TERRAIN_PACKAGE_KINE_TERRAIN_DATA, KINE_TERRAIN_PACKAGE_KINE_TERRAIN_SIZE)
+        .build(*engine);
+}
+
+static Texture* kine_create_uploaded_rgba_texture(
+    Engine* engine,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8)
+{
+    if (!engine || !pixelsRGBA8 || width <= 0 || height <= 0 || rowBytes <= 0)
+        return nullptr;
+
+    size_t bytes = (size_t)rowBytes * height;
+    uint8_t* copy = (uint8_t*)malloc(bytes);
+    if (!copy) return nullptr;
+    memcpy(copy, pixelsRGBA8, bytes);
+
+    Texture* tex = Texture::Builder()
+        .width((uint32_t)width)
+        .height((uint32_t)height)
+        .levels(1)
+        .usage(Texture::Usage::UPLOADABLE | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*engine);
+
+    if (!tex) {
+        free(copy);
+        return nullptr;
+    }
+
+    uint32_t strideTexels = (uint32_t)(rowBytes / 4);
+    Texture::PixelBufferDescriptor pb(
+        copy, bytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        /*alignment*/ 1, /*left*/ 0, /*top*/ 0, /*stride*/ strideTexels,
+        [](void* buffer, size_t, void*) { free(buffer); });
+
+    tex->setImage(*engine, 0, 0, 0,
+                  (uint32_t)width, (uint32_t)height, std::move(pb));
+    return tex;
+}
+
+static QualityLevel kine_quality_from_int(int quality)
+{
+    switch (quality) {
+        case 0: return QualityLevel::LOW;
+        case 1: return QualityLevel::MEDIUM;
+        case 2: return QualityLevel::HIGH;
+        case 3: return QualityLevel::ULTRA;
+        default: return QualityLevel::MEDIUM;
+    }
+}
+
+static uint8_t kine_clamp_u8(int value, int minValue, int maxValue)
+{
+    return (uint8_t)std::clamp(value, minValue, maxValue);
+}
+
+static uint32_t kine_next_power_of_two(uint32_t value)
+{
+    if (value <= 8u) return 8u;
+    value--;
+    value |= value >> 1u;
+    value |= value >> 2u;
+    value |= value >> 4u;
+    value |= value >> 8u;
+    value |= value >> 16u;
+    value++;
+    return std::clamp(value, 8u, 8192u);
+}
+
+static LightManager::ShadowOptions kine_make_sun_shadow_options(
+    int mapSize,
+    int cascades,
+    float shadowFar,
+    float shadowNearHint,
+    float shadowFarHint,
+    bool stable,
+    bool contactShadows)
+{
+    LightManager::ShadowOptions options;
+    options.mapSize = kine_next_power_of_two((uint32_t)std::max(mapSize, 8));
+    options.shadowCascades = kine_clamp_u8(cascades, 1, 4);
+    LightManager::ShadowCascades::computePracticalSplits(
+        options.cascadeSplitPositions,
+        options.shadowCascades,
+        1.0f,
+        std::max(shadowFar > 0.0f ? shadowFar : shadowFarHint, 2.0f),
+        0.65f);
+    options.shadowFar = std::max(shadowFar, 0.0f);
+    options.shadowNearHint = std::max(shadowNearHint, 0.001f);
+    options.shadowFarHint = std::max(shadowFarHint, options.shadowNearHint + 0.001f);
+    options.stable = stable;
+    options.lispsm = !stable;
+    // Values below Filament's recommended PCF defaults cause the receiver to
+    // shadow itself, especially on large, nearly coplanar parts (shadow acne).
+    options.constantBias = 0.004f;
+    options.normalBias = 1.25f;
+    options.polygonOffsetConstant = 0.75f;
+    options.polygonOffsetSlope = 2.5f;
+    options.screenSpaceContactShadows = contactShadows;
+    options.stepCount = 16;
+    options.maxShadowDistance = 0.75f;
+    return options;
+}
+
+extern "C" {
+
+static KineFilamentContext* Kine_Filament_CreateInternal(
+    int width,
+    int height,
+    void* nativeWindow,
+    void* vulkanCompositor = nullptr,
+    bool useFilamentOwnedCompositor = false)
+{
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    if (width <= 0 || height <= 0) return nullptr;
+
+    auto* ctx = new KineFilamentContext();
+    ctx->nativeWindow = nativeWindow;
+    ctx->useFilamentOwnedCompositor = useFilamentOwnedCompositor;
+    ctx->renderToSwapChain = nativeWindow != nullptr || vulkanCompositor != nullptr ||
+        useFilamentOwnedCompositor;
+
+#if KINE_FILAMENT_USE_VULKAN
+    if (useFilamentOwnedCompositor) {
+        ctx->vulkanPlatform = std::make_unique<KineFilamentCompositorVulkanPlatform>(
+            nativeWindow,
+            width,
+            height);
+        fprintf(stderr, "[Kine] creating Filament-owned Vulkan compositor engine\n");
+        ctx->engine = Engine::create(
+            backend::Backend::VULKAN,
+            ctx->vulkanPlatform.get(),
+            nullptr);
+    } else if (vulkanCompositor) {
+        ctx->vulkanCompositor = vulkanCompositor;
+        KineVulkanCompositorInfo info{};
+        if (!Kine_VulkanCompositor_GetInfo(
+                reinterpret_cast<KineVulkanCompositor*>(vulkanCompositor),
+                &info)) {
+            delete ctx;
+            return nullptr;
+        }
+
+        ctx->vulkanSharedContext.instance = reinterpret_cast<VkInstance>(info.instance);
+        ctx->vulkanSharedContext.physicalDevice = reinterpret_cast<VkPhysicalDevice>(info.physicalDevice);
+        ctx->vulkanSharedContext.logicalDevice = reinterpret_cast<VkDevice>(info.device);
+        ctx->vulkanSharedContext.graphicsQueueFamilyIndex = info.graphicsQueueFamilyIndex;
+        ctx->vulkanSharedContext.graphicsQueueIndex = info.graphicsQueueCount > 1 ? 1 : 0;
+        ctx->vulkanPlatform = nullptr;
+        fprintf(stderr,
+            "[Kine] creating Filament shared Vulkan engine queueFamily=%u queueIndex=%u queueCount=%u\n",
+            ctx->vulkanSharedContext.graphicsQueueFamilyIndex,
+            ctx->vulkanSharedContext.graphicsQueueIndex,
+            info.graphicsQueueCount);
+        ctx->engine = Engine::create(
+            backend::Backend::VULKAN,
+            ctx->vulkanPlatform.get(),
+            &ctx->vulkanSharedContext);
+    } else {
+        ctx->engine = Engine::create(backend::Backend::VULKAN);
+    }
+    if (!ctx->engine) { delete ctx; return nullptr; }
+#else
+    (void)vulkanCompositor;
+    void* sharedGLContext = kine_get_current_gl_context();
+    if (!sharedGLContext) { delete ctx; return nullptr; }
+
+    kine_capture_host_context(ctx);
+
+    kine_release_current_gl_context();
+
+    ctx->engine = Engine::create(backend::Backend::OPENGL, nullptr, sharedGLContext);
+    if (!ctx->engine) { delete ctx; return nullptr; }
+
+#if !KINE_FILAMENT_USE_VULKAN
+    kine_restore_host_context(ctx);
+#endif
+
+    kine_init_gl_ext();
+#endif
+
+    if (ctx->useFilamentOwnedCompositor) {
+        fprintf(stderr, "[Kine] creating Filament-owned compositor swapchain size=%dx%d\n", width, height);
+        // Use the native-window overload so Filament treats this as a
+        // presentable swapchain and invokes VulkanPlatform::present(). The
+        // width/height overload is always classified as headless internally.
+        ctx->swapChain = ctx->engine->createSwapChain(nativeWindow);
+        ctx->engine->flushAndWait();
+        if (ctx->vulkanPlatform) {
+            auto* platform = static_cast<KineFilamentCompositorVulkanPlatform*>(ctx->vulkanPlatform.get());
+            ctx->vulkanCompositor = platform->compositor();
+        }
+    } else if (ctx->renderToSwapChain && ctx->nativeWindow) {
+        fprintf(stderr, "[Kine] creating Filament native swapchain for window=%p size=%dx%d\n",
+            ctx->nativeWindow, width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(ctx->nativeWindow);
+    } else if (vulkanCompositor) {
+        fprintf(stderr, "[Kine] creating Filament compositor swapchain size=%dx%d\n", width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(width, height);
+    } else {
+        fprintf(stderr, "[Kine] creating Filament headless swapchain size=%dx%d\n", width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(width, height);
+    }
+    if (!ctx->swapChain) {
+        fprintf(stderr, "[Kine] createSwapChain failed\n");
+        Kine_Filament_Destroy(ctx);
+        return nullptr;
+    }
+    ctx->renderer  = ctx->engine->createRenderer();
+    ctx->scene     = ctx->engine->createScene();
+    ctx->view      = ctx->engine->createView();
+
+    ctx->cameraEntity = EntityManager::get().create();
+    ctx->camera = ctx->engine->createCamera(ctx->cameraEntity);
+    ctx->camera->setProjection(60.0, double(width) / double(height), 1.0, 500.0);
+
+    ctx->view->setScene(ctx->scene);
+    ctx->view->setCamera(ctx->camera);
+    ctx->view->setPostProcessingEnabled(true);
+    // Filament defaults zLightNear to 5m. Kinemium uses stud-sized scenes and
+    // commonly places local lights close to the camera, so that default can
+    // cull every PointLight / SpotLight in a small scene.
+    ctx->view->setDynamicLightingOptions(0.1f, 500.0f);
+
+    Renderer::ClearOptions clearOptions;
+    clearOptions.clearColor = ctx->skyColor;
+    clearOptions.clear = !ctx->useFilamentOwnedCompositor;
+    clearOptions.discard = !ctx->useFilamentOwnedCompositor;
+    ctx->renderer->setClearOptions(clearOptions);
+
+    ctx->defaultMaterial = buildDefaultMaterial(ctx->engine);
+    ctx->neonMaterial  = buildNeonMaterial(ctx->engine);
+    ctx->glassMaterial = buildGlassMaterial(ctx->engine);
+    ctx->waterMaterial = buildWaterMaterial(ctx->engine);
+    ctx->decalMaterial = buildDecalMaterial(ctx->engine);
+    ctx->outlineMaterial = buildOutlineMaterial(ctx->engine);
+    ctx->gizmoMaterial = buildGizmoMaterial(ctx->engine);
+    ctx->particleMaterial = buildParticleMaterial(ctx->engine);
+    ctx->terrainMaterial = buildTerrainMaterial(ctx->engine);
+    ctx->particleQuadMesh = buildParticleQuad();
+    uploadMesh(ctx->particleQuadMesh, ctx->engine);
+    ctx->postProcessQuadMesh = buildPostProcessQuad();
+    uploadMesh(ctx->postProcessQuadMesh, ctx->engine);
+
+    static const uint8_t whitePixel[4] = {255, 255, 255, 255};
+    ctx->whiteTex = Texture::Builder()
+        .width(1).height(1).levels(1)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*ctx->engine);
+
+    Texture::PixelBufferDescriptor pb(
+        whitePixel, 4, Texture::Format::RGBA, Texture::Type::UBYTE);
+    ctx->whiteTex->setImage(*ctx->engine, 0, std::move(pb));
+
+    ctx->sunLight = EntityManager::get().create();
+    math::float3 sunDir = normalize(math::float3{0.5f, -1.0f, 0.8f});
+    LightManager::Builder(LightManager::Type::SUN)
+        .color(Color::toLinear<ACCURATE>({1.0f, 0.98f, 0.95f}))
+        .intensity(100000.0f)
+        .direction(sunDir)
+        .sunAngularRadius(1.9f)
+        .shadowOptions(kine_make_sun_shadow_options(4096, 4, 0.0f, 0.5f, 160.0f, true, true))
+        .castShadows(true)
+        .build(*ctx->engine, ctx->sunLight);
+    ctx->scene->addEntity(ctx->sunLight);
+
+    if (ctx->renderToSwapChain) {
+        fprintf(stderr, "[Kine] using native swapchain render target\n");
+        if (!useDefaultSwapChainRenderTarget(ctx, width, height)) {
+            fprintf(stderr, "[Kine] native swapchain render target setup failed\n");
+            Kine_Filament_Destroy(ctx);
+            return nullptr;
+        }
+    } else {
+        fprintf(stderr, "[Kine] calling rebuildRenderTarget\n");
+        if (!rebuildRenderTarget(ctx, width, height)) {
+            fprintf(stderr, "[Kine] rebuildRenderTarget failed\n");
+            Kine_Filament_Destroy(ctx);
+            return nullptr;
+        }
+    }
+
+#if !KINE_FILAMENT_USE_VULKAN
+    kine_restore_host_context(ctx);
+#endif
+
+    fprintf(stderr, "[Kine] Create succeeded, colorTextureId=%u\n", ctx->colorTextureId);
+    return ctx;
+}
+
+KINE_API KineFilamentContext* Kine_Filament_Create(int width, int height)
+{
+    return Kine_Filament_CreateInternal(width, height, nullptr);
+}
+
+KINE_API KineFilamentContext* Kine_Filament_CreateForSDLWindow(void* sdlWindow, int width, int height)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    void* nativeWindow = getFilamentNativeWindowFromSDL(sdlWindow);
+    if (!nativeWindow) {
+        fprintf(stderr, "[Kine] failed to resolve SDL native window for Filament Vulkan swapchain\n");
+        return nullptr;
+    }
+    return Kine_Filament_CreateInternal(width, height, nativeWindow);
+#else
+    (void)sdlWindow;
+    return Kine_Filament_CreateInternal(width, height, nullptr);
+#endif
+}
+
+KINE_API KineFilamentContext* Kine_Filament_CreateForVulkanCompositor(
+    void* vulkanCompositor,
+    int width,
+    int height)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    if (!vulkanCompositor) {
+        return nullptr;
+    }
+    return Kine_Filament_CreateInternal(width, height, nullptr, vulkanCompositor);
+#else
+    (void)vulkanCompositor;
+    (void)width;
+    (void)height;
+    return nullptr;
+#endif
+}
+
+KINE_API KineFilamentContext* Kine_Filament_CreateForVulkanCompositorWindow(
+    void* sdlWindow,
+    int width,
+    int height)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    if (!sdlWindow) {
+        return nullptr;
+    }
+    return Kine_Filament_CreateInternal(width, height, sdlWindow, nullptr, true);
+#else
+    (void)sdlWindow;
+    (void)width;
+    (void)height;
+    return nullptr;
+#endif
+}
+
+KINE_API void* Kine_Filament_GetVulkanCompositor(KineFilamentContext* ctx)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    return ctx ? ctx->vulkanCompositor : nullptr;
+#else
+    (void)ctx;
+    return nullptr;
+#endif
+}
+
+KINE_API unsigned int Kine_Filament_GetColorTextureId(KineFilamentContext* ctx)
+{
+    return ctx ? ctx->colorTextureId : 0;
+}
+
+KINE_API bool Kine_Filament_GetVulkanBackend(KineFilamentContext* ctx, KineFilamentVulkanBackend* outBackend)
+{
+    if (!outBackend) {
+        return false;
+    }
+    memset(outBackend, 0, sizeof(*outBackend));
+
+#if KINE_FILAMENT_USE_VULKAN
+    if (!ctx || !ctx->engine || ctx->engine->getBackend() != backend::Backend::VULKAN) {
+        return false;
+    }
+
+    backend::Platform* platform = ctx->engine->getPlatform();
+    if (!platform) {
+        return false;
+    }
+
+    auto* vulkanPlatform = reinterpret_cast<backend::VulkanPlatform*>(platform);
+    void* getInstanceProcAddr = (void*)SDL_Vulkan_GetVkGetInstanceProcAddr();
+    if (!getInstanceProcAddr) {
+        return false;
+    }
+
+    outBackend->instance = vulkanPlatform->getInstance();
+    outBackend->physicalDevice = vulkanPlatform->getPhysicalDevice();
+    outBackend->device = vulkanPlatform->getDevice();
+    outBackend->queue = vulkanPlatform->getGraphicsQueue();
+    outBackend->graphicsQueueFamilyIndex = vulkanPlatform->getGraphicsQueueFamilyIndex();
+    outBackend->maxApiVersion = VK_API_VERSION_1_1;
+    outBackend->getInstanceProcAddr = getInstanceProcAddr;
+    outBackend->getDeviceProcAddr = nullptr;
+
+    return outBackend->instance && outBackend->physicalDevice &&
+        outBackend->device && outBackend->queue;
+#else
+    (void)ctx;
+    return false;
+#endif
+}
+
+KINE_API void Kine_Filament_CreateSky(KineFilamentContext* ctx, float r, float g, float b, float a)
+{
+    ctx->skybox = Skybox::Builder()
+    .color({r, g, b,a})
+    .build(*ctx->engine);
+    ctx->scene->setSkybox(ctx->skybox);
+}
+
+
+KINE_API void Kine_Filament_SetPostProcessing(KineFilamentContext* ctx, bool enabled)
+{
+    if (!ctx || !ctx->view) return;
+    ctx->view->setPostProcessingEnabled(enabled);
+}
+
+KINE_API void Kine_Filament_SetBloom(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float strength,
+    int resolution,
+    int levels,
+    bool threshold,
+    bool lensFlare)
+{
+    if (!ctx || !ctx->view) return;
+
+    BloomOptions options = ctx->view->getBloomOptions();
+    options.enabled = enabled;
+    options.strength = std::clamp(strength, 0.0f, 1.0f);
+    options.resolution = (uint32_t)std::clamp(resolution, 8, 4096);
+    options.levels = kine_clamp_u8(levels, 1, 11);
+    options.threshold = threshold;
+    options.lensFlare = lensFlare;
+    ctx->view->setBloomOptions(options);
+}
+
+KINE_API void Kine_Filament_SetAmbientOcclusion(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float radius,
+    float power,
+    float intensity,
+    int quality,
+    int aoType)
+{
+    if (!ctx || !ctx->view) return;
+
+    AmbientOcclusionOptions options = ctx->view->getAmbientOcclusionOptions();
+    options.enabled = enabled;
+    options.radius = std::clamp(radius, 0.0f, 10.0f);
+    options.power = std::max(power, 0.001f);
+    options.intensity = std::max(intensity, 0.0f);
+    options.quality = kine_quality_from_int(quality);
+    options.aoType = aoType == 1
+        ? AmbientOcclusionOptions::AmbientOcclusionType::GTAO
+        : AmbientOcclusionOptions::AmbientOcclusionType::SAO;
+    ctx->view->setAmbientOcclusionOptions(options);
+}
+
+KINE_API void Kine_Filament_SetAntiAliasing(
+    KineFilamentContext* ctx,
+    bool fxaa,
+    bool taa,
+    bool msaa,
+    int sampleCount)
+{
+    if (!ctx || !ctx->view) return;
+
+    ctx->view->setAntiAliasing(fxaa ? AntiAliasing::FXAA : AntiAliasing::NONE);
+
+    TemporalAntiAliasingOptions taaOptions = ctx->view->getTemporalAntiAliasingOptions();
+    taaOptions.enabled = taa;
+    ctx->view->setTemporalAntiAliasingOptions(taaOptions);
+
+    MultiSampleAntiAliasingOptions msaaOptions = ctx->view->getMultiSampleAntiAliasingOptions();
+    msaaOptions.enabled = msaa;
+    msaaOptions.sampleCount = kine_clamp_u8(sampleCount, 1, 8);
+    ctx->view->setMultiSampleAntiAliasingOptions(msaaOptions);
+}
+
+KINE_API void Kine_Filament_SetDynamicResolution(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float minScale,
+    float maxScale,
+    int quality,
+    float sharpness)
+{
+    if (!ctx || !ctx->view) return;
+
+    minScale = std::clamp(minScale, 0.1f, 1.0f);
+    maxScale = std::clamp(maxScale, minScale, 2.0f);
+
+    DynamicResolutionOptions options = ctx->view->getDynamicResolutionOptions();
+    options.enabled = enabled;
+    options.minScale = {minScale, minScale};
+    options.maxScale = {maxScale, maxScale};
+    options.quality = kine_quality_from_int(quality);
+    options.sharpness = std::clamp(sharpness, 0.0f, 1.0f);
+    options.homogeneousScaling = true;
+    ctx->view->setDynamicResolutionOptions(options);
+}
+
+KINE_API void Kine_Filament_SetDepthOfField(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float cocScale,
+    float cocAspectRatio,
+    float maxApertureDiameter,
+    int maxForegroundCOC,
+    int maxBackgroundCOC)
+{
+    if (!ctx || !ctx->view) return;
+
+    DepthOfFieldOptions options = ctx->view->getDepthOfFieldOptions();
+    options.enabled = enabled;
+    options.cocScale = std::max(cocScale, 0.0f);
+    options.cocAspectRatio = std::max(cocAspectRatio, 0.001f);
+    options.maxApertureDiameter = std::max(maxApertureDiameter, 0.0f);
+    options.maxForegroundCOC = (uint16_t)std::clamp(maxForegroundCOC, 0, 32);
+    options.maxBackgroundCOC = (uint16_t)std::clamp(maxBackgroundCOC, 0, 32);
+    ctx->view->setDepthOfFieldOptions(options);
+}
+
+KINE_API void Kine_Filament_SetFocusDistance(KineFilamentContext* ctx, float distance)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->camera->setFocusDistance(std::max(distance, 0.001f));
+}
+
+KINE_API void Kine_Filament_SetVignette(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float midPoint,
+    float roundness,
+    float feather,
+    float r,
+    float g,
+    float b,
+    float a)
+{
+    if (!ctx || !ctx->view) return;
+
+    VignetteOptions options = ctx->view->getVignetteOptions();
+    options.enabled = enabled;
+    options.midPoint = std::clamp(midPoint, 0.0f, 1.0f);
+    options.roundness = std::clamp(roundness, 0.0f, 1.0f);
+    options.feather = std::clamp(feather, 0.0f, 1.0f);
+    options.color = {
+        std::max(r, 0.0f),
+        std::max(g, 0.0f),
+        std::max(b, 0.0f),
+        std::clamp(a, 0.0f, 1.0f),
+    };
+    ctx->view->setVignetteOptions(options);
+}
+
+KINE_API void Kine_Filament_SetScreenSpaceReflections(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float thickness,
+    float bias,
+    float maxDistance,
+    float stride)
+{
+    if (!ctx || !ctx->view) return;
+
+    ScreenSpaceReflectionsOptions options = ctx->view->getScreenSpaceReflectionsOptions();
+    options.enabled = enabled;
+    options.thickness = std::max(thickness, 0.0f);
+    options.bias = std::max(bias, 0.0f);
+    options.maxDistance = std::max(maxDistance, 0.0f);
+    options.stride = std::max(stride, 0.001f);
+    ctx->view->setScreenSpaceReflectionsOptions(options);
+}
+
+KINE_API void Kine_Filament_SetColorGrading(
+    KineFilamentContext* ctx,
+    float exposure,
+    float contrast,
+    float saturation,
+    float vibrance,
+    float temperature,
+    float tint)
+{
+    if (!ctx || !ctx->engine || !ctx->view) return;
+
+    ColorGrading* grading = ColorGrading::Builder()
+        .exposure(exposure)
+        .contrast(std::max(contrast, 0.001f))
+        .saturation(std::max(saturation, 0.0f))
+        .vibrance(std::max(vibrance, 0.0f))
+        .whiteBalance(temperature, tint)
+        .build(*ctx->engine);
+
+    if (!grading) return;
+
+    if (ctx->colorGrading) {
+        ctx->view->setColorGrading(nullptr);
+        ctx->engine->destroy(ctx->colorGrading);
+    }
+    ctx->colorGrading = grading;
+    ctx->view->setColorGrading(ctx->colorGrading);
+}
+
+KINE_API void Kine_Filament_ClearColorGrading(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine || !ctx->view || !ctx->colorGrading) return;
+
+    ctx->view->setColorGrading(nullptr);
+    ctx->engine->destroy(ctx->colorGrading);
+    ctx->colorGrading = nullptr;
+}
+
+KINE_API void Kine_Filament_SetRenderQuality(KineFilamentContext* ctx, int hdrQuality)
+{
+    if (!ctx || !ctx->view) return;
+
+    RenderQuality quality = ctx->view->getRenderQuality();
+    quality.hdrColorBuffer = kine_quality_from_int(hdrQuality);
+    ctx->view->setRenderQuality(quality);
+}
+
+KINE_API void Kine_Filament_SetDithering(KineFilamentContext* ctx, bool enabled)
+{
+    if (!ctx || !ctx->view) return;
+    ctx->view->setDithering(enabled ? Dithering::TEMPORAL : Dithering::NONE);
+}
+
+KINE_API void Kine_Filament_SetShadowOptions(KineFilamentContext* ctx, bool enabled, int shadowType)
+{
+    if (!ctx || !ctx->view) return;
+
+    ctx->view->setShadowingEnabled(enabled);
+    switch (shadowType) {
+        case 1:
+            ctx->view->setShadowType(ShadowType::VSM);
+            break;
+        case 2:
+            ctx->view->setShadowType(ShadowType::DPCF);
+            break;
+        case 3:
+            ctx->view->setShadowType(ShadowType::PCSS);
+            break;
+        default:
+            ctx->view->setShadowType(ShadowType::PCF);
+            break;
+    }
+}
+
+KINE_API void Kine_Filament_SetSunShadowOptions(
+    KineFilamentContext* ctx,
+    int mapSize,
+    int cascades,
+    float shadowFar,
+    float shadowNearHint,
+    float shadowFarHint,
+    bool stable,
+    bool contactShadows)
+{
+    if (!ctx || !ctx->engine || ctx->sunLight.isNull()) return;
+
+    auto& lm = ctx->engine->getLightManager();
+    auto inst = lm.getInstance(ctx->sunLight);
+    if (!inst.isValid()) return;
+
+    lm.setShadowOptions(
+        inst,
+        kine_make_sun_shadow_options(
+            mapSize,
+            cascades,
+            shadowFar,
+            shadowNearHint,
+            shadowFarHint,
+            stable,
+            contactShadows));
+}
+
+KINE_API void Kine_Filament_SetSunRays(
+    KineFilamentContext* ctx,
+    bool enabled,
+    float distance,
+    float cutOffDistance,
+    float maximumOpacity,
+    float height,
+    float heightFalloff,
+    float density,
+    float inScatteringStart,
+    float inScatteringSize,
+    float r,
+    float g,
+    float b,
+    bool fogColorFromIbl)
+{
+    if (!ctx || !ctx->view) return;
+
+    FogOptions options = ctx->view->getFogOptions();
+    options.enabled = enabled;
+    options.distance = std::max(distance, 0.0f);
+    options.cutOffDistance = cutOffDistance > 0.0f
+        ? std::max(cutOffDistance, options.distance)
+        : std::numeric_limits<float>::infinity();
+    options.maximumOpacity = std::clamp(maximumOpacity, 0.0f, 1.0f);
+    options.height = height;
+    options.heightFalloff = std::max(heightFalloff, 0.0f);
+    options.density = std::max(density, 0.0f);
+    options.inScatteringStart = std::max(inScatteringStart, 0.0f);
+    options.inScatteringSize = enabled ? std::max(inScatteringSize, 0.001f) : -1.0f;
+    options.color = {
+        std::max(r, 0.0f),
+        std::max(g, 0.0f),
+        std::max(b, 0.0f),
+    };
+    options.fogColorFromIbl = fogColorFromIbl;
+    ctx->view->setFogOptions(options);
+}
+
+// ---------------------------------------------------------------------------
+// Kine_Filament_SetSkyAtmosphere
+//
+// Procedural atmospheric sky without a custom .filamat material.
+// We generate a 32x32 cubemap on the CPU every time this is called, evaluating
+// the gradient for every pixel based on its elevation (Y component).
+// We also point the built-in sun light entity at the supplied direction and
+// scale its intensity.
+// ---------------------------------------------------------------------------
+KINE_API void Kine_Filament_SetSkyAtmosphere(
+    KineFilamentContext* ctx,
+    float sunDirX,  float sunDirY,  float sunDirZ,
+    float skyR,     float skyG,     float skyB,
+    float horizonR, float horizonG, float horizonB,
+    float groundR,  float groundG,  float groundB,
+    float sunIntensity)
+{
+    if (!ctx || !ctx->engine) return;
+
+    // --- normalise sun direction -------------------------------------------
+    float len = sqrtf(sunDirX*sunDirX + sunDirY*sunDirY + sunDirZ*sunDirZ);
+    if (len < 1e-6f) { sunDirX = 0.f; sunDirY = 1.f; sunDirZ = 0.f; }
+    else { sunDirX /= len; sunDirY /= len; sunDirZ /= len; }
+
+    float lightDirX = -sunDirX;
+    float lightDirY = -sunDirY;
+    float lightDirZ = -sunDirZ;
+
+    // --- update sun light entity ------------------------------------------
+    if (!ctx->sunLight.isNull()) {
+        auto& lm = ctx->engine->getLightManager();
+        auto inst = lm.getInstance(ctx->sunLight);
+        if (inst.isValid()) {
+            lm.setDirection(inst, {lightDirX, lightDirY, lightDirZ});
+            float elevFactor = (sunDirY + 0.05f) / 0.15f;
+            if (elevFactor < 0.f) elevFactor = 0.f;
+            if (elevFactor > 1.f) elevFactor = 1.f;
+            lm.setIntensity(inst, sunIntensity * elevFactor);
+        }
+    }
+
+    // Determine the average clear color (used for the renderer background)
+    // using the sun's elevation just like the old logic, so things like fog
+    // or clear-screen match the predominant sky color.
+    float elev = sunDirY;
+    float fr, fg, fb;
+    if (elev >= 0.0f) {
+        // Blend across the whole visible hemisphere. The old 0.15 cutoff
+        // compressed the transition into a thin strip at the horizon and left
+        // almost all of the daylight sky as one flat color.
+        float t = std::pow(std::clamp(elev, 0.0f, 1.0f), 0.45f);
+        fr = horizonR + t * (skyR - horizonR);
+        fg = horizonG + t * (skyG - horizonG);
+        fb = horizonB + t * (skyB - horizonB);
+    } else if (elev >= -0.10f) {
+        float t = (elev + 0.10f) / 0.10f;
+        fr = groundR + t * (horizonR - groundR);
+        fg = groundG + t * (horizonG - groundG);
+        fb = groundB + t * (horizonB - groundB);
+    } else { fr = groundR; fg = groundG; fb = groundB; }
+    
+    auto clamp01 = [](float v) { return v < 0.f ? 0.f : v > 1.f ? 1.f : v; };
+    ctx->skyColor = {clamp01(fr), clamp01(fg), clamp01(fb), 1.0f};
+
+    // --- generate procedural cubemap gradient -----------------------------
+    const uint32_t faceSize = 32;
+    const size_t faceBytes = faceSize * faceSize * 4;
+    const size_t totalBytes = 6 * faceBytes;
+    
+    // Allocated memory will be freed by the PixelBufferDescriptor callback
+    uint8_t* pixels = (uint8_t*)malloc(totalBytes);
+    if (!pixels) return;
+
+    auto evalSky = [&](float dy) {
+        float r, g, b;
+        if (dy >= 0.0f) {
+            float t = std::pow(std::clamp(dy, 0.0f, 1.0f), 0.45f);
+            r = horizonR + t * (skyR - horizonR);
+            g = horizonG + t * (skyG - horizonG);
+            b = horizonB + t * (skyB - horizonB);
+        } else if (dy >= -0.10f) {
+            float t = (dy + 0.10f) / 0.10f;
+            r = groundR + t * (horizonR - groundR);
+            g = groundG + t * (horizonG - groundG);
+            b = groundB + t * (horizonB - groundB);
+        } else { r = groundR; g = groundG; b = groundB; }
+        return std::make_tuple(clamp01(r), clamp01(g), clamp01(b));
+    };
+
+    // Fill 6 faces: +X, -X, +Y, -Y, +Z, -Z
+    for (int face = 0; face < 6; ++face) {
+        uint8_t* facePixels = pixels + face * faceBytes;
+        for (uint32_t y = 0; y < faceSize; ++y) {
+            for (uint32_t x = 0; x < faceSize; ++x) {
+                // map (x,y) to [-1, 1] range
+                float u = (2.0f * (x + 0.5f) / faceSize) - 1.0f;
+                // Filament (OpenGL convention): +Y is DOWN for texture coordinates? 
+                // Wait, standard cubemap: v goes from -1 to 1 top to bottom.
+                // We'll just map v from +1 to -1 so Y is up.
+                float v = 1.0f - (2.0f * (y + 0.5f) / faceSize);
+                
+                float dx = 0, dy = 0, dz = 0;
+                switch (face) {
+                    case 0: dx =  1.0f; dy = v; dz = -u; break; // +X
+                    case 1: dx = -1.0f; dy = v; dz =  u; break; // -X
+                    case 2: dx =  u; dy =  1.0f; dz = -v; break; // +Y
+                    case 3: dx =  u; dy = -1.0f; dz =  v; break; // -Y
+                    case 4: dx =  u; dy = v; dz =  1.0f; break; // +Z
+                    case 5: dx = -u; dy = v; dz = -1.0f; break; // -Z
+                }
+                
+                float dlen = sqrtf(dx*dx + dy*dy + dz*dz);
+                dy /= dlen; // we only need the normalized Y component
+                
+                auto [pr, pg, pb] = evalSky(dy);
+                
+                size_t idx = (y * faceSize + x) * 4;
+                facePixels[idx + 0] = (uint8_t)(pr * 255.0f);
+                facePixels[idx + 1] = (uint8_t)(pg * 255.0f);
+                facePixels[idx + 2] = (uint8_t)(pb * 255.0f);
+                facePixels[idx + 3] = 255;
+            }
+        }
+    }
+
+    // If we already have a procedural texture, destroy it
+    if (ctx->skyTexture) {
+        ctx->engine->destroy(ctx->skyTexture);
+    }
+    
+    ctx->skyTexture = Texture::Builder()
+        .width(faceSize).height(faceSize).levels(1)
+        .sampler(Texture::Sampler::SAMPLER_CUBEMAP)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*ctx->engine);
+
+    Texture::PixelBufferDescriptor pb(
+        pixels, totalBytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        [](void* buffer, size_t size, void* user) { free(buffer); }
+    );
+
+    // Cubemaps are treated as a 2D array of 6 layers. We upload all 6 faces in one go.
+    ctx->skyTexture->setImage(*ctx->engine, 0, 0, 0, 0, faceSize, faceSize, 6, std::move(pb));
+
+    if (ctx->skybox) {
+        ctx->engine->destroy(ctx->skybox);
+        ctx->skybox = nullptr;
+    }
+    
+    ctx->skybox = Skybox::Builder()
+        .environment(ctx->skyTexture)
+        .showSun(true)
+        .build(*ctx->engine);
+        
+    ctx->scene->setSkybox(ctx->skybox);
+}
+
+KINE_API void Kine_Filament_CreateSkyboxCubemap(
+    KineFilamentContext* ctx,
+    const KineGLTextureInfo* texPosX, const KineGLTextureInfo* texNegX,
+    const KineGLTextureInfo* texPosY, const KineGLTextureInfo* texNegY,
+    const KineGLTextureInfo* texPosZ, const KineGLTextureInfo* texNegZ)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    (void)ctx;
+    (void)texPosX; (void)texNegX;
+    (void)texPosY; (void)texNegY;
+    (void)texPosZ; (void)texNegZ;
+    fprintf(stderr,
+        "[Kine] CreateSkyboxCubemap cannot import OpenGL texture IDs on the Vulkan backend.\n");
+#else
+    if (!ctx || !ctx->engine) return;
+    
+    const KineGLTextureInfo* textures[6] = {
+        texPosX, texNegX,
+        texPosY, texNegY,
+        texPosZ, texNegZ
+    };
+    
+    int width = textures[0] ? textures[0]->width : 0;
+    int height = textures[0] ? textures[0]->height : 0;
+    if (width <= 0 || height <= 0 || width != height) {
+        fprintf(stderr, "[Kine] CreateSkyboxCubemap: Faces must be square and > 0.\n");
+        return;
+    }
+    for (int i=1; i<6; ++i) {
+        if (!textures[i] || textures[i]->width != width || textures[i]->height != height) {
+            fprintf(stderr, "[Kine] CreateSkyboxCubemap: All faces must have identical square dimensions.\n");
+            return;
+        }
+    }
+    
+    size_t faceBytes = (size_t)width * height * 4;
+    size_t totalBytes = faceBytes * 6;
+    uint8_t* pixels = (uint8_t*)malloc(totalBytes);
+    if (!pixels) return;
+    
+    // Read pixels from the 6 OpenGL textures to RAM
+    for (int i=0; i<6; ++i) {
+        glBindTexture(GL_TEXTURE_2D, textures[i]->id);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels + i * faceBytes);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    if (ctx->skyTexture) {
+        ctx->engine->destroy(ctx->skyTexture);
+    }
+    
+    ctx->skyTexture = Texture::Builder()
+        .width(width).height(height).levels(1)
+        .sampler(Texture::Sampler::SAMPLER_CUBEMAP)
+        .format(Texture::InternalFormat::RGBA8)
+        .build(*ctx->engine);
+
+    Texture::PixelBufferDescriptor pb(
+        pixels, totalBytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        [](void* buffer, size_t size, void* user) { free(buffer); }
+    );
+    
+    ctx->skyTexture->setImage(*ctx->engine, 0, 0, 0, 0, width, height, 6, std::move(pb));
+    
+    if (ctx->skybox) {
+        ctx->engine->destroy(ctx->skybox);
+    }
+    
+    ctx->skybox = Skybox::Builder()
+        .environment(ctx->skyTexture)
+        .showSun(true)
+        .build(*ctx->engine);
+
+    ctx->scene->setSkybox(ctx->skybox);
+#endif
+}
+
+KINE_API void Kine_Filament_SetSun(
+    KineFilamentContext* ctx,
+    float sunDirX, float sunDirY, float sunDirZ,
+    float sunIntensity)
+{
+    if (!ctx || !ctx->engine || ctx->sunLight.isNull()) return;
+
+    float len = sqrtf(sunDirX*sunDirX + sunDirY*sunDirY + sunDirZ*sunDirZ);
+    if (len < 1e-6f) { sunDirX = 0.f; sunDirY = 1.f; sunDirZ = 0.f; }
+    else { sunDirX /= len; sunDirY /= len; sunDirZ /= len; }
+
+    float lightDirX = -sunDirX;
+    float lightDirY = -sunDirY;
+    float lightDirZ = -sunDirZ;
+
+    auto& lm = ctx->engine->getLightManager();
+    auto inst = lm.getInstance(ctx->sunLight);
+    if (inst.isValid()) {
+        lm.setDirection(inst, {lightDirX, lightDirY, lightDirZ});
+        lm.setIntensity(inst, sunIntensity);
+    }
+}
+
+
+KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
+{
+    if (!ctx) return;
+
+#if !KINE_FILAMENT_USE_VULKAN
+    kine_restore_host_context(ctx);
+#endif
+
+    if (ctx->engine) {
+        kine_destroy_post_process_pipeline(ctx);
+        ctx->postProcessShader = nullptr;
+        kine_destroy_built_batches(ctx);
+        ctx->pendingBatches.clear();
+		for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+			if (!batch) continue;
+			kine_destroy_instance_batch_chunks(batch);
+			if (batch->matInst) ctx->engine->destroy(batch->matInst);
+			batch->matInst = nullptr;
+			batch->ctx = nullptr;
+		}
+		ctx->instanceBatches.clear();
+        for (auto& decal : ctx->decals) {
+            kine_destroy_decal(ctx, decal);
+        }
+        ctx->decals.clear();
+        for (Entity light : ctx->lights) {
+            if (ctx->scene && ctx->scene->hasEntity(light)) ctx->scene->remove(light);
+            ctx->engine->destroy(light);
+            EntityManager::get().destroy(light);
+        }
+        ctx->lights.clear();
+
+        // Material instance destruction is queued. Drain it before destroying
+        // the materials that own those instances.
+        ctx->engine->flushAndWait();
+		ctx->globalShader = nullptr;
+		for (KineFilamentShader* shader : ctx->runtimeShaders) {
+			if (!shader) continue;
+			if (shader->material) ctx->engine->destroy(shader->material);
+			shader->material = nullptr;
+			shader->ctx = nullptr;
+		}
+		ctx->runtimeShaders.clear();
+
+        if (!ctx->sunLight.isNull()) {
+            ctx->scene->remove(ctx->sunLight);
+            ctx->engine->destroy(ctx->sunLight);
+            EntityManager::get().destroy(ctx->sunLight);
+        }
+        if (ctx->skybox) {
+            ctx->scene->setSkybox(nullptr);
+            ctx->engine->destroy(ctx->skybox);
+            ctx->skybox = nullptr;
+        }
+        if (ctx->indirectLight) {
+            ctx->scene->setIndirectLight(nullptr);
+            ctx->engine->destroy(ctx->indirectLight);
+            ctx->indirectLight = nullptr;
+        }
+        if (ctx->skyTexture) {
+            ctx->engine->destroy(ctx->skyTexture);
+            ctx->skyTexture = nullptr;
+        }
+        if (ctx->colorGrading) {
+            if (ctx->view) {
+                ctx->view->setColorGrading(nullptr);
+            }
+            ctx->engine->destroy(ctx->colorGrading);
+            ctx->colorGrading = nullptr;
+        }
+        if (ctx->renderTarget)  ctx->engine->destroy(ctx->renderTarget);
+        if (ctx->colorTarget)   ctx->engine->destroy(ctx->colorTarget);
+        if (ctx->depthTarget)   ctx->engine->destroy(ctx->depthTarget);
+        if (ctx->whiteTex)      ctx->engine->destroy(ctx->whiteTex);
+        if (ctx->particleQuadMesh) {
+            kine_invalidate_batches(ctx, ctx->particleQuadMesh, nullptr);
+            if (ctx->particleQuadMesh->vb) ctx->engine->destroy(ctx->particleQuadMesh->vb);
+            if (ctx->particleQuadMesh->ib) ctx->engine->destroy(ctx->particleQuadMesh->ib);
+            delete ctx->particleQuadMesh;
+            ctx->particleQuadMesh = nullptr;
+        }
+        if (ctx->postProcessQuadMesh) {
+            if (ctx->postProcessQuadMesh->vb) ctx->engine->destroy(ctx->postProcessQuadMesh->vb);
+            if (ctx->postProcessQuadMesh->ib) ctx->engine->destroy(ctx->postProcessQuadMesh->ib);
+            delete ctx->postProcessQuadMesh;
+            ctx->postProcessQuadMesh = nullptr;
+        }
+        if (ctx->defaultMaterial) ctx->engine->destroy(ctx->defaultMaterial);
+        if (ctx->neonMaterial)    ctx->engine->destroy(ctx->neonMaterial);
+        if (ctx->glassMaterial)   ctx->engine->destroy(ctx->glassMaterial);
+        if (ctx->waterMaterial)   ctx->engine->destroy(ctx->waterMaterial);
+        if (ctx->decalMaterial)   ctx->engine->destroy(ctx->decalMaterial);
+        if (ctx->outlineMaterial) ctx->engine->destroy(ctx->outlineMaterial);
+        if (ctx->gizmoMaterial)   ctx->engine->destroy(ctx->gizmoMaterial);
+        if (ctx->particleMaterial) ctx->engine->destroy(ctx->particleMaterial);
+        if (ctx->terrainMaterial) ctx->engine->destroy(ctx->terrainMaterial);
+        if (ctx->colorTextureId) {
+#if !KINE_FILAMENT_USE_VULKAN
+            GLuint id = (GLuint)ctx->colorTextureId;
+            glDeleteTextures(1, &id);
+#endif
+            ctx->colorTextureId = 0;
+        }
+        if (!ctx->cameraEntity.isNull()) {
+            ctx->engine->destroyCameraComponent(ctx->cameraEntity);
+            EntityManager::get().destroy(ctx->cameraEntity);
+        }
+        if (ctx->view)       ctx->engine->destroy(ctx->view);
+        if (ctx->scene)      ctx->engine->destroy(ctx->scene);
+        if (ctx->renderer)   ctx->engine->destroy(ctx->renderer);
+        if (ctx->swapChain) {
+            ctx->engine->destroy(ctx->swapChain);
+            ctx->swapChain = nullptr;
+        }
+        ctx->engine->flushAndWait();
+        if (ctx->useFilamentOwnedCompositor && ctx->vulkanPlatform) {
+            auto* platform = static_cast<KineFilamentCompositorVulkanPlatform*>(ctx->vulkanPlatform.get());
+            platform->destroyCompositor();
+            ctx->vulkanCompositor = nullptr;
+        }
+        Engine::destroy(&ctx->engine);
+    }
+
+    delete ctx;
+}
+
+KINE_API void Kine_Filament_DebugPrintPixel(KineFilamentContext* ctx)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    fprintf(stderr, "[Kine] DebugPrintPixel uses the OpenGL texture path and is unavailable on Vulkan\n");
+    (void)ctx;
+    return;
+#else
+    if (!ctx || ctx->colorTextureId == 0 || ctx->width <= 0 || ctx->height <= 0) return;
+
+    std::vector<unsigned char> buf((size_t)ctx->width * ctx->height * 4);
+
+    glBindTexture(GL_TEXTURE_2D, (GLuint)ctx->colorTextureId);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    int cx = ctx->width / 2;
+    int cy = ctx->height / 2;
+    size_t idx = ((size_t)cy * ctx->width + cx) * 4;
+
+    glBindTexture(GL_TEXTURE_2D, (GLuint)ctx->colorTextureId);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        fprintf(stderr, "[Kine] glGetTexImage GL error: 0x%x\n", err);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    fprintf(stderr, "[Kine] center pixel RGBA = %d %d %d %d\n",
+        buf[idx + 0], buf[idx + 1], buf[idx + 2], buf[idx + 3]);
+#endif
+}
+
+KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTime)
+{
+    if (!ctx || !ctx->engine) return;
+#if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
+    if (!ctx->renderToSwapChain) ctx->engine->pumpMessageQueues();
+#endif
+    ctx->time += deltaTime;
+
+    // Update this frame's persistent GPU-instanced renderables.
+
+#if !KINE_FILAMENT_USE_VULKAN
+    glEnable(GL_DEPTH_TEST);   // guard against the host renderer having disabled this last frame
+    glDepthMask(GL_TRUE);
+#endif
+
+#if KINE_FILAMENT_USE_VULKAN
+    if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
+        if (!Kine_VulkanCompositor_PrepareFilament(
+                static_cast<KineVulkanCompositor*>(ctx->vulkanCompositor))) {
+            const char* error = Kine_VulkanCompositor_GetLastError(
+                static_cast<KineVulkanCompositor*>(ctx->vulkanCompositor));
+            fprintf(stderr, "[Kine] compositor prepare for Filament failed: %s\n",
+                error && error[0] ? error : "unknown error");
+            kine_finish_batch_frame(ctx);
+            return;
+        }
+    }
+#endif
+
+    // Filament buffer updates come after Skia has finished with the single
+    // shared Vulkan queue, so backend uploads cannot overlap Skia.
+    kine_update_batches(ctx);
+
+    if (ctx->renderer->beginFrame(ctx->swapChain)) {
+        if (!ctx->loggedFirstFrame) {
+            fprintf(stderr, "[Kine] Filament beginFrame OK (%s swapchain, %dx%d)\n",
+                ctx->renderToSwapChain ? "native" : "headless",
+                ctx->width, ctx->height);
+            ctx->loggedFirstFrame = true;
+        }
+        Renderer::ClearOptions clearOptions;
+        clearOptions.clearColor = ctx->skyColor;
+        const bool hasPostProcess =
+            ctx->postProcessShader && ctx->postView && ctx->postMaterialInstance;
+        // A post-process scene renders into a private viewport-sized target,
+        // which must be cleared independently from the shared Skia compositor.
+        clearOptions.clear = hasPostProcess || !ctx->useFilamentOwnedCompositor;
+        clearOptions.discard = hasPostProcess || !ctx->useFilamentOwnedCompositor;
+        ctx->renderer->setClearOptions(clearOptions);
+
+        ctx->renderer->render(ctx->view);
+        if (hasPostProcess) {
+            kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
+            if (ctx->postProcessShader->material->hasParameter("time")) {
+                ctx->postMaterialInstance->setParameter("time", ctx->time);
+            }
+            if (ctx->postProcessShader->material->hasParameter("resolution")) {
+                ctx->postMaterialInstance->setParameter("resolution",
+                    math::float2{
+                        float(ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width),
+                        float(ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height)
+                    });
+            }
+            // Preserve the compositor everywhere outside the Filament viewport.
+            clearOptions.clear = false;
+            clearOptions.discard = false;
+            ctx->renderer->setClearOptions(clearOptions);
+            ctx->renderer->render(ctx->postView);
+        }
+#if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
+        // Readback belongs only to texture-backed, offscreen contexts. Native
+        // compositor contexts render directly into their swapchain and have no
+        // custom RenderTarget to pass to this overload.
+        if (!ctx->renderToSwapChain && ctx->renderTarget &&
+                !ctx->readbackPending && !ctx->readbackReady) {
+            ctx->readbackPixels.resize((size_t)ctx->width * (size_t)ctx->height * 4);
+            ctx->readbackReady = false;
+            ctx->readbackPending = true;
+            backend::PixelBufferDescriptor pb(
+                ctx->readbackPixels.data(),
+                ctx->readbackPixels.size(),
+                backend::PixelDataFormat::RGBA,
+                backend::PixelDataType::UBYTE,
+                [](void*, size_t, void* user) {
+                    auto* readbackCtx = static_cast<KineFilamentContext*>(user);
+                    readbackCtx->readbackPending = false;
+                    readbackCtx->readbackReady = true;
+                },
+                ctx
+            );
+            ctx->renderer->readPixels(ctx->renderTarget, 0, 0,
+                (uint32_t)ctx->width, (uint32_t)ctx->height, std::move(pb));
+        }
+#endif
+        ctx->renderer->endFrame();
+#if KINE_FILAMENT_USE_VULKAN
+        if (ctx->useFilamentOwnedCompositor) {
+            // Push the frame to Filament's backend thread. The compositor
+            // waits for its present callback without waiting for the GPU.
+            ctx->engine->flush();
+        }
+#endif
+    } else {
+        fprintf(stderr, "[Kine] beginFrame FAILED this frame\n");
+    }
+    
+    kine_finish_batch_frame(ctx);
+
+#if !KINE_FILAMENT_USE_VULKAN
+    if (kine_glBindFramebuffer) {
+        kine_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    glViewport(0, 0, ctx->width, ctx->height);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    kine_restore_host_context(ctx);
+#endif
+}
+
+KINE_API void Kine_Filament_Resize(KineFilamentContext* ctx, int width, int height)
+{
+    if (!ctx || !ctx->engine) return;
+    if (width <= 0 || height <= 0) return;
+    if (ctx->width == width && ctx->height == height) return;
+
+    // Drain any pending GPU commands that may still reference the old render target
+    // textures before we destroy them. Without this, the driver can segfault
+    // accessing freed GL objects on the backend thread.
+    ctx->engine->flushAndWait();
+
+    if (ctx->swapChain) {
+        ctx->engine->destroy(ctx->swapChain);
+        ctx->swapChain = nullptr;
+    }
+    if (ctx->useFilamentOwnedCompositor) {
+        fprintf(stderr, "[Kine] recreating Filament-owned compositor swapchain size=%dx%d\n",
+            width, height);
+        auto* platform = static_cast<KineFilamentCompositorVulkanPlatform*>(ctx->vulkanPlatform.get());
+        platform->setExtent(width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(ctx->nativeWindow);
+        ctx->engine->flushAndWait();
+        if (ctx->vulkanPlatform) {
+            ctx->vulkanCompositor = platform->compositor();
+        }
+        useDefaultSwapChainRenderTarget(ctx, width, height);
+    } else if (ctx->renderToSwapChain && ctx->nativeWindow) {
+        fprintf(stderr, "[Kine] recreating Filament native swapchain for window=%p size=%dx%d\n",
+            ctx->nativeWindow, width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(ctx->nativeWindow);
+        useDefaultSwapChainRenderTarget(ctx, width, height);
+    } else {
+        fprintf(stderr, "[Kine] recreating Filament headless swapchain size=%dx%d\n", width, height);
+        ctx->swapChain = ctx->engine->createSwapChain(width, height);
+        rebuildRenderTarget(ctx, width, height);
+    }
+    ctx->loggedFirstFrame = false;
+    ctx->camera->setProjection(60.0, double(width) / double(height), 1.0, 500.0);
+    if (ctx->postProcessShader && !kine_build_post_process_pipeline(ctx)) {
+        fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline after resize\n");
+        ctx->postProcessShader = nullptr;
+    }
+}
+
+KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, int width, int height)
+{
+    if (!ctx || !ctx->view) return;
+
+    if (width <= 0 || height <= 0) {
+        x = 0;
+        y = 0;
+        width = ctx->width;
+        height = ctx->height;
+    }
+
+    int clampedX = std::clamp(x, 0, std::max(0, ctx->width - 1));
+    int clampedY = std::clamp(y, 0, std::max(0, ctx->height - 1));
+    int clampedWidth = std::clamp(width, 1, std::max(1, ctx->width - clampedX));
+    int clampedHeight = std::clamp(height, 1, std::max(1, ctx->height - clampedY));
+
+    // Kinemium UI coordinates are top-left origin. Filament's viewport is
+    // bottom-left origin when rendering directly into the Vulkan swapchain.
+    int filamentY = ctx->height - clampedY - clampedHeight;
+    filamentY = std::clamp(filamentY, 0, std::max(0, ctx->height - 1));
+
+    const bool viewportChanged =
+        ctx->viewportX != clampedX || ctx->viewportY != clampedY ||
+        ctx->viewportWidth != clampedWidth || ctx->viewportHeight != clampedHeight;
+    ctx->viewportX = clampedX;
+    ctx->viewportY = clampedY;
+    ctx->viewportWidth = clampedWidth;
+    ctx->viewportHeight = clampedHeight;
+
+    ctx->camera->setProjection(
+        60.0,
+        double(clampedWidth) / double(clampedHeight),
+        1.0,
+        500.0);
+
+    if (ctx->postProcessShader) {
+        if (viewportChanged && !kine_build_post_process_pipeline(ctx)) {
+            fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline for viewport\n");
+            ctx->postProcessShader = nullptr;
+        }
+        return;
+    }
+
+    ctx->view->setViewport({
+        (int32_t)clampedX,
+        (int32_t)filamentY,
+        (uint32_t)clampedWidth,
+        (uint32_t)clampedHeight
+    });
+}
+
+KINE_API void* Kine_Filament_GetEngine(KineFilamentContext* ctx) { return ctx ? (void*)ctx->engine : nullptr; }
+KINE_API void* Kine_Filament_GetScene(KineFilamentContext* ctx)  { return ctx ? (void*)ctx->scene  : nullptr; }
+KINE_API void* Kine_Filament_GetView(KineFilamentContext* ctx)   { return ctx ? (void*)ctx->view   : nullptr; }
+KINE_API void* Kine_Filament_GetCamera(KineFilamentContext* ctx) { return ctx ? (void*)ctx->camera : nullptr; }
+
+KINE_API void Kine_Filament_SetCameraLookAt(
+    KineFilamentContext* ctx,
+    float eyeX, float eyeY, float eyeZ,
+    float targetX, float targetY, float targetZ,
+    float upX, float upY, float upZ)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->cameraEye = {eyeX, eyeY, eyeZ};
+    ctx->cameraTarget = {targetX, targetY, targetZ};
+    ctx->cameraUp = {upX, upY, upZ};
+    ctx->camera->lookAt(ctx->cameraEye, ctx->cameraTarget, ctx->cameraUp);
+}
+
+KINE_API bool Kine_Filament_BlitToScreen(KineFilamentContext* ctx, int dstX, int dstY, int dstWidth, int dstHeight)
+{
+#if KINE_FILAMENT_USE_VULKAN
+    (void)ctx; (void)dstX; (void)dstY; (void)dstWidth; (void)dstHeight;
+    return false;
+#else
+    if (!ctx || !ctx->engine || ctx->colorTextureId == 0) return false;
+    if (!kine_glBindFramebuffer || !kine_glGenFramebuffers ||
+        !kine_glFramebufferTexture2D || !kine_glBlitFramebuffer) return false;
+
+    if (ctx->readFboId == 0) {
+        GLuint fbo = 0;
+        kine_glGenFramebuffers(1, &fbo);
+        kine_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        kine_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                     GL_TEXTURE_2D, (GLuint)ctx->colorTextureId, 0);
+        ctx->readFboId = (unsigned int)fbo;
+        kine_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    kine_glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)ctx->readFboId);
+    kine_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // SDL's default framebuffer, must already be bound/current
+    kine_glBlitFramebuffer(0, 0, ctx->width, ctx->height,
+                            dstX, dstY, dstX + dstWidth, dstY + dstHeight,
+                            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    kine_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+#endif
+}
+
+KINE_API void Kine_Filament_SetCameraPosition(KineFilamentContext* ctx, float x, float y, float z)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->cameraEye = {x, y, z};
+    ctx->camera->lookAt(ctx->cameraEye, ctx->cameraTarget, ctx->cameraUp);
+}
+
+KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float dx, float dy, float dz)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->cameraTarget = ctx->cameraEye + math::double3{dx, dy, dz};
+    ctx->camera->lookAt(ctx->cameraEye, ctx->cameraTarget, ctx->cameraUp);
+}
+
+// light functions
+
+KINE_API int Kine_Filament_CreateLight(
+    KineFilamentContext* ctx,
+    float px, float py, float pz,
+    float cr, float cg, float cb,
+    float intensity,
+    float falloff
+) {
+    return Kine_Filament_CreateLightEx(
+        ctx, 0,
+        px, py, pz,
+        0.0f, -1.0f, 0.0f,
+        cr, cg, cb,
+        intensity, falloff,
+        0.35f, 0.785398163f,
+        false, true);
+}
+
+KINE_API int Kine_Filament_CreateLightEx(
+    KineFilamentContext* ctx,
+    int lightType,
+    float px, float py, float pz,
+    float dx, float dy, float dz,
+    float cr, float cg, float cb,
+    float intensity,
+    float falloff,
+    float innerConeRadians,
+    float outerConeRadians,
+    bool castShadows,
+    bool enabled
+) {
+    if (!ctx || !ctx->engine || !ctx->scene) return -1;
+
+    LightManager::Type type = LightManager::Type::POINT;
+    if (lightType == 1) type = LightManager::Type::SPOT;
+    else if (lightType == 2) type = LightManager::Type::FOCUSED_SPOT;
+
+    float directionLength = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (directionLength < 1e-6f) {
+        dx = 0.0f; dy = -1.0f; dz = 0.0f;
+    } else {
+        dx /= directionLength; dy /= directionLength; dz /= directionLength;
+    }
+    outerConeRadians = std::clamp(outerConeRadians, 0.00873f, 1.570796327f);
+    innerConeRadians = std::clamp(innerConeRadians, 0.00873f, outerConeRadians);
+
+    Entity entity = EntityManager::get().create();
+    LightManager::Builder builder(type);
+    builder.color({std::max(0.0f, cr), std::max(0.0f, cg), std::max(0.0f, cb)})
+        .intensity(std::max(0.0f, intensity))
+        .position({px, py, pz})
+        .falloff(std::max(0.001f, falloff));
+    if (type != LightManager::Type::POINT) {
+        builder.direction({dx, dy, dz})
+            .spotLightCone(innerConeRadians, outerConeRadians)
+            .castShadows(castShadows);
+    }
+    if (builder.build(*ctx->engine, entity) != LightManager::Builder::Success) {
+        EntityManager::get().destroy(entity);
+        return -1;
+    }
+
+    if (enabled) ctx->scene->addEntity(entity);
+    ctx->lights.push_back(entity);
+    return static_cast<int>(entity.getId());
+}
+
+// decals
+
+KINE_API int Kine_Filament_CreateDecal(
+    KineFilamentContext* ctx,
+    float width,
+    float height,
+    KineFilamentTex* texture,
+    float offsetStudsU,
+    float offsetStudsV,
+    float studsPerTileU,
+    float studsPerTileV,
+    bool culling,
+    bool castShadows,
+    bool receiveShadows
+)
+{
+    auto* texHandle = (KineTexHandle*)texture;
+    if (!ctx || !ctx->engine || !ctx->scene || !texHandle || !texHandle->tex ||
+        width <= 0.0f || height <= 0.0f)
+        return -1;
+
+    Entity entity = EntityManager::get().create();
+
+    MaterialInstance* material = ctx->decalMaterial->createInstance();
+
+    if (!material) {
+        EntityManager::get().destroy(entity);
+        return -1;
+    }
+
+    TextureSampler sampler(
+        TextureSampler::MinFilter::LINEAR,
+        TextureSampler::MagFilter::LINEAR,
+        TextureSampler::WrapMode::REPEAT
+    );
+
+    math::float2 uvScale{
+        studsPerTileU > 0.0f ? width  / studsPerTileU : 1.0f,
+        studsPerTileV > 0.0f ? height / studsPerTileV : 1.0f
+    };
+    math::float2 uvOffset{
+        studsPerTileU > 0.0f ? offsetStudsU / studsPerTileU : 0.0f,
+        studsPerTileV > 0.0f ? offsetStudsV / studsPerTileV : 0.0f
+    };
+
+    material->setParameter("baseColor", RgbaType::LINEAR, math::float4{1.0f, 1.0f, 1.0f, 1.0f});
+    material->setParameter("hasTexture", 1.0f);
+    material->setParameter("baseColorMap", texHandle->tex, sampler);
+    material->setParameter("uvScale", uvScale);
+    material->setParameter("uvOffset", uvOffset);
+
+    KineMesh* mesh = buildDecalQuad();
+    uploadMesh(mesh, ctx->engine);
+
+    RenderableManager::Builder(1)
+        .boundingBox({
+            {-width * 0.5f, -height * 0.5f, -0.01f},
+            { width * 0.5f,  height * 0.5f,  0.01f}
+        })
+        .material(0, material)
+        .geometry(
+            0,
+            RenderableManager::PrimitiveType::TRIANGLES,
+            mesh->vb,
+            mesh->ib,
+            0,
+            mesh->indexCount
+        )
+        .culling(culling)
+        .castShadows(castShadows)
+        .receiveShadows(receiveShadows)
+        .build(*ctx->engine, entity);
+
+    ctx->scene->addEntity(entity);
+    ctx->decals.push_back({entity, material, mesh});
+
+    return static_cast<int>(entity.getId());
+}
+
+static void kine_compute_decal_uv(
+    float width, float height,
+    float offsetStudsU, float offsetStudsV,
+    float studsPerTileU, float studsPerTileV,
+    math::float2& outScale, math::float2& outOffset)
+{
+    outScale = {
+        studsPerTileU > 0.0f ? width  / studsPerTileU : 1.0f,
+        studsPerTileV > 0.0f ? height / studsPerTileV : 1.0f
+    };
+    outOffset = {
+        studsPerTileU > 0.0f ? offsetStudsU / studsPerTileU : 0.0f,
+        studsPerTileV > 0.0f ? offsetStudsV / studsPerTileV : 0.0f
+    };
+}
+
+KINE_API bool Kine_Filament_SetDecalTiling(
+    KineFilamentContext* ctx, int decal,
+    float width, float height,
+    float offsetStudsU, float offsetStudsV,
+    float studsPerTileU, float studsPerTileV)
+{
+    if (!ctx || !ctx->engine) return false;
+
+    Entity entity = Entity::import(decal);
+    if (entity.isNull()) return false;
+
+    RenderableManager& rm = ctx->engine->getRenderableManager();
+    auto instance = rm.getInstance(entity);
+    if (!instance.isValid()) return false;
+
+    MaterialInstance* mi = rm.getMaterialInstanceAt(instance, 0);
+    if (!mi) return false;
+
+    math::float2 uvScale, uvOffset;
+    kine_compute_decal_uv(width, height, offsetStudsU, offsetStudsV,
+                           studsPerTileU, studsPerTileV, uvScale, uvOffset);
+
+    mi->setParameter("uvScale", uvScale);
+    mi->setParameter("uvOffset", uvOffset);
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext* ctx, int decal, float* mat4)
+{
+    if (!ctx || !ctx->engine || !mat4) return false;
+
+    Entity entity = Entity::import(decal);
+    if (entity.isNull()) return false;
+
+    RenderableManager& rm = ctx->engine->getRenderableManager();
+    if (!rm.hasComponent(entity)) return false;
+
+    // Same row-major transform -> Filament column-vector conversion used in
+    // Kine_Filament_DrawMeshEx.
+    math::mat4f transform(
+        math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+    );
+
+    TransformManager& tm = ctx->engine->getTransformManager();
+    auto instance = tm.getInstance(entity);
+    if (!instance.isValid()) {
+        tm.create(entity);
+        instance = tm.getInstance(entity);
+    }
+    if (!instance.isValid()) return false;
+
+    tm.setTransform(instance, transform);
+    return true;
+}
+
+KINE_API void Kine_Filament_RemoveDecal(KineFilamentContext* ctx, int decal)
+{
+    if (!ctx || !ctx->engine || !ctx->scene)
+        return;
+
+    Entity entity = Entity::import(decal);
+    if (entity.isNull())
+        return;
+
+    auto it = std::find_if(ctx->decals.begin(), ctx->decals.end(),
+        [entity](const KineDecalResource& decal) {
+            return decal.entity == entity;
+        });
+    if (it != ctx->decals.end()) {
+        kine_destroy_decal(ctx, *it);
+        ctx->decals.erase(it);
+        return;
+    }
+
+    if (ctx->engine->getRenderableManager().hasComponent(entity)) {
+        ctx->scene->remove(entity);
+        ctx->engine->destroy(entity);
+    }
+    EntityManager::get().destroy(entity);
+}
+
+KINE_API bool Kine_Filament_EditDecal(
+    KineFilamentContext* ctx,
+    int decal,
+    float width,
+    float height,
+    bool culling,
+    bool castShadows,
+    bool receiveShadows
+)
+{
+    if (!ctx || !ctx->engine || !ctx->scene ||
+        width <= 0.0f || height <= 0.0f)
+        return false;
+
+    Entity entity = Entity::import(decal);
+    if (entity.isNull())
+        return false;
+
+    RenderableManager& rm = ctx->engine->getRenderableManager();
+
+    if (!rm.hasComponent(entity))
+        return false;
+
+    auto instance = rm.getInstance(entity);
+
+    rm.setCastShadows(instance, castShadows);
+    rm.setReceiveShadows(instance, receiveShadows);
+    rm.setLayerMask(instance, 0x1, culling ? 0x1 : 0x0);
+
+    rm.setAxisAlignedBoundingBox(
+        instance,
+        {
+            {-width * 0.5f, -height * 0.5f, -0.01f},
+            { width * 0.5f,  height * 0.5f,  0.01f}
+        }
+    );
+
+    return true;
+}
+
+KINE_API void Kine_Filament_SetColorLight(KineFilamentContext* ctx, int light, float r, float g, float b) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid()) return;
+    lm.setColor(instance, {r, g, b});
+}
+
+
+KINE_API void Kine_Filament_SetIntensityLight(KineFilamentContext* ctx, int light, float intensity) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid()) return;
+    lm.setIntensity(instance, intensity);
+}
+
+KINE_API void Kine_Filament_SetFalloffLight(KineFilamentContext* ctx, int light, float falloff) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid()) return;
+    lm.setFalloff(instance, falloff);
+}
+
+KINE_API void Kine_Filament_SetPositionLight(KineFilamentContext* ctx, int light, float x, float y, float z) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid()) return;
+    lm.setPosition(instance, {x, y, z});
+}
+
+KINE_API void Kine_Filament_SetDirectionLight(KineFilamentContext* ctx, int light, float x, float y, float z) {
+    if (!ctx || !ctx->engine) return;
+    float length = sqrtf(x * x + y * y + z * z);
+    if (length < 1e-6f) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid()) return;
+    lm.setDirection(instance, {x / length, y / length, z / length});
+}
+
+KINE_API void Kine_Filament_SetConeLight(
+    KineFilamentContext* ctx, int light, float innerRadians, float outerRadians) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid() || lm.getType(instance) == LightManager::Type::POINT) return;
+    outerRadians = std::clamp(outerRadians, 0.00873f, 1.570796327f);
+    innerRadians = std::clamp(innerRadians, 0.00873f, outerRadians);
+    lm.setSpotLightCone(instance, innerRadians, outerRadians);
+}
+
+KINE_API void Kine_Filament_SetShadowLight(KineFilamentContext* ctx, int light, bool castShadows) {
+    if (!ctx || !ctx->engine) return;
+    auto& lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(Entity::import(light));
+    if (!instance.isValid() || lm.getType(instance) == LightManager::Type::POINT) return;
+    lm.setShadowCaster(instance, castShadows);
+}
+
+KINE_API void Kine_Filament_SetEnabledLight(KineFilamentContext* ctx, int light, bool enabled) {
+    if (!ctx || !ctx->engine || !ctx->scene) return;
+    Entity entity = Entity::import(light);
+    if (!ctx->engine->getLightManager().hasComponent(entity)) return;
+    bool active = ctx->scene->hasEntity(entity);
+    if (enabled && !active) ctx->scene->addEntity(entity);
+    else if (!enabled && active) ctx->scene->remove(entity);
+}
+
+KINE_API void Kine_Filament_RemoveLight(KineFilamentContext* ctx, int light) {
+    if (!ctx || !ctx->engine || !ctx->scene) return;
+    Entity entity = Entity::import(light);
+    auto it = std::find(ctx->lights.begin(), ctx->lights.end(), entity);
+    if (it == ctx->lights.end()) return;
+    if (ctx->scene->hasEntity(entity)) ctx->scene->remove(entity);
+    ctx->engine->destroy(entity);
+    EntityManager::get().destroy(entity);
+    ctx->lights.erase(it);
+}
+
+// camera functions
+
+KINE_API void Kine_Filament_SetCameraPerspective(
+    KineFilamentContext* ctx,
+    double fovYDegrees, double aspect, double nearPlane, double farPlane)
+{
+    if (!ctx || !ctx->camera) return;
+    ctx->camera->setProjection(fovYDegrees, aspect, nearPlane, farPlane);
+    if (ctx->view) {
+        ctx->view->setDynamicLightingOptions(
+            static_cast<float>(std::max(nearPlane, 0.01)),
+            static_cast<float>(std::max(farPlane, nearPlane + 0.01)));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mesh system
+//   shape: 1 = cube, 2 = sphere, 3 = pyramid, 6 = cylinder,
+//          10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
+// ---------------------------------------------------------------------------
+
+extern "C++" {
+
+static math::mat4f kine_from_row_major(const float* m)
+{
+    return math::mat4f(
+        math::float4{m[0], m[4], m[8], m[12]},
+        math::float4{m[1], m[5], m[9], m[13]},
+        math::float4{m[2], m[6], m[10], m[14]},
+        math::float4{m[3], m[7], m[11], m[15]});
+}
+
+static void kine_to_row_major(const math::mat4f& m, float* out)
+{
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            out[row * 4 + column] = m[column][row];
+        }
+    }
+}
+
+static math::float3 kine_lerp(const math::float3& a, const math::float3& b, float t)
+{
+    return a + (b - a) * t;
+}
+
+static KineQuat kine_normalize_quat(KineQuat q)
+{
+    const float length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (length <= 0.000001f) return {};
+    q.x /= length;
+    q.y /= length;
+    q.z /= length;
+    q.w /= length;
+    return q;
+}
+
+static KineQuat kine_slerp(KineQuat a, KineQuat b, float t)
+{
+    a = kine_normalize_quat(a);
+    b = kine_normalize_quat(b);
+    float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    if (dot < 0.0f) {
+        dot = -dot;
+        b.x = -b.x; b.y = -b.y; b.z = -b.z; b.w = -b.w;
+    }
+    if (dot > 0.9995f) {
+        return kine_normalize_quat({
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+            a.w + (b.w - a.w) * t});
+    }
+    const float angle = std::acos(std::clamp(dot, -1.0f, 1.0f));
+    const float denominator = std::sin(angle);
+    const float aWeight = std::sin((1.0f - t) * angle) / denominator;
+    const float bWeight = std::sin(t * angle) / denominator;
+    return {
+        a.x * aWeight + b.x * bWeight,
+        a.y * aWeight + b.y * bWeight,
+        a.z * aWeight + b.z * bWeight,
+        a.w * aWeight + b.w * bWeight};
+}
+
+static math::mat4f kine_compose_trs(
+    const math::float3& translation, KineQuat rotation, const math::float3& scale)
+{
+    rotation = kine_normalize_quat(rotation);
+    const float x = rotation.x, y = rotation.y, z = rotation.z, w = rotation.w;
+    const float xx = x * x, yy = y * y, zz = z * z;
+    const float xy = x * y, xz = x * z, yz = y * z;
+    const float wx = w * x, wy = w * y, wz = w * z;
+    return math::mat4f(
+        math::float4{(1.0f - 2.0f * (yy + zz)) * scale.x,
+                     (2.0f * (xy + wz)) * scale.x,
+                     (2.0f * (xz - wy)) * scale.x, 0.0f},
+        math::float4{(2.0f * (xy - wz)) * scale.y,
+                     (1.0f - 2.0f * (xx + zz)) * scale.y,
+                     (2.0f * (yz + wx)) * scale.y, 0.0f},
+        math::float4{(2.0f * (xz + wy)) * scale.z,
+                     (2.0f * (yz - wx)) * scale.z,
+                     (1.0f - 2.0f * (xx + yy)) * scale.z, 0.0f},
+        math::float4{translation.x, translation.y, translation.z, 1.0f});
+}
+
+static math::float3 kine_sample_vec(
+    const std::vector<KineVecKey>& keys, float time, const math::float3& fallback)
+{
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1 || time <= keys.front().time) return keys.front().value;
+    if (time >= keys.back().time) return keys.back().value;
+    auto upper = std::upper_bound(keys.begin(), keys.end(), time,
+        [](float value, const KineVecKey& key) { return value < key.time; });
+    const KineVecKey& b = *upper;
+    const KineVecKey& a = *(upper - 1);
+    const float span = b.time - a.time;
+    return kine_lerp(a.value, b.value, span > 0.0f ? (time - a.time) / span : 0.0f);
+}
+
+static KineQuat kine_sample_quat(
+    const std::vector<KineQuatKey>& keys, float time, const KineQuat& fallback)
+{
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1 || time <= keys.front().time) return keys.front().value;
+    if (time >= keys.back().time) return keys.back().value;
+    auto upper = std::upper_bound(keys.begin(), keys.end(), time,
+        [](float value, const KineQuatKey& key) { return value < key.time; });
+    const KineQuatKey& b = *upper;
+    const KineQuatKey& a = *(upper - 1);
+    const float span = b.time - a.time;
+    return kine_slerp(a.value, b.value, span > 0.0f ? (time - a.time) / span : 0.0f);
+}
+
+static bool kine_eval_bone_global(
+    size_t index,
+    const KineMesh* mesh,
+    const std::vector<math::mat4f>& locals,
+    std::vector<math::mat4f>& globals,
+    std::vector<uint8_t>& states)
+{
+    if (states[index] == 2) return true;
+    if (states[index] == 1) return false;
+    states[index] = 1;
+    const int parent = mesh->bones[index].parent;
+    if (parent >= 0 && (size_t)parent < mesh->bones.size()) {
+        if (!kine_eval_bone_global((size_t)parent, mesh, locals, globals, states)) return false;
+        globals[index] = globals[(size_t)parent] * locals[index];
+    } else {
+        globals[index] = locals[index];
+    }
+    states[index] = 2;
+    return true;
+}
+
+static void kine_upload_skin_pose(KineFilamentContext* ctx, KineMesh* mesh)
+{
+    if (!ctx || !ctx->engine || !mesh || mesh->skinMatrices.empty()) return;
+    RenderableManager& manager = ctx->engine->getRenderableManager();
+    auto updateChunks = [&](const std::vector<KineBuiltBatch>& chunks) {
+        for (const KineBuiltBatch& chunk : chunks) {
+            const RenderableManager::Instance instance = manager.getInstance(chunk.entity);
+            if (instance.isValid()) {
+                manager.setBones(instance, mesh->skinMatrices.data(), mesh->skinMatrices.size());
+            }
+        }
+    };
+    for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+        if (batch && batch->key.mesh == mesh) updateChunks(batch->chunks);
+    }
+    for (auto& entry : ctx->builtBatches) {
+        if (entry.first.mesh == mesh) updateChunks(entry.second.chunks);
+    }
+}
+
+} // extern "C++"
+
+// kine_filament_shim.cpp
+KineFilamentMesh* Kine_Filament_CreateCustomMesh(
+    KineFilamentContext* ctx,
+    const float* vertexData,
+    int vertexCount,
+    const uint16_t* indices,
+    int indexCount)
+{
+    if (!ctx || !ctx->engine || !vertexData || vertexCount <= 0 || !indices || indexCount <= 0)
+        return nullptr;
+    if (vertexCount > 65535) {
+        fprintf(stderr, "[Kine] CreateCustomMesh: %d verts exceeds uint16 index range\n", vertexCount);
+        return nullptr;
+    }
+    auto* m = new KineMesh();
+    m->vertices.resize(vertexCount);
+    memcpy(m->vertices.data(), vertexData, vertexCount * sizeof(KineVertex));
+    m->indices.assign(indices, indices + indexCount);
+    m->indexCount = (uint32_t)indexCount;
+    uploadMesh(m, ctx->engine); // computes tangents via SurfaceOrientation automatically
+    return (KineFilamentMesh*)m;
+}
+
+KINE_API KineFilamentMesh* Kine_Filament_CreateTerrainMesh(
+    KineFilamentContext* ctx,
+    const float* vertexData,
+    const float* materialWeights,
+    int vertexCount,
+    const uint16_t* indices,
+    int indexCount)
+{
+    if (!ctx || !ctx->engine || !vertexData || !materialWeights || vertexCount <= 0 ||
+        !indices || indexCount <= 0) {
+        return nullptr;
+    }
+    if (vertexCount > 65535) {
+        fprintf(stderr, "[Kine] CreateTerrainMesh: %d verts exceeds uint16 index range\n", vertexCount);
+        return nullptr;
+    }
+
+    auto* m = new KineMesh();
+    m->vertices.resize(vertexCount);
+    memcpy(m->vertices.data(), vertexData, vertexCount * sizeof(KineVertex));
+    m->terrainWeights.resize(vertexCount);
+    memcpy(m->terrainWeights.data(), materialWeights, vertexCount * sizeof(KineTerrainWeights));
+    m->indices.assign(indices, indices + indexCount);
+    m->indexCount = (uint32_t)indexCount;
+    uploadMesh(m, ctx->engine);
+    return (KineFilamentMesh*)m;
+}
+
+bool Kine_Filament_UpdateCustomMesh(
+    KineFilamentContext* ctx,
+    KineFilamentMesh* mesh,
+    const float* vertexData,
+    int vertexCount)
+{
+    auto* m = (KineMesh*)mesh;
+    if (!ctx || !ctx->engine || !m || !m->vb || !vertexData || vertexCount <= 0 ||
+        (size_t)vertexCount != m->vertices.size()) {
+        return false;
+    }
+
+    memcpy(m->vertices.data(), vertexData, m->vertices.size() * sizeof(KineVertex));
+
+    math::float3 boundsMin{
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max()
+    };
+    math::float3 boundsMax{
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest(),
+        std::numeric_limits<float>::lowest()
+    };
+    std::vector<math::float3> positions(m->vertices.size());
+    std::vector<math::float3> normals(m->vertices.size());
+    std::vector<math::float2> uvs(m->vertices.size());
+    for (size_t i = 0; i < m->vertices.size(); ++i) {
+        const KineVertex& vertex = m->vertices[i];
+        boundsMin.x = std::min(boundsMin.x, vertex.px);
+        boundsMin.y = std::min(boundsMin.y, vertex.py);
+        boundsMin.z = std::min(boundsMin.z, vertex.pz);
+        boundsMax.x = std::max(boundsMax.x, vertex.px);
+        boundsMax.y = std::max(boundsMax.y, vertex.py);
+        boundsMax.z = std::max(boundsMax.z, vertex.pz);
+        positions[i] = {vertex.px, vertex.py, vertex.pz};
+        normals[i] = {vertex.nx, vertex.ny, vertex.nz};
+        uvs[i] = {vertex.u, vertex.v};
+    }
+    m->localBounds.set(boundsMin, boundsMax);
+
+    std::vector<math::short4> quats(m->vertices.size());
+    auto orientation = SurfaceOrientation::Builder()
+        .vertexCount((uint32_t)m->vertices.size())
+        .normals(normals.data())
+        .uvs(uvs.data())
+        .positions(positions.data())
+        .triangleCount(m->indices.size() / 3)
+        .triangles(reinterpret_cast<const math::ushort3*>(m->indices.data()))
+        .build();
+    if (!orientation) {
+        fprintf(stderr, "[Kine] UV tangent regeneration failed; using normal-derived frames\n");
+        orientation = SurfaceOrientation::Builder()
+            .vertexCount((uint32_t)m->vertices.size())
+            .normals(normals.data())
+            .build();
+        if (!orientation) return false;
+    }
+    orientation->getQuats(quats.data(), (uint32_t)m->vertices.size());
+    delete orientation;
+
+    const size_t vertexBytes = m->vertices.size() * sizeof(KineVertex);
+    void* vertexCopy = malloc(vertexBytes);
+    memcpy(vertexCopy, m->vertices.data(), vertexBytes);
+    m->vb->setBufferAt(*ctx->engine, 0,
+        VertexBuffer::BufferDescriptor(vertexCopy, vertexBytes,
+            [](void* buffer, size_t, void*) { free(buffer); }, nullptr));
+
+    const size_t tangentBytes = quats.size() * sizeof(math::short4);
+    void* tangentCopy = malloc(tangentBytes);
+    memcpy(tangentCopy, quats.data(), tangentBytes);
+    m->vb->setBufferAt(*ctx->engine, 1,
+        VertexBuffer::BufferDescriptor(tangentCopy, tangentBytes,
+            [](void* buffer, size_t, void*) { free(buffer); }, nullptr));
+
+    return true;
+}
+
+KINE_API KineFilamentGizmo* Kine_Filament_CreateGizmo(KineFilamentContext* ctx, int gizmoType)
+{
+    if (!ctx || !ctx->engine) return nullptr;
+
+    auto* gizmo = new KineFilamentGizmo();
+    gizmo->type = gizmoType;
+
+    switch (gizmoType) {
+        case KINE_GIZMO_ROTATE: gizmo->axes = buildRotateGizmoAxes(); break;
+        case KINE_GIZMO_SCALE:  gizmo->axes = buildScaleGizmoAxes(); break;
+        default:                gizmo->axes = buildMoveGizmoAxes(); break;
+    }
+
+    KineMesh* meshes[4] = {gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center};
+    for (KineMesh* mesh : meshes) {
+        if (mesh) uploadMesh(mesh, ctx->engine);
+    }
+
+    return gizmo;
+}
+
+KINE_API void Kine_Filament_DestroyGizmo(KineFilamentContext* ctx, KineFilamentGizmo* gizmo)
+{
+    if (!ctx || !ctx->engine || !gizmo) return;
+
+    KineMesh* meshes[4] = {gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center};
+    for (KineMesh* mesh : meshes) {
+        if (!mesh) continue;
+        kine_invalidate_batches(ctx, mesh, nullptr);
+        if (mesh->vb) ctx->engine->destroy(mesh->vb);
+        if (mesh->ib) ctx->engine->destroy(mesh->ib);
+        delete mesh;
+    }
+
+    delete gizmo;
+}
+
+KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape)
+{
+    if (!ctx || !ctx->engine) return nullptr;
+
+    KineMesh* m = nullptr;
+    switch (shape) {
+        case 10: m = buildMoveGizmo(); break;
+        case 11: m = buildRotateGizmo(); break;
+        case 12: m = buildScaleGizmo(); break;
+        case 5:  m = buildDisplacedCube(); break;
+        case 4:  m = buildParticleQuad(); break;
+        case 6:  m = buildCylinder(); break;
+        case 2:  m = buildSphere(); break;
+        case 3:  m = buildPyramid(); break;
+        default: m = buildCube();   break; // 1 = cube (default)
+    }
+    uploadMesh(m, ctx->engine);
+    return (KineFilamentMesh*)m;
+}
+
+KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path)
+{
+    if (!ctx || !ctx->engine || !path || path[0] == '\0') return nullptr;
+
+#if KINE_WITH_ASSIMP
+    KineMesh* m = loadMeshWithAssimp(path);
+    if (!m) return nullptr;
+    uploadMesh(m, ctx->engine);
+    return (KineFilamentMesh*)m;
+#else
+    fprintf(stderr, "[Kine] CreateMeshFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
+    return nullptr;
+#endif
+}
+
+KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh* mesh)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    return m ? (int)m->bones.size() : 0;
+}
+
+KINE_API const char* Kine_Filament_GetMeshBoneName(const KineFilamentMesh* mesh, int boneIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return nullptr;
+    return m->bones[(size_t)boneIndex].name.c_str();
+}
+
+KINE_API int Kine_Filament_GetMeshBoneParent(const KineFilamentMesh* mesh, int boneIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return -1;
+    return m->bones[(size_t)boneIndex].parent;
+}
+
+KINE_API bool Kine_Filament_CopyMeshBoneBindTransform(
+    const KineFilamentMesh* mesh, int boneIndex, float* outTransform16)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || !outTransform16 || boneIndex < 0 || (size_t)boneIndex >= m->bones.size()) return false;
+    kine_to_row_major(m->bones[(size_t)boneIndex].bindLocal, outTransform16);
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetMeshBoneTransforms(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    const float* boneTransforms16, int boneCount)
+{
+    auto* m = reinterpret_cast<KineMesh*>(mesh);
+    if (!ctx || !m || !boneTransforms16 || boneCount != (int)m->bones.size() || boneCount <= 0) return false;
+    m->skinMatrices.resize((size_t)boneCount);
+    for (int i = 0; i < boneCount; ++i) {
+        m->skinMatrices[(size_t)i] =
+            kine_from_row_major(boneTransforms16 + (size_t)i * 16u) * m->bones[(size_t)i].inverseBind;
+    }
+    kine_upload_skin_pose(ctx, m);
+    return true;
+}
+
+KINE_API int Kine_Filament_GetMeshAnimationCount(const KineFilamentMesh* mesh)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    return m ? (int)m->animations.size() : 0;
+}
+
+KINE_API const char* Kine_Filament_GetMeshAnimationName(
+    const KineFilamentMesh* mesh, int animationIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || animationIndex < 0 || (size_t)animationIndex >= m->animations.size()) return nullptr;
+    return m->animations[(size_t)animationIndex].name.c_str();
+}
+
+KINE_API float Kine_Filament_GetMeshAnimationDuration(
+    const KineFilamentMesh* mesh, int animationIndex)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || animationIndex < 0 || (size_t)animationIndex >= m->animations.size()) return 0.0f;
+    return m->animations[(size_t)animationIndex].duration;
+}
+
+KINE_API bool Kine_Filament_ApplyMeshAnimation(
+    KineFilamentContext* ctx, KineFilamentMesh* mesh,
+    int animationIndex, float timeSeconds, bool loop)
+{
+    auto* m = reinterpret_cast<KineMesh*>(mesh);
+    if (!ctx || !m || m->bones.empty() || animationIndex < 0 ||
+            (size_t)animationIndex >= m->animations.size()) return false;
+    const KineAnimation& animation = m->animations[(size_t)animationIndex];
+    float sampleTime = std::max(timeSeconds, 0.0f);
+    if (animation.duration > 0.0f) {
+        sampleTime = loop ? std::fmod(sampleTime, animation.duration)
+                          : std::min(sampleTime, animation.duration);
+    }
+
+    std::vector<math::float3> translations(m->bones.size());
+    std::vector<KineQuat> rotations(m->bones.size());
+    std::vector<math::float3> scales(m->bones.size());
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        translations[i] = m->bones[i].bindTranslation;
+        rotations[i] = m->bones[i].bindRotation;
+        scales[i] = m->bones[i].bindScale;
+    }
+    for (const KineAnimationChannel& channel : animation.channels) {
+        if (channel.bone < 0 || (size_t)channel.bone >= m->bones.size()) continue;
+        const size_t bone = (size_t)channel.bone;
+        translations[bone] = kine_sample_vec(channel.translations, sampleTime, translations[bone]);
+        rotations[bone] = kine_sample_quat(channel.rotations, sampleTime, rotations[bone]);
+        scales[bone] = kine_sample_vec(channel.scales, sampleTime, scales[bone]);
+    }
+
+    std::vector<math::mat4f> locals(m->bones.size());
+    std::vector<math::mat4f> globals(m->bones.size());
+    std::vector<uint8_t> states(m->bones.size(), 0);
+    m->skinMatrices.resize(m->bones.size());
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        locals[i] = kine_compose_trs(translations[i], rotations[i], scales[i]);
+    }
+    for (size_t i = 0; i < m->bones.size(); ++i) {
+        if (!kine_eval_bone_global(i, m, locals, globals, states)) return false;
+        m->skinMatrices[i] = globals[i] * m->bones[i].inverseBind;
+    }
+    kine_upload_skin_pose(ctx, m);
+    return true;
+}
+
+KINE_API KineFilamentMeshData* Kine_Filament_LoadMeshDataFromPath(const char* path)
+{
+    if (!path || path[0] == '\0') return nullptr;
+
+#if KINE_WITH_ASSIMP
+    KineMesh* source = loadMeshWithAssimp(path);
+    if (!source) return nullptr;
+
+    auto* result = new KineCpuMeshData();
+    result->positions.reserve(source->vertices.size());
+    result->indices.reserve(source->indices.size());
+    for (const KineVertex& vertex : source->vertices) {
+        result->positions.push_back({vertex.px, vertex.py, vertex.pz});
+    }
+    for (uint16_t index : source->indices) {
+        result->indices.push_back((uint32_t)index);
+    }
+    delete source;
+    return reinterpret_cast<KineFilamentMeshData*>(result);
+#else
+    fprintf(stderr, "[Kine] LoadMeshDataFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
+    return nullptr;
+#endif
+}
+
+KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData* meshData)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    return data ? (int)data->positions.size() : 0;
+}
+
+KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData* meshData)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    return data ? (int)data->indices.size() : 0;
+}
+
+KINE_API bool Kine_Filament_CopyMeshDataPositions(
+    const KineFilamentMeshData* meshData, float* outPositions, int positionFloatCapacity)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    const size_t required = data ? data->positions.size() * 3u : 0u;
+    if (!data || !outPositions || positionFloatCapacity < 0 || (size_t)positionFloatCapacity < required)
+        return false;
+    for (size_t i = 0; i < data->positions.size(); ++i) {
+        outPositions[i * 3u] = data->positions[i].x;
+        outPositions[i * 3u + 1u] = data->positions[i].y;
+        outPositions[i * 3u + 2u] = data->positions[i].z;
+    }
+    return true;
+}
+
+KINE_API bool Kine_Filament_CopyMeshDataIndices(
+    const KineFilamentMeshData* meshData, uint32_t* outIndices, int indexCapacity)
+{
+    const auto* data = reinterpret_cast<const KineCpuMeshData*>(meshData);
+    const size_t required = data ? data->indices.size() : 0u;
+    if (!data || !outIndices || indexCapacity < 0 || (size_t)indexCapacity < required)
+        return false;
+    std::copy(data->indices.begin(), data->indices.end(), outIndices);
+    return true;
+}
+
+KINE_API void Kine_Filament_DestroyMeshData(KineFilamentMeshData* meshData)
+{
+    delete reinterpret_cast<KineCpuMeshData*>(meshData);
+}
+
+KINE_API KineFilamentTex* Kine_Filament_CreateTexFromPixels(
+    KineFilamentContext* ctx,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8)
+{
+    auto* th = new KineTexHandle();
+    th->tex = ctx ? kine_create_uploaded_rgba_texture(ctx->engine, width, height, rowBytes, pixelsRGBA8) : nullptr;
+    if (!th->tex) {
+        delete th;
+        return nullptr;
+    }
+
+    return (KineFilamentTex*)th;
+}
+
+KINE_API bool Kine_Filament_UpdateTexFromPixels(
+    KineFilamentContext* ctx,
+    KineFilamentTex* tex,
+    int width, int height,
+    int rowBytes,
+    const void* pixelsRGBA8)
+{
+    if (!ctx || !ctx->engine || !tex || !pixelsRGBA8 || width <= 0 || height <= 0 || rowBytes < width * 4)
+        return false;
+
+    auto* th = (KineTexHandle*)tex;
+    if (!th->tex || th->tex->getWidth(0) != (uint32_t)width || th->tex->getHeight(0) != (uint32_t)height)
+        return false;
+
+    const size_t bytes = (size_t)rowBytes * (size_t)height;
+    uint8_t* copy = (uint8_t*)malloc(bytes);
+    if (!copy) return false;
+    memcpy(copy, pixelsRGBA8, bytes);
+
+    Texture::PixelBufferDescriptor pb(
+        copy, bytes,
+        Texture::Format::RGBA, Texture::Type::UBYTE,
+        /*alignment*/ 1, /*left*/ 0, /*top*/ 0, /*stride*/ (uint32_t)(rowBytes / 4),
+        [](void* buffer, size_t, void*) { free(buffer); });
+
+    th->tex->setImage(*ctx->engine, 0, 0, 0,
+                      (uint32_t)width, (uint32_t)height, std::move(pb));
+    return true;
+}
+
+KINE_API KineFilamentTex* Kine_Filament_CreatePbrTexFromPixels(
+    KineFilamentContext* ctx,
+    int width, int height,
+    int albedoRowBytes,
+    const void* albedoRGBA8,
+    int normalWidth, int normalHeight,
+    int normalRowBytes,
+    const void* normalRGBA8,
+    int ormWidth, int ormHeight,
+    int ormRowBytes,
+    const void* ormRGBA8,
+    int heightWidth, int heightHeight,
+    int heightRowBytes,
+    const void* heightRGBA8,
+    float heightScale)
+{
+    if (!ctx || !ctx->engine) return nullptr;
+
+    auto* th = new KineTexHandle();
+    th->tex = kine_create_uploaded_rgba_texture(ctx->engine, width, height, albedoRowBytes, albedoRGBA8);
+    if (!th->tex) {
+        delete th;
+        return nullptr;
+    }
+
+    th->normalTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, normalWidth, normalHeight, normalRowBytes, normalRGBA8);
+    th->ormTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, ormWidth, ormHeight, ormRowBytes, ormRGBA8);
+    th->heightTex = kine_create_uploaded_rgba_texture(
+        ctx->engine, heightWidth, heightHeight, heightRowBytes, heightRGBA8);
+    th->heightScale = heightScale;
+
+    return (KineFilamentTex*)th;
+}
+
+KINE_API KineFilamentTex* Kine_Filament_CreateTerrainTextureSet(
+    KineFilamentContext* ctx,
+    KineFilamentTex* layer0,
+    KineFilamentTex* layer1,
+    KineFilamentTex* layer2,
+    KineFilamentTex* layer3,
+    KineFilamentTex* layer4,
+    KineFilamentTex* layer5)
+{
+    if (!ctx || !ctx->engine) return nullptr;
+
+    KineFilamentTex* layers[6] = {layer0, layer1, layer2, layer3, layer4, layer5};
+    auto* set = new KineTexHandle();
+    set->ownsTextures = false;
+    for (size_t i = 0; i < 6; ++i) {
+        auto* source = (KineTexHandle*)layers[i];
+        set->terrainLayers[i] = source ? source->tex : nullptr;
+    }
+    return (KineFilamentTex*)set;
+}
+
+KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMesh* mesh)
+{
+    if (!ctx || !mesh) return;
+    auto* m = (KineMesh*)mesh;
+    kine_invalidate_batches(ctx, m, nullptr);
+    if (m->vb) ctx->engine->destroy(m->vb);
+    if (m->ib) ctx->engine->destroy(m->ib);
+    delete m;
+}
+
+// ---------------------------------------------------------------------------
+// Texture system -- wraps an existing OpenGL texture handle.
+// Input layout: { uint id, int w, int h, int mipmaps, int format }
+// ---------------------------------------------------------------------------
+
+KINE_API KineFilamentTex* Kine_Filament_CreateTex(KineFilamentContext* ctx, const KineGLTextureInfo* texture)
+{
+    if (!ctx || !texture) return nullptr;
+
+    if (texture->id == 0) return nullptr;
+
+    auto* th = new KineTexHandle();
+
+    th->tex = Texture::Builder()
+        .width((uint32_t)texture->width)
+        .height((uint32_t)texture->height)
+        .levels(1)
+        .usage(Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8)
+        .import(texture->id)
+        .build(*ctx->engine);
+
+    if (!th->tex) {
+        delete th;
+        return nullptr;
+    }
+
+    return (KineFilamentTex*)th;
+}
+
+KINE_API void Kine_Filament_DestroyTex(KineFilamentContext* ctx, KineFilamentTex* tex)
+{
+    if (!ctx || !tex) return;
+    auto* th = (KineTexHandle*)tex;
+    kine_invalidate_batches(ctx, nullptr, th);
+    if (th->ownsTextures) {
+        if (th->tex) ctx->engine->destroy(th->tex);
+        if (th->normalTex) ctx->engine->destroy(th->normalTex);
+        if (th->ormTex) ctx->engine->destroy(th->ormTex);
+        if (th->heightTex) ctx->engine->destroy(th->heightTex);
+    }
+    delete th;
+}
+
+// ---------------------------------------------------------------------------
+// DrawMesh -- queues a mesh instance to be drawn this frame.
+//
+//   ctx          : context handle
+//   mesh         : mesh from Kine_Filament_CreateMesh
+//   r,g,b        : base color [0..1]
+//   tex          : optional texture handle (may be NULL)
+//   transparency : [0..1], 0 = fully opaque, 1 = fully transparent
+//   mat4         : row-major float[16] world transform
+//
+// Calls that share the same mesh, materialKind, color/params, and
+// shadow/culling flags are automatically batched together and issued as a
+// single GPU-instanced draw call from Kine_Filament_RenderFrame -- see the
+// "Automatic instanced batching" comment near the top of this file.
+// ---------------------------------------------------------------------------
+
+static void kine_queue_mesh(
+    KineFilamentContext* ctx,
+    KineFilamentMesh* mesh,
+    int materialKind,
+    float r, float g, float b,
+    float param1,
+    float param2,
+    float param3,
+    float transmission,
+    const float* mat4,
+    bool castShadow,
+    bool receiveShadow,
+    bool culling,
+    KineFilamentTex* tex,
+    KineFilamentShader* shader = nullptr,
+    uint64_t streamId = 0,
+    float particleUvOffsetY = 0.0f,
+    KineBatchKey* outKey = nullptr)
+{
+    if (!ctx || !mesh || !mat4) return;
+
+    KineBatchKey key;
+    key.mesh          = (KineMesh*)mesh;
+    key.shader        = shader && shader->ctx == ctx ? shader : nullptr;
+    key.streamId      = streamId;
+    key.materialKind  = materialKind;
+    key.r = r; key.g = g; key.b = b;
+    key.param1 = param1; key.param2 = param2; key.param3 = param3;
+    key.transmission  = transmission;
+    key.particleUvOffsetY = particleUvOffsetY;
+    key.castShadow    = castShadow;
+    key.receiveShadow = receiveShadow;
+    key.culling       = culling;
+    key.texture       = (KineTexHandle*)tex;
+    if (outKey) {
+        *outKey = key;
+    }
+
+    KinePendingBatch& pending = ctx->pendingBatches[key];
+    if (pending.lastQueuedFrame != ctx->batchFrame) {
+        pending.transforms.clear();
+        pending.lastQueuedFrame = ctx->batchFrame;
+		pending.transformHash = 1469598103934665603ULL;
+    }
+	for (size_t offset = 0; offset < 16; ++offset) {
+		uint32_t bits = 0;
+		memcpy(&bits, mat4 + offset, sizeof(bits));
+		pending.transformHash ^= bits;
+		pending.transformHash *= 1099511628211ULL;
+	}
+    pending.transforms.emplace_back(
+        math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+    );
+}
+
+KINE_API void Kine_Filament_DrawMeshEx(
+    KineFilamentContext* ctx,
+    KineFilamentMesh*    mesh,
+    int                  materialKind,
+    float                r, float g, float b,
+    float                param1, // roughness (glass) / intensity (neon)
+    float                param2, // ior (glass) / unused (neon)
+    float                param3, // thickness (glass) / unused (neon)
+    float                transmission, // glass only
+    float*               mat4,
+    bool                 castshadow,
+    bool                 receiveShadow,
+    bool                 culling,
+    KineFilamentTex*     tex)
+{
+    kine_queue_mesh(
+        ctx, mesh, materialKind,
+        r, g, b,
+        param1, param2, param3, transmission,
+        mat4,
+        castshadow, receiveShadow, culling,
+        tex);
+}
+
+KINE_API void Kine_Filament_DrawMeshList(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount)
+{
+    static_assert(sizeof(KineFilamentDrawItem) == 128,
+        "KineFilamentDrawItem ABI must match filament/structs.luau");
+    static_assert(offsetof(KineFilamentDrawItem, transform) == 16 &&
+                  offsetof(KineFilamentDrawItem, materialKind) == 108 &&
+                  offsetof(KineFilamentDrawItem, flags) == 112 &&
+                  offsetof(KineFilamentDrawItem, shader) == 120,
+        "KineFilamentDrawItem field offsets must match filament/structs.luau");
+
+    if (!ctx || !items || itemCount == 0) return;
+
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineFilamentDrawItem& item = items[i];
+        kine_queue_mesh(
+            ctx, item.mesh, item.materialKind,
+            item.r, item.g, item.b,
+            item.param1, item.param2, item.param3, item.transmission,
+            item.transform,
+            (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0,
+            (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0,
+            (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0,
+            item.tex,
+            item.shader);
+    }
+
+}
+
+KINE_API void Kine_Filament_DrawParticles(
+    KineFilamentContext* ctx,
+    KineFilamentTex* texture,
+    const KineFilamentParticleItem* items,
+    uint32_t itemCount,
+    float uvScaleX,
+    float uvScaleY,
+    float uvOffsetX,
+    float uvOffsetY,
+    bool castShadows,
+    bool culling)
+{
+    static_assert(sizeof(KineFilamentParticleItem) == 68,
+        "KineFilamentParticleItem ABI must match filament/funcs.luau");
+    static_assert(offsetof(KineFilamentParticleItem, r) == 64,
+        "KineFilamentParticleItem color offset must match filament/funcs.luau");
+
+    if (!ctx || !ctx->particleQuadMesh || !items || itemCount == 0) return;
+
+    const float sx = uvScaleX > 0.0f ? uvScaleX : 1.0f;
+    const float sy = uvScaleY > 0.0f ? uvScaleY : 1.0f;
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineFilamentParticleItem& item = items[i];
+        if (item.a == 0) continue;
+
+        kine_queue_mesh(
+            ctx,
+            reinterpret_cast<KineFilamentMesh*>(ctx->particleQuadMesh),
+            KINE_MAT_PARTICLE,
+            item.r / 255.0f,
+            item.g / 255.0f,
+            item.b / 255.0f,
+            sx,
+            sy,
+            uvOffsetX,
+            item.a / 255.0f,
+            item.transform,
+            castShadows,
+            false,
+            culling,
+            texture,
+            nullptr,
+            0,
+            uvOffsetY);
+    }
+}
+
+KINE_API void Kine_Filament_DrawMeshListVersioned(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount,
+    uint64_t streamId,
+    uint64_t version)
+{
+    if (!ctx || streamId == 0) return;
+
+    KineRetainedListState& state = ctx->retainedLists[streamId];
+    if (state.initialized && state.version == version) {
+        for (const KineBatchKey& key : state.keys) {
+            auto built = ctx->builtBatches.find(key);
+            if (built != ctx->builtBatches.end()) {
+                built->second.lastUsedFrame = ctx->batchFrame;
+            }
+        }
+        return;
+    }
+
+    state.initialized = true;
+    state.version = version;
+    state.keys.clear();
+    if (!items || itemCount == 0) return;
+
+    std::unordered_set<KineBatchKey, KineBatchKeyHash> uniqueKeys;
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineFilamentDrawItem& item = items[i];
+        KineBatchKey key;
+        kine_queue_mesh(
+            ctx, item.mesh, item.materialKind,
+            item.r, item.g, item.b,
+            item.param1, item.param2, item.param3, item.transmission,
+            item.transform,
+            (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0,
+            (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0,
+            (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0,
+            item.tex,
+            item.shader,
+            streamId,
+            0.0f,
+            &key);
+        if (uniqueKeys.insert(key).second) {
+            state.keys.push_back(key);
+        }
+    }
+}
+
+KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
+    KineFilamentContext* ctx,
+    const KineFilamentDrawItem* items,
+    uint32_t itemCount)
+{
+    if (!ctx || !ctx->engine || !items || itemCount == 0) return nullptr;
+
+    KineBatchKey key = kine_draw_item_key(items[0]);
+    if (!key.mesh) return nullptr;
+
+    auto* batch = new KineFilamentInstanceBatch();
+    batch->ctx = ctx;
+    batch->key = key;
+    batch->transforms.reserve(itemCount);
+
+    for (uint32_t i = 0; i < itemCount; ++i) {
+        const KineBatchKey itemKey = kine_draw_item_key(items[i]);
+        if (!(itemKey == key)) {
+            delete batch;
+            return nullptr;
+        }
+        batch->transforms.push_back(kine_draw_item_transform(items[i]));
+    }
+
+    if (!kine_rebuild_instance_batch(batch)) {
+        Kine_Filament_DestroyInstanceBatch(batch);
+        return nullptr;
+    }
+
+    ctx->instanceBatches.insert(batch);
+    return batch;
+}
+
+KINE_API void Kine_Filament_DestroyInstanceBatch(KineFilamentInstanceBatch* batch)
+{
+    if (!batch) return;
+    kine_destroy_instance_batch_chunks(batch);
+    KineFilamentContext* ctx = batch->ctx;
+    if (ctx) {
+        ctx->instanceBatches.erase(batch);
+    }
+    if (ctx && ctx->engine && batch->matInst) {
+        ctx->engine->destroy(batch->matInst);
+    }
+    delete batch;
+}
+
+KINE_API void Kine_Filament_UpdateInstanceTransforms(
+    KineFilamentInstanceBatch* batch,
+    const uint32_t* indices,
+    const float* transforms,
+    uint32_t dirtyCount)
+{
+    if (!batch || !batch->ctx || !batch->ctx->engine || !indices || !transforms || dirtyCount == 0) return;
+
+    size_t maxInstances = batch->ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+
+    std::vector<uint32_t> dirtyIndices;
+    dirtyIndices.reserve(dirtyCount);
+
+    for (uint32_t i = 0; i < dirtyCount; ++i) {
+        const uint32_t index = indices[i];
+        if (index >= batch->transforms.size()) continue;
+
+        const float* mat4 = transforms + ((size_t)i * 16);
+        batch->transforms[index] = math::mat4f(
+            math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+            math::float4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+            math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
+            math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
+        );
+        dirtyIndices.push_back(index);
+    }
+
+    if (dirtyIndices.empty()) return;
+
+    std::sort(dirtyIndices.begin(), dirtyIndices.end());
+    dirtyIndices.erase(std::unique(dirtyIndices.begin(), dirtyIndices.end()), dirtyIndices.end());
+
+    size_t pos = 0;
+    while (pos < dirtyIndices.size()) {
+        const uint32_t first = dirtyIndices[pos];
+        const size_t chunkIndex = first / maxInstances;
+        const size_t chunkBase = chunkIndex * maxInstances;
+        uint32_t last = first;
+        pos++;
+
+        while (pos < dirtyIndices.size()) {
+            const uint32_t next = dirtyIndices[pos];
+            if (next != last + 1 || next / maxInstances != chunkIndex) {
+                break;
+            }
+            last = next;
+            pos++;
+        }
+
+        if (chunkIndex >= batch->chunks.size()) continue;
+        KineBuiltBatch& chunk = batch->chunks[chunkIndex];
+        if (!chunk.instanceBuffer) continue;
+
+        const size_t count = (size_t)last - (size_t)first + 1;
+        chunk.instanceBuffer->setLocalTransforms(
+            batch->transforms.data() + first,
+            count,
+            first - chunkBase);
+    }
+}
+
+KINE_API void Kine_Filament_DrawMeshOutline(
+    KineFilamentContext* ctx,
+    KineFilamentMesh*    mesh,
+    float                r, float g, float b,
+    float                thickness,
+    float*               mat4)
+{
+    if (!ctx || !mesh || !mat4 || thickness <= 0.0f) return;
+
+    Kine_Filament_DrawMeshEx(
+        ctx, mesh, KINE_MAT_OUTLINE,
+        r, g, b,
+        thickness, 0.0f, 0.0f,
+        0.0f,
+        mat4,
+        false, false, false,
+        nullptr);
+}
+
+} // extern "C"
+
+static void kine_gizmo_axis_color(int axis, float& r, float& g, float& b)
+{
+    switch (axis) {
+        case KINE_GIZMO_AXIS_X:      r = 0.90f; g = 0.15f; b = 0.15f; break;
+        case KINE_GIZMO_AXIS_Y:      r = 0.20f; g = 0.85f; b = 0.20f; break;
+        case KINE_GIZMO_AXIS_Z:      r = 0.20f; g = 0.45f; b = 0.95f; break;
+        case KINE_GIZMO_AXIS_CENTER: r = 0.85f; g = 0.85f; b = 0.85f; break;
+        default:                     r = 1.00f; g = 1.00f; b = 1.00f; break;
+    }
+}
+
+struct KineGizmoScreenPoint {
+    double x = 0.0;
+    double y = 0.0;
+    bool valid = false;
+};
+
+static math::mat4 kine_gizmo_model_matrix(const float* mat4)
+{
+    return math::mat4(
+        math::double4{mat4[0], mat4[4], mat4[8],  mat4[12]},
+        math::double4{mat4[1], mat4[5], mat4[9],  mat4[13]},
+        math::double4{mat4[2], mat4[6], mat4[10], mat4[14]},
+        math::double4{mat4[3], mat4[7], mat4[11], mat4[15]});
+}
+
+static KineGizmoScreenPoint kine_gizmo_project(
+    KineFilamentContext* ctx,
+    const math::mat4& model,
+    const math::double3& point)
+{
+    KineGizmoScreenPoint result;
+    if (!ctx || !ctx->camera) return result;
+
+    const math::double4 clip = ctx->camera->getProjectionMatrix() *
+        ctx->camera->getViewMatrix() * model * math::double4{point, 1.0};
+    if (clip.w <= 1e-8) return result;
+
+    const double ndcX = clip.x / clip.w;
+    const double ndcY = clip.y / clip.w;
+    const int viewportX = ctx->viewportWidth > 0 ? ctx->viewportX : 0;
+    const int viewportY = ctx->viewportHeight > 0 ? ctx->viewportY : 0;
+    const int viewportWidth = ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width;
+    const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+    result.x = viewportX + (ndcX * 0.5 + 0.5) * viewportWidth;
+    result.y = viewportY + (1.0 - (ndcY * 0.5 + 0.5)) * viewportHeight;
+    result.valid = true;
+    return result;
+}
+
+static double kine_gizmo_segment_distance(
+    double px, double py,
+    const KineGizmoScreenPoint& a,
+    const KineGizmoScreenPoint& b)
+{
+    if (!a.valid || !b.valid) return std::numeric_limits<double>::max();
+    const double vx = b.x - a.x;
+    const double vy = b.y - a.y;
+    const double lengthSquared = vx * vx + vy * vy;
+    if (lengthSquared <= 1e-8) return std::hypot(px - a.x, py - a.y);
+    const double t = std::clamp(((px - a.x) * vx + (py - a.y) * vy) / lengthSquared, 0.0, 1.0);
+    return std::hypot(px - (a.x + vx * t), py - (a.y + vy * t));
+}
+
+static math::double3 kine_gizmo_axis_point(int axis, double distance)
+{
+    if (axis == KINE_GIZMO_AXIS_X) return {distance, 0.0, 0.0};
+    if (axis == KINE_GIZMO_AXIS_Y) return {0.0, distance, 0.0};
+    return {0.0, 0.0, distance};
+}
+
+extern "C" {
+
+KINE_API int Kine_Filament_PickGizmo(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    float screenX,
+    float screenY)
+{
+    if (!ctx || !ctx->camera || !gizmo || !mat4) return KINE_GIZMO_AXIS_NONE;
+
+    const math::mat4 model = kine_gizmo_model_matrix(mat4);
+    const KineGizmoScreenPoint center = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    if (center.valid && gizmo->axes.center &&
+        std::hypot((double)screenX - center.x, (double)screenY - center.y) <= 10.0) {
+        return KINE_GIZMO_AXIS_CENTER;
+    }
+
+    int closestAxis = KINE_GIZMO_AXIS_NONE;
+    double closestDistance = 12.0;
+    for (int axis = KINE_GIZMO_AXIS_X; axis <= KINE_GIZMO_AXIS_Z; ++axis) {
+        double distance = std::numeric_limits<double>::max();
+        if (gizmo->type == KINE_GIZMO_ROTATE) {
+            const double radius = axis == KINE_GIZMO_AXIS_X ? 0.85 :
+                (axis == KINE_GIZMO_AXIS_Y ? 0.92 : 0.99);
+            KineGizmoScreenPoint previous;
+            constexpr int segments = 64;
+            for (int i = 0; i <= segments; ++i) {
+                const double angle = 2.0 * M_PI * i / segments;
+                math::double3 point;
+                if (axis == KINE_GIZMO_AXIS_X) point = {0.0, radius * cos(angle), radius * sin(angle)};
+                else if (axis == KINE_GIZMO_AXIS_Y) point = {radius * cos(angle), 0.0, radius * sin(angle)};
+                else point = {radius * cos(angle), radius * sin(angle), 0.0};
+                const KineGizmoScreenPoint current = kine_gizmo_project(ctx, model, point);
+                if (i > 0) {
+                    distance = std::min(distance,
+                        kine_gizmo_segment_distance(screenX, screenY, previous, current));
+                }
+                previous = current;
+            }
+        } else {
+            const KineGizmoScreenPoint start = kine_gizmo_project(
+                ctx, model, kine_gizmo_axis_point(axis, 0.08));
+            const KineGizmoScreenPoint end = kine_gizmo_project(
+                ctx, model, kine_gizmo_axis_point(axis, 1.30));
+            distance = kine_gizmo_segment_distance(screenX, screenY, start, end);
+        }
+
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closestAxis = axis;
+        }
+    }
+    return closestAxis;
+}
+
+KINE_API float Kine_Filament_GetGizmoDragDelta(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    int axis,
+    float startX,
+    float startY,
+    float currentX,
+    float currentY)
+{
+    if (!ctx || !ctx->camera || !gizmo || !mat4) return 0.0f;
+    if (gizmo->type == KINE_GIZMO_ROTATE || axis == KINE_GIZMO_AXIS_CENTER) {
+        return ((currentX - startX) - (currentY - startY)) * 0.01f;
+    }
+
+    const math::mat4 model = kine_gizmo_model_matrix(mat4);
+    const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    const KineGizmoScreenPoint endpoint = kine_gizmo_project(
+        ctx, model, kine_gizmo_axis_point(axis, 1.0));
+    if (!origin.valid || !endpoint.valid) return 0.0f;
+
+    const double axisX = endpoint.x - origin.x;
+    const double axisY = endpoint.y - origin.y;
+    const double pixelsPerUnit = std::hypot(axisX, axisY);
+    if (pixelsPerUnit <= 1e-6) return 0.0f;
+    const double mouseX = currentX - startX;
+    const double mouseY = currentY - startY;
+    return (float)((mouseX * axisX + mouseY * axisY) / (pixelsPerUnit * pixelsPerUnit));
+}
+
+KINE_API void Kine_Filament_DrawGizmo(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo*   gizmo,
+    float*               mat4,
+    int                  hoveredAxis,
+    int                  selectedAxis)
+{
+    if (!ctx || !gizmo || !mat4) return;
+
+    struct AxisEntry { int id; KineMesh* mesh; };
+    AxisEntry entries[4] = {
+        {KINE_GIZMO_AXIS_X,      gizmo->axes.x},
+        {KINE_GIZMO_AXIS_Y,      gizmo->axes.y},
+        {KINE_GIZMO_AXIS_Z,      gizmo->axes.z},
+        {KINE_GIZMO_AXIS_CENTER, gizmo->axes.center},
+    };
+
+    for (const AxisEntry& entry : entries) {
+        if (!entry.mesh) continue;
+
+        float r = 1.0f, g = 1.0f, b = 1.0f;
+        kine_gizmo_axis_color(entry.id, r, g, b);
+
+        const bool isActive = (entry.id == hoveredAxis || entry.id == selectedAxis);
+        const bool somethingActive = (hoveredAxis != KINE_GIZMO_AXIS_NONE ||
+                                      selectedAxis != KINE_GIZMO_AXIS_NONE);
+        if (somethingActive && !isActive) {
+            r *= 0.55f;
+            g *= 0.55f;
+            b *= 0.55f;
+        }
+        if (isActive) {
+            r = 1.0f;
+            g = 0.85f;
+            b = 0.15f;
+        }
+
+        Kine_Filament_DrawMeshEx(
+            ctx, (KineFilamentMesh*)entry.mesh, KINE_MAT_GIZMO,
+            r, g, b,
+            1.0f, 0.0f, 1.0f,
+            0.0f,
+            mat4,
+            false, false, false,
+            nullptr);
+
+    }
+}
+
+} // extern "C"
+
+extern "C" {
+
+// ---------------------------------------------------------------------------
+// Pixel readback -- reads Filament's rendered frame into a CPU buffer.
+// Call after Kine_Filament_RenderFrame. outPixels must be width*height*4 bytes.
+// ---------------------------------------------------------------------------
+KINE_API void Kine_Filament_ReadPixels(KineFilamentContext* ctx, void* outPixels)
+{
+#if KINE_FILAMENT_USE_VULKAN
+#if KINE_FILAMENT_ENABLE_VULKAN_READBACK
+    if (!ctx || !ctx->engine || !outPixels || ctx->readbackPixels.empty()) return;
+    ctx->engine->pumpMessageQueues();
+    if (!ctx->readbackReady) return;
+    size_t bytes = (size_t)ctx->width * (size_t)ctx->height * 4;
+    if (ctx->readbackPixels.size() < bytes) return;
+    memcpy(outPixels, ctx->readbackPixels.data(), bytes);
+    ctx->readbackReady = false;
+#else
+    (void)ctx;
+    (void)outPixels;
+    static bool warned = false;
+    if (!warned) {
+        fprintf(stderr, "[Kine] Filament Vulkan readback is disabled. Build with KINE_FILAMENT_VULKAN_READBACK=ON for debugging only.\n");
+        warned = true;
+    }
+#endif
+#else
+    if (!ctx || !outPixels || ctx->readFboId == 0) return;
+    if (!kine_glBindFramebuffer) return;
+
+    kine_glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)ctx->readFboId);
+    glReadPixels(0, 0, (GLsizei)ctx->width, (GLsizei)ctx->height,
+                 GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
+    kine_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#endif
+}
+
+KINE_API int Kine_Filament_GetWidth(KineFilamentContext* ctx)
+{
+    return ctx ? ctx->width : 0;
+}
+
+KINE_API int Kine_Filament_GetHeight(KineFilamentContext* ctx)
+{
+    return ctx ? ctx->height : 0;
+}
+
+static thread_local std::string kine_filament_shader_error;
+
+KINE_API KineFilamentShader* Kine_Filament_Shader_Create(
+    KineFilamentContext* ctx, const char* materialSource)
+{
+    kine_filament_shader_error.clear();
+    if (!ctx || !ctx->engine || !materialSource || !*materialSource) {
+        kine_filament_shader_error = "Filament material source is empty or no rendering context is available";
+        return nullptr;
+    }
+
+    static std::once_flag filamatInit;
+    std::call_once(filamatInit, [] { filamat::MaterialBuilder::init(); });
+
+    filamat::MaterialBuilder builder;
+    builder.platform(filamat::MaterialBuilder::Platform::DESKTOP)
+#if KINE_FILAMENT_USE_VULKAN
+        .targetApi(filamat::MaterialBuilder::TargetApi::VULKAN)
+#else
+        .targetApi(filamat::MaterialBuilder::TargetApi::OPENGL)
+#endif
+        .optimization(filamat::MaterialBuilder::Optimization::PERFORMANCE)
+        .materialSource(materialSource);
+
+    const size_t sourceLength = strlen(materialSource);
+    auto mutableSource = std::make_unique<char[]>(sourceLength + 1);
+    memcpy(mutableSource.get(), materialSource, sourceLength + 1);
+    std::unique_ptr<const char[]> parserSource(mutableSource.release());
+    ssize_t parserLength = static_cast<ssize_t>(sourceLength);
+    KineRuntimeMaterialConfig parserConfig;
+    matp::MaterialParser parser;
+    utils::Status parseStatus = parser.parse(builder, parserConfig, parserLength, parserSource);
+    if (!parseStatus.isOk()) {
+        const std::string_view message = parseStatus.getMessage();
+        kine_filament_shader_error = message.empty()
+            ? "Filamat could not parse the material source"
+            : std::string(message);
+        return nullptr;
+    }
+
+    filamat::Package package = builder.build(ctx->engine->getJobSystem());
+    if (!package.isValid()) {
+        kine_filament_shader_error = "Filamat failed to compile the material source";
+        return nullptr;
+    }
+
+    Material* material = Material::Builder()
+        .package(package.getData(), package.getSize())
+        .build(*ctx->engine);
+    if (!material) {
+        kine_filament_shader_error = "Filament rejected the compiled material package";
+        return nullptr;
+    }
+
+    auto* shader = new KineFilamentShader();
+    shader->ctx = ctx;
+    shader->material = material;
+    ctx->runtimeShaders.insert(shader);
+    return shader;
+}
+
+KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader)
+{
+    if (!shader) return;
+    KineFilamentContext* ctx = shader->ctx;
+    if (ctx && ctx->engine) {
+        if (ctx->globalShader == shader) {
+            kine_switch_global_shader(ctx, nullptr);
+        }
+        if (ctx->postProcessShader == shader) {
+            kine_destroy_post_process_pipeline(ctx);
+            ctx->postProcessShader = nullptr;
+        }
+        // Batched renderables retain their MaterialInstance and shader key.
+        // Remove those references before the Material itself is destroyed.
+        kine_destroy_built_batches(ctx);
+        ctx->retainedLists.clear();
+        for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+            if (!batch || batch->key.shader != shader) continue;
+            kine_destroy_instance_batch_chunks(batch);
+            if (batch->matInst) {
+                ctx->engine->destroy(batch->matInst);
+                batch->matInst = nullptr;
+            }
+            batch->key.shader = nullptr;
+            kine_rebuild_instance_batch(batch);
+        }
+        ctx->runtimeShaders.erase(shader);
+        if (shader->material) {
+            ctx->engine->flushAndWait();
+            ctx->engine->destroy(shader->material);
+        }
+    }
+    delete shader;
+}
+
+KINE_API bool Kine_Filament_Shader_SetUniform(
+    KineFilamentShader* shader, const char* name, const float* values, int valueCount)
+{
+    if (!shader || !shader->material || !name || !*name || !values || valueCount < 1 || valueCount > 4) {
+        return false;
+    }
+    if (!shader->material->hasParameter(name)) return false;
+    shader->uniforms[name] = std::vector<float>(values, values + valueCount);
+    KineFilamentContext* ctx = shader->ctx;
+    if (ctx && ctx->engine) {
+        for (auto& [key, batch] : ctx->builtBatches) {
+            if (batch.matInst && (key.shader == shader || (!key.shader && ctx->globalShader == shader))) {
+                kine_apply_material_params(ctx, batch.matInst, key);
+            }
+        }
+        for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+            if (batch && batch->matInst &&
+                    (batch->key.shader == shader || (!batch->key.shader && ctx->globalShader == shader))) {
+                kine_apply_material_params(ctx, batch->matInst, batch->key);
+            }
+        }
+        if (ctx->postProcessShader == shader && ctx->postMaterialInstance) {
+            kine_apply_shader_uniforms(ctx->postMaterialInstance, shader);
+        }
+    }
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext* ctx, KineFilamentShader* shader)
+{
+    return kine_switch_global_shader(ctx, shader);
+}
+
+KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext* ctx, KineFilamentShader* shader)
+{
+    kine_filament_shader_error.clear();
+    if (!ctx || (shader && shader->ctx != ctx)) {
+        kine_filament_shader_error = "Post-process material belongs to a different Filament context";
+        return false;
+    }
+    kine_destroy_post_process_pipeline(ctx);
+    ctx->postProcessShader = shader;
+    if (!shader) return true;
+    if (!shader->material || !shader->material->isSampler("inputTexture")) {
+        ctx->postProcessShader = nullptr;
+        kine_filament_shader_error = "Post-process material must declare sampler2d inputTexture";
+        return false;
+    }
+    if (!kine_build_post_process_pipeline(ctx)) {
+        ctx->postProcessShader = nullptr;
+        kine_filament_shader_error = "Could not create the fullscreen Filament post-process pass";
+        return false;
+    }
+    return true;
+}
+
+KINE_API const char* Kine_Filament_Shader_GetLastError(void)
+{
+    return kine_filament_shader_error.c_str();
+}
+
+} // extern "C" (ReadPixels block)
