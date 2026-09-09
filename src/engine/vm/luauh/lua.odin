@@ -4,6 +4,22 @@ package luauh
 
 import "core:c"
 
+when ODIN_OS == .Windows {
+	foreign import lib {
+		"../../../../build/lib/kine_luau.lib",
+		"../../../../build/vendor/luau/Luau.Compiler.lib",
+		"../../../../build/vendor/luau/Luau.VM.lib",
+		"../../../../build/vendor/luau/Luau.Ast.lib",
+		"../../../../build/vendor/luau/Luau.Bytecode.lib",
+		"../../../../build/vendor/luau/Luau.Common.lib",
+	}
+} else {
+	foreign import lib {
+		"system:Luau.Compiler",
+		"system:Luau.VM",
+	}
+}
+
 // option for multiple returns in `lua_pcall' and `lua_call'
 LUA_MULTRET :: (-1)
 
@@ -94,7 +110,7 @@ lua_Integer :: i32
 // unsigned integer type
 lua_Unsigned :: u32
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	/*
 	** state manipulation
@@ -292,7 +308,7 @@ foreign lib {
 
 lua_CategoryName :: proc "c" (L: ^lua_State, memcat: u8) -> cstring
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	// write a Luau memory dump to a FILE in JSON format
 	// categoryName callback, when provided, will be called to record a name associated with the category
@@ -324,7 +340,7 @@ foreign lib {
 
 lua_Destructor :: proc "c" (L: ^lua_State, userdata: rawptr)
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	lua_setuserdatadtor :: proc(L: ^lua_State, tag: i32, dtor: lua_Destructor) ---
 	lua_getuserdatadtor :: proc(L: ^lua_State, tag: i32) -> lua_Destructor ---
@@ -359,7 +375,7 @@ foreign lib {
 lua_EmbedderMark :: proc "c" (L: ^lua_State, ref: i32)
 lua_EmbedderGc   :: proc "c" (L: ^lua_State, markref: lua_EmbedderMark)
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	lua_setembeddergc :: proc(L: ^lua_State, fn: lua_EmbedderGc) ---
 
@@ -443,7 +459,7 @@ foreign lib {
 LUA_NOREF  :: -1
 LUA_REFNIL :: 0
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	lua_ref   :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_unref :: proc(L: ^lua_State, ref: i32) -> i32 ---
@@ -539,4 +555,3 @@ lua_Callbacks :: struct {
 foreign lib {
 	lua_callbacks :: proc(L: ^lua_State) -> ^lua_Callbacks ---
 }
-

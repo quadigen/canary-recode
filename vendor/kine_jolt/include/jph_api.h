@@ -54,6 +54,8 @@ typedef void* JPH_ShapeRef;
 typedef void* JPH_BodyCreationSettingsRef;
 typedef void* JPH_BodyRef;                 // JPH::Body*
 typedef uint32_t JPH_BodyID;               // packed JPH::BodyID
+typedef uint32_t JPH_ObjectLayer;
+typedef uint32_t JPH_BroadPhaseLayer;
 typedef void* JPH_PhysicsSystemRef;
 typedef void* JPH_BodyInterfaceRef;
 typedef void* JPH_JobSystemRef;
@@ -64,9 +66,78 @@ typedef void* JPH_MotionPropertiesRef;
 typedef void* JPH_ContactListenerRef;
 typedef void* JPH_ConstraintRef;
 
+#define JPH_BODY_ID_INVALID UINT32_C(0xffffffff)
+
+typedef int32_t JPH_MotionType;
+enum
+{
+    JPH_MotionType_Static = 0,
+    JPH_MotionType_Kinematic = 1,
+    JPH_MotionType_Dynamic = 2
+};
+
+typedef int32_t JPH_ActivationMode;
+enum
+{
+    JPH_ActivationMode_Activate = 0,
+    JPH_ActivationMode_DontActivate = 1
+};
+
+typedef int32_t JPH_ConstraintSpace;
+enum
+{
+    JPH_ConstraintSpace_LocalToBodyCOM = 0,
+    JPH_ConstraintSpace_WorldSpace = 1
+};
+
+typedef uint32_t JPH_SpringMode;
+enum
+{
+    JPH_SpringMode_FrequencyAndDamping = 0,
+    JPH_SpringMode_StiffnessAndDamping = 1,
+    JPH_SpringMode_MassNormalizedStiffnessAndDamping = 2
+};
+
+typedef int32_t JPH_MotorState;
+enum
+{
+    JPH_MotorState_Off = 0,
+    JPH_MotorState_Velocity = 1,
+    JPH_MotorState_Position = 2,
+    JPH_MotorState_PositionAndVelocity = 3
+};
+
+typedef uint32_t JPH_SwingType;
+enum
+{
+    JPH_SwingType_Cone = 0,
+    JPH_SwingType_Pyramid = 1
+};
+
+typedef uint32_t JPH_SixDOFAxis;
+enum
+{
+    JPH_SixDOFAxis_TranslationX = 0,
+    JPH_SixDOFAxis_TranslationY = 1,
+    JPH_SixDOFAxis_TranslationZ = 2,
+    JPH_SixDOFAxis_RotationX = 3,
+    JPH_SixDOFAxis_RotationY = 4,
+    JPH_SixDOFAxis_RotationZ = 5,
+    JPH_SixDOFAxis_Num = 6,
+    JPH_SixDOFAxis_NumTranslation = 3
+};
+
+typedef int32_t JPH_RayFilterMode;
+enum
+{
+    JPH_RayFilterMode_None = 0,
+    JPH_RayFilterMode_Exclude = 1,
+    JPH_RayFilterMode_Include = 2
+};
+
 typedef struct JPH_SpringSettings
 {
-    uint32_t mode;
+    JPH_SpringMode mode;
     float frequencyOrStiffness;
     float damping;
 } JPH_SpringSettings;
@@ -93,7 +164,7 @@ typedef struct JPH_ConstraintSettings
 typedef struct JPH_FixedConstraintSettings
 {
     JPH_ConstraintSettings base;
-    int32_t space;
+    JPH_ConstraintSpace space;
     uint8_t autoDetectPoint;
     JPH_RVec3 point1;
     JPH_Vec3 axisX1;
@@ -106,7 +177,7 @@ typedef struct JPH_FixedConstraintSettings
 typedef struct JPH_DistanceConstraintSettings
 {
     JPH_ConstraintSettings base;
-    int32_t space;
+    JPH_ConstraintSpace space;
     JPH_RVec3 point1;
     JPH_RVec3 point2;
     float minDistance;
@@ -117,7 +188,7 @@ typedef struct JPH_DistanceConstraintSettings
 typedef struct JPH_HingeConstraintSettings
 {
     JPH_ConstraintSettings base;
-    int32_t space;
+    JPH_ConstraintSpace space;
     JPH_RVec3 point1;
     JPH_Vec3 hingeAxis1;
     JPH_Vec3 normalAxis1;
@@ -134,7 +205,7 @@ typedef struct JPH_HingeConstraintSettings
 typedef struct JPH_SliderConstraintSettings
 {
     JPH_ConstraintSettings base;
-    int32_t space;
+    JPH_ConstraintSpace space;
     uint8_t autoDetectPoint;
     JPH_RVec3 point1;
     JPH_Vec3 sliderAxis1;
@@ -152,7 +223,7 @@ typedef struct JPH_SliderConstraintSettings
 typedef struct JPH_SixDOFConstraintSettings
 {
     JPH_ConstraintSettings base;
-    int32_t space;
+    JPH_ConstraintSpace space;
     JPH_RVec3 position1;
     JPH_Vec3 axisX1;
     JPH_Vec3 axisY1;
@@ -160,7 +231,7 @@ typedef struct JPH_SixDOFConstraintSettings
     JPH_Vec3 axisX2;
     JPH_Vec3 axisY2;
     float maxFriction[6];
-    uint32_t swingType;
+    JPH_SwingType swingType;
     float limitMin[6];
     float limitMax[6];
     JPH_SpringSettings limitsSpringSettings[3];
@@ -244,25 +315,33 @@ JPH_API JPH_BroadPhaseLayerInterfaceRef JPH_BroadPhaseLayerInterfaceTable_Create
     uint32_t numObjectLayers,
     uint32_t numBroadPhaseLayers
 );
+JPH_API void JPH_BroadPhaseLayerInterfaceTable_Destroy(JPH_BroadPhaseLayerInterfaceRef bpInterface);
 
 JPH_API void JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
     JPH_BroadPhaseLayerInterfaceRef bpInterface,
-    uint32_t objectLayer,
-    uint32_t broadPhaseLayer
+    JPH_ObjectLayer objectLayer,
+    JPH_BroadPhaseLayer broadPhaseLayer
 );
 
 JPH_API JPH_ObjectLayerPairFilterRef JPH_ObjectLayerPairFilterTable_Create(uint32_t numObjectLayers);
+JPH_API void JPH_ObjectLayerPairFilterTable_Destroy(JPH_ObjectLayerPairFilterRef filter);
 
 JPH_API void JPH_ObjectLayerPairFilterTable_EnableCollision(
     JPH_ObjectLayerPairFilterRef filter,
-    uint32_t layer1,
-    uint32_t layer2
+    JPH_ObjectLayer layer1,
+    JPH_ObjectLayer layer2
 );
 
 JPH_API void JPH_ObjectLayerPairFilterTable_DisableCollision(
     JPH_ObjectLayerPairFilterRef filter,
-    uint32_t layer1,
-    uint32_t layer2
+    JPH_ObjectLayer layer1,
+    JPH_ObjectLayer layer2
+);
+
+JPH_API int32_t JPH_ObjectLayerPairFilterTable_ShouldCollide(
+    JPH_ObjectLayerPairFilterRef filter,
+    JPH_ObjectLayer layer1,
+    JPH_ObjectLayer layer2
 );
 
 JPH_API JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTable_Create(
@@ -270,6 +349,12 @@ JPH_API JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTa
     uint32_t numBroadPhaseLayers,
     JPH_ObjectLayerPairFilterRef objectLayerPairFilter,
     uint32_t numObjectLayers
+);
+JPH_API void JPH_ObjectVsBroadPhaseLayerFilterTable_Destroy(JPH_ObjectVsBroadPhaseLayerFilterRef filter);
+JPH_API int32_t JPH_ObjectVsBroadPhaseLayerFilterTable_ShouldCollide(
+    JPH_ObjectVsBroadPhaseLayerFilterRef filter,
+    JPH_ObjectLayer objectLayer,
+    JPH_BroadPhaseLayer broadPhaseLayer
 );
 
 JPH_API JPH_ShapeRef JPH_BoxShape_Create(const JPH_Vec3* halfExtent, float convexRadius);
@@ -287,8 +372,8 @@ JPH_API JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(
     JPH_ShapeRef shape,
     const JPH_RVec3* position,
     const JPH_Quat* rotation,
-    int32_t motionType,
-    uint32_t objectLayer
+    JPH_MotionType motionType,
+    JPH_ObjectLayer objectLayer
 );
 
 JPH_API void JPH_BodyCreationSettings_Destroy(JPH_BodyCreationSettingsRef settings);
@@ -311,6 +396,11 @@ JPH_API void JPH_PhysicsSystem_Update(
     int32_t collisionSteps,
     JPH_JobSystemRef jobSystem
 );
+JPH_API void JPH_PhysicsSystem_UpdateSingleThreaded(
+    JPH_PhysicsSystemRef system,
+    float deltaTime,
+    int32_t collisionSteps
+);
 JPH_API void JPH_PhysicsSystem_OptimizeBroadPhase(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetContactListener(JPH_PhysicsSystemRef system, JPH_ContactListenerRef listener);
 
@@ -331,7 +421,7 @@ JPH_API void JPH_DistanceConstraint_SetLimitsSpringSettings(
 JPH_API void JPH_HingeConstraintSettings_Init(JPH_HingeConstraintSettings* settings);
 JPH_API JPH_ConstraintRef JPH_HingeConstraint_Create(
     const JPH_HingeConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2);
-JPH_API void JPH_HingeConstraint_SetMotorState(JPH_ConstraintRef constraint, int32_t state);
+JPH_API void JPH_HingeConstraint_SetMotorState(JPH_ConstraintRef constraint, JPH_MotorState state);
 JPH_API void JPH_HingeConstraint_SetTargetAngularVelocity(JPH_ConstraintRef constraint, float velocity);
 JPH_API void JPH_HingeConstraint_SetTargetAngle(JPH_ConstraintRef constraint, float angle);
 JPH_API float JPH_HingeConstraint_GetCurrentAngle(JPH_ConstraintRef constraint);
@@ -345,18 +435,18 @@ JPH_API JPH_ConstraintRef JPH_SliderConstraint_Create(
 JPH_API void JPH_SliderConstraint_SetLimits(JPH_ConstraintRef constraint, float minDistance, float maxDistance);
 JPH_API void JPH_SliderConstraint_SetMotorSettings(
     JPH_ConstraintRef constraint, const JPH_MotorSettings* settings);
-JPH_API void JPH_SliderConstraint_SetMotorState(JPH_ConstraintRef constraint, int32_t state);
+JPH_API void JPH_SliderConstraint_SetMotorState(JPH_ConstraintRef constraint, JPH_MotorState state);
 JPH_API void JPH_SliderConstraint_SetTargetVelocity(JPH_ConstraintRef constraint, float velocity);
 JPH_API void JPH_SliderConstraint_SetTargetPosition(JPH_ConstraintRef constraint, float position);
 JPH_API float JPH_SliderConstraint_GetCurrentPosition(JPH_ConstraintRef constraint);
 
 JPH_API void JPH_SixDOFConstraintSettings_Init(JPH_SixDOFConstraintSettings* settings);
-JPH_API void JPH_SixDOFConstraintSettings_MakeFixedAxis(JPH_SixDOFConstraintSettings* settings, uint32_t axis);
-JPH_API void JPH_SixDOFConstraintSettings_MakeFreeAxis(JPH_SixDOFConstraintSettings* settings, uint32_t axis);
+JPH_API void JPH_SixDOFConstraintSettings_MakeFixedAxis(JPH_SixDOFConstraintSettings* settings, JPH_SixDOFAxis axis);
+JPH_API void JPH_SixDOFConstraintSettings_MakeFreeAxis(JPH_SixDOFConstraintSettings* settings, JPH_SixDOFAxis axis);
 JPH_API void JPH_SixDOFConstraintSettings_SetLimitedAxis(
-    JPH_SixDOFConstraintSettings* settings, uint32_t axis, float minValue, float maxValue);
+    JPH_SixDOFConstraintSettings* settings, JPH_SixDOFAxis axis, float minValue, float maxValue);
 JPH_API void JPH_SixDOFConstraintSettings_SetLimitsSpringSettings(
-    JPH_SixDOFConstraintSettings* settings, uint32_t axis, const JPH_SpringSettings* spring);
+    JPH_SixDOFConstraintSettings* settings, JPH_SixDOFAxis axis, const JPH_SpringSettings* spring);
 JPH_API JPH_ConstraintRef JPH_SixDOFConstraint_Create(
     const JPH_SixDOFConstraintSettings* settings, JPH_BodyRef body1, JPH_BodyRef body2);
 
@@ -368,12 +458,12 @@ JPH_API int32_t JPH_PhysicsSystem_CastRay(
     const JPH_Vec3* direction,
     const JPH_BodyID* bodyIDs,
     uint32_t bodyIDCount,
-    int32_t filterMode,
+    JPH_RayFilterMode filterMode,
     JPH_RayCastResult* outResult
 );
 
 JPH_API JPH_BodyRef JPH_BodyInterface_CreateBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyCreationSettingsRef settings);
-JPH_API void JPH_BodyInterface_AddBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, int32_t activationMode);
+JPH_API void JPH_BodyInterface_AddBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_ActivationMode activationMode);
 JPH_API void JPH_BodyInterface_RemoveAndDestroyBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
 
 JPH_API void JPH_BodyInterface_SetShape(
@@ -381,17 +471,17 @@ JPH_API void JPH_BodyInterface_SetShape(
     JPH_BodyID bodyID,
     JPH_ShapeRef shape,
     int32_t updateMassProperties,
-    int32_t activationMode
+    JPH_ActivationMode activationMode
 );
 
 JPH_API void JPH_BodyInterface_SetMotionType(
     JPH_BodyInterfaceRef bodyInterface,
     JPH_BodyID bodyID,
-    int32_t motionType,
-    int32_t activationMode
+    JPH_MotionType motionType,
+    JPH_ActivationMode activationMode
 );
 
-JPH_API void JPH_BodyInterface_SetObjectLayer(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, uint32_t layer);
+JPH_API void JPH_BodyInterface_SetObjectLayer(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_ObjectLayer layer);
 
 JPH_API void JPH_BodyInterface_ActivateBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
 JPH_API int32_t JPH_BodyInterface_IsActive(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
@@ -401,7 +491,7 @@ JPH_API void JPH_BodyInterface_SetPosition(
     JPH_BodyInterfaceRef bodyInterface,
     JPH_BodyID bodyID,
     const JPH_RVec3* position,
-    int32_t activationMode
+    JPH_ActivationMode activationMode
 );
 
 JPH_API void JPH_BodyInterface_SetPositionAndRotation(
@@ -409,14 +499,14 @@ JPH_API void JPH_BodyInterface_SetPositionAndRotation(
     JPH_BodyID bodyID,
     const JPH_RVec3* position,
     const JPH_Quat* rotation,
-    int32_t activationMode
+    JPH_ActivationMode activationMode
 );
 
 JPH_API void JPH_BodyInterface_SetRotation(
     JPH_BodyInterfaceRef bodyInterface,
     JPH_BodyID bodyID,
     const JPH_Quat* rotation,
-    int32_t activationMode
+    JPH_ActivationMode activationMode
 );
 
 JPH_API void JPH_BodyInterface_SetLinearVelocity(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, const JPH_Vec3* velocity);

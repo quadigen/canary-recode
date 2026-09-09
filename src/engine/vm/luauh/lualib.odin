@@ -4,12 +4,21 @@ package luauh
 
 import "core:c"
 
+when ODIN_OS == .Windows {
+	foreign import lib {
+		"../../../../build/lib/kine_luau.lib",
+		"../../../../build/vendor/luau/Luau.VM.lib",
+	}
+} else {
+	foreign import lib "system:Luau.VM"
+}
+
 luaL_Reg :: struct {
 	name: cstring,
 	func: lua_CFunction,
 }
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	luaL_register         :: proc(L: ^lua_State, libname: cstring, l: ^luaL_Reg) ---
 	luaL_getmetafield     :: proc(L: ^lua_State, obj: i32, e: cstring) -> i32 ---
@@ -156,7 +165,7 @@ foreign lib {
 
 LUA_INTLIBNAME :: "integer"
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	luaopen_integer :: proc(L: ^lua_State) -> i32 ---
 
@@ -167,4 +176,3 @@ foreign lib {
 	luaL_sandbox       :: proc(L: ^lua_State) ---
 	luaL_sandboxthread :: proc(L: ^lua_State) ---
 }
-

@@ -1,6 +1,10 @@
 package classes
 
 import "core:fmt"
+import "base:runtime"
+import "core:strings"
+import datatypes "../datatypes"
+import vm "../vm"
 
 Class_Info :: struct {
     name:   string,
@@ -12,19 +16,39 @@ Object_Class := Class_Info{
     parent = nil,
 }
 
-Object :: struct {
-    class:    ^Class_Info,
-    name:     string,
-    parent:   ^Object,
-    children: [dynamic]^Object,
+Object_Attribute :: struct {
+	name:      string,
+	value_ref: i32,
 }
 
-Object_Init :: proc(class: ^Class_Info = &Object_Class, name: string = "Object") -> Object {
+Object :: struct {
+	class:        ^Class_Info,
+	name:         string,
+	parent:       ^Object,
+	children:     [dynamic]^Object,
+	attributes:   [dynamic]Object_Attribute,
+	unique_id:    datatypes.UniqueId,
+	capabilities: datatypes.SecurityCapabilities,
+	sandboxed:    bool,
+	lua_ref:      i32,
+	destroyed:    bool,
+	archivable:   bool,
+}
+
+Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object {
+    resolved_class := class
+    if resolved_class == nil {
+        resolved_class = &Object_Class
+    }
+
     return Object{
-        class    = class,
+        class    = resolved_class,
         name     = name,
         parent   = nil,
         children = nil,
+		archivable = true,
+		unique_id  = datatypes.UniqueId_New(),
+		lua_ref    = -1,
     }
 }
 
@@ -34,10 +58,17 @@ Object_Destroy :: proc(self: ^Object) {
     }
 
     for child in self.children {
-        Object_Destroy(child)
+        if child != nil && child.parent == self {
+            child.parent = nil
+        }
     }
     delete(self.children)
     self.children = nil
+	for attribute in self.attributes {
+		delete(attribute.name)
+	}
+	delete(self.attributes)
+	self.attributes = nil
 
     Set_Parent(self, nil)
 }
@@ -93,7 +124,11 @@ Get_Parent :: proc(self: ^Object) -> ^Object {
 }
 
 Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
-    if self == nil {
+    if self == nil || self == new_parent || self.parent == new_parent {
+        return
+    }
+
+    if new_parent != nil && Is_Descendant_Of(new_parent, self) {
         return
     }
 
@@ -111,6 +146,22 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
     if new_parent != nil {
         append(&new_parent.children, self)
     }
+}
+
+Destroy_Hierarchy :: proc(self: ^Object) {
+    if self == nil || self.destroyed {
+        return
+    }
+
+    self.destroyed = true
+    for len(self.children) > 0 {
+        child := self.children[len(self.children)-1]
+        Destroy_Hierarchy(child)
+        if child != nil && child.parent == self {
+            Set_Parent(child, nil)
+        }
+    }
+    Set_Parent(self, nil)
 }
 
 Get_Children :: proc(self: ^Object) -> []^Object {
@@ -175,4 +226,293 @@ To_String :: proc(self: ^Object) -> string {
     }
 
     return fmt.tprintf("%s (%s)", self.name, Get_Class_Name(self))
+}
+
+Get_Full_Name :: proc(self: ^Object) -> string {
+    if self == nil {
+        return ""
+    }
+
+    if self.parent == nil {
+        return self.name
+    }
+    return fmt.tprintf("%s.%s", Get_Full_Name(self.parent), self.name)
+}
+
+Push_Object :: proc(L: ^vm.State, object: ^Object) {
+    if object == nil || object.lua_ref <= 0 {
+        vm.PushNil(L)
+        return
+    }
+    vm.PushRegistryReference(L, object.lua_ref)
+}
+
+object_from_argument :: proc(L: ^vm.State, index: int) -> ^Object {
+	binding := vm.UserdataBindingOf(L, index)
+	if binding == nil || binding.name != "Instance" { return nil }
+    return cast(^Object)vm.UserdataValue(L, index)
+}
+
+is_object_method :: proc(name: string) -> bool {
+    switch name {
+    case "Destroy", "FindFirstChild", "FindFirstChildOfClass", "GetChildren", "GetDescendants",
+		 "GetFullName", "IsA", "IsAncestorOf", "IsDescendantOf", "GetAttribute", "GetAttributes",
+		 "SetAttribute":
+        return true
+    }
+    return false
+}
+
+object_method :: proc "c" (L: ^vm.State) -> i32 {
+    context = runtime.default_context()
+    object := object_from_argument(L, 1)
+    if object == nil {
+        return vm.RaiseError(L, "expected an Instance")
+    }
+    method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
+    result_count, handled := Object_Namecall(L, object, nil, method)
+    if handled {
+        return result_count
+    }
+    return vm.RaiseError(L, "unknown Instance method")
+}
+
+Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
+    object := cast(^Object)value
+    if object == nil {
+        return false
+    }
+
+    switch key {
+    case "ClassName":
+        vm.PushString(L, Get_Class_Name(object))
+    case "Name":
+        vm.PushString(L, object.name)
+    case "Archivable":
+        vm.PushBoolean(L, object.archivable)
+    case "Parent":
+        Push_Object(L, object.parent)
+	case "UniqueId":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil || descriptor.registry.datatypes == nil { return false }
+		datatypes.Push_UniqueId(L, descriptor.registry.datatypes, object.unique_id)
+	case "Capabilities":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil || descriptor.registry.datatypes == nil { return false }
+		datatypes.Push_SecurityCapabilities(L, descriptor.registry.datatypes, object.capabilities)
+	case "Sandboxed":
+		vm.PushBoolean(L, object.sandboxed)
+	case "IsInSandbox":
+		current := object
+		is_sandboxed := false
+		for current != nil {
+			if current.sandboxed {
+				is_sandboxed = true
+				break
+			}
+			current = current.parent
+		}
+		vm.PushBoolean(L, is_sandboxed)
+    case:
+        if !is_object_method(key) {
+            return false
+        }
+        vm.PushString(L, key)
+        vm.PushFunction(L, key, object_method, 1)
+    }
+    return true
+}
+
+Object_Set_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_index: int) -> bool {
+    object := cast(^Object)value
+    if object == nil {
+        return false
+    }
+
+    switch key {
+    case "Name":
+        Set_Name(object, vm.ArgString(L, value_index))
+    case "Archivable":
+        object.archivable = vm.ArgBoolean(L, value_index)
+    case "Parent":
+        if vm.IsNil(L, value_index) {
+            Set_Parent(object, nil)
+            return true
+        }
+
+        parent := object_from_argument(L, value_index)
+        if parent == nil {
+            _ = vm.RaiseError(L, "Parent must be an Instance or nil")
+            return true
+        }
+        if parent == object || Is_Descendant_Of(parent, object) {
+            _ = vm.RaiseError(L, "cannot parent an Instance to itself or its descendant")
+            return true
+        }
+        Set_Parent(object, parent)
+	case "Capabilities":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil || descriptor.registry.datatypes == nil { return false }
+		object.capabilities = datatypes.Arg_SecurityCapabilities(L, value_index, descriptor.registry.datatypes)
+	case "Sandboxed":
+		object.sandboxed = vm.ArgBoolean(L, value_index)
+    case:
+        return false
+    }
+    return true
+}
+
+append_descendants :: proc(result: ^[dynamic]^Object, object: ^Object) {
+    for child in object.children {
+        append(result, child)
+        append_descendants(result, child)
+    }
+}
+
+attribute_index :: proc(object: ^Object, name: string) -> int {
+	if object == nil { return -1 }
+	for attribute, index in object.attributes {
+		if attribute.name == name { return index }
+	}
+	return -1
+}
+
+attribute_name_is_valid :: proc(name: string) -> bool {
+	if len(name) == 0 || len(name) > 100 { return false }
+	if len(name) >= 3 && (name[0] == 'R' || name[0] == 'r') &&
+	   (name[1] == 'B' || name[1] == 'b') && (name[2] == 'X' || name[2] == 'x') {
+		return false
+	}
+	for character in name {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+		   (character >= '0' && character <= '9') || character == '_' || character == '-' ||
+		   character == '.' || character == '/' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+attribute_value_is_supported :: proc(L: ^vm.State, index: int) -> bool {
+	#partial switch vm.TypeOf(L, index) {
+	case .Nil, .Boolean, .Number, .Integer, .String, .Vector:
+		return true
+	case .Userdata:
+		binding := vm.UserdataBindingOf(L, index)
+		return binding != nil && binding.tag >= datatypes.DATATYPE_TAG_BASE
+	}
+	return false
+}
+
+set_attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: int) -> bool {
+	if !attribute_name_is_valid(name) {
+		_ = vm.RaiseError(L, "attribute name must be 1-100 valid characters and cannot start with RBX")
+		return false
+	}
+	index := attribute_index(object, name)
+	if vm.IsNil(L, value_index) {
+		if index >= 0 {
+			vm.ReleaseValue(L, object.attributes[index].value_ref)
+			delete(object.attributes[index].name)
+			ordered_remove(&object.attributes, index)
+		}
+		return true
+	}
+	if !attribute_value_is_supported(L, value_index) {
+		_ = vm.RaiseError(L, "unsupported attribute value type")
+		return false
+	}
+	vm.PushValue(L, value_index)
+	value_ref := vm.RetainValue(L)
+	vm.Pop(L)
+	if index >= 0 {
+		vm.ReleaseValue(L, object.attributes[index].value_ref)
+		object.attributes[index].value_ref = value_ref
+	} else {
+		append(&object.attributes, Object_Attribute{name = strings.clone(name), value_ref = value_ref})
+	}
+	return true
+}
+
+Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
+    object := cast(^Object)value
+    if object == nil {
+        return 0, false
+    }
+
+    switch method {
+    case "Destroy":
+        Destroy_Hierarchy(object)
+        return 0, true
+    case "FindFirstChild":
+        name := vm.ArgString(L, 2)
+        recursive := vm.ArgOptionalBoolean(L, 3, false)
+        child := Find_First_Child(object, name)
+        if recursive && child == nil {
+            descendants: [dynamic]^Object
+            append_descendants(&descendants, object)
+            for descendant in descendants {
+                if descendant.name == name {
+                    child = descendant
+                    break
+                }
+            }
+            delete(descendants)
+        }
+        Push_Object(L, child)
+        return 1, true
+    case "FindFirstChildOfClass":
+        Push_Object(L, Find_First_Child_Of_Class(object, vm.ArgString(L, 2)))
+        return 1, true
+    case "GetChildren":
+        vm.NewTable(L, len(object.children))
+        for child, index in object.children {
+            Push_Object(L, child)
+            vm.SetArrayValue(L, -2, index+1)
+        }
+        return 1, true
+    case "GetDescendants":
+        descendants: [dynamic]^Object
+        append_descendants(&descendants, object)
+        vm.NewTable(L, len(descendants))
+        for descendant, index in descendants {
+            Push_Object(L, descendant)
+            vm.SetArrayValue(L, -2, index+1)
+        }
+        delete(descendants)
+        return 1, true
+    case "GetFullName":
+        vm.PushString(L, Get_Full_Name(object))
+        return 1, true
+	case "GetAttribute":
+		index := attribute_index(object, vm.ArgString(L, 2))
+		if index < 0 {
+			vm.PushNil(L)
+		} else {
+			vm.PushRegistryReference(L, object.attributes[index].value_ref)
+		}
+		return 1, true
+	case "GetAttributes":
+		vm.NewTable(L, 0, len(object.attributes))
+		for attribute in object.attributes {
+			vm.PushRegistryReference(L, attribute.value_ref)
+			vm.SetField(L, -2, attribute.name)
+		}
+		return 1, true
+	case "SetAttribute":
+		_ = set_attribute(L, object, vm.ArgString(L, 2), 3)
+		return 0, true
+    case "IsA":
+        vm.PushBoolean(L, Is_A(object, vm.ArgString(L, 2)))
+        return 1, true
+    case "IsAncestorOf":
+        vm.PushBoolean(L, Is_Ancestor_Of(object, object_from_argument(L, 2)))
+        return 1, true
+    case "IsDescendantOf":
+        vm.PushBoolean(L, Is_Descendant_Of(object, object_from_argument(L, 2)))
+        return 1, true
+    }
+
+    return 0, false
 }

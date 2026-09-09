@@ -3,6 +3,15 @@ package luauh
 
 import "core:c"
 
+when ODIN_OS == .Windows {
+	foreign import lib {
+		"../../../../build/lib/kine_luau.lib",
+		"../../../../build/vendor/luau/Luau.Compiler.lib",
+	}
+} else {
+	foreign import lib "system:Luau.Compiler"
+}
+
 lua_CompileConstant :: rawptr
 
 // return a type identifier for a global library member
@@ -62,7 +71,7 @@ lua_CompileOptions :: struct {
 	disabledBuiltins: ^cstring,
 }
 
-@(default_calling_convention="c")
+@(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	// compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
 	luau_compile :: proc(source: cstring, size: c.size_t, options: ^lua_CompileOptions, outsize: ^c.size_t) -> cstring ---
@@ -78,4 +87,3 @@ foreign lib {
 	luau_set_compile_constant_vectord   :: proc(constant: ^lua_CompileConstant, x: f64, y: f64, z: f64, w: f64) ---
 	luau_set_compile_constant_string    :: proc(constant: ^lua_CompileConstant, s: cstring, l: c.size_t) ---
 }
-

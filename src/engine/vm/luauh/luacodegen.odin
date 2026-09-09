@@ -1,7 +1,11 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 package luauh
 
-lua_State :: struct {}
+when ODIN_OS == .Windows {
+	foreign import lib "../../../../build/vendor/luau/Luau.CodeGen.lib"
+} else {
+	foreign import lib "system:Luau.CodeGen"
+}
 
 @(default_calling_convention="c")
 foreign lib {
@@ -14,4 +18,3 @@ foreign lib {
 	// build target function and all inner functions
 	luau_codegen_compile :: proc(L: ^lua_State, idx: i32) ---
 }
-

@@ -3,6 +3,7 @@ package luau
 import "core:c"
 import "core:c/libc"
 import "core:strings"
+import "base:runtime"
 
 import luauh "luauh"
 
@@ -18,8 +19,62 @@ Compile_Options :: struct {
 }
 
 VM :: struct {
-	L: ^State,
+	L:               ^State,
+	compile_options: Compile_Options,
 }
+
+Value_Type :: enum i32 {
+	None          = -1,
+	Nil           = 0,
+	Boolean       = 1,
+	LightUserdata = 2,
+	Number        = 3,
+	Integer       = 4,
+	Vector        = 5,
+	String        = 6,
+	Table         = 7,
+	Function      = 8,
+	Userdata      = 9,
+	Thread        = 10,
+	Buffer        = 11,
+	Class         = 12,
+	Object        = 13,
+}
+
+Userdata_Get_Proc      :: proc(L: ^State, value, ctx: rawptr, key: string) -> bool
+Userdata_Set_Proc      :: proc(L: ^State, value, ctx: rawptr, key: string, value_index: int) -> bool
+Userdata_Namecall_Proc :: proc(L: ^State, value, ctx: rawptr, method: string) -> (result_count: i32, handled: bool)
+Userdata_String_Proc   :: proc(value, ctx: rawptr) -> string
+Userdata_Destroy_Proc  :: proc(value, ctx: rawptr)
+Userdata_Binary_Proc   :: proc(L: ^State, value, ctx: rawptr, self_index, other_index: int) -> bool
+Userdata_Unary_Proc    :: proc(L: ^State, value, ctx: rawptr) -> bool
+Userdata_Equal_Proc    :: proc(value, other, ctx: rawptr) -> bool
+
+Userdata_Binding :: struct {
+	name:     string,
+	tag:      i32,
+	ctx:      rawptr,
+	owner:    rawptr,
+	get:      Userdata_Get_Proc,
+	set:      Userdata_Set_Proc,
+	namecall: Userdata_Namecall_Proc,
+	string:   Userdata_String_Proc,
+	destroy:  Userdata_Destroy_Proc,
+	add:      Userdata_Binary_Proc,
+	subtract: Userdata_Binary_Proc,
+	multiply: Userdata_Binary_Proc,
+	divide:   Userdata_Binary_Proc,
+	negate:   Userdata_Unary_Proc,
+	equal:    Userdata_Equal_Proc,
+}
+
+Userdata_Header :: struct {
+	value:   rawptr,
+	binding: ^Userdata_Binding,
+}
+
+NATIVE_USERDATA_TAG :: 42
+NATIVE_USERDATA_MAX_TAG :: 127
 
 Struct_Field_Kind :: enum {
 	Nil,
@@ -52,6 +107,11 @@ New :: proc(open_libraries := true) -> VM {
 
 	return VM{
 		L = L,
+		compile_options = Compile_Options{
+			optimization_level = 1,
+			debug_level        = 1,
+			vector_precision = 1
+		},
 	}
 }
 
@@ -85,6 +145,23 @@ set_global_from_stack :: proc(vm: ^VM, name: string) {
 		luauh.LUA_GLOBALSINDEX,
 		c_name,
 	)
+}
+
+SetGlobalFromStack :: proc(vm: ^VM, name: string) {
+	assert_open(vm)
+	set_global_from_stack(vm, name)
+}
+
+GetGlobal :: proc(L: ^State, name: string) -> Value_Type {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	return Value_Type(luauh.lua_getfield(L, luauh.LUA_GLOBALSINDEX, c_name))
+}
+
+SetGlobal :: proc(L: ^State, name: string) {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	luauh.lua_setfield(L, luauh.LUA_GLOBALSINDEX, c_name)
 }
 
 push_struct_field :: proc(L: ^State, field: Struct_Field) {
@@ -220,6 +297,7 @@ Field :: proc {
 	Field_Boolean,
 	Field_String,
 	Field_Function,
+	Field_Nil,
 }
 
 AddGlobal_Nil :: proc(vm: ^VM, name: string) {
@@ -411,14 +489,536 @@ PushNil :: proc(L: ^State) {
 	luauh.lua_pushnil(L)
 }
 
+PushVector3 :: proc(L: ^State, x, y, z: f32) {
+	luauh.lua_pushvector(L, x, y, z)
+}
 
+PushValue :: proc(L: ^State, index: int) {
+	luauh.lua_pushvalue(L, i32(index))
+}
 
-Run :: proc(
+PushLightUserdata :: proc(L: ^State, value: rawptr, tag: i32 = 0) {
+	luauh.lua_pushlightuserdatatagged(L, value, tag)
+}
+
+PushFunction :: proc(L: ^State, name: string, function: CFunction, upvalue_count: int = 0) {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	luauh.lua_pushcclosurek(L, function, c_name, i32(upvalue_count), nil)
+}
+
+UpvalueIndex :: proc(index: int) -> i32 {
+	return luauh.LUA_GLOBALSINDEX-i32(index)
+}
+
+UpvaluePointer :: proc(L: ^State, index: int = 1) -> rawptr {
+	return luauh.lua_tolightuserdata(L, UpvalueIndex(index))
+}
+
+ArgVector3 :: proc(L: ^State, index: int) -> (x, y, z: f32) {
+	value := luauh.luaL_checkvector(L, i32(index))
+	components := cast([^]f32)value
+	return components[0], components[1], components[2]
+}
+
+StackTop :: proc(L: ^State) -> int {
+	return int(luauh.lua_gettop(L))
+}
+
+SetStackTop :: proc(L: ^State, index: int) {
+	luauh.lua_settop(L, i32(index))
+}
+
+Pop :: proc(L: ^State, count: int = 1) {
+	if count > 0 {
+		luauh.lua_settop(L, -i32(count)-1)
+	}
+}
+
+NewThread :: proc(L: ^State) -> ^State {
+	return luauh.lua_newthread(L)
+}
+
+ThreadFromArgument :: proc(L: ^State, index: int) -> ^State {
+	return luauh.lua_tothread(L, i32(index))
+}
+
+PushCurrentThread :: proc(L: ^State) {
+	_ = luauh.lua_pushthread(L)
+}
+
+CopyValueToThread :: proc(from, to: ^State, index: int) {
+	luauh.lua_xpush(from, to, i32(index))
+}
+
+IsYieldable :: proc(L: ^State) -> bool {
+	return luauh.lua_isyieldable(L) != 0
+}
+
+YieldThread :: proc(L: ^State, result_count: int = 0) -> i32 {
+	return luauh.lua_yield(L, i32(result_count))
+}
+
+ResumeThread :: proc(thread, from: ^State, argument_count: int = 0) -> (finished, yielded: bool, err: string) {
+	status := luauh.lua_Status(luauh.lua_resume(thread, from, i32(argument_count)))
+	#partial switch status {
+	case .OK:
+		luauh.lua_resetthread(thread)
+		return true, false, ""
+	case .YIELD:
+		return false, true, ""
+	case:
+		err = get_stack_error(thread)
+		luauh.lua_resetthread(thread)
+		return false, false, err
+	}
+}
+
+ClearStack :: proc(L: ^State) {
+	luauh.lua_settop(L, 0)
+}
+
+ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> (ok: bool, err: string) {
+	status := luauh.lua_pcall(L, i32(argument_count), i32(result_count), 0)
+	if status == 0 {
+		return true, ""
+	}
+
+	err = get_stack_error(L)
+	Pop(L)
+	return false, err
+}
+
+TypeOf :: proc(L: ^State, index: int) -> Value_Type {
+	return Value_Type(luauh.lua_type(L, i32(index)))
+}
+
+TypeName :: proc(L: ^State, index: int) -> string {
+	name := luauh.lua_typename(L, luauh.lua_type(L, i32(index)))
+	if name == nil {
+		return "none"
+	}
+	return string(name)
+}
+
+IsNil :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Nil
+}
+
+IsNoneOrNil :: proc(L: ^State, index: int) -> bool {
+	type := TypeOf(L, index)
+	return type == .None || type == .Nil
+}
+
+IsBoolean :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Boolean
+}
+
+IsNumber :: proc(L: ^State, index: int) -> bool {
+	return luauh.lua_isnumber(L, i32(index)) != 0
+}
+
+IsString :: proc(L: ^State, index: int) -> bool {
+	return luauh.lua_isstring(L, i32(index)) != 0
+}
+
+IsTable :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Table
+}
+
+IsFunction :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Function
+}
+
+ArgOptionalString :: proc(L: ^State, index: int, default: string = "") -> string {
+	if IsNoneOrNil(L, index) {
+		return default
+	}
+	return ArgString(L, index)
+}
+
+ArgOptionalNumber :: proc(L: ^State, index: int, default: f64 = 0) -> f64 {
+	if IsNoneOrNil(L, index) {
+		return default
+	}
+	return ArgNumber(L, index)
+}
+
+ArgOptionalInteger :: proc(L: ^State, index: int, default: i64 = 0) -> i64 {
+	if IsNoneOrNil(L, index) {
+		return default
+	}
+	return ArgInteger(L, index)
+}
+
+ArgOptionalBoolean :: proc(L: ^State, index: int, default: bool = false) -> bool {
+	if IsNoneOrNil(L, index) {
+		return default
+	}
+	return ArgBoolean(L, index)
+}
+
+NewTable :: proc(L: ^State, array_capacity: int = 0, field_capacity: int = 0) {
+	luauh.lua_createtable(L, i32(array_capacity), i32(field_capacity))
+}
+
+GetField :: proc(L: ^State, index: int, name: string) -> Value_Type {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	return Value_Type(luauh.lua_getfield(L, i32(index), c_name))
+}
+
+SetField :: proc(L: ^State, index: int, name: string) {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	luauh.lua_setfield(L, i32(index), c_name)
+}
+
+SetReadOnly :: proc(L: ^State, index: int, read_only := true) {
+	luauh.lua_setreadonly(L, i32(index), read_only ? 1 : 0)
+}
+
+SetArrayValue :: proc(L: ^State, table_index, array_index: int) {
+	luauh.lua_rawseti(L, i32(table_index), i32(array_index))
+}
+
+RawLen :: proc(L: ^State, index: int) -> int {
+	return int(luauh.lua_objlen(L, i32(index)))
+}
+
+RawGetIndex :: proc(L: ^State, table_index, array_index: int) -> Value_Type {
+	return Value_Type(luauh.lua_rawgeti(L, i32(table_index), i32(array_index)))
+}
+
+RawSetIndex :: proc(L: ^State, table_index, array_index: int) {
+	luauh.lua_rawseti(L, i32(table_index), i32(array_index))
+}
+
+PushRegistryReference :: proc(L: ^State, reference: i32) {
+	luauh.lua_rawgeti(L, luauh.LUA_REGISTRYINDEX, reference)
+}
+
+RetainValue :: proc(L: ^State, index: int = -1) -> i32 {
+	return luauh.lua_ref(L, i32(index))
+}
+
+ReleaseValue :: proc(L: ^State, reference: i32) {
+	if reference > 0 {
+		_ = luauh.lua_unref(L, reference)
+	}
+}
+
+RaiseError :: proc(L: ^State, message: string) -> i32 {
+	luauh.lua_pushlstring(L, cast(cstring)raw_data(message), len(message))
+	luauh.lua_error(L)
+	return 0
+}
+
+RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {
+	if message == nil { return RaiseError(L, "Unknown Luau error") }
+	luauh.lua_pushlstring(L, cast(cstring)raw_data(message^), len(message^))
+	delete(message^)
+	message^ = ""
+	luauh.lua_error(L)
+	return 0
+}
+
+userdata_header :: proc(L: ^State, index: int) -> ^Userdata_Header {
+	if TypeOf(L, index) != .Userdata {
+		return nil
+	}
+	actual_tag := luauh.lua_userdatatag(L, i32(index))
+	if actual_tag < NATIVE_USERDATA_TAG || actual_tag > NATIVE_USERDATA_MAX_TAG {
+		return nil
+	}
+	header := cast(^Userdata_Header)luauh.lua_touserdata(L, i32(index))
+	if header == nil || header.binding == nil {
+		return nil
+	}
+	tag := header.binding.tag
+	if tag == 0 {
+		tag = NATIVE_USERDATA_TAG
+	}
+	if actual_tag != tag {
+		return nil
+	}
+	return header
+}
+
+IsNativeUserdata :: proc(L: ^State, index: int) -> bool {
+	return userdata_header(L, index) != nil
+}
+
+UserdataValue :: proc(L: ^State, index: int) -> rawptr {
+	header := userdata_header(L, index)
+	if header == nil {
+		return nil
+	}
+	return header.value
+}
+
+UserdataBindingOf :: proc(L: ^State, index: int) -> ^Userdata_Binding {
+	header := userdata_header(L, index)
+	if header == nil {
+		return nil
+	}
+	return header.binding
+}
+
+IsUserdataType :: proc(L: ^State, index: int, binding: ^Userdata_Binding) -> bool {
+	return binding != nil && UserdataBindingOf(L, index) == binding
+}
+
+userdata_index :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding == nil {
+		return RaiseError(L, "invalid native instance")
+	}
+
+	key := ArgString(L, 2)
+	if header.binding.get != nil && header.binding.get(L, header.value, header.binding.ctx, key) {
+		return 1
+	}
+
+	PushNil(L)
+	return 1
+}
+
+userdata_newindex :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding == nil {
+		return RaiseError(L, "invalid native instance")
+	}
+
+	key := ArgString(L, 2)
+	if header.binding.set != nil && header.binding.set(L, header.value, header.binding.ctx, key, 3) {
+		return 0
+	}
+
+	return RaiseError(L, "property cannot be assigned")
+}
+
+userdata_namecall :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding == nil {
+		return RaiseError(L, "invalid native instance")
+	}
+
+	atom: i32
+	method_value := luauh.lua_namecallatom(L, &atom)
+	if method_value == nil {
+		return RaiseError(L, "missing method name")
+	}
+	method := string(method_value)
+
+	if header.binding.namecall != nil {
+		result_count, handled := header.binding.namecall(L, header.value, header.binding.ctx, method)
+		if handled {
+			return result_count
+		}
+	}
+
+	return RaiseError(L, "unknown method")
+}
+
+userdata_method :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding == nil || header.binding.namecall == nil {
+		return RaiseError(L, "invalid native method receiver")
+	}
+	method := ArgString(L, int(UpvalueIndex(1)))
+	result_count, handled := header.binding.namecall(L, header.value, header.binding.ctx, method)
+	if handled {
+		return result_count
+	}
+	return RaiseError(L, "unknown method")
+}
+
+PushUserdataMethod :: proc(L: ^State, name: string) {
+	PushString(L, name)
+	PushFunction(L, name, userdata_method, 1)
+}
+
+userdata_binary :: proc(L: ^State, operation: Userdata_Binary_Proc) -> i32 {
+	header := userdata_header(L, 1)
+	self_index, other_index := 1, 2
+	if header == nil {
+		header = userdata_header(L, 2)
+		self_index, other_index = 2, 1
+	}
+	if header == nil || operation == nil || !operation(L, header.value, header.binding.ctx, self_index, other_index) {
+		return RaiseError(L, "unsupported datatype operation")
+	}
+	return 1
+}
+
+userdata_add :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil {
+		header = userdata_header(L, 2)
+	}
+	return userdata_binary(L, header != nil ? header.binding.add : nil)
+}
+
+userdata_subtract :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil {
+		header = userdata_header(L, 2)
+	}
+	return userdata_binary(L, header != nil ? header.binding.subtract : nil)
+}
+
+userdata_multiply :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil {
+		header = userdata_header(L, 2)
+	}
+	return userdata_binary(L, header != nil ? header.binding.multiply : nil)
+}
+
+userdata_divide :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil {
+		header = userdata_header(L, 2)
+	}
+	return userdata_binary(L, header != nil ? header.binding.divide : nil)
+}
+
+userdata_negate :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding.negate == nil || !header.binding.negate(L, header.value, header.binding.ctx) {
+		return RaiseError(L, "unsupported datatype operation")
+	}
+	return 1
+}
+
+userdata_equal :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	left := userdata_header(L, 1)
+	right := userdata_header(L, 2)
+	if left == nil || right == nil || left.binding != right.binding || left.binding.equal == nil {
+		PushBoolean(L, false)
+		return 1
+	}
+	PushBoolean(L, left.binding.equal(left.value, right.value, left.binding.ctx))
+	return 1
+}
+
+userdata_tostring :: proc "c" (L: ^State) -> i32 {
+	context = runtime.default_context()
+	header := userdata_header(L, 1)
+	if header == nil || header.binding == nil {
+		PushString(L, "native instance")
+		return 1
+	}
+
+	if header.binding.string != nil {
+		PushString(L, header.binding.string(header.value, header.binding.ctx))
+	} else {
+		PushString(L, header.binding.name)
+	}
+	return 1
+}
+
+userdata_destroy :: proc "c" (L: ^State, userdata: rawptr) {
+	context = runtime.default_context()
+	header := cast(^Userdata_Header)userdata
+	if header != nil && header.binding != nil && header.binding.destroy != nil && header.value != nil {
+		header.binding.destroy(header.value, header.binding.ctx)
+		header.value = nil
+	}
+}
+
+ensure_userdata_support :: proc(vm: ^VM, binding: ^Userdata_Binding) {
+	tag := binding.tag
+	if tag == 0 {
+		tag = NATIVE_USERDATA_TAG
+	}
+	luauh.lua_getuserdatametatable(vm.L, tag)
+	if TypeOf(vm.L, -1) == .Table {
+		Pop(vm.L)
+		return
+	}
+	Pop(vm.L)
+
+	NewTable(vm.L, 0, 11)
+	PushString(vm.L, binding.name)
+	SetField(vm.L, -2, "__type")
+	PushFunction(vm.L, "__index", userdata_index)
+	SetField(vm.L, -2, "__index")
+	PushFunction(vm.L, "__newindex", userdata_newindex)
+	SetField(vm.L, -2, "__newindex")
+	PushFunction(vm.L, "__namecall", userdata_namecall)
+	SetField(vm.L, -2, "__namecall")
+	PushFunction(vm.L, "__tostring", userdata_tostring)
+	SetField(vm.L, -2, "__tostring")
+	if binding.add != nil {
+		PushFunction(vm.L, "__add", userdata_add)
+		SetField(vm.L, -2, "__add")
+	}
+	if binding.subtract != nil {
+		PushFunction(vm.L, "__sub", userdata_subtract)
+		SetField(vm.L, -2, "__sub")
+	}
+	if binding.multiply != nil {
+		PushFunction(vm.L, "__mul", userdata_multiply)
+		SetField(vm.L, -2, "__mul")
+	}
+	if binding.divide != nil {
+		PushFunction(vm.L, "__div", userdata_divide)
+		SetField(vm.L, -2, "__div")
+	}
+	if binding.negate != nil {
+		PushFunction(vm.L, "__unm", userdata_negate)
+		SetField(vm.L, -2, "__unm")
+	}
+	if binding.equal != nil {
+		PushFunction(vm.L, "__eq", userdata_equal)
+		SetField(vm.L, -2, "__eq")
+	}
+
+	luauh.lua_setuserdatametatable(vm.L, tag)
+	luauh.lua_setuserdatadtor(vm.L, tag, userdata_destroy)
+}
+
+PushUserdata :: proc(vm: ^VM, value: rawptr, binding: ^Userdata_Binding) {
+	assert_open(vm)
+	assert(value != nil)
+	assert(binding != nil)
+	ensure_userdata_support(vm, binding)
+	tag := binding.tag
+	if tag == 0 {
+		tag = NATIVE_USERDATA_TAG
+	}
+
+	header := cast(^Userdata_Header)luauh.lua_newuserdatataggedwithmetatable(
+		vm.L,
+		size_of(Userdata_Header),
+		tag,
+	)
+	header^ = Userdata_Header{
+		value   = value,
+		binding = binding,
+	}
+}
+
+LoadSource :: proc(
 	vm: ^VM,
+	L: ^State,
 	source: string,
 	chunk_name: string = "Kinemium",
 ) -> (ok: bool, err: string) {
 	assert_open(vm)
+	assert(L != nil)
 
 	c_source := strings.clone_to_cstring(source)
 	defer delete(c_source)
@@ -460,7 +1060,7 @@ Run :: proc(
 	defer libc.free(cast(rawptr)bytecode)
 
 	status := luauh.luau_load(
-		vm.L,
+		L,
 		c_chunk,
 		bytecode,
 		bytecode_size,
@@ -468,12 +1068,26 @@ Run :: proc(
 	)
 
 	if status != 0 {
-		err = get_stack_error(vm.L)
-		luauh.lua_settop(vm.L, -2)
+		err = get_stack_error(L)
+		luauh.lua_settop(L, -2)
 		return false, err
 	}
+	return true, ""
+}
 
-	status = luauh.lua_pcall(
+Run :: proc(
+	vm: ^VM,
+	source: string,
+	chunk_name: string = "Kinemium",
+) -> (ok: bool, err: string) {
+	assert_open(vm)
+
+	ok, err = LoadSource(vm, vm.L, source, chunk_name)
+	if !ok {
+		return
+	}
+
+	status := luauh.lua_pcall(
 		vm.L,
 		0,
 		0,

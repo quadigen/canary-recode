@@ -1,12 +1,13 @@
 package classes
 
-import "core:fmt"
+import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
+import vm "../vm"
 
 Part_Class := Class_Info{
     name   = "Part",
-    parent = &Object_Class,
+    parent = &Instance_Class,
 }
 
 Part :: struct {
@@ -14,8 +15,13 @@ Part :: struct {
 
     cframe: datatypes.CFrame,
     color: datatypes.Color3,
-    transparency: i32,
+	size: datatypes.Vector3,
+    transparency: f64,
     anchored: bool,
+	can_collide: bool,
+	can_query: bool,
+	collision_group: string,
+    shape: enums.PartType,
     material: enums.Material,
 }
 
@@ -26,8 +32,112 @@ Part_Init :: proc() -> Part {
         color = datatypes.Color3{
             R = 1, G = 1, B = 1
         },
+		size = datatypes.Vector3{4, 1, 2},
         anchored = false,
+		can_collide = true,
+		can_query = true,
+		collision_group = strings.clone("Default"),
         transparency = 0,
+        shape =  enums.PartType.Block,
         material = enums.Material.SmoothPlastic
     }
+}
+
+part_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
+    part := new(Part)
+    part^ = Part_Init()
+    part.name = "Part"
+    return &part.object
+}
+
+part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	part := cast(^Part)object
+	delete(part.collision_group)
+    Object_Destroy(object)
+	free(part)
+}
+
+part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string) -> bool {
+    part := cast(^Part)object
+    switch key {
+    case "Anchored":
+        vm.PushBoolean(L, part.anchored)
+	case "CanCollide":
+		vm.PushBoolean(L, part.can_collide)
+	case "CanQuery":
+		vm.PushBoolean(L, part.can_query)
+	case "CollisionGroup":
+		vm.PushString(L, part.collision_group)
+    case "Material":
+		if enum_registry == nil { return false }
+		_ = enums.Push_Item_By_Value(L, enum_registry, "Material", i64(part.material))
+    case "Transparency":
+        vm.PushNumber(L, part.transparency)
+    case "Shape":
+        if enum_registry == nil { return false }
+		_ = enums.Push_Item_By_Value(L, enum_registry, "Shape", i64(part.shape))
+	case "CFrame":
+		if datatype_registry == nil { return false }
+		datatypes.Push_CFrame(L, datatype_registry, part.cframe)
+	case "Color":
+		if datatype_registry == nil { return false }
+		datatypes.Push_Color3(L, datatype_registry, part.color)
+	case "Size":
+		vm.PushVector3(L, part.size.x, part.size.y, part.size.z)
+    case:
+        return false
+    }
+    return true
+}
+
+part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string, value_index: int) -> bool {
+    part := cast(^Part)object
+    switch key {
+    case "Anchored":
+        part.anchored = vm.ArgBoolean(L, value_index)
+	case "CanCollide":
+		part.can_collide = vm.ArgBoolean(L, value_index)
+	case "CanQuery":
+		part.can_query = vm.ArgBoolean(L, value_index)
+	case "CollisionGroup":
+		delete(part.collision_group)
+		part.collision_group = strings.clone(vm.ArgString(L, value_index))
+    case "Material":
+		if enum_registry == nil { return false }
+		item := enums.Arg_Item(L, value_index, enum_registry, "Material")
+		part.material = enums.Material(item.value)
+    case "Shape":
+		if enum_registry == nil { return false }
+		item := enums.Arg_Item(L, value_index, enum_registry, "Shape")
+		part.shape = enums.PartType(item.value)
+    case "Transparency":
+        part.transparency = vm.ArgNumber(L, value_index)
+	case "CFrame":
+		if datatype_registry == nil { return false }
+		part.cframe = datatypes.Arg_CFrame(L, value_index, datatype_registry)
+	case "Color":
+		if datatype_registry == nil { return false }
+		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
+	case "Size":
+		x, y, z := vm.ArgVector3(L, value_index)
+		if x <= 0 || y <= 0 || z <= 0 {
+			_ = vm.RaiseError(L, "Size components must be greater than zero")
+			return true
+		}
+		part.size = datatypes.Vector3{x, y, z}
+    case:
+        return false
+    }
+    return true
+}
+
+Register_Part :: proc(registry: ^Registry) {
+    Register_Class(
+        registry,
+        &Part_Class,
+        part_construct,
+        part_destroy,
+        get = part_get,
+        set = part_set,
+    )
 }

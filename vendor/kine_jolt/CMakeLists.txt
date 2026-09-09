@@ -112,9 +112,3 @@ endif()
 set_target_properties(JoltWrapper PROPERTIES
     OUTPUT_NAME "JoltWrapper"
 )
-
-if(MSVC)
-    set_property(TARGET JoltWrapper PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
-    )
-endif()

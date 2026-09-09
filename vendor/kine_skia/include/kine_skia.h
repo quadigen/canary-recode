@@ -3,16 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-#if defined(_WIN32)
-  #if defined(KINE_SKIA_BUILD_EXPORTS)
-    #define KINE_SKIA_API __declspec(dllexport)
-  #else
-    #define KINE_SKIA_API __declspec(dllimport)
-  #endif
-#else
-  #define KINE_SKIA_API __attribute__((visibility("default")))
-#endif
+#include "kine_skia_export.h"
 
 #ifdef __cplusplus
 extern "C" {

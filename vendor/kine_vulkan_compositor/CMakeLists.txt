@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.25)
 
 project(kine_vulkan_compositor VERSION 0.1.0 LANGUAGES CXX)
 
+find_package(Vulkan REQUIRED)
+
 add_library(kine_vulkan_compositor STATIC
     src/kine_vulkan_compositor.cpp
 )
@@ -13,7 +15,8 @@ target_include_directories(kine_vulkan_compositor
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../kine_skia/include
-        ${CMAKE_BINARY_DIR}/kine_skia/skia-src/third_party/externals/vulkan-headers/include
+        ${KINE_SKIA_INCLUDE_DIR}/third_party/externals/vulkan-headers/include
+        ${Vulkan_INCLUDE_DIRS}
 )
 
 target_compile_definitions(kine_vulkan_compositor
@@ -24,6 +27,7 @@ target_compile_definitions(kine_vulkan_compositor
 target_link_libraries(kine_vulkan_compositor
     PRIVATE
         kine_skia
+        Vulkan::Vulkan
         $<$<TARGET_EXISTS:SDL3::SDL3-static>:SDL3::SDL3-static>
         $<$<TARGET_EXISTS:SDL3-static>:SDL3-static>
 )

@@ -800,17 +800,6 @@ CameraSpeedAdjustBinding :: enum {
 	AltScroll = 2,
 }
 
-CameraType :: enum {
-	Fixed = 0,
-	Attach = 1,
-	Watch = 2,
-	Track = 3,
-	Follow = 4,
-	Custom = 5,
-	Scriptable = 6,
-	Orbital = 7,
-}
-
 CaptureGalleryPermission :: enum {
 	ReadAndUpload = 0,
 }
@@ -1433,12 +1422,6 @@ DraggingScrollBar :: enum {
 	None = 0,
 	Horizontal = 1,
 	Vertical = 2,
-}
-
-EasingDirection :: enum {
-	In = 0,
-	Out = 1,
-	InOut = 2,
 }
 
 EasingStyle :: enum {
@@ -3240,11 +3223,33 @@ SecurityCapability :: enum {
 	Plugin = 23,
 	LocalUser = 24,
 	WritePlayer = 25,
+	RobloxScript = 26,
+	RobloxEngine = 27,
 	Unassigned = 28,
 	InternalTest = 29,
 	PluginOrOpenCloud = 30,
 	Assistant = 31,
 	RemoteCommand = 32,
+	AssetRead = 33,
+	AssetManagement = 34,
+	DynamicGeneration = 35,
+	PlatformAvatarEditing = 36,
+	AssetCreateUpdate = 37,
+	Capture = 38,
+	SensitiveInput = 39,
+	Monetization = 40,
+	LoadOwnedAsset = 41,
+	Social = 42,
+	ServerCommunication = 43,
+	Logging = 44,
+	PromptExternalPurchase = 45,
+	Groups = 46,
+	Teleport = 47,
+	Consequences = 48,
+	Material = 49,
+	AvatarBehavior = 50,
+	AvatarAppearance = 51,
+	LoadUnownedAsset = 52,
 }
 
 SelectionBehavior :: enum {
@@ -3966,11 +3971,6 @@ KinemiumUpscaleMode :: enum {
 	Lanczos = 4,
 }
 
-RigType :: enum {
-	Rig15 = 1,
-	Custom = 2,
-}
-
 KinemiumBloomMode :: enum {
 	Mix = 1,
 	Additive = 2,
@@ -4034,13 +4034,6 @@ ParticleBillboardMode :: enum {
 	Disabled = 0,
 	Front = 1,
 	YAxis = 2,
-}
-
-ParticleFlipbookMode :: enum {
-	Loop = 0,
-	OneShot = 1,
-	PingPong = 2,
-	Random = 3,
 }
 
 UIParticleEmitterShape :: enum {
@@ -4230,26 +4223,6 @@ UserInputType :: enum {
 	Voice = 20,
 }
 
-PartType :: enum {
-	Block = 0, // "block"
-	Ball = 1, // "sphere"
-	Cylinder = 2, // "cylinder"
-	Wedge = 3, // "wedge"
-	Torus = 4, // "torus"
-	CornerWedge = 5, // "cornerwedge"
-}
-
-ActuatorRelativeTo :: enum {
-	World = 0,
-	Attachment0 = 1,
-	Attachment1 = 2,
-}
-
-ForceLimitMode :: enum {
-	Magnitude = 0,
-	PerAxis = 1,
-}
-
 VelocityConstraintMode :: enum {
 	Vector = 0,
 	Line = 1,
@@ -4298,132 +4271,15 @@ KinemiumMouseCursor :: enum {
 	MOUSE_CURSOR_NOT_ALLOWED = 10,
 }
 
-NormalId :: enum {
-	Top = 1,
-	Bottom = 2,
-	Back = 3,
-	Front = 4,
-	Right = 5,
-	Left = 6,
-}
-
-FontStyle :: enum {
-	Normal = 0,
-	Italic = 1,
-}
-
-MultiplayerMode :: enum {
-	None = 0,
-	Singleplayer = 1,
-	Multiplayer = 2,
-}
-
-Language :: enum {
-	Luau = 1,
-}
-
-PredictionMode :: enum {
-	Off = 0,
-	Automatic = 1,
-	On = 2,
-}
-
-PredictionStatus :: enum {
-	NotPredicted = 0,
-	Predicted = 1,
-}
-
-AuthorityMode :: enum {
-	Client = 0,
-	Server = 1,
-}
-
-StepFrequency :: enum {
-	Hz60 = 60,
-	Hz120 = 120,
-	Hz240 = 240,
-}
-
-TextXAlignment :: enum {
-	Left = 0,
-	Center = 1,
-	Right = 2,
-}
-
-TextYAlignment :: enum {
-	Top = 0,
-	Center = 1,
-	Bottom = 2,
-}
-
-TextTruncate :: enum {
-	None = 0,
-	Head = 1,
-	Tail = 2,
-	Line = 3,
-	AtEnd = 1,
-}
-
-LeftRight :: enum {
-	Left = 0,
-	Center = 1,
-	Right = 2,
-}
-
-TopBottom :: enum {
-	Top = 0,
-	Center = 1,
-	Bottom = 2,
-}
-
 Dimension :: enum {
 	_2D = 1,
 	_3D = 2,
-}
-
-FillDirection :: enum {
-	Vertical = 0,
-	Horizontal = 1,
-}
-
-SortOrder :: enum {
-	LayoutOrder = 0,
-	Name = 1,
-}
-
-HorizontalAlignment :: enum {
-	Left = 0,
-	Center = 1,
-	Right = 2,
 }
 
 VerticalAlignment :: enum {
 	Top = 0,
 	Center = 1,
 	Bottom = 2,
-}
-
-ScreenInsets :: enum {
-	None = 0,
-	CoreUISafeInsets = 1,
-	DeviceSafeInsets = 2,
-	TopbarSafeInsets = 3,
-}
-
-ResamplerMode :: enum {
-	Default = 0,
-	Pixelated = 1,
-}
-
-ScrollBarInset :: enum {
-	None = 0,
-	ScrollBar = 1,
-	Always = 2,
-}
-
-SelectionBehavior :: enum {
-	Escape = 0,
-	Stop = 1,
 }
 
 UIFlexMode :: enum {
@@ -4434,60 +4290,10 @@ UIFlexMode :: enum {
 	Custom = 4,
 }
 
-ItemLineAlignment :: enum {
-	Automatic = 0,
-	Start = 1,
-	Center = 2,
-	End = 3,
-	Stretch = 4,
-}
-
-Style :: enum {
-	AlternatingSupports = 0,
-	BridgeStyleSupports = 1,
-	NoSupports = 2,
-}
-
-EasingStyle :: enum {
-	Linear = 0,
-	Sine = 1,
-	Quad = 2,
-	Cubic = 3,
-	Quart = 4,
-	Quint = 5,
-	Expo = 6,
-	Circular = 7,
-	Back = 8,
-	Bounce = 9,
-	Elastic = 10,
-	Smooth = 11,
-	Smoother = 12,
-	RidiculousWiggle = 13,
-	RevBack = 14,
-	Spring = 15,
-	SoftSpring = 16,
-}
-
 EasingDirection :: enum {
 	In = 0,
 	Out = 1,
 	InOut = 2,
-}
-
-CameraType :: enum {
-	Custom = 0,
-	Fixed = 1,
-	Attach = 2,
-	Watch = 3,
-	Track = 4,
-	Follow = 5,
-	Scriptable = 6,
-}
-
-Axis :: enum {
-	X = 0,
-	Y = 1,
-	Z = 2,
 }
 
 Face :: enum {
@@ -4499,63 +4305,15 @@ Face :: enum {
 	Back = 5,
 }
 
-AutomaticSize :: enum {
-	None = 0,
-	X = 1,
-	Y = 2,
-	XY = 3,
-}
-
-PlaybackState :: enum {
-	Stopped = 0,
-	Playing = 1,
-	Paused = 2,
-}
-
-AnimationPriority :: enum {
-	Core = 0,
-	Idle = 1,
-	Movement = 2,
-	Action = 3,
-}
-
 GameContext :: enum {
 	Game = 1,
 	Editor = 2,
 	Home = 3,
 }
 
-RunContext :: enum {
-	Legacy = 0,
-	Server = 1,
-	Client = 2,
-	Plugin = 3,
-	Editor = 4,
-}
-
-HumanoidStateType :: enum {
-	None = 0,
-	Running = 1,
-	Jumping = 2,
-	Freefall = 3,
-	Landed = 4,
-	Swimming = 5,
-	Climbing = 6,
-	Dead = 7,
-	Seated = 8,
-}
-
 ZIndexBehavior :: enum {
 	Global = 0,
 	Sibling = 1,
-}
-
-ScaleType :: enum {
-	Stretch = 0,
-	Fit = 1,
-	Crop = 2,
-	Tile = 3,
-	Slice = 4,
 }
 
 ConstraintType :: enum {
@@ -4565,13 +4323,6 @@ ConstraintType :: enum {
 	Prismatic = 3,
 	Spring = 4,
 	Rope = 5,
-}
-
-SurfaceType :: enum {
-	Smooth = 0,
-	Studs = 1,
-	Inlet = 2,
-	Universal = 3,
 }
 
 CollisionGroup :: enum {
@@ -4659,19 +4410,6 @@ PhysicsMaterialCombine :: enum {
 	Max = 3,
 }
 
-RenderFidelity :: enum {
-	Automatic = 0,
-	Precise = 1,
-	Performance = 2,
-}
-
-CollisionFidelity :: enum {
-	Default = 0,
-	Hull = 1,
-	Box = 2,
-	PreciseConvexDecomposition = 3,
-}
-
 AudioBackend :: enum {
 	RAUDIO = 0,
 	MiniAudio = 1,
@@ -4702,11 +4440,6 @@ NetworkReliability :: enum {
 	ReliableUnordered = 1,
 	Unreliable = 2,
 	UnreliableSequenced = 3,
-}
-
-SecurityCapabilities :: enum {
-	UserScript = 1,
-	Internals = 2,
 }
 
 TouchMovementMode :: enum {
@@ -4839,14 +4572,6 @@ UIFlexAlignment :: enum {
 	SpaceEvenly = 4,
 }
 
-UIFlexMode :: enum {
-	None = 0,
-	Grow = 1,
-	Shrink = 2,
-	Fill = 3,
-	Custom = 4,
-}
-
 UITheme :: enum {
 	Light = 0,
 	Dark = 1,
@@ -4884,38 +4609,6 @@ UserCFrame :: enum {
 	LeftHand = 1,
 	RightHand = 2,
 	Floor = 3,
-}
-
-UserInputState :: enum {
-	Begin = 0,
-	Change = 1,
-	End = 2,
-	Cancel = 3,
-	None = 4,
-}
-
-UserInputType :: enum {
-	MouseButton1 = 0,
-	MouseButton2 = 1,
-	MouseButton3 = 2,
-	MouseWheel = 3,
-	MouseMovement = 4,
-	Touch = 7,
-	Keyboard = 8,
-	Focus = 9,
-	Accelerometer = 10,
-	Gyro = 11,
-	Gamepad1 = 12,
-	Gamepad2 = 13,
-	Gamepad3 = 14,
-	Gamepad4 = 15,
-	Gamepad5 = 16,
-	Gamepad6 = 17,
-	Gamepad7 = 18,
-	Gamepad8 = 19,
-	TextInput = 20,
-	InputMethod = 21,
-	None = 22,
 }
 
 VRComfortSetting :: enum {
@@ -4972,18 +4665,6 @@ VRTouchpadMode :: enum {
 	Touch = 0,
 	VirtualThumbstick = 1,
 	ABXY = 2,
-}
-
-VelocityConstraintMode :: enum {
-	Line = 0,
-	Plane = 1,
-	Vector = 2,
-}
-
-VerticalAlignment :: enum {
-	Center = 0,
-	Top = 1,
-	Bottom = 2,
 }
 
 VerticalScrollBarPosition :: enum {
@@ -5192,9 +4873,4 @@ WrapTargetDebugMode :: enum {
 	Rbf = 7,
 	OuterCageDetail = 8,
 	PreWrapDeformerCage = 9,
-}
-
-ZIndexBehavior :: enum {
-	Global = 0,
-	Sibling = 1,
 }

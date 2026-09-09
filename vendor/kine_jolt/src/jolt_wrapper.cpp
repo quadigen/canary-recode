@@ -6,6 +6,7 @@
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -36,6 +37,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cfloat>
+#include <cstdio>
 
 namespace
 {
@@ -165,7 +167,7 @@ public:
 
     void MapObjectToBroadPhaseLayer(uint32_t objectLayer, uint32_t broadPhaseLayer)
     {
-        if (objectLayer < mObjectToBroadPhase.size())
+        if (objectLayer < mObjectToBroadPhase.size() && broadPhaseLayer < mNumBroadPhaseLayers)
             mObjectToBroadPhase[objectLayer] = JPH::BroadPhaseLayer(static_cast<JPH::uint8>(broadPhaseLayer));
     }
 
@@ -176,6 +178,8 @@ public:
 
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override
     {
+        if (inLayer >= mObjectToBroadPhase.size())
+            return JPH::BroadPhaseLayer(0);
         return mObjectToBroadPhase[inLayer];
     }
 
@@ -197,7 +201,7 @@ public:
     explicit ObjectLayerPairFilterTable(uint32_t numObjectLayers)
         : mNumObjectLayers(numObjectLayers)
     {
-        mTable.assign(static_cast<size_t>(numObjectLayers) * numObjectLayers, true);
+        mTable.assign(static_cast<size_t>(numObjectLayers) * numObjectLayers, false);
     }
 
     void EnableCollision(uint32_t layer1, uint32_t layer2)
@@ -212,6 +216,8 @@ public:
 
     bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override
     {
+        if (inObject1 >= mNumObjectLayers || inObject2 >= mNumObjectLayers)
+            return false;
         return mTable[Index(inObject1, inObject2)];
     }
 
@@ -266,6 +272,10 @@ public:
 
     bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override
     {
+        if (mNumBroadPhaseLayers == 0
+            || inLayer1 >= mTable.size() / mNumBroadPhaseLayers
+            || static_cast<JPH::uint8>(inLayer2) >= mNumBroadPhaseLayers)
+            return false;
         return mTable[Index(inLayer1, static_cast<JPH::uint8>(inLayer2))];
     }
 
@@ -494,10 +504,13 @@ JPH_JobSystemRef JPH_JobSystemThreadPool_Create(const JPH_JobSystemConfig* confi
     if (config == nullptr)
         return nullptr;
 
+    if (config->maxConcurrency <= 1)
+        return new JPH::JobSystemSingleThreaded(JPH::cMaxPhysicsJobs);
+
     auto* jobSystem = new JPH::JobSystemThreadPool(
         JPH::cMaxPhysicsJobs,
         JPH::cMaxPhysicsBarriers,
-        static_cast<int>(config->maxConcurrency)
+        static_cast<int>(config->maxConcurrency - 1)
     );
 
     return jobSystem;
@@ -505,7 +518,7 @@ JPH_JobSystemRef JPH_JobSystemThreadPool_Create(const JPH_JobSystemConfig* confi
 
 void JPH_JobSystem_Destroy(JPH_JobSystemRef jobSystem)
 {
-    delete reinterpret_cast<JPH::JobSystemThreadPool*>(jobSystem);
+    delete reinterpret_cast<JPH::JobSystem*>(jobSystem);
 }
 
 JPH_BroadPhaseLayerInterfaceRef JPH_BroadPhaseLayerInterfaceTable_Create(
@@ -513,7 +526,15 @@ JPH_BroadPhaseLayerInterfaceRef JPH_BroadPhaseLayerInterfaceTable_Create(
     uint32_t numBroadPhaseLayers
 )
 {
+    if (numObjectLayers == 0 || numBroadPhaseLayers == 0 || numBroadPhaseLayers > 256)
+        return nullptr;
+
     return new BPLayerInterfaceTable(numObjectLayers, numBroadPhaseLayers);
+}
+
+void JPH_BroadPhaseLayerInterfaceTable_Destroy(JPH_BroadPhaseLayerInterfaceRef bpInterface)
+{
+    delete reinterpret_cast<BPLayerInterfaceTable*>(bpInterface);
 }
 
 void JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
@@ -531,7 +552,15 @@ void JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
 
 JPH_ObjectLayerPairFilterRef JPH_ObjectLayerPairFilterTable_Create(uint32_t numObjectLayers)
 {
+    if (numObjectLayers == 0)
+        return nullptr;
+
     return new ObjectLayerPairFilterTable(numObjectLayers);
+}
+
+void JPH_ObjectLayerPairFilterTable_Destroy(JPH_ObjectLayerPairFilterRef filter)
+{
+    delete reinterpret_cast<ObjectLayerPairFilterTable*>(filter);
 }
 
 void JPH_ObjectLayerPairFilterTable_EnableCollision(
@@ -558,6 +587,21 @@ void JPH_ObjectLayerPairFilterTable_DisableCollision(
     reinterpret_cast<ObjectLayerPairFilterTable*>(filter)->DisableCollision(layer1, layer2);
 }
 
+int32_t JPH_ObjectLayerPairFilterTable_ShouldCollide(
+    JPH_ObjectLayerPairFilterRef filter,
+    uint32_t layer1,
+    uint32_t layer2
+)
+{
+    if (filter == nullptr)
+        return 0;
+
+    return reinterpret_cast<ObjectLayerPairFilterTable*>(filter)->ShouldCollide(
+        static_cast<JPH::ObjectLayer>(layer1),
+        static_cast<JPH::ObjectLayer>(layer2)
+    ) ? 1 : 0;
+}
+
 JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTable_Create(
     JPH_BroadPhaseLayerInterfaceRef bpInterface,
     uint32_t numBroadPhaseLayers,
@@ -565,7 +609,11 @@ JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTable_Crea
     uint32_t numObjectLayers
 )
 {
-    if (bpInterface == nullptr || objectLayerPairFilter == nullptr)
+    if (bpInterface == nullptr
+        || objectLayerPairFilter == nullptr
+        || numBroadPhaseLayers == 0
+        || numBroadPhaseLayers > 256
+        || numObjectLayers == 0)
         return nullptr;
 
     return new ObjectVsBroadPhaseLayerFilterTable(
@@ -574,6 +622,26 @@ JPH_ObjectVsBroadPhaseLayerFilterRef JPH_ObjectVsBroadPhaseLayerFilterTable_Crea
         *reinterpret_cast<ObjectLayerPairFilterTable*>(objectLayerPairFilter),
         numObjectLayers
     );
+}
+
+void JPH_ObjectVsBroadPhaseLayerFilterTable_Destroy(JPH_ObjectVsBroadPhaseLayerFilterRef filter)
+{
+    delete reinterpret_cast<ObjectVsBroadPhaseLayerFilterTable*>(filter);
+}
+
+int32_t JPH_ObjectVsBroadPhaseLayerFilterTable_ShouldCollide(
+    JPH_ObjectVsBroadPhaseLayerFilterRef filter,
+    uint32_t objectLayer,
+    uint32_t broadPhaseLayer
+)
+{
+    if (filter == nullptr)
+        return 0;
+
+    return reinterpret_cast<ObjectVsBroadPhaseLayerFilterTable*>(filter)->ShouldCollide(
+        static_cast<JPH::ObjectLayer>(objectLayer),
+        JPH::BroadPhaseLayer(static_cast<JPH::uint8>(broadPhaseLayer))
+    ) ? 1 : 0;
 }
 
 JPH_ShapeRef JPH_BoxShape_Create(const JPH_Vec3* halfExtent, float convexRadius)
@@ -761,6 +829,13 @@ void JPH_BodyCreationSettings_SetGravityFactor(JPH_BodyCreationSettingsRef setti
 
 JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings* settings)
 {
+	if (settings != nullptr) {
+		std::fprintf(stderr, "JPH create sizeof=%zu bodies=%u mutexes=%u pairs=%u contacts=%u broad=%p pair=%p vs=%p\n",
+			sizeof(*settings), settings->maxBodies, settings->numBodyMutexes, settings->maxBodyPairs,
+			settings->maxContactConstraints, settings->broadPhaseLayerInterface,
+			settings->objectLayerPairFilter, settings->objectVsBroadPhaseLayerFilter);
+		std::fflush(stderr);
+	}
     if (settings == nullptr
         || settings->broadPhaseLayerInterface == nullptr
         || settings->objectLayerPairFilter == nullptr
@@ -813,11 +888,33 @@ void JPH_PhysicsSystem_Update(
     if (system == nullptr || jobSystem == nullptr || sJphTempAllocator == nullptr)
         return;
 
+    std::fprintf(stderr, "JPH update begin system=%p jobs=%p dt=%f steps=%d\n", system, jobSystem, deltaTime, collisionSteps);
+    std::fflush(stderr);
     ToPhysicsSystem(system)->Update(
         deltaTime,
         collisionSteps,
         sJphTempAllocator,
-        reinterpret_cast<JPH::JobSystemThreadPool*>(jobSystem)
+        reinterpret_cast<JPH::JobSystem*>(jobSystem)
+    );
+    std::fprintf(stderr, "JPH update end\n");
+    std::fflush(stderr);
+}
+
+void JPH_PhysicsSystem_UpdateSingleThreaded(
+    JPH_PhysicsSystemRef system,
+    float deltaTime,
+    int32_t collisionSteps
+)
+{
+    if (system == nullptr || sJphTempAllocator == nullptr)
+        return;
+
+    JPH::JobSystemSingleThreaded jobSystem(JPH::cMaxPhysicsJobs);
+    ToPhysicsSystem(system)->Update(
+        deltaTime,
+        collisionSteps,
+        sJphTempAllocator,
+        &jobSystem
     );
 }
 
@@ -1224,9 +1321,18 @@ inline JPH::EConstraintSpace ToConstraintSpace(int32_t space)
 inline JPH::SpringSettings ToSpringSettings(const JPH_SpringSettings& settings)
 {
     JPH::SpringSettings result;
-    result.mMode = settings.mode == 0
-        ? JPH::ESpringMode::FrequencyAndDamping
-        : JPH::ESpringMode::StiffnessAndDamping;
+    switch (settings.mode)
+    {
+    case JPH_SpringMode_StiffnessAndDamping:
+        result.mMode = JPH::ESpringMode::StiffnessAndDamping;
+        break;
+    case JPH_SpringMode_MassNormalizedStiffnessAndDamping:
+        result.mMode = JPH::ESpringMode::MassNormalizedStiffnessAndDamping;
+        break;
+    default:
+        result.mMode = JPH::ESpringMode::FrequencyAndDamping;
+        break;
+    }
     result.mFrequency = settings.frequencyOrStiffness;
     result.mDamping = settings.damping;
     return result;
@@ -1247,6 +1353,7 @@ inline JPH::EMotorState ToMotorState(int32_t state)
 {
     if (state == 1) return JPH::EMotorState::Velocity;
     if (state == 2) return JPH::EMotorState::Position;
+    if (state == 3) return JPH::EMotorState::PositionAndVelocity;
     return JPH::EMotorState::Off;
 }
 }

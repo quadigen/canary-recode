@@ -5,7 +5,7 @@ Vector3 :: struct {
     x, y, z: f32,
 }
 
-Multiply :: proc(v: Vector3, scalar: f32) -> Vector3 {
+Vec3_Multiply :: proc(v: Vector3, scalar: f32) -> Vector3 {
     return Vector3{
         x = v.x * scalar,
         y = v.y * scalar,
@@ -13,15 +13,15 @@ Multiply :: proc(v: Vector3, scalar: f32) -> Vector3 {
     }
 }
 
-Unit :: proc(v: Vector3) -> Vector3 {
+Vec3_Unit :: proc(v: Vector3) -> Vector3 {
     length := math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
     if length == 0.0 {
         return Vector3{0.0, 0.0, 0.0}
     }
-    return Multiply(v, 1.0 / length)
+    return Vec3_Multiply(v, 1.0 / length)
 }
 
-Magnitude :: proc(v: Vector3) -> f32 {
+Vec3_Magnitude :: proc(v: Vector3) -> f32 {
     return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 }
 

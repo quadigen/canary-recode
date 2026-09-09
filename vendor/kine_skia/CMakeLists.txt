@@ -157,10 +157,20 @@ add_library(
     src/kine_skia.cpp
 )
 
+# The public Odin archive is generated from the aggregate KinemiumLibs target.
+# Keep the wrapper archive distinct so incremental aggregation never consumes
+# its own previous output through the kine_skia compatibility hard link.
+set_target_properties(kine_skia PROPERTIES OUTPUT_NAME "kine_skia_component")
+
 target_compile_features(
     kine_skia
     PRIVATE
         cxx_std_20
+)
+
+target_compile_definitions(kine_skia
+    PUBLIC
+        $<$<NOT:$<BOOL:${KINE_SKIA_BUILD_SHARED}>>:KINE_SKIA_STATIC>
 )
 
 target_include_directories(
@@ -205,7 +215,7 @@ if(MSVC)
 
         PROPERTY
             MSVC_RUNTIME_LIBRARY
-            "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+            "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 endif()
 
@@ -462,8 +472,8 @@ if(
             APPEND
             KINE_SKIA_GN_ARGS
 
-            "extra_cflags=[\"/MD\"]"
-            "extra_cflags_cc=[\"/MD\"]"
+            "extra_cflags=[\"/MT\"]"
+            "extra_cflags_cc=[\"/MT\"]"
         )
     else()
         list(

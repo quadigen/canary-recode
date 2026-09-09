@@ -926,10 +926,6 @@ CFrame_FromRotationBetweenVectors :: proc(
 }
 
 
-//
-// Inverse
-//
-
 CFrame_Inverse :: proc(cf: CFrame) -> CFrame {
     // Rotation inverse = transpose.
 
@@ -1052,10 +1048,6 @@ CFrame_VectorToObjectSpace :: proc(
     }
 }
 
-
-//
-// Orthonormalize
-//
 
 CFrame_Orthonormalize :: proc(cf: CFrame) -> CFrame {
     right := cframe_v3_unit(

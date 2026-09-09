@@ -259,8 +259,8 @@ if(KINE_WITH_FILAMENT)
     if(WIN32)
         # Windows Filament prebuilts are nested by MSVC CRT type (md/mdd/mt/mtd)
         target_link_directories(kine_filament_shim PUBLIC
-            $<$<CONFIG:Debug>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/mdd>
-            $<$<NOT:$<CONFIG:Debug>>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/md>
+            $<$<CONFIG:Debug>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/mtd>
+            $<$<NOT:$<CONFIG:Debug>>:${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/mt>
         )
     else()
         target_link_directories(kine_filament_shim PUBLIC ${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH})
@@ -304,7 +304,7 @@ if(KINE_WITH_FILAMENT)
             PRIVATE
                 ${KINE_SDL3_TARGET}
                 ${KINE_ASSIMP_TARGET}
-                gdi32 user32 opengl32
+                gdi32 user32 opengl32 shlwapi
         )
     elseif(APPLE)
         target_link_libraries(kine_filament_shim

@@ -1,13 +1,13 @@
 #ifndef KINE_SKIA_EXPORT_H
 #define KINE_SKIA_EXPORT_H
 
-#if defined(_WIN32) && defined(KINE_BUILD_SHARED)
+#if defined(_WIN32) && defined(KINE_BUILD_SHARED) && !defined(KINE_SKIA_STATIC)
     #if defined(KINE_SKIA_BUILD_EXPORTS)
         #define KINE_SKIA_API __declspec(dllexport)
     #else
         #define KINE_SKIA_API __declspec(dllimport)
     #endif
-#elif defined(__GNUC__) && defined(KINE_BUILD_SHARED)
+#elif defined(__GNUC__) && defined(KINE_BUILD_SHARED) && !defined(KINE_SKIA_STATIC)
     #define KINE_SKIA_API __attribute__((visibility("default")))
 #else
     #define KINE_SKIA_API
