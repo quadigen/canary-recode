@@ -1,0 +1,312 @@
+name: Build Kinemium Engine
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            folder: windows_x86-64
+            executable: kinemium.exe
+
+          - os: macos-latest
+            folder: macos_arm64
+            executable: kinemium
+
+          - os: ubuntu-latest
+            folder: debian_x86-64
+            executable: kinemium
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Enable long paths
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+
+          New-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" `
+            -Value 1 `
+            -PropertyType DWORD `
+            -Force
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # Odin
+      # ------------------------------------------------------------
+
+      - name: Setup Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: latest
+
+      - name: Show Odin version
+        run: odin version
+
+      # ------------------------------------------------------------
+      # Toolchain
+      # ------------------------------------------------------------
+
+      - name: Setup MSVC environment
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install build tools (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install cmake ninja -y
+
+      - name: Install build tools (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          brew install cmake ninja
+
+      - name: Install build tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            build-essential \
+            clang \
+            llvm \
+            libc++1 \
+            libc++abi1 \
+            libc++-dev \
+            libc++abi-dev
+
+      # ------------------------------------------------------------
+      # Linux native dependencies
+      # ------------------------------------------------------------
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxfixes-dev \
+            libxrender-dev \
+            libxss-dev \
+            libxtst-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl1-mesa-dev \
+            libibus-1.0-dev \
+            libgtk-3-dev \
+            libfontconfig1-dev \
+            libgl1-mesa-dev
+
+      # ------------------------------------------------------------
+      # Vulkan
+      # ------------------------------------------------------------
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.304.1
+          install_runtime: true
+          cache: true
+          stripdown: false
+
+      # ------------------------------------------------------------
+      # C/C++ native dependencies
+      #
+      # Equivalent to:
+      # cmake -S . -B vendor/build -G Ninja ...
+      # cmake --build vendor/build
+      # ------------------------------------------------------------
+
+      - name: Configure native dependencies
+        shell: bash
+        run: |
+          rm -rf vendor/build
+
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            CC=clang CXX=clang++ cmake \
+              -S . \
+              -B vendor/build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release
+          else
+            cmake \
+              -S . \
+              -B vendor/build \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build native dependencies
+        shell: bash
+        run: |
+          cmake --build vendor/build \
+            --config Release \
+            --parallel
+
+      # ------------------------------------------------------------
+      # Verify native libraries
+      # ------------------------------------------------------------
+
+      - name: List native libraries
+        shell: bash
+        run: |
+          echo "vendor/build/lib:"
+          find vendor/build/lib -maxdepth 1 -type f -print || true
+
+          echo
+          echo "Luau:"
+          find vendor/build -type f \
+            \( -name "Luau*.lib" \
+            -o -name "libLuau*.a" \
+            -o -name "kine_luau*" \) \
+            -print || true
+
+      - name: Verify Windows native libraries
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $required = @(
+            "vendor/build/lib/kine_sdl3.lib",
+            "vendor/build/lib/kine_filament.lib",
+            "vendor/build/lib/kine_skia.lib",
+            "vendor/build/lib/kine_vk.lib",
+            "vendor/build/lib/kine_jolt.lib",
+            "vendor/build/lib/kine_luau.lib"
+          )
+
+          foreach ($library in $required) {
+            if (!(Test-Path $library)) {
+              Write-Error "Missing native library: $library"
+              exit 1
+            }
+
+            Write-Host "Found $library"
+          }
+
+      - name: Verify Unix native libraries
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          required=(
+            "vendor/build/lib/kine_filament.a"
+            "vendor/build/lib/kine_skia.a"
+            "vendor/build/lib/kine_vk.a"
+            "vendor/build/lib/kine_jolt.a"
+          )
+
+          for library in "${required[@]}"; do
+            if [[ ! -f "$library" ]]; then
+              echo "Missing native library: $library"
+              exit 1
+            fi
+
+            echo "Found $library"
+          done
+
+      # ------------------------------------------------------------
+      # Odin
+      # ------------------------------------------------------------
+
+      - name: Check Odin source
+        run: odin check src
+
+      - name: Create output directory
+        shell: bash
+        run: |
+          mkdir -p "dist/${{ matrix.folder }}"
+
+      - name: Build Kinemium
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          odin build src `
+            -o:speed `
+            -out:"dist/${{ matrix.folder }}/${{ matrix.executable }}"
+
+      - name: Build Kinemium
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          odin build src \
+            -o:speed \
+            -out:"dist/${{ matrix.folder }}/${{ matrix.executable }}"
+
+      # ------------------------------------------------------------
+      # Verify executable
+      # ------------------------------------------------------------
+
+      - name: Verify executable
+        shell: bash
+        run: |
+          test -f "dist/${{ matrix.folder }}/${{ matrix.executable }}"
+          ls -lh "dist/${{ matrix.folder }}/${{ matrix.executable }}"
+
+      - name: Inspect Linux executable
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          file "dist/${{ matrix.folder }}/kinemium"
+          ldd "dist/${{ matrix.folder }}/kinemium" || true
+
+          readelf -W -l "dist/${{ matrix.folder }}/kinemium" \
+            | grep GNU_STACK || true
+
+          if readelf -W -l "dist/${{ matrix.folder }}/kinemium" \
+            | grep GNU_STACK \
+            | grep -q 'RWE'; then
+
+            echo "Kinemium has an executable GNU_STACK."
+            exit 1
+          fi
+
+      - name: Inspect macOS executable
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          file "dist/${{ matrix.folder }}/kinemium"
+          otool -L "dist/${{ matrix.folder }}/kinemium"
+
+      - name: Inspect Windows executable
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          dumpbin /dependents `
+            "dist/${{ matrix.folder }}/kinemium.exe" `
+            2>$null
+
+      # ------------------------------------------------------------
+      # Artifact
+      # ------------------------------------------------------------
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.folder }}
+          path: dist/${{ matrix.folder }}
+          if-no-files-found: error
