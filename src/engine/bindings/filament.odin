@@ -4,32 +4,32 @@ import sdl3 "vendor:sdl3"
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../build/lib/kine_sdl3.lib",
-		"../../../build/lib/kine_filament.lib",
-		"../../../build/lib/kine_filament_matp.lib",
-		"../../../build/lib/kine_filament_filamat.lib",
-		"../../../build/lib/kine_filament_filament.lib",
-		"../../../build/lib/kine_filament_backend.lib",
-		"../../../build/lib/kine_filament_bluegl.lib",
-		"../../../build/lib/kine_filament_bluevk.lib",
-		"../../../build/lib/kine_filament_filabridge.lib",
-		"../../../build/lib/kine_filament_filaflat.lib",
-		"../../../build/lib/kine_filament_utils.lib",
-		"../../../build/lib/kine_filament_geometry.lib",
-		"../../../build/lib/kine_filament_smol-v.lib",
-		"../../../build/lib/kine_filament_zstd.lib",
-		"../../../build/lib/kine_filament_uberarchive.lib",
-		"../../../build/lib/kine_filament_shaders.lib",
-		"../../../build/lib/kine_assimp.lib",
-		"../../../build/lib/kine_zlib.lib",
-		"../../../build/lib/kine_vk.lib",
-		"../../../build/lib/kine_skia.lib",
-		"../../../build/lib/kine_skia_skiacore.lib",
-		"../../../build/lib/kine_skia_svg.lib",
-		"../../../build/lib/kine_skia_skshaper.lib",
-		"../../../build/lib/kine_skia_skunicode_core.lib",
-		"../../../build/lib/kine_skia_skunicode_icu.lib",
-		"../../../build/lib/kine_vulkan_loader.lib",
+		"../../../vendor/build/lib/kine_sdl3.lib",
+		"../../../vendor/build/lib/kine_filament.lib",
+		"../../../vendor/build/lib/kine_filament_matp.lib",
+		"../../../vendor/build/lib/kine_filament_filamat.lib",
+		"../../../vendor/build/lib/kine_filament_filament.lib",
+		"../../../vendor/build/lib/kine_filament_backend.lib",
+		"../../../vendor/build/lib/kine_filament_bluegl.lib",
+		"../../../vendor/build/lib/kine_filament_bluevk.lib",
+		"../../../vendor/build/lib/kine_filament_filabridge.lib",
+		"../../../vendor/build/lib/kine_filament_filaflat.lib",
+		"../../../vendor/build/lib/kine_filament_utils.lib",
+		"../../../vendor/build/lib/kine_filament_geometry.lib",
+		"../../../vendor/build/lib/kine_filament_smol-v.lib",
+		"../../../vendor/build/lib/kine_filament_zstd.lib",
+		"../../../vendor/build/lib/kine_filament_uberarchive.lib",
+		"../../../vendor/build/lib/kine_filament_shaders.lib",
+		"../../../vendor/build/lib/kine_assimp.lib",
+		"../../../vendor/build/lib/kine_zlib.lib",
+		"../../../vendor/build/lib/kine_vk.lib",
+		"../../../vendor/build/lib/kine_skia.lib",
+		"../../../vendor/build/lib/kine_skia_skiacore.lib",
+		"../../../vendor/build/lib/kine_skia_svg.lib",
+		"../../../vendor/build/lib/kine_skia_skshaper.lib",
+		"../../../vendor/build/lib/kine_skia_skunicode_core.lib",
+		"../../../vendor/build/lib/kine_skia_skunicode_icu.lib",
+		"../../../vendor/build/lib/kine_vulkan_loader.lib",
 		"system:advapi32.lib",
 		"system:d2d1.lib",
 		"system:delayimp.lib",
@@ -48,7 +48,7 @@ when ODIN_OS == .Windows {
 		"system:winmm.lib",
 	}
 } else {
-	foreign import lib "../../../build/lib/kine_filament.a"
+	foreign import lib "../../../vendor/build/lib/kine_filament.a"
 }
 
 KineFilamentContext       :: struct {}
@@ -200,6 +200,14 @@ foreign lib {
 	Kine_Filament_SetCameraPosition         :: proc(ctx: ^KineFilamentContext, x: f32, y: f32, z: f32) ---
 	Kine_Filament_SetCameraDirection        :: proc(ctx: ^KineFilamentContext, dx: f32, dy: f32, dz: f32) ---
 	Kine_Filament_DestroyMesh               :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh) -> i32 ---
+	Kine_Filament_CreateTex                 :: proc(ctx: ^KineFilamentContext, tex: ^KineGLTextureInfo) -> i32 ---
+	Kine_Filament_CreateTexFromPixels :: proc(
+		ctx: ^KineFilamentContext,
+		width: i32,
+		height: i32,
+		rowBytes: i32,
+		pixelsRGBA8: rawptr,
+	) -> ^KineFilamentTex ---
 
 	/* Imported skeletal data. Bind transforms and caller-provided bone transforms
 	are row-major affine float[16] matrices in mesh-local space. Bone transforms

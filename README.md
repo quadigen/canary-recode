@@ -88,6 +88,22 @@ Kinemium provides with several flags you can run with ```zune run game```<br>
 - kilang (lets you run kilang code in the terminal, you can add this flag with any other flag and it will still work)<br>
 - editor (enables studio UI)
 
+## Engine packages
+
+Native Luau packages live in `src/engine/packages/<PackageName>`. Add one
+`// wire:package name="PackageName"` marker and expose these procedures from the
+package:
+
+```odin
+Context :: struct {}
+Install :: proc(L: ^vm.State, context: rawptr, renderer: ^renderer.RendererObject)
+Begin_Frame :: proc(context: rawptr, width, height: i32)
+```
+
+Run `just wire` after adding the folder. It regenerates the typed package
+registry, and Luau can then load it with `require("@engine/PackageName")`.
+The shorter `require("@PackageName")` form remains available for older scripts.
+
 # Multiplayer
 Kinemium provides multiplayer support with the ```server``` and ```client``` flags:
 

@@ -170,3 +170,4 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 		_step = ScreenGui_render,
 	)
 }
+

@@ -82,3 +82,4 @@ Register_Physics_Class :: proc(registry: ^classes.Registry) {
 		set = physics_set,
 	)
 }
+

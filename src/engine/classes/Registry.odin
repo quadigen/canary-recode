@@ -13,6 +13,12 @@ Class_Destructor  :: proc(object: ^Object, renderer: ^Renderer_Object)
 Class_Getter      :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, key: string) -> bool
 Class_Setter      :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, key: string, value_index: int) -> bool
 Class_Namecall    :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, method: string) -> (i32, bool)
+Require_Resolver  :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
+Class_Step_Phase :: enum {
+	Update,
+	Render_3D,
+	Render_2D,
+}
 Class_Step_Context :: struct {
 	L:               ^vm.State,
 	delta_time:      f32,
@@ -35,6 +41,7 @@ Class_Descriptor :: struct {
 	set:         Class_Setter,
 	namecall:    Class_Namecall,
 	_step:       Class_Step,
+	_step_phase: Class_Step_Phase,
 	creatable:   bool,
 	binding:     vm.Userdata_Binding,
 	registry:    ^Registry,
@@ -49,6 +56,8 @@ Registry :: struct {
 	data_model: rawptr,
 	vm_state: ^vm.VM,
 	fallback_require_ref: i32,
+	require_resolver: Require_Resolver,
+	require_resolver_ctx: rawptr,
 }
 
 Registry_Init :: proc(
@@ -63,6 +72,12 @@ Registry_Init :: proc(
 Set_Data_Model :: proc(registry: ^Registry, data_model: rawptr) {
 	if registry == nil { return }
 	registry.data_model = data_model
+}
+
+Set_Require_Resolver :: proc(registry: ^Registry, resolver: Require_Resolver, ctx: rawptr) {
+	if registry == nil { return }
+	registry.require_resolver = resolver
+	registry.require_resolver_ctx = ctx
 }
 
 descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
@@ -125,6 +140,7 @@ Register_Class :: proc(
 	set: Class_Setter = nil,
 	namecall: Class_Namecall = nil,
 	_step: Class_Step = nil,
+	_step_phase: Class_Step_Phase = .Render_2D,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
@@ -141,6 +157,7 @@ Register_Class :: proc(
 		set       = set,
 		namecall  = namecall,
 		_step     = _step,
+		_step_phase = _step_phase,
 		creatable = creatable,
 		registry  = registry,
 	}
@@ -191,13 +208,14 @@ Step :: proc(
 	delta_time: f32,
 	viewport_width: i32 = 0,
 	viewport_height: i32 = 0,
+	phase: Class_Step_Phase = .Render_2D,
 ) {
 	if registry == nil || L == nil { return }
 
 	targets: [dynamic]class_step_target
 
 	for descriptor in registry.classes {
-		if descriptor._step == nil { continue }
+		if descriptor._step == nil || descriptor._step_phase != phase { continue }
 		for object in descriptor.instances {
 			if object != nil && !object.destroyed {
 				append(&targets, class_step_target{object, descriptor._step})
@@ -266,6 +284,14 @@ require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 require_script :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
+	if vm.IsString(L, 1) {
+		path := vm.ArgString(L, 1)
+		if registry.require_resolver != nil &&
+		   registry.require_resolver(L, path, registry.require_resolver_ctx) {
+			return 1
+		}
+		return require_fallback(L, registry)
+	}
 	object := object_from_argument(L, 1)
 	if object == nil || !Is_A(object, "Script") {
 		return require_fallback(L, registry)
@@ -328,10 +354,12 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
 	Register_Instance(registry)
+	Register_Camera(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
 	Register_GuiObject(registry)
 	Register_ImageLabel(registry)
+	Register_InputObject(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
 	Register_ModuleScript(registry)
@@ -340,6 +368,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Script(registry)
 	Register_TextLabel(registry)
 	Register_UICorner(registry)
+	Register_UIShadow(registry)
 	// wire:end classes
 }
 

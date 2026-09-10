@@ -1,6 +1,10 @@
 package classes
 
 import datatypes "../datatypes"
+import "core:strings"
+import enums "../enum"
+import vm "../vm"
+import guilib "../gui"
 
 UICorner_Class := Class_Info{
     name   = "UICorner",
@@ -27,6 +31,67 @@ UICorner_Init :: proc() -> UICorner {
         top_left_radius = datatypes.UDim{0, 0},
         corner_radius = datatypes.UDim{0, 15},
     }
+}
+
+UICorner_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
+	corner := cast(^UICorner)object
+
+	switch key {
+	case "BottomLeftRadius":
+		datatypes.Push_UDim(L, datatype_registry, corner.bottom_left_radius)
+		return true
+	case "BottomRightRadius":
+		datatypes.Push_UDim(L, datatype_registry, corner.bottom_right_radius)
+		return true
+    case "TopLeftRadius":
+		datatypes.Push_UDim(L, datatype_registry, corner.top_left_radius)
+		return true
+    case "TopRightRadius":
+		datatypes.Push_UDim(L, datatype_registry, corner.top_right_radius)
+		return true
+    case "CornerRadius":
+		datatypes.Push_UDim(L, datatype_registry, corner.corner_radius)
+		return true
+	}
+
+	return false
+}
+
+UICorner_set :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	corner := cast(^UICorner)object
+
+	switch key {
+	case "BottomLeftRadius":
+		corner.bottom_left_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		return true
+	case "BottomRightRadius":
+		corner.bottom_right_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		return true
+    case "TopLeftRadius":
+		corner.top_left_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		return true
+    case "TopRightRadius":
+		corner.top_right_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		return true
+    case "CornerRadius":
+		corner.corner_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		return true
+	}
+
+	return false
 }
 
 ui_corner_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {

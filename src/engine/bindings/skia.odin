@@ -4,13 +4,13 @@ import "core:c"
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../build/lib/kine_skia.lib",
-		"../../../build/lib/kine_skia_skiacore.lib",
-		"../../../build/lib/kine_skia_svg.lib",
-		"../../../build/lib/kine_skia_skshaper.lib",
-		"../../../build/lib/kine_skia_skunicode_core.lib",
-		"../../../build/lib/kine_skia_skunicode_icu.lib",
-		"../../../build/lib/kine_vulkan_loader.lib",
+		"../../../vendor/build/lib/kine_skia.lib",
+		"../../../vendor/build/lib/kine_skia_skiacore.lib",
+		"../../../vendor/build/lib/kine_skia_svg.lib",
+		"../../../vendor/build/lib/kine_skia_skshaper.lib",
+		"../../../vendor/build/lib/kine_skia_skunicode_core.lib",
+		"../../../vendor/build/lib/kine_skia_skunicode_icu.lib",
+		"../../../vendor/build/lib/kine_vulkan_loader.lib",
 		"system:advapi32.lib",
 		"system:d2d1.lib",
 		"system:dwrite.lib",
@@ -20,7 +20,7 @@ when ODIN_OS == .Windows {
 		"system:user32.lib",
 	}
 } else {
-	foreign import lib "../../../build/lib/kine_skia.a"
+	foreign import lib "../../../vendor/build/lib/kine_skia.a"
 }
 
 KineSkiaSurface       :: struct {}
@@ -140,3 +140,4 @@ foreign lib {
 	/* Draw image scaled/cropped: src rect from the image -> dst rect on the surface */
 	Kine_Skia_Surface_DrawImageRect :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, srcX: f32, srcY: f32, srcWidth: f32, srcHeight: f32, dstX: f32, dstY: f32, dstWidth: f32, dstHeight: f32, alpha: u8) ---
 }
+

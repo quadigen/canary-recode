@@ -1,6 +1,5 @@
 package services
 
-import "core:fmt"
 // wire:service global="Lighting"
 
 import classes "../classes"
@@ -15,17 +14,24 @@ Lighting_Class := classes.Class_Info{name = "Lighting", parent = &Service_Class}
 Lighting :: struct {
 	using service: Service,
 	call_count: i64,
+	applied_context: ^kineffi.KineFilamentContext,
 }
 
 Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
 	service := new(Lighting)
 	service.service = Service_Init(&Lighting_Class, "Lighting", data_model)
 
-    result := kineffi.Kine_Filament_SetSkyAtmosphere(
+	return &service.object
+}
+
+Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
+    if renderer == nil || renderer.Filament == nil || service.applied_context == renderer.Filament { return }
+
+    _ = kineffi.Kine_Filament_SetSkyAtmosphere(
         renderer.Filament,
 
         // Sun direction
-        -0.35, -0.85, -0.25,
+        0.35, 0.85, 0.25,
 
         // Sky color
         0.32, 0.58, 0.95,
@@ -37,10 +43,10 @@ Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawpt
         0.10, 0.12, 0.14,
 
         // Sun intensity
-        8.0,
+        100_000.0,
     )
 
-	return &service.object
+	service.applied_context = renderer.Filament
 }
 
 Lighting_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {

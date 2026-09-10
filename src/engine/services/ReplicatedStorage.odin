@@ -33,3 +33,4 @@ ReplicatedStorage_destroy :: proc(object: ^classes.Object, renderer: ^classes.Re
 Register_ReplicatedStorage_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(registry, &ReplicatedStorage_Class, ReplicatedStorage_construct, ReplicatedStorage_destroy, creatable = false)
 }
+

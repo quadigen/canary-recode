@@ -2,11 +2,11 @@ package kineffi
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../build/lib/kine_vk.lib",
-		"../../../build/lib/kine_vulkan_loader.lib",
+		"../../../vendor/build/lib/kine_vk.lib",
+		"../../../vendor/build/lib/kine_vulkan_loader.lib",
 	}
 } else {
-	foreign import lib "../../../build/lib/kine_vk.a"
+	foreign import lib "../../../vendor/build/lib/kine_vk.a"
 }
 
 KineVulkanCompositor :: struct {}
@@ -44,6 +44,7 @@ foreign lib {
 	Kine_VulkanCompositor_Destroy                       :: proc(compositor: ^KineVulkanCompositor) ---
 	Kine_VulkanCompositor_Resize                        :: proc(compositor: ^KineVulkanCompositor, width: i32, height: i32) -> i32 ---
 	Kine_VulkanCompositor_IsReady                       :: proc(compositor: ^KineVulkanCompositor) -> i32 ---
+	Kine_VulkanCompositor_NeedsResize                   :: proc(compositor: ^KineVulkanCompositor) -> i32 ---
 	Kine_VulkanCompositor_GetLastError                  :: proc(compositor: ^KineVulkanCompositor) -> cstring ---
 	Kine_VulkanCompositor_GetInfo                       :: proc(compositor: ^KineVulkanCompositor, outInfo: ^KineVulkanCompositorInfo) -> i32 ---
 
@@ -70,3 +71,4 @@ foreign lib {
 	/* Flushes Skia work, transitions the image to present layout, and presents. */
 	Kine_VulkanCompositor_EndFrame :: proc(compositor: ^KineVulkanCompositor) -> i32 ---
 }
+

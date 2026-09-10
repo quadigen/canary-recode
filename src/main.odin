@@ -1,11 +1,13 @@
 package main
 
 import "core:fmt"
+import "core:os"
 import datatypes "engine/datatypes"
 import engine_runtime "engine/runtime"
 import renderer "engine/renderer"
 import vm "engine/vm"
 import sdl3 "vendor:sdl3"
+import sandbox "./sandboxed"
 
 Engine :: struct {
 	Version: string,
@@ -37,8 +39,15 @@ runtime_render_2d :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, wi
 	engine_runtime.Environment_Render_2D(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
 }
 
+runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil { return }
+	engine_runtime.Environment_SetEvent(ctx.environment, ctx.vm_state, event)
+}
+
 main :: proc() {
 	script_vm := vm.New()
+	
 	environment: engine_runtime.Environment
 	render_context := Runtime_Render_Context{environment = &environment, vm_state = &script_vm}
 	rendererObject := renderer.RendererObject{
@@ -58,38 +67,10 @@ main :: proc() {
 		OnClose = proc() {
 			fmt.println("Window closed")
 		},
+		OnEvent = runtime_input_event,
 	}
-	engine_runtime.Environment_Init(&environment, &script_vm, &rendererObject)
-	vm.SetVectorPrecision(&script_vm, true)
-	vm.AddStruct(
-		&script_vm,
-		"Engine",
 
-		vm.Field("Name", "Kinemium"),
-		vm.Field("Version", "1.0"),
-		vm.Field("Debug", false),
-	)
-	defer engine_runtime.Environment_Destroy(&environment)
-	defer vm.Close(&script_vm)
-
-	code := `
-local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = game:GetService("StarterGui")
-
-local image = Instance.new("ImageLabel")
-image.Size = UDim2.new(0, 400, 0, 400)
-image.Parent = screenGui
-`
-	success, error := vm.Run(&script_vm, code, "kinemium")
-	fmt.println(success, error)
+	sandbox.init(&rendererObject)
 
 	renderer.init("Kinemium Engine", 800, 600, &rendererObject)
-
-	position := datatypes.Vector3{
-		x = 1.0,
-		y = 2.0,
-		z = 3.0,
-	}
-	position = datatypes.Vec3_Multiply(position, 2.0)
-	fmt.println(position)
 }

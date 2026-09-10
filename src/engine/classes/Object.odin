@@ -516,3 +516,4 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 
     return 0, false
 }
+

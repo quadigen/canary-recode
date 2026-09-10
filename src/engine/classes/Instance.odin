@@ -29,3 +29,4 @@ instance_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 Register_Instance :: proc(registry: ^Registry) {
 	Register_Class(registry, &Instance_Class, instance_construct, instance_destroy)
 }
+

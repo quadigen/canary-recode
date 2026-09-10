@@ -47,3 +47,4 @@ Environment_Destroy :: proc(environment: ^Environment) {
 	delete(environment.modules)
 	environment.modules = nil
 }
+

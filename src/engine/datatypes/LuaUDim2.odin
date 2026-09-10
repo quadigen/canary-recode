@@ -156,3 +156,4 @@ UDim2_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_udim2(L, binding, UDim2_Zero)
 	vm.SetField(L, -2, "zero")
 }
+

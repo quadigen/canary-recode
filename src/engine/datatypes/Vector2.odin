@@ -73,3 +73,4 @@ Vec2_Lerp :: proc(value, goal: Vector2, alpha: f32) -> Vector2 {
 Vec2_FuzzyEq :: proc(a, b: Vector2, epsilon: f32 = 1.0e-5) -> bool {
 	return math.abs(a.X-b.X) <= epsilon && math.abs(a.Y-b.Y) <= epsilon
 }
+

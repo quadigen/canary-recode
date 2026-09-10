@@ -112,3 +112,4 @@ Register_ModuleScript :: proc(registry: ^Registry) {
 		set = script_set,
 	)
 }
+

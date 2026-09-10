@@ -85,3 +85,4 @@ Register_DataModel_Class :: proc(registry: ^classes.Registry) {
 		namecall = data_model_namecall,
 	)
 }
+

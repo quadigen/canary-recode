@@ -18,12 +18,17 @@ RendererObject :: struct {
 	UserData:    rawptr,
 	Draw3D:      proc(user_data: rawptr, ctx: ^kineffi.KineFilamentContext, delta_time: f32),
 	Draw2D:      proc(user_data: rawptr, surface: ^kineffi.KineSkiaSurface, width, height: i32, delta_time: f32),
-
+	OnEvent:     proc(user_data: rawptr, event: sdl3.Event),
+	Ready:       bool,
+	HasWorldToView: bool,
+	WorldToView: [12]f32,
+	ActiveCamera: rawptr,
 	SkiaSurface: ^kineffi.KineSkiaSurface,
 	Filament:    ^kineffi.KineFilamentContext,
 }
 
 init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
+	width, height := width, height
 	if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
 		panic("Failed to initialize SDL")
 	}
@@ -42,6 +47,7 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		panic("Failed to create SDL window")
 	}
 	defer sdl3.DestroyWindow(window)
+	_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
 
 	filament := kineffi.Kine_Filament_CreateForVulkanCompositorWindow(
 		window,
@@ -54,7 +60,11 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 	defer kineffi.Kine_Filament_Destroy(filament)
 
 	renderer.Filament = filament
+	renderer.Ready = false
+	renderer.HasWorldToView = false
 	defer {
+		renderer.Ready = false
+		renderer.HasWorldToView = false
 		renderer.SkiaSurface = nil
 		renderer.Filament = nil
 	}
@@ -64,7 +74,6 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		panic("Failed to create Vulkan compositor")
 	}
 
-	kineffi.Kine_Filament_CreateSky(filament, 0.08, 0.11, 0.16, 1)
 	kineffi.Kine_Filament_SetCameraPerspective(
 		filament,
 		60,
@@ -72,13 +81,6 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		0.1,
 		1000,
 	)
-	kineffi.Kine_Filament_SetCameraLookAt(
-		filament,
-		0, 4, 10,
-		0, 0, 0,
-		0, 1, 0,
-	)
-
 	running := true
 	drawable := true
 	frame_width, frame_height := width, height
@@ -88,6 +90,9 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		event: sdl3.Event
 
 		for sdl3.PollEvent(&event) {
+			if renderer.OnEvent != nil {
+				renderer.OnEvent(renderer.UserData, event)
+			}
 			#partial switch event.type {
 			case .QUIT, .WINDOW_CLOSE_REQUESTED:
 				running = false
@@ -110,28 +115,31 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 			case .WINDOW_RESTORED:
 				drawable = true
 			case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-				if event.window.data1 > 0 && event.window.data2 > 0 {
-					frame_width = event.window.data1
-					frame_height = event.window.data2
-					drawable = true
-					kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
-					kineffi.Kine_Filament_SetCameraPerspective(
-						filament,
-						60,
-						f64(frame_width)/f64(frame_height),
-						0.1,
-						1000,
-					)
-				}
+				drawable = true
 			}
 		}
 
 		if !running || !drawable {
+			previous_ticks = sdl3.GetTicksNS()
+			sdl3.Delay(10)
 			continue
 		}
 
+		// Drain resize events first, then use the actual drawable pixel extent.
+		pixel_width, pixel_height: i32
+		_ = sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height)
+		if pixel_width <= 0 || pixel_height <= 0 { sdl3.Delay(10); continue }
+		if pixel_width != frame_width || pixel_height != frame_height ||
+		   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
+			frame_width, frame_height = pixel_width, pixel_height
+			kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
+			kineffi.Kine_Filament_SetCameraPerspective(filament, 60,
+				f64(frame_width)/f64(frame_height), 0.1, 1000)
+			previous_ticks = sdl3.GetTicksNS()
+		}
+
 		now := sdl3.GetTicksNS()
-		delta_time := f32(now-previous_ticks)/1_000_000_000.0
+		delta_time := min(f32(now-previous_ticks)/1_000_000_000.0, 0.1)
 		previous_ticks = now
 		renderer.SkiaSurface = nil
 		if renderer.Step != nil {
@@ -140,11 +148,19 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 
 		base_surface := kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
 		if base_surface == nil {
+			if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 { continue }
 			error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 			fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
 			break
 		}
 
+		kineffi.Kine_Skia_Surface_Clear(
+			cast(^kineffi.KineSkiaSurface)base_surface,
+			20,
+			28,
+			41,
+			255,
+		)
 		if renderer.Draw3D != nil {
 			renderer.Draw3D(renderer.UserData, filament, delta_time)
 		}
@@ -167,6 +183,7 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 			fmt.eprintf("Vulkan presentation failed: %s\n", error)
 			break
 		}
+		renderer.Ready = true
 		renderer.SkiaSurface = nil
 	}
 

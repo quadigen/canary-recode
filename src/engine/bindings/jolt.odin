@@ -2,11 +2,11 @@ package kineffi
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../build/lib/kine_jolt.lib",
-		"../../../build/lib/kine_jolt_core.lib",
+		"../../../vendor/build/lib/kine_jolt.lib",
+		"../../../vendor/build/lib/kine_jolt_core.lib",
 	}
 } else {
-	foreign import lib "../../../build/lib/kine_jolt.a"
+	foreign import lib "../../../vendor/build/lib/kine_jolt.a"
 }
 
 JPH_Vec3 :: struct {
@@ -352,3 +352,4 @@ foreign lib {
 	JPH_ContactListener_Destroy              :: proc(listener: JPH_ContactListenerRef) ---
 	JPH_ContactListener_PollEvents           :: proc(listener: JPH_ContactListenerRef, procs: ^JPH_ContactListener_Procs, maxEvents: u32) -> u32 ---
 }
+

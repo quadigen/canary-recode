@@ -25,3 +25,4 @@ Vec3_Magnitude :: proc(v: Vector3) -> f32 {
     return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
 }
 
+

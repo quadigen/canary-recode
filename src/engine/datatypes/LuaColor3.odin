@@ -201,3 +201,4 @@ Color3_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_color3(L, binding, Color3{})
 	vm.SetField(L, -2, "black")
 }
+

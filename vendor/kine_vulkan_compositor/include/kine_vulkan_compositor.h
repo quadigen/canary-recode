@@ -69,6 +69,9 @@ Kine_VulkanCompositor_Resize(
 KINE_VULKAN_COMPOSITOR_API int
 Kine_VulkanCompositor_IsReady(const KineVulkanCompositor* compositor);
 
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_NeedsResize(const KineVulkanCompositor* compositor);
+
 KINE_VULKAN_COMPOSITOR_API const char*
 Kine_VulkanCompositor_GetLastError(const KineVulkanCompositor* compositor);
 

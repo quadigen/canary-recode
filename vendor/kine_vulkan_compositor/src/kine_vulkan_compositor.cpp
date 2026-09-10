@@ -44,6 +44,7 @@ struct KineVulkanCompositor {
     KineSkiaSurface* currentSkiaSurface = nullptr;
     KineSkiaSurface* overlaySkiaSurface = nullptr;
     bool frameActive = false;
+    bool needsResize = false;
     bool filamentPrepared = false;
     bool filamentPresented = false;
     bool overlayActive = false;
@@ -959,9 +960,17 @@ static bool kine_vk_wait_for_filament(
     submitInfo.pWaitDstStageMask = &waitStage;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &compositor->commandBuffer;
-    if (vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS ||
-        vkQueueWaitIdle(compositor->graphicsQueue) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "failed waiting for Filament before overlay");
+    VkResult submitted = vkQueueSubmit(
+        compositor->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    if (submitted != VK_SUCCESS) {
+        kine_vk_set_error(compositor,
+            "failed submitting Filament-to-overlay synchronization");
+        return false;
+    }
+    VkResult waited = vkQueueWaitIdle(compositor->graphicsQueue);
+    if (waited != VK_SUCCESS) {
+        kine_vk_set_error(compositor,
+            "failed waiting for Filament-to-overlay synchronization");
         return false;
     }
     return true;
@@ -1182,7 +1191,7 @@ Kine_VulkanCompositor_Resize(
     }
     if (compositor->width == static_cast<uint32_t>(width) &&
         compositor->height == static_cast<uint32_t>(height) &&
-        compositor->swapchain) {
+        compositor->swapchain && !compositor->needsResize) {
         return 1;
     }
 
@@ -1220,6 +1229,7 @@ Kine_VulkanCompositor_Resize(
         compositor->depthFormat = VK_FORMAT_UNDEFINED;
     }
 
+    compositor->needsResize = false;
     compositor->lastError.clear();
     return 1;
 }
@@ -1234,6 +1244,12 @@ Kine_VulkanCompositor_IsReady(const KineVulkanCompositor* compositor)
         compositor->commandBuffer && compositor->acquireFence &&
         compositor->filamentImageReadySemaphore && compositor->skiaContext &&
         compositor->lastError.empty();
+}
+
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_NeedsResize(const KineVulkanCompositor* compositor)
+{
+    return compositor && compositor->needsResize;
 }
 
 KINE_VULKAN_COMPOSITOR_API const char*
@@ -1462,6 +1478,10 @@ Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
         compositor->acquireFence,
         &compositor->currentImageIndex);
     if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+            compositor->needsResize = true;
+            return nullptr;
+        }
         kine_vk_set_error(compositor, "vkAcquireNextImageKHR failed");
         return nullptr;
     }
@@ -1643,6 +1663,10 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
     }
 
     if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) {
+        if (presented == VK_ERROR_OUT_OF_DATE_KHR) {
+            compositor->needsResize = true;
+            return 1;
+        }
         kine_vk_set_error(compositor, "vkQueuePresentKHR failed");
         return 0;
     }

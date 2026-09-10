@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../../build/lib/kine_luau.lib",
+		"../../../../vendor/build/lib/kine_luau.lib",
 		"../../../../build/vendor/luau/Luau.Compiler.lib",
 	}
 } else {
@@ -87,3 +87,4 @@ foreign lib {
 	luau_set_compile_constant_vectord   :: proc(constant: ^lua_CompileConstant, x: f64, y: f64, z: f64, w: f64) ---
 	luau_set_compile_constant_string    :: proc(constant: ^lua_CompileConstant, s: cstring, l: c.size_t) ---
 }
+

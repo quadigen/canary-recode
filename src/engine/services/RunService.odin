@@ -124,3 +124,4 @@ run_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 Register_RunService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(registry, &RunService_Class, run_service_construct, run_service_destroy, creatable = false, get = run_service_get, namecall = run_service_namecall)
 }
+

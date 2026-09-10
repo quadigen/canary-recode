@@ -3614,6 +3614,12 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
         }
     }
 
+    // Detach the old skybox before releasing its referenced texture.
+    if (ctx->skybox) {
+        ctx->scene->setSkybox(nullptr);
+        ctx->engine->destroy(ctx->skybox);
+        ctx->skybox = nullptr;
+    }
     // If we already have a procedural texture, destroy it
     if (ctx->skyTexture) {
         ctx->engine->destroy(ctx->skyTexture);
@@ -3622,7 +3628,7 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
     ctx->skyTexture = Texture::Builder()
         .width(faceSize).height(faceSize).levels(1)
         .sampler(Texture::Sampler::SAMPLER_CUBEMAP)
-        .format(Texture::InternalFormat::RGBA8)
+        .format(Texture::InternalFormat::SRGB8_A8)
         .build(*ctx->engine);
 
     Texture::PixelBufferDescriptor pb(
@@ -3641,6 +3647,7 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
     
     ctx->skybox = Skybox::Builder()
         .environment(ctx->skyTexture)
+        .intensity(15000.0f)
         .showSun(true)
         .build(*ctx->engine);
         
@@ -4004,13 +4011,23 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTim
         ctx->renderer->endFrame();
 #if KINE_FILAMENT_USE_VULKAN
         if (ctx->useFilamentOwnedCompositor) {
-            // Push the frame to Filament's backend thread. The compositor
-            // waits for its present callback without waiting for the GPU.
-            ctx->engine->flush();
+            // The compositor and Filament share one Vulkan queue. Finish the
+            // backend submission before the main thread submits the Skia
+            // overlay handoff on that queue.
+            ctx->engine->flushAndWait();
         }
 #endif
     } else {
         fprintf(stderr, "[Kine] beginFrame FAILED this frame\n");
+        if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
+            // A skipped frame still has to release the compositor handoff.
+            auto* compositor = static_cast<KineVulkanCompositor*>(ctx->vulkanCompositor);
+            ctx->engine->flushAndWait();
+            uint32_t imageIndex = 0;
+            if (Kine_VulkanCompositor_FilamentAcquire(compositor, &imageIndex, nullptr) == VK_SUCCESS) {
+                Kine_VulkanCompositor_FilamentPresent(compositor, imageIndex, nullptr);
+            }
+        }
     }
     
     kine_finish_batch_frame(ctx);
@@ -4033,7 +4050,9 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext* ctx, int width, int heig
 {
     if (!ctx || !ctx->engine) return;
     if (width <= 0 || height <= 0) return;
-    if (ctx->width == width && ctx->height == height) return;
+    if (ctx->width == width && ctx->height == height &&
+        (!ctx->useFilamentOwnedCompositor || !Kine_VulkanCompositor_NeedsResize(
+            static_cast<KineVulkanCompositor*>(ctx->vulkanCompositor)))) return;
 
     // Drain any pending GPU commands that may still reference the old render target
     // textures before we destroy them. Without this, the driver can segfault

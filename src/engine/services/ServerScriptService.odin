@@ -33,3 +33,4 @@ ServerScriptService_destroy :: proc(object: ^classes.Object, renderer: ^classes.
 Register_ServerScriptService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(registry, &ServerScriptService_Class, ServerScriptService_construct, ServerScriptService_destroy, creatable = false)
 }
+

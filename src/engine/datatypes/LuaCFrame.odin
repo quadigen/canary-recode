@@ -322,3 +322,4 @@ CFrame_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_cframe(L, binding, CFrame_Identity)
 	vm.SetField(L, -2, "identity")
 }
+

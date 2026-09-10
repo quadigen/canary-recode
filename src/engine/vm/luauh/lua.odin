@@ -6,7 +6,7 @@ import "core:c"
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../../build/lib/kine_luau.lib",
+		"../../../../vendor/build/lib/kine_luau.lib",
 		"../../../../build/vendor/luau/Luau.Compiler.lib",
 		"../../../../build/vendor/luau/Luau.VM.lib",
 		"../../../../build/vendor/luau/Luau.Ast.lib",
@@ -51,6 +51,10 @@ lua_CoStatus :: enum i32 {
 
 lua_State        :: struct {}
 lua_CFunction    :: proc "c" (L: ^lua_State) -> i32
+lua_UserThread_Callback :: proc "c" (
+	parent: ^lua_State,
+	thread: ^lua_State,
+)
 lua_Continuation :: proc "c" (L: ^lua_State, status: i32) -> i32
 
 /*
@@ -121,6 +125,19 @@ foreign lib {
 	lua_mainthread    :: proc(L: ^lua_State) -> ^lua_State ---
 	lua_resetthread   :: proc(L: ^lua_State) ---
 	lua_isthreadreset :: proc(L: ^lua_State) -> i32 ---
+	lua_getthreaddata :: proc(
+		L: ^lua_State,
+	) -> rawptr ---
+
+	lua_setthreaddata :: proc(
+		L: ^lua_State,
+		data: rawptr,
+	) ---
+
+	lua_setuserthreadcallback :: proc(
+		L: ^lua_State,
+		callback: lua_UserThread_Callback,
+	) ---
 
 	/*
 	** basic stack manipulation
@@ -244,8 +261,6 @@ foreign lib {
 	lua_resumeerror   :: proc(L: ^lua_State, from: ^lua_State) -> i32 ---
 	lua_status        :: proc(L: ^lua_State) -> i32 ---
 	lua_isyieldable   :: proc(L: ^lua_State) -> i32 ---
-	lua_getthreaddata :: proc(L: ^lua_State) -> rawptr ---
-	lua_setthreaddata :: proc(L: ^lua_State, data: rawptr) ---
 	lua_costatus      :: proc(L: ^lua_State, co: ^lua_State) -> i32 ---
 }
 
@@ -400,6 +415,7 @@ foreign lib {
 	lua_weakref    :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_weakunref  :: proc(L: ^lua_State, ref: i32) -> i32 ---
 	lua_getweakref :: proc(L: ^lua_State, ref: i32) -> i32 --- // returns the type of the value pushed onto the stack
+	
 
 	// alternative access for userdata metatables
 	// used by lua_newuserdatataggedwithmetatable to create tagged userdata with the associated metatable assigned
@@ -555,3 +571,4 @@ lua_Callbacks :: struct {
 foreign lib {
 	lua_callbacks :: proc(L: ^lua_State) -> ^lua_Callbacks ---
 }
+

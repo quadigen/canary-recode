@@ -1,6 +1,8 @@
 package services
 
+import "vendor:sdl3"
 import classes "../classes"
+import signals "../signals"
 import vm "../vm"
 
 Service_Descriptor :: struct {
@@ -16,10 +18,11 @@ Registry :: struct {
 	services: [dynamic]Service_Descriptor,
 	data_model: ^DataModel,
 	vm_state: ^vm.VM,
+	signal_registry: ^signals.Registry,
 }
 
-Registry_Init :: proc(class_registry: ^classes.Registry) -> Registry {
-	return Registry{classes = class_registry}
+Registry_Init :: proc(class_registry: ^classes.Registry, signal_registry: ^signals.Registry = nil) -> Registry {
+	return Registry{classes = class_registry, signal_registry = signal_registry}
 }
 
 Register_Service :: proc(registry: ^Registry, name, class_name: string, global_name: string = "") {
@@ -70,8 +73,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_ReplicatedStorage_Class(registry.classes)
 	Register_RunService_Class(registry.classes)
 	Register_ScriptContext_Class(registry.classes)
+	Register_Selection_Class(registry.classes)
 	Register_ServerScriptService_Class(registry.classes)
+	Register_SoundService_Class(registry.classes)
 	Register_StarterGui_Class(registry.classes)
+	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
 	Register_UserInputService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
@@ -83,15 +89,23 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
 	Register_Service(registry, "RunService", "RunService")
 	Register_Service(registry, "ScriptContext", "ScriptContext", "ScriptContext")
+	Register_Service(registry, "Selection", "Selection", "Selection")
 	Register_Service(registry, "ServerScriptService", "ServerScriptService", "ServerScriptService")
+	Register_Service(registry, "SoundService", "SoundService", "SoundService")
 	Register_Service(registry, "StarterGui", "StarterGui", "StarterGui")
+	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	// wire:end services
+	Register_Service(registry, "CoreGui", "StarterGui")
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
+	user_input := Find_Service(registry, "UserInputService")
+	if user_input != nil && user_input.object != nil {
+		User_Input_Begin_Frame(cast(^UserInputService)user_input.object)
+	}
 	physics := Find_Service(registry, "Physics")
 	if physics != nil && physics.object != nil {
 		Physics_Step(cast(^Physics)physics.object, delta_time)
@@ -104,6 +118,22 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 	if run_service != nil && run_service.object != nil {
 		Run_Service_Step(cast(^RunService)run_service.object, L, delta_time)
 	}
+}
+
+Set_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
+	user_input_service := Find_Service(registry, "UserInputService")
+	if user_input_service != nil && user_input_service.object != nil {
+		user_input_service_step(cast(^UserInputService)user_input_service.object, L, event)
+	}
+}
+
+Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
+	if registry == nil || renderer == nil || renderer.Filament == nil { return }
+	lighting := Find_Service(registry, "Lighting")
+	if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
+	workspace_service := Find_Service(registry, "Workspace")
+	if workspace_service == nil || workspace_service.object == nil { return }
+	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
 }
 
 Render_3D :: proc(registry: ^Registry, L: ^vm.State, renderer: ^classes.Renderer_Object, delta_time: f32) {
@@ -126,6 +156,13 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	for service in registry.services {
 		assert(Ensure_Service(registry, service.name) != nil)
 	}
+	workspace := cast(^Workspace)Ensure_Service(registry, "Workspace")
+	camera, camera_ok := classes.Push_New(registry.classes, vm_state, "Camera")
+	assert(camera_ok && camera != nil)
+	classes.Set_Parent(camera, &workspace.object)
+	workspace.current_camera = cast(^classes.Camera)camera
+	if registry.classes.renderer != nil { registry.classes.renderer.ActiveCamera = camera }
+	vm.Pop(vm_state.L)
 	task_scheduler := Find_Service(registry, "TaskScheduler")
 	assert(task_scheduler != nil && task_scheduler.object != nil)
 	Install_Task_Library(cast(^TaskScheduler)task_scheduler.object, vm_state)

@@ -38,3 +38,4 @@ service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obj
 Register_Service_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(registry, &Service_Class, service_construct, service_destroy, creatable = false)
 }
+

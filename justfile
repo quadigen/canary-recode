@@ -11,7 +11,7 @@ build:
 
 # Build with debug info
 debug:
-    odin build src -debug -out:build/kinemium-debug.exe
+    odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099"
 
 # Build optimized release
 release:
@@ -24,6 +24,10 @@ run: build
 # Run debug build
 run-debug: debug
     ./build/kinemium-debug.exe
+
+# Run an external Luau sandbox entry point with the debug engine
+run-sandbox script="C:\\Users\\devco\\Documents\\Kinemium-Canary\\src\\sandboxed\\internals\\gui\\mainframe.luau": debug
+    ./build/kinemium-debug.exe --script "{{script}}"
 
 # Run tests
 test:

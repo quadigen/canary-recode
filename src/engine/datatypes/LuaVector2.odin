@@ -172,3 +172,4 @@ Vector2_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_vector2(L, binding, Vector2_YAxis)
 	vm.SetField(L, -2, "yAxis")
 }
+

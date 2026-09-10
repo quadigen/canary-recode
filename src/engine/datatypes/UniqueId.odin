@@ -26,3 +26,4 @@ UniqueId_New :: proc() -> UniqueId {
 UniqueId_ToString :: proc(value: UniqueId) -> string {
 	return fmt.tprintf("%016x%08x%08x", cast(u64)value.Random, value.Time, value.Index)
 }
+

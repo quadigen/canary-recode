@@ -26,7 +26,10 @@ GuiObject :: struct {
     visible: bool,
     zindex: i32,
     anchorpoint: datatypes.Vector2,
-    border_size_pixels: i32
+    border_size_pixels: i32,
+
+    absolute_position: datatypes.Vector2,
+    absolute_size: datatypes.Vector2
 }
 
 GuiObject_Init :: proc() -> GuiObject {
@@ -46,6 +49,9 @@ GuiObject_Init :: proc() -> GuiObject {
         input_sink = false,
         gui_state = enums.GuiState.Idle,
         bg_transparency = 0,
+
+        absolute_position = datatypes.Vector2{0, 0},
+        absolute_size = datatypes.Vector2{0, 0}
     }
 }
 
@@ -98,10 +104,41 @@ GuiObject_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
 	case "AnchorPoint":
 		if datatype_registry == nil { return false }
 		datatypes.Push_Vector2(L, datatype_registry, GuiObject.anchorpoint)
+    case "AbsolutePosition":
+        if datatype_registry == nil { return false }
+        datatypes.Push_Vector2(L, datatype_registry, GuiObject.absolute_position)
+    case "AbsoluteSize":
+        if datatype_registry == nil { return false }
+        datatypes.Push_Vector2(L, datatype_registry, GuiObject.absolute_size)
     case:
         return false
     }
     return true
+}
+
+GuiObject_get_absolute_transform :: proc(
+    object: ^Object,
+    ctx: ^Class_Step_Context,
+) -> (x, y, width, height: f32) {
+    if object == nil {
+        return 0, 0, f32(ctx.viewport_width), f32(ctx.viewport_height)
+    }
+
+    if !Is_A(object, "GuiObject") {
+        return GuiObject_get_absolute_transform(object.parent, ctx)
+    }
+
+    parent_x, parent_y, parent_width, parent_height := GuiObject_get_absolute_transform(object.parent, ctx)
+
+    gui := cast(^GuiObject)object
+
+    width  = gui.size.X_Scale*parent_width + gui.size.X_Offset
+    height = gui.size.Y_Scale*parent_height + gui.size.Y_Offset
+
+    x = parent_x + gui.position.X_Scale*parent_width + gui.position.X_Offset - gui.anchorpoint.X*width
+    y = parent_y + gui.position.Y_Scale*parent_height + gui.position.Y_Offset - gui.anchorpoint.Y*height
+
+    return x, y, width, height
 }
 
 GuiObject_get_rect :: proc(
@@ -118,16 +155,7 @@ GuiObject_get_rect :: proc(
         return guilib.Rect{}, false
     }
 
-    width := gui.size.X_Scale*f32(ctx.viewport_width) + gui.size.X_Offset
-    height := gui.size.Y_Scale*f32(ctx.viewport_height) + gui.size.Y_Offset
-
-    x := gui.position.X_Scale*f32(ctx.viewport_width) +
-         gui.position.X_Offset -
-         gui.anchorpoint.X*width
-
-    y := gui.position.Y_Scale*f32(ctx.viewport_height) +
-         gui.position.Y_Offset -
-         gui.anchorpoint.Y*height
+    x, y, width, height := GuiObject_get_absolute_transform(object, ctx)
 
     return guilib.Rect{
         x = x,
@@ -150,9 +178,26 @@ GuiObject_render :: proc(
         return
     }
 
+    // set absolute size/pos
+    gui.absolute_position = datatypes.Vector2{rect.x, rect.y}
+    gui.absolute_size = datatypes.Vector2{rect.width, rect.height}
+
     corner   := Find_First_Child_Of_Class(object, "UICorner")
     shadow   := Find_First_Child_Of_Class(object, "UIShadow")
     backdrop := Find_First_Child_Of_Class(object, "UIBackdrop")
+
+    if shadow != nil {
+        shadow := cast(^UIShadow)shadow
+        params := guilib.ShadowParams{
+            offsetX = shadow.offset.X_Offset,
+            offsetY = shadow.offset.Y_Offset,
+            blurSigma = shadow.blur_radius.Offset,
+            spread = shadow.spread.X_Offset,
+            color = shadow.color,
+            alpha = f32(shadow.transparency)
+        }
+        guilib.drawShadow(ctx.renderer.SkiaSurface, rect, 2, 2, params)
+    }
 
     if corner != nil {
         guilib.drawRoundedRect(ctx.renderer.SkiaSurface, rect, 13)
@@ -197,6 +242,12 @@ GuiObject_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
 	case "AnchorPoint":
 		if datatype_registry == nil { return false }
 		GuiObject.anchorpoint = datatypes.Arg_Vector2(L, value_index, datatype_registry)
+    case "AbsolutePosition":
+        if datatype_registry == nil { return false }
+        vm.RaiseError(L, "Absolute Position cannot be changed")
+    case "AbsoluteSize":
+        if datatype_registry == nil { return false }
+        vm.RaiseError(L, "Absolute Size cannot be changed")
     case:
         return false
     }
@@ -214,3 +265,4 @@ Register_GuiObject :: proc(registry: ^Registry) {
         // remove _step since screengui is gonna render our stuff!
     )
 }
+

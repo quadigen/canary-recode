@@ -113,3 +113,4 @@ UDim_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_udim(L, binding, UDim_Zero)
 	vm.SetField(L, -2, "zero")
 }
+

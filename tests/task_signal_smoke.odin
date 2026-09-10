@@ -23,7 +23,7 @@ main :: proc() {
 	run_script(&script_vm, `
 assert(type(task) == "table")
 assert(type(task.spawn) == "function")
-assert(typeof(Signal.new()) == "Signal")
+assert(typeof(Signal.new()) == "KinemiumSignal")
 assert(game:GetService("TaskScheduler").PendingTaskCount == 0)
 
 spawned = false

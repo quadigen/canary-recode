@@ -81,7 +81,7 @@ endif()
 # One static library target for the engine's native dependency surface.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anchor(void) {}\n")
 
-add_library(KinemiumLibs STATIC
+add_library(KinemiumLibs STATIC EXCLUDE_FROM_ALL
     "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c"
 )
 target_compile_features(KinemiumLibs PRIVATE cxx_std_20)

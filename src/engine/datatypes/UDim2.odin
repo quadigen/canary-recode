@@ -54,3 +54,4 @@ UDim2_FuzzyEq :: proc(a, b: UDim2, epsilon: f32 = 1.0e-5) -> bool {
 	       math.abs(a.Y_Scale-b.Y_Scale) <= epsilon &&
 	       math.abs(a.Y_Offset-b.Y_Offset) <= epsilon
 }
+

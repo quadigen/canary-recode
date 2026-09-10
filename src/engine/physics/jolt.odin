@@ -177,3 +177,4 @@ System_Create :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (System, bool) {
 System_Destroy :: proc(system: ^System) {
 	System_Destroy_3D(system)
 }
+

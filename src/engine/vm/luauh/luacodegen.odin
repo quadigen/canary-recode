@@ -18,3 +18,4 @@ foreign lib {
 	// build target function and all inner functions
 	luau_codegen_compile :: proc(L: ^lua_State, idx: i32) ---
 }
+

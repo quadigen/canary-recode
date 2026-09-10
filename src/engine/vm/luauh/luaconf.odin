@@ -20,3 +20,4 @@ LUA_VECTOR_SIZE                :: 3 // must be 3 or 4
 LUA_VECTOR_DOUBLE              :: 0
 LUA_EXTRA_SIZE                 :: (LUA_VECTOR_SIZE-2)
 
+

@@ -12,3 +12,4 @@ Rect_Width :: proc(rect: Rect) -> f32 {
 Rect_Height :: proc(rect: Rect) -> f32 {
 	return rect.Max.Y - rect.Min.Y
 }
+

@@ -15,3 +15,4 @@ NumberRange_New2 :: proc(minimum, maximum: f32) -> (NumberRange, bool) {
 	}
 	return NumberRange{minimum, maximum}, true
 }
+

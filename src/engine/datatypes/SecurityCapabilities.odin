@@ -1,12 +1,22 @@
 package datatypes
 
+import vm "../vm"
+
 SecurityCapabilities :: struct {
 	bits_low:  u64,
 	bits_high: u64,
 }
 
-SECURITY_CAPABILITY_MAX_VALUE :: 73
-SECURITY_CAPABILITIES_ALL :: SecurityCapabilities{~u64(0), (u64(1) << (SECURITY_CAPABILITY_MAX_VALUE-63))-1}
+// Public Roblox-style capabilities currently occupy 0..73.
+// 126..127 are reserved for Kinemium engine internals and are intentionally
+// not exposed through Enum.SecurityCapability.
+SECURITY_CAPABILITY_PUBLIC_MAX_VALUE :: 73
+SECURITY_CAPABILITY_MAX_VALUE        :: 127
+
+SECURITY_CAPABILITY_INTERNAL_SECURITY_ADMIN :: i64(126)
+SECURITY_CAPABILITY_INTERNAL_SIGNAL_FIRE    :: i64(127)
+
+SECURITY_CAPABILITIES_ALL :: SecurityCapabilities{~u64(0), ~u64(0)}
 
 SecurityCapabilities_Contains_Value :: proc(capabilities: SecurityCapabilities, value: i64) -> bool {
 	if value < 0 || value > SECURITY_CAPABILITY_MAX_VALUE { return false }
@@ -54,5 +64,19 @@ SecurityCapabilities_Remove :: proc(capabilities, removals: SecurityCapabilities
 	return SecurityCapabilities{
 		bits_low  = capabilities.bits_low &~ removals.bits_low,
 		bits_high = capabilities.bits_high &~ removals.bits_high,
+	}
+}
+
+SecurityCapabilities_From_VM :: proc(capabilities: vm.Thread_Security_Capabilities) -> SecurityCapabilities {
+	return SecurityCapabilities{
+		bits_low  = capabilities.bits_low,
+		bits_high = capabilities.bits_high,
+	}
+}
+
+SecurityCapabilities_To_VM :: proc(capabilities: SecurityCapabilities) -> vm.Thread_Security_Capabilities {
+	return vm.Thread_Security_Capabilities{
+		bits_low  = capabilities.bits_low,
+		bits_high = capabilities.bits_high,
 	}
 }

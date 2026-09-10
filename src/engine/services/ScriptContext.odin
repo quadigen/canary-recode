@@ -36,3 +36,4 @@ Register_ScriptContext_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 	)
 }
+

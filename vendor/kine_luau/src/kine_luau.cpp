@@ -73,6 +73,23 @@ int kine_luau_load(lua_State* L, const char* chunkName, const char* bytecode, si
 {
     return luau_load(L, chunkName, bytecode, size, environment);
 }
+void* kine_lua_getthreaddata(lua_State* L)
+{
+    return lua_getthreaddata(L);
+}
+
+void kine_lua_setthreaddata(lua_State* L, void* data)
+{
+    lua_setthreaddata(L, data);
+}
+
+void kine_lua_setuserthreadcallback(
+    lua_State* L,
+    void (*callback)(lua_State*, lua_State*)
+)
+{
+    lua_callbacks(L)->userthread = callback;
+}
 int kine_lua_pcall(lua_State* L, int arguments, int results, int errorFunction)
 {
     return lua_pcall(L, arguments, results, errorFunction);

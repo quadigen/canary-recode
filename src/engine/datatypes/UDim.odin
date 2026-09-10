@@ -31,3 +31,4 @@ UDim_Lerp :: proc(value, goal: UDim, alpha: f32) -> UDim {
 UDim_FuzzyEq :: proc(a, b: UDim, epsilon: f32 = 1.0e-5) -> bool {
 	return math.abs(a.Scale-b.Scale) <= epsilon && math.abs(a.Offset-b.Offset) <= epsilon
 }
+

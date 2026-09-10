@@ -33,7 +33,7 @@ Part_Init :: proc() -> Part {
             R = 1, G = 1, B = 1
         },
 		size = datatypes.Vector3{4, 1, 2},
-        anchored = false,
+        anchored = true,
 		can_collide = true,
 		can_query = true,
 		collision_group = strings.clone("Default"),
@@ -141,3 +141,4 @@ Register_Part :: proc(registry: ^Registry) {
         set = part_set,
     )
 }
+

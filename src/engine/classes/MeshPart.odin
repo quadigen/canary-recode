@@ -132,3 +132,4 @@ Register_MeshPart :: proc(registry: ^Registry) {
         set = mesh_part_set,
     )
 }
+

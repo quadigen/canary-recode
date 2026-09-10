@@ -21,6 +21,7 @@ Workspace :: struct {
 	fallen_parts_destroy_height: f32,
 	fall_height_enabled: bool,
 	distributed_game_time: f64,
+	current_camera: ^classes.Camera,
 }
 
 workspace_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
@@ -49,7 +50,37 @@ workspace_part_mesh :: proc(workspace: ^Workspace, shape: enums.PartType) -> ^ki
 	}
 }
 
-workspace_append_draw_items :: proc(workspace: ^Workspace, object: ^classes.Object, items: ^[dynamic]kineffi.KineFilamentDrawItem) {
+workspace_has_parts :: proc(object: ^classes.Object) -> bool {
+	if object == nil { return false }
+	for child in object.children {
+		if child == nil || child.destroyed { continue }
+		if classes.Is_A(child, "Part") || workspace_has_parts(child) { return true }
+	}
+	return false
+}
+
+workspace_prepare_3d :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_Object) {
+	if workspace == nil || !workspace_has_parts(&workspace.object) { return }
+	_ = workspace_ensure_meshes(workspace, renderer)
+}
+
+Workspace_Apply_View :: proc(renderer: ^classes.Renderer_Object, cframe: datatypes.CFrame) -> datatypes.CFrame {
+	if renderer == nil || !renderer.HasWorldToView { return cframe }
+	view := renderer.WorldToView
+	return datatypes.CFrame_Mul_CFrame(datatypes.CFrame{
+		x = view[0], y = view[1], z = view[2],
+		r00 = view[3], r01 = view[4], r02 = view[5],
+		r10 = view[6], r11 = view[7], r12 = view[8],
+		r20 = view[9], r21 = view[10], r22 = view[11],
+	}, cframe)
+}
+
+workspace_append_draw_items :: proc(
+	workspace: ^Workspace,
+	object: ^classes.Object,
+	renderer: ^classes.Renderer_Object,
+	items: ^[dynamic]kineffi.KineFilamentDrawItem,
+) {
 	for child in object.children {
 		if child == nil || child.destroyed { continue }
 		if classes.Is_A(child, "Part") {
@@ -73,16 +104,16 @@ workspace_append_draw_items :: proc(workspace: ^Workspace, object: ^classes.Obje
 				        kineffi.KINE_FILAMENT_DRAW_CULLING,
 			})
 		}
-		workspace_append_draw_items(workspace, child, items)
+		workspace_append_draw_items(workspace, child, renderer, items)
 	}
 }
 
 workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 	workspace := cast(^Workspace)object
-	if !workspace_ensure_meshes(workspace, ctx.renderer) { return }
+	if !workspace_has_parts(object) || workspace.cube_mesh == nil { return }
 
 	items: [dynamic]kineffi.KineFilamentDrawItem
-	workspace_append_draw_items(workspace, object, &items)
+	workspace_append_draw_items(workspace, object, ctx.renderer, &items)
 	if len(items) > 0 {
 		_ = kineffi.Kine_Filament_DrawMeshList(ctx.renderer.Filament, raw_data(items), u32(len(items)))
 	}
@@ -99,6 +130,7 @@ workspace_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: 
 	workspace := cast(^Workspace)object
 	physics := workspace_physics(workspace)
 	switch key {
+	case "CurrentCamera": classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
 	case "Gravity": vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
 	case "FallenPartsDestroyHeight": vm.PushNumber(L, f64(workspace.fallen_parts_destroy_height))
 	case "FallHeightEnabled": vm.PushBoolean(L, workspace.fall_height_enabled)
@@ -112,6 +144,14 @@ workspace_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: 
 workspace_set :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string, value_index: int) -> bool {
 	workspace := cast(^Workspace)object
 	switch key {
+	case "CurrentCamera":
+		camera := classes.object_from_argument(L, value_index)
+		if camera == nil || !classes.Is_A(camera, "Camera") { return false }
+		workspace.current_camera = cast(^classes.Camera)camera
+		registry := cast(^DataModel)workspace.data_model
+		if registry != nil && registry.registry.classes.renderer != nil {
+			registry.registry.classes.renderer.ActiveCamera = camera
+		}
 	case "Gravity":
 		physics := workspace_physics(workspace)
 		if physics == nil { return false }

@@ -77,3 +77,4 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.globals)
 	registry.globals = nil
 }
+

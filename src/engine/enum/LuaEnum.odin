@@ -291,3 +291,4 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.types)
 	registry.types = nil
 }
+

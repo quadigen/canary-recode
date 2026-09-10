@@ -1121,3 +1121,4 @@ get_stack_error :: proc(L: ^State) -> string {
 		int(size),
 	)
 }
+

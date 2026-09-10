@@ -6,7 +6,7 @@ import "core:c"
 
 when ODIN_OS == .Windows {
 	foreign import lib {
-		"../../../../build/lib/kine_luau.lib",
+		"../../../../vendor/build/lib/kine_luau.lib",
 		"../../../../build/vendor/luau/Luau.VM.lib",
 	}
 } else {
@@ -176,3 +176,4 @@ foreign lib {
 	luaL_sandbox       :: proc(L: ^lua_State) ---
 	luaL_sandboxthread :: proc(L: ^lua_State) ---
 }
+

@@ -143,3 +143,4 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	install_library(vm_state, "Vector2", &registry.vector2, Vector2_Install_Fields)
 	// wire:end datatype-libraries
 }
+

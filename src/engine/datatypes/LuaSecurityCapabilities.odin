@@ -50,7 +50,11 @@ security_capabilities_new :: proc "c" (L: ^vm.State) -> i32 {
 
 security_capabilities_from_current :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	push_security_capabilities(L, binding_from_upvalue(L), SECURITY_CAPABILITIES_ALL)
+	push_security_capabilities(
+		L,
+		binding_from_upvalue(L),
+		SecurityCapabilities_From_VM(vm.GetThreadSecurityCapabilities(L)),
+	)
 	return 1
 }
 

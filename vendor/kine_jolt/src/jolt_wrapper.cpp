@@ -35,12 +35,24 @@
 #include <deque>
 #include <mutex>
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <cfloat>
-#include <cstdio>
 
 namespace
 {
+
+void TraceJolt(const char* format, ...)
+{
+    std::fputs("[Jolt] ", stderr);
+    va_list arguments;
+    va_start(arguments, format);
+    std::vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 
 class BodyIDFilter final : public JPH::BodyFilter
 {
@@ -463,7 +475,7 @@ private:
     std::deque<ContactEvent> mQueue;
 };
 
-JPH::TempAllocatorImpl* sJphTempAllocator = nullptr;
+JPH::TempAllocator* sJphTempAllocator = nullptr;
 bool sJphInitialized = false;
 
 }
@@ -473,11 +485,12 @@ int32_t JPH_Init(void)
         return 0;
 
     JPH::RegisterDefaultAllocator();
+    JPH::Trace = TraceJolt;
 
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
 
-    sJphTempAllocator = new JPH::TempAllocatorImpl(10 * 1024 * 1024);
+    sJphTempAllocator = new JPH::TempAllocatorImplWithMallocFallback(32 * 1024 * 1024);
 
     sJphInitialized = true;
     return 1;
@@ -829,13 +842,6 @@ void JPH_BodyCreationSettings_SetGravityFactor(JPH_BodyCreationSettingsRef setti
 
 JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings* settings)
 {
-	if (settings != nullptr) {
-		std::fprintf(stderr, "JPH create sizeof=%zu bodies=%u mutexes=%u pairs=%u contacts=%u broad=%p pair=%p vs=%p\n",
-			sizeof(*settings), settings->maxBodies, settings->numBodyMutexes, settings->maxBodyPairs,
-			settings->maxContactConstraints, settings->broadPhaseLayerInterface,
-			settings->objectLayerPairFilter, settings->objectVsBroadPhaseLayerFilter);
-		std::fflush(stderr);
-	}
     if (settings == nullptr
         || settings->broadPhaseLayerInterface == nullptr
         || settings->objectLayerPairFilter == nullptr
@@ -888,16 +894,12 @@ void JPH_PhysicsSystem_Update(
     if (system == nullptr || jobSystem == nullptr || sJphTempAllocator == nullptr)
         return;
 
-    std::fprintf(stderr, "JPH update begin system=%p jobs=%p dt=%f steps=%d\n", system, jobSystem, deltaTime, collisionSteps);
-    std::fflush(stderr);
     ToPhysicsSystem(system)->Update(
         deltaTime,
         collisionSteps,
         sJphTempAllocator,
         reinterpret_cast<JPH::JobSystem*>(jobSystem)
     );
-    std::fprintf(stderr, "JPH update end\n");
-    std::fflush(stderr);
 }
 
 void JPH_PhysicsSystem_UpdateSingleThreaded(

@@ -209,3 +209,4 @@ Register_TaskScheduler_Class :: proc(registry: ^classes.Registry) {
 		namecall = task_scheduler_namecall,
 	)
 }
+

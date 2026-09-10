@@ -200,3 +200,4 @@ ColorSequence_Luau_Binding :: proc() -> vm.Userdata_Binding {
 ColorSequence_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", color_sequence_new)
 }
+

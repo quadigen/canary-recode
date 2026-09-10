@@ -103,3 +103,4 @@ ColorSequence_At :: proc(sequence: ColorSequence, time: f32) -> Color3 {
 
 	return keypoints[len(keypoints)-1].Value
 }
+

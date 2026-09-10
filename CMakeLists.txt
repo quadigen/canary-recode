@@ -32,12 +32,11 @@ set_target_properties(kine_luau PROPERTIES
 # KinemiumOdinAliases emits the subsystem archives imported by the bindings
 # package, including their transitive Filament, Skia, Vulkan, and Jolt inputs.
 add_custom_target(KinemiumOdinLibraries ALL
-	DEPENDS
-		KinemiumLibs
-		KinemiumOdinAliases
-		kine_luau
-		kine_filament_shim
-		kine_skia
-		kine_vulkan_compositor
-		JoltWrapper
+    DEPENDS
+        KinemiumOdinAliases
+        kine_luau
+        kine_filament_shim
+        kine_skia
+        kine_vulkan_compositor
+        JoltWrapper
 )

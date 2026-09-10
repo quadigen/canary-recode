@@ -29,3 +29,4 @@ Ray_Distance :: proc(ray: Ray, point: Vector3) -> f32 {
 	dx, dy, dz := point.x-closest.x, point.y-closest.y, point.z-closest.z
 	return math.sqrt(dx*dx + dy*dy + dz*dz)
 }
+

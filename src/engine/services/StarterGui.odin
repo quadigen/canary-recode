@@ -41,3 +41,4 @@ StarterGui_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 Register_StarterGui_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(registry, &StarterGui_Class, StarterGui_construct, StarterGui_destroy, creatable = false, _step = StarterGui_Render)
 }
+
