@@ -83,7 +83,7 @@ part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
 		if datatype_registry == nil { return false }
 		datatypes.Push_Color3(L, datatype_registry, part.color)
 	case "Size":
-		vm.PushVector3(L, part.size.x, part.size.y, part.size.z)
+		datatypes.Push_Vector3(L, part.size)
     case:
         return false
     }
@@ -118,17 +118,40 @@ part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
 	case "Color":
 		if datatype_registry == nil { return false }
 		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
-	case "Size":
-		x, y, z := vm.ArgVector3(L, value_index)
-		if x <= 0 || y <= 0 || z <= 0 {
-			_ = vm.RaiseError(L, "Size components must be greater than zero")
-			return true
-		}
-		part.size = datatypes.Vector3{x, y, z}
+    case "Size":
+        size := datatypes.Arg_Vector3(L, value_index)
+
+        if size.x <= 0 || size.y <= 0 || size.z <= 0 {
+            _ = vm.RaiseError(
+                L,
+                "Size components must be greater than zero",
+            )
+            return true
+        }
+
+        part.size = size
     case:
         return false
     }
     return true
+}
+
+part_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^Part)source
+	dst := cast(^Part)destination
+
+	dst.cframe       = src.cframe
+	dst.color        = src.color
+	dst.size         = src.size
+	dst.transparency = src.transparency
+	dst.anchored     = src.anchored
+	dst.can_collide  = src.can_collide
+	dst.can_query    = src.can_query
+	dst.shape        = src.shape
+	dst.material     = src.material
+
+	delete(dst.collision_group)
+	dst.collision_group = strings.clone(src.collision_group)
 }
 
 Register_Part :: proc(registry: ^Registry) {
@@ -139,6 +162,7 @@ Register_Part :: proc(registry: ^Registry) {
         part_destroy,
         get = part_get,
         set = part_set,
+        clone = part_clone,
     )
 }
 

@@ -76,6 +76,10 @@ Frame_render :: proc(
     GuiObject_render(object, ctx)
 }
 
+Frame_clone :: proc(source: ^Object, destination: ^Object) {
+	// No extra properties
+}
+
 Register_Frame :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -84,5 +88,6 @@ Register_Frame :: proc(registry: ^Registry) {
         Frame_destroy,
         get = Frame_get,
         set = Frame_set,
+        clone = Frame_clone,
     )
 }

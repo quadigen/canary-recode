@@ -95,16 +95,33 @@ connection_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	return true
 }
 
-connection_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
-	if method != "Disconnect" { return 0, false }
-	connection_disconnect(cast(^KinemiumConnection)value)
-	return 0, true
+connection_namecall :: proc(
+    L: ^vm.State,
+    value,
+    ctx: rawptr,
+    method: string,
+) -> (i32, bool) {
+    if method != "Disconnect" {
+        return 0, false
+    }
+
+    connection_disconnect(cast(^KinemiumConnection)value)
+    return 0, true
 }
 
 connection_destroy :: proc(value, ctx: rawptr) {
-	connection := cast(^KinemiumConnection)value
-	connection_disconnect(connection)
-	free(connection)
+    connection := cast(^KinemiumConnection)value
+
+    if connection.registry != nil &&
+       connection.registry.L != nil &&
+       connection.signal_ref > 0 {
+        vm.ReleaseValue(connection.registry.L, connection.signal_ref)
+    }
+
+    connection.signal = nil
+    connection.signal_ref = -1
+
+    free(connection)
 }
 
 connection_string :: proc(value, ctx: rawptr) -> string {

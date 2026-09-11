@@ -1,0 +1,1161 @@
+local StudioThemeService = game:GetService("StudioThemeService")
+local Immco = require("@Immco")
+local theme = StudioThemeService.SelectedTheme
+local Argon = require("@Argon")
+local Selection = game:GetService("Selection")
+local PropertyCategories = {
+	Name = "Object",
+	Parent = "Object",
+	Archivable = "Object",
+	ClassName = "Object",
+	BaseClass = "Object",
+
+	Transparency = "Appearance",
+	Color = "Appearance",
+	Material = "Appearance",
+	IconColor = "Appearance",
+	Shape = "Appearance",
+	Reflectance = "Appearance",
+	CastsShadow = "Appearance",
+	IconTransparency = "Appearance",
+	IconSize = "Appearance",
+
+	AssemblyAngularVelocity = "Behavior",
+	AssemblyCenterOfMass = "Behavior",
+	AssemblyLinearVelocity = "Behavior",
+	AssemblyMass = "Behavior",
+	AssemblyRootPart = "Behavior",
+	Anchored = "Behavior",
+	CanCollide = "Behavior",
+
+	NetworkOwnerType = "Network",
+
+	Position = "Transform",
+	CFrame = "Transform",
+	Size = "Transform",
+	Rotation = "Transform",
+	Orientation = "Transform",
+
+	BottomLeftRadius = "Appearance",
+	BottomRightRadius = "Appearance",
+	TopLeftRadius = "Appearance",
+	TopRightRadius = "Appearance",
+	MeshId = "Appearance",
+	TextureID = "Appearance",
+	TextureId = "Appearance",
+
+	CurveType = "Path",
+	Closed = "Path",
+	LengthSamples = "Path",
+	ClosestPointSamples = "Path",
+	TangentIn = "Path",
+	TangentOut = "Path",
+	Order = "Path",
+	UpVector = "Path",
+
+	ScrollBarTransparency = "Appearance",
+	ScrollBarColor3 = "Appearance",
+	ScrollBarCornerRadius = "Appearance",
+	ScrollBarBackgroundTransparency = "Appearance",
+	ScrollBarBackgroundColor3 = "Appearance",
+	ScrollBarHoverColor3 = "Appearance",
+
+	SoundId = "Behavior",
+	Volume = "Behavior",
+	Pitch = "Behavior",
+	Looped = "Behavior",
+	Playing = "Behavior",
+	TimePosition = "Behavior",
+	PlayOnRemove = "Behavior",
+	IsLoaded = "Behavior",
+	AudioBackend = "Behavior",
+
+	Velocity = "Behavior",
+	Direction = "Behavior",
+	Up = "Behavior",
+	MinDistance = "Behavior",
+	MaxDistance = "Behavior",
+	ConeInsideAngle = "Behavior",
+	ConeOutsideAngle = "Behavior",
+	ConeOutsideVolume = "Behavior",
+	Is3D = "Behavior",
+
+	Shader = "Shader",
+
+	BackgroundColor3 = "Appearance",
+	BackgroundTransparency = "Appearance",
+	Visible = "Appearance",
+	BorderSize = "Appearance",
+	GroupColor3 = "Appearance",
+	GroupTransparency = "Appearance",
+
+	BorderColor = "Appearance",
+	BorderTransparency = "Appearance",
+	AbsolutePosition = "Transform",
+	AbsoluteSize = "Transform",
+	ClipsDescendants = "Behavior",
+	ZIndex = "Behavior",
+	AnchorPoint = "Transform",
+}
+
+local inspectorStorage = {}
+local inspectorContentHeight = 0
+
+if IsServer then
+	return
+end
+
+if IsClient then
+	return
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Parent = game.StarterGui
+
+local Inspector = Instance.new("Frame")
+Inspector.Name = "Inspector"
+Inspector.Size = theme.InspectorCoordinates.Size
+Inspector.Position = theme.InspectorCoordinates.Position
+Inspector.Parent = gui
+Inspector.BackgroundTransparency = 1
+local visible = true
+
+if ishared.StudioSystem then
+	ishared.StudioSystem:Connect(function(route)
+		if route == "toggle_inspector" then
+			visible = not visible
+		end
+	end)
+end
+
+local uiScale = 1
+local textSize = 15 * uiScale
+local headerTextSize = 15 * uiScale
+local rowHeight = 25 * uiScale
+local headerHeight = 24 * uiScale
+local contentPadding = 10 * uiScale
+local imageSize = 14 * uiScale
+local groupBottomPadding = 8 * uiScale
+local propertyPadding = 2 * uiScale
+local propertySeparatorWidth = 1 * uiScale
+local searchBoxHeight = 20
+
+local iconPath = "./src/assets/images/icons/"
+local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.svg")
+local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.svg")
+
+local adapterHeights = {
+	CFrame = 45 * uiScale,
+}
+
+local categoryExpanded = setmetatable({}, {
+	__index = function()
+		return true
+	end,
+})
+
+local function truncate(str, maxLength)
+	if #str <= maxLength then
+		return str
+	end
+
+	return string.sub(str, 1, maxLength) .. "...."
+end
+
+local readonly = {
+	["ClassName"] = true,
+}
+
+local categoryOrder = {
+	"Object",
+	"Transform",
+	"Appearance",
+	"Behavior",
+	"Network",
+	"Shader",
+}
+
+local adapters = {
+	ColorSequence = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local keypoints = value.Keypoints or {}
+
+		if #keypoints == 0 then
+			return
+		end
+
+		local gap = 4
+		local keypointWidth = (width - gap * (#keypoints - 1)) / #keypoints
+
+		for index, keypoint in ipairs(keypoints) do
+			local color = keypoint.Value
+			local time = keypoint.Time
+			local x = prop_x + (index - 1) * (keypointWidth + gap)
+
+			local function rebuildKeypoint(newTime, newColor)
+				local newKeypoints = {}
+
+				for i, current in ipairs(keypoints) do
+					if i == index then
+						newKeypoints[i] = ColorSequenceKeypoint.new(newTime or current.Time, newColor or current.Value)
+					else
+						newKeypoints[i] = ColorSequenceKeypoint.new(current.Time, current.Value)
+					end
+				end
+
+				table.sort(newKeypoints, function(a, b)
+					return a.Time < b.Time
+				end)
+
+				firstObj[prop.name] = ColorSequence.new(newKeypoints)
+			end
+
+			local rgbWidth = (keypointWidth - 8) / 3
+
+			local function colorInput(id, offset, component, background)
+				Immco.TextInput({
+					x = x + offset,
+					y = prop_y,
+					width = rgbWidth,
+					height = 16,
+					id = prop.name .. "_" .. index .. "_" .. id,
+					RetainedStorage = inspectorStorage,
+					renderer = renderer,
+					theme = theme,
+
+					Color = {
+						R = background.R,
+						G = background.G,
+						B = background.B,
+						A = 1,
+					},
+
+					FocusColor = {
+						R = background.R + 0.05,
+						G = background.G + 0.05,
+						B = background.B + 0.05,
+						A = 1,
+					},
+
+					TextColor = theme.InputTextColor,
+					PlaceholderColor = theme.InputPlaceholderColor,
+
+					placeholder = string.format("%.2f", color[component]),
+
+					OnSubmit = function(text)
+						local number = tonumber(text)
+
+						if not number then
+							return
+						end
+
+						number = math.clamp(number, 0, 1)
+
+						local newColor = Color3.new(
+							component == "R" and number or color.R,
+							component == "G" and number or color.G,
+							component == "B" and number or color.B
+						)
+
+						rebuildKeypoint(nil, newColor)
+					end,
+
+					engine_window = renderer.Window,
+				}, dt)
+			end
+
+			colorInput("R", 0, "R", {
+				R = 0.35,
+				G = 0.08,
+				B = 0.08,
+			})
+
+			colorInput("G", rgbWidth + 4, "G", {
+				R = 0.08,
+				G = 0.35,
+				B = 0.08,
+			})
+
+			colorInput("B", (rgbWidth + 4) * 2, "B", {
+				R = 0.08,
+				G = 0.15,
+				B = 0.35,
+			})
+
+			Immco.TextInput({
+				x = x,
+				y = prop_y + 20,
+				width = keypointWidth,
+				height = 16,
+				id = prop.name .. "_" .. index .. "_Time",
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = 0.15,
+					G = 0.15,
+					B = 0.15,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = 0.2,
+					G = 0.2,
+					B = 0.25,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = string.format("%.2f", time),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+
+					if not number then
+						return
+					end
+
+					rebuildKeypoint(math.clamp(number, 0, 1), nil)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+	end,
+
+	boolean = function(prop, firstObj, prop_x, prop_y, dt)
+		Immco.Checkbox({
+			x = prop_x,
+			y = prop_y,
+			bool = prop.value,
+			height = 20,
+			width = 20,
+			theme = theme,
+			Color = Argon:RGBA(33, 33, 33),
+			isOutline = false,
+			engine_window = renderer.Window,
+		}, dt)
+
+		Immco.Text({
+			x = prop_x + 30,
+			y = prop_y + 15,
+			TextSize = headerTextSize,
+			theme = theme,
+			Font = Argon:CreateFont(theme.Font),
+			text = prop.value == true and "true" or "false",
+			Color = theme.TextColor,
+			engine_window = renderer.Window,
+		}, dt)
+
+		if renderer:HasClicked({
+			x = prop_x,
+			y = prop_y,
+			width = 20,
+			height = 20,
+		}) then
+			firstObj[prop.name] = not prop.value
+		end
+	end,
+
+	string = function(prop, firstObj, prop_x, prop_y, dt, width)
+		Immco.TextInput({
+			x = prop_x,
+			y = prop_y,
+			width = width,
+			height = 16,
+			id = prop.name,
+			RetainedStorage = inspectorStorage,
+			renderer = renderer,
+			theme = theme,
+			ReadOnly = readonly[prop.name] ~= nil,
+			Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+			FocusColor = theme.InputFocusColor,
+			TextColor = theme.InputTextColor,
+			PlaceholderColor = theme.InputPlaceholderColor,
+			placeholder = tostring(prop.value),
+			OnSubmit = function(text)
+				firstObj[prop.name] = text
+			end,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
+
+	number = function(prop, firstObj, prop_x, prop_y, dt, width)
+		Immco.TextInput({
+			x = prop_x,
+			y = prop_y,
+			width = width,
+			height = 16,
+			id = prop.name,
+			RetainedStorage = inspectorStorage,
+			renderer = renderer,
+			theme = theme,
+			ReadOnly = readonly[prop.name] ~= nil,
+			Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+			FocusColor = theme.InputFocusColor,
+			TextColor = theme.InputTextColor,
+			PlaceholderColor = theme.InputPlaceholderColor,
+			placeholder = tostring(prop.value),
+			OnSubmit = function(text)
+				firstObj[prop.name] = tonumber(text)
+			end,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
+
+	Vector2 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local boxWidth = (width - 4) / 2
+
+		local function input(id, x, component, color)
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = tostring(value[component]),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+
+					if not number then
+						return
+					end
+
+					local current = firstObj[prop.name]
+
+					firstObj[prop.name] =
+						Vector2.new(component == "X" and number or current.X, component == "Y" and number or current.Y)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("X", prop_x, "X", {
+			R = 0.35,
+			G = 0.08,
+			B = 0.08,
+		})
+
+		input("Y", prop_x + boxWidth + 4, "Y", {
+			R = 0.08,
+			G = 0.35,
+			B = 0.08,
+		})
+	end,
+
+	Vector3 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+
+		local boxWidth = (width - 8) / 3
+
+		local function input(id, x, component, color)
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = tostring(value[component]),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+					if not number then
+						return
+					end
+
+					local current = firstObj[prop.name]
+					firstObj[prop.name] = Vector3.new(
+						component == "X" and number or current.X,
+						component == "Y" and number or current.Y,
+						component == "Z" and number or current.Z
+					)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("R", prop_x, "X", { R = 0.35, G = 0.08, B = 0.08 })
+		input("G", prop_x + boxWidth + 4, "Y", { R = 0.08, G = 0.35, B = 0.08 })
+		input("B", prop_x + (boxWidth + 4) * 2, "Z", { R = 0.08, G = 0.15, B = 0.35 })
+	end,
+
+	UDim2 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local boxWidth = (width - 4) / 2
+
+		local function input(id, x, component, color)
+			local udim = value[component]
+
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = tostring(udim.Scale) .. ", " .. tostring(udim.Offset),
+
+				OnSubmit = function(text)
+					local scale, offset = text:match("^%s*([%-%.%d]+)%s*,%s*([%-%.%d]+)%s*$")
+
+					scale = tonumber(scale)
+					offset = tonumber(offset)
+
+					if not scale or not offset then
+						return
+					end
+
+					local current = firstObj[prop.name]
+
+					if component == "X" then
+						firstObj[prop.name] = UDim2.new(scale, offset, current.Y.Scale, current.Y.Offset)
+					else
+						firstObj[prop.name] = UDim2.new(current.X.Scale, current.X.Offset, scale, offset)
+					end
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("X", prop_x, "X", {
+			R = 0.35,
+			G = 0.08,
+			B = 0.08,
+		})
+
+		input("Y", prop_x + boxWidth + 4, "Y", {
+			R = 0.08,
+			G = 0.35,
+			B = 0.08,
+		})
+	end,
+
+	Color3 = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+
+		local boxWidth = (width - 8) / 3
+
+		local function input(id, x, component, color)
+			Immco.TextInput({
+				x = x,
+				y = prop_y,
+				width = boxWidth,
+				height = 16,
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = {
+					R = color.R,
+					G = color.G,
+					B = color.B,
+					A = 1,
+				},
+
+				FocusColor = {
+					R = color.R + 0.05,
+					G = color.G + 0.05,
+					B = color.B + 0.05,
+					A = 1,
+				},
+
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = tostring(value[component]),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+					if not number then
+						return
+					end
+
+					local current = firstObj[prop.name]
+
+					firstObj[prop.name] = Color3.new(
+						component == "R" and number or current.R,
+						component == "G" and number or current.G,
+						component == "B" and number or current.B
+					)
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		input("R", prop_x, "R", { R = 0.35, G = 0.08, B = 0.08 })
+		input("G", prop_x + boxWidth + 4, "G", { R = 0.08, G = 0.35, B = 0.08 })
+		input("B", prop_x + (boxWidth + 4) * 2, "B", { R = 0.08, G = 0.15, B = 0.35 })
+	end,
+
+	EnumItem = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local val = prop.value
+		if val.EnumType then
+			local items = val.EnumType:GetEnumItems()
+			local result = {}
+
+			for _, item in pairs(items) do
+				table.insert(result, item.Name)
+			end
+
+			Immco.Dropdown({
+				RetainedStorage = inspectorStorage,
+				id = prop.name .. "_dropdown",
+				renderer = renderer,
+				window = renderer.Window,
+				theme = theme,
+
+				x = prop_x,
+				y = prop_y,
+				width = width,
+				height = 16,
+
+				Options = result,
+				Placeholder = val.Name,
+				MaxVisibleOptions = 10,
+
+				OnChanged = function(index, chosenValue)
+					firstObj[prop.name] = val.EnumType[chosenValue]
+				end,
+			}, dt)
+		end
+	end,
+
+	CFrame = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local position = value.Position
+		local rx, ry, rz = value:ToEulerAnglesXYZ()
+
+		local gap = 4
+		local boxWidth = (width - gap * 2) / 3
+
+		local function input(id, x, y, currentValue, onSubmit)
+			Immco.TextInput({
+				x = x,
+				y = y,
+				width = boxWidth,
+				height = 16,
+
+				id = prop.name .. "_" .. id,
+				RetainedStorage = inspectorStorage,
+				renderer = renderer,
+				theme = theme,
+
+				Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+				FocusColor = theme.InputFocusColor,
+				TextColor = theme.InputTextColor,
+				PlaceholderColor = theme.InputPlaceholderColor,
+
+				placeholder = string.format("%.2f", currentValue),
+
+				OnSubmit = function(text)
+					local number = tonumber(text)
+
+					if number then
+						onSubmit(number)
+					end
+				end,
+
+				engine_window = renderer.Window,
+			}, dt)
+		end
+
+		local function rebuildPosition(component, number)
+			local current = firstObj[prop.name]
+			local p = current.Position
+			local crx, cry, crz = current:ToEulerAnglesXYZ()
+
+			local newPosition = Vector3.new(
+				component == "X" and number or p.X,
+				component == "Y" and number or p.Y,
+				component == "Z" and number or p.Z
+			)
+
+			firstObj[prop.name] = CFrame.new(newPosition) * CFrame.Angles(crx, cry, crz)
+		end
+
+		local function rebuildRotation(component, degrees)
+			local current = firstObj[prop.name]
+			local p = current.Position
+			local crx, cry, crz = current:ToEulerAnglesXYZ()
+
+			local radians = math.rad(degrees)
+
+			if component == "X" then
+				crx = radians
+			elseif component == "Y" then
+				cry = radians
+			else
+				crz = radians
+			end
+
+			firstObj[prop.name] = CFrame.new(p) * CFrame.Angles(crx, cry, crz)
+		end
+
+		-- Position
+		input("PX", prop_x, prop_y, position.X, function(v)
+			rebuildPosition("X", v)
+		end)
+
+		input("PY", prop_x + boxWidth + gap, prop_y, position.Y, function(v)
+			rebuildPosition("Y", v)
+		end)
+
+		input("PZ", prop_x + (boxWidth + gap) * 2, prop_y, position.Z, function(v)
+			rebuildPosition("Z", v)
+		end)
+
+		-- Rotation, shown as degrees
+		input("RX", prop_x, prop_y + 20, math.deg(rx), function(v)
+			rebuildRotation("X", v)
+		end)
+
+		input("RY", prop_x + boxWidth + gap, prop_y + 20, math.deg(ry), function(v)
+			rebuildRotation("Y", v)
+		end)
+
+		input("RZ", prop_x + (boxWidth + gap) * 2, prop_y + 20, math.deg(rz), function(v)
+			rebuildRotation("Z", v)
+		end)
+	end,
+
+	Instance = function(prop, firstObj, prop_x, prop_y, dt, width)
+		local value = prop.value
+		local clearWidth = 20
+		local referenceWidth = width - clearWidth - 4
+
+		Argon:DrawRectangle(renderer.Window, {
+			x = prop_x,
+			y = prop_y,
+			width = referenceWidth,
+			height = 16,
+			Color = theme.InputColor,
+		})
+
+		Immco.Text({
+			x = prop_x + 6,
+			y = prop_y + 13,
+			TextSize = 13,
+			Font = Argon:CreateFont(theme.Font),
+			text = value and value.Name or "None",
+			Color = value and theme.TextColor or theme.SecondaryTextColor,
+			theme = theme,
+			engine_window = renderer.Window,
+		}, dt)
+
+		if
+			value
+			and renderer:HasClicked({
+				x = prop_x,
+				y = prop_y,
+				width = referenceWidth,
+				height = 16,
+			})
+		then
+			Selection:Set({ value })
+		end
+
+		Immco.TextButton({
+			x = prop_x + referenceWidth + 4,
+			y = prop_y,
+			width = clearWidth,
+			height = 16,
+
+			text = "×",
+			Color = theme.InputColor,
+			TextColor = theme.SecondaryTextColor,
+
+			theme = theme,
+			engine_window = renderer.Window,
+		}, dt)
+
+		if
+			renderer:HasClicked({
+				x = prop_x + referenceWidth + 4,
+				y = prop_y,
+				width = clearWidth,
+				height = 16,
+			})
+		then
+			firstObj[prop.name] = nil
+		end
+	end,
+
+	default = function(prop, firstObj, prop_x, prop_y, dt, width)
+		Immco.Text({
+			x = prop_x,
+			y = prop_y + 2,
+			TextSize = textSize,
+			theme = theme,
+			Font = Argon:CreateFont(theme.Font),
+			text = tostring(prop.value),
+			Color = theme.TextColor,
+			engine_window = renderer.Window,
+		}, dt)
+	end,
+}
+
+renderer.Pool.new("2d", function()
+	if not visible then
+		return
+	end
+	local dt = renderer.RuntimeLibrary.dt
+	local absolutePosition = Inspector.AbsolutePosition
+	local absoluteSize = Inspector.AbsoluteSize
+
+	Inspector.Size = theme.InspectorCoordinates.Size
+	Inspector.Position = theme.InspectorCoordinates.Position
+
+	if not absolutePosition then
+		return
+	end
+	if not absoluteSize then
+		return
+	end
+
+	Immco.Widget({
+		x = absolutePosition.X,
+		y = absolutePosition.Y + 5,
+		width = absoluteSize.X,
+		height = absoluteSize.Y,
+		title = "Inspector",
+		theme = theme,
+		engine_window = renderer.Window,
+		renderer = renderer,
+
+		callback = function(params)
+			Immco.Scroller({
+				id = "main-inspector",
+
+				ViewHeight = params.height - 40,
+				ContentHeight = inspectorContentHeight,
+
+				x = params.x,
+				y = params.y,
+				width = params.width,
+				height = params.height,
+
+				ScrollSpeed = 50,
+				ScrollLerpSpeed = 20,
+
+				renderer = renderer,
+				window = renderer.Window,
+				theme = theme,
+
+				RetainedStorage = inspectorStorage,
+				callback = function(params)
+					Immco.TextInput({
+						x = params.x + 6,
+						y = params.y + 4,
+						width = params.width - 12 * uiScale,
+						height = searchBoxHeight,
+						id = "InspectorSearch",
+						RetainedStorage = inspectorStorage,
+						renderer = renderer,
+						theme = theme,
+
+						Color = { R = 0.15, G = 0.15, B = 0.15, A = 1 },
+						FocusColor = theme.InputFocusColor,
+						TextColor = theme.TextColor,
+						PlaceholderColor = theme.InputPlaceholderColor,
+
+						placeholder = "Search Properties..",
+						OnSubmit = function(text) end,
+
+						engine_window = renderer.Window,
+					}, dt)
+
+					local object = Selection.Get()
+
+					if not object or not object[1] then
+						inspectorContentHeight = 28 + searchBoxHeight
+						return
+					end
+
+					local firstObj = object[1]
+
+					local grouped = {}
+					local seenCategories = {}
+
+					for property, value in pairs(firstObj:GetProperties()) do
+						local category = PropertyCategories.getPropertyCategory(property) or "Uncategorized"
+
+						if type(value) == "function" then
+							continue
+						end
+
+						local list = grouped[category]
+						if not list then
+							list = {}
+							grouped[category] = list
+						end
+
+						list[#list + 1] = { name = property, value = value }
+						seenCategories[category] = true
+					end
+
+					for _, list in pairs(grouped) do
+						table.sort(list, function(a, b)
+							return a.name < b.name
+						end)
+					end
+
+					local orderedCategories = {}
+					local placed = {}
+
+					for _, category in ipairs(categoryOrder) do
+						if seenCategories[category] then
+							orderedCategories[#orderedCategories + 1] = category
+							placed[category] = true
+						end
+					end
+
+					local leftovers = {}
+					for category in pairs(seenCategories) do
+						if not placed[category] then
+							leftovers[#leftovers + 1] = category
+						end
+					end
+					table.sort(leftovers)
+
+					for _, category in ipairs(leftovers) do
+						orderedCategories[#orderedCategories + 1] = category
+					end
+
+					-- render
+					local rowY = params.y + 28 + searchBoxHeight
+
+					for _, category in ipairs(orderedCategories) do
+						local props = grouped[category]
+						local isExpanded = categoryExpanded[category]
+						local propCount = isExpanded and #props or 0
+
+						local x = params.x + (6 * uiScale)
+						local groupTop = rowY - (18 * uiScale)
+						local width = params.width - (12 * uiScale)
+						local propertiesHeight = 0
+
+						if isExpanded then
+							for _, prop in ipairs(props) do
+								local adapterType = typeof(prop.value)
+								propertiesHeight += adapterHeights[adapterType] or rowHeight
+							end
+						end
+
+						local groupHeight = headerHeight + propertiesHeight + groupBottomPadding
+
+						Argon:Save(renderer.Window)
+
+						Argon:ClipRoundRect(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = groupHeight,
+						}, 6, 6)
+
+						Argon:DrawRectangle(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = groupHeight,
+							Color = Argon:RGBA(45, 45, 45),
+						})
+
+						Argon:DrawRectangle(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = headerHeight,
+							Color = theme.AlternatingColor2,
+							isOutline = true,
+						})
+
+						Argon:DrawRectangle(renderer.Window, {
+							x = x,
+							y = groupTop,
+							width = width,
+							height = headerHeight,
+							Color = theme.AlternatingColor1,
+						})
+
+						Argon:Restore(renderer.Window)
+
+						-- toggle arrow
+						local arrow = isExpanded and expandedIcon or arrowRight
+
+						Immco.Image({
+							x = x + (6 * uiScale),
+							y = rowY - (14 * uiScale),
+							width = imageSize,
+							height = imageSize,
+							Image = arrow,
+							theme = theme,
+							engine_window = renderer.Window,
+						}, dt)
+
+						-- header label
+						Immco.Text({
+							x = x + (6 * uiScale) + imageSize + (6 * uiScale),
+							y = rowY,
+							TextSize = headerTextSize,
+							theme = theme,
+							Font = Argon:CreateFont(theme.Font),
+							text = category,
+							Color = theme.TextColor,
+							engine_window = renderer.Window,
+						}, dt)
+
+						-- whole header row is clickable to toggle
+						if
+							renderer:HasClicked({
+								x = x,
+								y = groupTop,
+								width = width,
+								height = headerHeight,
+							})
+						then
+							categoryExpanded[category] = not isExpanded
+						end
+
+						rowY += headerHeight
+
+						if isExpanded then
+							local propertiesTop = rowY - 15
+
+							for _, prop in ipairs(props) do
+								propertiesHeight += adapterHeights[typeof(prop.value)] or rowHeight
+							end
+
+							Argon:Save(renderer.Window)
+
+							Argon:ClipRoundRect(renderer.Window, {
+								x = x,
+								y = propertiesTop,
+								width = width,
+								height = propertiesHeight,
+							}, 6, 6)
+
+							for _, prop in ipairs(props) do
+								local truncated = truncate(prop.name, 15)
+
+								local propertyX = x + propertyPadding
+								local propertyY = rowY - 15
+								local propertyWidth = width - (propertyPadding * 2)
+								local adapterType = typeof(prop.value)
+								local propertyHeight = adapterHeights[adapterType] or rowHeight
+
+								local separatorX = propertyX + (propertyWidth * 0.5)
+
+								Argon:DrawRectangle(renderer.Window, {
+									x = separatorX,
+									y = propertyY,
+									width = propertySeparatorWidth,
+									height = propertyHeight,
+									Color = Argon:RGBA(60, 60, 60),
+								})
+
+								-- Property name
+								Immco.Text({
+									x = propertyX + contentPadding,
+									y = rowY,
+									TextSize = textSize,
+									theme = theme,
+									Font = Argon:CreateFont(theme.Font),
+									text = tostring(truncated),
+									Color = theme.TextColor,
+									engine_window = renderer.Window,
+								}, dt)
+
+								local prop_x = separatorX + (4 * uiScale)
+								local prop_y = rowY - 15
+
+								local adapter = adapters[adapterType] or adapters.default
+								adapter(prop, firstObj, prop_x, prop_y, dt, (propertyWidth * 0.5) - 10)
+
+								rowY += propertyHeight
+							end
+
+							Argon:Restore(renderer.Window)
+						end
+
+						rowY += groupBottomPadding
+						rowY += 6 * uiScale
+						inspectorContentHeight = rowY - params.y
+					end
+				end,
+			}, dt)
+		end,
+	}, dt)
+end)

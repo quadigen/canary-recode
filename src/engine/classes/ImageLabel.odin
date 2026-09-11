@@ -123,6 +123,18 @@ ImageLabel_render :: proc(
     }
 }
 
+ImageLabel_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^ImageLabel)source
+	dst := cast(^ImageLabel)destination
+
+	dst.image = strings.clone(src.image)
+	if len(dst.image) > 0 {
+		dst.stored_image = kineffi.Kine_Skia_Image_LoadFromFile(strings.clone_to_cstring(dst.image))
+	} else {
+		dst.stored_image = nil
+	}
+}
+
 Register_ImageLabel :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -131,5 +143,6 @@ Register_ImageLabel :: proc(registry: ^Registry) {
         ImageLabel_destroy,
         get = ImageLabel_get,
         set = ImageLabel_set,
+        clone = ImageLabel_clone,
     )
 }

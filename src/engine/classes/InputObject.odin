@@ -69,6 +69,16 @@ Push_InputObject :: proc(L: ^vm.State, registry: ^Registry, value: InputObject_V
 	return input
 }
 
+input_object_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^InputObject)source
+	dst := cast(^InputObject)destination
+	dst.UserInputType = src.UserInputType
+	dst.UserInputState = src.UserInputState
+	dst.KeyCode = src.KeyCode
+	dst.Position = src.Position
+	dst.Delta = src.Delta
+}
+
 Register_InputObject :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -77,5 +87,6 @@ Register_InputObject :: proc(registry: ^Registry) {
 		input_object_destroy,
 		creatable = false,
 		get = input_object_get,
+		clone = input_object_clone,
 	)
 }

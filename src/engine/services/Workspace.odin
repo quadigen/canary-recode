@@ -6,6 +6,7 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import kineffi "../bindings"
+import materials "../material"
 import vm "../vm"
 
 Workspace_Class := classes.Class_Info{
@@ -61,7 +62,9 @@ workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 
 workspace_prepare_3d :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_Object) {
 	if workspace == nil || !workspace_has_parts(&workspace.object) { return }
-	_ = workspace_ensure_meshes(workspace, renderer)
+	if !workspace_ensure_meshes(workspace, renderer) { return }
+
+	materials.init(renderer)
 }
 
 Workspace_Apply_View :: proc(renderer: ^classes.Renderer_Object, cframe: datatypes.CFrame) -> datatypes.CFrame {
@@ -83,12 +86,37 @@ workspace_append_draw_items :: proc(
 ) {
 	for child in object.children {
 		if child == nil || child.destroyed { continue }
+
 		if classes.Is_A(child, "Part") {
 			part := cast(^classes.Part)child
 			cframe := part.cframe
 			size := part.size
+
+			render_material := materials.Get(part.material)
+			material_kind, param1, param2, param3, transmission :=
+				materials.Draw_Parameters(render_material)
+
+			if material_kind == kineffi.KINE_MAT_DEFAULT && render_material.texture != nil {
+				STUDS_PER_TILE :: f32(4.0)
+
+				largest_dimension := size.x
+				if size.y > largest_dimension {
+					largest_dimension = size.y
+				}
+				if size.z > largest_dimension {
+					largest_dimension = size.z
+				}
+
+				param3 = largest_dimension / STUDS_PER_TILE
+
+				if param3 < 1.0 {
+					param3 = 1.0
+				}
+			}
+
 			append(items, kineffi.KineFilamentDrawItem{
 				mesh = workspace_part_mesh(workspace, part.shape),
+				tex = render_material.texture,
 				transform = {
 					cframe.r00*size.x, cframe.r01*size.y, cframe.r02*size.z, cframe.x,
 					cframe.r10*size.x, cframe.r11*size.y, cframe.r12*size.z, cframe.y,
@@ -98,24 +126,37 @@ workspace_append_draw_items :: proc(
 				r = part.color.R,
 				g = part.color.G,
 				b = part.color.B,
-				materialKind = kineffi.KINE_MAT_DEFAULT,
+				param1 = param1,
+				param2 = param2,
+				param3 = param3,
+				transmission = transmission,
+				materialKind = material_kind,
 				flags = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS |
 				        kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS |
 				        kineffi.KINE_FILAMENT_DRAW_CULLING,
 			})
 		}
+
 		workspace_append_draw_items(workspace, child, renderer, items)
 	}
 }
 
 workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 	workspace := cast(^Workspace)object
-	if !workspace_has_parts(object) || workspace.cube_mesh == nil { return }
+	if !workspace_has_parts(object) { return }
+	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil { return }
+	if !workspace_ensure_meshes(workspace, ctx.renderer) { return }
+
+	materials.init(ctx.renderer)
 
 	items: [dynamic]kineffi.KineFilamentDrawItem
 	workspace_append_draw_items(workspace, object, ctx.renderer, &items)
 	if len(items) > 0 {
-		_ = kineffi.Kine_Filament_DrawMeshList(ctx.renderer.Filament, raw_data(items), u32(len(items)))
+		_ = kineffi.Kine_Filament_DrawMeshList(
+			ctx.renderer.Filament,
+			raw_data(items),
+			u32(len(items)),
+		)
 	}
 	delete(items)
 }
@@ -156,8 +197,10 @@ workspace_set :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: 
 		physics := workspace_physics(workspace)
 		if physics == nil { return false }
 		Physics_Set_Gravity(physics, f32(vm.ArgNumber(L, value_index)))
-	case "FallenPartsDestroyHeight": workspace.fallen_parts_destroy_height = clamp(f32(vm.ArgNumber(L, value_index)), -50_000, 50_000)
-	case "FallHeightEnabled": workspace.fall_height_enabled = vm.ArgBoolean(L, value_index)
+	case "FallenPartsDestroyHeight":
+		workspace.fallen_parts_destroy_height = clamp(f32(vm.ArgNumber(L, value_index)), -50_000, 50_000)
+	case "FallHeightEnabled":
+		workspace.fall_height_enabled = vm.ArgBoolean(L, value_index)
 	case: return false
 	}
 	return true
@@ -204,6 +247,9 @@ workspace_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_regis
 
 workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	workspace := cast(^Workspace)object
+
+	materials.shutdown(renderer)
+
 	if renderer != nil && renderer.Filament != nil {
 		if workspace.cube_mesh != nil { _ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.cube_mesh) }
 		if workspace.sphere_mesh != nil { _ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.sphere_mesh) }

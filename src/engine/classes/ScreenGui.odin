@@ -159,6 +159,20 @@ ScreenGui_set :: proc(
     return true
 }
 
+ScreenGui_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^ScreenGui)source
+	dst := cast(^ScreenGui)destination
+
+	dst.clip_to_device_safe_area = src.clip_to_device_safe_area
+	dst.displayorder             = src.displayorder
+	dst.ignore_gui_inset         = src.ignore_gui_inset
+	dst.safe_area_compat         = src.safe_area_compat
+	dst.screen_insets            = src.screen_insets
+	dst.enabled                  = src.enabled
+	dst.render_offset            = src.render_offset
+	dst.size                     = src.size
+}
+
 Register_ScreenGui :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -167,6 +181,7 @@ Register_ScreenGui :: proc(registry: ^Registry) {
         ScreenGui_destroy,
 		get = ScreenGui_get,
 		set = ScreenGui_set,
+		clone = ScreenGui_clone,
 		_step = ScreenGui_render,
 	)
 }

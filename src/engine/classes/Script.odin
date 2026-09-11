@@ -91,7 +91,32 @@ script_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(script)
 }
 
+script_member_security :: proc() -> [2]Member_Security {
+	return [2]Member_Security{
+		Property_Read_Security(
+			"Source",
+			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_READ),
+		),
+		Property_Write_Security(
+			"Source",
+			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_WRITE),
+		),
+	}
+}
+
+script_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^Script)source
+	dst := cast(^Script)destination
+
+	delete(dst.source)
+
+	dst.source       = strings.clone(src.source)
+	dst.module_state = .Unloaded
+	dst.module_ref   = -1
+}
+
 Register_Script :: proc(registry: ^Registry) {
+	rules := script_member_security()
 	Register_Class(
 		registry,
 		&Script_Class,
@@ -99,10 +124,13 @@ Register_Script :: proc(registry: ^Registry) {
 		script_destroy,
 		get = script_get,
 		set = script_set,
+		clone = script_clone,
+		member_security = rules[:],
 	)
 }
 
 Register_ModuleScript :: proc(registry: ^Registry) {
+	rules := script_member_security()
 	Register_Class(
 		registry,
 		&ModuleScript_Class,
@@ -110,6 +138,7 @@ Register_ModuleScript :: proc(registry: ^Registry) {
 		script_destroy,
 		get = script_get,
 		set = script_set,
+		clone = script_clone,
+		member_security = rules[:],
 	)
 }
-

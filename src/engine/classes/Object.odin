@@ -22,17 +22,18 @@ Object_Attribute :: struct {
 }
 
 Object :: struct {
-	class:        ^Class_Info,
-	name:         string,
-	parent:       ^Object,
-	children:     [dynamic]^Object,
-	attributes:   [dynamic]Object_Attribute,
-	unique_id:    datatypes.UniqueId,
-	capabilities: datatypes.SecurityCapabilities,
-	sandboxed:    bool,
-	lua_ref:      i32,
-	destroyed:    bool,
-	archivable:   bool,
+	class:                ^Class_Info,
+	name:                 string,
+	parent:               ^Object,
+	children:             [dynamic]^Object,
+	attributes:           [dynamic]Object_Attribute,
+	unique_id:            datatypes.UniqueId,
+	capabilities:         datatypes.SecurityCapabilities,
+	security_requirement: vm.Security_Requirement,
+	sandboxed:            bool,
+	lua_ref:              i32,
+	destroyed:            bool,
+	archivable:           bool,
 }
 
 Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object {
@@ -239,8 +240,26 @@ Get_Full_Name :: proc(self: ^Object) -> string {
     return fmt.tprintf("%s.%s", Get_Full_Name(self.parent), self.name)
 }
 
+// An Instance is inaccessible when either it or any ancestor requires
+// capabilities that the currently executing Luau thread does not have.
+Object_Is_Accessible :: proc(L: ^vm.State, object: ^Object) -> bool {
+	if object == nil {
+		return false
+	}
+
+	current := object
+	for current != nil {
+		if !vm.ThreadMeetsSecurityRequirement(L, current.security_requirement) {
+			return false
+		}
+		current = current.parent
+	}
+
+	return true
+}
+
 Push_Object :: proc(L: ^vm.State, object: ^Object) {
-    if object == nil || object.lua_ref <= 0 {
+    if object == nil || object.lua_ref <= 0 || !Object_Is_Accessible(L, object) {
         vm.PushNil(L)
         return
     }
@@ -250,31 +269,54 @@ Push_Object :: proc(L: ^vm.State, object: ^Object) {
 object_from_argument :: proc(L: ^vm.State, index: int) -> ^Object {
 	binding := vm.UserdataBindingOf(L, index)
 	if binding == nil || binding.name != "Instance" { return nil }
-    return cast(^Object)vm.UserdataValue(L, index)
+
+	object := cast(^Object)vm.UserdataValue(L, index)
+	if !Object_Is_Accessible(L, object) { return nil }
+    return object
 }
 
 is_object_method :: proc(name: string) -> bool {
-    switch name {
-    case "Destroy", "FindFirstChild", "FindFirstChildOfClass", "GetChildren", "GetDescendants",
-		 "GetFullName", "IsA", "IsAncestorOf", "IsDescendantOf", "GetAttribute", "GetAttributes",
-		 "SetAttribute":
-        return true
-    }
-    return false
+	switch name {
+	case "Clone", "Destroy", "FindFirstChild", "FindFirstChildOfClass",
+	     "GetChildren", "GetDescendants", "GetFullName",
+	     "IsA", "IsAncestorOf", "IsDescendantOf",
+	     "GetAttribute", "GetAttributes", "SetAttribute":
+		return true
+	}
+
+	return false
 }
 
 object_method :: proc "c" (L: ^vm.State) -> i32 {
-    context = runtime.default_context()
-    object := object_from_argument(L, 1)
-    if object == nil {
-        return vm.RaiseError(L, "expected an Instance")
-    }
-    method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
-    result_count, handled := Object_Namecall(L, object, nil, method)
-    if handled {
-        return result_count
-    }
-    return vm.RaiseError(L, "unknown Instance method")
+	context = runtime.default_context()
+
+	object := object_from_argument(L, 1)
+	if object == nil {
+		return vm.RaiseError(L, "expected an Instance")
+	}
+
+	method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
+
+	binding := vm.UserdataBindingOf(L, 1)
+
+	method_ctx: rawptr = nil
+
+	if binding != nil {
+		method_ctx = binding.ctx
+	}
+
+	result_count, handled := Object_Namecall(
+		L,
+		object,
+		method_ctx,
+		method,
+	)
+
+	if handled {
+		return result_count
+	}
+
+	return vm.RaiseError(L, "unknown Instance method")
 }
 
 Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
@@ -351,10 +393,18 @@ Object_Set_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value
         }
         Set_Parent(object, parent)
 	case "Capabilities":
+		if !vm.ThreadHasSecurityCapability(L, datatypes.SECURITY_CAPABILITY_INTERNAL_SECURITY_ADMIN) {
+			_ = vm.RaiseError(L, "Capabilities is restricted to internal scripts")
+			return true
+		}
 		descriptor := cast(^Class_Descriptor)ctx
 		if descriptor == nil || descriptor.registry == nil || descriptor.registry.datatypes == nil { return false }
 		object.capabilities = datatypes.Arg_SecurityCapabilities(L, value_index, descriptor.registry.datatypes)
 	case "Sandboxed":
+		if !vm.ThreadHasSecurityCapability(L, datatypes.SECURITY_CAPABILITY_INTERNAL_SECURITY_ADMIN) {
+			_ = vm.RaiseError(L, "Sandboxed is restricted to internal scripts")
+			return true
+		}
 		object.sandboxed = vm.ArgBoolean(L, value_index)
     case:
         return false
@@ -435,6 +485,111 @@ set_attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: 
 	return true
 }
 
+clone_base_state :: proc(
+	L: ^vm.State,
+	source: ^Object,
+	destination: ^Object,
+) {
+	if source == nil || destination == nil {
+		return
+	}
+
+	// Do NOT copy:
+	// - parent
+	// - children
+	// - unique_id
+	// - lua_ref
+	// - destroyed
+	//
+	// Those belong to the new Instance.
+
+	destination.name                 = source.name
+	destination.archivable           = source.archivable
+	destination.capabilities         = source.capabilities
+	destination.security_requirement = source.security_requirement
+	destination.sandboxed            = source.sandboxed
+
+	// Attributes need their own registry references.
+	for attribute in source.attributes {
+		vm.PushRegistryReference(L, attribute.value_ref)
+
+		value_ref := vm.RetainValue(L)
+
+		vm.Pop(L)
+
+		append(
+			&destination.attributes,
+			Object_Attribute{
+				name      = strings.clone(attribute.name),
+				value_ref = value_ref,
+			},
+		)
+	}
+}
+
+Clone_Object :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	source: ^Object,
+) -> (^Object, bool) {
+	if L == nil || registry == nil || source == nil {
+		return nil, false
+	}
+
+	if !source.archivable {
+		return nil, false
+	}
+
+	// false here is important:
+	// Clone should be able to reproduce registered Instances even if the
+	// class isn't exposed through Instance.new().
+	destination, ok := Push_New(
+		registry,
+		&vm.VM{L = L},
+		Get_Class_Name(source),
+		false,
+	)
+
+	if !ok || destination == nil {
+		return nil, false
+	}
+
+	// Push_New leaves destination's userdata on the Luau stack.
+	clone_base_state(L, source, destination)
+
+	Clone_Class_State(
+		registry,
+		source.class,
+		source,
+		destination,
+	)
+
+	// Clone Archivable descendants.
+	for child in source.children {
+		if child == nil || !child.archivable {
+			continue
+		}
+
+		cloned_child, child_ok := Clone_Object(
+			L,
+			registry,
+			child,
+		)
+
+		if !child_ok {
+			continue
+		}
+
+		Set_Parent(cloned_child, destination)
+
+		// Clone_Object left cloned_child's userdata on the stack.
+		// Its lua_ref keeps it alive, so remove the temporary stack value.
+		vm.Pop(L)
+	}
+
+	return destination, true
+}
+
 Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
     object := cast(^Object)value
     if object == nil {
@@ -442,6 +597,35 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
     }
 
     switch method {
+    case "Clone":
+	if !object.archivable {
+		vm.PushNil(L)
+		return 1, true
+	}
+
+	descriptor := cast(^Class_Descriptor)ctx
+
+	if descriptor == nil || descriptor.registry == nil {
+		count := vm.RaiseError(
+			L,
+			"cannot clone Instance without a class registry",
+		)
+		return count, true
+	}
+
+	_, ok := Clone_Object(
+		L,
+		descriptor.registry,
+		object,
+	)
+
+	if !ok {
+		vm.PushNil(L)
+		return 1, true
+	}
+
+	// Clone_Object/Push_New already left the cloned userdata on top.
+	return 1, true
     case "Destroy":
         Destroy_Hierarchy(object)
         return 0, true
@@ -516,4 +700,3 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 
     return 0, false
 }
-

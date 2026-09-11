@@ -28,11 +28,16 @@ Folder_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
     free(cast(^Folder)object)
 }
 
+Folder_clone :: proc(source: ^Object, destination: ^Object) {
+	// No extra properties
+}
+
 Register_Folder :: proc(registry: ^Registry) {
     Register_Class(
         registry,
         &Folder_Class,
         Folder_construct,
         Folder_destroy,
+        clone = Folder_clone,
     )
 }

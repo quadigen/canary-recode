@@ -208,6 +208,31 @@ foreign lib {
 		rowBytes: i32,
 		pixelsRGBA8: rawptr,
 	) -> ^KineFilamentTex ---
+	Kine_Filament_CreatePbrTexFromPixels :: proc(
+		ctx: ^KineFilamentContext,
+
+		width: i32,
+		height: i32,
+		albedoRowBytes: i32,
+		albedoRGBA8: rawptr,
+
+		normalWidth: i32,
+		normalHeight: i32,
+		normalRowBytes: i32,
+		normalRGBA8: rawptr,
+
+		ormWidth: i32,
+		ormHeight: i32,
+		ormRowBytes: i32,
+		ormRGBA8: rawptr,
+
+		heightWidth: i32,
+		heightHeight: i32,
+		heightRowBytes: i32,
+		heightRGBA8: rawptr,
+
+		heightScale: f32,
+	) -> ^KineFilamentTex ---
 
 	/* Imported skeletal data. Bind transforms and caller-provided bone transforms
 	are row-major affine float[16] matrices in mesh-local space. Bone transforms

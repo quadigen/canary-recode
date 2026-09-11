@@ -90,6 +90,15 @@ void kine_lua_setuserthreadcallback(
 {
     lua_callbacks(L)->userthread = callback;
 }
+int kine_lua_getmetatable(lua_State* L, int index)
+{
+    return lua_getmetatable(L, index);
+}
+int kine_luaL_error(lua_State* L, const char* message)
+{
+    luaL_error(L, "%s", message);
+    return 0;
+}
 int kine_lua_pcall(lua_State* L, int arguments, int results, int errorFunction)
 {
     return lua_pcall(L, arguments, results, errorFunction);

@@ -166,6 +166,16 @@ TextLabel_render :: proc(
 	)
 }
 
+TextLabel_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^TextLabel)source
+	dst := cast(^TextLabel)destination
+
+	dst.text              = strings.clone(src.text)
+	dst.text_size         = src.text_size
+	dst.text_color3       = src.text_color3
+	dst.text_transparency = src.text_transparency
+}
+
 Register_TextLabel :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -174,5 +184,6 @@ Register_TextLabel :: proc(registry: ^Registry) {
         TextLabel_destroy,
         get = TextLabel_get,
         set = TextLabel_set,
+        clone = TextLabel_clone,
     )
 }

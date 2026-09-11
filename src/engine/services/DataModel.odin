@@ -28,6 +28,7 @@ data_model_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 	free(model)
 }
 
+// Native engine access. This intentionally bypasses Luau thread security.
 DataModel_Get_Service :: proc(model: ^DataModel, name: string) -> ^classes.Object {
 	if model == nil || model.destroyed || model.registry == nil { return nil }
 	return Ensure_Service(model.registry, name)
@@ -41,10 +42,17 @@ data_model_get :: proc(
 	key: string,
 ) -> bool {
 	model := cast(^DataModel)object
-	service := DataModel_Get_Service(model, key)
-	if service != nil {
-		classes.Push_Object(L, service)
-		return true
+	descriptor := Find_Service(model.registry, key)
+	if descriptor != nil {
+		if !Service_Access_Allowed(L, descriptor) {
+			_ = vm.RaiseError(L, "insufficient security capabilities to access this service")
+			return true
+		}
+		service := Ensure_Service(model.registry, key)
+		if service != nil {
+			classes.Push_Object(L, service)
+			return true
+		}
 	}
 	switch key {
 	case "GetService", "FindService": vm.PushUserdataMethod(L, key)
@@ -63,12 +71,28 @@ data_model_namecall :: proc(
 	model := cast(^DataModel)object
 	switch method {
 	case "GetService":
-		service := DataModel_Get_Service(model, vm.ArgString(L, 2))
-		if service == nil { return vm.RaiseError(L, "unknown service"), true }
+		name := vm.ArgString(L, 2)
+		descriptor := Find_Service(model.registry, name)
+		if descriptor == nil {
+			return vm.RaiseError(L, "unknown service"), true
+		}
+		if !Service_Access_Allowed(L, descriptor) {
+			return vm.RaiseError(L, "insufficient security capabilities to access this service"), true
+		}
+		service := Ensure_Service(model.registry, name)
+		if service == nil {
+			return vm.RaiseError(L, "service is unavailable"), true
+		}
 		classes.Push_Object(L, service)
 		return 1, true
 	case "FindService":
-		classes.Push_Object(L, DataModel_Get_Service(model, vm.ArgString(L, 2)))
+		name := vm.ArgString(L, 2)
+		descriptor := Find_Service(model.registry, name)
+		if descriptor == nil || !Service_Access_Allowed(L, descriptor) {
+			vm.PushNil(L)
+			return 1, true
+		}
+		classes.Push_Object(L, Ensure_Service(model.registry, name))
 		return 1, true
 	}
 	return 0, false
@@ -85,4 +109,3 @@ Register_DataModel_Class :: proc(registry: ^classes.Registry) {
 		namecall = data_model_namecall,
 	)
 }
-

@@ -2,22 +2,24 @@ package services
 
 import "vendor:sdl3"
 import classes "../classes"
+import datatypes "../datatypes"
 import signals "../signals"
 import vm "../vm"
 
 Service_Descriptor :: struct {
-	name:       string,
-	class_name: string,
-	global_name: string,
-	object:     ^classes.Object,
+	name:         string,
+	class_name:   string,
+	global_name:  string,
+	object:       ^classes.Object,
 	constructing: bool,
+	security:     vm.Security_Requirement,
 }
 
 Registry :: struct {
-	classes:  ^classes.Registry,
-	services: [dynamic]Service_Descriptor,
-	data_model: ^DataModel,
-	vm_state: ^vm.VM,
+	classes:         ^classes.Registry,
+	services:        [dynamic]Service_Descriptor,
+	data_model:      ^DataModel,
+	vm_state:        ^vm.VM,
 	signal_registry: ^signals.Registry,
 }
 
@@ -47,6 +49,30 @@ Find_Service :: proc(registry: ^Registry, name: string) -> ^Service_Descriptor {
 	return nil
 }
 
+Set_Service_Security :: proc(registry: ^Registry, name: string, requirement: vm.Security_Requirement) -> bool {
+	descriptor := Find_Service(registry, name)
+	if descriptor == nil {
+		return false
+	}
+	descriptor.security = requirement
+	if descriptor.object != nil {
+		descriptor.object.security_requirement = requirement
+	}
+	return true
+}
+
+Service_Access_Allowed :: proc(L: ^vm.State, descriptor: ^Service_Descriptor) -> bool {
+	return descriptor != nil && vm.ThreadMeetsSecurityRequirement(L, descriptor.security)
+}
+
+Get_Service_For_Thread :: proc(registry: ^Registry, L: ^vm.State, name: string) -> (^classes.Object, bool) {
+	descriptor := Find_Service(registry, name)
+	if descriptor == nil || !Service_Access_Allowed(L, descriptor) {
+		return nil, false
+	}
+	return Ensure_Service(registry, name), true
+}
+
 Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	descriptor := Find_Service(registry, name)
 	if descriptor == nil || registry.vm_state == nil { return nil }
@@ -57,6 +83,7 @@ Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	defer descriptor.constructing = false
 	object, ok := classes.Push_New(registry.classes, registry.vm_state, descriptor.class_name, false)
 	if !ok || object == nil { return nil }
+	object.security_requirement = descriptor.security
 	descriptor.object = object
 	classes.Set_Parent(object, &registry.data_model.object)
 	vm.Pop(registry.vm_state.L)
@@ -67,38 +94,75 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
+	Register_CollectionService_Class(registry.classes)
 	Register_ExampleService_Class(registry.classes)
+	Register_HttpService_Class(registry.classes)
 	Register_Lighting_Class(registry.classes)
+	Register_LocalizationService_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
+	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
 	Register_RunService_Class(registry.classes)
 	Register_ScriptContext_Class(registry.classes)
 	Register_Selection_Class(registry.classes)
 	Register_ServerScriptService_Class(registry.classes)
+	Register_ServerStorage_Class(registry.classes)
 	Register_SoundService_Class(registry.classes)
 	Register_StarterGui_Class(registry.classes)
+	Register_StarterPack_Class(registry.classes)
+	Register_StarterPlayer_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
+	Register_TweenService_Class(registry.classes)
 	Register_UserInputService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
 	// wire:begin services
+	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
+	Register_Service(registry, "HttpService", "HttpService", "HttpService")
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
+	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "Physics", "Physics")
+	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
 	Register_Service(registry, "RunService", "RunService")
-	Register_Service(registry, "ScriptContext", "ScriptContext", "ScriptContext")
+	Register_Service(registry, "ScriptContext", "ScriptContext")
 	Register_Service(registry, "Selection", "Selection", "Selection")
 	Register_Service(registry, "ServerScriptService", "ServerScriptService", "ServerScriptService")
+	Register_Service(registry, "ServerStorage", "ServerStorage", "ServerStorage")
 	Register_Service(registry, "SoundService", "SoundService", "SoundService")
 	Register_Service(registry, "StarterGui", "StarterGui", "StarterGui")
+	Register_Service(registry, "StarterPack", "StarterPack", "StarterPack")
+	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
+	Register_Service(registry, "TweenService", "TweenService", "TweenService")
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	// wire:end services
 	Register_Service(registry, "CoreGui", "StarterGui")
+
+	assert(Set_Service_Security(
+		registry,
+		"ScriptContext",
+		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_CONTEXT),
+	))
+	assert(Set_Service_Security(
+		registry,
+		"Selection",
+		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
+	))
+	assert(Set_Service_Security(
+		registry,
+		"StudioThemeService",
+		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
+	))
+	assert(Set_Service_Security(
+		registry,
+		"CoreGui",
+		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
+	))
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
@@ -116,7 +180,7 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 	}
 	run_service := Find_Service(registry, "RunService")
 	if run_service != nil && run_service.object != nil {
-		Run_Service_Step(cast(^RunService)run_service.object, L, delta_time)
+		Run_Service_Heartbeat(cast(^RunService)run_service.object, L, delta_time)
 	}
 }
 
@@ -170,8 +234,10 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	classes.Push_Object(vm_state.L, &registry.data_model.object)
 	vm.SetGlobalFromStack(vm_state, "game")
 
+	// A protected service cannot safely be installed as a shared VM global:
+	// globals are common to every Luau thread, regardless of its capabilities.
 	for service in registry.services {
-		if service.global_name != "" {
+		if service.global_name != "" && vm.SecurityRequirementIsNone(service.security) {
 			classes.Push_Object(vm_state.L, service.object)
 			vm.SetGlobalFromStack(vm_state, service.global_name)
 		}

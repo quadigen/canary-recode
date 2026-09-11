@@ -709,9 +709,8 @@ ReleaseValue :: proc(L: ^State, reference: i32) {
 }
 
 RaiseError :: proc(L: ^State, message: string) -> i32 {
-	luauh.lua_pushlstring(L, cast(cstring)raw_data(message), len(message))
-	luauh.lua_error(L)
-	return 0
+    c_message := strings.clone_to_cstring(message, context.temp_allocator)
+    return luauh.luaL_error(L, c_message)
 }
 
 RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {

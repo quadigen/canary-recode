@@ -1,18 +1,11 @@
 package main
 
 import "core:fmt"
-import "core:os"
-import datatypes "engine/datatypes"
 import engine_runtime "engine/runtime"
 import renderer "engine/renderer"
 import vm "engine/vm"
 import sdl3 "vendor:sdl3"
 import sandbox "./sandboxed"
-
-Engine :: struct {
-	Version: string,
-	Build:   string,
-}
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -47,10 +40,15 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 
 main :: proc() {
 	script_vm := vm.New()
-	
+	defer vm.Close(&script_vm)
+
 	environment: engine_runtime.Environment
-	render_context := Runtime_Render_Context{environment = &environment, vm_state = &script_vm}
-	rendererObject := renderer.RendererObject{
+	render_context := Runtime_Render_Context{
+		environment = &environment,
+		vm_state = &script_vm,
+	}
+
+	renderer_object := renderer.RendererObject{
 		Step = runtime_update_step,
 		Draw3D = runtime_render_3d,
 		Draw2D = runtime_render_2d,
@@ -70,7 +68,8 @@ main :: proc() {
 		OnEvent = runtime_input_event,
 	}
 
-	sandbox.init(&rendererObject)
+	sandbox.init(&script_vm, &environment, &renderer_object)
+	defer sandbox.shutdown()
 
-	renderer.init("Kinemium Engine", 800, 600, &rendererObject)
+	renderer.init("Kinemium Engine", 800, 600, &renderer_object)
 }

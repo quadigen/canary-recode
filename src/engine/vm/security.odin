@@ -8,8 +8,57 @@ Thread_Security_Capabilities :: struct {
 	bits_high: u64,
 }
 
+Security_Requirement :: struct {
+	capabilities: Thread_Security_Capabilities,
+}
+
 THREAD_SECURITY_NONE :: Thread_Security_Capabilities{}
 THREAD_SECURITY_ALL  :: Thread_Security_Capabilities{~u64(0), ~u64(0)}
+SECURITY_REQUIREMENT_NONE :: Security_Requirement{}
+
+SecurityRequirementFromCapabilities :: proc(capabilities: Thread_Security_Capabilities) -> Security_Requirement {
+	return Security_Requirement{capabilities = capabilities}
+}
+
+SecurityRequirementFromValue :: proc(capability: i64) -> Security_Requirement {
+	result := SECURITY_REQUIREMENT_NONE
+	if capability < 0 || capability > 127 {
+		return result
+	}
+	if capability < 64 {
+		result.capabilities.bits_low = u64(1) << u64(capability)
+	} else {
+		result.capabilities.bits_high = u64(1) << u64(capability-64)
+	}
+	return result
+}
+
+SecurityRequirementIsNone :: proc(requirement: Security_Requirement) -> bool {
+	return requirement.capabilities.bits_low == 0 && requirement.capabilities.bits_high == 0
+}
+
+ThreadSecurityAddCapability :: proc(capabilities: Thread_Security_Capabilities, capability: i64) -> Thread_Security_Capabilities {
+	result := capabilities
+	if capability < 0 || capability > 127 {
+		return result
+	}
+	if capability < 64 {
+		result.bits_low |= u64(1) << u64(capability)
+	} else {
+		result.bits_high |= u64(1) << u64(capability-64)
+	}
+	return result
+}
+
+ThreadHasSecurityCapabilities :: proc(L: ^State, required: Thread_Security_Capabilities) -> bool {
+	current := GetThreadSecurityCapabilities(L)
+	return current.bits_low & required.bits_low == required.bits_low &&
+	       current.bits_high & required.bits_high == required.bits_high
+}
+
+ThreadMeetsSecurityRequirement :: proc(L: ^State, requirement: Security_Requirement) -> bool {
+	return ThreadHasSecurityCapabilities(L, requirement.capabilities)
+}
 
 thread_security_context :: proc(L: ^State) -> ^Thread_Security_Capabilities {
 	if L == nil {

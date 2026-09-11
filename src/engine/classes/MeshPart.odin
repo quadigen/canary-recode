@@ -122,6 +122,17 @@ mesh_part_set :: proc(
     return true
 }
 
+mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^MeshPart)source
+	dst := cast(^MeshPart)destination
+
+	delete(dst.mesh_id)
+	delete(dst.texture_id)
+
+	dst.mesh_id    = strings.clone(src.mesh_id)
+	dst.texture_id = strings.clone(src.texture_id)
+}
+
 Register_MeshPart :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -130,6 +141,7 @@ Register_MeshPart :: proc(registry: ^Registry) {
         mesh_part_destroy,
         get = mesh_part_get,
         set = mesh_part_set,
+        clone = mesh_part_clone,
     )
 }
 

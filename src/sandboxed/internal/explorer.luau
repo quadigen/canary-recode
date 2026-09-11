@@ -12,25 +12,17 @@ if IsClient then
 	return
 end
 
-repeat
-	task.wait()
-until game.CoreGui:FindFirstChild("Studio")
+local gui = Instance.new("ScreenGui")
+gui.Parent = game.StarterGui
 
 local Explorer = Instance.new("Frame")
 Explorer.Name = "Explorer"
 Explorer.Size = theme.ExplorerCoordinates.Size
 Explorer.Position = theme.ExplorerCoordinates.Position
-Explorer.Parent = game.CoreGui:FindFirstChild("Studio")
+Explorer.Parent = gui
 Explorer.BackgroundTransparency = 1
-local visible = true
 
-if ishared.StudioSystem then
-	ishared.StudioSystem:Connect(function(route)
-		if route == "toggle_explorer" then
-			visible = not visible
-		end
-	end)
-end
+local visible = true
 
 local retainedStorage = {}
 
@@ -317,10 +309,14 @@ renderer.Pool.new("2d", function()
 
 					local services = game:GetChildren()
 
+					pairs(services[1])
+
 					local order = {}
 					for index, name in ipairs(serviceOrder) do
 						order[name] = index
 					end
+
+					print(order[1])
 
 					table.sort(services, function(a, b)
 						local aOrder = order[a.Name]
@@ -387,7 +383,10 @@ renderer.Pool.new("2d", function()
 						local children = instance:GetChildren()
 						local hasChildren = false
 
-						for _, child in ipairs(children) do
+						print(children[1])
+
+						for _, child in pairs(children) do
+							print(child.Name)
 							if not child.ExplorerHidden then
 								hasChildren = true
 								break
@@ -588,6 +587,7 @@ renderer.Pool.new("2d", function()
 						}, dt)
 					end
 
+					print(services[1])
 					local renderState = { y = params.y + yOffset, rowIndex = 0 }
 					for _, service in ipairs(services) do
 						walkVisible(service, 0, renderState, function(instance, depth, rowY, idx)

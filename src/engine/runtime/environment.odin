@@ -94,21 +94,93 @@ Environment_Render_Step :: proc(environment: ^Environment, vm_state: ^vm.VM, del
 	classes.Step(&environment.classes, vm_state.L, delta_time)
 }
 
-Environment_Update_Step :: proc(environment: ^Environment, vm_state: ^vm.VM, delta_time: f32) {
-	if environment == nil || vm_state == nil || vm_state.L == nil { return }
-	services.Render_Step(&environment.services, vm_state.L, delta_time)
-	services.Prepare_3D(&environment.services, environment.renderer)
+Environment_Update_Step :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	delta_time: f32,
+) {
+	if environment == nil ||
+	   vm_state == nil ||
+	   vm_state.L == nil {
+		return
+	}
+
+	packages.Update(
+		&environment.packages,
+		delta_time,
+	)
+
+	services.Render_Step(
+		&environment.services,
+		vm_state.L,
+		delta_time,
+	)
+
+	services.Prepare_3D(
+		&environment.services,
+		environment.renderer,
+	)
 }
 
-Environment_SetEvent :: proc(environment: ^Environment, vm_state: ^vm.VM, event: sdl3.Event) {
-	if environment == nil || vm_state == nil || vm_state.L == nil { return }
-	services.Set_Event(&environment.services, vm_state.L, event)
+Environment_SetEvent :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	event: sdl3.Event,
+) {
+	if environment == nil ||
+	   vm_state == nil ||
+	   vm_state.L == nil {
+		return
+	}
+
+	packages.Set_Event(
+		&environment.packages,
+		event,
+	)
+
+	services.Set_Event(
+		&environment.services,
+		vm_state.L,
+		event,
+	)
 }
 
-Environment_Render_3D :: proc(environment: ^Environment, vm_state: ^vm.VM, delta_time: f32) {
-	if environment == nil || vm_state == nil || vm_state.L == nil { return }
-	classes.Step(&environment.classes, vm_state.L, delta_time, phase = .Render_3D)
-	services.Render_3D(&environment.services, vm_state.L, environment.renderer, delta_time)
+Environment_Render_3D :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	delta_time: f32,
+) {
+	if environment == nil ||
+	   vm_state == nil ||
+	   vm_state.L == nil {
+		return
+	}
+
+	// Canary renderer.Pool.new("3d")
+	packages.Render_3D(
+		&environment.packages,
+		delta_time,
+	)
+
+	classes.Step(
+		&environment.classes,
+		vm_state.L,
+		delta_time,
+		phase = .Render_3D,
+	)
+
+	services.Render_3D(
+		&environment.services,
+		vm_state.L,
+		environment.renderer,
+		delta_time,
+	)
+
+	// Canary renderer.Pool.new("gizmo") + After3D.
+	packages.Render_3D_Above(
+		&environment.packages,
+		delta_time,
+	)
 }
 
 Environment_Render_2D :: proc(
@@ -118,10 +190,40 @@ Environment_Render_2D :: proc(
 	width, height: i32,
 	delta_time: f32,
 ) {
-	if environment == nil || vm_state == nil || vm_state.L == nil || surface == nil || environment.renderer == nil { return }
+	if environment == nil ||
+	   vm_state == nil ||
+	   vm_state.L == nil ||
+	   surface == nil ||
+	   environment.renderer == nil {
+		return
+	}
+
 	previous_surface := environment.renderer.SkiaSurface
 	environment.renderer.SkiaSurface = surface
 	defer environment.renderer.SkiaSurface = previous_surface
-	packages.Render_2D(&environment.packages, width, height, delta_time)
-	classes.Step(&environment.classes, vm_state.L, delta_time, width, height)
+
+	// Canary "2d" pool.
+	packages.Render_2D(
+		&environment.packages,
+		width,
+		height,
+		delta_time,
+	)
+
+	// Native retained engine UI.
+	classes.Step(
+		&environment.classes,
+		vm_state.L,
+		delta_time,
+		width,
+		height,
+	)
+
+	// Canary "2da" pool: overlays, menus, CoreGui-like top layer.
+	packages.Render_2D_Above(
+		&environment.packages,
+		width,
+		height,
+		delta_time,
+	)
 }

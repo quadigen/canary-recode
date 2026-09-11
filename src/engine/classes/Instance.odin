@@ -26,7 +26,11 @@ instance_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(cast(^Instance)object)
 }
 
+instance_clone :: proc(source: ^Object, destination: ^Object) {
+	// No extra properties
+}
+
 Register_Instance :: proc(registry: ^Registry) {
-	Register_Class(registry, &Instance_Class, instance_construct, instance_destroy)
+	Register_Class(registry, &Instance_Class, instance_construct, instance_destroy, clone = instance_clone)
 }
 

@@ -209,6 +209,18 @@ Camera_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
     free(camera)
 }
 
+Camera_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^Camera)source
+	dst := cast(^Camera)destination
+
+	dst.CFrame = src.CFrame
+	dst.yaw = src.yaw
+	dst.pitch = src.pitch
+	dst.move_speed = src.move_speed
+	dst.mouse_sensitivity = src.mouse_sensitivity
+	// mouse_captured intentionally not copied.
+}
+
 Register_Camera :: proc(registry: ^Registry) {
     Register_Class(
         registry,
@@ -217,6 +229,7 @@ Register_Camera :: proc(registry: ^Registry) {
         Camera_destroy,
         get = Camera_Get,
         set = Camera_Set,
+        clone = Camera_clone,
         _step = Camera_Step,
 		_step_phase = .Render_3D,
     )

@@ -28,11 +28,16 @@ Model_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
     free(cast(^Model)object)
 }
 
+Model_clone :: proc(source: ^Object, destination: ^Object) {
+	// No extra properties
+}
+
 Register_Model :: proc(registry: ^Registry) {
     Register_Class(
         registry,
         &Model_Class,
         Model_construct,
         Model_destroy,
+        clone = Model_clone,
     )
 }

@@ -133,6 +133,10 @@ foreign lib {
 		L: ^lua_State,
 		data: rawptr,
 	) ---
+	luaL_error :: proc "c" (
+		L: ^lua_State,
+		message: cstring,
+	) -> i32 ---
 
 	lua_setuserthreadcallback :: proc(
 		L: ^lua_State,
