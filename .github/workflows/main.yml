@@ -120,11 +120,22 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          cmake_platform_args=()
+          if [[ "${{ runner.os }}" == 'Linux' ]]; then
+            # The aggregate archive is assembled with an MRI script. Use GNU
+            # binutils explicitly so the resulting archive is consumable by
+            # the system linker used by Odin.
+            cmake_platform_args+=(
+              -DCMAKE_AR=/usr/bin/ar
+              -DCMAKE_RANLIB=/usr/bin/ranlib
+            )
+          fi
           CC=clang CXX=clang++ CXXFLAGS=-stdlib=libc++ cmake \
             -S . \
             -B vendor/build \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            "${cmake_platform_args[@]}"
           cmake --build vendor/build --config Release --parallel
 
       - name: Verify native libraries (Windows)
@@ -160,6 +171,8 @@ jobs:
           for library in "${required[@]}"; do
             test -f "$library" || { echo "Missing native library: $library"; exit 1; }
           done
+          file vendor/build/lib/KinemiumLibs.a
+          ar -t vendor/build/lib/KinemiumLibs.a >/dev/null
           find vendor/build/_deps/sdl3-build -maxdepth 1 -type f \
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
