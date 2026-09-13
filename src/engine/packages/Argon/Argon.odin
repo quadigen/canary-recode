@@ -2,11 +2,10 @@ package argon
 
 // wire:package name="Argon"
 
-import "core:c"
 import "core:math"
 import "core:strings"
 import base_runtime "base:runtime"
-import sdl3 "vendor:sdl3"
+import sdl3 "../../platform"
 
 import kineffi "../../bindings"
 import renderer "../../renderer"
@@ -505,7 +504,7 @@ create_image_from_memory :: proc "c" (L: ^vm.State) -> i32 {
 
 	handle := kineffi.Kine_Skia_Image_LoadFromMemory(
 		cast(^u8)raw_data(data),
-		c.size_t(len(data)),
+		uintptr(len(data)),
 	)
 
 	if handle == nil {
@@ -2053,7 +2052,7 @@ is_key_down :: proc "c" (L: ^vm.State) -> i32 {
 	offset := function_offset(L)
 	key := int(vm.ArgInteger(L, 1+offset))
 
-	count: c.int
+	count: i32
 	state := sdl3.GetKeyboardState(&count)
 
 	down := false

@@ -29,6 +29,7 @@ Class_Step_Context :: struct {
 	data_model:      rawptr,
 	viewport_width:  i32,
 	viewport_height: i32,
+	gui_overlay:     bool,
 }
 
 Class_Step :: proc(object: ^Object, ctx: ^Class_Step_Context)
@@ -84,20 +85,21 @@ Method_Security :: proc(
 }
 
 Class_Descriptor :: struct {
-	info:            ^Class_Info,
-	construct:       Class_Constructor,
-	destroy:         Class_Destructor,
-	get:             Class_Getter,
-	set:             Class_Setter,
-	namecall:        Class_Namecall,
-	_step:           Class_Step,
-	_step_phase:     Class_Step_Phase,
-	creatable:       bool,
-	clone:           Class_Clone,
-	binding:         vm.Userdata_Binding,
-	registry:        ^Registry,
-	instances:       [dynamic]^Object,
-	member_security: [dynamic]Member_Security,
+	info:             ^Class_Info,
+	construct:        Class_Constructor,
+	destroy:          Class_Destructor,
+	get:              Class_Getter,
+	set:              Class_Setter,
+	namecall:         Class_Namecall,
+	_step:            Class_Step,
+	_step_phase:      Class_Step_Phase,
+	creatable:        bool,
+	clone:            Class_Clone,
+	binding:          vm.Userdata_Binding,
+	registry:         ^Registry,
+	instances:        [dynamic]^Object,
+	properties:       [dynamic]string,
+	member_security:  [dynamic]Member_Security,
 }
 
 Registry :: struct {
@@ -284,13 +286,13 @@ Register_Class :: proc(
 	_step: Class_Step = nil,
 	_step_phase: Class_Step_Phase = .Render_2D,
 	clone: Class_Clone = nil,
+	properties: []string = nil,
 	member_security: []Member_Security = nil,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
 	assert(construct != nil)
 	assert(destroy != nil)
-	assert(Find_Class(registry, info.name) == nil)
 
 	descriptor := new(Class_Descriptor)
 	descriptor^ = Class_Descriptor{
@@ -305,6 +307,10 @@ Register_Class :: proc(
 		creatable   = creatable,
 		clone       = clone,
 		registry    = registry,
+	}
+
+	for property in properties {
+		append(&descriptor.properties, property)
 	}
 
 	for rule in member_security {
@@ -394,6 +400,7 @@ Step :: proc(
 	viewport_width: i32 = 0,
 	viewport_height: i32 = 0,
 	phase: Class_Step_Phase = .Render_2D,
+	gui_overlay: bool = false,
 ) {
 	if registry == nil || L == nil { return }
 
@@ -415,6 +422,7 @@ Step :: proc(
 		data_model = registry.data_model,
 		viewport_width = viewport_width,
 		viewport_height = viewport_height,
+		gui_overlay = gui_overlay,
 	}
 
 	for target in targets {
@@ -451,12 +459,6 @@ instance_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-restore_script_global :: proc(L: ^vm.State, reference: i32) {
-	vm.PushRegistryReference(L, reference)
-	vm.SetGlobal(L, "script")
-	vm.ReleaseValue(L, reference)
-}
-
 require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 	if registry.fallback_require_ref <= 0 {
 		return vm.RaiseError(L, "require expects a Script or ModuleScript")
@@ -486,7 +488,7 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 	}
 
 	object := object_from_argument(L, 1)
-	if object == nil || !Is_A(object, "Script") {
+	if object == nil || !Is_A(object, "ModuleScript") {
 		return require_fallback(L, registry)
 	}
 
@@ -506,23 +508,29 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 
 	module.module_state = .Loading
 
-	_ = vm.GetGlobal(L, "script")
-	previous_script_ref := vm.RetainValue(L)
-	vm.Pop(L)
-
-	Push_Object(L, object)
-	vm.SetGlobal(L, "script")
-
 	chunk_name := fmt.tprintf("@%s", Get_Full_Name(object))
-	ok, err := vm.LoadSource(registry.vm_state, L, module.source, chunk_name)
+
+	ok, err := vm.LoadSource(
+		registry.vm_state,
+		L,
+		module.source,
+		chunk_name,
+	)
+
 	if !ok {
 		module.module_state = .Unloaded
-		restore_script_global(L, previous_script_ref)
 		return vm.RaiseOwnedError(L, &err)
 	}
 
+	if !Script_Apply_Environment(L, object) {
+		module.module_state = .Unloaded
+		return vm.RaiseError(
+			L,
+			"failed to create ModuleScript environment",
+		)
+	}
+
 	ok, err = vm.ProtectedCall(L, 0, 1)
-	restore_script_global(L, previous_script_ref)
 	if !ok {
 		module.module_state = .Unloaded
 		return vm.RaiseOwnedError(L, &err)
@@ -556,18 +564,27 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Instance(registry)
 	Register_BoolValue(registry)
 	Register_Camera(registry)
+	Register_Decal(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
 	Register_GuiObject(registry)
 	Register_ImageLabel(registry)
 	Register_InputObject(registry)
+	Register_Light(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
+	Register_ModuleModuleScript(registry)
 	Register_ModuleScript(registry)
 	Register_NumberValue(registry)
 	Register_Part(registry)
+	Register_PointLight(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
+	Register_ScrollingFrame(registry)
+	Register_Sound(registry)
+	Register_SpotLight(registry)
+	Register_SurfaceLight(registry)
+	Register_TextBox(registry)
 	Register_TextLabel(registry)
 	Register_UIBackdrop(registry)
 	Register_UICorner(registry)
@@ -583,6 +600,7 @@ Registry_Destroy :: proc(registry: ^Registry) {
 
 	for descriptor in registry.classes {
 		delete(descriptor.instances)
+		delete(descriptor.properties)
 		delete(descriptor.member_security)
 		free(descriptor)
 	}

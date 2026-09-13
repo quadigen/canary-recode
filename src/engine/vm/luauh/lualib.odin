@@ -2,15 +2,24 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 package luauh
 
-import "core:c"
-
-when ODIN_OS == .Windows {
+when ODIN_OS == .JS {
+	foreign import lib "../../../../build/web-native/lib/kine_lualib_link.o"
+} else when ODIN_OS == .Windows {
 	foreign import lib {
 		"../../../../vendor/build/lib/kine_luau.lib",
-		"../../../../build/vendor/luau/Luau.VM.lib",
+		"../../../../vendor/build/vendor/luau/Luau.VM.lib",
+	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib {
+		"../../../../build/android-native/lib/libkine_luau.a",
+		"../../../../build/android-native/luau/libLuau.VM.a",
 	}
 } else {
-	foreign import lib "system:Luau.VM"
+	foreign import lib {
+		"../../../../vendor/build/lib/kine_luau.a",
+		"../../../../vendor/build/vendor/luau/libLuau.VM.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Common.a",
+	}
 }
 
 luaL_Reg :: struct {
@@ -25,8 +34,8 @@ foreign lib {
 	luaL_callmeta         :: proc(L: ^lua_State, obj: i32, e: cstring) -> i32 ---
 	luaL_typeerrorL       :: proc(L: ^lua_State, narg: i32, tname: cstring) ---
 	luaL_argerrorL        :: proc(L: ^lua_State, narg: i32, extramsg: cstring) ---
-	luaL_checklstring     :: proc(L: ^lua_State, numArg: i32, l: ^c.size_t) -> cstring ---
-	luaL_optlstring       :: proc(L: ^lua_State, numArg: i32, def: cstring, l: ^c.size_t) -> cstring ---
+	luaL_checklstring     :: proc(L: ^lua_State, numArg: i32, l: ^uintptr) -> cstring ---
+	luaL_optlstring       :: proc(L: ^lua_State, numArg: i32, def: cstring, l: ^uintptr) -> cstring ---
 	luaL_checknumber      :: proc(L: ^lua_State, numArg: i32) -> f64 ---
 	luaL_optnumber        :: proc(L: ^lua_State, nArg: i32, def: f64) -> f64 ---
 	luaL_checkboolean     :: proc(L: ^lua_State, narg: i32) -> i32 ---
@@ -45,11 +54,11 @@ foreign lib {
 	luaL_newmetatable     :: proc(L: ^lua_State, tname: cstring) -> i32 ---
 	luaL_checkudata       :: proc(L: ^lua_State, ud: i32, tname: cstring) -> rawptr ---
 	luaL_checkudatatagged :: proc(L: ^lua_State, ud: i32, tag: i32) -> rawptr ---
-	luaL_checkbuffer      :: proc(L: ^lua_State, narg: i32, len: ^c.size_t) -> rawptr ---
+	luaL_checkbuffer      :: proc(L: ^lua_State, narg: i32, len: ^uintptr) -> rawptr ---
 	luaL_where            :: proc(L: ^lua_State, lvl: i32) ---
 	luaL_errorL           :: proc(L: ^lua_State, fmt: cstring, #c_vararg _: ..any) ---
 	luaL_checkoption      :: proc(L: ^lua_State, narg: i32, def: cstring, lst: [^]cstring) -> i32 ---
-	luaL_tolstring        :: proc(L: ^lua_State, idx: i32, len: ^c.size_t) -> cstring ---
+	luaL_tolstring        :: proc(L: ^lua_State, idx: i32, len: ^uintptr) -> cstring ---
 	luaL_newstate         :: proc() -> ^lua_State ---
 	luaL_findtable        :: proc(L: ^lua_State, idx: i32, fname: cstring, szhint: i32) -> cstring ---
 	luaL_typename         :: proc(L: ^lua_State, idx: i32) -> cstring ---
@@ -74,13 +83,13 @@ luaL_Buffer :: luaL_Strbuf
 @(default_calling_convention="c")
 foreign lib {
 	luaL_buffinit       :: proc(L: ^lua_State, B: ^luaL_Strbuf) ---
-	luaL_buffinitsize   :: proc(L: ^lua_State, B: ^luaL_Strbuf, size: c.size_t) -> cstring ---
-	luaL_prepbuffsize   :: proc(B: ^luaL_Buffer, size: c.size_t) -> cstring ---
-	luaL_addlstring     :: proc(B: ^luaL_Strbuf, s: cstring, l: c.size_t) ---
+	luaL_buffinitsize   :: proc(L: ^lua_State, B: ^luaL_Strbuf, size: uintptr) -> cstring ---
+	luaL_prepbuffsize   :: proc(B: ^luaL_Buffer, size: uintptr) -> cstring ---
+	luaL_addlstring     :: proc(B: ^luaL_Strbuf, s: cstring, l: uintptr) ---
 	luaL_addvalue       :: proc(B: ^luaL_Strbuf) ---
 	luaL_addvalueany    :: proc(B: ^luaL_Strbuf, idx: i32) ---
 	luaL_pushresult     :: proc(B: ^luaL_Strbuf) ---
-	luaL_pushresultsize :: proc(B: ^luaL_Strbuf, size: c.size_t) ---
+	luaL_pushresultsize :: proc(B: ^luaL_Strbuf, size: uintptr) ---
 
 	// builtin libraries
 	luaopen_base :: proc(L: ^lua_State) -> i32 ---

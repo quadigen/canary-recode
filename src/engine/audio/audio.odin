@@ -1,3 +1,4 @@
+#+build !js
 package audio
 
 import miniaudio "vendor:miniaudio"

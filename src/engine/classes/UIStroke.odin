@@ -126,5 +126,6 @@ Register_UIStroke :: proc(registry: ^Registry) {
 		get = UIStroke_get,
 		set = UIStroke_set,
 		clone = UIStroke_clone,
+		properties = []string{"Color", "Thickness", "ApplyStrokeMode", "Transparency", "Enabled"},
 	)
 }

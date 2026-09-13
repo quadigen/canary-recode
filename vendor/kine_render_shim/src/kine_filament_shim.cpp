@@ -41,8 +41,10 @@
 #include <filament/IndirectLight.h>
 #include <filamat/MaterialBuilder.h>
 #include <filamat/Package.h>
+#if !defined(__ANDROID__)
 #include <filament-matp/Config.h>
 #include <filament-matp/MaterialParser.h>
+#endif
 #include <backend/DriverEnums.h>
 #include <backend/Platform.h>
 #if KINE_FILAMENT_USE_VULKAN
@@ -103,11 +105,16 @@ struct VkQueue_T;
 #define M_PI 3.14159265358979323846
 #endif
 
+#if !defined(__ANDROID__)
 class KineRuntimeMaterialConfig final : public matp::Config {
 public:
     KineRuntimeMaterialConfig()
     {
+#if defined(__ANDROID__)
+        mPlatform = Platform::MOBILE;
+#else
         mPlatform = Platform::DESKTOP;
+#endif
 #if KINE_FILAMENT_USE_VULKAN
         mTargetApi = TargetApi::VULKAN;
 #else
@@ -125,6 +132,7 @@ public:
     std::string toString() const noexcept override { return "Kinemium runtime material"; }
     std::string toPIISafeString() const noexcept override { return toString(); }
 };
+#endif
 
 #if !KINE_FILAMENT_USE_VULKAN
 #if defined(_WIN32)
@@ -1096,6 +1104,11 @@ static void* getFilamentNativeWindowFromSDL(void* sdlWindow)
     fprintf(stderr, "[Kine] SDL Vulkan native window missing HWND, flags=0x%llx hdc=%p\n",
         (unsigned long long)flags, hdc);
     return nullptr;
+#elif defined(__ANDROID__)
+    void* nativeWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+    fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx androidWindow=%p\n",
+        (unsigned long long)flags, nativeWindow);
+    return nativeWindow;
 #elif defined(__APPLE__)
     void* cocoaWindow = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
     fprintf(stderr, "[Kine] SDL Vulkan native window: flags=0x%llx cocoaWindow=%p\n",
@@ -1709,38 +1722,59 @@ static bool kine_append_assimp_node(
     return true;
 }
 
-static KineMesh* loadMeshWithAssimp(const char* path)
+static constexpr unsigned int KINE_ASSIMP_FLAGS =
+    aiProcess_Triangulate |
+    aiProcess_JoinIdenticalVertices |
+    aiProcess_GenSmoothNormals |
+    aiProcess_ImproveCacheLocality |
+    aiProcess_RemoveRedundantMaterials |
+    aiProcess_SortByPType;
+
+static KineMesh* buildMeshFromAssimpScene(
+    const aiScene* scene,
+    const char* sourceName)
 {
-    Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(
-        path,
-        aiProcess_Triangulate |
-        aiProcess_JoinIdenticalVertices |
-        aiProcess_GenSmoothNormals |
-        aiProcess_ImproveCacheLocality |
-        aiProcess_RemoveRedundantMaterials |
-        aiProcess_SortByPType
-    );
     if (!scene || !scene->HasMeshes()) {
-        fprintf(stderr, "[Kine] Assimp failed to load mesh '%s': %s\n", path, importer.GetErrorString());
         return nullptr;
     }
+
+    fprintf(
+        stderr,
+        "[Kine] loading %s: %u meshes\n",
+        sourceName ? sourceName : "<memory>",
+        scene->mNumMeshes
+    );
+
     auto* m = new KineMesh();
+
     std::unordered_map<std::string, int> boneIndices;
     std::unordered_map<std::string, aiMatrix4x4> inverseBinds;
+
     for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex) {
         const aiMesh* src = scene->mMeshes[meshIndex];
         if (!src) continue;
-        for (unsigned int srcBoneIndex = 0; srcBoneIndex < src->mNumBones; ++srcBoneIndex) {
+
+        for (unsigned int srcBoneIndex = 0;
+             srcBoneIndex < src->mNumBones;
+             ++srcBoneIndex)
+        {
             const aiBone* srcBone = src->mBones[srcBoneIndex];
             if (!srcBone) continue;
+
             const std::string name = srcBone->mName.C_Str();
+
             if (boneIndices.find(name) == boneIndices.end()) {
                 if (boneIndices.size() >= 255) {
-                    fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds Filament's 255 bone limit\n", path);
+                    fprintf(
+                        stderr,
+                        "[Kine] Assimp mesh '%s' exceeds Filament's 255 bone limit\n",
+                        sourceName ? sourceName : "<memory>"
+                    );
+
                     delete m;
                     return nullptr;
                 }
+
                 boneIndices[name] = (int)boneIndices.size();
                 inverseBinds[name] = srcBone->mOffsetMatrix;
             }
@@ -1749,53 +1783,107 @@ static KineMesh* loadMeshWithAssimp(const char* path)
 
     std::unordered_map<std::string, aiNode*> nodes;
     std::unordered_map<aiNode*, aiMatrix4x4> globals;
-    kine_collect_assimp_nodes(scene->mRootNode, aiMatrix4x4(), nodes, globals);
+
+    kine_collect_assimp_nodes(
+        scene->mRootNode,
+        aiMatrix4x4(),
+        nodes,
+        globals
+    );
+
     aiMatrix4x4 rootInverse = scene->mRootNode->mTransformation;
     rootInverse.Inverse();
 
     m->bones.resize(boneIndices.size());
+
     for (const auto& entry : boneIndices) {
         const std::string& name = entry.first;
         const int index = entry.second;
+
         KineBone& bone = m->bones[index];
         bone.name = name;
         bone.inverseBind = kine_from_assimp(inverseBinds[name]);
 
         aiNode* node = nullptr;
+
         const auto nodeIt = nodes.find(name);
-        if (nodeIt != nodes.end()) node = nodeIt->second;
+        if (nodeIt != nodes.end()) {
+            node = nodeIt->second;
+        }
+
         aiNode* parent = node ? node->mParent : nullptr;
+
         while (parent) {
-            const auto parentIt = boneIndices.find(parent->mName.C_Str());
+            const auto parentIt =
+                boneIndices.find(parent->mName.C_Str());
+
             if (parentIt != boneIndices.end()) {
                 bone.parent = parentIt->second;
                 break;
             }
+
             parent = parent->mParent;
         }
 
         aiMatrix4x4 local;
+
         if (node) {
-            const aiMatrix4x4 boneGlobal = rootInverse * globals[node];
+            const aiMatrix4x4 boneGlobal =
+                rootInverse * globals[node];
+
             if (bone.parent >= 0) {
-                aiMatrix4x4 parentGlobal = rootInverse * globals[parent];
+                aiMatrix4x4 parentGlobal =
+                    rootInverse * globals[parent];
+
                 parentGlobal.Inverse();
                 local = parentGlobal * boneGlobal;
             } else {
                 local = boneGlobal;
             }
         }
-        aiVector3D scaling(1.0f, 1.0f, 1.0f), position(0.0f, 0.0f, 0.0f);
+
+        aiVector3D scaling(1.0f, 1.0f, 1.0f);
+        aiVector3D position(0.0f, 0.0f, 0.0f);
         aiQuaternion rotation;
-        local.Decompose(scaling, rotation, position);
-        bone.bindTranslation = {position.x, position.y, position.z};
-        bone.bindRotation = kine_from_assimp(rotation);
-        bone.bindScale = {scaling.x, scaling.y, scaling.z};
-        bone.bindLocal = kine_from_assimp(local);
+
+        local.Decompose(
+            scaling,
+            rotation,
+            position
+        );
+
+        bone.bindTranslation = {
+            position.x,
+            position.y,
+            position.z
+        };
+
+        bone.bindRotation =
+            kine_from_assimp(rotation);
+
+        bone.bindScale = {
+            scaling.x,
+            scaling.y,
+            scaling.z
+        };
+
+        bone.bindLocal =
+            kine_from_assimp(local);
     }
 
-    if (!kine_append_assimp_node(m, scene, scene->mRootNode, aiMatrix4x4(), boneIndices)) {
-        fprintf(stderr, "[Kine] Assimp mesh '%s' exceeds the current 65535 vertex limit\n", path);
+    if (!kine_append_assimp_node(
+            m,
+            scene,
+            scene->mRootNode,
+            aiMatrix4x4(),
+            boneIndices))
+    {
+        fprintf(
+            stderr,
+            "[Kine] Assimp mesh '%s' exceeds the current 65535 vertex limit\n",
+            sourceName ? sourceName : "<memory>"
+        );
+
         delete m;
         return nullptr;
     }
@@ -1805,62 +1893,220 @@ static KineMesh* loadMeshWithAssimp(const char* path)
         return nullptr;
     }
 
-    m->indexCount = (uint32_t)m->indices.size();
+    m->indexCount =
+        (uint32_t)m->indices.size();
+
     if (!m->bones.empty()) {
         m->skinMatrices.resize(m->bones.size());
-        std::vector<math::mat4f> globalsByBone(m->bones.size());
+
+        std::vector<math::mat4f> globalsByBone(
+            m->bones.size()
+        );
+
         for (size_t i = 0; i < m->bones.size(); ++i) {
-            globalsByBone[i] = m->bones[i].parent >= 0
-                ? globalsByBone[(size_t)m->bones[i].parent] * m->bones[i].bindLocal
-                : m->bones[i].bindLocal;
-            m->skinMatrices[i] = globalsByBone[i] * m->bones[i].inverseBind;
+            globalsByBone[i] =
+                m->bones[i].parent >= 0
+                    ? globalsByBone[
+                          (size_t)m->bones[i].parent
+                      ] * m->bones[i].bindLocal
+                    : m->bones[i].bindLocal;
+
+            m->skinMatrices[i] =
+                globalsByBone[i] *
+                m->bones[i].inverseBind;
         }
     }
 
-    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex) {
-        const aiAnimation* sourceAnimation = scene->mAnimations[animationIndex];
+    for (unsigned int animationIndex = 0;
+         animationIndex < scene->mNumAnimations;
+         ++animationIndex)
+    {
+        const aiAnimation* sourceAnimation =
+            scene->mAnimations[animationIndex];
+
         if (!sourceAnimation) continue;
-        const double ticksPerSecond = sourceAnimation->mTicksPerSecond > 0.0
-            ? sourceAnimation->mTicksPerSecond
-            : 25.0;
+
+        const double ticksPerSecond =
+            sourceAnimation->mTicksPerSecond > 0.0
+                ? sourceAnimation->mTicksPerSecond
+                : 25.0;
+
         KineAnimation animation;
-        animation.name = sourceAnimation->mName.length > 0
-            ? sourceAnimation->mName.C_Str()
-            : ("Animation" + std::to_string(animationIndex + 1));
-        animation.duration = (float)(sourceAnimation->mDuration / ticksPerSecond);
-        for (unsigned int channelIndex = 0; channelIndex < sourceAnimation->mNumChannels; ++channelIndex) {
-            const aiNodeAnim* sourceChannel = sourceAnimation->mChannels[channelIndex];
+
+        animation.name =
+            sourceAnimation->mName.length > 0
+                ? sourceAnimation->mName.C_Str()
+                : (
+                    "Animation" +
+                    std::to_string(animationIndex + 1)
+                );
+
+        animation.duration =
+            (float)(
+                sourceAnimation->mDuration /
+                ticksPerSecond
+            );
+
+        for (unsigned int channelIndex = 0;
+             channelIndex < sourceAnimation->mNumChannels;
+             ++channelIndex)
+        {
+            const aiNodeAnim* sourceChannel =
+                sourceAnimation->mChannels[channelIndex];
+
             if (!sourceChannel) continue;
-            const auto boneIt = boneIndices.find(sourceChannel->mNodeName.C_Str());
-            if (boneIt == boneIndices.end()) continue;
+
+            const auto boneIt =
+                boneIndices.find(
+                    sourceChannel->mNodeName.C_Str()
+                );
+
+            if (boneIt == boneIndices.end()) {
+                continue;
+            }
+
             KineAnimationChannel channel;
             channel.bone = boneIt->second;
-            channel.translations.reserve(sourceChannel->mNumPositionKeys);
-            channel.rotations.reserve(sourceChannel->mNumRotationKeys);
-            channel.scales.reserve(sourceChannel->mNumScalingKeys);
-            for (unsigned int i = 0; i < sourceChannel->mNumPositionKeys; ++i) {
-                const aiVectorKey& key = sourceChannel->mPositionKeys[i];
+
+            channel.translations.reserve(
+                sourceChannel->mNumPositionKeys
+            );
+
+            channel.rotations.reserve(
+                sourceChannel->mNumRotationKeys
+            );
+
+            channel.scales.reserve(
+                sourceChannel->mNumScalingKeys
+            );
+
+            for (unsigned int i = 0;
+                 i < sourceChannel->mNumPositionKeys;
+                 ++i)
+            {
+                const aiVectorKey& key =
+                    sourceChannel->mPositionKeys[i];
+
                 channel.translations.push_back({
-                    (float)(key.mTime / ticksPerSecond),
-                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+                    (float)(
+                        key.mTime /
+                        ticksPerSecond
+                    ),
+                    {
+                        key.mValue.x,
+                        key.mValue.y,
+                        key.mValue.z
+                    }
+                });
             }
-            for (unsigned int i = 0; i < sourceChannel->mNumRotationKeys; ++i) {
-                const aiQuatKey& key = sourceChannel->mRotationKeys[i];
+
+            for (unsigned int i = 0;
+                 i < sourceChannel->mNumRotationKeys;
+                 ++i)
+            {
+                const aiQuatKey& key =
+                    sourceChannel->mRotationKeys[i];
+
                 channel.rotations.push_back({
-                    (float)(key.mTime / ticksPerSecond),
-                    kine_from_assimp(key.mValue)});
+                    (float)(
+                        key.mTime /
+                        ticksPerSecond
+                    ),
+                    kine_from_assimp(key.mValue)
+                });
             }
-            for (unsigned int i = 0; i < sourceChannel->mNumScalingKeys; ++i) {
-                const aiVectorKey& key = sourceChannel->mScalingKeys[i];
+
+            for (unsigned int i = 0;
+                 i < sourceChannel->mNumScalingKeys;
+                 ++i)
+            {
+                const aiVectorKey& key =
+                    sourceChannel->mScalingKeys[i];
+
                 channel.scales.push_back({
-                    (float)(key.mTime / ticksPerSecond),
-                    {key.mValue.x, key.mValue.y, key.mValue.z}});
+                    (float)(
+                        key.mTime /
+                        ticksPerSecond
+                    ),
+                    {
+                        key.mValue.x,
+                        key.mValue.y,
+                        key.mValue.z
+                    }
+                });
             }
-            animation.channels.push_back(std::move(channel));
+
+            animation.channels.push_back(
+                std::move(channel)
+            );
         }
-        m->animations.push_back(std::move(animation));
+
+        m->animations.push_back(
+            std::move(animation)
+        );
     }
+
     return m;
+}
+
+static KineMesh* loadMeshWithAssimp(const char* path)
+{
+    Assimp::Importer importer;
+
+    const aiScene* scene = importer.ReadFile(
+        path,
+        KINE_ASSIMP_FLAGS
+    );
+
+    if (!scene || !scene->HasMeshes()) {
+        fprintf(
+            stderr,
+            "[Kine] Assimp failed to load mesh '%s': %s\n",
+            path,
+            importer.GetErrorString()
+        );
+        return nullptr;
+    }
+
+    return buildMeshFromAssimpScene(scene, path);
+}
+
+static KineMesh* loadMeshWithAssimpMemory(
+    const void* data,
+    size_t dataSize,
+    const char* formatHint)
+{
+    if (!data || dataSize == 0) {
+        return nullptr;
+    }
+
+    Assimp::Importer importer;
+
+    const char* hint =
+        (formatHint && formatHint[0] != '\0')
+            ? formatHint
+            : nullptr;
+
+    const aiScene* scene = importer.ReadFileFromMemory(
+        data,
+        dataSize,
+        KINE_ASSIMP_FLAGS,
+        hint
+    );
+
+    if (!scene || !scene->HasMeshes()) {
+        fprintf(
+            stderr,
+            "[Kine] Assimp failed to load mesh from memory: %s\n",
+            importer.GetErrorString()
+        );
+        return nullptr;
+    }
+
+    return buildMeshFromAssimpScene(
+        scene,
+        hint ? hint : "<memory>"
+    );
 }
 #endif
 
@@ -3384,6 +3630,54 @@ KINE_API void Kine_Filament_ClearColorGrading(KineFilamentContext* ctx)
     ctx->view->setColorGrading(nullptr);
     ctx->engine->destroy(ctx->colorGrading);
     ctx->colorGrading = nullptr;
+}
+
+KINE_API bool Kine_Filament_SetDecalColor(
+    KineFilamentContext* ctx,
+    int decal,
+    float r,
+    float g,
+    float b,
+    float a
+) {
+    if (!ctx || !ctx->engine)
+        return false;
+
+    Entity entity = Entity::import(decal);
+
+    if (entity.isNull())
+        return false;
+
+    RenderableManager& rm =
+        ctx->engine->getRenderableManager();
+
+    auto instance =
+        rm.getInstance(entity);
+
+    if (!instance.isValid())
+        return false;
+
+    MaterialInstance* material =
+        rm.getMaterialInstanceAt(
+            instance,
+            0
+        );
+
+    if (!material)
+        return false;
+
+    material->setParameter(
+        "baseColor",
+        RgbaType::LINEAR,
+        math::float4{
+            std::clamp(r, 0.0f, 1.0f),
+            std::clamp(g, 0.0f, 1.0f),
+            std::clamp(b, 0.0f, 1.0f),
+            std::clamp(a, 0.0f, 1.0f),
+        }
+    );
+
+    return true;
 }
 
 KINE_API void Kine_Filament_SetRenderQuality(KineFilamentContext* ctx, int hdrQuality)
@@ -4951,6 +5245,41 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext*
 #endif
 }
 
+KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromMemory(
+    KineFilamentContext* ctx,
+    const void* data,
+    size_t dataSize,
+    const char* formatHint)
+{
+    if (!ctx || !ctx->engine || !data || dataSize == 0) {
+        return nullptr;
+    }
+
+#if KINE_WITH_ASSIMP
+    KineMesh* m = loadMeshWithAssimpMemory(
+        data,
+        dataSize,
+        formatHint
+    );
+
+    if (!m) {
+        return nullptr;
+    }
+
+    uploadMesh(m, ctx->engine);
+
+    return reinterpret_cast<KineFilamentMesh*>(m);
+#else
+    fprintf(
+        stderr,
+        "[Kine] CreateMeshFromMemory requires "
+        "KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n"
+    );
+
+    return nullptr;
+#endif
+}
+
 KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh* mesh)
 {
     const auto* m = reinterpret_cast<const KineMesh*>(mesh);
@@ -5901,6 +6230,12 @@ static thread_local std::string kine_filament_shader_error;
 KINE_API KineFilamentShader* Kine_Filament_Shader_Create(
     KineFilamentContext* ctx, const char* materialSource)
 {
+#if defined(__ANDROID__)
+    (void)ctx;
+    (void)materialSource;
+    kine_filament_shader_error = "Runtime material compilation is unavailable on Android";
+    return nullptr;
+#else
     kine_filament_shader_error.clear();
     if (!ctx || !ctx->engine || !materialSource || !*materialSource) {
         kine_filament_shader_error = "Filament material source is empty or no rendering context is available";
@@ -5955,6 +6290,7 @@ KINE_API KineFilamentShader* Kine_Filament_Shader_Create(
     shader->material = material;
     ctx->runtimeShaders.insert(shader);
     return shader;
+#endif
 }
 
 KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader)

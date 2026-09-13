@@ -21,6 +21,7 @@ ScreenGui :: struct {
     safe_area_compat: enums.SafeAreaCompatibility,
     screen_insets: enums.ScreenInsets,
     enabled: bool,
+	render_on_top: bool,
 
     // kinemium-specific props
     render_offset: datatypes.Vector2,
@@ -62,28 +63,57 @@ ScreenGui_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
 		vm.PushBoolean(L, ScreenGui.clip_to_device_safe_area)
 	case "IgnoreGuiInset":
 		vm.PushBoolean(L, ScreenGui.ignore_gui_inset)
+	case "RenderOnTop":
+		vm.PushBoolean(L, ScreenGui.render_on_top)
     case:
         return false
     }
     return true
 }
 
-ScreenGui_RenderChildren :: proc(    
-    object: ^Object,
-    ctx: ^Class_Step_Context,
+ScreenGui_RenderChildren :: proc(
+	object: ^Object,
+	ctx: ^Class_Step_Context,
 ) {
-    for child in object.children {
-        switch {
-        case Is_A(child, "Frame"):
-            Frame_render(child, ctx)
+	for child in object.children {
+		switch {
+		case Is_A(child, "ScrollingFrame"):
+			ScrollingFrame_render(
+				child,
+				ctx,
+			)
 
-        case Is_A(child, "ImageLabel"):
-            ImageLabel_render(child, ctx)
+		case Is_A(child, "TextBox"):
+			TextBox_render(
+				child,
+				ctx,
+			)
 
-        case Is_A(child, "GuiObject"):
-            GuiObject_render(child, ctx)
-        }
-    }
+		case Is_A(child, "TextLabel"):
+			TextLabel_render(
+				child,
+				ctx,
+			)
+
+		case Is_A(child, "Frame"):
+			Frame_render(
+				child,
+				ctx,
+			)
+
+		case Is_A(child, "ImageLabel"):
+			ImageLabel_render(
+				child,
+				ctx,
+			)
+
+		case Is_A(child, "GuiObject"):
+			GuiObject_render(
+				child,
+				ctx,
+			)
+		}
+	}
 }
 
 ScreenGui_render :: proc(
@@ -95,6 +125,12 @@ ScreenGui_render :: proc(
 	if !gui.enabled {
 		return
 	}
+
+	wants_overlay := gui.render_on_top
+	if object.parent != nil && object.parent.name == "StarterGui" {
+		wants_overlay = true
+	}
+	if wants_overlay != ctx.gui_overlay { return }
 
 	if ctx == nil || ctx.renderer == nil || ctx.renderer.SkiaSurface == nil { return }
 
@@ -121,8 +157,17 @@ ScreenGui_set :: proc(
     case "ClipToDeviceSafeArea":
         screen_gui.clip_to_device_safe_area = vm.ArgBoolean(L, value_index)
 
+    case "Size":
+        screen_gui.size = datatypes.Arg_Vector2(L, value_index, datatype_registry)
+
+    case "RenderOffset":
+        screen_gui.render_offset = datatypes.Arg_Vector2(L, value_index, datatype_registry)
+
     case "IgnoreGuiInset":
         screen_gui.ignore_gui_inset = vm.ArgBoolean(L, value_index)
+
+	case "RenderOnTop":
+		screen_gui.render_on_top = vm.ArgBoolean(L, value_index)
 
     case "SafeAreaCompatibility":
         if enum_registry == nil {
@@ -169,6 +214,7 @@ ScreenGui_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.safe_area_compat         = src.safe_area_compat
 	dst.screen_insets            = src.screen_insets
 	dst.enabled                  = src.enabled
+	dst.render_on_top            = src.render_on_top
 	dst.render_offset            = src.render_offset
 	dst.size                     = src.size
 }
@@ -183,6 +229,7 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 		set = ScreenGui_set,
 		clone = ScreenGui_clone,
 		_step = ScreenGui_render,
+		properties = []string{"DisplayOrder", "ClipToDeviceSafeArea", "Enabled", "IgnoreGuiInset", "RenderOnTop"},
 	)
 }
 

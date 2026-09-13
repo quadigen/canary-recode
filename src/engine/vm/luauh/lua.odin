@@ -2,21 +2,34 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 package luauh
 
-import "core:c"
-
-when ODIN_OS == .Windows {
+when ODIN_OS == .JS {
+	foreign import lib "../../../../build/web-native/lib/kine_luau_web.o"
+} else when ODIN_OS == .Windows {
 	foreign import lib {
 		"../../../../vendor/build/lib/kine_luau.lib",
-		"../../../../build/vendor/luau/Luau.Compiler.lib",
-		"../../../../build/vendor/luau/Luau.VM.lib",
-		"../../../../build/vendor/luau/Luau.Ast.lib",
-		"../../../../build/vendor/luau/Luau.Bytecode.lib",
-		"../../../../build/vendor/luau/Luau.Common.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Compiler.lib",
+		"../../../../vendor/build/vendor/luau/Luau.VM.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Ast.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Bytecode.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Common.lib",
+	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib {
+		"../../../../build/android-native/lib/libkine_luau.a",
+		"../../../../build/android-native/luau/libLuau.Compiler.a",
+		"../../../../build/android-native/luau/libLuau.VM.a",
+		"../../../../build/android-native/luau/libLuau.Ast.a",
+		"../../../../build/android-native/luau/libLuau.Bytecode.a",
+		"../../../../build/android-native/luau/libLuau.Common.a",
 	}
 } else {
 	foreign import lib {
-		"system:Luau.Compiler",
-		"system:Luau.VM",
+		"../../../../vendor/build/lib/kine_luau.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Compiler.a",
+		"../../../../vendor/build/vendor/luau/libLuau.VM.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Ast.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Bytecode.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Common.a",
 	}
 }
 
@@ -60,7 +73,7 @@ lua_Continuation :: proc "c" (L: ^lua_State, status: i32) -> i32
 /*
 ** prototype for memory-allocation functions
 */
-lua_Alloc :: proc "c" (ud: rawptr, ptr: rawptr, osize: c.size_t, nsize: c.size_t) -> rawptr
+lua_Alloc :: proc "c" (ud: rawptr, ptr: rawptr, osize: uintptr, nsize: uintptr) -> rawptr
 
 /*
 ** basic types
@@ -178,9 +191,9 @@ foreign lib {
 	lua_tovector              :: proc(L: ^lua_State, idx: i32) -> ^f32 ---
 	lua_toboolean             :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_tointeger64           :: proc(L: ^lua_State, idx: i32, isinteger: ^i32) -> i64 ---
-	lua_tolstring             :: proc(L: ^lua_State, idx: i32, len: ^c.size_t) -> cstring ---
+	lua_tolstring             :: proc(L: ^lua_State, idx: i32, len: ^uintptr) -> cstring ---
 	lua_tostringatom          :: proc(L: ^lua_State, idx: i32, atom: ^i32) -> cstring ---
-	lua_tolstringatom         :: proc(L: ^lua_State, idx: i32, len: ^c.size_t, atom: ^i32) -> cstring ---
+	lua_tolstringatom         :: proc(L: ^lua_State, idx: i32, len: ^uintptr, atom: ^i32) -> cstring ---
 	lua_namecallatom          :: proc(L: ^lua_State, atom: ^i32) -> cstring ---
 	lua_objlen                :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_tocfunction           :: proc(L: ^lua_State, idx: i32) -> lua_CFunction ---
@@ -191,7 +204,7 @@ foreign lib {
 	lua_userdatatag           :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_lightuserdatatag      :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_tothread              :: proc(L: ^lua_State, idx: i32) -> ^lua_State ---
-	lua_tobuffer              :: proc(L: ^lua_State, idx: i32, len: ^c.size_t) -> rawptr ---
+	lua_tobuffer              :: proc(L: ^lua_State, idx: i32, len: ^uintptr) -> rawptr ---
 	lua_topointer             :: proc(L: ^lua_State, idx: i32) -> rawptr ---
 
 	/*
@@ -203,18 +216,18 @@ foreign lib {
 	lua_pushinteger64                  :: proc(L: ^lua_State, n: i64) ---
 	lua_pushunsigned                   :: proc(L: ^lua_State, n: u32) ---
 	lua_pushvector                     :: proc(L: ^lua_State, x: f32, y: f32, z: f32) ---
-	lua_pushlstring                    :: proc(L: ^lua_State, s: cstring, l: c.size_t) ---
+	lua_pushlstring                    :: proc(L: ^lua_State, s: cstring, l: uintptr) ---
 	lua_pushstring                     :: proc(L: ^lua_State, s: cstring) ---
-	lua_pushvfstring                   :: proc(L: ^lua_State, fmt: cstring, argp: c.va_list) -> cstring ---
+	lua_pushvfstring                   :: proc(L: ^lua_State, fmt: cstring, argp: rawptr) -> cstring ---
 	lua_pushfstringL                   :: proc(L: ^lua_State, fmt: cstring, #c_vararg _: ..any) -> cstring ---
 	lua_pushcclosurek                  :: proc(L: ^lua_State, fn: lua_CFunction, debugname: cstring, nup: i32, cont: lua_Continuation) ---
 	lua_pushboolean                    :: proc(L: ^lua_State, b: i32) ---
 	lua_pushthread                     :: proc(L: ^lua_State) -> i32 ---
 	lua_pushlightuserdatatagged        :: proc(L: ^lua_State, p: rawptr, tag: i32) ---
-	lua_newuserdatatagged              :: proc(L: ^lua_State, sz: c.size_t, tag: i32) -> rawptr ---
-	lua_newuserdatataggedwithmetatable :: proc(L: ^lua_State, sz: c.size_t, tag: i32) -> rawptr --- // metatable fetched with lua_getuserdatametatable
-	lua_newuserdatadtor                :: proc(L: ^lua_State, sz: c.size_t, dtor: proc "c" (rawptr)) -> rawptr ---
-	lua_newbuffer                      :: proc(L: ^lua_State, sz: c.size_t) -> rawptr ---
+	lua_newuserdatatagged              :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr ---
+	lua_newuserdatataggedwithmetatable :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr --- // metatable fetched with lua_getuserdatametatable
+	lua_newuserdatadtor                :: proc(L: ^lua_State, sz: uintptr, dtor: proc "c" (rawptr)) -> rawptr ---
+	lua_newbuffer                      :: proc(L: ^lua_State, sz: uintptr) -> rawptr ---
 
 	/*
 	** get functions (Lua -> stack)
@@ -247,7 +260,7 @@ foreign lib {
 	/*
 	** `load' and `call' functions (load and run Luau bytecode)
 	*/
-	luau_load  :: proc(L: ^lua_State, chunkname: cstring, data: cstring, size: c.size_t, env: i32) -> i32 ---
+	luau_load  :: proc(L: ^lua_State, chunkname: cstring, data: cstring, size: uintptr, env: i32) -> i32 ---
 	lua_call   :: proc(L: ^lua_State, nargs: i32, nresults: i32) ---
 	lua_pcall  :: proc(L: ^lua_State, nargs: i32, nresults: i32, errfunc: i32) -> i32 ---
 	lua_cpcall :: proc(L: ^lua_State, func: lua_CFunction, ud: rawptr) -> i32 ---
@@ -338,7 +351,7 @@ foreign lib {
 	** all allocated bytes are attributed to the memory category of the running thread (0..LUA_MEMORY_CATEGORIES-1)
 	*/
 	lua_setmemcat  :: proc(L: ^lua_State, category: i32) ---
-	lua_totalbytes :: proc(L: ^lua_State, category: i32) -> c.size_t ---
+	lua_totalbytes :: proc(L: ^lua_State, category: i32) -> uintptr ---
 
 	// measure the allocation rate in bytes/sec
 	// returns -1 if allocation rate cannot be measured
@@ -347,12 +360,12 @@ foreign lib {
 	/*
 	** miscellaneous functions
 	*/
-	lua_error               :: proc(L: ^lua_State) ---
+	lua_error               :: proc(L: ^lua_State) -> i32 ---
 	lua_next                :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_rawiter             :: proc(L: ^lua_State, idx: i32, iter: i32) -> i32 ---
 	lua_concat              :: proc(L: ^lua_State, n: i32) ---
 	lua_setpointerencodekey :: proc(L: ^lua_State, a: u64, b: u64, _c: u64, d: u64) ---
-	lua_encodepointer       :: proc(L: ^lua_State, p: c.uintptr_t) -> c.uintptr_t ---
+	lua_encodepointer       :: proc(L: ^lua_State, p: uintptr) -> uintptr ---
 	lua_clock               :: proc() -> f64 ---
 	lua_setuserdatatag      :: proc(L: ^lua_State, idx: i32, tag: i32) ---
 }
@@ -528,7 +541,7 @@ lua_Debug :: struct {
 	ssbuf:       [256]i8,
 }
 
-lua_Coverage :: proc "c" (_context: rawptr, function: cstring, linedefined: i32, depth: i32, hits: ^i32, size: c.size_t)
+lua_Coverage :: proc "c" (_context: rawptr, function: cstring, linedefined: i32, depth: i32, hits: ^i32, size: uintptr)
 
 @(default_calling_convention="c")
 foreign lib {
@@ -556,14 +569,14 @@ lua_Callbacks :: struct {
 	interrupt:           proc "c" (L: ^lua_State, gc: i32),                        // gets called at safepoints (loop back edges, call/ret, gc) if set
 	panic:               proc "c" (L: ^lua_State, errcode: i32),                   // gets called when an unprotected error is raised (if longjmp is used)
 	userthread:          proc "c" (LP: ^lua_State, L: ^lua_State),                 // gets called when L is created (LP == parent) or destroyed (LP == NULL)
-	useratom:            proc "c" (L: ^lua_State, s: cstring, l: c.size_t) -> i16, // gets called when a string is created to assign an atom id
+	useratom:            proc "c" (L: ^lua_State, s: cstring, l: uintptr) -> i16, // gets called when a string is created to assign an atom id
 	debugbreak:          proc "c" (L: ^lua_State, ar: ^lua_Debug),                 // gets called when BREAK instruction is encountered
 	debugstep:           proc "c" (L: ^lua_State, ar: ^lua_Debug),                 // gets called after each instruction in single step mode
 	debuginterrupt:      proc "c" (L: ^lua_State, ar: ^lua_Debug),                 // gets called when thread execution is interrupted by break in another thread
 	debugprotectederror: proc "c" (L: ^lua_State),                                 // gets called when protected call results in an error
 
 	// gets called after a heap object (or array) is allocated
-	onallocate: proc "c" (L: ^lua_State, block: rawptr, osize: c.size_t, nsize: c.size_t, memcat: u8, tt: i32, tag: i32),
+	onallocate: proc "c" (L: ^lua_State, block: rawptr, osize: uintptr, nsize: uintptr, memcat: u8, tt: i32, tag: i32),
 	preresume:  proc "c" (L: ^lua_State), // gets called before lua_resume runs a (co)routine
 	postresume: proc "c" (L: ^lua_State), // gets called after lua_resume returns (yield, return, or error)
 
@@ -575,4 +588,3 @@ lua_Callbacks :: struct {
 foreign lib {
 	lua_callbacks :: proc(L: ^lua_State) -> ^lua_Callbacks ---
 }
-

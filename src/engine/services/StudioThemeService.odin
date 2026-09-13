@@ -8,12 +8,78 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
+THEME_BASE_COLOR :=
+    Studio_Theme_Color{15, 15, 15, 255}
+
+THEME_BACKGROUND_COLOR :=
+    Studio_Theme_Color{35, 35, 35, 255}
+
+THEME_ACCENT_COLOR :=
+    Studio_Theme_Color{214, 133, 37, 255}
+
+THEME_SECONDARY_COLOR :=
+    Studio_Theme_Color{43, 43, 43, 255}
+
+THEME_THIRD_COLOR :=
+    Studio_Theme_Color{25, 25, 25, 255}
+
+
+THEME_TEXT_COLOR :=
+    Studio_Theme_Color{220, 220, 220, 255}
+
+THEME_SECONDARY_TEXT_COLOR :=
+    Studio_Theme_Color{180, 180, 180, 255}
+
+THEME_DIMMED_TEXT_COLOR :=
+    Studio_Theme_Color{170, 170, 170, 255}
+
+
+THEME_INPUT_COLOR :=
+    Studio_Theme_Color{38, 38, 38, 255}
+
+THEME_INPUT_FOCUS_COLOR :=
+    Studio_Theme_Color{51, 51, 64, 255}
+
+THEME_INPUT_TEXT_COLOR :=
+    Studio_Theme_Color{255, 255, 255, 255}
+
+THEME_INPUT_PLACEHOLDER_COLOR :=
+    Studio_Theme_Color{128, 128, 128, 255}
+
+
+THEME_ROW_EVEN_COLOR :=
+    Studio_Theme_Color{50, 50, 50, 255}
+
+THEME_ROW_ODD_COLOR :=
+    Studio_Theme_Color{45, 45, 45, 255}
+
+
+THEME_CODE_EDITOR_BACKGROUND :=
+    Studio_Theme_Color{0, 0, 0, 204}
+
+Studio_Theme_Color :: struct {
+	r: f64,
+	g: f64,
+	b: f64,
+	a: f64,
+}
+
+theme_color :: proc(
+	r, g, b: f64,
+	a: f64 = 255,
+) -> Studio_Theme_Color {
+	return Studio_Theme_Color{
+		r = r,
+		g = g,
+		b = b,
+		a = a,
+	}
+}
 
 StudioThemeService_Class := classes.Class_Info{
 	name   = "StudioThemeService",
 	parent = &Service_Class,
 }
-
 
 StudioThemeService :: struct {
 	using service: Service,
@@ -32,11 +98,6 @@ StudioThemeService :: struct {
 	bottom_padding: f64,
 	show_output:    bool,
 }
-
-
-// -----------------------------------------------------------------------------
-// Theme values
-// -----------------------------------------------------------------------------
 
 studio_theme_color :: proc(
 	L: ^vm.State,
@@ -57,7 +118,6 @@ studio_theme_color :: proc(
 	vm.PushNumber(L, a / 255.0)
 	vm.SetField(L, -2, "A")
 }
-
 
 studio_theme_set_color :: proc(
 	L: ^vm.State,
@@ -101,11 +161,6 @@ studio_theme_push_vector2 :: proc(
 		datatypes.Vector2{x, y},
 	)
 }
-
-
-// -----------------------------------------------------------------------------
-// Coordinates
-// -----------------------------------------------------------------------------
 
 studio_theme_set_coordinates :: proc(
 	L: ^vm.State,
@@ -776,6 +831,21 @@ studio_theme_push_theme_object :: proc(
 // Default theme
 // -----------------------------------------------------------------------------
 
+studio_theme_set_color_value :: proc(
+	L: ^vm.State,
+	name: string,
+	color: Studio_Theme_Color,
+) {
+	studio_theme_set_color(
+		L,
+		name,
+		color.r,
+		color.g,
+		color.b,
+		color.a,
+	)
+}
+
 studio_theme_push_default_theme :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
@@ -783,87 +853,112 @@ studio_theme_push_default_theme :: proc(
 ) {
 	vm.NewTable(L, 0, 32)
 
-	studio_theme_set_color(L, "BaseColor", 15, 15, 15)
-	studio_theme_set_color(L, "BgColor", 35, 35, 35)
-	studio_theme_set_color(L, "AccentColor", 214, 133, 37)
-	studio_theme_set_color(L, "SecondaryColor", 43, 43, 43)
-	studio_theme_set_color(L, "ThirdColor", 25, 25, 25)
+	studio_theme_set_color_value(
+		L,
+		"BaseColor",
+		THEME_BASE_COLOR,
+	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
+		L,
+		"BgColor",
+		THEME_BACKGROUND_COLOR,
+	)
+
+	studio_theme_set_color_value(
+		L,
+		"AccentColor",
+		THEME_ACCENT_COLOR,
+	)
+
+	studio_theme_set_color_value(
+		L,
+		"SecondaryColor",
+		THEME_SECONDARY_COLOR,
+	)
+
+	studio_theme_set_color_value(
+		L,
+		"ThirdColor",
+		THEME_THIRD_COLOR,
+	)
+
+	studio_theme_set_color_value(
 		L,
 		"SecondaryTextColor",
-		180, 180, 180,
+		THEME_SECONDARY_TEXT_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"TextColor",
-		220, 220, 220,
+		THEME_TEXT_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"TextColorDimmed",
-		0, 0, 0,
+		THEME_DIMMED_TEXT_COLOR,
 	)
 
-	vm.PushNumber(L, 8)
-	vm.SetField(L, -2, "CornerRadius")
-
-	vm.PushNumber(L, 8)
-	vm.SetField(L, -2, "ButtonCornerRadius")
-
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"InputColor",
-		38, 38, 38,
+		THEME_INPUT_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"InputFocusColor",
-		51, 51, 64,
+		THEME_INPUT_FOCUS_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"InputTextColor",
-		255, 255, 255,
+		THEME_INPUT_TEXT_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"InputPlaceholderColor",
-		128, 128, 128,
+		THEME_INPUT_PLACEHOLDER_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"AlternatingColor1",
-		50, 50, 50,
+		THEME_ROW_EVEN_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"AlternatingColor2",
-		45, 45, 45,
+		THEME_ROW_ODD_COLOR,
 	)
 
-	studio_theme_set_color(
+	studio_theme_set_color_value(
 		L,
 		"CodeEditorBgColor",
-		0, 0, 0, 204, // ~0.8 alpha
+		THEME_CODE_EDITOR_BACKGROUND,
 	)
+
+
+	vm.PushNumber(L, 6)
+	vm.SetField(L, -2, "CornerRadius")
+
+	vm.PushNumber(L, 4)
+	vm.SetField(L, -2, "ButtonCornerRadius")
 
 	vm.PushString(
 		L,
-		"./src/assets/fonts/Montserrat-Regular.ttf",
+		"./src/engine/assets/fonts/Montserrat-Regular.ttf",
 	)
 	vm.SetField(L, -2, "Font")
 
 	vm.PushString(
 		L,
-		"./src/assets/fonts/Montserrat-Regular.ttf",
+		"./src/engine/assets/fonts/Montserrat-Regular.ttf",
 	)
 	vm.SetField(L, -2, "FontBold")
 
@@ -877,14 +972,21 @@ studio_theme_push_default_theme :: proc(
 		L,
 		service,
 	)
-	vm.SetField(L, -2, "LayoutConfig")
+	vm.SetField(
+		L,
+		-2,
+		"LayoutConfig",
+	)
 
-	// The Luau implementation calls MakeUIBoxed() at the end.
 	studio_theme_push_boxed_window_config(
 		L,
 		registry,
 	)
-	vm.SetField(L, -2, "WindowConfig")
+	vm.SetField(
+		L,
+		-2,
+		"WindowConfig",
+	)
 }
 
 
@@ -1342,11 +1444,6 @@ studio_theme_service_namecall :: proc(
 
 		return 0, true
 
-
-	// -------------------------------------------------------------------------
-	// MakeUIBoxed
-	// -------------------------------------------------------------------------
-
 	case "MakeUIBoxed":
 		studio_theme_ensure_initialized(
 			L,
@@ -1374,19 +1471,6 @@ studio_theme_service_namecall :: proc(
 
 		return 0, true
 
-
-	// -------------------------------------------------------------------------
-	// JSON helpers
-	//
-	// Your Luau version depended directly on:
-	//
-	//     zune.serde.json
-	//     zune.fs
-	//
-	// Those aren't part of the current native service layer, so don't silently
-	// fake their semantics. Wire these into EncodingService/filesystem later.
-	// -------------------------------------------------------------------------
-
 	case "ExportThemeAsJson":
 		return vm.RaiseError(
 			L,
@@ -1403,11 +1487,6 @@ studio_theme_service_namecall :: proc(
 
 	return 0, false
 }
-
-
-// -----------------------------------------------------------------------------
-// Construction / destruction
-// -----------------------------------------------------------------------------
 
 StudioThemeService_construct :: proc(
 	renderer: ^classes.Renderer_Object,
@@ -1469,22 +1548,11 @@ StudioThemeService_destroy :: proc(
 		)
 	}
 
-	// theme_changed is externally owned by this service.
-	//
-	// Your Signal package currently exposes Create/Push/Fire but no public
-	// signals.Destroy(), so leave its lifetime tied to the engine registry
-	// until such an API exists.
-
 	service.theme_changed = nil
 
 	classes.Object_Destroy(object)
 	free(service)
 }
-
-
-// -----------------------------------------------------------------------------
-// Registration
-// -----------------------------------------------------------------------------
 
 Register_StudioThemeService_Class :: proc(
 	registry: ^classes.Registry,

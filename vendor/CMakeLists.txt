@@ -297,25 +297,38 @@ if(MSVC)
         STATIC_LIBRARY_OPTIONS "${KINE_COMPONENT_TARGET_FILES}"
     )
 elseif(APPLE)
-    set(_kine_libtool_cmd libtool -static -o "$<TARGET_FILE:KinemiumLibs>" "$<TARGET_FILE:KinemiumLibs>")
-    foreach(_dep IN LISTS KINE_COMPONENT_TARGETS)
-        list(APPEND _kine_libtool_cmd "$<$<TARGET_EXISTS:${_dep}>:$<TARGET_FILE:${_dep}>>")
-    endforeach()
+    set(_kine_bundle_archive "$<TARGET_FILE:KinemiumLibs>.bundle")
+    set(_kine_libtool_cmd
+        libtool -static -o "${_kine_bundle_archive}"
+        "$<TARGET_FILE:KinemiumLibs>"
+        ${KINE_COMPONENT_TARGET_FILES}
+    )
     add_custom_command(TARGET KinemiumLibs POST_BUILD
         COMMAND ${_kine_libtool_cmd}
+        COMMAND ${CMAKE_COMMAND} -E rename
+            "${_kine_bundle_archive}"
+            "$<TARGET_FILE:KinemiumLibs>"
         COMMENT "Bundling component static libraries into KinemiumLibs.a via libtool"
         COMMAND_EXPAND_LISTS
+        VERBATIM
     )
 else()
     set(_mri_script "${CMAKE_CURRENT_BINARY_DIR}/bundle_kinemium_libs.mri")
-    set(_mri_content "CREATE $<TARGET_FILE:KinemiumLibs>\nADDLIB $<TARGET_FILE:KinemiumLibs>\n")
-    foreach(_dep IN LISTS KINE_COMPONENT_TARGETS)
-        string(APPEND _mri_content "$<$<TARGET_EXISTS:${_dep}>:ADDLIB $<TARGET_FILE:${_dep}>\n>")
+    set(_kine_bundle_archive "$<TARGET_FILE:KinemiumLibs>.bundle")
+    set(_mri_content "CREATE ${_kine_bundle_archive}\nADDLIB $<TARGET_FILE:KinemiumLibs>\n")
+    foreach(_component_file IN LISTS KINE_COMPONENT_TARGET_FILES)
+        string(APPEND _mri_content "ADDLIB ${_component_file}\n")
     endforeach()
     string(APPEND _mri_content "SAVE\nEND\n")
     file(GENERATE OUTPUT "${_mri_script}" CONTENT "${_mri_content}")
     add_custom_command(TARGET KinemiumLibs POST_BUILD
-        COMMAND ${CMAKE_AR} -M < "${_mri_script}"
+        COMMAND ${CMAKE_COMMAND}
+            "-DARCHIVER=${CMAKE_AR}"
+            "-DMRI_SCRIPT=${_mri_script}"
+            "-DOUTPUT_ARCHIVE=$<TARGET_FILE:KinemiumLibs>"
+            "-DBUNDLE_ARCHIVE=${_kine_bundle_archive}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/bundle_static_archive.cmake"
         COMMENT "Bundling component static libraries into KinemiumLibs.a via ar MRI script"
+        VERBATIM
     )
 endif()

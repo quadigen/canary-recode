@@ -1,6 +1,6 @@
 package services
 
-import "vendor:sdl3"
+import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
 import signals "../signals"
@@ -83,6 +83,7 @@ Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	defer descriptor.constructing = false
 	object, ok := classes.Push_New(registry.classes, registry.vm_state, descriptor.class_name, false)
 	if !ok || object == nil { return nil }
+	classes.Set_Name(object, descriptor.name)
 	object.security_requirement = descriptor.security
 	descriptor.object = object
 	classes.Set_Parent(object, &registry.data_model.object)
@@ -99,6 +100,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_HttpService_Class(registry.classes)
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
+	Register_LogService_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
 	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
@@ -123,6 +125,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "HttpService", "HttpService", "HttpService")
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
+	Register_Service(registry, "LogService", "LogService", "logService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
@@ -150,17 +153,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	))
 	assert(Set_Service_Security(
 		registry,
-		"Selection",
-		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
-	))
-	assert(Set_Service_Security(
-		registry,
 		"StudioThemeService",
-		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
-	))
-	assert(Set_Service_Security(
-		registry,
-		"CoreGui",
 		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
 	))
 }

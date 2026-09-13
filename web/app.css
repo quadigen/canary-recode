@@ -1,0 +1,19 @@
+:root { color-scheme: dark; background:#0b0d12; font-family:Inter,system-ui,sans-serif }
+* { box-sizing:border-box }
+html,body,#desktop { width:100%; height:100%; margin:0; overflow:hidden }
+#desktop { position:relative; background:#12161e }
+canvas { position:absolute; inset:0; width:100%; height:100%; display:block }
+#filament-canvas { z-index:1 }
+#skia-base { z-index:2; pointer-events:none }
+#skia-overlay { z-index:3; pointer-events:none }
+#startup { position:absolute; z-index:10; inset:0; display:grid; place-content:center; justify-items:center; gap:10px; color:#f2f5fb; background:radial-gradient(circle at 50% 38%,#202a3b,#0b0e14 58%); transition:opacity .25s }
+#startup strong { font-size:22px; letter-spacing:-.02em }
+#startup span { color:#8692a6; font-size:13px }
+.spinner { width:30px; height:30px; border:3px solid #283246; border-top-color:#5794ff; border-radius:50%; animation:spin .8s linear infinite }
+@keyframes spin { to { transform:rotate(360deg) } }
+#runtime-badge { position:absolute; z-index:9; right:12px; bottom:10px; display:none; align-items:center; gap:7px; padding:7px 10px; color:#b9c5d7; border:1px solid #293445; border-radius:8px; background:#0d1119dc; box-shadow:0 6px 22px #0008; font-size:11px; pointer-events:none }
+#runtime-badge span { width:7px; height:7px; border-radius:50%; background:#49dc88; box-shadow:0 0 9px #49dc88 }
+#runtime-badge b { color:#e5ecf7 }
+#runtime-badge small { color:#718096 }
+html[data-engine-ready="true"] #startup { opacity:0; pointer-events:none }
+html[data-engine-ready="true"] #runtime-badge { display:flex }

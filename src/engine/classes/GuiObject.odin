@@ -141,7 +141,29 @@ GuiObject_get_absolute_transform :: proc(
 	x = parent_x + gui.position.X_Scale*parent_width + gui.position.X_Offset - gui.anchorpoint.X*width
 	y = parent_y + gui.position.Y_Scale*parent_height + gui.position.Y_Offset - gui.anchorpoint.Y*height
 
+	if object.parent != nil &&
+	Is_A(object.parent, "ScrollingFrame") {
+		scrolling :=
+			cast(^ScrollingFrame)object.parent
+
+		x -= scrolling.canvas_position.X
+		y -= scrolling.canvas_position.Y
+	}
+
 	return x, y, width, height
+}
+
+Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32) {
+	ctx := Class_Step_Context{viewport_width = width, viewport_height = height}
+	for descriptor in registry.classes {
+		for object in descriptor.instances {
+			if object == nil || object.destroyed || !Is_A(object, "GuiObject") { continue }
+			x, y, w, h := GuiObject_get_absolute_transform(object, &ctx)
+			gui := cast(^GuiObject)object
+			gui.absolute_position = {x, y}
+			gui.absolute_size = {w, h}
+		}
+	}
 }
 
 GuiObject_get_rect :: proc(
@@ -246,13 +268,16 @@ GuiObject_render :: proc(
 				alpha = 1-f32(shadow.transparency),
 			}
 
-			guilib.drawShadow(
-				ctx.renderer.SkiaSurface,
-				rect,
-				corner_radius,
-				f32(shadow.exponent),
-				params,
-			)
+			// let textlabel handle text shadows
+			if shadow.showfortext != true {
+				guilib.drawShadow(
+					ctx.renderer.SkiaSurface,
+					rect,
+					corner_radius,
+					f32(shadow.exponent),
+					params,
+				)
+			}
 		}
 	}
 
@@ -377,10 +402,6 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.zindex            = src.zindex
 	dst.anchorpoint       = src.anchorpoint
 	dst.border_size_pixels = src.border_size_pixels
-
-	// Don't copy:
-	// absolute_position / absolute_size
-	// They're calculated by layout.
 }
 
 Register_GuiObject :: proc(registry: ^Registry) {
@@ -392,5 +413,6 @@ Register_GuiObject :: proc(registry: ^Registry) {
 		get = GuiObject_get,
 		set = GuiObject_set,
 		clone = GuiObject_clone,
+		properties = []string{"BorderSizePixel", "Selectable", "Active", "GuiState", "ClipsDescendants", "Position", "AbsolutePosition", "Size", "BackgroundColor3", "BorderMode", "AnchorPoint", "ZIndex", "InputSink", "AbsoluteSize", "Visible", "BackgroundTransparency"},
 	)
 }

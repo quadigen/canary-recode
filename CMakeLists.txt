@@ -31,12 +31,22 @@ set_target_properties(kine_luau PROPERTIES
 # This is the single build target needed before linking the Odin executable.
 # KinemiumOdinAliases emits the subsystem archives imported by the bindings
 # package, including their transitive Filament, Skia, Vulkan, and Jolt inputs.
+set(KINEMIUM_ODIN_LIBRARY_TARGETS
+    KinemiumOdinAliases
+    kine_luau
+    kine_filament_shim
+    kine_skia
+    kine_vulkan_compositor
+    JoltWrapper
+)
+
+# Windows imports the component archives directly. Unix builds consume the
+# consolidated archive so C++ dependencies and Filament's prebuilt archives
+# are available to Odin without relying on machine-global libraries.
+if(NOT WIN32)
+    list(APPEND KINEMIUM_ODIN_LIBRARY_TARGETS KinemiumLibs)
+endif()
+
 add_custom_target(KinemiumOdinLibraries ALL
-    DEPENDS
-        KinemiumOdinAliases
-        kine_luau
-        kine_filament_shim
-        kine_skia
-        kine_vulkan_compositor
-        JoltWrapper
+    DEPENDS ${KINEMIUM_ODIN_LIBRARY_TARGETS}
 )

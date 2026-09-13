@@ -2,9 +2,11 @@ package packages
 import "core:fmt"
 import "core:strings"
 import base_runtime "base:runtime"
-import sdl3 "vendor:sdl3"
+import sdl3 "../platform"
 import renderer "../renderer"
 import vm "../vm"
+import kineffi "../bindings"
+
 Package_Installer    :: proc(L: ^vm.State, ctx: rawptr, renderer_object: ^renderer.RendererObject)
 Package_Begin_Frame  :: proc(ctx: rawptr, width, height: i32)
 Package_Descriptor :: struct {
@@ -21,7 +23,7 @@ Pool_Phase :: enum {
     Gizmo,
 }
 Draw_Callback :: struct {
-    id:        i64,
+    id:        f64,
     reference: i32,
     priority:  i32,
     phase:     Pool_Phase,
@@ -59,7 +61,7 @@ Registry :: struct {
     contexts:  Package_Contexts,
     width:  i32,
     height: i32,
-    next_callback_id: i64,
+    next_callback_id: f64,
     mouse_x:       f32,
     mouse_y:       f32,
     mouse_delta_x: f32,
@@ -303,7 +305,7 @@ pool_new :: proc "c" (L: ^vm.State) -> i32 {
         )
     }
     priority := i32(
-        vm.ArgOptionalInteger(
+        vm.ArgOptionalNumber(
             L,
             3+offset,
             0,
@@ -327,7 +329,7 @@ pool_new :: proc "c" (L: ^vm.State) -> i32 {
             registry.callbacks[index-1]
         registry.callbacks[index-1] = entry
     }
-    vm.PushInteger(L, entry.id)
+    vm.PushNumber(L, entry.id)
     return 1
 }
 pool_remove :: proc "c" (L: ^vm.State) -> i32 {
@@ -337,7 +339,7 @@ pool_remove :: proc "c" (L: ^vm.State) -> i32 {
         return 0
     }
     offset := function_offset(L)
-    id := vm.ArgInteger(L, 1+offset)
+    id := vm.ArgNumber(L, 1+offset)
     for callback, index in registry.callbacks {
         if callback.id == id {
             if callback.reference > 0 &&
@@ -395,12 +397,65 @@ hook_new :: proc "c" (L: ^vm.State) -> i32 {
             kind      = kind,
         },
     )
-    vm.PushInteger(L, i64(reference))
+    vm.PushNumber(L, f64(reference))
     return 1
 }
 // -----------------------------------------------------------------------------
 // Input compatibility
 // -----------------------------------------------------------------------------
+renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
+	context = base_runtime.default_context()
+
+	registry := registry_from_upvalue(L)
+	if registry == nil ||
+	   registry.renderer == nil {
+		return 0
+	}
+
+	offset := function_offset(L)
+
+	x      := i32(vm.ArgNumber(L, 1+offset))
+	y      := i32(vm.ArgNumber(L, 2+offset))
+	width  := i32(vm.ArgNumber(L, 3+offset))
+	height := i32(vm.ArgNumber(L, 4+offset))
+
+	if width <= 0 || height <= 0 {
+		return vm.RaiseError(
+			L,
+			"renderer:Set3DTexProps(x, y, width, height): width and height must be greater than 0",
+		)
+	}
+
+	renderer.set_viewport_rect(
+		registry.renderer,
+		x,
+		y,
+		width,
+		height,
+	)
+	renderer.apply_viewport_rect(registry.renderer)
+
+	if vm.IsTable(L, 1) {
+		vm.NewTable(L, 0, 4)
+
+		vm.PushNumber(L, f64(x))
+		vm.SetField(L, -2, "x")
+
+		vm.PushNumber(L, f64(y))
+		vm.SetField(L, -2, "y")
+
+		vm.PushNumber(L, f64(width))
+		vm.SetField(L, -2, "width")
+
+		vm.PushNumber(L, f64(height))
+		vm.SetField(L, -2, "height")
+
+		vm.SetField(L, 1, "tex3d_rect")
+	}
+
+	return 0
+}
+
 renderer_has_clicked :: proc "c" (L: ^vm.State) -> i32 {
     context = base_runtime.default_context()
     registry := registry_from_upvalue(L)
@@ -1165,10 +1220,14 @@ install_renderer_global :: proc(
         renderer_stop,
         registry,
     )
-    // Old methods that either map to native automatic behavior or have no
-    // meaningful equivalent in the recode.
-    for name in ([?]string{
+    set_registry_function(
+        L,
         "Set3DTexProps",
+        renderer_set_3d_tex_props,
+        registry,
+    )
+
+    for name in ([?]string{
         "MakeDepthBuffer",
         "SetGlobalShader",
         "SetIcon",
@@ -1187,8 +1246,7 @@ install_renderer_global :: proc(
             registry,
         )
     }
-    // Legacy tables used by older Canary scripts. These are compatibility
-    // shims; actual recode scene rendering should use native classes/services.
+
     install_legacy_mesh(L, registry)
     vm.SetField(L, renderer_index, "Mesh")
     install_legacy_shader(L, registry)

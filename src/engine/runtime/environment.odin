@@ -1,6 +1,6 @@
 package engine_runtime
 
-import "vendor:sdl3"
+import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
 import engine_enums "../enum"
@@ -116,6 +116,13 @@ Environment_Update_Step :: proc(
 		delta_time,
 	)
 
+	classes.Step(
+		&environment.classes,
+		vm_state.L,
+		delta_time,
+		phase = .Update,
+	)
+
 	services.Prepare_3D(
 		&environment.services,
 		environment.renderer,
@@ -138,11 +145,46 @@ Environment_SetEvent :: proc(
 		event,
 	)
 
+	classes.TextBox_Handle_Event(
+		&environment.classes,
+		vm_state.L,
+		event,
+	)
+
+	classes.ScrollingFrame_Handle_Event(
+		&environment.classes,
+		event,
+	)
+
 	services.Set_Event(
 		&environment.services,
 		vm_state.L,
 		event,
 	)
+
+	if event.type == .MOUSE_WHEEL &&
+	environment.renderer != nil &&
+	environment.renderer.ActiveCamera != nil {
+
+		active_camera :=
+			cast(^classes.Object)environment.renderer.ActiveCamera
+
+		if active_camera != nil &&
+		!active_camera.destroyed &&
+		classes.Is_A(active_camera, "Camera") {
+
+			wheel_y := f32(event.wheel.y)
+
+			if event.wheel.direction == .FLIPPED {
+				wheel_y = -wheel_y
+			}
+
+			classes.Camera_Add_Scroll(
+				cast(^classes.Camera)active_camera,
+				wheel_y,
+			)
+		}
+	}
 }
 
 Environment_Render_3D :: proc(
@@ -202,7 +244,7 @@ Environment_Render_2D :: proc(
 	environment.renderer.SkiaSurface = surface
 	defer environment.renderer.SkiaSurface = previous_surface
 
-	// Canary "2d" pool.
+	classes.Update_GUI_Layout(&environment.classes, width, height)
 	packages.Render_2D(
 		&environment.packages,
 		width,
@@ -210,7 +252,6 @@ Environment_Render_2D :: proc(
 		delta_time,
 	)
 
-	// Native retained engine UI.
 	classes.Step(
 		&environment.classes,
 		vm_state.L,
@@ -219,11 +260,36 @@ Environment_Render_2D :: proc(
 		height,
 	)
 
-	// Canary "2da" pool: overlays, menus, CoreGui-like top layer.
 	packages.Render_2D_Above(
 		&environment.packages,
 		width,
 		height,
 		delta_time,
+	)
+}
+
+Environment_Render_Overlay :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	surface: ^renderer.Skia_Surface,
+	width, height: i32,
+	delta_time: f32,
+) {
+	if environment == nil || vm_state == nil || vm_state.L == nil ||
+	   surface == nil || environment.renderer == nil {
+		return
+	}
+
+	previous_surface := environment.renderer.SkiaSurface
+	environment.renderer.SkiaSurface = surface
+	defer environment.renderer.SkiaSurface = previous_surface
+
+	classes.Step(
+		&environment.classes,
+		vm_state.L,
+		delta_time,
+		width,
+		height,
+		gui_overlay = true,
 	)
 }

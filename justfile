@@ -17,6 +17,18 @@ debug:
 release:
     odin build src -o:speed -out:build/kinemium.exe
 
+# Build the full engine for Firefox with Luau, Jolt, CanvasKit, and Filament WebGL.
+wasm:
+    & ./tools/build_wasm.ps1
+
+# Serve build/web on http://127.0.0.1:8000 after running `just wasm`.
+wasm-serve:
+    python -m http.server 8000 --directory build/web
+
+# Build an ARM64 Android debug APK with SDL3, Vulkan, Skia, Filament, Jolt, Luau, and miniaudio.
+android:
+    & ./tools/build_android.ps1
+
 # Run the engine
 run: build
     ./build/kinemium.exe

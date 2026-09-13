@@ -1,6 +1,6 @@
 package util
 import renderer "../renderer"
-import "vendor:sdl3"
+import sdl3 "../platform"
 import "vendor:stb/image"
 import "../vm"
 import "../services"

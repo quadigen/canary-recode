@@ -88,5 +88,6 @@ Register_InputObject :: proc(registry: ^Registry) {
 		creatable = false,
 		get = input_object_get,
 		clone = input_object_clone,
+		properties = []string{"Position", "UserInputState", "Delta", "UserInputType", "KeyCode"},
 	)
 }

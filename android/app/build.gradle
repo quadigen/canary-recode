@@ -1,0 +1,32 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.kinemium.engine"
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "dev.kinemium.engine"
+        minSdk 28
+        targetSdk 37
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ["../../build/android-jni"]
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
+
+dependencies {
+    implementation files("../../.cache/android/sdl3/SDL3-3.4.14.aar")
+}

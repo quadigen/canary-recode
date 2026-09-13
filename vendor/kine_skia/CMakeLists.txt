@@ -734,6 +734,15 @@ elseif(APPLE)
             "-framework CoreServices"
     )
 
+elseif(ANDROID)
+    target_link_libraries(
+        kine_skia
+
+        PRIVATE
+            dl
+            m
+    )
+
 else()
     target_link_libraries(
         kine_skia

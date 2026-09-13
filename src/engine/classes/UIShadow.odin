@@ -20,6 +20,7 @@ UIShadow :: struct {
 	transparency: f64,
 	zindex:       f64,
 	exponent:     f64,
+	showfortext:  bool
 }
 
 UIShadow_Init :: proc() -> UIShadow {
@@ -36,6 +37,7 @@ UIShadow_Init :: proc() -> UIShadow {
 		transparency = 0.35,
 		zindex = 0,
 		exponent = 2,
+		showfortext = true,
 	}
 }
 
@@ -81,6 +83,8 @@ UIShadow_get :: proc(
 		vm.PushNumber(L, shadow.zindex)
 	case "Enabled":
 		vm.PushBoolean(L, shadow.enabled)
+	case "ShowForText":
+		vm.PushBoolean(L, shadow.showfortext)
 	case:
 		return false
 	}
@@ -118,6 +122,8 @@ UIShadow_set :: proc(
 		shadow.zindex = vm.ArgNumber(L, value_index)
 	case "Enabled":
 		shadow.enabled = vm.ArgBoolean(L, value_index)
+	case "ShowForText":
+		shadow.showfortext = vm.ArgBoolean(L, value_index)
 	case:
 		return false
 	}
@@ -147,5 +153,6 @@ Register_UIShadow :: proc(registry: ^Registry) {
 		get = UIShadow_get,
 		set = UIShadow_set,
 		clone = UIShadow_clone,
+		properties = []string{"Offset", "Exponent", "BlurRadius", "Spread", "ZIndex", "Transparency", "Color3", "Enabled"},
 	)
 }

@@ -1,10 +1,17 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+#+build !js
 package luauh
 
 when ODIN_OS == .Windows {
-	foreign import lib "../../../../build/vendor/luau/Luau.CodeGen.lib"
+	foreign import lib "../../../../vendor/build/vendor/luau/Luau.CodeGen.lib"
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib "../../../../build/android-native/luau/libLuau.CodeGen.a"
 } else {
-	foreign import lib "system:Luau.CodeGen"
+	foreign import lib {
+		"../../../../vendor/build/vendor/luau/libLuau.CodeGen.a",
+		"../../../../vendor/build/vendor/luau/libLuau.VM.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Common.a",
+	}
 }
 
 @(default_calling_convention="c")

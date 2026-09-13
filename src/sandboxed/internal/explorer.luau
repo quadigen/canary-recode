@@ -1,630 +1,235 @@
-local StudioThemeService = game:GetService("StudioThemeService")
-local Immco = require("@Immco")
-local theme = StudioThemeService.SelectedTheme
+if IsServer or IsClient then
+	return
+end
+
+local UI = ishared.EditorUI
+local theme = game:GetService("StudioThemeService").SelectedTheme
 local Selection = game:GetService("Selection")
-local Argon = require("@Argon")
+local UserInputService = game:GetService("UserInputService")
+local colors = UI.colors
+local tokens = UI.tokens
 
-if IsServer then
-	return
-end
+local panel, content =
+	UI.window("Explorer", theme.ExplorerCoordinates.Position, theme.ExplorerCoordinates.Size, "Explorer")
+panel.Position =
+	UDim2.new(panel.Position.X.Scale, panel.Position.X.Offset, panel.Position.Y.Scale, panel.Position.Y.Offset)
 
-if IsClient then
-	return
-end
-
-local gui = Instance.new("ScreenGui")
-gui.Parent = game.StarterGui
-
-local Explorer = Instance.new("Frame")
-Explorer.Name = "Explorer"
-Explorer.Size = theme.ExplorerCoordinates.Size
-Explorer.Position = theme.ExplorerCoordinates.Position
-Explorer.Parent = gui
-Explorer.BackgroundTransparency = 1
-
-local visible = true
-
-local retainedStorage = {}
-
-local iconCache = {}
-local iconPath = "./src/assets/images/icons/"
-local textBoxStorage = {}
-local contextMenuStorage = {}
-
-local arrowRight = Argon:CreateImageFromPath(iconPath .. "ArrowRight.svg")
-local expandedIcon = Argon:CreateImageFromPath(iconPath .. "ArrowDown.svg")
-local plusIcon = Argon:CreateImageFromPath(iconPath .. "Plus.svg")
-
+local inset = UI.metrics.panelInset
+local searchField =
+	UI.input(content, "Search Explorer...", UDim2.fromOffset(inset, 6), UDim2.new(1, -42, 0, UI.metrics.inputHeight))
 local expanded = {}
-local createMenu = {
-	visible = false,
-	x = 0,
-	y = 0,
-	parent = nil,
-	suppressInput = false,
-}
-local createClassItems = nil
+local list = UI.create("ScrollingFrame", {
+	Position = UDim2.fromOffset(inset, 36),
 
-local canInteract = true
+	Size = UDim2.new(1, -inset * 2, 1, -42),
 
-local nonCreatableClassNames = {
-	DataModel = true,
-	Instance = true,
-	GuiObject = true,
-	ValueBase = true,
-	WorldObject2D = true,
-}
+	BackgroundColor3 = tokens.color.surface,
+	BorderSizePixel = 0,
 
-local function getCreateClassItems()
-	if createClassItems then
-		return createClassItems
-	end
+	CanvasPosition = Vector2.new(0, 0),
+	CanvasSize = UDim2.new(1, 0, 0, 0),
 
-	local classes = if Instance.getClasses then Instance.getClasses() else {}
-	local names = {}
+	ScrollingEnabled = true,
 
-	for className, classData in pairs(classes) do
-		if not classData.non_creatable and not nonCreatableClassNames[className] then
-			table.insert(names, className)
-		end
-	end
+	ScrollSpeed = 38,
 
-	table.sort(names)
+	SmoothScrollingEnabled = true,
+	ScrollSmoothness = 18,
 
-	createClassItems = {}
-	for _, className in ipairs(names) do
-		local itemClassName = className
-		table.insert(createClassItems, {
-			text = itemClassName,
-			callback = function()
-				local parent = createMenu.parent
-				if not parent or parent.Destroyed then
-					return
-				end
+	ScrollBarThickness = 5,
+	ScrollBarImageColor3 = tokens.color.subtext,
+	ScrollBarImageTransparency = 0.4,
 
-				local ok, created = pcall(Instance.new, itemClassName)
-				if not ok or not created then
-					warn(`Failed to create {itemClassName}: {created}`)
-					return
-				end
+	ScrollBarAutoHide = true,
+	ScrollBarFadeDelay = 0.45,
+	ScrollBarFadeSpeed = 12,
 
-				created.Parent = parent
-				expanded[parent] = true
-				Selection.Set({ created })
-			end,
-		})
-	end
+	ScrollBarMinimumHandleSize = 24,
 
-	return createClassItems
+	ClipsDescendants = true,
+
+	Active = true,
+	InputSink = true,
+}, content)
+
+UI.corner(list, tokens.radius.md)
+
+local function selectedObject()
+	local selection = Selection:Get()
+	return selection and selection[1]
 end
 
-local uiScale = 1
-
-local textSize = 16 * uiScale
-local imageSize = 16 * uiScale
-local rowHeight = 20 * uiScale
-local indentSize = 16 * uiScale
-local contentPadding = 10 * uiScale
-local yOffset = 45
+UI.iconButton(
+	content,
+	"builtin://icons/Plus.svg",
+	UDim2.new(1, -32, 0, 6),
+	UDim2.fromOffset(26, UI.metrics.inputHeight),
+	function()
+		local parent = selectedObject() or workspace
+		local ok, object = pcall(Instance.new, "Part")
+		if ok and object then
+			object.Name = "Part"
+			object.Parent = parent
+			expanded[parent] = true
+			Selection:Set({ object })
+		end
+	end,
+	{ color = tokens.color.input, iconSize = 14 }
+)
 
 local serviceOrder = {
-	"Workspace",
-	"Players",
-	"Lighting",
-	"ReplicatedFirst",
-	"ReplicatedStorage",
-	"ServerScriptService",
-	"ServerStorage",
-	"StarterGui",
-	"StarterPack",
-	"StarterPlayer",
-	"Teams",
-	"SoundService",
-	"Chat",
-	"TextChatService",
-	"MaterialService",
-	"TestService",
+	Workspace = 1,
+	Players = 2,
+	Lighting = 3,
+	ReplicatedFirst = 4,
+	ReplicatedStorage = 5,
+	ServerScriptService = 6,
+	ServerStorage = 7,
+	StarterGui = 8,
+	StarterPack = 9,
+	StarterPlayer = 10,
+	Teams = 11,
+	SoundService = 12,
 }
 
-local visibleRowCount = 0
-local contentHeight = 0
-local explorerSearch = ""
-
-local lastClickedInstance = nil
-local lastClickTime = 0
-local DOUBLE_CLICK_TIME = 0.3
-
-local function textMatches(value, query)
-	return string.find(string.lower(tostring(value or "")), query, 1, true) ~= nil
+local function sortedChildren(parent)
+	local children = parent:GetChildren()
+	table.sort(children, function(a, b)
+		local ao = serviceOrder[a.Name] or math.huge
+		local bo = serviceOrder[b.Name] or math.huge
+		if ao ~= bo then
+			return ao < bo
+		end
+		return a.Name < b.Name
+	end)
+	return children
 end
 
-local function instanceMatchesTree(instance, query)
-	if instance.ExplorerHidden then
-		return false
+local function treeHash(parent, depth)
+	if depth > 5 then
+		return ""
 	end
-	if textMatches(instance.Name, query) or textMatches(instance.ClassName, query) then
-		return true
-	end
-	for _, child in ipairs(instance:GetChildren()) do
-		if instanceMatchesTree(child, query) then
-			return true
+	local pieces = {}
+	for _, child in ipairs(sortedChildren(parent)) do
+		table.insert(pieces, child.Name .. ":" .. child.ClassName)
+		if expanded[child] then
+			table.insert(pieces, treeHash(child, depth + 1))
 		end
 	end
-	return false
+	return table.concat(pieces, "|")
 end
 
-local function clickedInstance(instance)
-	local now = os.clock()
+local lastHash = ""
+local rebuilding = false
+local rebuild
 
-	if lastClickedInstance == instance and (now - lastClickTime) <= DOUBLE_CLICK_TIME then
-		lastClickedInstance = nil
-		lastClickTime = 0
-		return true
+local fallbackIcons = {
+	ReplicatedFirst = "ReplicatedStorage",
+	StarterPack = "Backpack",
+	Teams = "Players",
+	Chat = "ChatService",
+	TextChatService = "ChatService",
+	MaterialService = "Texture",
+	TestService = "StudioService",
+	TaskScheduler = "RunService",
+	ExampleService = "StudioService",
+}
+
+local function iconPathFor(instance)
+	return "builtin://icons/" .. (fallbackIcons[instance.ClassName] or instance.ClassName) .. ".svg"
+end
+
+local rowIndex = 0
+local function addRow(instance, depth, y)
+	local children = sortedChildren(instance)
+	local isSelected = selectedObject() == instance
+	rowIndex += 1
+	local rowColor = rowIndex % 2 == 0 and tokens.color.rowEven or tokens.color.rowOdd
+	local row = UI.button(list, "", UDim2.fromOffset(1, y), UDim2.new(1, -2, 0, UI.metrics.treeRow), function()
+		Selection:Set({ instance })
+		if #children > 0 then
+			expanded[instance] = not expanded[instance]
+			lastHash = ""
+		end
+	end, {
+		color = isSelected and colors.selection or rowColor,
+		hoverColor = isSelected and colors.selection or colors.hover,
+		radius = isSelected and tokens.radius.sm or 0,
+		border = false,
+	})
+
+	local indent = 7 + depth * 16
+	if #children > 0 then
+		UI.image(
+			row,
+			"builtin://icons/" .. (expanded[instance] and "ArrowDown.svg" or "ArrowRight.svg"),
+			UDim2.fromOffset(indent, 4),
+			UDim2.fromOffset(12, 12)
+		)
+	end
+	UI.image(row, iconPathFor(instance), UDim2.fromOffset(indent + 16, 3), UDim2.fromOffset(14, 14))
+	UI.label(
+		row,
+		instance.Name,
+		UDim2.fromOffset(indent + 31, 2),
+		UDim2.new(1, -(indent + 34), 0, 17),
+		tokens.type.small,
+		isSelected and tokens.color.text or colors.text
+	)
+	return y + UI.metrics.treeRow
+end
+
+local function walk(parent, depth, y)
+	for _, child in ipairs(sortedChildren(parent)) do
+		y = addRow(child, depth, y)
+
+		if expanded[child] then
+			y = walk(child, depth + 1, y)
+		end
 	end
 
-	lastClickedInstance = instance
-	lastClickTime = now
-
-	return false
+	return y
 end
+
+rebuild = function()
+	if rebuilding then
+		return
+	end
+
+	rebuilding = true
+
+	local oldCanvasPosition = list.CanvasPosition
+
+	UI.clear(list)
+
+	rowIndex = 0
+
+	local finalY = walk(game, 0, 1)
+
+	list.CanvasSize = UDim2.new(1, 0, 0, finalY + 4)
+
+	list.CanvasPosition = oldCanvasPosition
+
+	rebuilding = false
+end
+
+Selection.SelectionChanged:Connect(function()
+	lastHash = ""
+end)
+
+UserInputService.InputBegan:Connect(function(a0: InputObject, a1: boolean)
+	if a0.KeyCode == Enum.KeyCode.Escape then
+		Selection:Set({ nil })
+	end
+end)
 
 renderer.Pool.new("2d", function()
-	if not visible then
-		return
+	panel.Size = theme.ExplorerCoordinates.Size
+	panel.Position = theme.ExplorerCoordinates.Position
+	local selected = selectedObject()
+	local hash = treeHash(game, 0) .. "#" .. (selected and selected:GetFullName() or "")
+	if hash ~= lastHash then
+		lastHash = hash
+		rebuild()
 	end
-	local dt = renderer.RuntimeLibrary.dt
-	local absolutePosition = Explorer.AbsolutePosition
-	local absoluteSize = Explorer.AbsoluteSize
-	visibleRowCount = 0
-	Explorer.Size = theme.ExplorerCoordinates.Size
-	Explorer.Position = theme.ExplorerCoordinates.Position
-
-	if not absolutePosition then
-		return
-	end
-	if not absoluteSize then
-		return
-	end
-
-	Immco.Widget({
-		x = absolutePosition.X,
-		y = absolutePosition.Y + 5,
-		width = absoluteSize.X,
-		height = absoluteSize.Y,
-		title = "Explorer",
-		theme = theme,
-		engine_window = renderer.Window,
-		renderer = renderer,
-
-		callback = function(params)
-			Immco.Scroller({
-				id = "main-explorer",
-
-				x = params.x,
-				y = params.y,
-				width = params.width,
-				height = params.height,
-
-				ViewHeight = params.height - 40,
-				ContentHeight = contentHeight,
-
-				ScrollSpeed = 50,
-				ScrollLerpSpeed = 20,
-
-				renderer = renderer,
-				window = renderer.Window,
-				theme = theme,
-
-				RetainedStorage = retainedStorage,
-				callback = function(params)
-					local rowHeightStep = rowHeight
-					local viewportRect = {
-						x = params.viewportX,
-						y = params.viewportY,
-						width = params.viewportWidth,
-						height = params.viewportHeight,
-					}
-
-					local function clipHitboxToViewport(rect)
-						local left = math.max(rect.x, viewportRect.x)
-						local top = math.max(rect.y, viewportRect.y)
-						local right = math.min(rect.x + rect.width, viewportRect.x + viewportRect.width)
-						local bottom = math.min(rect.y + rect.height, viewportRect.y + viewportRect.height)
-						if right <= left or bottom <= top then
-							return nil
-						end
-						return { x = left, y = top, width = right - left, height = bottom - top }
-					end
-
-					Immco.TextInput({
-						x = params.x + 6,
-						y = params.y + 4,
-						width = params.width - 15 * uiScale,
-						height = 20,
-						id = "ExplorerSearch",
-						RetainedStorage = textBoxStorage,
-						renderer = renderer,
-						theme = theme,
-
-						Color = theme.InputColor,
-						FocusColor = theme.InputFocusColor,
-						TextColor = theme.InputTextColor,
-						PlaceholderColor = theme.InputPlaceholderColor,
-
-						ReadOnly = not canInteract,
-
-						placeholder = "Search Objects...",
-						OnChange = function(text)
-							explorerSearch = text
-						end,
-						OnSubmit = function(text)
-							explorerSearch = text
-						end,
-
-						engine_window = renderer.Window,
-					}, dt)
-
-					local function walkVisible(instance, depth, state, visit)
-						if instance.ExplorerHidden then
-							return
-						end
-
-						local searchQuery = string.lower(explorerSearch)
-						local searching = searchQuery ~= ""
-						local selfMatches = not searching
-							or textMatches(instance.Name, searchQuery)
-							or textMatches(instance.ClassName, searchQuery)
-						local childMatches = false
-						local children = instance:GetChildren()
-
-						if searching then
-							for _, child in ipairs(children) do
-								if instanceMatchesTree(child, searchQuery) then
-									childMatches = true
-									break
-								end
-							end
-						end
-
-						if searching and not selfMatches and not childMatches then
-							return false
-						end
-
-						visit(instance, depth, state.y, state.rowIndex)
-
-						if not state.countOnly then
-							state.y += rowHeightStep
-							state.rowIndex += 1
-							visibleRowCount += 1
-						end
-
-						if searching or expanded[instance] then
-							for _, child in ipairs(children) do
-								walkVisible(child, depth + 1, state, visit)
-							end
-						end
-
-						return true
-					end
-
-					local services = game:GetChildren()
-
-					pairs(services[1])
-
-					local order = {}
-					for index, name in ipairs(serviceOrder) do
-						order[name] = index
-					end
-
-					print(order[1])
-
-					table.sort(services, function(a, b)
-						local aOrder = order[a.Name]
-						local bOrder = order[b.Name]
-
-						if aOrder and bOrder then
-							return aOrder < bOrder
-						elseif aOrder then
-							return true
-						elseif bOrder then
-							return false
-						end
-
-						return a.Name < b.Name
-					end)
-
-					local stripeRects = {}
-					local state = { y = params.y + yOffset, rowIndex = 0 }
-
-					for _, service in ipairs(services) do
-						walkVisible(service, 0, state, function(instance, depth, rowY, idx)
-							table.insert(stripeRects, {
-								y = rowY,
-								color = (idx % 2 == 0) and theme.AlternatingColor1 or theme.AlternatingColor2,
-							})
-						end)
-					end
-					contentHeight = yOffset + (visibleRowCount * rowHeight)
-
-					if #stripeRects > 0 then
-						local x = params.x + (6 * uiScale)
-						local width = params.width - (15 * uiScale)
-						local top = stripeRects[1].y - (18 * uiScale)
-						local bottom = stripeRects[#stripeRects].y - (18 * uiScale) + (25 * uiScale)
-						local height = bottom - top
-
-						Argon:Save(renderer.Window)
-
-						Argon:ClipRoundRect(renderer.Window, {
-							x = x,
-							y = top,
-							width = width,
-							height = height,
-						}, 6, 6)
-
-						for _, stripe in ipairs(stripeRects) do
-							Argon:DrawRectangle(renderer.Window, {
-								x = x,
-								y = stripe.y - (18 * uiScale),
-								width = width,
-								height = 25 * uiScale,
-								Color = stripe.color,
-							})
-						end
-
-						Argon:Restore(renderer.Window)
-					end
-
-					local function renderInstance(instance, depth, rowY)
-						if instance.ExplorerHidden then
-							return
-						end
-
-						local children = instance:GetChildren()
-						local hasChildren = false
-
-						print(children[1])
-
-						for _, child in pairs(children) do
-							print(child.Name)
-							if not child.ExplorerHidden then
-								hasChildren = true
-								break
-							end
-						end
-
-						if not iconCache[instance.ClassName] then
-							local path = iconPath .. instance.ClassName .. ".svg"
-							iconCache[instance.ClassName] = Argon:CreateImageFromPath(path)
-						end
-
-						local indent = params.x + contentPadding + (depth * indentSize)
-						local selection = Selection.Get()
-						local isSelected = selection and selection[1] == instance or false
-						local textX = indent + (36 * uiScale)
-
-						local rowRect = {
-							x = params.x + (6 * uiScale),
-							y = rowY - (18 * uiScale),
-							width = params.width - (12 * uiScale),
-							height = rowHeight,
-						}
-						local rowHitbox = clipHitboxToViewport(rowRect)
-						local isInRect = rowHitbox and renderer:isMouseInRect(rowHitbox) or false
-						if isInRect and canInteract then
-							local x = params.x + (6 * uiScale)
-							local y = rowY - (18 * uiScale)
-							local width = params.width - (12 * uiScale)
-							local height = 25 * uiScale
-							local border = 5 * uiScale
-
-							Argon:Save(renderer.Window)
-
-							Argon:ClipRoundRect(renderer.Window, {
-								x = x + border,
-								y = y + border,
-								width = width - border * 2,
-								height = height - border * 2,
-							}, 4, 4)
-
-							Argon:DrawRectangle(renderer.Window, {
-								x = x + border,
-								y = y + border,
-								width = width - border * 2,
-								height = height - border * 2,
-								Color = Argon:RGBA(55, 55, 55),
-								isOutline = true,
-							})
-
-							Argon:DrawRectangle(renderer.Window, {
-								x = x + border,
-								y = y + border,
-								width = width - border * 2,
-								height = height - border * 2,
-								Color = Argon:RGBA(44, 44, 44),
-							})
-
-							local textWidth = Argon:MeasureText(renderer.Window, instance.Name, textSize, theme.Font)
-							local plusRect = {
-								x = textX + textWidth + (6 * uiScale),
-								y = rowY - (14 * uiScale),
-								width = imageSize,
-								height = imageSize,
-							}
-
-							Immco.Image({
-								x = plusRect.x,
-								y = plusRect.y,
-								width = plusRect.width,
-								height = plusRect.height,
-								Image = plusIcon,
-								theme = theme,
-								engine_window = renderer.Window,
-							}, dt)
-
-							local plusHitbox = clipHitboxToViewport(plusRect)
-							if plusHitbox and renderer:HasClicked(plusHitbox) and canInteract then
-								Selection.Set({ instance })
-								createMenu.visible = true
-								createMenu.x = plusRect.x + plusRect.width + (4 * uiScale)
-								createMenu.y = plusRect.y
-								createMenu.parent = instance
-								createMenu.suppressInput = true
-								canInteract = false
-								renderer.UpdateCamera = false
-							end
-
-							Argon:Restore(renderer.Window)
-						end
-
-						if isSelected then
-							local x = params.x + (6 * uiScale)
-							local y = rowY - (18 * uiScale)
-							local width = params.width - (12 * uiScale)
-							local height = 25 * uiScale
-							local border = 5 * uiScale
-
-							Argon:Save(renderer.Window)
-
-							Argon:ClipRoundRect(renderer.Window, {
-								x = x,
-								y = y,
-								width = width,
-								height = height,
-							}, 6, 6)
-
-							Argon:DrawRectangle(renderer.Window, {
-								x = x,
-								y = y,
-								width = width,
-								height = height,
-								Color = Argon:RGBA(45, 125, 255, 255),
-							})
-
-							Argon:Restore(renderer.Window)
-
-							Argon:Save(renderer.Window)
-
-							Argon:ClipRoundRect(renderer.Window, {
-								x = x + border,
-								y = y + border,
-								width = width - border * 2,
-								height = height - border * 2,
-							}, 4, 4)
-
-							Argon:DrawRectangle(renderer.Window, {
-								x = x + border,
-								y = y + border,
-								width = width - border * 2,
-								height = height - border * 2,
-								Color = Argon:RGBA(45, 125, 255, 100),
-							})
-
-							Argon:Restore(renderer.Window)
-						end
-
-						if rowHitbox and renderer:HasClicked(rowHitbox) and canInteract then
-							if clickedInstance(instance) then
-								-- Double click
-								if instance:IsA("ScriptContainer") then
-									ishared.StudioSystem:Fire("toggle_code_editor", true)
-									return
-								end
-
-								ishared.StudioSystem:Fire("toggle_code_editor", false)
-
-								if hasChildren then
-									expanded[instance] = not expanded[instance]
-								end
-							else
-								-- First click
-								Selection.Set({ instance })
-							end
-						end
-
-						if hasChildren then
-							local arrow = expanded[instance] and expandedIcon or arrowRight
-
-							Immco.Image({
-								x = indent,
-								y = rowY - (14 * uiScale),
-								width = imageSize,
-								height = imageSize,
-								Image = arrow,
-								theme = theme,
-								engine_window = renderer.Window,
-							}, dt)
-
-							local arrowHitbox = clipHitboxToViewport({
-								x = indent,
-								y = rowY - (14 * uiScale),
-								width = imageSize,
-								height = imageSize,
-							})
-							if arrowHitbox and renderer:HasClicked(arrowHitbox) and canInteract then
-								expanded[instance] = not expanded[instance]
-							end
-						end
-
-						Immco.Image({
-							x = indent + imageSize,
-							y = rowY - (14 * uiScale),
-							width = imageSize,
-							height = imageSize,
-							Image = iconCache[instance.ClassName],
-							theme = theme,
-							engine_window = renderer.Window,
-						}, dt)
-
-						Immco.Text({
-							x = textX,
-							y = rowY,
-							TextSize = textSize,
-							theme = theme,
-							text = instance.Name,
-							Color = theme.TextColor,
-							engine_window = renderer.Window,
-						}, dt)
-					end
-
-					print(services[1])
-					local renderState = { y = params.y + yOffset, rowIndex = 0 }
-					for _, service in ipairs(services) do
-						walkVisible(service, 0, renderState, function(instance, depth, rowY, idx)
-							renderInstance(instance, depth, rowY)
-						end)
-					end
-				end,
-			}, dt)
-
-			if createMenu.visible then
-				local menuHeight = math.max(120, math.min(absoluteSize.Y - 55, 420))
-				local menuX = math.min(createMenu.x, absolutePosition.X + absoluteSize.X - 230)
-				local menuY = math.min(createMenu.y, absolutePosition.Y + absoluteSize.Y - menuHeight - 8)
-
-				Immco.ContextMenu({
-					id = "explorer-create-instance",
-					x = math.max(absolutePosition.X + 8, menuX),
-					y = math.max(absolutePosition.Y + 35, menuY),
-					width = 220,
-					MaxHeight = menuHeight,
-					items = getCreateClassItems(),
-					EnableSearch = true,
-					SearchPlaceholder = "Search classes...",
-					SuppressInput = createMenu.suppressInput,
-					RetainedStorage = contextMenuStorage,
-					renderer = renderer,
-					engine_window = renderer.Window,
-					theme = theme,
-					onClose = function()
-						createMenu.visible = false
-						createMenu.parent = nil
-						canInteract = true
-						renderer.UpdateCamera = true
-					end,
-				}, dt)
-				createMenu.suppressInput = false
-			end
-		end,
-	}, dt)
 end)

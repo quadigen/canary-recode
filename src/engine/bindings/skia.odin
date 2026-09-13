@@ -1,9 +1,9 @@
 package kineffi
 
-import "core:c"
-
-when ODIN_OS == .Windows {
-	foreign import lib {
+when ODIN_OS == .JS {
+	foreign import kine_skia "kinemium_skia"
+} else when ODIN_OS == .Windows {
+	foreign import kine_skia {
 		"../../../vendor/build/lib/kine_skia.lib",
 		"../../../vendor/build/lib/kine_skia_skiacore.lib",
 		"../../../vendor/build/lib/kine_skia_svg.lib",
@@ -19,14 +19,17 @@ when ODIN_OS == .Windows {
 		"system:ole32.lib",
 		"system:user32.lib",
 	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import kine_skia "../../../build/android-native/lib/kine_skia_component.a"
 } else {
-	foreign import lib "../../../vendor/build/lib/kine_skia.a"
+	foreign import kine_skia "../../../vendor/build/lib/KinemiumLibs.a"
 }
 
 KineSkiaSurface       :: struct {}
 KineSkiaImage         :: struct {}
 KineSkiaVulkanContext :: struct {}
 KineSkiaRuntimeShader :: struct {}
+KineSkiaTypeface :: struct {}
 
 KineSkiaVulkanBackend :: struct {
 	instance:                 rawptr, /* VkInstance */
@@ -51,7 +54,7 @@ KineSkiaVulkanImageInfo :: struct {
 }
 
 @(default_calling_convention="c")
-foreign lib {
+foreign kine_skia {
 	/* ---------------- Version ---------------- */
 	Kine_Skia_GetVersion :: proc() -> cstring ---
 
@@ -73,6 +76,61 @@ foreign lib {
 	Kine_Skia_Surface_Flush                    :: proc(surface: ^KineSkiaSurface) ---
 	Kine_Skia_Surface_SetBackdropFromSurface   :: proc(surface: ^KineSkiaSurface, backdrop: ^KineSkiaSurface) ---
 	Kine_Skia_Surface_ClearBackdrop            :: proc(surface: ^KineSkiaSurface) ---
+	Kine_Skia_Typeface_LoadFromMemory :: proc(
+		data: ^u8,
+		size: uintptr,
+	) -> ^KineSkiaTypeface ---
+
+	Kine_Skia_Typeface_LoadFromFile :: proc(
+		path: cstring,
+	) -> ^KineSkiaTypeface ---
+
+	Kine_Skia_Typeface_Destroy :: proc(
+		typeface: ^KineSkiaTypeface,
+	) ---
+
+	Kine_Skia_Surface_DrawTextTypeface :: proc(
+		surface: ^KineSkiaSurface,
+		text: cstring,
+		x, y: f32,
+		fontSize: f32,
+		typeface: ^KineSkiaTypeface,
+		r, g, b, a: u8,
+	) ---
+
+	Kine_Skia_Surface_DrawTextShadowTypeface :: proc(
+		surface: ^KineSkiaSurface,
+		text: cstring,
+		x, y: f32,
+		fontSize: f32,
+		typeface: ^KineSkiaTypeface,
+
+		offsetX: f32,
+		offsetY: f32,
+		blurSigma: f32,
+		spread: f32,
+
+		shadowR: u8,
+		shadowG: u8,
+		shadowB: u8,
+		shadowA: u8,
+	) ---
+
+	Kine_Skia_Typeface_MeasureText :: proc(
+		typeface: ^KineSkiaTypeface,
+		text: cstring,
+		fontSize: f32,
+	) -> f32 ---
+
+	Kine_Skia_Typeface_GetLineHeight :: proc(
+		typeface: ^KineSkiaTypeface,
+		fontSize: f32,
+	) -> f32 ---
+
+	Kine_Skia_Typeface_GetAscent :: proc(
+		typeface: ^KineSkiaTypeface,
+		fontSize: f32,
+	) -> f32 ---
 
 	/* Debug/readback helper: sample a single pixel back out of the surface */
 	Kine_Skia_Surface_GetPixel :: proc(surface: ^KineSkiaSurface, x: i32, y: i32, outR: ^u8, outG: ^u8, outB: ^u8, outA: ^u8) ---
@@ -129,7 +187,7 @@ foreign lib {
 
 	/* ---------------- Images ---------------- */
 	Kine_Skia_Image_LoadFromFile   :: proc(path: cstring) -> ^KineSkiaImage ---
-	Kine_Skia_Image_LoadFromMemory :: proc(data: ^u8, size: c.size_t) -> ^KineSkiaImage ---
+	Kine_Skia_Image_LoadFromMemory :: proc(data: ^u8, size: uintptr) -> ^KineSkiaImage ---
 	Kine_Skia_Image_Destroy        :: proc(image: ^KineSkiaImage) ---
 	Kine_Skia_Image_GetWidth       :: proc(image: ^KineSkiaImage) -> i32 ---
 	Kine_Skia_Image_GetHeight      :: proc(image: ^KineSkiaImage) -> i32 ---
@@ -140,4 +198,3 @@ foreign lib {
 	/* Draw image scaled/cropped: src rect from the image -> dst rect on the surface */
 	Kine_Skia_Surface_DrawImageRect :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, srcX: f32, srcY: f32, srcWidth: f32, srcHeight: f32, dstX: f32, dstY: f32, dstWidth: f32, dstHeight: f32, alpha: u8) ---
 }
-

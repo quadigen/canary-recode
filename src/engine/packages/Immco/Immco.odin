@@ -5,7 +5,8 @@ package immco
 import "core:math"
 import "core:strings"
 import base_runtime "base:runtime"
-import sdl3 "vendor:sdl3"
+import sdl3 "../../platform"
+import "core:fmt"
 
 import kineffi "../../bindings"
 import renderer "../../renderer"
@@ -770,17 +771,29 @@ image :: proc "c" (L: ^vm.State) -> i32 {
     height := table_number(L, p, "height", src_height)
     alpha := u8(clamp(table_number(L, p, "Alpha", 1)*255, 0, 255))
 
-    kineffi.Kine_Skia_Surface_DrawImageRect(
-        surface, image_handle,
-        table_number(L, p, "srcX", 0),
-        table_number(L, p, "srcY", 0),
-        table_number(L, p, "srcWidth", src_width),
-        table_number(L, p, "srcHeight", src_height),
-        table_number(L, p, "x"),
-        table_number(L, p, "y"),
-        width, height,
-        alpha,
-    )
+    src_x := table_number(L, p, "srcX", 0)
+    src_y := table_number(L, p, "srcY", 0)
+    src_w := table_number(L, p, "srcWidth", src_width)
+    src_h := table_number(L, p, "srcHeight", src_height)
+
+    if src_x == 0 && src_y == 0 && src_w == src_width && src_h == src_height {
+        kineffi.Kine_Skia_Surface_DrawImageSized(
+            surface, image_handle,
+            table_number(L, p, "x"),
+            table_number(L, p, "y"),
+            width, height,
+            alpha,
+        )
+    } else {
+        kineffi.Kine_Skia_Surface_DrawImageRect(
+            surface, image_handle,
+            src_x, src_y, src_w, src_h,
+            table_number(L, p, "x"),
+            table_number(L, p, "y"),
+            width, height,
+            alpha,
+        )
+    }
     return 0
 }
 
@@ -1005,8 +1018,10 @@ scroller :: proc "c" (L: ^vm.State) -> i32 {
         copy_field(L, p, result, "RetainedStorage")
 
         ok, err := vm.ProtectedCall(L, 1, 0)
-        _ = ok
-        _ = err
+        if !ok {
+            fmt.eprintf("Immco callback '%s' failed: %s\n", ok, err)
+            delete(err)
+        }
     } else {
         vm.Pop(L)
     }

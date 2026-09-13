@@ -1,15 +1,23 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 package luauh
 
-import "core:c"
-
-when ODIN_OS == .Windows {
+when ODIN_OS == .JS {
+	foreign import lib "../../../../build/web-native/lib/kine_luacode_link.o"
+} else when ODIN_OS == .Windows {
 	foreign import lib {
 		"../../../../vendor/build/lib/kine_luau.lib",
-		"../../../../build/vendor/luau/Luau.Compiler.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Compiler.lib",
+	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib {
+		"../../../../build/android-native/lib/libkine_luau.a",
+		"../../../../build/android-native/luau/libLuau.Compiler.a",
 	}
 } else {
-	foreign import lib "system:Luau.Compiler"
+	foreign import lib {
+		"../../../../vendor/build/lib/kine_luau.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Compiler.a",
+	}
 }
 
 lua_CompileConstant :: rawptr
@@ -74,7 +82,8 @@ lua_CompileOptions :: struct {
 @(default_calling_convention="c", link_prefix="kine_")
 foreign lib {
 	// compile source to bytecode; when source compilation fails, the resulting bytecode contains the encoded error. use free() to destroy
-	luau_compile :: proc(source: cstring, size: c.size_t, options: ^lua_CompileOptions, outsize: ^c.size_t) -> cstring ---
+	luau_compile :: proc(source: cstring, size: uintptr, options: ^lua_CompileOptions, outsize: ^uintptr) -> cstring ---
+	luau_free    :: proc(pointer: rawptr) ---
 
 	// when libraryMemberConstantCb is called, these methods can be used to set a value of the opaque lua_CompileConstant struct
 	// vector component 'w' is not visible to VM runtime configured with LUA_VECTOR_SIZE == 3, but can affect constant folding during compilation
@@ -85,6 +94,6 @@ foreign lib {
 	luau_set_compile_constant_integer64 :: proc(constant: ^lua_CompileConstant, l: i64) ---
 	luau_set_compile_constant_vector    :: proc(constant: ^lua_CompileConstant, x: f32, y: f32, z: f32, w: f32) ---
 	luau_set_compile_constant_vectord   :: proc(constant: ^lua_CompileConstant, x: f64, y: f64, z: f64, w: f64) ---
-	luau_set_compile_constant_string    :: proc(constant: ^lua_CompileConstant, s: cstring, l: c.size_t) ---
+	luau_set_compile_constant_string    :: proc(constant: ^lua_CompileConstant, s: cstring, l: uintptr) ---
 }
 

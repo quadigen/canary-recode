@@ -28,6 +28,9 @@
 #include <cstdint>
 #if defined(_WIN32)
 #include "include/ports/SkTypeface_win.h"
+#elif defined(__ANDROID__)
+#include "include/ports/SkFontMgr_android_ndk.h"
+#include "include/ports/SkFontScanner_FreeType.h"
 #elif defined(__APPLE__)
 #include "include/ports/SkFontMgr_mac_ct.h"
 #else
@@ -89,6 +92,10 @@ struct KineSkiaVulkanContext {
     sk_sp<GrDirectContext> context;
     KineSkiaVulkanBackend backend;
 #endif
+};
+
+struct KineSkiaTypeface {
+    sk_sp<SkTypeface> typeface;
 };
 
 struct KineSkiaRuntimeShader {
@@ -250,6 +257,8 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
 
     #if defined(_WIN32)
         sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+    #elif defined(__ANDROID__)
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_AndroidNDK(false, SkFontScanner_Make_FreeType());
     #elif defined(__APPLE__)
         sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
     #else
@@ -653,16 +662,22 @@ KINE_SKIA_API void Kine_Skia_Surface_GetPixel(
         return;
     }
 
+    if (x < 0 || y < 0 || x >= surface->surface->width() || y >= surface->surface->height()) {
+        return;
+    }
+
     SkPixmap pixmap;
-    if (!surface->surface->peekPixels(&pixmap)) {
-        return;
+    SkColor c;
+    if (surface->surface->peekPixels(&pixmap)) {
+        c = pixmap.getColor(x, y);
+    } else {
+        // Vulkan surfaces are not CPU-addressable. Read a single pixel back
+        // so this diagnostic API works for the actual compositor as well.
+        uint8_t rgba[4];
+        const auto info = SkImageInfo::Make(1, 1, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+        if (!surface->surface->readPixels(info, rgba, sizeof(rgba), x, y)) return;
+        c = SkColorSetARGB(rgba[3], rgba[0], rgba[1], rgba[2]);
     }
-
-    if (x < 0 || y < 0 || x >= pixmap.width() || y >= pixmap.height()) {
-        return;
-    }
-
-    SkColor c = pixmap.getColor(x, y);
     if (outR) *outR = SkColorGetR(c);
     if (outG) *outG = SkColorGetG(c);
     if (outB) *outB = SkColorGetB(c);
@@ -1141,6 +1156,280 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
         y + offsetY,
         shadowPaint
     );
+}
+
+KINE_SKIA_API KineSkiaTypeface* Kine_Skia_Typeface_LoadFromMemory(
+    const uint8_t* data,
+    size_t size)
+{
+    if (!data || size == 0) {
+        return nullptr;
+    }
+
+#if defined(_WIN32)
+    sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+    sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
+#else
+    sk_sp<SkFontMgr> mgr =
+        SkFontMgr_New_FontConfig(
+            nullptr,
+            SkFontScanner_Make_FreeType());
+#endif
+
+    if (!mgr) {
+        return nullptr;
+    }
+
+    sk_sp<SkData> fontData =
+        SkData::MakeWithCopy(data, size);
+
+    if (!fontData) {
+        return nullptr;
+    }
+
+    sk_sp<SkTypeface> typeface =
+        mgr->makeFromData(
+            fontData,
+            0);
+
+    if (!typeface) {
+        return nullptr;
+    }
+
+    auto* wrapper = new KineSkiaTypeface();
+    wrapper->typeface = std::move(typeface);
+
+    return wrapper;
+}
+
+KINE_SKIA_API KineSkiaTypeface* Kine_Skia_Typeface_LoadFromFile(
+    const char* path)
+{
+    if (!path || !path[0]) {
+        return nullptr;
+    }
+
+    sk_sp<SkTypeface> typeface =
+        kine_skia_get_typeface(path);
+
+    if (!typeface) {
+        return nullptr;
+    }
+
+    auto* wrapper = new KineSkiaTypeface();
+    wrapper->typeface = std::move(typeface);
+
+    return wrapper;
+}
+
+KINE_SKIA_API void Kine_Skia_Typeface_Destroy(
+    KineSkiaTypeface* typeface)
+{
+    delete typeface;
+}
+
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a)
+{
+    if (!surface ||
+        !surface->surface ||
+        !text ||
+        !text[0] ||
+        !typeface ||
+        !typeface->typeface) {
+        return;
+    }
+
+    SkFont font(
+        typeface->typeface,
+        fontSize);
+
+    font.setEdging(
+        SkFont::Edging::kAntiAlias);
+
+    sk_sp<SkTextBlob> blob =
+        SkTextBlob::MakeFromText(
+            text,
+            strlen(text),
+            font,
+            SkTextEncoding::kUTF8);
+
+    if (!blob) {
+        return;
+    }
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(
+        SkColorSetARGB(
+            a,
+            r,
+            g,
+            b));
+
+    surface->surface
+        ->getCanvas()
+        ->drawTextBlob(
+            blob,
+            x,
+            y,
+            paint);
+}
+
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadowTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+
+    float offsetX,
+    float offsetY,
+    float blurSigma,
+    float spread,
+
+    uint8_t shadowR,
+    uint8_t shadowG,
+    uint8_t shadowB,
+    uint8_t shadowA)
+{
+    if (!surface ||
+        !surface->surface ||
+        !text ||
+        !text[0] ||
+        !typeface ||
+        !typeface->typeface ||
+        shadowA == 0) {
+        return;
+    }
+
+    SkFont font(
+        typeface->typeface,
+        fontSize);
+
+    font.setEdging(
+        SkFont::Edging::kAntiAlias);
+
+    sk_sp<SkTextBlob> blob =
+        SkTextBlob::MakeFromText(
+            text,
+            strlen(text),
+            font,
+            SkTextEncoding::kUTF8);
+
+    if (!blob) {
+        return;
+    }
+
+    SkPaint paint;
+
+    paint.setAntiAlias(true);
+
+    paint.setColor(
+        SkColorSetARGB(
+            shadowA,
+            shadowR,
+            shadowG,
+            shadowB));
+
+    if (spread > 0.0f) {
+        paint.setStyle(
+            SkPaint::kStrokeAndFill_Style);
+
+        paint.setStrokeWidth(
+            spread * 2.0f);
+
+        paint.setStrokeJoin(
+            SkPaint::kRound_Join);
+    }
+
+    if (blurSigma > 0.0f) {
+        paint.setMaskFilter(
+            SkMaskFilter::MakeBlur(
+                kNormal_SkBlurStyle,
+                blurSigma));
+    }
+
+    surface->surface
+        ->getCanvas()
+        ->drawTextBlob(
+            blob,
+            x + offsetX,
+            y + offsetY,
+            paint);
+}
+
+KINE_SKIA_API float Kine_Skia_Typeface_MeasureText(
+    KineSkiaTypeface* typeface,
+    const char* text,
+    float fontSize)
+{
+    if (!typeface ||
+        !typeface->typeface ||
+        !text ||
+        fontSize <= 0.0f) {
+        return 0.0f;
+    }
+
+    SkFont font(typeface->typeface, fontSize);
+
+    return font.measureText(
+        text,
+        strlen(text),
+        SkTextEncoding::kUTF8
+    );
+}
+
+KINE_SKIA_API float Kine_Skia_Typeface_GetLineHeight(
+    KineSkiaTypeface* typeface,
+    float fontSize)
+{
+    if (!typeface ||
+        !typeface->typeface ||
+        fontSize <= 0.0f) {
+        return 0.0f;
+    }
+
+    SkFont font(typeface->typeface, fontSize);
+
+    SkFontMetrics metrics;
+    font.getMetrics(&metrics);
+
+    return
+        (-metrics.fAscent) +
+        metrics.fDescent +
+        metrics.fLeading;
+}
+
+KINE_SKIA_API float Kine_Skia_Typeface_GetAscent(
+    KineSkiaTypeface* typeface,
+    float fontSize)
+{
+    if (!typeface ||
+        !typeface->typeface ||
+        fontSize <= 0.0f) {
+        return 0.0f;
+    }
+
+    SkFont font(typeface->typeface, fontSize);
+
+    SkFontMetrics metrics;
+    font.getMetrics(&metrics);
+
+    return -metrics.fAscent;
 }
 
 KINE_SKIA_API float Kine_Skia_Surface_MeasureText(

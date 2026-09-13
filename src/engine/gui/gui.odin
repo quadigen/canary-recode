@@ -20,7 +20,9 @@ TextParams :: struct {
 	TextSize:     f32,
 	color:        datatypes.Color3,
 	transparency: f32,
-	font:         cstring,
+
+	font:     cstring,
+	typeface: ^kineffi.KineSkiaTypeface,
 }
 
 ShadowParams :: struct {
@@ -387,6 +389,23 @@ drawText :: proc(
 	r, g, b := colorToU8(params.color)
 	a := alphaToU8(params.transparency)
 
+	if params.typeface != nil {
+		kineffi.Kine_Skia_Surface_DrawTextTypeface(
+			surface,
+			text,
+			params.x,
+			params.y,
+			params.TextSize,
+			params.typeface,
+			r,
+			g,
+			b,
+			a,
+		)
+
+		return
+	}
+
 	kineffi.Kine_Skia_Surface_DrawText(
 		surface,
 		text,
@@ -412,7 +431,35 @@ drawTextShadow :: proc(
 	}
 
 	r, g, b := colorToU8(shadow.color)
-	a := u8(math.round(clamp(shadow.alpha, 0, 1) * 255))
+
+	a := u8(
+		math.round(
+			clamp(shadow.alpha, 0, 1) * 255,
+		),
+	)
+
+	if params.typeface != nil {
+		kineffi.Kine_Skia_Surface_DrawTextShadowTypeface(
+			surface,
+			text,
+			params.x,
+			params.y,
+			params.TextSize,
+			params.typeface,
+
+			shadow.offsetX,
+			shadow.offsetY,
+			shadow.blurSigma,
+			shadow.spread,
+
+			r,
+			g,
+			b,
+			a,
+		)
+
+		return
+	}
 
 	kineffi.Kine_Skia_Surface_DrawTextShadow(
 		surface,
@@ -421,10 +468,12 @@ drawTextShadow :: proc(
 		params.y,
 		params.TextSize,
 		params.font,
+
 		shadow.offsetX,
 		shadow.offsetY,
 		shadow.blurSigma,
 		shadow.spread,
+
 		r,
 		g,
 		b,

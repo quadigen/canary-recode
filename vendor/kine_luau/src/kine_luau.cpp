@@ -1,6 +1,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
+#include <cstdlib>
 
 extern "C" {
 
@@ -8,6 +9,8 @@ lua_State* kine_luaL_newstate() { return luaL_newstate(); }
 void kine_luaL_openlibs(lua_State* L) { luaL_openlibs(L); }
 void kine_lua_close(lua_State* L) { lua_close(L); }
 void kine_lua_setfield(lua_State* L, int index, const char* key) { lua_setfield(L, index, key); }
+int kine_lua_setmetatable(lua_State* L, int index) { return lua_setmetatable(L, index); }
+int kine_lua_setfenv(lua_State* L, int index) { return lua_setfenv(L, index); }
 void kine_lua_pushnumber(lua_State* L, double value) { lua_pushnumber(L, value); }
 void kine_lua_pushinteger64(lua_State* L, int64_t value) { lua_pushinteger64(L, value); }
 void kine_lua_pushvector(lua_State* L, float x, float y, float z) { lua_pushvector(L, x, y, z); }
@@ -69,6 +72,7 @@ char* kine_luau_compile(const char* source, size_t size, lua_CompileOptions* opt
 {
     return luau_compile(source, size, options, outSize);
 }
+void kine_luau_free(void* pointer) { std::free(pointer); }
 int kine_luau_load(lua_State* L, const char* chunkName, const char* bytecode, size_t size, int environment)
 {
     return luau_load(L, chunkName, bytecode, size, environment);

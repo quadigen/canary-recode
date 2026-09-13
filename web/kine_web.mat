@@ -1,0 +1,14 @@
+material {
+    name : "KinemiumWeb",
+    shadingModel : unlit,
+    blending : opaque,
+    parameters : [
+        { type : float4, name : baseColor }
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+    }
+}

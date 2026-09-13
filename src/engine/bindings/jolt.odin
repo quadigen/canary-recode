@@ -1,12 +1,16 @@
 package kineffi
 
-when ODIN_OS == .Windows {
+when ODIN_OS == .JS {
+	foreign import lib "../../../build/web-native/lib/kine_jolt_web.o"
+} else when ODIN_OS == .Windows {
 	foreign import lib {
 		"../../../vendor/build/lib/kine_jolt.lib",
 		"../../../vendor/build/lib/kine_jolt_core.lib",
 	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib "../../../build/android-native/lib/libJoltWrapper.a"
 } else {
-	foreign import lib "../../../vendor/build/lib/kine_jolt.a"
+	foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
 }
 
 JPH_Vec3 :: struct {

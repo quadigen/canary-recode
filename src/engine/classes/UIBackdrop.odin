@@ -110,5 +110,6 @@ Register_UIBackdrop :: proc(registry: ^Registry) {
 		get = UIBackdrop_get,
 		set = UIBackdrop_set,
 		clone = UIBackdrop_clone,
+		properties = []string{"TintColor3", "BlurRadius", "Enabled", "TintTransparency"},
 	)
 }

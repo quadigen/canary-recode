@@ -23,6 +23,8 @@ Part :: struct {
 	collision_group: string,
     shape: enums.PartType,
     material: enums.Material,
+    castshadow: bool,
+    position: datatypes.Vector3
 }
 
 Part_Init :: proc() -> Part {
@@ -39,7 +41,9 @@ Part_Init :: proc() -> Part {
 		collision_group = strings.clone("Default"),
         transparency = 0,
         shape =  enums.PartType.Block,
-        material = enums.Material.SmoothPlastic
+        material = enums.Material.SmoothPlastic,
+        castshadow = true,
+        position = datatypes.Vector3{0, 0, 0}
     }
 }
 
@@ -75,7 +79,7 @@ part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
         vm.PushNumber(L, part.transparency)
     case "Shape":
         if enum_registry == nil { return false }
-		_ = enums.Push_Item_By_Value(L, enum_registry, "Shape", i64(part.shape))
+		_ = enums.Push_Item_By_Value(L, enum_registry, "PartType", i64(part.shape))
 	case "CFrame":
 		if datatype_registry == nil { return false }
 		datatypes.Push_CFrame(L, datatype_registry, part.cframe)
@@ -84,6 +88,10 @@ part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
 		datatypes.Push_Color3(L, datatype_registry, part.color)
 	case "Size":
 		datatypes.Push_Vector3(L, part.size)
+    case "CastShadow":
+        vm.PushBoolean(L, part.castshadow)
+    case "Position":
+        datatypes.push_vector3(L, part.position)
     case:
         return false
     }
@@ -108,7 +116,7 @@ part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
 		part.material = enums.Material(item.value)
     case "Shape":
 		if enum_registry == nil { return false }
-		item := enums.Arg_Item(L, value_index, enum_registry, "Shape")
+		item := enums.Arg_Item(L, value_index, enum_registry, "PartType")
 		part.shape = enums.PartType(item.value)
     case "Transparency":
         part.transparency = vm.ArgNumber(L, value_index)
@@ -130,6 +138,13 @@ part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
         }
 
         part.size = size
+    case "CastShadow":
+        part.castshadow = vm.ArgBoolean(L, value_index)
+    case "Position":
+        v := datatypes.Arg_Vector3(L, value_index)
+        part.cframe.x = v.x
+        part.cframe.y = v.y
+        part.cframe.z = v.z
     case:
         return false
     }
@@ -149,6 +164,8 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.can_query    = src.can_query
 	dst.shape        = src.shape
 	dst.material     = src.material
+    dst.position     = src.position
+    dst.castshadow   = src.castshadow
 
 	delete(dst.collision_group)
 	dst.collision_group = strings.clone(src.collision_group)
@@ -163,6 +180,7 @@ Register_Part :: proc(registry: ^Registry) {
         get = part_get,
         set = part_set,
         clone = part_clone,
+		properties = []string{"CanCollide", "Position", "CastShadow", "Color", "Anchored", "CFrame", "Shape", "CollisionGroup", "CanQuery", "Transparency", "Size", "Material"},
     )
 }
 

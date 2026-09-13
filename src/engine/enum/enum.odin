@@ -2471,11 +2471,16 @@ PackagePermission :: enum {
 }
 
 PartType :: enum {
-	Ball = 0,
-	Block = 1,
-	Cylinder = 2,
-	Wedge = 3,
-	CornerWedge = 4,
+    Ball = 0,
+    Block = 1,
+    Cylinder = 2,
+    Wedge = 3,
+    CornerWedge = 4,
+    Cone = 5,
+    Pyramid = 6,
+    Truss = 7,
+    Torus = 8,
+    TriangleWedge = 9,
 }
 
 ParticleEmitterShape :: enum {

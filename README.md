@@ -78,7 +78,7 @@ https://zune.sh/guides/install
 
 - Run the engine<br>
 ```zune run engine```<br>
-*This tutorial works with both Linux and Windows, MacOS support is coming soon.*
+*This tutorial works on Windows, Linux, and macOS.*
 
 # Commands
 Kinemium provides with several flags you can run with ```zune run game```<br>
@@ -158,6 +158,29 @@ Ki-nem-yum!!
 - Manifold
 - Box2D
 - Jolt Physics
+
+## WebAssembly build
+
+The browser runtime is the engine's Odin `js_wasm32` target, not a separate web
+demo. It boots the same Luau VM, engine environment, instance/service registry,
+Studio scripts, and Jolt physics wrapper. SDL3/Vulkan are replaced at the
+platform boundary by browser input/window events, CanvasKit (Skia), and
+Filament WebGL while the desktop target remains unchanged.
+
+```powershell
+just wasm
+just wasm-serve
+```
+
+Open `http://127.0.0.1:8000` in Firefox. The page reports **Running in Firefox**
+only after the real engine module has initialized Luau, Jolt, the Studio
+environment, CanvasKit surfaces, and a Filament WebGL renderer.
+
+With the server running, verify rendered frames and save a screenshot with:
+
+```powershell
+py -3 tools/firefox_wasm_smoke.py --url http://127.0.0.1:8000/
+```
 - Luau
 - and most importantly.. Zune Runtime
 kv1.10.7

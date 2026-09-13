@@ -124,6 +124,9 @@ Register_UICorner :: proc(registry: ^Registry) {
         &UICorner_Class,
         ui_corner_construct,
         ui_corner_destroy,
+		get = UICorner_get,
+		set = UICorner_set,
         clone = ui_corner_clone,
+		properties = []string{"CornerRadius", "TopLeftRadius", "TopRightRadius", "BottomLeftRadius", "BottomRightRadius"},
     )
 }

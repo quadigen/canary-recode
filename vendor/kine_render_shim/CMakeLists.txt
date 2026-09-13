@@ -18,14 +18,26 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-set(SDL_SHARED ${KINE_BUILD_SHARED} CACHE BOOL "" FORCE)
+if(ANDROID)
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+elseif(UNIX)
+    # Odin's bundled SDL3 bindings link `system:SDL3` on Unix. Build the shared
+    # library beside the static wrapper so desktop artifacts can ship it.
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+else()
+    set(SDL_SHARED ${KINE_BUILD_SHARED} CACHE BOOL "" FORCE)
+endif()
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(SDL3)
 
-if(NOT KINE_BUILD_SHARED AND TARGET SDL3::SDL3-static)
+if(ANDROID AND TARGET SDL3::SDL3-shared)
+    set(KINE_SDL3_TARGET SDL3::SDL3-shared)
+elseif(ANDROID AND TARGET SDL3-shared)
+    set(KINE_SDL3_TARGET SDL3-shared)
+elseif(NOT KINE_BUILD_SHARED AND TARGET SDL3::SDL3-static)
     set(KINE_SDL3_TARGET SDL3::SDL3-static)
 elseif(NOT KINE_BUILD_SHARED AND TARGET SDL3-static)
     set(KINE_SDL3_TARGET SDL3-static)
@@ -145,8 +157,14 @@ if(KINE_WITH_FILAMENT)
     # Compile the default material with matc (ships in the Filament SDK)
     # and embed the .filamat bytes as a C array using resgen.
     # ------------------------------------------------------------------
-    set(MATC_EXE    "${FILAMENT_DIR}/bin/matc${CMAKE_EXECUTABLE_SUFFIX}")
-    set(RESGEN_EXE  "${FILAMENT_DIR}/bin/resgen${CMAKE_EXECUTABLE_SUFFIX}")
+    set(FILAMENT_HOST_TOOLS_DIR "${FILAMENT_DIR}/bin" CACHE PATH "Host Filament tools directory")
+    set(MATC_EXE    "${FILAMENT_HOST_TOOLS_DIR}/matc${CMAKE_EXECUTABLE_SUFFIX}")
+    set(RESGEN_EXE  "${FILAMENT_HOST_TOOLS_DIR}/resgen${CMAKE_EXECUTABLE_SUFFIX}")
+    if(ANDROID)
+        set(KINE_MATC_PLATFORM "mobile")
+    else()
+        set(KINE_MATC_PLATFORM "desktop")
+    endif()
 
     set(MAT_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
     file(MAKE_DIRECTORY ${MAT_GEN_DIR})
@@ -159,7 +177,7 @@ if(KINE_WITH_FILAMENT)
 
         add_custom_command(
             OUTPUT  ${_bin}
-            COMMAND ${MATC_EXE} -a ${KINE_MATC_BACKEND} -p desktop -o ${_bin} ${_src}
+            COMMAND ${MATC_EXE} -a ${KINE_MATC_BACKEND} -p ${KINE_MATC_PLATFORM} -o ${_bin} ${_src}
             DEPENDS ${_src}
             COMMENT "Compiling Filament material: ${NAME}.mat"
         )
@@ -272,11 +290,9 @@ if(KINE_WITH_FILAMENT)
     # PUBLIC link dependencies so the final whole-archive bundle inherits the
     # transitive Filament static libraries instead of leaving them unresolved.
     set(KINE_FILAMENT_CORE_LIBS
-        matp
         filamat
         filament
         backend
-        bluegl
         bluevk
         filabridge
         filaflat
@@ -287,6 +303,9 @@ if(KINE_WITH_FILAMENT)
         uberarchive
         shaders
     )
+    if(NOT ANDROID)
+        list(PREPEND KINE_FILAMENT_CORE_LIBS matp bluegl)
+    endif()
     if(UNIX AND NOT APPLE)
         list(JOIN KINE_FILAMENT_CORE_LIBS "," KINE_FILAMENT_CORE_LIBS_GROUP)
 
@@ -305,6 +324,12 @@ if(KINE_WITH_FILAMENT)
                 ${KINE_SDL3_TARGET}
                 ${KINE_ASSIMP_TARGET}
                 gdi32 user32 opengl32 shlwapi
+        )
+    elseif(ANDROID)
+        target_link_libraries(kine_filament_shim
+            PRIVATE
+                ${KINE_SDL3_TARGET}
+                android log EGL GLESv3 vulkan dl
         )
     elseif(APPLE)
         target_link_libraries(kine_filament_shim

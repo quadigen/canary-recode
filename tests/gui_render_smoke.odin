@@ -18,6 +18,16 @@ gui = Instance.new("Frame", screenGui)
 assert(gui.Size == UDim2.fromOffset(100, 100))
 assert(gui.BackgroundColor3 == Color3.new(1, 1, 1))
 assert(gui.BackgroundTransparency == 0)
+corner = Instance.new("UICorner", gui)
+corner.CornerRadius = UDim.new(0, 12)
+assert(corner.CornerRadius == UDim.new(0, 12))
+label = Instance.new("TextLabel", gui)
+label.Text = "Editor"
+label.TextSize = 18
+label.TextColor3 = Color3.fromRGB(220, 40, 40)
+label.BackgroundTransparency = 1
+label.Position = UDim2.fromOffset(8, 8)
+label.Size = UDim2.fromOffset(80, 24)
 `, "gui_render_smoke")
 	if !ok {
 		fmt.eprintln(err)
@@ -34,6 +44,24 @@ assert(gui.BackgroundTransparency == 0)
 	inside_r, inside_g, inside_b, inside_a: u8
 	kineffi.Kine_Skia_Surface_GetPixel(surface, 50, 50, &inside_r, &inside_g, &inside_b, &inside_a)
 	assert(inside_r == 255 && inside_g == 255 && inside_b == 255 && inside_a == 255)
+
+	corner_r, corner_g, corner_b, corner_a: u8
+	kineffi.Kine_Skia_Surface_GetPixel(surface, 0, 0, &corner_r, &corner_g, &corner_b, &corner_a)
+	assert(corner_a == 0)
+
+	found_text_pixel := false
+	for y in 8..<36 {
+		for x in 8..<88 {
+			r, g, b, a: u8
+			kineffi.Kine_Skia_Surface_GetPixel(surface, i32(x), i32(y), &r, &g, &b, &a)
+			if r > 150 && g < 150 && b < 150 && a > 0 {
+				found_text_pixel = true
+				break
+			}
+		}
+		if found_text_pixel { break }
+	}
+	assert(found_text_pixel)
 
 	outside_r, outside_g, outside_b, outside_a: u8
 	kineffi.Kine_Skia_Surface_GetPixel(surface, 150, 150, &outside_r, &outside_g, &outside_b, &outside_a)

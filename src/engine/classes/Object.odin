@@ -24,6 +24,7 @@ Object_Attribute :: struct {
 Object :: struct {
 	class:                ^Class_Info,
 	name:                 string,
+	owned_name:           string,
 	parent:               ^Object,
 	children:             [dynamic]^Object,
 	attributes:           [dynamic]Object_Attribute,
@@ -72,6 +73,8 @@ Object_Destroy :: proc(self: ^Object) {
 	self.attributes = nil
 
     Set_Parent(self, nil)
+	delete(self.owned_name)
+	self.owned_name = ""
 }
 
 Get_Class_Name :: proc(self: ^Object) -> string {
@@ -95,7 +98,12 @@ Set_Name :: proc(self: ^Object, name: string) {
         return
     }
 
-    self.name = name
+    // Lua strings can be collected after the assigning script completes.
+    // Keep native ownership so later FindFirstChild calls remain reliable.
+    copy := strings.clone(name)
+    delete(self.owned_name)
+    self.owned_name = copy
+    self.name = copy
 }
 
 Is_A :: proc(self: ^Object, class_name: string) -> bool {
@@ -240,8 +248,6 @@ Get_Full_Name :: proc(self: ^Object) -> string {
     return fmt.tprintf("%s.%s", Get_Full_Name(self.parent), self.name)
 }
 
-// An Instance is inaccessible when either it or any ancestor requires
-// capabilities that the currently executing Luau thread does not have.
 Object_Is_Accessible :: proc(L: ^vm.State, object: ^Object) -> bool {
 	if object == nil {
 		return false
@@ -278,9 +284,9 @@ object_from_argument :: proc(L: ^vm.State, index: int) -> ^Object {
 is_object_method :: proc(name: string) -> bool {
 	switch name {
 	case "Clone", "Destroy", "FindFirstChild", "FindFirstChildOfClass",
-	     "GetChildren", "GetDescendants", "GetFullName",
-	     "IsA", "IsAncestorOf", "IsDescendantOf",
-	     "GetAttribute", "GetAttributes", "SetAttribute":
+		"GetChildren", "GetDescendants", "GetFullName", "GetProperties",
+		"IsA", "IsAncestorOf", "IsDescendantOf",
+		"GetAttribute", "GetAttributes", "SetAttribute":
 		return true
 	}
 
@@ -503,7 +509,7 @@ clone_base_state :: proc(
 	//
 	// Those belong to the new Instance.
 
-	destination.name                 = source.name
+	Set_Name(destination, source.name)
 	destination.archivable           = source.archivable
 	destination.capabilities         = source.capabilities
 	destination.security_requirement = source.security_requirement
@@ -590,6 +596,30 @@ Clone_Object :: proc(
 	return destination, true
 }
 
+append_class_properties :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	class: ^Class_Info,
+	index: ^int,
+) {
+	if registry == nil || class == nil {
+		return
+	}
+
+	append_class_properties(L, registry, class.parent, index)
+
+	descriptor := Find_Class(registry, class.name)
+	if descriptor == nil {
+		return
+	}
+
+	for property in descriptor.properties {
+		vm.PushString(L, property)
+		vm.SetArrayValue(L, -2, index^)
+		index^ += 1
+	}
+}
+
 Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
     object := cast(^Object)value
     if object == nil {
@@ -651,18 +681,24 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
         return 1, true
     case "GetChildren":
         vm.NewTable(L, len(object.children))
-        for child, index in object.children {
+        index := 0
+        for child in object.children {
+            if !Object_Is_Accessible(L, child) || child.lua_ref <= 0 { continue }
             Push_Object(L, child)
-            vm.SetArrayValue(L, -2, index+1)
+            index += 1
+            vm.SetArrayValue(L, -2, index)
         }
         return 1, true
     case "GetDescendants":
         descendants: [dynamic]^Object
         append_descendants(&descendants, object)
         vm.NewTable(L, len(descendants))
-        for descendant, index in descendants {
+        index := 0
+        for descendant in descendants {
+            if !Object_Is_Accessible(L, descendant) || descendant.lua_ref <= 0 { continue }
             Push_Object(L, descendant)
-            vm.SetArrayValue(L, -2, index+1)
+            index += 1
+            vm.SetArrayValue(L, -2, index)
         }
         delete(descendants)
         return 1, true
@@ -696,6 +732,23 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
     case "IsDescendantOf":
         vm.PushBoolean(L, Is_Descendant_Of(object, object_from_argument(L, 2)))
         return 1, true
+	case "GetProperties":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil {
+			return vm.RaiseError(L, "cannot get properties without a class registry"), true
+		}
+
+		vm.NewTable(L, 0)
+
+		index := 1
+		append_class_properties(
+			L,
+			descriptor.registry,
+			object.class,
+			&index,
+		)
+
+		return 1, true
     }
 
     return 0, false

@@ -7,8 +7,8 @@ Part.Parent = workspace
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = game.StarterGui
 
-local frame = Instance.new("Frame")
-frame.Parent = screenGui
-frame.BackgroundTransparency = 0.5
-
-Instance.new("UIBackdrop").Parent = frame
+local mesh = Instance.new("Part")
+mesh.Anchored = true
+mesh.CFrame = CFrame.new(0, 10, 0)
+mesh.Shape = Enum.PartType.Truss
+mesh.Parent = workspace

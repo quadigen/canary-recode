@@ -2,6 +2,7 @@
 #define KINE_FILAMENT_SHIM_H
 
 #include "kine_render_shim_export.h"
+#include <stddef.h>
 
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -278,6 +279,18 @@ KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext* ctx, float d
 //        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, int shape);
 KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext* ctx, const char* path);
+KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromMemory(
+    KineFilamentContext* ctx,
+    const void* data,
+    size_t dataSize,
+    const char* formatHint);
+KINE_API bool Kine_Filament_SetDecalColor(
+    KineFilamentContext* ctx,
+    int decal,
+    float r,
+    float g,
+    float b,
+    float a);
 KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMesh* mesh);
 /* Imported skeletal data. Bind transforms and caller-provided bone transforms
    are row-major affine float[16] matrices in mesh-local space. Bone transforms

@@ -45,10 +45,9 @@ init_runtime :: proc(
 
 run_code :: proc(source: string, name: string) {
 	assert(initialized && script_vm != nil)
-	success, error := vm.RunWithSecurityCapabilities(
+	success, error := vm.RunInternal(
 		script_vm,
 		source,
-		vm.THREAD_SECURITY_ALL,
 		name,
 	)
 
@@ -64,7 +63,15 @@ run_code :: proc(source: string, name: string) {
 
 run_dir :: proc(loaded: []runtime.Load_Directory_File) {
 	assert(initialized)
+
 	for file in loaded {
+		if file.name == "editor_ui.luau" {
+			run_code(string(file.data), file.name)
+			break
+		}
+	}
+	for file in loaded {
+		if file.name == "editor_ui.luau" { continue }
 		run_code(string(file.data), file.name)
 	}
 }
@@ -75,6 +82,10 @@ init :: proc(
 	renderer_object: ^renderer.RendererObject,
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
+	init_scripts()
+}
+
+init_scripts :: proc() {
 	run_dir(#load_directory("./internal"))
 }
 

@@ -142,6 +142,7 @@ Register_MeshPart :: proc(registry: ^Registry) {
         get = mesh_part_get,
         set = mesh_part_set,
         clone = mesh_part_clone,
+		properties = []string{"TextureId", "MeshId"},
     )
 }
 

@@ -16,13 +16,36 @@ Workspace_Class := classes.Class_Info{
 
 Workspace :: struct {
 	using service: Service,
-	cube_mesh:     ^kineffi.KineFilamentMesh,
-	sphere_mesh:   ^kineffi.KineFilamentMesh,
-	cylinder_mesh: ^kineffi.KineFilamentMesh,
-	fallen_parts_destroy_height: f32,
-	fall_height_enabled: bool,
-	distributed_game_time: f64,
-	current_camera: ^classes.Camera,
+
+    // meshes
+    cube_mesh:           ^kineffi.KineFilamentMesh,
+    sphere_mesh:         ^kineffi.KineFilamentMesh,
+    cylinder_mesh:       ^kineffi.KineFilamentMesh,
+    cone_mesh:           ^kineffi.KineFilamentMesh,
+    torus_mesh:          ^kineffi.KineFilamentMesh,
+    pyramid_mesh:        ^kineffi.KineFilamentMesh,
+    truss_mesh:          ^kineffi.KineFilamentMesh,
+    wedge_mesh:          ^kineffi.KineFilamentMesh,
+    triangle_wedge_mesh: ^kineffi.KineFilamentMesh,
+    corner_wedge_mesh:   ^kineffi.KineFilamentMesh,
+
+    fallen_parts_destroy_height: f32,
+    fall_height_enabled:         bool,
+    distributed_game_time:       f64,
+    current_camera:              ^classes.Camera,
+}
+
+load_mesh :: proc(
+    ctx: ^kineffi.KineFilamentContext,
+    data: string,
+    format_hint: cstring = "glb",
+) -> ^kineffi.KineFilamentMesh {
+    return kineffi.Kine_Filament_CreateMeshFromMemory(
+        ctx,
+        raw_data(data),
+        uintptr(len(data)),
+        format_hint,
+    )
 }
 
 workspace_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
@@ -33,22 +56,133 @@ workspace_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawp
 	return &workspace.object
 }
 
-workspace_ensure_meshes :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_Object) -> bool {
-	if renderer == nil || renderer.Filament == nil { return false }
-	if workspace.cube_mesh == nil {
-		workspace.cube_mesh = kineffi.Kine_Filament_CreateMesh(renderer.Filament, kineffi.KINE_MESH_CUBE)
-		workspace.sphere_mesh = kineffi.Kine_Filament_CreateMesh(renderer.Filament, kineffi.KINE_MESH_SPHERE)
-		workspace.cylinder_mesh = kineffi.Kine_Filament_CreateMesh(renderer.Filament, kineffi.KINE_MESH_CYLINDER)
-	}
-	return workspace.cube_mesh != nil
+workspace_ensure_meshes :: proc(
+    workspace: ^Workspace,
+    renderer: ^classes.Renderer_Object,
+) -> bool {
+    if workspace == nil || renderer == nil || renderer.Filament == nil {
+        return false
+    }
+
+    if workspace.cube_mesh == nil {
+        workspace.cube_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Block.glb"),
+        )
+    }
+
+    if workspace.sphere_mesh == nil {
+        workspace.sphere_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Ball.glb"),
+        )
+    }
+
+    if workspace.cylinder_mesh == nil {
+        workspace.cylinder_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Cylinder.glb"),
+        )
+    }
+
+    if workspace.cone_mesh == nil {
+        workspace.cone_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Cone.glb"),
+        )
+    }
+
+    if workspace.torus_mesh == nil {
+        workspace.torus_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Torus.glb"),
+        )
+    }
+
+    if workspace.pyramid_mesh == nil {
+        workspace.pyramid_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Pyramid.glb"),
+        )
+    }
+
+    if workspace.truss_mesh == nil {
+        workspace.truss_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Truss.glb"),
+        )
+    }
+
+    if workspace.wedge_mesh == nil {
+        workspace.wedge_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Wedge.glb"),
+        )
+    }
+
+    if workspace.triangle_wedge_mesh == nil {
+        workspace.triangle_wedge_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Triangle Wedge.glb"),
+        )
+    }
+
+    if workspace.corner_wedge_mesh == nil {
+        workspace.corner_wedge_mesh = load_mesh(
+            renderer.Filament,
+            #load("../assets/shapes/Corner Wedge.glb"),
+        )
+    }
+
+    return workspace.cube_mesh != nil &&
+           workspace.sphere_mesh != nil &&
+           workspace.cylinder_mesh != nil &&
+           workspace.cone_mesh != nil &&
+           workspace.torus_mesh != nil &&
+           workspace.pyramid_mesh != nil &&
+           workspace.truss_mesh != nil &&
+           workspace.wedge_mesh != nil &&
+           workspace.triangle_wedge_mesh != nil &&
+           workspace.corner_wedge_mesh != nil
 }
 
-workspace_part_mesh :: proc(workspace: ^Workspace, shape: enums.PartType) -> ^kineffi.KineFilamentMesh {
-	#partial switch shape {
-	case .Ball: return workspace.sphere_mesh
-	case .Cylinder: return workspace.cylinder_mesh
-	case: return workspace.cube_mesh
-	}
+workspace_part_mesh :: proc(
+    workspace: ^Workspace,
+    shape: enums.PartType,
+) -> ^kineffi.KineFilamentMesh {
+    switch shape {
+    case .Ball:
+        return workspace.sphere_mesh
+
+    case .Block:
+        return workspace.cube_mesh
+
+    case .Cylinder:
+        return workspace.cylinder_mesh
+
+    case .Wedge:
+        return workspace.wedge_mesh
+
+    case .CornerWedge:
+        return workspace.corner_wedge_mesh
+
+    case .Cone:
+        return workspace.cone_mesh
+
+    case .Pyramid:
+        return workspace.pyramid_mesh
+
+    case .Truss:
+        return workspace.truss_mesh
+
+    case .Torus:
+        return workspace.torus_mesh
+
+    case .TriangleWedge:
+        return workspace.triangle_wedge_mesh
+    }
+
+    return workspace.cube_mesh
 }
 
 workspace_has_parts :: proc(object: ^classes.Object) -> bool {
@@ -65,6 +199,7 @@ workspace_prepare_3d :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_
 	if !workspace_ensure_meshes(workspace, renderer) { return }
 
 	materials.init(renderer)
+	
 }
 
 Workspace_Apply_View :: proc(renderer: ^classes.Renderer_Object, cframe: datatypes.CFrame) -> datatypes.CFrame {

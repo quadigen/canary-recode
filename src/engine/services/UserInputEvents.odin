@@ -1,6 +1,6 @@
 package services
 
-import "vendor:sdl3"
+import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"

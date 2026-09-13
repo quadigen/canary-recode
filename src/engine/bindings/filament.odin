@@ -1,9 +1,11 @@
 package kineffi
 
-import sdl3 "vendor:sdl3"
+import sdl3 "../platform"
 
-when ODIN_OS == .Windows {
-	foreign import lib {
+when ODIN_OS == .JS {
+	foreign import kine_filament "kinemium_filament"
+} else when ODIN_OS == .Windows {
+	foreign import kine_filament {
 		"../../../vendor/build/lib/kine_sdl3.lib",
 		"../../../vendor/build/lib/kine_filament.lib",
 		"../../../vendor/build/lib/kine_filament_matp.lib",
@@ -47,8 +49,38 @@ when ODIN_OS == .Windows {
 		"system:version.lib",
 		"system:winmm.lib",
 	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import kine_filament "../../../build/android-native/lib/libkine_filament_shim.a"
+} else when ODIN_OS == .Darwin {
+	foreign import kine_filament {
+		"../../../vendor/build/lib/KinemiumLibs.a",
+		"system:vulkan",
+		"system:c++",
+		"system:AppKit.framework",
+		"system:Cocoa.framework",
+		"system:CoreFoundation.framework",
+		"system:CoreGraphics.framework",
+		"system:CoreServices.framework",
+		"system:CoreText.framework",
+		"system:CoreVideo.framework",
+		"system:IOKit.framework",
+		"system:Metal.framework",
+		"system:MetalKit.framework",
+		"system:OpenGL.framework",
+		"system:QuartzCore.framework",
+		"system:UniformTypeIdentifiers.framework",
+	}
 } else {
-	foreign import lib "../../../vendor/build/lib/kine_filament.a"
+	foreign import kine_filament {
+		"../../../vendor/build/lib/KinemiumLibs.a",
+		"system:vulkan",
+		"system:stdc++",
+		"system:GL",
+		"system:X11",
+		"system:dl",
+		"system:pthread",
+		"system:m",
+	}
 }
 
 KineFilamentContext       :: struct {}
@@ -59,7 +91,7 @@ KineFilamentInstanceBatch :: struct {}
 KineFilamentShader        :: struct {}
 
 @(default_calling_convention="c")
-foreign lib {
+foreign kine_filament {
 	Kine_Filament_Shader_Destroy    :: proc(shader: ^KineFilamentShader) -> i32 ---
 	Kine_Filament_Shader_SetUniform :: proc(shader: ^KineFilamentShader, name: cstring, values: ^f32, valueCount: i32) -> i32 ---
 	Kine_Filament_SetGlobalShader   :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> i32 ---
@@ -154,7 +186,7 @@ KINE_GIZMO_SCALE  :: 12
 KineFilamentGizmo :: struct {}
 
 @(default_calling_convention="c")
-foreign lib {
+foreign kine_filament {
 	Kine_Filament_Create                          :: proc(width: i32, height: i32) -> ^KineFilamentContext ---
 	Kine_Filament_CreateForSDLWindow              :: proc(sdlWindow: rawptr, width: i32, height: i32) -> ^KineFilamentContext ---
 	Kine_Filament_CreateForVulkanCompositor       :: proc(compositor: rawptr, width: i32, height: i32) -> ^KineFilamentContext ---
@@ -171,7 +203,27 @@ foreign lib {
 	// deltaTime (seconds) drives ctx->time, used to animate the water material.
 	Kine_Filament_RenderFrame               :: proc(ctx: ^KineFilamentContext, deltaTime: f32) ---
 	Kine_Filament_Resize                    :: proc(ctx: ^KineFilamentContext, width: i32, height: i32) ---
-	Kine_Filament_SetViewport               :: proc(ctx: ^KineFilamentContext, x: i32, y: i32, width: i32, height: i32) -> i32 ---
+	Kine_Filament_SetViewport :: proc(
+		ctx: ^KineFilamentContext,
+		x: i32,
+		y: i32,
+		width: i32,
+		height: i32,
+	) ---
+	Kine_Filament_SetDecalColor :: proc(
+		ctx: ^KineFilamentContext,
+		decal: i32,
+		r: f32,
+		g: f32,
+		b: f32,
+		a: f32,
+	) -> i32 ---;
+	Kine_Filament_CreateMeshFromMemory :: proc(
+		ctx: ^KineFilamentContext,
+		data: rawptr,
+		data_size: uintptr,
+		format_hint: cstring,
+	) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateSky                 :: proc(ctx: ^KineFilamentContext, r: f32, g: f32, b: f32, a: f32) ---
 	Kine_Filament_SetPostProcessing         :: proc(ctx: ^KineFilamentContext, enabled: bool) -> i32 ---
 	Kine_Filament_SetBloom                  :: proc(ctx: ^KineFilamentContext, enabled: bool, strength: f32, resolution: i32, levels: i32, threshold: bool, lensFlare: bool) -> i32 ---

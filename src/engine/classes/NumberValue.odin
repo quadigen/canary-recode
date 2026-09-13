@@ -87,5 +87,6 @@ Register_NumberValue :: proc(registry: ^Registry) {
 		get = NumberValue_get,
 		set = NumberValue_set,
 		clone = NumberValue_clone,
+		properties = []string{"Value"},
 	)
 }

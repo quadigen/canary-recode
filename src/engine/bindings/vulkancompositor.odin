@@ -5,8 +5,10 @@ when ODIN_OS == .Windows {
 		"../../../vendor/build/lib/kine_vk.lib",
 		"../../../vendor/build/lib/kine_vulkan_loader.lib",
 	}
+} else when #config(KINE_ANDROID, false) {
+	foreign import lib "../../../build/android-native/lib/libkine_vulkan_compositor.a"
 } else {
-	foreign import lib "../../../vendor/build/lib/kine_vk.a"
+	foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
 }
 
 KineVulkanCompositor :: struct {}

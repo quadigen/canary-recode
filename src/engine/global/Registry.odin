@@ -23,6 +23,9 @@ Global_Descriptor :: struct {
 
 Registry :: struct {
 	globals: [dynamic]Global_Descriptor,
+
+	ishared_binding: vm.Userdata_Binding,
+	ishared_entries: [dynamic]IShared_Entry,
 }
 
 Register_String :: proc(registry: ^Registry, name, value: string) {
@@ -68,6 +71,9 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 			vm.AddGlobal_Function(vm_state, global.name, global.function)
 		}
 	}
+
+	Install_Runtime_Globals(vm_state)
+	Install_IShared(registry, vm_state)
 }
 
 Registry_Destroy :: proc(registry: ^Registry) {

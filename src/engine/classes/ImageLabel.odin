@@ -1,148 +1,492 @@
 package classes
 
-import "core:image"
-import "core:fmt"
+import "core:c"
+import strings "core:strings"
+
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 import kineffi "../bindings"
-import strings "core:strings"
 import guilib "../gui"
 
+IMAGE_LABEL_CLASS_ICONS :=
+	#load_directory("../assets/images/icons")
+
+IMAGE_LABEL_GLOBAL_ICONS :=
+	#load_directory("../assets/images/")
+
+
+BUILTIN_ICON_PREFIX :: "builtin://icons/"
+BUILTIN_GLOBAL_ICON_PREFIX :: "builtin://global-icons/"
+
+
 ImageLabel_Class := Class_Info{
-    name   = "ImageLabel",
-    parent = &GuiObject_Class,
+	name   = "ImageLabel",
+	parent = &GuiObject_Class,
 }
+
 
 ImageLabel :: struct {
-    using gui_object: GuiObject,
+	using gui_object: GuiObject,
 
-    image:        string,
-    stored_image: ^kineffi.KineSkiaImage,
+	image:       string,
+	owned_image: string,
+
+	stored_image: ^kineffi.KineSkiaImage,
+
+	image_transparency: f32,
 }
+
 
 ImageLabel_Init :: proc() -> ImageLabel {
-    gui := GuiObject_Init()
-    gui.object.class = &ImageLabel_Class
+	gui := GuiObject_Init()
 
-    return ImageLabel{
-        gui_object = gui,
-        image      = "",
-        stored_image = kineffi.Kine_Skia_Image_LoadFromFile(
-            strings.clone_to_cstring("C:/Users/devco/Pictures/Screenshots/Screenshot 2026-04-16 132902.png"),
-        )
-    }
-}
+	gui.object.class = &ImageLabel_Class
 
-ImageLabel_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
-    image_label := new(ImageLabel)
-    image_label^ = ImageLabel_Init()
-    image_label.name = "ImageLabel"
+	return ImageLabel{
+		gui_object = gui,
 
-    return &image_label.object
-}
+		image = "",
+		owned_image = "",
 
-ImageLabel_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
-    Object_Destroy(object)
-    free(cast(^ImageLabel)object)
-}
+		stored_image = nil,
 
-ImageLabel_get :: proc(
-    L: ^vm.State,
-    object: ^Object,
-    datatype_registry: ^datatypes.Registry,
-    enum_registry: ^enums.Registry,
-    key: string,
-) -> bool {
-    image_label := cast(^ImageLabel)object
-
-    switch key {
-    case "Image":
-        vm.PushString(L, image_label.image)
-
-    case:
-        return GuiObject_get(
-            L,
-            object,
-            datatype_registry,
-            enum_registry,
-            key,
-        )
-    }
-
-    return true
-}
-
-ImageLabel_set :: proc(
-    L: ^vm.State,
-    object: ^Object,
-    datatype_registry: ^datatypes.Registry,
-    enum_registry: ^enums.Registry,
-    key: string,
-    value_index: int,
-) -> bool {
-    image_label := cast(^ImageLabel)object
-
-    switch key {
-    case "Image":
-        image_label.image = vm.ArgString(L, value_index)
-        image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromFile(
-            strings.clone_to_cstring(image_label.image),
-        )
-
-    case:
-        return GuiObject_set(
-            L,
-            object,
-            datatype_registry,
-            enum_registry,
-            key,
-            value_index,
-        )
-    }
-
-    return true
-}
-
-ImageLabel_render :: proc(
-    object: ^Object,
-    ctx: ^Class_Step_Context,
-) {
-    rect, visible := GuiObject_get_rect(object, ctx)
-    if !visible {
-        return
-    }
-
-    // render background (does calculations a second time, TODO: fix)
-    GuiObject_render(object, ctx)
-
-    image_label := cast(^ImageLabel)object
-
-    if image_label.stored_image != nil {
-        guilib.drawImageSized(ctx.renderer.SkiaSurface, image_label.stored_image, rect)
-    }
-}
-
-ImageLabel_clone :: proc(source: ^Object, destination: ^Object) {
-	src := cast(^ImageLabel)source
-	dst := cast(^ImageLabel)destination
-
-	dst.image = strings.clone(src.image)
-	if len(dst.image) > 0 {
-		dst.stored_image = kineffi.Kine_Skia_Image_LoadFromFile(strings.clone_to_cstring(dst.image))
-	} else {
-		dst.stored_image = nil
+		image_transparency = 0,
 	}
 }
 
-Register_ImageLabel :: proc(registry: ^Registry) {
-    Register_Class(
-        registry,
-        &ImageLabel_Class,
-        ImageLabel_construct,
-        ImageLabel_destroy,
-        get = ImageLabel_get,
-        set = ImageLabel_set,
-        clone = ImageLabel_clone,
-    )
+ImageLabel_Find_Class_Icon :: proc(
+	name: string,
+) -> ([]u8, bool) {
+	for file in IMAGE_LABEL_CLASS_ICONS {
+		if file.name == name {
+			return file.data, true
+		}
+	}
+
+	return nil, false
+}
+
+ImageLabel_Find_Global_Icon :: proc(
+	name: string,
+) -> ([]u8, bool) {
+	for file in IMAGE_LABEL_GLOBAL_ICONS {
+		if file.name == name {
+			return file.data, true
+		}
+	}
+
+	return nil, false
+}
+
+ImageLabel_Resolve_Builtin_Image :: proc(
+	path: string,
+) -> ([]u8, bool) {
+	if strings.has_prefix(
+		path,
+		BUILTIN_ICON_PREFIX,
+	) {
+		name := path[len(BUILTIN_ICON_PREFIX):]
+
+		return ImageLabel_Find_Class_Icon(
+			name,
+		)
+	}
+
+	if strings.has_prefix(
+		path,
+		BUILTIN_GLOBAL_ICON_PREFIX,
+	) {
+		name :=
+			path[len(BUILTIN_GLOBAL_ICON_PREFIX):]
+
+		return ImageLabel_Find_Global_Icon(
+			name,
+		)
+	}
+
+	return nil, false
+}
+
+ImageLabel_Destroy_Stored_Image :: proc(
+	image_label: ^ImageLabel,
+) {
+	if image_label == nil {
+		return
+	}
+
+	if image_label.stored_image != nil {
+		kineffi.Kine_Skia_Image_Destroy(
+			image_label.stored_image,
+		)
+
+		image_label.stored_image = nil
+	}
+}
+
+
+ImageLabel_Load_Image :: proc(
+	image_label: ^ImageLabel,
+	path: string,
+) {
+	if image_label == nil {
+		return
+	}
+
+	ImageLabel_Destroy_Stored_Image(
+		image_label,
+	)
+
+	if len(path) == 0 {
+		return
+	}
+
+	//
+	// Built-in image.
+	//
+	// Examples:
+	//
+	// builtin://icons/Part.svg
+	// builtin://global-icons/ArrowDown.svg
+	//
+
+	if strings.has_prefix(
+		path,
+		"builtin://",
+	) {
+		data, found :=
+			ImageLabel_Resolve_Builtin_Image(
+				path,
+			)
+
+		if !found || len(data) == 0 {
+			return
+		}
+
+        image_label.stored_image =
+            kineffi.Kine_Skia_Image_LoadFromMemory(
+                &data[0],
+                uintptr(len(data)),
+            )
+
+		return
+	}
+
+	//
+	// Normal filesystem image.
+	//
+
+	cpath :=
+		strings.clone_to_cstring(
+			path,
+		)
+
+	image_label.stored_image =
+		kineffi.Kine_Skia_Image_LoadFromFile(
+			cpath,
+		)
+
+	delete(cpath)
+}
+
+
+ImageLabel_Set_Image :: proc(
+	image_label: ^ImageLabel,
+	path: string,
+) {
+	if image_label == nil {
+		return
+	}
+
+	//
+	// Don't reload the exact same image.
+	//
+
+	if image_label.image == path {
+		return
+	}
+
+	//
+	// Copy property string.
+	//
+
+	copy := strings.clone(
+		path,
+	)
+
+	delete(
+		image_label.owned_image,
+	)
+
+	image_label.owned_image =
+		copy
+
+	image_label.image =
+		image_label.owned_image
+
+	//
+	// Decode it.
+	//
+
+	ImageLabel_Load_Image(
+		image_label,
+		image_label.image,
+	)
+}
+
+
+//
+// Instance
+//
+
+ImageLabel_construct :: proc(
+	renderer: ^Renderer_Object,
+	data_model: rawptr,
+) -> ^Object {
+	image_label :=
+		new(ImageLabel)
+
+	image_label^ =
+		ImageLabel_Init()
+
+	image_label.name =
+		"ImageLabel"
+
+	return &image_label.object
+}
+
+
+ImageLabel_destroy :: proc(
+	object: ^Object,
+	renderer: ^Renderer_Object,
+) {
+	image_label :=
+		cast(^ImageLabel)object
+
+	ImageLabel_Destroy_Stored_Image(
+		image_label,
+	)
+
+	delete(
+		image_label.owned_image,
+	)
+
+	image_label.owned_image =
+		""
+
+	image_label.image =
+		""
+
+	Object_Destroy(
+		object,
+	)
+
+	free(
+		image_label,
+	)
+}
+
+
+//
+// Properties
+//
+
+ImageLabel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
+	image_label :=
+		cast(^ImageLabel)object
+
+	switch key {
+
+	case "Image":
+		vm.PushString(
+			L,
+			image_label.image,
+		)
+
+	case "ImageTransparency":
+		vm.PushNumber(
+			L,
+			f64(
+				image_label.image_transparency,
+			),
+		)
+
+	case:
+		return GuiObject_get(
+			L,
+			object,
+			datatype_registry,
+			enum_registry,
+			key,
+		)
+	}
+
+	return true
+}
+
+
+ImageLabel_set :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	image_label :=
+		cast(^ImageLabel)object
+
+	switch key {
+
+	case "Image":
+		ImageLabel_Set_Image(
+			image_label,
+			vm.ArgString(
+				L,
+				value_index,
+			),
+		)
+
+	case "ImageTransparency":
+		image_label.image_transparency =
+			clamp(
+				f32(
+					vm.ArgNumber(
+						L,
+						value_index,
+					),
+				),
+				0,
+				1,
+			)
+
+	case:
+		return GuiObject_set(
+			L,
+			object,
+			datatype_registry,
+			enum_registry,
+			key,
+			value_index,
+		)
+	}
+
+	return true
+}
+
+
+//
+// Rendering
+//
+
+ImageLabel_render :: proc(
+	object: ^Object,
+	ctx: ^Class_Step_Context,
+) {
+	rect, visible :=
+		GuiObject_get_rect(
+			object,
+			ctx,
+		)
+
+	if !visible {
+		return
+	}
+
+	//
+	// Render GuiObject background.
+	//
+	// TODO:
+	// GuiObject_render recalculates rect.
+	//
+
+	GuiObject_render(
+		object,
+		ctx,
+	)
+
+	image_label :=
+		cast(^ImageLabel)object
+
+	if image_label.stored_image != nil {
+		rect.bgTransparency =
+			image_label.image_transparency
+
+		guilib.drawImageSized(
+			ctx.renderer.SkiaSurface,
+			image_label.stored_image,
+			rect,
+		)
+	}
+}
+
+
+//
+// Cloning
+//
+
+ImageLabel_clone :: proc(
+	source: ^Object,
+	destination: ^Object,
+) {
+	src :=
+		cast(^ImageLabel)source
+
+	dst :=
+		cast(^ImageLabel)destination
+
+	ImageLabel_Destroy_Stored_Image(
+		dst,
+	)
+
+	delete(
+		dst.owned_image,
+	)
+
+	dst.owned_image =
+		strings.clone(
+			src.image,
+		)
+
+	dst.image =
+		dst.owned_image
+
+	dst.image_transparency =
+		src.image_transparency
+
+	ImageLabel_Load_Image(
+		dst,
+		dst.image,
+	)
+}
+
+
+//
+// Registration
+//
+
+Register_ImageLabel :: proc(
+	registry: ^Registry,
+) {
+	Register_Class(
+		registry,
+		&ImageLabel_Class,
+		ImageLabel_construct,
+		ImageLabel_destroy,
+
+		get = ImageLabel_get,
+		set = ImageLabel_set,
+		clone = ImageLabel_clone,
+
+		properties = []string{
+			"Image",
+			"ImageTransparency",
+		},
+	)
 }

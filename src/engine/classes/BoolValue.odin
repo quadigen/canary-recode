@@ -87,5 +87,6 @@ Register_BoolValue :: proc(registry: ^Registry) {
 		get = BoolValue_get,
 		set = BoolValue_set,
 		clone = BoolValue_clone,
+		properties = []string{"Value"},
 	)
 }

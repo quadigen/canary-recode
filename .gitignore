@@ -43,6 +43,7 @@
 build/
 Build/
 build-*/
+android/.gradle/
 
 # CMake generated files
 CMakeFiles/

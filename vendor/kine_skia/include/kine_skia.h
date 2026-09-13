@@ -13,6 +13,7 @@ typedef struct KineSkiaSurface KineSkiaSurface;
 typedef struct KineSkiaImage KineSkiaImage;
 typedef struct KineSkiaVulkanContext KineSkiaVulkanContext;
 typedef struct KineSkiaRuntimeShader KineSkiaRuntimeShader;
+typedef struct KineSkiaTypeface KineSkiaTypeface;
 
 typedef struct KineSkiaVulkanBackend {
     void* instance;              /* VkInstance */
@@ -205,6 +206,62 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
     float x, float y,
     float width, float height,
     uint8_t alpha);
+
+KINE_SKIA_API KineSkiaTypeface*
+Kine_Skia_Typeface_LoadFromMemory(
+    const uint8_t* data,
+    size_t size);
+
+    KINE_SKIA_API float Kine_Skia_Typeface_MeasureText(
+    KineSkiaTypeface* typeface,
+    const char* text,
+    float fontSize);
+
+KINE_SKIA_API float Kine_Skia_Typeface_GetLineHeight(
+    KineSkiaTypeface* typeface,
+    float fontSize);
+
+KINE_SKIA_API float Kine_Skia_Typeface_GetAscent(
+    KineSkiaTypeface* typeface,
+    float fontSize);
+    
+KINE_SKIA_API KineSkiaTypeface*
+Kine_Skia_Typeface_LoadFromFile(
+    const char* path);
+
+KINE_SKIA_API void
+Kine_Skia_Typeface_Destroy(
+    KineSkiaTypeface* typeface);
+
+KINE_SKIA_API void
+Kine_Skia_Surface_DrawTextTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a);
+
+KINE_SKIA_API void
+Kine_Skia_Surface_DrawTextShadowTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+    float offsetX,
+    float offsetY,
+    float blurSigma,
+    float spread,
+    uint8_t shadowR,
+    uint8_t shadowG,
+    uint8_t shadowB,
+    uint8_t shadowA);
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawPixels(
     KineSkiaSurface* surface,

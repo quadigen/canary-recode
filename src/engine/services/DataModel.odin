@@ -28,7 +28,6 @@ data_model_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 	free(model)
 }
 
-// Native engine access. This intentionally bypasses Luau thread security.
 DataModel_Get_Service :: proc(model: ^DataModel, name: string) -> ^classes.Object {
 	if model == nil || model.destroyed || model.registry == nil { return nil }
 	return Ensure_Service(model.registry, name)

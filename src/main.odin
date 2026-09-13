@@ -1,10 +1,11 @@
+#+build !js
 package main
 
 import "core:fmt"
 import engine_runtime "engine/runtime"
 import renderer "engine/renderer"
 import vm "engine/vm"
-import sdl3 "vendor:sdl3"
+import sdl3 "engine/platform"
 import sandbox "./sandboxed"
 
 Runtime_Render_Context :: struct {
@@ -32,6 +33,12 @@ runtime_render_2d :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, wi
 	engine_runtime.Environment_Render_2D(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
 }
 
+runtime_render_overlay :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, width, height: i32, delta_time: f32) {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil { return }
+	engine_runtime.Environment_Render_Overlay(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
+}
+
 runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 	ctx := cast(^Runtime_Render_Context)user_data
 	if ctx == nil { return }
@@ -52,6 +59,7 @@ main :: proc() {
 		Step = runtime_update_step,
 		Draw3D = runtime_render_3d,
 		Draw2D = runtime_render_2d,
+		DrawOverlay = runtime_render_overlay,
 		UserData = &render_context,
 		KeyDown = proc(scancode: sdl3.Scancode) {
 			fmt.println("Key down: ", scancode)

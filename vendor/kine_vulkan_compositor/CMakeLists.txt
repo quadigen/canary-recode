@@ -28,9 +28,15 @@ target_link_libraries(kine_vulkan_compositor
     PRIVATE
         kine_skia
         Vulkan::Vulkan
-        $<$<TARGET_EXISTS:SDL3::SDL3-static>:SDL3::SDL3-static>
-        $<$<TARGET_EXISTS:SDL3-static>:SDL3-static>
 )
+
+if(ANDROID AND TARGET SDL3::SDL3-shared)
+    target_link_libraries(kine_vulkan_compositor PRIVATE SDL3::SDL3-shared)
+elseif(TARGET SDL3::SDL3-static)
+    target_link_libraries(kine_vulkan_compositor PRIVATE SDL3::SDL3-static)
+elseif(TARGET SDL3-static)
+    target_link_libraries(kine_vulkan_compositor PRIVATE SDL3-static)
+endif()
 
 if(WIN32)
     target_link_libraries(kine_vulkan_compositor PRIVATE user32 gdi32 shell32)
@@ -40,6 +46,8 @@ elseif(APPLE)
         "-framework CoreVideo"
         "-framework QuartzCore"
     )
+elseif(ANDROID)
+    target_link_libraries(kine_vulkan_compositor PRIVATE dl)
 else()
     target_link_libraries(kine_vulkan_compositor PRIVATE dl pthread)
 endif()

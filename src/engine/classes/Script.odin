@@ -5,14 +5,15 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
+Script_Execution_State :: enum {
+	NotStarted,
+	Started,
+	Errored,
+}
+
 Script_Class := Class_Info{
 	name   = "Script",
 	parent = &Instance_Class,
-}
-
-ModuleScript_Class := Class_Info{
-	name   = "ModuleScript",
-	parent = &Script_Class,
 }
 
 Script_Module_State :: enum {
@@ -23,9 +24,46 @@ Script_Module_State :: enum {
 
 Script :: struct {
 	using object: Object,
-	source:       string,
+
+	source:          string,
+	execution_state: Script_Execution_State,
+
 	module_state: Script_Module_State,
 	module_ref:   i32,
+}
+
+Script_Apply_Environment :: proc(
+	L: ^vm.State,
+	object: ^Object,
+) -> bool {
+	if L == nil || object == nil {
+		return false
+	}
+
+	vm.NewTable(L, 0, 2)
+
+	// script = <this Script/ModuleScript>
+	Push_Object(L, object)
+	vm.SetField(L, -2, "script")
+
+	// metatable = {
+	//     __index = shared engine globals
+	// }
+	vm.NewTable(L, 0, 1)
+
+	vm.PushGlobals(L)
+	vm.SetField(L, -2, "__index")
+
+	// [chunk, environment, metatable]
+	if !vm.SetMetatable(L, -2) {
+		vm.Pop(L)
+		return false
+	}
+
+	// [chunk, environment]
+	//
+	// lua_setfenv consumes the environment
+	return vm.SetFunctionEnvironment(L, -2)
 }
 
 Script_Init :: proc(class: ^Class_Info = nil, name: string = "Script") -> Script {
@@ -113,6 +151,7 @@ script_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.source       = strings.clone(src.source)
 	dst.module_state = .Unloaded
 	dst.module_ref   = -1
+	dst.execution_state = .NotStarted
 }
 
 Register_Script :: proc(registry: ^Registry) {
@@ -126,19 +165,6 @@ Register_Script :: proc(registry: ^Registry) {
 		set = script_set,
 		clone = script_clone,
 		member_security = rules[:],
-	)
-}
-
-Register_ModuleScript :: proc(registry: ^Registry) {
-	rules := script_member_security()
-	Register_Class(
-		registry,
-		&ModuleScript_Class,
-		module_script_construct,
-		script_destroy,
-		get = script_get,
-		set = script_set,
-		clone = script_clone,
-		member_security = rules[:],
+		properties = []string{"Source"},
 	)
 }

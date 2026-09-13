@@ -1,7 +1,5 @@
 package luau
 
-import "core:c"
-import "core:c/libc"
 import "core:strings"
 import "base:runtime"
 
@@ -190,7 +188,7 @@ push_struct_field :: proc(L: ^State, field: Struct_Field) {
 		luauh.lua_pushlstring(
 			L,
 			value,
-			len(field.string_value),
+			uintptr(len(field.string_value)),
 		)
 
 	case .Function:
@@ -361,7 +359,7 @@ GetGlobalNumber :: proc(
 		c_name,
 	)
 
-	is_number: c.int
+	is_number: i32
 	value = luauh.lua_tonumberx(
 		vm.L,
 		-1,
@@ -417,7 +415,7 @@ SetVectorPrecision :: proc(vm: ^VM, use_f64: bool) {
 }
 
 ArgString :: proc(L: ^State, index: int) -> string {
-	size: c.size_t
+	size: uintptr
 
 	ptr := luauh.luaL_checklstring(
 		L,
@@ -578,6 +576,33 @@ ClearStack :: proc(L: ^State) {
 	luauh.lua_settop(L, 0)
 }
 
+PushGlobals :: proc(L: ^State) {
+	luauh.lua_pushvalue(
+		L,
+		luauh.LUA_GLOBALSINDEX,
+	)
+}
+
+SetMetatable :: proc(
+	L: ^State,
+	index: int,
+) -> bool {
+	return luauh.lua_setmetatable(
+		L,
+		i32(index),
+	) != 0
+}
+
+SetFunctionEnvironment :: proc(
+	L: ^State,
+	function_index: int,
+) -> bool {
+	return luauh.lua_setfenv(
+		L,
+		i32(function_index),
+	) != 0
+}
+
 ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> (ok: bool, err: string) {
 	status := luauh.lua_pcall(L, i32(argument_count), i32(result_count), 0)
 	if status == 0 {
@@ -715,7 +740,7 @@ RaiseError :: proc(L: ^State, message: string) -> i32 {
 
 RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {
 	if message == nil { return RaiseError(L, "Unknown Luau error") }
-	luauh.lua_pushlstring(L, cast(cstring)raw_data(message^), len(message^))
+	luauh.lua_pushlstring(L, cast(cstring)raw_data(message^), uintptr(len(message^)))
 	delete(message^)
 	message^ = ""
 	luauh.lua_error(L)
@@ -1025,7 +1050,7 @@ LoadSource :: proc(
 	c_chunk := strings.clone_to_cstring(chunk_name)
 	defer delete(c_chunk)
 
-	bytecode_size: c.size_t
+	bytecode_size: uintptr
 
     options := luauh.lua_CompileOptions{
         optimizationLevel = vm.compile_options.optimization_level,
@@ -1047,7 +1072,7 @@ LoadSource :: proc(
 
     bytecode := luauh.luau_compile(
         c_source,
-        c.size_t(len(source)),
+        uintptr(len(source)),
         &options,
         &bytecode_size,
     )
@@ -1056,7 +1081,7 @@ LoadSource :: proc(
 		return false, strings.clone("luau_compile returned nil")
 	}
 
-	defer libc.free(cast(rawptr)bytecode)
+	defer luauh.luau_free(cast(rawptr)bytecode)
 
 	status := luauh.luau_load(
 		L,
@@ -1103,7 +1128,7 @@ Run :: proc(
 }
 
 get_stack_error :: proc(L: ^State) -> string {
-	size: c.size_t
+	size: uintptr
 
 	ptr := luauh.lua_tolstring(
 		L,
@@ -1120,4 +1145,3 @@ get_stack_error :: proc(L: ^State) -> string {
 		int(size),
 	)
 }
-
