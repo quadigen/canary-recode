@@ -123,7 +123,10 @@ function(kine_add_odin_library_alias ALIAS_NAME SOURCE_FILE)
     add_custom_command(
         OUTPUT "${_alias_path}"
         COMMAND ${CMAKE_COMMAND} -E rm -f "${_alias_path}"
-        COMMAND ${CMAKE_COMMAND} -E create_hardlink "${SOURCE_FILE}" "${_alias_path}"
+        # GitHub's Windows runners install the Vulkan SDK on C: while the
+        # checkout lives on D:. Hard links cannot cross volume boundaries, so
+        # use a portable copy for every Odin-facing library alias.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SOURCE_FILE}" "${_alias_path}"
         DEPENDS "${SOURCE_FILE}"
         COMMENT "Generating Odin native library: ${ALIAS_NAME}${CMAKE_STATIC_LIBRARY_SUFFIX}"
         VERBATIM
