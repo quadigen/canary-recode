@@ -222,20 +222,44 @@ if(WIN32)
     endif()
     set(KINE_FILAMENT_ARCHIVE_DIR "${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}/${KINE_FILAMENT_CRT_DIR}")
 else()
-    set(KINE_FILAMENT_ARCHIVE_DIR "${FILAMENT_DIR}/lib/${FILAMENT_LIB_ARCH}")
+    # Filament's Unix archives have changed architecture-directory naming
+    # across releases and runner images. Resolve exact archive filenames below
+    # the SDK's lib tree rather than coupling them to CMAKE_SYSTEM_PROCESSOR.
+    set(KINE_FILAMENT_ARCHIVE_DIR "${FILAMENT_DIR}/lib")
 endif()
 foreach(_filament_archive IN LISTS KINE_FILAMENT_ARCHIVE_NAMES)
-    find_library(_filament_archive_path
-        NAMES "${_filament_archive}"
-        PATHS "${KINE_FILAMENT_ARCHIVE_DIR}"
-        NO_DEFAULT_PATH
-        NO_CACHE
-        REQUIRED
-    )
+    if(WIN32)
+        find_library(_filament_archive_path
+            NAMES "${_filament_archive}"
+            PATHS "${KINE_FILAMENT_ARCHIVE_DIR}"
+            NO_DEFAULT_PATH
+            NO_CACHE
+            REQUIRED
+        )
+    else()
+        set(_filament_archive_name
+            "${CMAKE_STATIC_LIBRARY_PREFIX}${_filament_archive}${CMAKE_STATIC_LIBRARY_SUFFIX}"
+        )
+        file(GLOB_RECURSE _filament_archive_candidates
+            LIST_DIRECTORIES FALSE
+            "${KINE_FILAMENT_ARCHIVE_DIR}/${_filament_archive_name}"
+        )
+        list(LENGTH _filament_archive_candidates _filament_archive_count)
+        if(NOT _filament_archive_count EQUAL 1)
+            message(FATAL_ERROR
+                "Expected exactly one ${_filament_archive_name} below "
+                "${KINE_FILAMENT_ARCHIVE_DIR}; found ${_filament_archive_count}: "
+                "${_filament_archive_candidates}"
+            )
+        endif()
+        list(GET _filament_archive_candidates 0 _filament_archive_path)
+    endif()
     list(APPEND KINE_COMPONENT_TARGET_FILES "${_filament_archive_path}")
     list(APPEND KINE_COMPONENT_TARGET_DEPENDENCIES "${_filament_archive_path}")
     kine_add_odin_library_alias("kine_filament_${_filament_archive}" "${_filament_archive_path}")
     unset(_filament_archive_path)
+    unset(_filament_archive_candidates)
+    unset(_filament_archive_name)
 endforeach()
 if(WIN32 AND Vulkan_LIBRARY)
     list(APPEND KINE_COMPONENT_TARGET_FILES "${Vulkan_LIBRARY}")
