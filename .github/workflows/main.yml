@@ -164,6 +164,35 @@ jobs:
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
 
+      - name: Build Odin vendor libraries (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          odin_root="$(odin root)"
+
+          build_odin_vendor_library() {
+            local source_dir="$1"
+            local script_name="$2"
+            if [[ -f "$source_dir/$script_name" ]]; then
+              bash "$source_dir/$script_name"
+            else
+              make -C "$source_dir"
+            fi
+          }
+
+          build_odin_vendor_library \
+            "$odin_root/vendor/miniaudio/src" \
+            build_miniaudio.sh
+
+          if [[ "${{ runner.os }}" == 'macOS' ]]; then
+            mkdir -p "$odin_root/vendor/stb/lib/darwin"
+          fi
+          build_odin_vendor_library \
+            "$odin_root/vendor/stb/src" \
+            build_stb.sh
+
+          bash "$odin_root/vendor/box2d/build_box2d.sh"
+
       - name: Check Odin source
         run: odin check src
 

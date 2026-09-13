@@ -56,6 +56,7 @@ when ODIN_OS == .JS {
 		"../../../vendor/build/lib/KinemiumLibs.a",
 		"system:vulkan",
 		"system:c++",
+		"system:z",
 		"system:AppKit.framework",
 		"system:Cocoa.framework",
 		"system:CoreFoundation.framework",
