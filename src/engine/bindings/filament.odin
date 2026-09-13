@@ -74,7 +74,7 @@ when ODIN_OS == .JS {
 	foreign import kine_filament {
 		"../../../vendor/build/lib/KinemiumLibs.a",
 		"system:vulkan",
-		"system:stdc++",
+		"system:c++",
 		"system:GL",
 		"system:X11",
 		"system:dl",

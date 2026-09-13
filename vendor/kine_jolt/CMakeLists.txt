@@ -71,19 +71,10 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
     GIT_TAG master
     GIT_SHALLOW TRUE
+    SOURCE_SUBDIR Build
 )
 
-FetchContent_GetProperties(Jolt)
-
-if(NOT jolt_POPULATED)
-    FetchContent_Populate(Jolt)
-endif()
-
-# Jolt's CMakeLists.txt is inside Build/
-add_subdirectory(
-    ${jolt_SOURCE_DIR}/Build
-    ${jolt_BINARY_DIR}
-)
+FetchContent_MakeAvailable(Jolt)
 
 # ---------------------------------------------------------
 # Jolt Wrapper

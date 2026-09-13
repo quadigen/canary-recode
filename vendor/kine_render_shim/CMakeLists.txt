@@ -141,8 +141,31 @@ if(KINE_WITH_FILAMENT)
             URL ${FILAMENT_URL}
         )
         FetchContent_MakeAvailable(filament_prebuilt)
-        set(FILAMENT_DIR ${filament_prebuilt_SOURCE_DIR})
-        set(FILAMENT_DIR ${filament_prebuilt_SOURCE_DIR} CACHE PATH "Filament SDK root" FORCE)
+
+        # Windows releases extract the SDK directly, while current Linux and
+        # macOS releases contain a top-level `filament/` directory. Normalize
+        # both archive layouts before consumers derive include/lib/bin paths.
+        set(_filament_sdk_root "${filament_prebuilt_SOURCE_DIR}")
+        if(NOT EXISTS "${_filament_sdk_root}/include/filament/Engine.h")
+            file(GLOB _filament_engine_headers
+                LIST_DIRECTORIES FALSE
+                "${filament_prebuilt_SOURCE_DIR}/*/include/filament/Engine.h"
+            )
+            list(LENGTH _filament_engine_headers _filament_header_count)
+            if(_filament_header_count EQUAL 1)
+                list(GET _filament_engine_headers 0 _filament_engine_header)
+                get_filename_component(_filament_include_dir "${_filament_engine_header}" DIRECTORY)
+                get_filename_component(_filament_include_dir "${_filament_include_dir}" DIRECTORY)
+                get_filename_component(_filament_sdk_root "${_filament_include_dir}" DIRECTORY)
+            else()
+                message(FATAL_ERROR
+                    "Could not locate the Filament SDK root under ${filament_prebuilt_SOURCE_DIR}"
+                )
+            endif()
+        endif()
+
+        set(FILAMENT_DIR "${_filament_sdk_root}" CACHE PATH "Filament SDK root" FORCE)
+        message(STATUS "Using Filament SDK at ${FILAMENT_DIR}")
     endif()
 
     if(NOT DEFINED FILAMENT_LIB_ARCH)
