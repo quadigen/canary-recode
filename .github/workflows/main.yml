@@ -227,8 +227,9 @@ jobs:
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
-            -extra-linker-flags:"-L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,@loader_path"
+            -extra-linker-flags:"-L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib 'dist/${{ matrix.folder }}/'
+          cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib 'dist/${{ matrix.folder }}/'
 
       - name: Inspect Linux executable
         if: runner.os == 'Linux'
