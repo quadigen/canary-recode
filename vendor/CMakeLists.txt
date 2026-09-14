@@ -355,6 +355,7 @@ else()
     add_custom_command(TARGET KinemiumLibs POST_BUILD
         COMMAND ${CMAKE_COMMAND}
             "-DARCHIVER=${CMAKE_AR}"
+            "-DRANLIB=${CMAKE_RANLIB}"
             "-DMRI_SCRIPT=${_mri_script}"
             "-DOUTPUT_ARCHIVE=$<TARGET_FILE:KinemiumLibs>"
             "-DBUNDLE_ARCHIVE=${_kine_bundle_archive}"

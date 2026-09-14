@@ -173,6 +173,9 @@ jobs:
           done
           file vendor/build/lib/KinemiumLibs.a
           ar -t vendor/build/lib/KinemiumLibs.a >/dev/null
+          if [[ "${{ runner.os }}" == 'Linux' ]]; then
+            nm --print-armap vendor/build/lib/KinemiumLibs.a >/dev/null
+          fi
           find vendor/build/_deps/sdl3-build -maxdepth 1 -type f \
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
