@@ -141,6 +141,7 @@ handles_destroy :: proc(
 ) {
 	handles := cast(^Handles)object
 	handles_destroy_native(handles.native_gizmo, handles.native_context)
+	handles_free_signal_pointers(&handles.mouse_button1_down, &handles.mouse_button1_up, &handles.mouse_drag)
 	Object_Destroy(object)
 	free(handles)
 }
@@ -151,8 +152,26 @@ arc_handles_destroy :: proc(
 ) {
 	handles := cast(^ArcHandles)object
 	handles_destroy_native(handles.native_gizmo, handles.native_context)
+	handles_free_signal_pointers(&handles.mouse_button1_down, &handles.mouse_button1_up, &handles.mouse_drag)
 	Object_Destroy(object)
 	free(handles)
+}
+
+handles_free_signal_pointers :: proc(
+	mouse_button1_down, mouse_button1_up, mouse_drag: ^^signals.Signal,
+) {
+	if mouse_button1_down^ != nil {
+		signals.Destroy(mouse_button1_down^)
+		mouse_button1_down^ = nil
+	}
+	if mouse_button1_up^ != nil {
+		signals.Destroy(mouse_button1_up^)
+		mouse_button1_up^ = nil
+	}
+	if mouse_drag^ != nil {
+		signals.Destroy(mouse_drag^)
+		mouse_drag^ = nil
+	}
 }
 
 handles_destroy_native :: proc(

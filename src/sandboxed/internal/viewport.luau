@@ -9,11 +9,6 @@ local theme = StudioThemeService.SelectedTheme
 local TextService = game:GetService("TextService")
 local Selection = game:GetService("Selection")
 
-local viewportRenderX = 0
-local viewportRenderY = 0
-local viewportRenderWidth = 0
-local viewportRenderHeight = 0
-
 local colors = UI.colors
 local tokens = UI.tokens
 
@@ -255,7 +250,7 @@ end
 
 updateTools()
 
-local breadcrumb = UI.group(viewportOverlay, UDim2.new(0, 8, 1, -60), UDim2.new(1, -16, 0, 26), {
+local breadcrumb = UI.group(viewportOverlay, UDim2.new(0, 8, 1, -30), UDim2.new(1, -16, 0, 26), {
 	color = tokens.color.surface,
 	radius = tokens.radius.sm,
 })
@@ -356,11 +351,6 @@ renderer.Pool.new("2d", function()
 		)
 	end
 
-	viewportRenderX = viewportPosition.X.Offset
-	viewportRenderY = viewportPosition.Y.Offset
-	viewportRenderWidth = viewportSize.X.Offset
-	viewportRenderHeight = viewportSize.Y.Offset
-
 	viewportRoot.Position = getViewportPosition()
 	viewportRoot.Size = viewportSize
 
@@ -392,10 +382,13 @@ local lastWidth = -1
 local lastHeight = -1
 
 renderer.Pool.new("2da", function()
-	local absoluteX = viewportRenderX
-	local absoluteY = viewportRenderY
-	local absoluteWidth = viewportRenderWidth
-	local absoluteHeight = viewportRenderHeight
+	local absolutePosition = viewportRoot.AbsolutePosition
+	local absoluteSize = viewportRoot.AbsoluteSize
+
+	local absoluteX = absolutePosition.X
+	local absoluteY = absolutePosition.Y
+	local absoluteWidth = absoluteSize.X
+	local absoluteHeight = absoluteSize.Y
 
 	if absoluteWidth <= 0 or absoluteHeight <= 0 then
 		return
@@ -415,8 +408,6 @@ renderer.Pool.new("2da", function()
 	end
 
 	if absoluteX ~= lastX or renderTop ~= lastY or absoluteWidth ~= lastWidth or renderHeight ~= lastHeight then
-		print("VIEWPORT CHANGED", absoluteX, renderTop, absoluteWidth, renderHeight)
-
 		lastX = absoluteX
 		lastY = renderTop
 		lastWidth = absoluteWidth

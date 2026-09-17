@@ -641,6 +641,8 @@ ScrollingFrame_destroy :: proc(
 		scrolling_frame_dragged = nil
 	}
 
+	GuiObject_Free_Signals(cast(^GuiObject)object)
+
 	Object_Destroy(object)
 	free(frame)
 }

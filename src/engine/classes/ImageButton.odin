@@ -113,6 +113,8 @@ ImageButton_destroy :: proc(
 		&label,
 	)
 
+	GuiButton_Free_Signals(cast(^GuiButton)object)
+
 	button.stored_image =
 		nil
 

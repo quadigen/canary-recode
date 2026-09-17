@@ -47,6 +47,7 @@ Registry :: struct {
 	L:                  ^vm.State,
 	signal_binding:     vm.Userdata_Binding,
 	connection_binding: vm.Userdata_Binding,
+	free_signals:       [dynamic]^Signal,
 }
 
 signal_has_internal_fire_capability :: proc(L: ^vm.State) -> bool {
@@ -62,13 +63,16 @@ find_listener :: proc(signal: ^Signal, id: u64) -> ^Listener {
 }
 
 disconnect_listener :: proc(signal: ^Signal, id: u64) {
-	listener := find_listener(signal, id)
-	if listener == nil || !listener.connected { return }
-	listener.connected = false
-	if signal.registry != nil && signal.registry.L != nil {
-		vm.ReleaseValue(signal.registry.L, listener.callback_ref)
+	if signal == nil { return }
+	for listener, index in signal.listeners {
+		if listener.id == id && listener.connected {
+			if signal.registry != nil && signal.registry.L != nil {
+				vm.ReleaseValue(signal.registry.L, listener.callback_ref)
+			}
+			ordered_remove(&signal.listeners, index)
+			return
+		}
 	}
-	listener.callback_ref = -1
 }
 
 connection_disconnect :: proc(connection: ^KinemiumConnection) {
@@ -111,15 +115,6 @@ connection_namecall :: proc(
 
 connection_destroy :: proc(value, ctx: rawptr) {
     connection := cast(^KinemiumConnection)value
-
-    if connection.registry != nil &&
-       connection.registry.L != nil &&
-       connection.signal_ref > 0 {
-        vm.ReleaseValue(connection.registry.L, connection.signal_ref)
-    }
-
-    connection.signal = nil
-    connection.signal_ref = -1
 
     free(connection)
 }
@@ -219,7 +214,14 @@ signal_fire_arguments :: proc(
 			capabilities = listener.capabilities,
 		})
 		vm.Pop(L)
-		if listener.once { disconnect_listener(signal, listener.id) }
+	}
+
+	// Disconnect "once" listeners after the snapshot so the removal cannot
+	// invalidate the iteration above.
+	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
+		if signal.listeners[index].once {
+			disconnect_listener(signal, signal.listeners[index].id)
+		}
 	}
 
 	waiters := signal.waiters
@@ -297,7 +299,9 @@ signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		if !signal_has_internal_fire_capability(L) {
 			return vm.RaiseError(L, "Signal:DisconnectAll is restricted to internal scripts"), true
 		}
-		for listener in signal.listeners { disconnect_listener(signal, listener.id) }
+		for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
+			disconnect_listener(signal, signal.listeners[index].id)
+		}
 		return 0, true
 	}
 	return 0, false
@@ -309,13 +313,35 @@ signal_destroy :: proc(value, ctx: rawptr) {
 		return
 	}
 	signal.destroyed = true
-	for listener in signal.listeners { disconnect_listener(signal, listener.id) }
+	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
+		disconnect_listener(signal, signal.listeners[index].id)
+	}
 	if signal.registry != nil && signal.registry.L != nil {
 		for waiter in signal.waiters { vm.ReleaseValue(signal.registry.L, waiter.thread_ref) }
 	}
 	delete(signal.listeners)
 	delete(signal.waiters)
 	free(signal)
+}
+
+// Destroy tears down a signal. External signals are returned to the registry
+// pool instead of freed so connections may still reference the struct.
+Destroy :: proc(signal: ^Signal) {
+	if signal == nil || signal.destroyed {
+		return
+	}
+	signal.destroyed = true
+	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
+		disconnect_listener(signal, signal.listeners[index].id)
+	}
+	if signal.registry != nil && signal.registry.L != nil {
+		for waiter in signal.waiters { vm.ReleaseValue(signal.registry.L, waiter.thread_ref) }
+	}
+	delete(signal.listeners)
+	delete(signal.waiters)
+	if signal.external_owner && signal.registry != nil {
+		append(&signal.registry.free_signals, signal)
+	}
 }
 
 signal_string :: proc(value, ctx: rawptr) -> string {
@@ -333,7 +359,17 @@ signal_new :: proc "c" (L: ^vm.State) -> i32 {
 
 Create :: proc(registry: ^Registry, _ignored: ..any) -> ^Signal {
 	if registry == nil { return nil }
-	signal := new(Signal)
+	signal: ^Signal
+	if len(registry.free_signals) > 0 {
+		signal = pop(&registry.free_signals)
+		// Preserve next_id so stale connections holding old listener ids
+		// can never match listeners created after the signal is reused.
+		next_id := signal.next_id
+		signal^ = Signal{}
+		signal.next_id = next_id
+	} else {
+		signal = new(Signal)
+	}
 	signal.registry = registry
 	signal.external_owner = true
 	return signal
@@ -393,5 +429,8 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 
 Registry_Destroy :: proc(registry: ^Registry) {
 	if registry == nil { return }
+	for signal in registry.free_signals { free(signal) }
+	delete(registry.free_signals)
+	registry.free_signals = nil
 	registry.L = nil
 }

@@ -806,6 +806,13 @@ IsNativeUserdata :: proc(L: ^State, index: int) -> bool {
 	return userdata_header(L, index) != nil
 }
 
+DetachUserdata :: proc(L: ^State, index: int) {
+	header := userdata_header(L, index)
+	if header != nil {
+		header.value = nil
+	}
+}
+
 UserdataValue :: proc(L: ^State, index: int) -> rawptr {
 	header := userdata_header(L, index)
 	if header == nil {

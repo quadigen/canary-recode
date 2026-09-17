@@ -31,6 +31,7 @@ Frame_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Obje
 }
 
 Frame_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+    GuiObject_Free_Signals(cast(^GuiObject)object)
     Object_Destroy(object)
     free(cast(^Frame)object)
 }

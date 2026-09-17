@@ -115,9 +115,7 @@ write_u32 :: proc(w: ^Writer, value: u32) {
 
 write_u64 :: proc(w: ^Writer, value: u64) {
 	bytes := transmute([8]u8)value
-	for byte in bytes {
-		append(&w.data, byte)
-	}
+	append(&w.data, ..bytes[:])
 }
 
 write_i16 :: proc(w: ^Writer, value: i16) {
@@ -934,18 +932,14 @@ read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registr
 		return false
 	}
 
-	// Encoding is filtered through a sub-buffer so a value we cannot encode
-	// (unknown userdata such as Signal) never corrupts the main stream.
-	sub := Writer{}
-	write_string(&sub, property)
-	if !write_value(&sub, L, registry, base + 1) {
-		delete(sub.data)
+	offset := len(w.data)
+	write_string(w, property)
+	if !write_value(w, L, registry, base + 1) {
+		resize(&w.data, offset)
 		vm.SetStackTop(L, base)
 		return false
 	}
 
-	append(&w.data, ..sub.data[:])
-	delete(sub.data)
 	vm.SetStackTop(L, base)
 	return true
 }
@@ -1008,14 +1002,13 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		base := vm.StackTop(L)
 		vm.PushRegistryReference(L, attribute.value_ref)
 
-		sub := Writer{}
-		write_string(&sub, attribute.name)
-		encodes := write_value(&sub, L, registry, base + 1)
-		if encodes {
-			append(&w.data, ..sub.data[:])
+		offset := len(w.data)
+		write_string(w, attribute.name)
+		if write_value(w, L, registry, base + 1) {
 			attribute_count += 1
+		} else {
+			resize(&w.data, offset)
 		}
-		delete(sub.data)
 		vm.SetStackTop(L, base)
 	}
 	patch_u32(w, attribute_count_offset, attribute_count)
@@ -1028,12 +1021,12 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		if child == nil || child == object || !child.archivable {
 			continue
 		}
-		sub := Writer{}
-		if write_instance(&sub, L, registry, child) {
-			append(&w.data, ..sub.data[:])
+		offset := len(w.data)
+		if write_instance(w, L, registry, child) {
 			child_count += 1
+		} else {
+			resize(&w.data, offset)
 		}
-		delete(sub.data)
 	}
 	patch_u32(w, child_count_offset, child_count)
 

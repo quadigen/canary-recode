@@ -28,6 +28,8 @@ LogService :: struct {
     history: [dynamic]LogEntry,
 }
 
+LOG_HISTORY_LIMIT :: 1000
+
 LogEntry :: struct {
 	message:   []u8,
 	log_type:  string,
@@ -44,6 +46,14 @@ log_service_add_entry :: proc(
 		log_type  = log_type,
 		timestamp = time.to_unix_seconds(time.now()),
 	})
+
+	if len(service.history) > LOG_HISTORY_LIMIT {
+		overflow := len(service.history) - LOG_HISTORY_LIMIT
+		for index in 0 ..< overflow {
+			delete(service.history[index].message)
+		}
+		remove_range(&service.history, 0, overflow)
+	}
 }
 
 log_service_write :: proc(
@@ -223,6 +233,7 @@ log_service_namecall :: proc(
         service.info_count = 0
         service.warning_count = 0
         service.error_count = 0
+        log_service_clear_history(service)
 
         return 0, true
     case "GetLogHistory":
@@ -253,6 +264,7 @@ log_service_destroy :: proc(
     object: ^classes.Object,
     renderer: ^classes.Renderer_Object,
 ) {
+    log_service_clear_history(cast(^LogService)object)
     classes.Object_Destroy(object)
     free(cast(^LogService)object)
 }

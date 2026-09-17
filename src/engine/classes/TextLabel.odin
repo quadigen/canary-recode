@@ -957,6 +957,8 @@ TextLabel_destroy :: proc(
 		&label.font_face,
 	)
 
+	GuiObject_Free_Signals(cast(^GuiObject)object)
+
 	Object_Destroy(
 		object,
 	)

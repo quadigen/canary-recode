@@ -4420,8 +4420,6 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, 
     int clampedWidth = std::clamp(width, 1, std::max(1, ctx->width - clampedX));
     int clampedHeight = std::clamp(height, 1, std::max(1, ctx->height - clampedY));
 
-    // Kinemium UI coordinates are top-left origin. Filament's viewport is
-    // bottom-left origin when rendering directly into the Vulkan swapchain.
     int filamentY = ctx->height - clampedY - clampedHeight;
     filamentY = std::clamp(filamentY, 0, std::max(0, ctx->height - 1));
 

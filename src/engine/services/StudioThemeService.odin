@@ -8,6 +8,7 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 import gui "../gui"
+import "core:fmt"
 
 THEME_BASE_COLOR :=
     Studio_Theme_Color{15, 15, 15, 255}
@@ -170,6 +171,14 @@ StudioThemeService_Update_Layout :: proc(
 	)
 
 	if size_changed {
+		fmt.printf(
+			"[StudioTheme Resize] %gx%g -> %dx%d\n",
+			service.layout_width,
+			service.layout_height,
+			width,
+			height,
+		)
+
 		studio_theme_fire_changed(
 			L,
 			service,

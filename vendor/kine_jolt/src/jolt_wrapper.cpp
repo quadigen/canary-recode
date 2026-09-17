@@ -1003,6 +1003,14 @@ void JPH_BodyInterface_AddBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bo
     ToBodyInterface(bodyInterface)->AddBody(ToBodyID(bodyID), ToActivation(activationMode));
 }
 
+void JPH_BodyInterface_DestroyBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyRef body)
+{
+    if (bodyInterface == nullptr || body == nullptr)
+        return;
+
+    ToBodyInterface(bodyInterface)->DestroyBody(ToBody(body)->GetID());
+}
+
 void JPH_BodyInterface_RemoveAndDestroyBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID)
 {
     if (bodyInterface == nullptr)

@@ -103,6 +103,13 @@ Class_Descriptor :: struct {
 	member_security:  [dynamic]Member_Security,
 }
 
+Pending_Destroy :: struct {
+	object:     ^Object,
+	descriptor: ^Class_Descriptor,
+}
+
+Destroy_Hook :: proc(object: ^Object, ctx: rawptr)
+
 Registry :: struct {
 	classes:              [dynamic]^Class_Descriptor,
 	datatypes:            ^datatypes.Registry,
@@ -114,6 +121,11 @@ Registry :: struct {
 	fallback_require_ref: i32,
 	require_resolver:     Require_Resolver,
 	require_resolver_ctx: rawptr,
+	// Objects that have been destroyed (and released from Lua) but whose native
+	// memory is kept alive until the next Step so no code reads a freed object.
+	pending_destroy:      [dynamic]Pending_Destroy,
+	destroy_hook:         Destroy_Hook,
+	destroy_hook_ctx:     rawptr,
 }
 
 Registry_Init :: proc(
@@ -436,6 +448,50 @@ Push_New :: proc(
 	return object, true
 }
 
+// Flush_Pending_Destroy frees the native memory of every destroyed Instance.
+// Destroyed objects are kept alive until the next Step so in-flight code that
+// still holds a pointer (guand by the destroyed flag) never reads freed
+// memory.
+Flush_Pending_Destroy :: proc(registry: ^Registry) {
+	if registry == nil {
+		return
+	}
+
+	pending := registry.pending_destroy
+	registry.pending_destroy = nil
+
+	for pending_destroy in pending {
+		if pending_destroy.object == nil || pending_destroy.descriptor == nil {
+			continue
+		}
+
+		object := pending_destroy.object
+		descriptor := pending_destroy.descriptor
+
+		for instance, index in descriptor.instances {
+			if instance == object {
+				ordered_remove(&descriptor.instances, index)
+				break
+			}
+		}
+
+		if descriptor.registry != nil && descriptor.registry.renderer != nil &&
+		   descriptor.registry.renderer.ActiveCamera == object {
+			descriptor.registry.renderer.ActiveCamera = nil
+		}
+
+		if registry.destroy_hook != nil {
+			registry.destroy_hook(object, registry.destroy_hook_ctx)
+		}
+
+		if descriptor.destroy != nil {
+			descriptor.destroy(object, descriptor.registry.renderer)
+		}
+	}
+
+	delete(pending)
+}
+
 Step :: proc(
 	registry: ^Registry,
 	L: ^vm.State,
@@ -446,6 +502,8 @@ Step :: proc(
 	gui_overlay: bool = false,
 ) {
 	if registry == nil || L == nil { return }
+
+	Flush_Pending_Destroy(registry)
 
 	targets: [dynamic]class_step_target
 
@@ -552,6 +610,7 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 	module.module_state = .Loading
 
 	chunk_name := fmt.tprintf("@%s", Get_Full_Name(object))
+	defer delete(chunk_name)
 
 	ok, err := vm.LoadSource(
 		registry.vm_state,
@@ -672,4 +731,6 @@ Registry_Destroy :: proc(registry: ^Registry) {
 
 	delete(registry.classes)
 	registry.classes = nil
+	delete(registry.pending_destroy)
+	registry.pending_destroy = nil
 }

@@ -166,6 +166,7 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 	body_id := kineffi.JPH_Body_GetID(body)
 
 	if body_id == kineffi.JPH_BODY_ID_INVALID {
+		kineffi.JPH_BodyInterface_DestroyBody(service.system.body_interface, body)
 		return Physics_Body{}, false
 	}
 

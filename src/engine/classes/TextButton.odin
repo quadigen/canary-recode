@@ -235,6 +235,8 @@ TextButton_destroy :: proc(
 		&button.font_face,
 	)
 
+	GuiButton_Free_Signals(cast(^GuiButton)object)
+
 	Object_Destroy(
 		object,
 	)

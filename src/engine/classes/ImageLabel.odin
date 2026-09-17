@@ -268,6 +268,8 @@ ImageLabel_destroy :: proc(
 		image_label,
 	)
 
+	GuiObject_Free_Signals(cast(^GuiObject)object)
+
 	delete(
 		image_label.owned_image,
 	)

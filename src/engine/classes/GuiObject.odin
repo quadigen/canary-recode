@@ -121,8 +121,47 @@ GuiObject_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 }
 
 GuiObject_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	GuiObject_Free_Signals(cast(^GuiObject)object)
 	Object_Destroy(object)
 	free(cast(^GuiObject)object)
+}
+
+GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
+	if gui == nil {
+		return
+	}
+	if gui.input_began != nil {
+		signals.Destroy(gui.input_began)
+		gui.input_began = nil
+	}
+	if gui.input_changed != nil {
+		signals.Destroy(gui.input_changed)
+		gui.input_changed = nil
+	}
+	if gui.input_ended != nil {
+		signals.Destroy(gui.input_ended)
+		gui.input_ended = nil
+	}
+	if gui.mouse_enter != nil {
+		signals.Destroy(gui.mouse_enter)
+		gui.mouse_enter = nil
+	}
+	if gui.mouse_leave != nil {
+		signals.Destroy(gui.mouse_leave)
+		gui.mouse_leave = nil
+	}
+	if gui.mouse_moved != nil {
+		signals.Destroy(gui.mouse_moved)
+		gui.mouse_moved = nil
+	}
+	if gui.mouse_wheel_forward != nil {
+		signals.Destroy(gui.mouse_wheel_forward)
+		gui.mouse_wheel_forward = nil
+	}
+	if gui.mouse_wheel_backward != nil {
+		signals.Destroy(gui.mouse_wheel_backward)
+		gui.mouse_wheel_backward = nil
+	}
 }
 
 GuiObject_get :: proc(

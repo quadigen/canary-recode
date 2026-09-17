@@ -234,6 +234,8 @@ Resize :: proc(
 
 Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.vm_state = vm_state
+	registry.classes.destroy_hook = services_destroy_hook
+	registry.classes.destroy_hook_ctx = registry
 	model_object, model_ok := classes.Push_New(registry.classes, vm_state, "DataModel", false)
 	assert(model_ok && model_object != nil)
 	registry.data_model = cast(^DataModel)model_object
@@ -275,4 +277,32 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	registry.services = nil
 	registry.data_model = nil
 	registry.vm_state = nil
+}
+
+// services_destroy_hook runs right before a destroyed Instance's native memory
+// is freed. Services drop their references to the object here so they never
+// read a dangling pointer afterwards.
+services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
+	if object == nil || ctx == nil {
+		return
+	}
+	registry := cast(^Registry)ctx
+
+	selection := Find_Service(registry, "Selection")
+	if selection != nil && selection.object != nil {
+		sel := cast(^Selection)selection.object
+		for index := len(sel.selected) - 1; index >= 0; index -= 1 {
+			if sel.selected[index] == object {
+				ordered_remove(&sel.selected, index)
+			}
+		}
+	}
+
+	workspace_service := Find_Service(registry, "Workspace")
+	if workspace_service != nil && workspace_service.object != nil {
+		workspace := cast(^Workspace)workspace_service.object
+		if workspace.current_camera == object {
+			workspace.current_camera = nil
+		}
+	}
 }

@@ -327,6 +327,7 @@ foreign lib {
 	JPH_PhysicsSystem_CastRay                :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, direction: ^JPH_Vec3, bodyIDs: ^JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outResult: ^JPH_RayCastResult) -> i32 ---
 	JPH_BodyInterface_CreateBody             :: proc(bodyInterface: JPH_BodyInterfaceRef, settings: JPH_BodyCreationSettingsRef) -> JPH_BodyRef ---
 	JPH_BodyInterface_AddBody                :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, activationMode: JPH_ActivationMode) ---
+	JPH_BodyInterface_DestroyBody            :: proc(bodyInterface: JPH_BodyInterfaceRef, body: JPH_BodyRef) ---
 	JPH_BodyInterface_RemoveAndDestroyBody   :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) ---
 	JPH_BodyInterface_SetShape               :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, shape: JPH_ShapeRef, updateMassProperties: i32, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_SetMotionType          :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, motionType: JPH_MotionType, activationMode: JPH_ActivationMode) ---

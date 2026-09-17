@@ -126,6 +126,10 @@ GuiButton_destroy :: proc(
 	object: ^Object,
 	renderer: ^Renderer_Object,
 ) {
+	GuiButton_Free_Signals(
+		cast(^GuiButton)object,
+	)
+
 	Object_Destroy(
 		object,
 	)
@@ -133,6 +137,45 @@ GuiButton_destroy :: proc(
 	free(
 		cast(^GuiButton)object,
 	)
+}
+
+GuiButton_Free_Signals :: proc(button: ^GuiButton) {
+	if button == nil {
+		return
+	}
+	GuiObject_Free_Signals(&button.gui_object)
+	if button.activated_signal != nil {
+		signals.Destroy(button.activated_signal)
+		button.activated_signal = nil
+	}
+	if button.secondary_activated_signal != nil {
+		signals.Destroy(button.secondary_activated_signal)
+		button.secondary_activated_signal = nil
+	}
+	if button.mouse_button1_click != nil {
+		signals.Destroy(button.mouse_button1_click)
+		button.mouse_button1_click = nil
+	}
+	if button.mouse_button1_down != nil {
+		signals.Destroy(button.mouse_button1_down)
+		button.mouse_button1_down = nil
+	}
+	if button.mouse_button1_up != nil {
+		signals.Destroy(button.mouse_button1_up)
+		button.mouse_button1_up = nil
+	}
+	if button.mouse_button2_click != nil {
+		signals.Destroy(button.mouse_button2_click)
+		button.mouse_button2_click = nil
+	}
+	if button.mouse_button2_down != nil {
+		signals.Destroy(button.mouse_button2_down)
+		button.mouse_button2_down = nil
+	}
+	if button.mouse_button2_up != nil {
+		signals.Destroy(button.mouse_button2_up)
+		button.mouse_button2_up = nil
+	}
 }
 
 GuiButton_get :: proc(

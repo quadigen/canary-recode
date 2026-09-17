@@ -68,6 +68,9 @@ Object_Destroy :: proc(self: ^Object) {
     delete(self.children)
     self.children = nil
 	for attribute in self.attributes {
+		if self.signal_registry != nil && self.signal_registry.vm_state != nil && self.signal_registry.vm_state.L != nil {
+			vm.ReleaseValue(self.signal_registry.vm_state.L, attribute.value_ref)
+		}
 		delete(attribute.name)
 	}
 	delete(self.attributes)
@@ -164,6 +167,32 @@ Destroy_Hierarchy :: proc(self: ^Object) {
     }
 
     self.destroyed = true
+
+    registry := self.signal_registry
+    L: ^vm.State
+    if registry != nil && registry.vm_state != nil {
+        L = registry.vm_state.L
+    }
+
+    // Release the Lua registry pin so the userdata can be collected, and
+    // detach the native value so the garbage collector skips its destroy
+    // callback. Native memory is freed by Flush_Pending_Destroy at the next
+    // Step instead of by the GC.
+    if self.lua_ref > 0 && L != nil {
+        vm.PushRegistryReference(L, self.lua_ref)
+        vm.DetachUserdata(L, -1)
+        vm.Pop(L)
+        vm.ReleaseValue(L, self.lua_ref)
+        self.lua_ref = -1
+    }
+
+    if registry != nil {
+        descriptor := Find_Class(registry, Get_Class_Name(self))
+        if descriptor != nil {
+            append(&registry.pending_destroy, Pending_Destroy{object = self, descriptor = descriptor})
+        }
+    }
+
     for len(self.children) > 0 {
         child := self.children[len(self.children)-1]
         Destroy_Hierarchy(child)

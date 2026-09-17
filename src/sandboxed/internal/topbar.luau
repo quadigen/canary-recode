@@ -18,7 +18,7 @@ local FLYOUT_BOTTOM_PADDING = 5
 local expanded = true
 local selectedCategory
 
-local baseLayout = {}
+
 local lastTheme = theme
 
 local categoryRecords = {}
@@ -246,52 +246,22 @@ local function copyUDim2(value)
 	return UDim2.new(value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset)
 end
 
-local function captureCoordinate(name)
+local function applyUpperPaneLayout(name, extraHeight)
 	local coordinates = theme[name]
 
 	if not coordinates then
 		return
 	end
 
-	baseLayout[name] = {
-		Position = copyUDim2(coordinates.Position),
-
-		Size = copyUDim2(coordinates.Size),
-	}
-end
-
-local function captureBaseLayout()
-	baseLayout = {}
-
-	captureCoordinate("ExplorerCoordinates")
-
-	captureCoordinate("ViewportCoordinates")
-
-	-- The code editor occupies the same upper-center slot as
-	-- the viewport, so keep it aligned with the ribbon too.
-	captureCoordinate("CodeEditorCoordinates")
-end
-
-captureBaseLayout()
-
-local function applyUpperPaneLayout(name, extraHeight)
-	local base = baseLayout[name]
-
-	local coordinates = theme[name]
-
-	if not base or not coordinates then
-		return
-	end
-
 	coordinates.Position = UDim2.new(
-		base.Position.X.Scale,
-		base.Position.X.Offset,
-		base.Position.Y.Scale,
-		base.Position.Y.Offset + extraHeight
+		coordinates.Position.X.Scale,
+		coordinates.Position.X.Offset,
+		coordinates.Position.Y.Scale,
+		coordinates.Position.Y.Offset + extraHeight
 	)
 
 	coordinates.Size =
-		UDim2.new(base.Size.X.Scale, base.Size.X.Offset, base.Size.Y.Scale, base.Size.Y.Offset - extraHeight)
+		UDim2.new(coordinates.Size.X.Scale, coordinates.Size.X.Offset, coordinates.Size.Y.Scale, coordinates.Size.Y.Offset - extraHeight)
 end
 
 local function layoutExtraHeight()
@@ -733,7 +703,7 @@ local function refreshTheme()
 
 		lastTheme = selectedTheme
 
-		captureBaseLayout()
+		
 	end
 
 	local colors = palette()

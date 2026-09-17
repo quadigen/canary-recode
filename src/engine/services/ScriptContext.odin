@@ -87,6 +87,7 @@ ScriptContext_Run_Script :: proc(
 		"@%s",
 		classes.Get_Full_Name(&script.object),
 	)
+	defer delete(chunk_name)
 
 	ok, load_error := vm.LoadSource(
 		script_context.vm_state,

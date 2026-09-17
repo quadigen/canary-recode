@@ -2404,6 +2404,12 @@ TextBox_destroy :: proc(
 		delete(box.placeholder_text)
 	}
 
+	GuiObject_Free_Signals(cast(^GuiObject)object)
+	if box.focus_lost != nil {
+		signals.Destroy(box.focus_lost)
+		box.focus_lost = nil
+	}
+
 	Object_Destroy(object)
 
 	free(box)

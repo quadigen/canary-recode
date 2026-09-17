@@ -128,6 +128,11 @@ jobs:
             cmake_platform_args+=(
               -DCMAKE_AR=/usr/bin/ar
               -DCMAKE_RANLIB=/usr/bin/ranlib
+              # Jolt's Release builds enable thin LTO by default, producing
+              # LLVM bitcode archives that GNU ld cannot consume when Odin
+              # links the aggregate kernel. Keep the Jolt archive in plain
+              # relocatable objects instead.
+              -DINTERPROCEDURAL_OPTIMIZATION=OFF
             )
           fi
           CC=clang CXX=clang++ CXXFLAGS=-stdlib=libc++ cmake \
@@ -226,6 +231,15 @@ jobs:
           New-Item -ItemType Directory -Force 'dist/${{ matrix.folder }}' | Out-Null
           odin build src -o:speed -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}'
 
+          # SDL3 is consumed through Odin's bundled vendor:sdl3 binding, which
+          # links SDL3.lib and expects SDL3.dll next to the executable.
+          $odinRoot = "$(odin root)".TrimEnd()
+          $sdl3Dll = Join-Path $odinRoot 'vendor/sdl3/SDL3.dll'
+          if (!(Test-Path -LiteralPath $sdl3Dll)) {
+            throw "SDL3.dll was not found next to the Odin SDK: $sdl3Dll"
+          }
+          Copy-Item -LiteralPath $sdl3Dll -Destination 'dist/${{ matrix.folder }}/SDL3.dll'
+
       - name: Build Kinemium (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -272,10 +286,157 @@ jobs:
           if (!(Test-Path -LiteralPath 'dist/${{ matrix.folder }}/${{ matrix.executable }}')) {
             throw 'Kinemium executable was not created'
           }
+          if (!(Test-Path -LiteralPath 'dist/${{ matrix.folder }}/SDL3.dll')) {
+            throw 'SDL3.dll was not copied next to the executable'
+          }
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.folder }}
           path: dist/${{ matrix.folder }}
+          if-no-files-found: error
+
+  web:
+    name: Web (WASM)
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: git config --system core.longpaths true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: latest
+
+      - name: Install Emscripten
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath '.tools/emsdk')) {
+            git clone https://github.com/emscripten-core/emsdk.git .tools/emsdk
+          }
+          & './.tools/emsdk/emsdk.bat' install latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & './.tools/emsdk/emsdk.bat' activate latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Filament material compiler (matc)
+        shell: pwsh
+        run: |
+          $toolDir = '.cache/filament-matc'
+          $archive = Join-Path $toolDir 'filament-v1.74.0-windows.tgz'
+          New-Item -ItemType Directory -Force $toolDir | Out-Null
+          if (!(Test-Path -LiteralPath $archive)) {
+            Invoke-WebRequest 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz' -OutFile $archive
+          }
+          tar -xzf $archive -C $toolDir
+          $matc = Join-Path $toolDir 'filament/bin/matc.exe'
+          if (!(Test-Path -LiteralPath $matc)) {
+            throw "matc was not found at $matc"
+          }
+          Write-Output "FILAMENT_MATC=$matc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build Kinemium Web (WASM)
+        shell: pwsh
+        run: |
+          & './tools/build_wasm.ps1'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath 'build/web/kinemium_engine.wasm')) {
+            throw 'kinemium_engine.wasm was not built'
+          }
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: web
+          path: build/web
+          if-no-files-found: error
+
+  android:
+    name: Android arm64
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: git config --system core.longpaths true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: latest
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK components
+        shell: pwsh
+        run: |
+          if (-not $env:ANDROID_HOME) { throw 'ANDROID_HOME is not set' }
+          $licensesDir = Join-Path $env:ANDROID_HOME 'licenses'
+          New-Item -ItemType Directory -Force $licensesDir | Out-Null
+          Set-Content -Path (Join-Path $licensesDir 'android-sdk-license') -Value '24333f8a63b6825ea9c5514f83c2829b004d1fee' -NoNewline
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          if (!(Test-Path -LiteralPath $sdkmanager)) {
+            throw "sdkmanager was not found at $sdkmanager"
+          }
+          & $sdkmanager --install 'ndk;30.0.16248370' 'platforms;android-37'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath (Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370/build/cmake/android.toolchain.cmake'))) {
+            throw 'Android NDK 30.0.16248370 was not installed'
+          }
+
+      - name: Configure and build native dependencies (Windows)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
+
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+
+          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build vendor/build --config Release --parallel
+
+      - name: Build Kinemium Android (APK)
+        shell: pwsh
+        run: |
+          try {
+            & './tools/build_android.ps1'
+            if ($LASTEXITCODE -ne 0) { throw "build_android.ps1 exited with code $LASTEXITCODE" }
+          } catch {
+            Write-Error $_
+            exit 1
+          }
+          if (!(Test-Path -LiteralPath 'android/app/build/outputs/apk/debug/app-debug.apk')) {
+            throw 'app-debug.apk was not created'
+          }
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: android
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

@@ -70,6 +70,30 @@ KineRoot = model
 	defer delete(data)
 	fmt.printf("serialized %d bytes\n", len(data))
 
+	base := vm.StackTop(script_vm.L)
+	vm.NewTable(script_vm.L)
+	unsupported_ref := vm.RetainValue(script_vm.L)
+	vm.Pop(script_vm.L)
+	attribute_count := len(root.attributes)
+	child_count := len(root.children)
+	append(&root.attributes, classes.Object_Attribute{name = "Skipped", value_ref = unsupported_ref})
+	invalid_child := classes.Object{archivable = true}
+	non_archivable_child := classes.Object{}
+	append(&root.children, &invalid_child, &non_archivable_child)
+	filtered, filtered_ok := serializer.Serialize(&environment.classes, script_vm.L, root)
+	resize(&root.attributes, attribute_count)
+	resize(&root.children, child_count)
+	vm.ReleaseValue(script_vm.L, unsupported_ref)
+	defer delete(filtered)
+	if !filtered_ok || len(filtered) != len(data) || vm.StackTop(script_vm.L) != base {
+		panic("skipped records changed the stream or VM stack")
+	}
+	for byte, index in data {
+		if filtered[index] != byte {
+			panic("skipped records corrupted the stream")
+		}
+	}
+
 	parent, parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
 	if !parent_ok || parent == nil {
 		panic("could not create Folder")

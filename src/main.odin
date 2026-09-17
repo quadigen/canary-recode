@@ -48,14 +48,6 @@ last_ui_height: i32 = -1
 
 runtime_render_2d :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, width, height: i32, delta_time: f32) {
 	if width != last_ui_width || height != last_ui_height {
-        fmt.printf(
-            "[Draw2D SIZE CHANGED] %dx%d -> %dx%d\n",
-            last_ui_width,
-            last_ui_height,
-            width,
-            height,
-        )
-
         last_ui_width = width
         last_ui_height = height
     }

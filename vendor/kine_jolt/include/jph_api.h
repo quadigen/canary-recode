@@ -464,6 +464,7 @@ JPH_API int32_t JPH_PhysicsSystem_CastRay(
 
 JPH_API JPH_BodyRef JPH_BodyInterface_CreateBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyCreationSettingsRef settings);
 JPH_API void JPH_BodyInterface_AddBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, JPH_ActivationMode activationMode);
+JPH_API void JPH_BodyInterface_DestroyBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyRef body);
 JPH_API void JPH_BodyInterface_RemoveAndDestroyBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
 
 JPH_API void JPH_BodyInterface_SetShape(
