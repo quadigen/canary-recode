@@ -7,6 +7,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
+import gui "../gui"
 
 THEME_BASE_COLOR :=
     Studio_Theme_Color{15, 15, 15, 255}
@@ -86,17 +87,17 @@ StudioThemeService :: struct {
 
 	explorer_hidden: bool,
 
-	// Retained Luau values.
 	selected_theme_ref: i32,
 	theme_object_ref:   i32,
 
 	theme_changed: ^signals.Signal,
 
-	// Same locals that InitRenderer used in the Luau implementation.
 	padding:        f64,
 	header_height:  f64,
 	bottom_padding: f64,
 	show_output:    bool,
+	layout_width:  f32,
+	layout_height: f32,
 }
 
 studio_theme_color :: proc(
@@ -119,13 +120,71 @@ studio_theme_color :: proc(
 	vm.SetField(L, -2, "A")
 }
 
+StudioThemeService_Update_Layout :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	datatype_registry: ^datatypes.Registry,
+	width, height: i32,
+) {
+	if registry == nil ||
+	   L == nil ||
+	   datatype_registry == nil ||
+	   width <= 0 ||
+	   height <= 0 {
+		return
+	}
+
+	descriptor := Find_Service(
+		registry,
+		"StudioThemeService",
+	)
+
+	if descriptor == nil || descriptor.object == nil {
+		return
+	}
+
+	service := cast(^StudioThemeService)descriptor.object
+
+	size_changed :=
+		service.layout_width  != f32(width) ||
+		service.layout_height != f32(height)
+
+	service.layout_width = f32(width)
+	service.layout_height = f32(height)
+
+	studio_theme_ensure_initialized(
+		L,
+		service,
+		datatype_registry,
+	)
+
+	vm.PushRegistryReference(
+		L,
+		service.selected_theme_ref,
+	)
+
+	studio_theme_set_coordinates(
+		L,
+		service,
+		datatype_registry,
+	)
+
+	if size_changed {
+		studio_theme_fire_changed(
+			L,
+			service,
+		)
+	}
+
+	vm.Pop(L)
+}
+
 studio_theme_set_color :: proc(
 	L: ^vm.State,
 	name: string,
 	r, g, b: f64,
 	a: f64 = 255,
 ) {
-	// Theme table is expected immediately below the value we push.
 	studio_theme_color(L, r, g, b, a)
 	vm.SetField(L, -2, name)
 }
@@ -162,6 +221,31 @@ studio_theme_push_vector2 :: proc(
 	)
 }
 
+studio_theme_set_coordinate :: proc(
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	name: string,
+	coordinate: gui.Layout_Coordinate,
+) {
+	vm.NewTable(L, 0, 2)
+
+	datatypes.Push_UDim2(
+		L,
+		registry,
+		coordinate.Size,
+	)
+	vm.SetField(L, -2, "Size")
+
+	datatypes.Push_UDim2(
+		L,
+		registry,
+		coordinate.Position,
+	)
+	vm.SetField(L, -2, "Position")
+
+	vm.SetField(L, -2, name)
+}
+
 studio_theme_set_coordinates :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
@@ -171,192 +255,59 @@ studio_theme_set_coordinates :: proc(
 		return
 	}
 
-	P := service.padding
-	TopH := service.header_height
-	BottomPad := service.bottom_padding
+	config := gui.Editor_Layout_Default_Config()
 
-	viewport_top := 2*P + TopH
+	config.P = f32(service.padding)
+	config.TopH = f32(service.header_height)
+	config.show_output = service.show_output
 
-	viewport_height: f64 = 1
-	viewport_height_offset := -(viewport_top + BottomPad)
+	coordinates := gui.Editor_Layout_Compute(
+		&config,
+		service.layout_width,
+		service.layout_height,
+	)
 
-	if service.show_output {
-		viewport_height = 0.7
-		viewport_height_offset = -(viewport_top + P/2)
-	}
-
-	// TopbarCoordinates
-	vm.NewTable(L, 0, 2)
-
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		1,
-		f32(-P*2),
-		0,
-		f32(TopH),
+		"TopbarCoordinates",
+		coordinates.TopbarCoordinates,
 	)
-	vm.SetField(L, -2, "Size")
 
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		0,
-		f32(P),
-		0,
-		f32(P),
+		"ViewportCoordinates",
+		coordinates.ViewportCoordinates,
 	)
-	vm.SetField(L, -2, "Position")
 
-	vm.SetField(L, -2, "TopbarCoordinates")
-
-
-	// ViewportCoordinates
-	vm.NewTable(L, 0, 2)
-
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		0.78,
-		f32(-P*1.5),
-		f32(viewport_height),
-		f32(viewport_height_offset),
+		"CodeEditorCoordinates",
+		coordinates.CodeEditorCoordinates,
 	)
-	vm.SetField(L, -2, "Size")
 
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		0,
-		f32(P),
-		0,
-		f32(viewport_top),
+		"OutputCoordinates",
+		coordinates.OutputCoordinates,
 	)
-	vm.SetField(L, -2, "Position")
 
-	vm.SetField(L, -2, "ViewportCoordinates")
-
-
-	// OutputCoordinates
-	vm.NewTable(L, 0, 2)
-
-	if service.show_output {
-		studio_theme_push_udim2(
-			L,
-			registry,
-			0.78,
-			f32(-P*1.5),
-			0.3,
-			f32(-(P/2 + P + BottomPad)),
-		)
-		vm.SetField(L, -2, "Size")
-
-		studio_theme_push_udim2(
-			L,
-			registry,
-			0,
-			f32(P),
-			0.7,
-			f32(P/2),
-		)
-		vm.SetField(L, -2, "Position")
-	} else {
-		studio_theme_push_udim2(
-			L,
-			registry,
-			0, 0,
-			0, 0,
-		)
-		vm.SetField(L, -2, "Size")
-
-		studio_theme_push_udim2(
-			L,
-			registry,
-			0, 0,
-			1, 0,
-		)
-		vm.SetField(L, -2, "Position")
-	}
-
-	vm.SetField(L, -2, "OutputCoordinates")
-
-
-	// ExplorerCoordinates
-	vm.NewTable(L, 0, 2)
-
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		0.22,
-		f32(-P*1.5),
-		0.5,
-		f32(-(2*P + TopH + P/2)),
+		"ExplorerCoordinates",
+		coordinates.ExplorerCoordinates,
 	)
-	vm.SetField(L, -2, "Size")
 
-	studio_theme_push_udim2(
+	studio_theme_set_coordinate(
 		L,
 		registry,
-		0.78,
-		f32(P/2),
-		0,
-		f32(2*P + TopH),
+		"InspectorCoordinates",
+		coordinates.InspectorCoordinates,
 	)
-	vm.SetField(L, -2, "Position")
-
-	vm.SetField(L, -2, "ExplorerCoordinates")
-
-
-	// InspectorCoordinates
-	vm.NewTable(L, 0, 2)
-
-	studio_theme_push_udim2(
-		L,
-		registry,
-		0.22,
-		f32(-P*1.5),
-		0.5,
-		f32(-(P/2 + P + BottomPad)),
-	)
-	vm.SetField(L, -2, "Size")
-
-	studio_theme_push_udim2(
-		L,
-		registry,
-		0.78,
-		f32(P/2),
-		0.5,
-		f32(P/2),
-	)
-	vm.SetField(L, -2, "Position")
-
-	vm.SetField(L, -2, "InspectorCoordinates")
-
-
-	// CodeEditorCoordinates
-	vm.NewTable(L, 0, 2)
-
-	studio_theme_push_udim2(
-		L,
-		registry,
-		0.78,
-		f32(-P*1.5),
-		f32(viewport_height),
-		f32(viewport_height_offset),
-	)
-	vm.SetField(L, -2, "Size")
-
-	studio_theme_push_udim2(
-		L,
-		registry,
-		0,
-		f32(P),
-		0,
-		f32(viewport_top),
-	)
-	vm.SetField(L, -2, "Position")
-
-	vm.SetField(L, -2, "CodeEditorCoordinates")
 }
 
 
@@ -1295,6 +1246,11 @@ studio_theme_service_namecall :: proc(
 			datatype_registry,
 		)
 
+		studio_theme_fire_changed(
+			L,
+			service,
+		)
+
 		return 0, true
 
 
@@ -1392,10 +1348,6 @@ studio_theme_service_namecall :: proc(
 			datatype_registry,
 		)
 
-		// Keep LayoutConfig's numeric copy synchronized too.
-		//
-		// The old Luau implementation doesn't update these three values
-		// after ChangeLayoutSettings, which appears accidental.
 		if vm.GetField(L, -1, "LayoutConfig") == .Table {
 			vm.PushNumber(L, service.padding)
 			vm.SetField(L, -2, "P")
@@ -1508,6 +1460,10 @@ StudioThemeService_construct :: proc(
 	service.padding = 4
 	service.header_height = 33
 	service.bottom_padding = 12
+	service.show_output = true
+
+	service.layout_width = 800
+	service.layout_height = 600
 	service.show_output = true
 
 	model := cast(^DataModel)data_model

@@ -20,6 +20,7 @@ ScrollingFrame :: struct {
 	canvas_position: datatypes.Vector2,
 	target_position: datatypes.Vector2,
 	canvas_size:     datatypes.UDim2,
+	virtualized_scrolling: bool,
 
 	scrolling_enabled: bool,
 	scroll_speed:     f32,
@@ -70,6 +71,7 @@ ScrollingFrame_Init :: proc() -> ScrollingFrame {
 			Y_Scale = 0,
 			Y_Offset = 0,
 		},
+		virtualized_scrolling = false,
 
 		scrolling_enabled = true,
 		scroll_speed = 42,
@@ -680,6 +682,13 @@ ScrollingFrame_get :: proc(
 
 		return true
 
+	case "VirtualizedScrolling":
+		vm.PushBoolean(
+			L,
+			frame.virtualized_scrolling,
+		)
+		return true
+
 	case "ScrollingEnabled":
 		vm.PushBoolean(
 			L,
@@ -831,6 +840,14 @@ ScrollingFrame_set :: proc(
 				datatype_registry,
 			)
 
+		return true
+
+	case "VirtualizedScrolling":
+		frame.virtualized_scrolling =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
 		return true
 
 	case "ScrollingEnabled":
@@ -1044,6 +1061,7 @@ ScrollingFrame_clone :: proc(
 	dst.canvas_position = src.canvas_position
 	dst.target_position = src.canvas_position
 	dst.canvas_size = src.canvas_size
+	dst.virtualized_scrolling = src.virtualized_scrolling
 
 	dst.scrolling_enabled = src.scrolling_enabled
 	dst.scroll_speed = src.scroll_speed
@@ -1450,5 +1468,21 @@ Register_ScrollingFrame :: proc(
 		get = ScrollingFrame_get,
 		set = ScrollingFrame_set,
 		clone = ScrollingFrame_clone,
+		properties = []string{
+			"CanvasPosition",
+			"CanvasSize",
+			"VirtualizedScrolling",
+			"ScrollingEnabled",
+			"ScrollSpeed",
+			"SmoothScrollingEnabled",
+			"ScrollSmoothness",
+			"ScrollBarThickness",
+			"ScrollBarImageColor3",
+			"ScrollBarImageTransparency",
+			"ScrollBarAutoHide",
+			"ScrollBarFadeDelay",
+			"ScrollBarFadeSpeed",
+			"ScrollBarMinimumHandleSize",
+		},
 	)
 }

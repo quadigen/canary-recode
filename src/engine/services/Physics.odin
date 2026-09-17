@@ -19,6 +19,7 @@ Physics_Body :: struct {
 	shape:       enums.PartType,
 	anchored:    bool,
 	last_cframe: datatypes.CFrame,
+	mesh_id:     string,
 }
 
 Physics :: struct {
@@ -82,4 +83,3 @@ Register_Physics_Class :: proc(registry: ^classes.Registry) {
 		set = physics_set,
 	)
 }
-

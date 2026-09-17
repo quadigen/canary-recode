@@ -52,6 +52,11 @@ Font_Entry :: struct {
     path: string,
     size: f64,
 }
+Internal_Module :: struct {
+    name: string,
+    source: string,
+    reference: i32,
+}
 Registry :: struct {
     vm_state: ^vm.VM,
     renderer: ^renderer.RendererObject,
@@ -73,6 +78,7 @@ Registry :: struct {
     runtime_library_ref: i32,
     active_camera_ref: i32,
     profiler_ref:      i32,
+    internal_modules: [dynamic]Internal_Module,
     dimension_3d: bool,
     running:      bool,
 }
@@ -151,6 +157,15 @@ invoke_callback :: proc(
         return
     }
     L := registry.vm_state.L
+
+    // Render-loop callbacks are first-party internal scripts that need full
+    // access to engine services (e.g. StudioThemeService.SelectedTheme).
+    // Temporarily grant THREAD_SECURITY_ALL, same as RunInternal, and restore
+    // the previous capabilities when done.
+    previous_caps := vm.GetThreadSecurityCapabilities(L)
+    vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
+    defer vm.SetThreadSecurityCapabilities(L, previous_caps)
+
     vm.PushRegistryReference(L, reference)
     if registry.runtime_library_ref > 0 {
         vm.PushRegistryReference(
@@ -258,6 +273,45 @@ Resolve :: proc(
     registry := cast(^Registry)raw_registry
     if registry == nil {
         return false
+    }
+    internal_name := path
+    if strings.has_prefix(internal_name, "@internal/") {
+        internal_name = internal_name[len("@internal/"):]
+    } else if strings.has_prefix(internal_name, "internal/") {
+        internal_name = internal_name[len("internal/"):]
+    } else {
+        internal_name = ""
+    }
+    if internal_name != "" &&
+       !strings.contains(internal_name, "..") &&
+       !strings.contains(internal_name, "\\") &&
+       !strings.has_prefix(internal_name, "/") {
+        if strings.has_suffix(internal_name, ".luau") {
+            internal_name = internal_name[:len(internal_name)-len(".luau")]
+        }
+        for &module in registry.internal_modules {
+            if module.name == internal_name {
+                if module.reference <= 0 {
+                    ok, err := vm.LoadSource(
+                        registry.vm_state,
+                        L,
+                        module.source,
+                        strings.concatenate({"internal/", module.name}),
+                    )
+                    if !ok {
+                        return vm.RaiseError(L, err) > 0
+                    }
+                    ok, err = vm.ProtectedCall(L, 0, 1)
+                    if !ok {
+                        return vm.RaiseError(L, err) > 0
+                    }
+                    module.reference = vm.RetainValue(L)
+                    vm.Pop(L)
+                }
+                vm.PushRegistryReference(L, module.reference)
+                return true
+            }
+        }
     }
     name := path
     if strings.has_prefix(path, "@engine/") {
@@ -629,6 +683,11 @@ renderer_set_profiler :: proc "c" (L: ^vm.State) -> i32 {
                 L,
                 value_index,
             )
+    }
+    for module in registry.internal_modules {
+        if module.reference > 0 {
+            vm.ReleaseValue(registry.vm_state.L, module.reference)
+        }
     }
     return 0
 }
@@ -1288,6 +1347,17 @@ Init :: proc(
     registry.dimension_3d = true
     registry.running = true
     Register_Default_Packages(registry)
+    for file in #load_directory("../../sandboxed/internal") {
+        file_name := file.name
+        if !strings.has_suffix(file_name, ".luau") {
+            continue
+        }
+        module_name := file_name[:len(file_name)-len(".luau")]
+        append(&registry.internal_modules, Internal_Module{
+            name = module_name,
+            source = string(file.data),
+        })
+    }
     for &descriptor in registry.packages {
         descriptor.installer(
             vm_state.L,
@@ -1632,5 +1702,6 @@ Destroy :: proc(
     delete(registry.hooks)
     delete(registry.callbacks)
     delete(registry.packages)
+    delete(registry.internal_modules)
     registry^ = Registry{}
 }

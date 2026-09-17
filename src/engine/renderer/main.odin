@@ -21,6 +21,7 @@ RendererObject :: struct {
 	Draw2D:      proc(user_data: rawptr, surface: ^kineffi.KineSkiaSurface, width, height: i32, delta_time: f32),
 	DrawOverlay: proc(user_data: rawptr, surface: ^kineffi.KineSkiaSurface, width, height: i32, delta_time: f32),
 	OnEvent:     proc(user_data: rawptr, event: sdl3.Event),
+	OnResize:    proc(user_data: rawptr, width, height: i32),
 	Ready:       bool,
 	HasWorldToView: bool,
 	WorldToView: [12]f32,
@@ -29,11 +30,37 @@ RendererObject :: struct {
 	Filament:    ^kineffi.KineFilamentContext,
 	HasViewportRect: bool,
 	ViewportRect: [4]i32,
+	CurrentEvent: ^sdl3.Event
 }
 
-set_viewport_rect :: proc(renderer: ^RendererObject, x, y, width, height: i32) {
-	renderer.HasViewportRect = true
-	renderer.ViewportRect = {x, y, width, height}
+set_viewport_rect :: proc(
+    renderer: ^RendererObject,
+    x, y, width, height: i32,
+) {
+    if width <= 0 || height <= 0 {
+        return
+    }
+
+    old := renderer.ViewportRect
+    changed :=
+        !renderer.HasViewportRect ||
+        old[0] != x ||
+        old[1] != y ||
+        old[2] != width ||
+        old[3] != height
+
+    renderer.HasViewportRect = true
+    renderer.ViewportRect = {x, y, width, height}
+
+    if changed && renderer.Filament != nil {
+        kineffi.Kine_Filament_SetCameraPerspective(
+            renderer.Filament,
+            60,
+            f64(width) / f64(height),
+            0.1,
+            1000,
+        )
+    }
 }
 
 apply_viewport_rect :: proc(renderer: ^RendererObject) {
@@ -104,13 +131,6 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		return
 	}
 
-	kineffi.Kine_Filament_SetCameraPerspective(
-		filament,
-		60,
-		f64(width)/f64(height),
-		0.1,
-		1000,
-	)
 	running := true
 	drawable := true
 	frame_width, frame_height := width, height
@@ -123,6 +143,7 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 			if renderer.OnEvent != nil {
 				renderer.OnEvent(renderer.UserData, event)
 			}
+			renderer.CurrentEvent = &event
 			#partial switch event.type {
 			case .QUIT, .WINDOW_CLOSE_REQUESTED:
 				running = false
@@ -159,11 +180,25 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		_ = sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height)
 		if pixel_width <= 0 || pixel_height <= 0 { sdl3.Delay(10); continue }
 		if pixel_width != frame_width || pixel_height != frame_height ||
-		   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
+		kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
+			size_changed := pixel_width != frame_width || pixel_height != frame_height
+
 			frame_width, frame_height = pixel_width, pixel_height
-			kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
-			kineffi.Kine_Filament_SetCameraPerspective(filament, 60,
-				f64(frame_width)/f64(frame_height), 0.1, 1000)
+
+			kineffi.Kine_Filament_Resize(
+				filament,
+				frame_width,
+				frame_height,
+			)
+
+			if size_changed && renderer.OnResize != nil {
+				renderer.OnResize(
+					renderer.UserData,
+					frame_width,
+					frame_height,
+				)
+			}
+
 			previous_ticks = sdl3.GetTicksNS()
 		}
 

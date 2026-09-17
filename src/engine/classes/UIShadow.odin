@@ -37,7 +37,7 @@ UIShadow_Init :: proc() -> UIShadow {
 		transparency = 0.35,
 		zindex = 0,
 		exponent = 2,
-		showfortext = true,
+		showfortext = false,
 	}
 }
 
@@ -153,6 +153,6 @@ Register_UIShadow :: proc(registry: ^Registry) {
 		get = UIShadow_get,
 		set = UIShadow_set,
 		clone = UIShadow_clone,
-		properties = []string{"Offset", "Exponent", "BlurRadius", "Spread", "ZIndex", "Transparency", "Color3", "Enabled"},
+		properties = []string{"ShowForText", "Offset", "Exponent", "BlurRadius", "Spread", "ZIndex", "Transparency", "Color3", "Enabled"},
 	)
 }

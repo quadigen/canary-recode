@@ -172,9 +172,11 @@ jobs:
             test -f "$library" || { echo "Missing native library: $library"; exit 1; }
           done
           file vendor/build/lib/KinemiumLibs.a
-          ar -t vendor/build/lib/KinemiumLibs.a >/dev/null
           if [[ "${{ runner.os }}" == 'Linux' ]]; then
-            nm --print-armap vendor/build/lib/KinemiumLibs.a >/dev/null
+            grep -q '^GROUP (' vendor/build/lib/KinemiumLibs.a
+            test -f vendor/build/lib/KinemiumLibs.a.anchor
+          else
+            ar -t vendor/build/lib/KinemiumLibs.a >/dev/null
           fi
           find vendor/build/_deps/sdl3-build -maxdepth 1 -type f \
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \

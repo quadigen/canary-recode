@@ -2,13 +2,14 @@ if IsServer or IsClient then
 	return
 end
 
-local UI = ishared.EditorUI
+local UI = require("@internal/editor_ui")
 
 local StudioThemeService = game:GetService("StudioThemeService")
+local theme = StudioThemeService.SelectedTheme
 local Selection = game:GetService("Selection")
 local UserInputService = game:GetService("UserInputService")
 
-local theme = StudioThemeService.SelectedTheme
+
 local colors = UI.colors
 local tokens = UI.tokens
 
@@ -81,6 +82,7 @@ local readonlyProperties = {
 	AbsolutePosition = true,
 	AbsoluteSize = true,
 	SelectedText = true,
+	CFrame = true,
 }
 
 local panel, content =
@@ -158,6 +160,10 @@ local function propertyValue(object, property)
 	end
 
 	return nil
+end
+
+local function includeInSignature(propertyName)
+	return propertyName ~= "CFrame" and propertyName ~= "Position" and propertyName ~= "Orientation"
 end
 
 local function displayValue(value)
@@ -1434,9 +1440,10 @@ renderer.Pool.new("2d", function()
 
 	if object then
 		for _, property in ipairs(propertiesFor(object)) do
-			local value = propertyValue(object, property)
-
-			table.insert(pieces, property .. ":" .. typeof(value) .. "=" .. displayValue(value))
+			if includeInSignature(property) then
+				local value = propertyValue(object, property)
+				table.insert(pieces, property .. ":" .. typeof(value) .. "=" .. displayValue(value))
+			end
 		end
 	end
 
@@ -1448,3 +1455,4 @@ renderer.Pool.new("2d", function()
 		rebuild()
 	end
 end)
+

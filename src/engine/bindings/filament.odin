@@ -225,6 +225,13 @@ foreign kine_filament {
 		data_size: uintptr,
 		format_hint: cstring,
 	) -> ^KineFilamentMesh ---
+	Kine_Filament_CreateMeshFromPath :: proc(
+		ctx: ^KineFilamentContext,
+		path: cstring,
+	) -> ^KineFilamentMesh ---
+	Kine_Filament_LoadMeshDataFromPath :: proc(
+		path: cstring,
+	) -> ^KineFilamentMeshData ---
 	Kine_Filament_CreateSky                 :: proc(ctx: ^KineFilamentContext, r: f32, g: f32, b: f32, a: f32) ---
 	Kine_Filament_SetPostProcessing         :: proc(ctx: ^KineFilamentContext, enabled: bool) -> i32 ---
 	Kine_Filament_SetBloom                  :: proc(ctx: ^KineFilamentContext, enabled: bool, strength: f32, resolution: i32, levels: i32, threshold: bool, lensFlare: bool) -> i32 ---
@@ -299,13 +306,14 @@ foreign kine_filament {
 	Kine_Filament_GetMeshAnimationName      :: proc(mesh: ^KineFilamentMesh, animationIndex: i32) -> ^i32 ---
 	Kine_Filament_GetMeshAnimationDuration  :: proc(mesh: ^KineFilamentMesh, animationIndex: i32) -> i32 ---
 	Kine_Filament_ApplyMeshAnimation        :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, animationIndex: i32, timeSeconds: f32, loop: bool) -> i32 ---
+	Kine_Filament_CreateGizmo               :: proc(ctx: ^KineFilamentContext, gizmoType: i32) -> ^KineFilamentGizmo ---
 	Kine_Filament_GetMeshDataVertexCount    :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_GetMeshDataIndexCount     :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_CopyMeshDataPositions     :: proc(meshData: ^KineFilamentMeshData, outPositions: ^f32, positionFloatCapacity: i32) -> i32 ---
 	Kine_Filament_CopyMeshDataIndices       :: proc(meshData: ^KineFilamentMeshData, outIndices: ^u32, indexCapacity: i32) -> i32 ---
 	Kine_Filament_DestroyMeshData           :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_DebugPrintPixel           :: proc(ctx: ^KineFilamentContext) -> i32 ---
-	Kine_Filament_DestroyGizmo              :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo) -> i32 ---
+	Kine_Filament_DestroyGizmo              :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo) ---
 	Kine_Filament_DestroyTex                :: proc(ctx: ^KineFilamentContext, tex: ^KineFilamentTex) -> i32 ---
 	Kine_Filament_UpdateCustomMesh          :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, vertexData: ^f32, vertexCount: i32) -> i32 ---
 	Kine_Filament_DrawMeshEx                :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, materialKind: i32, r: f32, g: f32, b: f32, param1: f32, param2: f32, param3: f32, transmission: f32, mat4: ^f32, castShadows: bool, receiveShadows: bool, culling: bool, tex: ^KineFilamentTex) -> i32 ---
@@ -318,9 +326,9 @@ foreign kine_filament {
 	Kine_Filament_UpdateInstanceTransforms :: proc(batch: ^KineFilamentInstanceBatch, indices: ^u32, transforms: ^f32, dirtyCount: u32) -> i32 ---
 	Kine_Filament_DrawParticles            :: proc(ctx: ^KineFilamentContext, texture: ^KineFilamentTex, items: ^KineFilamentParticleItem, itemCount: u32, uvScaleX: f32, uvScaleY: f32, uvOffsetX: f32, uvOffsetY: f32, castShadows: bool, culling: bool) -> i32 ---
 	Kine_Filament_DrawMeshOutline          :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, r: f32, g: f32, b: f32, thickness: f32, mat4: ^f32) -> i32 ---
-	Kine_Filament_DrawGizmo                :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) -> i32 ---
+	Kine_Filament_DrawGizmo                :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) ---
 	Kine_Filament_PickGizmo                :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, screenX: f32, screenY: f32) -> i32 ---
-	Kine_Filament_GetGizmoDragDelta        :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> i32 ---
+	Kine_Filament_GetGizmoDragDelta        :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
 
 	// OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
 	// keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a

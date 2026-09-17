@@ -8,11 +8,6 @@ import vm "../vm"
 import guilib "../gui"
 import kineffi "../bindings"
 
-
-//
-// Embedded fonts
-//
-
 TEXT_LABEL_FONTS :=
 	#load_directory("../assets/fonts")
 
@@ -29,11 +24,6 @@ TEXT_Y_TOP    :: "Top"
 TEXT_Y_CENTER :: "Center"
 TEXT_Y_BOTTOM :: "Bottom"
 
-
-//
-// Class
-//
-
 TextLabel_Class := Class_Info{
 	name   = "TextLabel",
 	parent = &GuiObject_Class,
@@ -49,40 +39,19 @@ Text_Line :: struct {
 TextLabel :: struct {
 	using gui_object: GuiObject,
 
-	//
-	// Text
-	//
-
 	text:       string,
 	owned_text: string,
 
-	//
-	// Font
-	//
-
 	font_face: datatypes.Font,
-
 	stored_typeface: ^kineffi.KineSkiaTypeface,
-
-	//
-	// Main appearance
-	//
 
 	text_size:         f32,
 	text_color3:       datatypes.Color3,
 	text_transparency: f32,
 
-	//
-	// Stroke
-	//
-
 	text_stroke_color3:       datatypes.Color3,
 	text_stroke_transparency: f32,
 	text_stroke_thickness:    f32,
-
-	//
-	// Layout
-	//
 
 	text_x_alignment: string,
 	text_y_alignment: string,
@@ -93,13 +62,66 @@ TextLabel :: struct {
 	line_height:  f32,
 	text_padding: f32,
 
-	//
-	// Calculated after layout/render.
-	//
-
 	text_bounds: datatypes.Vector2,
 }
 
+TextLabel_Resolve_Font_Memory :: proc(
+	family: string,
+) -> (
+	data: []u8,
+	ok: bool,
+) {
+	resolved_family := family
+
+	if len(resolved_family) == 0 {
+		resolved_family = DEFAULT_FONT
+	}
+
+	if !strings.has_prefix(
+		resolved_family,
+		BUILTIN_FONT_PREFIX,
+	) {
+		return nil, false
+	}
+
+	name :=
+		resolved_family[len(BUILTIN_FONT_PREFIX):]
+
+	return TextLabel_Find_Builtin_Font(name)
+}
+
+TextLabel_Load_Typeface_From_Family :: proc(
+	family: string,
+) -> ^kineffi.KineSkiaTypeface {
+	resolved_family := family
+
+	if len(resolved_family) == 0 {
+		resolved_family = DEFAULT_FONT
+	}
+
+	if data, ok := TextLabel_Resolve_Font_Memory(
+		resolved_family,
+	); ok {
+		if len(data) == 0 {
+			return nil
+		}
+
+		return kineffi.Kine_Skia_Typeface_LoadFromMemory(
+			&data[0],
+			uintptr(len(data)),
+		)
+	}
+
+	cpath :=
+		strings.clone_to_cstring(
+			resolved_family,
+		)
+	defer delete(cpath)
+
+	return kineffi.Kine_Skia_Typeface_LoadFromFile(
+		cpath,
+	)
+}
 
 TextLabel_Init :: proc() -> TextLabel {
 	gui := GuiObject_Init()
@@ -232,64 +254,13 @@ TextLabel_Load_Typeface :: proc(
 		return
 	}
 
-	TextLabel_Destroy_Typeface(
-		label,
-	)
-
-	family :=
-		label.font_face.Family
-
-	if len(family) == 0 {
-		return
-	}
-
-	//
-	// Embedded font
-	//
-
-	if strings.has_prefix(
-		family,
-		BUILTIN_FONT_PREFIX,
-	) {
-		name :=
-			family[len(BUILTIN_FONT_PREFIX):]
-
-		data, found :=
-			TextLabel_Find_Builtin_Font(
-				name,
-			)
-
-		if !found ||
-		   len(data) == 0 {
-			return
-		}
-
-		label.stored_typeface =
-			kineffi.Kine_Skia_Typeface_LoadFromMemory(
-				&data[0],
-				uintptr(len(data)),
-			)
-
-		return
-	}
-
-	//
-	// Filesystem font
-	//
-
-	cpath :=
-		strings.clone_to_cstring(
-			family,
-		)
+	TextLabel_Destroy_Typeface(label)
 
 	label.stored_typeface =
-		kineffi.Kine_Skia_Typeface_LoadFromFile(
-			cpath,
+		TextLabel_Load_Typeface_From_Family(
+			label.font_face.Family,
 		)
-
-	delete(cpath)
 }
-
 
 TextLabel_Set_Font_Family :: proc(
 	label: ^TextLabel,
@@ -1105,16 +1076,20 @@ TextLabel_get :: proc(
 		)
 
 	case "TextXAlignment":
-		vm.PushString(
-			L,
-			label.text_x_alignment,
-		)
+		if enum_registry != nil {
+			value: i64 = label.text_x_alignment == TEXT_X_RIGHT ? 1 : label.text_x_alignment == TEXT_X_CENTER ? 2 : 0
+			if !enums.Push_Item_By_Value(L, enum_registry, "TextXAlignment", value) { vm.PushString(L, label.text_x_alignment) }
+		} else {
+			vm.PushString(L, label.text_x_alignment)
+		}
 
 	case "TextYAlignment":
-		vm.PushString(
-			L,
-			label.text_y_alignment,
-		)
+		if enum_registry != nil {
+			value: i64 = label.text_y_alignment == TEXT_Y_CENTER ? 1 : label.text_y_alignment == TEXT_Y_BOTTOM ? 2 : 0
+			if !enums.Push_Item_By_Value(L, enum_registry, "TextYAlignment", value) { vm.PushString(L, label.text_y_alignment) }
+		} else {
+			vm.PushString(L, label.text_y_alignment)
+		}
 
 	case "LineHeight":
 		vm.PushNumber(
@@ -1321,11 +1296,14 @@ TextLabel_set :: proc(
 
 
 	case "TextXAlignment":
-		value :=
-			vm.ArgString(
-				L,
-				value_index,
-			)
+		value := ""
+		if enum_registry != nil && vm.IsUserdataType(L, value_index, &enum_registry.item_binding) {
+			item := enums.Arg_Item(L, value_index, enum_registry, "TextXAlignment")
+			if item == nil { return true }
+			value = enums.Item_Name(item)
+		} else {
+			value = vm.ArgString(L, value_index)
+		}
 
 		if value != TEXT_X_LEFT &&
 		   value != TEXT_X_CENTER &&
@@ -1344,11 +1322,14 @@ TextLabel_set :: proc(
 
 
 	case "TextYAlignment":
-		value :=
-			vm.ArgString(
-				L,
-				value_index,
-			)
+		value := ""
+		if enum_registry != nil && vm.IsUserdataType(L, value_index, &enum_registry.item_binding) {
+			item := enums.Arg_Item(L, value_index, enum_registry, "TextYAlignment")
+			if item == nil { return true }
+			value = enums.Item_Name(item)
+		} else {
+			value = vm.ArgString(L, value_index)
+		}
 
 		if value != TEXT_Y_TOP &&
 		   value != TEXT_Y_CENTER &&

@@ -30,6 +30,26 @@ main :: proc() {
 	engine_runtime.Environment_Render_2D(&environment, &script_vm, surface, width, height, 1.0/60.0)
 	engine_runtime.Environment_Render_2D(&environment, &script_vm, surface, width, height, 1.0/60.0)
 
+	probe_ok, probe_err := vm.Run(&script_vm, `
+local explorer = game.CoreGui:FindFirstChild("Studio"):FindFirstChild("Explorer")
+local n = 0
+for _, child in ipairs(explorer:GetDescendants()) do
+	local pos = child.AbsolutePosition
+	if child:IsA("GuiObject") and pos and pos.X > 600 and pos.Y > 90 and pos.Y < 260 and pos.Y > 0 then
+		n += 1
+		if n <= 12 then
+			print(child.ClassName .. ":" .. math.floor(pos.X) .. "," .. math.floor(pos.Y) .. "," .. math.floor(child.AbsoluteSize.X) .. "," .. math.floor(child.AbsoluteSize.Y))
+		end
+	end
+end
+print("ROWS=" .. n)
+`, "editor_native_ui_probe")
+	if !probe_ok {
+		fmt.eprintln(probe_err)
+		delete(probe_err)
+		panic("native editor probe failed")
+	}
+
 	// Exercise the same native UserInputService hit routing used by the live
 	// editor. This coordinate selects a visible Explorer service row at 800x600.
 	click: sdl3.Event

@@ -132,6 +132,25 @@
     Kine_Skia_Surface_DrawImageSized:(id,img,x,y,w,h)=>{const i=images.get(img);if(i)surf(id)?.canvas.drawImageRect(i,rect(x,y,w,h));},
     Kine_Skia_Surface_DrawImageRect:(id,img,sx,sy,sw,sh,dx,dy,dw,dh)=>{const i=images.get(img);if(i)surf(id)?.canvas.drawImageRectOptions(i,rect(sx,sy,sw,sh),rect(dx,dy,dw,dh),CanvasKit.FilterMode.Linear,CanvasKit.MipmapMode.None);},
     Kine_Skia_Surface_DrawImageOutlineSized:(id,img,x,y,w,h,t,r,g,b,a)=>skia.Kine_Skia_Surface_DrawRoundRect(id,x,y,w,h,0,0,r,g,b,a,t),
+    Kine_Skia_Surface_DrawImageShadow:(id,img,x,y,w,h,ox,oy,blur,spread,r,g,b,a)=>{
+      const i=images.get(img),c=surf(id)?.canvas;if(!i||!c)return;
+      const dx=x+ox-spread,dy=y+oy-spread,dw=w+spread*2,dh=h+spread*2;
+      const pad=Math.max(blur,1),bounds=rect(dx-pad,dy-pad,dw+pad*2,dh+pad*2);
+      const src=rect(0,0,i.width(),i.height()),dst=rect(dx,dy,dw,dh);
+      const layer=new CanvasKit.Paint();
+      c.save();
+      c.clipRect(bounds,CanvasKit.ClipOp.Intersect,false);
+      c.saveLayer(bounds,layer);
+      const mp=paint(r,g,b,a/255);
+      mp.setMaskFilter(CanvasKit.MaskFilter.MakeBlur(CanvasKit.BlurStyle.Normal,blur,true));
+      c.drawImageRectOptions(i,src,dst,CanvasKit.FilterMode.Linear,CanvasKit.MipmapMode.None,mp);
+      const tp=paint(r,g,b,a/255);
+      tp.setBlendMode(CanvasKit.BlendMode.SrcIn);
+      c.drawRect(bounds,tp);
+      c.restore();
+      c.restore();
+      layer.delete();mp.delete();tp.delete();
+    },
     Kine_Skia_Surface_DrawPixels:()=>{}, Kine_Skia_Surface_GetPixel:(id,x,y,pr,pg,pb,pa)=>{const data=surf(id)?.surface.readPixels(x,y,{width:1,height:1});if(data){const h=heap8();h[pr]=data[0];h[pg]=data[1];h[pb]=data[2];h[pa]=data[3];}},
     Kine_Skia_RuntimeShader_Create:src=>handle(shaders,{source:cstr(src)}), Kine_Skia_RuntimeShader_Destroy:id=>shaders.delete(id), Kine_Skia_RuntimeShader_SetUniform:()=>1,
     Kine_Skia_RuntimeShader_GetLastError:()=>0, Kine_Skia_Surface_DrawRuntimeShaderRect:()=>{}

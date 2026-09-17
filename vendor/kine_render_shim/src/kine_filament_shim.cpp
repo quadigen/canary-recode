@@ -2373,6 +2373,7 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
         mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
         mi->setParameter("roughness", key.param1);
         mi->setParameter("metallic",  key.param2);
+        mi->setParameter("shadowStrength", 0.4f);
 
         float uvs = (key.param3 > 0.0f) ? key.param3 : 1.0f;
         mi->setParameter("uvScale", math::float2{uvs, uvs});
@@ -3946,6 +3947,23 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
         .build(*ctx->engine);
         
     ctx->scene->setSkybox(ctx->skybox);
+
+    if (ctx->indirectLight) {
+        ctx->scene->setIndirectLight(nullptr);
+        ctx->engine->destroy(ctx->indirectLight);
+        ctx->indirectLight = nullptr;
+    }
+
+    math::float3 sh[9] = {};
+    sh[0] = { ctx->skyColor.r, ctx->skyColor.g, ctx->skyColor.b };
+    
+    ctx->indirectLight = IndirectLight::Builder()
+        .reflections(ctx->skyTexture)
+        .irradiance(1, sh)
+        .intensity(15000.0f)
+        .build(*ctx->engine);
+        
+    ctx->scene->setIndirectLight(ctx->indirectLight);
 }
 
 KINE_API void Kine_Filament_CreateSkyboxCubemap(
@@ -4773,7 +4791,9 @@ KINE_API bool Kine_Filament_EditDecal(
 
     rm.setCastShadows(instance, castShadows);
     rm.setReceiveShadows(instance, receiveShadows);
-    rm.setLayerMask(instance, 0x1, culling ? 0x1 : 0x0);
+    rm.setCulling(instance, culling);
+    // Keep the decal on the normal visible layer.
+    rm.setLayerMask(instance, 0x01, 0x01);
 
     rm.setAxisAlignedBoundingBox(
         instance,

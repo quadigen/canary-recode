@@ -1,5 +1,6 @@
 package classes
 
+import "core:fmt"
 import "core:c"
 import strings "core:strings"
 
@@ -399,20 +400,54 @@ ImageLabel_render :: proc(
 		return
 	}
 
-	//
-	// Render GuiObject background.
-	//
-	// TODO:
-	// GuiObject_render recalculates rect.
-	//
+	image_label :=
+		cast(^ImageLabel)object
+
+	image_shadow := false
+
+	if image_label.stored_image != nil {
+		shadow_object :=
+			Find_First_Child_Of_Class(
+				object,
+				"UIShadow",
+			)
+
+		if shadow_object != nil {
+			shadow := cast(^UIShadow)shadow_object
+
+			if shadow.enabled && shadow.showfortext != true {
+				short_edge := min(rect.width, rect.height)
+				offset_x := shadow.offset.X_Scale*rect.width + shadow.offset.X_Offset
+				offset_y := shadow.offset.Y_Scale*rect.height + shadow.offset.Y_Offset
+				spread_x := shadow.spread.X_Scale*rect.width + shadow.spread.X_Offset
+				spread_y := shadow.spread.Y_Scale*rect.height + shadow.spread.Y_Offset
+
+				params := guilib.ShadowParams{
+					offsetX = offset_x,
+					offsetY = offset_y,
+					blurSigma = max(f32(0), gui_resolve_udim(shadow.blur_radius, short_edge)),
+					spread = max(f32(0), (spread_x+spread_y)*0.5),
+					color = shadow.color,
+					alpha = 1-f32(shadow.transparency),
+				}
+
+				guilib.drawImageShadow(
+					ctx.renderer.SkiaSurface,
+					image_label.stored_image,
+					rect,
+					params,
+				)
+
+				image_shadow = true
+			}
+		}
+	}
 
 	GuiObject_render(
 		object,
 		ctx,
+		image_shadow,
 	)
-
-	image_label :=
-		cast(^ImageLabel)object
 
 	if image_label.stored_image != nil {
 		rect.bgTransparency =

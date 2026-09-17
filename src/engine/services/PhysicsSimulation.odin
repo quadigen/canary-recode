@@ -19,10 +19,20 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		position: kineffi.JPH_RVec3
 		rotation: kineffi.JPH_Quat
 		kineffi.JPH_BodyInterface_GetPositionAndRotation(service.system.body_interface, body.body_id, &position, &rotation)
+		if !physics_finite_f32(f32(position.x)) || !physics_finite_f32(f32(position.y)) || !physics_finite_f32(f32(position.z)) ||
+		   !physics_finite_f32(rotation.x) || !physics_finite_f32(rotation.y) ||
+		   !physics_finite_f32(rotation.z) || !physics_finite_f32(rotation.w) {
+			part.cframe = body.last_cframe
+			continue
+		}
 		part.cframe = datatypes.CFrame_New_Quaternion(
 			f32(position.x), f32(position.y), f32(position.z),
 			rotation.x, rotation.y, rotation.z, rotation.w,
 		)
+		if !physics_valid_cframe(part.cframe) {
+			part.cframe = body.last_cframe
+			continue
+		}
 		body.last_cframe = part.cframe
 		if workspace_service.fall_height_enabled && part.cframe.y < workspace_service.fallen_parts_destroy_height {
 			classes.Destroy_Hierarchy(&part.object)

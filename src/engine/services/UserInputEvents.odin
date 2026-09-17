@@ -112,8 +112,8 @@ user_input_key_index :: proc(service: ^UserInputService, key_code: enums.KeyCode
 }
 
 user_input_fire :: proc(L: ^vm.State, service: ^UserInputService, signal: ^signals.Signal, value: classes.InputObject_Value) {
-	if signal == nil || service.class_registry == nil { return }
-	if classes.Push_InputObject(L, service.class_registry, value) == nil { return }
+	if signal == nil || service.signal_registry == nil { return }
+	if classes.Push_InputObject(L, service.signal_registry, value) == nil { return }
 	vm.PushBoolean(L, false)
 	signals.Fire(L, signal, 2)
 	vm.Pop(L, 2)

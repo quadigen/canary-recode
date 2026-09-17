@@ -274,6 +274,12 @@ Camera_Freecam_Step :: proc(
 		movement.z -= up.z
 	}
 
+	if focused && keys[int(sdl3.Scancode.LSHIFT)] || keys[int(sdl3.Scancode.RSHIFT)] {
+		camera.move_speed = 5 
+	} else {
+		camera.move_speed = 10
+	}
+
 	length_squared :=
 		movement.x * movement.x +
 		movement.y * movement.y +
@@ -323,7 +329,6 @@ Camera_Consume_Orbit_Scroll :: proc(camera: ^Camera) {
 		return
 	}
 
-	// Scrolling forward decreases the distance to the subject.
 	camera.orbit_distance -=
 		camera.pending_scroll * camera.scroll_step
 

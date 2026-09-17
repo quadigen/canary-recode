@@ -614,6 +614,17 @@ ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> 
 	return false, err
 }
 
+DisplayString :: proc(L: ^State, index: int) -> string {
+	size: uintptr
+	value := luauh.lua_tolstring(L, i32(index), &size)
+	if value == nil {
+		return TypeName(L, index)
+	}
+	result := string(value)
+	Pop(L)
+	return result
+}
+
 TypeOf :: proc(L: ^State, index: int) -> Value_Type {
 	return Value_Type(luauh.lua_type(L, i32(index)))
 }
@@ -683,6 +694,24 @@ ArgOptionalBoolean :: proc(L: ^State, index: int, default: bool = false) -> bool
 	return ArgBoolean(L, index)
 }
 
+ToNumber :: proc(L: ^State, index: int) -> (f64, bool) {
+	is_number: i32
+	value := luauh.lua_tonumberx(L, i32(index), &is_number)
+	return value, is_number != 0
+}
+
+ToString :: proc(L: ^State, index: int) -> (string, bool) {
+	if TypeOf(L, index) != .String {
+		return "", false
+	}
+	size: uintptr
+	ptr := luauh.lua_tolstring(L, i32(index), &size)
+	if ptr == nil {
+		return "", false
+	}
+	return strings.string_from_ptr(cast(^u8)ptr, int(size)), true
+}
+
 NewTable :: proc(L: ^State, array_capacity: int = 0, field_capacity: int = 0) {
 	luauh.lua_createtable(L, i32(array_capacity), i32(field_capacity))
 }
@@ -717,6 +746,10 @@ RawGetIndex :: proc(L: ^State, table_index, array_index: int) -> Value_Type {
 
 RawSetIndex :: proc(L: ^State, table_index, array_index: int) {
 	luauh.lua_rawseti(L, i32(table_index), i32(array_index))
+}
+
+Next :: proc(L: ^State, table_index: int) -> bool {
+	return luauh.lua_next(L, i32(table_index)) != 0
 }
 
 PushRegistryReference :: proc(L: ^State, reference: i32) {

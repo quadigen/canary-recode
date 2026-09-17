@@ -12,6 +12,18 @@ Push_Ray :: proc(L: ^vm.State, registry: ^Registry, value: Ray) {
 	push_ray(L, &registry.ray, value)
 }
 
+Arg_Ray :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Ray {
+	return require_ray(L, index, &registry.ray)^
+}
+
+require_ray :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^Ray {
+	if !vm.IsUserdataType(L, index, binding) {
+		_ = vm.RaiseError(L, "expected Ray")
+		return nil
+	}
+	return cast(^Ray)vm.UserdataValue(L, index)
+}
+
 ray_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	push_ray(L, binding_from_upvalue(L), Ray{arg_vector3(L, 1), arg_vector3(L, 2)})

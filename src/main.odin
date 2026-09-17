@@ -7,6 +7,7 @@ import renderer "engine/renderer"
 import vm "engine/vm"
 import sdl3 "engine/platform"
 import sandbox "./sandboxed"
+import services "engine/services"
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -27,7 +28,38 @@ runtime_render_3d :: proc(user_data: rawptr, filament: ^renderer.Filament_Contex
 	engine_runtime.Environment_Render_3D(ctx.environment, ctx.vm_state, delta_time)
 }
 
+runtime_resize :: proc(user_data: rawptr, width, height: i32) {
+    ctx := cast(^Runtime_Render_Context)user_data
+
+    if ctx == nil || ctx.environment == nil {
+        return
+    }
+
+    services.Resize(
+        &ctx.environment.services,
+        &ctx.environment.datatypes,
+        width,
+        height,
+    )
+}
+
+last_ui_width:  i32 = -1
+last_ui_height: i32 = -1
+
 runtime_render_2d :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, width, height: i32, delta_time: f32) {
+	if width != last_ui_width || height != last_ui_height {
+        fmt.printf(
+            "[Draw2D SIZE CHANGED] %dx%d -> %dx%d\n",
+            last_ui_width,
+            last_ui_height,
+            width,
+            height,
+        )
+
+        last_ui_width = width
+        last_ui_height = height
+    }
+
 	ctx := cast(^Runtime_Render_Context)user_data
 	if ctx == nil { return }
 	engine_runtime.Environment_Render_2D(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
@@ -73,6 +105,7 @@ main :: proc() {
 		OnClose = proc() {
 			fmt.println("Window closed")
 		},
+		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,
 	}
 

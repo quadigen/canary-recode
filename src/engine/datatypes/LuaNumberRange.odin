@@ -12,6 +12,18 @@ Push_NumberRange :: proc(L: ^vm.State, registry: ^Registry, value: NumberRange) 
 	push_number_range(L, &registry.number_range, value)
 }
 
+Arg_NumberRange :: proc(L: ^vm.State, index: int, registry: ^Registry) -> NumberRange {
+	return require_number_range(L, index, &registry.number_range)^
+}
+
+require_number_range :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^NumberRange {
+	if !vm.IsUserdataType(L, index, binding) {
+		_ = vm.RaiseError(L, "expected NumberRange")
+		return nil
+	}
+	return cast(^NumberRange)vm.UserdataValue(L, index)
+}
+
 number_range_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	minimum := f32(vm.ArgNumber(L, 1))

@@ -140,7 +140,7 @@ System_Set_Gravity :: proc(system: ^System, gravity: f32) {
 	kineffi.JPH_PhysicsSystem_SetGravity(system.handle, &value)
 }
 
-System_Step :: proc(system: ^System, delta_time: f32, collision_steps: i32 = 1) {
+System_Step :: proc(system: ^System, delta_time: f32, collision_steps: i32 = 4) {
 	if system == nil || system.handle == nil || delta_time <= 0 { return }
 	kineffi.JPH_PhysicsSystem_UpdateSingleThreaded(system.handle, delta_time, collision_steps)
 }
@@ -177,4 +177,3 @@ System_Create :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (System, bool) {
 System_Destroy :: proc(system: ^System) {
 	System_Destroy_3D(system)
 }
-

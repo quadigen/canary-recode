@@ -2,6 +2,7 @@ package services
 
 // wire:service global="workspace"
 
+import "core:strings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -185,6 +186,34 @@ workspace_part_mesh :: proc(
     return workspace.cube_mesh
 }
 
+workspace_meshpart_mesh :: proc(
+	part: ^classes.MeshPart,
+	ctx: ^kineffi.KineFilamentContext,
+) -> ^kineffi.KineFilamentMesh {
+	if part == nil || ctx == nil || part.mesh_id == "" {
+		return nil
+	}
+	if part.native_mesh != nil && part.native_context == ctx {
+		return part.native_mesh
+	}
+	if part.native_mesh != nil && part.native_context != nil {
+		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
+		part.native_mesh = nil
+		part.native_context = nil
+	}
+	path := part.mesh_id
+	if strings.has_prefix(path, "file://") {
+		path = path[len("file://"):]
+	}
+	c_path := strings.clone_to_cstring(path)
+	defer delete(c_path)
+	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPath(ctx, c_path)
+	if part.native_mesh != nil {
+		part.native_context = ctx
+	}
+	return part.native_mesh
+}
+
 workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 	if object == nil { return false }
 	for child in object.children {
@@ -224,8 +253,23 @@ workspace_append_draw_items :: proc(
 
 		if classes.Is_A(child, "Part") {
 			part := cast(^classes.Part)child
+			mesh := workspace_part_mesh(workspace, part.shape)
+			if classes.Is_A(child, "MeshPart") {
+				mesh = workspace_meshpart_mesh(
+					cast(^classes.MeshPart)child,
+					renderer.Filament,
+				)
+				if mesh == nil {
+					mesh = workspace_part_mesh(workspace, part.shape)
+				}
+			}
 			cframe := part.cframe
 			size := part.size
+			render_size := datatypes.Vector3{
+				size.x * 0.5,
+				size.y * 0.5,
+				size.z * 0.5,
+			}
 
 			render_material := materials.Get(part.material)
 			material_kind, param1, param2, param3, transmission :=
@@ -250,12 +294,12 @@ workspace_append_draw_items :: proc(
 			}
 
 			append(items, kineffi.KineFilamentDrawItem{
-				mesh = workspace_part_mesh(workspace, part.shape),
+				mesh = mesh,
 				tex = render_material.texture,
 				transform = {
-					cframe.r00*size.x, cframe.r01*size.y, cframe.r02*size.z, cframe.x,
-					cframe.r10*size.x, cframe.r11*size.y, cframe.r12*size.z, cframe.y,
-					cframe.r20*size.x, cframe.r21*size.y, cframe.r22*size.z, cframe.z,
+					cframe.r00*render_size.x, cframe.r01*render_size.y, cframe.r02*render_size.z, cframe.x,
+					cframe.r10*render_size.x, cframe.r11*render_size.y, cframe.r12*render_size.z, cframe.y,
+					cframe.r20*render_size.x, cframe.r21*render_size.y, cframe.r22*render_size.z, cframe.z,
 					0, 0, 0, 1,
 				},
 				r = part.color.R,

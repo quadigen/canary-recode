@@ -69,25 +69,25 @@ main :: proc() {
 	enums.Registry_Init(&enum_registry)
 	renderer_object: classes.Renderer_Object
 	expected_renderer = &renderer_object
-	class_registry := classes.Registry_Init(&datatype_registry, &enum_registry, &renderer_object)
-	classes.Register_Default_Classes(&class_registry)
+	signal_registry := classes.Registry_Init(&datatype_registry, &enum_registry, &renderer_object)
+	classes.Register_Default_Classes(&signal_registry)
 	classes.Register_Class(
-		&class_registry,
+		&signal_registry,
 		&Step_Probe_Class,
 		step_probe_construct,
 		step_probe_destroy,
 		get = step_probe_get,
 		_step = step_probe_step,
 	)
-	classes.Install_Instance_Library(&class_registry, &script_vm)
+	classes.Install_Instance_Library(&signal_registry, &script_vm)
 
 	run_script(&script_vm, `
 activeProbe = Instance.new("StepProbe")
 destroyedProbe = Instance.new("StepProbe")
 destroyedProbe:Destroy()
 `)
-	classes.Step(&class_registry, script_vm.L, 0.25)
-	classes.Step(&class_registry, script_vm.L, 0.5)
+	classes.Step(&signal_registry, script_vm.L, 0.25)
+	classes.Step(&signal_registry, script_vm.L, 0.5)
 	run_script(&script_vm, `
 assert(activeProbe.StepCount == 2)
 assert(math.abs(activeProbe.LastDelta - 0.5) < 1e-6)
@@ -95,12 +95,12 @@ assert(destroyedProbe.StepCount == 0)
 activeProbe:Destroy()
 `)
 	assert(construct_saw_renderer)
-	classes.Step(&class_registry, script_vm.L, 1.0)
+	classes.Step(&signal_registry, script_vm.L, 1.0)
 	run_script(&script_vm, `assert(activeProbe.StepCount == 2)`)
 
 	vm.Close(&script_vm)
 	assert(destroy_saw_renderer)
-	classes.Registry_Destroy(&class_registry)
+	classes.Registry_Destroy(&signal_registry)
 	enums.Registry_Destroy(&enum_registry)
 	fmt.println("CLASS_STEP_SMOKE_PASSED")
 }

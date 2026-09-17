@@ -6,7 +6,7 @@ import vm "../vm"
 
 BoolValue_Class := Class_Info{
 	name   = "BoolValue",
-	parent = &Instance_Class,
+	parent = &ValueBase_Class,
 }
 
 BoolValue :: struct {

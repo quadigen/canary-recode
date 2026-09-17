@@ -27,6 +27,7 @@ Object :: struct {
 	owned_name:           string,
 	parent:               ^Object,
 	children:             [dynamic]^Object,
+	signal_registry: ^Registry,
 	attributes:           [dynamic]Object_Attribute,
 	unique_id:            datatypes.UniqueId,
 	capabilities:         datatypes.SecurityCapabilities,
@@ -461,7 +462,7 @@ attribute_value_is_supported :: proc(L: ^vm.State, index: int) -> bool {
 	return false
 }
 
-set_attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: int) -> bool {
+Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: int) -> bool {
 	if !attribute_name_is_valid(name) {
 		_ = vm.RaiseError(L, "attribute name must be 1-100 valid characters and cannot start with RBX")
 		return false
@@ -721,7 +722,7 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		}
 		return 1, true
 	case "SetAttribute":
-		_ = set_attribute(L, object, vm.ArgString(L, 2), 3)
+		_ = Set_Attribute(L, object, vm.ArgString(L, 2), 3)
 		return 0, true
     case "IsA":
         vm.PushBoolean(L, Is_A(object, vm.ArgString(L, 2)))

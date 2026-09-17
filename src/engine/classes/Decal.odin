@@ -855,6 +855,21 @@ Register_Decal :: proc(
 
 		get = Decal_Get,
 		set = Decal_Set,
+		properties = []string{
+			"Texture",
+			"Color3",
+			"Transparency",
+			"Face",
+			"StudsPerTileU",
+			"StudsPerTileV",
+			"OffsetStudsU",
+			"OffsetStudsV",
+			"ZOffset",
+			"Enabled",
+			"Culling",
+			"CastShadows",
+			"ReceiveShadows",
+		},
 
 		clone = Decal_clone,
 

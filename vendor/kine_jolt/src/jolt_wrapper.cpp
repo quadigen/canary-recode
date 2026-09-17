@@ -840,6 +840,7 @@ void JPH_BodyCreationSettings_SetGravityFactor(JPH_BodyCreationSettingsRef setti
     ToBCS(settings)->mGravityFactor = factor;
 }
 
+
 JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings* settings)
 {
     if (settings == nullptr

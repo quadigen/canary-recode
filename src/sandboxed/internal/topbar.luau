@@ -2,11 +2,11 @@ if IsServer or IsClient then
 	return
 end
 
-local UI = ishared.EditorUI
+local UI = require("@internal/editor_ui")
 
 local StudioThemeService = game:GetService("StudioThemeService")
-
 local theme = StudioThemeService.SelectedTheme
+
 local root = UI.RootOverlay()
 
 local tokens = UI.tokens
@@ -164,7 +164,7 @@ local toolbarCategories = {
 	},
 }
 
-ishared.buttonCategories = {
+UI.buttonCategories = {
 	{
 		name = "Engine",
 
@@ -317,8 +317,8 @@ local function fireRoute(route)
 		return
 	end
 
-	if ishared.StudioSystem then
-		ishared.StudioSystem:Fire(route)
+	if UI.StudioSystem then
+		UI.StudioSystem:Fire(route)
 		return
 	end
 
@@ -586,8 +586,8 @@ local headerX = 35
 
 local engineButtonRecords = {}
 
-for _, definition in ipairs(ishared.buttonCategories[1].buttons) do
-	local width = #definition.name * 7 + 16
+for _, definition in ipairs(UI.buttonCategories[1].buttons) do
+	local width = #definition.name * 8 + 20
 
 	local _, label, record = UI.button(
 		headerSurface,
@@ -629,7 +629,7 @@ headerX += 12
 
 selectedIndicator = UI.frame(
 	headerSurface,
-	UDim2.fromOffset(headerX, baseHeaderHeight() - 3),
+	UDim2.fromOffset(headerX, baseHeaderHeight()),
 	UDim2.fromOffset(20, 2),
 	initialColors.accent,
 	1
@@ -638,7 +638,7 @@ selectedIndicator = UI.frame(
 for _, category in ipairs(toolbarCategories) do
 	local current = category
 
-	local width = #current.name * 7 + 18
+	local width = #current.name * 8 + 22
 
 	categoryPositions[current] = {
 		x = headerX,
@@ -738,8 +738,6 @@ local function refreshTheme()
 
 	local colors = palette()
 
-	-- Keep header/menu buttons synchronized with the currently
-	-- selected StudioTheme instead of preserving startup colors.
 	for _, record in ipairs(engineButtonRecords) do
 		record.color = colors.panel
 
@@ -777,7 +775,7 @@ local function refreshTheme()
 	applyWorkspaceLayout()
 end
 
-ishared.EngineTopbar = {
+UI.EngineTopbar = {
 	AddCategory = function(categoryName, buttons)
 		if type(categoryName) ~= "string" or type(buttons) ~= "table" then
 			return

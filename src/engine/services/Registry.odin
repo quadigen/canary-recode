@@ -1,5 +1,6 @@
 package services
 
+import "core:fmt"
 import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
@@ -23,8 +24,14 @@ Registry :: struct {
 	signal_registry: ^signals.Registry,
 }
 
-Registry_Init :: proc(class_registry: ^classes.Registry, signal_registry: ^signals.Registry = nil) -> Registry {
-	return Registry{classes = class_registry, signal_registry = signal_registry}
+Registry_Init :: proc(
+	class_registry: ^classes.Registry,
+	signal_registry: ^signals.Registry = nil,
+) -> Registry {
+	return Registry{
+		classes = class_registry,
+		signal_registry = signal_registry,
+	}
 }
 
 Register_Service :: proc(registry: ^Registry, name, class_name: string, global_name: string = "") {
@@ -115,6 +122,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_StarterPlayer_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
+	Register_TextService_Class(registry.classes)
+	Register_Tween_Class(registry.classes)
 	Register_TweenService_Class(registry.classes)
 	Register_UserInputService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
@@ -140,6 +149,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
+	Register_Service(registry, "TextService", "TextService", "TextService")
 	Register_Service(registry, "TweenService", "TweenService", "TweenService")
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
@@ -201,6 +211,27 @@ Render_3D :: proc(registry: ^Registry, L: ^vm.State, renderer: ^classes.Renderer
 	workspace_render_3d(workspace_service.object, &ctx)
 }
 
+Resize :: proc(
+    registry: ^Registry,
+    datatype_registry: ^datatypes.Registry,
+    width, height: i32,
+) {
+    if registry == nil ||
+       registry.vm_state == nil ||
+       registry.vm_state.L == nil ||
+       datatype_registry == nil {
+        return
+    }
+
+    StudioThemeService_Update_Layout(
+        registry,
+        registry.vm_state.L,
+        datatype_registry,
+        width,
+        height,
+    )
+}
+
 Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.vm_state = vm_state
 	model_object, model_ok := classes.Push_New(registry.classes, vm_state, "DataModel", false)
@@ -227,14 +258,13 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	classes.Push_Object(vm_state.L, &registry.data_model.object)
 	vm.SetGlobalFromStack(vm_state, "game")
 
-	// A protected service cannot safely be installed as a shared VM global:
-	// globals are common to every Luau thread, regardless of its capabilities.
 	for service in registry.services {
 		if service.global_name != "" && vm.SecurityRequirementIsNone(service.security) {
 			classes.Push_Object(vm_state.L, service.object)
 			vm.SetGlobalFromStack(vm_state, service.global_name)
 		}
 	}
+	Install_Log_Globals(registry, vm_state)
 }
 
 Registry_Destroy :: proc(registry: ^Registry) {

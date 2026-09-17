@@ -3,6 +3,7 @@ package classes
 import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
+import kineffi "../bindings"
 import vm "../vm"
 
 MeshPart_Class := Class_Info{
@@ -15,6 +16,8 @@ MeshPart :: struct {
 
     mesh_id:    string,
     texture_id: string,
+    native_mesh: ^kineffi.KineFilamentMesh,
+    native_context: ^kineffi.KineFilamentContext,
 }
 
 MeshPart_Init :: proc() -> MeshPart {
@@ -52,6 +55,12 @@ mesh_part_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 mesh_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
     mesh_part := cast(^MeshPart)object
 
+    if mesh_part.native_mesh != nil && mesh_part.native_context != nil {
+        _ = kineffi.Kine_Filament_DestroyMesh(
+            mesh_part.native_context,
+            mesh_part.native_mesh,
+        )
+    }
     delete(mesh_part.mesh_id)
 	delete(mesh_part.texture_id)
 	delete(mesh_part.collision_group)
@@ -145,4 +154,3 @@ Register_MeshPart :: proc(registry: ^Registry) {
 		properties = []string{"TextureId", "MeshId"},
     )
 }
-

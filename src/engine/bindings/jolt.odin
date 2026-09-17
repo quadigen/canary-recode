@@ -356,4 +356,3 @@ foreign lib {
 	JPH_ContactListener_Destroy              :: proc(listener: JPH_ContactListenerRef) ---
 	JPH_ContactListener_PollEvents           :: proc(listener: JPH_ContactListenerRef, procs: ^JPH_ContactListener_Procs, maxEvents: u32) -> u32 ---
 }
-

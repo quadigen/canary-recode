@@ -28,7 +28,7 @@ UserInputService :: struct {
 	input_began:           ^signals.Signal,
 	input_changed:         ^signals.Signal,
 	input_ended:           ^signals.Signal,
-	class_registry:        ^classes.Registry,
+	object_runtime:        ^classes.Registry,
 }
 
 user_input_service_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
@@ -40,7 +40,7 @@ user_input_service_construct :: proc(renderer: ^classes.Renderer_Object, data_mo
 	service.mouse_delta_sensitivity = 1
 	model := cast(^DataModel)data_model
 	if model != nil && model.registry != nil {
-		service.class_registry = model.registry.classes
+		service.signal_registry = model.registry.classes
 		if model.registry.signal_registry != nil && model.registry.vm_state != nil {
 			service.input_began = signals.Create(model.registry.signal_registry, model.registry.vm_state.L)
 			service.input_changed = signals.Create(model.registry.signal_registry, model.registry.vm_state.L)
@@ -99,7 +99,7 @@ user_input_service_set :: proc(L: ^vm.State, object: ^classes.Object, datatype_r
 }
 
 user_input_push_key :: proc(L: ^vm.State, service: ^UserInputService, key_code: enums.KeyCode) {
-	_ = classes.Push_InputObject(L, service.class_registry, classes.InputObject_Value{
+	_ = classes.Push_InputObject(L, service.signal_registry, classes.InputObject_Value{
 		UserInputType = .Keyboard,
 		UserInputState = .Begin,
 		KeyCode = key_code,
@@ -107,7 +107,7 @@ user_input_push_key :: proc(L: ^vm.State, service: ^UserInputService, key_code: 
 }
 
 user_input_push_mouse_button :: proc(L: ^vm.State, service: ^UserInputService, input_type: enums.UserInputType) {
-	_ = classes.Push_InputObject(L, service.class_registry, classes.InputObject_Value{
+	_ = classes.Push_InputObject(L, service.signal_registry, classes.InputObject_Value{
 		UserInputType = input_type,
 		UserInputState = .Begin,
 		Position = {service.mouse_location.X, service.mouse_location.Y, 0},

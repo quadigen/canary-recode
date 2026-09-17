@@ -174,6 +174,7 @@ foreign kine_skia {
 	Kine_Skia_Surface_DrawImageSized        :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, x: f32, y: f32, width: f32, height: f32, alpha: u8) ---
 	Kine_Skia_Surface_DrawPixels            :: proc(surface: ^KineSkiaSurface, pixels: rawptr, sourceWidth: i32, sourceHeight: i32, sourceRowBytes: u32, x: f32, y: f32, width: f32, height: f32, flipY: i32, alpha: u8) ---
 	Kine_Skia_Surface_DrawImageOutlineSized :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, x: f32, y: f32, width: f32, height: f32, thickness: f32, r: u8, g: u8, b: u8, a: u8, alpha: u8) ---
+	Kine_Skia_Surface_DrawImageShadow      :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, x: f32, y: f32, width: f32, height: f32, offsetX: f32, offsetY: f32, blurSigma: f32, spread: f32, r: u8, g: u8, b: u8, a: u8) ---
 	Kine_Skia_Surface_GetFontAscent         :: proc(fontSize: f32, fontPath: cstring) -> f32 ---
 
 	/* fontPath may be "" or NULL to use the default system font.

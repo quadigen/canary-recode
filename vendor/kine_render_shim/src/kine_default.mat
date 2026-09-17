@@ -15,6 +15,7 @@ material {
         { type : sampler2d, name : ormMap },
         { type : float,     name : hasHeightMap },
         { type : sampler2d, name : heightMap },
+        { type : float,     name : shadowStrength },
         { type : float,     name : heightScale },
         { type : float2,    name : uvScale }
     ]
@@ -85,7 +86,14 @@ fragment {
             uv = mix(currUV, prevUV, nextDepth / (nextDepth - prevDepth));
         }
 
+        if (materialParams.hasNormalMap > 0.5) {
+            material.normal =
+                texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+        }
+
         prepareMaterial(material);
+
+        material.shadowStrength = materialParams.shadowStrength;
 
         // Normal maps are tangent-space inputs. prepareMaterial() initializes
         // MaterialInputs, so custom values must be assigned after it.

@@ -6,7 +6,7 @@ import vm "../vm"
 
 NumberValue_Class := Class_Info{
 	name   = "NumberValue",
-	parent = &Instance_Class,
+	parent = &ValueBase_Class,
 }
 
 NumberValue :: struct {
@@ -64,7 +64,7 @@ NumberValue_set :: proc(
 
 	switch key {
 	case "Value":
-		val.value = vm.ArgNumber(L, int(val.value))
+		val.value = vm.ArgNumber(L, value_index)
 	case:
 		return false
 	}

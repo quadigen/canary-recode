@@ -336,6 +336,7 @@ lua_GCOp :: enum i32 {
 @(default_calling_convention="c")
 foreign lib {
 	lua_gc :: proc(L: ^lua_State, what: i32, data: i32) -> i32 ---
+	lua_next :: proc(L: ^lua_State, idx: i32) -> i32 ---
 }
 
 lua_CategoryName :: proc "c" (L: ^lua_State, memcat: u8) -> cstring
@@ -361,7 +362,6 @@ foreign lib {
 	** miscellaneous functions
 	*/
 	lua_error               :: proc(L: ^lua_State) -> i32 ---
-	lua_next                :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_rawiter             :: proc(L: ^lua_State, idx: i32, iter: i32) -> i32 ---
 	lua_concat              :: proc(L: ^lua_State, n: i32) ---
 	lua_setpointerencodekey :: proc(L: ^lua_State, a: u64, b: u64, _c: u64, d: u64) ---

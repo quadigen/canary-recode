@@ -344,23 +344,24 @@ elseif(APPLE)
         VERBATIM
     )
 else()
-    set(_mri_script "${CMAKE_CURRENT_BINARY_DIR}/bundle_kinemium_libs.mri")
-    set(_kine_bundle_archive "$<TARGET_FILE:KinemiumLibs>.bundle")
-    set(_mri_content "CREATE ${_kine_bundle_archive}\nADDLIB $<TARGET_FILE:KinemiumLibs>\n")
+    # GNU ld accepts an archive-looking input as an implicit linker script.
+    # Keep the small anchor archive separately, then expose all component
+    # archives as a GROUP so cyclic static dependencies are searched until
+    # resolved without repacking (and corrupting) the large native archives.
+    set(_kine_anchor_archive "$<TARGET_FILE:KinemiumLibs>.anchor")
+    set(_kine_linker_script "${CMAKE_CURRENT_BINARY_DIR}/KinemiumLibs.ld")
+    set(_kine_linker_content "GROUP (\n  ${_kine_anchor_archive}\n")
     foreach(_component_file IN LISTS KINE_COMPONENT_TARGET_FILES)
-        string(APPEND _mri_content "ADDLIB ${_component_file}\n")
+        string(APPEND _kine_linker_content "  ${_component_file}\n")
     endforeach()
-    string(APPEND _mri_content "SAVE\nEND\n")
-    file(GENERATE OUTPUT "${_mri_script}" CONTENT "${_mri_content}")
+    string(APPEND _kine_linker_content ")\n")
+    file(GENERATE OUTPUT "${_kine_linker_script}" CONTENT "${_kine_linker_content}")
     add_custom_command(TARGET KinemiumLibs POST_BUILD
-        COMMAND ${CMAKE_COMMAND}
-            "-DARCHIVER=${CMAKE_AR}"
-            "-DRANLIB=${CMAKE_RANLIB}"
-            "-DMRI_SCRIPT=${_mri_script}"
-            "-DOUTPUT_ARCHIVE=$<TARGET_FILE:KinemiumLibs>"
-            "-DBUNDLE_ARCHIVE=${_kine_bundle_archive}"
-            -P "${CMAKE_SOURCE_DIR}/cmake/bundle_static_archive.cmake"
-        COMMENT "Bundling component static libraries into KinemiumLibs.a via ar MRI script"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:KinemiumLibs>" "${_kine_anchor_archive}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_kine_linker_script}" "$<TARGET_FILE:KinemiumLibs>"
+        COMMENT "Generating KinemiumLibs.a GNU ld archive group"
         VERBATIM
     )
 endif()

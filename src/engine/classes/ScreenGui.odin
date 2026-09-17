@@ -65,10 +65,66 @@ ScreenGui_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
 		vm.PushBoolean(L, ScreenGui.ignore_gui_inset)
 	case "RenderOnTop":
 		vm.PushBoolean(L, ScreenGui.render_on_top)
+	case "Size":
+		datatypes.Push_Vector2(
+			L,
+			datatype_registry,
+			ScreenGui.size,
+		)
+
+	case "RenderOffset":
+		datatypes.Push_Vector2(
+			L,
+			datatype_registry,
+			ScreenGui.render_offset,
+		)
     case:
         return false
     }
     return true
+}
+
+ScreenGui_RenderChild :: proc(
+	child: ^Object,
+	ctx: ^Class_Step_Context,
+) {
+	switch {
+	case Is_A(child, "ScrollingFrame"):
+		ScrollingFrame_render(
+			child,
+			ctx,
+		)
+
+	case Is_A(child, "TextBox"):
+		TextBox_render(
+			child,
+			ctx,
+		)
+
+	case Is_A(child, "TextLabel"):
+		TextLabel_render(
+			child,
+			ctx,
+		)
+
+	case Is_A(child, "Frame"):
+		Frame_render(
+			child,
+			ctx,
+		)
+
+	case Is_A(child, "ImageLabel"):
+		ImageLabel_render(
+			child,
+			ctx,
+		)
+
+	case Is_A(child, "GuiObject"):
+		GuiObject_render(
+			child,
+			ctx,
+		)
+	}
 }
 
 ScreenGui_RenderChildren :: proc(
@@ -76,43 +132,30 @@ ScreenGui_RenderChildren :: proc(
 	ctx: ^Class_Step_Context,
 ) {
 	for child in object.children {
-		switch {
-		case Is_A(child, "ScrollingFrame"):
-			ScrollingFrame_render(
-				child,
-				ctx,
-			)
+		ScreenGui_RenderChild(child, ctx)
+	}
+}
 
-		case Is_A(child, "TextBox"):
-			TextBox_render(
-				child,
-				ctx,
-			)
-
-		case Is_A(child, "TextLabel"):
-			TextLabel_render(
-				child,
-				ctx,
-			)
-
-		case Is_A(child, "Frame"):
-			Frame_render(
-				child,
-				ctx,
-			)
-
-		case Is_A(child, "ImageLabel"):
-			ImageLabel_render(
-				child,
-				ctx,
-			)
-
-		case Is_A(child, "GuiObject"):
-			GuiObject_render(
-				child,
-				ctx,
-			)
+ScreenGui_RenderChildren_Visible :: proc(
+	object: ^Object,
+	ctx: ^Class_Step_Context,
+	viewport: guilib.Rect,
+) {
+	for child in object.children {
+		if !Is_A(child, "GuiObject") {
+			continue
 		}
+
+		child_rect, child_visible := GuiObject_get_rect(child, ctx)
+		if !child_visible ||
+		   child_rect.x + child_rect.width < viewport.x ||
+		   child_rect.x > viewport.x + viewport.width ||
+		   child_rect.y + child_rect.height < viewport.y ||
+		   child_rect.y > viewport.y + viewport.height {
+			continue
+		}
+
+		ScreenGui_RenderChild(child, ctx)
 	}
 }
 
@@ -229,7 +272,14 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 		set = ScreenGui_set,
 		clone = ScreenGui_clone,
 		_step = ScreenGui_render,
-		properties = []string{"DisplayOrder", "ClipToDeviceSafeArea", "Enabled", "IgnoreGuiInset", "RenderOnTop"},
+		properties = []string{
+			"DisplayOrder",
+			"ClipToDeviceSafeArea",
+			"Enabled",
+			"IgnoreGuiInset",
+			"RenderOnTop",
+			"Size",
+			"RenderOffset",
+		},
 	)
 }
-

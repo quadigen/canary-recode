@@ -54,7 +54,7 @@ Environment_Init :: proc(environment: ^Environment, vm_state: ^vm.VM, renderer_o
 	engine_enums.Registry_Init(&environment.enums)
 	datatypes.Registry_Init(&environment.datatypes, &environment.enums)
 	signals.Registry_Init(&environment.signals)
-	environment.classes = classes.Registry_Init(&environment.datatypes, &environment.enums, renderer_object)
+	environment.classes = classes.Registry_Init(&environment.datatypes, &environment.enums, renderer_object, signal_registry = &environment.signals)
 	environment.services = services.Registry_Init(&environment.classes, &environment.signals)
 	environment.modules = vm.Environment_Init()
 
@@ -145,6 +145,18 @@ Environment_SetEvent :: proc(
 		event,
 	)
 
+	classes.GuiObject_Handle_Event(
+		&environment.classes,
+		vm_state.L,
+		event,
+	)
+
+	classes.GuiButton_Handle_Event(
+		&environment.classes,
+		vm_state.L,
+		event,
+	)
+
 	classes.TextBox_Handle_Event(
 		&environment.classes,
 		vm_state.L,
@@ -163,16 +175,14 @@ Environment_SetEvent :: proc(
 	)
 
 	if event.type == .MOUSE_WHEEL &&
-	environment.renderer != nil &&
-	environment.renderer.ActiveCamera != nil {
-
+	   environment.renderer != nil &&
+	   environment.renderer.ActiveCamera != nil {
 		active_camera :=
 			cast(^classes.Object)environment.renderer.ActiveCamera
 
 		if active_camera != nil &&
-		!active_camera.destroyed &&
-		classes.Is_A(active_camera, "Camera") {
-
+		   !active_camera.destroyed &&
+		   classes.Is_A(active_camera, "Camera") {
 			wheel_y := f32(event.wheel.y)
 
 			if event.wheel.direction == .FLIPPED {
@@ -186,7 +196,6 @@ Environment_SetEvent :: proc(
 		}
 	}
 }
-
 Environment_Render_3D :: proc(
 	environment: ^Environment,
 	vm_state: ^vm.VM,
@@ -244,12 +253,25 @@ Environment_Render_2D :: proc(
 	environment.renderer.SkiaSurface = surface
 	defer environment.renderer.SkiaSurface = previous_surface
 
-	classes.Update_GUI_Layout(&environment.classes, width, height)
+	services.StudioThemeService_Update_Layout(
+		&environment.services,
+		vm_state.L,
+		&environment.datatypes,
+		width,
+		height,
+	)
+
 	packages.Render_2D(
 		&environment.packages,
 		width,
 		height,
 		delta_time,
+	)
+
+	classes.Update_GUI_Layout(
+		&environment.classes,
+		width,
+		height,
 	)
 
 	classes.Step(

@@ -42,7 +42,9 @@ frame.Position = UDim2.fromOffset(60, 30)
 frame.Size = UDim2.new(0.5, 0, 0, 100)
 frame.BackgroundTransparency = 1
 layout_checks = 0
-renderer.Pool.new("2d", function()
+-- Absolute rects are resolved by Update_GUI_Layout after the "2d" pool
+-- phase, so the "2da" phase observes them fresh (see viewport.luau).
+renderer.Pool.new("2da", function()
     assert(frame.AbsolutePosition == Vector2.new(60, 30))
     assert(frame.AbsoluteSize == Vector2.new(renderer.Width * 0.5, 100))
     layout_checks += 1

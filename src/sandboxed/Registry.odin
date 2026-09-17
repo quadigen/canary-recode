@@ -2,6 +2,7 @@ package sandboxed
 
 import runtime "base:runtime"
 import "core:fmt"
+import "core:strings"
 import engine_runtime "../engine/runtime"
 import renderer "../engine/renderer"
 import vm "../engine/vm"
@@ -66,14 +67,27 @@ run_dir :: proc(loaded: []runtime.Load_Directory_File) {
 
 	for file in loaded {
 		if file.name == "editor_ui.luau" {
-			run_code(string(file.data), file.name)
+			run_internal_module(file.name)
 			break
 		}
 	}
 	for file in loaded {
 		if file.name == "editor_ui.luau" { continue }
-		run_code(string(file.data), file.name)
+		run_internal_module(file.name)
 	}
+}
+
+run_internal_module :: proc(file_name: string) {
+	if !strings.has_suffix(file_name, ".luau") {
+		return
+	}
+	module_name := file_name[:len(file_name)-len(".luau")]
+	source := strings.concatenate({
+		"require(\"@internal/",
+		module_name,
+		"\")",
+	})
+	run_code(source, file_name)
 }
 
 init :: proc(

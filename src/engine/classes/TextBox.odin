@@ -8,7 +8,8 @@ import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
 import vm "../vm"
-
+import signals "../signals"
+import "core:strconv"
 
 TextBox_Class := Class_Info{
 	name   = "TextBox",
@@ -30,6 +31,11 @@ TextBox :: struct {
 	clear_text_on_focus:     bool,
 	text_editable:           bool,
 	select_all_on_focus:     bool,
+	code_editor:             bool,
+	show_line_numbers:       bool,
+	show_minimap:            bool,
+	tab_size:                int,
+	auto_indent:             bool,
 
 	max_length:              int,
 
@@ -43,12 +49,20 @@ TextBox :: struct {
 	selection_color3:        datatypes.Color3,
 	selection_transparency:  f32,
 	focus_color3:            datatypes.Color3,
+	focus_lost:              ^signals.Signal,
 
 	focus_animation:         f32,
 	caret_timer:             f32,
 
 	scroll_x:                f32,
 	scroll_target_x:         f32,
+
+	scroll_y:              f32,
+	scroll_target_y:       f32,
+
+	preferred_x:           f32,
+	preferred_x_valid:     bool,
+	caret_needs_scroll:    bool,
 }
 
 
@@ -73,6 +87,11 @@ TextBox_Init :: proc() -> TextBox {
 		clear_text_on_focus    = false,
 		text_editable          = true,
 		select_all_on_focus    = false,
+		code_editor            = false,
+		show_line_numbers      = true,
+		show_minimap           = false,
+		tab_size               = 4,
+		auto_indent             = true,
 
 		max_length             = -1,
 
@@ -91,6 +110,13 @@ TextBox_Init :: proc() -> TextBox {
 		caret_timer            = 0,
 
 		scroll_x               = 0,
+
+		scroll_y                = 0,
+		scroll_target_y         = 0,
+
+		preferred_x             = 0,
+		preferred_x_valid       = false,
+		caret_needs_scroll      = true,
 		scroll_target_x        = 0,
 	}
 }
@@ -111,13 +137,990 @@ text_box_replace_string :: proc(
 
 
 text_box_restart_caret :: proc(box: ^TextBox) {
-	if box == nil {
-		return
-	}
+    if box == nil {
+        return
+    }
 
-	box.caret_timer = 0
+    box.caret_timer = 0
+    box.caret_needs_scroll = true
 }
 
+text_box_line_height :: proc(box: ^TextBox) -> f32 {
+    return max(
+        box.text_size * 1.35,
+        box.text_size + 4,
+    )
+}
+
+text_box_decimal_digits :: proc(value: int) -> int {
+    v := max(value, 1)
+    result := 1
+
+    for v >= 10 {
+        v /= 10
+        result += 1
+    }
+
+    return result
+}
+
+text_box_gutter_width :: proc(box: ^TextBox) -> f32 {
+    if box == nil ||
+       !box.code_editor ||
+       !box.show_line_numbers {
+        return 0
+    }
+
+    digits := text_box_decimal_digits(
+        text_box_line_count(box.text),
+    )
+
+    return f32(digits) * box.text_size * 0.62 + 18
+}
+
+text_box_measure_range :: proc(
+    box: ^TextBox,
+    start: int,
+    finish: int,
+) -> f32 {
+    if box == nil {
+        return 0
+    }
+
+    a := clamp(start, 0, len(box.text))
+    b := clamp(finish, a, len(box.text))
+
+    if a == b {
+        return 0
+    }
+
+    value := strings.clone_to_cstring(
+        box.text[a:b],
+    )
+    defer delete(value)
+
+    return guilib.measureText(
+        value,
+        box.text_size,
+        "",
+    )
+}
+
+text_box_line_start_by_index :: proc(
+    text: string,
+    wanted_line: int,
+) -> int {
+    if wanted_line <= 0 {
+        return 0
+    }
+
+    line := 0
+
+    for i in 0 ..< len(text) {
+        if text[i] == '\n' {
+            line += 1
+
+            if line == wanted_line {
+                return i + 1
+            }
+        }
+    }
+
+    return len(text)
+}
+
+text_box_cursor_on_line_from_x :: proc(
+    box: ^TextBox,
+    start: int,
+    finish: int,
+    target_x: f32,
+) -> int {
+    if start >= finish {
+        return start
+    }
+
+    target := max(target_x, f32(0))
+
+    previous_index := start
+    previous_width: f32 = 0
+
+    index := start
+
+    for index < finish {
+        next := text_box_utf8_next_boundary(
+            box.text,
+            index,
+        )
+
+        next = min(next, finish)
+
+        width := text_box_measure_range(
+            box,
+            start,
+            next,
+        )
+
+        midpoint := (
+            previous_width +
+            width
+        ) * 0.5
+
+        if target < midpoint {
+            return previous_index
+        }
+
+        previous_index = next
+        previous_width = width
+        index = next
+    }
+
+    return finish
+}
+
+text_box_cursor_from_point :: proc(
+    box: ^TextBox,
+    mouse_x: f32,
+    mouse_y: f32,
+) -> int {
+    if box == nil {
+        return 0
+    }
+
+    if !box.code_editor {
+        return text_box_cursor_from_x(
+            box,
+            mouse_x,
+        )
+    }
+
+    padding: f32 = 6
+
+    line_height := text_box_line_height(box)
+
+    y := (
+        mouse_y -
+        box.absolute_position.Y -
+        padding +
+        box.scroll_y
+    )
+
+    line := int(
+        max(
+            y / line_height,
+            f32(0),
+        ),
+    )
+
+    line_count := text_box_line_count(
+        box.text,
+    )
+
+    line = clamp(
+        line,
+        0,
+        max(line_count - 1, 0),
+    )
+
+    start := text_box_line_start_by_index(
+        box.text,
+        line,
+    )
+
+    finish := text_box_line_end(
+        box.text,
+        start,
+    )
+
+    x := (
+        mouse_x -
+        box.absolute_position.X -
+        padding -
+        text_box_gutter_width(box) +
+        box.scroll_x
+    )
+
+    return text_box_cursor_on_line_from_x(
+        box,
+        start,
+        finish,
+        x,
+    )
+}
+
+text_box_set_cursor :: proc(
+    box: ^TextBox,
+    position: int,
+    shift: bool,
+) {
+    if box == nil {
+        return
+    }
+
+    next := clamp(
+        position,
+        0,
+        len(box.text),
+    )
+
+    if !shift {
+        box.selection_anchor = next
+    }
+
+    box.cursor_byte = next
+    box.preferred_x_valid = false
+
+    text_box_restart_caret(box)
+}
+
+text_box_move_vertical :: proc(
+    box: ^TextBox,
+    direction: int,
+    shift: bool,
+    amount: int = 1,
+) {
+    if box == nil ||
+       !box.code_editor ||
+       direction == 0 {
+        return
+    }
+
+    current_start := text_box_line_start(
+        box.text,
+        box.cursor_byte,
+    )
+
+    current_finish := text_box_line_end(
+        box.text,
+        box.cursor_byte,
+    )
+
+    target_x: f32
+
+    if box.preferred_x_valid {
+        target_x = box.preferred_x
+    } else {
+        target_x = text_box_measure_range(
+            box,
+            current_start,
+            box.cursor_byte,
+        )
+
+        box.preferred_x = target_x
+        box.preferred_x_valid = true
+    }
+
+    start := current_start
+    finish := current_finish
+
+    for _ in 0 ..< max(amount, 1) {
+        if direction < 0 {
+            if start == 0 {
+                break
+            }
+
+            finish = start - 1
+
+            start = text_box_line_start(
+                box.text,
+                finish,
+            )
+
+            finish = text_box_line_end(
+                box.text,
+                start,
+            )
+        } else {
+            if finish >= len(box.text) {
+                break
+            }
+
+            start = finish + 1
+
+            finish = text_box_line_end(
+                box.text,
+                start,
+            )
+        }
+    }
+
+    next := text_box_cursor_on_line_from_x(
+        box,
+        start,
+        finish,
+        target_x,
+    )
+
+    if !shift {
+        box.selection_anchor = next
+    }
+
+    box.cursor_byte = next
+
+    text_box_restart_caret(box)
+}
+
+text_box_is_word_byte :: proc(c: u8) -> bool {
+    return (
+        (c >= 'a' && c <= 'z') ||
+        (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') ||
+        c == '_' ||
+        c >= 0x80
+    )
+}
+
+text_box_render_code_editor :: proc(
+    box: ^TextBox,
+    rect: guilib.Rect,
+    ctx: ^Class_Step_Context,
+    dt: f32,
+) {
+    surface := ctx.renderer.SkiaSurface
+
+    padding: f32 = 6
+
+    line_height :=
+        text_box_line_height(box)
+
+    line_count :=
+        text_box_line_count(
+            box.text,
+        )
+
+    gutter :=
+        text_box_gutter_width(box)
+
+    minimap_width: f32 = 0
+
+    if box.show_minimap &&
+       rect.width >= 250 {
+        minimap_width = 64
+    }
+
+    content_x :=
+        rect.x +
+        padding +
+        gutter
+
+    content_width :=
+        max(
+            rect.width -
+            padding * 2 -
+            gutter -
+            minimap_width,
+            f32(0),
+        )
+
+    content_height :=
+        max(
+            rect.height -
+            padding * 2,
+            f32(0),
+        )
+
+    caret_line :=
+        text_box_line_number(
+            box.text,
+            box.cursor_byte,
+        ) - 1
+
+    caret_start :=
+        text_box_line_start(
+            box.text,
+            box.cursor_byte,
+        )
+
+    caret_x_local :=
+        text_box_measure_range(
+            box,
+            caret_start,
+            box.cursor_byte,
+        )
+
+    total_height :=
+        f32(line_count) *
+        line_height
+
+    max_scroll_y :=
+        max(
+            total_height -
+            content_height,
+            f32(0),
+        )
+
+    if box.focused &&
+       box.caret_needs_scroll {
+        top :=
+            f32(caret_line) *
+            line_height
+
+        bottom :=
+            top +
+            line_height
+
+        if top <
+           box.scroll_target_y {
+            box.scroll_target_y =
+                top
+        } else if bottom >
+                  box.scroll_target_y +
+                  content_height {
+            box.scroll_target_y =
+                bottom -
+                content_height
+        }
+
+        visible_x :=
+            caret_x_local -
+            box.scroll_target_x
+
+        if visible_x < 0 {
+            box.scroll_target_x =
+                caret_x_local
+        } else if visible_x >
+                  content_width {
+            box.scroll_target_x =
+                caret_x_local -
+                content_width
+        }
+
+        box.scroll_target_x =
+            max(
+                box.scroll_target_x,
+                f32(0),
+            )
+
+        box.caret_needs_scroll =
+            false
+    }
+
+    box.scroll_target_y =
+        clamp(
+            box.scroll_target_y,
+            f32(0),
+            max_scroll_y,
+        )
+
+    scroll_lerp :=
+        min(
+            dt * 20,
+            f32(1),
+        )
+
+    box.scroll_x +=
+        (
+            box.scroll_target_x -
+            box.scroll_x
+        ) *
+        scroll_lerp
+
+    box.scroll_y +=
+        (
+            box.scroll_target_y -
+            box.scroll_y
+        ) *
+        scroll_lerp
+
+    guilib.save(surface)
+    defer guilib.restore(surface)
+
+    guilib.clipRect(
+        surface,
+        guilib.Rect{
+            x = rect.x,
+            y = rect.y,
+            width =
+                rect.width -
+                minimap_width,
+            height =
+                rect.height,
+        },
+    )
+
+    if box.focused {
+        current_y :=
+            rect.y +
+            padding +
+            f32(caret_line) *
+            line_height -
+            box.scroll_y
+
+        guilib.drawRect(
+            surface,
+            guilib.Rect{
+                x =
+                    rect.x,
+                y =
+                    current_y,
+                width =
+                    rect.width -
+                    minimap_width,
+                height =
+                    line_height,
+                color =
+                    box.focus_color3,
+                bgTransparency =
+                    0.94,
+            },
+        )
+    }
+
+    selection_start,
+    selection_finish,
+    selected :=
+        text_box_selection_bounds(
+            box,
+        )
+
+    position := 0
+    line_number := 1
+
+    for {
+        finish := text_box_line_end(
+            box.text,
+            position,
+        )
+
+        y :=
+            rect.y +
+            padding +
+            f32(line_number - 1) *
+            line_height -
+            box.scroll_y
+
+        if y + line_height >= rect.y &&
+           y <= rect.y + rect.height {
+            baseline :=
+                y +
+                (
+                    line_height -
+                    box.text_size
+                ) *
+                0.5 +
+                box.text_size
+
+            if box.show_line_numbers {
+                number_buffer: [32]u8
+
+                number := strconv.write_int(
+                    number_buffer[:],
+                    i64(line_number),
+                    10,
+                )
+
+                number_text :=
+                    strings.clone_to_cstring(
+                        number,
+                    )
+                defer delete(number_text)
+
+                number_width :=
+                    guilib.measureText(
+                        number_text,
+                        box.text_size * 0.8,
+                        "",
+                    )
+
+                guilib.drawText(
+                    surface,
+                    number_text,
+                    guilib.TextParams{
+                        x =
+                            rect.x +
+                            gutter -
+                            number_width -
+                            7,
+                        y =
+                            baseline,
+                        TextSize =
+                            box.text_size *
+                            0.8,
+                        color =
+                            box.placeholder_color3,
+                        transparency =
+                            0.2,
+                        font =
+                            "",
+                    },
+                )
+            }
+
+            if selected {
+                a := max(
+                    selection_start,
+                    position,
+                )
+
+                b := min(
+                    selection_finish,
+                    finish,
+                )
+
+                newline_selected :=
+                    finish < len(box.text) &&
+                    selection_start <= finish &&
+                    selection_finish > finish
+
+                if a < b ||
+                   newline_selected {
+                    x1 :=
+                        text_box_measure_range(
+                            box,
+                            position,
+                            a,
+                        )
+
+                    x2 :=
+                        text_box_measure_range(
+                            box,
+                            position,
+                            b,
+                        )
+
+                    width :=
+                        x2 - x1
+
+                    if newline_selected {
+                        width =
+                            max(
+                                width + 5,
+                                f32(5),
+                            )
+                    }
+
+                    guilib.drawRect(
+                        surface,
+                        guilib.Rect{
+                            x =
+                                content_x +
+                                x1 -
+                                box.scroll_x,
+                            y =
+                                y + 1,
+                            width =
+                                width,
+                            height =
+                                line_height - 2,
+                            color =
+                                box.selection_color3,
+                            bgTransparency =
+                                box.selection_transparency,
+                        },
+                    )
+                }
+            }
+
+            if finish > position {
+                line :=
+                    strings.clone_to_cstring(
+                        box.text[
+                            position:
+                            finish
+                        ],
+                    )
+                defer delete(line)
+
+                guilib.drawText(
+                    surface,
+                    line,
+                    guilib.TextParams{
+                        x =
+                            content_x -
+                            box.scroll_x,
+                        y =
+                            baseline,
+                        TextSize =
+                            box.text_size,
+                        color =
+                            box.text_color3,
+                        transparency =
+                            box.text_transparency,
+                        font =
+                            "",
+                    },
+                )
+            }
+        }
+
+        if finish >= len(box.text) {
+            break
+        }
+
+        position = finish + 1
+        line_number += 1
+    }
+
+    if box.focused {
+        caret_y :=
+            rect.y +
+            padding +
+            f32(caret_line) *
+            line_height -
+            box.scroll_y
+
+        caret_x :=
+            content_x +
+            caret_x_local -
+            box.scroll_x
+
+        visible :=
+            box.caret_timer < 0.6
+
+        if visible {
+            guilib.drawLine(
+                surface,
+                caret_x,
+                caret_y + 2,
+                caret_x,
+                caret_y +
+                    line_height -
+                    2,
+                1.5,
+                box.caret_color3,
+                box.text_transparency,
+            )
+        }
+    }
+
+    if minimap_width > 0 {
+        map_x :=
+            rect.x +
+            rect.width -
+            minimap_width
+
+        position = 0
+        line_number = 0
+
+        for {
+            finish := text_box_line_end(
+                box.text,
+                position,
+            )
+
+            y :=
+                rect.y +
+                (
+                    f32(line_number) /
+                    f32(max(line_count, 1))
+                ) *
+                rect.height
+
+            length :=
+                finish -
+                position
+
+            width :=
+                clamp(
+                    f32(length),
+                    f32(2),
+                    minimap_width - 8,
+                )
+
+            guilib.drawRect(
+                surface,
+                guilib.Rect{
+                    x =
+                        map_x + 4,
+                    y =
+                        y,
+                    width =
+                        width,
+                    height =
+                        1,
+                    color =
+                        box.text_color3,
+                    bgTransparency =
+                        0.72,
+                },
+            )
+
+            if finish >= len(box.text) {
+                break
+            }
+
+            position = finish + 1
+            line_number += 1
+        }
+    }
+}
+
+text_box_word_left :: proc(
+    text: string,
+    index: int,
+) -> int {
+    if index <= 0 {
+        return 0
+    }
+
+    i := text_box_utf8_prev_boundary(
+        text,
+        index,
+    )
+
+    for i > 0 &&
+        (
+            text[i] == ' ' ||
+            text[i] == '\t' ||
+            text[i] == '\n'
+        ) {
+        i = text_box_utf8_prev_boundary(
+            text,
+            i,
+        )
+    }
+
+    if text_box_is_word_byte(text[i]) {
+        for i > 0 {
+            previous := text_box_utf8_prev_boundary(
+                text,
+                i,
+            )
+
+            if !text_box_is_word_byte(
+                text[previous],
+            ) {
+                break
+            }
+
+            i = previous
+        }
+    }
+
+    return i
+}
+
+text_box_word_right :: proc(
+    text: string,
+    index: int,
+) -> int {
+    if index >= len(text) {
+        return len(text)
+    }
+
+    i := index
+
+    if text_box_is_word_byte(text[i]) {
+        for i < len(text) &&
+            text_box_is_word_byte(text[i]) {
+            i = text_box_utf8_next_boundary(
+                text,
+                i,
+            )
+        }
+    } else {
+        i = text_box_utf8_next_boundary(
+            text,
+            i,
+        )
+    }
+
+    for i < len(text) &&
+        (
+            text[i] == ' ' ||
+            text[i] == '\t' ||
+            text[i] == '\n'
+        ) {
+        i = text_box_utf8_next_boundary(
+            text,
+            i,
+        )
+    }
+
+    return i
+}
+
+text_box_select_word_at :: proc(
+    box: ^TextBox,
+    position: int,
+) {
+    if box == nil ||
+       len(box.text) == 0 {
+        return
+    }
+
+    i := clamp(
+        position,
+        0,
+        len(box.text),
+    )
+
+    if i == len(box.text) {
+        i = text_box_utf8_prev_boundary(
+            box.text,
+            i,
+        )
+    }
+
+    if !text_box_is_word_byte(box.text[i]) {
+        box.selection_anchor = i
+        box.cursor_byte = text_box_utf8_next_boundary(
+            box.text,
+            i,
+        )
+
+        return
+    }
+
+    start := i
+    finish := text_box_utf8_next_boundary(
+        box.text,
+        i,
+    )
+
+    for start > 0 {
+        previous := text_box_utf8_prev_boundary(
+            box.text,
+            start,
+        )
+
+        if !text_box_is_word_byte(
+            box.text[previous],
+        ) {
+            break
+        }
+
+        start = previous
+    }
+
+    for finish < len(box.text) &&
+        text_box_is_word_byte(
+            box.text[finish],
+        ) {
+        finish = text_box_utf8_next_boundary(
+            box.text,
+            finish,
+        )
+    }
+
+    box.selection_anchor = start
+    box.cursor_byte = finish
+
+    text_box_restart_caret(box)
+}
+
+text_box_select_line_at :: proc(
+    box: ^TextBox,
+    position: int,
+) {
+    start := text_box_line_start(
+        box.text,
+        position,
+    )
+
+    finish := text_box_line_end(
+        box.text,
+        position,
+    )
+
+    if finish < len(box.text) {
+        finish += 1
+    }
+
+    box.selection_anchor = start
+    box.cursor_byte = finish
+
+    text_box_restart_caret(box)
+}
 
 text_box_utf8_prev_boundary :: proc(
 	text: string,
@@ -440,6 +1443,602 @@ text_box_insert :: proc(
 	text_box_restart_caret(box)
 }
 
+text_box_line_start :: proc(text: string, index: int) -> int {
+	i := clamp(index, 0, len(text))
+	for i > 0 && text[i-1] != '\n' {
+		i -= 1
+	}
+	return i
+}
+
+text_box_line_end :: proc(text: string, index: int) -> int {
+	i := clamp(index, 0, len(text))
+	for i < len(text) && text[i] != '\n' {
+		i += 1
+	}
+	return i
+}
+
+text_box_line_number :: proc(text: string, index: int) -> int {
+	line := 1
+	for i in 0 ..< clamp(index, 0, len(text)) {
+		if text[i] == '\n' {
+			line += 1
+		}
+	}
+	return line
+}
+
+text_box_line_count :: proc(text: string) -> int {
+	count := 1
+	for c in text {
+		if c == '\n' {
+			count += 1
+		}
+	}
+	return count
+}
+
+text_box_indent :: proc(text: string, index: int) -> string {
+	start := text_box_line_start(text, index)
+	i := start
+	for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
+		i += 1
+	}
+	return text[start:i]
+}
+
+text_box_replace_range :: proc(box: ^TextBox, start, finish: int, value: string) {
+	if box == nil || !box.text_editable {
+		return
+	}
+	box.cursor_byte = start
+	box.selection_anchor = finish
+	text_box_erase(box, start, finish)
+	text_box_insert(box, value)
+}
+
+text_box_indent_selection :: proc(
+    box: ^TextBox,
+    unindent: bool,
+) {
+    if box == nil ||
+       !box.text_editable {
+        return
+    }
+
+    selection_start,
+    selection_finish,
+    selected := text_box_selection_bounds(box)
+
+    if !selected {
+        if unindent {
+            start := text_box_line_start(
+                box.text,
+                box.cursor_byte,
+            )
+
+            finish := text_box_line_end(
+                box.text,
+                box.cursor_byte,
+            )
+
+            remove := 0
+
+            if start < finish &&
+               box.text[start] == '\t' {
+                remove = 1
+            } else {
+                for remove < max(box.tab_size, 1) &&
+                    start + remove < finish &&
+                    box.text[start + remove] == ' ' {
+                    remove += 1
+                }
+            }
+
+            if remove > 0 {
+                old_cursor := box.cursor_byte
+
+                text_box_erase(
+                    box,
+                    start,
+                    start + remove,
+                )
+
+                box.cursor_byte = max(
+                    start,
+                    old_cursor - remove,
+                )
+
+                box.selection_anchor =
+                    box.cursor_byte
+            }
+
+            return
+        }
+
+        line_start := text_box_line_start(
+            box.text,
+            box.cursor_byte,
+        )
+
+        column := text_box_utf8_count(
+            box.text[
+                line_start:
+                box.cursor_byte
+            ],
+        )
+
+        tab_size := max(
+            box.tab_size,
+            1,
+        )
+
+        amount := tab_size -
+            column % tab_size
+
+        spaces := strings.repeat(
+            " ",
+            amount,
+        )
+        defer delete(spaces)
+
+        text_box_insert(
+            box,
+            spaces,
+        )
+
+        return
+    }
+
+    region_start := text_box_line_start(
+        box.text,
+        selection_start,
+    )
+
+    selection_last := selection_finish
+
+    if selection_last > selection_start &&
+       selection_last > 0 &&
+       box.text[selection_last - 1] == '\n' {
+        selection_last -= 1
+    }
+
+    region_finish := text_box_line_end(
+        box.text,
+        selection_last,
+    )
+
+    if region_finish < len(box.text) {
+        region_finish += 1
+    }
+
+    builder := strings.builder_make()
+    defer strings.builder_destroy(&builder)
+
+    position := region_start
+
+    for position < region_finish {
+        line_end := text_box_line_end(
+            box.text,
+            position,
+        )
+
+        line_end = min(
+            line_end,
+            region_finish,
+        )
+
+        if unindent {
+            remove := 0
+
+            if position < line_end &&
+               box.text[position] == '\t' {
+                remove = 1
+            } else {
+                for remove < max(box.tab_size, 1) &&
+                    position + remove < line_end &&
+                    box.text[position + remove] == ' ' {
+                    remove += 1
+                }
+            }
+
+            _ = strings.write_string(
+                &builder,
+                box.text[
+                    position + remove:
+                    line_end
+                ],
+            )
+        } else {
+            for _ in 0 ..< max(box.tab_size, 1) {
+                _ = strings.write_byte(
+                    &builder,
+                    ' ',
+                )
+            }
+
+            _ = strings.write_string(
+                &builder,
+                box.text[position:line_end],
+            )
+        }
+
+        if line_end < region_finish &&
+           line_end < len(box.text) &&
+           box.text[line_end] == '\n' {
+            _ = strings.write_byte(
+                &builder,
+                '\n',
+            )
+
+            position = line_end + 1
+        } else {
+            break
+        }
+    }
+
+    replacement := strings.to_string(
+        builder,
+    )
+
+    text_box_replace_range(
+        box,
+        region_start,
+        region_finish,
+        replacement,
+    )
+
+    box.selection_anchor = region_start
+    box.cursor_byte = (
+        region_start +
+        len(replacement)
+    )
+
+    text_box_restart_caret(box)
+}
+
+text_box_toggle_comment :: proc(
+    box: ^TextBox,
+) {
+    if box == nil ||
+       !box.text_editable {
+        return
+    }
+
+    selection_start,
+    selection_finish,
+    selected := text_box_selection_bounds(box)
+
+    if !selected {
+        selection_start =
+            box.cursor_byte
+
+        selection_finish =
+            box.cursor_byte
+    }
+
+    region_start := text_box_line_start(
+        box.text,
+        selection_start,
+    )
+
+    last_position := selection_finish
+
+    if last_position > selection_start &&
+       last_position > 0 &&
+       box.text[last_position - 1] == '\n' {
+        last_position -= 1
+    }
+
+    region_finish := text_box_line_end(
+        box.text,
+        last_position,
+    )
+
+    all_commented := true
+    has_content := false
+
+    position := region_start
+
+    for position <= region_finish {
+        line_end := text_box_line_end(
+            box.text,
+            position,
+        )
+
+        first := position
+
+        for first < line_end &&
+            (
+                box.text[first] == ' ' ||
+                box.text[first] == '\t'
+            ) {
+            first += 1
+        }
+
+        if first < line_end {
+            has_content = true
+
+            if first + 1 >= line_end ||
+               box.text[first] != '-' ||
+               box.text[first + 1] != '-' {
+                all_commented = false
+                break
+            }
+        }
+
+        if line_end >= region_finish ||
+           line_end >= len(box.text) {
+            break
+        }
+
+        position = line_end + 1
+    }
+
+    if !has_content {
+        all_commented = false
+    }
+
+    builder := strings.builder_make()
+    defer strings.builder_destroy(&builder)
+
+    position = region_start
+
+    for position <= region_finish {
+        line_end := text_box_line_end(
+            box.text,
+            position,
+        )
+
+        first := position
+
+        for first < line_end &&
+            (
+                box.text[first] == ' ' ||
+                box.text[first] == '\t'
+            ) {
+            first += 1
+        }
+
+        _ = strings.write_string(
+            &builder,
+            box.text[position:first],
+        )
+
+        if first < line_end {
+            if all_commented {
+                remove := 2
+
+                if first + 2 < line_end &&
+                   box.text[first + 2] == ' ' {
+                    remove = 3
+                }
+
+                _ = strings.write_string(
+                    &builder,
+                    box.text[
+                        first + remove:
+                        line_end
+                    ],
+                )
+            } else {
+                _ = strings.write_string(
+                    &builder,
+                    "-- ",
+                )
+
+                _ = strings.write_string(
+                    &builder,
+                    box.text[first:line_end],
+                )
+            }
+        }
+
+        if line_end >= region_finish ||
+           line_end >= len(box.text) {
+            break
+        }
+
+        _ = strings.write_byte(
+            &builder,
+            '\n',
+        )
+
+        position = line_end + 1
+    }
+
+    replacement := strings.to_string(
+        builder,
+    )
+
+    text_box_replace_range(
+        box,
+        region_start,
+        region_finish,
+        replacement,
+    )
+
+    box.selection_anchor =
+        region_start
+
+    box.cursor_byte =
+        region_start +
+        len(replacement)
+
+    text_box_restart_caret(box)
+}
+
+text_box_insert_newline :: proc(
+    box: ^TextBox,
+) {
+    if box == nil ||
+       !box.text_editable {
+        return
+    }
+
+    indentation := text_box_indent(
+        box.text,
+        box.cursor_byte,
+    )
+
+    if !box.auto_indent {
+        text_box_insert(
+            box,
+            "\n",
+        )
+        return
+    }
+
+    line_start := text_box_line_start(
+        box.text,
+        box.cursor_byte,
+    )
+
+    before := strings.trim_space(
+        box.text[
+            line_start:
+            box.cursor_byte
+        ],
+    )
+
+    increase_indent := false
+
+    if len(before) > 0 {
+        last := before[len(before) - 1]
+
+        increase_indent = (
+            last == '{' ||
+            last == '[' ||
+            last == '(' ||
+            strings.has_suffix(
+                before,
+                "then",
+            ) ||
+            strings.has_suffix(
+                before,
+                "do",
+            )
+        )
+    }
+
+    builder := strings.builder_make()
+    defer strings.builder_destroy(&builder)
+
+    _ = strings.write_byte(
+        &builder,
+        '\n',
+    )
+
+    _ = strings.write_string(
+        &builder,
+        indentation,
+    )
+
+    if increase_indent {
+        for _ in 0 ..< max(box.tab_size, 1) {
+            _ = strings.write_byte(
+                &builder,
+                ' ',
+            )
+        }
+    }
+
+    text_box_insert(
+        box,
+        strings.to_string(builder),
+    )
+}
+
+text_box_duplicate_line :: proc(
+    box: ^TextBox,
+) {
+    if box == nil ||
+       !box.text_editable {
+        return
+    }
+
+    start := text_box_line_start(
+        box.text,
+        box.cursor_byte,
+    )
+
+    finish := text_box_line_end(
+        box.text,
+        box.cursor_byte,
+    )
+
+    column := box.cursor_byte - start
+
+    if finish < len(box.text) {
+        insertion := finish + 1
+
+        line := strings.clone(
+            box.text[start:insertion],
+        )
+        defer delete(line)
+
+        text_box_replace_range(
+            box,
+            insertion,
+            insertion,
+            line,
+        )
+
+        box.cursor_byte =
+            insertion +
+            min(
+                column,
+                finish - start,
+            )
+    } else {
+        line := strings.clone(
+            box.text[start:finish],
+        )
+        defer delete(line)
+
+        duplicate := strings.concatenate({
+            "\n",
+            line,
+        })
+        defer delete(duplicate)
+
+        text_box_replace_range(
+            box,
+            finish,
+            finish,
+            duplicate,
+        )
+
+        box.cursor_byte =
+            finish +
+            1 +
+            min(
+                column,
+                finish - start,
+            )
+    }
+
+    box.selection_anchor =
+        box.cursor_byte
+
+    text_box_restart_caret(box)
+}
+
+text_box_delete_line :: proc(box: ^TextBox) {
+	if box == nil || !box.text_editable {
+		return
+	}
+	start := text_box_line_start(box.text, box.cursor_byte)
+	end := text_box_line_end(box.text, box.cursor_byte)
+	if end < len(box.text) {
+		end += 1
+	} else if start > 0 {
+		start -= 1
+	}
+	text_box_erase(box, start, end)
+}
+
 
 text_box_copy_selection :: proc(
 	box: ^TextBox,
@@ -578,14 +2177,25 @@ TextBox_focus :: proc(
 
 TextBox_blur :: proc(
 	box: ^TextBox,
+	enter_pressed: bool = false,
 ) {
 	if box == nil {
 		return
 	}
 
+	was_focused := box.focused
 	box.focused = false
 	box.drag_selecting = false
 	box.caret_timer = 0
+	if was_focused && box.object.signal_registry != nil && box.object.signal_registry.signal_registry != nil {
+		if box.focus_lost == nil {
+			box.focus_lost = signals.Create(box.object.signal_registry.signal_registry)
+		}
+		vm_state := box.object.signal_registry.signal_registry.L
+		vm.PushBoolean(vm_state, enter_pressed)
+		signals.Fire(vm_state, box.focus_lost, 1)
+		vm.Pop(vm_state, 1)
+	}
 
 	if text_box_focused == box {
 		text_box_focused = nil
@@ -811,6 +2421,15 @@ TextBox_get :: proc(
 		cast(^TextBox)object
 
 	switch key {
+	case "FocusLost":
+		if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
+			return false
+		}
+		if box.focus_lost == nil {
+			box.focus_lost = signals.Create(box.object.signal_registry.signal_registry)
+		}
+		signals.Push(L, box.focus_lost)
+		return true
 
 	case "Text":
 		vm.PushString(
@@ -844,6 +2463,37 @@ TextBox_get :: proc(
 			box.text_color3,
 		)
 
+		return true
+
+	case "CodeEditor":
+		vm.PushBoolean(L, box.code_editor)
+		return true
+
+	case "ShowLineNumbers":
+		vm.PushBoolean(L, box.show_line_numbers)
+		return true
+
+	case "ShowMinimap":
+		vm.PushBoolean(L, box.show_minimap)
+		return true
+
+	case "TabSize":
+		vm.PushNumber(L, f64(box.tab_size))
+		return true
+
+	case "AutoIndent":
+		vm.PushBoolean(L, box.auto_indent)
+		return true
+
+	case "LineCount":
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_line_count(
+					box.text,
+				),
+			),
+		)
 		return true
 
 	case "PlaceholderColor3":
@@ -1009,6 +2659,58 @@ TextBox_set :: proc(
 			),
 		)
 
+		return true
+
+	case "CodeEditor":
+		box.code_editor =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+
+		box.scroll_x = 0
+		box.scroll_target_x = 0
+		box.scroll_y = 0
+		box.scroll_target_y = 0
+		box.caret_needs_scroll = true
+
+		return true
+
+	case "ShowLineNumbers":
+		box.show_line_numbers =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+		return true
+
+	case "ShowMinimap":
+		box.show_minimap =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+		return true
+
+	case "TabSize":
+		box.tab_size = clamp(
+			int(
+				vm.ArgNumber(
+					L,
+					value_index,
+				),
+			),
+			1,
+			16,
+		)
+		return true
+
+	case "AutoIndent":
+		box.auto_indent =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
 		return true
 
 	case "PlaceholderText":
@@ -1305,9 +3007,15 @@ TextBox_render :: proc(
 			f32(0.1),
 		)
 
-	//
-	// Focus animation
-	//
+	if box.code_editor {
+		text_box_render_code_editor(
+			box,
+			rect,
+			ctx,
+			dt,
+		)
+		return
+	}
 
 	focus_target: f32 = 0
 
@@ -1327,10 +3035,6 @@ TextBox_render :: proc(
 			box.focus_animation
 		) *
 		focus_lerp
-
-	//
-	// Caret timer
-	//
 
 	if box.focused {
 		box.caret_timer += dt
@@ -1643,6 +3347,8 @@ TextBox_render :: proc(
 		)
 	}
 
+
+
 	//
 	// Animated focus underline
 	//
@@ -1893,9 +3599,10 @@ TextBox_Handle_Event :: proc(
 		}
 
 		cursor :=
-			text_box_cursor_from_x(
+			text_box_cursor_from_point(
 				clicked,
 				event.button.x,
+				event.button.y,
 			)
 
 		modifiers :=
@@ -1935,9 +3642,10 @@ TextBox_Handle_Event :: proc(
 		}
 
 		box.cursor_byte =
-			text_box_cursor_from_x(
+			text_box_cursor_from_point(
 				box,
 				event.motion.x,
+				event.motion.y,
 			)
 
 		text_box_restart_caret(
@@ -2051,11 +3759,40 @@ TextBox_Handle_Event :: proc(
 
 				return
 
+			case .D:
+				if box.code_editor {
+					text_box_duplicate_line(box)
+				}
+				return
+
+			case .SLASH:
+				if box.code_editor {
+					text_box_toggle_comment(box)
+				}
+				return
+
+			case .L:
+				if box.code_editor {
+					text_box_delete_line(box)
+				}
+				return
+
 			case:
 			}
 		}
 
 		#partial switch event.key.scancode {
+
+		case .UP:
+			text_box_move_vertical(box, -1, shift)
+
+		case .DOWN:
+			text_box_move_vertical(box, 1, shift)
+
+		case .TAB:
+			if box.code_editor {
+				text_box_indent_selection(box, shift)
+			}
 
 		//
 		// Backspace
@@ -2146,11 +3883,15 @@ TextBox_Handle_Event :: proc(
 						old_cursor
 				}
 
-				box.cursor_byte =
-					text_box_utf8_prev_boundary(
-						box.text,
-						old_cursor,
-					)
+				if shortcut {
+					box.cursor_byte = text_box_word_left(box.text, old_cursor)
+				} else {
+					box.cursor_byte =
+						text_box_utf8_prev_boundary(
+							box.text,
+							old_cursor,
+						)
+				}
 
 				if !shift {
 					box.selection_anchor =
@@ -2192,11 +3933,15 @@ TextBox_Handle_Event :: proc(
 						old_cursor
 				}
 
-				box.cursor_byte =
-					text_box_utf8_next_boundary(
-						box.text,
-						old_cursor,
-					)
+				if shortcut {
+					box.cursor_byte = text_box_word_right(box.text, old_cursor)
+				} else {
+					box.cursor_byte =
+						text_box_utf8_next_boundary(
+							box.text,
+							old_cursor,
+						)
+				}
 
 				if !shift {
 					box.selection_anchor =
@@ -2271,9 +4016,14 @@ TextBox_Handle_Event :: proc(
 
 		case .RETURN,
 		     .KP_ENTER:
-			TextBox_blur(
-				box,
-			)
+			if box.code_editor {
+				text_box_insert_newline(box)
+			} else {
+				TextBox_blur(
+					box,
+					true,
+				)
+			}
 
 		//
 		// Escape
@@ -2309,5 +4059,35 @@ Register_TextBox :: proc(
 
 		clone =
 			TextBox_clone,
+
+		properties = []string{
+			"Text",
+			"PlaceholderText",
+			"TextSize",
+			"TextColor3",
+			"PlaceholderColor3",
+			"TextTransparency",
+
+			"ClearTextOnFocus",
+			"TextEditable",
+			"SelectAllOnFocus",
+			"MaxLength",
+
+			"CaretColor3",
+			"SelectionColor3",
+			"SelectionTransparency",
+			"FocusColor3",
+
+			"CodeEditor",
+			"ShowLineNumbers",
+			"ShowMinimap",
+			"TabSize",
+			"AutoIndent",
+
+			"SelectedText",
+			"LineCount",
+
+			"FocusLost",
+		}
 	)
 }

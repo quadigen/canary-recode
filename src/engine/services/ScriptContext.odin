@@ -16,7 +16,7 @@ ScriptContext :: struct {
 	using service: Service,
 
 	vm_state:       ^vm.VM,
-	class_registry: ^classes.Registry,
+	object_registry: ^classes.Registry,
 }
 
 ScriptContext_construct :: proc(
@@ -35,7 +35,7 @@ ScriptContext_construct :: proc(
 
 	if model != nil && model.registry != nil {
 		script_context.vm_state = model.registry.vm_state
-		script_context.class_registry = model.registry.classes
+		script_context.object_registry = model.registry.classes
 	}
 
 	return &script_context.object
@@ -159,11 +159,11 @@ ScriptContext_step :: proc(
 
 	if script_context == nil ||
 	   script_context.vm_state == nil ||
-	   script_context.class_registry == nil {
+	   script_context.object_registry == nil {
 		return
 	}
 
-	for descriptor in script_context.class_registry.classes {
+	for descriptor in script_context.object_registry.classes {
 		if descriptor == nil {
 			continue
 		}
@@ -195,7 +195,7 @@ ScriptContext_destroy :: proc(
 	script_context := cast(^ScriptContext)object
 
 	script_context.vm_state = nil
-	script_context.class_registry = nil
+	script_context.object_registry = nil
 
 	classes.Object_Destroy(object)
 	free(script_context)

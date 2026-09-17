@@ -233,6 +233,13 @@ Arg_Item :: proc(L: ^vm.State, index: int, registry: ^Registry, enum_name: strin
 	return item
 }
 
+Item_Name :: proc(item: ^Enum_Item) -> string {
+	if item == nil {
+		return ""
+	}
+	return item.name
+}
+
 enum_item_from_name :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
@@ -291,4 +298,3 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.types)
 	registry.types = nil
 }
-

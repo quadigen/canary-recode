@@ -6,6 +6,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 import renderer "../renderer"
+import signals "../signals"
 
 Renderer_Object   :: renderer.RendererObject
 Class_Constructor :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object
@@ -109,6 +110,7 @@ Registry :: struct {
 	renderer:             ^Renderer_Object,
 	data_model:           rawptr,
 	vm_state:             ^vm.VM,
+	signal_registry:      ^signals.Registry,
 	fallback_require_ref: i32,
 	require_resolver:     Require_Resolver,
 	require_resolver_ctx: rawptr,
@@ -119,12 +121,14 @@ Registry_Init :: proc(
 	enum_registry: ^enums.Registry = nil,
 	renderer: ^Renderer_Object = nil,
 	data_model: rawptr = nil,
+	signal_registry: ^signals.Registry = nil,
 ) -> Registry {
 	return Registry{
 		datatypes = datatype_registry,
 		enums = enum_registry,
 		renderer = renderer,
 		data_model = data_model,
+		signal_registry = signal_registry,
 	}
 }
 
@@ -218,6 +222,42 @@ descriptor_set :: proc(
 	}
 
 	return Object_Set_Property(L, value, ctx, key, value_index)
+}
+
+append_properties :: proc(
+    registry: ^Registry,
+    class: ^Class_Info,
+    result: ^[dynamic]string,
+) {
+    if registry == nil || class == nil {
+        return
+    }
+
+    append_properties(registry, class.parent, result)
+
+    descriptor := Find_Class(registry, class.name)
+    if descriptor == nil {
+        return
+    }
+
+    for property in descriptor.properties {
+        append(result, property)
+    }
+}
+
+Get_Properties :: proc(
+    registry: ^Registry,
+    object: ^Object,
+) -> [dynamic]string {
+    result: [dynamic]string
+
+    if registry == nil || object == nil {
+        return result
+    }
+
+    append_properties(registry, object.class, &result)
+
+    return result
 }
 
 descriptor_namecall :: proc(
@@ -387,9 +427,12 @@ Push_New :: proc(
 		return nil, false
 	}
 
+	object.signal_registry = registry
+
 	vm.PushUserdata(vm_state, object, &descriptor.binding)
 	object.lua_ref = vm.RetainValue(vm_state.L)
 	append(&descriptor.instances, object)
+
 	return object, true
 }
 
@@ -562,34 +605,56 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
 	Register_Instance(registry)
+	Register_ArcHandles(registry)
 	Register_BoolValue(registry)
+	Register_BrickColorValue(registry)
 	Register_Camera(registry)
+	Register_CFrameValue(registry)
+	Register_Color3Value(registry)
+	Register_ColorSequenceValue(registry)
 	Register_Decal(registry)
+	Register_DoubleConstrainedValue(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
+	Register_GuiButton(registry)
 	Register_GuiObject(registry)
+	Register_Handles(registry)
+	Register_ImageButton(registry)
 	Register_ImageLabel(registry)
 	Register_InputObject(registry)
+	Register_IntConstrainedValue(registry)
+	Register_IntValue(registry)
 	Register_Light(registry)
+	Register_Lighting_Effect(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
 	Register_ModuleModuleScript(registry)
 	Register_ModuleScript(registry)
+	Register_NumberRangeValue(registry)
+	Register_NumberSequenceValue(registry)
 	Register_NumberValue(registry)
+	Register_ObjectValue(registry)
 	Register_Part(registry)
 	Register_PointLight(registry)
+	Register_RayValue(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
 	Register_ScrollingFrame(registry)
 	Register_Sound(registry)
 	Register_SpotLight(registry)
+	Register_StringValue(registry)
 	Register_SurfaceLight(registry)
 	Register_TextBox(registry)
+	Register_TextButton(registry)
 	Register_TextLabel(registry)
 	Register_UIBackdrop(registry)
 	Register_UICorner(registry)
+	Register_UIGradient(registry)
 	Register_UIShadow(registry)
 	Register_UIStroke(registry)
+	Register_ValueBase(registry)
+	Register_Vector2Value(registry)
+	Register_Vector3Value(registry)
 	// wire:end classes
 }
 

@@ -1783,6 +1783,94 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(
         &imagePaint);
 }
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageShadow(
+    KineSkiaSurface* surface,
+    KineSkiaImage* image,
+    float x, float y,
+    float width, float height,
+    float offsetX, float offsetY,
+    float blurSigma, float spread,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    if (!surface || !surface->surface || !image ||
+        width <= 0.0f || height <= 0.0f || a == 0) {
+        return;
+    }
+
+    if (!image->image && !image->svg) {
+        return;
+    }
+
+    SkCanvas* canvas = surface->surface->getCanvas();
+
+    const SkRect srcRect =
+        SkRect::MakeXYWH(x, y, width, height);
+
+    sk_sp<SkImageFilter> inputFilter = nullptr;
+
+    // Spread should expand the alpha silhouette, not resize the image.
+    if (spread > 0.0f) {
+        inputFilter = SkImageFilters::Dilate(
+            spread,
+            spread,
+            nullptr
+        );
+    }
+
+    sk_sp<SkImageFilter> shadowFilter =
+        SkImageFilters::DropShadowOnly(
+            offsetX,
+            offsetY,
+            std::max(0.0f, blurSigma),
+            std::max(0.0f, blurSigma),
+            SkColorSetARGB(a, r, g, b),
+            std::move(inputFilter)
+        );
+
+    SkPaint layerPaint;
+    layerPaint.setAntiAlias(true);
+    layerPaint.setImageFilter(std::move(shadowFilter));
+
+    // Blur normally needs significantly more room than one sigma.
+    const float blurPadding =
+        std::max(0.0f, blurSigma) * 3.0f;
+
+    const float padding =
+        std::max(0.0f, spread) + blurPadding;
+
+    SkRect layerBounds = srcRect;
+    layerBounds.outset(
+        padding + std::abs(offsetX),
+        padding + std::abs(offsetY)
+    );
+
+    canvas->saveLayer(&layerBounds, &layerPaint);
+
+    if (image->svg) {
+        kine_skia_draw_svg(
+            canvas,
+            image,
+            x,
+            y,
+            width,
+            height,
+            255
+        );
+    } else {
+        SkPaint imagePaint;
+        imagePaint.setAntiAlias(true);
+
+        canvas->drawImageRect(
+            image->image,
+            srcRect,
+            SkSamplingOptions(SkFilterMode::kLinear),
+            &imagePaint
+        );
+    }
+
+    canvas->restore();
+}
+
 KINE_SKIA_API float Kine_Skia_Surface_GetFontAscent(
     float fontSize,
     const char* fontPath)

@@ -282,6 +282,15 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(
     uint8_t r, uint8_t g, uint8_t b, uint8_t a,
     uint8_t alpha);
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageShadow(
+    KineSkiaSurface* surface,
+    KineSkiaImage* image,
+    float x, float y,
+    float width, float height,
+    float offsetX, float offsetY,
+    float blurSigma, float spread,
+    uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+
 KINE_SKIA_API float Kine_Skia_Surface_GetFontAscent(float fontSize, const char* fontPath);
 
 /* ---------------- Text ---------------- */

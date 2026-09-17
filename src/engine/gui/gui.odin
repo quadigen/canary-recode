@@ -540,6 +540,37 @@ drawImageSized :: proc(
 	)
 }
 
+drawImageShadow :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	imageObject: ^kineffi.KineSkiaImage,
+	rect: Rect,
+	shadow: ShadowParams,
+) {
+	if surface == nil || imageObject == nil {
+		return
+	}
+
+	r, g, b := colorToU8(shadow.color)
+	a := u8(math.round(clamp(shadow.alpha, 0, 1) * 255))
+
+	kineffi.Kine_Skia_Surface_DrawImageShadow(
+		surface,
+		imageObject,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		shadow.offsetX,
+		shadow.offsetY,
+		shadow.blurSigma,
+		shadow.spread,
+		r,
+		g,
+		b,
+		a,
+	)
+}
+
 drawImageRect :: proc(
 	surface: ^kineffi.KineSkiaSurface,
 	imageObject: ^kineffi.KineSkiaImage,

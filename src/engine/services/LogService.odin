@@ -3,6 +3,8 @@ package services
 // wire:service global="logService"
 
 import "core:fmt"
+import "core:strings"
+import "base:runtime"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -42,6 +44,89 @@ log_service_add_entry :: proc(
 		log_type  = log_type,
 		timestamp = time.to_unix_seconds(time.now()),
 	})
+}
+
+log_service_write :: proc(
+	service: ^LogService,
+	message: string,
+	log_type: string,
+) {
+	if service == nil {
+		return
+	}
+	service.message_count += 1
+	switch log_type {
+	case "Info":
+		service.info_count += 1
+	case "Warn":
+		service.warning_count += 1
+	case "Error":
+		service.error_count += 1
+	}
+	log_service_add_entry(service, message, log_type)
+	switch log_type {
+	case "Info":
+		fmt.printf("[INFO] %s\n", message)
+	case "Warn":
+		fmt.eprintf("[WARN] %s\n", message)
+	case "Error":
+		fmt.eprintf("[ERROR] %s\n", message)
+	case:
+		fmt.println(message)
+	}
+}
+
+log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	registry := cast(^Registry)vm.UpvaluePointer(L)
+	if registry == nil {
+		return 0
+	}
+	service_descriptor := Find_Service(registry, "LogService")
+	if service_descriptor == nil {
+		return 0
+	}
+	service := cast(^LogService)Ensure_Service(registry, "LogService")
+	if service == nil {
+		return 0
+	}
+	parts: [dynamic]string
+	for index := 1; index <= vm.StackTop(L); index += 1 {
+		append(&parts, vm.DisplayString(L, index))
+	}
+	message := strings.concatenate(parts[:])
+	delete(parts)
+	log_service_write(service, message, "Log")
+	return 0
+}
+
+log_service_luau_warn :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	registry := cast(^Registry)vm.UpvaluePointer(L)
+	if registry == nil {
+		return 0
+	}
+	service := cast(^LogService)Ensure_Service(registry, "LogService")
+	if service == nil {
+		return 0
+	}
+	parts: [dynamic]string
+	for index := 1; index <= vm.StackTop(L); index += 1 {
+		append(&parts, vm.DisplayString(L, index))
+	}
+	message := strings.concatenate(parts[:])
+	delete(parts)
+	log_service_write(service, message, "Warn")
+	return 0
+}
+
+Install_Log_Globals :: proc(registry: ^Registry, vm_state: ^vm.VM) {
+	vm.PushLightUserdata(vm_state.L, registry)
+	vm.PushFunction(vm_state.L, "print", log_service_luau_print, 1)
+	vm.SetGlobalFromStack(vm_state, "print")
+	vm.PushLightUserdata(vm_state.L, registry)
+	vm.PushFunction(vm_state.L, "warn", log_service_luau_warn, 1)
+	vm.SetGlobalFromStack(vm_state, "warn")
 }
 
 log_service_clear_history :: proc(service: ^LogService) {
@@ -112,41 +197,25 @@ log_service_namecall :: proc(
     switch method {
     case "Log":
         message := vm.ArgString(L, 2)
-
-        service.message_count += 1
-
-        fmt.println(message)
-
+        log_service_write(service, message, "Log")
         return 0, true
 
     case "Info":
         message := vm.ArgString(L, 2)
 
-        service.message_count += 1
-        service.info_count += 1
-
-        fmt.printf("[INFO] %s\n", message)
-
+        log_service_write(service, message, "Info")
         return 0, true
 
     case "Warn":
         message := vm.ArgString(L, 2)
 
-        service.message_count += 1
-        service.warning_count += 1
-
-        fmt.eprintf("[WARN] %s\n", message)
-
+        log_service_write(service, message, "Warn")
         return 0, true
 
     case "Error":
         message := vm.ArgString(L, 2)
 
-        service.message_count += 1
-        service.error_count += 1
-
-        fmt.eprintf("[ERROR] %s\n", message)
-
+        log_service_write(service, message, "Error")
         return 0, true
 
     case "Clear":
@@ -168,7 +237,7 @@ log_service_namecall :: proc(
             vm.PushString(L, entry.log_type)
             vm.SetField(L, -2, "type")
 
-            vm.PushInteger(L, entry.timestamp)
+            vm.PushNumber(L, f64(entry.timestamp))
             vm.SetField(L, -2, "timestamp")
 
             vm.RawSetIndex(L, -2, i + 1)
