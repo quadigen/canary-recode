@@ -59,13 +59,6 @@ local list = UI.create("ScrollingFrame", {
 
 UI.corner(list, tokens.radius.md)
 
-UI.create("UIBackdrop", {
-	Enabled = true,
-	BlurRadius = 18,
-	TintColor3 = tokens.color.surface,
-	TintTransparency = 0.72,
-}, list)
-
 local function selectedObject()
 	local selection = Selection:Get()
 	return selection and selection[1]
@@ -98,6 +91,7 @@ local classIcons = {
 	Sound = "Sound",
 	SpotLight = "SpotLight",
 	SurfaceLight = "SurfaceLight",
+	SyntaxHighlighter = "SyntaxHighlighter",
 	TextBox = "TextBox",
 	TextButton = "TextButton",
 	TextLabel = "TextLabel",
@@ -147,6 +141,7 @@ local creatableClasses = {
 	"StringValue",
 	"SurfaceLight",
 	"SunRaysEffect",
+	"SyntaxHighlighter",
 	"TextBox",
 	"TextButton",
 	"TextLabel",
@@ -229,6 +224,7 @@ local categoryByClass = {
 	ScreenGui = "UI",
 	ScrollingFrame = "UI",
 	TextBox = "UI",
+	SyntaxHighlighter = "UI",
 	TextButton = "UI",
 	TextLabel = "UI",
 	UIBackdrop = "UI",
@@ -276,12 +272,14 @@ local dropdown = UI.dropdown(content, "", UDim2.new(1, -32, 0, 6), UDim2.fromOff
 
 	icon = "builtin://icons/Plus.svg",
 	iconSize = 14,
+	backdrop = true,
 
 	color = tokens.color.input,
 	hoverColor = tokens.color.hover,
-
+	closeOnOutsideClick = false,
 	menuWidth = 190,
 	menuSide = "left",
+	itemBgTransparency = 1,
 	BackgroundTransparency = 0.5,
 	menuPosition = function()
 		local coordinates = theme.ExplorerCoordinates
@@ -316,9 +314,6 @@ local dropdown = UI.dropdown(content, "", UDim2.new(1, -32, 0, 6), UDim2.fromOff
 		})
 	end,
 })
-
-local backDrop = Instance.new("UIBackdrop")
-backDrop.Parent = dropdown
 
 local serviceOrder = {
 	Workspace = 1,
@@ -521,7 +516,6 @@ rebuild()
 
 renderer.Pool.new("2d", function()
 	panel.Size = theme.ExplorerCoordinates.Size
-
 	panel.Position = theme.ExplorerCoordinates.Position
 
 	local selected = selectedObject()

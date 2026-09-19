@@ -7,3 +7,18 @@
 [submodule ".tools/emsdk"]
 	path = .tools/emsdk
 	url = https://github.com/emscripten-core/emsdk.git
+[submodule "vendor/libyaml"]
+	path = vendor/libyaml
+	url = https://github.com/yaml/libyaml
+[submodule "vendor/miniz"]
+	path = vendor/miniz
+	url = https://github.com/richgel999/miniz
+[submodule "vendor/tracy"]
+	path = vendor/tracy
+	url = https://github.com/wolfpld/tracy
+[submodule "vendor/zstd"]
+	path = vendor/zstd
+	url = https://github.com/facebook/zstd.git
+[submodule "src/engine/util/odin-http"]
+	path = src/engine/util/odin-http
+	url = https://github.com/laytan/odin-http

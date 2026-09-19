@@ -340,28 +340,40 @@ struct KineTexHandle {
 // Automatic instanced batching.
 //
 // Kine_Filament_DrawMeshEx no longer builds a Filament Entity per call. It
-// just records the world transform under a key describing "everything about
-// this draw that isn't the transform" (mesh + material kind + color/params +
-// shadow/culling flags). Calls that share a key are, by definition, the same
-// mesh drawn with the same material settings, so they can legally share one
-// MaterialInstance and be issued as a single GPU-instanced draw call.
+// just appends the world transform AND color to a pending batch under a key
+// describing "everything about this draw that isn't per-instance" (mesh +
+// material kind + params + shadow/culling flags). Calls that share a key are,
+// by definition, the same mesh drawn with the same material settings, so they
+// can legally share one GPU-instanced draw call even when their colors differ.
+//
+// Color is deliberately NOT part of the key: it travels beside the transform
+// as per-instance data. Each 64-instance chunk gets its own MaterialInstance
+// carrying a fixed float4[64] "instanceColors" array, and the (instanced)
+// materials read their own entry via getInstanceIndex().
 //
 // kine_update_batches() turns each accumulated batch into one or more
 // RenderableManager entities using InstanceBuffers. Stable batches retain
 // their entities, materials, and buffers across frames; animation only
-// uploads transforms and updates bounds. Batches bigger than
+// uploads transforms/colors and updates bounds. Batches bigger than
 // Engine::getMaxAutomaticInstances() are split into multiple draw calls.
 // ---------------------------------------------------------------------------
+
+// The per-instance color array baked into every instanced material. One
+// InstanceBuffer chunk = self.getMaxAutomaticInstances() instances (64 on
+// every desktop backend), so a fixed 64-slot array always covers one chunk.
+constexpr size_t KINE_MAX_INSTANCE_COLORS = 64;
 
 struct KineBatchKey {
     KineMesh* mesh          = nullptr;
     KineFilamentShader* shader = nullptr;
     uint64_t  streamId      = 0;
+
     int       materialKind  = 0;
-    float     r = 0, g = 0, b = 0;
+
     float     param1 = 0, param2 = 0, param3 = 0;
     float     transmission  = 0;
     float     particleUvOffsetY = 0;
+
     bool      castShadow    = false;
     bool      receiveShadow = false;
     bool      culling       = true;
@@ -371,7 +383,6 @@ struct KineBatchKey {
     bool operator==(const KineBatchKey& o) const noexcept
     {
         return mesh == o.mesh && shader == o.shader && streamId == o.streamId && materialKind == o.materialKind &&
-               r == o.r && g == o.g && b == o.b &&
                param1 == o.param1 && param2 == o.param2 && param3 == o.param3 &&
                transmission == o.transmission && particleUvOffsetY == o.particleUvOffsetY &&
                castShadow == o.castShadow && receiveShadow == o.receiveShadow &&
@@ -387,9 +398,6 @@ struct KineBatchKeyHash {
         mix(std::hash<void*>()(k.shader));
         mix(std::hash<uint64_t>()(k.streamId));
         mix(std::hash<int>()(k.materialKind));
-        mix(std::hash<float>()(k.r));
-        mix(std::hash<float>()(k.g));
-        mix(std::hash<float>()(k.b));
         mix(std::hash<float>()(k.param1));
         mix(std::hash<float>()(k.param2));
         mix(std::hash<float>()(k.param3));
@@ -405,28 +413,30 @@ struct KineBatchKeyHash {
 
 struct KinePendingBatch {
     std::vector<math::mat4f> transforms;
+    std::vector<math::float4> colors;
+
     uint64_t lastQueuedFrame = 0;
-    uint64_t transformHash = 1469598103934665603ULL;
+    uint64_t instanceHash = 1469598103934665603ULL;
 };
 
 struct KineBuiltBatch {
     Entity            entity;
     InstanceBuffer*   instanceBuffer = nullptr;
+    MaterialInstance* materialInstance = nullptr;
     size_t             instanceCount = 0;
 };
 
 struct KinePersistentBatch {
-    MaterialInstance* matInst = nullptr;
     std::vector<KineBuiltBatch> chunks;
     uint64_t lastUsedFrame = 0;
-    uint64_t transformHash = 0;
+    uint64_t instanceHash = 0;
 };
 
 struct KineFilamentInstanceBatch {
     KineFilamentContext* ctx = nullptr;
     KineBatchKey key;
-    MaterialInstance* matInst = nullptr;
     std::vector<math::mat4f> transforms;
+    std::vector<math::float4> colors;
     std::vector<KineBuiltBatch> chunks;
 };
 
@@ -2271,10 +2281,12 @@ bool rebuildRenderTarget(KineFilamentContext* ctx, unsigned int textureId, int w
 }
 
 // ---------------------------------------------------------------------------
-// Applies a batch's shared color/params to a freshly-created MaterialInstance.
-// Every draw call folded into a given batch was queued with an identical
-// KineBatchKey, so it's correct for all of that batch's GPU instances to
-// share one MaterialInstance built this way.
+// Applies a batch's shared (non per-instance) params to a freshly-created
+// MaterialInstance. Colors are deliberately NOT set here: every draw call
+// queued under a batch may carry a different color, so per-instance colors
+// live in the chunk's float4[64] "instanceColors" array and are assigned
+// separately (see kine_set_chunk_colors). Only state that is truly uniform
+// across all of the batch's instances belongs in this function.
 // ---------------------------------------------------------------------------
 static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstance* mi, const KineBatchKey& key)
 {
@@ -2294,29 +2306,16 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
 	const float time = ctx->time;
 	Texture* whiteTex = ctx->whiteTex;
     if (key.materialKind == KINE_MAT_GLASS) {
-        // Keep the dielectric surface mostly neutral; use absorption below
-        // for physically plausible colored transmission through the volume.
-        const math::float3 surfaceColor{
-            0.82f + key.r * 0.18f,
-            0.82f + key.g * 0.18f,
-            0.82f + key.b * 0.18f,
-        };
-        const math::float3 absorption{
-            (1.0f - std::clamp(key.r, 0.0f, 1.0f)) * 0.15f,
-            (1.0f - std::clamp(key.g, 0.0f, 1.0f)) * 0.15f,
-            (1.0f - std::clamp(key.b, 0.0f, 1.0f)) * 0.15f,
-        };
-        mi->setParameter("baseColor", RgbType::LINEAR, surfaceColor);
+        // Per-instance baseColor/absorption (derived from the instance color)
+        // are computed in kine_glass.mat's fragment shader via getInstanceIndex().
         mi->setParameter("roughness",    key.param1);
         mi->setParameter("ior",          key.param2);
         mi->setParameter("thickness",    key.param3);
         mi->setParameter("transmission", key.transmission);
-        mi->setParameter("absorption",   absorption);
     } else if (key.materialKind == KINE_MAT_NEON) {
-        mi->setParameter("emissiveColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
+        // Per-instance emissive color comes from instanceColors.rgb.
         mi->setParameter("intensity",     key.param1);
     } else if (key.materialKind == KINE_MAT_WATER) {
-        mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
         mi->setParameter("roughness",   key.param1);       // ~0.05-0.15 for calm water
         mi->setParameter("ior",         key.param2);       // 1.33
         mi->setParameter("thickness",   key.param3);
@@ -2326,12 +2325,12 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
         mi->setParameter("waveSpeed",   1.0f);
         mi->setParameter("foamAmount",  0.3f);
     } else if (key.materialKind == KINE_MAT_OUTLINE) {
-        mi->setParameter("baseColor", RgbType::LINEAR, math::float3{key.r, key.g, key.b});
         mi->setParameter("thickness", key.param1);
     } else if (key.materialKind == KINE_MAT_GIZMO) {
-        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
+        // Everything (including per-instance baseColor) is set per chunk.
     } else if (key.materialKind == KINE_MAT_PARTICLE) {
-        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, key.transmission});
+        // Per-instance baseColor (rgb + per-particle alpha) comes from
+        // instanceColors; see kine_queue_mesh below.
         mi->setParameter("uvScale", math::float2{key.param1, key.param2});
         mi->setParameter("uvOffset", math::float2{key.param3, key.particleUvOffsetY});
 
@@ -2370,7 +2369,8 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
             TextureSampler::WrapMode::REPEAT
         );
 
-        mi->setParameter("baseColor", RgbaType::LINEAR, math::float4{key.r, key.g, key.b, 1.0f});
+        // Per-instance baseColor comes from instanceColors (kine_default.mat),
+        // so only the surface controls below are shared across instances.
         mi->setParameter("roughness", key.param1);
         mi->setParameter("metallic",  key.param2);
         mi->setParameter("shadowStrength", 0.4f);
@@ -2479,9 +2479,6 @@ static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem& item, uint64_
     key.shader = item.shader;
     key.streamId = streamId;
     key.materialKind = item.materialKind;
-    key.r = item.r;
-    key.g = item.g;
-    key.b = item.b;
     key.param1 = item.param1;
     key.param2 = item.param2;
     key.param3 = item.param3;
@@ -2507,6 +2504,28 @@ static math::mat4f kine_draw_item_transform(const KineFilamentDrawItem& item)
     );
 }
 
+static size_t kine_max_chunk_instances(KineFilamentContext* ctx)
+{
+    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
+    if (maxInstances == 0) maxInstances = 1;
+    // Chunk colors ride in a fixed float4[KINE_MAX_INSTANCE_COLORS] array, so
+    // cap each chunk at that many instances regardless of the reported limit.
+    return std::min(maxInstances, KINE_MAX_INSTANCE_COLORS);
+}
+
+// Uploads this chunk's slice of the per-instance color array. Only materials
+// that actually declare an instanceColors parameter (the built-in instanced
+// ones) receive it; user runtime materials opt in on their own.
+static void kine_set_chunk_colors(
+    MaterialInstance* mi,
+    const math::float4* colors,
+    size_t count)
+{
+    if (!mi || !colors || count == 0 || !mi->getMaterial()->hasParameter("instanceColors")) return;
+    count = std::min(count, KINE_MAX_INSTANCE_COLORS);
+    mi->setParameter("instanceColors", colors, count);
+}
+
 static void kine_destroy_instance_batch_chunks(KineFilamentInstanceBatch* batch)
 {
     if (!batch || !batch->ctx || !batch->ctx->engine) return;
@@ -2519,6 +2538,9 @@ static void kine_destroy_instance_batch_chunks(KineFilamentInstanceBatch* batch)
         }
         if (chunk.instanceBuffer) {
             ctx->engine->destroy(chunk.instanceBuffer);
+        }
+        if (chunk.materialInstance) {
+            ctx->engine->destroy(chunk.materialInstance);
         }
     }
     batch->chunks.clear();
@@ -2534,21 +2556,22 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
     Material* base = kine_select_material(ctx, batch->key.materialKind, batch->key.shader);
     if (!base) return false;
 
-    if (!batch->matInst) {
-        batch->matInst = base->createInstance();
-    }
-    kine_apply_material_params(ctx, batch->matInst, batch->key);
-
     kine_destroy_instance_batch_chunks(batch);
 
-    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
-    if (maxInstances == 0) maxInstances = 1;
+    size_t maxInstances = kine_max_chunk_instances(ctx);
 
     size_t offset = 0;
     while (offset < batch->transforms.size()) {
         const size_t count = std::min(maxInstances, batch->transforms.size() - offset);
         const math::mat4f* chunkTransforms = batch->transforms.data() + offset;
+        const math::float4* chunkColors = batch->colors.empty()
+            ? nullptr
+            : batch->colors.data() + offset;
         const Box bounds = kine_compute_dynamic_batch_bounds(mesh, chunkTransforms, count);
+
+        MaterialInstance* mi = base->createInstance();
+        kine_apply_material_params(ctx, mi, batch->key);
+        kine_set_chunk_colors(mi, chunkColors, count);
 
         InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
         instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
@@ -2556,7 +2579,7 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
         Entity entity = EntityManager::get().create();
         RenderableManager::Builder renderableBuilder(1);
         renderableBuilder.boundingBox(bounds)
-            .material(0, batch->matInst)
+            .material(0, mi)
             .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, mesh->vb, mesh->ib, 0, mesh->indexCount)
             .culling(batch->key.culling)
             .receiveShadows(batch->key.receiveShadow)
@@ -2573,7 +2596,7 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
         renderableBuilder.build(*ctx->engine, entity);
 
         ctx->scene->addEntity(entity);
-        batch->chunks.push_back({entity, instanceBuffer, count});
+        batch->chunks.push_back({entity, instanceBuffer, mi, count});
         offset += count;
     }
 
@@ -2594,10 +2617,6 @@ static bool kine_switch_global_shader(KineFilamentContext* ctx, KineFilamentShad
     for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
         if (!batch) continue;
         kine_destroy_instance_batch_chunks(batch);
-        if (batch->matInst) {
-            ctx->engine->destroy(batch->matInst);
-            batch->matInst = nullptr;
-        }
         rebuilt = kine_rebuild_instance_batch(batch) && rebuilt;
     }
     return rebuilt;
@@ -2744,6 +2763,9 @@ static void kine_destroy_batch_chunks(
         if (chunk.instanceBuffer) {
             ctx->engine->destroy(chunk.instanceBuffer);
         }
+        if (chunk.materialInstance) {
+            ctx->engine->destroy(chunk.materialInstance);
+        }
     }
     batch.chunks.clear();
 }
@@ -2753,10 +2775,6 @@ static void kine_destroy_persistent_batch(
     KinePersistentBatch& batch)
 {
     kine_destroy_batch_chunks(ctx, batch);
-    if (batch.matInst) {
-        ctx->engine->destroy(batch.matInst);
-        batch.matInst = nullptr;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2768,8 +2786,7 @@ static void kine_destroy_persistent_batch(
 // ---------------------------------------------------------------------------
 static void kine_update_batches(KineFilamentContext* ctx)
 {
-    size_t maxInstances = ctx->engine->getMaxAutomaticInstances();
-    if (maxInstances == 0) maxInstances = 1;
+    size_t maxInstances = kine_max_chunk_instances(ctx);
 
     std::vector<std::pair<KineBatchKey, KinePendingBatch*>> sortedBatches;
     sortedBatches.reserve(ctx->pendingBatches.size());
@@ -2793,12 +2810,9 @@ static void kine_update_batches(KineFilamentContext* ctx)
 
         KinePersistentBatch& batch = ctx->builtBatches[key];
         batch.lastUsedFrame = ctx->batchFrame;
-        if (!batch.matInst) {
-            batch.matInst = base->createInstance();
-			kine_apply_material_params(ctx, batch.matInst, key);
-        }
 
         std::vector<math::mat4f>& transforms = pending->transforms;
+        std::vector<math::float4>& colors = pending->colors;
         const size_t requiredChunks = (transforms.size() + maxInstances - 1) / maxInstances;
         bool rebuildChunks = batch.chunks.size() != requiredChunks;
         if (!rebuildChunks) {
@@ -2815,22 +2829,27 @@ static void kine_update_batches(KineFilamentContext* ctx)
         if (rebuildChunks) {
             kine_destroy_batch_chunks(ctx, batch);
         }
-		const bool transformsChanged = rebuildChunks || batch.transformHash != pending->transformHash;
+		const bool transformsChanged = rebuildChunks || batch.instanceHash != pending->instanceHash;
 
         size_t offset = 0;
         size_t chunkIndex = 0;
         while (offset < transforms.size()) {
             const size_t count = std::min(maxInstances, transforms.size() - offset);
             const math::mat4f* chunkTransforms = transforms.data() + offset;
+            const math::float4* chunkColors = colors.data() + offset;
             if (rebuildChunks) {
 				const Box bounds = kine_compute_batch_bounds(m, chunkTransforms, count);
+                MaterialInstance* mi = base->createInstance();
+                kine_apply_material_params(ctx, mi, key);
+                kine_set_chunk_colors(mi, chunkColors, count);
+
                 InstanceBuffer* instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
                 instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
 
                 Entity entity = EntityManager::get().create();
                 RenderableManager::Builder renderableBuilder(1);
                 renderableBuilder.boundingBox(bounds)
-                    .material(0, batch.matInst)
+                    .material(0, mi)
                     .geometry(0, RenderableManager::PrimitiveType::TRIANGLES, m->vb, m->ib, 0, m->indexCount)
                     .culling(key.culling)
                     .receiveShadows(key.receiveShadow)
@@ -2848,11 +2867,12 @@ static void kine_update_batches(KineFilamentContext* ctx)
                 renderableBuilder.build(*ctx->engine, entity);
 
                 ctx->scene->addEntity(entity);
-                batch.chunks.push_back({entity, instanceBuffer, count});
+                batch.chunks.push_back({entity, instanceBuffer, mi, count});
 			} else if (transformsChanged) {
 				const Box bounds = kine_compute_batch_bounds(m, chunkTransforms, count);
                 KineBuiltBatch& chunk = batch.chunks[chunkIndex];
                 chunk.instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
+                kine_set_chunk_colors(chunk.materialInstance, chunkColors, count);
                 RenderableManager& rm = ctx->engine->getRenderableManager();
                 RenderableManager::Instance renderable = rm.getInstance(chunk.entity);
                 if (renderable.isValid()) {
@@ -2863,15 +2883,19 @@ static void kine_update_batches(KineFilamentContext* ctx)
             offset += count;
             chunkIndex++;
         }
-		batch.transformHash = pending->transformHash;
+		batch.instanceHash = pending->instanceHash;
     }
 
     // Retained water batches still need their time uniform advanced even
     // when their transforms and material properties are unchanged.
     for (auto& [key, batch] : ctx->builtBatches) {
         if (batch.lastUsedFrame == ctx->batchFrame &&
-            key.materialKind == KINE_MAT_WATER && batch.matInst) {
-			kine_apply_material_params(ctx, batch.matInst, key);
+            key.materialKind == KINE_MAT_WATER) {
+            for (KineBuiltBatch& chunk : batch.chunks) {
+                if (chunk.materialInstance) {
+                    kine_apply_material_params(ctx, chunk.materialInstance, key);
+                }
+            }
         }
     }
 
@@ -4084,8 +4108,6 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
 		for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
 			if (!batch) continue;
 			kine_destroy_instance_batch_chunks(batch);
-			if (batch->matInst) ctx->engine->destroy(batch->matInst);
-			batch->matInst = nullptr;
 			batch->ctx = nullptr;
 		}
 		ctx->instanceBatches.clear();
@@ -5676,7 +5698,6 @@ static void kine_queue_mesh(
     key.shader        = shader && shader->ctx == ctx ? shader : nullptr;
     key.streamId      = streamId;
     key.materialKind  = materialKind;
-    key.r = r; key.g = g; key.b = b;
     key.param1 = param1; key.param2 = param2; key.param3 = param3;
     key.transmission  = transmission;
     key.particleUvOffsetY = particleUvOffsetY;
@@ -5691,14 +5712,15 @@ static void kine_queue_mesh(
     KinePendingBatch& pending = ctx->pendingBatches[key];
     if (pending.lastQueuedFrame != ctx->batchFrame) {
         pending.transforms.clear();
+        pending.colors.clear();
         pending.lastQueuedFrame = ctx->batchFrame;
-		pending.transformHash = 1469598103934665603ULL;
+		pending.instanceHash = 1469598103934665603ULL;
     }
 	for (size_t offset = 0; offset < 16; ++offset) {
 		uint32_t bits = 0;
 		memcpy(&bits, mat4 + offset, sizeof(bits));
-		pending.transformHash ^= bits;
-		pending.transformHash *= 1099511628211ULL;
+		pending.instanceHash ^= bits;
+		pending.instanceHash *= 1099511628211ULL;
 	}
     pending.transforms.emplace_back(
         math::float4{mat4[0], mat4[4], mat4[8],  mat4[12]},
@@ -5706,6 +5728,19 @@ static void kine_queue_mesh(
         math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
         math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
     );
+    // Color rides along as per-instance data so differently-colored draws that
+    // share a mesh/material still fold into a single batch. Particles carry
+    // their per-particle alpha in the w channel (the same value already
+    // stored in key.transmission); every other material treats w as opaque.
+    const math::float4 color{r, g, b,
+        materialKind == KINE_MAT_PARTICLE ? transmission : 1.0f};
+	for (size_t offset = 0; offset < 4; ++offset) {
+		uint32_t bits = 0;
+		memcpy(&bits, &color[offset], sizeof(bits));
+		pending.instanceHash ^= bits;
+		pending.instanceHash *= 1099511628211ULL;
+	}
+    pending.colors.emplace_back(color);
 }
 
 KINE_API void Kine_Filament_DrawMeshEx(
@@ -5800,7 +5835,11 @@ KINE_API void Kine_Filament_DrawParticles(
             uvOffsetX,
             item.a / 255.0f,
             item.transform,
-            castShadows,
+            // Tiny particle quads (a few pixels wide) gain nothing from
+            // shadow casting and it doubles the shadow-pass geometry cost, so
+            // castShadows is intentionally ignored here. Received shadows stay
+            // off for unlit petals, and only the caller's culling flag is kept.
+            false,
             false,
             culling,
             texture,
@@ -5872,14 +5911,21 @@ KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
     batch->ctx = ctx;
     batch->key = key;
     batch->transforms.reserve(itemCount);
+    batch->colors.reserve(itemCount);
 
     for (uint32_t i = 0; i < itemCount; ++i) {
-        const KineBatchKey itemKey = kine_draw_item_key(items[i]);
+        const KineFilamentDrawItem& item = items[i];
+        const KineBatchKey itemKey = kine_draw_item_key(item);
         if (!(itemKey == key)) {
             delete batch;
             return nullptr;
         }
-        batch->transforms.push_back(kine_draw_item_transform(items[i]));
+        batch->transforms.push_back(kine_draw_item_transform(item));
+        // Color is per-instance data (not part of the key), so different items
+        // may carry different colors inside one explicit instance batch.
+        batch->colors.emplace_back(
+            item.r, item.g, item.b,
+            key.materialKind == KINE_MAT_PARTICLE ? item.transmission : 1.0f);
     }
 
     if (!kine_rebuild_instance_batch(batch)) {
@@ -5899,9 +5945,6 @@ KINE_API void Kine_Filament_DestroyInstanceBatch(KineFilamentInstanceBatch* batc
     if (ctx) {
         ctx->instanceBatches.erase(batch);
     }
-    if (ctx && ctx->engine && batch->matInst) {
-        ctx->engine->destroy(batch->matInst);
-    }
     delete batch;
 }
 
@@ -5913,8 +5956,7 @@ KINE_API void Kine_Filament_UpdateInstanceTransforms(
 {
     if (!batch || !batch->ctx || !batch->ctx->engine || !indices || !transforms || dirtyCount == 0) return;
 
-    size_t maxInstances = batch->ctx->engine->getMaxAutomaticInstances();
-    if (maxInstances == 0) maxInstances = 1;
+    size_t maxInstances = kine_max_chunk_instances(batch->ctx);
 
     std::vector<uint32_t> dirtyIndices;
     dirtyIndices.reserve(dirtyCount);
@@ -6330,10 +6372,6 @@ KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader* shader)
         for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
             if (!batch || batch->key.shader != shader) continue;
             kine_destroy_instance_batch_chunks(batch);
-            if (batch->matInst) {
-                ctx->engine->destroy(batch->matInst);
-                batch->matInst = nullptr;
-            }
             batch->key.shader = nullptr;
             kine_rebuild_instance_batch(batch);
         }
@@ -6357,14 +6395,23 @@ KINE_API bool Kine_Filament_Shader_SetUniform(
     KineFilamentContext* ctx = shader->ctx;
     if (ctx && ctx->engine) {
         for (auto& [key, batch] : ctx->builtBatches) {
-            if (batch.matInst && (key.shader == shader || (!key.shader && ctx->globalShader == shader))) {
-                kine_apply_material_params(ctx, batch.matInst, key);
+            if (key.shader == shader || (!key.shader && ctx->globalShader == shader)) {
+                for (KineBuiltBatch& chunk : batch.chunks) {
+                    if (chunk.materialInstance) {
+                        kine_apply_material_params(ctx, chunk.materialInstance, key);
+                    }
+                }
             }
         }
         for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
-            if (batch && batch->matInst &&
-                    (batch->key.shader == shader || (!batch->key.shader && ctx->globalShader == shader))) {
-                kine_apply_material_params(ctx, batch->matInst, batch->key);
+            if (!batch || (batch->key.shader != shader &&
+                    (batch->key.shader || ctx->globalShader != shader))) {
+                continue;
+            }
+            for (KineBuiltBatch& chunk : batch->chunks) {
+                if (chunk.materialInstance) {
+                    kine_apply_material_params(ctx, chunk.materialInstance, batch->key);
+                }
             }
         }
         if (ctx->postProcessShader == shader && ctx->postMaterialInstance) {

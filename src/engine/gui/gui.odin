@@ -369,11 +369,79 @@ drawBackdropBlur :: proc(
 		cornerRadius,
 		cornerRadius,
 		blurSigma,
-		a,
+		255,
 		r,
 		g,
 		b,
 		a,
+	)
+}
+
+drawTextBlurred :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	text: cstring,
+	params: TextParams,
+	blurSigma: f32,
+) {
+	if surface == nil || blurSigma < 0 {
+		return
+	}
+
+	r, g, b := colorToU8(params.color)
+	a := alphaToU8(params.transparency)
+
+	if params.typeface != nil {
+		kineffi.Kine_Skia_Surface_DrawTextBlurredTypeface(
+			surface,
+			text,
+			params.x,
+			params.y,
+			params.TextSize,
+			params.typeface,
+			blurSigma,
+			r,
+			g,
+			b,
+			a,
+		)
+
+		return
+	}
+
+	kineffi.Kine_Skia_Surface_DrawTextBlurred(
+		surface,
+		text,
+		params.x,
+		params.y,
+		params.TextSize,
+		params.font,
+		blurSigma,
+		r,
+		g,
+		b,
+		a,
+	)
+}
+
+drawImageBlurred :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	imageObject: ^kineffi.KineSkiaImage,
+	rect: Rect,
+	blurSigma: f32,
+) {
+	if surface == nil || imageObject == nil || blurSigma < 0 {
+		return
+	}
+
+	kineffi.Kine_Skia_Surface_DrawImageBlurredSized(
+		surface,
+		imageObject,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		blurSigma,
+		alphaToU8(rect.bgTransparency),
 	)
 }
 
@@ -490,6 +558,22 @@ measureText :: proc(
 		text,
 		fontSize,
 		font,
+	)
+}
+
+measureTextTypeface :: proc(
+	typeface: ^kineffi.KineSkiaTypeface,
+	text: cstring,
+	fontSize: f32,
+) -> f32 {
+	if typeface == nil {
+		return 0
+	}
+
+	return kineffi.Kine_Skia_Typeface_MeasureText(
+		typeface,
+		text,
+		fontSize,
 	)
 }
 

@@ -6,6 +6,8 @@ import "core:strings"
 
 import kineffi "../bindings"
 import sdl3 "../platform"
+import tracy "../util/odin-tracy"
+import profiling "../profiling"
 
 Filament_Context :: kineffi.KineFilamentContext
 Skia_Surface     :: kineffi.KineSkiaSurface
@@ -29,8 +31,10 @@ RendererObject :: struct {
 	SkiaSurface: ^kineffi.KineSkiaSurface,
 	Filament:    ^kineffi.KineFilamentContext,
 	HasViewportRect: bool,
+	RenderFilament: bool,
 	ViewportRect: [4]i32,
-	CurrentEvent: ^sdl3.Event
+	CurrentEvent: ^sdl3.Event,
+	Window: ^sdl3.Window,
 }
 
 set_viewport_rect :: proc(
@@ -96,6 +100,11 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		height,
 		sdl3.WINDOW_RESIZABLE | sdl3.WINDOW_VULKAN,
     )
+
+	renderer.Window = window
+	defer {
+		renderer.Window = nil
+	}
 	
 	if window == nil {
 		show_fatal_error("Failed to create the Vulkan window")
@@ -136,37 +145,43 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 	frame_width, frame_height := width, height
 	previous_ticks := sdl3.GetTicksNS()
 
-	for running {
-		event: sdl3.Event
+	tracy.SetThreadName("Main/Render")
 
-		for sdl3.PollEvent(&event) {
-			if renderer.OnEvent != nil {
-				renderer.OnEvent(renderer.UserData, event)
-			}
-			renderer.CurrentEvent = &event
-			#partial switch event.type {
-			case .QUIT, .WINDOW_CLOSE_REQUESTED:
-				running = false
-            case .KEY_DOWN:
-				if renderer.KeyDown != nil {
-					renderer.KeyDown(event.key.scancode)
+	for running {
+		{
+			tracy.ZoneNC("Polling Events", 0x61AFEF)
+			z := profiling.Begin("Polling Events", 0x61AFEF)
+			event: sdl3.Event
+
+			for sdl3.PollEvent(&event) {
+				if renderer.OnEvent != nil {
+					renderer.OnEvent(renderer.UserData, event)
 				}
-            case .KEY_UP:
-				if renderer.KeyUp != nil {
-					renderer.KeyUp(event.key.scancode)
+				renderer.CurrentEvent = &event
+				#partial switch event.type {
+				case .QUIT, .WINDOW_CLOSE_REQUESTED:
+					running = false
+				case .KEY_DOWN:
+					if renderer.KeyDown != nil {
+						renderer.KeyDown(event.key.scancode)
+					}
+				case .KEY_UP:
+					if renderer.KeyUp != nil {
+						renderer.KeyUp(event.key.scancode)
+					}
+				case .WINDOW_DESTROYED:
+					running = false
+				case .MOUSE_BUTTON_DOWN:
+					if renderer.MouseClick != nil {
+						renderer.MouseClick(event.button)
+					}
+				case .WINDOW_MINIMIZED:
+					drawable = false
+				case .WINDOW_RESTORED:
+					drawable = true
+				case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
+					drawable = true
 				}
-            case .WINDOW_DESTROYED:
-				running = false
-            case .MOUSE_BUTTON_DOWN:
-				if renderer.MouseClick != nil {
-					renderer.MouseClick(event.button)
-				}
-			case .WINDOW_MINIMIZED:
-				drawable = false
-			case .WINDOW_RESTORED:
-				drawable = true
-			case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-				drawable = true
 			}
 		}
 
@@ -206,43 +221,81 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		delta_time := min(f32(now-previous_ticks)/1_000_000_000.0, 0.1)
 		previous_ticks = now
 		renderer.SkiaSurface = nil
-		if renderer.Step != nil {
-			renderer.Step(renderer.UserData, delta_time)
+
+		{
+			tracy.ZoneNC("Engine Step", 0xD08770)
+			z := profiling.Begin("Engine Step", 0xD08770)
+			if renderer.Step != nil {
+				renderer.Step(renderer.UserData, delta_time)
+			}
 		}
 
-		base_surface := kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
-		if base_surface == nil {
-			if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 { continue }
-			error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
-			fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
-			break
+		base_surface: rawptr
+		{
+			tracy.ZoneNC("Vulkan BeginFrame", 0x56B6C2)
+			z := profiling.Begin("Vulkan BeginFrame", 0x56B6C2)
+			base_surface = kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
+			if base_surface == nil {
+				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 { continue }
+				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
+				fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
+				break
+			}
 		}
 
-		kineffi.Kine_Skia_Surface_Clear(
-			cast(^kineffi.KineSkiaSurface)base_surface,
-			20,
-			28,
-			41,
-			255,
-		)
+		{
+			tracy.ZoneNC("Skia Clear", 0xA3BE8C)
+			z := profiling.Begin("Skia Clear", 0xA3BE8C)
+			kineffi.Kine_Skia_Surface_Clear(
+				cast(^kineffi.KineSkiaSurface)base_surface,
+				20,
+				28,
+				41,
+				255,
+			)
+		}
 
 		renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)base_surface
-		if renderer.Draw2D != nil {
-			renderer.Draw2D(renderer.UserData, renderer.SkiaSurface, frame_width, frame_height, delta_time)
+
+		{
+			tracy.ZoneNC("Draw2D", 0x61AFEF)
+			z := profiling.Begin("Draw2D", 0x61AFEF)
+			if renderer.Draw2D != nil {
+				renderer.Draw2D(renderer.UserData, renderer.SkiaSurface, frame_width, frame_height, delta_time)
+			}
 		}
-		if renderer.Draw3D != nil {
-			renderer.Draw3D(renderer.UserData, filament, delta_time)
+
+		{
+			tracy.ZoneNC("Draw3D", 0x98C379)
+			z := profiling.Begin("Draw3D", 0x98C379)
+			if renderer.Draw3D != nil {
+				renderer.Draw3D(renderer.UserData, filament, delta_time)
+			}
 		}
-		kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
+
+		{
+			tracy.ZoneNC("Skia Flush", 0xE5C07B)
+			z := profiling.Begin("Skia Flush", 0xE5C07B)
+			kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
+		}
 		renderer.SkiaSurface = nil
 		apply_viewport_rect(renderer)
-		kineffi.Kine_Filament_RenderFrame(filament, delta_time)
+
+		if renderer.RenderFilament {
+			tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
+			z := profiling.Begin("Filament RenderFrame", 0xC678DD)
+			kineffi.Kine_Filament_RenderFrame(filament, delta_time)
+		}
 
 		if renderer.DrawOverlay != nil {
+			tracy.ZoneNC("Overlay", 0xE06C75)
+			z := profiling.Begin("Overlay", 0xE06C75)
 			overlay_surface := kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
 			if overlay_surface != nil {
 				renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)overlay_surface
 				renderer.DrawOverlay(renderer.UserData, renderer.SkiaSurface, frame_width, frame_height, delta_time)
+				tracy.ZoneNC("Skia Flush", 0xE5C07B)
+				z := profiling.Begin("Overlay Skia Flush", 0xE5C07B)
 				kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
 				renderer.SkiaSurface = nil
 			}
@@ -250,11 +303,15 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 
 		if kineffi.Kine_VulkanCompositor_EndFrame(compositor) == 0 {
 			error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
+			tracy.ZoneNC("Vulkan Present", 0xD19A66)
+			z := profiling.Begin("Vulkan Present", 0xD19A66)
 			fmt.eprintf("Vulkan presentation failed: %s\n", error)
 			break
 		}
 		renderer.Ready = true
 		renderer.SkiaSurface = nil
+
+		tracy.FrameMark()
 	}
 
 	if renderer.OnClose != nil {

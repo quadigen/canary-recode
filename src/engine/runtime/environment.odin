@@ -10,6 +10,8 @@ import signals "../signals"
 import services "../services"
 import vm "../vm"
 import renderer "../renderer"
+import tracy "../util/odin-tracy"
+import profiling "../profiling"
 
 Environment :: struct {
 	classes: classes.Registry,
@@ -105,28 +107,47 @@ Environment_Update_Step :: proc(
 		return
 	}
 
-	packages.Update(
-		&environment.packages,
-		delta_time,
-	)
+	profiling.frame_tick(delta_time)
+	profiling.frame_flush()
 
-	services.Render_Step(
-		&environment.services,
-		vm_state.L,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Packages Update", 0x61AFEF)
+		z := profiling.Begin("Packages Update", 0x61AFEF)
+		packages.Update(
+			&environment.packages,
+			delta_time,
+		)
+	}
 
-	classes.Step(
-		&environment.classes,
-		vm_state.L,
-		delta_time,
-		phase = .Update,
-	)
+	{
+		tracy.ZoneNC("Services Step", 0x8FB1DF)
+		z := profiling.Begin("Services Step", 0x8FB1DF)
+		services.Render_Step(
+			&environment.services,
+			vm_state.L,
+			delta_time,
+		)
+	}
 
-	services.Prepare_3D(
-		&environment.services,
-		environment.renderer,
-	)
+	{
+		tracy.ZoneNC("Classes Step .Update", 0xD08770)
+		z := profiling.Begin("Classes Step .Update", 0xD08770)
+		classes.Step(
+			&environment.classes,
+			vm_state.L,
+			delta_time,
+			phase = .Update,
+		)
+	}
+
+	{
+		tracy.ZoneNC("Services Prepare 3D", 0xC678DD)
+		z := profiling.Begin("Services Prepare 3D", 0xC678DD)
+		services.Prepare_3D(
+			&environment.services,
+			environment.renderer,
+		)
+	}
 }
 
 Environment_SetEvent :: proc(
@@ -207,31 +228,45 @@ Environment_Render_3D :: proc(
 		return
 	}
 
-	// Canary renderer.Pool.new("3d")
-	packages.Render_3D(
-		&environment.packages,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Packages Render 3D", 0x61AFEF)
+		z := profiling.Begin("Packages Render 3D", 0x61AFEF)
+		packages.Render_3D(
+			&environment.packages,
+			delta_time,
+		)
+	}
 
-	classes.Step(
-		&environment.classes,
-		vm_state.L,
-		delta_time,
-		phase = .Render_3D,
-	)
+	{
+		tracy.ZoneNC("Classes Step .Render3D", 0xD08770)
+		z := profiling.Begin("Classes Step .Render3D", 0xD08770)
+		classes.Step(
+			&environment.classes,
+			vm_state.L,
+			delta_time,
+			phase = .Render_3D,
+		)
+	}
 
-	services.Render_3D(
-		&environment.services,
-		vm_state.L,
-		environment.renderer,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Services Render 3D", 0x8FB1DF)
+		z := profiling.Begin("Services Render 3D", 0x8FB1DF)
+		services.Render_3D(
+			&environment.services,
+			vm_state.L,
+			environment.renderer,
+			delta_time,
+		)
+	}
 
-	// Canary renderer.Pool.new("gizmo") + After3D.
-	packages.Render_3D_Above(
-		&environment.packages,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Packages Render 3D Above", 0x61AFEF)
+		z := profiling.Begin("Packages Render 3D Above", 0x61AFEF)
+		packages.Render_3D_Above(
+			&environment.packages,
+			delta_time,
+		)
+	}
 }
 
 Environment_Render_2D :: proc(
@@ -253,41 +288,61 @@ Environment_Render_2D :: proc(
 	environment.renderer.SkiaSurface = surface
 	defer environment.renderer.SkiaSurface = previous_surface
 
-	services.StudioThemeService_Update_Layout(
-		&environment.services,
-		vm_state.L,
-		&environment.datatypes,
-		width,
-		height,
-	)
+	{
+		tracy.ZoneNC("Studio Theme Layout", 0x56B6C2)
+		z := profiling.Begin("Studio Theme Layout", 0x56B6C2)
+		services.StudioThemeService_Update_Layout(
+			&environment.services,
+			vm_state.L,
+			&environment.datatypes,
+			width,
+			height,
+		)
+	}
 
-	packages.Render_2D(
-		&environment.packages,
-		width,
-		height,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Packages Render 2D", 0x61AFEF)
+		z := profiling.Begin("Packages Render 2D", 0x61AFEF)
+		packages.Render_2D(
+			&environment.packages,
+			width,
+			height,
+			delta_time,
+		)
+	}
 
-	classes.Update_GUI_Layout(
-		&environment.classes,
-		width,
-		height,
-	)
+	{
+		tracy.ZoneNC("GUI Layout", 0x56B6C2)
+		z := profiling.Begin("GUI Layout", 0x56B6C2)
+		classes.Update_GUI_Layout(
+			&environment.classes,
+			width,
+			height,
+		)
+	}
 
-	classes.Step(
-		&environment.classes,
-		vm_state.L,
-		delta_time,
-		width,
-		height,
-	)
+	{
+		tracy.ZoneNC("Classes Step .Render2D", 0xD08770)
+		z := profiling.Begin("Classes Step .Render2D", 0xD08770)
+		classes.Step(
+			&environment.classes,
+			vm_state.L,
+			delta_time,
+			width,
+			height,
+		)
+	}
 
-	packages.Render_2D_Above(
-		&environment.packages,
-		width,
-		height,
-		delta_time,
-	)
+	{
+		tracy.ZoneNC("Packages Render 2D Above", 0x61AFEF)
+		z := profiling.Begin("Packages Render 2D Above", 0x61AFEF)
+		packages.Render_2D_Above(
+			&environment.packages,
+			width,
+			height,
+			delta_time,
+		)
+	}
 }
 
 Environment_Render_Overlay :: proc(
@@ -306,12 +361,16 @@ Environment_Render_Overlay :: proc(
 	environment.renderer.SkiaSurface = surface
 	defer environment.renderer.SkiaSurface = previous_surface
 
-	classes.Step(
-		&environment.classes,
-		vm_state.L,
-		delta_time,
-		width,
-		height,
-		gui_overlay = true,
-	)
+	{
+		tracy.ZoneNC("Classes Step .Overlay", 0xD08770)
+		z := profiling.Begin("Classes Step .Overlay", 0xD08770)
+		classes.Step(
+			&environment.classes,
+			vm_state.L,
+			delta_time,
+			width,
+			height,
+			gui_overlay = true,
+		)
+	}
 }

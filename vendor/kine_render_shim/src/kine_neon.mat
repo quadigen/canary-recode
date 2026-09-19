@@ -2,8 +2,9 @@ material {
     name : "kine_neon",
     shadingModel : unlit,
     blending : add,
+    instanced : true,
     parameters : [
-        { type : float3, name : emissiveColor },
+        { type : float4[64], name : instanceColors },
         { type : float,  name : intensity }
     ]
 }
@@ -11,7 +12,7 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor.rgb = materialParams.emissiveColor * materialParams.intensity;
+        material.baseColor.rgb = materialParams.instanceColors[getInstanceIndex()].rgb * materialParams.intensity;
         material.baseColor.a = 1.0;
     }
 }

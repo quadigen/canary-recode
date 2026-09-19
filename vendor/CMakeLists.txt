@@ -75,6 +75,22 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/manifold")
     add_subdirectory(manifold)
 endif()
 
+# Tracy
+set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
+set(TRACY_ON_DEMAND ON CACHE BOOL "Only profile while Tracy is connected" FORCE)
+set(TRACY_STATIC ON CACHE BOOL "Build Tracy statically" FORCE)
+set(TRACY_LTO OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG v0.14.1
+    GIT_SHALLOW TRUE
+    GIT_PROGRESS TRUE
+)
+
+FetchContent_MakeAvailable(tracy)
+
 # Jolt Wrapper
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kine_jolt")
     add_subdirectory(kine_jolt)
@@ -82,6 +98,20 @@ endif()
 
 # One static library target for the engine's native dependency surface.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anchor(void) {}\n")
+
+# Zstandard
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+
+add_subdirectory(zstd)
+
+# minizip
+add_subdirectory(miniz)
+
+# yaml
+add_subdirectory(libyaml)
 
 add_library(KinemiumLibs STATIC EXCLUDE_FROM_ALL
     "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c"
@@ -177,6 +207,8 @@ set(KINE_COMPONENT_TARGETS
     geometry
     smol-v
     zstd
+    yaml
+    miniz
     uberarchive
     shaders
 

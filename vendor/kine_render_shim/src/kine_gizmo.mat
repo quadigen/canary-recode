@@ -5,13 +5,14 @@ material {
     culling : none,
     depthWrite : false,
     depthCulling : false,
+    instanced : true,
     parameters : [
-        { type : float4, name : baseColor }
+        { type : float4[64], name : instanceColors }
     ]
 }
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = materialParams.baseColor;
+        material.baseColor = materialParams.instanceColors[getInstanceIndex()];
     }
 }

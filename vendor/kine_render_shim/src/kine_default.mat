@@ -2,9 +2,10 @@ material {
     name : "KineDefault",
     shadingModel : lit,
     blending : opaque,
+    instanced : true,
     requires : [ uv0 ],
     parameters : [
-        { type : float4,    name : baseColor },
+        { type : float4[64], name : instanceColors },
         { type : float,     name : roughness },
         { type : float,     name : metallic },
         { type : float,     name : hasTexture },
@@ -102,9 +103,10 @@ fragment {
         }
 
         // -------------------------------------------------------------------
-        // Surface properties
-        // -------------------------------------------------------------------
-        vec4 color = materialParams.baseColor;
+        // Surface properties. The per-instance tint lives in a fixed 64-slot
+        // array indexed by getInstanceIndex() (each batching chunk is at most
+        // 64 instances, see kine_max_chunk_instances()).
+        vec4 color = materialParams.instanceColors[getInstanceIndex()];
         if (materialParams.hasTexture > 0.5) {
             color *= texture(materialParams_baseColorMap, uv);
         }

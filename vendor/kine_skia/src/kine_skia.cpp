@@ -1888,6 +1888,220 @@ KINE_SKIA_API float Kine_Skia_Surface_GetFontAscent(
     return -metrics.fAscent;
 }
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurred(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    const char* fontPath,
+    float blurSigma,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a)
+{
+    if (!surface ||
+        !surface->surface ||
+        !text ||
+        !text[0] ||
+        fontSize <= 0.0f ||
+        a == 0) {
+        return;
+    }
+
+    sk_sp<SkTypeface> typeface =
+        kine_skia_get_typeface(fontPath);
+
+    if (!typeface) {
+        return;
+    }
+
+    SkFont font(typeface, fontSize);
+    font.setEdging(SkFont::Edging::kAntiAlias);
+
+    sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
+        text,
+        strlen(text),
+        font,
+        SkTextEncoding::kUTF8);
+
+    if (!blob) {
+        return;
+    }
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SkColorSetARGB(a, r, g, b));
+
+    if (blurSigma > 0.0f) {
+        paint.setMaskFilter(
+            SkMaskFilter::MakeBlur(
+                kNormal_SkBlurStyle,
+                blurSigma));
+    }
+
+    surface->surface
+        ->getCanvas()
+        ->drawTextBlob(
+            blob,
+            x,
+            y,
+            paint);
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurredTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+    float blurSigma,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a)
+{
+    if (!surface ||
+        !surface->surface ||
+        !text ||
+        !text[0] ||
+        !typeface ||
+        !typeface->typeface ||
+        fontSize <= 0.0f ||
+        a == 0) {
+        return;
+    }
+
+    SkFont font(typeface->typeface, fontSize);
+    font.setEdging(SkFont::Edging::kAntiAlias);
+
+    sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
+        text,
+        strlen(text),
+        font,
+        SkTextEncoding::kUTF8);
+
+    if (!blob) {
+        return;
+    }
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SkColorSetARGB(a, r, g, b));
+
+    if (blurSigma > 0.0f) {
+        paint.setMaskFilter(
+            SkMaskFilter::MakeBlur(
+                kNormal_SkBlurStyle,
+                blurSigma));
+    }
+
+    surface->surface
+        ->getCanvas()
+        ->drawTextBlob(
+            blob,
+            x,
+            y,
+            paint);
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageBlurredSized(
+    KineSkiaSurface* surface,
+    KineSkiaImage* image,
+    float x,
+    float y,
+    float width,
+    float height,
+    float blurSigma,
+    uint8_t alpha)
+{
+    if (!surface ||
+        !surface->surface ||
+        !image ||
+        width <= 0.0f ||
+        height <= 0.0f ||
+        alpha == 0) {
+        return;
+    }
+
+    if (!image->image && !image->svg) {
+        return;
+    }
+
+    if (blurSigma <= 0.0f) {
+        Kine_Skia_Surface_DrawImageSized(
+            surface,
+            image,
+            x,
+            y,
+            width,
+            height,
+            alpha);
+        return;
+    }
+
+    SkCanvas* canvas =
+        surface->surface->getCanvas();
+
+    const SkRect dst =
+        SkRect::MakeXYWH(
+            x,
+            y,
+            width,
+            height);
+
+    const float padding =
+        std::max(0.0f, blurSigma) * 3.0f;
+
+    SkRect layerBounds = dst;
+    layerBounds.outset(
+        padding,
+        padding);
+
+    SkPaint blurPaint;
+    blurPaint.setAntiAlias(true);
+    blurPaint.setImageFilter(
+        SkImageFilters::Blur(
+            blurSigma,
+            blurSigma,
+            SkTileMode::kDecal,
+            nullptr));
+
+    canvas->saveLayer(
+        &layerBounds,
+        &blurPaint);
+
+    if (image->svg) {
+        kine_skia_draw_svg(
+            canvas,
+            image,
+            x,
+            y,
+            width,
+            height,
+            alpha);
+    } else {
+        SkPaint imagePaint;
+        imagePaint.setAntiAlias(true);
+
+        if (alpha < 255) {
+            imagePaint.setAlphaf(
+                alpha / 255.0f);
+        }
+
+        canvas->drawImageRect(
+            image->image,
+            dst,
+            SkSamplingOptions(
+                SkFilterMode::kLinear),
+            &imagePaint);
+    }
+
+    canvas->restore();
+}
+
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageRect(
     KineSkiaSurface* surface,
     KineSkiaImage* image,

@@ -18,9 +18,9 @@ TextButton :: struct {
 	text:       string,
 	owned_text: string,
 
-	font_face: datatypes.Font,
-
-	stored_typeface: ^kineffi.KineSkiaTypeface,
+	font_face:        datatypes.Font,
+	font_enum:        enums.Font,
+	stored_typeface:  ^kineffi.KineSkiaTypeface,
 
 	text_size:         f32,
 	text_color3:       datatypes.Color3,
@@ -61,6 +61,9 @@ TextButton_Init :: proc() -> TextButton {
 		owned_text = text,
 
 		font_face = font,
+
+		font_enum =
+			.Legacy,
 
 		stored_typeface = nil,
 
@@ -106,8 +109,8 @@ TextButton_to_text_label :: proc(
 		owned_text = button.owned_text,
 
 		font_face = button.font_face,
-
-		stored_typeface = button.stored_typeface,
+	font_enum = button.font_enum,
+	stored_typeface = button.stored_typeface,
 
 		text_size         = button.text_size,
 		text_color3       = button.text_color3,
@@ -138,7 +141,7 @@ TextButton_sync_text_label :: proc(
 	button.owned_text = label.owned_text
 
 	button.font_face = label.font_face
-
+	button.font_enum = label.font_enum
 	button.stored_typeface = label.stored_typeface
 
 	button.text_size = label.text_size

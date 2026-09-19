@@ -3,4 +3,3 @@ if IsServer or IsClient then
 end
 
 local UI = require("@internal/editor_ui")
-UI.root()

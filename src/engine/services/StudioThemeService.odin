@@ -516,7 +516,7 @@ studio_theme_push_padded_window_config :: proc(
 	studio_theme_push_vector2(L, registry, 0, 1)
 	vm.SetField(L, -2, "anchorPoint")
 
-	studio_theme_push_udim2(L, registry, 1, -450, 0, 200)
+	studio_theme_push_udim2(L, registry, 1, -444, 0, 200)
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Output")
@@ -938,7 +938,7 @@ studio_theme_push_default_theme :: proc(
 		"LayoutConfig",
 	)
 
-	studio_theme_push_boxed_window_config(
+	studio_theme_push_padded_window_config(
 		L,
 		registry,
 	)

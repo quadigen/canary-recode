@@ -1,5 +1,7 @@
 package classes
 
+import datatypes "../datatypes"
+
 Folder_Class := Class_Info{
     name   = "Folder",
     parent = &Instance_Class,
@@ -7,11 +9,13 @@ Folder_Class := Class_Info{
 
 Folder :: struct {
     using object: Object,
+    IconTint: datatypes.Color3
 }
 
 Folder_Init :: proc() -> Folder {
     return Folder{
         object = Object_Init(&Folder_Class),
+        IconTint = datatypes.Color3{0, 0, 0}
     }
 }
 
@@ -39,5 +43,6 @@ Register_Folder :: proc(registry: ^Registry) {
         Folder_construct,
         Folder_destroy,
         clone = Folder_clone,
+        properties = []string{"IconTint"}
     )
 }

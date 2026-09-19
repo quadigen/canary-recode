@@ -4,6 +4,7 @@ import "core:fmt"
 import "base:runtime"
 import "core:strings"
 import datatypes "../datatypes"
+import enums "../enum"
 import vm "../vm"
 
 Class_Info :: struct {
@@ -36,6 +37,10 @@ Object :: struct {
 	lua_ref:              i32,
 	destroyed:            bool,
 	archivable:           bool,
+	can_replicate:        bool,
+	replication_mode:     enums.ReplicationMode,
+	replication_group:    string,
+	network_id:           u32,
 }
 
 Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object {
@@ -50,6 +55,7 @@ Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object
         parent   = nil,
         children = nil,
 		archivable = true,
+		can_replicate = true,
 		unique_id  = datatypes.UniqueId_New(),
 		lua_ref    = -1,
     }
@@ -79,6 +85,8 @@ Object_Destroy :: proc(self: ^Object) {
     Set_Parent(self, nil)
 	delete(self.owned_name)
 	self.owned_name = ""
+	delete(self.replication_group)
+	self.replication_group = ""
 }
 
 Get_Class_Name :: proc(self: ^Object) -> string {
@@ -368,6 +376,16 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
         vm.PushString(L, object.name)
     case "Archivable":
         vm.PushBoolean(L, object.archivable)
+	case "CanReplicate":
+		vm.PushBoolean(L, object.can_replicate)
+	case "ReplicationMode":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil || descriptor.registry.enums == nil { return false }
+		_ = enums.Push_Item_By_Value(L, descriptor.registry.enums, "ReplicationMode", i64(object.replication_mode))
+	case "ReplicationGroup":
+		vm.PushString(L, object.replication_group)
+	case "NetworkId":
+		vm.PushNumber(L, f64(object.network_id))
     case "Parent":
         Push_Object(L, object.parent)
 	case "UniqueId":
@@ -412,6 +430,16 @@ Object_Set_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value
         Set_Name(object, vm.ArgString(L, value_index))
     case "Archivable":
         object.archivable = vm.ArgBoolean(L, value_index)
+	case "CanReplicate":
+		object.can_replicate = vm.ArgBoolean(L, value_index)
+	case "ReplicationMode":
+		descriptor := cast(^Class_Descriptor)ctx
+		if descriptor == nil || descriptor.registry == nil || descriptor.registry.enums == nil { return false }
+		item := enums.Arg_Item(L, value_index, descriptor.registry.enums, "ReplicationMode")
+		object.replication_mode = enums.ReplicationMode(item.value)
+	case "ReplicationGroup":
+		delete(object.replication_group)
+		object.replication_group = strings.clone(vm.ArgString(L, value_index))
     case "Parent":
         if vm.IsNil(L, value_index) {
             Set_Parent(object, nil)
@@ -544,6 +572,10 @@ clone_base_state :: proc(
 	destination.capabilities         = source.capabilities
 	destination.security_requirement = source.security_requirement
 	destination.sandboxed            = source.sandboxed
+	destination.can_replicate         = source.can_replicate
+	destination.replication_mode      = source.replication_mode
+	delete(destination.replication_group)
+	destination.replication_group = strings.clone(source.replication_group)
 
 	// Attributes need their own registry references.
 	for attribute in source.attributes {

@@ -9,6 +9,8 @@ import enums "../enum"
 import kineffi "../bindings"
 import materials "../material"
 import vm "../vm"
+import tracy "../util/odin-tracy"
+import profiling "../profiling"
 
 Workspace_Class := classes.Class_Info{
 	name   = "Workspace",
@@ -224,6 +226,8 @@ workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 }
 
 workspace_prepare_3d :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_Object) {
+	tracy.ZoneNC("Workspace Prepare 3D", 0xB48EAD)
+	z := profiling.Begin("Workspace Prepare 3D", 0xB48EAD)
 	if workspace == nil || !workspace_has_parts(&workspace.object) { return }
 	if !workspace_ensure_meshes(workspace, renderer) { return }
 
@@ -310,9 +314,7 @@ workspace_append_draw_items :: proc(
 				param3 = param3,
 				transmission = transmission,
 				materialKind = material_kind,
-				flags = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS |
-				        kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS |
-				        kineffi.KINE_FILAMENT_DRAW_CULLING,
+				flags = kineffi.KINE_FILAMENT_DRAW_CULLING,
 			})
 		}
 
@@ -321,6 +323,8 @@ workspace_append_draw_items :: proc(
 }
 
 workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	tracy.ZoneNC("Workspace Render 3D", 0xB48EAD)
+	z := profiling.Begin("Workspace Render 3D", 0xB48EAD)
 	workspace := cast(^Workspace)object
 	if !workspace_has_parts(object) { return }
 	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil { return }

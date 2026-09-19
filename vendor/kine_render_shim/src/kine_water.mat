@@ -4,9 +4,10 @@ material {
     blending : transparent,
     refractionMode : cubemap,
     refractionType : solid,
+    instanced : true,
     requires : [ uv0 ],
     parameters : [
-        { type : float3, name : baseColor },
+        { type : float4[64], name : instanceColors },
         { type : float,  name : roughness },
         { type : float,  name : ior },
         { type : float,  name : thickness },
@@ -54,7 +55,7 @@ fragment {
         vec3 N = normalize(cross(binormal, tangent));
         material.normal = N;
 
-        material.baseColor.rgb = materialParams.baseColor;
+        material.baseColor.rgb = materialParams.instanceColors[getInstanceIndex()].rgb;
         material.roughness     = materialParams.roughness;
         material.ior           = materialParams.ior;
         material.thickness     = materialParams.thickness;

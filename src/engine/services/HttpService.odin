@@ -1,13 +1,20 @@
 package services
 
-// wire:service global="HttpService"
+// wire:service global="httpService"
 
+import "core:bytes"
 import "core:fmt"
+import "core:net"
+import "core:strings"
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import json "core:encoding/json"
+
+import http "../util/odin-http"
+import http_client "../util/odin-http/client"
 
 HttpService_Class := classes.Class_Info{
 	name   = "HttpService",
@@ -16,6 +23,7 @@ HttpService_Class := classes.Class_Info{
 
 HttpService :: struct {
 	using service: Service,
+
 	http_enabled: bool,
 }
 
@@ -24,114 +32,296 @@ http_service_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(HttpService)
+
 	service.service = Service_Init(
 		&HttpService_Class,
 		"HttpService",
 		data_model,
 	)
-	service.http_enabled = false
+
+	service.http_enabled = true
+
 	return &service.object
 }
 
-http_is_unreserved :: proc(value: u8) -> bool {
-	return (value >= 'A' && value <= 'Z') ||
-	       (value >= 'a' && value <= 'z') ||
-	       (value >= '0' && value <= '9') ||
-	       value == '-' ||
-	       value == '_' ||
-	       value == '.' ||
-	       value == '~'
-}
+http_service_body_string :: proc(body: http_client.Body_Type) -> string {
+	switch value in body {
+	case http_client.Body_Plain:
+		return string(value)
 
-http_hex_value :: proc(value: u8) -> (u8, bool) {
-	switch {
-	case value >= '0' && value <= '9':
-		return value-'0', true
+	case http_client.Body_Url_Encoded:
+		builder := strings.builder_make(context.temp_allocator)
 
-	case value >= 'A' && value <= 'F':
-		return value-'A'+10, true
+		first := true
 
-	case value >= 'a' && value <= 'f':
-		return value-'a'+10, true
+		for key, item in value {
+			if !first {
+				strings.write_byte(&builder, '&')
+			}
+
+			first = false
+
+			encoded_key := net.percent_encode(
+				key,
+				context.temp_allocator,
+			)
+
+			encoded_value := net.percent_encode(
+				item,
+				context.temp_allocator,
+			)
+
+			strings.write_string(&builder, encoded_key)
+			strings.write_byte(&builder, '=')
+			strings.write_string(&builder, encoded_value)
+		}
+
+		return strings.to_string(builder)
+
+	case http_client.Body_Error:
+		return ""
 	}
 
-	return 0, false
+	return ""
 }
 
-http_url_encode :: proc(value: string) -> string {
-	hex := "0123456789ABCDEF"
-	result: [dynamic]u8
-
-	for index in 0 ..< len(value) {
-		byte := value[index]
-
-		if http_is_unreserved(byte) {
-			append(&result, byte)
-			continue
-		}
-
-		append(&result, '%')
-		append(&result, hex[byte >> 4])
-		append(&result, hex[byte & 15])
+http_service_apply_headers :: proc(
+	L: ^vm.State,
+	req: ^http_client.Request,
+	table_index: int,
+	allocated_keys: ^[dynamic]string,
+) {
+	if !vm.IsTable(L, table_index) {
+		return
 	}
 
-	return string(result[:])
+	vm.PushNil(L)
+
+	for vm.Next(L, table_index) {
+		key, key_ok := vm.ToString(L, -2)
+		value, value_ok := vm.ToString(L, -1)
+
+		if key_ok && value_ok {
+			allocated_key := http.headers_set(
+				&req.headers,
+				key,
+				value,
+			)
+
+			append(allocated_keys, allocated_key)
+		}
+
+		vm.Pop(L)
+	}
 }
 
-http_url_decode :: proc(value: string) -> (string, bool) {
-	result: [dynamic]u8
-
-	index := 0
-	for index < len(value) {
-		if value[index] != '%' {
-			append(&result, value[index])
-			index += 1
-			continue
-		}
-
-		if index+2 >= len(value) {
-			delete(result)
-			return "", false
-		}
-
-		high, high_ok := http_hex_value(value[index+1])
-		low, low_ok := http_hex_value(value[index+2])
-
-		if !high_ok || !low_ok {
-			delete(result)
-			return "", false
-		}
-
-		append(&result, (high << 4) | low)
-		index += 3
+HttpService_GetAsync :: proc(
+	service: ^HttpService,
+	url: string,
+	allocator := context.allocator,
+) -> (body: string, ok: bool) {
+	if !service.http_enabled {
+		return "", false
 	}
 
-	return string(result[:]), true
+	response, err := http_client.get(url, allocator)
+	if err != nil {
+		return "", false
+	}
+	defer http_client.response_destroy(&response)
+
+	response_body, body_allocated, body_err :=
+		http_client.response_body(&response, allocator = allocator)
+
+	if body_err != nil {
+		return "", false
+	}
+
+	defer http_client.body_destroy(
+		response_body,
+		body_allocated,
+		allocator,
+	)
+
+	if !http.status_is_success(response.status) {
+		return "", false
+	}
+
+	#partial switch value in response_body {
+	case http_client.Body_Plain:
+		return strings.clone(string(value), allocator), true
+	}
+
+	return "", false
 }
 
-http_generate_guid :: proc(wrap: bool) -> string {
-	value := datatypes.UniqueId_New()
-	raw := datatypes.UniqueId_ToString(value)
+HttpService_GetJSON :: proc(
+	service: ^HttpService,
+	url: string,
+	output: ^$T,
+	allocator := context.allocator,
+) -> bool {
+	body, ok := HttpService_GetAsync(service, url, allocator)
+	if !ok {
+		return false
+	}
+	defer delete(body, allocator)
 
-	if wrap {
-		return fmt.tprintf(
-			"{%s-%s-%s-%s-%s}",
-			raw[0:8],
-			raw[8:12],
-			raw[12:16],
-			raw[16:20],
-			raw[20:32],
+	err := json.unmarshal_string(body, output, allocator = allocator)
+	return err == nil
+}
+
+http_service_send :: proc(
+	L: ^vm.State,
+	method: http.Method,
+	url: string,
+	request_body: string = "",
+	content_type: string = "",
+	headers_index: int = 0,
+	return_response_table: bool = false,
+	require_success: bool = true,
+) -> i32 {
+	req: http_client.Request
+
+	http_client.request_init(&req, method)
+
+	allocated_header_keys := make([dynamic]string)
+
+	defer {
+		http_client.request_destroy(&req)
+
+		for key in allocated_header_keys {
+			delete(key)
+		}
+
+		delete(allocated_header_keys)
+	}
+
+	if content_type != "" {
+		http.headers_set_content_type_string(
+			&req.headers,
+			content_type,
 		)
 	}
 
-	return fmt.tprintf(
-		"%s-%s-%s-%s-%s",
-		raw[0:8],
-		raw[8:12],
-		raw[12:16],
-		raw[16:20],
-		raw[20:32],
+	if headers_index != 0 {
+		http_service_apply_headers(
+			L,
+			&req,
+			headers_index,
+			&allocated_header_keys,
+		)
+	}
+
+	if request_body != "" {
+		_, write_error := bytes.buffer_write_string(
+			&req.body,
+			request_body,
+		)
+
+		if write_error != nil {
+			return vm.RaiseError(
+				L,
+				fmt.tprintf(
+					"HttpService failed to write request body: %v",
+					write_error,
+				),
+			)
+		}
+	}
+
+	response, request_error := http_client.request(
+		&req,
+		url,
 	)
+
+	if request_error != nil {
+		return vm.RaiseError(
+			L,
+			fmt.tprintf(
+				"HttpService request failed: %v",
+				request_error,
+			),
+		)
+	}
+
+	defer http_client.response_destroy(&response)
+
+	response_body, body_allocated, body_error :=
+		http_client.response_body(&response)
+
+	if body_error != nil {
+		return vm.RaiseError(
+			L,
+			fmt.tprintf(
+				"HttpService failed to read response body: %v",
+				body_error,
+			),
+		)
+	}
+
+	defer http_client.body_destroy(
+		response_body,
+		body_allocated,
+	)
+
+	body := http_service_body_string(response_body)
+
+	status_code := int(response.status)
+	status_line := http.status_string(response.status)
+
+	status_message := status_line
+
+	if len(status_line) > 4 {
+		status_message = status_line[4:]
+	}
+
+	success := http.status_is_success(response.status)
+
+	if return_response_table {
+		vm.NewTable(L, 0, 5)
+
+		vm.PushBoolean(L, success)
+		vm.SetField(L, -2, "Success")
+
+		vm.PushNumber(L, f64(status_code))
+		vm.SetField(L, -2, "StatusCode")
+
+		vm.PushString(L, status_message)
+		vm.SetField(L, -2, "StatusMessage")
+
+		vm.PushString(L, body)
+		vm.SetField(L, -2, "Body")
+
+		vm.NewTable(
+			L,
+			0,
+			http.headers_count(response.headers),
+		)
+
+		for key, value in response.headers._kv {
+			vm.PushString(L, value)
+			vm.SetField(L, -2, key)
+		}
+
+		vm.SetField(L, -2, "Headers")
+
+		return 1
+	}
+
+	if require_success && !success {
+		return vm.RaiseError(
+			L,
+			fmt.tprintf(
+				"HttpService request failed with HTTP %s",
+				status_line,
+			),
+		)
+	}
+
+	vm.PushString(L, body)
+
+	return 1
 }
 
 http_service_get :: proc(
@@ -146,38 +336,17 @@ http_service_get :: proc(
 	switch key {
 	case "HttpEnabled":
 		vm.PushBoolean(L, service.http_enabled)
+		return true
 
-	case "GenerateGUID",
-	     "UrlEncode",
-	     "UrlDecode":
+	case "GetAsync",
+	     "PostAsync",
+	     "RequestAsync",
+	     "UrlEncode":
 		vm.PushUserdataMethod(L, key)
-
-	case:
-		return false
+		return true
 	}
 
-	return true
-}
-
-http_service_set :: proc(
-	L: ^vm.State,
-	object: ^classes.Object,
-	datatype_registry: ^datatypes.Registry,
-	enum_registry: ^enums.Registry,
-	key: string,
-	value_index: int,
-) -> bool {
-	service := cast(^HttpService)object
-
-	switch key {
-	case "HttpEnabled":
-		service.http_enabled = vm.ArgBoolean(L, value_index)
-
-	case:
-		return false
-	}
-
-	return true
+	return false
 }
 
 http_service_namecall :: proc(
@@ -185,28 +354,132 @@ http_service_namecall :: proc(
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
-	method: string,
+	method_name: string,
 ) -> (i32, bool) {
-	switch method {
-	case "GenerateGUID":
-		wrap := vm.ArgOptionalBoolean(L, 2, false)
-		vm.PushString(L, http_generate_guid(wrap))
-		return 1, true
+	service := cast(^HttpService)object
 
-	case "UrlEncode":
-		encoded := http_url_encode(vm.ArgString(L, 2))
-		vm.PushString(L, encoded)
-		delete(encoded)
-		return 1, true
-
-	case "UrlDecode":
-		decoded, ok := http_url_decode(vm.ArgString(L, 2))
-		if !ok {
-			return vm.RaiseError(L, "invalid percent-encoded URL"), true
+	switch method_name {
+	case "GetAsync":
+		if !service.http_enabled {
+			return vm.RaiseError(
+				L,
+				"HTTP requests are disabled",
+			), true
 		}
 
-		vm.PushString(L, decoded)
-		delete(decoded)
+		url := vm.ArgString(L, 2)
+
+		return http_service_send(
+			L,
+			.Get,
+			url,
+		), true
+
+	case "PostAsync":
+		if !service.http_enabled {
+			return vm.RaiseError(
+				L,
+				"HTTP requests are disabled",
+			), true
+		}
+
+		url := vm.ArgString(L, 2)
+		body := vm.ArgString(L, 3)
+
+		content_type := vm.ArgOptionalString(
+			L,
+			4,
+			"application/json",
+		)
+
+		return http_service_send(
+			L,
+			.Post,
+			url,
+			body,
+			content_type,
+		), true
+
+	case "RequestAsync":
+		if !service.http_enabled {
+			return vm.RaiseError(
+				L,
+				"HTTP requests are disabled",
+			), true
+		}
+
+		if !vm.IsTable(L, 2) {
+			return vm.RaiseError(
+				L,
+				"RequestAsync expects a request table",
+			), true
+		}
+
+		vm.GetField(L, 2, "Url")
+
+		if !vm.IsString(L, -1) {
+			vm.Pop(L)
+
+			return vm.RaiseError(
+				L,
+				"RequestAsync requires Url",
+			), true
+		}
+
+		url := vm.ArgString(L, -1)
+		vm.Pop(L)
+
+		vm.GetField(L, 2, "Method")
+		method_string := vm.ArgOptionalString(L, -1, "GET")
+		vm.Pop(L)
+
+		http_method, method_ok := http.method_parse(method_string)
+
+		if !method_ok {
+			return vm.RaiseError(
+				L,
+				fmt.tprintf(
+					"Unsupported HTTP method '%s'",
+					method_string,
+				),
+			), true
+		}
+
+		vm.GetField(L, 2, "Body")
+		body := vm.ArgOptionalString(L, -1, "")
+		vm.Pop(L)
+
+		headers_index := 0
+
+		vm.GetField(L, 2, "Headers")
+
+		if vm.IsTable(L, -1) {
+			headers_index = vm.StackTop(L)
+		} else {
+			vm.Pop(L)
+		}
+
+		return http_service_send(
+			L,
+			http_method,
+			url,
+			body,
+			"",
+			headers_index,
+			true,
+			false,
+		), true
+
+	case "UrlEncode":
+		value := vm.ArgString(L, 2)
+
+		encoded := net.percent_encode(
+			value,
+			context.temp_allocator,
+		)
+
+		vm.PushString(L, encoded)
+
 		return 1, true
 	}
 
@@ -217,19 +490,23 @@ http_service_destroy :: proc(
 	object: ^classes.Object,
 	renderer: ^classes.Renderer_Object,
 ) {
+	service := cast(^HttpService)object
+
 	classes.Object_Destroy(object)
-	free(cast(^HttpService)object)
+
+	free(service)
 }
 
-Register_HttpService_Class :: proc(registry: ^classes.Registry) {
+Register_HttpService_Class :: proc(
+	registry: ^classes.Registry,
+) {
 	classes.Register_Class(
 		registry,
 		&HttpService_Class,
 		http_service_construct,
 		http_service_destroy,
 		creatable = false,
-		get = http_service_get,
-		set = http_service_set,
-		namecall = http_service_namecall,
+		get       = http_service_get,
+		namecall  = http_service_namecall,
 	)
 }

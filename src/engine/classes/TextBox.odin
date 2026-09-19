@@ -9,11 +9,20 @@ import enums "../enum"
 import guilib "../gui"
 import vm "../vm"
 import signals "../signals"
+import kineffi "../bindings"
 import "core:strconv"
 
 TextBox_Class := Class_Info{
 	name   = "TextBox",
 	parent = &GuiObject_Class,
+}
+
+
+Undo_Entry :: struct {
+	start:       int,
+	delete_text: string,
+	insert_text: string,
+	epoch:       int,
 }
 
 
@@ -27,6 +36,10 @@ TextBox :: struct {
 	text_color3:             datatypes.Color3,
 	placeholder_color3:      datatypes.Color3,
 	text_transparency:       f32,
+
+	font_face:               datatypes.Font,
+	font_enum:               enums.Font,
+	stored_typeface:         ^kineffi.KineSkiaTypeface,
 
 	clear_text_on_focus:     bool,
 	text_editable:           bool,
@@ -63,6 +76,14 @@ TextBox :: struct {
 	preferred_x:           f32,
 	preferred_x_valid:     bool,
 	caret_needs_scroll:    bool,
+
+	auto_close:            bool,
+	wrap:                  bool,
+
+	undo_stack:            [dynamic]Undo_Entry,
+	redo_stack:            [dynamic]Undo_Entry,
+	suppress_undo:         bool,
+	undo_epoch:            int,
 }
 
 
@@ -72,6 +93,13 @@ text_box_focused: ^TextBox
 TextBox_Init :: proc() -> TextBox {
 	gui := GuiObject_Init()
 	gui.object.class = &TextBox_Class
+
+	font :=
+		datatypes.Font_New(
+			DEFAULT_FONT,
+			.Regular,
+			.Normal,
+		)
 
 	return TextBox{
 		gui_object             = gui,
@@ -83,6 +111,10 @@ TextBox_Init :: proc() -> TextBox {
 		text_color3            = datatypes.Color3{0, 0, 0},
 		placeholder_color3     = datatypes.Color3{0.5, 0.5, 0.5},
 		text_transparency      = 0,
+
+		font_face              = font,
+		font_enum              = .Legacy,
+		stored_typeface        = nil,
 
 		clear_text_on_focus    = false,
 		text_editable          = true,
@@ -118,7 +150,107 @@ TextBox_Init :: proc() -> TextBox {
 		preferred_x_valid       = false,
 		caret_needs_scroll      = true,
 		scroll_target_x        = 0,
+
+		auto_close              = true,
+		wrap                    = false,
 	}
+}
+
+
+TextBox_Load_Typeface :: proc(
+	box: ^TextBox,
+) {
+	if box == nil {
+		return
+	}
+
+	TextBox_Destroy_Typeface(box)
+
+	box.stored_typeface =
+		TextLabel_Load_Typeface_From_Family(
+			box.font_face.Family,
+		)
+}
+
+
+TextBox_Destroy_Typeface :: proc(
+	box: ^TextBox,
+) {
+	if box == nil {
+		return
+	}
+
+	if box.stored_typeface != nil {
+		kineffi.Kine_Skia_Typeface_Destroy(
+			box.stored_typeface,
+		)
+
+		box.stored_typeface =
+			nil
+	}
+}
+
+
+TextBox_Set_Font_Family :: proc(
+	box: ^TextBox,
+	family: string,
+) {
+	if box == nil {
+		return
+	}
+
+	new_enum :=
+		TextLabel_Font_Enum_From_Family(
+			family,
+		)
+
+	if box.font_face.Family == family {
+		box.font_enum =
+			new_enum
+
+		return
+	}
+
+	new_font :=
+		datatypes.Font_New(
+			family,
+			box.font_face.Weight,
+			box.font_face.Style,
+		)
+
+	datatypes.Font_Destroy(
+		&box.font_face,
+	)
+
+	box.font_face =
+		new_font
+
+	box.font_enum =
+		new_enum
+
+	TextBox_Load_Typeface(
+		box,
+	)
+}
+
+
+TextBox_Set_Font_Enum :: proc(
+	box: ^TextBox,
+	font: enums.Font,
+) {
+	if box == nil {
+		return
+	}
+
+	TextBox_Set_Font_Family(
+		box,
+		TextLabel_Font_Enum_To_Family(
+			font,
+		),
+	)
+
+	box.font_enum =
+		font
 }
 
 
@@ -143,6 +275,114 @@ text_box_restart_caret :: proc(box: ^TextBox) {
 
     box.caret_timer = 0
     box.caret_needs_scroll = true
+}
+
+undo_entry_destroy :: proc(entry: ^Undo_Entry) {
+    if len(entry.delete_text) > 0 {
+        delete(entry.delete_text)
+    }
+
+    if len(entry.insert_text) > 0 {
+        delete(entry.insert_text)
+    }
+}
+
+undo_stack_clear :: proc(stack: ^[dynamic]Undo_Entry) {
+    for &entry in stack^ {
+        undo_entry_destroy(&entry)
+    }
+
+    clear(stack)
+}
+
+text_box_undo_last :: proc(box: ^TextBox) -> ^Undo_Entry {
+    if box == nil || len(box.undo_stack) == 0 {
+        return nil
+    }
+
+    return &box.undo_stack[len(box.undo_stack) - 1]
+}
+
+text_box_undo :: proc(box: ^TextBox) {
+    if box == nil ||
+       !box.text_editable ||
+       len(box.undo_stack) == 0 {
+        return
+    }
+
+    entry := box.undo_stack[len(box.undo_stack) - 1]
+    pop(&box.undo_stack)
+
+    old := box.text
+
+    next := strings.concatenate({
+        old[:entry.start],
+        entry.delete_text,
+        old[entry.start + len(entry.insert_text):],
+    })
+
+    box.text = next
+
+    if len(old) > 0 {
+        delete(old)
+    }
+
+    box.cursor_byte =
+        entry.start +
+        len(entry.delete_text)
+
+    box.selection_anchor =
+        box.cursor_byte
+
+    append(
+        &box.redo_stack,
+        entry,
+    )
+
+    box.undo_epoch += 1
+
+    text_box_restart_caret(box)
+}
+
+text_box_redo :: proc(box: ^TextBox) {
+    if box == nil ||
+       !box.text_editable ||
+       len(box.redo_stack) == 0 {
+        return
+    }
+
+    entry := box.redo_stack[len(box.redo_stack) - 1]
+    pop(&box.redo_stack)
+
+    old := box.text
+
+    next := strings.concatenate({
+        old[:entry.start],
+        entry.insert_text,
+        old[entry.start + len(entry.delete_text):],
+    })
+
+    box.text = next
+
+    if len(old) > 0 {
+        delete(old)
+    }
+
+    box.cursor_byte =
+        entry.start +
+        len(entry.insert_text)
+
+    box.selection_anchor =
+        box.cursor_byte
+
+    append(
+        &box.undo_stack,
+        entry,
+    )
+
+    box.undo_epoch += 1
+
+    text_box_restart_caret(box)
 }
 
 text_box_line_height :: proc(box: ^TextBox) -> f32 {
@@ -198,6 +438,14 @@ text_box_measure_range :: proc(
         box.text[a:b],
     )
     defer delete(value)
+
+    if box.stored_typeface != nil {
+        return guilib.measureTextTypeface(
+            box.stored_typeface,
+            value,
+            box.text_size,
+        )
+    }
 
     return guilib.measureText(
         value,
@@ -311,25 +559,25 @@ text_box_cursor_from_point :: proc(
         ),
     )
 
-    line_count := text_box_line_count(
-        box.text,
+    content_width :=
+        text_box_editor_content_width(
+            box,
+            box.absolute_size.X,
+        )
+
+    lines := text_box_visual_lines(
+        box,
+        content_width,
     )
+    defer delete(lines)
 
     line = clamp(
         line,
         0,
-        max(line_count - 1, 0),
+        max(len(lines) - 1, 0),
     )
 
-    start := text_box_line_start_by_index(
-        box.text,
-        line,
-    )
-
-    finish := text_box_line_end(
-        box.text,
-        start,
-    )
+    chunk := lines[line]
 
     x := (
         mouse_x -
@@ -341,8 +589,8 @@ text_box_cursor_from_point :: proc(
 
     return text_box_cursor_on_line_from_x(
         box,
-        start,
-        finish,
+        chunk.start,
+        chunk.finish,
         x,
     )
 }
@@ -384,13 +632,26 @@ text_box_move_vertical :: proc(
         return
     }
 
-    current_start := text_box_line_start(
-        box.text,
-        box.cursor_byte,
-    )
+    content_width :=
+        text_box_editor_content_width(
+            box,
+            box.absolute_size.X,
+        )
 
-    current_finish := text_box_line_end(
-        box.text,
+    lines := text_box_visual_lines(
+        box,
+        content_width,
+    )
+    defer delete(lines)
+
+    line_count := len(lines)
+
+    if line_count == 0 {
+        return
+    }
+
+    current := text_box_visual_index_at(
+        lines[:],
         box.cursor_byte,
     )
 
@@ -401,7 +662,7 @@ text_box_move_vertical :: proc(
     } else {
         target_x = text_box_measure_range(
             box,
-            current_start,
+            lines[current].start,
             box.cursor_byte,
         )
 
@@ -409,44 +670,18 @@ text_box_move_vertical :: proc(
         box.preferred_x_valid = true
     }
 
-    start := current_start
-    finish := current_finish
-
-    for _ in 0 ..< max(amount, 1) {
-        if direction < 0 {
-            if start == 0 {
-                break
-            }
-
-            finish = start - 1
-
-            start = text_box_line_start(
-                box.text,
-                finish,
-            )
-
-            finish = text_box_line_end(
-                box.text,
-                start,
-            )
-        } else {
-            if finish >= len(box.text) {
-                break
-            }
-
-            start = finish + 1
-
-            finish = text_box_line_end(
-                box.text,
-                start,
-            )
-        }
-    }
+    target := clamp(
+        current +
+        direction *
+        max(amount, 1),
+        0,
+        line_count - 1,
+    )
 
     next := text_box_cursor_on_line_from_x(
         box,
-        start,
-        finish,
+        lines[target].start,
+        lines[target].finish,
         target_x,
     )
 
@@ -467,6 +702,242 @@ text_box_is_word_byte :: proc(c: u8) -> bool {
         c == '_' ||
         c >= 0x80
     )
+}
+
+text_box_is_bracket :: proc(c: u8) -> bool {
+    return (
+        c == '(' || c == ')' ||
+        c == '[' || c == ']' ||
+        c == '{' || c == '}'
+    )
+}
+
+text_box_bracket_pair :: proc(
+    text: string,
+    index: int,
+) -> int {
+    if index < 0 ||
+       index >= len(text) ||
+       !text_box_is_bracket(text[index]) {
+        return -1
+    }
+
+    open, close := byte(0), byte(0)
+    backward := false
+
+    switch text[index] {
+    case '(':
+        open, close = '(', ')'
+    case ')':
+        open, close = '(', ')'
+        backward = true
+    case '[':
+        open, close = '[', ']'
+    case ']':
+        open, close = '[', ']'
+        backward = true
+    case '{':
+        open, close = '{', '}'
+    case '}':
+        open, close = '{', '}'
+        backward = true
+    case:
+        return -1
+    }
+
+    depth := 0
+
+    if backward {
+        i := index
+        for i >= 0 {
+            c := text[i]
+
+            if c == close {
+                depth += 1
+            } else if c == open {
+                depth -= 1
+
+                if depth == 0 {
+                    return i
+                }
+            }
+
+            i -= 1
+        }
+    } else {
+        for i in index ..< len(text) {
+            c := text[i]
+
+            if c == open {
+                depth += 1
+            } else if c == close {
+                depth -= 1
+
+                if depth == 0 {
+                    return i
+                }
+            }
+        }
+    }
+
+    return -1
+}
+
+text_box_bracket_highlight :: proc(
+    box: ^TextBox,
+) -> (first: int, second: int, has: bool) {
+    if box == nil ||
+       len(box.text) == 0 {
+        return -1, -1, false
+    }
+
+    p := box.cursor_byte
+
+    if p < len(box.text) &&
+       text_box_is_bracket(box.text[p]) {
+        matched := text_box_bracket_pair(box.text, p)
+        return p, matched, true
+    }
+
+    if p > 0 &&
+       text_box_is_bracket(box.text[p - 1]) {
+        matched := text_box_bracket_pair(box.text, p - 1)
+        return p - 1, matched, true
+    }
+
+    return -1, -1, false
+}
+
+text_box_auto_close :: proc(
+    box: ^TextBox,
+    c: u8,
+) -> bool {
+    if box == nil {
+        return false
+    }
+
+    p := box.cursor_byte
+    has_next := p < len(box.text)
+    next_char: u8
+
+    if has_next {
+        next_char = box.text[p]
+    }
+
+    closer := byte(0)
+    is_open := false
+    is_quote := false
+
+    switch c {
+    case '(':
+        closer = ')'
+        is_open = true
+    case '[':
+        closer = ']'
+        is_open = true
+    case '{':
+        closer = '}'
+        is_open = true
+    case ')', ']', '}':
+        if has_next && next_char == c {
+            box.selection_anchor = p + 1
+            box.cursor_byte = p + 1
+            box.preferred_x_valid = false
+            text_box_restart_caret(box)
+            return true
+        }
+
+        text_box_insert(box, string([]u8{c}))
+        return true
+    case '"', '\'', '`':
+        is_quote = true
+        closer = c
+
+        if has_next && next_char == c {
+            box.selection_anchor = p + 1
+            box.cursor_byte = p + 1
+            box.preferred_x_valid = false
+            text_box_restart_caret(box)
+            return true
+        }
+    case:
+        text_box_insert(box, string([]u8{c}))
+        return true
+    }
+
+    sel_start,
+    sel_finish,
+    selected := text_box_selection_bounds(box)
+
+    if selected {
+        pair := strings.concatenate({
+            string([]u8{c}),
+            box.text[sel_start:sel_finish],
+            string([]u8{closer}),
+        })
+        defer delete(pair)
+
+        text_box_replace_range(
+            box,
+            sel_start,
+            sel_finish,
+            pair,
+        )
+
+        return true
+    }
+
+    if is_open &&
+       has_next &&
+       (
+           next_char == c ||
+           next_char == closer ||
+           text_box_is_word_byte(next_char)
+       ) {
+        text_box_insert(box, string([]u8{c}))
+        return true
+    }
+
+    if is_quote &&
+       has_next &&
+       text_box_is_word_byte(next_char) {
+        text_box_insert(box, string([]u8{c}))
+        return true
+    }
+
+    pair := strings.concatenate({
+        string([]u8{c}),
+        string([]u8{closer}),
+    })
+    defer delete(pair)
+
+    text_box_insert(box, pair)
+
+    box.cursor_byte -= 1
+    box.selection_anchor = box.cursor_byte
+    box.preferred_x_valid = false
+    text_box_restart_caret(box)
+    return true
+}
+
+text_box_handle_text :: proc(
+    box: ^TextBox,
+    value: string,
+) {
+    if box == nil ||
+       len(value) == 0 {
+        return
+    }
+
+    if box.code_editor &&
+       box.auto_close &&
+       len(value) == 1 {
+        if text_box_auto_close(box, value[0]) {
+            return
+        }
+    }
+
+    text_box_insert(box, value)
 }
 
 text_box_render_code_editor :: proc(
@@ -503,12 +974,9 @@ text_box_render_code_editor :: proc(
         gutter
 
     content_width :=
-        max(
-            rect.width -
-            padding * 2 -
-            gutter -
-            minimap_width,
-            f32(0),
+        text_box_editor_content_width(
+            box,
+            rect.width,
         )
 
     content_height :=
@@ -518,27 +986,37 @@ text_box_render_code_editor :: proc(
             f32(0),
         )
 
-    caret_line :=
-        text_box_line_number(
-            box.text,
-            box.cursor_byte,
-        ) - 1
+    lines :=
+        text_box_visual_lines(
+            box,
+            content_width,
+        )
+    defer delete(lines)
 
-    caret_start :=
-        text_box_line_start(
-            box.text,
+    highlight := syntax_highlighter_for_box(box)
+
+    if highlight != nil {
+        syntax_highlighter_ensure(highlight, box.text)
+    }
+
+    visual_line_count :=
+        len(lines)
+
+    caret_line :=
+        text_box_visual_index_at(
+            lines[:],
             box.cursor_byte,
         )
 
     caret_x_local :=
         text_box_measure_range(
             box,
-            caret_start,
+            lines[caret_line].start,
             box.cursor_byte,
         )
 
     total_height :=
-        f32(line_count) *
+        f32(visual_line_count) *
         line_height
 
     max_scroll_y :=
@@ -547,6 +1025,14 @@ text_box_render_code_editor :: proc(
             content_height,
             f32(0),
         )
+
+    if box.focused {
+        box.caret_timer += dt
+
+        for box.caret_timer >= 1.2 {
+            box.caret_timer -= 1.2
+        }
+    }
 
     if box.focused &&
        box.caret_needs_scroll {
@@ -672,19 +1158,24 @@ text_box_render_code_editor :: proc(
             box,
         )
 
-    position := 0
-    line_number := 1
+    bracket_first := -1
+    bracket_second := -1
+    bracket_found := false
 
-    for {
-        finish := text_box_line_end(
-            box.text,
-            position,
-        )
+    if box.focused {
+        bracket_first,
+        bracket_second,
+        bracket_found =
+            text_box_bracket_highlight(
+                box,
+            )
+    }
 
+    for line, index in lines {
         y :=
             rect.y +
             padding +
-            f32(line_number - 1) *
+            f32(index) *
             line_height -
             box.scroll_y
 
@@ -699,12 +1190,25 @@ text_box_render_code_editor :: proc(
                 0.5 +
                 box.text_size
 
-            if box.show_line_numbers {
+            starts_text_line :=
+                line.start == 0 ||
+                (
+                    line.start > 0 &&
+                    box.text[line.start - 1] == '\n'
+                )
+
+            if box.show_line_numbers &&
+               starts_text_line {
                 number_buffer: [32]u8
 
                 number := strconv.write_int(
                     number_buffer[:],
-                    i64(line_number),
+                    i64(
+                        text_box_line_number(
+                            box.text,
+                            line.start,
+                        ),
+                    ),
                     10,
                 )
 
@@ -715,11 +1219,20 @@ text_box_render_code_editor :: proc(
                 defer delete(number_text)
 
                 number_width :=
-                    guilib.measureText(
+                    guilib.measureTextTypeface(
+                        box.stored_typeface,
                         number_text,
                         box.text_size * 0.8,
-                        "",
                     )
+
+                if box.stored_typeface == nil {
+                    number_width =
+                        guilib.measureText(
+                            number_text,
+                            box.text_size * 0.8,
+                            "",
+                        )
+                }
 
                 guilib.drawText(
                     surface,
@@ -739,41 +1252,67 @@ text_box_render_code_editor :: proc(
                             box.placeholder_color3,
                         transparency =
                             0.2,
-                        font =
-                            "",
+                        typeface =
+                            box.stored_typeface,
                     },
                 )
             }
 
+            draw_bracket(
+                box,
+                surface,
+                content_x,
+                y,
+                line_height,
+                line,
+                bracket_first,
+                bracket_second < 0,
+            )
+
+            draw_bracket(
+                box,
+                surface,
+                content_x,
+                y,
+                line_height,
+                line,
+                bracket_second,
+                false,
+            )
+
             if selected {
                 a := max(
                     selection_start,
-                    position,
+                    line.start,
                 )
 
                 b := min(
                     selection_finish,
-                    finish,
+                    line.finish,
                 )
 
+                has_newline :=
+                    line.finish < len(box.text) &&
+                    box.text[line.finish] == '\n'
+
                 newline_selected :=
-                    finish < len(box.text) &&
-                    selection_start <= finish &&
-                    selection_finish > finish
+                    has_newline &&
+                    selection_start <= line.finish &&
+                    selection_finish > line.finish
 
                 if a < b ||
                    newline_selected {
                     x1 :=
                         text_box_measure_range(
                             box,
-                            position,
+                            line.start,
                             a,
                         )
 
                     x2 :=
                         text_box_measure_range(
                             box,
-                            position,
+                            line.start,
                             b,
                         )
 
@@ -810,19 +1349,29 @@ text_box_render_code_editor :: proc(
                 }
             }
 
-            if finish > position {
-                line :=
+            if highlight != nil {
+                text_box_draw_syntax_line(
+                    box,
+                    highlight,
+                    surface,
+                    content_x,
+                    baseline,
+                    line.start,
+                    line.finish,
+                )
+            } else if line.finish > line.start {
+                chunk :=
                     strings.clone_to_cstring(
                         box.text[
-                            position:
-                            finish
+                            line.start:
+                            line.finish
                         ],
                     )
-                defer delete(line)
+                defer delete(chunk)
 
                 guilib.drawText(
                     surface,
-                    line,
+                    chunk,
                     guilib.TextParams{
                         x =
                             content_x -
@@ -835,19 +1384,12 @@ text_box_render_code_editor :: proc(
                             box.text_color3,
                         transparency =
                             box.text_transparency,
-                        font =
-                            "",
+                        typeface =
+                            box.stored_typeface,
                     },
                 )
             }
         }
-
-        if finish >= len(box.text) {
-            break
-        }
-
-        position = finish + 1
-        line_number += 1
     }
 
     if box.focused {
@@ -888,8 +1430,8 @@ text_box_render_code_editor :: proc(
             rect.width -
             minimap_width
 
-        position = 0
-        line_number = 0
+        position := 0
+        map_line := 0
 
         for {
             finish := text_box_line_end(
@@ -900,7 +1442,7 @@ text_box_render_code_editor :: proc(
             y :=
                 rect.y +
                 (
-                    f32(line_number) /
+                    f32(map_line) /
                     f32(max(line_count, 1))
                 ) *
                 rect.height
@@ -939,8 +1481,201 @@ text_box_render_code_editor :: proc(
             }
 
             position = finish + 1
-            line_number += 1
+            map_line += 1
         }
+    }
+}
+
+draw_bracket :: proc(
+    box: ^TextBox,
+    surface: ^kineffi.KineSkiaSurface,
+    content_x: f32,
+    y: f32,
+    line_height: f32,
+    line: Visual_Line,
+    bracket_index: int,
+    unmatched: bool,
+) {
+    if box == nil ||
+       surface == nil ||
+       bracket_index < line.start ||
+       bracket_index >= line.finish {
+        return
+    }
+
+    x_start :=
+        text_box_measure_range(
+            box,
+            line.start,
+            bracket_index,
+        )
+
+    x_end :=
+        text_box_measure_range(
+            box,
+            line.start,
+            bracket_index + 1,
+        )
+
+    color := datatypes.Color3{0.35, 0.6, 1.0}
+
+    transparency: f32 = 0.45
+
+    if unmatched {
+        color = datatypes.Color3{1, 0.35, 0.35}
+        transparency = 0.35
+    }
+
+    guilib.drawRect(
+        surface,
+        guilib.Rect{
+            x =
+                content_x +
+                x_start -
+                box.scroll_x,
+            y =
+                y + 1,
+            width =
+                max(
+                    x_end - x_start,
+                    f32(2),
+                ),
+            height =
+                line_height - 2,
+            color =
+                color,
+            bgTransparency =
+                transparency,
+        },
+    )
+}
+
+text_box_draw_syntax_segment :: proc(
+    box: ^TextBox,
+    surface: ^kineffi.KineSkiaSurface,
+    content_x: f32,
+    baseline: f32,
+    line_start: int,
+    segment_start: int,
+    segment_finish: int,
+    color3: datatypes.Color3,
+) {
+    if box == nil ||
+       surface == nil ||
+       segment_finish <= segment_start {
+        return
+    }
+
+    segment := box.text[segment_start:segment_finish]
+
+    value := strings.clone_to_cstring(segment)
+    defer delete(value)
+
+    x :=
+        content_x +
+        text_box_measure_range(
+            box,
+            line_start,
+            segment_start,
+        ) -
+        box.scroll_x
+
+    guilib.drawText(
+        surface,
+        value,
+        guilib.TextParams{
+            x =
+                x,
+            y =
+                baseline,
+            TextSize =
+                box.text_size,
+            color =
+                color3,
+            transparency =
+                box.text_transparency,
+            typeface =
+                box.stored_typeface,
+        },
+    )
+}
+
+text_box_draw_syntax_line :: proc(
+    box: ^TextBox,
+    highlighter: ^SyntaxHighlighter,
+    surface: ^kineffi.KineSkiaSurface,
+    content_x: f32,
+    baseline: f32,
+    line_start: int,
+    line_finish: int,
+) {
+    if box == nil ||
+       highlighter == nil ||
+       surface == nil ||
+       line_finish <= line_start {
+        return
+    }
+
+    spans := highlighter.spans[:]
+
+    cursor := line_start
+
+    for index in 0 ..< len(spans) {
+        span := spans[index]
+
+        if span.finish <= cursor {
+            continue
+        }
+
+        if span.start >= line_finish {
+            break
+        }
+
+        span_start := max(span.start, cursor)
+        span_finish := min(span.finish, line_finish)
+
+        if span_start >= span_finish {
+            continue
+        }
+
+        if span_start > cursor {
+            text_box_draw_syntax_segment(
+                box,
+                surface,
+                content_x,
+                baseline,
+                line_start,
+                cursor,
+                span_start,
+                box.text_color3,
+            )
+        }
+
+        text_box_draw_syntax_segment(
+            box,
+            surface,
+            content_x,
+            baseline,
+            line_start,
+            span_start,
+            span_finish,
+            span.color3,
+        )
+
+        cursor = max(cursor, span_finish)
+    }
+
+    if cursor < line_finish {
+        text_box_draw_syntax_segment(
+            box,
+            surface,
+            content_x,
+            baseline,
+            line_start,
+            cursor,
+            line_finish,
+            box.text_color3,
+        )
     }
 }
 
@@ -1294,6 +2029,9 @@ text_box_set_text :: proc(
 		source,
 	)
 
+	undo_stack_clear(&box.undo_stack)
+	undo_stack_clear(&box.redo_stack)
+
 	box.cursor_byte = clamp(
 		box.cursor_byte,
 		0,
@@ -1331,6 +2069,60 @@ text_box_erase :: proc(
 	if clamped_start ==
 	   clamped_finish {
 		return
+	}
+
+	if !box.suppress_undo {
+		undo_stack_clear(&box.redo_stack)
+
+		deleted := strings.clone(
+			box.text[clamped_start:clamped_finish],
+		)
+
+		top := text_box_undo_last(box)
+		merged := false
+
+		if top != nil &&
+		   top.epoch == box.undo_epoch {
+			if len(top.insert_text) == 0 &&
+			   top.start + len(top.delete_text) == clamped_start {
+				combined := strings.concatenate({
+					top.delete_text,
+					deleted,
+				})
+
+				undo_entry_destroy(top)
+				top.delete_text = combined
+				merged = true
+			} else if len(top.insert_text) == 0 &&
+			          clamped_finish == top.start &&
+			          clamped_start < top.start {
+				combined := strings.concatenate({
+					deleted,
+					top.delete_text,
+				})
+
+				combined_start := clamped_start
+
+				undo_entry_destroy(top)
+				top.start = combined_start
+				top.delete_text = combined
+				merged = true
+			}
+		}
+
+		if !merged {
+			append(
+				&box.undo_stack,
+				Undo_Entry{
+					start       = clamped_start,
+					delete_text = deleted,
+					insert_text = "",
+					epoch       = box.undo_epoch,
+				},
+			)
+		} else {
+			delete(deleted)
+		}
 	}
 
 	next := strings.concatenate({
@@ -1422,6 +2214,54 @@ text_box_insert :: proc(
 		len(box.text),
 	)
 
+	if !box.suppress_undo {
+		undo_stack_clear(&box.redo_stack)
+
+		top := text_box_undo_last(box)
+		merged := false
+
+		if top != nil &&
+		   top.epoch == box.undo_epoch {
+			if len(top.insert_text) > 0 &&
+			   !strings.contains(top.insert_text, "\n") &&
+			   !strings.contains(insert_value, "\n") &&
+			   top.start + len(top.insert_text) == box.cursor_byte {
+				combined := strings.concatenate({
+					top.insert_text,
+					insert_value,
+				})
+
+				// The entry may also hold a delete_text (typing over a
+				// selection merges into the erase entry), so only the old
+				// insert_text buffer must be freed. Freeing the whole entry
+				// would leave top.delete_text pointing at freed memory that is
+				// later read on undo and freed again on destroy.
+				if len(top.insert_text) > 0 {
+					delete(top.insert_text)
+				}
+				top.insert_text = combined
+				merged = true
+			} else if len(top.delete_text) > 0 &&
+			          len(top.insert_text) == 0 &&
+			          top.start == box.cursor_byte {
+				top.insert_text = strings.clone(insert_value)
+				merged = true
+			}
+		}
+
+		if !merged {
+			append(
+				&box.undo_stack,
+				Undo_Entry{
+					start       = box.cursor_byte,
+					delete_text = "",
+					insert_text = strings.clone(insert_value),
+					epoch       = box.undo_epoch,
+				},
+			)
+		}
+	}
+
 	next := strings.concatenate({
 		box.text[:box.cursor_byte],
 		insert_value,
@@ -1477,6 +2317,164 @@ text_box_line_count :: proc(text: string) -> int {
 		}
 	}
 	return count
+}
+
+Visual_Line :: struct {
+	start:  int,
+	finish: int,
+}
+
+text_box_editor_content_width :: proc(
+	box: ^TextBox,
+	width: f32,
+) -> f32 {
+	if box == nil {
+		return 0
+	}
+
+	padding: f32 = 6
+
+	content := max(
+		width - padding * 2 - text_box_gutter_width(box),
+		f32(0),
+	)
+
+	if box.show_minimap &&
+	   width >= 250 {
+		content = max(
+			content - 64,
+			f32(0),
+		)
+	}
+
+	return content
+}
+
+text_box_visual_lines :: proc(
+	box: ^TextBox,
+	content_width: f32,
+) -> [dynamic]Visual_Line {
+	result := make([dynamic]Visual_Line)
+
+	text := box.text
+
+	if len(text) == 0 {
+		append(
+			&result,
+			Visual_Line{start = 0, finish = 0},
+		)
+		return result
+	}
+
+	position := 0
+
+	for position <= len(text) {
+		line_end := text_box_line_end(text, position)
+
+		if !box.wrap ||
+		   content_width <= f32(0) ||
+		   line_end == position {
+			append(
+				&result,
+				Visual_Line{start = position, finish = line_end},
+			)
+
+			if line_end >= len(text) {
+				break
+			}
+
+			position = line_end + 1
+			continue
+		}
+
+		chunk_start := position
+		last_fit := position
+		pos := position
+
+		for pos < line_end {
+			next := text_box_utf8_next_boundary(text, pos)
+			next = min(next, line_end)
+
+			if next == pos {
+				break
+			}
+
+			width := text_box_measure_range(
+				box,
+				chunk_start,
+				next,
+			)
+
+			if width > content_width {
+				split := last_fit
+
+				if split == chunk_start {
+					split = next
+				}
+
+				if split > chunk_start {
+					append(
+						&result,
+						Visual_Line{start = chunk_start, finish = split},
+					)
+				}
+
+				chunk_start = split
+				pos = split
+				last_fit = split
+			} else {
+				last_fit = next
+				pos = next
+			}
+		}
+
+		append(
+			&result,
+			Visual_Line{start = chunk_start, finish = line_end},
+		)
+
+		if line_end >= len(text) {
+			break
+		}
+
+		position = line_end + 1
+	}
+
+	if len(result) == 0 {
+		append(
+			&result,
+			Visual_Line{start = 0, finish = 0},
+		)
+	}
+
+	return result
+}
+
+text_box_visual_line_count :: proc(
+	box: ^TextBox,
+	content_width: f32,
+) -> int {
+	lines := text_box_visual_lines(box, content_width)
+	defer delete(lines)
+	return len(lines)
+}
+
+text_box_visual_index_at :: proc(
+	lines: []Visual_Line,
+	offset: int,
+) -> int {
+	if len(lines) == 0 {
+		return 0
+	}
+
+	for line, i in lines {
+		if offset >= line.start &&
+		   offset <= line.finish {
+			return i
+		}
+	}
+
+	return len(lines) - 1
 }
 
 text_box_indent :: proc(text: string, index: int) -> string {
@@ -2255,25 +3253,6 @@ text_box_effectively_visible :: proc(
 }
 
 
-text_box_contains_point :: proc(
-	box: ^TextBox,
-	x: f32,
-	y: f32,
-) -> bool {
-	if !text_box_effectively_visible(box) {
-		return false
-	}
-
-	position := box.absolute_position
-	size := box.absolute_size
-
-	return x >= position.X &&
-	       y >= position.Y &&
-	       x <= position.X + size.X &&
-	       y <= position.Y + size.Y
-}
-
-
 text_box_measure_prefix :: proc(
 	box: ^TextBox,
 	byte_index: int,
@@ -2299,6 +3278,14 @@ text_box_measure_prefix :: proc(
 		)
 
 	defer delete(text)
+
+	if box.stored_typeface != nil {
+		return guilib.measureTextTypeface(
+			box.stored_typeface,
+			text,
+			box.text_size,
+		)
+	}
 
 	return guilib.measureText(
 		text,
@@ -2381,6 +3368,10 @@ TextBox_construct :: proc(
 	box.name =
 		"TextBox"
 
+	TextBox_Load_Typeface(
+		box,
+	)
+
 	return &box.object
 }
 
@@ -2403,6 +3394,15 @@ TextBox_destroy :: proc(
 	if len(box.placeholder_text) > 0 {
 		delete(box.placeholder_text)
 	}
+
+	TextBox_Destroy_Typeface(box)
+
+	datatypes.Font_Destroy(
+		&box.font_face,
+	)
+
+	undo_stack_clear(&box.undo_stack)
+	undo_stack_clear(&box.redo_stack)
 
 	GuiObject_Free_Signals(cast(^GuiObject)object)
 	if box.focus_lost != nil {
@@ -2451,6 +3451,16 @@ TextBox_get :: proc(
 		)
 		return true
 
+	case "Font":
+		if enum_registry != nil {
+			if !enums.Push_Item_By_Value(L, enum_registry, "Font", i64(box.font_enum)) {
+				vm.PushString(L, box.font_face.Family)
+			}
+		} else {
+			vm.PushString(L, box.font_face.Family)
+		}
+		return true
+
 	case "TextSize":
 		vm.PushNumber(
 			L,
@@ -2489,6 +3499,14 @@ TextBox_get :: proc(
 
 	case "AutoIndent":
 		vm.PushBoolean(L, box.auto_indent)
+		return true
+
+	case "AutoClose":
+		vm.PushBoolean(L, box.auto_close)
+		return true
+
+	case "WordWrap":
+		vm.PushBoolean(L, box.wrap)
 		return true
 
 	case "LineCount":
@@ -2624,7 +3642,9 @@ TextBox_get :: proc(
 	     "IsFocused",
 	     "SelectAll",
 	     "ClearSelection",
-	     "CopySelection":
+	     "CopySelection",
+	     "Undo",
+	     "Redo":
 		vm.PushUserdataMethod(
 			L,
 			key,
@@ -2719,6 +3739,27 @@ TextBox_set :: proc(
 			)
 		return true
 
+	case "AutoClose":
+		box.auto_close =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+		return true
+
+	case "WordWrap":
+		box.wrap =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+
+		if box.code_editor {
+			box.caret_needs_scroll = true
+		}
+
+		return true
+
 	case "PlaceholderText":
 		text_box_replace_string(
 			&box.placeholder_text,
@@ -2727,6 +3768,30 @@ TextBox_set :: proc(
 				value_index,
 			),
 		)
+
+		return true
+
+	case "Font":
+		if enum_registry != nil &&
+		   vm.IsUserdataType(L, value_index, &enum_registry.item_binding) {
+			item := enums.Arg_Item(L, value_index, enum_registry, "Font")
+			if item == nil {
+				return true
+			}
+
+			TextBox_Set_Font_Enum(
+				box,
+				enums.Font(item.value),
+			)
+		} else {
+			TextBox_Set_Font_Family(
+				box,
+				vm.ArgString(
+					L,
+					value_index,
+				),
+			)
+		}
 
 		return true
 
@@ -2972,6 +4037,14 @@ TextBox_namecall :: proc(
 
 	case "CopySelection":
 		text_box_copy_selection(box)
+		return 0, true
+
+	case "Undo":
+		text_box_undo(box)
+		return 0, true
+
+	case "Redo":
+		text_box_redo(box)
 		return 0, true
 	}
 
@@ -3273,8 +4346,8 @@ TextBox_render :: proc(
 				transparency =
 					box.text_transparency,
 
-				font =
-					"",
+				typeface =
+					box.stored_typeface,
 			},
 		)
 	}
@@ -3421,6 +4494,22 @@ TextBox_clone :: proc(
 		src.placeholder_text,
 	)
 
+	TextBox_Destroy_Typeface(dst)
+
+	datatypes.Font_Destroy(
+		&dst.font_face,
+	)
+
+	dst.font_face =
+		datatypes.Font_Clone(
+			src.font_face,
+		)
+
+	dst.font_enum =
+		src.font_enum
+
+	TextBox_Load_Typeface(dst)
+
 	dst.text_size =
 		src.text_size
 
@@ -3482,22 +4571,34 @@ TextBox_clone :: proc(
 }
 
 
+text_box_from_hit :: proc(
+	registry: ^Registry,
+	x: f32,
+	y: f32,
+) -> ^TextBox {
+	if registry == nil {
+		return nil
+	}
+
+	chain := GuiObject_hit_chain(registry, x, y)
+	defer delete(chain)
+
+	for gui in chain {
+		if Is_A(&gui.object, "TextBox") {
+			return cast(^TextBox)gui
+		}
+	}
+
+	return nil
+}
+
+
 TextBox_Handle_Event :: proc(
 	registry: ^Registry,
 	L: ^vm.State,
 	event: sdl3.Event,
 ) {
 	if registry == nil {
-		return
-	}
-
-	descriptor :=
-		Find_Class(
-			registry,
-			"TextBox",
-		)
-
-	if descriptor == nil {
 		return
 	}
 
@@ -3513,39 +4614,12 @@ TextBox_Handle_Event :: proc(
 			return
 		}
 
-		clicked: ^TextBox
-		best_z: i32
-		found := false
-
-		for object in descriptor.instances {
-			if object == nil ||
-			   object.destroyed {
-				continue
-			}
-
-			box :=
-				cast(^TextBox)object
-
-			if !text_box_contains_point(
-				box,
+		clicked :=
+			text_box_from_hit(
+				registry,
 				event.button.x,
 				event.button.y,
-			) {
-				continue
-			}
-
-			if !found ||
-			   box.zindex >= best_z {
-				clicked =
-					box
-
-				best_z =
-					box.zindex
-
-				found =
-					true
-			}
-		}
+			)
 
 		//
 		// Clicked outside
@@ -3674,8 +4748,103 @@ TextBox_Handle_Event :: proc(
 		}
 
 	//
-	// Unicode text input
+	// Mouse wheel scrolling
 	//
+
+	case .MOUSE_WHEEL:
+		box :=
+			text_box_focused
+
+		if box == nil ||
+		   !box.focused ||
+		   !box.code_editor {
+			return
+		}
+
+		modifiers :=
+			sdl3.GetModState()
+
+		ctrl :=
+			.LCTRL in modifiers ||
+			.RCTRL in modifiers
+
+		shift :=
+			.LSHIFT in modifiers ||
+			.RSHIFT in modifiers
+
+		padding: f32 = 6
+
+		line_height :=
+			text_box_line_height(box)
+
+		delta_x :=
+			event.wheel.x
+
+		delta_y :=
+			event.wheel.y
+
+		content_width :=
+			text_box_editor_content_width(
+				box,
+				box.absolute_size.X,
+			)
+
+		content_height :=
+			max(
+				box.absolute_size.Y -
+				padding * 2,
+				f32(0),
+			)
+
+		if ctrl || shift {
+			if abs(delta_x) <
+			   0.001 {
+				delta_x = delta_y
+				delta_y = 0
+			}
+		}
+
+		if abs(delta_x) > 0.001 {
+			box.scroll_target_x =
+				max(
+					box.scroll_target_x -
+					delta_x *
+					box.text_size *
+					3,
+					f32(0),
+				)
+		}
+
+		if abs(delta_y) > 0.001 {
+			box.scroll_target_y -=
+				delta_y *
+				line_height *
+				3
+
+			max_scroll_y :=
+				max(
+					f32(
+						text_box_visual_line_count(
+							box,
+							content_width,
+						),
+					) *
+					line_height -
+					content_height,
+					f32(0),
+				)
+
+			box.scroll_target_y =
+				clamp(
+					box.scroll_target_y,
+					f32(0),
+					max_scroll_y,
+				)
+		}
+
+		//
+		// Unicode text input
+		//
 
 	case .TEXT_INPUT:
 		box :=
@@ -3688,7 +4857,7 @@ TextBox_Handle_Event :: proc(
 			return
 		}
 
-		text_box_insert(
+		text_box_handle_text(
 			box,
 			string(
 				event.text.text,
@@ -3780,6 +4949,22 @@ TextBox_Handle_Event :: proc(
 			case .L:
 				if box.code_editor {
 					text_box_delete_line(box)
+				}
+				return
+
+			case .Z:
+				if box.code_editor {
+					if shift {
+						text_box_redo(box)
+					} else {
+						text_box_undo(box)
+					}
+				}
+				return
+
+			case .Y:
+				if box.code_editor {
+					text_box_redo(box)
 				}
 				return
 
@@ -3967,6 +5152,17 @@ TextBox_Handle_Event :: proc(
 			old_cursor :=
 				box.cursor_byte
 
+			target := 0
+
+			if !shortcut &&
+			   box.code_editor {
+				target =
+					text_box_line_start(
+						box.text,
+						old_cursor,
+					)
+			}
+
 			if shift {
 				if box.selection_anchor ==
 				   box.cursor_byte {
@@ -3974,11 +5170,13 @@ TextBox_Handle_Event :: proc(
 						old_cursor
 				}
 
-				box.cursor_byte = 0
+				box.cursor_byte = target
 			} else {
-				box.cursor_byte = 0
-				box.selection_anchor = 0
+				box.cursor_byte = target
+				box.selection_anchor = target
 			}
+
+			box.preferred_x_valid = false
 
 			text_box_restart_caret(
 				box,
@@ -3995,6 +5193,15 @@ TextBox_Handle_Event :: proc(
 			end :=
 				len(box.text)
 
+			if !shortcut &&
+			   box.code_editor {
+				end =
+					text_box_line_end(
+						box.text,
+						old_cursor,
+					)
+			}
+
 			if shift {
 				if box.selection_anchor ==
 				   box.cursor_byte {
@@ -4002,15 +5209,13 @@ TextBox_Handle_Event :: proc(
 						old_cursor
 				}
 
-				box.cursor_byte =
-					end
+				box.cursor_byte = end
 			} else {
-				box.cursor_byte =
-					end
-
-				box.selection_anchor =
-					end
+				box.cursor_byte = end
+				box.selection_anchor = end
 			}
+
+			box.preferred_x_valid = false
 
 			text_box_restart_caret(
 				box,
@@ -4068,6 +5273,7 @@ Register_TextBox :: proc(
 
 		properties = []string{
 			"Text",
+			"Font",
 			"PlaceholderText",
 			"TextSize",
 			"TextColor3",
@@ -4089,11 +5295,12 @@ Register_TextBox :: proc(
 			"ShowMinimap",
 			"TabSize",
 			"AutoIndent",
+			"AutoClose",
+			"WordWrap",
 
 			"SelectedText",
 			"LineCount",
 
-			"FocusLost",
 		}
 	)
 }

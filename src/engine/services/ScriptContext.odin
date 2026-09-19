@@ -6,6 +6,8 @@ import "core:fmt"
 
 import classes "../classes"
 import vm "../vm"
+import tracy "../util/odin-tracy"
+import profiling "../profiling"
 
 ScriptContext_Class := classes.Class_Info{
 	name   = "ScriptContext",
@@ -55,6 +57,8 @@ ScriptContext_Run_Script :: proc(
 	script_context: ^ScriptContext,
 	script: ^classes.Script,
 ) -> bool {
+	tracy.ZoneNC("Script Run", 0x98C379)
+	z := profiling.Begin("Script Run", 0x98C379)
 	if script_context == nil ||
 	   script_context.vm_state == nil ||
 	   script_context.vm_state.L == nil ||
@@ -156,6 +160,8 @@ ScriptContext_step :: proc(
 	object: ^classes.Object,
 	ctx: ^classes.Class_Step_Context,
 ) {
+	tracy.ZoneNC("Scripts Start", 0x98C379)
+	z := profiling.Begin("Scripts Start", 0x98C379)
 	script_context := cast(^ScriptContext)object
 
 	if script_context == nil ||

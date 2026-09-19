@@ -2,6 +2,7 @@ material {
     name : "KineTerrain",
     shadingModel : lit,
     blending : opaque,
+    instanced : true,
     requires : [ custom0, custom1 ],
     variables : [ terrainWeights0, terrainWeights1 ],
     parameters : [

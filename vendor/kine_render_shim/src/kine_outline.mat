@@ -5,8 +5,9 @@ material {
     depthWrite : true,
     depthCulling : true,
     vertexDomain : object,
+    instanced : true,
     parameters : [
-        { type : float3, name : baseColor },
+        { type : float4[64], name : instanceColors },
         { type : float,  name : thickness }
     ]
 }
@@ -20,9 +21,10 @@ vertex {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor.rgb = materialParams.baseColor;
+        vec3 c = materialParams.instanceColors[getInstanceIndex()].rgb;
+        material.baseColor.rgb = c;
         material.baseColor.a = 1.0;
-        material.emissive.rgb = materialParams.baseColor;
+        material.emissive.rgb = c;
         material.emissive.a = 1.0;
         material.roughness = 1.0;
         material.metallic = 0.0;

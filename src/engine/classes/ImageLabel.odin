@@ -19,7 +19,14 @@ IMAGE_LABEL_GLOBAL_ICONS :=
 
 BUILTIN_ICON_PREFIX :: "builtin://icons/"
 BUILTIN_GLOBAL_ICON_PREFIX :: "builtin://global-icons/"
+RUNTIME_IMAGE_PREFIX :: "memory://"
 
+Runtime_Image_Asset :: struct {
+	id:   string,
+	data: string,
+}
+
+runtime_image_assets: [dynamic]Runtime_Image_Asset
 
 ImageLabel_Class := Class_Info{
 	name   = "ImageLabel",
@@ -174,6 +181,26 @@ ImageLabel_Load_Image :: proc(
 	}
 
 	//
+	// Load from memory
+	//
+
+	if strings.has_prefix(path, RUNTIME_IMAGE_PREFIX) {
+		data, found := ImageLabel_Find_Runtime_Image(path)
+
+		if !found || len(data) == 0 {
+			return
+		}
+
+		image_label.stored_image =
+			kineffi.Kine_Skia_Image_LoadFromMemory(
+				raw_data(data),
+				uintptr(len(data)),
+			)
+
+		return
+	}
+
+	//
 	// Normal filesystem image.
 	//
 
@@ -289,6 +316,39 @@ ImageLabel_destroy :: proc(
 	)
 }
 
+ImageLabel_Register_Runtime_Image :: proc(
+	id: string,
+	data: string,
+) -> string {
+	for &asset in runtime_image_assets {
+		if asset.id == id {
+			delete(asset.data)
+			asset.data = strings.clone(data)
+			return asset.id
+		}
+	}
+
+	asset := Runtime_Image_Asset{
+		id   = strings.clone(id),
+		data = strings.clone(data),
+	}
+
+	append(&runtime_image_assets, asset)
+
+	return runtime_image_assets[len(runtime_image_assets)-1].id
+}
+
+ImageLabel_Find_Runtime_Image :: proc(
+	id: string,
+) -> (string, bool) {
+	for &asset in runtime_image_assets {
+		if asset.id == id {
+			return asset.data, true
+		}
+	}
+
+	return "", false
+}
 
 //
 // Properties
@@ -406,12 +466,21 @@ ImageLabel_render :: proc(
 		cast(^ImageLabel)object
 
 	image_shadow := false
+	should_draw := true
+	blur_sigma: f32 = 0
+	has_blur := false
 
 	if image_label.stored_image != nil {
 		shadow_object :=
 			Find_First_Child_Of_Class(
 				object,
 				"UIShadow",
+			)
+
+		blur_filter :=
+			Find_First_Child_Of_Class(
+				object,
+				"BlurImageFilter",
 			)
 
 		if shadow_object != nil {
@@ -443,6 +512,22 @@ ImageLabel_render :: proc(
 				image_shadow = true
 			}
 		}
+
+		if blur_filter != nil {
+			filter := cast(^BlurImageFilter)blur_filter
+
+			if filter.enabled {
+				blur_sigma = max(
+					f32(0),
+					gui_resolve_udim(
+						filter.blur_radius,
+						min(rect.width, rect.height),
+					),
+				)
+
+				has_blur = true
+			}
+		}
 	}
 
 	GuiObject_render(
@@ -455,11 +540,20 @@ ImageLabel_render :: proc(
 		rect.bgTransparency =
 			image_label.image_transparency
 
-		guilib.drawImageSized(
-			ctx.renderer.SkiaSurface,
-			image_label.stored_image,
-			rect,
-		)
+		if has_blur {
+			guilib.drawImageBlurred(
+				ctx.renderer.SkiaSurface,
+				image_label.stored_image,
+				rect,
+				blur_sigma,
+			)
+		} else {
+			guilib.drawImageSized(
+				ctx.renderer.SkiaSurface,
+				image_label.stored_image,
+				rect,
+			)
+		}
 	}
 }
 

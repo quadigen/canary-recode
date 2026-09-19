@@ -6,6 +6,8 @@ import classes "../classes"
 import datatypes "../datatypes"
 import signals "../signals"
 import vm "../vm"
+import tracy "../util/odin-tracy"
+import profiling "../profiling"
 
 Service_Descriptor :: struct {
 	name:         string,
@@ -103,14 +105,22 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
 	Register_CollectionService_Class(registry.classes)
+	Register_DialogService_Class(registry.classes)
 	Register_ExampleService_Class(registry.classes)
 	Register_HttpService_Class(registry.classes)
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
+	Register_NetworkEmulator_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
+	Register_Players_Class(registry.classes)
+	Register_Plugin_Class(registry.classes)
+	Register_PluginMarketplace_Class(registry.classes)
+	Register_ProfilerService_Class(registry.classes)
+	Register_Project_Class(registry.classes)
 	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
+	Register_ReplicatorService_Class(registry.classes)
 	Register_RunService_Class(registry.classes)
 	Register_ScriptContext_Class(registry.classes)
 	Register_Selection_Class(registry.classes)
@@ -130,14 +140,21 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:end service-classes
 	// wire:begin services
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
+	Register_Service(registry, "DialogService", "DialogService", "DialogService")
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
-	Register_Service(registry, "HttpService", "HttpService", "HttpService")
+	Register_Service(registry, "HttpService", "HttpService", "httpService")
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService", "logService")
 	Register_Service(registry, "Physics", "Physics")
+	Register_Service(registry, "Players", "Players")
+	Register_Service(registry, "Plugin", "Plugin", "Plugin")
+	Register_Service(registry, "PluginMarketplace", "PluginMarketplace", "PluginMarketplace")
+	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
+	Register_Service(registry, "Project", "Project", "Project")
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
+	Register_Service(registry, "ReplicatorService", "ReplicatorService")
 	Register_Service(registry, "RunService", "RunService")
 	Register_Service(registry, "ScriptContext", "ScriptContext")
 	Register_Service(registry, "Selection", "Selection", "Selection")
@@ -169,21 +186,41 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
-	user_input := Find_Service(registry, "UserInputService")
-	if user_input != nil && user_input.object != nil {
-		User_Input_Begin_Frame(cast(^UserInputService)user_input.object)
+	replicator := Find_Service(registry, "ReplicatorService")
+	if replicator != nil && replicator.object != nil {
+		Replication_Step(cast(^ReplicatorService)replicator.object, L, delta_time)
 	}
-	physics := Find_Service(registry, "Physics")
-	if physics != nil && physics.object != nil {
-		Physics_Step(cast(^Physics)physics.object, delta_time)
+	{
+		tracy.ZoneNC("User Input BeginFrame", 0x56B6C2)
+		z := profiling.Begin("User Input BeginFrame", 0x56B6C2)
+		user_input := Find_Service(registry, "UserInputService")
+		if user_input != nil && user_input.object != nil {
+			User_Input_Begin_Frame(cast(^UserInputService)user_input.object)
+		}
 	}
-	task_scheduler := Find_Service(registry, "TaskScheduler")
-	if task_scheduler != nil && task_scheduler.object != nil {
-		Task_Scheduler_Step(cast(^TaskScheduler)task_scheduler.object, delta_time)
+	{
+		tracy.ZoneNC("Physics Step", 0xE06C75)
+		z := profiling.Begin("Physics Step", 0xE06C75)
+		physics := Find_Service(registry, "Physics")
+		if physics != nil && physics.object != nil {
+			Physics_Step(cast(^Physics)physics.object, delta_time)
+		}
 	}
-	run_service := Find_Service(registry, "RunService")
-	if run_service != nil && run_service.object != nil {
-		Run_Service_Heartbeat(cast(^RunService)run_service.object, L, delta_time)
+	{
+		tracy.ZoneNC("TaskScheduler Step", 0xD19A66)
+		z := profiling.Begin("TaskScheduler Step", 0xD19A66)
+		task_scheduler := Find_Service(registry, "TaskScheduler")
+		if task_scheduler != nil && task_scheduler.object != nil {
+			Task_Scheduler_Step(cast(^TaskScheduler)task_scheduler.object, delta_time)
+		}
+	}
+	{
+		tracy.ZoneNC("RunService Heartbeat", 0xE5C07B)
+		z := profiling.Begin("RunService Heartbeat", 0xE5C07B)
+		run_service := Find_Service(registry, "RunService")
+		if run_service != nil && run_service.object != nil {
+			Run_Service_Heartbeat(cast(^RunService)run_service.object, L, delta_time)
+		}
 	}
 }
 
@@ -196,8 +233,12 @@ Set_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
 
 Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 	if registry == nil || renderer == nil || renderer.Filament == nil { return }
-	lighting := Find_Service(registry, "Lighting")
-	if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
+	{
+		tracy.ZoneNC("Lighting Apply", 0xC586C0)
+		z := profiling.Begin("Lighting Apply", 0xC586C0)
+		lighting := Find_Service(registry, "Lighting")
+		if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
+	}
 	workspace_service := Find_Service(registry, "Workspace")
 	if workspace_service == nil || workspace_service.object == nil { return }
 	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
@@ -267,11 +308,16 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 		}
 	}
 	Install_Log_Globals(registry, vm_state)
+	Register_ProfilerOverlay(registry, vm_state)
 }
 
 Registry_Destroy :: proc(registry: ^Registry) {
 	if registry == nil {
 		return
+	}
+	replicator := Find_Service(registry, "ReplicatorService")
+	if registry.vm_state != nil && registry.vm_state.L != nil && replicator != nil && replicator.object != nil {
+		replication_stop(cast(^ReplicatorService)replicator.object)
 	}
 	delete(registry.services)
 	registry.services = nil
@@ -287,6 +333,13 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 		return
 	}
 	registry := cast(^Registry)ctx
+	for &descriptor in registry.services {
+		if descriptor.object == object { descriptor.object = nil; break }
+	}
+	replicator := Find_Service(registry, "ReplicatorService")
+	if replicator != nil && replicator.object != nil {
+		replication_forget_destroyed(cast(^ReplicatorService)replicator.object, object)
+	}
 
 	selection := Find_Service(registry, "Selection")
 	if selection != nil && selection.object != nil {

@@ -6,27 +6,30 @@ material {
     // refraction also warps opaque scene geometry behind the glass.
     refractionMode : screenspace,
     refractionType : solid,
+    instanced : true,
     parameters : [
-        { type : float3, name : baseColor },
+        { type : float4[64], name : instanceColors },
         { type : float,  name : roughness },
         { type : float,  name : ior },
         { type : float,  name : thickness },
-        { type : float,  name : transmission },
-        { type : float3, name : absorption }
+        { type : float,  name : transmission }
     ]
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor.rgb = materialParams.baseColor;
+        vec3 c = materialParams.instanceColors[getInstanceIndex()].rgb;
+        // Keep the dielectric surface mostly neutral; use absorption below
+        // for physically plausible colored transmission through the volume.
+        material.baseColor.rgb = 0.82 + 0.18 * c;
         material.roughness     = materialParams.roughness;
         material.ior           = materialParams.ior;
         material.thickness     = materialParams.thickness;
         // BasePart.Transparency is passed as transmission. Use the same value
         // for the blend opacity so Glass has no hidden opacity of its own.
         material.transmission  = materialParams.transmission;
-        material.absorption    = materialParams.absorption;
+        material.absorption    = (1.0 - clamp(c, 0.0, 1.0)) * 0.15;
         material.baseColor.a   = 1.0 - materialParams.transmission;
     }
 }

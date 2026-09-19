@@ -260,6 +260,18 @@ breadcrumb.Name = "ViewportBreadcrumb"
 breadcrumb.Visible = renderer.Dimension == "3D"
 breadcrumb.ClipsDescendants = true
 
+local CodeEditor = Instance.new("TextBox")
+CodeEditor.Size = UDim2.new(1, 0, 1, 0)
+CodeEditor.CodeEditor = true
+CodeEditor.Visible = false
+CodeEditor.BackgroundTransparency = 0.6
+CodeEditor.BackgroundColor3 = Color3.new(0, 0, 0)
+CodeEditor.TextColor3 = Color3.new(1, 1, 1)
+CodeEditor.Parent = viewportOverlay
+
+local backDrop = Instance.new("UIBackdrop")
+backDrop.Parent = CodeEditor
+
 local function rebuildBreadcrumb(path)
 	UI.clear(breadcrumb)
 
@@ -415,7 +427,11 @@ renderer.Pool.new("2da", function()
 	end
 
 	if renderer.Dimension == "3D" then
-		renderer:Set3DTexProps(absoluteX, renderTop, absoluteWidth, renderHeight)
+		if rootOverlay.Enabled then
+			renderer:Set3DTexProps(absoluteX, renderTop, absoluteWidth, renderHeight)
+		else
+			renderer:Set3DTexProps(0, 0, 0, 0)
+		end
 	end
 
 	local overlayInset = math.max(0, renderTop - absoluteY)

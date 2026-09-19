@@ -9,7 +9,6 @@ local theme = StudioThemeService.SelectedTheme
 local Selection = game:GetService("Selection")
 local UserInputService = game:GetService("UserInputService")
 
-
 local colors = UI.colors
 local tokens = UI.tokens
 
@@ -1455,4 +1454,3 @@ renderer.Pool.new("2d", function()
 		rebuild()
 	end
 end)
-

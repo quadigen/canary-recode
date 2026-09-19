@@ -81,6 +81,35 @@ foreign kine_skia {
 		size: uintptr,
 	) -> ^KineSkiaTypeface ---
 
+	Kine_Skia_Surface_DrawImageBlurredSized :: proc(
+		surface: ^KineSkiaSurface,
+		image: ^KineSkiaImage,
+		x, y: f32,
+		width, height: f32,
+		blurSigma: f32,
+		alpha: u8,
+	) ---
+
+	Kine_Skia_Surface_DrawTextBlurred :: proc(
+		surface: ^KineSkiaSurface,
+		text: cstring,
+		x, y: f32,
+		fontSize: f32,
+		fontPath: cstring,
+		blurSigma: f32,
+		r, g, b, a: u8,
+	) ---
+
+	Kine_Skia_Surface_DrawTextBlurredTypeface :: proc(
+		surface: ^KineSkiaSurface,
+		text: cstring,
+		x, y: f32,
+		fontSize: f32,
+		typeface: ^KineSkiaTypeface,
+		blurSigma: f32,
+		r, g, b, a: u8,
+	) ---
+
 	Kine_Skia_Typeface_LoadFromFile :: proc(
 		path: cstring,
 	) -> ^KineSkiaTypeface ---

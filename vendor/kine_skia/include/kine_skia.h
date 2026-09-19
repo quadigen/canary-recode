@@ -246,6 +246,42 @@ Kine_Skia_Surface_DrawTextTypeface(
     uint8_t b,
     uint8_t a);
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurredTypeface(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    KineSkiaTypeface* typeface,
+    float blurSigma,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurred(
+    KineSkiaSurface* surface,
+    const char* text,
+    float x,
+    float y,
+    float fontSize,
+    const char* fontPath,
+    float blurSigma,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageBlurredSized(
+    KineSkiaSurface* surface,
+    KineSkiaImage* image,
+    float x,
+    float y,
+    float width,
+    float height,
+    float blurSigma,
+    uint8_t alpha);
+
 KINE_SKIA_API void
 Kine_Skia_Surface_DrawTextShadowTypeface(
     KineSkiaSurface* surface,

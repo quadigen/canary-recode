@@ -4,9 +4,10 @@ material {
     blending : transparent,
     depthWrite : false,
     doubleSided : true,
+    instanced : true,
     requires : [ uv0 ],
     parameters : [
-        { type : float4,    name : baseColor },
+        { type : float4[64], name : instanceColors },
         { type : float,     name : hasTexture },
         { type : sampler2d, name : baseColorMap },
         { type : float2,    name : uvScale },
@@ -16,7 +17,9 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec4 color = materialParams.baseColor;
+        // RGB tint and per-particle alpha ride in the same float4 slot that
+        // kine_queue_mesh queued for this instance.
+        vec4 color = materialParams.instanceColors[getInstanceIndex()];
         if (materialParams.hasTexture > 0.5) {
             vec2 uv = getUV0() * materialParams.uvScale + materialParams.uvOffset;
             color *= texture(materialParams_baseColorMap, uv);

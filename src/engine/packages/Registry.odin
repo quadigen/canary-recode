@@ -474,11 +474,12 @@ renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
 	height := i32(vm.ArgNumber(L, 4+offset))
 
 	if width <= 0 || height <= 0 {
-		return vm.RaiseError(
-			L,
-			"renderer:Set3DTexProps(x, y, width, height): width and height must be greater than 0",
-		)
-	}
+		registry.renderer.RenderFilament = false
+	} else {
+        if !registry.renderer.RenderFilament {
+            registry.renderer.RenderFilament = true
+        }
+    }
 
 	renderer.set_viewport_rect(
 		registry.renderer,

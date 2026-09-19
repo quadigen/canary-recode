@@ -32,6 +32,16 @@ Script :: struct {
 	module_ref:   i32,
 }
 
+Script_Set_Source :: proc(script: ^Script, source: string) {
+	if script == nil {
+		return
+	}
+	script.module_state = .Unloaded
+	delete(script.source)
+	script.source = strings.clone(source)
+	script.execution_state = .NotStarted
+}
+
 Script_Apply_Environment :: proc(
 	L: ^vm.State,
 	object: ^Object,

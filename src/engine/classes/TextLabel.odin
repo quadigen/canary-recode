@@ -42,7 +42,8 @@ TextLabel :: struct {
 	text:       string,
 	owned_text: string,
 
-	font_face: datatypes.Font,
+	font_face:       datatypes.Font,
+	font_enum:       enums.Font,
 	stored_typeface: ^kineffi.KineSkiaTypeface,
 
 	text_size:         f32,
@@ -149,6 +150,9 @@ TextLabel_Init :: proc() -> TextLabel {
 
 		font_face =
 			font,
+
+		font_enum =
+			.Legacy,
 
 		stored_typeface =
 			nil,
@@ -270,7 +274,15 @@ TextLabel_Set_Font_Family :: proc(
 		return
 	}
 
+	new_enum :=
+		TextLabel_Font_Enum_From_Family(
+			family,
+		)
+
 	if label.font_face.Family == family {
+		label.font_enum =
+			new_enum
+
 		return
 	}
 
@@ -287,6 +299,9 @@ TextLabel_Set_Font_Family :: proc(
 
 	label.font_face =
 		new_font
+
+	label.font_enum =
+		new_enum
 
 	TextLabel_Load_Typeface(
 		label,
@@ -308,6 +323,11 @@ TextLabel_Set_Font_Face :: proc(
 		label.font_face.Style == font.Style
 
 	if same {
+		label.font_enum =
+			TextLabel_Font_Enum_From_Family(
+				font.Family,
+			)
+
 		return
 	}
 
@@ -320,9 +340,242 @@ TextLabel_Set_Font_Face :: proc(
 			font,
 		)
 
+	label.font_enum =
+		TextLabel_Font_Enum_From_Family(
+			font.Family,
+		)
+
 	TextLabel_Load_Typeface(
 		label,
 	)
+}
+
+
+//
+// --------------------------------------------------------------------------
+// Enum.Font
+// --------------------------------------------------------------------------
+//
+
+TextLabel_Set_Font_Enum :: proc(
+	label: ^TextLabel,
+	font: enums.Font,
+) {
+	if label == nil {
+		return
+	}
+
+	TextLabel_Set_Font_Family(
+		label,
+		TextLabel_Font_Enum_To_Family(
+			font,
+		),
+	)
+
+	label.font_enum =
+		font
+}
+
+TextLabel_Font_Enum_To_Family :: proc(
+	font: enums.Font,
+) -> string {
+	switch font {
+	case .Legacy:
+		return DEFAULT_FONT
+	case .Arial:
+		return DEFAULT_FONT
+	case .ArialBold:
+		return "builtin://fonts/Montserrat-Bold.ttf"
+	case .SourceSans:
+		return "builtin://fonts/SourceSans3-Regular.ttf"
+	case .SourceSansBold:
+		return "builtin://fonts/SourceSans3-Bold.ttf"
+	case .SourceSansLight:
+		return "builtin://fonts/SourceSans3-Light.ttf"
+	case .SourceSansItalic:
+		return "builtin://fonts/SourceSans3-Italic.ttf"
+	case .Bodoni:
+		return "builtin://fonts/Bembo.otf"
+	case .Garamond:
+		return "builtin://fonts/Bembo.otf"
+	case .Cartoon:
+		return "builtin://fonts/ComicNeue-Angular-Bold.ttf"
+	case .Code:
+		return "builtin://fonts/GoogleSansCode-Regular.ttf"
+	case .Highway:
+		return "builtin://fonts/HWYGOTH.ttf"
+	case .SciFi:
+		return "builtin://fonts/Zekton.ttf"
+	case .Arcade:
+		return "builtin://fonts/VCR.ttf"
+	case .Fantasy:
+		return "builtin://fonts/Duskfall_Gothic.ttf"
+	case .Antique:
+		return "builtin://fonts/RomanAntique.otf"
+	case .SourceSansSemibold:
+		return "builtin://fonts/SourceSans3-SemiBold.ttf"
+	case .Gotham:
+		return "builtin://fonts/Montserrat-Regular.ttf"
+	case .GothamMedium:
+		return "builtin://fonts/Montserrat-Medium.ttf"
+	case .GothamBold:
+		return "builtin://fonts/Montserrat-Bold.ttf"
+	case .GothamBlack:
+		return "builtin://fonts/Montserrat-Black.ttf"
+	case .AmaticSC:
+		return "builtin://fonts/AmaticSC-Regular.ttf"
+	case .Bangers:
+		return "builtin://fonts/Bangers-Regular.ttf"
+	case .Creepster:
+		return "builtin://fonts/Creepster-Regular.ttf"
+	case .DenkOne:
+		return "builtin://fonts/DenkOne-Regular.ttf"
+	case .Fondamento:
+		return "builtin://fonts/Fondamento-Regular.ttf"
+	case .FredokaOne:
+		return "builtin://fonts/FredokaOne-Regular.ttf"
+	case .GrenzeGotisch:
+		return "builtin://fonts/GrenzeGotisch-Regular.ttf"
+	case .IndieFlower:
+		return "builtin://fonts/IndieFlower-Regular.ttf"
+	case .JosefinSans:
+		return "builtin://fonts/JosefinSans-Regular.ttf"
+	case .Jura:
+		return "builtin://fonts/Jura-Regular.ttf"
+	case .Kalam:
+		return "builtin://fonts/Kalam-Regular.ttf"
+	case .LuckiestGuy:
+		return "builtin://fonts/LuckiestGuy-Regular.ttf"
+	case .Merriweather:
+		return "builtin://fonts/Merriweather-Regular.ttf"
+	case .Michroma:
+		return "builtin://fonts/Michroma-Regular.ttf"
+	case .Nunito:
+		return "builtin://fonts/Nunito-Regular.ttf"
+	case .Oswald:
+		return "builtin://fonts/Oswald-Regular.ttf"
+	case .PatrickHand:
+		return "builtin://fonts/PatrickHand-Regular.ttf"
+	case .PermanentMarker:
+		return "builtin://fonts/PermanentMarker-Regular.ttf"
+	case .Roboto:
+		return "builtin://fonts/Roboto-Regular.ttf"
+	case .RobotoCondensed:
+		return "builtin://fonts/Roboto_Condensed-Regular.ttf"
+	case .RobotoMono:
+		return "builtin://fonts/RobotoMono-Regular.ttf"
+	case .Sarpanch:
+		return "builtin://fonts/Sarpanch-Regular.ttf"
+	case .SpecialElite:
+		return "builtin://fonts/SpecialElite-Regular.ttf"
+	case .TitilliumWeb:
+		return "builtin://fonts/TitilliumWeb-Regular.ttf"
+	case .Ubuntu:
+		return "builtin://fonts/Ubuntu-Regular.ttf"
+	case .Arimo:
+		return "builtin://fonts/Arimo-Regular.ttf"
+	case .ArimoBold:
+		return "builtin://fonts/Arimo-Bold.ttf"
+	case:
+		return DEFAULT_FONT
+	}
+}
+
+TextLabel_Font_Enum_From_Family :: proc(
+	family: string,
+) -> enums.Font {
+	switch family {
+	case DEFAULT_FONT:
+		return .Legacy
+	case "builtin://fonts/Montserrat-Bold.ttf":
+		return .ArialBold
+	case "builtin://fonts/Montserrat-Medium.ttf":
+		return .GothamMedium
+	case "builtin://fonts/Montserrat-Black.ttf":
+		return .GothamBlack
+	case "builtin://fonts/SourceSans3-Regular.ttf":
+		return .SourceSans
+	case "builtin://fonts/SourceSans3-Bold.ttf":
+		return .SourceSansBold
+	case "builtin://fonts/SourceSans3-Light.ttf":
+		return .SourceSansLight
+	case "builtin://fonts/SourceSans3-Italic.ttf":
+		return .SourceSansItalic
+	case "builtin://fonts/SourceSans3-SemiBold.ttf":
+		return .SourceSansSemibold
+	case "builtin://fonts/Bembo.otf":
+		return .Bodoni
+	case "builtin://fonts/ComicNeue-Angular-Bold.ttf":
+		return .Cartoon
+	case "builtin://fonts/GoogleSansCode-Regular.ttf":
+		return .Code
+	case "builtin://fonts/HWYGOTH.ttf":
+		return .Highway
+	case "builtin://fonts/Zekton.ttf":
+		return .SciFi
+	case "builtin://fonts/VCR.ttf":
+		return .Arcade
+	case "builtin://fonts/Duskfall_Gothic.ttf":
+		return .Fantasy
+	case "builtin://fonts/RomanAntique.otf":
+		return .Antique
+	case "builtin://fonts/AmaticSC-Regular.ttf":
+		return .AmaticSC
+	case "builtin://fonts/Bangers-Regular.ttf":
+		return .Bangers
+	case "builtin://fonts/Creepster-Regular.ttf":
+		return .Creepster
+	case "builtin://fonts/DenkOne-Regular.ttf":
+		return .DenkOne
+	case "builtin://fonts/Fondamento-Regular.ttf":
+		return .Fondamento
+	case "builtin://fonts/FredokaOne-Regular.ttf":
+		return .FredokaOne
+	case "builtin://fonts/GrenzeGotisch-Regular.ttf":
+		return .GrenzeGotisch
+	case "builtin://fonts/IndieFlower-Regular.ttf":
+		return .IndieFlower
+	case "builtin://fonts/JosefinSans-Regular.ttf":
+		return .JosefinSans
+	case "builtin://fonts/Jura-Regular.ttf":
+		return .Jura
+	case "builtin://fonts/Kalam-Regular.ttf":
+		return .Kalam
+	case "builtin://fonts/LuckiestGuy-Regular.ttf":
+		return .LuckiestGuy
+	case "builtin://fonts/Merriweather-Regular.ttf":
+		return .Merriweather
+	case "builtin://fonts/Michroma-Regular.ttf":
+		return .Michroma
+	case "builtin://fonts/Nunito-Regular.ttf":
+		return .Nunito
+	case "builtin://fonts/Oswald-Regular.ttf":
+		return .Oswald
+	case "builtin://fonts/PatrickHand-Regular.ttf":
+		return .PatrickHand
+	case "builtin://fonts/PermanentMarker-Regular.ttf":
+		return .PermanentMarker
+	case "builtin://fonts/Roboto-Regular.ttf":
+		return .Roboto
+	case "builtin://fonts/Roboto_Condensed-Regular.ttf":
+		return .RobotoCondensed
+	case "builtin://fonts/RobotoMono-Regular.ttf":
+		return .RobotoMono
+	case "builtin://fonts/Sarpanch-Regular.ttf":
+		return .Sarpanch
+	case "builtin://fonts/SpecialElite-Regular.ttf":
+		return .SpecialElite
+	case "builtin://fonts/TitilliumWeb-Regular.ttf":
+		return .TitilliumWeb
+	case "builtin://fonts/Ubuntu-Regular.ttf":
+		return .Ubuntu
+	case "builtin://fonts/Arimo-Regular.ttf":
+		return .Arimo
+	case "builtin://fonts/Arimo-Bold.ttf":
+		return .ArimoBold
+	case:
+		return .Legacy
+	}
 }
 
 
@@ -997,10 +1250,13 @@ TextLabel_get :: proc(
 		)
 
 	case "Font":
-		vm.PushString(
-			L,
-			label.font_face.Family,
-		)
+		if enum_registry != nil {
+			if !enums.Push_Item_By_Value(L, enum_registry, "Font", i64(label.font_enum)) {
+				vm.PushString(L, label.font_face.Family)
+			}
+		} else {
+			vm.PushString(L, label.font_face.Family)
+		}
 
 	case "FontFace":
 		if datatype_registry == nil {
@@ -1174,13 +1430,26 @@ TextLabel_set :: proc(
 
 
 	case "Font":
-		TextLabel_Set_Font_Family(
-			label,
-			vm.ArgString(
-				L,
-				value_index,
-			),
-		)
+		if enum_registry != nil &&
+		   vm.IsUserdataType(L, value_index, &enum_registry.item_binding) {
+			item := enums.Arg_Item(L, value_index, enum_registry, "Font")
+			if item == nil {
+				return true
+			}
+
+			TextLabel_Set_Font_Enum(
+				label,
+				enums.Font(item.value),
+			)
+		} else {
+			TextLabel_Set_Font_Family(
+				label,
+				vm.ArgString(
+					L,
+					value_index,
+				),
+			)
+		}
 
 
 	case "FontFace":
@@ -1817,6 +2086,9 @@ TextLabel_clone :: proc(
 		datatypes.Font_Clone(
 			src.font_face,
 		)
+
+	dst.font_enum =
+		src.font_enum
 
 	TextLabel_Load_Typeface(
 		dst,

@@ -349,6 +349,26 @@ gui_button_apply_state :: proc(
 	}
 }
 
+GuiButton_from_hit :: proc(
+    hit: ^GuiObject,
+) -> ^GuiButton {
+    if hit == nil {
+        return nil
+    }
+
+    object := &hit.object
+
+    for object != nil {
+        if Is_A(object, "GuiButton") {
+            return cast(^GuiButton)object
+        }
+
+        object = object.parent
+    }
+
+    return nil
+}
+
 GuiButton_update :: proc(
 	object: ^Object,
 	ctx: ^Class_Step_Context,
@@ -378,58 +398,6 @@ GuiButton_update :: proc(
 	)
 
 	return true
-}
-
-GuiButton_find_topmost :: proc(
-	registry: ^Registry,
-	x, y: f32,
-) -> ^GuiButton {
-	if registry == nil {
-		return nil
-	}
-
-	best: ^GuiButton
-	best_z: i32
-	best_depth := 0
-
-	for descriptor in registry.classes {
-		for object in descriptor.instances {
-			if object == nil ||
-			   object.destroyed ||
-			   !Is_A(object, "GuiButton") {
-				continue
-			}
-
-			button :=
-				cast(^GuiButton)object
-
-			if !GuiObject_contains_point(
-				&button.gui_object,
-				x,
-				y,
-			) {
-				continue
-			}
-
-			depth :=
-				gui_object_depth(
-					object,
-				)
-
-			if best == nil ||
-			   button.zindex > best_z ||
-			   (
-					button.zindex == best_z &&
-					depth >= best_depth
-			   ) {
-				best = button
-				best_z = button.zindex
-				best_depth = depth
-			}
-		}
-	}
-
-	return best
 }
 
 gui_button_find_pressed :: proc(
@@ -559,12 +527,13 @@ GuiButton_Handle_Event :: proc(
 		x := f32(event.button.x)
 		y := f32(event.button.y)
 
-		button :=
-			GuiButton_find_topmost(
-				registry,
-				x,
-				y,
-			)
+		hit := GuiObject_find_topmost(
+			registry,
+			x,
+			y,
+		)
+
+		button := GuiButton_from_hit(hit)
 
 		if button == nil {
 			return

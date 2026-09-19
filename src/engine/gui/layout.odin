@@ -506,8 +506,8 @@ Editor_Layout_Compute :: proc(
 				gap       = P,
 
 				padding = {
-					left   = config.Padding,
-					right  = config.Padding,
+					left   = 0,
+					right  = 0,
 					top    = config.Padding,
 					bottom = config.Padding,
 				},
@@ -558,8 +558,8 @@ Editor_Layout_Compute :: proc(
 				height    = left_item.actual_height,
 
 				padding = {
-					left   = config.Padding,
-					right  = config.Padding,
+					left   = 0,
+					right  = 0,
 					top    = config.Padding,
 					bottom = config.Padding,
 				},
@@ -606,8 +606,8 @@ Editor_Layout_Compute :: proc(
 			gap       = P,
 
 			padding = {
-				left   = config.Padding,
-				right  = config.Padding,
+				left   = 0,
+				right  = 0,
 				top    = config.Padding,
 				bottom = config.Padding,
 			},

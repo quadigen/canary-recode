@@ -139,23 +139,6 @@ scrolling_frame_effectively_visible :: proc(frame: ^ScrollingFrame) -> bool {
 }
 
 
-scrolling_frame_depth :: proc(frame: ^ScrollingFrame) -> int {
-	if frame == nil {
-		return 0
-	}
-
-	depth := 0
-	current := frame.parent
-
-	for current != nil {
-		depth += 1
-		current = current.parent
-	}
-
-	return depth
-}
-
-
 scrolling_frame_contains_point :: proc(
 	frame: ^ScrollingFrame,
 	x, y: f32,
@@ -1092,7 +1075,7 @@ ScrollingFrame_clone :: proc(
 }
 
 
-scrolling_frame_find_at_point :: proc(
+scrolling_frame_from_hit :: proc(
 	registry: ^Registry,
 	x, y: f32,
 ) -> ^ScrollingFrame {
@@ -1100,56 +1083,28 @@ scrolling_frame_find_at_point :: proc(
 		return nil
 	}
 
-	descriptor :=
-		Find_Class(
-			registry,
-			"ScrollingFrame",
-		)
+	chain := GuiObject_hit_chain(registry, x, y)
+	defer delete(chain)
 
-	if descriptor == nil {
-		return nil
-	}
-
-	best: ^ScrollingFrame
-	best_z: i32
-	best_depth: int
-	found := false
-
-	for object in descriptor.instances {
-		if object == nil ||
-		   object.destroyed {
+	for gui in chain {
+		if gui == nil ||
+		   !Is_A(&gui.object, "ScrollingFrame") {
 			continue
 		}
 
-		frame :=
-			cast(^ScrollingFrame)object
+		frame := cast(^ScrollingFrame)gui
 
-		if !frame.scrolling_enabled ||
-		   !scrolling_frame_contains_point(
+		if frame.scrolling_enabled &&
+		   scrolling_frame_contains_point(
 			   frame,
 			   x,
 			   y,
 		   ) {
-			continue
-		}
-
-		depth :=
-			scrolling_frame_depth(
-				frame,
-			)
-
-		if !found ||
-		   frame.zindex > best_z ||
-		   (frame.zindex == best_z &&
-		    depth >= best_depth) {
-			best = frame
-			best_z = frame.zindex
-			best_depth = depth
-			found = true
+			return frame
 		}
 	}
 
-	return best
+	return nil
 }
 
 
@@ -1164,7 +1119,7 @@ ScrollingFrame_Handle_Event :: proc(
 	#partial switch event.type {
 	case .MOUSE_WHEEL:
 		frame :=
-			scrolling_frame_find_at_point(
+			scrolling_frame_from_hit(
 				registry,
 				event.wheel.mouse_x,
 				event.wheel.mouse_y,
@@ -1212,7 +1167,7 @@ ScrollingFrame_Handle_Event :: proc(
 		}
 
 		frame :=
-			scrolling_frame_find_at_point(
+			scrolling_frame_from_hit(
 				registry,
 				event.button.x,
 				event.button.y,
