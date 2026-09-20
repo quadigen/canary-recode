@@ -1168,6 +1168,8 @@ KINE_SKIA_API KineSkiaTypeface* Kine_Skia_Typeface_LoadFromMemory(
 
 #if defined(_WIN32)
     sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__ANDROID__)
+    sk_sp<SkFontMgr> mgr = SkFontMgr_New_AndroidNDK(false, SkFontScanner_Make_FreeType());
 #elif defined(__APPLE__)
     sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
 #else

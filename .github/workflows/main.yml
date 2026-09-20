@@ -135,7 +135,11 @@ jobs:
               -DINTERPROCEDURAL_OPTIMIZATION=OFF
             )
           fi
-          CC=clang CXX=clang++ CXXFLAGS=-stdlib=libc++ cmake \
+          cmake_env=(CC=clang CXX=clang++)
+          if [[ "${{ runner.os }}" == 'macOS' ]]; then
+            cmake_env+=(CXXFLAGS=-stdlib=libc++)
+          fi
+          env "${cmake_env[@]}" cmake \
             -S . \
             -B vendor/build \
             -G Ninja \
@@ -264,7 +268,7 @@ jobs:
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -lstdc++"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
           cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
           cp -a "${VULKAN_SDK}"/lib/libvulkan.so* 'dist/${{ matrix.folder }}/'
