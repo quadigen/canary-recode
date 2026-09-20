@@ -67,6 +67,7 @@ jobs:
             cmake \
             git \
             libegl1-mesa-dev \
+            libenet-dev \
             libfontconfig1-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev \
@@ -92,7 +93,7 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install cmake ninja
+        run: brew install cmake enet ninja
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -122,9 +123,8 @@ jobs:
         run: |
           cmake_platform_args=()
           if [[ "${{ runner.os }}" == 'Linux' ]]; then
-            # The aggregate archive is assembled with an MRI script. Use GNU
-            # binutils explicitly so the resulting archive is consumable by
-            # the system linker used by Odin.
+            # Keep GNU binutils explicit for the native component archives
+            # consumed through the Linux linker group.
             cmake_platform_args+=(
               -DCMAKE_AR=/usr/bin/ar
               -DCMAKE_RANLIB=/usr/bin/ranlib
@@ -216,6 +216,18 @@ jobs:
 
           bash "$odin_root/vendor/box2d/build_box2d.sh"
 
+      - name: Stage static ENet library (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == 'macOS' ]]; then
+            enet_archive="$(brew --prefix enet)/lib/libenet.a"
+          else
+            enet_archive='/usr/lib/x86_64-linux-gnu/libenet.a'
+          fi
+          test -s "$enet_archive"
+          cp "$enet_archive" vendor/build/lib/libenet.a
+
       - name: Check Odin source
         run: odin check src
 
@@ -248,7 +260,7 @@ jobs:
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
-            -extra-linker-flags:"-L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
 
       - name: Build Kinemium (macOS)
@@ -259,7 +271,7 @@ jobs:
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
-            -extra-linker-flags:"-L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib 'dist/${{ matrix.folder }}/'
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib 'dist/${{ matrix.folder }}/'
 
@@ -340,7 +352,7 @@ jobs:
             Invoke-WebRequest 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz' -OutFile $archive
           }
           tar -xzf $archive -C $toolDir
-          $matc = Join-Path $toolDir 'filament/bin/matc.exe'
+          $matc = Join-Path $toolDir 'bin/matc.exe'
           if (!(Test-Path -LiteralPath $matc)) {
             throw "matc was not found at $matc"
           }
@@ -401,7 +413,7 @@ jobs:
           if (!(Test-Path -LiteralPath $sdkmanager)) {
             throw "sdkmanager was not found at $sdkmanager"
           }
-          & $sdkmanager --install 'ndk;30.0.16248370' 'platforms;android-37'
+          & $sdkmanager --install 'ndk;30.0.16248370' 'platforms;android-36'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path -LiteralPath (Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370/build/cmake/android.toolchain.cmake'))) {
             throw 'Android NDK 30.0.16248370 was not installed'
