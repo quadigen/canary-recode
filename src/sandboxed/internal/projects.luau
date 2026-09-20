@@ -13,6 +13,23 @@ return function(page, windowControls, gui)
 
 	local projectsPage = windowControls.pages.Projects
 
+	UI.toast("Changes saved", {
+		type = "success",
+
+		message = "",
+
+		detailsTitle = "Save details",
+
+		details = [[
+Project: My Game
+File: game.kine
+Saved 148 instances
+Saved 23 scripts
+No errors were reported.
+]],
+
+		duration = 9,
+	})
 	local prompt, content, promptController = UI.prompt({
 		name = "CreateProject",
 
@@ -80,7 +97,10 @@ return function(page, windowControls, gui)
 					if success then
 						print("success: created project!")
 
-						Project:SetActiveProject(props.FolderPath)
+						if props.FolderPath then
+							Project:SetActiveProject(props.FolderPath)
+						end
+
 						gui.Enabled = false
 						UI.root().Enabled = true
 						UI.RootOverlay().Enabled = true
@@ -343,7 +363,12 @@ return function(page, windowControls, gui)
 			UDim2.new(0, 0, 0, 0),
 			UDim2.new(1, -20, 0, 90),
 			function()
-				Project:SetActiveProject(folderPath)
+				if not folderPath then
+					print("did not find " .. folderPath)
+					print({ iconid, name, descriptiontext, folderPath })
+				else
+					Project:SetActiveProject(folderPath)
+				end
 				gui.Enabled = false
 
 				UI.root().Enabled = true
@@ -412,6 +437,6 @@ return function(page, windowControls, gui)
 	end
 
 	for _, project in pairs(projects) do
-		card(projectsList, project.Icon, project.Name, project.Description, project.FolderPath)
+		card(projectsList, project.Icon, project.Name, project.Description, project.Path)
 	end
 end
