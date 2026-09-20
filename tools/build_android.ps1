@@ -16,8 +16,8 @@ $filamentVersion = "1.74.0"
 $sdlVersion = "3.4.14"
 $cache = Join-Path $repo ".cache\android"
 $filamentRoot = Join-Path $cache "filament\filament"
-$filamentHostRoot = Join-Path $cache "filament-host\filament"
-$localFilamentHost = Join-Path $repo "build\_deps\filament_prebuilt-src"
+$filamentHostRoot = Join-Path $cache "filament-host"
+$localFilamentHost = Join-Path $repo "vendor\build\_deps\filament_prebuilt-src"
 if (Test-Path (Join-Path $localFilamentHost "bin\matc.exe")) {
     $filamentHostRoot = $localFilamentHost
 }
@@ -39,7 +39,12 @@ if (-not (Test-Path (Join-Path $filamentRoot "lib\arm64-v8a\libfilament.a"))) {
 }
 if (-not (Test-Path (Join-Path $filamentHostRoot "bin\matc.exe"))) {
     $archive = Join-Path $cache "filament-host\filament-v$filamentVersion-windows.tgz"
-    Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-windows.tgz" $archive (Split-Path $filamentHostRoot)
+    Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-windows.tgz" $archive $filamentHostRoot
+}
+foreach ($hostTool in @('matc.exe', 'resgen.exe')) {
+    if (-not (Test-Path (Join-Path $filamentHostRoot "bin\$hostTool"))) {
+        throw "Filament host tool $hostTool was not found under $filamentHostRoot"
+    }
 }
 if (-not (Test-Path $sdlAar)) {
     $sdlDir = Split-Path $sdlAar
