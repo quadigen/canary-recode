@@ -141,7 +141,15 @@ jobs:
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             "${cmake_platform_args[@]}"
-          cmake --build vendor/build --config Release --parallel
+          for attempt in 1 2 3; do
+            if cmake --build vendor/build --config Release --parallel; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              exit 1
+            fi
+            sleep $((30 * attempt))
+          done
 
       - name: Verify native libraries (Windows)
         if: runner.os == 'Windows'
@@ -216,15 +224,11 @@ jobs:
 
           bash "$odin_root/vendor/box2d/build_box2d.sh"
 
-      - name: Stage static ENet library (Unix)
-        if: runner.os != 'Windows'
+      - name: Stage static ENet library (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          if [[ "${{ runner.os }}" == 'macOS' ]]; then
-            enet_archive="$(brew --prefix enet)/lib/libenet.a"
-          else
-            enet_archive='/usr/lib/x86_64-linux-gnu/libenet.a'
-          fi
+          enet_archive="$(brew --prefix enet)/lib/libenet.a"
           test -s "$enet_archive"
           cp "$enet_archive" vendor/build/lib/libenet.a
 
@@ -262,6 +266,7 @@ jobs:
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
+          cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
 
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
@@ -401,6 +406,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.304.1
+          install_runtime: true
+          cache: true
+          stripdown: false
 
       - name: Install Android SDK components
         shell: pwsh
