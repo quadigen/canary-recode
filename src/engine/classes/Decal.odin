@@ -145,39 +145,43 @@ decal_reload_texture :: proc(
 		return false
 	}
 
-	path := strings.clone_to_cstring(decal.texture)
-	defer delete(path)
-
-	width, height, channels: c.int
-
-	pixels := image.load(
-		path,
-		&width,
-		&height,
-		&channels,
-		4,
-	)
-
-	if pixels == nil {
+	when ODIN_OS == .JS {
 		return false
-	}
+	} else {
+		path := strings.clone_to_cstring(decal.texture)
+		defer delete(path)
 
-	defer image.image_free(pixels)
+		width, height, channels: c.int
 
-	if width <= 0 || height <= 0 {
-		return false
-	}
-
-	decal.native_texture =
-		kineffi.Kine_Filament_CreateTexFromPixels(
-			renderer.Filament,
-			i32(width),
-			i32(height),
-			i32(width) * 4,
-			pixels,
+		pixels := image.load(
+			path,
+			&width,
+			&height,
+			&channels,
+			4,
 		)
 
-	return decal.native_texture != nil
+		if pixels == nil {
+			return false
+		}
+
+		defer image.image_free(pixels)
+
+		if width <= 0 || height <= 0 {
+			return false
+		}
+
+		decal.native_texture =
+			kineffi.Kine_Filament_CreateTexFromPixels(
+				renderer.Filament,
+				i32(width),
+				i32(height),
+				i32(width) * 4,
+				pixels,
+			)
+
+		return decal.native_texture != nil
+	}
 }
 
 decal_in_workspace :: proc(object: ^Object) -> bool {

@@ -1,3 +1,4 @@
+#+build !js
 package kineffi
 
 import "core:c"

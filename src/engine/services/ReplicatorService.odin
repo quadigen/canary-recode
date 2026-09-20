@@ -1,3 +1,4 @@
+#+build !js
 package services
 
 import classes "../classes"

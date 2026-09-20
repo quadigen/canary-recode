@@ -1,3 +1,4 @@
+#+build !js
 package services
 
 // wire:service global="DialogService"

@@ -206,8 +206,10 @@ Environment_SetEvent :: proc(
 		   classes.Is_A(active_camera, "Camera") {
 			wheel_y := f32(event.wheel.y)
 
-			if event.wheel.direction == .FLIPPED {
-				wheel_y = -wheel_y
+			when ODIN_OS != .JS {
+				if event.wheel.direction == .FLIPPED {
+					wheel_y = -wheel_y
+				}
 			}
 
 			classes.Camera_Add_Scroll(

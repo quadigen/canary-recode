@@ -1,3 +1,4 @@
+#+build !js
 package tracy
 
 import "core:c"

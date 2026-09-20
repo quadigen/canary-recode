@@ -7,6 +7,7 @@
  * #include <yaml.h>
  * @endcode
  */
+#+build !js
 package kineffi
 
 import "core:c/libc"

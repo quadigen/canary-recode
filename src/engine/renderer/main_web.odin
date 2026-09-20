@@ -21,6 +21,7 @@ RendererObject :: struct {
 	DrawOverlay: proc(user_data: rawptr, surface: ^kineffi.KineSkiaSurface, width, height: i32, delta_time: f32),
 	OnEvent:     proc(user_data: rawptr, event: sdl3.Event),
 	Ready:       bool,
+	RenderFilament: bool,
 	HasWorldToView: bool,
 	WorldToView: [12]f32,
 	ActiveCamera: rawptr,

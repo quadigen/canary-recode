@@ -6,7 +6,7 @@ import guilib "../gui"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
-import sdl3 "vendor:sdl3"
+import sdl3 "../platform"
 
 GuiObject_Class := Class_Info {
 	name   = "GuiObject",
@@ -905,8 +905,10 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 
 		wheel_y := f32(event.wheel.y)
 
-		if event.wheel.direction == .FLIPPED {
-			wheel_y = -wheel_y
+		when ODIN_OS != .JS {
+			if event.wheel.direction == .FLIPPED {
+				wheel_y = -wheel_y
+			}
 		}
 
 		if wheel_y > 0 {

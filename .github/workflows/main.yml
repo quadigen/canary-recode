@@ -363,6 +363,9 @@ jobs:
           }
           Write-Output "FILAMENT_MATC=$matc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Check Web Odin source
+        run: odin check src -target:js_wasm32
+
       - name: Build Kinemium Web (WASM)
         shell: pwsh
         run: |
