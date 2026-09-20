@@ -631,17 +631,39 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
         return false;
     }
 
-    VkSurfaceFormatKHR chosenFormat = formats[0];
-    for (const VkSurfaceFormatKHR& format : formats) {
-        if ((format.format == VK_FORMAT_R8G8B8A8_UNORM ||
-             format.format == VK_FORMAT_B8G8R8A8_UNORM ||
-             format.format == VK_FORMAT_R8G8B8A8_SRGB ||
-             format.format == VK_FORMAT_B8G8R8A8_SRGB) &&
-            format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            chosenFormat = format;
+    // Ganesh does not support VK_FORMAT_B8G8R8A8_SRGB as a render target.
+    // Prefer the usual BGRA UNORM surface, regardless of the driver's order.
+    const VkFormat supportedFormats[] = {
+        VK_FORMAT_B8G8R8A8_UNORM,
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_R8G8B8A8_SRGB,
+    };
+    VkSurfaceFormatKHR chosenFormat{};
+    bool foundFormat = false;
+    for (VkFormat supportedFormat : supportedFormats) {
+        for (const VkSurfaceFormatKHR& format : formats) {
+            if (format.format == supportedFormat &&
+                format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosenFormat = format;
+                foundFormat = true;
+                break;
+            }
+        }
+        if (foundFormat) {
             break;
         }
     }
+    if (!foundFormat) {
+        kine_vk_set_error(compositor, "no Skia-renderable Vulkan surface format found");
+        for (const VkSurfaceFormatKHR& format : formats) {
+            fprintf(stderr, "[Kine] unsupported surface format=%u colorSpace=%u\n",
+                static_cast<unsigned>(format.format),
+                static_cast<unsigned>(format.colorSpace));
+        }
+        return false;
+    }
+    fprintf(stderr, "[Kine] selected Skia-compatible swapchain format=%u\n",
+        static_cast<unsigned>(chosenFormat.format));
 
     VkExtent2D extent = capabilities.currentExtent;
     if (extent.width == UINT32_MAX) {

@@ -531,15 +531,42 @@ KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_CreateVulkanRenderTarget(
     vkImageInfo.fLevelCount = imageInfo->levelCount ? imageInfo->levelCount : 1;
     vkImageInfo.fCurrentQueueFamily = imageInfo->currentQueueFamily;
 
-    GrBackendRenderTarget renderTarget = GrBackendRenderTargets::MakeVk(width, height, vkImageInfo);
-    if (!renderTarget.isValid()) {
-        return nullptr;
+    SkColorType colorType;
+    switch (vkImageInfo.fFormat) {
+        case VK_FORMAT_B8G8R8A8_UNORM:
+            colorType = kBGRA_8888_SkColorType;
+            break;
+        case VK_FORMAT_R8G8B8A8_UNORM:
+            colorType = kRGBA_8888_SkColorType;
+            break;
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            colorType = kSRGBA_8888_SkColorType;
+            break;
+        default:
+            fprintf(stderr, "kine_skia: unsupported Vulkan render target format=%u\n",
+                static_cast<unsigned>(vkImageInfo.fFormat));
+            return nullptr;
     }
 
-    SkColorType colorType = kRGBA_8888_SkColorType;
-    if (vkImageInfo.fFormat == VK_FORMAT_B8G8R8A8_UNORM ||
-        vkImageInfo.fFormat == VK_FORMAT_B8G8R8A8_SRGB) {
-        colorType = kBGRA_8888_SkColorType;
+    auto logImageInfo = [&]() {
+        fprintf(stderr,
+            "kine_skia: Vulkan target image=%p format=%u layout=%u usage=0x%x "
+            "samples=%u levels=%u queueFamily=%u size=%dx%d\n",
+            reinterpret_cast<void*>(vkImageInfo.fImage),
+            static_cast<unsigned>(vkImageInfo.fFormat),
+            static_cast<unsigned>(vkImageInfo.fImageLayout),
+            static_cast<unsigned>(vkImageInfo.fImageUsageFlags),
+            vkImageInfo.fSampleCount,
+            vkImageInfo.fLevelCount,
+            vkImageInfo.fCurrentQueueFamily,
+            width, height);
+    };
+
+    GrBackendRenderTarget renderTarget = GrBackendRenderTargets::MakeVk(width, height, vkImageInfo);
+    if (!renderTarget.isValid()) {
+        fprintf(stderr, "kine_skia: Vulkan backend render target is invalid\n");
+        logImageInfo();
+        return nullptr;
     }
 
     sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
@@ -551,6 +578,9 @@ KINE_SKIA_API KineSkiaSurface* Kine_Skia_Surface_CreateVulkanRenderTarget(
         nullptr);
 
     if (!surface) {
+        fprintf(stderr, "kine_skia: WrapBackendRenderTarget rejected format=%u colorType=%d\n",
+            static_cast<unsigned>(vkImageInfo.fFormat), static_cast<int>(colorType));
+        logImageInfo();
         return nullptr;
     }
 
