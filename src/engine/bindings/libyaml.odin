@@ -13,7 +13,8 @@ package kineffi
 import "core:c/libc"
 import "core:c"
 
-foreign import lib "../../../vendor/build/vendor/libyaml/yaml.lib"
+when ODIN_OS == .Windows do foreign import lib "../../../vendor/build/vendor/libyaml/yaml.lib"
+when ODIN_OS != .Windows do foreign import lib "../../../vendor/build/vendor/libyaml/libyaml.a"
 
 @(default_calling_convention="c")
 foreign lib {

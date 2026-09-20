@@ -67,7 +67,7 @@ if (-not (Test-Path (Join-Path $skiaOut "libsvg.a"))) {
     Push-Location $skiaRoot
     try {
         & .\bin\gn.exe gen out/KinemiumAndroid "--args=$gnArgs"
-        & .\third_party\ninja\ninja.exe -C out/KinemiumAndroid skia svg skshaper skunicode_core skunicode_icu
+    & ninja -C out/KinemiumAndroid skia svg skshaper skunicode_core skunicode_icu
         if ($LASTEXITCODE -ne 0) { throw "Skia Android build failed" }
     } finally { Pop-Location }
 }

@@ -264,9 +264,10 @@ jobs:
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
           cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
+          cp -a "${VULKAN_SDK}"/lib/libvulkan.so* 'dist/${{ matrix.folder }}/'
 
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
@@ -286,6 +287,7 @@ jobs:
         run: |
           file 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
           ldd 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
+          ! ldd 'dist/${{ matrix.folder }}/${{ matrix.executable }}' | grep -q 'not found'
           ! readelf -W -l 'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
             | grep GNU_STACK | grep -q RWE
 
