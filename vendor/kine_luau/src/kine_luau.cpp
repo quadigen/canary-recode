@@ -103,6 +103,15 @@ int kine_luaL_error(lua_State* L, const char* message)
     luaL_error(L, "%s", message);
     return 0;
 }
+const char* kine_luaL_tolstring(lua_State* L, int index, size_t* size)
+{
+    return luaL_tolstring(L, index, size);
+}
+
+int kine_lua_absindex(lua_State* L, int index)
+{
+    return lua_absindex(L, index);
+}
 int kine_lua_pcall(lua_State* L, int arguments, int results, int errorFunction)
 {
     return lua_pcall(L, arguments, results, errorFunction);

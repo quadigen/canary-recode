@@ -74,6 +74,10 @@ FetchContent_Declare(
     SOURCE_SUBDIR Build
 )
 
+if(MSVC AND "${CMAKE_CXX_FLAGS}" STREQUAL "")
+    set(CMAKE_CXX_FLAGS "/utf-8")
+endif()
+
 FetchContent_MakeAvailable(Jolt)
 
 # ---------------------------------------------------------

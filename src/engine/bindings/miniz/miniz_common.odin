@@ -3,7 +3,9 @@ package zip
 import "core:c"
 
 /* ------------------- Types and macros */
-foreign import lib "../../../vendor/build/vendor/miniz/miniz.lib"
+when ODIN_OS == .Windows do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.lib"
+when #config(KINE_ANDROID, false) do foreign import lib "../../../../build/android-native/lib/libKinemiumLibs.a"
+when ODIN_OS != .Windows && !#config(KINE_ANDROID, false) do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.a"
 
 mz_uint8  :: u8
 mz_int16  :: i16

@@ -1,15 +1,16 @@
 #+build !js
 package main
 
-import "core:fmt"
-import engine_runtime "engine/runtime"
-import renderer "engine/renderer"
-import vm "engine/vm"
-import sdl3 "engine/platform"
-import sandbox "./sandboxed"
-import services "engine/services"
 import tracy "./engine/util/odin-tracy"
+import sandbox "./sandboxed"
+import "core:fmt"
+import sdl3 "engine/platform"
 import profiling "engine/profiling"
+import renderer "engine/renderer"
+import engine_runtime "engine/runtime"
+import services "engine/services"
+import target "engine/target"
+import vm "engine/vm"
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -24,66 +25,98 @@ runtime_update_step :: proc(user_data: rawptr, delta_time: f32) {
 	engine_runtime.Environment_Update_Step(ctx.environment, ctx.vm_state, delta_time)
 }
 
-runtime_render_3d :: proc(user_data: rawptr, filament: ^renderer.Filament_Context, delta_time: f32) {
+runtime_render_3d :: proc(
+	user_data: rawptr,
+	filament: ^renderer.Filament_Context,
+	delta_time: f32,
+) {
 	ctx := cast(^Runtime_Render_Context)user_data
-	if ctx == nil { return }
+	if ctx == nil {return}
 	engine_runtime.Environment_Render_3D(ctx.environment, ctx.vm_state, delta_time)
 }
 
-runtime_resize :: proc(user_data: rawptr, width, height: i32) {	
-    ctx := cast(^Runtime_Render_Context)user_data
+runtime_resize :: proc(user_data: rawptr, width, height: i32) {
+	ctx := cast(^Runtime_Render_Context)user_data
 
-    if ctx == nil || ctx.environment == nil {
-        return
-    }
+	if ctx == nil || ctx.environment == nil {
+		return
+	}
 
-    services.Resize(
-        &ctx.environment.services,
-        &ctx.environment.datatypes,
-        width,
-        height,
-    )
+	services.Resize(&ctx.environment.services, &ctx.environment.datatypes, width, height)
 }
 
-last_ui_width:  i32 = -1
+last_ui_width: i32 = -1
 last_ui_height: i32 = -1
 
-runtime_render_2d :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, width, height: i32, delta_time: f32) {
+runtime_render_2d :: proc(
+	user_data: rawptr,
+	surface: ^renderer.Skia_Surface,
+	width, height: i32,
+	delta_time: f32,
+) {
 	if width != last_ui_width || height != last_ui_height {
-        last_ui_width = width
-        last_ui_height = height
-    }
+		last_ui_width = width
+		last_ui_height = height
+	}
 
 	ctx := cast(^Runtime_Render_Context)user_data
-	if ctx == nil { return }
-	engine_runtime.Environment_Render_2D(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
+	if ctx == nil {return}
+	engine_runtime.Environment_Render_2D(
+		ctx.environment,
+		ctx.vm_state,
+		surface,
+		width,
+		height,
+		delta_time,
+	)
 }
 
-runtime_render_overlay :: proc(user_data: rawptr, surface: ^renderer.Skia_Surface, width, height: i32, delta_time: f32) {
+runtime_render_overlay :: proc(
+	user_data: rawptr,
+	surface: ^renderer.Skia_Surface,
+	width, height: i32,
+	delta_time: f32,
+) {
 	ctx := cast(^Runtime_Render_Context)user_data
-	if ctx == nil { return }
-	engine_runtime.Environment_Render_Overlay(ctx.environment, ctx.vm_state, surface, width, height, delta_time)
+	if ctx == nil {return}
+	engine_runtime.Environment_Render_Overlay(
+		ctx.environment,
+		ctx.vm_state,
+		surface,
+		width,
+		height,
+		delta_time,
+	)
 }
 
 runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 	ctx := cast(^Runtime_Render_Context)user_data
-	if ctx == nil { return }
+	if ctx == nil {return}
 	profiling.trigger_event(event)
 	engine_runtime.Environment_SetEvent(ctx.environment, ctx.vm_state, event)
 }
 
-main :: proc() {
+run_desktop :: proc() {
 	tracy.SetThreadName("Main")
+	options := Startup_Options{}
+	when target.IS_CLIENT {
+		ok: bool
+		options, ok = startup_options("127.0.0.1")
+		if !ok {return}
+		if options.address == "" || options.address == "0.0.0.0" {
+			fmt.eprintln("Network client needs a reachable server address; use 127.0.0.1 for a server on this computer")
+			return
+		}
+	}
 	script_vm := vm.New()
-	defer vm.Close(&script_vm)
 
 	environment: engine_runtime.Environment
-	render_context := Runtime_Render_Context{
+	render_context := Runtime_Render_Context {
 		environment = &environment,
-		vm_state = &script_vm,
+		vm_state    = &script_vm,
 	}
 
-	renderer_object := renderer.RendererObject{
+	renderer_object := renderer.RendererObject {
 		Step = runtime_update_step,
 		Draw3D = runtime_render_3d,
 		Draw2D = runtime_render_2d,
@@ -108,9 +141,31 @@ main :: proc() {
 
 	sandbox.init(&script_vm, &environment, &renderer_object)
 	defer sandbox.shutdown()
+	defer vm.Close(&script_vm)
+
+	when target.IS_CLIENT {
+		object := services.Ensure_Service(&environment.services, "ReplicatorService")
+		if object == nil ||
+		   !services.replication_start(
+				   cast(^services.ReplicatorService)object,
+				   options.address,
+				   options.port,
+				   .Client,
+			   ) {
+			fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
+			return
+		}
+		fmt.printf("Kinemium client connecting to %s:%d...\n", options.address, options.port)
+	}
 
 	profiling.init()
 	defer profiling.shutdown()
 
-	renderer.init("Kinemium Engine", 800, 600, &renderer_object)
+	title := "Kinemium Editor"
+	when target.IS_CLIENT {title = "Kinemium Client"}
+	renderer.init(title, 800, 600, &renderer_object)
+}
+
+main :: proc() {
+	when target.IS_SERVER {run_server()} else {run_desktop()}
 }

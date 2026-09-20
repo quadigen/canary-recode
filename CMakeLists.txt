@@ -40,12 +40,9 @@ set(KINEMIUM_ODIN_LIBRARY_TARGETS
     JoltWrapper
 )
 
-# Windows imports the component archives directly. Unix builds consume the
-# consolidated archive so C++ dependencies and Filament's prebuilt archives
-# are available to Odin without relying on machine-global libraries.
-if(NOT WIN32)
-    list(APPEND KINEMIUM_ODIN_LIBRARY_TARGETS KinemiumLibs)
-endif()
+# Bindings for compression and YAML import the consolidated archive on every
+# desktop platform, while renderer bindings may still use component aliases.
+list(APPEND KINEMIUM_ODIN_LIBRARY_TARGETS KinemiumLibs)
 
 add_custom_target(KinemiumOdinLibraries ALL
     DEPENDS ${KINEMIUM_ODIN_LIBRARY_TARGETS}

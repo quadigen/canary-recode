@@ -12,23 +12,37 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
-TweenService_Class := classes.Class_Info{
+TweenService_Class := classes.Class_Info {
 	name   = "TweenService",
 	parent = &Service_Class,
+}
+
+Tween_Value_Kind :: enum {
+	Number,
+	UDim2,
+	Color3,
+}
+
+Tween_Value :: struct {
+	kind:   Tween_Value_Kind,
+	number: f64,
+	udim2:  datatypes.UDim2,
+	color3: datatypes.Color3,
+}
+
+Tween_Property :: struct {
+	name:  string,
+	start: Tween_Value,
+	goal:  Tween_Value,
 }
 
 TweenService :: struct {
 	using service: Service,
 }
 
-Tween_Class := classes.Class_Info{
+Tween_Class := classes.Class_Info {
 	name   = "Tween",
 	parent = &classes.Instance_Class,
-}
-
-Tween_Property :: struct {
-	name: string,
-	goal: f64,
 }
 
 Tween :: struct {
@@ -44,7 +58,89 @@ Tween :: struct {
 	completed_signal_ref: i32,
 }
 
-tween_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+tween_read_value :: proc(L: ^vm.State, index: int) -> (Tween_Value, bool) {
+	if vm.IsNumber(L, index) {
+		value, ok := vm.ToNumber(L, index)
+
+		if !ok {
+			return Tween_Value{}, false
+		}
+
+		return Tween_Value{kind = .Number, number = value}, true
+	}
+
+	binding := vm.UserdataBindingOf(L, index)
+
+	if binding == nil {
+		return Tween_Value{}, false
+	}
+
+	switch binding.name {
+	case "UDim2":
+		ptr := cast(^datatypes.UDim2)vm.UserdataValue(L, index)
+
+		if ptr == nil {
+			return Tween_Value{}, false
+		}
+
+		return Tween_Value{kind = .UDim2, udim2 = ptr^}, true
+
+	case "Color3":
+		ptr := cast(^datatypes.Color3)vm.UserdataValue(L, index)
+
+		if ptr == nil {
+			return Tween_Value{}, false
+		}
+
+		return Tween_Value{kind = .Color3, color3 = ptr^}, true
+	}
+
+	return Tween_Value{}, false
+}
+
+tween_values_compatible :: proc(a, b: Tween_Value) -> bool {
+	return a.kind == b.kind
+}
+
+tween_push_interpolated_value :: proc(
+	L: ^vm.State,
+	datatype_registry: ^datatypes.Registry,
+	start, goal: Tween_Value,
+	alpha: f64,
+) -> bool {
+	if start.kind != goal.kind {
+		return false
+	}
+
+	switch start.kind {
+	case .Number:
+		value := start.number + (goal.number - start.number) * alpha
+
+		vm.PushNumber(L, value)
+		return true
+
+	case .UDim2:
+		value := datatypes.UDim2_Lerp(start.udim2, goal.udim2, f32(alpha))
+
+		datatypes.Push_UDim2(L, datatype_registry, value)
+
+		return true
+
+	case .Color3:
+		value := datatypes.Lerp(start.color3, goal.color3, f32(alpha))
+
+		datatypes.Push_Color3(L, datatype_registry, value)
+
+		return true
+	}
+
+	return false
+}
+
+tween_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	tween := new(Tween)
 	tween.object = classes.Object_Init(&Tween_Class, "Tween")
 	tween.state = .Begin
@@ -71,7 +167,7 @@ tween_play :: proc(tween: ^Tween) {
 		tween.time_position = 0
 		tween.state = .Playing
 	case .Playing, .Delayed:
-		// already running
+	// already running
 	}
 }
 
@@ -126,12 +222,7 @@ tween_fire_completed :: proc(tween: ^Tween, L: ^vm.State) {
 	if signal == nil {
 		return
 	}
-	_ = enums.Push_Item_By_Value(
-		L,
-		class_registry.enums,
-		"PlaybackState",
-		i64(tween.state),
-	)
+	_ = enums.Push_Item_By_Value(L, class_registry.enums, "PlaybackState", i64(tween.state))
 	signals.Fire(L, signal, 1)
 }
 
@@ -155,21 +246,29 @@ apply_goal :: proc(tween: ^Tween, L: ^vm.State, eased: f64) {
 	base := vm.StackTop(L)
 	defer vm.SetStackTop(L, base)
 
+	class_registry := tween.signal_registry
+
+	if class_registry == nil || class_registry.datatypes == nil {
+		return
+	}
+
+	datatype_registry := class_registry.datatypes
+
 	vm.PushRegistryReference(L, tween.instance_ref)
+
 	if vm.TypeOf(L, -1) == .Nil {
 		return
 	}
+
 	instance_index := vm.StackTop(L)
 
 	for prop in tween.properties {
 		vm.SetStackTop(L, instance_index)
-		_ = vm.GetField(L, instance_index, prop.name)
-		if !vm.IsNumber(L, -1) {
+
+		if !tween_push_interpolated_value(L, datatype_registry, prop.start, prop.goal, eased) {
 			continue
 		}
-		current, _ := vm.ToNumber(L, -1)
-		vm.SetStackTop(L, instance_index)
-		vm.PushNumber(L, current+(prop.goal-current)*eased)
+
 		vm.SetField(L, instance_index, prop.name)
 	}
 }
@@ -215,17 +314,21 @@ tween_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 
 	tween.state = .Playing
 
-	cycle_index := i64(math.floor(t/time_len))
-	alpha_cycle := clamp(t/time_len-f64(cycle_index), 0.0, 1.0)
+	cycle_index := i64(math.floor(t / time_len))
+	alpha_cycle := clamp(t / time_len - f64(cycle_index), 0.0, 1.0)
+
 	if tween.info.Reverses && cycle_index % 2 == 1 {
 		alpha_cycle = 1.0 - alpha_cycle
 	}
+
 	eased := tween_get_value(
 		alpha_cycle,
 		i64(tween.info.EasingStyle),
 		i64(tween.info.EasingDirection),
 	)
+
 	apply_goal(tween, L, eased)
+
 	tween.time_position = min(t, tween.duration)
 }
 
@@ -242,12 +345,7 @@ tween_get :: proc(
 		if enum_registry == nil {
 			return false
 		}
-		_ = enums.Push_Item_By_Value(
-			L,
-			enum_registry,
-			"PlaybackState",
-			i64(tween.state),
-		)
+		_ = enums.Push_Item_By_Value(L, enum_registry, "PlaybackState", i64(tween.state))
 	case "TimePosition":
 		vm.PushNumber(L, tween.time_position)
 	case "Duration":
@@ -288,7 +386,10 @@ tween_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	tween := cast(^Tween)object
 	switch method {
 	case "Play":
@@ -336,11 +437,7 @@ tween_service_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(TweenService)
-	service.service = Service_Init(
-		&TweenService_Class,
-		"TweenService",
-		data_model,
-	)
+	service.service = Service_Init(&TweenService_Class, "TweenService", data_model)
 	return &service.object
 }
 
@@ -348,96 +445,105 @@ tween_bounce_out :: proc(t: f64) -> f64 {
 	n1: f64 = 7.5625
 	d1: f64 = 2.75
 
-	if t < 1/d1 {
-		return n1*t*t
+	if t < 1 / d1 {
+		return n1 * t * t
 	}
 
-	if t < 2/d1 {
-		x := t - 1.5/d1
-		return n1*x*x + 0.75
+	if t < 2 / d1 {
+		x := t - 1.5 / d1
+		return n1 * x * x + 0.75
 	}
 
-	if t < 2.5/d1 {
-		x := t - 2.25/d1
-		return n1*x*x + 0.9375
+	if t < 2.5 / d1 {
+		x := t - 2.25 / d1
+		return n1 * x * x + 0.9375
 	}
 
-	x := t - 2.625/d1
-	return n1*x*x + 0.984375
+	x := t - 2.625 / d1
+	return n1 * x * x + 0.984375
 }
 
 tween_ease_in :: proc(alpha: f64, style: i64) -> f64 {
 	t := clamp(alpha, 0.0, 1.0)
 
 	switch style {
-	case 0: // Linear
+	case 0:
+		// Linear
 		return t
 
-	case 1: // Sine
-		return 1 - math.cos((t*math.PI)/2)
+	case 1:
+		// Sine
+		return 1 - math.cos((t * math.PI) / 2)
 
-	case 2: // Back
+	case 2:
+		// Back
 		c1: f64 = 1.70158
 		c3 := c1 + 1
-		return c3*t*t*t - c1*t*t
+		return c3 * t * t * t - c1 * t * t
 
-	case 3: // Quad
-		return t*t
+	case 3:
+		// Quad
+		return t * t
 
-	case 4: // Quart
-		t2 := t*t
-		return t2*t2
+	case 4:
+		// Quart
+		t2 := t * t
+		return t2 * t2
 
-	case 5: // Quint
-		t2 := t*t
-		return t2*t2*t
+	case 5:
+		// Quint
+		t2 := t * t
+		return t2 * t2 * t
 
-	case 6: // Bounce
-		return 1 - tween_bounce_out(1-t)
+	case 6:
+		// Bounce
+		return 1 - tween_bounce_out(1 - t)
 
-	case 7: // Elastic
+	case 7:
+		// Elastic
 		if t == 0 || t == 1 {
 			return t
 		}
-		c4 := (2*math.PI)/3
-		return -math.pow(2.0, 10*t-10) *
-		       math.sin((t*10-10.75)*c4)
+		c4 := (2 * math.PI) / 3
+		return -math.pow(2.0, 10 * t - 10) * math.sin((t * 10 - 10.75) * c4)
 
-	case 8: // Exponential
+	case 8:
+		// Exponential
 		if t == 0 {
 			return 0
 		}
-		return math.pow(2.0, 10*t-10)
+		return math.pow(2.0, 10 * t - 10)
 
-	case 9: // Circular
-		return 1 - math.sqrt(max(0.0, 1-t*t))
+	case 9:
+		// Circular
+		return 1 - math.sqrt(max(0.0, 1 - t * t))
 
-	case 10: // Cubic
-		return t*t*t
+	case 10:
+		// Cubic
+		return t * t * t
 	}
 
 	return t
 }
 
-tween_get_value :: proc(
-	alpha: f64,
-	style: i64,
-	direction: i64,
-) -> f64 {
+tween_get_value :: proc(alpha: f64, style: i64, direction: i64) -> f64 {
 	t := clamp(alpha, 0.0, 1.0)
 
 	switch direction {
-	case 0: // In
+	case 0:
+		// In
 		return tween_ease_in(t, style)
 
-	case 1: // Out
-		return 1 - tween_ease_in(1-t, style)
+	case 1:
+		// Out
+		return 1 - tween_ease_in(1 - t, style)
 
-	case 2: // InOut
+	case 2:
+		// InOut
 		if t < 0.5 {
-			return tween_ease_in(t*2, style)/2
+			return tween_ease_in(t * 2, style) / 2
 		}
-		return 1 - tween_ease_in((1-t)*2, style)/2
+		return 1 - tween_ease_in((1 - t) * 2, style) / 2
 	}
 
 	return tween_ease_in(t, style)
@@ -467,7 +573,10 @@ tween_service_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	switch method {
 	case "Create":
 		return tween_create(L, object, datatype_registry)
@@ -479,28 +588,11 @@ tween_service_namecall :: proc(
 
 		alpha := vm.ArgNumber(L, 2)
 
-		style := enums.Arg_Item(
-			L,
-			3,
-			enum_registry,
-			"EasingStyle",
-		)
+		style := enums.Arg_Item(L, 3, enum_registry, "EasingStyle")
 
-		direction := enums.Arg_Item(
-			L,
-			4,
-			enum_registry,
-			"EasingDirection",
-		)
+		direction := enums.Arg_Item(L, 4, enum_registry, "EasingDirection")
 
-		vm.PushNumber(
-			L,
-			tween_get_value(
-				alpha,
-				style.value,
-				direction.value,
-			),
-		)
+		vm.PushNumber(L, tween_get_value(alpha, style.value, direction.value))
 
 		return 1, true
 	}
@@ -508,10 +600,7 @@ tween_service_namecall :: proc(
 	return 0, false
 }
 
-tween_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+tween_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^TweenService)object)
 }
@@ -520,7 +609,10 @@ tween_create :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^TweenService)object
 	if service == nil ||
 	   service.data_model == nil ||
@@ -535,9 +627,7 @@ tween_create :: proc(
 		return vm.RaiseError(L, "TweenService:Create expects an Instance"), true
 	}
 	target := cast(^classes.Object)vm.UserdataValue(L, 2)
-	if target == nil ||
-	   target.destroyed ||
-	   !classes.Object_Is_Accessible(L, target) {
+	if target == nil || target.destroyed || !classes.Object_Is_Accessible(L, target) {
 		return vm.RaiseError(L, "TweenService:Create expects an accessible Instance"), true
 	}
 
@@ -550,7 +640,9 @@ tween_create :: proc(
 		return vm.RaiseError(L, "TweenService:Create expects a goal table"), true
 	}
 
-	vm_state := vm.VM{L = L}
+	vm_state := vm.VM {
+		L = L,
+	}
 	tween_object, ok := classes.Push_New(class_registry, &vm_state, "Tween", false)
 	if !ok {
 		return vm.RaiseError(L, "failed to create Tween"), true
@@ -564,30 +656,62 @@ tween_create :: proc(
 	vm.Pop(L)
 
 	property_count := 0
+
 	vm.PushNil(L)
+
 	for vm.Next(L, 4) {
 		property_name, name_ok := vm.ToString(L, -2)
-		goal, number_ok := vm.ToNumber(L, -1)
+
 		if !name_ok {
-			return vm.RaiseError(L, "TweenService:Create goal table keys must be property names"), true
+			return vm.RaiseError(L, "TweenService:Create goal table keys must be property names"),
+				true
 		}
-		if !number_ok {
+
+		goal, goal_ok := tween_read_value(L, -1)
+
+		if !goal_ok {
 			return vm.RaiseError(
-				L,
-				fmt.tprintf(
-					"TweenService:Create goal value for %q must be a number",
-					property_name,
+					L,
+					fmt.tprintf(
+						"TweenService:Create unsupported goal type for property %q",
+						property_name,
+					),
 				),
-			), true
+				true
 		}
+
+		vm.GetField(L, 2, property_name)
+
+		start, start_ok := tween_read_value(L, -1)
+
+		vm.Pop(L)
+
+		if !start_ok {
+			return vm.RaiseError(
+					L,
+					fmt.tprintf("TweenService:Create property %q is not tweenable", property_name),
+				),
+				true
+		}
+
+		if !tween_values_compatible(start, goal) {
+			return vm.RaiseError(
+					L,
+					fmt.tprintf(
+						"TweenService:Create property %q has incompatible start and goal types",
+						property_name,
+					),
+				),
+				true
+		}
+
 		append(
 			&tween.properties,
-			Tween_Property{
-				name = strings.clone(property_name),
-				goal = goal,
-			},
+			Tween_Property{name = strings.clone(property_name), start = start, goal = goal},
 		)
+
 		property_count += 1
+
 		vm.Pop(L)
 	}
 

@@ -129,7 +129,9 @@ MINIZ_HAS_64BIT_REGISTERS :: 1
 /* For more compatibility with zlib, miniz.c uses unsigned long for some parameters/struct members. Beware: mz_ulong can be either 32 or 64-bits! */
 mz_ulong :: c.ulong
 
-foreign import lib "../../../vendor/build/vendor/miniz/miniz.lib"
+when ODIN_OS == .Windows do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.lib"
+when #config(KINE_ANDROID, false) do foreign import lib "../../../../build/android-native/lib/libKinemiumLibs.a"
+when ODIN_OS != .Windows && !#config(KINE_ANDROID, false) do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.a"
 
 @(default_calling_convention="c")
 foreign lib {

@@ -44,7 +44,9 @@ library. They are not "stable"; their definitions or signatures may change in
 the future. Only static linking is allowed.
 *******************************************************************************/
 
-foreign import lib "../../../vendor/build/vendor/zstd/build/cmake/lib/zstd_static.lib"
+when ODIN_OS == .Windows do foreign import lib "../../../vendor/build/lib/KinemiumLibs.lib"
+when #config(KINE_ANDROID, false) do foreign import lib "../../../build/android-native/lib/libKinemiumLibs.a"
+when ODIN_OS != .Windows && !#config(KINE_ANDROID, false) do foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
 
 /*------   Version   ------*/
 ZSTD_VERSION_MAJOR    :: 1

@@ -8,11 +8,14 @@ import kineffi "../bindings"
 Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	if service == nil || !service.initialized { return }
 	workspace := Service_Get_Service(&service.service, "Workspace")
+
 	if workspace == nil { return }
+
 	Physics_Synchronize(service, workspace)
 	jolt.System_Step(&service.system, min(delta_time, 0.1))
 	workspace_service := cast(^Workspace)workspace
 	workspace_service.distributed_game_time += f64(max(delta_time, 0))
+
 	for &body in service.bodies {
 		part := cast(^classes.Part)body.object
 		if part.anchored { continue }

@@ -102,7 +102,7 @@ log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
 	}
 	parts: [dynamic]string
 	for index := 1; index <= vm.StackTop(L); index += 1 {
-		append(&parts, vm.DisplayString(L, index))
+		append(&parts, vm.DisplayString(L, i32(index)))
 	}
 	message := strings.concatenate(parts[:])
 	delete(parts)
@@ -122,7 +122,7 @@ log_service_luau_warn :: proc "c" (L: ^vm.State) -> i32 {
 	}
 	parts: [dynamic]string
 	for index := 1; index <= vm.StackTop(L); index += 1 {
-		append(&parts, vm.DisplayString(L, index))
+		append(&parts, vm.DisplayString(L, i32(index)))
 	}
 	message := strings.concatenate(parts[:])
 	delete(parts)

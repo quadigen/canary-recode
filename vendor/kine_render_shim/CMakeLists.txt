@@ -181,8 +181,13 @@ if(KINE_WITH_FILAMENT)
     # and embed the .filamat bytes as a C array using resgen.
     # ------------------------------------------------------------------
     set(FILAMENT_HOST_TOOLS_DIR "${FILAMENT_DIR}/bin" CACHE PATH "Host Filament tools directory")
-    set(MATC_EXE    "${FILAMENT_HOST_TOOLS_DIR}/matc${CMAKE_EXECUTABLE_SUFFIX}")
-    set(RESGEN_EXE  "${FILAMENT_HOST_TOOLS_DIR}/resgen${CMAKE_EXECUTABLE_SUFFIX}")
+    if(CMAKE_HOST_WIN32)
+        set(KINE_HOST_EXECUTABLE_SUFFIX ".exe")
+    else()
+        set(KINE_HOST_EXECUTABLE_SUFFIX "")
+    endif()
+    set(MATC_EXE    "${FILAMENT_HOST_TOOLS_DIR}/matc${KINE_HOST_EXECUTABLE_SUFFIX}")
+    set(RESGEN_EXE  "${FILAMENT_HOST_TOOLS_DIR}/resgen${KINE_HOST_EXECUTABLE_SUFFIX}")
     if(ANDROID)
         set(KINE_MATC_PLATFORM "mobile")
     else()
@@ -377,6 +382,16 @@ if(KINE_WITH_FILAMENT)
     endif()
 
     target_compile_features(kine_filament_shim PRIVATE cxx_std_20)
+
+    if(UNIX AND NOT APPLE AND NOT ANDROID)
+        # The prebuilt Linux Filament SDK uses libc++ for C++ API symbols.
+        # Skia's GN build uses libstdc++, so limit this ABI choice to the
+        # Filament-facing shim and the Assimp library it calls directly.
+        target_compile_options(kine_filament_shim PRIVATE -stdlib=libc++)
+        if(TARGET assimp)
+            target_compile_options(assimp PRIVATE -stdlib=libc++)
+        endif()
+    endif()
 
     if(MSVC)
         target_compile_options(kine_filament_shim PRIVATE /GR-)

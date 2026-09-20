@@ -614,14 +614,67 @@ ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> 
 	return false, err
 }
 
-DisplayString :: proc(L: ^State, index: int) -> string {
-	size: uintptr
-	value := luauh.lua_tolstring(L, i32(index), &size)
-	if value == nil {
-		return TypeName(L, index)
+DisplayString :: proc(L: ^State, index: i32, depth: i32 = 0) -> string {
+	if depth >= 8 {
+		return "{ ... }"
 	}
-	result := string(value)
-	Pop(L)
+
+	if !IsTable(L, int(index)) {
+		cstr := luauh.luaL_tolstring(L, index, nil)
+
+		if cstr == nil {
+			return TypeName(L, int(index))
+		}
+
+		result := strings.clone(string(cstr))
+		Pop(L)
+
+		return result
+	}
+
+	table_index := luauh.lua_absindex(L, index)
+
+	parts: [dynamic]string
+	defer delete(parts)
+
+	indent := strings.repeat("    ", int(depth))
+	child_indent := strings.repeat("    ", int(depth + 1))
+
+	append(&parts, "{")
+
+	luauh.lua_pushnil(L)
+
+	has_entries := false
+
+	for luauh.lua_next(L, table_index) != 0 {
+		has_entries = true
+
+		key := DisplayString(L, -2, depth + 1)
+		value := DisplayString(L, -1, depth + 1)
+
+		append(&parts, "\n")
+		append(&parts, child_indent)
+		append(&parts, "[")
+		append(&parts, key)
+		append(&parts, "] = ")
+		append(&parts, value)
+		append(&parts, ",")
+
+		Pop(L)
+	}
+
+	if has_entries {
+		append(&parts, "\n")
+		append(&parts, indent)
+	}
+
+	append(&parts, "}")
+
+	result := strings.concatenate(parts[:])
+
+	delete(indent)
+	delete(child_indent)
+
 	return result
 }
 

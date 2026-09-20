@@ -2745,9 +2745,10 @@ function UI.dropdown(parent, value, position, size, chevronIcon, options)
 				return
 				]]
 			end
-
 			local absolutePosition = button.AbsolutePosition
-			if not absolutePosition then
+			local absoluteSize = button.AbsoluteSize
+
+			if not absolutePosition or not absoluteSize then
 				return
 			end
 
@@ -3117,10 +3118,8 @@ function UI.switch(parent, position, value, callback, options)
 	local record
 
 	local function redraw()
-		track.BackgroundColor3 = enabled and options.enabledColor
-			or colors.accent
-			or options.disabledColor
-			or colors.input
+		track.BackgroundColor3 = enabled and (options.enabledColor or colors.accent)
+			or (options.disabledColor or colors.input)
 
 		knob.Position = enabled and UDim2.new(1, -(knobSize + 3), 0.5, -math.floor(knobSize / 2))
 			or UDim2.new(0, 3, 0.5, -math.floor(knobSize / 2))

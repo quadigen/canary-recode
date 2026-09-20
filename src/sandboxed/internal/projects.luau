@@ -79,6 +79,11 @@ return function(page, windowControls, gui)
 					local success = Project:CreateProject(props.Name, props.FolderPath, props.Description, props.Icon)
 					if success then
 						print("success: created project!")
+
+						Project:SetActiveProject(props.FolderPath)
+						gui.Enabled = false
+						UI.root().Enabled = true
+						UI.RootOverlay().Enabled = true
 					end
 				end,
 			},
@@ -331,14 +336,14 @@ return function(page, windowControls, gui)
 
 	local projects = Project:GetProjects()
 
-	local function card(parent, iconid, name, descriptiontext)
+	local function card(parent, iconid, name, descriptiontext, folderPath)
 		local card, label, record = UI.button(
 			projectsList,
 			"Card",
 			UDim2.new(0, 0, 0, 0),
 			UDim2.new(1, -20, 0, 90),
 			function()
-				Project:SetActiveProject("C:/Users/user/Documents/MyProject")
+				Project:SetActiveProject(folderPath)
 				gui.Enabled = false
 
 				UI.root().Enabled = true
@@ -407,6 +412,6 @@ return function(page, windowControls, gui)
 	end
 
 	for _, project in pairs(projects) do
-		card(projectsList, project.Icon, project.Name, project.Description)
+		card(projectsList, project.Icon, project.Name, project.Description, project.FolderPath)
 	end
 end

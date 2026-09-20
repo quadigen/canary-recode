@@ -6,6 +6,7 @@ import "core:strings"
 import engine_runtime "../engine/runtime"
 import renderer "../engine/renderer"
 import vm "../engine/vm"
+import target "../engine/target"
 
 script_vm:   ^vm.VM
 environment: ^engine_runtime.Environment
@@ -39,6 +40,7 @@ init_runtime :: proc(
 		vm.Field("Name", "Kinemium"),
 		vm.Field("Version", "1.0"),
 		vm.Field("Debug", false),
+		vm.Field("Target", target.NAME),
 	)
 
 	initialized = true
@@ -96,7 +98,7 @@ init :: proc(
 	renderer_object: ^renderer.RendererObject,
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
-	init_scripts()
+	when target.IS_EDITOR {init_scripts()}
 }
 
 init_scripts :: proc() {

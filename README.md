@@ -14,6 +14,10 @@ or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
 # Another notice
 This is an `ODIN` recode of Kinemium Engine, stuff may be unstable, Please run at your own risk!
 
+## Odin build targets
+
+Run `just editor`, `just client`, or `just server` to build the corresponding executable. The editor loads the editor UI, the client connects to `127.0.0.1:1234`, and the server listens headlessly on `0.0.0.0:1234`. Client and server accept `--address` and `--port` arguments. `0.0.0.0` is a server bind address, not a client destination; use `127.0.0.1` on the same computer or the server's LAN/public IP from another computer. The `BUILD_TARGET` Odin definition selects the mode and exposes `IsEditor`, `IsClient`, `IsServer`, and `BuildTarget` to Luau.
+
 # Features
 ## Datatypes
 - Axes

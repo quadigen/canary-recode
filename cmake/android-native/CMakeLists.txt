@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "Do not build third-party test targets" FORCE)
 
 if(NOT FILAMENT_DIR OR NOT KINE_SKIA_DIR OR NOT FILAMENT_HOST_TOOLS_DIR)
     message(FATAL_ERROR "FILAMENT_DIR, KINE_SKIA_DIR, and FILAMENT_HOST_TOOLS_DIR are required")
@@ -46,6 +47,19 @@ add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/luau" luau)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_luau" kine_luau)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_jolt" kine_jolt)
 
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/zstd" zstd)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/miniz" miniz)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/libyaml" libyaml)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anchor(void) {}\n")
+add_library(KinemiumLibs STATIC "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c")
+target_link_libraries(KinemiumLibs PUBLIC libzstd_static miniz yaml)
+set_target_properties(KinemiumLibs PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
 set_target_properties(kine_render_shim kine_filament_shim kine_skia kine_vulkan_compositor
     kine_luau JoltWrapper Jolt PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
@@ -80,6 +94,10 @@ if(KINE_ODIN_OBJECTS)
         Luau.Ast
         Luau.Bytecode
         Luau.Common
+        KinemiumLibs
+        libzstd_static
+        miniz
+        yaml
         ${KINE_SKIA_ANDROID_ARCHIVES}
         SDL3::SDL3-shared
         "${KINE_ANDROID_VENDOR_DIR}/miniaudio.a"

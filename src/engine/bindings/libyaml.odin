@@ -13,8 +13,9 @@ package kineffi
 import "core:c/libc"
 import "core:c"
 
-when ODIN_OS == .Windows do foreign import lib "../../../vendor/build/vendor/libyaml/yaml.lib"
-when ODIN_OS != .Windows do foreign import lib "../../../vendor/build/vendor/libyaml/libyaml.a"
+when ODIN_OS == .Windows do foreign import lib "../../../vendor/build/lib/KinemiumLibs.lib"
+when #config(KINE_ANDROID, false) do foreign import lib "../../../build/android-native/lib/libKinemiumLibs.a"
+when ODIN_OS != .Windows && !#config(KINE_ANDROID, false) do foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
 
 @(default_calling_convention="c")
 foreign lib {

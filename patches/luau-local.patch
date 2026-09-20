@@ -1,0 +1,65 @@
+diff --git a/Common/include/Luau/Common.h b/Common/include/Luau/Common.h
+index 15c2f571..ad274053 100644
+--- a/Common/include/Luau/Common.h
++++ b/Common/include/Luau/Common.h
+@@ -90,8 +90,15 @@ struct FValue
+         : value(def)
+         , dynamic(dynamic)
+         , name(name)
+-        , next(list)
++        , next(nullptr)
+     {
++        // Relocatable WebAssembly links may retain a constructor more than once.
++        // Never splice the same flag object back onto its own intrusive list.
++        for (FValue* flag = list; flag; flag = flag->next)
++            if (flag == this)
++                return;
++
++        next = list;
+         list = this;
+     }
+ 
+diff --git a/bench/micro_tests/test_OOP_method_call.lua b/bench/micro_tests/test_OOP_method_call.lua
+index b67b19f5..e48b5a01 100644
+--- a/bench/micro_tests/test_OOP_method_call.lua
++++ b/bench/micro_tests/test_OOP_method_call.lua
+@@ -1,14 +1,18 @@
+-local function prequire(name) local success, result = pcall(require, name); return success and result end
+-local bench = script and require(script.Parent.bench_support) or prequire("bench_support") or require("../bench_support")
++local function prequire(name)
++    local success, result = pcall(require, name)
++    return success and result
++end
++local bench = script and require(script.Parent.bench_support)
++    or prequire("bench_support")
++    or require("../bench_support")
+ 
+ function test()
+-
+     local Number = {}
+     Number.__index = Number
+ 
+     function Number.new(v)
+         local self = {
+-            value = v
++            value = v,
+         }
+         setmetatable(self, Number)
+         return self
+@@ -21,12 +25,12 @@ function test()
+     local n = Number.new(42)
+ 
+     local ts0 = os.clock()
+-    for i=1,10_000_000 do
++    for i = 1, 10_000_000 do
+         local _ = n:Get()
+     end
+     local ts1 = os.clock()
+ 
+-    return ts1-ts0
++    return ts1 - ts0
+ end
+ 
+-bench.runCode(test, "OOP: method call")
+\ No newline at end of file
++bench.runCode(test, "OOP: method call")

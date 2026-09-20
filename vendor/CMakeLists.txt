@@ -16,6 +16,7 @@ include(FetchContent)
 # Build external projects as static inputs, then bundle them into one
 # static library (KinemiumLibs.lib / KinemiumLibs.a) at the end of this file.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "Do not build third-party test targets" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
 if(WIN32)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL "" FORCE)
@@ -206,7 +207,7 @@ set(KINE_COMPONENT_TARGETS
     utils
     geometry
     smol-v
-    zstd
+    libzstd_static
     yaml
     miniz
     uberarchive
@@ -356,8 +357,11 @@ endif()
 
 # Bundle component static libraries into one big KinemiumLibs archive file
 if(MSVC)
+    # Renderer bindings already import their Windows component archives.
+    # Merge only the data libraries consumed through KinemiumLibs.lib so this
+    # archive stays small and does not duplicate the Filament/Skia bundles.
     set_target_properties(KinemiumLibs PROPERTIES
-        STATIC_LIBRARY_OPTIONS "${KINE_COMPONENT_TARGET_FILES}"
+        STATIC_LIBRARY_OPTIONS "$<TARGET_FILE:libzstd_static>;$<TARGET_FILE:miniz>;$<TARGET_FILE:yaml>"
     )
 elseif(APPLE)
     set(_kine_bundle_archive "$<TARGET_FILE:KinemiumLibs>.bundle")

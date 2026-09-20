@@ -60,6 +60,10 @@ local owned = Instance.new("Part")
 owned.Name = "OwnedPart"
 owned.ReplicationMode = Enum.ReplicationMode.OwnerOnly
 owned.Parent = game:GetService("Workspace")
+local distant = Instance.new("Part")
+distant.Name = "DistantPart"
+distant.CFrame = CFrame.new(2000, 0, 0)
+distant.Parent = game:GetService("Workspace")
 r.EventReceived:Connect(function(name, data)
     if name == "client-test" then received = data end
 end)
@@ -92,6 +96,7 @@ assert(part and part.ClassName == "Part")
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart") == nil)
+assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2000)
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 17)
 assert(part.CFrame.Position == Vector3.new(4, 5, 6))
 assert(part.Size == Vector3.new(2, 3, 4))
@@ -100,6 +105,28 @@ assert(math.abs(part.Transparency - 0.4) < 1e-4)
 assert(r:SendEvent("client-test", "hello"))
 assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint = Color3.new(0.1, 0.2, 0.3), frame = CFrame.new(2, 3, 4), list = { 10, 20 }, nested = { ok = true } }))
 `, "replicator_client_verify")
+
+	run_script(&server_vm, `
+game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(6, 5, 6)
+`, "replicator_server_interpolation")
+	for _ in 0..<6 {
+		step_network(&server, &server_vm)
+		step_network(&client, &client_vm)
+	}
+	run_script(&client_vm, `
+local x = game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X
+assert(x > 4 and x < 6, "expected buffered interpolation, got " .. tostring(x))
+`, "replicator_client_interpolation")
+	for _ in 0..<20 {
+		step_network(&server, &server_vm)
+		step_network(&client, &client_vm)
+	}
+	run_script(&client_vm, `
+assert(game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X == 6)
+`, "replicator_client_interpolation_complete")
+	run_script(&server_vm, `
+game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(4, 5, 6)
+`, "replicator_server_interpolation_reset")
 
 	for _ in 0..<20 {
 		engine_runtime.Environment_Render_Step(&server, &server_vm, 1.0 / 60.0)
@@ -123,6 +150,10 @@ local owned = game:GetService("Workspace"):FindFirstChild("OwnedPart")
 assert(owned and owned.NetworkId > 0, "owned part unavailable")
 assert(game:GetService("ReplicatorService"):AssignOwnership(owned, players[1]))
 owned.Anchored = false
+local r = game:GetService("ReplicatorService")
+r.RelevancyDistance = 100
+assert(r.RelevancyDistance == 100)
+game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame = CFrame.new(2100, 0, 0)
 assert(game:GetService("ReplicatorService"):SendEvent("server-test", "world"))
 local workspace = game:GetService("Workspace")
 local folder = Instance.new("Folder")
@@ -151,8 +182,20 @@ assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 23)
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart"))
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart"))
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart"))
+assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2000)
 assert(game:GetService("Players").LocalPlayer.UserId > 0)
 `, "replicator_client_event")
+
+	run_script(&server_vm, `
+game:GetService("ReplicatorService").RelevancyDistance = 5000
+`, "replicator_server_relevancy_restore")
+	for _ in 0..<15 {
+		step_network(&server, &server_vm)
+		step_network(&client, &client_vm)
+	}
+	run_script(&client_vm, `
+assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2100)
+`, "replicator_client_relevancy_restore")
 
 	run_script(&client_vm, `
 game:GetService("Workspace"):FindFirstChild("OwnedPart").CFrame = CFrame.new(2, 0, 0)

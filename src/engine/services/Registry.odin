@@ -104,6 +104,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
+	when ODIN_OS != .JS { Register_CharacterService_Class(registry.classes) }
 	Register_CollectionService_Class(registry.classes)
 	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
 	Register_ExampleService_Class(registry.classes)
@@ -139,6 +140,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
 	// wire:begin services
+	when ODIN_OS != .JS { Register_Service(registry, "CharacterService", "CharacterService") }
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
 	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService", "DialogService") }
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
@@ -190,6 +192,12 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 		replicator := Find_Service(registry, "ReplicatorService")
 		if replicator != nil && replicator.object != nil {
 			Replication_Step(cast(^ReplicatorService)replicator.object, L, delta_time)
+		}
+	}
+	when ODIN_OS != .JS {
+		character_service := Find_Service(registry, "CharacterService")
+		if character_service != nil && character_service.object != nil {
+			CharacterService_Step(cast(^CharacterService)character_service.object, delta_time)
 		}
 	}
 	{

@@ -670,6 +670,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
 	Register_CFrameValue(registry)
+	Register_CharacterModel(registry)
 	Register_Color3Value(registry)
 	Register_ColorSequenceValue(registry)
 	Register_Decal(registry)

@@ -15,7 +15,9 @@ TDEFL_FORCE_ALL_STATIC_BLOCKS       :: 262144
 TDEFL_FILTER_MATCHES                :: 131072
 TDEFL_FORCE_ALL_RAW_BLOCKS          :: 524288
 
-foreign import lib "../../../vendor/build/vendor/miniz/miniz.lib"
+when ODIN_OS == .Windows do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.lib"
+when #config(KINE_ANDROID, false) do foreign import lib "../../../../build/android-native/lib/libKinemiumLibs.a"
+when ODIN_OS != .Windows && !#config(KINE_ANDROID, false) do foreign import lib "../../../../vendor/build/lib/KinemiumLibs.a"
 
 @(default_calling_convention="c")
 foreign lib {

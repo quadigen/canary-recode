@@ -6,6 +6,7 @@ import sdl3 "../platform"
 import renderer "../renderer"
 import vm "../vm"
 import kineffi "../bindings"
+import target "../target"
 
 Package_Installer    :: proc(L: ^vm.State, ctx: rawptr, renderer_object: ^renderer.RendererObject)
 Package_Begin_Frame  :: proc(ctx: rawptr, width, height: i32)
@@ -1379,13 +1380,15 @@ Init :: proc(
     vm.AddGlobal_Boolean(
         vm_state,
         "IsServer",
-        false,
+        target.IS_SERVER,
     )
     vm.AddGlobal_Boolean(
         vm_state,
         "IsClient",
-        false,
+        target.IS_CLIENT,
     )
+    vm.AddGlobal_Boolean(vm_state, "IsEditor", target.IS_EDITOR)
+    vm.AddGlobal_String(vm_state, "BuildTarget", target.NAME)
     vm.NewTable(vm_state.L, 0, 8)
     vm.SetGlobalFromStack(
         vm_state,

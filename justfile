@@ -48,8 +48,10 @@ wire-check:
 editor:
     odin build src -define:BUILD_TARGET=editor -out:build/kinemium-editor.exe
 
-player:
-    odin build src -define:BUILD_TARGET=player -out:build/kinemium.exe
+client:
+    odin build src -define:BUILD_TARGET=client -out:build/kinemium-client.exe
+
+player: client
 
 server:
     odin build src -define:BUILD_TARGET=server -out:build/kinemium-server.exe
@@ -57,8 +59,13 @@ server:
 run-editor:
     odin run src -define:BUILD_TARGET=editor
 
-run-player:
-    odin run src -define:BUILD_TARGET=player
+run-client:
+    odin run src -define:BUILD_TARGET=client
+
+run-player: run-client
+
+run-server:
+    odin run src -define:BUILD_TARGET=server
 
 fmt:
     odinfmt -w src
