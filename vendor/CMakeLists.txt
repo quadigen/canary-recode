@@ -27,7 +27,7 @@ endif()
 
 set(KINE_WITH_FILAMENT ON CACHE BOOL "" FORCE)
 set(KINE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
-set(KINE_SKIA_BUILD_SHARED OFF CACHE BOOL "Isolate Skia's VMA implementation from Filament" FORCE)
+set(KINE_SKIA_BUILD_SHARED OFF CACHE BOOL "Build Skia as a static library" FORCE)
 set(KINE_FILAMENT_BACKEND VULKAN CACHE STRING "Use the unified Vulkan compositor path for Filament and Skia" FORCE)
 set(KINE_FILAMENT_VULKAN_READBACK ON CACHE BOOL "Enable offscreen Filament ViewportFrame readback" FORCE)
 add_subdirectory(kine_render_shim)

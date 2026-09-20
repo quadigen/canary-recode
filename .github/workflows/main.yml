@@ -179,6 +179,11 @@ jobs:
             }
           }
 
+      - name: Isolate Skia Vulkan allocator (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/isolate_skia_vma.sh vendor/build/vendor/kine_skia/skia-src/out/Kinemium/libskia.a
+
       - name: Verify native libraries (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -276,6 +281,14 @@ jobs:
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
           cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
           cp -a "${VULKAN_SDK}"/lib/libvulkan.so* 'dist/${{ matrix.folder }}/'
+          for soname in libc++.so.1 libc++abi.so.1 libunwind.so.1; do
+            source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
+            test -n "$source_path" && test -f "$source_path" || {
+              echo "Missing Linux runtime library: $soname" >&2
+              exit 1
+            }
+            cp -L "$source_path" "dist/${{ matrix.folder }}/$soname"
+          done
 
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
