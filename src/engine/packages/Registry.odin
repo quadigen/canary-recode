@@ -57,6 +57,7 @@ Internal_Module :: struct {
     name: string,
     source: string,
     reference: i32,
+    owned: bool,
 }
 Registry :: struct {
     vm_state: ^vm.VM,
@@ -333,6 +334,97 @@ Resolve :: proc(
         }
     }
     return false
+}
+
+destroy_internal_modules :: proc(
+    modules: ^[dynamic]Internal_Module,
+    L: ^vm.State = nil,
+) {
+    for &module in modules {
+        if L != nil && module.reference > 0 {
+            vm.ReleaseValue(L, module.reference)
+        }
+        if module.owned {
+            delete(module.name)
+            delete(module.source)
+        }
+    }
+    delete(modules^)
+    modules^ = nil
+}
+
+Load_Internal_Modules_From_Blob :: proc(
+    registry: ^Registry,
+    archive_path: string,
+) -> bool {
+    if registry == nil {
+        return false
+    }
+
+    archive, opened := kineffi.Zip_Open(archive_path)
+    if !opened {
+        return false
+    }
+    defer kineffi.Zip_Close(archive)
+
+    loaded := make([dynamic]Internal_Module)
+    keep_loaded := false
+    defer if !keep_loaded {
+        destroy_internal_modules(&loaded)
+    }
+
+    found_entrypoint := false
+    for index := u32(0); index < kineffi.Zip_File_Count(archive); index += 1 {
+        archive_name, named := kineffi.Zip_File_Name(archive, index)
+        if !named {
+            continue
+        }
+
+        module_path := ""
+        if strings.has_prefix(archive_name, "internal/") {
+            module_path = archive_name[len("internal/"):]
+        } else if marker := strings.index(archive_name, "/internal/"); marker >= 0 {
+            module_path = archive_name[marker + len("/internal/"):]
+        }
+
+        if module_path == "" ||
+           !strings.has_suffix(module_path, ".luau") ||
+           strings.contains(module_path, "..") ||
+           strings.contains(module_path, "\\") {
+            delete(archive_name)
+            continue
+        }
+
+        data, read := kineffi.Zip_Read_Index(archive, index)
+        if !read {
+            delete(archive_name)
+            return false
+        }
+
+        module_name := module_path[:len(module_path)-len(".luau")]
+        append(&loaded, Internal_Module{
+            name = strings.clone(module_name),
+            source = strings.clone(string(data)),
+            owned = true,
+        })
+        found_entrypoint = found_entrypoint || module_name == "editor_ui"
+
+        delete(data)
+        delete(archive_name)
+    }
+
+    if !found_entrypoint {
+        return false
+    }
+
+    L: ^vm.State
+    if registry.vm_state != nil {
+        L = registry.vm_state.L
+    }
+    destroy_internal_modules(&registry.internal_modules, L)
+    registry.internal_modules = loaded
+    keep_loaded = true
+    return true
 }
 // -----------------------------------------------------------------------------
 // renderer.Pool
@@ -1331,9 +1423,7 @@ install_renderer_global :: proc(
         "renderer",
     )
 }
-// -----------------------------------------------------------------------------
-// Init / frame updates / events
-// -----------------------------------------------------------------------------
+
 Init :: proc(
     registry: ^Registry,
     vm_state: ^vm.VM,
@@ -1349,17 +1439,6 @@ Init :: proc(
     registry.dimension_3d = true
     registry.running = true
     Register_Default_Packages(registry)
-    for file in #load_directory("../../sandboxed/internal") {
-        file_name := file.name
-        if !strings.has_suffix(file_name, ".luau") {
-            continue
-        }
-        module_name := file_name[:len(file_name)-len(".luau")]
-        append(&registry.internal_modules, Internal_Module{
-            name = module_name,
-            source = string(file.data),
-        })
-    }
     for &descriptor in registry.packages {
         descriptor.installer(
             vm_state.L,
@@ -1706,6 +1785,6 @@ Destroy :: proc(
     delete(registry.hooks)
     delete(registry.callbacks)
     delete(registry.packages)
-    delete(registry.internal_modules)
+    destroy_internal_modules(&registry.internal_modules)
     registry^ = Registry{}
 }

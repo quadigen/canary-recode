@@ -42,7 +42,7 @@ compress_kine :: proc(data: []u8) -> ([]u8, bool) {
 
 decompress_kine :: proc(data: []u8) -> ([]u8, bool) {
 	content_size := kineffi.ZSTD_getFrameContentSize(raw_data(data), c.size_t(len(data)))
-	if content_size == ~u64(0) || content_size == ~u64(1) {
+	if content_size == ~u64(0) || content_size == ~u64(1) || content_size > 64 * 1024 * 1024 {
 		return nil, false
 	}
 

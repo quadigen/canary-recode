@@ -1,10 +1,11 @@
 package sandboxed
 
-import runtime "base:runtime"
 import "core:fmt"
 import "core:strings"
 import engine_runtime "../engine/runtime"
+import packages "../engine/packages"
 import renderer "../engine/renderer"
+import services "../engine/services"
 import vm "../engine/vm"
 import target "../engine/target"
 
@@ -64,32 +65,28 @@ run_code :: proc(source: string, name: string) {
 	}
 }
 
-run_dir :: proc(loaded: []runtime.Load_Directory_File) {
+run_modules :: proc(loaded: []packages.Internal_Module) {
 	assert(initialized)
 
-	for file in loaded {
-		if file.name == "editor_ui.luau" {
-			run_internal_module(file.name)
+	for module in loaded {
+		if module.name == "editor_ui" {
+			run_internal_module(module.name)
 			break
 		}
 	}
-	for file in loaded {
-		if file.name == "editor_ui.luau" { continue }
-		run_internal_module(file.name)
+	for module in loaded {
+		if module.name == "editor_ui" { continue }
+		run_internal_module(module.name)
 	}
 }
 
-run_internal_module :: proc(file_name: string) {
-	if !strings.has_suffix(file_name, ".luau") {
-		return
-	}
-	module_name := file_name[:len(file_name)-len(".luau")]
+run_internal_module :: proc(module_name: string) {
 	source := strings.concatenate({
 		"require(\"@internal/",
 		module_name,
 		"\")",
 	})
-	run_code(source, file_name)
+	run_code(source, module_name)
 }
 
 init :: proc(
@@ -98,11 +95,44 @@ init :: proc(
 	renderer_object: ^renderer.RendererObject,
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
-	when target.IS_EDITOR {init_scripts()}
+	when target.IS_EDITOR {
+		editor_object := services.Ensure_Service(
+			&environment.services,
+			"EditorService",
+		)
+		if editor_object == nil {
+			fmt.eprintln("Editor cache unavailable: EditorService is unavailable; using bundled editor")
+		} else {
+			fetch := services.EditorService_Get_Editor(
+				cast(^services.EditorService)editor_object,
+			)
+			if fetch.warning != "" {
+				fmt.eprintf("%s\n", fetch.warning)
+			}
+			if fetch.error_message != "" {
+				fmt.eprintf("Editor cache unavailable: %s; using bundled editor\n", fetch.error_message)
+			} else {
+				if packages.Load_Internal_Modules_From_Blob(
+					&environment.packages,
+					fetch.path,
+				) {
+					if fetch.downloaded {
+						fmt.printf("Downloaded editor update to %s\n", fetch.path)
+					} else {
+						fmt.printf("Loaded current cached editor from %s\n", fetch.path)
+					}
+				} else {
+					fmt.eprintf("Editor cache at %s is unreadable; using bundled editor\n", fetch.path)
+				}
+				delete(fetch.path)
+			}
+		}
+		init_scripts()
+	}
 }
 
 init_scripts :: proc() {
-	run_dir(#load_directory("./internal"))
+	run_modules(environment.packages.internal_modules[:])
 }
 
 shutdown :: proc() {

@@ -18,6 +18,8 @@ This is an `ODIN` recode of Kinemium Engine, stuff may be unstable, Please run a
 
 Run `just editor`, `just client`, or `just server` to build the corresponding executable. The editor loads the editor UI, the client connects to `127.0.0.1:1234`, and the server listens headlessly on `0.0.0.0:1234`. Client and server accept `--address` and `--port` arguments. `0.0.0.0` is a server bind address, not a client destination; use `127.0.0.1` on the same computer or the server's LAN/public IP from another computer. The `BUILD_TARGET` Odin definition selects the mode and exposes `IsEditor`, `IsClient`, `IsServer`, and `BuildTarget` to Luau.
 
+To host a native KINE version-1 map, run `just server`, then `./build/kinemium-server.exe --map path/to/world.kine`. In another terminal run `just client`, then `./build/kinemium-client.exe --address 127.0.0.1 --port 1234`. The file can contain a `Model`, `Folder`, `Part`, or serialized `Workspace` root. The server imports its contents into the live Workspace before accepting clients; clients receive the map through replication and should not pass `--map`. The older Luau engine's KINE version-2 table files are a different format and are not yet supported by this loader.
+
 # Features
 ## Datatypes
 - Axes

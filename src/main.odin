@@ -107,6 +107,10 @@ run_desktop :: proc() {
 			fmt.eprintln("Network client needs a reachable server address; use 127.0.0.1 for a server on this computer")
 			return
 		}
+		if options.map_path != "" {
+			fmt.eprintln("Load the map on the server with --map; clients receive it through replication")
+			return
+		}
 	}
 	script_vm := vm.New()
 
@@ -161,7 +165,7 @@ run_desktop :: proc() {
 	profiling.init()
 	defer profiling.shutdown()
 
-	title := "Kinemium Editor"
+	title := "Kinemium Engine"
 	when target.IS_CLIENT {title = "Kinemium Client"}
 	renderer.init(title, 800, 600, &renderer_object)
 }

@@ -8,6 +8,7 @@ import "core:strconv"
 Startup_Options :: struct {
 	address: string,
 	port:    u16,
+	map_path: string,
 }
 
 startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
@@ -33,6 +34,10 @@ startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
 			   value >
 				   65535 {fmt.eprintln("--port must be between 1 and 65535"); return options, false}
 			options.port = u16(value)
+		case "--map":
+			if index + 1 >= len(os.args) {fmt.eprintln("--map requires a .kine file path"); return options, false}
+			index += 1
+			options.map_path = os.args[index]
 		}
 	}
 	return options, true
