@@ -350,10 +350,6 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Apply local Luau fixes
-        shell: bash
-        run: git -C vendor/luau apply ../../patches/luau-local.patch
-
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
@@ -421,10 +417,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
-
-      - name: Apply local Luau fixes
-        shell: bash
-        run: git -C vendor/luau apply ../../patches/luau-local.patch
 
       - name: Setup Odin
         uses: laytan/setup-odin@v2
