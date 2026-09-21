@@ -100,6 +100,22 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 	)
 }
 
+REPLICATION_ROOT_NAMES := [?]string {
+	"Workspace",
+	"ReplicatedFirst",
+	"ReplicatedStorage",
+	"Lighting",
+	"SoundService",
+	"StarterGui",
+	"StarterPack",
+	"StarterPlayer",
+}
+
+replication_root_allowed :: proc(name: string) -> bool {
+	for candidate in REPLICATION_ROOT_NAMES {if candidate == name {return true}}
+	return false
+}
+
 replication_group_contains :: proc(
 	service: ^ReplicatorService,
 	user_id: u32,
@@ -327,10 +343,10 @@ replication_sync_tree :: proc(service: ^ReplicatorService, object: ^classes.Obje
 
 replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Object) -> bool {
 	if object == nil || object.destroyed {return false}
-	workspace := DataModel_Get_Service(service.data_model, "Workspace")
-	storage := DataModel_Get_Service(service.data_model, "ReplicatedStorage")
 	for current := object; current != nil; current = current.parent {
-		if current == workspace || current == storage {return true}
+		if current.parent == &service.data_model.object &&
+		   classes.Is_A(current, "Service") &&
+		   replication_root_allowed(current.name) {return true}
 		if current == &service.data_model.object {return false}
 	}
 	return false
@@ -338,10 +354,9 @@ replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Objec
 
 replication_sync :: proc(service: ^ReplicatorService) {
 	if service.mode != .Server || service.data_model == nil {return}
-	workspace := DataModel_Get_Service(service.data_model, "Workspace")
-	storage := DataModel_Get_Service(service.data_model, "ReplicatedStorage")
-	replication_sync_tree(service, workspace)
-	replication_sync_tree(service, storage)
+	for root_name in REPLICATION_ROOT_NAMES {
+		replication_sync_tree(service, DataModel_Get_Service(service.data_model, root_name))
+	}
 	for &connection in service.peers {
 		connection.bytes_this_tick = 0
 		for item in service.entities {

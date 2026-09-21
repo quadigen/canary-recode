@@ -9,11 +9,29 @@ import serializer "../serializer"
 import services "../services"
 import vm "../vm"
 
-map_part_count :: proc(object: ^classes.Object) -> int {
+MAP_CONTENT_SERVICES := [?]string {
+	"Workspace",
+	"ReplicatedFirst",
+	"ReplicatedStorage",
+	"Lighting",
+	"SoundService",
+	"StarterGui",
+	"StarterPack",
+	"StarterPlayer",
+	"ServerScriptService",
+	"ServerStorage",
+}
+
+map_instance_count :: proc(object: ^classes.Object) -> int {
 	if object == nil || object.destroyed {return 0}
-	count := classes.Is_A(object, "Part") ? 1 : 0
-	for child in object.children {count += map_part_count(child)}
+	count := 1
+	for child in object.children {count += map_instance_count(child)}
 	return count
+}
+
+map_content_service :: proc(name: string) -> bool {
+	for candidate in MAP_CONTENT_SERVICES {if candidate == name {return true}}
+	return false
 }
 
 Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> bool {
@@ -26,47 +44,53 @@ Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> 
 		fmt.eprintf("Map file does not exist: %s\n", path)
 		return false
 	}
-	workspace := cast(^services.Workspace)services.Ensure_Service(&environment.services, "Workspace")
-	if workspace == nil {return false}
 	root, ok := serializer.Deserialize_From_File(&environment.classes, script_vm.L, nil, path)
 	if !ok || root == nil {
-		fmt.eprintf("Could not load .kine map (supported KINE versions 1-%d): %s\n", serializer.KINE_VERSION, path)
+		fmt.eprintf("Could not load .kine map (expected KINE version %d): %s\n", serializer.KINE_VERSION, path)
+		return false
+	}
+	if !classes.Is_A(root, "DataModel") {
+		classes.Destroy_Hierarchy(root)
+		fmt.eprintf(".kine map root must be a DataModel: %s\n", path)
 		return false
 	}
 
-	source := root
-	if classes.Is_A(root, "DataModel") {
-		source = classes.Find_First_Child(root, "Workspace")
-		if source != nil && !classes.Is_A(source, "Workspace") {source = nil}
-	}
-	if source == nil {
-		classes.Destroy_Hierarchy(root)
-		fmt.eprintf(".kine map has no Workspace: %s\n", path)
-		return false
-	}
-	if !classes.Is_A(source, "Workspace") &&
-	   !classes.Is_A(source, "Model") &&
-	   !classes.Is_A(source, "Folder") &&
-	   !classes.Is_A(source, "Part") {
-		classes.Destroy_Hierarchy(root)
-		fmt.eprintf(".kine map root must be a Workspace, Model, Folder, or Part: %s\n", path)
-		return false
-	}
-
-	count := map_part_count(source)
-	if classes.Is_A(source, "Workspace") {
+	service_count := 0
+	instance_count := 0
+	for len(root.children) > 0 {
+		source := root.children[len(root.children) - 1]
+		if !classes.Is_A(source, "Service") || !map_content_service(source.name) {
+			classes.Destroy_Hierarchy(source)
+			continue
+		}
+		target := services.Ensure_Service(&environment.services, source.name)
+		if target == nil || classes.Get_Class_Name(target) != classes.Get_Class_Name(source) {
+			classes.Destroy_Hierarchy(source)
+			continue
+		}
+		for {
+			removed := false
+			for child in target.children {
+				if classes.Is_A(target, "Workspace") && classes.Is_A(child, "Camera") {continue}
+				classes.Destroy_Hierarchy(child)
+				removed = true
+				break
+			}
+			if !removed {break}
+		}
 		for len(source.children) > 0 {
 			child := source.children[len(source.children) - 1]
-			if classes.Is_A(child, "Camera") {
+			if classes.Is_A(source, "Workspace") && classes.Is_A(child, "Camera") {
 				classes.Destroy_Hierarchy(child)
 			} else {
-				classes.Set_Parent(child, &workspace.object)
+				instance_count += map_instance_count(child)
+				classes.Set_Parent(child, target)
 			}
 		}
-		classes.Destroy_Hierarchy(root)
-	} else {
-		classes.Set_Parent(root, &workspace.object)
+		service_count += 1
+		classes.Destroy_Hierarchy(source)
 	}
-	fmt.printf("Loaded .kine map %s (%d parts)\n", path, count)
+	classes.Destroy_Hierarchy(root)
+	fmt.printf("Loaded .kine DataModel %s (%d services, %d instances)\n", path, service_count, instance_count)
 	return true
 }

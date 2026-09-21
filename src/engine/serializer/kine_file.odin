@@ -8,9 +8,8 @@ import classes "../classes"
 import vm "../vm"
 import kineffi "../bindings"
 
-// A .KINE file stores the KINE byte stream as a single zstd frame. Files saved
-// before compression was introduced are still accepted: their leading bytes do
-// not match the zstd magic, so they are passed through uncompressed.
+// A .KINE file stores the KINE byte stream as a single zstd frame when that is
+// smaller. Raw KINE v2 streams remain valid for small or incompressible files.
 KINE_ZSTD_LEVEL :: kineffi.ZSTD_CLEVEL_DEFAULT
 
 is_zstd_frame :: proc(data: []u8) -> bool {

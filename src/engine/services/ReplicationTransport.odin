@@ -264,7 +264,7 @@ replication_receive :: proc(
 		   id == 0 ||
 		   replication_entity_object(service, id) != nil ||
 		   service.data_model == nil {break}
-		if root_name != "" && root_name != "Workspace" && root_name != "ReplicatedStorage" {break}
+		if root_name != "" && !replication_root_allowed(root_name) {break}
 		if !replication_builtin_class(class_name) &&
 		   replication_schema(service, class_name) == nil {break}
 		parent :=

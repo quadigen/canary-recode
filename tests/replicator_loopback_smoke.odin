@@ -52,6 +52,16 @@ local score = Instance.new("NumberValue")
 score.Name = "Score"
 score.Value = 17
 score.Parent = game:GetService("ReplicatedStorage")
+local bootstrap = Instance.new("Folder")
+bootstrap.Name = "Bootstrap"
+bootstrap.Parent = game:GetService("ReplicatedFirst")
+local ready = Instance.new("BoolValue")
+ready.Name = "Ready"
+ready.Value = true
+ready.Parent = bootstrap
+local secret = Instance.new("Folder")
+secret.Name = "ServerSecret"
+secret.Parent = game:GetService("ServerStorage")
 local grouped = Instance.new("Part")
 grouped.Name = "GroupedPart"
 grouped.ReplicationGroup = "Team"
@@ -98,6 +108,9 @@ assert(game:GetService("Workspace"):FindFirstChild("GroupedPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2000)
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 17)
+local bootstrap = game:GetService("ReplicatedFirst"):FindFirstChild("Bootstrap")
+assert(bootstrap and bootstrap:FindFirstChild("Ready").Value == true)
+assert(game:GetService("ServerStorage"):FindFirstChild("ServerSecret") == nil)
 assert(part.CFrame.Position == Vector3.new(4, 5, 6))
 assert(part.Size == Vector3.new(2, 3, 4))
 assert(part.CanQuery == false)
