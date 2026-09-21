@@ -357,6 +357,10 @@ Load_Internal_Modules_From_Blob :: proc(
     registry: ^Registry,
     archive_path: string,
 ) -> bool {
+    when ODIN_OS == .JS {
+        fmt.eprintln("[EditorModules] archive loading is unavailable on Web")
+        return false
+    } else {
     if registry == nil {
         fmt.eprintln("[EditorModules] package registry is nil")
         return false
@@ -430,6 +434,7 @@ Load_Internal_Modules_From_Blob :: proc(
     keep_loaded = true
     fmt.eprintf("[EditorModules] loaded %d modules from %s\n", len(loaded), archive_path)
     return true
+    }
 }
 // -----------------------------------------------------------------------------
 // renderer.Pool

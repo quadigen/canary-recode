@@ -11,6 +11,23 @@ $ndk = Join-Path $AndroidSdk "ndk\$NdkVersion"
 if (-not (Test-Path (Join-Path $ndk "build\cmake\android.toolchain.cmake"))) {
     throw "Android NDK $NdkVersion was not found under $AndroidSdk"
 }
+$env:ANDROID_NDK_HOME = $ndk
+
+$vcpkgCommand = Get-Command vcpkg -ErrorAction SilentlyContinue
+$vcpkgExecutable = if ($null -ne $vcpkgCommand) { $vcpkgCommand.Source } else { "" }
+foreach ($vcpkgRoot in @($env:VCPKG_INSTALLATION_ROOT, "C:\vcpkg")) {
+    if ($vcpkgExecutable -or -not $vcpkgRoot) { continue }
+    $vcpkgCandidate = Join-Path $vcpkgRoot "vcpkg.exe"
+    if (Test-Path -LiteralPath $vcpkgCandidate) {
+        $vcpkgExecutable = $vcpkgCandidate
+    }
+}
+if (-not $vcpkgExecutable) {
+    throw "vcpkg is required to build the Android OpenSSL and ENet libraries"
+}
+$vcpkgInstalled = Join-Path $repo "build\vcpkg-installed"
+& $vcpkgExecutable install openssl:arm64-android enet:arm64-android "--x-install-root=$vcpkgInstalled"
+if ($LASTEXITCODE -ne 0) { throw "Android OpenSSL/ENet dependency build failed" }
 
 $filamentVersion = "1.74.0"
 $sdlVersion = "3.4.14"
@@ -65,8 +82,32 @@ if (-not (Test-Path (Join-Path $box2dRoot ".git"))) {
 }
 
 $oldPath = $env:PATH
-$pythonDir = Split-Path (Get-Command python).Source
-$env:PATH = "$pythonDir;$oldPath"
+$pythonExecutable = ""
+foreach ($pythonName in @("python", "python3")) {
+    $pythonCommand = Get-Command $pythonName -ErrorAction SilentlyContinue
+    if ($null -eq $pythonCommand) { continue }
+    $probe = & $pythonCommand.Source -c "import sys; print(sys.executable)" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $probe) {
+        $pythonExecutable = $probe.Trim()
+        break
+    }
+}
+if (-not $pythonExecutable) {
+    $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -ne $pythonLauncher) {
+        $probe = & $pythonLauncher.Source -3 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $probe) { $pythonExecutable = $probe.Trim() }
+    }
+}
+if (-not $pythonExecutable) { throw "A working Python 3 interpreter is required to build Skia" }
+$pythonShim = Join-Path $repo "build\android-python"
+New-Item -ItemType Directory -Force $pythonShim | Out-Null
+$pythonShimExecutable = Join-Path $pythonShim "python3.exe"
+if (Test-Path -LiteralPath $pythonShimExecutable) {
+    Remove-Item -LiteralPath $pythonShimExecutable -Force
+}
+New-Item -ItemType HardLink -Path $pythonShimExecutable -Target $pythonExecutable | Out-Null
+$env:PATH = "$pythonShim;$(Split-Path $pythonExecutable);$oldPath"
 if (-not (Test-Path (Join-Path $skiaOut "libsvg.a"))) {
     $gnArgs = 'target_os="android" target_cpu="arm64" ndk="' + ($ndk -replace '\\','/') + '" is_debug=false is_official_build=true is_component_build=false skia_enable_ganesh=true skia_enable_svg=true skia_enable_skshaper=true skia_use_vulkan=true skia_use_gl=false skia_use_expat=true skia_use_system_expat=false skia_use_harfbuzz=true skia_use_system_harfbuzz=false skia_use_icu=true skia_use_system_icu=false skia_use_freetype=true skia_use_system_freetype2=false skia_use_libpng_decode=true skia_use_libpng_encode=true skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_dng_sdk=false'
     Push-Location $skiaRoot
@@ -80,7 +121,7 @@ $env:PATH = $oldPath
 
 $toolchain = Join-Path $ndk "build\cmake\android.toolchain.cmake"
 $nativeBuild = Join-Path $repo "build\android-native"
-& cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=arm64-v8a "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DKINE_SKIA_DIR=$skiaRoot" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" -DCMAKE_BUILD_TYPE=Release
+& cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=arm64-v8a "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DKINE_SKIA_DIR=$skiaRoot" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" "-DKINE_ANDROID_VCPKG_DIR=$(Join-Path $vcpkgInstalled 'arm64-android')" -DCMAKE_BUILD_TYPE=Release
 & cmake --build $nativeBuild --parallel
 if ($LASTEXITCODE -ne 0) { throw "Native Android dependency build failed" }
 

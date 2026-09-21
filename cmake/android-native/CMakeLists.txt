@@ -73,6 +73,7 @@ set(KINE_ODIN_OBJECT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/android" CACHE P
 set(KINE_ANDROID_JNI_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/android-jni/arm64-v8a" CACHE PATH "APK JNI output directory")
 set(KINE_ANDROID_VENDOR_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/android-vendor" CACHE PATH "NDK-built Odin vendor archives")
 set(KINE_ANDROID_BOX2D_LIBRARY "${CMAKE_CURRENT_LIST_DIR}/../../build/android-box2d/src/libbox2d.a" CACHE FILEPATH "Android Box2D archive")
+set(KINE_ANDROID_VCPKG_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/vcpkg-installed/arm64-android" CACHE PATH "vcpkg Android dependency prefix")
 
 file(GLOB KINE_ODIN_OBJECTS CONFIGURE_DEPENDS "${KINE_ODIN_OBJECT_DIR}/kinemium-*.o")
 if(KINE_ODIN_OBJECTS)
@@ -105,6 +106,9 @@ if(KINE_ODIN_OBJECTS)
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_resize.a"
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_write.a"
         "${KINE_ANDROID_BOX2D_LIBRARY}"
+        "${KINE_ANDROID_VCPKG_DIR}/lib/libenet.a"
+        "${KINE_ANDROID_VCPKG_DIR}/lib/libssl.a"
+        "${KINE_ANDROID_VCPKG_DIR}/lib/libcrypto.a"
     )
     list(JOIN KINE_ANDROID_LINK_LIBS "," KINE_ANDROID_LINK_GROUP)
 

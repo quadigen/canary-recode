@@ -104,13 +104,13 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
-	Register_CharacterService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_CharacterService_Class(registry.classes) }
 	Register_CollectionService_Class(registry.classes)
-	Register_ContentProvider_Class(registry.classes)
-	Register_DialogService_Class(registry.classes)
-	Register_EditorService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_ContentProvider_Class(registry.classes) }
+	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
+	when ODIN_OS != .JS { Register_EditorService_Class(registry.classes) }
 	Register_ExampleService_Class(registry.classes)
-	Register_HttpService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_HttpService_Class(registry.classes) }
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
@@ -118,12 +118,12 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Physics_Class(registry.classes)
 	Register_Players_Class(registry.classes)
 	Register_Plugin_Class(registry.classes)
-	Register_PluginMarketplace_Class(registry.classes)
+	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
 	Register_ProfilerService_Class(registry.classes)
-	Register_Project_Class(registry.classes)
+	when ODIN_OS != .JS { Register_Project_Class(registry.classes) }
 	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
-	Register_ReplicatorService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_ReplicatorService_Class(registry.classes) }
 	Register_RunService_Class(registry.classes)
 	Register_ScriptContext_Class(registry.classes)
 	Register_Selection_Class(registry.classes)
@@ -142,25 +142,25 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
 	// wire:begin services
-	Register_Service(registry, "CharacterService", "CharacterService")
+	when ODIN_OS != .JS { Register_Service(registry, "CharacterService", "CharacterService") }
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
-	Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider")
-	Register_Service(registry, "DialogService", "DialogService")
-	Register_Service(registry, "EditorService", "EditorService", "EditorService")
+	when ODIN_OS != .JS { Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider") }
+	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService") }
+	when ODIN_OS != .JS { Register_Service(registry, "EditorService", "EditorService", "EditorService") }
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
-	Register_Service(registry, "HttpService", "HttpService")
+	when ODIN_OS != .JS { Register_Service(registry, "HttpService", "HttpService") }
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
 	Register_Service(registry, "Plugin", "Plugin", "Plugin")
-	Register_Service(registry, "PluginMarketplace", "PluginMarketplace")
+	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace") }
 	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
-	Register_Service(registry, "Project", "Project")
+	when ODIN_OS != .JS { Register_Service(registry, "Project", "Project") }
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
-	Register_Service(registry, "ReplicatorService", "ReplicatorService")
+	when ODIN_OS != .JS { Register_Service(registry, "ReplicatorService", "ReplicatorService") }
 	Register_Service(registry, "RunService", "RunService")
 	Register_Service(registry, "ScriptContext", "ScriptContext")
 	Register_Service(registry, "Selection", "Selection", "Selection")

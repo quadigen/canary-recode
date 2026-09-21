@@ -118,15 +118,33 @@ Set-GeneratedRegion (Join-Path $classesPath 'Registry.odin') 'classes' @(
 $servicesPath = Join-Path $RootPath 'src/engine/services'
 $serviceFiles = Get-OdinFiles $servicesPath @('Registry.odin')
 $serviceClassPattern = '(?m)^[ \t]*(?<name>Register_[A-Za-z][A-Za-z0-9_]*_Class)[ \t]*::[ \t]*proc[ \t]*\([ \t\r\n]*registry[ \t]*:[ \t]*\^classes\.Registry\b'
-$serviceClassProcedures = Get-UniqueMatches $serviceFiles $serviceClassPattern
+$serviceClassProcedures = foreach ($file in $serviceFiles) {
+    $source = [System.IO.File]::ReadAllText($file.FullName)
+    $nativeOnly = $source -match '(?m)^#\+build[ \t]+!js[ \t\r]*$'
+    foreach ($registration in [regex]::Matches($source, $serviceClassPattern)) {
+        [pscustomobject]@{
+            Name = $registration.Groups['name'].Value
+            NativeOnly = $nativeOnly
+        }
+    }
+}
 $serviceClassProcedures = @($serviceClassProcedures | Sort-Object @{ Expression = {
-    if ($_ -eq 'Register_DataModel_Class') { 0 }
-    elseif ($_ -eq 'Register_Service_Class') { 1 }
+    if ($_.Name -eq 'Register_DataModel_Class') { 0 }
+    elseif ($_.Name -eq 'Register_Service_Class') { 1 }
     else { 2 }
-} }, @{ Expression = { $_ } })
-Set-GeneratedRegion (Join-Path $servicesPath 'Registry.odin') 'service-classes' @(
-    $serviceClassProcedures | ForEach-Object { "`t$_(registry.classes)" }
-)
+} }, @{ Expression = { $_.Name } })
+$seenServiceClassProcedures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$serviceClassLines = foreach ($procedure in $serviceClassProcedures) {
+    if (!$seenServiceClassProcedures.Add($procedure.Name)) {
+        throw "Duplicate service class registration procedure '$($procedure.Name)'"
+    }
+    if ($procedure.NativeOnly) {
+        "`twhen ODIN_OS != .JS { $($procedure.Name)(registry.classes) }"
+    } else {
+        "`t$($procedure.Name)(registry.classes)"
+    }
+}
+Set-GeneratedRegion (Join-Path $servicesPath 'Registry.odin') 'service-classes' $serviceClassLines
 
 $serviceEntries = [System.Collections.Generic.List[object]]::new()
 foreach ($file in $serviceFiles) {
@@ -149,18 +167,28 @@ foreach ($file in $serviceFiles) {
             Name = $nameMatch.Groups['name'].Value
             ClassName = $nameMatch.Groups['name'].Value
             GlobalName = $globalName
+            NativeOnly = $source -match '(?m)^#\+build[ \t]+!js[ \t\r]*$'
         })
     }
 }
 
 $seenServices = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $serviceLines = [System.Collections.Generic.List[string]]::new()
-foreach ($service in ($serviceEntries | Sort-Object Name)) {
-    if (!$seenServices.Add($service.Name)) { throw "Duplicate wired service '$($service.Name)'" }
-    if ($service.GlobalName) {
-        $serviceLines.Add("`tRegister_Service(registry, `"$($service.Name)`", `"$($service.ClassName)`", `"$($service.GlobalName)`")")
+function Get-ServiceRegistration([object]$Service) {
+    if ($Service.GlobalName) {
+        return "Register_Service(registry, `"$($Service.Name)`", `"$($Service.ClassName)`", `"$($Service.GlobalName)`")"
     } else {
-        $serviceLines.Add("`tRegister_Service(registry, `"$($service.Name)`", `"$($service.ClassName)`")")
+        return "Register_Service(registry, `"$($Service.Name)`", `"$($Service.ClassName)`")"
+    }
+}
+$sortedServices = @($serviceEntries | Sort-Object Name)
+foreach ($service in $sortedServices) {
+    if (!$seenServices.Add($service.Name)) { throw "Duplicate wired service '$($service.Name)'" }
+    $registration = Get-ServiceRegistration $service
+    if ($service.NativeOnly) {
+        $serviceLines.Add("`twhen ODIN_OS != .JS { $registration }")
+    } else {
+        $serviceLines.Add("`t$registration")
     }
 }
 Set-GeneratedRegion (Join-Path $servicesPath 'Registry.odin') 'services' $serviceLines

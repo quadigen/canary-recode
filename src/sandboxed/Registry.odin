@@ -95,7 +95,7 @@ init :: proc(
 	renderer_object: ^renderer.RendererObject,
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
-	when target.IS_EDITOR {
+	when target.IS_EDITOR && ODIN_OS != .JS {
 		editor_object := services.Ensure_Service(
 			&environment.services,
 			"EditorService",
@@ -127,6 +127,10 @@ init :: proc(
 				delete(fetch.path)
 			}
 		}
+		init_scripts()
+	}
+	when target.IS_EDITOR && ODIN_OS == .JS {
+		fmt.eprintln("[EditorStartup] remote editor archives are unavailable on Web; starting embedded modules")
 		init_scripts()
 	}
 }
