@@ -117,6 +117,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_NetworkEmulator_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
 	Register_Players_Class(registry.classes)
+	when ODIN_OS != .JS { Register_PlaytestService_Class(registry.classes) }
 	Register_Plugin_Class(registry.classes)
 	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
 	Register_ProfilerService_Class(registry.classes)
@@ -154,6 +155,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "LogService", "LogService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
+	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService", "PlaytestService") }
 	Register_Service(registry, "Plugin", "Plugin", "Plugin")
 	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace") }
 	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
@@ -189,6 +191,13 @@ Register_Default_Services :: proc(registry: ^Registry) {
 		"StudioThemeService",
 		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
 	))
+	when ODIN_OS != .JS {
+		assert(Set_Service_Security(
+			registry,
+			"PlaytestService",
+			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
+		))
+	}
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {

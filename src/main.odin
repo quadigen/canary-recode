@@ -98,16 +98,14 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 
 run_desktop :: proc() {
 	tracy.SetThreadName("Main")
-	options := Startup_Options{}
+	options, options_ok := startup_options("127.0.0.1")
+	if !options_ok {return}
 	when target.IS_CLIENT {
-		ok: bool
-		options, ok = startup_options("127.0.0.1")
-		if !ok {return}
-		if options.address == "" || options.address == "0.0.0.0" {
+		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
 			fmt.eprintln("Network client needs a reachable server address; use 127.0.0.1 for a server on this computer")
 			return
 		}
-		if options.map_path != "" {
+		if options.map_path != "" && !options.playtest {
 			fmt.eprintln("Load the map on the server with --map; clients receive it through replication")
 			return
 		}
@@ -143,30 +141,34 @@ run_desktop :: proc() {
 		OnEvent = runtime_input_event,
 	}
 
-	sandbox.init(&script_vm, &environment, &renderer_object)
+	if options.playtest {sandbox.init_runtime(&script_vm, &environment, &renderer_object)} else {sandbox.init(&script_vm, &environment, &renderer_object)}
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
+	if options.playtest && !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {return}
 
 	when target.IS_CLIENT {
-		object := services.Ensure_Service(&environment.services, "ReplicatorService")
-		if object == nil ||
-		   !services.replication_start(
-				   cast(^services.ReplicatorService)object,
-				   options.address,
-				   options.port,
-				   .Client,
-			   ) {
-			fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
-			return
+		if !options.playtest {
+			object := services.Ensure_Service(&environment.services, "ReplicatorService")
+			if object == nil ||
+			   !services.replication_start(
+					   cast(^services.ReplicatorService)object,
+					   options.address,
+					   options.port,
+					   .Client,
+				   ) {
+				fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
+				return
+			}
+			fmt.printf("Kinemium client connecting to %s:%d...\n", options.address, options.port)
 		}
-		fmt.printf("Kinemium client connecting to %s:%d...\n", options.address, options.port)
 	}
 
 	profiling.init()
 	defer profiling.shutdown()
 
 	title := "Kinemium Engine"
-	when target.IS_CLIENT {title = "Kinemium Client"}
+	if options.playtest {title = "Kinemium Playtest"}
+	when target.IS_CLIENT {if !options.playtest {title = "Kinemium Client"}}
 	renderer.init(title, 800, 600, &renderer_object)
 }
 

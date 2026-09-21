@@ -81,11 +81,14 @@ replication_send :: proc(
 	reliable: bool = true,
 ) -> bool {
 	if peer == nil || service.host == nil || len(payload) > 1048576 {return false}
-	if service.mode == .Server && kind == 5 {
+	if service.mode == .Server && kind != 2 {
 		for &connection in service.peers {
 			if connection.peer != peer {continue}
 			if u64(connection.bytes_this_tick) + u64(len(payload)) + 5 >
-			   u64(service.bandwidth_budget) {return false}
+			   u64(service.bandwidth_budget) {
+				service.bandwidth_drops += 1
+				return false
+			}
 			break
 		}
 	}
@@ -102,7 +105,7 @@ replication_send :: proc(
 	   0 {enet.packet_destroy(packet); return false}
 	service.packets_sent += 1
 	service.bytes_sent += u64(len(bytes))
-	if service.mode == .Server && kind == 5 {
+	if service.mode == .Server && kind != 2 {
 		for &connection in service.peers {
 			if connection.peer == peer {connection.bytes_this_tick += u32(len(bytes)); break}
 		}
@@ -453,6 +456,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						player = player,
 						known = make(map[u32]u32),
 						initialized = make(map[u32]bool),
+						state_hashes = make(map[u32]u64),
 					},
 				)
 				bytes: [dynamic]u8
@@ -476,6 +480,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						if item.player != nil {Players_Remove(players, L, item.player)}
 						delete(item.known)
 						delete(item.initialized)
+						delete(item.state_hashes)
 						ordered_remove(&service.peers, index)
 						break
 					}
@@ -491,6 +496,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 		case .RECEIVE:
 			if event.packet != nil {
 				service.packets_received += 1
+				service.bytes_received += u64(event.packet.dataLength)
 				if event.packet.dataLength <= 1048581 {
 					replication_receive(
 						service,

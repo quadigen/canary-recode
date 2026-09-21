@@ -39,6 +39,7 @@ replication_forget_destroyed :: proc(service: ^ReplicatorService, object: ^class
 				delete(bytes)
 				delete_key(&connection.known, item.id)
 				delete_key(&connection.initialized, item.id)
+				delete_key(&connection.state_hashes, item.id)
 			}
 		}
 		delete(item.recipients)
@@ -234,7 +235,9 @@ replication_send_part_state :: proc(
 	service: ^ReplicatorService,
 	peer: ^enet.Peer,
 	part: ^classes.Part,
-) -> bool {
+	previous_hash: u64 = 0,
+	suppress_unchanged: bool = false,
+) -> (bool, u64, bool) {
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	append(&bytes, 1)
@@ -281,7 +284,12 @@ replication_send_part_state :: proc(
 		}
 	}
 	replication_put_u32(&bytes, ack)
-	return replication_send(service, peer, 5, bytes[:], false)
+	hash: u64 = 14695981039346656037
+	for byte in bytes[9:] {
+		hash = (hash ~ u64(byte)) * 1099511628211
+	}
+	if suppress_unchanged && hash == previous_hash {return true, hash, true}
+	return replication_send(service, peer, 5, bytes[:], false), hash, false
 }
 
 replication_send_property :: proc(
@@ -351,6 +359,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			if replication_send_spawn(service, connection.peer, item.object) {
 				connection.known[item.id] = parent_id + 1
 				delete_key(&connection.initialized, item.id)
+				delete_key(&connection.state_hashes, item.id)
 			}
 		}
 		for item in service.entities {
@@ -363,6 +372,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			delete(bytes)
 			delete_key(&connection.known, item.id)
 			delete_key(&connection.initialized, item.id)
+			delete_key(&connection.state_hashes, item.id)
 		}
 		for item in service.entities {
 			if connection.known[item.id] == 0 ||
@@ -372,11 +382,20 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			   !replication_relevant(service, &connection, item.object) {continue}
 			sent := false
 			if classes.Is_A(item.object, "Part") {
-				sent = replication_send_part_state(
+				state_sent, state_hash, unchanged := replication_send_part_state(
 					service,
 					connection.peer,
 					cast(^classes.Part)item.object,
+					connection.state_hashes[item.id],
+					connection.initialized[item.id],
 				)
+				if unchanged {
+					service.unchanged_states_skipped += 1
+					sent = true
+				} else {
+					sent = state_sent
+					if sent {connection.state_hashes[item.id] = state_hash}
+				}
 			} else {
 				sent = replication_send_property(
 					service,

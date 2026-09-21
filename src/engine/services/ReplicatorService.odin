@@ -45,6 +45,7 @@ Replication_Peer :: struct {
 	player:          ^Player,
 	known:           map[u32]u32,
 	initialized:     map[u32]bool,
+	state_hashes:    map[u32]u64,
 	bytes_this_tick: u32,
 }
 
@@ -89,7 +90,10 @@ ReplicatorService :: struct {
 	packets_sent:              u64,
 	bytes_sent:                u64,
 	packets_received:          u64,
+	bytes_received:            u64,
 	malformed_packets:         u64,
+	bandwidth_drops:           u64,
+	unchanged_states_skipped:  u64,
 	owned_states_accepted:     u64,
 	owned_states_rejected:     u64,
 }
@@ -128,6 +132,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 			if L != nil && item.player != nil {Players_Remove(players, L, item.player)}
 			delete(item.known)
 			delete(item.initialized)
+			delete(item.state_hashes)
 		}
 		enet.host_destroy(service.host)
 		service.host = nil
@@ -433,6 +438,7 @@ replication_namecall :: proc(
 				delete(bytes)
 				delete_key(&connection.known, id)
 				delete_key(&connection.initialized, id)
+				delete_key(&connection.state_hashes, id)
 			}
 		}
 		vm.PushBoolean(L, id != 0)
@@ -543,14 +549,17 @@ replication_namecall :: proc(
 		vm.PushBoolean(L, ok)
 		return 1, true
 	case "GetStats":
-		vm.NewTable(L, 0, 12)
+		vm.NewTable(L, 0, 15)
 		vm.PushBoolean(L, service.connected); vm.SetField(L, -2, "connected")
 		vm.PushInteger(L, i64(len(service.entities))); vm.SetField(L, -2, "replicatedEntities")
 		vm.PushInteger(L, i64(len(service.peers))); vm.SetField(L, -2, "peers")
 		vm.PushInteger(L, i64(service.packets_sent)); vm.SetField(L, -2, "packetsSent")
 		vm.PushNumber(L, f64(service.bytes_sent)); vm.SetField(L, -2, "bytesSent")
 		vm.PushInteger(L, i64(service.packets_received)); vm.SetField(L, -2, "packetsReceived")
+		vm.PushNumber(L, f64(service.bytes_received)); vm.SetField(L, -2, "bytesReceived")
 		vm.PushInteger(L, i64(service.malformed_packets)); vm.SetField(L, -2, "malformedPackets")
+		vm.PushNumber(L, f64(service.bandwidth_drops)); vm.SetField(L, -2, "bandwidthDrops")
+		vm.PushNumber(L, f64(service.unchanged_states_skipped)); vm.SetField(L, -2, "unchangedStatesSkipped")
 		vm.PushNumber(L, f64(service.tick)); vm.SetField(L, -2, "tick")
 		vm.PushNumber(
 			L,

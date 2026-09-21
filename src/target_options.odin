@@ -4,11 +4,13 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strconv"
+import "core:strings"
 
 Startup_Options :: struct {
 	address: string,
 	port:    u16,
 	map_path: string,
+	playtest: bool,
 }
 
 startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
@@ -38,6 +40,23 @@ startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
 			if index + 1 >= len(os.args) {fmt.eprintln("--map requires a .kine file path"); return options, false}
 			index += 1
 			options.map_path = os.args[index]
+		case "--playtest":
+			if index + 1 >= len(os.args) {fmt.eprintln("--playtest requires a .kine file path"); return options, false}
+			index += 1
+			options.map_path = os.args[index]
+			options.playtest = true
+		case "--script":
+			if index + 1 >= len(os.args) {fmt.eprintln("--script requires a file path"); return options, false}
+			index += 1
+		case:
+			if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
+				if options.map_path != "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
+				options.map_path = arg
+				options.playtest = true
+			} else {
+				fmt.eprintf("Unknown argument: %s\n", arg)
+				return options, false
+			}
 		}
 	}
 	return options, true

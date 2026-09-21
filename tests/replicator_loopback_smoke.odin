@@ -105,6 +105,11 @@ assert(math.abs(part.Transparency - 0.4) < 1e-4)
 assert(r:SendEvent("client-test", "hello"))
 assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint = Color3.new(0.1, 0.2, 0.3), frame = CFrame.new(2, 3, 4), list = { 10, 20 }, nested = { ok = true } }))
 `, "replicator_client_verify")
+	run_script(&server_vm, `
+local stats = game:GetService("ReplicatorService"):GetStats()
+assert(stats.bytesReceived > 0)
+assert(stats.unchangedStatesSkipped > 0)
+`, "replicator_delta_stats")
 
 	run_script(&server_vm, `
 game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(6, 5, 6)

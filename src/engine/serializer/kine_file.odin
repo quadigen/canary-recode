@@ -80,6 +80,9 @@ Serialize_To_File :: proc(
 	}
 	defer delete(compressed)
 
+	if len(compressed) >= len(data) {
+		return os.write_entire_file(path, data) == nil
+	}
 	return os.write_entire_file(path, compressed) == nil
 }
 

@@ -59,6 +59,9 @@ server:
 run-editor:
     odin run src -define:BUILD_TARGET=editor
 
+playtest map: editor
+    ./build/kinemium-editor.exe "{{map}}"
+
 run-client:
     odin run src -define:BUILD_TARGET=client
 

@@ -14,7 +14,7 @@ import vm "../vm"
 //
 //   header:
 //     4 bytes   magic "KINE"
-//     1 byte    format version (1)
+//     1 byte    format version
 //   instance record (repeated recursively):
 //     string   class name
 //     string   instance name
@@ -32,11 +32,13 @@ import vm "../vm"
 //     per child:
 //       instance record
 //
-//   string := u32 length + raw bytes
+//   string := varuint length + raw bytes (v2), u32 length + raw bytes (v1)
 //   value  := u8 tag + payload (see Value_Tag below)
 
 KINE_MAGIC :: "KINE"
-KINE_VERSION :: 1
+KINE_VERSION :: 2
+KINE_MIN_VERSION :: 1
+KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 
 // Properties that are read-only in the engine (their setters RaiseError).
 // They are skipped so a round trip never tries to write them back.
@@ -88,11 +90,13 @@ Datatype_Id :: enum u16 {
 
 Writer :: struct {
 	data: [dynamic]u8,
+	version: u8,
 }
 
 Reader :: struct {
 	data: []u8,
 	pos:  int,
+	version: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +115,15 @@ write_u16 :: proc(w: ^Writer, value: u16) {
 write_u32 :: proc(w: ^Writer, value: u32) {
 	bytes := transmute([4]u8)value
 	append(&w.data, bytes[0], bytes[1], bytes[2], bytes[3])
+}
+
+write_var_u32 :: proc(w: ^Writer, value: u32) {
+	remaining := value
+	for remaining >= 0x80 {
+		write_u8(w, u8(remaining) | 0x80)
+		remaining >>= 7
+	}
+	write_u8(w, u8(remaining))
 }
 
 write_u64 :: proc(w: ^Writer, value: u64) {
@@ -139,7 +152,7 @@ write_f64 :: proc(w: ^Writer, value: f64) {
 }
 
 write_string :: proc(w: ^Writer, value: string) {
-	write_u32(w, u32(len(value)))
+	if w.version >= 2 {write_var_u32(w, u32(len(value)))} else {write_u32(w, u32(len(value)))}
 	append(&w.data, ..transmute([]u8)value)
 }
 
@@ -188,6 +201,17 @@ read_u32 :: proc(r: ^Reader) -> (u32, bool) {
 	return transmute(u32)[4]u8{bytes[0], bytes[1], bytes[2], bytes[3]}, true
 }
 
+read_var_u32 :: proc(r: ^Reader) -> (u32, bool) {
+	value: u32
+	for shift: u32 = 0; shift < 35; shift += 7 {
+		byte, ok := read_u8(r)
+		if !ok || (shift == 28 && byte > 0x0f) {return 0, false}
+		value |= u32(byte & 0x7f) << shift
+		if byte & 0x80 == 0 {return value, true}
+	}
+	return 0, false
+}
+
 read_u64 :: proc(r: ^Reader) -> (u64, bool) {
 	bytes, ok := read_bytes(r, 8)
 	if !ok {
@@ -225,11 +249,13 @@ read_f64 :: proc(r: ^Reader) -> (f64, bool) {
 }
 
 read_string :: proc(r: ^Reader) -> (string, bool) {
-	length, ok := read_u32(r)
+	length: u32
+	ok: bool
+	if r.version >= 2 {length, ok = read_var_u32(r)} else {length, ok = read_u32(r)}
 	if !ok {
 		return "", false
 	}
-	if length > u32(len(r.data)) {
+	if length > KINE_MAX_STRING_LENGTH || u64(length) > u64(len(r.data) - r.pos) {
 		return "", false
 	}
 	bytes, bytes_ok := read_bytes(r, int(length))
@@ -1231,10 +1257,11 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 
 // Serialize writes an Instance hierarchy into a .KINE byte stream.
 // The returned slice is owned by the caller (free it with delete).
-Serialize :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Object) -> ([]u8, bool) {
+Serialize_Version :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Object, version: u8) -> ([]u8, bool) {
 	if registry == nil || L == nil || object == nil {
 		return nil, false
 	}
+	if version < KINE_MIN_VERSION || version > KINE_VERSION {return nil, false}
 
 	base := vm.StackTop(L)
 	previous := vm.GetThreadSecurityCapabilities(L)
@@ -1242,15 +1269,19 @@ Serialize :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Ob
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, base)
 
-	writer := Writer{data = make([dynamic]u8, 0, 4096)}
+	writer := Writer{data = make([dynamic]u8, 0, 4096), version = version}
 	defer delete(writer.data)
 
-	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), KINE_VERSION)
+	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), version)
 	if !write_instance(&writer, L, registry, object) {
 		return nil, false
 	}
 
 	return slice.clone(writer.data[:]), true
+}
+
+Serialize :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Object) -> ([]u8, bool) {
+	return Serialize_Version(registry, L, object, KINE_VERSION)
 }
 
 // Deserialize reads a .KINE byte stream and restores the Instance hierarchy
@@ -1280,12 +1311,17 @@ Deserialize :: proc(registry: ^classes.Registry, L: ^vm.State, parent: ^classes.
 	if !version_ok {
 		return nil, false
 	}
-	if version != KINE_VERSION {
+	if version < KINE_MIN_VERSION || version > KINE_VERSION {
 		return nil, false
 	}
+	reader.version = version
 
 	object, root_ok := read_instance(&reader, L, registry, parent)
 	if !root_ok {
+		return nil, false
+	}
+	if reader.pos != len(reader.data) {
+		classes.Destroy_Hierarchy(object)
 		return nil, false
 	}
 

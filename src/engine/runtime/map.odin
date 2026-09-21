@@ -30,7 +30,7 @@ Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> 
 	if workspace == nil {return false}
 	root, ok := serializer.Deserialize_From_File(&environment.classes, script_vm.L, nil, path)
 	if !ok || root == nil {
-		fmt.eprintf("Could not load .kine map (expected native KINE version 1): %s\n", path)
+		fmt.eprintf("Could not load .kine map (supported KINE versions 1-%d): %s\n", serializer.KINE_VERSION, path)
 		return false
 	}
 

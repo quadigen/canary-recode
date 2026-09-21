@@ -68,7 +68,11 @@ KineRoot = model
 		panic("serialize failed")
 	}
 	defer delete(data)
-	fmt.printf("serialized %d bytes\n", len(data))
+	legacy_data, legacy_ok := serializer.Serialize_Version(&environment.classes, script_vm.L, root, 1)
+	if !legacy_ok || legacy_data == nil {panic("legacy serialize failed")}
+	defer delete(legacy_data)
+	if len(data) >= len(legacy_data) {panic("KINE v2 did not reduce the uncompressed stream size")}
+	fmt.printf("serialized KINE v2 %d bytes (v1 %d bytes)\n", len(data), len(legacy_data))
 
 	base := vm.StackTop(script_vm.L)
 	vm.NewTable(script_vm.L)
@@ -104,6 +108,8 @@ KineRoot = model
 	if !load_ok || loaded == nil {
 		panic("deserialize failed")
 	}
+	legacy_loaded, legacy_load_ok := serializer.Deserialize(&environment.classes, script_vm.L, parent, legacy_data)
+	if !legacy_load_ok || legacy_loaded == nil {panic("KINE v1 compatibility failed")}
 
 	vm.PushRegistryReference(script_vm.L, loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "LoadedRoot")
