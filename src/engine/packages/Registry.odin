@@ -358,11 +358,13 @@ Load_Internal_Modules_From_Blob :: proc(
     archive_path: string,
 ) -> bool {
     if registry == nil {
+        fmt.eprintln("[EditorModules] package registry is nil")
         return false
     }
 
     archive, opened := kineffi.Zip_Open(archive_path)
     if !opened {
+        fmt.eprintf("[EditorModules] failed opening archive: %s\n", archive_path)
         return false
     }
     defer kineffi.Zip_Close(archive)
@@ -397,6 +399,7 @@ Load_Internal_Modules_From_Blob :: proc(
 
         data, read := kineffi.Zip_Read_Index(archive, index)
         if !read {
+            fmt.eprintf("[EditorModules] failed reading archive entry %d: %s\n", index, archive_name)
             delete(archive_name)
             return false
         }
@@ -414,6 +417,7 @@ Load_Internal_Modules_From_Blob :: proc(
     }
 
     if !found_entrypoint {
+        fmt.eprintf("[EditorModules] archive has no editor_ui module: %s\n", archive_path)
         return false
     }
 
@@ -424,6 +428,7 @@ Load_Internal_Modules_From_Blob :: proc(
     destroy_internal_modules(&registry.internal_modules, L)
     registry.internal_modules = loaded
     keep_loaded = true
+    fmt.eprintf("[EditorModules] loaded %d modules from %s\n", len(loaded), archive_path)
     return true
 }
 // -----------------------------------------------------------------------------

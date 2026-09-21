@@ -25,6 +25,18 @@ main :: proc() {
 		_ = os.remove_all(temp_dir)
 		delete(temp_dir)
 	}
+	expect(
+		services.EditorService_Ensure_Directory(temp_dir),
+		"existing editor cache directory was rejected",
+	)
+	cache_archive, cache_version, cache_ok := services.EditorService_Cache_Paths_From_Base(
+		temp_dir,
+		"Kinemium",
+		"smoke test",
+	)
+	expect(cache_ok, "failed resolving editor cache paths")
+	delete(cache_archive)
+	delete(cache_version)
 
 	archive_path, path_err := filepath.join(
 		[]string{temp_dir, "editor.zip"},

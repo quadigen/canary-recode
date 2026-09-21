@@ -101,28 +101,28 @@ init :: proc(
 			"EditorService",
 		)
 		if editor_object == nil {
-			fmt.eprintln("Editor cache unavailable: EditorService is unavailable; using bundled editor")
+			fmt.eprintln("[EditorStartup] EditorService is unavailable; editor UI cannot start")
 		} else {
 			fetch := services.EditorService_Get_Editor(
 				cast(^services.EditorService)editor_object,
 			)
 			if fetch.warning != "" {
-				fmt.eprintf("%s\n", fetch.warning)
+				fmt.eprintf("[EditorStartup] %s\n", fetch.warning)
 			}
 			if fetch.error_message != "" {
-				fmt.eprintf("Editor cache unavailable: %s; using bundled editor\n", fetch.error_message)
+				fmt.eprintf("[EditorStartup] %s; editor UI cannot start\n", fetch.error_message)
 			} else {
 				if packages.Load_Internal_Modules_From_Blob(
 					&environment.packages,
 					fetch.path,
 				) {
 					if fetch.downloaded {
-						fmt.printf("Downloaded editor update to %s\n", fetch.path)
+						fmt.printf("[EditorStartup] downloaded editor update to %s\n", fetch.path)
 					} else {
-						fmt.printf("Loaded current cached editor from %s\n", fetch.path)
+						fmt.printf("[EditorStartup] loaded cached editor from %s\n", fetch.path)
 					}
 				} else {
-					fmt.eprintf("Editor cache at %s is unreadable; using bundled editor\n", fetch.path)
+					fmt.eprintf("[EditorStartup] editor archive at %s could not be loaded; editor UI cannot start\n", fetch.path)
 				}
 				delete(fetch.path)
 			}
@@ -132,6 +132,7 @@ init :: proc(
 }
 
 init_scripts :: proc() {
+	fmt.eprintf("[EditorStartup] starting %d internal editor modules\n", len(environment.packages.internal_modules))
 	run_modules(environment.packages.internal_modules[:])
 }
 
