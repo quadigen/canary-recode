@@ -80,7 +80,7 @@ Serialize_To_File :: proc(
 	}
 	defer delete(compressed)
 
-	return os.write_entire_file(path, compressed) == 0
+	return os.write_entire_file(path, compressed) == nil
 }
 
 // Deserialize_From_File reads a .KINE file from disk and restores the
@@ -92,7 +92,7 @@ Deserialize_From_File :: proc(
 	path: string,
 ) -> (^classes.Object, bool) {
 	data, err := os.read_entire_file(path, context.allocator)
-	if err != 0 {
+	if err != nil {
 		return nil, false
 	}
 	defer delete(data)
