@@ -260,9 +260,9 @@ jobs:
             if ($v.StartsWith('v')) { $v = $v.Substring(1) }
             $versionDefine = @("-define:RUNTIME_VERSION_DISPLAY=$v")
           }
-          & odin build src \
-            -o:speed \
-            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+          & odin build src `
+            -o:speed `
+            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' `
             @versionDefine `
             -define:BUILD_TARGET=editor `
             -define:RUNTIME_GIT_ENABLED=true `
