@@ -1,6 +1,7 @@
 package serializer
 
 import "base:runtime"
+import "core:fmt"
 import "core:slice"
 import "core:strings"
 import classes "../classes"
@@ -44,6 +45,10 @@ KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 READ_ONLY_PROPERTIES := [?]string{
 	"AbsolutePosition",
 	"AbsoluteSize",
+	"TextBounds",
+	"AbsoluteContentSize",
+	"AbsoluteCellCount",
+	"AbsoluteCellSize",
 }
 
 Value_Tag :: enum u8 {
@@ -89,6 +94,12 @@ Datatype_Id :: enum u16 {
 
 Writer :: struct {
 	data: [dynamic]u8,
+	// Excludes a child during serialization. Called with the child and its
+	// immediate parent for every child that would otherwise be written; returning
+	// true skips that child and its subtree. The exporter uses it to strip
+	// editor-only services (CoreGui, EditorService, ...) from the DataModel root
+	// before writing a map file.
+	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 }
 
 Reader :: struct {
@@ -1042,6 +1053,9 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		if child == nil || child == object || !child.archivable {
 			continue
 		}
+		if w.exclude_child != nil && w.exclude_child(object, child) {
+			continue
+		}
 		offset := len(w.data)
 		if write_instance(w, L, registry, child) {
 			child_count += 1
@@ -1196,9 +1210,7 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 		}
 		value_index := vm.StackTop(L)
 		if !apply_property(L, registry, object, descriptor, key, value_index) {
-			delete(key)
-			classes.Destroy_Hierarchy(object)
-			return nil, false
+			fmt.eprintf("[kine] Deserialize skipped un-applyable property %s on %s (%s)\n", key, class_name, classes.Get_Name(object))
 		}
 		delete(key)
 	}
@@ -1252,7 +1264,12 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 
 // Serialize writes an Instance hierarchy into a .KINE byte stream.
 // The returned slice is owned by the caller (free it with delete).
-Serialize :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Object) -> ([]u8, bool) {
+Serialize :: proc(
+	registry: ^classes.Registry,
+	L: ^vm.State,
+	object: ^classes.Object,
+	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
+) -> ([]u8, bool) {
 	if registry == nil || L == nil || object == nil {
 		return nil, false
 	}
@@ -1263,7 +1280,7 @@ Serialize :: proc(registry: ^classes.Registry, L: ^vm.State, object: ^classes.Ob
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, base)
 
-	writer := Writer{data = make([dynamic]u8, 0, 4096)}
+	writer := Writer{data = make([dynamic]u8, 0, 4096), exclude_child = exclude_child}
 	defer delete(writer.data)
 
 	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), KINE_VERSION)

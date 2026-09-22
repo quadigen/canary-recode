@@ -100,6 +100,28 @@ Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	return object
 }
 
+MAP_CONTENT_SERVICES := [?]string{
+	"Workspace",
+	"ReplicatedFirst",
+	"ReplicatedStorage",
+	"Lighting",
+	"SoundService",
+	"StarterGui",
+	"StarterPack",
+	"StarterPlayer",
+	"ServerScriptService",
+	"ServerStorage",
+}
+
+Map_Content_Service :: proc(name: string) -> bool {
+	for candidate in MAP_CONTENT_SERVICES {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
 Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
@@ -110,6 +132,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_EditorService_Class(registry.classes) }
 	Register_ExampleService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_ExportService_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_HttpService_Class(registry.classes) }
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
@@ -152,6 +175,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService") }
 	when ODIN_OS != .JS { Register_Service(registry, "EditorService", "EditorService", "EditorService") }
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
+	when ODIN_OS != .JS { Register_Service(registry, "ExportService", "ExportService", "ExportService") }
 	when ODIN_OS != .JS { Register_Service(registry, "HttpService", "HttpService") }
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
@@ -201,6 +225,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 		assert(Set_Service_Security(
 			registry,
 			"PlaytestService",
+			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
+		))
+		assert(Set_Service_Security(
+			registry,
+			"ExportService",
 			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
 		))
 	}

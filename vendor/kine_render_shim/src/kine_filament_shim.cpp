@@ -3148,6 +3148,19 @@ static LightManager::ShadowOptions kine_make_sun_shadow_options(
 
 extern "C" {
 
+// Engine-wide memory budget. The default backend handle arena is only a few
+// MiB; long editor sessions that hot-reload meshes/textures exhaust it and
+// Filament logs "HandleAllocator arena is full" and falls back to slow
+// per-handle heap allocations. Bump it so a comfortable session stays on the
+// fast arena instead. driverHandleArenaSizeMB is the documented runtime knob
+// (0 = per-backend default).
+static Engine::Config kine_engine_config()
+{
+    Engine::Config config;
+    config.driverHandleArenaSizeMB = 64;
+    return config;
+}
+
 static KineFilamentContext* Kine_Filament_CreateInternal(
     int width,
     int height,
@@ -3171,10 +3184,12 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
             width,
             height);
         fprintf(stderr, "[Kine] creating Filament-owned Vulkan compositor engine\n");
+        Engine::Config engineConfig = kine_engine_config();
         ctx->engine = Engine::create(
             backend::Backend::VULKAN,
             ctx->vulkanPlatform.get(),
-            nullptr);
+            nullptr,
+            &engineConfig);
     } else if (vulkanCompositor) {
         ctx->vulkanCompositor = vulkanCompositor;
         KineVulkanCompositorInfo info{};
@@ -3196,12 +3211,15 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
             ctx->vulkanSharedContext.graphicsQueueFamilyIndex,
             ctx->vulkanSharedContext.graphicsQueueIndex,
             info.graphicsQueueCount);
+        Engine::Config engineConfig = kine_engine_config();
         ctx->engine = Engine::create(
             backend::Backend::VULKAN,
             ctx->vulkanPlatform.get(),
-            &ctx->vulkanSharedContext);
+            &ctx->vulkanSharedContext,
+            &engineConfig);
     } else {
-        ctx->engine = Engine::create(backend::Backend::VULKAN);
+        Engine::Config engineConfig = kine_engine_config();
+        ctx->engine = Engine::create(backend::Backend::VULKAN, nullptr, nullptr, &engineConfig);
     }
     if (!ctx->engine) { delete ctx; return nullptr; }
 #else
@@ -3213,7 +3231,8 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
 
     kine_release_current_gl_context();
 
-    ctx->engine = Engine::create(backend::Backend::OPENGL, nullptr, sharedGLContext);
+    Engine::Config engineConfig = kine_engine_config();
+    ctx->engine = Engine::create(backend::Backend::OPENGL, nullptr, sharedGLContext, &engineConfig);
     if (!ctx->engine) { delete ctx; return nullptr; }
 
 #if !KINE_FILAMENT_USE_VULKAN

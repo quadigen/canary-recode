@@ -24,6 +24,22 @@ ServerScriptService_construct :: proc(renderer: ^classes.Renderer_Object, data_m
 	return &service.object
 }
 
+ServerScriptService_RunScripts :: proc(renderer: ^classes.Renderer_Object, data_model: ^DataModel, object: ^classes.Object) {
+	service := cast(^ServerScriptService)object
+	script_context := cast(^ScriptContext)Service_Get_Service(&service.service, "ScriptContext")
+
+	descendants: [dynamic]^classes.Object
+	classes.append_descendants(&descendants, object)  
+
+	for child in descendants {
+		if classes.Is_A(child, "Script") {
+			object := cast(^classes.Script)child
+			ScriptContext_Run_Script(script_context, object)
+		}
+	}
+
+	delete(descendants)
+}
 
 ServerScriptService_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)

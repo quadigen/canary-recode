@@ -9,19 +9,6 @@ import serializer "../serializer"
 import services "../services"
 import vm "../vm"
 
-MAP_CONTENT_SERVICES := [?]string {
-	"Workspace",
-	"ReplicatedFirst",
-	"ReplicatedStorage",
-	"Lighting",
-	"SoundService",
-	"StarterGui",
-	"StarterPack",
-	"StarterPlayer",
-	"ServerScriptService",
-	"ServerStorage",
-}
-
 map_instance_count :: proc(object: ^classes.Object) -> int {
 	if object == nil || object.destroyed {return 0}
 	count := 1
@@ -30,8 +17,7 @@ map_instance_count :: proc(object: ^classes.Object) -> int {
 }
 
 map_content_service :: proc(name: string) -> bool {
-	for candidate in MAP_CONTENT_SERVICES {if candidate == name {return true}}
-	return false
+	return services.Map_Content_Service(name)
 }
 
 Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> bool {

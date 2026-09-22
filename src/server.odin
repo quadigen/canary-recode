@@ -7,6 +7,7 @@ import "core:time"
 import engine_runtime "engine/runtime"
 import services "engine/services"
 import vm "engine/vm"
+import classes "engine/classes"
 
 run_server :: proc() {
 	options, ok := startup_options("0.0.0.0")
@@ -16,7 +17,23 @@ run_server :: proc() {
 	sandbox.init_runtime(&script_vm, &environment, nil)
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
-	if options.map_path != "" && !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {return}
+	if options.map_path != "" &&
+	   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {return}
+
+	server_script_service := cast(^services.ServerScriptService)(
+		services.Ensure_Service(&environment.services, "ServerScriptService")
+	)
+
+	datamodel := environment.services.data_model
+
+	fmt.println("Running scripts")
+	services.ServerScriptService_RunScripts(
+		environment.renderer,
+		datamodel,
+		server_script_service,
+	)
+	fmt.println("Finished running scripts")
+
 	object := services.Ensure_Service(&environment.services, "ReplicatorService")
 	if object == nil ||
 	   !services.replication_start(

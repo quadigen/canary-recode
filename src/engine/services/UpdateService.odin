@@ -9,6 +9,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
+import "core:sync"
 import "core:thread"
 import "core:time"
 import json "core:encoding/json"
@@ -30,6 +31,7 @@ UPDATE_PENDING_NAME        :: "pending"
 UPDATE_PENDING_VERSION_NAME :: "pending.version"
 UPDATE_STALE_SUFFIX        :: ".kinemium-old"
 UPDATE_CHECK_TTL_SECONDS   :: 1800
+UPDATE_MAX_REDIRECTS       :: 5
 
 UpdateService_Class := classes.Class_Info{
 	name   = "UpdateService",
@@ -44,6 +46,35 @@ UpdateService :: struct {
 	cached_time:       i64,
 
 	background_started: bool,
+
+	// Asynchronous apply state (GUI Update & Restart path). The apply thread
+	// writes under `apply_mutex`; the UI polls it from the main thread.
+	apply_mutex: sync.Mutex,
+	apply:       UpdateApply,
+
+	// Serializes stages into the shared pending directory so the opportunistic
+	// startup check and an explicit apply never race over the same tag dir.
+	stage_mutex: sync.Mutex,
+}
+
+UpdateApply :: struct {
+	running:   bool,
+	status:    Update_Apply_Status,
+
+	downloaded: i64,
+	total:      i64,
+	percent:    f64,
+
+	message: string,
+}
+
+Update_Apply_Status :: enum u8 {
+	Idle,
+	Fetching,
+	Downloading,
+	Extracting,
+	Ready,
+	Failed,
 }
 
 UpdateStatus :: enum u8 {
@@ -107,6 +138,11 @@ update_service_destroy :: proc(
 	renderer: ^classes.Renderer_Object,
 ) {
 	service := cast(^UpdateService)object
+	sync.mutex_lock(&service.apply_mutex)
+	if len(service.apply.message) > 0 {
+		delete(service.apply.message)
+	}
+	sync.mutex_unlock(&service.apply_mutex)
 	update_report_destroy(&service.cached)
 	classes.Object_Destroy(object)
 	free(service)
@@ -120,7 +156,7 @@ update_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "IsUpdateAvailable", "ApplyUpdate":
+	case "IsUpdateAvailable", "ApplyUpdate", "GetUpdateProgress", "FinishUpdateRestart":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
@@ -142,6 +178,11 @@ update_service_namecall :: proc(
 	case "ApplyUpdate":
 		vm.PushBoolean(L, update_service_apply_now(service))
 		return 1, true
+	case "GetUpdateProgress":
+		update_service_push_progress(L, service)
+		return 1, true
+	case "FinishUpdateRestart":
+		return update_service_finish_restart(L, service)
 	}
 	return 0, false
 }
@@ -330,7 +371,7 @@ update_http_get :: proc(url: string) -> (body: string, status: int, ok: bool) {
 	http_client.request_init(&req, .Get)
 	defer http_client.request_destroy(&req)
 
-	user_agent := fmt.tprintf("Kinemium/%s", globals.RUNTIME_VERSION_DISPLAY)
+	user_agent := fmt.aprintf("Kinemium/%s", globals.RUNTIME_VERSION_DISPLAY)
 	defer delete(user_agent)
 	key := http.headers_set(&req.headers, "User-Agent", user_agent)
 	defer delete(key)
@@ -523,21 +564,87 @@ update_join_dir :: proc(base_dir, name: string) -> string {
 	return joined
 }
 
+// Downloads a release asset, following redirects (GitHub release assets
+// redirect to a signed object-storage URL). Returns the raw bytes allocated on
+// `context.allocator`.
+update_download_asset :: proc(url: string) -> (body: string, ok: bool) {
+	return update_download_asset_stream(url, nil, nil)
+}
+
+// Streaming variant of `update_download_asset`. `on_read` is invoked with each
+// downloaded chunk (`delta` bytes and a `total_hint`) so the caller can surface
+// download progress while the body is still being fetched.
+update_download_asset_stream :: proc(
+	url: string,
+	on_read: proc(delta, total_hint: i64, userdata: rawptr),
+	userdata: rawptr = nil,
+	total_hint: i64 = -1,
+) -> (body: string, ok: bool) {
+	current_url := strings.clone(url, context.allocator)
+	defer delete(current_url)
+
+	for hop in 0 ..< UPDATE_MAX_REDIRECTS {
+		req: http_client.Request
+		http_client.request_init(&req, .Get)
+		defer http_client.request_destroy(&req)
+
+		response, request_error := http_client.request(&req, current_url)
+		if request_error != nil {
+			return "", false
+		}
+		defer http_client.response_destroy(&response)
+
+		if http.status_is_redirect(response.status) {
+			location, has_location := http.headers_get_unsafe(response.headers, "location")
+			if !has_location {
+				return "", false
+			}
+			delete(current_url)
+			current_url = strings.clone(location, context.allocator)
+			continue
+		}
+
+		if !http.status_is_success(response.status) {
+			return "", false
+		}
+
+		streamed, body_error := http_client.response_body_stream(
+			&response,
+			allocator = context.allocator,
+			total_hint = total_hint,
+			on_read = on_read,
+			userdata = userdata,
+		)
+		if body_error != nil {
+			fmt.eprintf("[UpdateService] asset body read failed at %s: %v\n", current_url, body_error)
+			return "", false
+		}
+		return streamed, true
+	}
+	return "", false
+}
+
 // Downloads the update bundle and stages it into the pending directory, writing
 // pending.version as the ready marker. Never frees `report`; ownership stays
 // with the caller.
 update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateReport) -> bool {
+	return update_service_stage_to_dir_stream(service, report, nil, nil, -1)
+}
+
+// Streaming variant of `update_service_stage_to_dir`; `on_read` receives each
+// downloaded chunk so an explicit apply can report download progress.
+update_service_stage_to_dir_stream :: proc(
+	service: ^UpdateService,
+	report: UpdateReport,
+	on_read: proc(delta, total_hint: i64, userdata: rawptr),
+	userdata: rawptr = nil,
+	total_hint: i64 = -1,
+) -> bool {
 	if service == nil || len(report.asset_url) == 0 {
 		return false
 	}
 
-	http_object := Service_Get_Service(&service.service, "HttpService")
-	if http_object == nil {
-		return false
-	}
-	http_service := cast(^HttpService)http_object
-
-	data, ok := HttpService_GetAsync(http_service, report.asset_url)
+	data, ok := update_download_asset_stream(report.asset_url, on_read, userdata, total_hint)
 	if !ok {
 		return false
 	}
@@ -558,7 +665,7 @@ update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateRepor
 	}
 	defer delete(zip_path)
 
-	if err := os.write_entire_file_from_string(zip_path, data); err != nil {
+	if err := os.write_entire_file(zip_path, data); err != nil {
 		return false
 	}
 
@@ -826,7 +933,9 @@ update_replace_file :: proc(src, dest: string) -> bool {
 // Primary entry point for the `--apply-update <pending dir> <app exe> [-- args]`
 // flag: swaps the bundle into place, relaunches the application with the
 // original arguments, and returns. The staging directory is left behind for the
-// next boot to sweep away (a running installer cannot delete its own image).
+// next boot to sweep away (a running installer cannot delete its own image),
+// but the pending.version marker is removed so the applied update is not
+// replayed on every subsequent boot.
 Update_Apply_Pending :: proc(pending_dir, target_exe: string, forwarded_args: []string) -> bool {
 	if !Update_Swap_Bundle(pending_dir, target_exe) {
 		return false
@@ -852,7 +961,23 @@ Update_Apply_Pending :: proc(pending_dir, target_exe: string, forwarded_args: []
 		return false
 	}
 	_ = process
+	update_pending_clear(pending_dir)
 	return true
+}
+
+// Removes the ready marker for a pending update bundle so an already-applied
+// update is not replayed. The bundle directory itself is left for the next boot
+// to sweep away once this installer process has exited its own image.
+update_pending_clear :: proc(pending_dir: string) {
+	if len(pending_dir) == 0 {
+		return
+	}
+	marker, join_err := filepath.join([]string{pending_dir, UPDATE_PENDING_VERSION_NAME}, context.allocator)
+	if join_err != nil {
+		return
+	}
+	defer delete(marker)
+	_ = os.remove(marker)
 }
 
 // Forces a check plus stage plus install and exits. Used by `--update`.
@@ -923,6 +1048,8 @@ update_service_background_main :: proc(t: ^thread.Thread) {
 	if !ok || !report.available {
 		return
 	}
+	sync.mutex_lock(&service.stage_mutex)
+	defer sync.mutex_unlock(&service.stage_mutex)
 	update_service_stage_to_dir(service, report)
 }
 
@@ -1085,24 +1212,275 @@ update_service_cache_sync :: proc(service: ^UpdateService, force_recheck := fals
 	return true
 }
 
+update_apply_status_string :: proc(status: Update_Apply_Status) -> string {
+	#partial switch status {
+	case .Idle:       return "idle"
+	case .Fetching:   return "fetching"
+	case .Downloading: return "downloading"
+	case .Extracting: return "extracting"
+	case .Ready:      return "ready"
+	case .Failed:     return "failed"
+	}
+	return "idle"
+}
+
+update_apply_percent_of :: proc(downloaded, total: i64) -> f64 {
+	if total <= 0 {
+		return -1
+	}
+	return f64(downloaded) / f64(total) * 100.0
+}
+
+update_apply_set_status :: proc(service: ^UpdateService, status: Update_Apply_Status) {
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.status = status
+}
+
+update_apply_set_total :: proc(service: ^UpdateService, total: i64) {
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.total = total
+	service.apply.percent = update_apply_percent_of(service.apply.downloaded, total)
+}
+
+// Resets the byte counter before a fresh download attempt so progress never
+// looks like it regressed or overshot after a retry.
+update_apply_reset_downloaded :: proc(service: ^UpdateService) {
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.downloaded = 0
+	service.apply.percent = 0
+}
+
+// Progress callback driven by the streaming download on the apply thread.
+update_apply_on_read :: proc(delta, total_hint: i64, userdata: rawptr) {
+	service := cast(^UpdateService)userdata
+	if service == nil {
+		return
+	}
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.downloaded += delta
+	service.apply.percent = update_apply_percent_of(service.apply.downloaded, service.apply.total)
+}
+
+update_apply_fail :: proc(service: ^UpdateService, message: string) {
+	if service == nil {
+		return
+	}
+	fmt.eprintln("[UpdateService] update apply failed:", message)
+
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.status = .Failed
+	service.apply.running = false
+	if len(service.apply.message) > 0 {
+		delete(service.apply.message)
+	}
+	service.apply.message = strings.clone(message, context.allocator)
+}
+
+update_apply_finish :: proc(service: ^UpdateService, asset_size: i64) {
+	if service == nil {
+		return
+	}
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	service.apply.running = false
+	service.apply.status = .Ready
+	if service.apply.total <= 0 {
+		service.apply.total = asset_size
+		service.apply.downloaded = asset_size
+		service.apply.percent = 100.0
+	}
+}
+
+// Background apply flow: fetch the manifest, download the asset with progress,
+// stage it and mark it Ready for `FinishUpdateRestart`. Runs the staging lane
+// and the download entirely off the main thread so the engine window stays
+// responsive. If a bundle for the same version is already staged (startup check
+// beat us to it), skip straight to Ready.
+update_service_apply_thread_main :: proc(t: ^thread.Thread) {
+	service := cast(^UpdateService)t.data
+	if service == nil {
+		return
+	}
+
+	update_apply_set_status(service, .Fetching)
+
+	report, ok := update_fetch_report()
+	defer update_report_destroy(&report)
+	if !ok {
+		update_apply_fail(service, report.error)
+		return
+	}
+	if !report.available {
+		update_apply_fail(service, "no update is available for this build")
+		return
+	}
+
+	version, pending_dir, staged := Update_Pending_Read()
+	defer if len(version) > 0 { delete(version) }
+	defer if len(pending_dir) > 0 { delete(pending_dir) }
+	if staged && version == report.latest_version {
+		update_apply_finish(service, report.asset_size)
+		return
+	}
+
+	update_apply_set_status(service, .Downloading)
+	update_apply_set_total(service, report.asset_size)
+
+	// Transient network failures reset a slow download; retry once before the
+	// UI reports a failed apply (the user can always retry from the prompt).
+	staged_ok := false
+	for attempt in 0 ..< 2 {
+		update_apply_reset_downloaded(service)
+		sync.mutex_lock(&service.stage_mutex)
+		staged_ok = update_service_stage_to_dir_stream(
+			service,
+			report,
+			update_apply_on_read,
+			service,
+			report.asset_size,
+		)
+		sync.mutex_unlock(&service.stage_mutex)
+		if staged_ok {
+			break
+		}
+		if attempt == 0 {
+			fmt.eprintln("[UpdateService] update download/stage failed; retrying once")
+			time.sleep(2 * time.Second)
+		}
+	}
+
+	if !staged_ok {
+		update_apply_fail(service, "failed to download and stage the update")
+		return
+	}
+
+	update_apply_finish(service, report.asset_size)
+}
+
+// Starts applying the update in the background. Returns immediately; progress
+// is exposed through GetUpdateProgress, and the caller is expected to invoke
+// FinishUpdateRestart once the state reaches Ready.
 update_service_apply_now :: proc(service: ^UpdateService) -> bool {
 	if service == nil || !update_service_enabled() {
 		return false
 	}
-	if !update_service_cache_sync(service, force_recheck = true) || !service.cached_valid {
+
+	if !update_service_cache_sync(service, force_recheck = true) {
 		return false
 	}
-	if !service.cached.available {
-		return false
-	}
-	if !update_service_stage_to_dir(service, service.cached) {
+	if !service.cached_valid || !service.cached.available {
 		return false
 	}
 
-	delete(service.cached.staged_version)
-	service.cached.staged_ready = true
-	service.cached.staged_version = strings.clone(service.cached.latest_version)
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+	if service.apply.running {
+		return false
+	}
+	service.apply = UpdateApply{running = true, status = .Fetching, percent = -1}
+
+	apply_thread := thread.create(update_service_apply_thread_main)
+	apply_thread.data = service
+	thread.start(apply_thread)
 	return true
+}
+
+// Pushes a snapshot of the asynchronous apply state to the VM.
+update_service_push_progress :: proc(L: ^vm.State, service: ^UpdateService) {
+	if service == nil {
+		vm.PushNil(L)
+		return
+	}
+
+	sync.mutex_lock(&service.apply_mutex)
+	defer sync.mutex_unlock(&service.apply_mutex)
+
+	vm.NewTable(L, 0, 8)
+
+	vm.PushBoolean(L, service.apply.running)
+	vm.SetField(L, -2, "running")
+
+	vm.PushString(L, update_apply_status_string(service.apply.status))
+	vm.SetField(L, -2, "status")
+
+	vm.PushNumber(L, f64(service.apply.downloaded))
+	vm.SetField(L, -2, "downloaded")
+
+	vm.PushNumber(L, f64(service.apply.total))
+	vm.SetField(L, -2, "total")
+
+	if service.apply.total > 0 {
+		vm.PushNumber(L, update_apply_percent_of(service.apply.downloaded, service.apply.total))
+		vm.SetField(L, -2, "percent")
+	}
+
+	if len(service.apply.message) > 0 {
+		vm.PushString(L, service.apply.message)
+		vm.SetField(L, -2, "message")
+	}
+
+	vm.SetReadOnly(L, -1)
+}
+
+// Called by the UI once GetUpdateProgress reports Ready: atomically claims the
+// transition, spawns the installer helper, and exits the process (mirrors
+// Update_Service_Run_Now).
+update_service_finish_restart :: proc(L: ^vm.State, service: ^UpdateService) -> (i32, bool) {
+	if service == nil || !update_service_enabled() {
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+	claimed := false
+	sync.mutex_lock(&service.apply_mutex)
+	if service.apply.status == .Ready && !service.apply.running {
+		claimed = true
+		service.apply.status = .Idle
+	}
+	sync.mutex_unlock(&service.apply_mutex)
+
+	if !claimed {
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+	version, pending_dir, ready := Update_Pending_Read()
+	if !ready {
+		update_apply_fail(service, "staged update is no longer present")
+		if len(version) > 0 {
+			delete(version)
+		}
+		if len(pending_dir) > 0 {
+			delete(pending_dir)
+		}
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+	if !Update_Service_Spawn_Helper(pending_dir) {
+		update_apply_fail(service, "failed to launch the update installer")
+		if len(version) > 0 {
+			delete(version)
+		}
+		if len(pending_dir) > 0 {
+			delete(pending_dir)
+		}
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+	if len(version) > 0 {
+		delete(version)
+	}
+	if len(pending_dir) > 0 {
+		delete(pending_dir)
+	}
+	os.exit(0)
 }
 
 update_push_current_table :: proc(L: ^vm.State, report: UpdateReport) {
@@ -1111,11 +1489,11 @@ update_push_current_table :: proc(L: ^vm.State, report: UpdateReport) {
 	vm.PushString(L, report.current_display)
 	vm.SetField(L, -2, "display")
 
-	vm.PushInteger(L, i64(report.current_major))
+	vm.PushNumber(L, f64(report.current_major))
 	vm.SetField(L, -2, "major")
-	vm.PushInteger(L, i64(report.current_minor))
+	vm.PushNumber(L, f64(report.current_minor))
 	vm.SetField(L, -2, "minor")
-	vm.PushInteger(L, i64(report.current_patch))
+	vm.PushNumber(L, f64(report.current_patch))
 	vm.SetField(L, -2, "patch")
 
 	if len(report.current_prerelease) > 0 {
@@ -1152,7 +1530,7 @@ update_push_latest_table :: proc(L: ^vm.State, report: UpdateReport) {
 	vm.SetField(L, -2, "asset_name")
 	vm.PushString(L, report.asset_url)
 	vm.SetField(L, -2, "asset_url")
-	vm.PushInteger(L, report.asset_size)
+	vm.PushNumber(L, f64(report.asset_size))
 	vm.SetField(L, -2, "asset_size")
 
 	vm.SetReadOnly(L, -1)

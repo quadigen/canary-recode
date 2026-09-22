@@ -687,6 +687,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_IntValue(registry)
 	Register_Light(registry)
 	Register_Lighting_Effect(registry)
+	Register_LocalScript(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
 	Register_ModuleModuleScript(registry)

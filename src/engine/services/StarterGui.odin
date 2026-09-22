@@ -6,31 +6,34 @@ import "core:fmt"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
-import vm "../vm"
 import guilib "../gui"
+import vm "../vm"
 
-StarterGui_Class := classes.Class_Info{name = "StarterGui", parent = &Service_Class}
+StarterGui_Class := classes.Class_Info {
+	name   = "StarterGui",
+	parent = &Service_Class,
+}
 
 StarterGui :: struct {
 	using service: Service,
-	call_count: i64,
+	call_count:    i64,
 }
 
-StarterGui_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+StarterGui_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	service := new(StarterGui)
 	service.service = Service_Init(&StarterGui_Class, "StarterGui", data_model)
 	return &service.object
 }
 
-StarterGui_Render :: proc(
-    object: ^classes.Object,
-    ctx: ^classes.Class_Step_Context,
-) {
-    for child in object.children {
-        if classes.Is_A(child, "ScreenGui") {
-            classes.ScreenGui_render(child, ctx)
-        }
-    }
+StarterGui_Render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	for child in object.children {
+		if classes.Is_A(child, "ScreenGui") {
+			classes.ScreenGui_render(child, ctx)
+		}
+	}
 }
 
 StarterGui_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -39,9 +42,11 @@ StarterGui_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 }
 
 Register_StarterGui_Class :: proc(registry: ^classes.Registry) {
-	// ScreenGui instances render themselves in the base or overlay pass. The
-	// service is only their container; stepping it too would draw every child a
-	// second time.
-	classes.Register_Class(registry, &StarterGui_Class, StarterGui_construct, StarterGui_destroy, creatable = false)
+	classes.Register_Class(
+		registry,
+		&StarterGui_Class,
+		StarterGui_construct,
+		StarterGui_destroy,
+		creatable = false,
+	)
 }
-

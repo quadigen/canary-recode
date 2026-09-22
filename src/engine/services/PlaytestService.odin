@@ -22,11 +22,21 @@ PlaytestService :: struct {
 	last_exit_code: int,
 	last_error:     string,
 	map_path:       string,
+	temp_map_dir:   string,
 }
 
 playtest_set_error :: proc(service: ^PlaytestService, value: string) {
 	delete(service.last_error)
 	service.last_error = strings.clone(value)
+}
+
+playtest_cleanup_temp_map :: proc(service: ^PlaytestService) {
+	if service == nil || len(service.temp_map_dir) == 0 {return}
+	if err := os.remove_all(service.temp_map_dir); err != nil {
+		_ = err
+	}
+	delete(service.temp_map_dir)
+	service.temp_map_dir = ""
 }
 
 playtest_refresh :: proc(service: ^PlaytestService) {
@@ -35,6 +45,7 @@ playtest_refresh :: proc(service: ^PlaytestService) {
 	if err == nil && state.exited {
 		service.running = false
 		service.last_exit_code = state.exit_code
+		playtest_cleanup_temp_map(service)
 	}
 }
 
@@ -52,6 +63,7 @@ playtest_stop :: proc(service: ^PlaytestService) -> bool {
 		return false
 	}
 	service.last_exit_code = state.exit_code
+	playtest_cleanup_temp_map(service)
 	return true
 }
 
@@ -67,6 +79,7 @@ playtest_construct :: proc(
 playtest_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^PlaytestService)object
 	_ = playtest_stop(service)
+	playtest_cleanup_temp_map(service)
 	delete(service.last_error)
 	delete(service.map_path)
 	classes.Object_Destroy(object)
@@ -114,18 +127,56 @@ playtest_namecall :: proc(
 	service := cast(^PlaytestService)object
 	switch method {
 	case "Start":
-		path := vm.ArgString(L, 2)
-		if path == "" ||
+		path := ""
+		if vm.StackTop(L) >= 2 && !vm.IsNoneOrNil(L, 2) {
+			path = vm.ArgString(L, 2)
+		}
+		map_owned := false
+		if path != "" &&
 		   (!strings.has_suffix(path, ".kine") && !strings.has_suffix(path, ".KINE")) {
 			return vm.RaiseError(L, "PlaytestService:Start expects a .kine file path"), true
 		}
-		if !os.exists(
-			path,
-		) {return vm.RaiseError(L, "PlaytestService:Start could not find the .kine file"), true}
+		if path != "" && !os.exists(path) {
+			return vm.RaiseError(L, "PlaytestService:Start could not find the .kine file"), true
+		}
+		if path == "" {
+			export_service := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
+			if export_service == nil {
+				return vm.RaiseError(L, "PlaytestService:Start could not access ExportService"), true
+			}
+			temp_dir, temp_err := os.make_directory_temp("", "kinemium-playtest-*", context.allocator)
+			if temp_err != nil {
+				playtest_set_error(service, os.error_string(temp_err))
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+			file_path, join_err := os.join_path({temp_dir, "map.kine"}, context.allocator)
+			if join_err != nil {
+				_ = os.remove_all(temp_dir)
+				delete(temp_dir)
+				playtest_set_error(service, os.error_string(join_err))
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+			if !export_datamodel_to_file(export_service, L, file_path) {
+				_ = os.remove_all(temp_dir)
+				delete(temp_dir)
+				delete(file_path)
+				playtest_set_error(service, "failed to export the DataModel to a .kine file")
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+			playtest_cleanup_temp_map(service)
+			service.temp_map_dir = strings.clone(temp_dir)
+			delete(temp_dir)
+			path = file_path
+			map_owned = true
+		}
 		playtest_refresh(service)
 		if service.running {_ = playtest_stop(service)}
 		executable, path_err := os.get_executable_path(context.temp_allocator)
 		if path_err != nil {
+			if map_owned {delete(path)}
 			playtest_set_error(service, os.error_string(path_err))
 			vm.PushBoolean(L, false)
 			return 1, true
@@ -140,16 +191,18 @@ playtest_namecall :: proc(
 			},
 		)
 		if start_err != nil {
+			if map_owned {delete(path)}
 			playtest_set_error(service, os.error_string(start_err))
 			vm.PushBoolean(L, false)
 			return 1, true
 		}
+		delete(service.map_path)
+		service.map_path = strings.clone(path)
+		if map_owned {delete(path)}
 		service.process = process
 		service.running = true
 		service.last_exit_code = 0
 		playtest_set_error(service, "")
-		delete(service.map_path)
-		service.map_path = strings.clone(path)
 		vm.PushBoolean(L, true)
 		return 1, true
 	case "Stop":

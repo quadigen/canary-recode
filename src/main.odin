@@ -102,11 +102,15 @@ run_desktop :: proc() {
 	if !options_ok {return}
 	when target.IS_CLIENT {
 		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
-			fmt.eprintln("Network client needs a reachable server address; use 127.0.0.1 for a server on this computer")
+			fmt.eprintln(
+				"Network client needs a reachable server address; use 127.0.0.1 for a server on this computer",
+			)
 			return
 		}
 		if options.map_path != "" && !options.playtest {
-			fmt.eprintln("Load the map on the server with --map; clients receive it through replication")
+			fmt.eprintln(
+				"Load the map on the server with --map; clients receive it through replication",
+			)
 			return
 		}
 	}
@@ -141,10 +145,18 @@ run_desktop :: proc() {
 		OnEvent = runtime_input_event,
 	}
 
-	if options.playtest {sandbox.init_runtime(&script_vm, &environment, &renderer_object)} else {sandbox.init(&script_vm, &environment, &renderer_object)}
+	if options.playtest {
+		sandbox.init_runtime(&script_vm, &environment, &renderer_object)
+	} else {
+		sandbox.init(&script_vm, &environment, &renderer_object)
+	}
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
-	if options.playtest && !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {return}
+
+	if options.playtest &&
+	   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
+		return
+	}
 
 	when target.IS_CLIENT {
 		if !options.playtest {
@@ -163,7 +175,7 @@ run_desktop :: proc() {
 		}
 	}
 
-services.Update_Service_Boot(
+	services.Update_Service_Boot(
 		&environment.services,
 		!options.playtest,
 		options.update_check,

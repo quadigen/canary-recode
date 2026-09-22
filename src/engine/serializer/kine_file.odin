@@ -61,13 +61,16 @@ decompress_kine :: proc(data: []u8) -> ([]u8, bool) {
 }
 
 // Serialize_To_File writes an Instance hierarchy to a .KINE file on disk.
+// exclude_child (optional) lets the caller strip selected children and their
+// subtrees from the written tree (for example editor-only services).
 Serialize_To_File :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	object: ^classes.Object,
 	path: string,
+	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
 ) -> bool {
-	data, ok := Serialize(registry, L, object)
+	data, ok := Serialize(registry, L, object, exclude_child)
 	if !ok {
 		return false
 	}
