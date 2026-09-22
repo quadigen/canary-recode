@@ -254,7 +254,20 @@ jobs:
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
 
           New-Item -ItemType Directory -Force 'dist/${{ matrix.folder }}' | Out-Null
-          odin build src -o:speed -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}'
+          $versionDefine = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $v = $env:GITHUB_REF_NAME
+            if ($v.StartsWith('v')) { $v = $v.Substring(1) }
+            $versionDefine = @("-define:RUNTIME_VERSION_DISPLAY=$v")
+          }
+          & odin build src \
+            -o:speed \
+            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+            @versionDefine `
+            -define:BUILD_TARGET=editor `
+            -define:RUNTIME_GIT_ENABLED=true `
+            -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
+            -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
 
           # SDL3 is consumed through Odin's bundled vendor:sdl3 binding, which
           # links SDL3.lib and expects SDL3.dll next to the executable.
@@ -270,9 +283,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p 'dist/${{ matrix.folder }}'
+          version_define=()
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
+          fi
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+            "${version_define[@]}" \
+            -define:BUILD_TARGET=editor \
+            -define:RUNTIME_GIT_ENABLED=true \
+            -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+            -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
           cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
@@ -291,9 +313,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p 'dist/${{ matrix.folder }}'
+          version_define=()
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
+          fi
           odin build src \
             -o:speed \
             -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+            "${version_define[@]}" \
+            -define:BUILD_TARGET=editor \
+            -define:RUNTIME_GIT_ENABLED=true \
+            -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+            -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib 'dist/${{ matrix.folder }}/'
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib 'dist/${{ matrix.folder }}/'
@@ -488,3 +519,49 @@ jobs:
           name: android
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: windows_x86-64
+          path: release/windows
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: linux_x86-64
+          path: release/linux
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: macos_arm64
+          path: release/macos
+
+      - name: Create platform archives
+        shell: bash
+        run: |
+          cd release
+          (cd windows && zip -r ../kinemium-windows-x86_64.zip .)
+          (cd linux && zip -r ../kinemium-linux-x86_64.zip .)
+          (cd macos && zip -r ../kinemium-macos-arm64.zip .)
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/kinemium-windows-x86_64.zip \
+            release/kinemium-linux-x86_64.zip \
+            release/kinemium-macos-arm64.zip \
+            --generate-notes

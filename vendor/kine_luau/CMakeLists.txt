@@ -15,5 +15,7 @@ add_library(kine_luau STATIC src/kine_luau.cpp)
 target_include_directories(kine_luau PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/../luau/VM/include
 	${CMAKE_CURRENT_SOURCE_DIR}/../luau/Compiler/include
+	${CMAKE_CURRENT_SOURCE_DIR}/../luau/Ast/include
+	${CMAKE_CURRENT_SOURCE_DIR}/../luau/Common/include
 )
-target_link_libraries(kine_luau PUBLIC Luau.Compiler Luau.VM)
+target_link_libraries(kine_luau PUBLIC Luau.Compiler Luau.VM Luau.Ast)

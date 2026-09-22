@@ -3,20 +3,25 @@ package globals
 import vm "../vm"
 
 RUNTIME_NAME            :: "kinemium"
-RUNTIME_VERSION_DISPLAY :: "1.19.0-dev"
-RUNTIME_URL             :: "https://github.com/Qquaded/Kinemium-Engine"
+RUNTIME_VERSION_DISPLAY := string(#config(RUNTIME_VERSION_DISPLAY, "1.19.0-dev"))
+RUNTIME_URL             := string(#config(RUNTIME_URL, "https://github.com/quadigen/canary-recode"))
 
-RUNTIME_SEMANTIC_ENABLED    :: true
-RUNTIME_SEMANTIC_MAJOR      :: 1
-RUNTIME_SEMANTIC_MINOR      :: 19
-RUNTIME_SEMANTIC_PATCH      :: 0
-RUNTIME_SEMANTIC_PRERELEASE :: "dev"
-RUNTIME_SEMANTIC_BUILD      :: ""
+// The update manifest for the engine self-update flow. Release builds are
+// stamped (see justfile / CI) with everything except this constant; the
+// self-update system is disabled unless RUNTIME_GIT_COMMIT is non-empty.
+RUNTIME_UPDATE_URL := string(#config(RUNTIME_UPDATE_URL, "https://api.github.com/repos/quadigen/canary-recode/releases/latest"))
 
-RUNTIME_GIT_ENABLED :: false
-RUNTIME_GIT_URL     :: ""
-RUNTIME_GIT_COMMIT  :: ""
-RUNTIME_GIT_BRANCH  :: ""
+RUNTIME_SEMANTIC_ENABLED    := bool(#config(RUNTIME_SEMANTIC_ENABLED, true))
+RUNTIME_SEMANTIC_MAJOR      := int(#config(RUNTIME_SEMANTIC_MAJOR, 1))
+RUNTIME_SEMANTIC_MINOR      := int(#config(RUNTIME_SEMANTIC_MINOR, 19))
+RUNTIME_SEMANTIC_PATCH      := int(#config(RUNTIME_SEMANTIC_PATCH, 0))
+RUNTIME_SEMANTIC_PRERELEASE := string(#config(RUNTIME_SEMANTIC_PRERELEASE, "dev"))
+RUNTIME_SEMANTIC_BUILD      := string(#config(RUNTIME_SEMANTIC_BUILD, ""))
+
+RUNTIME_GIT_ENABLED := bool(#config(RUNTIME_GIT_ENABLED, false))
+RUNTIME_GIT_URL     := string(#config(RUNTIME_GIT_URL, "https://github.com/quadigen/canary-recode"))
+RUNTIME_GIT_COMMIT  := string(#config(RUNTIME_GIT_COMMIT, ""))
+RUNTIME_GIT_BRANCH  := string(#config(RUNTIME_GIT_BRANCH, ""))
 
 LUAU_INFO_ENABLED    :: false
 LUAU_VERSION_DISPLAY :: ""
@@ -42,13 +47,13 @@ runtime_set_optional_string :: proc(
 runtime_push_semantic_version :: proc(L: ^vm.State) {
 	vm.NewTable(L, 0, 5)
 
-	vm.PushInteger(L, RUNTIME_SEMANTIC_MAJOR)
+	vm.PushInteger(L, i64(RUNTIME_SEMANTIC_MAJOR))
 	vm.SetField(L, -2, "major")
 
-	vm.PushInteger(L, RUNTIME_SEMANTIC_MINOR)
+	vm.PushInteger(L, i64(RUNTIME_SEMANTIC_MINOR))
 	vm.SetField(L, -2, "minor")
 
-	vm.PushInteger(L, RUNTIME_SEMANTIC_PATCH)
+	vm.PushInteger(L, i64(RUNTIME_SEMANTIC_PATCH))
 	vm.SetField(L, -2, "patch")
 
 	runtime_set_optional_string(

@@ -114,6 +114,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
+	Register_LuauService_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
 	Register_Players_Class(registry.classes)
@@ -136,9 +137,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_StarterPlayer_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
+	Register_Terrain_Class(registry.classes)
 	Register_TextService_Class(registry.classes)
 	Register_Tween_Class(registry.classes)
 	Register_TweenService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_UpdateService_Class(registry.classes) }
 	Register_UserInputService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
@@ -153,6 +156,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService")
+	Register_Service(registry, "LuauService", "LuauService", "LuauService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
 	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService", "PlaytestService") }
@@ -174,8 +178,10 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
+	Register_Service(registry, "Terrain", "Terrain", "terrain")
 	Register_Service(registry, "TextService", "TextService", "TextService")
 	Register_Service(registry, "TweenService", "TweenService")
+	when ODIN_OS != .JS { Register_Service(registry, "UpdateService", "UpdateService") }
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	// wire:end services

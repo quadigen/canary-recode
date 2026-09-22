@@ -329,6 +329,24 @@ foreign kine_filament {
 	Kine_Filament_DrawGizmo                :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) ---
 	Kine_Filament_PickGizmo                :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, screenX: f32, screenY: f32) -> i32 ---
 	Kine_Filament_GetGizmoDragDelta        :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
+	Kine_Filament_CreateTerrainMesh :: proc(
+		ctx:             ^KineFilamentContext,
+		vertexData:      ^f32,
+		materialWeights: ^f32,
+		vertexCount:     i32,
+		indices:         ^u16,
+		indexCount:      i32,
+	) -> ^KineFilamentMesh ---
+
+	Kine_Filament_CreateTerrainTextureSet :: proc(
+		ctx:    ^KineFilamentContext,
+		layer0: ^KineFilamentTex,
+		layer1: ^KineFilamentTex,
+		layer2: ^KineFilamentTex,
+		layer3: ^KineFilamentTex,
+		layer4: ^KineFilamentTex,
+		layer5: ^KineFilamentTex,
+	) -> ^KineFilamentTex ---
 
 	// OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
 	// keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a

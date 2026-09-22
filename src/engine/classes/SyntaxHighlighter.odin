@@ -5,10 +5,16 @@ import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import luauh "../vm/luauh"
 
 SyntaxHighlighter_Class := Class_Info {
 	name   = "SyntaxHighlighter",
 	parent = &Instance_Class,
+}
+
+Syntax_Highlighting_Language :: enum {
+	None,
+	Luau,
 }
 
 Syntax_Rule_Kind :: enum {
@@ -37,6 +43,7 @@ SyntaxHighlighter :: struct {
 	using object: Object,
 
 	enabled: bool,
+	language:  Syntax_Highlighting_Language,
 
 	rules:         [dynamic]Syntax_Rule,
 	rules_version: int,
@@ -51,6 +58,7 @@ SyntaxHighlighter_Init :: proc() -> SyntaxHighlighter {
 	return SyntaxHighlighter {
 		object              = Object_Init(&SyntaxHighlighter_Class, "SyntaxHighlighter"),
 		enabled             = true,
+		language            = .Luau,
 		cached_rules_version = -1,
 		spans_valid         = false,
 	}
@@ -124,6 +132,7 @@ SyntaxHighlighter_clone :: proc(source: ^Object, destination: ^Object) {
 	dst := cast(^SyntaxHighlighter)destination
 
 	dst.enabled = src.enabled
+	dst.language = src.language
 
 	for rule in src.rules {
 		copy := Syntax_Rule {
@@ -236,6 +245,15 @@ SyntaxHighlighter_get :: proc(
 		vm.PushBoolean(L, highlighter.enabled)
 		return true
 
+	case "Language":
+		switch highlighter.language {
+		case .Luau:
+			vm.PushString(L, "Luau")
+		case .None:
+			vm.PushString(L, "None")
+		}
+		return true
+
 	case "RuleCount":
 		vm.PushNumber(L, f64(len(highlighter.rules)))
 		return true
@@ -301,6 +319,19 @@ SyntaxHighlighter_set :: proc(
 	switch key {
 	case "Enabled":
 		highlighter.enabled = vm.ArgBoolean(L, value_index)
+		highlighter.spans_valid = false
+		return true
+
+	case "Language":
+		value := vm.ArgString(L, value_index)
+
+		switch value {
+		case "Luau":
+			highlighter.language = .Luau
+		case "None":
+			highlighter.language = .None
+		}
+
 		highlighter.spans_valid = false
 		return true
 	}
@@ -406,6 +437,7 @@ Register_SyntaxHighlighter :: proc(registry: ^Registry) {
 
 		properties = []string{
 			"Enabled",
+			"Language",
 			"Rules",
 			"RuleCount",
 
@@ -573,9 +605,32 @@ syntax_highlighter_ensure :: proc(
 	highlighter.spans = nil
 	highlighter.spans_valid = false
 
-	if !highlighter.enabled || len(highlighter.rules) == 0 {
+	if !highlighter.enabled {
 		highlighter.spans_valid = true
 		highlighter.cached_rules_version = highlighter.rules_version
+		return
+	}
+
+	switch highlighter.language {
+	case .Luau:
+		syntax_highlighter_luau_spans(highlighter, text)
+	case .None:
+		syntax_highlighter_rule_spans(highlighter, text)
+	}
+
+	highlighter.spans_valid = true
+	highlighter.cached_rules_version = highlighter.rules_version
+}
+
+syntax_highlighter_rule_spans :: proc(
+	highlighter: ^SyntaxHighlighter,
+	text: string,
+) {
+	if highlighter == nil {
+		return
+	}
+
+	if len(highlighter.rules) == 0 {
 		return
 	}
 
@@ -619,9 +674,84 @@ syntax_highlighter_ensure :: proc(
 			position += 1
 		}
 	}
+}
 
-	highlighter.spans_valid = true
-	highlighter.cached_rules_version = highlighter.rules_version
+syntax_luau_span_color :: proc(type: i32) -> (datatypes.Color3, bool) {
+	if type >= i32(luauh.Kine_Lexeme.Reserved_And) &&
+	   type <= i32(luauh.Kine_Lexeme.Reserved_While) {
+		return datatypes.Color3{0.05, 0.42, 0.90}, true
+	}
+
+	#partial switch luauh.Kine_Lexeme(type) {
+	case .QuotedString,
+	     .RawString,
+	     .InterpStringBegin,
+	     .InterpStringMid,
+	     .InterpStringEnd,
+	     .InterpStringSimple:
+		return datatypes.Color3{0.10, 0.65, 0.28}, true
+
+	case .Number:
+		return datatypes.Color3{0.85, 0.40, 0.12}, true
+
+	case .Comment, .BlockComment:
+		return datatypes.Color3{0.40, 0.45, 0.50}, true
+
+	case .Attribute, .AttributeOpen:
+		return datatypes.Color3{0.60, 0.35, 0.75}, true
+	}
+
+	return {}, false
+}
+
+syntax_highlighter_luau_spans :: proc(
+	highlighter: ^SyntaxHighlighter,
+	text: string,
+) {
+	if highlighter == nil || len(text) == 0 {
+		return
+	}
+
+	c_text := strings.clone_to_cstring(text)
+	defer delete(c_text)
+
+	handle := luauh.luau_lexer_create(c_text, uintptr(len(text)))
+
+	if handle == nil {
+		return
+	}
+
+	defer luauh.luau_lexer_destroy(handle)
+
+	for {
+		token := luauh.luau_lexer_next(handle)
+
+		if token.type == i32(luauh.Kine_Lexeme.Eof) {
+			break
+		}
+
+		start := int(token.begin)
+		finish := int(token.end)
+
+		if finish <= start {
+			continue
+		}
+
+		color, colored := syntax_luau_span_color(token.type)
+
+		if !colored {
+			continue
+		}
+
+		append(
+			&highlighter.spans,
+			Syntax_Span {
+				start  = start,
+				finish = finish,
+				color3 = color,
+			},
+		)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,14 @@
 
 set shell := ["powershell.exe", "-NoProfile", "-Command"]
 
+git_commit := `git rev-parse --short HEAD`
+git_branch := `git rev-parse --abbrev-ref HEAD`
+
+# Release version. Bump when cutting a release; the `release` recipe stamps
+# it over the "1.19.0-dev" defaults so released binaries stop offering updates
+# to their own version.
+version := "1.19.0"
+
 default:
     @just --list
 
@@ -12,7 +20,7 @@ debug:
     odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099"
 
 release:
-    odin build src -o:speed -out:build/kinemium.exe
+    odin build src -o:speed -out:build/kinemium.exe -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}}
 
 wasm:
     & ./tools/build_wasm.ps1

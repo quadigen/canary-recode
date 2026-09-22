@@ -4318,38 +4318,66 @@ TextBox_render :: proc(
 	//
 
 	if len(display_text) > 0 {
-		text :=
-			strings.clone_to_cstring(
-				display_text,
+		highlight: ^SyntaxHighlighter
+
+		if len(box.text) > 0 {
+			highlight =
+				syntax_highlighter_for_box(
+					box,
+				)
+		}
+
+		if highlight != nil {
+			syntax_highlighter_ensure(
+				highlight,
+				box.text,
 			)
 
-		defer delete(text)
-
-		guilib.drawText(
-			surface,
-			text,
-			guilib.TextParams{
-				x =
-					rect.x +
+			text_box_draw_syntax_line(
+				box,
+				highlight,
+				surface,
+				rect.x +
 					padding -
 					box.scroll_x,
+				baseline,
+				0,
+				len(box.text),
+			)
+		} else {
+			text :=
+				strings.clone_to_cstring(
+					display_text,
+				)
 
-				y =
-					baseline,
+			defer delete(text)
 
-				TextSize =
-					box.text_size,
+			guilib.drawText(
+				surface,
+				text,
+				guilib.TextParams{
+					x =
+						rect.x +
+						padding -
+						box.scroll_x,
 
-				color =
-					display_color,
+					y =
+						baseline,
 
-				transparency =
-					box.text_transparency,
+					TextSize =
+						box.text_size,
 
-				typeface =
-					box.stored_typeface,
-			},
-		)
+					color =
+						display_color,
+
+					transparency =
+						box.text_transparency,
+
+					typeface =
+						box.stored_typeface,
+				},
+			)
+		}
 	}
 
 	//

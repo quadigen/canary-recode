@@ -1,7 +1,34 @@
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
+#include "Luau/Lexer.h"
+
 #include <cstdlib>
+#include <new>
+
+struct kine_luau_token
+{
+    int type;
+    unsigned int begin;
+    unsigned int end;
+};
+
+namespace
+{
+struct Kine_Luau_Lexer
+{
+    Luau::Allocator allocator;
+    Luau::AstNameTable names;
+    Luau::Lexer lexer;
+    const char* text;
+    size_t size;
+
+    Kine_Luau_Lexer(const char* text, size_t size)
+        : allocator(), names(allocator), lexer(text, size, names), text(text), size(size)
+    {
+    }
+};
+}
 
 extern "C" {
 
@@ -117,5 +144,44 @@ int kine_lua_pcall(lua_State* L, int arguments, int results, int errorFunction)
     return lua_pcall(L, arguments, results, errorFunction);
 }
 const char* kine_lua_tolstring(lua_State* L, int index, size_t* size) { return lua_tolstring(L, index, size); }
+
+void* kine_luau_lexer_create(const char* text, size_t size)
+{
+    try
+    {
+        return new Kine_Luau_Lexer(text, size);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+void kine_luau_lexer_destroy(void* handle)
+{
+    delete static_cast<Kine_Luau_Lexer*>(handle);
+}
+
+kine_luau_token kine_luau_lexer_next(void* handle)
+{
+    kine_luau_token token = {0, 0, 0};
+    Kine_Luau_Lexer* lexer = static_cast<Kine_Luau_Lexer*>(handle);
+    if (!lexer)
+        return token;
+
+    unsigned int cursor = lexer->lexer.getOffset();
+    (void)lexer->lexer.next();
+    token.type = static_cast<int>(lexer->lexer.current().type);
+    token.end = lexer->lexer.getOffset();
+
+    token.begin = cursor;
+
+    // next() consumes leading whitespace before producing a lexeme, so scan
+    // past it to find the token's first byte.
+    while (token.begin < token.end && token.begin < lexer->size && Luau::isSpace(lexer->text[token.begin]))
+        token.begin++;
+
+    return token;
+}
 
 }

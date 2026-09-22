@@ -11,6 +11,8 @@ Startup_Options :: struct {
 	port:    u16,
 	map_path: string,
 	playtest: bool,
+	update_check: bool,
+	no_update: bool,
 }
 
 startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
@@ -45,9 +47,13 @@ startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
 			index += 1
 			options.map_path = os.args[index]
 			options.playtest = true
-		case "--script":
+case "--script":
 			if index + 1 >= len(os.args) {fmt.eprintln("--script requires a file path"); return options, false}
 			index += 1
+		case "--update":
+			options.update_check = true
+		case "--no-update":
+			options.no_update = true
 		case:
 			if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
 				if options.map_path != "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}

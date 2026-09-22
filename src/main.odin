@@ -163,6 +163,13 @@ run_desktop :: proc() {
 		}
 	}
 
+services.Update_Service_Boot(
+		&environment.services,
+		!options.playtest,
+		options.update_check,
+		options.no_update,
+	)
+
 	profiling.init()
 	defer profiling.shutdown()
 
@@ -170,8 +177,13 @@ run_desktop :: proc() {
 	if options.playtest {title = "Kinemium Playtest"}
 	when target.IS_CLIENT {if !options.playtest {title = "Kinemium Client"}}
 	renderer.init(title, 800, 600, &renderer_object)
+
+	if !options.playtest {
+		services.Update_Service_Shutdown()
+	}
 }
 
 main :: proc() {
+	services.Update_Handle_Command_Line()
 	when target.IS_SERVER {run_server()} else {run_desktop()}
 }
