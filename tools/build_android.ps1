@@ -100,7 +100,11 @@ if (-not $pythonExecutable) {
     }
 }
 if (-not $pythonExecutable) { throw "A working Python 3 interpreter is required to build Skia" }
-$pythonShim = Join-Path $repo "build\android-python"
+$pythonShimBase = $env:USERPROFILE
+if (-not $pythonShimBase -or [IO.Path]::GetPathRoot($pythonShimBase) -ne [IO.Path]::GetPathRoot($pythonExecutable)) {
+    $pythonShimBase = Split-Path $pythonExecutable
+}
+$pythonShim = Join-Path $pythonShimBase ".kinemium\android-python"
 New-Item -ItemType Directory -Force $pythonShim | Out-Null
 $pythonShimExecutable = Join-Path $pythonShim "python3.exe"
 if (Test-Path -LiteralPath $pythonShimExecutable) {
