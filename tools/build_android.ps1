@@ -1,7 +1,7 @@
 param(
     [string]$AndroidSdk = $env:ANDROID_HOME,
     [string]$NdkVersion = "30.0.16248370",
-    [int]$ApiLevel = 28
+    [int]$ApiLevel = 30
 )
 
 $ErrorActionPreference = "Stop"
