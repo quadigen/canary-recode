@@ -888,6 +888,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_RemoteFunction(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
+	Register_StateMachine(registry)
 	Register_ScrollingFrame(registry)
 	Register_Sound(registry)
 	Register_SpotLight(registry)
