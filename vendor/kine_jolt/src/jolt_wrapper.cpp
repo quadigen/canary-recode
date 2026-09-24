@@ -10,10 +10,14 @@
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/CollisionCollector.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
@@ -994,6 +998,60 @@ int32_t JPH_PhysicsSystem_CastRay(
     outResult->normal = FromJPH(normal);
     outResult->bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
     outResult->fraction = hit.mFraction;
+    return 1;
+}
+
+extern "C" JPH_ShapeRef JPH_CapsuleShape_Create(float halfHeight, float radius, float convexRadius)
+{
+    return new JPH::CapsuleShape(halfHeight, radius);
+}
+
+int32_t JPH_PhysicsSystem_CastShape(
+    JPH_PhysicsSystemRef system,
+    const JPH_RVec3* origin,
+    const JPH_Vec3* displacement,
+    JPH_ShapeRef shape,
+    const JPH_BodyID* bodyIDs,
+    uint32_t bodyIDCount,
+    int32_t filterMode,
+    float maxDistance,
+    JPH_RayCastResult* outResult)
+{
+    if (system == nullptr || origin == nullptr || displacement == nullptr || shape == nullptr || outResult == nullptr)
+        return 0;
+
+    JPH::PhysicsSystem* physicsSystem = ToPhysicsSystem(system);
+    const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode == 2);
+    JPH::Shape* shapePtr = static_cast<JPH::Shape*>(shape);
+    JPH::RShapeCast shapeCast(shapePtr, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(ToJPH(*origin)), ToJPH(*displacement));
+    JPH::ShapeCastSettings settings;
+    settings.mReturnDeepestPoint = false;
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+
+    if (filterMode == 0)
+    {
+        physicsSystem->GetNarrowPhaseQuery().CastShape(shapeCast, settings, JPH::RVec3::sZero(), collector);
+    }
+    else
+    {
+        physicsSystem->GetNarrowPhaseQuery().CastShape(
+            shapeCast,
+            settings,
+            JPH::RVec3::sZero(),
+            collector,
+            JPH::BroadPhaseLayerFilter(),
+            JPH::ObjectLayerFilter(),
+            bodyFilter,
+            JPH::ShapeFilter());
+    }
+    if (!collector.HadHit())
+        return 0;
+
+    const JPH::ShapeCastResult& hit = collector.mHit;
+    outResult->fraction = hit.mFraction;
+    outResult->bodyID = hit.mBodyID2.GetIndexAndSequenceNumber();
+    outResult->position = FromJPH(shapeCast.GetPointOnRay(hit.mFraction));
+    outResult->normal = FromJPH(hit.mPenetrationAxis);
     return 1;
 }
 

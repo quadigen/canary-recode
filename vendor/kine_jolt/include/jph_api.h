@@ -404,6 +404,28 @@ JPH_API void JPH_PhysicsSystem_UpdateSingleThreaded(
 JPH_API void JPH_PhysicsSystem_OptimizeBroadPhase(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetContactListener(JPH_PhysicsSystemRef system, JPH_ContactListenerRef listener);
 
+// Capsule aligned with the Y axis. halfHeight = half the straight cylinder section,
+// radius = capsule radius. convexRadius is ignored (Jolt 5.x capsules have no
+// separate convex radius) and kept only for API symmetry.
+JPH_API JPH_ShapeRef JPH_CapsuleShape_Create(float halfHeight, float radius, float convexRadius);
+
+// Sweeps `shape` (identity rotation) from `origin` along `displacement` (the total
+// move for this sweep, not a normalized direction), bounded by maxDistance.
+// bodyIDs/filterMode behave exactly like JPH_PhysicsSystem_CastRay (0 = no filter,
+// 1 = exclude bodyIDs, 2 = include bodyIDs). Returns 1 on hit with the closest
+// fraction in outResult.
+JPH_API int32_t JPH_PhysicsSystem_CastShape(
+    JPH_PhysicsSystemRef system,
+    const JPH_RVec3* origin,
+    const JPH_Vec3* displacement,
+    JPH_ShapeRef shape,
+    const JPH_BodyID* bodyIDs,
+    uint32_t bodyIDCount,
+    JPH_RayFilterMode filterMode,
+    float maxDistance,
+    JPH_RayCastResult* outResult
+);
+
 JPH_API void JPH_PhysicsSystem_AddConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint);
 JPH_API void JPH_PhysicsSystem_RemoveConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint);
 
