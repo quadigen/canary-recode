@@ -271,6 +271,7 @@ foreign lib {
 	JPH_BoxShape_Create                                          :: proc(halfExtent: ^JPH_Vec3, convexRadius: f32) -> JPH_ShapeRef ---
 	JPH_SphereShape_Create                                       :: proc(radius: f32) -> JPH_ShapeRef ---
 	JPH_CylinderShape_Create                                     :: proc(halfHeight: f32, radius: f32, convexRadius: f32) -> JPH_ShapeRef ---
+	JPH_CapsuleShape_Create                                      :: proc(halfHeight: f32, radius: f32, convexRadius: f32) -> JPH_ShapeRef ---
 	JPH_ConvexHullShape_Create                                   :: proc(points: ^JPH_Vec3, pointCount: u32, maxConvexRadius: f32) -> JPH_ShapeRef ---
 	JPH_MeshShape_Create                                         :: proc(triangles: ^JPH_Triangle, triangleCount: u32) -> JPH_ShapeRef ---
 	JPH_Shape_Destroy                                            :: proc(shape: JPH_ShapeRef) ---
@@ -325,6 +326,7 @@ foreign lib {
 	// Casts a finite ray where direction is the full displacement of the ray.
 	// filterMode: 0 = no body filter, 1 = exclude bodyIDs, 2 = include bodyIDs.
 	JPH_PhysicsSystem_CastRay                :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, direction: ^JPH_Vec3, bodyIDs: ^JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outResult: ^JPH_RayCastResult) -> i32 ---
+	JPH_PhysicsSystem_CastShape              :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, displacement: ^JPH_Vec3, shape: JPH_ShapeRef, bodyIDs: ^JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, maxDistance: f32, outResult: ^JPH_RayCastResult) -> i32 ---
 	JPH_BodyInterface_CreateBody             :: proc(bodyInterface: JPH_BodyInterfaceRef, settings: JPH_BodyCreationSettingsRef) -> JPH_BodyRef ---
 	JPH_BodyInterface_AddBody                :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_DestroyBody            :: proc(bodyInterface: JPH_BodyInterfaceRef, body: JPH_BodyRef) ---
