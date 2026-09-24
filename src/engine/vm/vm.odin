@@ -8,6 +8,11 @@ import luauh "luauh"
 State     :: luauh.lua_State
 CFunction :: luauh.lua_CFunction
 
+// MULTIPLE_RESULTS mirrors LUA_MULTRET: a protected call that keeps every value
+// the callee returns. `require` uses it to enforce Roblox's "exactly one return
+// value" rule for ModuleScripts.
+MULTIPLE_RESULTS :: -1
+
 Compile_Options :: struct {
 	optimization_level: i32,
 	debug_level:        i32,
@@ -100,7 +105,12 @@ New :: proc(open_libraries := true) -> VM {
 	}
 
 	if open_libraries {
+		// Open standard Lua libraries
 		luauh.luaL_openlibs(L)
+		// Remove the os library since we have DateTime datatype in the engine
+		// We use lua_setfield with LUA_GLOBALSINDEX since lua_setglobal doesn't exist in bindings
+		luauh.lua_pushnil(L)
+		luauh.lua_setfield(L, luauh.LUA_GLOBALSINDEX, "os")
 	}
 
 	return VM{
@@ -505,6 +515,25 @@ PushFunction :: proc(L: ^State, name: string, function: CFunction, upvalue_count
 	luauh.lua_pushcclosurek(L, function, c_name, i32(upvalue_count), nil)
 }
 
+// PushFunctionWithContinuation installs a C closure that is allowed to yield
+// across its own call boundary. The continuation is invoked by Luau after the
+// protected call finishes (or is resumed after a yield) so the C function can
+// complete its bookkeeping and produce its results.
+//
+// This is what makes runtime operations such as `require` able to suspend the
+// calling script (task.wait inside a ModuleScript) without blocking the host.
+PushFunctionWithContinuation :: proc(
+	L: ^State,
+	name: string,
+	function: CFunction,
+	continuation: luauh.lua_Continuation,
+	upvalue_count: int = 0,
+	) {
+	c_name := strings.clone_to_cstring(name)
+	defer delete(c_name)
+	luauh.lua_pushcclosurek(L, function, c_name, i32(upvalue_count), continuation)
+}
+
 UpvalueIndex :: proc(index: int) -> i32 {
 	return luauh.LUA_GLOBALSINDEX-i32(index)
 }
@@ -576,6 +605,32 @@ ClearStack :: proc(L: ^State) {
 	luauh.lua_settop(L, 0)
 }
 
+// ResumeThreadTraceback resumes a thread like ResumeThread but captures a Luau
+// traceback before the thread is reset, so script error reporting can show both
+// the failing source location and the call stack.
+ResumeThreadTraceback :: proc(
+	thread, from: ^State,
+	argument_count: int = 0,
+) -> (
+	finished, yielded: bool,
+	err: string,
+	traceback: string,
+) {
+	status := luauh.lua_Status(luauh.lua_resume(thread, from, i32(argument_count)))
+	#partial switch status {
+	case .OK:
+		luauh.lua_resetthread(thread)
+		return true, false, "", ""
+	case .YIELD:
+		return false, true, "", ""
+	case:
+		err = get_stack_error(thread)
+		traceback = Traceback(thread, err)
+		luauh.lua_resetthread(thread)
+		return false, false, err, traceback
+	}
+}
+
 PushGlobals :: proc(L: ^State) {
 	luauh.lua_pushvalue(
 		L,
@@ -612,6 +667,29 @@ ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> 
 	err = get_stack_error(L)
 	Pop(L)
 	return false, err
+}
+
+// CallYieldableProtected performs a protected call that may yield. It must only
+// be invoked from a C closure that was installed with a continuation (see
+// PushFunctionWithContinuation).
+//
+// The return value mirrors Luau's contract: a negative value (C_CALL_YIELD)
+// means execution yielded and the C function must return that value to
+// propagate the yield; otherwise the value is the continuation's result count.
+CallYieldableProtected :: proc(
+	L: ^State,
+	argument_count: int,
+	result_count: int = 0,
+) -> i32 {
+	return luauh.lua_pcallyieldable(L, i32(argument_count), i32(result_count), 0)
+}
+
+C_CALL_YIELD :: -1
+
+// DidCallYield reports whether CallYieldableProtected asked the caller to
+// propagate a yield.
+DidCallYield :: proc(status: i32) -> bool {
+	return status == C_CALL_YIELD
 }
 
 DisplayString :: proc(L: ^State, index: i32, depth: i32 = 0) -> string {
@@ -831,6 +909,56 @@ RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {
 	message^ = ""
 	luauh.lua_error(L)
 	return 0
+}
+
+// StackError takes ownership of the error value on top of the stack, converts
+// it to an owned string and pops it. The caller owns the returned string.
+StackError :: proc(L: ^State) -> string {
+	message := get_stack_error(L)
+	Pop(L)
+	return message
+}
+
+// Reraise raises the value currently on top of the stack as an error. Used by
+// continuations that receive a non-zero status from a yieldable call.
+Reraise :: proc(L: ^State) -> i32 {
+	return luauh.lua_error(L)
+}
+
+// Traceback builds an owned Luau traceback for `message`, starting at `level`.
+// A new string is pushed for the duration of the call and popped before return.
+Traceback :: proc(L: ^State, message: string, level: i32 = 1) -> string {
+	c_message := strings.clone_to_cstring(message)
+	defer delete(c_message)
+
+	luauh.luaL_traceback(L, L, c_message, level)
+
+	size: uintptr
+	ptr := luauh.lua_tolstring(L, -1, &size)
+	if ptr == nil {
+		Pop(L)
+		return strings.clone(message)
+	}
+	result := strings.clone_from_ptr(cast(^u8)ptr, int(size))
+	Pop(L)
+	return result
+}
+
+// Thread_Status mirrors lua_CoStatus so engine code does not need to reach into
+// the low level bindings.
+Thread_Status :: enum i32 {
+	Running   = 0,
+	Suspended = 1,
+	Normal    = 2,
+	Finished  = 3,
+	Error     = 4,
+}
+
+ThreadStatus :: proc(L: ^State, thread: ^State) -> Thread_Status {
+	if L == nil || thread == nil {
+		return .Finished
+	}
+	return Thread_Status(luauh.lua_costatus(L, thread))
 }
 
 userdata_header :: proc(L: ^State, index: int) -> ^Userdata_Header {

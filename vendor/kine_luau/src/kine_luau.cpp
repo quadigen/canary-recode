@@ -80,7 +80,35 @@ void kine_lua_rawseti(lua_State* L, int index, int arrayIndex) { lua_rawseti(L, 
 int kine_lua_rawgeti(lua_State* L, int index, int arrayIndex) { return lua_rawgeti(L, index, arrayIndex); }
 int kine_lua_ref(lua_State* L, int index) { return lua_ref(L, index); }
 int kine_lua_unref(lua_State* L, int reference) { return lua_unref(L, reference); }
+int kine_lua_pcallyieldable(
+    lua_State* L,
+    int arguments,
+    int results,
+    int errorFunction
+)
+{
+    return lua_pcallyieldable(L, arguments, results, errorFunction);
+}
+
+void kine_luaL_traceback(
+    lua_State* L,
+    lua_State* L1,
+    const char* message,
+    int level
+)
+{
+    luaL_traceback(L, L1, message, level);
+}
+
+int kine_lua_costatus(
+    lua_State* L,
+    lua_State* co
+)
+{
+    return lua_costatus(L, co);
+}
 int kine_lua_error(lua_State* L)
+
 {
     lua_error(L);
     return 0;

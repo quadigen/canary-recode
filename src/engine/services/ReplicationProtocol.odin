@@ -2,6 +2,7 @@
 package services
 
 import datatypes "../datatypes"
+import enums "../enum"
 import vm "../vm"
 
 replication_put_u32 :: proc(bytes: ^[dynamic]u8, value: u32) {
@@ -126,6 +127,63 @@ replication_encode_value :: proc(
 				frame.r22,
 			}
 			for value in values {replication_put_f32(bytes, value)}
+		} else if binding.name == "UDim" {
+			append(bytes, 9)
+			value := cast(^datatypes.UDim)vm.UserdataValue(L, index)
+			replication_put_f32(bytes, value.Scale)
+			replication_put_f32(bytes, value.Offset)
+		} else if binding.name == "UDim2" {
+			append(bytes, 10)
+			value := cast(^datatypes.UDim2)vm.UserdataValue(L, index)
+			replication_put_f32(bytes, value.X_Scale)
+			replication_put_f32(bytes, value.X_Offset)
+			replication_put_f32(bytes, value.Y_Scale)
+			replication_put_f32(bytes, value.Y_Offset)
+		} else if binding.name == "Vector2" {
+			append(bytes, 11)
+			value := cast(^datatypes.Vector2)vm.UserdataValue(L, index)
+			replication_put_f32(bytes, value.X)
+			replication_put_f32(bytes, value.Y)
+		} else if binding.name == "Rect" {
+			append(bytes, 12)
+			value := cast(^datatypes.Rect)vm.UserdataValue(L, index)
+			replication_put_f32(bytes, value.Min.X)
+			replication_put_f32(bytes, value.Min.Y)
+			replication_put_f32(bytes, value.Max.X)
+			replication_put_f32(bytes, value.Max.Y)
+		} else if binding.name == "ColorSequence" {
+			append(bytes, 13)
+			value := cast(^datatypes.ColorSequence)vm.UserdataValue(L, index)
+			count := min(len(value.Keypoints), 32)
+			replication_put_u32(bytes, u32(count))
+			for i in 0 ..< count {
+				replication_put_f32(bytes, value.Keypoints[i].Time)
+				replication_put_f32(bytes, value.Keypoints[i].Value.R)
+				replication_put_f32(bytes, value.Keypoints[i].Value.G)
+				replication_put_f32(bytes, value.Keypoints[i].Value.B)
+			}
+		} else if binding.name == "NumberSequence" {
+			append(bytes, 14)
+			value := cast(^datatypes.NumberSequence)vm.UserdataValue(L, index)
+			count := min(len(value.Keypoints), 32)
+			replication_put_u32(bytes, u32(count))
+			for i in 0 ..< count {
+				replication_put_f32(bytes, value.Keypoints[i].Time)
+				replication_put_f32(bytes, value.Keypoints[i].Value)
+				replication_put_f32(bytes, value.Keypoints[i].Envelope)
+			}
+		} else if binding.name == "Font" {
+			append(bytes, 15)
+			value := cast(^datatypes.Font)vm.UserdataValue(L, index)
+			replication_put_string(bytes, value.Family)
+			replication_put_f32(bytes, f32(value.Weight))
+			replication_put_f32(bytes, f32(value.Style))
+		} else if binding.tag == enums.ENUM_ITEM_TAG {
+			append(bytes, 16)
+			item := cast(^enums.Enum_Item)vm.UserdataValue(L, index)
+			if item == nil || item.enum_type == nil || item.value < 0 {return false}
+			replication_put_string(bytes, item.enum_type.name)
+			replication_put_u32(bytes, u32(item.value))
 		} else {return false}
 	case:
 		return false
@@ -208,6 +266,106 @@ replication_decode_value :: proc(
 		frame.r21 = replication_read_f32(reader)
 		frame.r22 = replication_read_f32(reader)
 		datatypes.Push_CFrame(L, datatype_registry, frame)
+	case 9:
+		if reader.offset + 8 > len(reader.data) {reader.valid = false; vm.PushNil(L); return}
+		value := datatypes.UDim {
+			Scale  = replication_read_f32(reader),
+			Offset = replication_read_f32(reader),
+		}
+		datatypes.Push_UDim(L, datatype_registry, value)
+	case 10:
+		if reader.offset + 16 > len(reader.data) {reader.valid = false; vm.PushNil(L); return}
+		value := datatypes.UDim2 {
+			X_Scale  = replication_read_f32(reader),
+			X_Offset = replication_read_f32(reader),
+			Y_Scale  = replication_read_f32(reader),
+			Y_Offset = replication_read_f32(reader),
+		}
+		datatypes.Push_UDim2(L, datatype_registry, value)
+	case 11:
+		if reader.offset + 8 > len(reader.data) {reader.valid = false; vm.PushNil(L); return}
+		value := datatypes.Vector2 {
+			X = replication_read_f32(reader),
+			Y = replication_read_f32(reader),
+		}
+		datatypes.Push_Vector2(L, datatype_registry, value)
+	case 12:
+		if reader.offset + 16 > len(reader.data) {reader.valid = false; vm.PushNil(L); return}
+		value := datatypes.Rect {
+			Min = datatypes.Vector2 {
+				X = replication_read_f32(reader),
+				Y = replication_read_f32(reader),
+			},
+			Max = datatypes.Vector2 {
+				X = replication_read_f32(reader),
+				Y = replication_read_f32(reader),
+			},
+		}
+		datatypes.Push_Rect(L, datatype_registry, value)
+	case 13:
+		count := replication_read_u32(reader)
+		if count > 32 || reader.offset + int(count) * 16 > len(reader.data) {
+			reader.valid = false; vm.PushNil(L); return
+		}
+		keypoints := make([]datatypes.ColorSequenceKeypoint, count)
+		for i in 0 ..< int(count) {
+			keypoints[i] = datatypes.ColorSequenceKeypoint {
+				Time  = replication_read_f32(reader),
+				Value = datatypes.Color3 {
+					R = replication_read_f32(reader),
+					G = replication_read_f32(reader),
+					B = replication_read_f32(reader),
+				},
+			}
+		}
+		sequence, ok := datatypes.ColorSequence_FromKeypoints(keypoints)
+		delete(keypoints)
+		if !ok {reader.valid = false; vm.PushNil(L); return}
+		datatypes.Push_ColorSequence(L, datatype_registry, sequence)
+	case 14:
+		count := replication_read_u32(reader)
+		if count > 32 || reader.offset + int(count) * 12 > len(reader.data) {
+			reader.valid = false; vm.PushNil(L); return
+		}
+		keypoints := make([]datatypes.NumberSequenceKeypoint, count)
+		for i in 0 ..< int(count) {
+			keypoints[i] = datatypes.NumberSequenceKeypoint {
+				Time     = replication_read_f32(reader),
+				Value    = replication_read_f32(reader),
+				Envelope = replication_read_f32(reader),
+			}
+		}
+		sequence, ok := datatypes.NumberSequence_FromKeypoints(keypoints)
+		delete(keypoints)
+		if !ok {reader.valid = false; vm.PushNil(L); return}
+		datatypes.Push_NumberSequence(L, datatype_registry, sequence)
+	case 15:
+		family := replication_read_string(reader)
+		if !reader.valid {vm.PushNil(L); return}
+		weight := i32(replication_read_f32(reader))
+		style := i32(replication_read_f32(reader))
+		font := datatypes.Font {
+			Family = family,
+			Weight = enums.FontWeight(weight),
+			Style  = enums.FontStyle(style),
+		}
+		datatypes.Push_Font(L, datatype_registry, font)
+	case 16:
+		enum_name := replication_read_string(reader)
+		value := i64(replication_read_u32(reader))
+		if !reader.valid ||
+		   datatype_registry == nil ||
+		   datatype_registry.enums == nil {
+			reader.valid = false; vm.PushNil(L); return
+		}
+		if !enums.Push_Item_By_Value(
+			L,
+			datatype_registry.enums,
+			enum_name,
+			value,
+		) {
+			reader.valid = false
+		}
 	case:
 		reader.valid = false; vm.PushNil(L)
 	}

@@ -4,6 +4,8 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import vm "../vm"
+import "core:fmt"
+import "core:strings"
 import enet "vendor:ENet"
 
 replication_entity_id :: proc(service: ^ReplicatorService, object: ^classes.Object) -> u32 {
@@ -73,8 +75,41 @@ replication_schema :: proc(
 	service: ^ReplicatorService,
 	class_name: string,
 ) -> ^Replication_Schema {
-	for &schema in service.schemas {if schema.class_name == class_name {return &schema}}
-	return nil
+	for &schema in service.schemas {
+		if schema.class_name == class_name {return &schema}
+	}
+	if service == nil ||
+	   service.data_model == nil ||
+	   service.data_model.registry == nil ||
+	   service.data_model.registry.classes == nil {
+		return nil
+	}
+	if replication_builtin_class(class_name) {
+		return nil
+	}
+	properties := classes.Class_Property_List(
+		service.data_model.registry.classes,
+		class_name,
+	)
+	schema: Replication_Schema
+	schema.class_name = strings.clone(class_name)
+	for property in properties {
+		switch property {
+		case "Parent", "Name", "ReplicationMode", "ReplicationGroup",
+		     "AbsolutePosition", "AbsoluteSize",
+		     "TextBounds", "SelectedText", "LineCount",
+		     "AbsoluteCellCount", "AbsoluteCellSize", "AbsoluteContentSize":
+			continue
+		}
+		append(&schema.properties, strings.clone(property))
+	}
+	delete(properties)
+	if len(schema.properties) == 0 {
+		delete(schema.class_name)
+		return nil
+	}
+	append(&service.schemas, schema)
+	return &service.schemas[len(service.schemas) - 1]
 }
 
 replication_schema_has :: proc(schema: ^Replication_Schema, property: string) -> bool {
@@ -96,8 +131,16 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 		class_name == "StringValue" ||
 		class_name == "Vector3Value" ||
 		class_name == "Color3Value" ||
-		class_name == "CFrameValue" \
+		class_name == "CFrameValue" ||
+		class_name == "RemoteEvent" ||
+		class_name == "RemoteFunction" \
 	)
+}
+
+replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
+	return object != nil &&
+	       classes.Is_A(object, "MeshPart") &&
+	       (property == "MeshId" || property == "TextureId")
 }
 
 REPLICATION_ROOT_NAMES := [?]string {
@@ -224,7 +267,8 @@ replication_send_owned_state :: proc(
 	   entity.object.destroyed ||
 	   !classes.Is_A(entity.object, "Part") {return false}
 	part := cast(^classes.Part)entity.object
-	if part.anchored {return false}
+	if part.anchored &&
+	   (part.parent == nil || !classes.Is_A(part.parent, "CharacterModel")) {return false}
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity.id)
@@ -281,6 +325,7 @@ replication_send_part_state :: proc(
 	replication_put_f32(&bytes, f32(part.transparency))
 	append(&bytes, part.anchored ? u8(1) : u8(0))
 	append(&bytes, part.can_collide ? u8(1) : u8(0))
+	append(&bytes, u8(part.material))
 	ack: u32
 	if part.parent != nil &&
 	   classes.Is_A(part.parent, "CharacterModel") &&
@@ -323,6 +368,9 @@ replication_send_property :: proc(
 	replication_put_u32(&bytes, service.tick)
 	replication_put_string(&bytes, property)
 	top := vm.StackTop(L)
+	previous := vm.GetThreadSecurityCapabilities(L)
+	vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
+	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, top)
 	classes.Push_Object(L, object)
 	_ = vm.GetField(L, -1, property)
@@ -359,6 +407,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	}
 	for &connection in service.peers {
 		connection.bytes_this_tick = 0
+		spawned := 0
 		for item in service.entities {
 			if !replication_visible(service, &connection, item.object) ||
 			   service.suppressed[item.object] {continue}
@@ -375,6 +424,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				connection.known[item.id] = parent_id + 1
 				delete_key(&connection.initialized, item.id)
 				delete_key(&connection.state_hashes, item.id)
+				spawned += 1
 			}
 		}
 		for item in service.entities {
@@ -430,6 +480,22 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				}
 			}
 			if sent {connection.initialized[item.id] = true}
+			if replication_builtin_property(item.object, "MeshId") {
+				_ = replication_send_property(
+					service,
+					service.data_model.registry.vm_state.L,
+					connection.peer,
+					item.object,
+					"MeshId",
+				)
+				_ = replication_send_property(
+					service,
+					service.data_model.registry.vm_state.L,
+					connection.peer,
+					item.object,
+					"TextureId",
+				)
+			}
 			schema := replication_schema(service, classes.Get_Class_Name(item.object))
 			if schema != nil {
 				for property in schema.properties {
@@ -444,6 +510,13 @@ replication_sync :: proc(service: ^ReplicatorService) {
 					}
 				}
 			}
+		}
+		if spawned > 0 && connection.player != nil {
+			fmt.printf(
+				"[Replication] sent initial snapshot to %s (%d instances)\n",
+				connection.player.name,
+				spawned,
+			)
 		}
 	}
 	for index := len(service.entities) - 1; index >= 0; index -= 1 {

@@ -477,12 +477,16 @@ private:
 
 JPH::TempAllocator* sJphTempAllocator = nullptr;
 bool sJphInitialized = false;
+int32_t sJphUsers = 0;
 
 }
 int32_t JPH_Init(void)
 {
     if (sJphInitialized)
-        return 0;
+    {
+        sJphUsers += 1;
+        return 1;
+    }
 
     JPH::RegisterDefaultAllocator();
     JPH::Trace = TraceJolt;
@@ -493,6 +497,7 @@ int32_t JPH_Init(void)
     sJphTempAllocator = new JPH::TempAllocatorImplWithMallocFallback(32 * 1024 * 1024);
 
     sJphInitialized = true;
+    sJphUsers = 1;
     return 1;
 }
 
@@ -501,6 +506,11 @@ void JPH_Shutdown(void)
     if (!sJphInitialized)
         return;
 
+    sJphUsers -= 1;
+    if (sJphUsers > 0)
+        return;
+
+    sJphUsers = 0;
     delete sJphTempAllocator;
     sJphTempAllocator = nullptr;
 

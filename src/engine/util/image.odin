@@ -29,7 +29,7 @@ image_from_mem :: proc(loaded: []u8) -> EngineImage {
         return EngineImage{}
     }
 
-    defer image.image_free(pixels)
-
+    // NOTE: no `defer image_free` here — the caller owns `pixels` and must
+    // free it. Freeing here would hand back a dangling pointer.
     return EngineImage{width = width, height = height, pixels = pixels}
 }

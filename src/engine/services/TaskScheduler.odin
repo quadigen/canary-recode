@@ -56,6 +56,46 @@ cancel_all_tasks :: proc(scheduler: ^TaskScheduler) {
 	clear(&scheduler.tasks)
 }
 
+TaskScheduler_Owns_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> bool {
+	if scheduler == nil || thread == nil {
+		return false
+	}
+	for task in scheduler.tasks {
+		if task.thread == thread {
+			return true
+		}
+	}
+	return false
+}
+
+// TaskScheduler_Cancel_Thread drops every pending resume for a thread and
+// releases the retained references. Script contexts use it to stop a disabled or
+// destroyed script without leaking the suspended thread.
+TaskScheduler_Cancel_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> bool {
+	if scheduler == nil || thread == nil {
+		return false
+	}
+	cancelled := false
+	for index := len(scheduler.tasks) - 1; index >= 0; index -= 1 {
+		if scheduler.tasks[index].thread == thread {
+			vm.ReleaseValue(scheduler.L, scheduler.tasks[index].thread_ref)
+			ordered_remove(&scheduler.tasks, index)
+			cancelled = true
+		}
+	}
+	return cancelled
+}
+
+// task_scheduler_describe_thread names the script owning a thread so scheduled
+// failures can be reported with script context.
+task_scheduler_describe_thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> string {
+	script_context := cast(^ScriptContext)Service_Get_Service(&scheduler.service, "ScriptContext")
+	if script_context == nil {
+		return ""
+	}
+	return ScriptContext_Describe_Thread(script_context, thread)
+}
+
 task_scheduler_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
 	if method != "CancelAll" { return 0, false }
 	cancel_all_tasks(cast(^TaskScheduler)object)
@@ -114,7 +154,8 @@ task_wait :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
 	if scheduler == nil || scheduler.destroyed { return vm.RaiseError(L, "TaskScheduler is unavailable") }
-	if !vm.IsYieldable(L) { return vm.RaiseError(L, "task.wait must be called from a coroutine") }
+	// Remove the IsYieldable check - task.wait should work from any thread,
+	// including the main script thread, not just spawned coroutines
 	delay := max(vm.ArgOptionalNumber(L, 1, 0), 0)
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
@@ -188,11 +229,21 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 			vm.PushNumber(task.thread, scheduler.elapsed-task.wait_started_at)
 			argument_count = 1
 		}
-		_, _, err := vm.ResumeThread(task.thread, scheduler.L, argument_count)
+		_, _, err, traceback := vm.ResumeThreadTraceback(task.thread, scheduler.L, argument_count)
 		vm.ReleaseValue(scheduler.L, task.thread_ref)
 		if err != "" {
-			fmt.eprintf("Scheduled task failed: %s\n", err)
+			describe := task_scheduler_describe_thread(scheduler, task.thread)
+			if len(describe) > 0 {
+				if len(traceback) > 0 {
+					fmt.eprintf("Script error in %s:\n%s\n", describe, traceback)
+				} else {
+					fmt.eprintf("Script error in %s:\n%s\n", describe, err)
+				}
+			} else {
+				fmt.eprintf("Scheduled task failed: %s\n", err)
+			}
 			delete(err)
+			delete(traceback)
 		}
 	}
 	delete(ready)

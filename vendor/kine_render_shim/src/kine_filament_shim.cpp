@@ -539,6 +539,8 @@ struct KineFilamentContext {
     Skybox*        skybox        = nullptr;
     Texture*       skyTexture    = nullptr;
     IndirectLight* indirectLight = nullptr;
+    double nearPlane = 0.1;
+    double farPlane  = 500.0;
     void* filamentCtx = nullptr;
     math::float4 skyColor = {0.53f, 0.81f, 0.92f, 1.0f};
 
@@ -3275,7 +3277,7 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
 
     ctx->cameraEntity = EntityManager::get().create();
     ctx->camera = ctx->engine->createCamera(ctx->cameraEntity);
-    ctx->camera->setProjection(60.0, double(width) / double(height), 1.0, 500.0);
+    ctx->camera->setProjection(60.0, double(width) / double(height), ctx->nearPlane, ctx->farPlane);
 
     ctx->view->setScene(ctx->scene);
     ctx->view->setCamera(ctx->camera);
@@ -4438,7 +4440,7 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext* ctx, int width, int heig
         rebuildRenderTarget(ctx, width, height);
     }
     ctx->loggedFirstFrame = false;
-    ctx->camera->setProjection(60.0, double(width) / double(height), 1.0, 500.0);
+    ctx->camera->setProjection(60.0, double(width) / double(height), ctx->nearPlane, ctx->farPlane);
     if (ctx->postProcessShader && !kine_build_post_process_pipeline(ctx)) {
         fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline after resize\n");
         ctx->postProcessShader = nullptr;
@@ -4472,11 +4474,7 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, 
     ctx->viewportWidth = clampedWidth;
     ctx->viewportHeight = clampedHeight;
 
-    ctx->camera->setProjection(
-        60.0,
-        double(clampedWidth) / double(clampedHeight),
-        1.0,
-        500.0);
+    ctx->camera->setProjection(60.0, double(clampedWidth) / double(clampedHeight), ctx->nearPlane, ctx->farPlane);
 
     if (ctx->postProcessShader) {
         if (viewportChanged && !kine_build_post_process_pipeline(ctx)) {
@@ -4934,6 +4932,8 @@ KINE_API void Kine_Filament_SetCameraPerspective(
     double fovYDegrees, double aspect, double nearPlane, double farPlane)
 {
     if (!ctx || !ctx->camera) return;
+    ctx->nearPlane = nearPlane;
+    ctx->farPlane  = farPlane;
     ctx->camera->setProjection(fovYDegrees, aspect, nearPlane, farPlane);
     if (ctx->view) {
         ctx->view->setDynamicLightingOptions(

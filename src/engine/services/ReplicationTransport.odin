@@ -3,10 +3,12 @@ package services
 
 import classes "../classes"
 import datatypes "../datatypes"
+import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
 import "core:strings"
+import "base:runtime"
 import enet "vendor:ENet"
 
 replication_start :: proc(
@@ -113,6 +115,13 @@ replication_send :: proc(
 	return true
 }
 
+replication_apply_property :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	name := vm.ArgString(L, int(vm.UpvalueIndex(1)))
+	vm.SetField(L, -2, name)
+	return 0
+}
+
 replication_receive :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
@@ -155,15 +164,23 @@ replication_receive :: proc(
 			schema := replication_schema(service, classes.Get_Class_Name(object))
 			if name != "Name" &&
 			   (name != "Value" || !classes.Is_A(object, "ValueBase")) &&
+			   !replication_builtin_property(object, name) &&
 			   !replication_schema_has(schema, name) {reader.valid = false; break}
 			top := vm.StackTop(L)
+			previous := vm.GetThreadSecurityCapabilities(L)
+			vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
+			defer vm.SetThreadSecurityCapabilities(L, previous)
 			defer vm.SetStackTop(L, top)
+			vm.PushString(L, name)
+			vm.PushFunction(L, "replication_apply_property", replication_apply_property, 1)
 			classes.Push_Object(L, object)
 			replication_decode_value(L, &reader, service.signal_registry.datatypes, 0)
-			if reader.valid {
-				vm.SetField(L, -2, name)
-				entity.last_tick = tick
+			if !reader.valid {break}
+			if ok, err := vm.ProtectedCall(L, 2, 0); !ok {
+				fmt.eprintf("[Replication] failed to apply property %q to %s: %s\n", name, classes.Get_Class_Name(object), err)
+				vm.Pop(L)
 			}
+			entity.last_tick = tick
 			break
 		}
 		if subtype != 1 || !classes.Is_A(object, "Part") {reader.valid = false; break}
@@ -192,10 +209,11 @@ replication_receive :: proc(
 			B = replication_read_f32(&reader),
 		}
 		transparency := replication_read_f32(&reader)
-		if reader.offset + 6 > len(reader.data) {reader.valid = false; break}
+		if reader.offset + 7 > len(reader.data) {reader.valid = false; break}
 		anchored := reader.data[reader.offset] != 0
 		can_collide := reader.data[reader.offset + 1] != 0
-		reader.offset += 2
+		material := enums.Material(reader.data[reader.offset + 2])
+		reader.offset += 3
 		ack := replication_read_u32(&reader)
 		if reader.valid {
 			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
@@ -211,7 +229,32 @@ replication_receive :: proc(
 				players.local_player != nil &&
 				entity.owner_id == players.local_player.user_id
 			if local_character && object.name == "HumanoidRootPart" {
-				character_reconcile(service, entity, frame, ack)
+				if owned {
+					// This character is owned by the local player: the server
+					// accepts our state instead of simulating it. On the first
+					// authoritative frame align to the server's spawn position,
+					// then only snap when the server forces a correction.
+					if entity.force_correction {
+						part.cframe = frame
+						part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
+						entity.force_correction = false
+					}
+					characters := cast(^CharacterService)Ensure_Service(
+						service.data_model.registry,
+						"CharacterService",
+					)
+					if characters != nil && !characters.authoritative_received {
+						character_translate(
+							cast(^classes.CharacterModel)object.parent,
+							frame.x - part.cframe.x,
+							frame.y - part.cframe.y,
+							frame.z - part.cframe.z,
+						)
+						characters.authoritative_received = true
+					}
+				} else {
+					character_reconcile(service, entity, frame, ack)
+				}
 			} else if local_character {
 				if entity.last_tick == 0 {
 					part.cframe = frame
@@ -249,6 +292,9 @@ replication_receive :: proc(
 			part.transparency = f64(transparency)
 			part.anchored = anchored
 			part.can_collide = can_collide
+			if int(material) >= 0 && int(material) <= int(enums.Material.debug) {
+				part.material = material
+			}
 			classes.Set_Name(object, name)
 			entity.last_tick = tick
 		}
@@ -343,7 +389,7 @@ replication_receive :: proc(
 			return
 		}
 		part := cast(^classes.Part)entity.object
-		if part.anchored || reader.offset + 48 != len(reader.data) {
+		if reader.offset + 48 != len(reader.data) {
 			service.owned_states_rejected += 1
 			return
 		}
@@ -393,6 +439,8 @@ replication_receive :: proc(
 		entity.last_accepted_ms = now
 		entity.last_accepted_position = part.position
 		service.owned_states_accepted += 1
+	case 13:
+		replication_receive_ownership_request(service, peer, &reader)
 	case 15:
 		if service.mode != .Client || peer != service.remote {return}
 		id := replication_read_u32(&reader)
@@ -425,6 +473,38 @@ replication_receive :: proc(
 			if !ok && err != "" {delete(err)}
 		}
 		vm.ReleaseValue(L, payload_ref)
+	case 16:
+		// RemoteEvent fire.
+		if service.mode == .Server {
+			known := false
+			for connection in service.peers {if connection.peer == peer {known = true; break}}
+			if !known {return}
+		} else if peer != service.remote {return}
+		id := replication_read_u32(&reader)
+		if !reader.valid || id == 0 {break}
+		remote_receive_fire(service, L, peer, id, &reader)
+		if !reader.valid {break}
+	case 17:
+		// RemoteFunction invoke request.
+		if service.mode == .Server {
+			known := false
+			for connection in service.peers {if connection.peer == peer {known = true; break}}
+			if !known {return}
+		} else if peer != service.remote {return}
+		id := replication_read_u32(&reader)
+		invoke_id := replication_read_u32(&reader)
+		if !reader.valid || id == 0 {break}
+		remote_run_invoke(service, L, peer, id, invoke_id, &reader)
+		if !reader.valid {break}
+	case 18:
+		// RemoteFunction invoke response.
+		if service.mode == .Server {
+			known := false
+			for connection in service.peers {if connection.peer == peer {known = true; break}}
+			if !known {return}
+		} else if peer != service.remote {return}
+		remote_receive_invoke_response(service, L, &reader)
+		if !reader.valid {break}
 	case:
 		reader.valid = false
 	}
@@ -433,6 +513,7 @@ replication_receive :: proc(
 
 Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: f32) {
 	if service == nil || service.host == nil {return}
+	remote_invoke_timeouts(service, L)
 	event: enet.Event
 	for enet.host_service(service.host, &event, 0) > 0 {
 		switch event.type {

@@ -16,6 +16,7 @@ CharacterService :: struct {
 	move_direction:         datatypes.Vector3,
 	jump_queued:            bool,
 	local_jump_pending:     bool,
+	scripted_move:          bool,
 	input_sequence:         u32,
 	last_ack:               u32,
 	authoritative_received: bool,
@@ -116,77 +117,13 @@ CharacterService_Load :: proc(
 		G = 0.8,
 		B = 0.08,
 	}
-	blue := datatypes.Color3 {
-		R = 0.08,
-		G = 0.3,
-		B = 0.85,
-	}
-	gray := datatypes.Color3 {
-		R = 0.16,
-		G = 0.16,
-		B = 0.18,
-	}
 	_ = character_service_part(
 		service,
 		model,
 		"HumanoidRootPart",
-		datatypes.Vector3{2, 2, 1},
+		datatypes.Vector3{2, 4, 2},
 		spawn,
-		gray,
-		false,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"Torso",
-		datatypes.Vector3{2, 2, 1},
-		datatypes.Vector3{spawn.x, spawn.y, spawn.z},
-		blue,
-		true,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"Head",
-		datatypes.Vector3{1.2, 1.2, 1.2},
-		datatypes.Vector3{spawn.x, spawn.y + 1.7, spawn.z},
 		yellow,
-		true,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"LeftArm",
-		datatypes.Vector3{0.7, 2, 0.8},
-		datatypes.Vector3{spawn.x - 1.4, spawn.y, spawn.z},
-		yellow,
-		true,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"RightArm",
-		datatypes.Vector3{0.7, 2, 0.8},
-		datatypes.Vector3{spawn.x + 1.4, spawn.y, spawn.z},
-		yellow,
-		true,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"LeftLeg",
-		datatypes.Vector3{0.8, 2, 0.8},
-		datatypes.Vector3{spawn.x - 0.55, spawn.y - 2, spawn.z},
-		gray,
-		true,
-	)
-	_ = character_service_part(
-		service,
-		model,
-		"RightLeg",
-		datatypes.Vector3{0.8, 2, 0.8},
-		datatypes.Vector3{spawn.x + 0.55, spawn.y - 2, spawn.z},
-		gray,
 		true,
 	)
 	classes.Set_Parent(object, workspace)
@@ -334,6 +271,7 @@ character_service_namecall :: proc(
 		return 1, true
 	case "SetMoveDirection":
 		service.move_direction = datatypes.Arg_Vector3(L, 2)
+		service.scripted_move = true
 		vm.PushBoolean(L, true)
 		return 1, true
 	case "Jump":

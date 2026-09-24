@@ -203,7 +203,7 @@ Register_UpdateService_Class :: proc(registry: ^classes.Registry) {
 // stamped release builds. Developer builds (`odin run`, no RUNTIME_GIT_COMMIT)
 // never disable the system indirectly by being unstamped.
 update_service_enabled :: proc() -> bool {
-	when target.IS_SERVER {
+	if target.is_server() {
 		return false
 	} else {
 		return len(globals.RUNTIME_GIT_COMMIT) > 0 && len(globals.RUNTIME_UPDATE_URL) > 0
@@ -568,18 +568,6 @@ update_join_dir :: proc(base_dir, name: string) -> string {
 // redirect to a signed object-storage URL). Returns the raw bytes allocated on
 // `context.allocator`.
 update_download_asset :: proc(url: string) -> (body: string, ok: bool) {
-	return update_download_asset_stream(url, nil, nil)
-}
-
-// Streaming variant of `update_download_asset`. `on_read` is invoked with each
-// downloaded chunk (`delta` bytes and a `total_hint`) so the caller can surface
-// download progress while the body is still being fetched.
-update_download_asset_stream :: proc(
-	url: string,
-	on_read: proc(delta, total_hint: i64, userdata: rawptr),
-	userdata: rawptr = nil,
-	total_hint: i64 = -1,
-) -> (body: string, ok: bool) {
 	current_url := strings.clone(url, context.allocator)
 	defer delete(current_url)
 
@@ -608,43 +596,29 @@ update_download_asset_stream :: proc(
 			return "", false
 		}
 
-		streamed, body_error := http_client.response_body_stream(
-			&response,
-			allocator = context.allocator,
-			total_hint = total_hint,
-			on_read = on_read,
-			userdata = userdata,
-		)
+		parsed, body_allocated, body_error := http_client.response_body(&response, allocator = context.allocator)
 		if body_error != nil {
 			fmt.eprintf("[UpdateService] asset body read failed at %s: %v\n", current_url, body_error)
 			return "", false
 		}
-		return streamed, true
+		defer http_client.body_destroy(parsed, body_allocated, context.allocator)
+
+		#partial switch value in parsed {
+		case http_client.Body_Plain:
+			return strings.clone(string(value), context.allocator), true
+		case:
+			return "", false
+		}
 	}
 	return "", false
 }
 
-// Downloads the update bundle and stages it into the pending directory, writing
-// pending.version as the ready marker. Never frees `report`; ownership stays
-// with the caller.
 update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateReport) -> bool {
-	return update_service_stage_to_dir_stream(service, report, nil, nil, -1)
-}
-
-// Streaming variant of `update_service_stage_to_dir`; `on_read` receives each
-// downloaded chunk so an explicit apply can report download progress.
-update_service_stage_to_dir_stream :: proc(
-	service: ^UpdateService,
-	report: UpdateReport,
-	on_read: proc(delta, total_hint: i64, userdata: rawptr),
-	userdata: rawptr = nil,
-	total_hint: i64 = -1,
-) -> bool {
 	if service == nil || len(report.asset_url) == 0 {
 		return false
 	}
 
-	data, ok := update_download_asset_stream(report.asset_url, on_read, userdata, total_hint)
+	data, ok := update_download_asset(report.asset_url)
 	if !ok {
 		return false
 	}
@@ -1244,27 +1218,6 @@ update_apply_set_total :: proc(service: ^UpdateService, total: i64) {
 	service.apply.percent = update_apply_percent_of(service.apply.downloaded, total)
 }
 
-// Resets the byte counter before a fresh download attempt so progress never
-// looks like it regressed or overshot after a retry.
-update_apply_reset_downloaded :: proc(service: ^UpdateService) {
-	sync.mutex_lock(&service.apply_mutex)
-	defer sync.mutex_unlock(&service.apply_mutex)
-	service.apply.downloaded = 0
-	service.apply.percent = 0
-}
-
-// Progress callback driven by the streaming download on the apply thread.
-update_apply_on_read :: proc(delta, total_hint: i64, userdata: rawptr) {
-	service := cast(^UpdateService)userdata
-	if service == nil {
-		return
-	}
-	sync.mutex_lock(&service.apply_mutex)
-	defer sync.mutex_unlock(&service.apply_mutex)
-	service.apply.downloaded += delta
-	service.apply.percent = update_apply_percent_of(service.apply.downloaded, service.apply.total)
-}
-
 update_apply_fail :: proc(service: ^UpdateService, message: string) {
 	if service == nil {
 		return
@@ -1289,11 +1242,9 @@ update_apply_finish :: proc(service: ^UpdateService, asset_size: i64) {
 	defer sync.mutex_unlock(&service.apply_mutex)
 	service.apply.running = false
 	service.apply.status = .Ready
-	if service.apply.total <= 0 {
-		service.apply.total = asset_size
-		service.apply.downloaded = asset_size
-		service.apply.percent = 100.0
-	}
+	service.apply.total = asset_size
+	service.apply.downloaded = asset_size
+	service.apply.percent = 100.0
 }
 
 // Background apply flow: fetch the manifest, download the asset with progress,
@@ -1335,15 +1286,8 @@ update_service_apply_thread_main :: proc(t: ^thread.Thread) {
 	// UI reports a failed apply (the user can always retry from the prompt).
 	staged_ok := false
 	for attempt in 0 ..< 2 {
-		update_apply_reset_downloaded(service)
 		sync.mutex_lock(&service.stage_mutex)
-		staged_ok = update_service_stage_to_dir_stream(
-			service,
-			report,
-			update_apply_on_read,
-			service,
-			report.asset_size,
-		)
+		staged_ok = update_service_stage_to_dir(service, report)
 		sync.mutex_unlock(&service.stage_mutex)
 		if staged_ok {
 			break

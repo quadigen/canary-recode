@@ -100,6 +100,18 @@ physics_shape_for_part :: proc(
 	}
 }
 
+physics_remote_owned :: proc(service: ^Physics, part: ^classes.Part) -> bool {
+	if service == nil || service.data_model == nil || part == nil {return false}
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+	if replicator == nil || replicator.mode == .Stopped {return false}
+	entity := replication_entity(replicator, &part.object)
+	if entity == nil || entity.owner_id == 0 {return false}
+	if replicator.mode == .Server {return true}
+	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+	if players == nil || players.local_player == nil {return true}
+	return entity.owner_id != players.local_player.user_id
+}
+
 physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_Body, bool) {
 	mesh_context: ^kineffi.KineFilamentContext
 
@@ -124,10 +136,15 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 
 	rotation := physics_quaternion_from_cframe(part.cframe)
 
-	motion_type: kineffi.JPH_MotionType =
-		part.anchored ? .Static : .Dynamic
+	remote := physics_remote_owned(service, part)
 
-	layer: kineffi.JPH_ObjectLayer = part.anchored ? jolt.OBJECT_LAYER_NON_MOVING : jolt.OBJECT_LAYER_MOVING
+	static := part.anchored || remote
+
+	motion_type: kineffi.JPH_MotionType =
+		static ? .Static : .Dynamic
+
+	layer: kineffi.JPH_ObjectLayer =
+		static ? jolt.OBJECT_LAYER_NON_MOVING : jolt.OBJECT_LAYER_MOVING
 
 	settings := kineffi.JPH_BodyCreationSettings_Create3(
 		shape,
@@ -171,7 +188,7 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 	}
 
 	activation: kineffi.JPH_ActivationMode =
-		part.anchored ? .DontActivate : .Activate
+		static ? .DontActivate : .Activate
 
 	kineffi.JPH_BodyInterface_AddBody(
 		service.system.body_interface,
@@ -196,6 +213,21 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 		part.cframe,
 		mesh_id,
 	}, true
+}
+
+physics_refresh_part :: proc(service: ^Physics, part: ^classes.Part) {
+	if service == nil || !service.initialized || part == nil {return}
+	body_index := physics_find_body_index(service, &part.object)
+	if body_index < 0 {return}
+	body := service.bodies[body_index]
+	physics_destroy_body(service, body)
+	new_body, ok := physics_create_body(service, part)
+	if ok {
+		service.bodies[body_index] = new_body
+	} else {
+		ordered_remove(&service.bodies, body_index)
+	}
+	kineffi.JPH_PhysicsSystem_OptimizeBroadPhase(service.system.handle)
 }
 
 physics_destroy_body :: proc(service: ^Physics, body: Physics_Body) {

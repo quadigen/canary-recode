@@ -340,6 +340,7 @@ object_method :: proc "c" (L: ^vm.State) -> i32 {
 	}
 
 	method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
+	fmt.println("Object_Namecall method:", method)
 
 	binding := vm.UserdataBindingOf(L, 1)
 

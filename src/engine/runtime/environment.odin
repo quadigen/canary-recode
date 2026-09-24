@@ -8,6 +8,7 @@ import globals "../global"
 import packages "../packages"
 import signals "../signals"
 import services "../services"
+import target "../target"
 import vm "../vm"
 import renderer "../renderer"
 import tracy "../util/odin-tracy"
@@ -23,6 +24,9 @@ Environment :: struct {
 	modules: vm.Environment,
 	renderer: ^renderer.RendererObject,
 	packages: packages.Registry,
+	// mode is the role of this runtime (Server/Client/Editor). Script execution
+	// is scoped by it: Scripts belong to servers and LocalScripts to clients.
+	mode: target.Mode,
 }
 
 install_classes :: proc(vm_state: ^vm.VM, ctx: rawptr) {
@@ -50,14 +54,20 @@ install_signals :: proc(vm_state: ^vm.VM, ctx: rawptr) {
 	signals.Install(cast(^signals.Registry)ctx, vm_state)
 }
 
-Environment_Init :: proc(environment: ^Environment, vm_state: ^vm.VM, renderer_object: ^renderer.RendererObject = nil) {
+Environment_Init :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	renderer_object: ^renderer.RendererObject = nil,
+	mode: target.Mode = target.current_mode,
+) {
 	assert(environment != nil)
+	environment.mode = mode
 	environment.renderer = renderer_object
 	engine_enums.Registry_Init(&environment.enums)
 	datatypes.Registry_Init(&environment.datatypes, &environment.enums)
 	signals.Registry_Init(&environment.signals)
 	environment.classes = classes.Registry_Init(&environment.datatypes, &environment.enums, renderer_object, signal_registry = &environment.signals)
-	environment.services = services.Registry_Init(&environment.classes, &environment.signals)
+	environment.services = services.Registry_Init(&environment.classes, &environment.signals, mode)
 	environment.modules = vm.Environment_Init()
 
 	classes.Register_Default_Classes(&environment.classes)
@@ -73,6 +83,18 @@ Environment_Init :: proc(environment: ^Environment, vm_state: ^vm.VM, renderer_o
 	vm.Environment_Add(&environment.modules, "globals", install_globals, &environment.globals)
 	vm.Environment_Install(&environment.modules, vm_state)
 	packages.Init(&environment.packages, vm_state, renderer_object)
+}
+
+// Environment_Set_Mode overrides an Environment's runtime role after it has been
+// initialized. Test harnesses and tooling that host a server runtime and a
+// client runtime in the same process use this to give each VM the correct
+// script execution scope.
+Environment_Set_Mode :: proc(environment: ^Environment, mode: target.Mode) {
+	if environment == nil {
+		return
+	}
+	environment.mode = mode
+	environment.services.mode = mode
 }
 
 Environment_Destroy :: proc(environment: ^Environment) {

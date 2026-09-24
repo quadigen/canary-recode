@@ -1469,15 +1469,15 @@ Init :: proc(
     vm.AddGlobal_Boolean(
         vm_state,
         "IsServer",
-        target.IS_SERVER,
+        target.is_server(),
     )
     vm.AddGlobal_Boolean(
         vm_state,
         "IsClient",
-        target.IS_CLIENT,
+        target.is_client(),
     )
-    vm.AddGlobal_Boolean(vm_state, "IsEditor", target.IS_EDITOR)
-    vm.AddGlobal_String(vm_state, "BuildTarget", target.NAME)
+    vm.AddGlobal_Boolean(vm_state, "IsEditor", target.is_editor())
+    vm.AddGlobal_String(vm_state, "BuildTarget", target.name())
     vm.NewTable(vm_state.L, 0, 8)
     vm.SetGlobalFromStack(
         vm_state,

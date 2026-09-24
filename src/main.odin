@@ -96,11 +96,9 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 	engine_runtime.Environment_SetEvent(ctx.environment, ctx.vm_state, event)
 }
 
-run_desktop :: proc() {
+run_desktop :: proc(options: Startup_Options) {
 	tracy.SetThreadName("Main")
-	options, options_ok := startup_options("127.0.0.1")
-	if !options_ok {return}
-	when target.IS_CLIENT {
+	if target.is_client() {
 		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
 			fmt.eprintln(
 				"Network client needs a reachable server address; use 127.0.0.1 for a server on this computer",
@@ -153,12 +151,44 @@ run_desktop :: proc() {
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
 
-	if options.playtest &&
-	   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
-		return
+	if target.is_server() {
+		if options.map_path != "" &&
+		   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
+			return
+		}
+	} else {
+		if options.playtest &&
+		   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
+			return
+		}
 	}
 
-	when target.IS_CLIENT {
+	if target.is_server() {
+		server_script_service := cast(^services.ServerScriptService)(
+			services.Ensure_Service(&environment.services, "ServerScriptService")
+		)
+		if server_script_service != nil {
+			fmt.println("Running scripts")
+			services.ServerScriptService_RunScripts(
+				environment.renderer,
+				environment.services.data_model,
+				&server_script_service.object,
+			)
+			fmt.println("Finished running scripts")
+		}
+		object := services.Ensure_Service(&environment.services, "ReplicatorService")
+		if object == nil ||
+		   !services.replication_start(
+				   cast(^services.ReplicatorService)object,
+				   options.address,
+				   options.port,
+				   .Server,
+			   ) {
+			fmt.eprintf("Could not start the server on %s:%d\n", options.address, options.port)
+			return
+		}
+		fmt.printf("Kinemium server listening on %s:%d\n", options.address, options.port)
+	} else if target.is_client() {
 		if !options.playtest {
 			object := services.Ensure_Service(&environment.services, "ReplicatorService")
 			if object == nil ||
@@ -175,19 +205,25 @@ run_desktop :: proc() {
 		}
 	}
 
-	services.Update_Service_Boot(
-		&environment.services,
-		!options.playtest,
-		options.update_check,
-		options.no_update,
-	)
+	if !target.is_server() {
+		services.Update_Service_Boot(
+			&environment.services,
+			!options.playtest,
+			options.update_check,
+			options.no_update,
+		)
+	}
 
 	profiling.init()
 	defer profiling.shutdown()
 
 	title := "Kinemium Engine"
 	if options.playtest {title = "Kinemium Playtest"}
-	when target.IS_CLIENT {if !options.playtest {title = "Kinemium Client"}}
+	if target.is_server() {
+		title = "Kinemium Server"
+	} else if target.is_client() {
+		if !options.playtest {title = "Kinemium Client"}
+	}
 	renderer.init(title, 800, 600, &renderer_object)
 
 	if !options.playtest {
@@ -197,5 +233,12 @@ run_desktop :: proc() {
 
 main :: proc() {
 	services.Update_Handle_Command_Line()
-	when target.IS_SERVER {run_server()} else {run_desktop()}
+	options, options_ok := startup_options()
+	if !options_ok {return}
+	target.set_mode(options.mode)
+	if target.is_server() && !options.window {
+		run_server(options)
+	} else {
+		run_desktop(options)
+	}
 }

@@ -41,7 +41,7 @@ init_runtime :: proc(
 		vm.Field("Name", "Kinemium"),
 		vm.Field("Version", "1.0"),
 		vm.Field("Debug", false),
-		vm.Field("Target", target.NAME),
+		vm.Field("Target", target.name()),
 	)
 
 	initialized = true
@@ -95,7 +95,7 @@ init :: proc(
 	renderer_object: ^renderer.RendererObject,
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
-	when target.IS_EDITOR && ODIN_OS != .JS {
+	if target.is_editor() && ODIN_OS != .JS {
 		editor_object := services.Ensure_Service(
 			&environment.services,
 			"EditorService",
@@ -129,7 +129,7 @@ init :: proc(
 		}
 		init_scripts()
 	}
-	when target.IS_EDITOR && ODIN_OS == .JS {
+	if target.is_editor() && ODIN_OS == .JS {
 		fmt.eprintln("[EditorStartup] remote editor archives are unavailable on Web; starting embedded modules")
 		init_scripts()
 	}

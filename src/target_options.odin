@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
+import target "engine/target"
 
 Startup_Options :: struct {
 	address: string,
@@ -13,12 +14,14 @@ Startup_Options :: struct {
 	playtest: bool,
 	update_check: bool,
 	no_update: bool,
+	window: bool,
+	mode:    target.Mode,
 }
 
-startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
+startup_options :: proc() -> (Startup_Options, bool) {
 	options := Startup_Options {
-		address = default_address,
-		port    = 1234,
+		port = 1234,
+		mode = target.ACTIVE,
 	}
 	for index := 1; index < len(os.args); index += 1 {
 		arg := os.args[index]
@@ -47,6 +50,12 @@ startup_options :: proc(default_address: string) -> (Startup_Options, bool) {
 			index += 1
 			options.map_path = os.args[index]
 			options.playtest = true
+		case "--server":
+			options.mode = target.Mode.Server
+		case "--client":
+			options.mode = target.Mode.Client
+		case "--editor":
+			options.mode = target.Mode.Editor
 case "--script":
 			if index + 1 >= len(os.args) {fmt.eprintln("--script requires a file path"); return options, false}
 			index += 1
@@ -54,6 +63,8 @@ case "--script":
 			options.update_check = true
 		case "--no-update":
 			options.no_update = true
+		case "--window":
+			options.window = true
 		case:
 			if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
 				if options.map_path != "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
@@ -64,6 +75,11 @@ case "--script":
 				return options, false
 			}
 		}
+	}
+	if options.mode == target.Mode.Server && options.address == "" {
+		options.address = "0.0.0.0"
+	} else if options.address == "" {
+		options.address = "127.0.0.1"
 	}
 	return options, true
 }

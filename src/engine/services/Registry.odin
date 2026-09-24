@@ -5,6 +5,7 @@ import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
 import signals "../signals"
+import target "../target"
 import vm "../vm"
 import tracy "../util/odin-tracy"
 import profiling "../profiling"
@@ -24,15 +25,21 @@ Registry :: struct {
 	data_model:      ^DataModel,
 	vm_state:        ^vm.VM,
 	signal_registry: ^signals.Registry,
+	// mode is the role of the runtime this registry drives. It scopes script
+	// execution: a Server runtime runs Scripts, a Client runtime runs
+	// LocalScripts, and an Editor runtime hosts either side.
+	mode:            target.Mode,
 }
 
 Registry_Init :: proc(
 	class_registry: ^classes.Registry,
 	signal_registry: ^signals.Registry = nil,
+	mode: target.Mode = target.current_mode,
 ) -> Registry {
 	return Registry{
 		classes = class_registry,
 		signal_registry = signal_registry,
+		mode = mode,
 	}
 }
 
@@ -340,6 +347,16 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.data_model = cast(^DataModel)model_object
 	registry.data_model.registry = registry
 	classes.Set_Data_Model(registry.classes, registry.data_model)
+	classes.Set_Network_Ownership(
+		registry.classes,
+		network_ownership_namecall,
+		registry.data_model,
+	)
+	classes.Set_Remote_Call(
+		registry.classes,
+		remote_call_dispatch,
+		registry.data_model,
+	)
 	vm.Pop(vm_state.L)
 
 	for service in registry.services {

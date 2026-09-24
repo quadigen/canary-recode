@@ -96,6 +96,8 @@ ReplicatorService :: struct {
 	unchanged_states_skipped:  u64,
 	owned_states_accepted:     u64,
 	owned_states_rejected:     u64,
+	invoke_pending:            [dynamic]Remote_Invoke_Pending,
+	next_invoke_id:            u32,
 }
 
 replication_enet_users: int
@@ -159,14 +161,25 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	for member in service.group_members {delete(member.name)}
 	delete(service.group_members)
 	service.group_members = nil
+	for pending in service.invoke_pending {
+		if pending.thread_ref != 0 && service.data_model != nil &&
+		   service.data_model.registry != nil &&
+		   service.data_model.registry.vm_state != nil &&
+		   service.data_model.registry.vm_state.L != nil {
+			vm.ReleaseValue(service.data_model.registry.vm_state.L, pending.thread_ref)
+		}
+	}
+	delete(service.invoke_pending)
+	service.invoke_pending = nil
+	service.next_invoke_id = 0
 	delete(service.suppressed)
 	service.suppressed = nil
 	service.remote = nil
 	service.mode = .Stopped
 	service.connected = false
 	if service.data_model != nil && service.data_model.registry != nil && service.data_model.registry.vm_state != nil && service.data_model.registry.vm_state.L != nil {
-		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsServer", target.IS_SERVER)
-		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsClient", target.IS_CLIENT)
+		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsServer", target.is_server())
+		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsClient", target.is_client())
 	}
 	service.elapsed = 0
 	service.tick = 0
@@ -373,8 +386,7 @@ replication_namecall :: proc(
 			property := vm.ArgString(L, -1)
 			if len(property) == 0 ||
 			   len(property) > 64 ||
-			   property == "Parent" ||
-			   property == "Source" {
+			   property == "Parent" {
 				vm.Pop(L)
 				return vm.RaiseError(L, "invalid schema property"), true
 			}
@@ -457,21 +469,7 @@ replication_namecall :: proc(
 				   ) {return vm.RaiseError(L, "owner must be a Player or nil"), true}
 			owner_id = (cast(^Player)player_object).user_id
 		}
-		entity.owner_id = owner_id
-		if classes.Is_A(instance, "Part") {
-			part := cast(^classes.Part)instance
-			entity.last_accepted_position = datatypes.Vector3 {
-				part.cframe.x,
-				part.cframe.y,
-				part.cframe.z,
-			}
-			entity.last_accepted_ms = enet.time_get()
-		}
-		bytes: [dynamic]u8
-		replication_put_u32(&bytes, entity.id)
-		replication_put_u32(&bytes, owner_id)
-		for connection in service.peers {if connection.known[entity.id] != 0 {_ = replication_send(service, connection.peer, 10, bytes[:])}}
-		delete(bytes)
+		replication_set_ownership(service, entity, owner_id)
 		vm.NewTable(L, 0, 2)
 		vm.PushNumber(L, f64(owner_id)); vm.SetField(L, -2, "owner")
 		vm.PushNumber(L, f64(entity.id)); vm.SetField(L, -2, "id")
@@ -551,13 +549,13 @@ replication_namecall :: proc(
 	case "GetStats":
 		vm.NewTable(L, 0, 15)
 		vm.PushBoolean(L, service.connected); vm.SetField(L, -2, "connected")
-		vm.PushInteger(L, i64(len(service.entities))); vm.SetField(L, -2, "replicatedEntities")
-		vm.PushInteger(L, i64(len(service.peers))); vm.SetField(L, -2, "peers")
-		vm.PushInteger(L, i64(service.packets_sent)); vm.SetField(L, -2, "packetsSent")
+vm.PushNumber(L, f64(len(service.entities))); vm.SetField(L, -2, "replicatedEntities")
+		vm.PushNumber(L, f64(len(service.peers))); vm.SetField(L, -2, "peers")
+		vm.PushNumber(L, f64(service.packets_sent)); vm.SetField(L, -2, "packetsSent")
 		vm.PushNumber(L, f64(service.bytes_sent)); vm.SetField(L, -2, "bytesSent")
-		vm.PushInteger(L, i64(service.packets_received)); vm.SetField(L, -2, "packetsReceived")
+		vm.PushNumber(L, f64(service.packets_received)); vm.SetField(L, -2, "packetsReceived")
 		vm.PushNumber(L, f64(service.bytes_received)); vm.SetField(L, -2, "bytesReceived")
-		vm.PushInteger(L, i64(service.malformed_packets)); vm.SetField(L, -2, "malformedPackets")
+		vm.PushNumber(L, f64(service.malformed_packets)); vm.SetField(L, -2, "malformedPackets")
 		vm.PushNumber(L, f64(service.bandwidth_drops)); vm.SetField(L, -2, "bandwidthDrops")
 		vm.PushNumber(L, f64(service.unchanged_states_skipped)); vm.SetField(L, -2, "unchangedStatesSkipped")
 		vm.PushNumber(L, f64(service.tick)); vm.SetField(L, -2, "tick")

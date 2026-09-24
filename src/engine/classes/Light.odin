@@ -1280,6 +1280,8 @@ Register_Light :: proc(
 		get = light_get,
 		set = light_set,
 		clone = light_clone,
+
+		properties = []string {"Brightness", "Color", "Enabled", "Shadows"},
 	)
 }
 
@@ -1300,6 +1302,8 @@ Register_PointLight :: proc(
 		_step_phase = .Render_3D,
 
 		clone = point_light_clone,
+
+		properties = []string {"Brightness", "Color", "Enabled", "Range", "Shadows"},
 	)
 }
 
@@ -1320,6 +1324,8 @@ Register_SpotLight :: proc(
 		_step_phase = .Render_3D,
 
 		clone = spot_light_clone,
+
+		properties = []string {"Angle", "Brightness", "Color", "Enabled", "Face", "Range", "Shadows"},
 	)
 }
 
@@ -1340,5 +1346,7 @@ Register_SurfaceLight :: proc(
 		_step_phase = .Render_3D,
 
 		clone = surface_light_clone,
+
+		properties = []string {"Brightness", "Color", "Enabled", "Face", "Shadows"},
 	)
 }

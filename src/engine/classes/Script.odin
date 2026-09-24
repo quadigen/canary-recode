@@ -5,95 +5,61 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-Script_Execution_State :: enum {
-	NotStarted,
-	Started,
-	Errored,
-}
-
 Script_Class := Class_Info{
 	name   = "Script",
 	parent = &Instance_Class,
 }
 
-Script_Module_State :: enum {
-	Unloaded,
-	Loading,
-	Loaded,
-}
-
 Script :: struct {
 	using object: Object,
-
-	source:          string,
-	execution_state: Script_Execution_State,
-
-	module_state: Script_Module_State,
-	module_ref:   i32,
-}
-
-Script_Set_Source :: proc(script: ^Script, source: string) {
-	if script == nil {
-		return
-	}
-	script.module_state = .Unloaded
-	delete(script.source)
-	script.source = strings.clone(source)
-	script.execution_state = .NotStarted
-}
-
-Script_Apply_Environment :: proc(
-	L: ^vm.State,
-	object: ^Object,
-) -> bool {
-	if L == nil || object == nil {
-		return false
-	}
-
-	vm.NewTable(L, 0, 2)
-
-	// script = <this Script/ModuleScript>
-	Push_Object(L, object)
-	vm.SetField(L, -2, "script")
-
-	// metatable = {
-	//     __index = shared engine globals
-	// }
-	vm.NewTable(L, 0, 1)
-
-	vm.PushGlobals(L)
-	vm.SetField(L, -2, "__index")
-
-	// [chunk, environment, metatable]
-	if !vm.SetMetatable(L, -2) {
-		vm.Pop(L)
-		return false
-	}
-
-	// [chunk, environment]
-	//
-	// lua_setfenv consumes the environment
-	return vm.SetFunctionEnvironment(L, -2)
+	using common: Script_Common,
 }
 
 Script_Init :: proc(class: ^Class_Info = nil, name: string = "Script") -> Script {
 	resolved_class := class
 	if resolved_class == nil { resolved_class = &Script_Class }
 	return Script{
-		object     = Object_Init(resolved_class, name),
-		module_ref = -1,
+		object = Object_Init(resolved_class, name),
+		common = Script_Common{
+			enabled         = true,
+			module_state    = .Unloaded,
+			module_ref      = -1,
+			execution_state = .NotStarted,
+			thread_ref      = -1,
+		},
 	}
+}
+
+// Script_Set_Source replaces a Script's source text, invalidating its module
+// cache and any running thread.
+Script_Set_Source :: proc(script: ^Script, source: string) {
+	if script == nil {
+		return
+	}
+	L := script_vm_state(script.signal_registry)
+	Script_Common_Set_Source(L, &script.common, source)
+}
+
+// Script_Set_Enabled toggles execution. The script context observes the change
+// on the next step: a disabled script is never started, and a running script is
+// stopped.
+Script_Set_Enabled :: proc(script: ^Script, enabled: bool) {
+	if script == nil {
+		return
+	}
+	script.enabled = enabled
+}
+
+Script_Get_Enabled :: proc(script: ^Script) -> bool {
+	if script == nil {
+		return false
+	}
+	return script.enabled
 }
 
 script_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	script := new(Script)
 	script^ = Script_Init()
-	return &script.object
-}
-
-module_script_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
-	script := new(Script)
-	script^ = Script_Init(&ModuleScript_Class, "ModuleScript")
 	return &script.object
 }
 
@@ -106,8 +72,12 @@ script_get :: proc(
 ) -> bool {
 	script := cast(^Script)object
 	switch key {
-	case "Source": vm.PushString(L, script.source)
-	case: return false
+	case "Source":
+		vm.PushString(L, script.source)
+	case "Enabled":
+		vm.PushBoolean(L, script.enabled)
+	case:
+		return false
 	}
 	return true
 }
@@ -120,52 +90,48 @@ script_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	if key != "Source" { return false }
 	script := cast(^Script)object
-	if script.module_ref > 0 {
-		vm.ReleaseValue(L, script.module_ref)
-		script.module_ref = -1
+	switch key {
+	case "Source":
+		Script_Set_Source(script, vm.ArgString(L, value_index))
+	case "Enabled":
+		Script_Set_Enabled(script, vm.ArgBoolean(L, value_index))
+	case:
+		return false
 	}
-	script.module_state = .Unloaded
-	delete(script.source)
-	script.source = strings.clone(vm.ArgString(L, value_index))
 	return true
 }
 
 script_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	script := cast(^Script)object
+	L := script_vm_state(object.signal_registry)
+	Script_Release_Module(L, &script.common)
+	Script_Release_Thread(L, &script.common)
 	delete(script.source)
+	script.source = ""
 	Object_Destroy(object)
 	free(script)
-}
-
-script_member_security :: proc() -> [2]Member_Security {
-	return [2]Member_Security{
-		Property_Read_Security(
-			"Source",
-			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_READ),
-		),
-		Property_Write_Security(
-			"Source",
-			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_WRITE),
-		),
-	}
 }
 
 script_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^Script)source
 	dst := cast(^Script)destination
 
-	delete(dst.source)
+	L := script_vm_state(dst.signal_registry)
+	Script_Release_Module(L, &dst.common)
+	Script_Release_Thread(L, &dst.common)
 
-	dst.source       = strings.clone(src.source)
-	dst.module_state = .Unloaded
-	dst.module_ref   = -1
+	delete(dst.source)
+	dst.source          = strings.clone(src.source)
+	dst.enabled         = src.enabled
+	dst.module_state    = .Unloaded
+	dst.module_ref      = -1
+	dst.thread          = nil
+	dst.thread_ref      = -1
 	dst.execution_state = .NotStarted
 }
 
 Register_Script :: proc(registry: ^Registry) {
-	rules := script_member_security()
 	Register_Class(
 		registry,
 		&Script_Class,
@@ -174,7 +140,6 @@ Register_Script :: proc(registry: ^Registry) {
 		get = script_get,
 		set = script_set,
 		clone = script_clone,
-		member_security = rules[:],
-		properties = []string{"Source"},
+		properties = []string{"Source", "Enabled"},
 	)
 }

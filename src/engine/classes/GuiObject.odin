@@ -1188,6 +1188,11 @@ GuiObject_set :: proc(
 		gui_object.border_mode = enums.BorderMode(
 			enums.Arg_Item(L, value_index, enum_registry, "BorderMode").value,
 		)
+	case "GuiState":
+		if enum_registry == nil {return false}
+		gui_object.gui_state = enums.GuiState(
+			enums.Arg_Item(L, value_index, enum_registry, "GuiState").value,
+		)
 	case "BackgroundColor3":
 		if datatype_registry == nil {return false}
 		gui_object.bg_color = datatypes.Arg_Color3(L, value_index, datatype_registry)

@@ -34,6 +34,11 @@ main :: proc() {
 	run_character_script(&server_vm, `
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39185))
 assert(IsServer and not IsClient)
+local floor = Instance.new("Part", workspace)
+floor.Name = "Spawn"
+floor.Size = vector.create(500, 1, 500)
+floor.CFrame = CFrame.new(0, 4, 0)
+floor.Anchored = true
 `, "character_server_start")
 	run_character_script(&first_vm, `
 assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39185))
@@ -51,7 +56,6 @@ for _, player in ipairs(players) do
     assert(player.Character and player.Character.ClassName == "CharacterModel")
     assert(player.Character.OwnerUserId == player.UserId)
     assert(player.Character.RootPart.Name == "HumanoidRootPart")
-    assert(player.Character:FindFirstChild("Head"))
     assert(game:GetService("CharacterService"):GetCharacter(player) == player.Character)
 end
 `, "character_server_spawn")
@@ -85,7 +89,6 @@ assert(game:GetService("Players"):GetPlayers()[1].Character.RootPart.CFrame.Posi
 	run_character_script(&server_vm, `
 local player = game:GetService("Players"):GetPlayers()[1]
 assert(player.Character.RootPart.CFrame.Position.X > 10)
-assert(player.Character:FindFirstChild("Head").CFrame.Position.X > 10)
 `, "character_server_move")
 	run_character_script(&first_vm, `
 local x = game:GetService("Players").LocalPlayer.Character.RootPart.CFrame.Position.X
@@ -112,7 +115,6 @@ end
 	run_character_script(&first_vm, `
 local character = game:GetService("Players").LocalPlayer.Character
 assert(character.RootPart.CFrame.Position.X < 100)
-assert(character:FindFirstChild("Head").CFrame.Position.X < 100)
 `, "character_client_reconciled")
 	run_character_script(&server_vm, `
 local player = game:GetService("Players"):GetPlayers()[2]

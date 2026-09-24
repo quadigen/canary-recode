@@ -2,6 +2,7 @@ package classes
 
 import "base:runtime"
 import "core:fmt"
+import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
@@ -110,6 +111,28 @@ Pending_Destroy :: struct {
 
 Destroy_Hook :: proc(object: ^Object, ctx: rawptr)
 
+// Network_Ownership_Dispatch handles the replication ownership API
+// (SetNetworkOwner / GetNetworkOwner / SetNetworkOwnershipAuto). The services
+// package installs it into the class registry so instance methods can reach
+// the ReplicatorService without classes importing services.
+Network_Ownership_Dispatch :: proc(
+	ctx: rawptr,
+	L: ^vm.State,
+	object: ^Object,
+	method: string,
+) -> (i32, bool)
+
+// Remote_Call_Dispatch handles the RemoteEvent / RemoteFunction API
+// (FireServer / FireClient / FireAllClients / InvokeServer / InvokeClient).
+// The services package installs it into the class registry so instance
+// methods can reach the ReplicatorService without classes importing services.
+Remote_Call_Dispatch :: proc(
+	ctx: rawptr,
+	L: ^vm.State,
+	instance: ^Object,
+	method: string,
+) -> (i32, bool)
+
 Registry :: struct {
 	classes:              [dynamic]^Class_Descriptor,
 	datatypes:            ^datatypes.Registry,
@@ -126,6 +149,10 @@ Registry :: struct {
 	pending_destroy:      [dynamic]Pending_Destroy,
 	destroy_hook:         Destroy_Hook,
 	destroy_hook_ctx:     rawptr,
+	network_ownership:    Network_Ownership_Dispatch,
+	network_ownership_ctx: rawptr,
+	remote_call:          Remote_Call_Dispatch,
+	remote_call_ctx:      rawptr,
 }
 
 Registry_Init :: proc(
@@ -153,6 +180,18 @@ Set_Require_Resolver :: proc(registry: ^Registry, resolver: Require_Resolver, ct
 	if registry == nil { return }
 	registry.require_resolver = resolver
 	registry.require_resolver_ctx = ctx
+}
+
+Set_Network_Ownership :: proc(registry: ^Registry, dispatch: Network_Ownership_Dispatch, ctx: rawptr) {
+	if registry == nil { return }
+	registry.network_ownership = dispatch
+	registry.network_ownership_ctx = ctx
+}
+
+Set_Remote_Call :: proc(registry: ^Registry, dispatch: Remote_Call_Dispatch, ctx: rawptr) {
+	if registry == nil { return }
+	registry.remote_call = dispatch
+	registry.remote_call_ctx = ctx
 }
 
 Can_Access_Member :: proc(
@@ -272,6 +311,26 @@ Get_Properties :: proc(
     return result
 }
 
+Class_Property_List :: proc(
+    registry: ^Registry,
+    class_name: string,
+) -> [dynamic]string {
+    result: [dynamic]string
+
+    if registry == nil {
+        return result
+    }
+
+    descriptor := Find_Class(registry, class_name)
+    if descriptor == nil {
+        return result
+    }
+
+    append_properties(registry, descriptor.info, &result)
+
+    return result
+}
+
 descriptor_namecall :: proc(
 	L: ^vm.State,
 	value, ctx: rawptr,
@@ -286,6 +345,39 @@ descriptor_namecall :: proc(
 
 	if !Can_Access_Member(L, descriptor, method, .Call) {
 		return vm.RaiseError(L, "insufficient security capabilities to call this member"), true
+	}
+
+	if descriptor.registry != nil &&
+	   descriptor.registry.network_ownership != nil {
+		switch method {
+		case "SetNetworkOwner", "GetNetworkOwner", "SetNetworkOwnershipAuto":
+			result_count, handled := descriptor.registry.network_ownership(
+				descriptor.registry.network_ownership_ctx,
+				L,
+				object,
+				method,
+			)
+			if handled {
+				return result_count, true
+			}
+		}
+	}
+
+	if descriptor.registry != nil &&
+	   descriptor.registry.remote_call != nil {
+		switch method {
+		case "FireServer", "FireClient", "FireAllClients",
+		     "InvokeServer", "InvokeClient", "InvokeClients":
+			result_count, handled := descriptor.registry.remote_call(
+				descriptor.registry.remote_call_ctx,
+				L,
+				object,
+				method,
+			)
+			if handled {
+				return result_count, true
+			}
+		}
 	}
 
 	if descriptor != nil && descriptor.namecall != nil {
@@ -561,8 +653,8 @@ instance_new :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
-	if registry.fallback_require_ref <= 0 {
-		return vm.RaiseError(L, "require expects a Script or ModuleScript")
+	if registry == nil || registry.fallback_require_ref <= 0 {
+		return vm.RaiseError(L, "require expects a ModuleScript")
 	}
 
 	vm.PushRegistryReference(L, registry.fallback_require_ref)
@@ -575,13 +667,76 @@ require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 	return 1
 }
 
+REQUIRE_RESULT_COUNT_ERROR :: "Module code did not return exactly one value"
+
+// require_continuation completes a require that may have suspended.
+//
+// Luau invokes this after the protected call started by require_script
+// finishes, either immediately (the module did not yield) or when the calling
+// thread is resumed (the module yielded via task.wait and friends). It caches
+// the module result and produces require's return value.
+require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
+	context = runtime.default_context()
+
+	object := object_from_argument(L, 1)
+	common := Script_Common_Of(object)
+	if object == nil || common == nil || !Is_A(object, "ModuleScript") {
+		if status != 0 {
+			// Preserve the original error rather than masking it.
+			return vm.Reraise(L)
+		}
+		return 1
+	}
+
+	if status != 0 {
+		// The module raised. Roblox does not cache a failed module, so reset the
+		// state and let the error propagate to the caller.
+		common.module_state = .Unloaded
+		return vm.Reraise(L)
+	}
+
+	// Stack layout is [argument 1 (the ModuleScript), ...results].
+	result_count := vm.StackTop(L) - 1
+	if result_count != 1 {
+		common.module_state = .Unloaded
+		return vm.RaiseError(
+			L,
+			strings.concatenate({
+				REQUIRE_RESULT_COUNT_ERROR,
+				": ",
+				Get_Full_Name(object),
+			}),
+		)
+	}
+
+	// Retain the module's return value. `lua_ref` returns 0 for nil, which is
+	// still a valid cached result and pushed back as nil on later requires.
+	common.module_ref = vm.RetainValue(L)
+	common.module_state = .Loaded
+	return 1
+}
+
+// require_script implements Roblox's require() as a runtime operation:
+//
+//  1. validate the argument is a ModuleScript
+//  2. resolve the module's execution context (the calling VM)
+//  3. consult that context's module cache
+//  4. return the cached value when the module is already initialized
+//  5. detect a circular dependency through the Loading state
+//  6. execute the module in its own environment
+//  7. capture the returned value, cache it and return it to the caller
+//
+// It is installed with a continuation so a module may yield; the cache write
+// therefore happens in require_continuation once execution completes.
 require_script :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 
+	// Engine-internal modules are addressed by string path ("@internal/...").
 	if vm.IsString(L, 1) {
 		path := vm.ArgString(L, 1)
-		if registry.require_resolver != nil &&
+		if registry != nil &&
+		   registry.require_resolver != nil &&
 		   registry.require_resolver(L, path, registry.require_resolver_ctx) {
 			return 1
 		}
@@ -589,58 +744,80 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 	}
 
 	object := object_from_argument(L, 1)
-	if object == nil || !Is_A(object, "ModuleScript") {
-		return require_fallback(L, registry)
+	if object == nil {
+		return vm.RaiseError(
+			L,
+			"require expects a ModuleScript, got a non-Instance value",
+		)
+	}
+	if !Is_A(object, "ModuleScript") {
+		describe := Script_Describe(object)
+		defer delete(describe)
+		return vm.RaiseError(
+			L,
+			strings.concatenate({
+				"require expects a ModuleScript, got ",
+				describe,
+			}),
+		)
+	}
+	if object.destroyed {
+		return vm.RaiseError(L, "require: the ModuleScript has been destroyed")
 	}
 
-	module := cast(^Script)object
-	switch module.module_state {
+	common := Script_Common_Of(object)
+	if common == nil {
+		return vm.RaiseError(L, "require: the ModuleScript has no script state")
+	}
+
+	switch common.module_state {
 	case .Loaded:
-		vm.PushRegistryReference(L, module.module_ref)
+		// Cached result; register 0 represents a cached nil.
+		if common.module_ref > 0 {
+			vm.PushRegistryReference(L, common.module_ref)
+		} else {
+			vm.PushNil(L)
+		}
 		return 1
 	case .Loading:
-		return vm.RaiseError(L, "cyclic require detected")
+		describe := Get_Full_Name(object)
+		return vm.RaiseError(
+			L,
+			strings.concatenate({
+				"cyclic require detected while loading ",
+				describe,
+			}),
+		)
 	case .Unloaded:
 	}
 
-	if registry == nil || registry.vm_state == nil {
-		return vm.RaiseError(L, "script runtime is unavailable")
+	if registry == nil || registry.vm_state == nil || registry.vm_state.L == nil {
+		return vm.RaiseError(L, "require: the script runtime is unavailable")
 	}
 
-	module.module_state = .Loading
+	// Mark as loading before executing so a nested require of the same module
+	// is reported as a circular dependency instead of recursing forever.
+	common.module_state = .Loading
 
-	chunk_name := fmt.tprintf("@%s", Get_Full_Name(object))
+	chunk_name := fmt.aprintf("@%s", Get_Full_Name(object))
 	defer delete(chunk_name)
 
-	ok, err := vm.LoadSource(
-		registry.vm_state,
-		L,
-		module.source,
-		chunk_name,
-	)
-
+	ok, err := vm.LoadSource(registry.vm_state, L, common.source, chunk_name)
 	if !ok {
-		module.module_state = .Unloaded
+		common.module_state = .Unloaded
 		return vm.RaiseOwnedError(L, &err)
 	}
 
 	if !Script_Apply_Environment(L, object) {
-		module.module_state = .Unloaded
-		return vm.RaiseError(
-			L,
-			"failed to create ModuleScript environment",
-		)
+		common.module_state = .Unloaded
+		return vm.RaiseError(L, "require: failed to create the ModuleScript environment")
 	}
 
-	ok, err = vm.ProtectedCall(L, 0, 1)
-	if !ok {
-		module.module_state = .Unloaded
-		return vm.RaiseOwnedError(L, &err)
-	}
-
-	module.module_ref = vm.RetainValue(L)
-	module.module_state = .Loaded
-	return 1
+	// [argument 1 (the ModuleScript), module chunk]
+	//
+	// Yieldable protected call: the continuation caches the result. A negative
+	// return value means the module suspended and the yield must propagate.
+	return vm.CallYieldableProtected(L, 0, vm.MULTIPLE_RESULTS)
 }
 
 Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
@@ -652,14 +829,23 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.SetField(vm_state.L, -2, "new")
 	vm.SetGlobalFromStack(vm_state, "Instance")
 
+	// Preserve the stock Luau require (used by the engine's internal module
+	// loader) before replacing the global with the script-aware version.
 	_ = vm.GetGlobal(vm_state.L, "require")
 	registry.fallback_require_ref = vm.RetainValue(vm_state.L)
 	vm.Pop(vm_state.L)
 
 	vm.PushLightUserdata(vm_state.L, registry)
-	vm.PushFunction(vm_state.L, "require", require_script, 1)
+	vm.PushFunctionWithContinuation(
+		vm_state.L,
+		"require",
+		require_script,
+		require_continuation,
+		1,
+	)
 	vm.SetGlobalFromStack(vm_state, "require")
 }
+
 
 Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
@@ -690,7 +876,6 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_LocalScript(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
-	Register_ModuleModuleScript(registry)
 	Register_ModuleScript(registry)
 	Register_NumberRangeValue(registry)
 	Register_NumberSequenceValue(registry)
@@ -699,6 +884,8 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Part(registry)
 	Register_PointLight(registry)
 	Register_RayValue(registry)
+	Register_RemoteEvent(registry)
+	Register_RemoteFunction(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
 	Register_ScrollingFrame(registry)

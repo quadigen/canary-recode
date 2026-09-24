@@ -9,9 +9,7 @@ import services "engine/services"
 import vm "engine/vm"
 import classes "engine/classes"
 
-run_server :: proc() {
-	options, ok := startup_options("0.0.0.0")
-	if !ok {return}
+run_server :: proc(options: Startup_Options) {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
 	sandbox.init_runtime(&script_vm, &environment, nil)
@@ -49,7 +47,7 @@ run_server :: proc() {
 	previous := time.now()
 	for {
 		now := time.now()
-		delta_time := f32(time.diff(now, previous)) / f32(time.Second)
+		delta_time := f32(time.diff(previous, now)) / f32(time.Second)
 		previous = now
 		engine_runtime.Environment_Update_Step(&environment, &script_vm, min(delta_time, 0.1))
 		time.sleep(16 * time.Millisecond)

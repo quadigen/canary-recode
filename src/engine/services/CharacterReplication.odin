@@ -3,6 +3,7 @@ package services
 
 import classes "../classes"
 import datatypes "../datatypes"
+import sdl3 "../platform"
 import "core:math"
 import enet "vendor:ENet"
 
@@ -176,6 +177,49 @@ character_receive_input :: proc(
 	if jump {player.jump_queued = true}
 }
 
+character_ground_rest_y :: proc(
+	service: ^CharacterService,
+	root: ^classes.Part,
+) -> (rest_y: f32, found: bool) {
+	if service == nil ||
+	   service.data_model == nil ||
+	   root == nil ||
+	   root.destroyed {return 0, false}
+	workspace := DataModel_Get_Service(service.data_model, "Workspace")
+	if workspace == nil {return 0, false}
+	physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+	if physics == nil || !physics.initialized {return 0, false}
+	params := datatypes.RaycastParams{}
+	params.RespectCanCollide = true
+	params.ExcludeFilterSet = true
+	append(&params.ExcludeInstances, datatypes.Raycast_Instance_Reference{object = root.object.parent})
+	defer delete(params.ExcludeInstances)
+	origin := datatypes.Vector3{root.cframe.x, root.cframe.y + 0.1, root.cframe.z}
+	direction := datatypes.Vector3{0, -2048, 0}
+	result, hit := Physics_Raycast(physics, workspace, origin, direction, &params)
+	if !hit {return 0, false}
+	return result.Position.y + root.size.y * 0.5, true
+}
+
+character_client_authoritative :: proc(
+	service: ^ReplicatorService,
+	model: ^classes.CharacterModel,
+) -> bool {
+	if service == nil || service.mode != .Server || model == nil {return false}
+	if model.owner_user_id == 0 {return false}
+	root := classes.CharacterModel_Root(model)
+	entity := root != nil ? replication_entity(service, root) : nil
+	if entity == nil || entity.owner_id == 0 || entity.owner_id != model.owner_user_id {return false}
+	for connection in service.peers {
+		if connection.player != nil &&
+		   connection.player.user_id == model.owner_user_id &&
+		   connection.player.character == model {
+			return true
+		}
+	}
+	return false
+}
+
 CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 	if service == nil || service.data_model == nil || delta_time <= 0 {return}
 	replicator := cast(^ReplicatorService)DataModel_Get_Service(
@@ -185,6 +229,39 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 	if replicator == nil || (replicator.mode != .Server && replicator.mode != .Client) {return}
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	if players == nil {return}
+
+	if replicator.mode == .Client && !service.scripted_move {
+		focused := sdl3.GetKeyboardFocus() != nil
+		keys := sdl3.GetKeyboardState(nil)
+		workspace := cast(^Workspace)DataModel_Get_Service(service.data_model, "Workspace")
+		direction := datatypes.Vector3{}
+		if focused && workspace != nil && workspace.current_camera != nil {
+			orientation := workspace.current_camera.CFrame
+			look := datatypes.CFrame_LookVector(orientation)
+			right := datatypes.CFrame_RightVector(orientation)
+			if keys[int(sdl3.Scancode.W)] {
+				direction.x += look.x
+				direction.z += look.z
+			}
+			if keys[int(sdl3.Scancode.S)] {
+				direction.x -= look.x
+				direction.z -= look.z
+			}
+			if keys[int(sdl3.Scancode.D)] {
+				direction.x += right.x
+				direction.z += right.z
+			}
+			if keys[int(sdl3.Scancode.A)] {
+				direction.x -= right.x
+				direction.z -= right.z
+			}
+			if keys[int(sdl3.Scancode.SPACE)] {
+				service.jump_queued = true
+				service.local_jump_pending = true
+			}
+		}
+		service.move_direction = direction
+	}
 	dt := min(delta_time, 0.1)
 	for child in players.children {
 		if child == nil || child.destroyed || !classes.Is_A(child, "Player") {continue}
@@ -196,14 +273,24 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 		}
 		root := classes.CharacterModel_Root(player.character)
 		if root == nil {continue}
-		if player.jump_queued && root.cframe.y <= player.ground_y + 0.02 {
+		if replicator.mode == .Server && character_client_authoritative(replicator, player.character) {
+			continue
+		}
+		ground_y, found := character_ground_rest_y(service, root)
+		if found {
+			player.ground_y = ground_y
+		} else {
+			player.ground_y = -1.0e20
+		}
+		rest_y := player.ground_y
+		if player.jump_queued && root.cframe.y <= rest_y + 0.05 {
 			player.vertical_speed = player.jump_power
 		}
 		player.jump_queued = false
 		old_y := root.cframe.y
 		new_y := old_y + player.vertical_speed * dt
 		player.vertical_speed -= 50 * dt
-		if new_y <= player.ground_y {new_y = player.ground_y; player.vertical_speed = 0}
+		if found && new_y <= rest_y {new_y = rest_y; player.vertical_speed = 0}
 		dx := player.move_direction.x * player.walk_speed * dt
 		dy := new_y - old_y
 		dz := player.move_direction.z * player.walk_speed * dt
