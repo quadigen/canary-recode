@@ -13,6 +13,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 
 	Physics_Synchronize(service, workspace)
 	jolt.System_Step(&service.system, min(delta_time, 0.1))
+	Physics_Drain_Contacts(service)
 	workspace_service := cast(^Workspace)workspace
 	workspace_service.distributed_game_time += f64(max(delta_time, 0))
 

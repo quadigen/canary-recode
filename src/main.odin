@@ -98,7 +98,7 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 
 run_desktop :: proc(options: Startup_Options) {
 	tracy.SetThreadName("Main")
-	if target.is_client() {
+	if target.is_client() && !options.standalone {
 		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
 			fmt.eprintln(
 				"Network client needs a reachable server address; use 127.0.0.1 for a server on this computer",
@@ -143,23 +143,38 @@ run_desktop :: proc(options: Startup_Options) {
 		OnEvent = runtime_input_event,
 	}
 
-	if options.playtest {
+	if options.playtest || options.standalone {
 		sandbox.init_runtime(&script_vm, &environment, &renderer_object)
 	} else {
 		sandbox.init(&script_vm, &environment, &renderer_object)
+	}
+	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
+
+	if options.standalone {
+		engine_runtime.Environment_Set_Mode(&environment, target.Mode.Standalone)
+		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
+		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
 
 	if target.is_server() {
-		if options.map_path != "" &&
-		   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
+		if !load_game_map(&environment, &script_vm, options) {
 			return
 		}
-	} else {
-		if options.playtest &&
-		   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {
+	} else if options.playtest || options.standalone {
+		if !load_game_map(&environment, &script_vm, options) {
 			return
+		}
+	}
+
+	if options.standalone {
+		players_object := services.Ensure_Service(&environment.services, "Players")
+		if players_object != nil {
+			players := cast(^services.Players)players_object
+			if players != nil && players.local_player == nil {
+				players.local_player = services.Players_Add(players, script_vm.L, 1, "Player")
+			}
 		}
 	}
 
@@ -188,16 +203,16 @@ run_desktop :: proc(options: Startup_Options) {
 			return
 		}
 		fmt.printf("Kinemium server listening on %s:%d\n", options.address, options.port)
-	} else if target.is_client() {
-		if !options.playtest {
+} else if target.is_client() {
+		if !options.playtest && !options.standalone {
 			object := services.Ensure_Service(&environment.services, "ReplicatorService")
 			if object == nil ||
 			   !services.replication_start(
-					   cast(^services.ReplicatorService)object,
-					   options.address,
-					   options.port,
-					   .Client,
-				   ) {
+				   cast(^services.ReplicatorService)object,
+				   options.address,
+				   options.port,
+				   .Client,
+			   ) {
 				fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
 				return
 			}
@@ -219,10 +234,11 @@ run_desktop :: proc(options: Startup_Options) {
 
 	title := "Kinemium Engine"
 	if options.playtest {title = "Kinemium Playtest"}
+	if options.standalone {title = "Kinemium Standalone"}
 	if target.is_server() {
 		title = "Kinemium Server"
 	} else if target.is_client() {
-		if !options.playtest {title = "Kinemium Client"}
+		if !options.playtest && !options.standalone {title = "Kinemium Client"}
 	}
 	renderer.init(title, 800, 600, &renderer_object)
 

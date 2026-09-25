@@ -74,6 +74,22 @@ FetchContent_Declare(
     SOURCE_SUBDIR Build
 )
 
+# ---------------------------------------------------------
+# V-HACD (header-only convex decomposition)
+# ---------------------------------------------------------
+
+FetchContent_Declare(
+    VHACD
+    GIT_REPOSITORY https://github.com/kmammou/v-hacd.git
+    GIT_TAG v4.1.0
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_GetProperties(VHACD)
+if(NOT VHACD_POPULATED)
+    FetchContent_Populate(VHACD)
+endif()
+
 if(MSVC AND "${CMAKE_CXX_FLAGS}" STREQUAL "")
     set(CMAKE_CXX_FLAGS "/utf-8")
 endif()
@@ -94,11 +110,14 @@ endif()
 
 add_library(JoltWrapper ${KINE_JOLT_WRAPPER_LIBRARY_TYPE}
     src/jolt_wrapper.cpp
+    src/vhacd_wrapper.cpp
 )
 
 target_include_directories(JoltWrapper
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${vhacd_SOURCE_DIR}/include
 )
 
 target_link_libraries(JoltWrapper

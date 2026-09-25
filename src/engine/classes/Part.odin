@@ -3,6 +3,7 @@ package classes
 import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 Part_Class := Class_Info{
@@ -24,7 +25,8 @@ Part :: struct {
     shape: enums.PartType,
     material: enums.Material,
     castshadow: bool,
-    position: datatypes.Vector3
+    position: datatypes.Vector3,
+	touched: ^signals.Signal,
 }
 
 Part_Init :: proc() -> Part {
@@ -56,6 +58,10 @@ part_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Objec
 
 part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	part := cast(^Part)object
+	if part.touched != nil && part.object.signal_registry != nil && part.object.signal_registry.signal_registry != nil {
+		signals.Destroy(part.touched)
+		part.touched = nil
+	}
 	delete(part.collision_group)
     Object_Destroy(object)
 	free(part)
@@ -92,6 +98,12 @@ part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
         vm.PushBoolean(L, part.castshadow)
     case "Position":
         datatypes.push_vector3(L, part.position)
+	case "Touched":
+		if part.touched == nil && part.object.signal_registry != nil && part.object.signal_registry.signal_registry != nil {
+			part.touched = signals.Create(part.object.signal_registry.signal_registry)
+		}
+		if part.touched == nil { return false }
+		signals.Push(L, part.touched)
     case:
         return false
     }

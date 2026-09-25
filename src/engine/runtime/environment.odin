@@ -95,6 +95,7 @@ Environment_Set_Mode :: proc(environment: ^Environment, mode: target.Mode) {
 	}
 	environment.mode = mode
 	environment.services.mode = mode
+	classes.Set_Mode(&environment.classes, mode)
 }
 
 Environment_Destroy :: proc(environment: ^Environment) {

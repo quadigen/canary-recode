@@ -38,8 +38,9 @@ Script_Common :: struct {
 	module_ref:      i32,
 	execution_state: Script_Execution_State,
 	enabled:         bool,
-	thread:          ^vm.State,
-	thread_ref:      i32,
+	restart_requested: bool,
+	thread:            ^vm.State,
+	thread_ref:        i32,
 }
 
 Script_Kind :: enum {
@@ -135,6 +136,22 @@ Script_Common_Set_Source :: proc(L: ^vm.State, common: ^Script_Common, source: s
 	Script_Reset(L, common)
 	delete(common.source)
 	common.source = strings.clone(source)
+}
+
+// Script_Common_Set_Enabled records an Enabled change and reports whether it
+// turned execution on from off. Roblox restarts a script on a false -> true
+// transition, so the execution context turns that edge into a fresh run; the
+// initial value (true by construction) is not an edge and never restarts.
+Script_Common_Set_Enabled :: proc(common: ^Script_Common, enabled: bool) -> bool {
+	if common == nil {
+		return false
+	}
+	restart := enabled && !common.enabled
+	common.enabled = enabled
+	if restart {
+		common.restart_requested = true
+	}
+	return restart
 }
 
 Script_Apply_Environment :: proc(L: ^vm.State, object: ^Object) -> bool {

@@ -14,6 +14,7 @@ Mode :: enum {
 	Editor,
 	Client,
 	Server,
+	Standalone,
 }
 
 when BUILD_TARGET_NAME == "server" {
@@ -65,6 +66,8 @@ name :: proc() -> string {
 		return "client"
 	case .Editor:
 		return "editor"
+	case .Standalone:
+		return "standalone"
 	}
 	return "editor"
 }

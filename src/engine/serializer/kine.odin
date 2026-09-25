@@ -40,8 +40,6 @@ KINE_MAGIC :: "KINE"
 KINE_VERSION :: 2
 KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 
-// Properties that are read-only in the engine (their setters RaiseError).
-// They are skipped so a round trip never tries to write them back.
 READ_ONLY_PROPERTIES := [?]string{
 	"AbsolutePosition",
 	"AbsoluteSize",

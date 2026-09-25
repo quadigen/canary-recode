@@ -38,6 +38,18 @@ Replication_Entity :: struct {
 	force_correction:       bool,
 	samples:                [dynamic]Replication_Sample,
 	sample_age:             f32,
+	// velocity_sq is the squared magnitude of the last inter-sample delta,
+	// updated on the server each tick and used to priority-sort state sends
+	// so fast-moving parts are never starved out by the bandwidth budget.
+	velocity_sq:            f32,
+	// dead_reckoning holds the last interpolated CFrame and the linear
+	// velocity estimated from the two most recent samples. The client uses
+	// it to extrapolate position when the sample buffer runs dry.
+	last_frame:             datatypes.CFrame,
+	last_velocity:          datatypes.Vector3,
+	// dr_age tracks how many seconds the client has been dead-reckoning so
+	// the extrapolation can be capped to avoid wild divergence.
+	dr_age:                 f32,
 }
 
 Replication_Peer :: struct {
@@ -46,6 +58,7 @@ Replication_Peer :: struct {
 	known:           map[u32]u32,
 	initialized:     map[u32]bool,
 	state_hashes:    map[u32]u64,
+	property_hashes: map[u32]u64,
 	bytes_this_tick: u32,
 }
 
@@ -98,6 +111,15 @@ ReplicatorService :: struct {
 	owned_states_rejected:     u64,
 	invoke_pending:            [dynamic]Remote_Invoke_Pending,
 	next_invoke_id:            u32,
+	// load_pressure accumulates bandwidth_drops between adaptive ticks.
+	// When it exceeds the adaptive threshold the budget and snapshot_rate
+	// are widened temporarily, then cooled back toward their base values.
+	load_pressure:             f32,
+	// base_bandwidth_budget / base_snapshot_rate are the values set by the
+	// user (or defaults). The adaptive logic scales above them but never
+	// permanently overrides them.
+	base_bandwidth_budget:     u32,
+	base_snapshot_rate:        f32,
 }
 
 replication_enet_users: int
@@ -113,6 +135,8 @@ replication_construct :: proc(
 	service.teleport_threshold = 12
 	service.relevancy_distance = 1024
 	service.bandwidth_budget = 48 * 1024
+	service.base_snapshot_rate = 20
+	service.base_bandwidth_budget = 48 * 1024
 	service.next_id = 1
 	service.next_user_id = 1
 	return &service.object
@@ -135,6 +159,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 			delete(item.known)
 			delete(item.initialized)
 			delete(item.state_hashes)
+			delete(item.property_hashes)
 		}
 		enet.host_destroy(service.host)
 		service.host = nil
@@ -282,6 +307,7 @@ replication_set :: proc(
 		if rate < 1 ||
 		   rate > 120 {_ = vm.RaiseError(L, "SnapshotRate must be between 1 and 120"); return true}
 		service.snapshot_rate = f32(rate)
+		service.base_snapshot_rate = f32(rate)
 		return true
 	}
 	if key == "BandwidthBudget" {
@@ -291,6 +317,7 @@ replication_set :: proc(
 			return true
 		}
 		service.bandwidth_budget = u32(budget)
+		service.base_bandwidth_budget = u32(budget)
 		return true
 	}
 	if key == "InterpolationDelayTicks" {
@@ -451,6 +478,7 @@ replication_namecall :: proc(
 				delete_key(&connection.known, id)
 				delete_key(&connection.initialized, id)
 				delete_key(&connection.state_hashes, id)
+				delete_key(&connection.property_hashes, id)
 			}
 		}
 		vm.PushBoolean(L, id != 0)

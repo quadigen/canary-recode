@@ -40,14 +40,11 @@ Script_Set_Source :: proc(script: ^Script, source: string) {
 	Script_Common_Set_Source(L, &script.common, source)
 }
 
-// Script_Set_Enabled toggles execution. The script context observes the change
-// on the next step: a disabled script is never started, and a running script is
-// stopped.
 Script_Set_Enabled :: proc(script: ^Script, enabled: bool) {
 	if script == nil {
 		return
 	}
-	script.enabled = enabled
+	Script_Common_Set_Enabled(&script.common, enabled)
 }
 
 Script_Get_Enabled :: proc(script: ^Script) -> bool {
@@ -124,11 +121,12 @@ script_clone :: proc(source: ^Object, destination: ^Object) {
 	delete(dst.source)
 	dst.source          = strings.clone(src.source)
 	dst.enabled         = src.enabled
-	dst.module_state    = .Unloaded
-	dst.module_ref      = -1
-	dst.thread          = nil
-	dst.thread_ref      = -1
-	dst.execution_state = .NotStarted
+	dst.module_state      = .Unloaded
+	dst.module_ref        = -1
+	dst.thread            = nil
+	dst.thread_ref        = -1
+	dst.execution_state   = .NotStarted
+	dst.restart_requested = false
 }
 
 Register_Script :: proc(registry: ^Registry) {

@@ -4,6 +4,8 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import sdl3 "../platform"
+import vm "../vm"
+import kineffi "../bindings"
 import "core:math"
 import enet "vendor:ENet"
 
@@ -12,6 +14,30 @@ character_translate :: proc(model: ^classes.CharacterModel, dx, dy, dz: f32) {
 	for part_object in model.children {
 		if part_object == nil ||
 		   part_object.destroyed ||
+		   !classes.Is_A(part_object, "Part") {continue}
+		part := cast(^classes.Part)part_object
+		part.cframe.x += dx
+		part.cframe.y += dy
+		part.cframe.z += dz
+		part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
+	}
+}
+
+// character_translate_followers moves every Part of a character model except
+// `root` by the given delta. The controller and replication correction paths
+// move the root part authoritatively; the remaining parts (such as the visible
+// CharacterCollider capsule) must follow the root instead of being translated
+// twice.
+character_translate_followers :: proc(
+	model: ^classes.CharacterModel,
+	root: ^classes.Part,
+	dx, dy, dz: f32,
+) {
+	if model == nil || model.destroyed || root == nil {return}
+	for part_object in model.children {
+		if part_object == nil ||
+		   part_object.destroyed ||
+		   part_object == &root.object ||
 		   !classes.Is_A(part_object, "Part") {continue}
 		part := cast(^classes.Part)part_object
 		part.cframe.x += dx
@@ -220,6 +246,320 @@ character_client_authoritative :: proc(
 	return false
 }
 
+// The character capsule is resolved with Jolt shape casts instead of sampled
+// rays, so the swept volume decides where the character can stand and move.
+CHARACTER_SWEEP_ITERATIONS :: 4
+
+// A surface is walkable when its outward normal is within `max_slope_angle` of up.
+CharacterController_Walkable_Cos :: proc(max_slope_angle: f32) -> f32 {
+	return math.cos(math.to_radians(clamp(max_slope_angle, 0, 89.9)))
+}
+
+// Sweeps the capsule straight down from `position` and reports where its centre
+// would settle on the surface below, plus that surface's outward normal.
+CharacterController_Ground_Cast :: proc(
+	physics: ^Physics,
+	coll: ^classes.CollisionController,
+	snap_distance: f32,
+	position: datatypes.Vector3,
+) -> (rest_y: f32, normal: datatypes.Vector3, hit: bool) {
+	rest_y = position.y
+	normal = datatypes.Vector3{0, 1, 0}
+	if physics == nil || coll == nil || !coll.body_created || coll.shape == nil {return}
+	distance := max(snap_distance, 0) + classes.COLLISION_SKIN
+	origin := datatypes.Vector3{position.x, position.y + classes.COLLISION_SKIN, position.z}
+	contact, contact_normal, _, _, did_hit := physics_character_sweep(
+		physics,
+		coll,
+		origin,
+		datatypes.Vector3{0, -distance, 0},
+	)
+	if !did_hit {return}
+	length := datatypes.Vec3_Magnitude(contact_normal)
+	if length <= 0.0001 {return}
+	normal = datatypes.Vec3_Divide(contact_normal, length)
+	rest_y = contact.y
+	hit = true
+	return
+}
+
+// Advances the capsule from `origin` by `displacement`, sliding along surfaces it
+// can walk on. Surfaces steeper than `max_slope_angle` only allow movement along
+// their level contour, which stops the character from climbing them.
+CharacterController_Sweep :: proc(
+	physics: ^Physics,
+	coll: ^classes.CollisionController,
+	origin: datatypes.Vector3,
+	displacement: datatypes.Vector3,
+	max_slope_angle: f32,
+	blocked_body: ^kineffi.JPH_BodyID,
+) -> datatypes.Vector3 {
+	position := origin
+	remaining := displacement
+	walkable_cos := CharacterController_Walkable_Cos(max_slope_angle)
+	for _ in 0..<CHARACTER_SWEEP_ITERATIONS {
+		length := datatypes.Vec3_Magnitude(remaining)
+		if length <= 0.0001 {break}
+		direction := datatypes.Vec3_Divide(remaining, length)
+		_, contact_normal, body_id, fraction, hit := physics_character_sweep(physics, coll, position, remaining)
+		if !hit {
+			position = datatypes.Vec3_Add(position, remaining)
+			break
+		}
+		normal_length := datatypes.Vec3_Magnitude(contact_normal)
+		if normal_length <= 0.0001 {break}
+		normal := datatypes.Vec3_Divide(contact_normal, normal_length)
+		advance := max(fraction*length - classes.COLLISION_SKIN, 0)
+		position = datatypes.Vec3_Add(position, datatypes.Vec3_Multiply(direction, advance))
+		remaining = datatypes.Vec3_Multiply(direction, length - advance)
+		if normal.y >= walkable_cos {
+			// Walkable ground: follow the surface, which carries the character up
+			// ramps instead of stopping it.
+			into := datatypes.Vec3_Dot(remaining, normal)
+			if into < 0 {
+				remaining = datatypes.Vec3_Subtract(remaining, datatypes.Vec3_Multiply(normal, into))
+			}
+		} else if normal.y <= -walkable_cos {
+			// Ceiling: keep only the horizontal part of the remaining motion.
+			remaining.y = 0
+		} else {
+			// Too steep to walk: slide only along the level contour of the surface.
+			if blocked_body != nil {blocked_body^ = body_id}
+			tangent := datatypes.Vec3_Cross(datatypes.Vector3{0, 1, 0}, normal)
+			tangent_length := datatypes.Vec3_Magnitude(tangent)
+			if tangent_length <= 0.0001 {
+				remaining = datatypes.Vector3{}
+			} else {
+				tangent = datatypes.Vec3_Divide(tangent, tangent_length)
+				remaining = datatypes.Vec3_Multiply(tangent, datatypes.Vec3_Dot(remaining, tangent))
+			}
+		}
+	}
+	return datatypes.Vec3_Subtract(position, origin)
+}
+
+CharacterController_Ground_Probe :: proc(
+	physics: ^Physics,
+	gd: ^classes.GroundDetector,
+	coll: ^classes.CollisionController,
+	position: datatypes.Vector3,
+	max_slope_angle: f32,
+) -> (grounded: bool, rest_y: f32, normal: datatypes.Vector3) {
+	rest_y = position.y
+	normal = datatypes.Vector3{0, 1, 0}
+	if gd == nil {return}
+	hit_rest, hit_normal, hit := CharacterController_Ground_Cast(physics, coll, gd.snap_distance, position)
+	if hit {
+		gd.slope_angle = math.to_degrees(math.acos(clamp(hit_normal.y, -1, 1)))
+	}
+	grounded = hit && hit_normal.y >= CharacterController_Walkable_Cos(max_slope_angle)
+	if grounded {
+		rest_y = hit_rest
+		normal = hit_normal
+		gd.rest_y = rest_y
+	}
+	gd.grounded = grounded
+	return
+}
+
+CharacterController_Tick :: proc(
+	cc: ^classes.CharacterController,
+	physics: ^Physics,
+	L: ^vm.State,
+	dt: f32,
+) {
+	if cc == nil || cc.destroyed || physics == nil || L == nil || dt <= 0 {return}
+	root := classes.CharacterController_Root(cc)
+	if root == nil {return}
+	cc.step_count += 1
+	movement := cast(^classes.MovementController)classes.CharacterController_Find(cc, "MovementController")
+	ground := cast(^classes.GroundDetector)classes.CharacterController_Find(cc, "GroundDetector")
+	rotation := cast(^classes.RotationController)classes.CharacterController_Find(cc, "RotationController")
+	sm := cast(^classes.StateMachine)classes.CharacterController_Find(cc, "StateMachine")
+	collision := cast(^classes.CollisionController)classes.CharacterController_Find(cc, "CollisionController")
+	if movement != nil {
+		movement.walk_speed = cc.walk_speed
+		movement.acceleration = 10 * cc.walk_speed
+	}
+	if sm != nil && sm.state == "Dead" {
+		cc.vertical_speed = 0
+		return
+	}
+	humanoid := cast(^classes.Humanoid)classes.Find_Child(cc.object.parent, "Humanoid")
+	if humanoid != nil {
+		classes.Humanoid_Sync(humanoid, cc, L, dt)
+	}
+	move_dir, jump := classes.MovementController_Step(movement, dt)
+	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+	previous_position := position
+	if collision != nil {
+		Physics_Ensure_Character_Capsule(physics, collision, root, position)
+	}
+	grounded := false
+	ground_normal := datatypes.Vector3{0, 1, 0}
+	if ground != nil {
+		grounded, _, ground_normal = CharacterController_Ground_Probe(physics, ground, collision, position, cc.max_slope_angle)
+	}
+	was_grounded := grounded || cc.coyote_time > 0
+	if grounded {
+		cc.coyote_time = classes.CHARACTER_COYOTE_TIME
+	} else if cc.coyote_time > 0 {
+		cc.coyote_time -= dt
+	}
+	jumped := jump && was_grounded
+	if jumped {
+		cc.vertical_speed = math.sqrt(2 * cc.jump_height * classes.CHARACTER_GRAVITY)
+		cc.coyote_time = 0
+	}
+	cc.vertical_speed -= classes.CHARACTER_GRAVITY * dt
+	if collision != nil && collision.body_created && collision.shape != nil {
+		// Horizontal motion. On walkable ground the move follows the ground plane,
+		// so walking into a ramp climbs it at a constant horizontal speed rather
+		// than being stopped at its base.
+		move := datatypes.Vector3{move_dir.x * dt, 0, move_dir.z * dt}
+		if grounded && ground_normal.y > 0.0001 {
+			move.y = -(move.x*ground_normal.x + move.z*ground_normal.z) / ground_normal.y
+		}
+		// Horizontal sweeps start a skin above the capsule so the surface the
+		// character is standing on does not mask obstacles in front of it.
+		cast_origin := datatypes.Vector3{position.x, position.y + classes.COLLISION_SKIN, position.z}
+		blocked := kineffi.JPH_BODY_ID_INVALID
+		applied := CharacterController_Sweep(physics, collision, cast_origin, move, cc.max_slope_angle, &blocked)
+		if grounded {
+			wanted := math.abs(move.x) + math.abs(move.z)
+			gained := math.abs(applied.x) + math.abs(applied.z)
+			if gained < wanted - 0.001 {
+				elevated := datatypes.Vector3{
+					position.x,
+					position.y + classes.COLLISION_STEP_HEIGHT + classes.COLLISION_SKIN,
+					position.z,
+				}
+				step_blocked := kineffi.JPH_BODY_ID_INVALID
+				step := CharacterController_Sweep(physics, collision, elevated, move, cc.max_slope_angle, &step_blocked)
+				if math.abs(step.x) + math.abs(step.z) > gained + 0.001 {
+					applied = step
+					blocked = step_blocked
+					position.y += classes.COLLISION_STEP_HEIGHT
+				}
+			}
+		}
+		position = datatypes.Vec3_Add(position, applied)
+		if blocked != kineffi.JPH_BODY_ID_INVALID {
+			physics_fire_touched(physics, blocked, root)
+		}
+		// Vertical motion is resolved through the same capsule sweep so the
+		// character cannot sink into steep surfaces or tunnel through floors.
+		if cc.vertical_speed != 0 {
+			vertical := datatypes.Vector3{0, cc.vertical_speed * dt, 0}
+			applied_vertical := CharacterController_Sweep(physics, collision, position, vertical, cc.max_slope_angle, nil)
+			position = datatypes.Vec3_Add(position, applied_vertical)
+			if cc.vertical_speed < 0 && applied_vertical.y > vertical.y + 0.0001 {
+				cc.vertical_speed = 0
+			}
+		}
+		// Settle onto the surface below so ramps, steps and early ground contact
+		// keep the character grounded instead of leaving it hovering.
+		settle_y, settle_normal, settle_hit := CharacterController_Ground_Cast(
+			physics,
+			collision,
+			ground != nil ? ground.snap_distance : 0.6,
+			position,
+		)
+		if settle_hit &&
+		   settle_normal.y >= CharacterController_Walkable_Cos(cc.max_slope_angle) &&
+		   cc.vertical_speed <= 0 {
+			position.y = settle_y
+			cc.vertical_speed = 0
+			if ground != nil {
+				ground.grounded = true
+				ground.rest_y = settle_y
+				ground.slope_angle = math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1)))
+			}
+		}
+	} else {
+		position.x += move_dir.x * dt
+		position.z += move_dir.z * dt
+		position.y += cc.vertical_speed * dt
+	}
+	yaw: f32
+	_, current_yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(root.cframe)
+	yaw = math.to_degrees(current_yaw)
+	if rotation != nil && cc.auto_rotate {
+		if move_dir.x != 0 || move_dir.z != 0 {
+			classes.RotationController_Set_Target(rotation, move_dir)
+		}
+		yaw = classes.RotationController_Step(rotation, dt)
+	}
+	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
+	cf.x = position.x
+	cf.y = position.y
+	cf.z = position.z
+	root.cframe = cf
+	root.position = datatypes.Vector3{position.x, position.y, position.z}
+	if collision != nil {
+		Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{position.x, position.y, position.z}, yaw)
+	}
+	// Carry the rest of the character (the visible CharacterCollider capsule,
+	// accessories, ...) along with the root so it does not stay at the spawn
+	// point while the root moves.
+	delta := datatypes.Vector3{
+		position.x - previous_position.x,
+		position.y - previous_position.y,
+		position.z - previous_position.z,
+	}
+	if delta.x != 0 || delta.y != 0 || delta.z != 0 {
+		if cc.object.parent != nil && classes.Is_A(cc.object.parent, "CharacterModel") {
+			character_translate_followers(
+				cast(^classes.CharacterModel)cc.object.parent,
+				root,
+				delta.x,
+				delta.y,
+				delta.z,
+			)
+		}
+	}
+	if sm != nil {
+		next := sm.state
+		moving := move_dir.x != 0 || move_dir.z != 0
+		switch sm.state {
+		case "Idle":
+			switch {
+			case jumped: next = "Jumping"
+			case !was_grounded: next = "Falling"
+			case moving: next = "Running"
+			}
+		case "Running":
+			switch {
+			case jumped: next = "Jumping"
+			case !was_grounded: next = "Falling"
+			case !moving: next = "Idle"
+			}
+		case "Jumping":
+			if cc.vertical_speed < 0 && !was_grounded {next = "Falling"}
+		case "Falling":
+			if was_grounded {next = moving ? "Running" : "Idle"}
+		}
+		classes.StateMachine_Set_State(sm, L, next)
+	}
+}
+
+CharacterMotor_Advance :: proc(
+	motor: ^classes.CharacterMotor,
+	cc: ^classes.CharacterController,
+	physics: ^Physics,
+	L: ^vm.State,
+	dt: f32,
+) {
+	if motor == nil || cc == nil {return}
+	frame_dt := min(dt, motor.max_step)
+	motor.accumulator += frame_dt
+	step := 1 / motor.steps_per_second
+	for motor.accumulator >= step {
+		CharacterController_Tick(cc, physics, L, step)
+		motor.accumulator -= step
+	}
+}
+
 CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 	if service == nil || service.data_model == nil || delta_time <= 0 {return}
 	replicator := cast(^ReplicatorService)DataModel_Get_Service(
@@ -275,6 +615,24 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 		if root == nil {continue}
 		if replicator.mode == .Server && character_client_authoritative(replicator, player.character) {
 			continue
+		}
+		when !#config(FORCE_LEGACY_CHARACTERS, false) {
+			controller := classes.CharacterController_From_Model(player.character)
+			motor := cast(^classes.CharacterMotor)classes.Find_Child(&player.character.object, "CharacterMotor")
+			if controller != nil && motor != nil {
+				movement := cast(^classes.MovementController)classes.CharacterController_Find(controller, "MovementController")
+				if movement != nil {movement.input_direction = player.move_direction}
+				if player.jump_queued {
+					classes.MovementController_Queue_Jump(movement)
+					player.jump_queued = false
+				}
+				physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+				L := service.data_model.registry.vm_state.L
+				if physics != nil {
+					CharacterMotor_Advance(motor, controller, physics, L, dt)
+				}
+				continue
+			}
 		}
 		ground_y, found := character_ground_rest_y(service, root)
 		if found {

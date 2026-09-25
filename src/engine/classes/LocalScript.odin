@@ -5,13 +5,6 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-// LocalScript is a client side script. It only executes in a client runtime and
-// never on the server, mirroring Roblox's LocalScript class.
-//
-// Each client is an independent runtime (its own VM and its own script
-// instances), so LocalScript state is never shared between clients. Inside the
-// script, `script` refers to this Instance and the player context is reachable
-// through `game:GetService("Players").LocalPlayer`.
 LocalScript_Class := Class_Info{
 	name   = "LocalScript",
 	parent = &Instance_Class,
@@ -83,7 +76,7 @@ LocalScript_set :: proc(
 	case "Source":
 		LocalScript_Set_Source(script, vm.ArgString(L, value_index))
 	case "Enabled":
-		script.enabled = vm.ArgBoolean(L, value_index)
+		Script_Common_Set_Enabled(&script.common, vm.ArgBoolean(L, value_index))
 	case:
 		return false
 	}
@@ -112,11 +105,12 @@ LocalScript_clone :: proc(source: ^Object, destination: ^Object) {
 	delete(dst.source)
 	dst.source          = strings.clone(src.source)
 	dst.enabled         = src.enabled
-	dst.module_state    = .Unloaded
-	dst.module_ref      = -1
-	dst.thread          = nil
-	dst.thread_ref      = -1
-	dst.execution_state = .NotStarted
+	dst.module_state      = .Unloaded
+	dst.module_ref        = -1
+	dst.thread            = nil
+	dst.thread_ref        = -1
+	dst.execution_state   = .NotStarted
+	dst.restart_requested = false
 }
 
 Register_LocalScript :: proc(registry: ^Registry) {

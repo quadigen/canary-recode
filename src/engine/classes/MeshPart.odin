@@ -16,6 +16,7 @@ MeshPart :: struct {
 
     mesh_id:    string,
     texture_id: string,
+    collision_fidelity: enums.CollisionFidelity,
     native_mesh: ^kineffi.KineFilamentMesh,
     native_context: ^kineffi.KineFilamentContext,
 }
@@ -41,6 +42,7 @@ MeshPart_Init :: proc() -> MeshPart {
         },
         mesh_id    = "",
         texture_id = "",
+        collision_fidelity = enums.CollisionFidelity.Default,
     }
 }
 
@@ -85,6 +87,15 @@ mesh_part_get :: proc(
     case "TextureId":
         vm.PushString(L, mesh_part.texture_id)
 
+    case "CollisionFidelity":
+        if enum_registry == nil { return false }
+        _ = enums.Push_Item_By_Value(
+            L,
+            enum_registry,
+            "CollisionFidelity",
+            i64(mesh_part.collision_fidelity),
+        )
+
     case:
         return part_get(
             L,
@@ -117,6 +128,13 @@ mesh_part_set :: proc(
         delete(mesh_part.texture_id)
         mesh_part.texture_id = strings.clone(vm.ArgString(L, value_index))
 
+    case "CollisionFidelity":
+        if enum_registry == nil { return false }
+        item := enums.Arg_Item(L, value_index, enum_registry, "CollisionFidelity")
+        if item != nil {
+            mesh_part.collision_fidelity = enums.CollisionFidelity(item.value)
+        }
+
     case:
         return part_set(
             L,
@@ -140,6 +158,7 @@ mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst.mesh_id    = strings.clone(src.mesh_id)
 	dst.texture_id = strings.clone(src.texture_id)
+	dst.collision_fidelity = src.collision_fidelity
 }
 
 Register_MeshPart :: proc(registry: ^Registry) {
@@ -151,6 +170,6 @@ Register_MeshPart :: proc(registry: ^Registry) {
         get = mesh_part_get,
         set = mesh_part_set,
         clone = mesh_part_clone,
-		properties = []string{"TextureId", "MeshId"},
+		properties = []string{"CollisionFidelity", "TextureId", "MeshId"},
     )
 }

@@ -33,8 +33,7 @@ ServerScriptService_RunScripts :: proc(renderer: ^classes.Renderer_Object, data_
 
 	for child in descendants {
 		if classes.Is_A(child, "Script") {
-			object := cast(^classes.Script)child
-			ScriptContext_Run_Script(script_context, object)
+			ScriptContext_Run_Script(script_context, child)
 		}
 	}
 

@@ -30,14 +30,32 @@ Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> 
 		fmt.eprintf("Map file does not exist: %s\n", path)
 		return false
 	}
-	root, ok := serializer.Deserialize_From_File(&environment.classes, script_vm.L, nil, path)
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		fmt.eprintf("Map file could not be read: %s\n", path)
+		return false
+	}
+	defer delete(data)
+	return Load_Map_From_Data(environment, script_vm, data, path)
+}
+
+// Load_Map_From_Data restores a DataModel from an in-memory .KINE byte stream.
+// name is used in messages and suffix/version reporting.
+Load_Map_From_Data :: proc(
+	environment: ^Environment,
+	script_vm: ^vm.VM,
+	data: []u8,
+	name: string,
+) -> bool {
+	if environment == nil || script_vm == nil || script_vm.L == nil || data == nil {return false}
+	root, ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data)
 	if !ok || root == nil {
-		fmt.eprintf("Could not load .kine map (expected KINE version %d): %s\n", serializer.KINE_VERSION, path)
+		fmt.eprintf("Could not load .kine map (expected KINE version %d): %s\n", serializer.KINE_VERSION, name)
 		return false
 	}
 	if !classes.Is_A(root, "DataModel") {
 		classes.Destroy_Hierarchy(root)
-		fmt.eprintf(".kine map root must be a DataModel: %s\n", path)
+		fmt.eprintf(".kine map root must be a DataModel: %s\n", name)
 		return false
 	}
 
@@ -77,6 +95,6 @@ Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> 
 		classes.Destroy_Hierarchy(source)
 	}
 	classes.Destroy_Hierarchy(root)
-	fmt.printf("Loaded .kine DataModel %s (%d services, %d instances)\n", path, service_count, instance_count)
+	fmt.printf("Loaded .kine DataModel %s (%d services, %d instances)\n", name, service_count, instance_count)
 	return true
 }

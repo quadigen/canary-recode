@@ -21,6 +21,9 @@ Player :: struct {
 	character:    ^classes.CharacterModel,
 	character_added: ^signals.Signal,
 	character_removing: ^signals.Signal,
+	player_scripts: ^classes.Object,
+	player_gui:     ^classes.Object,
+	prepared_character: ^classes.CharacterModel,
 	move_direction: datatypes.Vector3,
 	jump_queued: bool,
 	input_sequence: u32,
@@ -91,6 +94,26 @@ player_get :: proc(
 		vm.PushNumber(L, f64(player.jump_power))
 	case "Character":
 		if player.character == nil || player.character.destroyed {vm.PushNil(L)} else {classes.Push_Object(L, &player.character.object)}
+	case "PlayerScripts":
+		if player.player_scripts == nil || player.player_scripts.destroyed {
+			scripts, _ := ClientScripts_Ensure_Player_Containers(
+				player.signal_registry,
+				L,
+				player,
+			)
+			if scripts == nil {vm.PushNil(L); break}
+		}
+		classes.Push_Object(L, player.player_scripts)
+	case "PlayerGui":
+		if player.player_gui == nil || player.player_gui.destroyed {
+			_, gui := ClientScripts_Ensure_Player_Containers(
+				player.signal_registry,
+				L,
+				player,
+			)
+			if gui == nil {vm.PushNil(L); break}
+		}
+		classes.Push_Object(L, player.player_gui)
 	case "CharacterAdded":
 		if player.character_added == nil {player.character_added = signals.Create(player.signal_registry.signal_registry)}
 		signals.Push(L, player.character_added)
@@ -112,14 +135,23 @@ player_set :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^da
 		value := vm.ArgNumber(L, value_index)
 		if value < 0 || value > 100 {_ = vm.RaiseError(L, "WalkSpeed must be between 0 and 100"); return true}
 		player.walk_speed = f32(value)
+		if controller := player_controller(player); controller != nil {controller.walk_speed = f32(value)}
 	case "JumpPower":
 		value := vm.ArgNumber(L, value_index)
 		if value < 0 || value > 100 {_ = vm.RaiseError(L, "JumpPower must be between 0 and 100"); return true}
 		player.jump_power = f32(value)
+		if controller := player_controller(player); controller != nil {
+			controller.jump_height = f32(value * value / (2 * classes.CHARACTER_GRAVITY))
+		}
 	case:
 		return false
 	}
 	return true
+}
+
+player_controller :: proc(player: ^Player) -> ^classes.CharacterController {
+	if player == nil || player.character == nil || player.character.destroyed {return nil}
+	return classes.CharacterController_From_Model(player.character)
 }
 
 player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
@@ -221,6 +253,19 @@ Players_Add :: proc(service: ^Players, L: ^vm.State, id: u32, name: string) -> ^
 		vm.Pop(L)
 	}
 	return player
+}
+
+Players_Forget_Client_Container :: proc(object: ^classes.Object) {
+	if object == nil || object.parent == nil || !classes.Is_A(object.parent, "Player") {
+		return
+	}
+	player := cast(^Player)object.parent
+	if player.player_scripts == object {
+		player.player_scripts = nil
+	}
+	if player.player_gui == object {
+		player.player_gui = nil
+	}
 }
 
 Players_Remove :: proc(service: ^Players, L: ^vm.State, player: ^Player) {

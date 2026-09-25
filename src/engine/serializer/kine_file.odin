@@ -88,6 +88,27 @@ Serialize_To_File :: proc(
 	return os.write_entire_file(path, compressed) == nil
 }
 
+// Deserialize_From_Data restores an Instance hierarchy from an in-memory .KINE
+// byte stream (embedded binaries, network payloads) under parent.
+Deserialize_From_Data :: proc(
+	registry: ^classes.Registry,
+	L: ^vm.State,
+	parent: ^classes.Object,
+	data: []u8,
+) -> (^classes.Object, bool) {
+	if is_zstd_frame(data) {
+		decompressed, ok := decompress_kine(data)
+		if !ok {
+			return nil, false
+		}
+		defer delete(decompressed)
+
+		return Deserialize(registry, L, parent, decompressed)
+	}
+
+	return Deserialize(registry, L, parent, data)
+}
+
 // Deserialize_From_File reads a .KINE file from disk and restores the
 // Instance hierarchy under parent (which may be nil for a standalone root).
 Deserialize_From_File :: proc(
@@ -102,15 +123,5 @@ Deserialize_From_File :: proc(
 	}
 	defer delete(data)
 
-	if is_zstd_frame(data) {
-		decompressed, ok := decompress_kine(data)
-		if !ok {
-			return nil, false
-		}
-		defer delete(decompressed)
-
-		return Deserialize(registry, L, parent, decompressed)
-	}
-
-	return Deserialize(registry, L, parent, data)
+	return Deserialize_From_Data(registry, L, parent, data)
 }

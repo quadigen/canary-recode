@@ -411,9 +411,16 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 		}
 		vm.PushBoolean(L, is_sandboxed)
     case:
+		child := Find_First_Child(object, key)
+		if child != nil {
+			Push_Object(L, child)
+			return true
+		}
+
         if !is_object_method(key) {
             return false
         }
+
         vm.PushString(L, key)
         vm.PushFunction(L, key, object_method, 1)
     }

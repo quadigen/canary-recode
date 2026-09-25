@@ -15,8 +15,7 @@ run_server :: proc(options: Startup_Options) {
 	sandbox.init_runtime(&script_vm, &environment, nil)
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
-	if options.map_path != "" &&
-	   !engine_runtime.Load_Map(&environment, &script_vm, options.map_path) {return}
+	if !load_game_map(&environment, &script_vm, options) {return}
 
 	server_script_service := cast(^services.ServerScriptService)(
 		services.Ensure_Service(&environment.services, "ServerScriptService")

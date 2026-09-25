@@ -53,7 +53,7 @@ System_Create_3D :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (result: System, 
 	kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
 		result.object_pair_filter,
 		OBJECT_LAYER_MOVING,
-		OBJECT_LAYER_NON_MOVING,
+		OBJECT_LAYER_MOVING,
 	)
 
 	result.broad_phase_interface = kineffi.JPH_BroadPhaseLayerInterfaceTable_Create(
@@ -169,9 +169,6 @@ System_Cast_Ray :: proc(
 	return
 }
 
-// Sweeps `shape` (identity rotation) over `displacement` from `origin`, returning
-// the closest hit fraction and body (0..1). candidate_bodies excludes/includes via
-// filter_mode, matching System_Cast_Ray semantics (None = no filter).
 System_Cast_Shape :: proc(
 	system: ^System,
 	origin: kineffi.JPH_RVec3,
@@ -180,13 +177,12 @@ System_Cast_Shape :: proc(
 	candidate_bodies: []kineffi.JPH_BodyID = nil,
 	filter_mode: kineffi.JPH_RayFilterMode = .None,
 	max_distance: f32 = 1000,
-) -> (fraction: f32, body_id: kineffi.JPH_BodyID, hit: bool) {
+) -> (result: kineffi.JPH_RayCastResult, hit: bool) {
 	if system == nil || system.handle == nil || shape == nil { return }
 	native_origin := origin
 	native_displacement := displacement
 	ids: ^kineffi.JPH_BodyID
 	if len(candidate_bodies) > 0 { ids = raw_data(candidate_bodies) }
-	result: kineffi.JPH_RayCastResult
 	hit = kineffi.JPH_PhysicsSystem_CastShape(
 		system.handle,
 		&native_origin,
@@ -198,12 +194,12 @@ System_Cast_Shape :: proc(
 		max_distance,
 		&result,
 	) != 0
-	fraction = result.fraction
-	body_id = result.bodyID
+	if hit {
+		result.normal = kineffi.JPH_Vec3{-result.normal.x, -result.normal.y, -result.normal.z}
+	}
 	return
 }
 
-// Compatibility names for callers that do not need to distinguish 2D and 3D physics.
 System_Create :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (System, bool) {
 	return System_Create_3D(config)
 }

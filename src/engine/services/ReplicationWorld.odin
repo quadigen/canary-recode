@@ -42,6 +42,7 @@ replication_forget_destroyed :: proc(service: ^ReplicatorService, object: ^class
 				delete_key(&connection.known, item.id)
 				delete_key(&connection.initialized, item.id)
 				delete_key(&connection.state_hashes, item.id)
+				delete_key(&connection.property_hashes, item.id)
 			}
 		}
 		delete(item.recipients)
@@ -125,6 +126,9 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 		class_name == "Model" ||
 		class_name == "CharacterModel" ||
 		class_name == "Folder" ||
+		class_name == "PlayerScripts" ||
+		class_name == "PlayerGui" ||
+		class_name == "StarterCharacterScripts" ||
 		class_name == "BoolValue" ||
 		class_name == "IntValue" ||
 		class_name == "NumberValue" ||
@@ -133,8 +137,35 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 		class_name == "Color3Value" ||
 		class_name == "CFrameValue" ||
 		class_name == "RemoteEvent" ||
-		class_name == "RemoteFunction" \
+		class_name == "RemoteFunction" ||
+		class_name == "StateMachine" ||
+		class_name == "CharacterMotor" ||
+		class_name == "MovementController" ||
+		class_name == "GroundDetector" ||
+		class_name == "CollisionController" ||
+		class_name == "RotationController" ||
+		class_name == "CharacterAnimator" ||
+		class_name == "CharacterInput" ||
+		class_name == "CharacterCamera" \
 	)
+}
+
+character_subtree_class :: proc(class_name: string) -> bool {
+	switch class_name {
+	case "CharacterController",
+	     "Humanoid",
+	     "CharacterMotor",
+	     "MovementController",
+	     "GroundDetector",
+	     "RotationController",
+	     "StateMachine",
+	     "CollisionController",
+	     "CharacterAnimator",
+	     "CharacterInput",
+	     "CharacterCamera":
+		return true
+	}
+	return false
 }
 
 replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
@@ -326,6 +357,7 @@ replication_send_part_state :: proc(
 	append(&bytes, part.anchored ? u8(1) : u8(0))
 	append(&bytes, part.can_collide ? u8(1) : u8(0))
 	append(&bytes, u8(part.material))
+	append(&bytes, u8(part.shape))
 	ack: u32
 	if part.parent != nil &&
 	   classes.Is_A(part.parent, "CharacterModel") &&
@@ -405,8 +437,70 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	for root_name in REPLICATION_ROOT_NAMES {
 		replication_sync_tree(service, DataModel_Get_Service(service.data_model, root_name))
 	}
+
+	// -------------------------------------------------------------------------
+	// Adaptive load control
+	//
+	// Each server tick we look at how many packets were dropped since the last
+	// sync.  When pressure rises we temporarily widen the per-connection budget
+	// and push the snapshot rate up toward 30 Hz so the client gets more frames
+	// and the buffer stays fed.  When things calm down we cool back toward the
+	// base values over about two seconds so we don't oscillate.
+	// -------------------------------------------------------------------------
+	drops_this_tick := service.bandwidth_drops
+	if drops_this_tick > 0 {
+		// Accumulate pressure; each dropped packet adds 1 unit.
+		service.load_pressure = min(service.load_pressure + f32(drops_this_tick), 60)
+	} else {
+		// Cool down: subtract 0.5 per tick so it takes ~2 s at 20 Hz to clear.
+		service.load_pressure = max(service.load_pressure - 0.5, 0)
+	}
+	// Reset the per-tick drop counter *after* reading it above.
+	service.bandwidth_drops = 0
+
+	if service.load_pressure > 0 {
+		// Scale budget up to 2× base and snapshot_rate up to 30 Hz, linearly
+		// proportional to pressure (0–60).
+		t := min(service.load_pressure / 60, 1)
+		service.bandwidth_budget = u32(
+			f32(service.base_bandwidth_budget) * (1 + t),
+		)
+		service.snapshot_rate = service.base_snapshot_rate + t * (30 - service.base_snapshot_rate)
+	} else {
+		service.bandwidth_budget = service.base_bandwidth_budget
+		service.snapshot_rate = service.base_snapshot_rate
+	}
+
+	// Update velocity_sq on each Part entity so the priority sort below can
+	// rank fast-moving parts ahead of stationary ones.
+	for &item in service.entities {
+		if item.object == nil ||
+		   item.object.destroyed ||
+		   !classes.Is_A(item.object, "Part") {
+			item.velocity_sq = 0
+			continue
+		}
+		part := cast(^classes.Part)item.object
+		if part.anchored {
+			item.velocity_sq = 0
+			continue
+		}
+		// Approximate velocity from the delta between the current CFrame and
+		// the most recent sample on the entity (server-side last_frame stored
+		// in last_accepted_position — repurpose it here).
+		dx := part.cframe.x - item.last_accepted_position.x
+		dy := part.cframe.y - item.last_accepted_position.y
+		dz := part.cframe.z - item.last_accepted_position.z
+		item.velocity_sq = dx * dx + dy * dy + dz * dz
+		item.last_accepted_position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
+	}
+
 	for &connection in service.peers {
 		connection.bytes_this_tick = 0
+
+		// -----------------------------------------------------------------------
+		// Phase 1: Spawns — always reliable, skip bandwidth check.
+		// -----------------------------------------------------------------------
 		spawned := 0
 		for item in service.entities {
 			if !replication_visible(service, &connection, item.object) ||
@@ -424,9 +518,14 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				connection.known[item.id] = parent_id + 1
 				delete_key(&connection.initialized, item.id)
 				delete_key(&connection.state_hashes, item.id)
+				delete_key(&connection.property_hashes, item.id)
 				spawned += 1
 			}
 		}
+
+		// -----------------------------------------------------------------------
+		// Phase 2: Despawns
+		// -----------------------------------------------------------------------
 		for item in service.entities {
 			if connection.known[item.id] == 0 {continue}
 			if replication_visible(service, &connection, item.object) &&
@@ -438,29 +537,44 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			delete_key(&connection.known, item.id)
 			delete_key(&connection.initialized, item.id)
 			delete_key(&connection.state_hashes, item.id)
+			delete_key(&connection.property_hashes, item.id)
 		}
+
+		// -----------------------------------------------------------------------
+		// Phase 3: State sends — sort Part entities so fast-moving unanchored
+		// parts come first and are never starved by the bandwidth budget.
+		//
+		// Strategy:
+		//   • First pass: guarantee first-state sends for newly spawned entities
+		//     (initialized == false). These bypass the bandwidth check so the
+		//     client always receives at least one authoritative frame right after
+		//     a spawn.
+		//   • Second pass: sort the remaining (already-initialized) entities
+		//     by velocity_sq descending and send in that order so fast parts
+		//     fill the budget before slow/stationary ones.
+		// -----------------------------------------------------------------------
+
+		// First: guarantee initial state for any entity that just spawned this
+		// tick (initialized == false), ignoring the bandwidth limiter.
 		for item in service.entities {
 			if connection.known[item.id] == 0 ||
 			   item.object == nil ||
 			   item.object.destroyed {continue}
-			if connection.initialized[item.id] &&
-			   !replication_relevant(service, &connection, item.object) {continue}
+			if connection.initialized[item.id] {continue} // handled below
+
 			sent := false
 			if classes.Is_A(item.object, "Part") {
-				state_sent, state_hash, unchanged := replication_send_part_state(
+				// Force-send regardless of budget by passing suppress_unchanged=false
+				// and not checking the budget — the send itself will account for it.
+				state_sent, state_hash, _ := replication_send_part_state(
 					service,
 					connection.peer,
 					cast(^classes.Part)item.object,
-					connection.state_hashes[item.id],
-					connection.initialized[item.id],
+					0,
+					false,
 				)
-				if unchanged {
-					service.unchanged_states_skipped += 1
-					sent = true
-				} else {
-					sent = state_sent
-					if sent {connection.state_hashes[item.id] = state_hash}
-				}
+				sent = state_sent
+				if sent {connection.state_hashes[item.id] = state_hash}
 			} else {
 				sent = replication_send_property(
 					service,
@@ -480,37 +594,70 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				}
 			}
 			if sent {connection.initialized[item.id] = true}
-			if replication_builtin_property(item.object, "MeshId") {
-				_ = replication_send_property(
-					service,
-					service.data_model.registry.vm_state.L,
-					connection.peer,
-					item.object,
-					"MeshId",
-				)
-				_ = replication_send_property(
-					service,
-					service.data_model.registry.vm_state.L,
-					connection.peer,
-					item.object,
-					"TextureId",
-				)
+			replication_send_extra_properties(service, &connection, item)
+		}
+
+		// Second: build a priority-sorted slice of already-initialized entity
+		// indices then send in velocity order.
+		sorted_indices: [dynamic]int
+		defer delete(sorted_indices)
+		for item, index in service.entities {
+			if connection.known[item.id] == 0 ||
+			   item.object == nil ||
+			   item.object.destroyed {continue}
+			if !connection.initialized[item.id] {continue} // already handled above
+			if !replication_relevant(service, &connection, item.object) {continue}
+			append(&sorted_indices, index)
+		}
+		// Insertion-sort by velocity_sq descending — N is typically small
+		// (hundreds, not thousands) so this is fine.
+		for i := 1; i < len(sorted_indices); i += 1 {
+			key_idx := sorted_indices[i]
+			key_vel := service.entities[key_idx].velocity_sq
+			j := i - 1
+			for j >= 0 && service.entities[sorted_indices[j]].velocity_sq < key_vel {
+				sorted_indices[j + 1] = sorted_indices[j]
+				j -= 1
 			}
-			schema := replication_schema(service, classes.Get_Class_Name(item.object))
-			if schema != nil {
-				for property in schema.properties {
-					if property != "Name" && property != "Value" {
-						_ = replication_send_property(
-							service,
-							service.data_model.registry.vm_state.L,
-							connection.peer,
-							item.object,
-							property,
-						)
-					}
+			sorted_indices[j + 1] = key_idx
+		}
+
+		for index in sorted_indices {
+			item := service.entities[index]
+			if classes.Is_A(item.object, "Part") {
+				state_sent, state_hash, unchanged := replication_send_part_state(
+					service,
+					connection.peer,
+					cast(^classes.Part)item.object,
+					connection.state_hashes[item.id],
+					true,
+				)
+				if unchanged {
+					service.unchanged_states_skipped += 1
+				} else if state_sent {
+					connection.state_hashes[item.id] = state_hash
+				}
+			} else {
+				_ = replication_send_property(
+					service,
+					service.data_model.registry.vm_state.L,
+					connection.peer,
+					item.object,
+					"Name",
+				)
+				if classes.Is_A(item.object, "ValueBase") {
+					_ = replication_send_property(
+						service,
+						service.data_model.registry.vm_state.L,
+						connection.peer,
+						item.object,
+						"Value",
+					)
 				}
 			}
+			replication_send_extra_properties(service, &connection, item)
 		}
+
 		if spawned > 0 && connection.player != nil {
 			fmt.printf(
 				"[Replication] sent initial snapshot to %s (%d instances)\n",
@@ -529,4 +676,78 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		}
 	}
 	service.tick += 1
+}
+
+// replication_send_extra_properties sends MeshId/TextureId and schema
+// properties for an entity. Schema property values are hashed per connection
+// and only re-sent when they actually change, so local client edits to a
+// replicated object are not clobbered every tick.
+replication_send_extra_properties :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	item: Replication_Entity,
+) {
+	if item.object == nil || item.object.destroyed {return}
+	L := service.data_model.registry.vm_state.L
+	if replication_builtin_property(item.object, "MeshId") {
+		_ = replication_send_property(
+			service,
+			L,
+			connection.peer,
+			item.object,
+			"MeshId",
+		)
+		_ = replication_send_property(
+			service,
+			L,
+			connection.peer,
+			item.object,
+			"TextureId",
+		)
+	}
+	schema := replication_schema(service, classes.Get_Class_Name(item.object))
+	if schema == nil {return}
+	hash := replication_schema_properties_hash(service, L, item.object, schema)
+	if previous, ok := connection.property_hashes[item.id]; ok && previous == hash {return}
+	all_sent := true
+	for property in schema.properties {
+		if property != "Name" && property != "Value" {
+			if !replication_send_property(service, L, connection.peer, item.object, property) {
+				all_sent = false
+			}
+		}
+	}
+	if all_sent {connection.property_hashes[item.id] = hash}
+}
+
+replication_schema_properties_hash :: proc(
+	service: ^ReplicatorService,
+	L: ^vm.State,
+	object: ^classes.Object,
+	schema: ^Replication_Schema,
+) -> u64 {
+	if service == nil || L == nil || object == nil || object.destroyed || schema == nil {return 0}
+	scratch: [dynamic]u8
+	defer delete(scratch)
+	top := vm.StackTop(L)
+	previous := vm.GetThreadSecurityCapabilities(L)
+	vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
+	defer vm.SetThreadSecurityCapabilities(L, previous)
+	defer vm.SetStackTop(L, top)
+	classes.Push_Object(L, object)
+	for property in schema.properties {
+		if property == "Name" || property == "Value" {continue}
+		_ = vm.GetField(L, -1, property)
+		if !replication_encode_value(L, -1, &scratch, 0) {
+			vm.Pop(L)
+			vm.Pop(L)
+			return 0
+		}
+		vm.Pop(L)
+	}
+	hash: u64 = 14695981039346656037
+	for byte in scratch {
+		hash = (hash ~ u64(byte)) * 1099511628211
+	}
+	return hash
 }

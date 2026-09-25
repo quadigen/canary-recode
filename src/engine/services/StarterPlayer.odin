@@ -35,9 +35,35 @@ starter_player_construct :: proc(
 
 	service.auto_jump_enabled = true
 	service.character_walk_speed = 16
-	service.character_jump_power = 50
+	service.character_jump_power = 53.1534
 	service.character_max_slope_angle = 89
 	service.load_character_appearance = true
+
+	// The starter template containers exist as soon as the service does, on
+	// every runtime, so places and scripts can author into them immediately
+	// (mirroring Roblox's default hierarchy) instead of silently parenting to
+	// nil on runtimes that have not prepared a local player yet. The class/name
+	// pairs match what ClientScripts uses when preparing player containers:
+	// "StarterPlayerScripts" is an instance name; its class is PlayerScripts.
+	if model := cast(^DataModel)data_model; model != nil &&
+	   model.registry != nil && model.registry.vm_state != nil {
+		containers := [?]struct{class_name, name: string}{
+			{"PlayerScripts", "StarterPlayerScripts"},
+			{"StarterCharacterScripts", "StarterCharacterScripts"},
+		}
+		for container in containers {
+			object, ok := classes.Push_New(
+				model.registry.classes,
+				model.registry.vm_state,
+				container.class_name,
+				false,
+			)
+			if !ok || object == nil {continue}
+			classes.Set_Name(object, container.name)
+			classes.Set_Parent(object, &service.object)
+			vm.Pop(model.registry.vm_state.L)
+		}
+	}
 
 	return &service.object
 }
@@ -143,5 +169,21 @@ Register_StarterPlayer_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = starter_player_get,
 		set = starter_player_set,
+	)
+}
+
+StarterPlayer_Apply_Character :: proc(
+	data_model: ^DataModel,
+	controller: ^classes.CharacterController,
+) {
+	if data_model == nil || controller == nil || controller.destroyed {return}
+	starter := cast(^StarterPlayer)DataModel_Get_Service(data_model, "StarterPlayer")
+	if starter == nil {return}
+	controller.walk_speed = f32(starter.character_walk_speed)
+	controller.max_slope_angle = f32(starter.character_max_slope_angle)
+	controller.jump_height = f32(
+		starter.character_jump_power *
+		starter.character_jump_power /
+		(2 * classes.CHARACTER_GRAVITY),
 	)
 }

@@ -767,6 +767,12 @@ JPH_ShapeRef JPH_MeshShape_Create(const JPH_Triangle* triangles, uint32_t triang
     return shape;
 }
 
+void JPH_Shape_AddRef(JPH_ShapeRef shape)
+{
+    if (shape != nullptr)
+        ToShape(shape)->AddRef();
+}
+
 void JPH_Shape_Destroy(JPH_ShapeRef shape)
 {
     if (shape != nullptr)

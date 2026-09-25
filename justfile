@@ -64,6 +64,17 @@ player: client
 server:
     odin build src -define:BUILD_TARGET=server -out:build/kinemium-server.exe
 
+release-templates:
+    New-Item -ItemType Directory -Force rel | Out-Null
+    copy build\kinemium-server.exe rel\kinemium-server-windows-x86_64.exe
+    copy build\kinemium-client.exe rel\kinemium-client-windows-x86_64.exe
+
+server-bake map address="0.0.0.0" port="1234":
+    odin build src -define:BUILD_TARGET=server -define:KINE_MODE=server -define:KINE_ADDRESS={{address}} -define:KINE_PORT={{port}} -define:KINE_EMBED="$(Resolve-Path '{{map}}')" -out:build/kinemium-server.exe
+
+client-bake address="" map="" port="1234":
+    odin build src -define:BUILD_TARGET=client -define:KINE_MODE=client {{ if address != "" { "-define:KINE_ADDRESS=" + address + " " } else { "" } }}-define:KINE_PORT={{port}} {{ if map != "" { "-define:KINE_EMBED=\"$(Resolve-Path '" + map + "')\" " } else { "" } }}-out:build/kinemium-client.exe
+
 run-editor:
     odin run src -define:BUILD_TARGET=editor
 

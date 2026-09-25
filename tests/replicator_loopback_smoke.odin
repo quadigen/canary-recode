@@ -43,6 +43,7 @@ part.Size = Vector3.new(2, 3, 4)
 part.Color = Color3.new(0.25, 0.5, 0.75)
 part.Transparency = 0.4
 part.CanQuery = false
+part.Shape = Enum.PartType.Cylinder
 part.Parent = game:GetService("Workspace")
 local hidden = Instance.new("Part")
 hidden.Name = "ManualPart"
@@ -114,6 +115,7 @@ assert(game:GetService("ServerStorage"):FindFirstChild("ServerSecret") == nil)
 assert(part.CFrame.Position == Vector3.new(4, 5, 6))
 assert(part.Size == Vector3.new(2, 3, 4))
 assert(part.CanQuery == false)
+assert(part.Shape == Enum.PartType.Cylinder, "Shape enum should replicate")
 assert(math.abs(part.Transparency - 0.4) < 1e-4)
 assert(r:SendEvent("client-test", "hello"))
 assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint = Color3.new(0.1, 0.2, 0.3), frame = CFrame.new(2, 3, 4), list = { 10, 20 }, nested = { ok = true } }))
@@ -140,7 +142,10 @@ assert(x > 4 and x < 6, "expected buffered interpolation, got " .. tostring(x))
 		step_network(&client, &client_vm)
 	}
 	run_script(&client_vm, `
-assert(game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X == 6)
+local x = game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X
+-- Interpolation blends toward the target and stops correcting within its
+-- jitter deadband, so compare with a small tolerance instead of exactly.
+assert(math.abs(x - 6) < 0.1, "expected converged interpolation, got " .. tostring(x))
 `, "replicator_client_interpolation_complete")
 	run_script(&server_vm, `
 game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(4, 5, 6)
@@ -195,7 +200,7 @@ assert(targeted and targeted.value == 42)
 local folder = game:GetService("Workspace"):FindFirstChild("NetworkFolder")
 assert(folder)
 local part = folder:FindFirstChild("MovedPart")
-assert(part and part.CFrame.Position == Vector3.new(8, 9, 10))
+assert(part and math.abs(part.CFrame.Position.X - 8) < 0.1 and math.abs(part.CFrame.Position.Y - 9) < 0.1 and math.abs(part.CFrame.Position.Z - 10) < 0.1, "MovedPart position should replicate")
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 23)
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart"))
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart"))

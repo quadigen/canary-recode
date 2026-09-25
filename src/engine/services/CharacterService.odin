@@ -50,6 +50,7 @@ character_service_part :: proc(
 	size, offset: datatypes.Vector3,
 	color: datatypes.Color3,
 	visible: bool,
+	shape: enums.PartType,
 ) -> ^classes.Part {
 	object, ok := classes.Push_New(
 		service.data_model.registry.classes,
@@ -69,6 +70,7 @@ character_service_part :: proc(
 	part.cframe.y = offset.y
 	part.cframe.z = offset.z
 	part.position = offset
+	part.shape = shape
 	classes.Set_Parent(object, &model.object)
 	vm.Pop(service.data_model.registry.vm_state.L)
 	return part
@@ -112,20 +114,34 @@ CharacterService_Load :: proc(
 			break
 		}
 	}
-	yellow := datatypes.Color3 {
-		R = 0.96,
-		G = 0.8,
-		B = 0.08,
+	white := datatypes.Color3 {
+		R = 1,
+		G = 1,
+		B = 1,
 	}
+
 	_ = character_service_part(
 		service,
 		model,
 		"HumanoidRootPart",
-		datatypes.Vector3{2, 4, 2},
+		datatypes.Vector3{3, 5, 3},
 		spawn,
-		yellow,
-		true,
+		white,
+		false,
+		.Block
 	)
+
+	_ = character_service_part(
+		service,
+		model,
+		"CharacterCollider",
+		datatypes.Vector3{3, 3, 3},
+		spawn,
+		white,
+		true,
+		.Capsule
+	)
+
 	classes.Set_Parent(object, workspace)
 	vm.Pop(service.data_model.registry.vm_state.L)
 	Player_Set_Character(player, service.data_model.registry.vm_state.L, model)
@@ -138,12 +154,36 @@ CharacterService_Load :: proc(
 		entity := replication_entity_by_id(replicator, id)
 		if entity != nil {entity.owner_id = player.user_id}
 	}
+	when !#config(FORCE_LEGACY_CHARACTERS, false) {
+		classes.CharacterController_Build(
+			service.data_model.registry.classes,
+			service.data_model.registry.vm_state.L,
+			model,
+		)
+		controller := classes.CharacterController_From_Model(model)
+		StarterPlayer_Apply_Character(service.data_model, controller)
+	}
 	return model
 }
 
 CharacterService_Unload :: proc(service: ^CharacterService, player: ^Player) -> bool {
 	if service == nil || player == nil || player.character == nil {return false}
 	model := player.character
+	when !#config(FORCE_LEGACY_CHARACTERS, false) {
+		controller := classes.CharacterController_From_Model(model)
+		if controller != nil {
+			collision_object := classes.CharacterController_Find(controller, "CollisionController")
+			if collision_object != nil {
+				physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+				if physics != nil {
+					Physics_Destroy_Character_Capsule(
+						physics,
+						cast(^classes.CollisionController)collision_object,
+					)
+				}
+			}
+		}
+	}
 	Player_Set_Character(player, service.data_model.registry.vm_state.L, nil)
 	if !model.destroyed {classes.Destroy_Hierarchy(&model.object)}
 	return true
@@ -186,6 +226,11 @@ CharacterService_Bind :: proc(
 				service.last_ack = 0
 				service.authoritative_received = false
 			}
+		}
+		when !#config(FORCE_LEGACY_CHARACTERS, false) {
+			classes.CharacterController_Build(data_model.registry.classes, L, model)
+			controller := classes.CharacterController_From_Model(model)
+			StarterPlayer_Apply_Character(data_model, controller)
 		}
 	}
 }

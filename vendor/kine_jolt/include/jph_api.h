@@ -366,6 +366,18 @@ JPH_API JPH_ShapeRef JPH_ConvexHullShape_Create(
     float maxConvexRadius
 );
 JPH_API JPH_ShapeRef JPH_MeshShape_Create(const JPH_Triangle* triangles, uint32_t triangleCount);
+// Decomposes a triangle mesh (V-HACD) into a compound of convex hulls.
+// Triangles is the index array; triangleCount is the number of index values
+// (must be a multiple of 3). Hull vertices are scaled by `scale` (mesh is in
+// unit space).
+JPH_API JPH_ShapeRef JPH_VHACD_Compound_Create(
+    const JPH_Vec3* points,
+    uint32_t pointCount,
+    const uint32_t* triangles,
+    uint32_t triangleCount,
+    const JPH_Vec3* scale
+);
+JPH_API void JPH_Shape_AddRef(JPH_ShapeRef shape);
 JPH_API void JPH_Shape_Destroy(JPH_ShapeRef shape);
 
 JPH_API JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(

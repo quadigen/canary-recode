@@ -8,6 +8,7 @@ import enums "../enum"
 import vm "../vm"
 import renderer "../renderer"
 import signals "../signals"
+import target "../target"
 
 Renderer_Object   :: renderer.RendererObject
 Class_Constructor :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object
@@ -111,10 +112,6 @@ Pending_Destroy :: struct {
 
 Destroy_Hook :: proc(object: ^Object, ctx: rawptr)
 
-// Network_Ownership_Dispatch handles the replication ownership API
-// (SetNetworkOwner / GetNetworkOwner / SetNetworkOwnershipAuto). The services
-// package installs it into the class registry so instance methods can reach
-// the ReplicatorService without classes importing services.
 Network_Ownership_Dispatch :: proc(
 	ctx: rawptr,
 	L: ^vm.State,
@@ -122,10 +119,6 @@ Network_Ownership_Dispatch :: proc(
 	method: string,
 ) -> (i32, bool)
 
-// Remote_Call_Dispatch handles the RemoteEvent / RemoteFunction API
-// (FireServer / FireClient / FireAllClients / InvokeServer / InvokeClient).
-// The services package installs it into the class registry so instance
-// methods can reach the ReplicatorService without classes importing services.
 Remote_Call_Dispatch :: proc(
 	ctx: rawptr,
 	L: ^vm.State,
@@ -144,8 +137,7 @@ Registry :: struct {
 	fallback_require_ref: i32,
 	require_resolver:     Require_Resolver,
 	require_resolver_ctx: rawptr,
-	// Objects that have been destroyed (and released from Lua) but whose native
-	// memory is kept alive until the next Step so no code reads a freed object.
+	mode:                 target.Mode,
 	pending_destroy:      [dynamic]Pending_Destroy,
 	destroy_hook:         Destroy_Hook,
 	destroy_hook_ctx:     rawptr,
@@ -168,12 +160,18 @@ Registry_Init :: proc(
 		renderer = renderer,
 		data_model = data_model,
 		signal_registry = signal_registry,
+		mode = target.current_mode,
 	}
 }
 
 Set_Data_Model :: proc(registry: ^Registry, data_model: rawptr) {
 	if registry == nil { return }
 	registry.data_model = data_model
+}
+
+Set_Mode :: proc(registry: ^Registry, mode: target.Mode) {
+	if registry == nil { return }
+	registry.mode = mode
 }
 
 Set_Require_Resolver :: proc(registry: ^Registry, resolver: Require_Resolver, ctx: rawptr) {
@@ -217,6 +215,11 @@ descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
 
+	if object == nil {
+		_ = vm.RaiseError(L, "attempt to access a destroyed Instance")
+		return true
+	}
+
 	if !Object_Is_Accessible(L, object) {
 		_ = vm.RaiseError(L, "insufficient security capabilities to access this Instance")
 		return true
@@ -249,6 +252,11 @@ descriptor_set :: proc(
 ) -> bool {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
+
+	if object == nil {
+		_ = vm.RaiseError(L, "attempt to access a destroyed Instance")
+		return true
+	}
 
 	if !Object_Is_Accessible(L, object) {
 		_ = vm.RaiseError(L, "insufficient security capabilities to access this Instance")
@@ -338,6 +346,10 @@ descriptor_namecall :: proc(
 ) -> (i32, bool) {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
+
+	if object == nil {
+		return vm.RaiseError(L, "attempt to access a destroyed Instance"), true
+	}
 
 	if !Object_Is_Accessible(L, object) {
 		return vm.RaiseError(L, "insufficient security capabilities to access this Instance"), true
@@ -652,6 +664,29 @@ instance_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
+// Script_Require_Context_Of reports whether a script Instance may be required in
+// a runtime with the given role. Roblox modules run where they belong: a
+// ModuleScript is portable, a Script belongs to a server runtime and a
+// LocalScript to a client runtime. Editor runtimes host either side so in-editor
+// playtesting can require both.
+Script_Require_Context_Of :: proc(object: ^Object, mode: target.Mode) -> bool {
+	kind, ok := Script_Kind_Of(object)
+	if !ok {
+		return false
+	}
+	switch mode {
+	case .Server:
+		return kind != .LocalScript
+	case .Client:
+		return kind != .Script
+	case .Standalone:
+		return true
+	case .Editor:
+		return true
+	}
+	return false
+}
+
 require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 	if registry == nil || registry.fallback_require_ref <= 0 {
 		return vm.RaiseError(L, "require expects a ModuleScript")
@@ -680,7 +715,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 
 	object := object_from_argument(L, 1)
 	common := Script_Common_Of(object)
-	if object == nil || common == nil || !Is_A(object, "ModuleScript") {
+	if object == nil || common == nil || !Script_Is_Script(object) {
 		if status != 0 {
 			// Preserve the original error rather than masking it.
 			return vm.Reraise(L)
@@ -718,7 +753,8 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 
 // require_script implements Roblox's require() as a runtime operation:
 //
-//  1. validate the argument is a ModuleScript
+//  1. validate the argument is a ModuleScript (or a Script/LocalScript, which
+//     Roblox accepts and runs exactly like a module)
 //  2. resolve the module's execution context (the calling VM)
 //  3. consult that context's module cache
 //  4. return the cached value when the module is already initialized
@@ -750,7 +786,7 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 			"require expects a ModuleScript, got a non-Instance value",
 		)
 	}
-	if !Is_A(object, "ModuleScript") {
+	if !Script_Is_Script(object) {
 		describe := Script_Describe(object)
 		defer delete(describe)
 		return vm.RaiseError(
@@ -762,12 +798,33 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 		)
 	}
 	if object.destroyed {
-		return vm.RaiseError(L, "require: the ModuleScript has been destroyed")
+		return vm.RaiseError(L, "require: the script has been destroyed")
 	}
 
 	common := Script_Common_Of(object)
 	if common == nil {
-		return vm.RaiseError(L, "require: the ModuleScript has no script state")
+		return vm.RaiseError(L, "require: the script has no script state")
+	}
+
+	// A Script may only be required by a server runtime and a LocalScript only by
+	// a client runtime; ModuleScripts work in both. The check is skipped when the
+	// class registry has no runtime role attached (bare VM harnesses).
+	if registry != nil && !Script_Require_Context_Of(object, registry.mode) {
+		describe := Script_Describe(object)
+		defer delete(describe)
+		reason := "a client runtime"
+		if registry.mode == .Server {
+			reason = "a server runtime"
+		}
+		return vm.RaiseError(
+			L,
+			strings.concatenate({
+				"require: ",
+				describe,
+				" cannot be required from ",
+				reason,
+			}),
+		)
 	}
 
 	switch common.module_state {
@@ -799,8 +856,10 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 	// is reported as a circular dependency instead of recursing forever.
 	common.module_state = .Loading
 
-	chunk_name := fmt.aprintf("@%s", Get_Full_Name(object))
-	defer delete(chunk_name)
+	// Luau formats a chunk name that does not start with '=' as
+	// [string "<name"]:<line>; using the instance name keeps required-module
+	// errors readable while the surrounding report names the full path.
+	chunk_name := Get_Name(object)
 
 	ok, err := vm.LoadSource(registry.vm_state, L, common.source, chunk_name)
 	if !ok {
@@ -855,20 +914,25 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_BoolValue(registry)
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
+	Register_CFrameValue(registry)
 	Register_CharacterAnimator(registry)
 	Register_CharacterCamera(registry)
+	Register_CharacterController(registry)
 	Register_CharacterInput(registry)
-	Register_CFrameValue(registry)
 	Register_CharacterModel(registry)
+	Register_CharacterMotor(registry)
+	Register_CollisionController(registry)
 	Register_Color3Value(registry)
 	Register_ColorSequenceValue(registry)
 	Register_Decal(registry)
 	Register_DoubleConstrainedValue(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
+	Register_GroundDetector(registry)
 	Register_GuiButton(registry)
 	Register_GuiObject(registry)
 	Register_Handles(registry)
+	Register_Humanoid(registry)
 	Register_ImageButton(registry)
 	Register_ImageLabel(registry)
 	Register_InputObject(registry)
@@ -880,21 +944,24 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_MeshPart(registry)
 	Register_Model(registry)
 	Register_ModuleScript(registry)
+	Register_MovementController(registry)
 	Register_NumberRangeValue(registry)
 	Register_NumberSequenceValue(registry)
 	Register_NumberValue(registry)
 	Register_ObjectValue(registry)
 	Register_Part(registry)
 	Register_PointLight(registry)
+	Register_PostProcessShader(registry)
 	Register_RayValue(registry)
 	Register_RemoteEvent(registry)
 	Register_RemoteFunction(registry)
+	Register_RotationController(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
-	Register_StateMachine(registry)
 	Register_ScrollingFrame(registry)
 	Register_Sound(registry)
 	Register_SpotLight(registry)
+	Register_StateMachine(registry)
 	Register_StringValue(registry)
 	Register_SurfaceLight(registry)
 	Register_SyntaxHighlighter(registry)

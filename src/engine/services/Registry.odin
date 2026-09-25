@@ -139,6 +139,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_EditorService_Class(registry.classes) }
 	Register_ExampleService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_ExporterService_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_ExportService_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_HttpService_Class(registry.classes) }
 	Register_Lighting_Class(registry.classes)
@@ -147,7 +148,9 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_LuauService_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
+	Register_PlayerGui_Class(registry.classes)
 	Register_Players_Class(registry.classes)
+	Register_PlayerScripts_Class(registry.classes)
 	when ODIN_OS != .JS { Register_PlaytestService_Class(registry.classes) }
 	Register_Plugin_Class(registry.classes)
 	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
@@ -162,11 +165,13 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_ServerScriptService_Class(registry.classes)
 	Register_ServerStorage_Class(registry.classes)
 	Register_SoundService_Class(registry.classes)
+	Register_StarterCharacterScripts_Class(registry.classes)
 	Register_StarterGui_Class(registry.classes)
 	Register_StarterPack_Class(registry.classes)
 	Register_StarterPlayer_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
+	when ODIN_OS != .JS { Register_TemplateService_Class(registry.classes) }
 	Register_Terrain_Class(registry.classes)
 	Register_TextService_Class(registry.classes)
 	Register_Tween_Class(registry.classes)
@@ -182,6 +187,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService") }
 	when ODIN_OS != .JS { Register_Service(registry, "EditorService", "EditorService", "EditorService") }
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
+	when ODIN_OS != .JS { Register_Service(registry, "ExporterService", "ExporterService", "ExporterService") }
 	when ODIN_OS != .JS { Register_Service(registry, "ExportService", "ExportService", "ExportService") }
 	when ODIN_OS != .JS { Register_Service(registry, "HttpService", "HttpService") }
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
@@ -190,7 +196,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "LuauService", "LuauService", "LuauService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
-	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService", "PlaytestService") }
+	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService") }
 	Register_Service(registry, "Plugin", "Plugin", "Plugin")
 	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace") }
 	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
@@ -209,6 +215,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
+	when ODIN_OS != .JS { Register_Service(registry, "TemplateService", "TemplateService", "TemplateService") }
 	Register_Service(registry, "Terrain", "Terrain", "terrain")
 	Register_Service(registry, "TextService", "TextService", "TextService")
 	Register_Service(registry, "TweenService", "TweenService")
@@ -347,6 +354,9 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.data_model = cast(^DataModel)model_object
 	registry.data_model.registry = registry
 	classes.Set_Data_Model(registry.classes, registry.data_model)
+	// Mirror the runtime role into the class registry so `require()` can enforce
+	// the server/client boundary without classes importing services.
+	classes.Set_Mode(registry.classes, registry.mode)
 	classes.Set_Network_Ownership(
 		registry.classes,
 		network_ownership_namecall,
@@ -412,6 +422,24 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 	registry := cast(^Registry)ctx
 	for &descriptor in registry.services {
 		if descriptor.object == object { descriptor.object = nil; break }
+	}
+
+	// A destroyed script must not leave a thread behind: cancel any pending
+	// scheduler resume and drop the context's bookkeeping for it.
+	if classes.Script_Is_Script(object) {
+		descriptor := Find_Service(registry, "ScriptContext")
+		if descriptor != nil && descriptor.object != nil {
+			script_context := cast(^ScriptContext)descriptor.object
+			if !script_context.destroyed {
+				ScriptContext_Forget_Script(script_context, object)
+			}
+		}
+	}
+
+	// Player-owned client containers must not leave a dangling reference on the
+	// Player that owns them.
+	if classes.Is_A(object, "PlayerScripts") || classes.Is_A(object, "PlayerGui") {
+		Players_Forget_Client_Container(object)
 	}
 	when ODIN_OS != .JS {
 		replicator := Find_Service(registry, "ReplicatorService")

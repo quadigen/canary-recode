@@ -15,8 +15,6 @@ ScriptContext_Class := classes.Class_Info {
 	parent = &Service_Class,
 }
 
-// Script_Thread tracks a live script thread so the context can reap it when it
-// finishes and report scheduler-resumed failures with script context.
 Script_Thread :: struct {
 	object:      ^classes.Object,
 	thread:      ^vm.State,
@@ -56,13 +54,6 @@ ScriptContext_Get_VM :: proc(script_context: ^ScriptContext) -> ^vm.VM {
 	return script_context.vm_state
 }
 
-// ScriptContext_Mode reports the role of the runtime this context belongs to.
-//
-// The role is per Environment (and therefore per VM), not per process: a server
-// process runs Scripts, a client process runs LocalScripts, and an editor
-// runtime may host either side so in-editor playtesting works. Harnesses that
-// build a server and a client Environment in one process set each role
-// explicitly through Environment_Set_Mode.
 ScriptContext_Mode :: proc(script_context: ^ScriptContext) -> target.Mode {
 	if script_context == nil ||
 	   script_context.service.data_model == nil ||
@@ -93,16 +84,16 @@ script_context_remember_thread :: proc(
 		return
 	}
 	script_context_forget_thread(script_context, object)
-	append(&script_context.threads, Script_Thread{
-		object      = object,
-		thread      = thread,
-		description = classes.Script_Describe(object),
-	})
+	append(
+		&script_context.threads,
+		Script_Thread {
+			object = object,
+			thread = thread,
+			description = classes.Script_Describe(object),
+		},
+	)
 }
 
-// ScriptContext_Describe_Thread names the script that owns a script thread, or
-// returns "" when the thread is not a script thread. The returned string is
-// owned by the context and must not be freed by the caller.
 ScriptContext_Describe_Thread :: proc(
 	script_context: ^ScriptContext,
 	thread: ^vm.State,
@@ -140,9 +131,6 @@ script_context_thread_is_scheduled :: proc(
 	return TaskScheduler_Owns_Thread(scheduler, thread)
 }
 
-// script_context_report_error prints a script error with full identity and a
-// Luau traceback. Errors are reported, never fatal: an error in one script must
-// not take down unrelated scripts or the runtime.
 script_context_report_error :: proc(
 	script_context: ^ScriptContext,
 	object: ^classes.Object,
@@ -151,16 +139,14 @@ script_context_report_error :: proc(
 ) {
 	_ = script_context
 	name := classes.Get_Full_Name(object)
+	class_name := classes.Get_Class_Name(object)
 	if len(traceback) > 0 {
-		fmt.eprintf("Script error in %s:\n%s\n", name, traceback)
+		fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, traceback)
 	} else {
-		fmt.eprintf("Script error in %s:\n%s\n", name, message)
+		fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, message)
 	}
 }
 
-// script_context_is_active reports whether a script is reachable from the
-// DataModel root. Roblox scripts only start once they are part of the game
-// hierarchy, so an unparented Instance.new("Script") never runs.
 script_context_is_active :: proc(object: ^classes.Object) -> bool {
 	if object == nil || object.destroyed {
 		return false
@@ -178,12 +164,12 @@ script_context_is_active :: proc(object: ^classes.Object) -> bool {
 	return false
 }
 
-// script_context_should_run enforces the server/client boundary for the runtime
-// this context belongs to. A Script never executes on a client and a LocalScript
-// never executes on a server; editor runtimes host either side.
 script_context_should_run :: proc(mode: target.Mode, object: ^classes.Object) -> bool {
 	kind, ok := classes.Script_Kind_Of(object)
 	if !ok || kind == .ModuleScript {
+		return false
+	}
+	if kind == .LocalScript && ClientScripts_In_Template(object) {
 		return false
 	}
 	switch mode {
@@ -191,10 +177,78 @@ script_context_should_run :: proc(mode: target.Mode, object: ^classes.Object) ->
 		return kind == .Script
 	case .Client:
 		return kind == .LocalScript
+	case .Standalone:
+		return kind == .Script || kind == .LocalScript
 	case .Editor:
-		return true
+		return false
 	}
 	return false
+}
+
+script_context_restart_script :: proc(
+	script_context: ^ScriptContext,
+	object: ^classes.Object,
+	common: ^classes.Script_Common,
+) {
+	if common.execution_state == .Started {
+		script_context_stop_script(script_context, object, common)
+	}
+	common.execution_state = .NotStarted
+}
+
+ScriptContext_Forget_Script :: proc(script_context: ^ScriptContext, object: ^classes.Object) {
+	if script_context == nil || object == nil {
+		return
+	}
+
+	common := classes.Script_Common_Of(object)
+	if common == nil {
+		script_context_forget_thread(script_context, object)
+		return
+	}
+
+	if scheduler := script_context_task_scheduler(script_context); scheduler != nil {
+		TaskScheduler_Cancel_Thread(scheduler, common.thread)
+	}
+
+	if script_context.vm_state != nil && script_context.vm_state.L != nil {
+		classes.Script_Release_Thread(script_context.vm_state.L, common)
+	}
+	common.execution_state = .Stopped
+	script_context_forget_thread(script_context, object)
+}
+
+ScriptContext_Stop_All :: proc(script_context: ^ScriptContext) {
+	if script_context == nil {
+		return
+	}
+
+	L: ^vm.State = nil
+	if script_context.vm_state != nil {
+		L = script_context.vm_state.L
+	}
+	scheduler := script_context_task_scheduler(script_context)
+
+	for entry in script_context.threads {
+		if scheduler != nil {
+			TaskScheduler_Cancel_Thread(scheduler, entry.thread)
+		}
+		if entry.object == nil || entry.object.destroyed {
+			continue
+		}
+		common := classes.Script_Common_Of(entry.object)
+		if common == nil {
+			continue
+		}
+		if L != nil {
+			classes.Script_Release_Thread(L, common)
+		}
+		common.execution_state = .Stopped
+	}
+	for entry in script_context.threads {
+		delete(entry.description)
+	}
+	clear(&script_context.threads)
 }
 
 script_context_fail_script :: proc(
@@ -214,14 +268,11 @@ script_context_finish_script :: proc(
 	common: ^classes.Script_Common,
 ) {
 	L := script_context.vm_state.L
-	// Parked in Stopped: the script ran (or was stopped) and must not restart.
 	common.execution_state = .Stopped
 	classes.Script_Release_Thread(L, common)
 	script_context_forget_thread(script_context, object)
 }
 
-// script_context_stop_script cancels a running script, dropping any pending
-// scheduler resume so a disabled script never wakes up again.
 script_context_stop_script :: proc(
 	script_context: ^ScriptContext,
 	object: ^classes.Object,
@@ -234,9 +285,6 @@ script_context_stop_script :: proc(
 	script_context_finish_script(script_context, object, common)
 }
 
-// script_context_start creates the script's thread, installs its environment and
-// runs it for the first time. A script that yields keeps its thread (retained in
-// Script_Common) so it can be resumed later without leaking the VM thread.
 script_context_start :: proc(
 	script_context: ^ScriptContext,
 	object: ^classes.Object,
@@ -247,8 +295,6 @@ script_context_start :: proc(
 
 	main_thread := script_context.vm_state.L
 
-	// Mark started before running so a re-entrant step, or a reparent during
-	// execution, can never start the same script twice.
 	common.execution_state = .Started
 
 	thread := vm.NewThread(main_thread)
@@ -259,8 +305,7 @@ script_context_start :: proc(
 	common.thread_ref = thread_ref
 	script_context_remember_thread(script_context, object, thread)
 
-	chunk_name := fmt.aprintf("@%s", classes.Get_Full_Name(object))
-	defer delete(chunk_name)
+	chunk_name := classes.Get_Name(object)
 
 	ok, load_error := vm.LoadSource(script_context.vm_state, thread, common.source, chunk_name)
 	if !ok {
@@ -301,19 +346,15 @@ script_context_start :: proc(
 	return true
 }
 
-// ScriptContext_Run_Script starts one Script/LocalScript during the startup
-// pass. It is idempotent: scripts that already ran, are disabled, have no
-// source, or do not belong to this runtime are left untouched.
-ScriptContext_Run_Script :: proc(script_context: ^ScriptContext, script: ^classes.Script) -> bool {
+ScriptContext_Run_Script :: proc(script_context: ^ScriptContext, object: ^classes.Object) -> bool {
 	if script_context == nil ||
 	   script_context.vm_state == nil ||
 	   script_context.vm_state.L == nil ||
-	   script == nil ||
-	   script.destroyed {
+	   object == nil ||
+	   object.destroyed {
 		return false
 	}
 
-	object := &script.object
 	common := classes.Script_Common_Of(object)
 	if common == nil || classes.Is_A(object, "ModuleScript") {
 		return false
@@ -332,14 +373,6 @@ ScriptContext_Run_Script :: proc(script_context: ^ScriptContext, script: ^classe
 }
 
 
-// script_context_resume_script observes a live script thread.
-//
-//   * Finished/Error - the thread completed (possibly after a scheduler resume):
-//     release it so the VM thread is never leaked.
-//   * Suspended      - a script that yielded to something other than the task
-//     scheduler has no resumer, so it is driven here. Threads awaiting
-//     task.wait()/task.delay() are owned by the scheduler and must not be
-//     resumed twice.
 script_context_resume_script :: proc(
 	script_context: ^ScriptContext,
 	object: ^classes.Object,
@@ -356,18 +389,9 @@ script_context_resume_script :: proc(
 	case .Error:
 		script_context_fail_script(script_context, object, common)
 	case .Suspended:
-		if script_context_thread_is_scheduled(script_context, common.thread) {
-			return
-		}
-		_, _, resume_error, traceback := vm.ResumeThreadTraceback(common.thread, L, 0)
-		if resume_error != "" {
-			script_context_report_error(script_context, object, resume_error, traceback)
-			delete(resume_error)
-			delete(traceback)
-			script_context_fail_script(script_context, object, common)
-		}
+		return
 	case .Running, .Normal:
-		// Actively executing; leave it alone.
+
 	}
 }
 
@@ -384,6 +408,21 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 
 	mode := ScriptContext_Mode(script_context)
 
+	if mode == .Client || mode == .Standalone {
+		if data_model := script_context.service.data_model; data_model != nil {
+			if players_object := Ensure_Service(data_model.registry, "Players");
+			   players_object != nil {
+				players := cast(^Players)players_object
+				if players != nil && players.local_player != nil {
+					ClientScripts_Prepare_Local_Player(
+						data_model,
+						players.local_player,
+					)
+				}
+			}
+		}
+	}
+
 	for descriptor in script_context.object_registry.classes {
 		if descriptor == nil {
 			continue
@@ -399,7 +438,6 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 				continue
 			}
 
-			// ModuleScripts never execute on their own; require() drives them.
 			kind, _ := classes.Script_Kind_Of(instance)
 			if kind == .ModuleScript {
 				continue
@@ -410,9 +448,18 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 			}
 
 			if !common.enabled {
-				// Enabled = false prevents execution and stops a running script.
+				common.restart_requested = false
 				if common.execution_state == .Started {
 					script_context_stop_script(script_context, instance, common)
+				}
+				continue
+			}
+
+			if common.restart_requested {
+				common.restart_requested = false
+				script_context_restart_script(script_context, instance, common)
+				if len(common.source) > 0 && script_context_is_active(instance) {
+					script_context_start(script_context, instance, common)
 				}
 				continue
 			}
@@ -426,8 +473,7 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 			case .Started:
 				script_context_resume_script(script_context, instance, common)
 			case .Stopped, .Errored:
-				// A script executes at most once, matching Roblox: reparenting
-				// or re-enabling does not run it again.
+
 			}
 		}
 	}
@@ -437,6 +483,10 @@ ScriptContext_destroy :: proc(object: ^classes.Object, renderer: ^classes.Render
 	script_context := cast(^ScriptContext)object
 
 	if script_context != nil {
+		// The execution context is going away: stop every running script so no
+		// thread or scheduled resume outlives the runtime.
+		ScriptContext_Stop_All(script_context)
+
 		for entry in script_context.threads {
 			delete(entry.description)
 		}

@@ -274,6 +274,8 @@ foreign lib {
 	JPH_CapsuleShape_Create                                      :: proc(halfHeight: f32, radius: f32, convexRadius: f32) -> JPH_ShapeRef ---
 	JPH_ConvexHullShape_Create                                   :: proc(points: ^JPH_Vec3, pointCount: u32, maxConvexRadius: f32) -> JPH_ShapeRef ---
 	JPH_MeshShape_Create                                         :: proc(triangles: ^JPH_Triangle, triangleCount: u32) -> JPH_ShapeRef ---
+	JPH_VHACD_Compound_Create                                    :: proc(points: ^JPH_Vec3, pointCount: u32, triangles: ^u32, triangleCount: u32, scale: ^JPH_Vec3) -> JPH_ShapeRef ---
+	JPH_Shape_AddRef                                             :: proc(shape: JPH_ShapeRef) ---
 	JPH_Shape_Destroy                                            :: proc(shape: JPH_ShapeRef) ---
 	JPH_BodyCreationSettings_Create3                             :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, motionType: JPH_MotionType, objectLayer: JPH_ObjectLayer) -> JPH_BodyCreationSettingsRef ---
 	JPH_BodyCreationSettings_Destroy                             :: proc(settings: JPH_BodyCreationSettingsRef) ---

@@ -278,6 +278,19 @@ jobs:
           }
           Copy-Item -LiteralPath $sdl3Dll -Destination 'dist/${{ matrix.folder }}/SDL3.dll'
 
+          # Server/client templates for the exporter (Windows)
+          foreach ($flavor in @('server', 'client')) {
+            & odin build src `
+              -o:speed `
+              -out:"dist/${{ matrix.folder }}/kinemium-$flavor-windows-x86_64.exe" `
+              @versionDefine `
+              -define:BUILD_TARGET=$flavor `
+              -define:RUNTIME_GIT_ENABLED=true `
+              -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
+              -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Build Kinemium (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -308,6 +321,21 @@ jobs:
             cp -L "$source_path" "dist/${{ matrix.folder }}/$soname"
           done
 
+          # Server/client templates for the exporter (Linux)
+          for flavor in server client; do
+            odin build src \
+              -o:speed \
+              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-linux-x86_64" \
+              "${version_define[@]}" \
+              -define:BUILD_TARGET="$flavor" \
+              -define:RUNTIME_GIT_ENABLED=true \
+              -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+              -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
+              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
+            if [[ $? -ne 0 ]]; then exit 1; fi
+          done
+          chmod +x dist/${{ matrix.folder }}/kinemium-server-linux-x86_64 dist/${{ matrix.folder }}/kinemium-client-linux-x86_64
+
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -328,6 +356,20 @@ jobs:
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib 'dist/${{ matrix.folder }}/'
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib 'dist/${{ matrix.folder }}/'
+
+          # Server/client templates for the exporter (macOS)
+          for flavor in server client; do
+            odin build src \
+              -o:speed \
+              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-macos-arm64" \
+              "${version_define[@]}" \
+              -define:BUILD_TARGET="$flavor" \
+              -define:RUNTIME_GIT_ENABLED=true \
+              -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+              -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
+              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+            if [[ $? -ne 0 ]]; then exit 1; fi
+          done
 
       - name: Inspect Linux executable
         if: runner.os == 'Linux'
@@ -564,4 +606,10 @@ jobs:
             release/kinemium-windows-x86_64.zip \
             release/kinemium-linux-x86_64.zip \
             release/kinemium-macos-arm64.zip \
+            release/windows/kinemium-server-windows-x86_64.exe \
+            release/windows/kinemium-client-windows-x86_64.exe \
+            release/linux/kinemium-server-linux-x86_64 \
+            release/linux/kinemium-client-linux-x86_64 \
+            release/macos/kinemium-server-macos-arm64 \
+            release/macos/kinemium-client-macos-arm64 \
             --generate-notes

@@ -1014,11 +1014,26 @@ IsUserdataType :: proc(L: ^State, index: int, binding: ^Userdata_Binding) -> boo
 	return binding != nil && UserdataBindingOf(L, index) == binding
 }
 
+// A destroyed Instance keeps its userdata shell but with a detached value so
+// stale references can never read freed memory. Any access through such a
+// shell has to report the real cause instead of whatever error the binding
+// would raise for a nil value.
+userdata_detached :: proc(L: ^State, header: ^Userdata_Header) -> bool {
+	if header == nil || header.value != nil {
+		return false
+	}
+	_ = RaiseError(L, "attempt to access a destroyed Instance")
+	return true
+}
+
 userdata_index :: proc "c" (L: ^State) -> i32 {
 	context = runtime.default_context()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
+	}
+	if userdata_detached(L, header) {
+		return 0
 	}
 
 	key := ArgString(L, 2)
@@ -1036,6 +1051,9 @@ userdata_newindex :: proc "c" (L: ^State) -> i32 {
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
 	}
+	if userdata_detached(L, header) {
+		return 0
+	}
 
 	key := ArgString(L, 2)
 	if header.binding.set != nil && header.binding.set(L, header.value, header.binding.ctx, key, 3) {
@@ -1050,6 +1068,9 @@ userdata_namecall :: proc "c" (L: ^State) -> i32 {
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
+	}
+	if userdata_detached(L, header) {
+		return 0
 	}
 
 	atom: i32
@@ -1074,6 +1095,9 @@ userdata_method :: proc "c" (L: ^State) -> i32 {
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil || header.binding.namecall == nil {
 		return RaiseError(L, "invalid native method receiver")
+	}
+	if userdata_detached(L, header) {
+		return 0
 	}
 	method := ArgString(L, int(UpvalueIndex(1)))
 	result_count, handled := header.binding.namecall(L, header.value, header.binding.ctx, method)

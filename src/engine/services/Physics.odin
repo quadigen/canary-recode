@@ -20,14 +20,23 @@ Physics_Body :: struct {
 	anchored:    bool,
 	last_cframe: datatypes.CFrame,
 	mesh_id:     string,
+	collision_fidelity: enums.CollisionFidelity,
 }
 
 Physics :: struct {
 	using service: Service,
 	system:        jolt.System,
 	bodies:        [dynamic]Physics_Body,
+	body_to_part:  map[kineffi.JPH_BodyID]^classes.Part,
+	contact_listener: kineffi.JPH_ContactListenerRef,
 	gravity:       f32,
+	pcd_cache:     map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
 	initialized:   bool,
+}
+
+Physics_Shape_Cache_Key :: struct {
+	mesh_id: string,
+	size:    datatypes.Vector3,
 }
 
 Physics_Set_Gravity :: proc(service: ^Physics, gravity: f32) {
@@ -40,16 +49,32 @@ physics_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr
 	service := new(Physics)
 	service.service = Service_Init(&Physics_Class, "Physics", data_model)
 	service.gravity = 196.2
+	service.pcd_cache = make(map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef)
 	service.system, service.initialized = jolt.System_Create_3D()
-	if service.initialized { jolt.System_Set_Gravity(&service.system, service.gravity) }
+	if service.initialized {
+		jolt.System_Set_Gravity(&service.system, service.gravity)
+		service.contact_listener = kineffi.JPH_ContactListener_Create()
+		if service.contact_listener != nil {
+			kineffi.JPH_PhysicsSystem_SetContactListener(service.system.handle, service.contact_listener)
+		}
+	}
 	return &service.object
 }
 
 physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^Physics)object
 	for body in service.bodies { physics_destroy_body(service, body) }
+	delete(service.body_to_part)
 	delete(service.bodies)
+	for _, shape in service.pcd_cache {
+		kineffi.JPH_Shape_Destroy(shape)
+	}
+	delete(service.pcd_cache)
 	jolt.System_Destroy_3D(&service.system)
+	if service.contact_listener != nil {
+		kineffi.JPH_ContactListener_Destroy(service.contact_listener)
+		service.contact_listener = nil
+	}
 	classes.Object_Destroy(object)
 	free(service)
 }

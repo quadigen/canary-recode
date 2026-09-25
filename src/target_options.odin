@@ -8,20 +8,54 @@ import "core:strings"
 import target "engine/target"
 
 Startup_Options :: struct {
-	address: string,
-	port:    u16,
-	map_path: string,
-	playtest: bool,
+	address:      string,
+	port:         u16,
+	map_path:     string,
+	playtest:     bool,
 	update_check: bool,
-	no_update: bool,
-	window: bool,
-	mode:    target.Mode,
+	no_update:    bool,
+	window:       bool,
+	mode:         target.Mode,
+	standalone:   bool,
 }
 
 startup_options :: proc() -> (Startup_Options, bool) {
 	options := Startup_Options {
-		port = 1234,
-		mode = target.ACTIVE,
+		address = CONFIG_ADDRESS,
+		port    = 1234,
+		mode    = target.ACTIVE,
+	}
+	if CONFIG_PORT != 0 {
+		if CONFIG_PORT < 1 ||
+		   CONFIG_PORT >
+			   65535 {fmt.eprintf("Config port %d must be between 1 and 65535\n", CONFIG_PORT); return options, false}
+		options.port = u16(CONFIG_PORT)
+	}
+	if CONFIG_MODE != "" {
+		switch CONFIG_MODE {
+		case "editor":
+			options.mode = target.Mode.Editor
+		case "client", "player":
+			options.mode = target.Mode.Client
+		case "server":
+			options.mode = target.Mode.Server
+		case:
+			fmt.eprintf("Config mode %q must be editor, client, or server\n", CONFIG_MODE)
+			return options, false
+		}
+	}
+	if self, self_ok := self_payload(); self_ok {
+		if self.address != "" {
+			options.address = self.address
+		}
+		if self.port != 0 {
+			options.port = self.port
+		}
+		if self.mode == target.Mode.Server {
+			options.mode = target.Mode.Server
+		} else if self.mode == target.Mode.Client {
+			options.mode = target.Mode.Client
+		}
 	}
 	for index := 1; index < len(os.args); index += 1 {
 		arg := os.args[index]
@@ -42,11 +76,17 @@ startup_options :: proc() -> (Startup_Options, bool) {
 				   65535 {fmt.eprintln("--port must be between 1 and 65535"); return options, false}
 			options.port = u16(value)
 		case "--map":
-			if index + 1 >= len(os.args) {fmt.eprintln("--map requires a .kine file path"); return options, false}
+			if index + 1 >=
+			   len(
+				   os.args,
+			   ) {fmt.eprintln("--map requires a .kine file path"); return options, false}
 			index += 1
 			options.map_path = os.args[index]
 		case "--playtest":
-			if index + 1 >= len(os.args) {fmt.eprintln("--playtest requires a .kine file path"); return options, false}
+			if index + 1 >=
+			   len(
+				   os.args,
+			   ) {fmt.eprintln("--playtest requires a .kine file path"); return options, false}
 			index += 1
 			options.map_path = os.args[index]
 			options.playtest = true
@@ -56,8 +96,9 @@ startup_options :: proc() -> (Startup_Options, bool) {
 			options.mode = target.Mode.Client
 		case "--editor":
 			options.mode = target.Mode.Editor
-case "--script":
-			if index + 1 >= len(os.args) {fmt.eprintln("--script requires a file path"); return options, false}
+		case "--script":
+			if index + 1 >=
+			   len(os.args) {fmt.eprintln("--script requires a file path"); return options, false}
 			index += 1
 		case "--update":
 			options.update_check = true
@@ -67,7 +108,8 @@ case "--script":
 			options.window = true
 		case:
 			if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
-				if options.map_path != "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
+				if options.map_path !=
+				   "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
 				options.map_path = arg
 				options.playtest = true
 			} else {
@@ -76,9 +118,16 @@ case "--script":
 			}
 		}
 	}
+	_, _, has_embedded := embedded_map()
+	options.standalone = options.mode == target.Mode.Client &&
+		options.address == "" &&
+		has_embedded
+	if options.standalone {
+		options.address = ""
+	}
 	if options.mode == target.Mode.Server && options.address == "" {
 		options.address = "0.0.0.0"
-	} else if options.address == "" {
+	} else if options.address == "" && !options.standalone {
 		options.address = "127.0.0.1"
 	}
 	return options, true

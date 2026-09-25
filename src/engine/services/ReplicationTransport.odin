@@ -171,6 +171,18 @@ replication_receive :: proc(
 			vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
 			defer vm.SetThreadSecurityCapabilities(L, previous)
 			defer vm.SetStackTop(L, top)
+			if name == "CFrame" || name == "Position" {
+				players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+				if players != nil &&
+				   players.local_player != nil &&
+				   entity.owner_id == players.local_player.user_id &&
+				   object.parent != nil &&
+				   classes.Is_A(object.parent, "CharacterModel") &&
+				   (cast(^classes.CharacterModel)object.parent).owner_user_id ==
+						players.local_player.user_id {
+					break
+				}
+			}
 			vm.PushString(L, name)
 			vm.PushFunction(L, "replication_apply_property", replication_apply_property, 1)
 			classes.Push_Object(L, object)
@@ -209,11 +221,12 @@ replication_receive :: proc(
 			B = replication_read_f32(&reader),
 		}
 		transparency := replication_read_f32(&reader)
-		if reader.offset + 7 > len(reader.data) {reader.valid = false; break}
+		if reader.offset + 8 > len(reader.data) {reader.valid = false; break}
 		anchored := reader.data[reader.offset] != 0
 		can_collide := reader.data[reader.offset + 1] != 0
 		material := enums.Material(reader.data[reader.offset + 2])
-		reader.offset += 3
+		shape := enums.PartType(reader.data[reader.offset + 3])
+		reader.offset += 4
 		ack := replication_read_u32(&reader)
 		if reader.valid {
 			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
@@ -230,19 +243,25 @@ replication_receive :: proc(
 				entity.owner_id == players.local_player.user_id
 			if local_character && object.name == "HumanoidRootPart" {
 				if owned {
-					// This character is owned by the local player: the server
-					// accepts our state instead of simulating it. On the first
-					// authoritative frame align to the server's spawn position,
-					// then only snap when the server forces a correction.
-					if entity.force_correction {
-						part.cframe = frame
-						part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
-						entity.force_correction = false
-					}
 					characters := cast(^CharacterService)Ensure_Service(
 						service.data_model.registry,
 						"CharacterService",
 					)
+					if entity.force_correction {
+						dx := frame.x - part.cframe.x
+						dy := frame.y - part.cframe.y
+						dz := frame.z - part.cframe.z
+						part.cframe = frame
+						part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
+						character_translate_followers(
+							cast(^classes.CharacterModel)object.parent,
+							part,
+							dx,
+							dy,
+							dz,
+						)
+						entity.force_correction = false
+					}
 					if characters != nil && !characters.authoritative_received {
 						character_translate(
 							cast(^classes.CharacterModel)object.parent,
@@ -295,6 +314,9 @@ replication_receive :: proc(
 			if int(material) >= 0 && int(material) <= int(enums.Material.debug) {
 				part.material = material
 			}
+			if int(shape) >= 0 && int(shape) <= int(enums.PartType.Capsule) {
+				part.shape = shape
+			}
 			classes.Set_Name(object, name)
 			entity.last_tick = tick
 		}
@@ -316,6 +338,30 @@ replication_receive :: proc(
 		parent :=
 			parent_id == 0 ? DataModel_Get_Service(service.data_model, root_name) : replication_entity_object(service, parent_id)
 		if parent == nil || service.data_model.registry == nil {break}
+		// Containers the runtime owns locally (StarterPlayerScripts and
+		// StarterCharacterScripts live under StarterPlayer) must not be
+		// duplicated by a replicated copy: keep ours and let the ClientScripts
+		// merge step move the replicated contents into them instead.
+if classes.Is_A(parent, "StarterPlayer") {
+		if existing := classes.Find_First_Child(parent, name); existing != nil {
+			// Adopt the server's id so later property updates for this
+			// replicated shell land on our existing container.
+			existing.network_id = id
+			append(&service.entities, Replication_Entity{id = id, object = existing})
+			return
+		}
+	}
+	if character_subtree_class(class_name) {
+		// The client builds a prediction controller for each character as
+		// soon as its HumanoidRootPart arrives (CharacterService_Bind). Adopt
+		// the server's entity id onto the locally-built instance instead of
+		// duplicating the subtree, mirroring the StarterPlayer pattern above.
+		if existing := classes.Find_First_Child_Of_Class(parent, class_name); existing != nil {
+			existing.network_id = id
+			append(&service.entities, Replication_Entity{id = id, object = existing})
+			return
+		}
+	}
 		object, ok := classes.Push_New(
 			service.data_model.registry.classes,
 			service.data_model.registry.vm_state,
@@ -419,25 +465,26 @@ replication_receive :: proc(
 			service.owned_states_rejected += 1
 			return
 		}
-		now := enet.time_get()
-		elapsed_ms := now - entity.last_accepted_ms
-		if elapsed_ms > 1000 {elapsed_ms = 1000}
-		dx := frame.x - entity.last_accepted_position.x
-		dy := frame.y - entity.last_accepted_position.y
-		dz := frame.z - entity.last_accepted_position.z
-		limit := f32(12) + f32(elapsed_ms) * (256.0 / 1000.0)
-		if dx * dx + dy * dy + dz * dz > limit * limit {
+		dx := frame.x - part.cframe.x
+		dy := frame.y - part.cframe.y
+		dz := frame.z - part.cframe.z
+		if dx * dx + dy * dy + dz * dz > 128 * 128 {
 			service.owned_states_rejected += 1
-			bytes: [dynamic]u8
-			replication_put_u32(&bytes, id)
-			_ = replication_send(service, peer, 15, bytes[:])
-			delete(bytes)
+			payload := []u8{u8(id), u8(id >> 8), u8(id >> 16), u8(id >> 24)}
+			_ = replication_send(service, connection.peer, 15, payload)
 			return
 		}
 		part.cframe = frame
 		part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
-		entity.last_accepted_ms = now
-		entity.last_accepted_position = part.position
+		if part.parent != nil && classes.Is_A(part.parent, "CharacterModel") {
+			character_translate_followers(
+				cast(^classes.CharacterModel)part.parent,
+				part,
+				dx,
+				dy,
+				dz,
+			)
+		}
 		service.owned_states_accepted += 1
 	case 13:
 		replication_receive_ownership_request(service, peer, &reader)
@@ -538,6 +585,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						known = make(map[u32]u32),
 						initialized = make(map[u32]bool),
 						state_hashes = make(map[u32]u64),
+						property_hashes = make(map[u32]u64),
 					},
 				)
 				bytes: [dynamic]u8
@@ -562,6 +610,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						delete(item.known)
 						delete(item.initialized)
 						delete(item.state_hashes)
+						delete(item.property_hashes)
 						ordered_remove(&service.peers, index)
 						break
 					}

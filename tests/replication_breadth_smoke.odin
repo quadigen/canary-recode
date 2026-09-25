@@ -27,8 +27,11 @@ main :: proc() {
 	client_vm := vm.New()
 	server: engine_runtime.Environment
 	client: engine_runtime.Environment
-	engine_runtime.Environment_Init(&server, &server_vm)
-	engine_runtime.Environment_Init(&client, &client_vm)
+	// The environments need explicit roles: server Scripts run on the server
+	// runtime, client LocalScripts on the client runtime. Without this the
+	// build default (editor) hosts neither side and no script ever starts.
+	engine_runtime.Environment_Init(&server, &server_vm, nil, .Server)
+	engine_runtime.Environment_Init(&client, &client_vm, nil, .Client)
 
 	run_breadth(&server_vm, `
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39234))

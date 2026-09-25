@@ -63,7 +63,16 @@ end
 local players = game:GetService("Players")
 assert(#players:GetPlayers() == 2)
 assert(players.LocalPlayer.Character and players.LocalPlayer.Character.RootPart)
-assert(players.LocalPlayer.Character.OwnerUserId == players.LocalPlayer.UserId)
+local character = players.LocalPlayer.Character
+assert(character.OwnerUserId == players.LocalPlayer.UserId)
+local ctrl = nil
+for _, c in ipairs(character:GetChildren()) do
+    if c.ClassName == "CharacterController" then ctrl = c end
+end
+assert(ctrl and ctrl.WalkSpeed == 16, "controller replicated with schema")
+local sm = false
+for _, c in ipairs(ctrl:GetChildren()) do if c.ClassName == "StateMachine" then sm = true end end
+assert(sm, "schema-less subtree replicated")
 assert(workspace.CurrentCamera.CameraSubject == players.LocalPlayer.Character)
 assert(game:GetService("CharacterService"):SetMoveDirection(Vector3.new(1, 0, 0)))
 assert(game:GetService("CharacterService"):Jump())

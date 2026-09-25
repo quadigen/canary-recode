@@ -2481,6 +2481,7 @@ PartType :: enum {
     Truss = 7,
     Torus = 8,
     TriangleWedge = 9,
+	Capsule = 10,
 }
 
 ParticleEmitterShape :: enum {
