@@ -6,19 +6,6 @@ import datatypes "../datatypes"
 import vm "../vm"
 import enet "vendor:ENet"
 
-// Network ownership implements Roblox-style part/model ownership:
-//
-//   - The server is the authority. Server-side calls apply immediately and are
-//     broadcast with message kind 10. Client-side calls are optimistic locally
-//     and forwarded to the server with message kind 13; the server's kind 10
-//     broadcast decides the final owner.
-//   - While an entity is owned by a connected client, that client's position
-//     updates (kind 11) are accepted by the server and the server stops
-//     simulating the entity (characters are not stepped, dynamic bodies are
-//     treated as static for the server).
-//   - Characters are automatically owned by their player; regular parts default
-//     to server ownership.
-
 replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Replication_Entity) {
 	if service == nil || entity == nil {return}
 	bytes: [dynamic]u8

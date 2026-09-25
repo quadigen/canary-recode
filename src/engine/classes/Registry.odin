@@ -277,10 +277,19 @@ descriptor_set :: proc(
 		key,
 		value_index,
 	   ) {
+		// The write succeeded, so notify subscribers of this exact property.
+		// Funnelling here means every class gets change signals for free,
+		// without each setter having to remember to fire its own.
+		Object_Fire_Property_Changed(object, key)
 		return true
 	}
 
-	return Object_Set_Property(L, value, ctx, key, value_index)
+	if Object_Set_Property(L, value, ctx, key, value_index) {
+		Object_Fire_Property_Changed(object, key)
+		return true
+	}
+
+	return false
 }
 
 append_properties :: proc(

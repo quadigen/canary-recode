@@ -25,6 +25,10 @@ ScrollingFrame :: struct {
 	scrolling_enabled: bool,
 	scroll_speed:     f32,
 
+	// X / Y / XY, matching Enum.ScrollingDirection. X and Y gate which axes can
+	// scroll and clamp the corresponding max_scroll_* to zero.
+	scrolling_direction: enums.ScrollingDirection,
+
 	smooth_scrolling: bool,
 	smoothness:       f32,
 
@@ -75,6 +79,8 @@ ScrollingFrame_Init :: proc() -> ScrollingFrame {
 
 		scrolling_enabled = true,
 		scroll_speed = 42,
+
+		scrolling_direction = .XY,
 
 		smooth_scrolling = true,
 		smoothness = 18,
@@ -205,6 +211,19 @@ scrolling_frame_update_bounds :: proc(
 		canvas_height - rect.height,
 		f32(0),
 	)
+
+	// A direction of X or Y disables the other axis entirely; clamping the
+	// extent to zero makes every wheel/drag path fall out for free.
+	allows_x := frame.scrolling_direction == .X || frame.scrolling_direction == .XY
+	allows_y := frame.scrolling_direction == .Y || frame.scrolling_direction == .XY
+
+	if !allows_x {
+		frame.max_scroll_x = 0
+	}
+
+	if !allows_y {
+		frame.max_scroll_y = 0
+	}
 
 	frame.target_position.X = clamp(
 		frame.target_position.X,
@@ -681,6 +700,10 @@ ScrollingFrame_get :: proc(
 		)
 		return true
 
+	case "ScrollingDirection":
+		_ = enums.Push_Item_By_Value(L, enum_registry, "ScrollingDirection", i64(frame.scrolling_direction))
+		return true
+
 	case "ScrollSpeed":
 		vm.PushNumber(
 			L,
@@ -849,6 +872,28 @@ ScrollingFrame_set :: proc(
 			if scrolling_frame_dragged == frame {
 				scrolling_frame_dragged = nil
 			}
+		}
+
+		return true
+
+	case "ScrollingDirection":
+		item :=
+			enums.Arg_Item(
+				L,
+				value_index,
+				enum_registry,
+				"ScrollingDirection",
+			)
+
+		frame.scrolling_direction = enums.ScrollingDirection(item.value)
+
+		// A disallowed axis must not keep a stale offset, so snap it back now.
+		if frame.scrolling_direction == .X {
+			frame.canvas_position.Y = 0
+			frame.target_position.Y = 0
+		} else if frame.scrolling_direction == .Y {
+			frame.canvas_position.X = 0
+			frame.target_position.X = 0
 		}
 
 		return true
@@ -1050,6 +1095,7 @@ ScrollingFrame_clone :: proc(
 
 	dst.scrolling_enabled = src.scrolling_enabled
 	dst.scroll_speed = src.scroll_speed
+	dst.scrolling_direction = src.scrolling_direction
 
 	dst.smooth_scrolling = src.smooth_scrolling
 	dst.smoothness = src.smoothness

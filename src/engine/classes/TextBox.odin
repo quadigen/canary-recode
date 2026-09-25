@@ -63,6 +63,7 @@ TextBox :: struct {
 	selection_transparency:  f32,
 	focus_color3:            datatypes.Color3,
 	focus_lost:              ^signals.Signal,
+	text_changed:            ^signals.Signal,
 
 	focus_animation:         f32,
 	caret_timer:             f32,
@@ -303,6 +304,33 @@ text_box_undo_last :: proc(box: ^TextBox) -> ^Undo_Entry {
     return &box.undo_stack[len(box.undo_stack) - 1]
 }
 
+// Mirrors the Roblox `TextBox.TextChanged` event. Every text-mutation path
+// (Luau assignment, typing, paste, delete, undo/redo) funnels through here, so
+// listeners see engine-side edits as well as script-side ones. Declared above
+// the undo/redo procs that call it, since Odin requires declaration first.
+text_box_fire_text_changed :: proc(box: ^TextBox) {
+	if box == nil {
+		return
+	}
+
+	// The signal is only allocated on first read of `.TextChanged`, so the
+	// common case (nobody listening) costs a single nil check per keystroke.
+	if box.text_changed == nil {
+		return
+	}
+
+	if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
+		return
+	}
+
+	signals.Fire(
+		box.object.signal_registry.signal_registry.L,
+		box.text_changed,
+		0,
+	)
+}
+
+
 text_box_undo :: proc(box: ^TextBox) {
     if box == nil ||
        !box.text_editable ||
@@ -342,6 +370,8 @@ text_box_undo :: proc(box: ^TextBox) {
     box.undo_epoch += 1
 
     text_box_restart_caret(box)
+
+    text_box_fire_text_changed(box)
 }
 
 text_box_redo :: proc(box: ^TextBox) {
@@ -383,6 +413,8 @@ text_box_redo :: proc(box: ^TextBox) {
     box.undo_epoch += 1
 
     text_box_restart_caret(box)
+
+    text_box_fire_text_changed(box)
 }
 
 text_box_line_height :: proc(box: ^TextBox) -> f32 {
@@ -2042,6 +2074,8 @@ text_box_set_text :: proc(
 		box.cursor_byte
 
 	text_box_restart_caret(box)
+
+	text_box_fire_text_changed(box)
 }
 
 
@@ -2143,6 +2177,8 @@ text_box_erase :: proc(
 		clamped_start
 
 	text_box_restart_caret(box)
+
+	text_box_fire_text_changed(box)
 }
 
 
@@ -2281,6 +2317,8 @@ text_box_insert :: proc(
 		box.cursor_byte
 
 	text_box_restart_caret(box)
+
+	text_box_fire_text_changed(box)
 }
 
 text_box_line_start :: proc(text: string, index: int) -> int {
@@ -3409,6 +3447,10 @@ TextBox_destroy :: proc(
 		signals.Destroy(box.focus_lost)
 		box.focus_lost = nil
 	}
+	if box.text_changed != nil {
+		signals.Destroy(box.text_changed)
+		box.text_changed = nil
+	}
 
 	Object_Destroy(object)
 
@@ -3435,6 +3477,16 @@ TextBox_get :: proc(
 			box.focus_lost = signals.Create(box.object.signal_registry.signal_registry)
 		}
 		signals.Push(L, box.focus_lost)
+		return true
+
+	case "TextChanged":
+		if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
+			return false
+		}
+		if box.text_changed == nil {
+			box.text_changed = signals.Create(box.object.signal_registry.signal_registry)
+		}
+		signals.Push(L, box.text_changed)
 		return true
 
 	case "Text":

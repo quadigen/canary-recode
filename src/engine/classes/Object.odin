@@ -5,6 +5,7 @@ import "base:runtime"
 import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 Class_Info :: struct {
@@ -22,6 +23,15 @@ Object_Attribute :: struct {
 	value_ref: i32,
 }
 
+// Lazily-created per-property change signals backing
+// `Instance:GetPropertyChangedSignal(name)`. Entries are only created when a
+// script actually subscribes, so an Instance nobody observes costs nothing
+// beyond the nil map.
+Object_Property_Signal :: struct {
+	name:   string,
+	signal: ^signals.Signal,
+}
+
 Object :: struct {
 	class:                ^Class_Info,
 	name:                 string,
@@ -30,6 +40,7 @@ Object :: struct {
 	children:             [dynamic]^Object,
 	signal_registry: ^Registry,
 	attributes:           [dynamic]Object_Attribute,
+	property_signals:     [dynamic]Object_Property_Signal,
 	unique_id:            datatypes.UniqueId,
 	capabilities:         datatypes.SecurityCapabilities,
 	security_requirement: vm.Security_Requirement,
@@ -61,6 +72,94 @@ Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object
     }
 }
 
+// Returns the existing signal for `name`, or nil when nothing has subscribed
+// to it yet. Never allocates, so the fire path stays allocation-free.
+Object_Find_Property_Signal :: proc(
+	self: ^Object,
+	name: string,
+) -> ^signals.Signal {
+	if self == nil || len(self.property_signals) == 0 {
+		return nil
+	}
+
+	for entry in self.property_signals {
+		if entry.name == name {
+			return entry.signal
+		}
+	}
+
+	return nil
+}
+
+// Returns the signal for `name`, creating it on first request. This is the
+// path `GetPropertyChangedSignal` takes.
+Object_Get_Or_Create_Property_Signal :: proc(
+	self: ^Object,
+	name: string,
+) -> ^signals.Signal {
+	if self == nil {
+		return nil
+	}
+
+	if self.signal_registry == nil || self.signal_registry.signal_registry == nil {
+		return nil
+	}
+
+	if existing := Object_Find_Property_Signal(self, name); existing != nil {
+		return existing
+	}
+
+	signal := signals.Create(self.signal_registry.signal_registry)
+	if signal == nil {
+		return nil
+	}
+
+	// The property name comes from a Luau string that can be collected once the
+	// calling script yields, so the key needs native ownership.
+	append(&self.property_signals, Object_Property_Signal{
+		name   = strings.clone(name),
+		signal = signal,
+	})
+
+	return signal
+}
+
+// Fires the change signal for `name` if one exists. Called after a successful
+// property write from the single descriptor_set funnel, which is what makes
+// this cover every class rather than just the ones with bespoke events.
+Object_Fire_Property_Changed :: proc(
+	self: ^Object,
+	name: string,
+) {
+	signal := Object_Find_Property_Signal(self, name)
+	if signal == nil {
+		return
+	}
+
+	if self.signal_registry == nil || self.signal_registry.signal_registry == nil {
+		return
+	}
+
+	signals.Fire(self.signal_registry.signal_registry.L, signal, 0)
+}
+
+Object_Free_Property_Signals :: proc(self: ^Object) {
+	if self == nil {
+		return
+	}
+
+	for entry in self.property_signals {
+		if entry.signal != nil {
+			signals.Destroy(entry.signal)
+		}
+
+		delete(entry.name)
+	}
+
+	delete(self.property_signals)
+	self.property_signals = nil
+}
+
 Object_Destroy :: proc(self: ^Object) {
     if self == nil {
         return
@@ -81,6 +180,8 @@ Object_Destroy :: proc(self: ^Object) {
 	}
 	delete(self.attributes)
 	self.attributes = nil
+
+	Object_Free_Property_Signals(self)
 
     Set_Parent(self, nil)
 	delete(self.owned_name)
@@ -324,7 +425,8 @@ is_object_method :: proc(name: string) -> bool {
 	case "Clone", "Destroy", "FindFirstChild", "FindFirstChildOfClass",
 		"GetChildren", "GetDescendants", "GetFullName", "GetProperties",
 		"IsA", "IsAncestorOf", "IsDescendantOf",
-		"GetAttribute", "GetAttributes", "SetAttribute":
+		"GetAttribute", "GetAttributes", "SetAttribute",
+		"GetPropertyChangedSignal":
 		return true
 	}
 
@@ -793,6 +895,14 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	case "SetAttribute":
 		_ = Set_Attribute(L, object, vm.ArgString(L, 2), 3)
 		return 0, true
+	case "GetPropertyChangedSignal":
+		signal := Object_Get_Or_Create_Property_Signal(object, vm.ArgString(L, 2))
+		if signal == nil {
+			vm.PushNil(L)
+			return 1, true
+		}
+		signals.Push(L, signal)
+		return 1, true
     case "IsA":
         vm.PushBoolean(L, Is_A(object, vm.ArgString(L, 2)))
         return 1, true
