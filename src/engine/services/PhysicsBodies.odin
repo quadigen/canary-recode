@@ -290,16 +290,62 @@ physics_remote_owned :: proc(service: ^Physics, part: ^classes.Part) -> bool {
 	replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
 	if replicator == nil || replicator.mode == .Stopped {return false}
 	entity := replication_entity(replicator, &part.object)
-	if entity == nil || entity.owner_id == 0 {return false}
-	if replicator.mode == .Server {return true}
-	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
-	if players == nil || players.local_player == nil {return true}
-	return entity.owner_id != players.local_player.user_id
+	if entity == nil {return false}
+	// The two roles are asymmetric here, and this used to share a single early
+	// exit for owner_id == 0, which is wrong in opposite directions on each
+	// side.
+	//
+	// On the server, owner_id 0 means "nobody owns this, the server simulates
+	// it", so it is local authority and the body stays dynamic.
+	//
+	// On a client, owner_id 0 means "the server owns this". Treating that as
+	// local authority made the client build a dynamic body and run its own Jolt
+	// simulation of a Part the server is already simulating. The same Part then
+	// had two disagreeing sources of motion: the client's integration drifted
+	// away from the replicated transform, and because the client's solver was
+	// also resolving contacts the server never resolved, replicated Parts
+	// visibly collided with and shoved each other around on the client only.
+	//
+	// So the client branch is decided before the owner_id check, and only a
+	// Part this client actually owns is simulated locally.
+	if replicator.mode == .Client {
+		players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+		// With no local player yet nothing can be the owner, so every replicated
+		// Part belongs to the server and none may be simulated here.
+		if players == nil || players.local_player == nil {return true}
+		return entity.owner_id != players.local_player.user_id
+	}
+	// On the server an unowned Part is simulated locally; one with an owner is
+	// driven by that client and must stay static so the two solvers never both
+	// move it.
+	return entity.owner_id != 0
+}
+
+// physics_part_awaiting_transform reports whether `part` is a replicated Part on
+// a client that has not yet been sent an authoritative transform.
+//
+// Such a Part exists only because its spawn arrived; it is sitting at whatever
+// transform its constructor produced, which for a Part is the world origin.
+// Building a body from that placeholder is what put a burst of newly replicated
+// Parts in a heap at the middle of the map, colliding with each other and with
+// whatever else lives near the origin. Declining the body is safe: the first
+// transform is sent reliably in the same snapshot pass as the spawn, so the body
+// is built on the next synchronize from the real transform instead.
+physics_part_awaiting_transform :: proc(service: ^Physics, part: ^classes.Part) -> bool {
+	if service == nil || service.data_model == nil || part == nil {return false}
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+	if replicator == nil || replicator.mode != .Client {return false}
+	entity := replication_entity(replicator, &part.object)
+	return entity != nil && !entity.has_transform
 }
 
 physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_Body, bool) {
 	if part == nil {return Physics_Body{}, false}
 	if part_in_character_model(part) {return Physics_Body{}, false}
+	// Never build a body from a placeholder transform: a replicated Part the
+	// client has not been given a real position for yet has no business existing
+	// in the solver.
+	if physics_part_awaiting_transform(service, part) {return Physics_Body{}, false}
 
 	shape := physics_shape_for_part(service, part)
 	if shape == nil {
@@ -391,6 +437,7 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 		part.size,
 		part.shape,
 		part.anchored,
+		remote,
 		part.cframe,
 		mesh_id,
 		mesh_part_collision_fidelity(part),
@@ -483,7 +530,8 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		if classes.Is_A(&part.object, "MeshPart") {
 			mesh_id = (cast(^classes.MeshPart)part).mesh_id
 		}
-		if body.size != part.size || body.shape != part.shape || body.anchored != part.anchored || body.mesh_id != mesh_id || body.collision_fidelity != mesh_part_collision_fidelity(part) {
+		remote := physics_remote_owned(service, part)
+		if body.size != part.size || body.shape != part.shape || body.anchored != part.anchored || body.remote != remote || body.mesh_id != mesh_id || body.collision_fidelity != mesh_part_collision_fidelity(part) {
 			physics_destroy_body(service, body^)
 			new_body, ok := physics_create_body(service, part)
 			if ok {
@@ -496,7 +544,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		}
 		if body.last_cframe != part.cframe {
 			position := kineffi.JPH_RVec3{f64(part.cframe.x), f64(part.cframe.y), f64(part.cframe.z)}
-			activation: kineffi.JPH_ActivationMode = part.anchored ? .DontActivate : .Activate
+			activation: kineffi.JPH_ActivationMode = (part.anchored || remote) ? .DontActivate : .Activate
 			if body.last_cframe.r00 == part.cframe.r00 &&
 			   body.last_cframe.r01 == part.cframe.r01 &&
 			   body.last_cframe.r02 == part.cframe.r02 &&
@@ -538,6 +586,36 @@ physics_capsule_size_from_root :: proc(root: ^classes.Part) -> (radius, half_hei
 	return
 }
 
+// The inverse of physics_quaternion_from_cframe. Jolt's Quat is (x, y, z, w)
+// and builds a column-convention rotation matrix, which is the same convention
+// physics_quaternion_from_cframe reads, so this round-trips through it.
+physics_cframe_from_quaternion :: proc(q: kineffi.JPH_Quat) -> datatypes.CFrame {
+	x := q.x
+	y := q.y
+	z := q.z
+	w := q.w
+	xx := x * x
+	yy := y * y
+	zz := z * z
+	xy := x * y
+	xz := x * z
+	yz := y * z
+	wx := w * x
+	wy := w * y
+	wz := w * z
+	return datatypes.CFrame {
+		r00 = 1 - 2 * (yy + zz),
+		r01 = 2 * (xy - wz),
+		r02 = 2 * (xz + wy),
+		r10 = 2 * (xy + wz),
+		r11 = 1 - 2 * (xx + zz),
+		r12 = 2 * (yz - wx),
+		r20 = 2 * (xz - wy),
+		r21 = 2 * (yz + wx),
+		r22 = 1 - 2 * (xx + yy),
+	}
+}
+
 Physics_Ensure_Character_Capsule :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
@@ -553,7 +631,10 @@ Physics_Ensure_Character_Capsule :: proc(
 	if coll.shape == nil {return}
 	pos := kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)}
 	identity := kineffi.JPH_Quat{0, 0, 0, 1}
-	settings := kineffi.JPH_BodyCreationSettings_Create3(coll.shape, &pos, &identity, .Kinematic, jolt.OBJECT_LAYER_MOVING)
+	// A dead character gets a dynamic capsule from the moment its body appears,
+	// even if the body is created after death.
+	motion: kineffi.JPH_MotionType = coll.ragdoll ? .Dynamic : .Kinematic
+	settings := kineffi.JPH_BodyCreationSettings_Create3(coll.shape, &pos, &identity, motion, jolt.OBJECT_LAYER_MOVING)
 	if settings == nil {return}
 	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
@@ -563,7 +644,8 @@ Physics_Ensure_Character_Capsule :: proc(
 		kineffi.JPH_BodyInterface_DestroyBody(service.system.body_interface, body)
 		return
 	}
-	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, .DontActivate)
+	activation: kineffi.JPH_ActivationMode = coll.ragdoll ? .Activate : .DontActivate
+	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, activation)
 	coll.body_id = body_id
 	service.body_to_part[coll.body_id] = root
 	coll.body_created = true
@@ -583,6 +665,107 @@ Physics_Set_Character_Capsule :: proc(
 	rotation := physics_quaternion_from_cframe(cf)
 	pos := kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)}
 	kineffi.JPH_BodyInterface_SetPositionAndRotation(service.system.body_interface, coll.body_id, &pos, &rotation, .DontActivate)
+}
+
+// Physics_Set_Character_Capsule_Dynamic hands the character capsule to the solver
+// or takes it back, without rebuilding the body.
+//
+// A living character is a kinematic body: CharacterController_Tick sweeps it and
+// teleports it to the root every frame, so the solver never integrates it. On
+// death there is nothing driving it, so the same capsule is switched to dynamic
+// and the solver takes over -- it falls, collides and tumbles. The flag is sticky
+// so a body created later is still created dynamic.
+//
+// Note this is a rigid-body ragdoll: the character's parts stay anchored and move
+// together, so the body topples as one piece. An articulated ragdoll with limbs on
+// their own bodies would need a joint solver the engine does not have.
+Physics_Set_Character_Capsule_Dynamic :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	simulated: bool,
+) -> bool {
+	if service == nil || coll == nil {return false}
+	coll.ragdoll = simulated
+	if !coll.body_created || service.system.body_interface == nil {return false}
+	if coll.body_id == kineffi.JPH_BODY_ID_INVALID {return false}
+	motion: kineffi.JPH_MotionType = simulated ? .Dynamic : .Kinematic
+	kineffi.JPH_BodyInterface_SetMotionType(
+		service.system.body_interface,
+		coll.body_id,
+		motion,
+		.Activate,
+	)
+	// Handing the body to the solver with momentum left over from the walk would
+	// launch the corpse sideways.
+	if simulated {
+		zero := kineffi.JPH_Vec3{0, 0, 0}
+		kineffi.JPH_BodyInterface_SetLinearVelocity(
+			service.system.body_interface,
+			coll.body_id,
+			&zero,
+		)
+		kineffi.JPH_BodyInterface_SetAngularVelocity(
+			service.system.body_interface,
+			coll.body_id,
+			&zero,
+		)
+	}
+	return true
+}
+
+// Physics_Start_Character_Ragdoll creates the character capsule if it is missing
+// and hands it to the solver.
+//
+// The server usually has no capsule for a character at all: a living character is
+// simulated by its owning client, and the server skips ticking it. A dead one has
+// to be simulated by the server, so the body is created here. The ragdoll flag is
+// set before the create so the body comes into existence dynamic and active
+// rather than being built kinematic and immediately converted.
+Physics_Start_Character_Ragdoll :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	root: ^classes.Part,
+) -> bool {
+	if service == nil || coll == nil || root == nil || !service.initialized {return false}
+	coll.ragdoll = true
+	Physics_Ensure_Character_Capsule(
+		service,
+		coll,
+		root,
+		datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z},
+	)
+	if !coll.body_created {return false}
+	return Physics_Set_Character_Capsule_Dynamic(service, coll, true)
+}
+
+// Physics_Get_Character_Capsule_CFrame reads the solved transform of a character
+// capsule, so the visible parts of a ragdolling character can follow the body
+// the solver is actually simulating.
+Physics_Get_Character_Capsule_CFrame :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+) -> (datatypes.CFrame, bool) {
+	if service == nil ||
+	   coll == nil ||
+	   !coll.body_created ||
+	   service.system.body_interface == nil ||
+	   coll.body_id == kineffi.JPH_BODY_ID_INVALID {
+		return datatypes.CFrame_Identity, false
+	}
+	position: kineffi.JPH_RVec3
+	rotation: kineffi.JPH_Quat
+	kineffi.JPH_BodyInterface_GetPositionAndRotation(
+		service.system.body_interface,
+		coll.body_id,
+		&position,
+		&rotation,
+	)
+	cf := physics_cframe_from_quaternion(rotation)
+	cf.x = f32(position.x)
+	cf.y = f32(position.y)
+	cf.z = f32(position.z)
+	if !physics_valid_cframe(cf) {return datatypes.CFrame_Identity, false}
+	return cf, true
 }
 
 Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.CollisionController) {

@@ -776,5 +776,15 @@ Register_GuiButton :: proc(
 			"Modal",
 			"Selected",
 		},
+		events = []string{
+			"Activated",
+			"SecondaryActivated",
+			"MouseButton1Click",
+			"MouseButton1Down",
+			"MouseButton1Up",
+			"MouseButton2Click",
+			"MouseButton2Down",
+			"MouseButton2Up",
+		},
 	)
 }

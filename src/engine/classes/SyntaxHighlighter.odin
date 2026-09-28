@@ -441,6 +441,9 @@ Register_SyntaxHighlighter :: proc(registry: ^Registry) {
 			"Rules",
 			"RuleCount",
 
+		},
+
+		methods = []string{
 			"AddRule",
 			"AddKeyword",
 			"AddRegex",
@@ -679,7 +682,7 @@ syntax_highlighter_rule_spans :: proc(
 syntax_luau_span_color :: proc(type: i32) -> (datatypes.Color3, bool) {
 	if type >= i32(luauh.Kine_Lexeme.Reserved_And) &&
 	   type <= i32(luauh.Kine_Lexeme.Reserved_While) {
-		return datatypes.Color3{0.05, 0.42, 0.90}, true
+		return datatypes.Color3{0.839, 0.522, 0.145}, true
 	}
 
 	#partial switch luauh.Kine_Lexeme(type) {

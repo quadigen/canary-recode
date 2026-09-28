@@ -138,5 +138,6 @@ Register_RemoteFunction :: proc(registry: ^Registry) {
 		RemoteFunction_destroy,
 		get = RemoteFunction_get,
 		set = RemoteFunction_set,
+		events = []string{"OnServerInvoke", "OnClientInvoke"},
 	)
 }

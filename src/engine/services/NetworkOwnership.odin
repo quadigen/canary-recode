@@ -32,6 +32,14 @@ replication_set_ownership :: proc(
 		part := cast(^classes.Part)entity.object
 		entity.last_accepted_position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
 		entity.last_accepted_ms = enet.time_get()
+		// A new owner starts from the part's current transform, so the travel and
+		// rate windows must be re-anchored too. Otherwise the first upload from a
+		// freshly assigned owner is measured against wherever the previous owner
+		// left off and gets rejected as an implausible jump.
+		entity.owned_window_origin = entity.last_accepted_position
+		entity.owned_window_time = 0
+		entity.owned_rate_window_time = 0
+		entity.owned_updates_window = 0
 		if refresh_physics {
 			physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
 			if physics != nil {physics_refresh_part(physics, part)}

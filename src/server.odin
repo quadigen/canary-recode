@@ -6,12 +6,17 @@ import "core:fmt"
 import "core:time"
 import engine_runtime "engine/runtime"
 import services "engine/services"
+import target "engine/target"
 import vm "engine/vm"
 import classes "engine/classes"
 
 run_server :: proc(options: Startup_Options) {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
+	// Published before the runtime initializes, matching the desktop path, so
+	// scripts can read IsPlaytest while they load.
+	target.set_playtest(options.playtest)
+	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
 	sandbox.init_runtime(&script_vm, &environment, nil)
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)

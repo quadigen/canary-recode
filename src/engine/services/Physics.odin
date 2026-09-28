@@ -18,6 +18,12 @@ Physics_Body :: struct {
 	size:        datatypes.Vector3,
 	shape:       enums.PartType,
 	anchored:    bool,
+	// remote is true when some other peer is authoritative for this body, which
+	// on a client means every replicated Part the local player does not own. A
+	// remote body is simulated nowhere locally: it is positioned from the
+	// replicated transform and never written back, so the client cannot end up
+	// with a second, disagreeing source of motion for the same Part.
+	remote:      bool,
 	last_cframe: datatypes.CFrame,
 	mesh_id:     string,
 	collision_fidelity: enums.CollisionFidelity,

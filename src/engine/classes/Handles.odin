@@ -696,6 +696,11 @@ Register_Handles :: proc(registry: ^Registry) {
 			"MouseButton1Up",
 			"MouseDrag",
 		},
+		events = []string{
+			"MouseButton1Down",
+			"MouseButton1Up",
+			"MouseDrag",
+		},
 	)
 }
 

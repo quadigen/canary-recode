@@ -107,5 +107,7 @@ Register_StateMachine :: proc(registry: ^Registry) {
 		state_machine_destroy,
 		get = state_machine_get,
 		namecall = state_machine_namecall,
+		methods = []string{"GetState", "SetState"},
+		events = []string{"StateChanged"},
 	)
 }

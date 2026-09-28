@@ -89,13 +89,37 @@ run_internal_module :: proc(module_name: string) {
 	run_code(source, module_name)
 }
 
-init :: proc(
-	vm_state: ^vm.VM,
-	environment_state: ^engine_runtime.Environment,
-	renderer_object: ^renderer.RendererObject,
-) {
-	init_runtime(vm_state, environment_state, renderer_object)
-	if target.is_editor() && ODIN_OS != .JS {
+	// editor_available reports whether this process should run the editor UI.
+	//
+	// The editor normally runs in an editor process, but a playtest needs it too
+	// so the playtest client window can host the editor tooling and any custom
+	// GUI written against IsPlaytest. A dedicated server or client started by
+	// hand is excluded: those are shipping targets, not authoring sessions.
+	editor_available :: proc() -> bool {
+		if ODIN_OS == .JS {
+			// Remote editor archives are unavailable on Web, so only the embedded
+			// modules are used, and that path is handled separately below.
+			return target.is_editor()
+		}
+
+		if target.is_editor() {
+			return true
+		}
+
+		// A playtest is launched with a window on both the server and the client,
+		// and init is only reached from the windowed desktop path, so the editor
+		// can run in either. A headless server never reaches here at all.
+		return target.is_playtest()
+	}
+
+	init :: proc(
+		vm_state: ^vm.VM,
+		environment_state: ^engine_runtime.Environment,
+		renderer_object: ^renderer.RendererObject,
+	) {
+		init_runtime(vm_state, environment_state, renderer_object)
+
+		if editor_available() {
 		editor_object := services.Ensure_Service(
 			&environment.services,
 			"EditorService",
@@ -128,12 +152,13 @@ init :: proc(
 			}
 		}
 		init_scripts()
-	}
-	if target.is_editor() && ODIN_OS == .JS {
+		}
+
+		if target.is_editor() && ODIN_OS == .JS {
 		fmt.eprintln("[EditorStartup] remote editor archives are unavailable on Web; starting embedded modules")
 		init_scripts()
+		}
 	}
-}
 
 init_scripts :: proc() {
 	fmt.eprintf("[EditorStartup] starting %d internal editor modules\n", len(environment.packages.internal_modules))

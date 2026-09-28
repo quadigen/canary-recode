@@ -8,7 +8,9 @@ import vm "../vm"
 
 Part_Class := Class_Info{
     name   = "Part",
-    parent = &Instance_Class,
+    // BasePart, not Instance: it is the level IsA("BasePart") matches at, so
+    // the whole "is this solid geometry" idiom resolves.
+    parent = &BasePart_Class,
 }
 
 Part :: struct {
@@ -98,6 +100,10 @@ part_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
         vm.PushBoolean(L, part.castshadow)
     case "Position":
         datatypes.push_vector3(L, part.position)
+    case "AssemblyLinearVelocity":
+        datatypes.push_vector3(L, Part_Linear_Velocity(part.object.signal_registry, object))
+    case "AssemblyAngularVelocity":
+        datatypes.push_vector3(L, Part_Angular_Velocity(part.object.signal_registry, object))
 	case "Touched":
 		if part.touched == nil && part.object.signal_registry != nil && part.object.signal_registry.signal_registry != nil {
 			part.touched = signals.Create(part.object.signal_registry.signal_registry)
@@ -157,10 +163,38 @@ part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
         part.cframe.x = v.x
         part.cframe.y = v.y
         part.cframe.z = v.z
+    case "AssemblyLinearVelocity":
+        Part_Set_Linear_Velocity(
+            part.object.signal_registry,
+            object,
+            datatypes.Arg_Vector3(L, value_index),
+        )
+    case "AssemblyAngularVelocity":
+        Part_Set_Angular_Velocity(
+            part.object.signal_registry,
+            object,
+            datatypes.Arg_Vector3(L, value_index),
+        )
     case:
         return false
     }
     return true
+}
+
+part_namecall :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
+    part := cast(^Part)object
+    switch method {
+    case "ApplyImpulse":
+        impulse := datatypes.Arg_Vector3(L, 2)
+        // Roblox's signature is ApplyImpulse(impulse, position?) and the position
+        // is what would let a launch spin the Part off-centre. The Jolt wrapper
+        // only exposes centre-of-mass impulses, so the position argument is
+        // accepted and ignored rather than rejected -- scripts written against
+        // Roblox should still run, just with centre-of-mass behaviour.
+        _ = Part_Apply_Impulse(part.object.signal_registry, object, impulse)
+        return 0, true
+    }
+    return 0, false
 }
 
 part_clone :: proc(source: ^Object, destination: ^Object) {
@@ -191,8 +225,11 @@ Register_Part :: proc(registry: ^Registry) {
         part_destroy,
         get = part_get,
         set = part_set,
+        namecall = part_namecall,
         clone = part_clone,
-		properties = []string{"CanCollide", "Position", "CastShadow", "Color", "Anchored", "CFrame", "Shape", "CollisionGroup", "CanQuery", "Transparency", "Size", "Material"},
+		properties = []string{"CanCollide", "Position", "CastShadow", "Color", "Anchored", "CFrame", "Shape", "CollisionGroup", "CanQuery", "Transparency", "Size", "Material", "AssemblyLinearVelocity", "AssemblyAngularVelocity"},
+		methods = []string{"ApplyImpulse"},
+		events = []string{"Touched"},
     )
 }
 

@@ -68,6 +68,10 @@ Environment_Init :: proc(
 	signals.Registry_Init(&environment.signals)
 	environment.classes = classes.Registry_Init(&environment.datatypes, &environment.enums, renderer_object, signal_registry = &environment.signals)
 	environment.services = services.Registry_Init(&environment.classes, &environment.signals, mode)
+	// Must follow the Registry_Init above: the hooks resolve the physics service
+	// through this registry, and they store a pointer to it, so it has to be
+	// final before they are installed.
+	services.Install_Part_Body_Access(&environment.services)
 	environment.modules = vm.Environment_Init()
 
 	classes.Register_Default_Classes(&environment.classes)

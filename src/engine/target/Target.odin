@@ -42,8 +42,22 @@ IS_SERVER :: ACTIVE == Mode.Server
 // binaries still run as a server without flags.
 current_mode := BUILD_DEFAULT
 
+// playtest is set when the process was launched by PlaytestService to host a
+// playtest server or client. It is tracked here rather than kept in the startup
+// options so any part of the engine can ask whether it is inside a playtest, the
+// same way it asks about the current mode.
+playtest := false
+
 set_mode :: proc(mode: Mode) {
 	current_mode = mode
+}
+
+set_playtest :: proc(value: bool) {
+	playtest = value
+}
+
+is_playtest :: proc() -> bool {
+	return playtest
 }
 
 is_editor :: proc() -> bool {

@@ -417,6 +417,10 @@ CharacterController_Tick :: proc(
 		// so walking into a ramp climbs it at a constant horizontal speed rather
 		// than being stopped at its base.
 		move := datatypes.Vector3{move_dir.x * dt, 0, move_dir.z * dt}
+		// Knockback rides along with the walk displacement, so a push goes through
+		// the same sweep and is blocked by geometry just like walking is.
+		move.x += cc.knockback.x * dt
+		move.z += cc.knockback.z * dt
 		if grounded && ground_normal.y > 0.0001 {
 			move.y = -(move.x*ground_normal.x + move.z*ground_normal.z) / ground_normal.y
 		}
@@ -518,6 +522,13 @@ CharacterController_Tick :: proc(
 			)
 		}
 	}
+	// Bleed the knockback off once the displacement has been consumed, so the
+	// next tick carries less of it.
+	knockback_damping := math.exp(-classes.CHARACTER_KNOCKBACK_DAMPING * dt)
+	cc.knockback.x *= knockback_damping
+	cc.knockback.z *= knockback_damping
+	if math.abs(cc.knockback.x) < 0.0001 { cc.knockback.x = 0 }
+	if math.abs(cc.knockback.z) < 0.0001 { cc.knockback.z = 0 }
 	if sm != nil {
 		next := sm.state
 		moving := move_dir.x != 0 || move_dir.z != 0
@@ -558,6 +569,24 @@ CharacterMotor_Advance :: proc(
 		CharacterController_Tick(cc, physics, L, step)
 		motor.accumulator -= step
 	}
+}
+
+// character_simulation_suspended reports whether this peer must stop simulating a
+// character because another peer owns its transform.
+//
+// Owner id 0 is the server: a ragdolling character gives its root back to the
+// server precisely so there is one writer for the body. This deliberately stays
+// silent when there is no replication entity at all, so a runtime with no peer
+// connection keeps simulating its own character exactly as it did before.
+character_simulation_suspended :: proc(
+	replicator: ^ReplicatorService,
+	model: ^classes.CharacterModel,
+) -> bool {
+	if replicator == nil || model == nil || model.destroyed {return false}
+	root := classes.CharacterModel_Root(model)
+	entity := root != nil ? replication_entity(replicator, root) : nil
+	if entity == nil {return false}
+	return entity.owner_id == 0
 }
 
 CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
@@ -610,6 +639,28 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 			if player != players.local_player {continue}
 			player.move_direction = service.move_direction
 			if service.local_jump_pending {player.jump_queued = true; service.local_jump_pending = false}
+		}
+		// Death and respawn are server decisions. A client learns about both from
+		// replication, so running the lifecycle on both sides would leave two peers
+		// disagreeing about who owns a dead body. On the server this runs ahead of
+		// the client-authoritative skip below, because a dead character has no owner
+		// to drive it and the server has to take it over.
+		if replicator.mode == .Server {
+			CharacterService_Update_Death(service, player, dt)
+		} else if character_simulation_suspended(replicator, player.character) {
+			// The server owns this body -- it ragdolled, or handed the character to
+			// another peer. Its transform arrives by replication, so driving it here
+			// would have two peers writing the same transform.
+			continue
+		}
+		if player.ragdoll {
+			// The solver owns the body now. Drive nothing, and carry the simulated
+			// capsule onto the visible parts. A client does not do this: the same
+			// transform reaches it through replication.
+			if replicator.mode == .Server {
+				CharacterService_Update_Ragdoll(service, player.character)
+			}
+			continue
 		}
 		root := classes.CharacterModel_Root(player.character)
 		if root == nil {continue}

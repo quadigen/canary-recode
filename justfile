@@ -42,6 +42,45 @@ run-sandbox script="C:\\Users\\devco\\Documents\\Kinemium-Canary\\src\\sandboxed
 
 test:
     odin test src
+    @just test-replication
+
+# The replication smoke tests are standalone `odin run` programs rather than
+# `odin test` suites, because each one boots a full engine environment pair over
+# real sockets. They live here so a change to the wire cannot pass CI silently.
+test-replication:
+    #!pwsh
+    $ErrorActionPreference = 'Stop'
+    $tests = @(
+        'replicator_loopback_smoke',
+        'replicator_multi_peer_smoke',
+        'replication_remote_smoke',
+        'replication_breadth_smoke',
+        'character_replication_smoke',
+        'ownership_api_smoke',
+        'replication_ack_suppression_smoke',
+        'replication_authority_smoke',
+         'replication_handshake_smoke',
+         'replication_load_control_smoke',
+         'replication_timebase_smoke',
+         'replication_relevancy_smoke',
+         'character_death_smoke',
+         'player_impulse_smoke',
+         'part_velocity_smoke'
+    )
+    $failed = @()
+    foreach ($t in $tests) {
+        $output = (odin run "tests/$t.odin" -file 2>&1 | Out-String)
+        if ($output -match 'PASSED') {
+            Write-Host "PASS  $t"
+        } else {
+            Write-Host "FAIL  $t"
+            Write-Host $output
+            $failed += $t
+        }
+    }
+    if ($failed.Count -gt 0) {
+        throw "replication tests failed: $($failed -join ', ')"
+    }
 
 check:
     odin check src

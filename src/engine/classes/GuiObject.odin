@@ -1271,5 +1271,15 @@ Register_GuiObject :: proc(registry: ^Registry) {
 			"Visible",
 			"BackgroundTransparency",
 		},
+		events = []string{
+			"InputBegan",
+			"InputChanged",
+			"InputEnded",
+			"MouseEnter",
+			"MouseLeave",
+			"MouseMoved",
+			"MouseWheelForward",
+			"MouseWheelBackward",
+		},
 	)
 }

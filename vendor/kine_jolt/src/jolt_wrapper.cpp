@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
@@ -777,6 +778,167 @@ void JPH_Shape_Destroy(JPH_ShapeRef shape)
 {
     if (shape != nullptr)
         ToShape(shape)->Release();
+}
+
+namespace
+{
+
+// GetTrianglesNext must never be asked for fewer than this many triangles, and it is also
+// the size of its internal scratch for a single shape. Shapes hand triangles back in
+// blocks, so a caller-provided buffer is filled a block at a time rather than in one pass.
+constexpr int kTrianglesPerBlock = 512;
+
+// Accumulates triangles across a shape and its children. `total` keeps counting after the
+// buffer is full only so the caller learns that more geometry exists; `truncated` then
+// stops the walk so an oversized compound is not traversed for nothing.
+struct TriangleCollector
+{
+    JPH_Vec3* outVertices;
+    int32_t maxTriangles;
+    int32_t written = 0;
+    int32_t total = 0;
+    bool truncated = false;
+};
+
+// Drains one leaf shape's triangles. Returns false once the collector is full.
+bool CollectLeafTriangles(
+    const JPH::Shape* shape,
+    const JPH::Vec3& positionCOM,
+    const JPH::Quat& rotation,
+    TriangleCollector& io)
+{
+    // The cull box has to be world space, and GetWorldSpaceBounds is a public
+    // non-virtual wrapper around the shape's own bounds, so no downcast is needed to
+    // build it. GetTrianglesNext only culls coarsely, so a few extra triangles are fine.
+    JPH::AABox box = shape->GetWorldSpaceBounds(
+        JPH::Mat44::sRotationTranslation(rotation, positionCOM),
+        JPH::Vec3::sOne());
+
+    JPH::Shape::GetTrianglesContext context;
+    shape->GetTrianglesStart(context, box, positionCOM, rotation, JPH::Vec3::sOne());
+
+    JPH::Float3 scratch[3 * kTrianglesPerBlock];
+
+    for (;;)
+    {
+        const int32_t found = shape->GetTrianglesNext(
+            context,
+            kTrianglesPerBlock,
+            scratch,
+            nullptr);
+        if (found <= 0)
+            return true;
+
+        io.total += found;
+
+        const int32_t room = io.maxTriangles - io.written;
+        if (room > 0)
+        {
+            const int32_t keep = found < room ? found : room;
+            for (int32_t i = 0; i < keep; ++i)
+            {
+                JPH_Vec3* dst = io.outVertices + (io.written + i) * 3;
+                for (int32_t corner = 0; corner < 3; ++corner)
+                {
+                    const JPH::Float3& v = scratch[i * 3 + corner];
+                    dst[corner] = JPH_Vec3{v.x, v.y, v.z};
+                }
+            }
+            io.written += keep;
+        }
+
+        if (io.written >= io.maxTriangles)
+        {
+            // A full block that still left room is not the end of the shape, so only
+            // stop here when something was actually dropped.
+            if (io.total > io.maxTriangles)
+            {
+                io.truncated = true;
+                return false;
+            }
+        }
+    }
+}
+
+void CollectTrianglesRecursive(
+    const JPH::Shape* shape,
+    const JPH::Vec3& positionCOM,
+    const JPH::Quat& rotation,
+    TriangleCollector& io)
+{
+    if (io.truncated)
+        return;
+
+    // Compound shapes do not implement triangle iteration themselves; the surface is the
+    // union of their children. This is what makes a V-HACD precise collision mesh, which
+    // is a StaticCompoundShape of convex hulls, produce usable geometry.
+    //
+    // The type is discriminated with GetType rather than dynamic_cast on purpose. Jolt is
+    // compiled with RTTI disabled, so a dynamic_cast issued from this translation unit
+    // reads a vtable that carries no type information and faults at run time. GetType is a
+    // plain virtual call, and EShapeType::Compound covers both StaticCompoundShape and
+    // MutableCompoundShape because they share the CompoundShape base.
+    if (shape->GetType() == JPH::EShapeType::Compound)
+    {
+        const JPH::CompoundShape* compound = static_cast<const JPH::CompoundShape*>(shape);
+
+        for (uint32_t i = 0; i < compound->GetNumSubShapes(); ++i)
+        {
+            const JPH::CompoundShape::SubShape& sub = compound->GetSubShape(i);
+
+            // SubShape::FromSettings already stored the child relative to this shape's
+            // center of mass, so it composes as a plain transform.
+            const JPH::Vec3 childPosition = positionCOM + rotation * sub.GetPositionCOM();
+            const JPH::Quat childRotation = rotation * sub.GetRotation();
+
+            CollectTrianglesRecursive(sub.mShape.GetPtr(), childPosition, childRotation, io);
+        }
+        return;
+    }
+
+    CollectLeafTriangles(shape, positionCOM, rotation, io);
+}
+
+} // namespace
+
+int32_t JPH_Shape_CollectTriangles(
+    JPH_ShapeRef shape,
+    const JPH_RVec3* position,
+    const JPH_Quat* rotation,
+    JPH_Vec3* outVertices,
+    int32_t maxTriangles,
+    int32_t* outTruncated)
+{
+    if (outTruncated != nullptr)
+        *outTruncated = 0;
+
+    if (shape == nullptr || position == nullptr || rotation == nullptr ||
+        outVertices == nullptr || maxTriangles <= 0)
+        return 0;
+
+    const JPH::Shape* jphShape = ToShape(shape);
+    const JPH::Quat jphRotation = ToJPH(*rotation);
+
+    // The triangle API is single precision throughout (Vec3Arg in, Float3 out) even in a
+    // double precision build, so the position is narrowed here. That is not a problem at
+    // Roblox world scales, where a stud coordinate stays well inside float range.
+    const JPH::Vec3 origin(
+        static_cast<float>(position->x),
+        static_cast<float>(position->y),
+        static_cast<float>(position->z));
+
+    // Jolt keeps shapes centred on their center of mass and that offset is not zero for
+    // asymmetric shapes such as a wedge, while callers pass the position the shape was
+    // created at (the same convention as JPH_BodyCreationSettings_Create3).
+    const JPH::Vec3 positionCOM = origin + jphRotation * jphShape->GetCenterOfMass();
+
+    TriangleCollector collector{outVertices, maxTriangles};
+    CollectTrianglesRecursive(jphShape, positionCOM, jphRotation, collector);
+
+    if (outTruncated != nullptr && collector.truncated)
+        *outTruncated = 1;
+
+    return collector.written;
 }
 
 JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(

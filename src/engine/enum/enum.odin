@@ -4247,6 +4247,7 @@ Material :: enum {
 	Sand = 8, // "sand"
 	Water = 9, // "water"
 	debug = 10, // "debug"
+	Air = 11, // "air" — empty terrain cell; never rendered
 }
 
 UserInputState :: enum {

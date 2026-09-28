@@ -278,8 +278,6 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 			"Enabled",
 			"IgnoreGuiInset",
 			"RenderOnTop",
-			"Size",
-			"RenderOffset",
 		},
 	)
 }

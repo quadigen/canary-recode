@@ -28,13 +28,13 @@ date_time_now :: proc "c" (L: ^vm.State) -> i32 {
 
 date_time_from_unix_timestamp :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestamp(vm.ArgInteger(L, 1)))
+	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestamp(vm.ArgNumber(L, 1)))
 	return 1
 }
 
 date_time_from_unix_timestamp_millis :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestampMillis(vm.ArgInteger(L, 1)))
+	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestampMillis(vm.ArgNumber(L, 1)))
 	return 1
 }
 
@@ -42,9 +42,9 @@ date_time_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	date_time := cast(^DateTime)value
 	switch key {
 	case "UnixTimestamp":
-		vm.PushInteger(L, DateTime_UnixTimestamp(date_time^))
+		vm.PushNumber(L, DateTime_UnixTimestamp(date_time^))
 	case "UnixTimestampMillis":
-		vm.PushInteger(L, date_time.UnixTimestampMillis)
+		vm.PushNumber(L, date_time.UnixTimestampMillis)
 	case:
 		return false
 	}

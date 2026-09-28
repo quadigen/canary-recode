@@ -272,5 +272,14 @@ Register_Humanoid :: proc(registry: ^Registry) {
 		set = humanoid_set,
 		namecall = humanoid_namecall,
 		properties = []string{"Health", "MaxHealth"},
+		methods = []string{
+			"TakeDamage",
+			"Move",
+			"Jump",
+			"WalkTo",
+			"MoveTo",
+			"GetState",
+		},
+		events = []string{"HealthChanged", "StateChanged"},
 	)
 }

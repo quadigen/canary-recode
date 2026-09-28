@@ -9,6 +9,10 @@ replication_put_u32 :: proc(bytes: ^[dynamic]u8, value: u32) {
 	for shift := 0; shift < 32; shift += 8 {append(bytes, u8(value >> u32(shift)))}
 }
 
+replication_put_u64 :: proc(bytes: ^[dynamic]u8, value: u64) {
+	for shift := 0; shift < 64; shift += 8 {append(bytes, u8(value >> u64(shift)))}
+}
+
 replication_put_string :: proc(bytes: ^[dynamic]u8, value: string) {
 	replication_put_u32(bytes, u32(len(value)))
 	for byte in transmute([]u8)value {append(bytes, byte)}
@@ -24,11 +28,28 @@ Replication_Reader :: struct {
 	valid:  bool,
 }
 
+replication_read_u8 :: proc(reader: ^Replication_Reader) -> u8 {
+	if !reader.valid || reader.offset + 1 > len(reader.data) {reader.valid = false; return 0}
+	value := reader.data[reader.offset]
+	reader.offset += 1
+	return value
+}
+
 replication_read_u32 :: proc(reader: ^Replication_Reader) -> u32 {
 	if !reader.valid || reader.offset + 4 > len(reader.data) {reader.valid = false; return 0}
 	value: u32
 	for shift := 0; shift < 32; shift += 8 {
 		value |= u32(reader.data[reader.offset]) << u32(shift)
+		reader.offset += 1
+	}
+	return value
+}
+
+replication_read_u64 :: proc(reader: ^Replication_Reader) -> u64 {
+	if !reader.valid || reader.offset + 8 > len(reader.data) {reader.valid = false; return 0}
+	value: u64
+	for shift := 0; shift < 64; shift += 8 {
+		value |= u64(reader.data[reader.offset]) << u64(shift)
 		reader.offset += 1
 	}
 	return value

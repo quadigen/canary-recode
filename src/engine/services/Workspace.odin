@@ -22,6 +22,9 @@ Workspace :: struct {
 
 	// meshes
 	cube_mesh:                   ^kineffi.KineFilamentMesh,
+	// Dense subdivided top-face grid; the water material displaces these
+	// vertices on the GPU with Gerstner waves (KINE_MESH_WATER_GRID).
+	water_grid_mesh:             ^kineffi.KineFilamentMesh,
 	sphere_mesh:                 ^kineffi.KineFilamentMesh,
 	cylinder_mesh:               ^kineffi.KineFilamentMesh,
 	cone_mesh:                   ^kineffi.KineFilamentMesh,
@@ -72,6 +75,13 @@ workspace_ensure_meshes :: proc(
 
 	if workspace.cube_mesh == nil {
 		workspace.cube_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Block.glb"))
+	}
+
+	if workspace.water_grid_mesh == nil {
+		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
+			renderer.Filament,
+			kineffi.KINE_MESH_WATER_GRID,
+		)
 	}
 
 	if workspace.sphere_mesh == nil {
@@ -186,6 +196,18 @@ workspace_part_mesh :: proc(
 	return workspace.cube_mesh
 }
 
+// Water parts render on a dense subdivided grid so the water material can
+// displace real geometry with Gerstner waves; the Block.glb cube only has 4
+// vertices per face, far too few for meaningful waves.
+workspace_water_mesh :: proc(
+	workspace: ^Workspace,
+) -> ^kineffi.KineFilamentMesh {
+	if workspace.water_grid_mesh != nil {
+		return workspace.water_grid_mesh
+	}
+	return workspace.cube_mesh
+}
+
 workspace_meshpart_mesh :: proc(
 	part: ^classes.MeshPart,
 	ctx: ^kineffi.KineFilamentContext,
@@ -290,6 +312,25 @@ workspace_append_draw_items :: proc(
 				render_material,
 			)
 
+			if material_kind == kineffi.KINE_MAT_WATER {
+				// Vertex waves only make sense on the water's top surface, so a
+				// water Part swaps its shape mesh for a flat grid whose surface
+				// sits at mesh y = +0.5.
+				//
+				// That grid is authored 1 unit wide in X/Z, while every other
+				// part mesh (Block.glb and friends) is a 2-unit-wide cube. The
+				// shared render_size is half the part size, which is correct for
+				// the 2-unit meshes but would shrink the water surface to half
+				// the part's footprint and drop it to mid-height. Scaling by the
+				// full size lines the 0.5-unit offsets back up: X/Z become
+				// size*0.5 = the part's half-extent, and y = +0.5*size.y is the
+				// top face.
+				mesh = workspace_water_mesh(workspace)
+				render_size.x = size.x
+				render_size.y = size.y
+				render_size.z = size.z
+			}
+
 			if material_kind == kineffi.KINE_MAT_DEFAULT && render_material.texture != nil {
 				STUDS_PER_TILE :: f32(4.0)
 
@@ -354,20 +395,41 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 	workspace := cast(^Workspace)object
 	if !workspace_has_parts(object) {return}
 	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
-	if !workspace_ensure_meshes(workspace, ctx.renderer) {return}
 
-	materials.init(ctx.renderer)
-
-	items: [dynamic]kineffi.KineFilamentDrawItem
-	workspace_append_draw_items(workspace, object, ctx.renderer, &items)
-	if len(items) > 0 {
-		_ = kineffi.Kine_Filament_DrawMeshList(
-			ctx.renderer.Filament,
-			raw_data(items),
-			u32(len(items)),
-		)
+	{
+		tracy.ZoneNC("WS Mesh Setup", 0x9CDCFE)
+		setup := profiling.Begin("WS Mesh Setup", 0x9CDCFE)
+		if !workspace_ensure_meshes(workspace, ctx.renderer) {return}
+		materials.init(ctx.renderer)
 	}
-	delete(items)
+
+	// The collect and submit halves are timed separately on purpose. This runs for
+	// every part in the tree on every frame, so "the frame is slow" is never enough
+	// to act on: the question is whether the cost is our per-part CPU work walking
+	// the tree, or Filament consuming the submitted list. Those have completely
+	// different fixes, and they are indistinguishable inside a single zone.
+	//
+	// The zone value is the item count, so the capture also gives a per-part cost and
+	// reveals whether the frame time scales with the scene.
+	{
+		tc := tracy.ZoneNC("WS Collect Draw Items", 0xB48EAD)
+		collect := profiling.Begin("WS Collect Draw Items", 0xB48EAD)
+		items: [dynamic]kineffi.KineFilamentDrawItem
+		workspace_append_draw_items(workspace, object, ctx.renderer, &items)
+		tracy.ZoneValue(tc, u64(len(items)))
+
+		if len(items) > 0 {
+			ts := tracy.ZoneNC("WS Filament Submit", 0xC678DD)
+			submit := profiling.Begin("WS Filament Submit", 0xC678DD)
+			tracy.ZoneValue(ts, u64(len(items)))
+			_ = kineffi.Kine_Filament_DrawMeshList(
+				ctx.renderer.Filament,
+				raw_data(items),
+				u32(len(items)),
+			)
+		}
+		delete(items)
+	}
 }
 
 workspace_physics :: proc(workspace: ^Workspace) -> ^Physics {

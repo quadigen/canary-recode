@@ -68,6 +68,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <utility>
 
 struct KineSkiaSurface {
@@ -243,6 +244,31 @@ static std::unordered_map<std::string, sk_sp<SkTypeface>>& kine_skia_typeface_ca
 {
     static std::unordered_map<std::string, sk_sp<SkTypeface>> cache;
     return cache;
+}
+
+/* In-memory font cache. Every load used to construct a fresh platform
+ * font manager (a new DirectWrite factory on Windows); the manager and its
+ * font collection retain OS-level state that is never fully released, so
+ * each call leaked ~7MB of private memory. Fonts are keyed by content and
+ * verified byte-for-byte on hit, so identical loads reuse one typeface. */
+struct KineSkiaMemoryTypefaceEntry {
+    std::vector<uint8_t> bytes;
+    sk_sp<SkTypeface> typeface;
+};
+
+static std::unordered_map<size_t, KineSkiaMemoryTypefaceEntry>& kine_skia_memory_typeface_cache()
+{
+    static std::unordered_map<size_t, KineSkiaMemoryTypefaceEntry> cache;
+    return cache;
+}
+
+static size_t kine_skia_font_hash(const uint8_t* data, size_t size)
+{
+    size_t hash = size * 31 + 1469598103934665603ull;
+    for (size_t i = 0; i < size; i++) {
+        hash = (hash ^ data[i]) * 1099511628211ull;
+    }
+    return hash;
 }
 
 static sk_sp<SkTypeface> kine_skia_get_typeface(const char* fontPath)
@@ -1196,6 +1222,21 @@ KINE_SKIA_API KineSkiaTypeface* Kine_Skia_Typeface_LoadFromMemory(
         return nullptr;
     }
 
+    auto& cache = kine_skia_memory_typeface_cache();
+    const size_t key = kine_skia_font_hash(data, size);
+
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        const KineSkiaMemoryTypefaceEntry& entry = it->second;
+        if (entry.bytes.size() == size &&
+            memcmp(entry.bytes.data(), data, size) == 0 &&
+            entry.typeface) {
+            auto* wrapper = new KineSkiaTypeface();
+            wrapper->typeface = entry.typeface;
+            return wrapper;
+        }
+    }
+
 #if defined(_WIN32)
     sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
 #elif defined(__ANDROID__)
@@ -1228,6 +1269,11 @@ KINE_SKIA_API KineSkiaTypeface* Kine_Skia_Typeface_LoadFromMemory(
     if (!typeface) {
         return nullptr;
     }
+
+    KineSkiaMemoryTypefaceEntry entry;
+    entry.bytes.assign(data, data + size);
+    entry.typeface = typeface;
+    cache[key] = std::move(entry);
 
     auto* wrapper = new KineSkiaTypeface();
     wrapper->typeface = std::move(typeface);

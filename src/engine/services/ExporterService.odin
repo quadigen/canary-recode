@@ -4,15 +4,15 @@ package services
 
 // wire:service global="ExporterService"
 
-import "core:fmt"
-import "core:os"
-import "core:path/filepath"
-import "core:strings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import target "../target"
 import vm "../vm"
+import "core:fmt"
+import "core:os"
+import "core:path/filepath"
+import "core:strings"
 
 ExporterService_Class := classes.Class_Info {
 	name   = "ExporterService",
@@ -23,7 +23,11 @@ ExporterService :: struct {
 	using service: Service,
 }
 
-Exporter_Kind :: enum { Server, Client, Both }
+Exporter_Kind :: enum {
+	Server,
+	Client,
+	Both,
+}
 
 Exporter_Bake :: proc(
 	folder, address: string,
@@ -31,7 +35,10 @@ Exporter_Bake :: proc(
 	game_name: string,
 	map_bytes: []u8,
 	kind: Exporter_Kind,
-) -> (ok: bool, message: string) {
+) -> (
+	ok: bool,
+	message: string,
+) {
 	if address == "" {
 		return false, "Address must not be empty"
 	}
@@ -138,7 +145,11 @@ exporter_service_namecall :: proc(
 	switch method {
 	case "ExportExecutable":
 		if !vm.ThreadHasSecurityCapability(L, EXPORTER_INTERNALS_CAPABILITY) {
-			return vm.RaiseError(L, "ExporterService:ExportExecutable() requires Internals capability"), true
+			return vm.RaiseError(
+					L,
+					"ExporterService:ExportExecutable() requires Internals capability",
+				),
+				true
 		}
 		kind_name := vm.ArgString(L, 2)
 		folder := vm.ArgString(L, 3)
@@ -147,27 +158,36 @@ exporter_service_namecall :: proc(
 		game_file := vm.ArgString(L, 6)
 		kind, kind_ok := exporter_kind_from_string(kind_name)
 		if folder == "" || address == "" || game_file == "" || !kind_ok {
-			return vm.RaiseError(L, "ExporterService:ExportExecutable(target, folder, address, port, fileName) expects target Server|Client|Both, a folder, an address, a port 1-65535, and an exported .kine file"), true
+			return vm.RaiseError(
+					L,
+					"ExporterService:ExportExecutable(target, folder, address, port, fileName) expects target Server|Client|Both, a folder, an address, a port 1-65535, and an exported .kine file",
+				),
+				true
 		}
 		if port < 1 || port > 65535 {
-			return vm.RaiseError(L, "ExporterService:ExportExecutable port must be between 1 and 65535"), true
+			return vm.RaiseError(
+					L,
+					"ExporterService:ExportExecutable port must be between 1 and 65535",
+				),
+				true
 		}
 		map_bytes, read_ok := os.read_entire_file_from_path(game_file, context.allocator)
 		if read_ok != nil {
-			return vm.RaiseError(L, "ExporterService:ExportExecutable could not read the exported kine file"), true
+			return vm.RaiseError(
+					L,
+					"ExporterService:ExportExecutable could not read the exported kine file",
+				),
+				true
 		}
 		defer delete(map_bytes)
 		game_name := filepath.base(game_file)
-		bake_ok, message := Exporter_Bake(
-			folder,
-			address,
-			u16(port),
-			game_name,
-			map_bytes,
-			kind,
-		)
+		bake_ok, message := Exporter_Bake(folder, address, u16(port), game_name, map_bytes, kind)
 		if !bake_ok {
-			return vm.RaiseError(L, fmt.tprintf("ExporterService:ExportExecutable failed: %s", message)), true
+			return vm.RaiseError(
+					L,
+					fmt.tprintf("ExporterService:ExportExecutable failed: %s", message),
+				),
+				true
 		}
 		vm.PushString(L, message)
 		return 1, true

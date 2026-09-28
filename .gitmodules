@@ -22,3 +22,6 @@
 [submodule "src/engine/util/odin-http"]
 	path = src/engine/util/odin-http
 	url = https://github.com/laytan/odin-http
+[submodule "vendor/webview"]
+	path = vendor/webview
+	url = https://github.com/webview/webview

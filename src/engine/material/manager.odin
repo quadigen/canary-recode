@@ -170,7 +170,7 @@ load_texture :: proc(material: enums.Material, entry: ^Material) {
 		return
 	}
 
-	switch material {
+	#partial switch material {
 	case .Glass, .Neon, .Water:
 		entry.loaded = true
 		return

@@ -380,6 +380,23 @@ JPH_API JPH_ShapeRef JPH_VHACD_Compound_Create(
 JPH_API void JPH_Shape_AddRef(JPH_ShapeRef shape);
 JPH_API void JPH_Shape_Destroy(JPH_ShapeRef shape);
 
+// Triangulates `shape` into world-space triangles, writing 3 * maxTriangles entries to
+// `outVertices` and returning how many triangles were written. Compound shapes (such as
+// the V-HACD result used for precise collision meshes) are walked recursively.
+//
+// `position` is the world position the shape was created at, matching
+// JPH_BodyCreationSettings_Create3; the wrapper applies the shape's center-of-mass offset
+// itself. Set `outTruncated` when the shape has more triangles than `maxTriangles`, so the
+// caller can grow the buffer and call again.
+JPH_API int32_t JPH_Shape_CollectTriangles(
+    JPH_ShapeRef shape,
+    const JPH_RVec3* position,
+    const JPH_Quat* rotation,
+    JPH_Vec3* outVertices,
+    int32_t maxTriangles,
+    int32_t* outTruncated
+);
+
 JPH_API JPH_BodyCreationSettingsRef JPH_BodyCreationSettings_Create3(
     JPH_ShapeRef shape,
     const JPH_RVec3* position,

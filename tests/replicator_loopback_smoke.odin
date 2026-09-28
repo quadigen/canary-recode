@@ -36,6 +36,17 @@ assert(emulator:Send("later", true, 10))
 assert(#emulator:Drain(10.49) == 0)
 assert(emulator:Drain(10.5)[1] == "later")
 assert(emulator:Send("lost", false, 10) == false)
+-- A floor, so the client's character has something to stand on. Spatial
+-- relevancy is measured from that character, and without a floor it free-falls
+-- out of the scene: by the time the test narrows the sphere the focus is a
+-- thousand studs below every part under test and nothing is in range. The old
+-- spawn-everything behaviour hid this because relevancy never gated a spawn.
+local floor = Instance.new("Part")
+floor.Name = "Floor"
+floor.Anchored = true
+floor.Size = Vector3.new(4000, 1, 4000)
+floor.CFrame = CFrame.new(0, -0.5, 0)
+floor.Parent = game:GetService("Workspace")
 local part = Instance.new("Part")
 part.Name = "ReplicatedPart"
 part.CFrame = CFrame.new(4, 5, 6)
@@ -107,7 +118,11 @@ assert(part and part.ClassName == "Part")
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart") == nil)
-assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2000)
+-- DistantPart sits 2000 studs out, well outside the default 1024 stud sphere, so
+-- spatial relevancy means it is never spawned at all. It used to be spawned and
+-- then left frozen at its first position, which is the stale-instance behaviour
+-- relevancy exists to prevent.
+assert(game:GetService("Workspace"):FindFirstChild("DistantPart") == nil, "a part 2000 studs out must not replicate through a 1024 stud sphere")
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 17)
 local bootstrap = game:GetService("ReplicatedFirst"):FindFirstChild("Bootstrap")
 assert(bootstrap and bootstrap:FindFirstChild("Ready").Value == true)
@@ -117,6 +132,16 @@ assert(part.Size == Vector3.new(2, 3, 4))
 assert(part.CanQuery == false)
 assert(part.Shape == Enum.PartType.Cylinder, "Shape enum should replicate")
 assert(math.abs(part.Transparency - 0.4) < 1e-4)
+for _, name in ipairs({ "Workspace", "ReplicatedStorage", "StarterPlayer" }) do
+    local service = game:GetService(name)
+    local copies = 0
+    for _, child in game:GetChildren() do
+        if child.Name == name then copies += 1 end
+    end
+    assert(copies == 1, "client has " .. tostring(copies) .. " copies of " .. name)
+    assert(service.Parent == game, name .. " should hang off the DataModel")
+end
+assert(game:GetService("ReplicatorService"):GetStats().malformedPackets == 0, "no snapshot should be malformed")
 assert(r:SendEvent("client-test", "hello"))
 assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint = Color3.new(0.1, 0.2, 0.3), frame = CFrame.new(2, 3, 4), list = { 10, 20 }, nested = { ok = true } }))
 `, "replicator_client_verify")
@@ -205,7 +230,10 @@ assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 23)
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart"))
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart"))
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart"))
-assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2000)
+-- The server shrank the sphere to 100 studs and moved DistantPart to 2100, so it
+-- is still out of range and must stay absent rather than lingering as a frozen
+-- instance at its last replicated position.
+assert(game:GetService("Workspace"):FindFirstChild("DistantPart") == nil, "a part 2100 studs out must not replicate through a 100 stud sphere")
 assert(game:GetService("Players").LocalPlayer.UserId > 0)
 `, "replicator_client_event")
 

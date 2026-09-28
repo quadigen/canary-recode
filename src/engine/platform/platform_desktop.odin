@@ -18,6 +18,7 @@ MessageBoxFlags :: sdl.MessageBoxFlags
 MessageBoxFlag :: sdl.MessageBoxFlag
 DialogFileCallback :: sdl.DialogFileCallback
 ShowOpenFolderDialog :: sdl.ShowOpenFolderDialog
+ShowOpenFileDialog :: sdl.ShowOpenFileDialog
 
 INIT_VIDEO :: sdl.INIT_VIDEO
 INIT_EVENTS :: sdl.INIT_EVENTS

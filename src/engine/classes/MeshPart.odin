@@ -32,7 +32,7 @@ MeshPart_Init :: proc() -> MeshPart {
                 B = 1,
             },
 			size         = datatypes.Vector3{4, 1, 2},
-            anchored     = false,
+            anchored     = true,
 			can_collide  = true,
 			can_query    = true,
 			collision_group = strings.clone("Default"),
@@ -149,6 +149,19 @@ mesh_part_set :: proc(
     return true
 }
 
+// MeshPart is a Part, so it inherits the same members. Part_Class holds the
+// behaviour rather than this class, and the delegation above has to be repeated
+// here for every callback MeshPart shadows.
+mesh_part_namecall :: proc(
+    L: ^vm.State,
+    object: ^Object,
+    datatype_registry: ^datatypes.Registry,
+    enum_registry: ^enums.Registry,
+    method: string,
+) -> (i32, bool) {
+    return part_namecall(L, object, datatype_registry, enum_registry, method)
+}
+
 mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^MeshPart)source
 	dst := cast(^MeshPart)destination
@@ -169,7 +182,9 @@ Register_MeshPart :: proc(registry: ^Registry) {
         mesh_part_destroy,
         get = mesh_part_get,
         set = mesh_part_set,
+        namecall = mesh_part_namecall,
         clone = mesh_part_clone,
 		properties = []string{"CollisionFidelity", "TextureId", "MeshId"},
+		methods = []string{"ApplyImpulse"},
     )
 }

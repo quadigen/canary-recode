@@ -97,6 +97,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kine_jolt")
     add_subdirectory(kine_jolt)
 endif()
 
+# Recast & Detour Wrapper
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kine_recast")
+    add_subdirectory(kine_recast)
+endif()
+
 # One static library target for the engine's native dependency surface.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anchor(void) {}\n")
 
@@ -110,6 +115,9 @@ add_subdirectory(zstd)
 
 # minizip
 add_subdirectory(miniz)
+
+# webview
+add_subdirectory(webview)
 
 # yaml
 add_subdirectory(libyaml)
@@ -172,6 +180,11 @@ kine_add_odin_library_alias(kine_skia "$<TARGET_FILE:kine_skia>")
 kine_add_odin_library_alias(kine_vk "$<TARGET_FILE:kine_vulkan_compositor>")
 kine_add_odin_library_alias(kine_jolt "$<TARGET_FILE:JoltWrapper>")
 kine_add_odin_library_alias(kine_jolt_core "$<TARGET_FILE:Jolt>")
+if(TARGET RecastWrapper)
+    kine_add_odin_library_alias(kine_recast "$<TARGET_FILE:RecastWrapper>")
+    kine_add_odin_library_alias(kine_recast_core "$<TARGET_FILE:Recast>")
+    kine_add_odin_library_alias(kine_detour "$<TARGET_FILE:Detour>")
+endif()
 kine_add_odin_library_alias(kine_assimp "$<TARGET_FILE:assimp>")
 if(TARGET zlibstatic)
     kine_add_odin_library_alias(kine_zlib "$<TARGET_FILE:zlibstatic>")
@@ -210,6 +223,7 @@ set(KINE_COMPONENT_TARGETS
     libzstd_static
     yaml
     miniz
+    webview
     uberarchive
     shaders
 
@@ -227,6 +241,12 @@ set(KINE_COMPONENT_TARGETS
     Jolt
     assimp
     zlibstatic
+
+    # Navigation. The wrapper is bundled with the Recast and Detour archives it
+    # calls into, so the Odin bindings only need to import one library.
+    RecastWrapper
+    Recast
+    Detour
 
     # SDL3 and Luau are linked separately by Odin. Bundling either here causes
     # duplicate symbols and, for legacy Luau builds, incompatible CRT objects.

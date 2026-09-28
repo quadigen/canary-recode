@@ -90,6 +90,13 @@ TextBox :: struct {
 
 text_box_focused: ^TextBox
 
+// Exposes the currently focused TextBox so services (notably
+// UserInputService:GetFocusedTextBox) can ask whether a keystroke was aimed at
+// a text field rather than at the game or the editor shell.
+TextBox_Focused :: proc() -> ^TextBox {
+	return text_box_focused
+}
+
 
 TextBox_Init :: proc() -> TextBox {
 	gui := GuiObject_Init()
@@ -5381,6 +5388,22 @@ Register_TextBox :: proc(
 			"SelectedText",
 			"LineCount",
 
-		}
+		},
+
+		methods = []string{
+			"CaptureFocus",
+			"ReleaseFocus",
+			"IsFocused",
+			"SelectAll",
+			"ClearSelection",
+			"CopySelection",
+			"Undo",
+			"Redo",
+		},
+
+		events = []string{
+			"FocusLost",
+			"TextChanged",
+		},
 	)
 }

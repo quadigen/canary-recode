@@ -108,6 +108,8 @@ KINE_MESH_PYRAMID :: 3
 KINE_MESH_PARTICLE_QUAD :: 4
 KINE_MESH_DISPLACED_CUBE :: 5
 KINE_MESH_CYLINDER :: 6
+// Dense subdivided top-face grid for the vertex-displaced water material.
+KINE_MESH_WATER_GRID :: 7
 
 // Gizmo type, matches the existing shape codes used by Kine_Filament_CreateMesh.
 KINE_GIZMO_MOVE :: 10

@@ -40,7 +40,9 @@ DialogService :: struct {
 	thread_ref: i32,
 }
 
-dialog_folder_callback :: proc "c" (
+// Shared by PickFolder and PickFile: both dialogs resolve to a single
+// optional path, and only one dialog can be open at a time.
+dialog_result_callback :: proc "c" (
 	userdata: rawptr,
 	filelist: [^]cstring,
 	filter: i32,
@@ -82,20 +84,30 @@ dialog_folder_callback :: proc "c" (
 	service.result_path = strings.clone(string(filelist[0]))
 }
 
-DialogService_PickFolder :: proc(
+dialog_begin :: proc(
 	L: ^vm.State,
 	service: ^DialogService,
 	default_location: string,
-) -> i32 {
+	method_name: string,
+) -> (
+	window: ^sdl3.Window,
+	location: cstring,
+	ok: bool,
+) {
 	if service == nil || service.destroyed {
-		return vm.RaiseError(L, "DialogService is unavailable")
+		vm.RaiseError(L, "DialogService is unavailable")
+		return nil, nil, false
 	}
 
 	if !vm.IsYieldable(L) {
-		return vm.RaiseError(
+		vm.RaiseError(
 			L,
-			"DialogService:PickFolder() must be called from a yieldable thread",
+			fmt.tprintf(
+				"DialogService:%s() must be called from a yieldable thread",
+				method_name,
+			),
 		)
+		return nil, nil, false
 	}
 
 	sync.mutex_lock(&service.mutex)
@@ -103,10 +115,11 @@ DialogService_PickFolder :: proc(
 	if service.pending {
 		sync.mutex_unlock(&service.mutex)
 
-		return vm.RaiseError(
+		vm.RaiseError(
 			L,
 			"DialogService already has an open dialog",
 		)
+		return nil, nil, false
 	}
 
 	if len(service.result_path) > 0 {
@@ -134,20 +147,55 @@ DialogService_PickFolder :: proc(
 	service.thread_ref = vm.RetainValue(L)
 	vm.Pop(L)
 
-	window: ^sdl3.Window = nil
-
+	window = nil
 	if service.renderer != nil {
 		window = service.renderer.Window
 	}
 
-	location := service.default_location
+	location = service.default_location
 
 	sync.mutex_unlock(&service.mutex)
 
+	return window, location, true
+}
+
+DialogService_PickFolder :: proc(
+	L: ^vm.State,
+	service: ^DialogService,
+	default_location: string,
+) -> i32 {
+	window, location, ok := dialog_begin(L, service, default_location, "PickFolder")
+	if !ok {
+		return 0
+	}
+
 	sdl3.ShowOpenFolderDialog(
-		dialog_folder_callback,
+		dialog_result_callback,
 		service,
 		window,
+		location,
+		false,
+	)
+
+	return vm.YieldThread(L)
+}
+
+DialogService_PickFile :: proc(
+	L: ^vm.State,
+	service: ^DialogService,
+	default_location: string,
+) -> i32 {
+	window, location, ok := dialog_begin(L, service, default_location, "PickFile")
+	if !ok {
+		return 0
+	}
+
+	sdl3.ShowOpenFileDialog(
+		dialog_result_callback,
+		service,
+		window,
+		nil,
+		0,
 		location,
 		false,
 	)
@@ -259,7 +307,7 @@ dialog_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "PickFolder":
+	case "PickFolder", "PickFile":
 		if !vm.ThreadHasSecurityCapability(
 			L,
 			DIALOG_INTERNALS_CAPABILITY,
@@ -307,6 +355,29 @@ dialog_service_namecall :: proc(
 		)
 
 		return DialogService_PickFolder(
+			L,
+			service,
+			default_location,
+		), true
+
+	case "PickFile":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			DIALOG_INTERNALS_CAPABILITY,
+		) {
+			return vm.RaiseError(
+				L,
+				"DialogService:PickFile() requires Internals capability",
+			), true
+		}
+
+		default_location := vm.ArgOptionalString(
+			L,
+			2,
+			"",
+		)
+
+		return DialogService_PickFile(
 			L,
 			service,
 			default_location,

@@ -216,6 +216,10 @@ playtest_namecall :: proc(
 			executable,
 			"--server",
 			"--window",
+			// Marks this child as a playtest host. The server keeps its own
+			// --map handling, so the flag is passed without a value here and the
+			// map continues to travel on --map below.
+			"--playtest-host",
 			"--map",
 			path,
 			"--address",
@@ -243,6 +247,9 @@ playtest_namecall :: proc(
 		client_command := []string{
 			executable,
 			"--client",
+			// The client receives the map through replication, so it is marked as
+			// a playtest host without being given a --map of its own.
+			"--playtest-host",
 			"--address",
 			PLAYTEST_ADDRESS,
 			"--port",

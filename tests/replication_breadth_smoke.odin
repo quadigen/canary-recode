@@ -69,6 +69,17 @@ atmosphere.Name = "SkyBox"
 atmosphere.Density = 0.3
 atmosphere.Color = Color3.new(0.5, 0.5, 0.6)
 
+-- A floor, so the client's character has something to stand on. Spatial
+-- relevancy is measured from that character, and this world has no floor, so it
+-- free-falls out of the scene and every part under test ends up outside the
+-- sphere. The old spawn-everything behaviour hid this because relevancy never
+-- gated a spawn.
+local floor = Instance.new("Part", workspace)
+floor.Name = "Floor"
+floor.Anchored = true
+floor.Size = vector.create(4000, 1, 4000)
+floor.CFrame = CFrame.new(0, -0.5, 0)
+
 -- PointLight on a part
 local lamp = Instance.new("Part", workspace)
 lamp.Name = "Lamp"

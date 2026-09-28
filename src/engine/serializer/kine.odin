@@ -399,7 +399,7 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_string(w, value.uri)
 	case .DateTime:
 		value := cast(^datatypes.DateTime)ptr
-		write_i64(w, value.UnixTimestampMillis)
+		write_f64(w, value.UnixTimestampMillis)
 	case .Faces:
 		value := cast(^datatypes.Faces)ptr
 		write_u8(w, value.Top ? 1 : 0)
@@ -642,7 +642,7 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 		if !ok {
 			return false
 		}
-		datatypes.Push_DateTime(L, registry, datatypes.DateTime{UnixTimestampMillis = millis})
+		datatypes.Push_DateTime(L, registry, datatypes.DateTime{UnixTimestampMillis = f64(millis)})
 	case .Faces:
 		top, o1 := read_u8(r)
 		bottom, o2 := read_u8(r)

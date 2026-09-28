@@ -147,6 +147,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_LogService_Class(registry.classes)
 	Register_LuauService_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
+	Register_Path_Class(registry.classes)
+	Register_PathfindingService_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
 	Register_PlayerGui_Class(registry.classes)
 	Register_Players_Class(registry.classes)
@@ -156,6 +158,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
 	Register_ProfilerService_Class(registry.classes)
 	when ODIN_OS != .JS { Register_Project_Class(registry.classes) }
+	Register_ReflectionService_Class(registry.classes)
 	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
 	when ODIN_OS != .JS { Register_ReplicatorService_Class(registry.classes) }
@@ -194,6 +197,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService")
 	Register_Service(registry, "LuauService", "LuauService", "LuauService")
+	Register_Service(registry, "PathfindingService", "PathfindingService", "PathfindingService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
 	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService") }
@@ -201,6 +205,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace") }
 	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
 	when ODIN_OS != .JS { Register_Service(registry, "Project", "Project") }
+	Register_Service(registry, "ReflectionService", "ReflectionService")
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
 	when ODIN_OS != .JS { Register_Service(registry, "ReplicatorService", "ReplicatorService") }
@@ -250,6 +255,10 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
+	// Idempotent: the environment constructor already installs these, but a
+	// registry assembled any other way still needs them before a script can read a
+	// Part's velocity.
+	Install_Part_Body_Access(registry)
 	when ODIN_OS != .JS {
 		replicator := Find_Service(registry, "ReplicatorService")
 		if replicator != nil && replicator.object != nil {
@@ -312,15 +321,20 @@ Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 		if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
 	}
 	workspace_service := Find_Service(registry, "Workspace")
+	terrain_service := Find_Service(registry, "Workspace")
 	if workspace_service == nil || workspace_service.object == nil { return }
+	if terrain_service == nil || terrain_service.object == nil { return }
 	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
+	Terrain_Prepare_3D(cast(^Terrain)terrain_service.object, renderer)
 }
 
 Render_3D :: proc(registry: ^Registry, L: ^vm.State, renderer: ^classes.Renderer_Object, delta_time: f32) {
 	if registry == nil || renderer == nil || renderer.Filament == nil { return }
 	workspace_service := Find_Service(registry, "Workspace")
+	terrain_service := Find_Service(registry, "Terrain")
 	if workspace_service == nil || workspace_service.object == nil { return }
 	ctx := classes.Class_Step_Context{L = L, delta_time = delta_time, renderer = renderer}
+	Terrain_Render_3D(cast(^Terrain)terrain_service.object, ctx.renderer)
 	workspace_render_3d(workspace_service.object, &ctx)
 }
 

@@ -67,7 +67,7 @@ user_input_service_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_r
 	case "InputBegan": signals.Push(L, service.input_began)
 	case "InputChanged": signals.Push(L, service.input_changed)
 	case "InputEnded": signals.Push(L, service.input_ended)
-	case "GetMouseLocation", "GetMouseDelta", "GetLastInputType", "IsKeyDown", "IsMouseButtonPressed", "GetKeysPressed", "GetMouseButtonsPressed":
+	case "GetMouseLocation", "GetMouseDelta", "GetLastInputType", "IsKeyDown", "IsMouseButtonPressed", "GetKeysPressed", "GetMouseButtonsPressed", "GetFocusedTextBox":
 		vm.PushUserdataMethod(L, key)
 	case: return false
 	}
@@ -117,6 +117,17 @@ user_input_push_mouse_button :: proc(L: ^vm.State, service: ^UserInputService, i
 user_input_service_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
 	service := cast(^UserInputService)object
 	switch method {
+	case "GetFocusedTextBox":
+		focused := classes.TextBox_Focused()
+
+		if focused == nil {
+			vm.PushNil(L)
+		} else {
+			classes.Push_Object(L, &focused.object)
+		}
+
+		return 1, true
+
 	case "GetMouseLocation":
 		datatypes.Push_Vector2(L, datatype_registry, service.mouse_location)
 		return 1, true

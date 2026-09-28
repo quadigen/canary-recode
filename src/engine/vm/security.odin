@@ -82,7 +82,19 @@ SetThreadSecurityCapabilities :: proc(L: ^State, capabilities: Thread_Security_C
 
 	security := thread_security_context(L)
 	if security == nil {
-		security = new(Thread_Security_Capabilities)
+		// A missing context already reads as NONE, so threads inheriting no
+		// capabilities need no allocation at all.
+		if capabilities.bits_low == 0 && capabilities.bits_high == 0 {
+			return
+		}
+
+		// The destroy callback in thread_security_userthread runs under the
+		// default context, so the allocation must come from the same
+		// allocator. Allocating under the caller's context pairs the free
+		// with a foreign allocator whenever the caller runs on a tracking or
+		// arena allocator.
+		ctx := runtime.default_context()
+		security = new(Thread_Security_Capabilities, ctx.allocator)
 		luauh.lua_setthreaddata(L, security)
 	}
 	security^ = capabilities
@@ -110,7 +122,7 @@ thread_security_userthread :: proc "c" (parent, thread: ^State) {
 		security := thread_security_context(thread)
 		if security != nil {
 			luauh.lua_setthreaddata(thread, nil)
-			free(security)
+			free(security, runtime.default_context().allocator)
 		}
 		return
 	}
@@ -133,7 +145,9 @@ ShutdownThreadSecurity :: proc(L: ^State) {
 	security := thread_security_context(L)
 	if security != nil {
 		luauh.lua_setthreaddata(L, nil)
-		free(security)
+		// Pinned to the default context: allocations in
+		// SetThreadSecurityCapabilities always use it.
+		free(security, runtime.default_context().allocator)
 	}
 }
 

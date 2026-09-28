@@ -143,12 +143,14 @@ run_desktop :: proc(options: Startup_Options) {
 		OnEvent = runtime_input_event,
 	}
 
-	if options.playtest || options.standalone {
+	target.set_playtest(options.playtest)
+	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
+
+	if options.standalone {
 		sandbox.init_runtime(&script_vm, &environment, &renderer_object)
 	} else {
 		sandbox.init(&script_vm, &environment, &renderer_object)
 	}
-	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
 
 	if options.standalone {
 		engine_runtime.Environment_Set_Mode(&environment, target.Mode.Standalone)
@@ -179,9 +181,10 @@ run_desktop :: proc(options: Startup_Options) {
 	}
 
 	if target.is_server() {
-		server_script_service := cast(^services.ServerScriptService)(
-			services.Ensure_Service(&environment.services, "ServerScriptService")
-		)
+		server_script_service := cast(^services.ServerScriptService)(services.Ensure_Service(
+				&environment.services,
+				"ServerScriptService",
+			))
 		if server_script_service != nil {
 			fmt.println("Running scripts")
 			services.ServerScriptService_RunScripts(
@@ -203,16 +206,16 @@ run_desktop :: proc(options: Startup_Options) {
 			return
 		}
 		fmt.printf("Kinemium server listening on %s:%d\n", options.address, options.port)
-} else if target.is_client() {
-		if !options.playtest && !options.standalone {
+	} else if target.is_client() {
+		if !options.standalone {
 			object := services.Ensure_Service(&environment.services, "ReplicatorService")
 			if object == nil ||
 			   !services.replication_start(
-				   cast(^services.ReplicatorService)object,
-				   options.address,
-				   options.port,
-				   .Client,
-			   ) {
+					   cast(^services.ReplicatorService)object,
+					   options.address,
+					   options.port,
+					   .Client,
+				   ) {
 				fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
 				return
 			}
@@ -233,12 +236,15 @@ run_desktop :: proc(options: Startup_Options) {
 	defer profiling.shutdown()
 
 	title := "Kinemium Engine"
-	if options.playtest {title = "Kinemium Playtest"}
-	if options.standalone {title = "Kinemium Standalone"}
+	if options.standalone {
+		title = "Kinemium Engine"
+	}
 	if target.is_server() {
 		title = "Kinemium Server"
 	} else if target.is_client() {
-		if !options.playtest && !options.standalone {title = "Kinemium Client"}
+		title = "Kinemium Client"
+	} else if !options.playtest && !options.standalone {
+		title = "Kinemium Engine"
 	}
 	renderer.init(title, 800, 600, &renderer_object)
 

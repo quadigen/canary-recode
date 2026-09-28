@@ -283,10 +283,6 @@ Destroy_Hierarchy :: proc(self: ^Object) {
         L = registry.vm_state.L
     }
 
-    // Release the Lua registry pin so the userdata can be collected, and
-    // detach the native value so the garbage collector skips its destroy
-    // callback. Native memory is freed by Flush_Pending_Destroy at the next
-    // Step instead of by the GC.
     if self.lua_ref > 0 && L != nil {
         vm.PushRegistryReference(L, self.lua_ref)
         vm.DetachUserdata(L, -1)

@@ -20,7 +20,10 @@ CharacterService :: struct {
 	input_sequence:         u32,
 	last_ack:               u32,
 	authoritative_received: bool,
-	predictions:            [dynamic]Character_Prediction,
+	// respawn_time is how long a dead character stays on the ground before it is
+	// replaced by a fresh one at the Spawn part.
+	respawn_time:         f32,
+	predictions:           [dynamic]Character_Prediction,
 }
 
 Character_Prediction :: struct {
@@ -34,6 +37,7 @@ character_service_construct :: proc(
 ) -> ^classes.Object {
 	service := new(CharacterService)
 	service.service = Service_Init(&CharacterService_Class, "CharacterService", data_model)
+	service.respawn_time = 5
 	return &service.object
 }
 
@@ -76,6 +80,152 @@ character_service_part :: proc(
 	return part
 }
 
+// CharacterService_Spawn_Position is where a character appears: on top of the
+// Part named "Spawn" in Workspace, or a default height if the map has no Spawn
+// part. First spawn and every respawn go through here, so a map only has to
+// place one Spawn part to cover both.
+CharacterService_Spawn_Position :: proc(
+	data_model: ^DataModel,
+) -> datatypes.Vector3 {
+	position := datatypes.Vector3{0, 5, 0}
+	if data_model == nil {return position}
+	workspace := DataModel_Get_Service(data_model, "Workspace")
+	if workspace == nil {return position}
+	for child in workspace.children {
+		if child != nil &&
+		   !child.destroyed &&
+		   child.name == "Spawn" &&
+		   classes.Is_A(child, "Part") {
+			part := cast(^classes.Part)child
+			position =
+				datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
+			break
+		}
+	}
+	return position
+}
+
+// CharacterService_Begin_Ragdoll hands a dying character's body to the solver.
+//
+// Two things change at once. The collision capsule stops being kinematic, so the
+// solver integrates it and the body falls instead of hovering where the walk left
+// it. And the root's replication ownership moves to the server, because while a
+// living character is simulated by its owner, a dead one has no owner to simulate
+// it -- leaving ownership with the client would leave two peers writing a
+// transform for the same body.
+CharacterService_Begin_Ragdoll :: proc(
+	data_model: ^DataModel,
+	model: ^classes.CharacterModel,
+) {
+	if data_model == nil || model == nil || model.destroyed {return}
+	controller := classes.CharacterController_From_Model(model)
+	if controller == nil {return}
+	controller.ragdoll = true
+	controller.knockback = datatypes.Vector3{}
+	controller.vertical_speed = 0
+	collision := cast(^classes.CollisionController)classes.CharacterController_Find(
+		controller,
+		"CollisionController",
+	)
+	root := classes.CharacterModel_Root(model)
+	if collision != nil && root != nil {
+		physics := cast(^Physics)DataModel_Get_Service(data_model, "Physics")
+		Physics_Start_Character_Ragdoll(physics, collision, root)
+	}
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(data_model, "ReplicatorService")
+	if replicator != nil && replicator.mode == .Server {
+		if root := classes.CharacterModel_Root(model); root != nil {
+			if entity := replication_entity_by_id(
+				replicator,
+				replication_register(replicator, &root.object),
+			); entity != nil {
+				entity.owner_id = 0
+			}
+		}
+	}
+}
+
+// CharacterService_Update_Ragdoll copies the simulated capsule's transform onto
+// the character's visible parts.
+//
+// While alive the root is the source of truth and the capsule is teleported to
+// it. Ragdolling inverts that: the solver owns the body, and the root plus its
+// followers have to follow it, or the character would sit still while an
+// invisible capsule fell away from it.
+//
+// This runs before the physics step, so the root trails the body by one frame of
+// motion. On a corpse that is invisible, and remote peers see the replicated
+// transform through the interpolator regardless.
+CharacterService_Update_Ragdoll :: proc(
+	service: ^CharacterService,
+	model: ^classes.CharacterModel,
+) {
+	if service == nil || model == nil || model.destroyed {return}
+	root := classes.CharacterModel_Root(model)
+	controller := classes.CharacterController_From_Model(model)
+	if root == nil || controller == nil {return}
+	collision := cast(^classes.CollisionController)classes.CharacterController_Find(
+		controller,
+		"CollisionController",
+	)
+	if collision == nil {return}
+	physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+	cf, ok := Physics_Get_Character_Capsule_CFrame(physics, collision)
+	if !ok {return}
+	delta := datatypes.Vector3{cf.x - root.cframe.x, cf.y - root.cframe.y, cf.z - root.cframe.z}
+	root.cframe = cf
+	root.position = datatypes.Vector3{cf.x, cf.y, cf.z}
+	if delta.x != 0 || delta.y != 0 || delta.z != 0 {
+		character_translate_followers(model, root, delta.x, delta.y, delta.z)
+	}
+}
+
+// CharacterService_Update_Death runs the ragdoll and respawn lifecycle for one
+// player.
+//
+// Death and respawn are server decisions. The client learns about both through
+// the replication that already carries the character's transform, so running this
+// on both sides would leave the two peers disagreeing about who owns a dead body
+// and when it comes back.
+CharacterService_Update_Death :: proc(
+	service: ^CharacterService,
+	player: ^Player,
+	delta_time: f32,
+) {
+	if service == nil ||
+	   player == nil ||
+	   player.character == nil ||
+	   player.character.destroyed {return}
+	humanoid := cast(^classes.Humanoid)classes.Find_Child(&player.character.object, "Humanoid")
+	dead := humanoid != nil && !humanoid.destroyed && humanoid.health <= 0
+
+	if !dead {
+		player.ragdoll = false
+		player.respawn_timer = 0
+		return
+	}
+
+	if !player.ragdoll {
+		// Death is the transition into the ragdoll, so the timer starts here
+		// rather than when the character stopped walking.
+		player.ragdoll = true
+		player.respawn_timer = 0
+		CharacterService_Begin_Ragdoll(service.data_model, player.character)
+		return
+	}
+
+	player.respawn_timer += delta_time
+	if player.respawn_timer < service.respawn_time {return}
+
+	// Unload and Load rather than reviving in place: the replacement goes through
+	// the same Spawn-part placement as a first spawn, and the replication churn is
+	// the path that already works for every character load.
+	player.ragdoll = false
+	player.respawn_timer = 0
+	CharacterService_Unload(service, player)
+	_ = CharacterService_Load(service, player)
+}
+
 CharacterService_Load :: proc(
 	service: ^CharacterService,
 	player: ^Player,
@@ -103,17 +253,7 @@ CharacterService_Load :: proc(
 	model := cast(^classes.CharacterModel)object
 	model.owner_user_id = player.user_id
 	classes.Set_Name(object, player.name)
-	spawn := datatypes.Vector3{0, 5, 0}
-	for child in workspace.children {
-		if child != nil &&
-		   !child.destroyed &&
-		   child.name == "Spawn" &&
-		   classes.Is_A(child, "Part") {
-			part := cast(^classes.Part)child
-			spawn = datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
-			break
-		}
-	}
+	spawn := CharacterService_Spawn_Position(service.data_model)
 	white := datatypes.Color3 {
 		R = 1,
 		G = 1,
@@ -268,6 +408,7 @@ character_service_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
+	service := cast(^CharacterService)object
 	switch key {
 	case "LoadPlayer",
 	     "LoadCharacter",
@@ -277,6 +418,26 @@ character_service_get :: proc(
 	     "SetMoveDirection",
 	     "Jump":
 		vm.PushUserdataMethod(L, key)
+	case "RespawnTime":
+		vm.PushNumber(L, f64(service.respawn_time))
+	case:
+		return false
+	}
+	return true
+}
+
+character_service_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	service := cast(^CharacterService)object
+	switch key {
+	case "RespawnTime":
+		service.respawn_time = max(f32(vm.ArgNumber(L, value_index)), 0)
 	case:
 		return false
 	}
@@ -336,6 +497,8 @@ Register_CharacterService_Class :: proc(registry: ^classes.Registry) {
 		character_service_destroy,
 		creatable = false,
 		get = character_service_get,
+		set = character_service_set,
 		namecall = character_service_namecall,
+		properties = []string{"RespawnTime"},
 	)
 }

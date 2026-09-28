@@ -1228,6 +1228,54 @@ static KineMesh* buildDisplacedCube(int segments = 48)
     return m;
 }
 
+static KineMesh* buildWaterGrid(int segments = 32)
+{
+    // Dense horizontal grid used by the vertex-displaced water material. One
+    // unit-sized top face (+Y) at mesh-space y = +0.5, matching the other
+    // shapes' centered-unit-cube convention, subdivided so Gerstner waves in
+    // the vertex shader have vertices to move. UVs are world-mapped by the
+    // engine (uv * uvScale), so no per-face UV wrap is needed here.
+    auto* m = new KineMesh();
+
+    const int row = segments + 1;
+    m->vertices.reserve((size_t)row * row);
+    m->indices.reserve((size_t)segments * segments * 6);
+
+    for (int z = 0; z <= segments; ++z) {
+        const float v = (float)z / (float)segments - 0.5f;
+        for (int x = 0; x <= segments; ++x) {
+            const float u = (float)x / (float)segments - 0.5f;
+            KineVertex vtx;
+            vtx.px = u;
+            vtx.py = 0.5f;
+            vtx.pz = v;
+            vtx.nx = 0.0f; vtx.ny = 1.0f; vtx.nz = 0.0f;
+            vtx.u = u + 0.5f;
+            vtx.v = v + 0.5f;
+            m->vertices.push_back(vtx);
+        }
+    }
+
+    for (int z = 0; z < segments; ++z) {
+        for (int x = 0; x < segments; ++x) {
+            const uint16_t i0 = (uint16_t)(z * row + x);
+            const uint16_t i1 = i0 + 1;
+            const uint16_t i3 = (uint16_t)((z + 1) * row + x);
+            const uint16_t i2 = i3 + 1;
+            // Wound so the geometric normal is +Y (front-facing when viewed
+            // from above). Filament treats counter-clockwise triangles as
+            // front-facing, and water is drawn with culling enabled, so the
+            // opposite order makes the whole surface back-facing and it
+            // disappears. Verified against buildCube's +Y face, which uses the
+            // same convention.
+            m->indices.push_back(i0); m->indices.push_back(i3); m->indices.push_back(i1);
+            m->indices.push_back(i1); m->indices.push_back(i3); m->indices.push_back(i2);
+        }
+    }
+    m->indexCount = (uint32_t)m->indices.size();
+    return m;
+}
+
 static KineMesh* buildSphere(int slices = 16, int stacks = 12)
 {
     auto* m = new KineMesh();
@@ -2325,7 +2373,11 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
         mi->setParameter("time",        time);
         mi->setParameter("waveScale",   4.0f);
         mi->setParameter("waveSpeed",   1.0f);
-        mi->setParameter("foamAmount",  0.3f);
+        mi->setParameter("waveAmplitude", 1.0f);
+        mi->setParameter("foamAmount",  0.55f);
+        mi->setParameter("absorption", math::float3{0.35f, 0.09f, 0.04f});
+        mi->setParameter("clearCoat",          1.0f);
+        mi->setParameter("clearCoatRoughness", 0.04f);
     } else if (key.materialKind == KINE_MAT_OUTLINE) {
         mi->setParameter("thickness", key.param1);
     } else if (key.materialKind == KINE_MAT_GIZMO) {
@@ -5283,6 +5335,7 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMesh(KineFilamentContext* ctx, in
         case 6:  m = buildCylinder(); break;
         case 2:  m = buildSphere(); break;
         case 3:  m = buildPyramid(); break;
+        case 7:  m = buildWaterGrid(); break;
         default: m = buildCube();   break; // 1 = cube (default)
     }
     uploadMesh(m, ctx->engine);

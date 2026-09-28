@@ -5,6 +5,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
+import "core:math"
 
 Player_Class := classes.Class_Info {
 	name   = "Player",
@@ -31,6 +32,12 @@ Player :: struct {
 	vertical_speed: f32,
 	walk_speed: f32,
 	jump_power: f32,
+	// ragdoll is true between the character's death and its respawn. The character
+	// service owns both ends of that window; the flag is what lets a character that
+	// has been unloaded not look like a fresh one still waiting to die.
+	ragdoll: bool,
+	// respawn_timer counts up from death towards CharacterService.respawn_time.
+	respawn_timer: f32,
 }
 
 Players :: struct {
@@ -155,16 +162,71 @@ player_controller :: proc(player: ^Player) -> ^classes.CharacterController {
 }
 
 player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
-	if method != "LoadCharacter" {return 0, false}
 	player := cast(^Player)object
-	when ODIN_OS == .JS {
-		vm.PushNil(L)
-	} else {
-		service := cast(^CharacterService)DataModel_Get_Service(cast(^DataModel)player.signal_registry.data_model, "CharacterService")
-		model := CharacterService_Load(service, player)
-		if model == nil {vm.PushNil(L)} else {classes.Push_Object(L, &model.object)}
+	switch method {
+	case "LoadCharacter":
+		when ODIN_OS == .JS {
+			vm.PushNil(L)
+		} else {
+			service := cast(^CharacterService)DataModel_Get_Service(cast(^DataModel)player.signal_registry.data_model, "CharacterService")
+			model := CharacterService_Load(service, player)
+			if model == nil {vm.PushNil(L)} else {classes.Push_Object(L, &model.object)}
+		}
+		return 1, true
+	case "Teleport":
+		if player.character == nil || player.character.destroyed {
+			return vm.RaiseError(L, "Player:Teleport requires a loaded character"), true
+		}
+		root := classes.CharacterModel_Root(player.character)
+		if root == nil {return vm.RaiseError(L, "Player:Teleport requires a HumanoidRootPart"), true}
+		frame := datatypes.Arg_CFrame(L, 2, datatype_registry)
+		previous := root.cframe
+		root.cframe = frame
+		root.position = datatypes.Vector3{frame.x, frame.y, frame.z}
+		character_delta := datatypes.CFrame_Mul_CFrame(frame, datatypes.CFrame_Inverse(previous))
+		for child in player.character.children {
+			if child == nil || child.destroyed || child == &root.object || !classes.Is_A(child, "Part") {continue}
+			part := cast(^classes.Part)child
+			part.cframe = datatypes.CFrame_Mul_CFrame(character_delta, part.cframe)
+			part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
+		}
+		when ODIN_OS != .JS {
+			_, yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(frame)
+			if controller := player_controller(player); controller != nil {
+				controller.vertical_speed = 0
+				controller.coyote_time = 0
+				if rotation := cast(^classes.RotationController)classes.CharacterController_Find(controller, "RotationController"); rotation != nil {
+					rotation.yaw = math.to_degrees(yaw)
+					rotation.target_yaw = rotation.yaw
+				}
+				if collision := cast(^classes.CollisionController)classes.CharacterController_Find(controller, "CollisionController"); collision != nil {
+					physics := cast(^Physics)DataModel_Get_Service(cast(^DataModel)player.signal_registry.data_model, "Physics")
+					if physics != nil {Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{frame.x, frame.y, frame.z}, math.to_degrees(yaw))}
+				}
+			}
+			player.vertical_speed = 0
+			player.ground_y = frame.y
+		}
+		vm.PushBoolean(L, true)
+		return 1, true
+	case "ApplyImpulse":
+		// Roblox keeps this as a legacy way to push a character around. The
+		// character is a kinematic capsule rather than a solver body, so the
+		// impulse becomes character velocity here instead of being handed to Jolt.
+		impulse := datatypes.Arg_Vector3(L, 2)
+		if !classes.CharacterController_Apply_Impulse(
+			   player_controller(player),
+			   impulse,
+		   ) {
+			return vm.RaiseError(
+				L,
+				"Player:ApplyImpulse requires a loaded character",
+			), true
+		}
+		return 0, true
+
 	}
-	return 1, true
+	return 0, false
 }
 
 players_construct :: proc(
@@ -293,6 +355,7 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		get = player_get,
 		set = player_set,
 		namecall = player_namecall,
+		methods = []string{"LoadCharacter", "Teleport", "ApplyImpulse"},
 	)
 	classes.Register_Class(
 		registry,

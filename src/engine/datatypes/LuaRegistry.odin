@@ -33,6 +33,7 @@ Registry :: struct {
 	region3: vm.Userdata_Binding,
 	region3int16: vm.Userdata_Binding,
 	security_capabilities: vm.Userdata_Binding,
+	terrain_region: vm.Userdata_Binding,
 	tween_info: vm.Userdata_Binding,
 	u_dim: vm.Userdata_Binding,
 	u_dim2: vm.Userdata_Binding,
@@ -73,6 +74,7 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.region3 = Region3_Luau_Binding()
 	registry.region3int16 = Region3int16_Luau_Binding()
 	registry.security_capabilities = SecurityCapabilities_Luau_Binding()
+	registry.terrain_region = TerrainRegion_Luau_Binding()
 	registry.tween_info = TweenInfo_Luau_Binding()
 	registry.u_dim = UDim_Luau_Binding()
 	registry.u_dim2 = UDim2_Luau_Binding()
@@ -109,14 +111,15 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.region3.tag = DATATYPE_TAG_BASE + 22
 	registry.region3int16.tag = DATATYPE_TAG_BASE + 23
 	registry.security_capabilities.tag = DATATYPE_TAG_BASE + 24
-	registry.tween_info.tag = DATATYPE_TAG_BASE + 25
-	registry.u_dim.tag = DATATYPE_TAG_BASE + 26
-	registry.u_dim2.tag = DATATYPE_TAG_BASE + 27
-	registry.unique_id.tag = DATATYPE_TAG_BASE + 28
-	registry.vector2.tag = DATATYPE_TAG_BASE + 29
-	registry.vector2int16.tag = DATATYPE_TAG_BASE + 30
-	registry.vector3.tag = DATATYPE_TAG_BASE + 31
-	registry.vector3int16.tag = DATATYPE_TAG_BASE + 32
+	registry.terrain_region.tag = DATATYPE_TAG_BASE + 25
+	registry.tween_info.tag = DATATYPE_TAG_BASE + 26
+	registry.u_dim.tag = DATATYPE_TAG_BASE + 27
+	registry.u_dim2.tag = DATATYPE_TAG_BASE + 28
+	registry.unique_id.tag = DATATYPE_TAG_BASE + 29
+	registry.vector2.tag = DATATYPE_TAG_BASE + 30
+	registry.vector2int16.tag = DATATYPE_TAG_BASE + 31
+	registry.vector3.tag = DATATYPE_TAG_BASE + 32
+	registry.vector3int16.tag = DATATYPE_TAG_BASE + 33
 	// wire:end datatype-tags
 
 	// wire:begin datatype-contexts
@@ -170,6 +173,8 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.region3int16.owner = registry
 	registry.security_capabilities.ctx = &registry.security_capabilities
 	registry.security_capabilities.owner = registry
+	registry.terrain_region.ctx = &registry.terrain_region
+	registry.terrain_region.owner = registry
 	registry.tween_info.ctx = &registry.tween_info
 	registry.tween_info.owner = registry
 	registry.u_dim.ctx = &registry.u_dim
@@ -247,6 +252,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	install_library(vm_state, "Region3", &registry.region3, Region3_Install_Fields)
 	install_library(vm_state, "Region3int16", &registry.region3int16, Region3int16_Install_Fields)
 	install_library(vm_state, "SecurityCapabilities", &registry.security_capabilities, SecurityCapabilities_Install_Fields)
+	install_library(vm_state, "TerrainRegion", &registry.terrain_region, TerrainRegion_Install_Fields)
 	install_library(vm_state, "TweenInfo", &registry.tween_info, TweenInfo_Install_Fields)
 	install_library(vm_state, "UDim", &registry.u_dim, UDim_Install_Fields)
 	install_library(vm_state, "UDim2", &registry.u_dim2, UDim2_Install_Fields)

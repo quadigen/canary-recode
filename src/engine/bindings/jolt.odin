@@ -277,6 +277,7 @@ foreign lib {
 	JPH_VHACD_Compound_Create                                    :: proc(points: ^JPH_Vec3, pointCount: u32, triangles: ^u32, triangleCount: u32, scale: ^JPH_Vec3) -> JPH_ShapeRef ---
 	JPH_Shape_AddRef                                             :: proc(shape: JPH_ShapeRef) ---
 	JPH_Shape_Destroy                                            :: proc(shape: JPH_ShapeRef) ---
+	JPH_Shape_CollectTriangles                                   :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, outVertices: ^JPH_Vec3, maxTriangles: i32, outTruncated: ^i32) -> i32 ---
 	JPH_BodyCreationSettings_Create3                             :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, motionType: JPH_MotionType, objectLayer: JPH_ObjectLayer) -> JPH_BodyCreationSettingsRef ---
 	JPH_BodyCreationSettings_Destroy                             :: proc(settings: JPH_BodyCreationSettingsRef) ---
 	JPH_BodyCreationSettings_SetAllowSleeping                    :: proc(settings: JPH_BodyCreationSettingsRef, allow: i32) ---

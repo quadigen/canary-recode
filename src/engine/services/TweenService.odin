@@ -256,7 +256,22 @@ apply_goal :: proc(tween: ^Tween, L: ^vm.State, eased: f64) {
 
 	vm.PushRegistryReference(L, tween.instance_ref)
 
+	// The target can be destroyed while this tween is still playing. That
+	// detaches the userdata, so the retained reference no longer yields a usable
+	// Instance even though the stack slot is non-nil. Re-validating the binding
+	// and the underlying object keeps a finished-and-freed target from
+	// corrupting the VM stack, which shows up as a hard crash on the next step.
 	if vm.TypeOf(L, -1) == .Nil {
+		return
+	}
+
+	binding := vm.UserdataBindingOf(L, -1)
+	if binding == nil || binding.name != "Instance" {
+		return
+	}
+
+	target := cast(^classes.Object)vm.UserdataValue(L, -1)
+	if target == nil || target.destroyed {
 		return
 	}
 

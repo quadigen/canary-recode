@@ -133,6 +133,28 @@ export_service_namecall :: proc(
 		}
 		vm.PushBoolean(L, export_object_to_file(service, L, target, path))
 		return 1, true
+	case "ImportFile":
+		path := vm.ArgString(L, 2)
+		if path == "" {
+			return vm.RaiseError(L, "ExportService:ImportFile expects a file path"), true
+		}
+		model := service.data_model
+		if model == nil ||
+		   model.registry == nil ||
+		   model.registry.classes == nil {
+			return vm.RaiseError(L, "ExportService:ImportFile has no DataModel"), true
+		}
+		imported, ok := serializer.Deserialize_From_File(
+			model.registry.classes,
+			L,
+			service,
+			path,
+		)
+		if !ok {
+			return vm.RaiseError(L, "ExportService:ImportFile could not read the file"), true
+		}
+		classes.Push_Object(L, imported)
+		return 1, true
 	}
 	return 0, false
 }

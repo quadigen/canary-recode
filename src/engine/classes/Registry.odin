@@ -102,6 +102,8 @@ Class_Descriptor :: struct {
 	registry:         ^Registry,
 	instances:        [dynamic]^Object,
 	properties:       [dynamic]string,
+	methods:          [dynamic]string,
+	events:           [dynamic]string,
 	member_security:  [dynamic]Member_Security,
 }
 
@@ -126,6 +128,56 @@ Remote_Call_Dispatch :: proc(
 	method: string,
 ) -> (i32, bool)
 
+// Part_Body_Access bridges the rigid-body members of a Part --
+// AssemblyLinearVelocity, AssemblyAngularVelocity and ApplyImpulse -- to the
+// physics service.
+//
+// The bridge is necessary because of the package graph: services imports
+// classes, so classes cannot import services and a Part has no way to reach the
+// Jolt body that represents it. Network ownership and remote calls already cross
+// this boundary the same way, through hooks the services layer installs at
+// startup. Every entry point is optional; a Part with no installed access, or
+// one whose service has no body for it, reads as a zero velocity and ignores
+// writes, which is what an anchored Part should report anyway.
+Part_Body_Access :: struct {
+	get_linear_velocity:  proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
+	set_linear_velocity:  proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
+	get_angular_velocity: proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
+	set_angular_velocity: proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
+	apply_impulse:        proc(ctx: rawptr, part: ^Object, impulse: datatypes.Vector3) -> bool,
+}
+
+Part_Linear_Velocity :: proc(registry: ^Registry, part: ^Object) -> datatypes.Vector3 {
+	if registry == nil || part == nil || registry.part_body.get_linear_velocity == nil {
+		return datatypes.Vector3{}
+	}
+	velocity, _ := registry.part_body.get_linear_velocity(registry.part_body_ctx, part)
+	return velocity
+}
+
+Part_Set_Linear_Velocity :: proc(registry: ^Registry, part: ^Object, velocity: datatypes.Vector3) {
+	if registry == nil || part == nil || registry.part_body.set_linear_velocity == nil {return}
+	registry.part_body.set_linear_velocity(registry.part_body_ctx, part, velocity)
+}
+
+Part_Angular_Velocity :: proc(registry: ^Registry, part: ^Object) -> datatypes.Vector3 {
+	if registry == nil || part == nil || registry.part_body.get_angular_velocity == nil {
+		return datatypes.Vector3{}
+	}
+	velocity, _ := registry.part_body.get_angular_velocity(registry.part_body_ctx, part)
+	return velocity
+}
+
+Part_Set_Angular_Velocity :: proc(registry: ^Registry, part: ^Object, velocity: datatypes.Vector3) {
+	if registry == nil || part == nil || registry.part_body.set_angular_velocity == nil {return}
+	registry.part_body.set_angular_velocity(registry.part_body_ctx, part, velocity)
+}
+
+Part_Apply_Impulse :: proc(registry: ^Registry, part: ^Object, impulse: datatypes.Vector3) -> bool {
+	if registry == nil || part == nil || registry.part_body.apply_impulse == nil {return false}
+	return registry.part_body.apply_impulse(registry.part_body_ctx, part, impulse)
+}
+
 Registry :: struct {
 	classes:              [dynamic]^Class_Descriptor,
 	datatypes:            ^datatypes.Registry,
@@ -145,6 +197,8 @@ Registry :: struct {
 	network_ownership_ctx: rawptr,
 	remote_call:          Remote_Call_Dispatch,
 	remote_call_ctx:      rawptr,
+	part_body:            Part_Body_Access,
+	part_body_ctx:        rawptr,
 }
 
 Registry_Init :: proc(
@@ -190,6 +244,12 @@ Set_Remote_Call :: proc(registry: ^Registry, dispatch: Remote_Call_Dispatch, ctx
 	if registry == nil { return }
 	registry.remote_call = dispatch
 	registry.remote_call_ctx = ctx
+}
+
+Set_Part_Body_Access :: proc(registry: ^Registry, access: Part_Body_Access, ctx: rawptr) {
+	if registry == nil { return }
+	registry.part_body = access
+	registry.part_body_ctx = ctx
 }
 
 Can_Access_Member :: proc(
@@ -348,6 +408,90 @@ Class_Property_List :: proc(
     return result
 }
 
+// Class_Member_Entry pairs a reflected member with the class that declares it.
+// Owner is what ReflectedProperty/Method/Event report, and it is the declaring
+// class rather than the queried one, so an inherited member keeps pointing at
+// its original owner.
+Class_Member_Entry :: struct {
+    name:  string,
+    owner: string,
+}
+
+// Class_Member_List selects which declared-member list a reflection query reads.
+Class_Member_List :: enum {
+	Properties,
+	Methods,
+	Events,
+}
+
+// descriptor_member_list returns the requested list for a class.
+descriptor_member_list :: proc(
+    descriptor: ^Class_Descriptor,
+    list: Class_Member_List,
+) -> [dynamic]string {
+    switch list {
+    case .Properties: return descriptor.properties
+    case .Methods: return descriptor.methods
+    case .Events: return descriptor.events
+    }
+    return nil
+}
+
+// Collect_Class_Members gathers the members a class declares in `list`, plus
+// those it inherits, base class first, so callers see members in inheritance
+// order. A name redeclared by a subclass keeps the subclass as its owner while
+// the base declaration is dropped, matching how a real lookup would resolve the
+// shadowed member.
+Collect_Class_Members :: proc(
+    registry: ^Registry,
+    class_name: string,
+    list: Class_Member_List,
+) -> [dynamic]Class_Member_Entry {
+    result: [dynamic]Class_Member_Entry
+
+    if registry == nil {
+        return result
+    }
+
+    descriptor := Find_Class(registry, class_name)
+    if descriptor == nil {
+        return result
+    }
+
+    // Walk root -> leaf so subclasses can shadow inherited names.
+    chain: [dynamic]^Class_Info
+    class := descriptor.info
+    for class != nil {
+        append(&chain, class)
+        class = class.parent
+    }
+    defer delete(chain)
+
+    for index := len(chain) - 1; index >= 0; index -= 1 {
+        owner_class := chain[index]
+        owner := Find_Class(registry, owner_class.name)
+        if owner == nil {
+            continue
+        }
+
+        for name in descriptor_member_list(owner, list) {
+            shadowed := false
+            for &entry in result {
+                if entry.name == name {
+                    entry.owner = owner_class.name
+                    shadowed = true
+                    break
+                }
+            }
+            if !shadowed {
+                append(&result, Class_Member_Entry{name = name, owner = owner_class.name})
+            }
+        }
+    }
+
+    return result
+}
+
 descriptor_namecall :: proc(
 	L: ^vm.State,
 	value, ctx: rawptr,
@@ -452,6 +596,8 @@ Register_Class :: proc(
 	_step_phase: Class_Step_Phase = .Render_2D,
 	clone: Class_Clone = nil,
 	properties: []string = nil,
+	methods: []string = nil,
+	events: []string = nil,
 	member_security: []Member_Security = nil,
 ) {
 	assert(registry != nil)
@@ -478,6 +624,14 @@ Register_Class :: proc(
 		append(&descriptor.properties, property)
 	}
 
+	for method in methods {
+		append(&descriptor.methods, method)
+	}
+
+	for event in events {
+		append(&descriptor.events, event)
+	}
+
 	for rule in member_security {
 		append(&descriptor.member_security, rule)
 	}
@@ -493,6 +647,27 @@ Register_Class :: proc(
 	}
 
 	append(&registry.classes, descriptor)
+}
+
+// Member_Requirement returns the security requirement registered for a member
+// access on a class, or SECURITY_REQUIREMENT_NONE when the class declares no
+// rule for it. ReflectionService uses this to report a member's Permits.
+Member_Requirement :: proc(
+	descriptor: ^Class_Descriptor,
+	name: string,
+	access: Member_Access,
+) -> vm.Security_Requirement {
+	if descriptor == nil {
+		return vm.SECURITY_REQUIREMENT_NONE
+	}
+
+	for rule in descriptor.member_security {
+		if rule.name == name && rule.access == access {
+			return rule.requirement
+		}
+	}
+
+	return vm.SECURITY_REQUIREMENT_NONE
 }
 
 Find_Class :: proc(registry: ^Registry, name: string) -> ^Class_Descriptor {
@@ -605,6 +780,43 @@ Flush_Pending_Destroy :: proc(registry: ^Registry) {
 	delete(pending)
 }
 
+// ScreenGui.RenderOnTop and StarterGui residency already decide which pass a
+// screen draws in, but nothing ordered screens *within* a pass: they rendered in
+// creation order, so DisplayOrder was accepted, stored, and then ignored. Sort
+// the ScreenGui instances by it so the editor's chrome can be layered above
+// game GUIs. Insertion sort keeps this stable, preserving creation order for
+// equal DisplayOrder values.
+Sort_ScreenGui_Instances :: proc(descriptor: ^Class_Descriptor) {
+	if descriptor == nil || len(descriptor.instances) < 2 {
+		return
+	}
+
+	instances := &descriptor.instances
+
+	display_order := proc(object: ^Object) -> f64 {
+		if object == nil {
+			return 0
+		}
+
+		screen := cast(^ScreenGui)object
+
+		return screen.displayorder
+	}
+
+	for i := 1; i < len(instances); i += 1 {
+		current := instances[i]
+		key := display_order(current)
+
+		j := i - 1
+		for j >= 0 && display_order(instances[j]) > key {
+			instances[j + 1] = instances[j]
+			j -= 1
+		}
+
+		instances[j + 1] = current
+	}
+}
+
 Step :: proc(
 	registry: ^Registry,
 	L: ^vm.State,
@@ -622,6 +834,11 @@ Step :: proc(
 
 	for descriptor in registry.classes {
 		if descriptor._step == nil || descriptor._step_phase != phase { continue }
+
+		if descriptor.info != nil && descriptor.info.name == "ScreenGui" {
+			Sort_ScreenGui_Instances(descriptor)
+		}
+
 		for object in descriptor.instances {
 			if object != nil && !object.destroyed {
 				append(&targets, class_step_target{object, descriptor._step})
@@ -920,12 +1137,12 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Instance(registry)
 	Register_ArcHandles(registry)
 	Register_BlurImageFilter(registry)
+	Register_BasePart(registry)
 	Register_BoolValue(registry)
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
 	Register_CFrameValue(registry)
 	Register_CharacterAnimator(registry)
-	Register_CharacterCamera(registry)
 	Register_CharacterController(registry)
 	Register_CharacterInput(registry)
 	Register_CharacterModel(registry)
@@ -1007,3 +1224,4 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil
 }
+

@@ -30,7 +30,56 @@ instance_clone :: proc(source: ^Object, destination: ^Object) {
 	// No extra properties
 }
 
+// Base Instance members. Every class inherits these, so declaring them once
+// here gives ReflectionService a complete answer for any class without each
+// subclass having to restate them.
+INSTANCE_PROPERTIES := []string{
+	"Name",
+	"ClassName",
+	"Parent",
+	"Archivable",
+	"CanReplicate",
+	"ReplicationGroup",
+	"ReplicationMode",
+	"NetworkId",
+	"UniqueId",
+	"Capabilities",
+	"Sandboxed",
+	"IsInSandbox",
+}
+
+INSTANCE_METHODS := []string{
+	"Clone",
+	"Destroy",
+	"FindFirstChild",
+	"FindFirstChildOfClass",
+	"GetChildren",
+	"GetDescendants",
+	"GetFullName",
+	"GetProperties",
+	"IsA",
+	"IsAncestorOf",
+	"IsDescendantOf",
+	"GetAttribute",
+	"GetAttributes",
+	"SetAttribute",
+	"GetPropertyChangedSignal",
+}
+
+INSTANCE_EVENTS := []string{
+	"Changed",
+}
+
 Register_Instance :: proc(registry: ^Registry) {
-	Register_Class(registry, &Instance_Class, instance_construct, instance_destroy, clone = instance_clone)
+	Register_Class(
+		registry,
+		&Instance_Class,
+		instance_construct,
+		instance_destroy,
+		clone = instance_clone,
+		properties = INSTANCE_PROPERTIES,
+		methods = INSTANCE_METHODS,
+		events = INSTANCE_EVENTS,
+	)
 }
 

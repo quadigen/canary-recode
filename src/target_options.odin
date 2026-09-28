@@ -90,6 +90,8 @@ startup_options :: proc() -> (Startup_Options, bool) {
 			index += 1
 			options.map_path = os.args[index]
 			options.playtest = true
+		case "--playtest-host":
+			options.playtest = true
 		case "--server":
 			options.mode = target.Mode.Server
 		case "--client":

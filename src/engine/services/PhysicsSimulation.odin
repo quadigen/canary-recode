@@ -19,7 +19,14 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 
 	for &body in service.bodies {
 		part := cast(^classes.Part)body.object
-		if part.anchored { continue }
+		// A remote body is positioned from the replicated transform in
+		// Physics_Synchronize and is never read back. Copying the solver's copy
+		// into part.cframe here would overwrite the authoritative transform with
+		// the client's own stale result, which is the second half of the same bug:
+		// two solvers fighting over one Part. It also skips the fall-height
+		// cleanup for these, which is correct: FallenPartsDestroyHeight is the
+		// server's decision and arrives as a despawn.
+		if part.anchored || body.remote { continue }
 		position: kineffi.JPH_RVec3
 		rotation: kineffi.JPH_Quat
 		kineffi.JPH_BodyInterface_GetPositionAndRotation(service.system.body_interface, body.body_id, &position, &rotation)
@@ -36,6 +43,16 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		if !physics_valid_cframe(part.cframe) {
 			part.cframe = body.last_cframe
 			continue
+		}
+		// Position and CFrame are two fields holding the same placement, and the
+		// setter and the replication path both keep them in step. Reading the
+		// solver's result back into only one of them left Position reporting where
+		// a moving Part used to be, which also made a scripted impulse look like it
+		// did nothing.
+		part.position = datatypes.Vector3 {
+			part.cframe.x,
+			part.cframe.y,
+			part.cframe.z,
 		}
 		body.last_cframe = part.cframe
 		if workspace_service.fall_height_enabled && part.cframe.y < workspace_service.fallen_parts_destroy_height {
