@@ -287,38 +287,46 @@ part_in_character_model :: proc(part: ^classes.Part) -> bool {
 
 physics_remote_owned :: proc(service: ^Physics, part: ^classes.Part) -> bool {
 	if service == nil || service.data_model == nil || part == nil {return false}
-	replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
-	if replicator == nil || replicator.mode == .Stopped {return false}
-	entity := replication_entity(replicator, &part.object)
-	if entity == nil {return false}
-	// The two roles are asymmetric here, and this used to share a single early
-	// exit for owner_id == 0, which is wrong in opposite directions on each
-	// side.
-	//
-	// On the server, owner_id 0 means "nobody owns this, the server simulates
-	// it", so it is local authority and the body stays dynamic.
-	//
-	// On a client, owner_id 0 means "the server owns this". Treating that as
-	// local authority made the client build a dynamic body and run its own Jolt
-	// simulation of a Part the server is already simulating. The same Part then
-	// had two disagreeing sources of motion: the client's integration drifted
-	// away from the replicated transform, and because the client's solver was
-	// also resolving contacts the server never resolved, replicated Parts
-	// visibly collided with and shoved each other around on the client only.
-	//
-	// So the client branch is decided before the owner_id check, and only a
-	// Part this client actually owns is simulated locally.
-	if replicator.mode == .Client {
-		players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
-		// With no local player yet nothing can be the owner, so every replicated
-		// Part belongs to the server and none may be simulated here.
-		if players == nil || players.local_player == nil {return true}
-		return entity.owner_id != players.local_player.user_id
+	// ReplicatorService and replication_entity live in `#+build !js` files, and
+	// there is no replication on Web at all. Reporting "not remotely owned" is
+	// the same answer the nil-replicator check below already gives, so the Web
+	// build keeps every Part locally authoritative and its body dynamic.
+	when ODIN_OS == .JS {
+		return false
+	} else {
+		replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+		if replicator == nil || replicator.mode == .Stopped {return false}
+		entity := replication_entity(replicator, &part.object)
+		if entity == nil {return false}
+		// The two roles are asymmetric here, and this used to share a single early
+		// exit for owner_id == 0, which is wrong in opposite directions on each
+		// side.
+		//
+		// On the server, owner_id 0 means "nobody owns this, the server simulates
+		// it", so it is local authority and the body stays dynamic.
+		//
+		// On a client, owner_id 0 means "the server owns this". Treating that as
+		// local authority made the client build a dynamic body and run its own Jolt
+		// simulation of a Part the server is already simulating. The same Part then
+		// had two disagreeing sources of motion: the client's integration drifted
+		// away from the replicated transform, and because the client's solver was
+		// also resolving contacts the server never resolved, replicated Parts
+		// visibly collided with and shoved each other around on the client only.
+		//
+		// So the client branch is decided before the owner_id check, and only a
+		// Part this client actually owns is simulated locally.
+		if replicator.mode == .Client {
+			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+			// With no local player yet nothing can be the owner, so every replicated
+			// Part belongs to the server and none may be simulated here.
+			if players == nil || players.local_player == nil {return true}
+			return entity.owner_id != players.local_player.user_id
+		}
+		// On the server an unowned Part is simulated locally; one with an owner is
+		// driven by that client and must stay static so the two solvers never both
+		// move it.
+		return entity.owner_id != 0
 	}
-	// On the server an unowned Part is simulated locally; one with an owner is
-	// driven by that client and must stay static so the two solvers never both
-	// move it.
-	return entity.owner_id != 0
 }
 
 // physics_part_awaiting_transform reports whether `part` is a replicated Part on
@@ -333,10 +341,16 @@ physics_remote_owned :: proc(service: ^Physics, part: ^classes.Part) -> bool {
 // is built on the next synchronize from the real transform instead.
 physics_part_awaiting_transform :: proc(service: ^Physics, part: ^classes.Part) -> bool {
 	if service == nil || service.data_model == nil || part == nil {return false}
-	replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
-	if replicator == nil || replicator.mode != .Client {return false}
-	entity := replication_entity(replicator, &part.object)
-	return entity != nil && !entity.has_transform
+	// Nothing is replicated on Web, so no Part is ever awaiting an authoritative
+	// transform and the body is built from the local transform straight away.
+	when ODIN_OS == .JS {
+		return false
+	} else {
+		replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+		if replicator == nil || replicator.mode != .Client {return false}
+		entity := replication_entity(replicator, &part.object)
+		return entity != nil && !entity.has_transform
+	}
 }
 
 physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_Body, bool) {

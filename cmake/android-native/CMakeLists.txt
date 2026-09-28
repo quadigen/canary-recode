@@ -115,6 +115,7 @@ if(KINE_ODIN_OBJECTS)
     add_library(kinemium_android SHARED
         ${KINE_ODIN_OBJECTS}
         "${CMAKE_CURRENT_LIST_DIR}/android_jni.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/bionic_pthread_cancel.cpp"
     )
     set_target_properties(kinemium_android PROPERTIES
         OUTPUT_NAME main

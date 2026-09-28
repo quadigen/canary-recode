@@ -119,40 +119,47 @@ run_internal_module :: proc(module_name: string) {
 	) {
 		init_runtime(vm_state, environment_state, renderer_object)
 
+	// EditorService lives in a `#+build !js` file, and on Web the editor archive
+	// cannot be fetched at all. `editor_available()` already answers "just use the
+	// embedded modules" there, which the ODIN_OS == .JS branch below handles by
+	// calling init_scripts() itself. Compiling the download path out for Web keeps
+	// it from running twice, and keeps `odin check -target:js_wasm32` compiling.
+	when ODIN_OS != .JS {
 		if editor_available() {
-		editor_object := services.Ensure_Service(
-			&environment.services,
-			"EditorService",
-		)
-		if editor_object == nil {
-			fmt.eprintln("[EditorStartup] EditorService is unavailable; editor UI cannot start")
-		} else {
-			fetch := services.EditorService_Get_Editor(
-				cast(^services.EditorService)editor_object,
+			editor_object := services.Ensure_Service(
+				&environment.services,
+				"EditorService",
 			)
-			if fetch.warning != "" {
-				fmt.eprintf("[EditorStartup] %s\n", fetch.warning)
-			}
-			if fetch.error_message != "" {
-				fmt.eprintf("[EditorStartup] %s; editor UI cannot start\n", fetch.error_message)
+			if editor_object == nil {
+				fmt.eprintln("[EditorStartup] EditorService is unavailable; editor UI cannot start")
 			} else {
-				if packages.Load_Internal_Modules_From_Blob(
-					&environment.packages,
-					fetch.path,
-				) {
-					if fetch.downloaded {
-						fmt.printf("[EditorStartup] downloaded editor update to %s\n", fetch.path)
-					} else {
-						fmt.printf("[EditorStartup] loaded cached editor from %s\n", fetch.path)
-					}
-				} else {
-					fmt.eprintf("[EditorStartup] editor archive at %s could not be loaded; editor UI cannot start\n", fetch.path)
+				fetch := services.EditorService_Get_Editor(
+					cast(^services.EditorService)editor_object,
+				)
+				if fetch.warning != "" {
+					fmt.eprintf("[EditorStartup] %s\n", fetch.warning)
 				}
-				delete(fetch.path)
+				if fetch.error_message != "" {
+					fmt.eprintf("[EditorStartup] %s; editor UI cannot start\n", fetch.error_message)
+				} else {
+					if packages.Load_Internal_Modules_From_Blob(
+						&environment.packages,
+						fetch.path,
+					) {
+						if fetch.downloaded {
+							fmt.printf("[EditorStartup] downloaded editor update to %s\n", fetch.path)
+						} else {
+							fmt.printf("[EditorStartup] loaded cached editor from %s\n", fetch.path)
+						}
+					} else {
+						fmt.eprintf("[EditorStartup] editor archive at %s could not be loaded; editor UI cannot start\n", fetch.path)
+					}
+					delete(fetch.path)
+				}
 			}
+			init_scripts()
 		}
-		init_scripts()
-		}
+	}
 
 		if target.is_editor() && ODIN_OS == .JS {
 		fmt.eprintln("[EditorStartup] remote editor archives are unavailable on Web; starting embedded modules")

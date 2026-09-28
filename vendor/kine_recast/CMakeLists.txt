@@ -36,9 +36,10 @@ set(RECASTNAVIGATION_ENABLE_FAST_MATH OFF CACHE BOOL "" FORCE)
 set(RECASTNAVIGATION_DT_POLYREF64 OFF CACHE BOOL "" FORCE)
 set(RECASTNAVIGATION_DT_VIRTUAL_QUERYFILTER OFF CACHE BOOL "" FORCE)
 
-# Upstream disables RTTI and exceptions for its own sources and treats warnings
-# as errors. Neither applies to the wrapper, which stays conservative on its own
-# and is built as C++17.
+# Upstream treats warnings as errors, which the wrapper should not inherit by
+# accident. Upstream also disables RTTI and exceptions for its own sources, which
+# the wrapper does have to match; see the RecastWrapper target below for why that
+# one is not independent.
 FetchContent_Declare(
     RecastNavigation
     GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
@@ -87,6 +88,24 @@ target_compile_definitions(RecastWrapper
 
 if(WIN32)
     target_compile_definitions(RecastWrapper PRIVATE NOMINMAX)
+endif()
+
+# The wrapper subclasses rcContext, so its RTTI setting is not independent of
+# the library it wraps. Upstream compiles Recast with -fno-rtti, and rcContext's
+# key function (doResetLog, Recast.cpp) is what the Itanium ABI would use to emit
+# the typeinfo for rcContext -- so with RTTI off in Recast, no typeinfo for
+# rcContext exists in the library at all. The wrapper still needs a vtable for
+# SilentContext, and with RTTI enabled its typeinfo would reference that missing
+# symbol, leaving "typeinfo for rcContext" undefined at link time. MSVC hides
+# this by emitting typeinfo as a COMDAT in every translation unit that needs it;
+# the Itanium ABI targets (macOS, Linux) do not, so this links on Windows and
+# fails everywhere else. Matching the library's setting removes the dangling
+# reference, and the wrapper has no dynamic_cast, typeid, or exception handling
+# of its own, so nothing is lost.
+if(MSVC)
+    target_compile_options(RecastWrapper PRIVATE /GR-)
+else()
+    target_compile_options(RecastWrapper PRIVATE -fno-rtti)
 endif()
 
 set_target_properties(RecastWrapper PROPERTIES

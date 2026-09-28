@@ -371,16 +371,23 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	// Mirror the runtime role into the class registry so `require()` can enforce
 	// the server/client boundary without classes importing services.
 	classes.Set_Mode(registry.classes, registry.mode)
-	classes.Set_Network_Ownership(
-		registry.classes,
-		network_ownership_namecall,
-		registry.data_model,
-	)
-	classes.Set_Remote_Call(
-		registry.classes,
-		remote_call_dispatch,
-		registry.data_model,
-	)
+	// Both dispatchers are declared in `#+build !js` files along with the rest of
+	// the networking stack, so they are not compiled on Web. Leaving the registry's
+	// dispatch pointers nil is the correct Web behaviour rather than a gap:
+	// classes/Registry.odin nil-checks them before dispatching, so SetNetworkOwner,
+	// FireClient and friends simply stop being namecallable there.
+	when ODIN_OS != .JS {
+		classes.Set_Network_Ownership(
+			registry.classes,
+			network_ownership_namecall,
+			registry.data_model,
+		)
+		classes.Set_Remote_Call(
+			registry.classes,
+			remote_call_dispatch,
+			registry.data_model,
+		)
+	}
 	vm.Pop(vm_state.L)
 
 	for service in registry.services {
