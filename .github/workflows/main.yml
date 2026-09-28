@@ -400,7 +400,8 @@ jobs:
             throw 'SDL3.dll was not copied next to the executable'
           }
 
-      - name: Run replication smoke tests (Windows)        if: runner.os == 'Windows'
+      - name: Run replication smoke tests (Windows)        
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
