@@ -372,6 +372,17 @@ jobs:
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
 
+      - name: Strip Linux executables
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cd 'dist/${{ matrix.folder }}'
+          ls -lh kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64
+          for f in kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64; do
+            strip --strip-unneeded "$f"
+          done
+          ls -lh kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64
+
       - name: Inspect Linux executable
         if: runner.os == 'Linux'
         shell: bash
