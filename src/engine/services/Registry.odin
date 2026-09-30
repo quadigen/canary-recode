@@ -331,7 +331,7 @@ Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 		if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
 	}
 	workspace_service := Find_Service(registry, "Workspace")
-	terrain_service := Find_Service(registry, "Workspace")
+	terrain_service := Find_Service(registry, "Terrain")
 	if workspace_service == nil || workspace_service.object == nil { return }
 	if terrain_service == nil || terrain_service.object == nil { return }
 	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
