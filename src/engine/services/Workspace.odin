@@ -3,6 +3,7 @@ package services
 // wire:service global="workspace"
 
 import kineffi "../bindings"
+import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -212,10 +213,23 @@ workspace_meshpart_mesh :: proc(
 	part: ^classes.MeshPart,
 	ctx: ^kineffi.KineFilamentContext,
 ) -> ^kineffi.KineFilamentMesh {
-	if part == nil || ctx == nil || part.mesh_id == "" {
+	if part == nil || ctx == nil {
 		return nil
 	}
-	if part.native_mesh != nil && part.native_context == ctx {
+	if part.editable_mesh_id != 0 {
+		return workspace_editable_meshpart_mesh(part, ctx)
+	}
+	if part.mesh_id == "" {
+		if part.native_mesh != nil && part.native_context != nil {
+			_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
+			part.native_mesh = nil
+			part.native_context = nil
+		}
+		return nil
+	}
+	if part.native_mesh != nil &&
+	   part.native_context == ctx &&
+	   !part.native_is_editable {
 		return part.native_mesh
 	}
 	if part.native_mesh != nil && part.native_context != nil {
@@ -223,15 +237,125 @@ workspace_meshpart_mesh :: proc(
 		part.native_mesh = nil
 		part.native_context = nil
 	}
-	path := part.mesh_id
-	if strings.has_prefix(path, "file://") {
-		path = path[len("file://"):]
+	// A saved map carries its meshes inside the .kine, so try the embedded bytes
+	// first. Assimp needs a format hint to pick an importer for in-memory data,
+	// and the authored path recorded in the asset table is what supplies it.
+	if data, found := assetstore.Resolve_Bytes(part.mesh_id); found && len(data) > 0 {
+		hint := assetstore.Format_Hint(part.mesh_id)
+		defer delete(hint)
+		// An author can name a file without an extension, in which case there is
+		// no hint to pass and the importer default is the only thing to go on.
+		c_hint := hint == "" ? "glb" : strings.clone_to_cstring(hint)
+		defer delete(c_hint)
+		part.native_mesh = kineffi.Kine_Filament_CreateMeshFromMemory(
+			ctx,
+			raw_data(data),
+			uintptr(len(data)),
+			c_hint,
+		)
+		if part.native_mesh != nil {
+			part.native_context = ctx
+			part.native_is_editable = false
+		}
+		return part.native_mesh
 	}
-	c_path := strings.clone_to_cstring(path)
+
+	// Otherwise the value is a plain path, which Resolve_Path passes through
+	// after stripping any "file://" prefix. Reaching here with an embedded
+	// reference means the store never received those bytes, so say so instead of
+	// letting the load fail into a primitive box with no explanation.
+	if assetstore.Is_Uri(part.mesh_id) {
+		assetstore.Report_Missing_Asset(part.mesh_id, "Part mesh")
+	}
+	resolved := assetstore.Resolve_Path(part.mesh_id)
+	defer delete(resolved)
+	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
 	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPath(ctx, c_path)
 	if part.native_mesh != nil {
 		part.native_context = ctx
+		part.native_is_editable = false
+	}
+	return part.native_mesh
+}
+
+editable_mesh_render_scale :: proc(bounds: datatypes.Vector3) -> datatypes.Vector3 {
+	scale := datatypes.Vector3{1, 1, 1}
+	if bounds.x > 0 {
+		scale.x = 2.0 / bounds.x
+	}
+	if bounds.y > 0 {
+		scale.y = 2.0 / bounds.y
+	}
+	if bounds.z > 0 {
+		scale.z = 2.0 / bounds.z
+	}
+	return scale
+}
+
+workspace_editable_meshpart_mesh :: proc(
+	part: ^classes.MeshPart,
+	ctx: ^kineffi.KineFilamentContext,
+) -> ^kineffi.KineFilamentMesh {
+	mesh := classes.EditableMesh_Of_Handle(part.editable_mesh_id)
+	if mesh == nil {
+		return nil
+	}
+	if part.native_mesh != nil &&
+	   part.native_context == ctx &&
+	   part.native_is_editable &&
+	   part.editable_mesh_version == mesh.version {
+		return part.native_mesh
+	}
+	if part.native_mesh != nil && part.native_context != nil {
+		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
+		part.native_mesh = nil
+		part.native_context = nil
+	}
+
+	corners: [dynamic]classes.EditableMesh_Corner_Data
+	_ = classes.EditableMesh_Collect_Triangles(mesh, &corners)
+	defer delete(corners)
+
+	vertex_count := min(len(corners), 65532)
+	if vertex_count == 0 {
+		part.editable_mesh_version = mesh.version
+		return nil
+	}
+
+	center := classes.EditableMesh_Get_Center(mesh)
+	bounds := classes.EditableMesh_Get_Size(mesh)
+	scale := editable_mesh_render_scale(bounds)
+
+	vertex_data := make([dynamic]f32, 0, vertex_count * 8)
+	defer delete(vertex_data)
+	indices := make([dynamic]u16, 0, vertex_count)
+	defer delete(indices)
+
+	for corner_index in 0 ..< vertex_count {
+		corner := corners[corner_index]
+		position := datatypes.Vector3{
+			(corner.position.x - center.x) * scale.x,
+			(corner.position.y - center.y) * scale.y,
+			(corner.position.z - center.z) * scale.z,
+		}
+		append(&indices, u16(corner_index))
+		append(&vertex_data, position.x, position.y, position.z)
+		append(&vertex_data, corner.normal.x, corner.normal.y, corner.normal.z)
+		append(&vertex_data, corner.uv.X, corner.uv.Y)
+	}
+
+	part.native_mesh = kineffi.Kine_Filament_CreateCustomMesh(
+		ctx,
+		cast(^f32)raw_data(vertex_data),
+		i32(len(vertex_data)),
+		cast(^u16)raw_data(indices),
+		i32(len(indices)),
+	)
+	if part.native_mesh != nil {
+		part.native_context = ctx
+		part.native_is_editable = true
+		part.editable_mesh_version = mesh.version
 	}
 	return part.native_mesh
 }

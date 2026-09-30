@@ -181,6 +181,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_TweenService_Class(registry.classes)
 	when ODIN_OS != .JS { Register_UpdateService_Class(registry.classes) }
 	Register_UserInputService_Class(registry.classes)
+	Register_WebviewService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
 	// wire:begin services
@@ -226,6 +227,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "TweenService", "TweenService")
 	when ODIN_OS != .JS { Register_Service(registry, "UpdateService", "UpdateService") }
 	Register_Service(registry, "UserInputService", "UserInputService")
+	Register_Service(registry, "WebviewService", "WebviewService", "WebviewService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	// wire:end services
 	Register_Service(registry, "CoreGui", "StarterGui")
@@ -301,6 +303,14 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 		run_service := Find_Service(registry, "RunService")
 		if run_service != nil && run_service.object != nil {
 			Run_Service_Heartbeat(cast(^RunService)run_service.object, L, delta_time)
+		}
+	}
+	{
+		tracy.ZoneNC("RunService RenderStepped", 0x98C379)
+		z := profiling.Begin("RunService RenderStepped", 0x98C379)
+		run_service := Find_Service(registry, "RunService")
+		if run_service != nil && run_service.object != nil {
+			Run_Service_Render_Step(cast(^RunService)run_service.object, L, delta_time)
 		}
 	}
 }

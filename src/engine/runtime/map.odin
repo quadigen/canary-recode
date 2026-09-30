@@ -4,6 +4,7 @@ package engine_runtime
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import assetstore "../assetstore"
 import classes "../classes"
 import serializer "../serializer"
 import services "../services"
@@ -48,8 +49,15 @@ Load_Map_From_Data :: proc(
 	name: string,
 ) -> bool {
 	if environment == nil || script_vm == nil || script_vm.L == nil || data == nil {return false}
+
+	// A new map brings its own assets, so the previous map's must not linger.
+	// Clearing first also keeps a stale entry from colliding with a new content
+	// id and making a perfectly good stream look corrupt.
+	assetstore.Clear()
 	root, ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data)
 	if !ok || root == nil {
+		// Leave nothing half-published behind from a stream that did not load.
+		assetstore.Clear()
 		fmt.eprintf("Could not load .kine map (expected KINE version %d): %s\n", serializer.KINE_VERSION, name)
 		return false
 	}

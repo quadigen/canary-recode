@@ -1,6 +1,7 @@
 #+build !js
 package services
 
+import assetstore "../assetstore"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
@@ -67,6 +68,101 @@ replication_read_string :: proc(reader: ^Replication_Reader) -> string {
 
 replication_read_f32 :: proc(reader: ^Replication_Reader) -> f32 {
 	return transmute(f32)replication_read_u32(reader)
+}
+
+// ---------------------------------------------------------------------------
+// Asset table frames
+// ---------------------------------------------------------------------------
+// A network client never loads a map, and the asset store is only ever filled as
+// a side effect of deserializing a .kine stream, so the server has to hand the
+// client the bytes its `kineasset://` references point at.
+//
+// One frame per asset, then a closing frame carrying the count. Per asset
+// framing keeps each reliable packet a size ENet can carry on its own, and a
+// single bad entry cannot take the rest of the table down with it. Every frame
+// goes out on the reliable channel, which is ordered, so the whole table is
+// applied before the first spawn that can reference it.
+
+Replication_Asset_Subtype_Entry: u8 = 0
+Replication_Asset_Subtype_End:   u8 = 1
+
+// MAX_ASSET_WIRE_PATH bounds the authored path string on the wire. The path
+// only ever supplies a file extension, so anything longer is either corrupt or
+// a peer trying to make this frame expensive to parse.
+Replication_Asset_Max_Path: u32 = 4096
+
+// Asset keys are content hashes, so they are a fixed 16 lowercase hex digits.
+// Register_As re-checks the real rule, so this is only a cheap early reject that
+// keeps a hostile length out of the string reader.
+Replication_Asset_Max_Id_Length: u32 = 16
+
+encode_asset_entry :: proc(
+	bytes: ^[dynamic]u8,
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	data: []u8,
+) {
+	append(bytes, Replication_Asset_Subtype_Entry)
+	replication_put_string(bytes, id)
+	replication_put_string(bytes, path)
+	append(bytes, u8(kind))
+	replication_put_u32(bytes, u32(len(data)))
+	append(bytes, ..data)
+}
+
+// decode_asset_entry_body reads one entry with the leading subtype already
+// consumed. `data` borrows from the reader and is only valid while the packet
+// that backs it is, so the caller must copy before handing it to the store.
+//
+// The payload length is checked against both the per asset cap and the bytes
+// actually present. A declared length is a claim by the sender, and believing a
+// claim larger than the buffer is how a parser ends up reading past its input.
+decode_asset_entry_body :: proc(
+	reader: ^Replication_Reader,
+) -> (id: string, path: string, kind: assetstore.Asset_Kind, data: []u8, ok: bool) {
+	if !reader.valid {return "", "", .Unknown, nil, false}
+	id = replication_read_string(reader)
+	if !reader.valid || id == "" || len(id) > int(Replication_Asset_Max_Id_Length) {
+		reader.valid = false
+		return
+	}
+	path = replication_read_string(reader)
+	if !reader.valid || len(path) > int(Replication_Asset_Max_Path) {
+		reader.valid = false
+		return
+	}
+	kind = assetstore.Asset_Kind(replication_read_u8(reader))
+	if !reader.valid {return}
+	length := replication_read_u32(reader)
+	if !reader.valid {return}
+	if length > u32(assetstore.MAX_ASSET_BYTES) ||
+	   int(length) > len(reader.data) - reader.offset {
+		reader.valid = false
+		return
+	}
+	data = reader.data[reader.offset:reader.offset + int(length)]
+	reader.offset += int(length)
+	ok = true
+	return
+}
+
+// decode_asset_entry reads a complete entry frame, subtype included. Used where
+// the frame is expected to be an entry rather than the closing marker.
+decode_asset_entry :: proc(
+	reader: ^Replication_Reader,
+) -> (id: string, path: string, kind: assetstore.Asset_Kind, data: []u8, ok: bool) {
+	if !reader.valid || reader.offset >= len(reader.data) {
+		reader.valid = false
+		return "", "", .Unknown, nil, false
+	}
+	subtype := reader.data[reader.offset]
+	reader.offset += 1
+	if subtype != Replication_Asset_Subtype_Entry {
+		reader.valid = false
+		return "", "", .Unknown, nil, false
+	}
+	return decode_asset_entry_body(reader)
 }
 
 replication_encode_value :: proc(

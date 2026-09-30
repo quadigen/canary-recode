@@ -46,6 +46,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -r "-Wl,--whole-archive" (Join-Path $nativeLib "libJoltWrapper.a") "-Wl,--no-whole-archive" `
     (Join-Path $nativeLib "libJolt.a") -o (Join-Path $nativeLib "kine_jolt_web.o")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $emcc -r "-Wl,--whole-archive" (Join-Path $nativeLib "libRecastWrapper.a") "-Wl,--no-whole-archive" `
+    (Join-Path $nativeLib "libRecast.a") (Join-Path $nativeLib "libDetour.a") -o (Join-Path $nativeLib "kine_recast_web.o")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/luacode_link.c") -o (Join-Path $nativeLib "kine_luacode_link.o")
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/lualib_link.c") -o (Join-Path $nativeLib "kine_lualib_link.o")

@@ -1482,6 +1482,33 @@ static void appendCuboid(KineMesh* m, float cx, float cy, float cz, float sx, fl
     }
 }
 
+// appendQuad adds a flat square lying in the plane spanned by the unit vectors u
+// and v, centred on `center` and reaching `half` along each of them. Plane
+// handles are a single flat card, which is all the unlit gizmo material needs.
+static void appendQuad(
+    KineMesh* m,
+    const float center[3],
+    const float u[3],
+    const float v[3],
+    const float normal[3],
+    float half)
+{
+    const float p[4][3] = {
+        {center[0] - u[0]*half - v[0]*half, center[1] - u[1]*half - v[1]*half, center[2] - u[2]*half - v[2]*half},
+        {center[0] + u[0]*half - v[0]*half, center[1] + u[1]*half - v[1]*half, center[2] + u[2]*half - v[2]*half},
+        {center[0] + u[0]*half + v[0]*half, center[1] + u[1]*half + v[1]*half, center[2] + u[2]*half + v[2]*half},
+        {center[0] - u[0]*half + v[0]*half, center[1] - u[1]*half + v[1]*half, center[2] - u[2]*half + v[2]*half},
+    };
+
+    const uint16_t base = (uint16_t)m->vertices.size();
+    m->vertices.push_back({p[0][0], p[0][1], p[0][2], normal[0], normal[1], normal[2], 0, 0});
+    m->vertices.push_back({p[1][0], p[1][1], p[1][2], normal[0], normal[1], normal[2], 1, 0});
+    m->vertices.push_back({p[2][0], p[2][1], p[2][2], normal[0], normal[1], normal[2], 1, 1});
+    m->vertices.push_back({p[3][0], p[3][1], p[3][2], normal[0], normal[1], normal[2], 0, 1});
+    m->indices.push_back(base + 0); m->indices.push_back(base + 1); m->indices.push_back(base + 2);
+    m->indices.push_back(base + 0); m->indices.push_back(base + 2); m->indices.push_back(base + 3);
+}
+
 static KineMesh* buildMoveGizmo()
 {
     auto* m = new KineMesh();
@@ -1501,6 +1528,9 @@ struct KineGizmoAxisMeshes {
     KineMesh* y      = nullptr;
     KineMesh* z      = nullptr;
     KineMesh* center = nullptr;
+    // Plane handles, indexed by KINE_GIZMO_AXIS_XY / _YZ / _XZ. They take over
+    // from the matching axis arrow when the camera lines up with that axis.
+    KineMesh* planes[3] = {nullptr, nullptr, nullptr};
 };
 
 } // namespace
@@ -1511,6 +1541,45 @@ struct KineFilamentGizmo {
 };
 
 namespace {
+
+// Plane handles sit between the centre cube and the arrow tips, tucked into the
+// corner of their plane so they never sit on top of an arrow shaft.
+static const float KINE_GIZMO_PLANE_OFFSET = 0.72f;
+static const float KINE_GIZMO_PLANE_HALF   = 0.13f;
+
+// buildPlaneHandles fills the three plane cards. Order matches the plane array:
+// XY, YZ, then XZ. Each card is drawn in the plane whose normal is the axis it
+// stands in for, so it takes over exactly when that arrow foreshortens away.
+static void buildPlaneHandles(KineGizmoAxisMeshes& g)
+{
+    const float unitX[3] = {1.0f, 0.0f, 0.0f};
+    const float unitY[3] = {0.0f, 1.0f, 0.0f};
+    const float unitZ[3] = {0.0f, 0.0f, 1.0f};
+
+    // XY plane, normal +Z.
+    g.planes[0] = new KineMesh();
+    {
+        const float center[3] = {KINE_GIZMO_PLANE_OFFSET, KINE_GIZMO_PLANE_OFFSET, 0.0f};
+        appendQuad(g.planes[0], center, unitX, unitY, unitZ, KINE_GIZMO_PLANE_HALF);
+        g.planes[0]->indexCount = (uint32_t)g.planes[0]->indices.size();
+    }
+
+    // YZ plane, normal +X.
+    g.planes[1] = new KineMesh();
+    {
+        const float center[3] = {0.0f, KINE_GIZMO_PLANE_OFFSET, KINE_GIZMO_PLANE_OFFSET};
+        appendQuad(g.planes[1], center, unitY, unitZ, unitX, KINE_GIZMO_PLANE_HALF);
+        g.planes[1]->indexCount = (uint32_t)g.planes[1]->indices.size();
+    }
+
+    // XZ plane, normal +Y.
+    g.planes[2] = new KineMesh();
+    {
+        const float center[3] = {KINE_GIZMO_PLANE_OFFSET, 0.0f, KINE_GIZMO_PLANE_OFFSET};
+        appendQuad(g.planes[2], center, unitX, unitZ, unitY, KINE_GIZMO_PLANE_HALF);
+        g.planes[2]->indexCount = (uint32_t)g.planes[2]->indices.size();
+    }
+}
 
 static KineGizmoAxisMeshes buildMoveGizmoAxes()
 {
@@ -1534,6 +1603,8 @@ static KineGizmoAxisMeshes buildMoveGizmoAxes()
     g.center = new KineMesh();
     appendCuboid(g.center, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
     g.center->indexCount = (uint32_t)g.center->indices.size();
+
+    buildPlaneHandles(g);
 
     return g;
 }
@@ -1575,11 +1646,12 @@ static KineGizmoAxisMeshes buildScaleGizmoAxes()
     appendCuboid(g.center, 0.0f, 0.0f, 0.0f, 0.13f, 0.13f, 0.13f);
     g.center->indexCount = (uint32_t)g.center->indices.size();
 
+    buildPlaneHandles(g);
+
     return g;
 }
 
-static void appendTorus(KineMesh* m, int axis, float radius, float tubeRadius, int segments, int sides)
-{
+static void appendTorus(KineMesh* m, int axis, float radius, float tubeRadius, int segments, int sides){
     uint16_t base = (uint16_t)m->vertices.size();
     for (int i = 0; i < segments; ++i) {
         float a = 2.0f * (float)M_PI * (float)i / (float)segments;
@@ -5297,7 +5369,10 @@ KINE_API KineFilamentGizmo* Kine_Filament_CreateGizmo(KineFilamentContext* ctx, 
         default:                gizmo->axes = buildMoveGizmoAxes(); break;
     }
 
-    KineMesh* meshes[4] = {gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center};
+    KineMesh* meshes[7] = {
+        gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center,
+        gizmo->axes.planes[0], gizmo->axes.planes[1], gizmo->axes.planes[2],
+    };
     for (KineMesh* mesh : meshes) {
         if (mesh) uploadMesh(mesh, ctx->engine);
     }
@@ -5309,7 +5384,10 @@ KINE_API void Kine_Filament_DestroyGizmo(KineFilamentContext* ctx, KineFilamentG
 {
     if (!ctx || !ctx->engine || !gizmo) return;
 
-    KineMesh* meshes[4] = {gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center};
+    KineMesh* meshes[7] = {
+        gizmo->axes.x, gizmo->axes.y, gizmo->axes.z, gizmo->axes.center,
+        gizmo->axes.planes[0], gizmo->axes.planes[1], gizmo->axes.planes[2],
+    };
     for (KineMesh* mesh : meshes) {
         if (!mesh) continue;
         kine_invalidate_batches(ctx, mesh, nullptr);
@@ -6109,6 +6187,11 @@ static void kine_gizmo_axis_color(int axis, float& r, float& g, float& b)
         case KINE_GIZMO_AXIS_Y:      r = 0.20f; g = 0.85f; b = 0.20f; break;
         case KINE_GIZMO_AXIS_Z:      r = 0.20f; g = 0.45f; b = 0.95f; break;
         case KINE_GIZMO_AXIS_CENTER: r = 0.85f; g = 0.85f; b = 0.85f; break;
+        // A plane card wears the color of the axis it stands in for, so the
+        // handoff reads as the same handle changing shape rather than a new one.
+        case KINE_GIZMO_AXIS_XY:     r = 0.20f; g = 0.45f; b = 0.95f; break;
+        case KINE_GIZMO_AXIS_YZ:     r = 0.90f; g = 0.15f; b = 0.15f; break;
+        case KINE_GIZMO_AXIS_XZ:     r = 0.20f; g = 0.85f; b = 0.20f; break;
         default:                     r = 1.00f; g = 1.00f; b = 1.00f; break;
     }
 }
@@ -6173,6 +6256,194 @@ static math::double3 kine_gizmo_axis_point(int axis, double distance)
     return {0.0, 0.0, distance};
 }
 
+// The three plane handles. A plane card lies in the plane normal to `normalAxis`
+// and takes over from that axis's arrow once the camera lines up with it. `first`
+// and `second` are the two axes the plane actually drags, which is also where its
+// name comes from.
+struct KineGizmoPlane {
+    int id;
+    int meshIndex;
+    int normalAxis;
+    int first;
+    int second;
+};
+
+static const KineGizmoPlane KINE_GIZMO_PLANES[3] = {
+    {KINE_GIZMO_AXIS_XY, 0, KINE_GIZMO_AXIS_Z, KINE_GIZMO_AXIS_X, KINE_GIZMO_AXIS_Y},
+    {KINE_GIZMO_AXIS_YZ, 1, KINE_GIZMO_AXIS_X, KINE_GIZMO_AXIS_Y, KINE_GIZMO_AXIS_Z},
+    {KINE_GIZMO_AXIS_XZ, 2, KINE_GIZMO_AXIS_Y, KINE_GIZMO_AXIS_X, KINE_GIZMO_AXIS_Z},
+};
+
+static const KineGizmoPlane* kine_gizmo_plane(int id)
+{
+    for (const KineGizmoPlane& plane : KINE_GIZMO_PLANES) {
+        if (plane.id == id) return &plane;
+    }
+    return nullptr;
+}
+
+// How close to dead-on an axis has to be before its arrow is too foreshortened to
+// use. Past this the arrow has collapsed to a dot and the plane card takes over.
+// Around 23 degrees off axis, which is roughly where a thin shaft stops being
+// distinguishable from its own screen-space pick radius.
+static const double KINE_GIZMO_AXIS_HANDOFF = 0.92;
+
+// One gizmo unit is sized to cover this fraction of the viewport height, so the
+// whole gizmo reads as an eighth of the screen no matter the resolution.
+static const double KINE_GIZMO_TARGET_VIEWPORT_FRACTION = 0.125;
+
+// The handle under the cursor is drawn this much larger than the rest. It only
+// affects drawing, so the gizmo's projected size and pick radius stay in step.
+static const double KINE_GIZMO_ACTIVE_BOOST = 1.18;
+
+// kine_gizmo_view_scale is the factor that turns the rigid gizmo space into a
+// constant screen size. Perspective divides by range, so a world length L at
+// distance d covers viewportHeight * focal * L / (2d) pixels. Inverting that for
+// the target size makes the gizmo grow as the camera pulls back instead of
+// shrinking to nothing.
+static double kine_gizmo_view_scale(KineFilamentContext* ctx, double distance)
+{
+    if (!ctx || !ctx->camera || distance <= 1e-6) return 1.0;
+
+    // projection[1].x is the vertical focal length, the factor that maps a
+    // view-space length onto NDC Y.
+    const math::mat4 projection = ctx->camera->getProjectionMatrix();
+    const double focal = projection[1].x;
+    if (!(focal > 1e-6)) return 1.0;
+
+    const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+    if (viewportHeight <= 0) return 1.0;
+
+    const double targetPixels = KINE_GIZMO_TARGET_VIEWPORT_FRACTION * (double)viewportHeight;
+    return (2.0 * targetPixels * distance) / ((double)viewportHeight * focal);
+}
+
+// KineGizmoFrame is the resolved draw frame for one gizmo: the model matrix with
+// its constant-screen-size scale applied, plus which arrow has handed off to a
+// plane card. Draw, pick and drag all read this so they can never disagree about
+// what is on screen.
+struct KineGizmoFrame {
+    math::mat4 model;
+    float scaled[16] = {};
+    // Same gizmo with the hovered/selected handle grown, sharing the origin.
+    float boosted[16] = {};
+    int hiddenAxis = KINE_GIZMO_AXIS_NONE;
+    int activePlane = KINE_GIZMO_AXIS_NONE;
+};
+
+static void kine_gizmo_scaled_matrix(const float* mat4, double scale, float* out)
+{
+    // The incoming matrix is rigid, so only the three basis vectors need scaling.
+    // The translation is the gizmo origin itself and must not move.
+    for (int i = 0; i < 12; ++i) out[i] = (float)(mat4[i] * scale);
+    out[12] = mat4[12];
+    out[13] = mat4[13];
+    out[14] = mat4[14];
+    out[15] = mat4[15];
+}
+
+static KineGizmoFrame kine_gizmo_frame(KineFilamentContext* ctx, const float* mat4, int gizmoType)
+{
+    KineGizmoFrame frame;
+    frame.model = kine_gizmo_model_matrix(mat4);
+    kine_gizmo_scaled_matrix(mat4, 1.0, frame.scaled);
+    if (!ctx || !ctx->camera) return frame;
+
+    // Recover the eye from the view matrix rather than trusting the cached
+    // context copy, so the handoff always agrees with what was actually rendered.
+    // The view matrix is [R | t] with R orthonormal, so the eye is -R-transpose * t.
+    // Filament stores mat4 column-major, so component i of that product is column i
+    // of R dotted with t.
+    const math::mat4 view = ctx->camera->getViewMatrix();
+    const double t[3] = {view[3].x, view[3].y, view[3].z};
+    const math::double3 eye{
+        -(view[0].x * t[0] + view[0].y * t[1] + view[0].z * t[2]),
+        -(view[1].x * t[0] + view[1].y * t[1] + view[1].z * t[2]),
+        -(view[2].x * t[0] + view[2].y * t[1] + view[2].z * t[2]),
+    };
+
+    const math::double4 origin = frame.model * math::double4{0.0, 0.0, 0.0, 1.0};
+    const math::double3 toGizmo{origin.x - eye.x, origin.y - eye.y, origin.z - eye.z};
+    const double distance = std::sqrt(
+        toGizmo.x * toGizmo.x + toGizmo.y * toGizmo.y + toGizmo.z * toGizmo.z);
+
+    kine_gizmo_scaled_matrix(mat4, kine_gizmo_view_scale(ctx, distance), frame.scaled);
+    kine_gizmo_scaled_matrix(
+        mat4, kine_gizmo_view_scale(ctx, distance) * KINE_GIZMO_ACTIVE_BOOST, frame.boosted);
+    // Project through the scaled matrix too. Scaling only the basis vectors
+    // leaves the translation alone, so this still puts the origin on the real
+    // gizmo while every handle around it grows to its screen size.
+    frame.model = kine_gizmo_model_matrix(frame.scaled);
+    if (distance <= 1e-6) return frame;
+
+    // Rotate the view direction into gizmo space to see which axis it favours.
+    // Callers hand us a row-major matrix, so the world images of the local axes
+    // are its rows and the rotation into gizmo space is the transpose.
+    const double inv = 1.0 / distance;
+    const double dx = toGizmo.x * inv;
+    const double dy = toGizmo.y * inv;
+    const double dz = toGizmo.z * inv;
+    const double weights[3] = {
+        std::abs(mat4[0] * dx + mat4[4] * dy + mat4[8] * dz),
+        std::abs(mat4[1] * dx + mat4[5] * dy + mat4[9] * dz),
+        std::abs(mat4[2] * dx + mat4[6] * dy + mat4[10] * dz),
+    };
+
+    // Rotate rings stay usable no matter where the camera is, so only the arrows
+    // hand off. Taking the single best candidate keeps two near-equal axes from
+    // both collapsing at once and leaving the gizmo with a hole in it.
+    if (gizmoType != KINE_GIZMO_ROTATE) {
+        int dominant = KINE_GIZMO_AXIS_NONE;
+        double best = KINE_GIZMO_AXIS_HANDOFF;
+        for (int i = 0; i < 3; ++i) {
+            if (weights[i] > best) {
+                best = weights[i];
+                dominant = KINE_GIZMO_AXIS_X + i;
+            }
+        }
+        if (dominant != KINE_GIZMO_AXIS_NONE) {
+            frame.hiddenAxis = dominant;
+            for (const KineGizmoPlane& plane : KINE_GIZMO_PLANES) {
+                if (plane.normalAxis == dominant) frame.activePlane = plane.id;
+            }
+        }
+    }
+    return frame;
+}
+
+// kine_gizmo_plane_corner mirrors appendQuad's corner order so the pick region is
+// exactly the card that was drawn.
+static math::double3 kine_gizmo_plane_corner(
+    const KineGizmoPlane& plane, int corner, double half)
+{
+    const int a = plane.first - KINE_GIZMO_AXIS_X;
+    const int b = plane.second - KINE_GIZMO_AXIS_X;
+    const double signA = (corner == 0 || corner == 3) ? -1.0 : 1.0;
+    const double signB = (corner == 0 || corner == 1) ? -1.0 : 1.0;
+    double p[3] = {0.0, 0.0, 0.0};
+    p[a] = KINE_GIZMO_PLANE_OFFSET + signA * half;
+    p[b] = KINE_GIZMO_PLANE_OFFSET + signB * half;
+    return math::double3{p[0], p[1], p[2]};
+}
+
+static bool kine_gizmo_point_in_quad(
+    double px, double py,
+    const KineGizmoScreenPoint& q0,
+    const KineGizmoScreenPoint& q1,
+    const KineGizmoScreenPoint& q2,
+    const KineGizmoScreenPoint& q3)
+{
+    if (!q0.valid || !q1.valid || !q2.valid || !q3.valid) return false;
+    const KineGizmoScreenPoint* quad[4] = {&q0, &q1, &q2, &q3};
+    int outside = 0;
+    for (int i = 0; i < 4; ++i) {
+        const KineGizmoScreenPoint& a = *quad[i];
+        const KineGizmoScreenPoint& b = *quad[(i + 1) & 3];
+        if ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x) < 0.0) ++outside;
+    }
+    return outside == 0 || outside == 4;
+}
+
 extern "C" {
 
 KINE_API int Kine_Filament_PickGizmo(
@@ -6184,16 +6455,33 @@ KINE_API int Kine_Filament_PickGizmo(
 {
     if (!ctx || !ctx->camera || !gizmo || !mat4) return KINE_GIZMO_AXIS_NONE;
 
-    const math::mat4 model = kine_gizmo_model_matrix(mat4);
-    const KineGizmoScreenPoint center = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    const KineGizmoFrame frame = kine_gizmo_frame(ctx, mat4, gizmo->type);
+    const KineGizmoScreenPoint center = kine_gizmo_project(ctx, frame.model, {0.0, 0.0, 0.0});
     if (center.valid && gizmo->axes.center &&
         std::hypot((double)screenX - center.x, (double)screenY - center.y) <= 10.0) {
         return KINE_GIZMO_AXIS_CENTER;
     }
 
+    // Test the plane card first: it sits over the arm it replaced, so it has to
+    // win any overlap.
+    if (frame.activePlane != KINE_GIZMO_AXIS_NONE) {
+        const KineGizmoPlane* plane = kine_gizmo_plane(frame.activePlane);
+        if (plane && gizmo->axes.planes[plane->meshIndex]) {
+            KineGizmoScreenPoint corners[4];
+            for (int i = 0; i < 4; ++i) {
+                corners[i] = kine_gizmo_project(
+                    ctx, frame.model, kine_gizmo_plane_corner(*plane, i, KINE_GIZMO_PLANE_HALF));
+            }
+            if (kine_gizmo_point_in_quad(screenX, screenY, corners[0], corners[1], corners[2], corners[3])) {
+                return plane->id;
+            }
+        }
+    }
+
     int closestAxis = KINE_GIZMO_AXIS_NONE;
     double closestDistance = 12.0;
     for (int axis = KINE_GIZMO_AXIS_X; axis <= KINE_GIZMO_AXIS_Z; ++axis) {
+        if (axis == frame.hiddenAxis) continue;
         double distance = std::numeric_limits<double>::max();
         if (gizmo->type == KINE_GIZMO_ROTATE) {
             const double radius = axis == KINE_GIZMO_AXIS_X ? 0.85 :
@@ -6206,7 +6494,7 @@ KINE_API int Kine_Filament_PickGizmo(
                 if (axis == KINE_GIZMO_AXIS_X) point = {0.0, radius * cos(angle), radius * sin(angle)};
                 else if (axis == KINE_GIZMO_AXIS_Y) point = {radius * cos(angle), 0.0, radius * sin(angle)};
                 else point = {radius * cos(angle), radius * sin(angle), 0.0};
-                const KineGizmoScreenPoint current = kine_gizmo_project(ctx, model, point);
+                const KineGizmoScreenPoint current = kine_gizmo_project(ctx, frame.model, point);
                 if (i > 0) {
                     distance = std::min(distance,
                         kine_gizmo_segment_distance(screenX, screenY, previous, current));
@@ -6215,9 +6503,9 @@ KINE_API int Kine_Filament_PickGizmo(
             }
         } else {
             const KineGizmoScreenPoint start = kine_gizmo_project(
-                ctx, model, kine_gizmo_axis_point(axis, 0.08));
+                ctx, frame.model, kine_gizmo_axis_point(axis, 0.08));
             const KineGizmoScreenPoint end = kine_gizmo_project(
-                ctx, model, kine_gizmo_axis_point(axis, 1.30));
+                ctx, frame.model, kine_gizmo_axis_point(axis, 1.30));
             distance = kine_gizmo_segment_distance(screenX, screenY, start, end);
         }
 
@@ -6240,14 +6528,15 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
     float currentY)
 {
     if (!ctx || !ctx->camera || !gizmo || !mat4) return 0.0f;
-    if (gizmo->type == KINE_GIZMO_ROTATE || axis == KINE_GIZMO_AXIS_CENTER) {
+    if (gizmo->type == KINE_GIZMO_ROTATE || axis == KINE_GIZMO_AXIS_CENTER ||
+        kine_gizmo_plane(axis)) {
         return ((currentX - startX) - (currentY - startY)) * 0.01f;
     }
 
-    const math::mat4 model = kine_gizmo_model_matrix(mat4);
-    const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
+    const KineGizmoFrame frame = kine_gizmo_frame(ctx, mat4, gizmo->type);
+    const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, frame.model, {0.0, 0.0, 0.0});
     const KineGizmoScreenPoint endpoint = kine_gizmo_project(
-        ctx, model, kine_gizmo_axis_point(axis, 1.0));
+        ctx, frame.model, kine_gizmo_axis_point(axis, 1.0));
     if (!origin.valid || !endpoint.valid) return 0.0f;
 
     const double axisX = endpoint.x - origin.x;
@@ -6259,6 +6548,53 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
     return (float)((mouseX * axisX + mouseY * axisY) / (pixelsPerUnit * pixelsPerUnit));
 }
 
+KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    int axis,
+    float startX,
+    float startY,
+    float currentX,
+    float currentY,
+    float* outFirst,
+    float* outSecond)
+{
+    if (outFirst) *outFirst = 0.0f;
+    if (outSecond) *outSecond = 0.0f;
+    if (!ctx || !ctx->camera || !gizmo || !mat4 || !outFirst || !outSecond) return 0;
+
+    const KineGizmoPlane* plane = kine_gizmo_plane(axis);
+    if (!plane) return 0;
+    if (gizmo->type == KINE_GIZMO_ROTATE) return 0;
+
+    // The two in-plane axes projected to screen are the basis for the drag. The
+    // card is offset from the origin, but that only shifts where the handle sits,
+    // not the directions it moves along.
+    const KineGizmoFrame frame = kine_gizmo_frame(ctx, mat4, gizmo->type);
+    const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, frame.model, {0.0, 0.0, 0.0});
+    const KineGizmoScreenPoint first = kine_gizmo_project(
+        ctx, frame.model, kine_gizmo_axis_point(plane->first, 1.0));
+    const KineGizmoScreenPoint second = kine_gizmo_project(
+        ctx, frame.model, kine_gizmo_axis_point(plane->second, 1.0));
+    if (!origin.valid || !first.valid || !second.valid) return 0;
+
+    const double ax = first.x - origin.x;
+    const double ay = first.y - origin.y;
+    const double bx = second.x - origin.x;
+    const double by = second.y - origin.y;
+    const double determinant = ax * by - ay * bx;
+    if (std::abs(determinant) <= 1e-6) return 0;
+
+    // Solve the 2x2 system for the mouse travel along each in-plane axis. These
+    // are cumulative from the drag start, matching the single-axis contract.
+    const double mouseX = (double)currentX - startX;
+    const double mouseY = (double)currentY - startY;
+    *outFirst = (float)((mouseX * by - mouseY * bx) / determinant);
+    *outSecond = (float)((ax * mouseY - ay * mouseX) / determinant);
+    return 1;
+}
+
 KINE_API void Kine_Filament_DrawGizmo(
     KineFilamentContext* ctx,
     KineFilamentGizmo*   gizmo,
@@ -6268,16 +6604,28 @@ KINE_API void Kine_Filament_DrawGizmo(
 {
     if (!ctx || !gizmo || !mat4) return;
 
+    // Not const: DrawMeshEx takes a mutable float[16].
+    KineGizmoFrame frame = kine_gizmo_frame(ctx, mat4, gizmo->type);
+
     struct AxisEntry { int id; KineMesh* mesh; };
-    AxisEntry entries[4] = {
+    AxisEntry entries[7] = {
         {KINE_GIZMO_AXIS_X,      gizmo->axes.x},
         {KINE_GIZMO_AXIS_Y,      gizmo->axes.y},
         {KINE_GIZMO_AXIS_Z,      gizmo->axes.z},
         {KINE_GIZMO_AXIS_CENTER, gizmo->axes.center},
+        {KINE_GIZMO_AXIS_XY,     gizmo->axes.planes[0]},
+        {KINE_GIZMO_AXIS_YZ,     gizmo->axes.planes[1]},
+        {KINE_GIZMO_AXIS_XZ,     gizmo->axes.planes[2]},
     };
 
     for (const AxisEntry& entry : entries) {
         if (!entry.mesh) continue;
+        // The arrow that handed off is replaced outright by its plane card, so
+        // neither of them is ever drawn at the same time: skip the hidden arrow,
+        // and skip every card except the active one. Pick applies the same rule,
+        // so a card is only on screen while it is also grabbable.
+        if (entry.id == frame.hiddenAxis) continue;
+        if (entry.id >= KINE_GIZMO_AXIS_XY && entry.id != frame.activePlane) continue;
 
         float r = 1.0f, g = 1.0f, b = 1.0f;
         kine_gizmo_axis_color(entry.id, r, g, b);
@@ -6296,12 +6644,16 @@ KINE_API void Kine_Filament_DrawGizmo(
             b = 0.15f;
         }
 
+        // The handle under the cursor grows so it reads as grabbable. Picking still
+        // runs against the unscaled frame, whose 12px radius already covers it.
+        const float* handle = isActive ? frame.boosted : frame.scaled;
+
         Kine_Filament_DrawMeshEx(
             ctx, (KineFilamentMesh*)entry.mesh, KINE_MAT_GIZMO,
             r, g, b,
             1.0f, 0.0f, 1.0f,
             0.0f,
-            mat4,
+            const_cast<float*>(handle),
             false, false, false,
             nullptr);
 

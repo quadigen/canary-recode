@@ -13,6 +13,10 @@ when ODIN_OS == .Windows {
 		"../../../vendor/build/lib/kine_detour.lib",
 	}
 } else when ODIN_OS == .JS {
+	// build_wasm.ps1 relocatably links RecastWrapper with the Recast and Detour
+	// archives it calls into and emits this one object. wasm32 allows only a
+	// single path per foreign import, which is why this is merged into one file
+	// rather than the three archives the desktop branches name.
 	foreign import lib "../../../build/web-native/lib/kine_recast_web.o"
 } else when #config(KINE_ANDROID, false) {
 	foreign import lib "../../../build/android-native/lib/libRecastWrapper.a"

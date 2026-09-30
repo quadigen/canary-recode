@@ -311,10 +311,6 @@ text_box_undo_last :: proc(box: ^TextBox) -> ^Undo_Entry {
     return &box.undo_stack[len(box.undo_stack) - 1]
 }
 
-// Mirrors the Roblox `TextBox.TextChanged` event. Every text-mutation path
-// (Luau assignment, typing, paste, delete, undo/redo) funnels through here, so
-// listeners see engine-side edits as well as script-side ones. Declared above
-// the undo/redo procs that call it, since Odin requires declaration first.
 text_box_fire_text_changed :: proc(box: ^TextBox) {
 	if box == nil {
 		return

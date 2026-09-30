@@ -168,6 +168,69 @@ enum_pointer_equal :: proc(value, other, ctx: rawptr) -> bool {
 	return value == other
 }
 
+Enum_Item_Def :: struct {
+	name:  string,
+	value: i64,
+}
+
+Enum_Type_Exists :: proc(registry: ^Registry, name: string) -> bool {
+	return find_type(registry, name) != nil
+}
+
+Enum_Item_By_Name :: proc(
+	registry: ^Registry,
+	enum_name: string,
+	item_name: string,
+) -> ^Enum_Item {
+	return find_item_by_name(find_type(registry, enum_name), item_name)
+}
+
+Enum_Item_By_Value :: proc(
+	registry: ^Registry,
+	enum_name: string,
+	value: i64,
+) -> ^Enum_Item {
+	return find_item_by_value(find_type(registry, enum_name), value)
+}
+
+// Register_Named_Enum registers an enum from an explicit name/value list rather
+// than from an Odin `typeid`. Native plugins cross a C boundary and cannot hand
+// the host a typeid, so they describe the enum as data instead.
+//
+// The registry takes its own copy of the name and of every item name, so the
+// caller may free the source strings as soon as this returns. It reports
+// failure instead of asserting on a duplicate so a plugin can react to the
+// conflict itself.
+Register_Named_Enum :: proc(
+	registry: ^Registry,
+	name: string,
+	items: []Enum_Item_Def,
+) -> bool {
+	if registry == nil || name == "" || find_type(registry, name) != nil {
+		return false
+	}
+
+	enum_type := new(Enum_Type)
+	enum_type.name = strings.clone(name)
+	enum_type.display_name = strings.concatenate({"Enum.", enum_type.name})
+	enum_type.items = make([dynamic]^Enum_Item, 0, len(items))
+	for def in items {
+		if def.name == "" {
+			continue
+		}
+		item := new(Enum_Item)
+		item^ = Enum_Item{
+			enum_type = enum_type,
+			name      = strings.clone(def.name),
+			display_name = strings.concatenate({enum_type.display_name, ".", def.name}),
+			value     = def.value,
+		}
+		append(&enum_type.items, item)
+	}
+	append(&registry.types, enum_type)
+	return true
+}
+
 Register_Reflected_Enum :: proc(registry: ^Registry, name: string, Enum_Type_Id: typeid) {
 	assert(registry != nil)
 	assert(find_type(registry, name) == nil)

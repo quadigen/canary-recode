@@ -29,43 +29,43 @@ Plugin_Assets :: struct {
 Plugin_Download :: struct {
 	name:   string `json:"name"`,
 	url:    string `json:"url"`,
-	size:   i64    `json:"size"`,
+	size:   i64 `json:"size"`,
 	sha256: string `json:"sha256"`,
 }
 
 Plugin_Manifest :: struct {
-	name:         string            `json:"name"`,
-	id:           string            `json:"id"`,
-	version:      string            `json:"version"`,
-	description:  string            `json:"description"`,
-	icon:         string            `json:"icon"`,
-	thumbnail:    string            `json:"thumbnail"`,
-	homepage:     string            `json:"homepage"`,
-	repository:   string            `json:"repository"`,
-	keywords:     []string          `json:"keywords"`,
-	author:       string            `json:"author"`,
-	license:      string            `json:"license"`,
-	main:         string            `json:"main"`,
-	engine:       Plugin_Engine     `json:"engine"`,
+	name:         string `json:"name"`,
+	id:           string `json:"id"`,
+	version:      string `json:"version"`,
+	description:  string `json:"description"`,
+	icon:         string `json:"icon"`,
+	thumbnail:    string `json:"thumbnail"`,
+	homepage:     string `json:"homepage"`,
+	repository:   string `json:"repository"`,
+	keywords:     []string `json:"keywords"`,
+	author:       string `json:"author"`,
+	license:      string `json:"license"`,
+	main:         string `json:"main"`,
+	engine:       Plugin_Engine `json:"engine"`,
 	dependencies: map[string]string `json:"dependencies"`,
-	intents:      []string          `json:"intents"`,
+	intents:      []string `json:"intents"`,
 }
 
 KinemiumPlugin :: struct {
-	slug:         string          `json:"slug"`,
-	generated_at: string          `json:"generatedAt"`,
-	updated_at:   string          `json:"updatedAt"`,
+	slug:         string `json:"slug"`,
+	generated_at: string `json:"generatedAt"`,
+	updated_at:   string `json:"updatedAt"`,
 	manifest:     Plugin_Manifest `json:"manifest"`,
-	assets:       Plugin_Assets   `json:"assets"`,
+	assets:       Plugin_Assets `json:"assets"`,
 	download:     Plugin_Download `json:"download"`,
-	details_url:  string          `json:"detailsUrl"`,
-	file_count:   int             `json:"fileCount"`,
+	details_url:  string `json:"detailsUrl"`,
+	file_count:   int `json:"fileCount"`,
 }
 
 Plugin_List :: struct {
-	version:      int      `json:"version"`,
-	generated_at: string   `json:"generatedAt"`,
-	plugin_count: int      `json:"pluginCount"`,
+	version:      int `json:"version"`,
+	generated_at: string `json:"generatedAt"`,
+	plugin_count: int `json:"pluginCount"`,
 	plugins:      []KinemiumPlugin `json:"plugins"`,
 }
 

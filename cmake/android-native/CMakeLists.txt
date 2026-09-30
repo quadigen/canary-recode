@@ -46,6 +46,7 @@ set(LUAU_EXTERN_C ON CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/luau" luau)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_luau" kine_luau)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_jolt" kine_jolt)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_recast" kine_recast)
 
 set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -61,7 +62,7 @@ target_link_libraries(KinemiumLibs PUBLIC libzstd_static miniz yaml)
 set_target_properties(KinemiumLibs PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 set_target_properties(kine_render_shim kine_filament_shim kine_skia kine_vulkan_compositor
-    kine_luau JoltWrapper Jolt PROPERTIES
+    kine_luau JoltWrapper Jolt RecastWrapper PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
@@ -88,6 +89,11 @@ if(KINE_ODIN_OBJECTS)
         kine_skia
         JoltWrapper
         Jolt
+        # Supplies the RCN_* C API for PathfindingService. It has to be listed
+        # here rather than relying on the foreign import in recast.odin, because
+        # CMake links the prebuilt Odin objects and never passes Odin's foreign
+        # libraries to the linker.
+        RecastWrapper
         kine_luau
         Luau.CodeGen
         Luau.Compiler

@@ -1,19 +1,5 @@
 package classes
 
-// Shared execution state for the three Roblox-style script classes.
-//
-// `Script`, `LocalScript` and `ModuleScript` all embed `Script_Common` directly
-// after `Object`, so the runtime can read a script's source, module cache and
-// execution state without knowing the concrete class. Keeping the layout
-// identical across the three classes means a single code path drives script
-// execution and `require()` while the class hierarchy still distinguishes the
-// Roblox-visible behavior (server script / client script / module).
-//
-// Isolation note: every runtime (server process, each connected client, or an
-// in-process test runtime) owns its own VM and its own script instances, so the
-// per-instance module cache below is automatically per-runtime. There is no
-// global cache shared between runtimes.
-
 import "core:fmt"
 import "core:strings"
 
@@ -138,10 +124,6 @@ Script_Common_Set_Source :: proc(L: ^vm.State, common: ^Script_Common, source: s
 	common.source = strings.clone(source)
 }
 
-// Script_Common_Set_Enabled records an Enabled change and reports whether it
-// turned execution on from off. Roblox restarts a script on a false -> true
-// transition, so the execution context turns that edge into a fresh run; the
-// initial value (true by construction) is not an edge and never restarts.
 Script_Common_Set_Enabled :: proc(common: ^Script_Common, enabled: bool) -> bool {
 	if common == nil {
 		return false

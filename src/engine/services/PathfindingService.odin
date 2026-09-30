@@ -21,10 +21,6 @@ PathfindingService_Class := classes.Class_Info{
 PathfindingService :: struct {
 	using service: Service,
 
-	// The navigation mesh is built from Workspace geometry and reused for every
-	// path request. Recast is not cheap to build, and Roblox keeps a single grid
-	// alive for the same reason, so the mesh is cached until the geometry it was
-	// built from changes.
 	nav_mesh:         kineffi.RCN_NavMeshRef,
 	nav_query:        kineffi.RCN_NavQueryRef,
 	nav_filter:       kineffi.RCN_FilterRef,
@@ -44,8 +40,6 @@ PathfindingService :: struct {
 	last_rebuild:       time.Time,
 }
 
-// Path_Class is the class behind the Path objects PathfindingService hands back.
-// Roblox exposes it as a class, and scripts can check `path:IsA("Path")`.
 Path_Class := classes.Class_Info{
 	name   = "Path",
 	parent = &classes.Instance_Class,
@@ -483,13 +477,9 @@ pathfinding_rebuild_navigation :: proc(
 	config: kineffi.RECAST_BuildConfig
 	kineffi.RCN_DefaultBuildConfig(&config)
 
-	// Roblox expresses agent size in studs, and Recast wants world units plus a
-	// climb budget. A can-jump agent gets a climb budget so steps are traversable.
 	config.agentRadius = agent_radius
 	config.agentHeight = agent_height
 	config.agentMaxClimb = agent_can_jump ? 7.0 : 0.0
-	// Recast works in world units, so one cell is one stud. A finer cell would
-	// narrow the gaps between parts that an agent can slip through.
 	config.cellSize = 1.0
 	config.cellHeight = 1.0
 	config.agentMaxSlope = 60.0
@@ -1268,9 +1258,6 @@ path_namecall :: proc(
 			}
 		}
 
-		// Roblox returns a number here, and this engine's integer subtype does
-		// not compare equal to a float literal, so the result is pushed as a
-		// plain number to keep `result == -1` working in scripts.
 		vm.PushNumber(L, f64(blocked))
 		return 1, true
 	}
@@ -1278,8 +1265,6 @@ path_namecall :: proc(
 	return 0, false
 }
 
-// path_construct builds a bare Path. Scripts never construct one directly, so the
-// only Paths that exist are the ones PathfindingService hands out.
 path_construct :: proc(
 	renderer: ^classes.Renderer_Object,
 	data_model: rawptr,

@@ -102,6 +102,15 @@ KINE_GIZMO_AXIS_X :: 1
 KINE_GIZMO_AXIS_Y :: 2
 KINE_GIZMO_AXIS_Z :: 3
 KINE_GIZMO_AXIS_CENTER :: 4
+
+// Plane handles. An axis arrow foreshortens into an unusable dot once the camera
+// looks down it, so the plane perpendicular to that axis takes over. Each one is
+// named for the two axes it drags, and is colored with the color of the axis it
+// replaces.
+KINE_GIZMO_AXIS_XY :: 5
+KINE_GIZMO_AXIS_YZ :: 6
+KINE_GIZMO_AXIS_XZ :: 7
+KINE_GIZMO_AXIS_COUNT :: 8
 KINE_MESH_CUBE :: 1
 KINE_MESH_SPHERE :: 2
 KINE_MESH_PYRAMID :: 3
@@ -208,6 +217,12 @@ foreign kine_filament {
 	Kine_Filament_DrawGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) ---
 	Kine_Filament_PickGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, screenX: f32, screenY: f32) -> i32 ---
 	Kine_Filament_GetGizmoDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
+	// Solves a plane-handle drag. Returns true and writes one delta per axis the
+	// plane spans (XY writes X then Y, YZ writes Y then Z, XZ writes X then Z), in
+	// the same local units a single-axis drag reports. Returns false for any other
+	// axis.
+	Kine_Filament_GetGizmoPlaneDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32, outFirst: ^f32, outSecond: ^f32) -> i32 ---
+	Kine_Filament_CreateCustomMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateTerrainMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, materialWeights: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
 
 	Kine_Filament_CreateTerrainTextureSet :: proc(ctx: ^KineFilamentContext, layer0: ^KineFilamentTex, layer1: ^KineFilamentTex, layer2: ^KineFilamentTex, layer3: ^KineFilamentTex, layer4: ^KineFilamentTex, layer5: ^KineFilamentTex) -> ^KineFilamentTex ---

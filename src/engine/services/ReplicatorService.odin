@@ -315,6 +315,14 @@ ReplicatorService :: struct {
 	char_acks_received:        u64,
 	acks_sent:                 u64,
 	states_applied:            u64,
+	// Asset transfer. A network client never loads a map, so the server pushes its
+	// asset table at connect time; without it every `kineasset://` reference on the
+	// client misses and the mesh silently renders as a primitive shape.
+	assets_sent:               u64,
+	assets_received:           u64,
+	asset_bytes_received:      u64,
+	asset_rejections:          u64,
+	asset_table_complete:      bool,
 	// ack_elapsed paces the kind 4 rounds. ack_full_elapsed is a separate,
 	// coarser clock that drives the periodic full re-report; reusing
 	// ack_elapsed for it meant the threshold was never reached, because that
@@ -918,6 +926,12 @@ replication_namecall :: proc(
 		vm.PushNumber(L, f64(service.bytes_received)); vm.SetField(L, -2, "bytesReceived")
 		vm.PushNumber(L, f64(service.malformed_packets)); vm.SetField(L, -2, "malformedPackets")
 		vm.PushNumber(L, f64(service.bandwidth_drops)); vm.SetField(L, -2, "bandwidthDrops")
+		// Asset transfer visibility. A client that is connected but never received
+		// the table is the shape of "connected, everything renders as a primitive".
+		vm.PushNumber(L, f64(service.assets_sent)); vm.SetField(L, -2, "assetsSent")
+		vm.PushNumber(L, f64(service.assets_received)); vm.SetField(L, -2, "assetsReceived")
+		vm.PushNumber(L, f64(service.asset_rejections)); vm.SetField(L, -2, "assetRejections")
+		vm.PushBoolean(L, service.asset_table_complete); vm.SetField(L, -2, "assetTableComplete")
 		// rejectedPackets separates unknown or reserved kinds from genuine
 		// corruption. A climb here during a rolling update means clients and
 		// servers disagree about the protocol, which is a different and much more

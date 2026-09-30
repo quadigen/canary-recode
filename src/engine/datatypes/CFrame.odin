@@ -394,7 +394,6 @@ CFrame_ZVector :: proc(cf: CFrame) -> Vector3 {
 
 
 CFrame_LookVector :: proc(cf: CFrame) -> Vector3 {
-    // Roblox forward is local -Z.
     return Vector3{
         -cf.r02,
         -cf.r12,
@@ -774,7 +773,6 @@ CFrame_LookAt_Up :: proc(
         return CFrame_New_Position(at)
     }
 
-    // Roblox faces local -Z.
     back := cframe_v3_unit(cframe_v3_mul(direction, -1))
 
     up := cframe_v3_unit(up_input)

@@ -9,6 +9,7 @@ import enums "../enum"
 import vm "../vm"
 import kineffi "../bindings"
 import guilib "../gui"
+import assetstore "../assetstore"
 
 IMAGE_LABEL_CLASS_ICONS :=
 	#load_directory("../assets/images/icons")
@@ -201,12 +202,39 @@ ImageLabel_Load_Image :: proc(
 	}
 
 	//
+	// Embedded asset. A map that was saved with its textures inside carries
+	// "kineasset://" references, and those bytes travel in the .kine rather than
+	// on disk, so the image is decoded straight from memory.
+	//
+
+	if data, found := assetstore.Resolve_Bytes(path); found {
+		if len(data) == 0 {
+			return
+		}
+
+		image_label.stored_image =
+			kineffi.Kine_Skia_Image_LoadFromMemory(
+				raw_data(data),
+				uintptr(len(data)),
+			)
+
+		return
+	}
+
+	//
 	// Normal filesystem image.
 	//
 
+	// Falling through with an embedded reference means the bytes never arrived.
+	// Report it here, where the author will actually see it, rather than leaving
+	// the label silently blank.
+	if assetstore.Is_Uri(path) {
+		assetstore.Report_Missing_Asset(path, "ImageLabel image")
+	}
+
 	cpath :=
 		strings.clone_to_cstring(
-			path,
+			assetstore.Resolve_Path(path),
 		)
 
 	image_label.stored_image =

@@ -8,8 +8,6 @@ import vm "../vm"
 
 Part_Class := Class_Info{
     name   = "Part",
-    // BasePart, not Instance: it is the level IsA("BasePart") matches at, so
-    // the whole "is this solid geometry" idiom resolves.
     parent = &BasePart_Class,
 }
 
@@ -186,11 +184,6 @@ part_namecall :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
     switch method {
     case "ApplyImpulse":
         impulse := datatypes.Arg_Vector3(L, 2)
-        // Roblox's signature is ApplyImpulse(impulse, position?) and the position
-        // is what would let a launch spin the Part off-centre. The Jolt wrapper
-        // only exposes centre-of-mass impulses, so the position argument is
-        // accepted and ignored rather than rejected -- scripts written against
-        // Roblox should still run, just with centre-of-mass behaviour.
         _ = Part_Apply_Impulse(part.object.signal_registry, object, impulse)
         return 0, true
     }

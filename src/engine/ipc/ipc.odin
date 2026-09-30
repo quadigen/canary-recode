@@ -9,18 +9,16 @@ MAGIC_3 :: u8('C')
 
 PROTOCOL_VERSION :: u16(1)
 
-HEADER_SIZE      :: 12
+HEADER_SIZE :: 12
 MAX_MESSAGE_SIZE :: 16 * 1024 * 1024
 
 
 Error_Kind :: enum {
 	None,
-
 	Closed,
 	Invalid_Header,
 	Version_Mismatch,
 	Message_Too_Large,
-
 	Read_Failed,
 	Write_Failed,
 	Pipe_Failed,
@@ -41,9 +39,8 @@ Message :: struct {
 
 
 Channel :: struct {
-	read:  ^os.File,
-	write: ^os.File,
-
+	read:       ^os.File,
+	write:      ^os.File,
 	owns_read:  bool,
 	owns_write: bool,
 }
@@ -55,10 +52,7 @@ is_ok :: proc(err: Error) -> bool {
 
 
 make_error :: proc(kind: Error_Kind, err: os.Error = nil) -> Error {
-	return Error{
-		kind     = kind,
-		os_error = err,
-	}
+	return Error{kind = kind, os_error = err}
 }
 
 
@@ -77,16 +71,17 @@ put_u32_le :: proc(dst: []u8, offset: int, value: u32) {
 
 
 get_u16_le :: proc(src: []u8, offset: int) -> u16 {
-	return u16(src[offset + 0]) |
-	       u16(src[offset + 1]) << 8
+	return u16(src[offset + 0]) | u16(src[offset + 1]) << 8
 }
 
 
 get_u32_le :: proc(src: []u8, offset: int) -> u32 {
-	return u32(src[offset + 0]) |
-	       u32(src[offset + 1]) << 8 |
-	       u32(src[offset + 2]) << 16 |
-	       u32(src[offset + 3]) << 24
+	return(
+		u32(src[offset + 0]) |
+		u32(src[offset + 1]) << 8 |
+		u32(src[offset + 2]) << 16 |
+		u32(src[offset + 3]) << 24 \
+	)
 }
 
 
@@ -260,9 +255,7 @@ close :: proc(channel: ^Channel) {
 		_ = os.close(channel.read)
 	}
 
-	if channel.owns_write &&
-	   channel.write != nil &&
-	   channel.write != channel.read {
+	if channel.owns_write && channel.write != nil && channel.write != channel.read {
 		_ = os.close(channel.write)
 	}
 
@@ -272,12 +265,7 @@ close :: proc(channel: ^Channel) {
 
 
 from_stdio :: proc() -> Channel {
-	return Channel{
-		read       = os.stdin,
-		write      = os.stdout,
-		owns_read  = false,
-		owns_write = false,
-	}
+	return Channel{read = os.stdin, write = os.stdout, owns_read = false, owns_write = false}
 }
 
 
@@ -304,15 +292,14 @@ spawn :: proc(
 		return
 	}
 
-	desc := os.Process_Desc{
+	desc := os.Process_Desc {
 		command     = command,
 		working_dir = working_dir,
-
-		stdin  = child_read,
-		stdout = child_write,
+		stdin       = child_read,
+		stdout      = child_write,
 
 		// Keep normal diagnostic output available.
-		stderr = os.stderr,
+		stderr      = os.stderr,
 	}
 
 	process2, process_err := os.process_start(desc)
@@ -328,7 +315,7 @@ spawn :: proc(
 		return
 	}
 
-	channel = Channel{
+	channel = Channel {
 		read       = parent_read,
 		write      = parent_write,
 		owns_read  = true,

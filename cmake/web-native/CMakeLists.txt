@@ -22,7 +22,8 @@ target_compile_definitions(Luau.Bytecode PRIVATE clock=kine_luau_clock)
 target_compile_definitions(Luau.Common PRIVATE clock=kine_luau_clock)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_luau" kine_luau)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_jolt" kine_jolt)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_recast" kine_recast)
 
-set_target_properties(kine_luau JoltWrapper Jolt PROPERTIES
+set_target_properties(kine_luau JoltWrapper Jolt RecastWrapper Recast Detour PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )

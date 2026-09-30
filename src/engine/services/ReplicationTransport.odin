@@ -7,15 +7,17 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
+import "core:slice"
 import "core:sort"
 import "core:strings"
 import "base:runtime"
+import assetstore "../assetstore"
 import enet "vendor:ENet"
 
 // Wire protocol revision. Bumping this is the only supported way to change the
 // packet layout: both sides compare it during the handshake and refuse to talk
 // to a peer they cannot parse, instead of silently misinterpreting frames.
-Replication_Protocol_Version: u32 = 6
+Replication_Protocol_Version: u32 = 7
 
 // The framing layer still accepts revision 5 so that a stale client can reach
 // the HELLO handler and be told why it is being refused. Rejecting it at the
@@ -25,12 +27,17 @@ Replication_Minimum_Framing_Version: u32 = 5
 Replication_Capability_Ack_Tokens:     u32 = 1 << 0
 Replication_Capability_Batch_Properties: u32 = 1 << 1
 Replication_Capability_Time_Sync:       u32 = 1 << 2
+// The server pushes its asset table at connect time. Advertised separately so a
+// peer that cannot apply the frames is never sent them in the first place,
+// rather than having the frames arrive and be dropped as unknown kinds.
+Replication_Capability_Asset_Transfer: u32 = 1 << 3
 
 // Every feature this build implements, advertised during the handshake.
 Replication_Local_Capabilities: u32 =
 	Replication_Capability_Ack_Tokens |
 	Replication_Capability_Batch_Properties |
-	Replication_Capability_Time_Sync
+	Replication_Capability_Time_Sync |
+	Replication_Capability_Asset_Transfer
 
 Replication_Handshake_Ok:                u8 = 0
 Replication_Handshake_Version_Mismatch:  u8 = 1
@@ -38,6 +45,10 @@ Replication_Handshake_Auth_Rejected:     u8 = 2
 Replication_Handshake_Malformed:         u8 = 3
 Replication_Handshake_Already_Complete:  u8 = 4
 Replication_Handshake_Schema_Mismatch:   u8 = 5
+
+// Frame kinds are numbered by capability, so a new one takes the next free
+// number rather than reusing a retired meaning.
+Replication_Kind_Asset: u8 = 21
 
 replication_string_compare :: proc(a, b: string) -> int {
 	if a < b {return -1}
@@ -327,6 +338,9 @@ replication_receive_hello :: proc(
 	)
 	service.connected = true
 	fmt.printf("Network server accepted %s (user %d)\n", name, id)
+	// Assets go out after WELCOME, on the same reliable channel, so ENet ordering
+	// guarantees they are applied before any spawn that references one.
+	replication_send_asset_table(service, peer, capabilities)
 }
 
 replication_receive_welcome :: proc(
@@ -574,11 +588,16 @@ replication_budgeted :: proc(
 	kind: u8,
 ) -> bool {
 	if service == nil || service.mode != .Server {return false}
+	// The asset table is a connect time transfer, not part of the per tick
+	// snapshot, so it must not be measured against the tick budget. A drop here
+	// would leave the client permanently missing a mesh, and unlike a lost
+	// property frame nothing would ever retry it.
 	return kind != 1 &&
 	       kind != 2 &&
 	       kind != 3 &&
 	       kind != 8 &&
-	       kind != 20
+	       kind != 20 &&
+	       kind != Replication_Kind_Asset
 }
 
 replication_send :: proc(
@@ -639,6 +658,113 @@ replication_apply_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
+// replication_send_asset_table hands a freshly connected client every asset the
+// loaded map published. Without it the client's store stays empty for the life
+// of the process, because only deserializing a .kine stream ever fills it, and
+// a network client never loads one.
+//
+// Sent right after WELCOME on the reliable channel, so ENet's per channel
+// ordering puts the whole table ahead of the first spawn that references it.
+replication_send_asset_table :: proc(
+	service: ^ReplicatorService,
+	peer: ^enet.Peer,
+	client_capabilities: u32,
+) {
+	if (client_capabilities & Replication_Capability_Asset_Transfer) == 0 {return}
+	total := assetstore.Count()
+
+	sent := 0
+	for index := 0; index < total; index += 1 {
+		// At borrows the entry, and nothing registers during this loop, so the
+		// pointer stays valid to the end of the iteration.
+		entry, ok := assetstore.At(index)
+		if !ok || entry == nil {continue}
+		payload: [dynamic]u8
+		encode_asset_entry(&payload, entry.id, entry.path, entry.kind, entry.bytes)
+		sent_ok := replication_send(service, peer, Replication_Kind_Asset, payload[:], true)
+		// Freed here rather than with defer: a defer inside a loop body runs at
+		// procedure exit, so one per iteration would free the same final buffer
+		// once per asset.
+		delete(payload)
+		if !sent_ok {return}
+		sent += 1
+	}
+
+	// A closing frame so the client can tell a complete table from a truncated
+	// one instead of silently running with whatever happened to arrive. It is sent
+	// even when the map published nothing, so an empty table is reported as a
+	// complete empty table rather than leaving the client waiting forever.
+	footer: [dynamic]u8
+	append(&footer, Replication_Asset_Subtype_End)
+	replication_put_u32(&footer, u32(sent))
+	replication_send(service, peer, Replication_Kind_Asset, footer[:], true)
+	delete(footer)
+
+	service.assets_sent += u64(sent)
+	fmt.printf("Sent %d embedded assets to a client\n", sent)
+}
+
+replication_receive_asset :: proc(
+	service: ^ReplicatorService,
+	peer: ^enet.Peer,
+	reader: ^Replication_Reader,
+) {
+	if service.mode != .Client || peer != service.remote {return}
+	if reader.offset >= len(reader.data) {reader.valid = false; return}
+	subtype := reader.data[reader.offset]
+	reader.offset += 1
+
+	if subtype == Replication_Asset_Subtype_End {
+		count := replication_read_u32(reader)
+		if !reader.valid {return}
+		// The declared count is checked against what actually arrived rather than
+		// just recorded. Taking the server's word for it would let a truncated or
+		// hostile table mark itself complete, which is the one thing this frame
+		// exists to rule out.
+		if u64(count) != service.assets_received {
+			fmt.eprintf(
+				"[Replication] asset table is incomplete: the server closed it after %d entries but only %d arrived\n",
+				count,
+				service.assets_received,
+			)
+			service.asset_rejections += 1
+			return
+		}
+		service.asset_table_complete = true
+		fmt.printf("Received %d embedded assets from the server\n", count)
+		return
+	}
+	if subtype != Replication_Asset_Subtype_Entry {reader.valid = false; return}
+
+	id, path, kind, data, ok := decode_asset_entry_body(reader)
+	if !ok {return}
+	// The cumulative caps are enforced here rather than left to the store, because
+	// bytes now arrive from the network instead of a file the user chose. Count
+	// and total size are both bounded so a peer cannot make this client reserve
+	// an unbounded amount of memory by claiming more than it sent.
+	if service.assets_received >= u64(assetstore.MAX_ASSET_COUNT) {
+		fmt.eprintln("[Replication] refused an asset past the asset count limit")
+		service.asset_rejections += 1
+		return
+	}
+	if service.asset_bytes_received + u64(len(data)) > u64(assetstore.MAX_ASSET_TOTAL_BYTES) {
+		fmt.eprintln("[Replication] refused an asset past the total size limit")
+		service.asset_rejections += 1
+		return
+	}
+
+	// Register_As takes ownership, and the packet buffer is released once this
+	// dispatch returns, so the store gets a copy it may keep.
+	owned := slice.clone(data)
+	if !assetstore.Register_As(id, owned, path, kind) {
+		fmt.eprintf("[Replication] refused a malformed asset entry: %s\n", id)
+		service.asset_rejections += 1
+		return
+	}
+	service.assets_received += 1
+	service.asset_bytes_received += u64(len(data))
+}
+
 replication_receive :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
@@ -670,6 +796,8 @@ replication_receive :: proc(
 		replication_receive_time_sync(service, peer, &reader)
 	case 20:
 		replication_receive_time_sync_reply(service, peer, &reader)
+	case Replication_Kind_Asset:
+		replication_receive_asset(service, peer, &reader)
 	case 2:
 		if service.mode != .Client || peer != service.remote {return}
 		id := replication_read_u32(&reader)

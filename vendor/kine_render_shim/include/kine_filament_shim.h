@@ -101,6 +101,15 @@ typedef struct KineFilamentVulkanBackend {
 #define KINE_GIZMO_AXIS_Z      3
 #define KINE_GIZMO_AXIS_CENTER 4
 
+// Plane handles. An axis arrow foreshortens into an unusable dot once the camera
+// looks down it, so the plane perpendicular to that axis takes over. Each one is
+// named for the two axes it drags, and is colored with the color of the axis it
+// replaces.
+#define KINE_GIZMO_AXIS_XY     5
+#define KINE_GIZMO_AXIS_YZ     6
+#define KINE_GIZMO_AXIS_XZ     7
+#define KINE_GIZMO_AXIS_COUNT  8
+
 // Gizmo type, matches the existing shape codes used by Kine_Filament_CreateMesh.
 #define KINE_GIZMO_MOVE   10
 #define KINE_GIZMO_ROTATE 11
@@ -443,6 +452,21 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
     float startY,
     float currentX,
     float currentY);
+
+// Solves a plane-handle drag. Returns 1 and writes one delta per axis the plane
+// spans (XY writes X then Y, YZ writes Y then Z, XZ writes X then Z), in the same
+// local units a single-axis drag reports. Returns 0 for any other axis.
+KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
+    KineFilamentContext* ctx,
+    KineFilamentGizmo* gizmo,
+    float* mat4,
+    int axis,
+    float startX,
+    float startY,
+    float currentX,
+    float currentY,
+    float* outFirst,
+    float* outSecond);
 
 // OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
 // keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a

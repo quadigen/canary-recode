@@ -68,7 +68,7 @@ KineRoot = model
 		panic("serialize failed")
 	}
 	defer delete(data)
-	fmt.printf("serialized KINE v2 %d bytes\n", len(data))
+	fmt.printf("serialized KINE v%d %d bytes\n", serializer.KINE_VERSION, len(data))
 	data[4] = 1
 	rejected, accepted_v1 := serializer.Deserialize(&environment.classes, script_vm.L, nil, data)
 	if accepted_v1 || rejected != nil {panic("KINE v1 must be rejected")}

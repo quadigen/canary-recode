@@ -47,13 +47,9 @@ UpdateService :: struct {
 
 	background_started: bool,
 
-	// Asynchronous apply state (GUI Update & Restart path). The apply thread
-	// writes under `apply_mutex`; the UI polls it from the main thread.
 	apply_mutex: sync.Mutex,
 	apply:       UpdateApply,
 
-	// Serializes stages into the shared pending directory so the opportunistic
-	// startup check and an explicit apply never race over the same tag dir.
 	stage_mutex: sync.Mutex,
 }
 
@@ -199,9 +195,6 @@ Register_UpdateService_Class :: proc(registry: ^classes.Registry) {
 	)
 }
 
-// Self-updates are only meaningful for the editor and the client, and only for
-// stamped release builds. Developer builds (`odin run`, no RUNTIME_GIT_COMMIT)
-// never disable the system indirectly by being unstamped.
 update_service_enabled :: proc() -> bool {
 	if target.is_server() {
 		return false
@@ -279,10 +272,6 @@ update_strip_v :: proc(version: string) -> string {
 	return strings.clone(version)
 }
 
-// Returns >0 when a is newer, 0 when equal, <0 when a is older. Only the
-// major/minor/patch triple and the presence of a prerelease identifier take
-// part in the comparison (a release always beats a prerelease of the same
-// triple, and pre-release identifiers compare lexically).
 Update_Version_Compare :: proc(a, b: string) -> int {
 	amajor, aminor, apatch, aprerelease, aok := update_parse_version(a)
 	bmajor, bminor, bpatch, bprerelease, bok := update_parse_version(b)
@@ -363,9 +352,6 @@ update_parse_version :: proc(version: string) -> (major, minor, patch: int, prer
 	return major, minor, patch, prerelease, true
 }
 
-// Sends an HTTP GET with an explicit User-Agent. The GitHub API rejects
-// requests without one, so this path (not HttpService_GetAsync) is used for
-// manifest lookups.
 update_http_get :: proc(url: string) -> (body: string, status: int, ok: bool) {
 	req: http_client.Request
 	http_client.request_init(&req, .Get)

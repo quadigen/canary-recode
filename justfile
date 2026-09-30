@@ -42,7 +42,31 @@ run-sandbox script="C:\\Users\\devco\\Documents\\Kinemium-Canary\\src\\sandboxed
 
 test:
     odin test src
+    odin test src/engine/assetstore
+    @just test-serializer
     @just test-replication
+
+test-serializer:
+    #!pwsh
+    $ErrorActionPreference = 'Stop'
+    $tests = @(
+        'serializer_smoke',
+        'asset_portability_smoke'
+    )
+    $failed = @()
+    foreach ($t in $tests) {
+        $output = (odin run "tests/$t.odin" -file 2>&1 | Out-String)
+        if ($output -match 'PASSED') {
+            Write-Host "PASS  $t"
+        } else {
+            Write-Host "FAIL  $t"
+            Write-Host $output
+            $failed += $t
+        }
+    }
+    if ($failed.Count -gt 0) {
+        throw "serializer tests failed: $($failed -join ', ')"
+    }
 
 # The replication smoke tests are standalone `odin run` programs rather than
 # `odin test` suites, because each one boots a full engine environment pair over
@@ -63,7 +87,9 @@ test-replication:
          'replication_load_control_smoke',
          'replication_timebase_smoke',
          'replication_relevancy_smoke',
+         'replication_asset_smoke',
          'character_death_smoke',
+         'character_cancollide_smoke',
          'player_impulse_smoke',
          'part_velocity_smoke'
     )

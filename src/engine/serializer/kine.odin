@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:slice"
 import "core:strings"
 import classes "../classes"
+import assetstore "../assetstore"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
@@ -16,6 +17,14 @@ import vm "../vm"
 //   header:
 //     4 bytes   magic "KINE"
 //     1 byte    format version
+//   asset table (version 3 and later, absent in version 2):
+//     u32      asset count
+//     per asset:
+//       string   content id
+//       string   original path as authored
+//       u8       asset kind
+//       varuint  byte length
+//       bytes    raw file contents
 //   instance record (repeated recursively):
 //     string   class name
 //     string   instance name
@@ -35,9 +44,21 @@ import vm "../vm"
 //
 //   string := varuint length + raw bytes
 //   value  := u8 tag + payload (see Value_Tag below)
+//
+// The asset table is read before the instance tree so that every property setter
+// runs with its referenced bytes already published. Asset-bearing property
+// values are stored as "kineasset://<content-id>", which round-trips losslessly:
+// the store keeps the original path so an editor can still show what was used.
 
 KINE_MAGIC :: "KINE"
-KINE_VERSION :: 2
+
+// KINE_VERSION is the version written by this build.
+KINE_VERSION :: 3
+
+// KINE_LEGACY_VERSION is the last layout without an asset table. Those files
+// still decode; they just cannot carry embedded assets.
+KINE_LEGACY_VERSION :: 2
+
 KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 
 READ_ONLY_PROPERTIES := [?]string{
@@ -98,11 +119,25 @@ Writer :: struct {
 	// editor-only services (CoreGui, EditorService, ...) from the DataModel root
 	// before writing a map file.
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
+	// Ids this stream actually referenced, in first-use order. Only these are
+	// written to the asset table, so assets left in the store by an
+	// already-loaded map do not leak into the file being written.
+	used_ids: [dynamic]string,
+	used_seen: map[string]bool,
+	// embed_assets is false for a version 2 stream, where asset properties keep
+	// the author's bare paths and no table is written.
+	embed_assets: bool,
+	// version is the layout being written. A few value records changed shape
+	// between versions, so a record can consult it rather than guessing.
+	version: u8,
 }
 
 Reader :: struct {
 	data: []u8,
 	pos:  int,
+	// version is the layout being read, so a record can tell which shape to
+	// expect instead of guessing.
+	version: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +327,103 @@ read_i16s :: proc(r: ^Reader, out: []i16) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Asset embedding
+// ---------------------------------------------------------------------------
+
+// asset_kind_of reports whether a class property holds a reference to a file
+// that belongs inside the .kine file. Keeping this a table means adding a
+// consumer is one line, and a property that is not listed keeps its current
+// behaviour of storing a bare path.
+asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, bool) {
+	switch class_name {
+	case "MeshPart":
+		switch property {
+		case "MeshId", "MeshContent":
+			return .Mesh, true
+		case "TextureId":
+			return .Texture, true
+		}
+	case "ImageLabel", "ImageButton":
+		if property == "Image" {
+			return .Texture, true
+		}
+	case "Decal":
+		if property == "Texture" {
+			return .Texture, true
+		}
+	}
+	return .Unknown, false
+}
+
+// is_embeddable_path rejects values that are not the author's own files: an
+// already-embedded reference, an empty slot, or any other scheme such as
+// builtin://, memory:// or a remote URL.
+is_embeddable_path :: proc(path: string) -> bool {
+	if path == "" {
+		return false
+	}
+	if assetstore.Is_Uri(path) {
+		return false
+	}
+	return !strings.contains(path, "://")
+}
+
+// note_asset records that this stream referenced an asset, so the asset table
+// carries it even when the store already held those bytes from an earlier map.
+note_asset :: proc(w: ^Writer, id: string) {
+	if w.used_seen == nil {
+		w.used_seen = make(map[string]bool)
+	}
+	if w.used_seen[id] {
+		return
+	}
+	w.used_seen[id] = true
+	append(&w.used_ids, strings.clone(id))
+}
+
+// embed_path turns an authored file path into the value to serialize. When the
+// file can be read its bytes are registered and a "kineasset://" reference is
+// returned; otherwise the authored path is preserved, so a missing file
+// degrades to the current broken-in-the-editor behaviour rather than to nothing.
+// The result is owned by the caller.
+embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) -> string {
+	if !w.embed_assets || !is_embeddable_path(authored) {
+		return strings.clone(authored)
+	}
+
+	data, ok := assetstore.Read_Asset_File(authored)
+	if !ok {
+		return strings.clone(authored)
+	}
+
+	// Register consumes the bytes, so `data` must not be freed here.
+	id := assetstore.Register(data, authored, kind)
+	defer delete(id)
+	if id == "" {
+		return strings.clone(authored)
+	}
+	note_asset(w, id)
+	return assetstore.Make_Uri(id)
+}
+
+// replace_stack_asset rewrites a string already on the Lua stack with its
+// embedded reference, keeping the value at the same stack index.
+replace_stack_asset :: proc(w: ^Writer, L: ^vm.State, value_index: int, kind: assetstore.Asset_Kind) -> bool {
+	if vm.TypeOf(L, value_index) != .String {
+		return false
+	}
+	authored := vm.ArgString(L, value_index)
+	if !is_embeddable_path(authored) {
+		return false
+	}
+	uri := embed_path(w, authored, kind)
+	defer delete(uri)
+	vm.SetStackTop(L, value_index - 1)
+	vm.PushString(L, uri)
+	return true
+}
+
+// ---------------------------------------------------------------------------
 // Value encoding
 // ---------------------------------------------------------------------------
 
@@ -396,7 +528,18 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		}
 	case .Content:
 		value := cast(^datatypes.Content)ptr
-		write_string(w, value.uri)
+		// Content is the generic file handle, so a local path inside one is an
+		// asset like any other and embeds as data.
+		uri := embed_path(w, value.uri, .Data)
+		write_string(w, uri)
+		delete(uri)
+		// Version 3 added the object handle. Without it a Content pointing at a
+		// live engine object (an EditableMesh, say) silently degraded to a
+		// dangling empty reference on every reload.
+		if w.version >= 3 {
+			write_u32(w, value.object_id)
+			write_u8(w, value.object_kind)
+		}
 	case .DateTime:
 		value := cast(^datatypes.DateTime)ptr
 		write_f64(w, value.UnixTimestampMillis)
@@ -636,7 +779,17 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 		if !ok {
 			return false
 		}
-		datatypes.Push_Content(L, registry, datatypes.Content{uri = uri})
+		content := datatypes.Content{uri = uri}
+		if r.version >= 3 {
+			object_id, id_ok := read_u32(r)
+			object_kind, kind_ok := read_u8(r)
+			if !id_ok || !kind_ok {
+				return false
+			}
+			content.object_id = object_id
+			content.object_kind = object_kind
+		}
+		datatypes.Push_Content(L, registry, content)
 	case .DateTime:
 		millis, ok := read_i64(r)
 		if !ok {
@@ -945,7 +1098,7 @@ serialize_read_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, property: string) -> bool {
+read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, class_name: string, property: string) -> bool {
 	base := vm.StackTop(L)
 
 	read_context := serialize_read_context{object = object, descriptor = descriptor, key = property}
@@ -962,6 +1115,12 @@ read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registr
 		return false
 	}
 
+	// A declared asset property holding a local path is rewritten to point at
+	// the embedded copy. This has to happen before write_value runs, because
+	// that is what puts the value into the stream.
+	if kind, is_asset := asset_kind_of(class_name, property); is_asset {
+		_ = replace_stack_asset(w, L, base + 1, kind)
+	}
 	offset := len(w.data)
 	write_string(w, property)
 	if !write_value(w, L, registry, base + 1) {
@@ -969,7 +1128,6 @@ read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registr
 		vm.SetStackTop(L, base)
 		return false
 	}
-
 	vm.SetStackTop(L, base)
 	return true
 }
@@ -1018,7 +1176,7 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		if !property_is_saveable(property) {
 			continue
 		}
-		if read_class_property(w, L, registry, object, descriptor, property) {
+		if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {
 			property_count += 1
 		}
 	}
@@ -1257,16 +1415,154 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 }
 
 // ---------------------------------------------------------------------------
+// Asset table
+// ---------------------------------------------------------------------------
+
+write_asset_table :: proc(w: ^Writer) -> bool {
+	count := len(w.used_ids)
+	if count > assetstore.MAX_ASSET_COUNT {
+		fmt.eprintf("[kine] refusing to write %d assets (limit %d)\n", count, assetstore.MAX_ASSET_COUNT)
+		return false
+	}
+
+	total: i64 = 0
+	for id in w.used_ids {
+		entry, ok := assetstore.Find(id)
+		if !ok {
+			fmt.eprintf("[kine] asset %s vanished before the table was written\n", id)
+			return false
+		}
+		if len(entry.bytes) > assetstore.MAX_ASSET_BYTES {
+			fmt.eprintf("[kine] asset %s is %d bytes, over the %d limit\n", id, len(entry.bytes), assetstore.MAX_ASSET_BYTES)
+			return false
+		}
+		total += i64(len(entry.bytes))
+		if total > i64(assetstore.MAX_ASSET_TOTAL_BYTES) {
+			fmt.eprintf("[kine] embedded assets total %d bytes, over the %d limit\n", total, assetstore.MAX_ASSET_TOTAL_BYTES)
+			return false
+		}
+	}
+
+	write_u32(w, u32(count))
+	for id in w.used_ids {
+		entry, _ := assetstore.Find(id)
+		write_string(w, entry.id)
+		write_string(w, entry.path)
+		write_u8(w, u8(entry.kind))
+		write_var_u32(w, u32(len(entry.bytes)))
+		append(&w.data, ..entry.bytes)
+	}
+	return true
+}
+
+// read_asset_table publishes every embedded blob before the instance tree is
+// walked, so a property setter that decodes an asset finds its bytes waiting.
+// Bytes are cloned out of the input buffer: Register_As takes ownership and
+// `data` outlives this call.
+read_asset_table :: proc(r: ^Reader) -> bool {
+	count, ok := read_u32(r)
+	if !ok {
+		return false
+	}
+	if count > u32(assetstore.MAX_ASSET_COUNT) {
+		fmt.eprintf("[kine] asset count %d exceeds the limit\n", count)
+		return false
+	}
+
+	total: i64 = 0
+	for i in 0 ..< int(count) {
+		id, id_ok := read_string(r)
+		if !id_ok {
+			return false
+		}
+		path, path_ok := read_string(r)
+		if !path_ok {
+			delete(id)
+			return false
+		}
+		kind_byte, kind_ok := read_u8(r)
+		if !kind_ok {
+			delete(id)
+			delete(path)
+			return false
+		}
+		length, length_ok := read_var_u32(r)
+		if !length_ok {
+			delete(id)
+			delete(path)
+			return false
+		}
+		if length > u32(assetstore.MAX_ASSET_BYTES) {
+			fmt.eprintf("[kine] asset %s claims %d bytes, over the limit\n", id, length)
+			delete(id)
+			delete(path)
+			return false
+		}
+		total += i64(length)
+		if total > i64(assetstore.MAX_ASSET_TOTAL_BYTES) {
+			fmt.eprintf("[kine] asset table declares %d bytes, over the limit\n", total)
+			delete(id)
+			delete(path)
+			return false
+		}
+
+		bytes, bytes_ok := read_bytes(r, int(length))
+		if !bytes_ok {
+			delete(id)
+			delete(path)
+			return false
+		}
+
+		// Register_As consumes the bytes, so hand it a copy it may own.
+		owned := slice.clone(bytes)
+		accepted := assetstore.Register_As(id, owned, path, assetstore.Asset_Kind(kind_byte))
+		if !accepted {
+			fmt.eprintf("[kine] asset table entry %s is corrupt or duplicated\n", id)
+			delete(id)
+			delete(path)
+			return false
+		}
+		delete(id)
+		delete(path)
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-// Serialize writes an Instance hierarchy into a .KINE byte stream.
-// The returned slice is owned by the caller (free it with delete).
+// Serialize writes an Instance hierarchy into a .KINE byte stream, embedding
+// every referenced asset so the file is portable. The returned slice is owned
+// by the caller (free it with delete).
 Serialize :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
+) -> ([]u8, bool) {
+	return serialize(registry, L, object, KINE_VERSION, exclude_child)
+}
+
+// Serialize_Legacy writes the version 2 layout: no asset table, and asset
+// properties keep the author's bare paths. It exists so the version 2 reader
+// stays exercised, and for saves that must stay small and diff-friendly. Such a
+// file only works on a machine that still has the referenced files.
+Serialize_Legacy :: proc(
+	registry: ^classes.Registry,
+	L: ^vm.State,
+	object: ^classes.Object,
+	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
+) -> ([]u8, bool) {
+	return serialize(registry, L, object, KINE_LEGACY_VERSION, exclude_child)
+}
+
+serialize :: proc(
+	registry: ^classes.Registry,
+	L: ^vm.State,
+	object: ^classes.Object,
+	version: u8,
+	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 ) -> ([]u8, bool) {
 	if registry == nil || L == nil || object == nil {
 		return nil, false
@@ -1278,13 +1574,49 @@ Serialize :: proc(
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, base)
 
-	writer := Writer{data = make([dynamic]u8, 0, 4096), exclude_child = exclude_child}
-	defer delete(writer.data)
+	// The instance tree is built first because an asset reference is only
+	// discovered while properties are read, and the asset table has to precede
+	// the tree in the output. The tree buffer is then copied in one step.
+	tree := Writer{
+		data         = make([dynamic]u8, 0, 4096),
+		exclude_child = exclude_child,
+		embed_assets  = version == KINE_VERSION,
+		version       = version,
+	}
+	defer delete(tree.data)
+	defer for id in tree.used_ids {
+		delete(id)
+	}
+	defer delete(tree.used_ids)
+	defer delete(tree.used_seen)
 
-	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), KINE_VERSION)
-	if !write_instance(&writer, L, registry, object) {
+	if !write_instance(&tree, L, registry, object) {
 		return nil, false
 	}
+
+	writer := Writer{data = make([dynamic]u8, 0, len(tree.data) + 1024)}
+	defer delete(writer.data)
+	defer for id in writer.used_ids {
+		delete(id)
+	}
+	defer delete(writer.used_ids)
+	defer delete(writer.used_seen)
+
+	// The tree walk is what discovered the assets, so its list is the one the
+	// table describes. Hand ownership to the output writer before writing it.
+	writer.used_ids = tree.used_ids
+	writer.used_seen = tree.used_seen
+	tree.used_ids = nil
+	tree.used_seen = nil
+
+	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), version)
+	if version == KINE_VERSION && !write_asset_table(&writer) {
+		return nil, false
+	}
+	// Copy the tree in one shot rather than element by element.
+	tree_start := len(writer.data)
+	resize(&writer.data, tree_start + len(tree.data))
+	copy(writer.data[tree_start:], tree.data[:])
 
 	return slice.clone(writer.data[:]), true
 }
@@ -1316,7 +1648,18 @@ Deserialize :: proc(registry: ^classes.Registry, L: ^vm.State, parent: ^classes.
 	if !version_ok {
 		return nil, false
 	}
-	if version != KINE_VERSION {
+	// Now that the version is known and accepted, hand it to the reader so each
+	// value record knows which layout to expect.
+	reader.version = version
+	// Version 2 has no asset table. Accepting it keeps older maps loadable; they
+	// simply have nothing embedded, so asset properties keep their bare paths.
+	if version != KINE_VERSION && version != KINE_LEGACY_VERSION {
+		return nil, false
+	}
+
+	// Publishing happens before the tree is walked so every property setter sees
+	// its bytes. A failure here means the file is unusable, not just degraded.
+	if version == KINE_VERSION && !read_asset_table(&reader) {
 		return nil, false
 	}
 

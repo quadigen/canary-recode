@@ -79,7 +79,6 @@ Vec3_Magnitude :: proc(v: Vector3) -> f32 {
 Vec3_Unit :: proc(v: Vector3) -> Vector3 {
 	magnitude := Vec3_Magnitude(v)
 
-	// Roblox returns NaN components for Vector3.zero.Unit.
 	if magnitude == 0 {
 		nan := math.nan_f32()
 		return Vector3{nan, nan, nan}
@@ -156,7 +155,6 @@ Vec3_Angle :: proc(a, b: Vector3, axis: ^Vector3 = nil) -> f32 {
 }
 
 vec3_fuzzy_component :: proc(a, b, epsilon: f32) -> bool {
-	// Matches Roblox's long-standing relative component comparison behavior.
 	return a == b || math.abs(a-b) <= (math.abs(a)+1.0)*epsilon
 }
 

@@ -7,17 +7,7 @@ import vm "../vm"
 
 CHARACTER_GRAVITY :: 196.2
 CHARACTER_COYOTE_TIME :: 0.1
-
-// CHARACTER_NOMINAL_MASS converts an impulse into a velocity change.
-//
-// A character is moved by a kinematic capsule that CharacterController_Tick
-// positions, not by a dynamic body the solver integrates, so it has no mass the
-// solver can divide by. Rather than pretend otherwise, this stands in as the
-// documented conversion factor for character impulses.
 CHARACTER_NOMINAL_MASS :: 10.0
-
-// CHARACTER_KNOCKBACK_DAMPING is how fast an external push bleeds off, per
-// second. Without it a knockback would persist until something else stopped it.
 CHARACTER_KNOCKBACK_DAMPING :: 6.0
 
 CharacterController_Class := Class_Info {
@@ -36,13 +26,7 @@ CharacterController :: struct {
 	vertical_speed: f32,
 	coyote_time:    f32,
 	step_count:     u32,
-	// knockback is an external horizontal velocity in studs per second, applied
-	// on top of walk movement and damped every tick. It is how an impulse on a
-	// character moves it.
 	knockback: datatypes.Vector3,
-	// ragdoll is set once the character dies. The character controller stops
-	// driving the root and the physics service takes the body over, so this flag
-	// is what the tick and the impulse path check to stay out of the way.
 	ragdoll: bool,
 }
 
@@ -83,14 +67,6 @@ CharacterController_From_Model :: proc(model: ^CharacterModel) -> ^CharacterCont
 	return nil
 }
 
-// CharacterController_Apply_Impulse turns an impulse into motion on a character.
-//
-// The character is a kinematic capsule, so the solver never integrates it and has
-// no body for Jolt to add an impulse to. The horizontal component becomes
-// knockback, which the tick carries and damps, and the vertical component joins
-// the jump velocity. Returns false when there is nothing to push: no controller,
-// or a controller whose body the physics service already owns because the
-// character is ragdolling.
 CharacterController_Apply_Impulse :: proc(
 	cc: ^CharacterController,
 	impulse: datatypes.Vector3,

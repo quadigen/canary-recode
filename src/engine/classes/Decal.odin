@@ -9,6 +9,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import kineffi "../bindings"
 import vm "../vm"
+import assetstore "../assetstore"
 
 Decal_Class := Class_Info{
 	name   = "Decal",
@@ -148,7 +149,19 @@ decal_reload_texture :: proc(
 	when ODIN_OS == .JS {
 		return false
 	} else {
-		path := strings.clone_to_cstring(decal.texture)
+		// Decals decode through stb, which only reads from a file. An embedded
+		// texture is extracted to the content-addressed cache first, so the
+		// authored path is never needed.
+		resolved := assetstore.Resolve_Path(decal.texture)
+		defer delete(resolved)
+		if resolved == "" {
+			// A decal with no decal is easy to miss in a busy scene, and an
+			// embedded reference that resolved to nothing means the table is
+			// incomplete rather than the texture being absent.
+			assetstore.Report_Missing_Asset(decal.texture, "Decal texture")
+			return false
+		}
+		path := strings.clone_to_cstring(resolved)
 		defer delete(path)
 
 		width, height, channels: c.int

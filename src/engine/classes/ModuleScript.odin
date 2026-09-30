@@ -42,9 +42,6 @@ ModuleScript_Init :: proc(class: ^Class_Info = nil, name: string = "ModuleScript
 	}
 }
 
-// ModuleScript_Set_Source replaces the module source. Any previously cached
-// require() result is dropped so the next require executes the new source,
-// matching Roblox editing behavior.
 ModuleScript_Set_Source :: proc(module: ^ModuleScript, source: string) {
 	if module == nil {
 		return

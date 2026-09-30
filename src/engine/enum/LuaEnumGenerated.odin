@@ -271,6 +271,7 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "MatchmakingType", MatchmakingType)
 	Register_Reflected_Enum(registry, "MaterialPattern", MaterialPattern)
 	Register_Reflected_Enum(registry, "MembershipType", MembershipType)
+	Register_Reflected_Enum(registry, "MeshAttribute", MeshAttribute)
 	Register_Reflected_Enum(registry, "MeshPartDetailLevel", MeshPartDetailLevel)
 	Register_Reflected_Enum(registry, "MeshPartHeadsAndAccessories", MeshPartHeadsAndAccessories)
 	Register_Reflected_Enum(registry, "MeshScaleUnit", MeshScaleUnit)

@@ -3,9 +3,6 @@ package datatypes
 import "core:fmt"
 import vm "../vm"
 
-// TerrainRegion is the snapshot object returned by Terrain:CopyRegion and
-// consumed by Terrain:PasteRegion. It mirrors Roblox's TerrainRegion: a
-// not-creatable userdata that exposes its cell Size and nothing else.
 TerrainRegion :: struct {
 	size:      Vector3int16,
 	materials: []i64,
@@ -43,8 +40,6 @@ push_terrain_region :: proc(
 	binding: ^vm.Userdata_Binding,
 	value: TerrainRegion,
 ) {
-	// Take ownership of the arrays directly rather than copying the struct
-	// through push_value, so the userdata is the single owner of the slices.
 	stored := new(TerrainRegion)
 	stored^ = value
 	vm.PushUserdata(&vm.VM{L = L}, stored, binding)

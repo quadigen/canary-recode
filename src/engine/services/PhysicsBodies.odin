@@ -2,6 +2,7 @@ package services
 
 import "core:math"
 import "core:strings"
+import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -159,7 +160,7 @@ physics_meshpart_shape :: proc(
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
 ) -> kineffi.JPH_ShapeRef {
-	if classes.Is_A(&mesh_part.object, "MeshPart") && mesh_part.mesh_id != "" {
+	if classes.Is_A(&mesh_part.object, "MeshPart") && (mesh_part.mesh_id != "" || mesh_part.editable_mesh_id != 0) {
 		#partial switch mesh_part.collision_fidelity {
 		case .Box:
 			half := datatypes.Vector3{max(mesh_part.size.x*0.5, 0.001), max(mesh_part.size.y*0.5, 0.001), max(mesh_part.size.z*0.5, 0.001)}
@@ -177,11 +178,17 @@ physics_meshpart_shape :: proc(
 physics_load_mesh_data :: proc(
 	mesh_part: ^classes.MeshPart,
 ) -> ([]kineffi.JPH_Vec3, [dynamic]u32, bool) {
-	path := mesh_part.mesh_id
-	if strings.has_prefix(path, "file://") {
-		path = path[len("file://"):]
+	// Physics reads collision data through a path-only binding, so an embedded
+	// mesh is extracted to the content-addressed cache first.
+	resolved := assetstore.Resolve_Path(mesh_part.mesh_id)
+	defer delete(resolved)
+	if resolved == "" {
+		// No collision data is quieter than no render mesh: the part looks
+		// correct and simply does not collide. Name the reason.
+		assetstore.Report_Missing_Asset(mesh_part.mesh_id, "Physics collision mesh")
+		return nil, nil, false
 	}
-	c_path := strings.clone_to_cstring(path)
+	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
 	data := kineffi.Kine_Filament_LoadMeshDataFromPath(c_path)
 	if data == nil {
@@ -214,7 +221,13 @@ physics_mesh_hull_shape :: proc(
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
 ) -> kineffi.JPH_ShapeRef {
-	verts, _, ok := physics_load_mesh_data(mesh_part)
+	verts: []kineffi.JPH_Vec3
+	ok := false
+	if mesh_part.editable_mesh_id != 0 {
+		verts, ok = physics_editable_mesh_vertices(mesh_part)
+	} else {
+		verts, _, ok = physics_load_mesh_data(mesh_part)
+	}
 	if !ok {
 		return nil
 	}
@@ -232,13 +245,83 @@ physics_mesh_hull_shape :: proc(
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(verts), u32(len(verts)), 0)
 }
 
+physics_editable_mesh_vertices :: proc(
+	mesh_part: ^classes.MeshPart,
+) -> ([]kineffi.JPH_Vec3, bool) {
+	mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
+	if mesh == nil {
+		return nil, false
+	}
+	center := classes.EditableMesh_Get_Center(mesh)
+	bounds := classes.EditableMesh_Get_Size(mesh)
+	scale := editable_mesh_render_scale(bounds)
+
+	corners: [dynamic]classes.EditableMesh_Corner_Data
+	_ = classes.EditableMesh_Collect_Corners(mesh, &corners)
+	defer delete(corners)
+
+	if len(corners) == 0 {
+		return nil, false
+	}
+	verts := make([]kineffi.JPH_Vec3, len(corners))
+	for corner, i in corners {
+		verts[i] = kineffi.JPH_Vec3{
+			(corner.position.x - center.x) * scale.x,
+			(corner.position.y - center.y) * scale.y,
+			(corner.position.z - center.z) * scale.z,
+		}
+	}
+	return verts, true
+}
+
+physics_editable_mesh_triangles :: proc(
+	mesh_part: ^classes.MeshPart,
+) -> ([]kineffi.JPH_Vec3, [dynamic]u32, bool) {
+	mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
+	if mesh == nil {
+		return nil, nil, false
+	}
+	center := classes.EditableMesh_Get_Center(mesh)
+	bounds := classes.EditableMesh_Get_Size(mesh)
+	scale := editable_mesh_render_scale(bounds)
+
+	corners: [dynamic]classes.EditableMesh_Corner_Data
+	_ = classes.EditableMesh_Collect_Triangles(mesh, &corners)
+	defer delete(corners)
+
+	if len(corners) == 0 || len(corners) % 3 != 0 {
+		return nil, nil, false
+	}
+	verts := make([]kineffi.JPH_Vec3, len(corners))
+	idx := make([dynamic]u32, len(corners))
+	for corner, i in corners {
+		verts[i] = kineffi.JPH_Vec3{
+			(corner.position.x - center.x) * scale.x,
+			(corner.position.y - center.y) * scale.y,
+			(corner.position.z - center.z) * scale.z,
+		}
+		idx[i] = u32(i)
+	}
+	return verts, idx, true
+}
+
 physics_mesh_pcd_shape :: proc(
 	service: ^Physics,
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
 ) -> kineffi.JPH_ShapeRef {
+	editable := mesh_part.editable_mesh_id != 0
+	version := u64(0)
+	if editable {
+		mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
+		if mesh != nil {
+			version = mesh.version
+		}
+	}
 	key := Physics_Shape_Cache_Key{
 		mesh_id = strings.clone(mesh_part.mesh_id),
+		editable_mesh_id = mesh_part.editable_mesh_id,
+		editable_mesh_version = version,
 		size = mesh_part.size,
 	}
 	if service != nil && service.pcd_cache != nil {
@@ -248,7 +331,14 @@ physics_mesh_pcd_shape :: proc(
 			return cached
 		}
 	}
-	verts, idx, ok := physics_load_mesh_data(mesh_part)
+	verts: []kineffi.JPH_Vec3
+	idx: [dynamic]u32
+	ok := false
+	if editable {
+		verts, idx, ok = physics_editable_mesh_triangles(mesh_part)
+	} else {
+		verts, idx, ok = physics_load_mesh_data(mesh_part)
+	}
 	if !ok {
 		delete(key.mesh_id)
 		return nil
@@ -438,11 +528,12 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 	service.body_to_part[body_id] = part
 
 	mesh_id := ""
+	editable_mesh_id := u32(0)
 
 	if classes.Is_A(&part.object, "MeshPart") {
-		mesh_id = strings.clone(
-			(cast(^classes.MeshPart)part).mesh_id,
-		)
+		mesh_part := cast(^classes.MeshPart)part
+		mesh_id = strings.clone(mesh_part.mesh_id)
+		editable_mesh_id = mesh_part.editable_mesh_id
 	}
 
 	return Physics_Body{
@@ -454,8 +545,23 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 		remote,
 		part.cframe,
 		mesh_id,
+		editable_mesh_id,
+		physics_mesh_part_version(part),
 		mesh_part_collision_fidelity(part),
 	}, true
+}
+
+physics_mesh_part_version :: proc(part: ^classes.Part) -> u64 {
+	if classes.Is_A(&part.object, "MeshPart") {
+		mesh_part := cast(^classes.MeshPart)part
+		if mesh_part.editable_mesh_id != 0 {
+			mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
+			if mesh != nil {
+				return mesh.version
+			}
+		}
+	}
+	return 0
 }
 
 mesh_part_collision_fidelity :: proc(part: ^classes.Part) -> enums.CollisionFidelity {
@@ -541,11 +647,14 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		}
 		body := &service.bodies[body_index]
 		mesh_id := ""
+		editable_mesh_id := u32(0)
 		if classes.Is_A(&part.object, "MeshPart") {
-			mesh_id = (cast(^classes.MeshPart)part).mesh_id
+			mesh_part := cast(^classes.MeshPart)part
+			mesh_id = mesh_part.mesh_id
+			editable_mesh_id = mesh_part.editable_mesh_id
 		}
 		remote := physics_remote_owned(service, part)
-		if body.size != part.size || body.shape != part.shape || body.anchored != part.anchored || body.remote != remote || body.mesh_id != mesh_id || body.collision_fidelity != mesh_part_collision_fidelity(part) {
+		if body.size != part.size || body.shape != part.shape || body.anchored != part.anchored || body.remote != remote || body.mesh_id != mesh_id || body.editable_mesh_id != editable_mesh_id || body.editable_mesh_version != physics_mesh_part_version(part) || body.collision_fidelity != mesh_part_collision_fidelity(part) {
 			physics_destroy_body(service, body^)
 			new_body, ok := physics_create_body(service, part)
 			if ok {
@@ -798,11 +907,22 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 	}
 }
 
+// Lists the bodies the character capsule is allowed to collide with, excluding
+// its own body.
+//
+// A Part with CanCollide off is a ghost: it is still a body, so it would
+// otherwise stop the character dead even though nothing else in the engine
+// treats it as solid. Filtering it out here is what makes the character pass
+// through it, matching how Physics_Raycast already respects the same flag.
+// The character sweep is the only consumer of this list, so the filter lives
+// here rather than being repeated at every call site.
 Physics_Candidate_Bodies :: proc(service: ^Physics, exclude: kineffi.JPH_BodyID) -> [dynamic]kineffi.JPH_BodyID {
 	result: [dynamic]kineffi.JPH_BodyID
 	if service == nil {return result}
 	for body in service.bodies {
 		if body.body_id == exclude || body.body_id == kineffi.JPH_BODY_ID_INVALID {continue}
+		part := cast(^classes.Part)body.object
+		if part == nil || !part.can_collide {continue}
 		append(&result, body.body_id)
 	}
 	return result

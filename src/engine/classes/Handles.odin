@@ -1,94 +1,95 @@
 package classes
 
-import sdl3 "../platform"
+import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
-import kineffi "../bindings"
+import sdl3 "../platform"
 import signals "../signals"
 import vm "../vm"
+import "core:math"
 
-Adorn_Class := Class_Info{
+Adorn_Class := Class_Info {
 	name   = "Adorn",
 	parent = &Instance_Class,
 }
 
-PartAdornment_Class := Class_Info{
+PartAdornment_Class := Class_Info {
 	name   = "PartAdornment",
 	parent = &Adorn_Class,
 }
 
-Handles_Class := Class_Info{
+Handles_Class := Class_Info {
 	name   = "Handles",
 	parent = &PartAdornment_Class,
 }
 
-ArcHandles_Class := Class_Info{
+ArcHandles_Class := Class_Info {
 	name   = "ArcHandles",
 	parent = &PartAdornment_Class,
 }
 
 Handles :: struct {
-	using object: Object,
-
-	Adornee: ^Object,
-	Color3:  datatypes.Color3,
-	Faces:   datatypes.Faces,
-	Style:   enums.HandlesStyle,
-	Visible: bool,
-
+	using object:       Object,
+	Adornee:            ^Object,
+	Color3:             datatypes.Color3,
+	Faces:              datatypes.Faces,
+	Style:              enums.HandlesStyle,
+	Visible:            bool,
 	mouse_button1_down: ^signals.Signal,
 	mouse_button1_up:   ^signals.Signal,
 	mouse_drag:         ^signals.Signal,
-
-	native_gizmo:   ^kineffi.KineFilamentGizmo,
-	native_context: ^kineffi.KineFilamentContext,
-	hovered_axis:  i32,
-	selected_axis: i32,
-	dragging:      bool,
-	previous_left: bool,
-	drag_start_x:  f32,
-	drag_start_y:  f32,
-	drag_last_delta: f32,
+	native_gizmo:       ^kineffi.KineFilamentGizmo,
+	native_context:     ^kineffi.KineFilamentContext,
+	hovered_axis:       i32,
+	snap:               f64,
+	selected_axis:      i32,
+	dragging:           bool,
+	previous_left:      bool,
+	drag_start_x:       f32,
+	drag_start_y:       f32,
+	drag_last_delta:    f32,
+	drag_last_delta2:   f32,
 }
 
 ArcHandles :: struct {
-	using object: Object,
-
-	Adornee: ^Object,
-	Axes:    datatypes.Axes,
-	Color3:  datatypes.Color3,
-	Visible: bool,
-
+	using object:       Object,
+	Adornee:            ^Object,
+	Axes:               datatypes.Axes,
+	Color3:             datatypes.Color3,
+	Visible:            bool,
 	mouse_button1_down: ^signals.Signal,
 	mouse_button1_up:   ^signals.Signal,
 	mouse_drag:         ^signals.Signal,
-
-	native_gizmo:   ^kineffi.KineFilamentGizmo,
-	native_context: ^kineffi.KineFilamentContext,
-	hovered_axis:  i32,
-	selected_axis: i32,
-	dragging:      bool,
-	previous_left: bool,
-	drag_start_x:  f32,
-	drag_start_y:  f32,
-	drag_last_delta: f32,
+	native_gizmo:       ^kineffi.KineFilamentGizmo,
+	native_context:     ^kineffi.KineFilamentContext,
+	hovered_axis:       i32,
+	selected_axis:      i32,
+	snap:               f64,
+	dragging:           bool,
+	previous_left:      bool,
+	drag_start_x:       f32,
+	drag_start_y:       f32,
+	drag_last_delta:    f32,
+	drag_last_delta2:   f32,
 }
 
 handles_init :: proc() -> Handles {
-	return Handles{
+	return Handles {
 		object = Object_Init(&Handles_Class, "Handles"),
 		Color3 = datatypes.Color3{1, 1, 1},
-		Faces  = datatypes.Faces_All,
-		Style  = .Resize,
+		Faces = datatypes.Faces_All,
+		Style = .Resize,
+		snap = 2,
 		Visible = true,
 	}
 }
 
 arc_handles_init :: proc() -> ArcHandles {
-	return ArcHandles{
+	return ArcHandles {
 		object = Object_Init(&ArcHandles_Class, "ArcHandles"),
-		Axes   = datatypes.Axes_All,
+		Axes = datatypes.Axes_All,
 		Color3 = datatypes.Color3{1, 1, 1},
+		snap = 2,
 		Visible = true,
 	}
 }
@@ -117,42 +118,64 @@ handles_ensure_signals :: proc(
 	}
 }
 
-handles_construct :: proc(
-	renderer: ^Renderer_Object,
-	data_model: rawptr,
-) -> ^Object {
+handles_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	handles := new(Handles)
 	handles^ = handles_init()
 	return &handles.object
 }
 
-arc_handles_construct :: proc(
-	renderer: ^Renderer_Object,
-	data_model: rawptr,
-) -> ^Object {
+arc_handles_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	handles := new(ArcHandles)
 	handles^ = arc_handles_init()
 	return &handles.object
 }
 
-handles_destroy :: proc(
-	object: ^Object,
-	renderer: ^Renderer_Object,
-) {
+handles_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	handles := cast(^Handles)object
 	handles_destroy_native(handles.native_gizmo, handles.native_context)
-	handles_free_signal_pointers(&handles.mouse_button1_down, &handles.mouse_button1_up, &handles.mouse_drag)
+	handles_free_signal_pointers(
+		&handles.mouse_button1_down,
+		&handles.mouse_button1_up,
+		&handles.mouse_drag,
+	)
 	Object_Destroy(object)
 	free(handles)
 }
 
-arc_handles_destroy :: proc(
-	object: ^Object,
-	renderer: ^Renderer_Object,
-) {
+handles_snap_delta :: proc(delta: f32, snap: f64) -> f32 {
+	if snap <= 0 {
+		return delta
+	}
+
+	step := f32(snap)
+	return f32(math.round(f64(delta) / snap)) * step
+}
+
+handles_snap_increment :: proc(current_delta: f32, last_applied_delta: ^f32, snap: f64) -> f32 {
+	if snap <= 0 {
+		increment := current_delta - last_applied_delta^
+		last_applied_delta^ = current_delta
+		return increment
+	}
+
+	snapped := handles_snap_delta(current_delta, snap)
+	increment := snapped - last_applied_delta^
+
+	if increment != 0 {
+		last_applied_delta^ = snapped
+	}
+
+	return increment
+}
+
+arc_handles_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	handles := cast(^ArcHandles)object
 	handles_destroy_native(handles.native_gizmo, handles.native_context)
-	handles_free_signal_pointers(&handles.mouse_button1_down, &handles.mouse_button1_up, &handles.mouse_drag)
+	handles_free_signal_pointers(
+		&handles.mouse_button1_down,
+		&handles.mouse_button1_up,
+		&handles.mouse_drag,
+	)
 	Object_Destroy(object)
 	free(handles)
 }
@@ -184,11 +207,23 @@ handles_destroy_native :: proc(
 }
 
 handles_model_matrix :: proc(part: ^Part) -> [16]f32 {
-	return [16]f32{
-		part.cframe.r00, part.cframe.r01, part.cframe.r02, part.cframe.x,
-		part.cframe.r10, part.cframe.r11, part.cframe.r12, part.cframe.y,
-		part.cframe.r20, part.cframe.r21, part.cframe.r22, part.cframe.z,
-		0, 0, 0, 1,
+	return [16]f32 {
+		part.cframe.r00,
+		part.cframe.r01,
+		part.cframe.r02,
+		part.cframe.x,
+		part.cframe.r10,
+		part.cframe.r11,
+		part.cframe.r12,
+		part.cframe.y,
+		part.cframe.r20,
+		part.cframe.r21,
+		part.cframe.r22,
+		part.cframe.z,
+		0,
+		0,
+		0,
+		1,
 	}
 }
 
@@ -218,6 +253,27 @@ handles_ensure_native :: proc(
 	}
 }
 
+handles_plane :: proc(axis: i32) -> (first: i32, second: i32, normal: i32, is_plane: bool) {
+	switch axis {
+	case kineffi.KINE_GIZMO_AXIS_XY:
+		return kineffi.KINE_GIZMO_AXIS_X,
+			kineffi.KINE_GIZMO_AXIS_Y,
+			kineffi.KINE_GIZMO_AXIS_Z,
+			true
+	case kineffi.KINE_GIZMO_AXIS_YZ:
+		return kineffi.KINE_GIZMO_AXIS_Y,
+			kineffi.KINE_GIZMO_AXIS_Z,
+			kineffi.KINE_GIZMO_AXIS_X,
+			true
+	case kineffi.KINE_GIZMO_AXIS_XZ:
+		return kineffi.KINE_GIZMO_AXIS_X,
+			kineffi.KINE_GIZMO_AXIS_Z,
+			kineffi.KINE_GIZMO_AXIS_Y,
+			true
+	}
+	return 0, 0, 0, false
+}
+
 handles_axis_vector :: proc(axis: i32) -> datatypes.Vector3 {
 	switch axis {
 	case kineffi.KINE_GIZMO_AXIS_X:
@@ -231,8 +287,12 @@ handles_axis_vector :: proc(axis: i32) -> datatypes.Vector3 {
 }
 
 handles_push_axis :: proc(L: ^vm.State, registry: ^enums.Registry, axis: i32) {
+	report := axis
+	if _, _, normal, is_plane := handles_plane(axis); is_plane {
+		report = normal
+	}
 	value := i64(0)
-	switch axis {
+	switch report {
 	case kineffi.KINE_GIZMO_AXIS_Y:
 		value = 1
 	case kineffi.KINE_GIZMO_AXIS_Z:
@@ -269,12 +329,7 @@ handles_fire_drag :: proc(
 	signals.Fire(L, signal, 2)
 }
 
-handles_apply_delta :: proc(
-	part: ^Part,
-	axis: i32,
-	delta: f32,
-	style: enums.HandlesStyle,
-) {
+handles_apply_axis_delta :: proc(part: ^Part, axis: i32, delta: f32, style: enums.HandlesStyle) {
 	if part == nil {
 		return
 	}
@@ -315,6 +370,25 @@ handles_apply_delta :: proc(
 	}
 }
 
+handles_apply_delta :: proc(part: ^Part, axis: i32, delta: f32, style: enums.HandlesStyle) {
+	handles_apply_axis_delta(part, axis, delta, style)
+}
+
+handles_apply_plane_delta :: proc(
+	part: ^Part,
+	first_axis: i32,
+	second_axis: i32,
+	first: f32,
+	second: f32,
+	style: enums.HandlesStyle,
+) {
+	if part == nil || style == .Rotation {
+		return
+	}
+	handles_apply_axis_delta(part, first_axis, first, style)
+	handles_apply_axis_delta(part, second_axis, second, style)
+}
+
 handles_step_common :: proc(
 	L: ^vm.State,
 	renderer: ^Renderer_Object,
@@ -329,7 +403,9 @@ handles_step_common :: proc(
 	drag_start_x: ^f32,
 	drag_start_y: ^f32,
 	drag_last_delta: ^f32,
+	drag_last_delta2: ^f32,
 	gizmo_type: i32,
+	snap: ^f64,
 	style: enums.HandlesStyle,
 	mouse_down: ^signals.Signal,
 	mouse_up: ^signals.Signal,
@@ -350,12 +426,7 @@ handles_step_common :: proc(
 		return
 	}
 
-	handles_ensure_native(
-		renderer.Filament,
-		gizmo,
-		ctx,
-		gizmo_type,
-	)
+	handles_ensure_native(renderer.Filament, gizmo, ctx, gizmo_type)
 	if gizmo^ == nil {
 		return
 	}
@@ -381,26 +452,60 @@ handles_step_common :: proc(
 		drag_start_x^ = mouse_x
 		drag_start_y^ = mouse_y
 		drag_last_delta^ = 0
+		drag_last_delta2^ = 0
 		handles_fire_axis(L, mouse_down, enum_registry, selected_axis^)
 	}
 
 	if dragging^ && left {
-		delta := kineffi.Kine_Filament_GetGizmoDragDelta(
-			renderer.Filament,
-			gizmo^,
-			&model[0],
-			selected_axis^,
-			drag_start_x^,
-			drag_start_y^,
-			mouse_x,
-			mouse_y,
-		)
-		increment := delta - drag_last_delta^
-		drag_last_delta^ = delta
-		if apply_delta {
-			handles_apply_delta(part, selected_axis^, increment, style)
+		first_axis, second_axis, _, is_plane := handles_plane(selected_axis^)
+		if is_plane {
+			first, second: f32
+			if kineffi.Kine_Filament_GetGizmoPlaneDragDelta(
+				   renderer.Filament,
+				   gizmo^,
+				   &model[0],
+				   selected_axis^,
+				   drag_start_x^,
+				   drag_start_y^,
+				   mouse_x,
+				   mouse_y,
+				   &first,
+				   &second,
+			   ) !=
+			   0 {
+				first_increment := handles_snap_increment(first, drag_last_delta, snap^)
+				second_increment := handles_snap_increment(second, drag_last_delta2, snap^)
+				drag_last_delta^ = first
+				drag_last_delta2^ = second
+				if apply_delta {
+					handles_apply_plane_delta(
+						part,
+						first_axis,
+						second_axis,
+						first_increment,
+						second_increment,
+						style,
+					)
+				}
+				handles_fire_drag(L, mouse_drag, enum_registry, selected_axis^, first)
+			}
+		} else {
+			delta := kineffi.Kine_Filament_GetGizmoDragDelta(
+				renderer.Filament,
+				gizmo^,
+				&model[0],
+				selected_axis^,
+				drag_start_x^,
+				drag_start_y^,
+				mouse_x,
+				mouse_y,
+			)
+			increment := handles_snap_increment(delta, drag_last_delta, snap^)
+			if apply_delta && increment != 0 {
+				handles_apply_delta(part, selected_axis^, increment, style)
+			}
+			handles_fire_drag(L, mouse_drag, enum_registry, selected_axis^, delta)
 		}
-		handles_fire_drag(L, mouse_drag, enum_registry, selected_axis^, delta)
 	}
 
 	if !left && previous_left^ && dragging^ {
@@ -431,14 +536,16 @@ handles_get :: proc(
 	switch key {
 	case "Adornee":
 		Push_Object(L, handles.Adornee)
+	case "Snap":
+		vm.PushNumber(L, handles.snap)
 	case "Color3":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, handles.Color3)
 	case "Faces":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Faces(L, datatype_registry, handles.Faces)
 	case "Style":
-		if enum_registry == nil { return false }
+		if enum_registry == nil {return false}
 		_ = enums.Push_Item_By_Value(L, enum_registry, "HandlesStyle", i64(handles.Style))
 	case "Visible":
 		vm.PushBoolean(L, handles.Visible)
@@ -450,9 +557,12 @@ handles_get :: proc(
 			&handles.mouse_drag,
 		)
 		switch key {
-		case "MouseButton1Down": signals.Push(L, handles.mouse_button1_down)
-		case "MouseButton1Up": signals.Push(L, handles.mouse_button1_up)
-		case "MouseDrag": signals.Push(L, handles.mouse_drag)
+		case "MouseButton1Down":
+			signals.Push(L, handles.mouse_button1_down)
+		case "MouseButton1Up":
+			signals.Push(L, handles.mouse_button1_up)
+		case "MouseDrag":
+			signals.Push(L, handles.mouse_drag)
 		}
 	case:
 		return false
@@ -490,7 +600,9 @@ handles_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		&handles.drag_start_x,
 		&handles.drag_start_y,
 		&handles.drag_last_delta,
+		&handles.drag_last_delta2,
 		kineffi.KINE_GIZMO_SCALE,
+		&handles.snap,
 		handles.Style,
 		handles.mouse_button1_down,
 		handles.mouse_button1_up,
@@ -529,7 +641,9 @@ arc_handles_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		&handles.drag_start_x,
 		&handles.drag_start_y,
 		&handles.drag_last_delta,
+		&handles.drag_last_delta2,
 		kineffi.KINE_GIZMO_ROTATE,
+		&handles.snap,
 		.Rotation,
 		handles.mouse_button1_down,
 		handles.mouse_button1_up,
@@ -561,14 +675,16 @@ handles_set :: proc(
 			return true
 		}
 		handles.Adornee = adornee
+	case "Snap":
+		handles.snap = vm.ArgNumber(L, value_index)
 	case "Color3":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		handles.Color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case "Faces":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		handles.Faces = datatypes.Arg_Faces(L, value_index, datatype_registry)
 	case "Style":
-		if enum_registry == nil { return false }
+		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "HandlesStyle")
 		handles.Style = enums.HandlesStyle(item.value)
 	case "Visible":
@@ -593,11 +709,13 @@ arc_handles_get :: proc(
 	case "Adornee":
 		Push_Object(L, handles.Adornee)
 	case "Axes":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Axes(L, datatype_registry, handles.Axes)
 	case "Color3":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, handles.Color3)
+	case "Snap":
+		vm.PushNumber(L, handles.snap)
 	case "Visible":
 		vm.PushBoolean(L, handles.Visible)
 	case "MouseButton1Down", "MouseButton1Up", "MouseDrag":
@@ -608,9 +726,12 @@ arc_handles_get :: proc(
 			&handles.mouse_drag,
 		)
 		switch key {
-		case "MouseButton1Down": signals.Push(L, handles.mouse_button1_down)
-		case "MouseButton1Up": signals.Push(L, handles.mouse_button1_up)
-		case "MouseDrag": signals.Push(L, handles.mouse_drag)
+		case "MouseButton1Down":
+			signals.Push(L, handles.mouse_button1_down)
+		case "MouseButton1Up":
+			signals.Push(L, handles.mouse_button1_up)
+		case "MouseDrag":
+			signals.Push(L, handles.mouse_drag)
 		}
 	case:
 		return false
@@ -641,11 +762,13 @@ arc_handles_set :: proc(
 			return true
 		}
 		handles.Adornee = adornee
+	case "Snap":
+		handles.snap = vm.ArgNumber(L, value_index)
 	case "Axes":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		handles.Axes = datatypes.Arg_Axes(L, value_index, datatype_registry)
 	case "Color3":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		handles.Color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case "Visible":
 		handles.Visible = vm.ArgBoolean(L, value_index)
@@ -686,7 +809,7 @@ Register_Handles :: proc(registry: ^Registry) {
 		clone = handles_clone,
 		_step = handles_step,
 		_step_phase = .Render_3D,
-		properties = []string{
+		properties = []string {
 			"Adornee",
 			"Color3",
 			"Faces",
@@ -695,12 +818,9 @@ Register_Handles :: proc(registry: ^Registry) {
 			"MouseButton1Down",
 			"MouseButton1Up",
 			"MouseDrag",
+			"Snap",
 		},
-		events = []string{
-			"MouseButton1Down",
-			"MouseButton1Up",
-			"MouseDrag",
-		},
+		events = []string{"MouseButton1Down", "MouseButton1Up", "MouseDrag"},
 	)
 }
 
@@ -715,7 +835,7 @@ Register_ArcHandles :: proc(registry: ^Registry) {
 		clone = arc_handles_clone,
 		_step = arc_handles_step,
 		_step_phase = .Render_3D,
-		properties = []string{
+		properties = []string {
 			"Adornee",
 			"Axes",
 			"Color3",
@@ -723,6 +843,7 @@ Register_ArcHandles :: proc(registry: ^Registry) {
 			"MouseButton1Down",
 			"MouseButton1Up",
 			"MouseDrag",
+			"Snap",
 		},
 	)
 }

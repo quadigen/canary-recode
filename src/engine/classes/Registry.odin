@@ -1,23 +1,55 @@
 package classes
 
-import "base:runtime"
-import "core:fmt"
-import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
-import vm "../vm"
 import renderer "../renderer"
 import signals "../signals"
 import target "../target"
+import vm "../vm"
+import "base:runtime"
+import "core:fmt"
+import "core:strings"
 
-Renderer_Object   :: renderer.RendererObject
+Renderer_Object :: renderer.RendererObject
 Class_Constructor :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object
-Class_Destructor  :: proc(object: ^Object, renderer: ^Renderer_Object)
-Class_Getter      :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, key: string) -> bool
-Class_Setter      :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, key: string, value_index: int) -> bool
-Class_Namecall    :: proc(L: ^vm.State, object: ^Object, datatypes: ^datatypes.Registry, enums: ^enums.Registry, method: string) -> (i32, bool)
-Class_Clone       :: proc(source: ^Object, destination: ^Object)
-Require_Resolver  :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
+// Class_Constructor_With_Context is the context-carrying form of
+// Class_Constructor. Only classes whose callbacks live in another module need
+// it -- the native plugin loader uses `ctx` to recover the record describing
+// which plugin class is being constructed, since a bare Class_Constructor gets
+// no argument identifying the class it is being called for.
+Class_Constructor_With_Context :: proc(
+	ctx: rawptr,
+	renderer: ^Renderer_Object,
+	data_model: rawptr,
+) -> ^Object
+Class_Destructor :: proc(object: ^Object, renderer: ^Renderer_Object)
+Class_Getter :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatypes: ^datatypes.Registry,
+	enums: ^enums.Registry,
+	key: string,
+) -> bool
+Class_Setter :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatypes: ^datatypes.Registry,
+	enums: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool
+Class_Namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatypes: ^datatypes.Registry,
+	enums: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+)
+Class_Clone :: proc(source: ^Object, destination: ^Object)
+Require_Resolver :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
 
 Class_Step_Phase :: enum {
 	Update,
@@ -58,53 +90,44 @@ Property_Read_Security :: proc(
 	name: string,
 	requirement: vm.Security_Requirement,
 ) -> Member_Security {
-	return Member_Security{
-		name = name,
-		access = .Read,
-		requirement = requirement,
-	}
+	return Member_Security{name = name, access = .Read, requirement = requirement}
 }
 
 Property_Write_Security :: proc(
 	name: string,
 	requirement: vm.Security_Requirement,
 ) -> Member_Security {
-	return Member_Security{
-		name = name,
-		access = .Write,
-		requirement = requirement,
-	}
+	return Member_Security{name = name, access = .Write, requirement = requirement}
 }
 
-Method_Security :: proc(
-	name: string,
-	requirement: vm.Security_Requirement,
-) -> Member_Security {
-	return Member_Security{
-		name = name,
-		access = .Call,
-		requirement = requirement,
-	}
+Method_Security :: proc(name: string, requirement: vm.Security_Requirement) -> Member_Security {
+	return Member_Security{name = name, access = .Call, requirement = requirement}
 }
 
 Class_Descriptor :: struct {
-	info:             ^Class_Info,
-	construct:        Class_Constructor,
-	destroy:          Class_Destructor,
-	get:              Class_Getter,
-	set:              Class_Setter,
-	namecall:         Class_Namecall,
-	_step:            Class_Step,
-	_step_phase:      Class_Step_Phase,
-	creatable:        bool,
-	clone:            Class_Clone,
-	binding:          vm.Userdata_Binding,
-	registry:         ^Registry,
-	instances:        [dynamic]^Object,
-	properties:       [dynamic]string,
-	methods:          [dynamic]string,
-	events:           [dynamic]string,
-	member_security:  [dynamic]Member_Security,
+	info:               ^Class_Info,
+	construct:          Class_Constructor,
+	// construct_with_ctx, when set, replaces `construct`. The pair is how a
+	// module that owns its class callbacks identifies which of its classes is
+	// being built: `construct` is the shared engine-side entry point and
+	// `construct_ctx` is the per-class record it forwards.
+	construct_with_ctx: Class_Constructor_With_Context,
+	construct_ctx:      rawptr,
+	destroy:            Class_Destructor,
+	get:                Class_Getter,
+	set:                Class_Setter,
+	namecall:           Class_Namecall,
+	_step:              Class_Step,
+	_step_phase:        Class_Step_Phase,
+	creatable:          bool,
+	clone:              Class_Clone,
+	binding:            vm.Userdata_Binding,
+	registry:           ^Registry,
+	instances:          [dynamic]^Object,
+	properties:         [dynamic]string,
+	methods:            [dynamic]string,
+	events:             [dynamic]string,
+	member_security:    [dynamic]Member_Security,
 }
 
 Pending_Destroy :: struct {
@@ -119,14 +142,20 @@ Network_Ownership_Dispatch :: proc(
 	L: ^vm.State,
 	object: ^Object,
 	method: string,
-) -> (i32, bool)
+) -> (
+	i32,
+	bool,
+)
 
 Remote_Call_Dispatch :: proc(
 	ctx: rawptr,
 	L: ^vm.State,
 	instance: ^Object,
 	method: string,
-) -> (i32, bool)
+) -> (
+	i32,
+	bool,
+)
 
 // Part_Body_Access bridges the rigid-body members of a Part --
 // AssemblyLinearVelocity, AssemblyAngularVelocity and ApplyImpulse -- to the
@@ -168,37 +197,45 @@ Part_Angular_Velocity :: proc(registry: ^Registry, part: ^Object) -> datatypes.V
 	return velocity
 }
 
-Part_Set_Angular_Velocity :: proc(registry: ^Registry, part: ^Object, velocity: datatypes.Vector3) {
+Part_Set_Angular_Velocity :: proc(
+	registry: ^Registry,
+	part: ^Object,
+	velocity: datatypes.Vector3,
+) {
 	if registry == nil || part == nil || registry.part_body.set_angular_velocity == nil {return}
 	registry.part_body.set_angular_velocity(registry.part_body_ctx, part, velocity)
 }
 
-Part_Apply_Impulse :: proc(registry: ^Registry, part: ^Object, impulse: datatypes.Vector3) -> bool {
+Part_Apply_Impulse :: proc(
+	registry: ^Registry,
+	part: ^Object,
+	impulse: datatypes.Vector3,
+) -> bool {
 	if registry == nil || part == nil || registry.part_body.apply_impulse == nil {return false}
 	return registry.part_body.apply_impulse(registry.part_body_ctx, part, impulse)
 }
 
 Registry :: struct {
-	classes:              [dynamic]^Class_Descriptor,
-	datatypes:            ^datatypes.Registry,
-	enums:                ^enums.Registry,
-	renderer:             ^Renderer_Object,
-	data_model:           rawptr,
-	vm_state:             ^vm.VM,
-	signal_registry:      ^signals.Registry,
-	fallback_require_ref: i32,
-	require_resolver:     Require_Resolver,
-	require_resolver_ctx: rawptr,
-	mode:                 target.Mode,
-	pending_destroy:      [dynamic]Pending_Destroy,
-	destroy_hook:         Destroy_Hook,
-	destroy_hook_ctx:     rawptr,
-	network_ownership:    Network_Ownership_Dispatch,
+	classes:               [dynamic]^Class_Descriptor,
+	datatypes:             ^datatypes.Registry,
+	enums:                 ^enums.Registry,
+	renderer:              ^Renderer_Object,
+	data_model:            rawptr,
+	vm_state:              ^vm.VM,
+	signal_registry:       ^signals.Registry,
+	fallback_require_ref:  i32,
+	require_resolver:      Require_Resolver,
+	require_resolver_ctx:  rawptr,
+	mode:                  target.Mode,
+	pending_destroy:       [dynamic]Pending_Destroy,
+	destroy_hook:          Destroy_Hook,
+	destroy_hook_ctx:      rawptr,
+	network_ownership:     Network_Ownership_Dispatch,
 	network_ownership_ctx: rawptr,
-	remote_call:          Remote_Call_Dispatch,
-	remote_call_ctx:      rawptr,
-	part_body:            Part_Body_Access,
-	part_body_ctx:        rawptr,
+	remote_call:           Remote_Call_Dispatch,
+	remote_call_ctx:       rawptr,
+	part_body:             Part_Body_Access,
+	part_body_ctx:         rawptr,
 }
 
 Registry_Init :: proc(
@@ -208,7 +245,7 @@ Registry_Init :: proc(
 	data_model: rawptr = nil,
 	signal_registry: ^signals.Registry = nil,
 ) -> Registry {
-	return Registry{
+	return Registry {
 		datatypes = datatype_registry,
 		enums = enum_registry,
 		renderer = renderer,
@@ -219,35 +256,39 @@ Registry_Init :: proc(
 }
 
 Set_Data_Model :: proc(registry: ^Registry, data_model: rawptr) {
-	if registry == nil { return }
+	if registry == nil {return}
 	registry.data_model = data_model
 }
 
 Set_Mode :: proc(registry: ^Registry, mode: target.Mode) {
-	if registry == nil { return }
+	if registry == nil {return}
 	registry.mode = mode
 }
 
 Set_Require_Resolver :: proc(registry: ^Registry, resolver: Require_Resolver, ctx: rawptr) {
-	if registry == nil { return }
+	if registry == nil {return}
 	registry.require_resolver = resolver
 	registry.require_resolver_ctx = ctx
 }
 
-Set_Network_Ownership :: proc(registry: ^Registry, dispatch: Network_Ownership_Dispatch, ctx: rawptr) {
-	if registry == nil { return }
+Set_Network_Ownership :: proc(
+	registry: ^Registry,
+	dispatch: Network_Ownership_Dispatch,
+	ctx: rawptr,
+) {
+	if registry == nil {return}
 	registry.network_ownership = dispatch
 	registry.network_ownership_ctx = ctx
 }
 
 Set_Remote_Call :: proc(registry: ^Registry, dispatch: Remote_Call_Dispatch, ctx: rawptr) {
-	if registry == nil { return }
+	if registry == nil {return}
 	registry.remote_call = dispatch
 	registry.remote_call_ctx = ctx
 }
 
 Set_Part_Body_Access :: proc(registry: ^Registry, access: Part_Body_Access, ctx: rawptr) {
-	if registry == nil { return }
+	if registry == nil {return}
 	registry.part_body = access
 	registry.part_body_ctx = ctx
 }
@@ -290,26 +331,16 @@ descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		return true
 	}
 
-	if descriptor != nil && descriptor.get != nil &&
-	   descriptor.get(
-		L,
-		object,
-		descriptor.registry.datatypes,
-		descriptor.registry.enums,
-		key,
-	   ) {
+	if descriptor != nil &&
+	   descriptor.get != nil &&
+	   descriptor.get(L, object, descriptor.registry.datatypes, descriptor.registry.enums, key) {
 		return true
 	}
 
 	return Object_Get_Property(L, value, ctx, key)
 }
 
-descriptor_set :: proc(
-	L: ^vm.State,
-	value, ctx: rawptr,
-	key: string,
-	value_index: int,
-) -> bool {
+descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_index: int) -> bool {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
 
@@ -328,14 +359,15 @@ descriptor_set :: proc(
 		return true
 	}
 
-	if descriptor != nil && descriptor.set != nil &&
+	if descriptor != nil &&
+	   descriptor.set != nil &&
 	   descriptor.set(
-		L,
-		object,
-		descriptor.registry.datatypes,
-		descriptor.registry.enums,
-		key,
-		value_index,
+		   L,
+		   object,
+		   descriptor.registry.datatypes,
+		   descriptor.registry.enums,
+		   key,
+		   value_index,
 	   ) {
 		// The write succeeded, so notify subscribers of this exact property.
 		// Funnelling here means every class gets change signals for free,
@@ -352,60 +384,50 @@ descriptor_set :: proc(
 	return false
 }
 
-append_properties :: proc(
-    registry: ^Registry,
-    class: ^Class_Info,
-    result: ^[dynamic]string,
-) {
-    if registry == nil || class == nil {
-        return
-    }
+append_properties :: proc(registry: ^Registry, class: ^Class_Info, result: ^[dynamic]string) {
+	if registry == nil || class == nil {
+		return
+	}
 
-    append_properties(registry, class.parent, result)
+	append_properties(registry, class.parent, result)
 
-    descriptor := Find_Class(registry, class.name)
-    if descriptor == nil {
-        return
-    }
+	descriptor := Find_Class(registry, class.name)
+	if descriptor == nil {
+		return
+	}
 
-    for property in descriptor.properties {
-        append(result, property)
-    }
+	for property in descriptor.properties {
+		append(result, property)
+	}
 }
 
-Get_Properties :: proc(
-    registry: ^Registry,
-    object: ^Object,
-) -> [dynamic]string {
-    result: [dynamic]string
+Get_Properties :: proc(registry: ^Registry, object: ^Object) -> [dynamic]string {
+	result: [dynamic]string
 
-    if registry == nil || object == nil {
-        return result
-    }
+	if registry == nil || object == nil {
+		return result
+	}
 
-    append_properties(registry, object.class, &result)
+	append_properties(registry, object.class, &result)
 
-    return result
+	return result
 }
 
-Class_Property_List :: proc(
-    registry: ^Registry,
-    class_name: string,
-) -> [dynamic]string {
-    result: [dynamic]string
+Class_Property_List :: proc(registry: ^Registry, class_name: string) -> [dynamic]string {
+	result: [dynamic]string
 
-    if registry == nil {
-        return result
-    }
+	if registry == nil {
+		return result
+	}
 
-    descriptor := Find_Class(registry, class_name)
-    if descriptor == nil {
-        return result
-    }
+	descriptor := Find_Class(registry, class_name)
+	if descriptor == nil {
+		return result
+	}
 
-    append_properties(registry, descriptor.info, &result)
+	append_properties(registry, descriptor.info, &result)
 
-    return result
+	return result
 }
 
 // Class_Member_Entry pairs a reflected member with the class that declares it.
@@ -413,8 +435,8 @@ Class_Property_List :: proc(
 // class rather than the queried one, so an inherited member keeps pointing at
 // its original owner.
 Class_Member_Entry :: struct {
-    name:  string,
-    owner: string,
+	name:  string,
+	owner: string,
 }
 
 // Class_Member_List selects which declared-member list a reflection query reads.
@@ -426,15 +448,18 @@ Class_Member_List :: enum {
 
 // descriptor_member_list returns the requested list for a class.
 descriptor_member_list :: proc(
-    descriptor: ^Class_Descriptor,
-    list: Class_Member_List,
+	descriptor: ^Class_Descriptor,
+	list: Class_Member_List,
 ) -> [dynamic]string {
-    switch list {
-    case .Properties: return descriptor.properties
-    case .Methods: return descriptor.methods
-    case .Events: return descriptor.events
-    }
-    return nil
+	switch list {
+	case .Properties:
+		return descriptor.properties
+	case .Methods:
+		return descriptor.methods
+	case .Events:
+		return descriptor.events
+	}
+	return nil
 }
 
 // Collect_Class_Members gathers the members a class declares in `list`, plus
@@ -443,60 +468,56 @@ descriptor_member_list :: proc(
 // the base declaration is dropped, matching how a real lookup would resolve the
 // shadowed member.
 Collect_Class_Members :: proc(
-    registry: ^Registry,
-    class_name: string,
-    list: Class_Member_List,
+	registry: ^Registry,
+	class_name: string,
+	list: Class_Member_List,
 ) -> [dynamic]Class_Member_Entry {
-    result: [dynamic]Class_Member_Entry
+	result: [dynamic]Class_Member_Entry
 
-    if registry == nil {
-        return result
-    }
+	if registry == nil {
+		return result
+	}
 
-    descriptor := Find_Class(registry, class_name)
-    if descriptor == nil {
-        return result
-    }
+	descriptor := Find_Class(registry, class_name)
+	if descriptor == nil {
+		return result
+	}
 
-    // Walk root -> leaf so subclasses can shadow inherited names.
-    chain: [dynamic]^Class_Info
-    class := descriptor.info
-    for class != nil {
-        append(&chain, class)
-        class = class.parent
-    }
-    defer delete(chain)
+	// Walk root -> leaf so subclasses can shadow inherited names.
+	chain: [dynamic]^Class_Info
+	class := descriptor.info
+	for class != nil {
+		append(&chain, class)
+		class = class.parent
+	}
+	defer delete(chain)
 
-    for index := len(chain) - 1; index >= 0; index -= 1 {
-        owner_class := chain[index]
-        owner := Find_Class(registry, owner_class.name)
-        if owner == nil {
-            continue
-        }
+	for index := len(chain) - 1; index >= 0; index -= 1 {
+		owner_class := chain[index]
+		owner := Find_Class(registry, owner_class.name)
+		if owner == nil {
+			continue
+		}
 
-        for name in descriptor_member_list(owner, list) {
-            shadowed := false
-            for &entry in result {
-                if entry.name == name {
-                    entry.owner = owner_class.name
-                    shadowed = true
-                    break
-                }
-            }
-            if !shadowed {
-                append(&result, Class_Member_Entry{name = name, owner = owner_class.name})
-            }
-        }
-    }
+		for name in descriptor_member_list(owner, list) {
+			shadowed := false
+			for &entry in result {
+				if entry.name == name {
+					entry.owner = owner_class.name
+					shadowed = true
+					break
+				}
+			}
+			if !shadowed {
+				append(&result, Class_Member_Entry{name = name, owner = owner_class.name})
+			}
+		}
+	}
 
-    return result
+	return result
 }
 
-descriptor_namecall :: proc(
-	L: ^vm.State,
-	value, ctx: rawptr,
-	method: string,
-) -> (i32, bool) {
+descriptor_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
 
@@ -512,8 +533,7 @@ descriptor_namecall :: proc(
 		return vm.RaiseError(L, "insufficient security capabilities to call this member"), true
 	}
 
-	if descriptor.registry != nil &&
-	   descriptor.registry.network_ownership != nil {
+	if descriptor.registry != nil && descriptor.registry.network_ownership != nil {
 		switch method {
 		case "SetNetworkOwner", "GetNetworkOwner", "SetNetworkOwnershipAuto":
 			result_count, handled := descriptor.registry.network_ownership(
@@ -528,11 +548,14 @@ descriptor_namecall :: proc(
 		}
 	}
 
-	if descriptor.registry != nil &&
-	   descriptor.registry.remote_call != nil {
+	if descriptor.registry != nil && descriptor.registry.remote_call != nil {
 		switch method {
-		case "FireServer", "FireClient", "FireAllClients",
-		     "InvokeServer", "InvokeClient", "InvokeClients":
+		case "FireServer",
+		     "FireClient",
+		     "FireAllClients",
+		     "InvokeServer",
+		     "InvokeClient",
+		     "InvokeClients":
 			result_count, handled := descriptor.registry.remote_call(
 				descriptor.registry.remote_call_ctx,
 				L,
@@ -599,6 +622,8 @@ Register_Class :: proc(
 	methods: []string = nil,
 	events: []string = nil,
 	member_security: []Member_Security = nil,
+	construct_with_ctx: Class_Constructor_With_Context = nil,
+	construct_ctx: rawptr = nil,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
@@ -606,18 +631,20 @@ Register_Class :: proc(
 	assert(destroy != nil)
 
 	descriptor := new(Class_Descriptor)
-	descriptor^ = Class_Descriptor{
-		info        = info,
-		construct   = construct,
-		destroy     = destroy,
-		get         = get,
-		set         = set,
-		namecall    = namecall,
-		_step       = _step,
-		_step_phase = _step_phase,
-		creatable   = creatable,
-		clone       = clone,
-		registry    = registry,
+	descriptor^ = Class_Descriptor {
+		info               = info,
+		construct          = construct,
+		construct_with_ctx = construct_with_ctx,
+		construct_ctx      = construct_ctx,
+		destroy            = destroy,
+		get                = get,
+		set                = set,
+		namecall           = namecall,
+		_step              = _step,
+		_step_phase        = _step_phase,
+		creatable          = creatable,
+		clone              = clone,
+		registry           = registry,
 	}
 
 	for property in properties {
@@ -636,7 +663,7 @@ Register_Class :: proc(
 		append(&descriptor.member_security, rule)
 	}
 
-	descriptor.binding = vm.Userdata_Binding{
+	descriptor.binding = vm.Userdata_Binding {
 		name     = "Instance",
 		ctx      = descriptor,
 		get      = descriptor_get,
@@ -696,12 +723,7 @@ Clone_Class_State :: proc(
 
 	// Copy base-class state first.
 	if info.parent != nil {
-		Clone_Class_State(
-			registry,
-			info.parent,
-			source,
-			destination,
-		)
+		Clone_Class_State(registry, info.parent, source, destination)
 	}
 
 	descriptor := Find_Class(registry, info.name)
@@ -716,13 +738,27 @@ Push_New :: proc(
 	vm_state: ^vm.VM,
 	class_name: string,
 	require_creatable := true,
-) -> (^Object, bool) {
+) -> (
+	^Object,
+	bool,
+) {
 	descriptor := Find_Class(registry, class_name)
 	if descriptor == nil || (require_creatable && !descriptor.creatable) {
 		return nil, false
 	}
 
-	object := descriptor.construct(registry.renderer, registry.data_model)
+	object: ^Object
+
+	if descriptor.construct_with_ctx != nil {
+		object = descriptor.construct_with_ctx(
+			descriptor.construct_ctx,
+			registry.renderer,
+			registry.data_model,
+		)
+	} else {
+		object = descriptor.construct(registry.renderer, registry.data_model)
+	}
+
 	if object == nil {
 		return nil, false
 	}
@@ -763,7 +799,8 @@ Flush_Pending_Destroy :: proc(registry: ^Registry) {
 			}
 		}
 
-		if descriptor.registry != nil && descriptor.registry.renderer != nil &&
+		if descriptor.registry != nil &&
+		   descriptor.registry.renderer != nil &&
 		   descriptor.registry.renderer.ActiveCamera == object {
 			descriptor.registry.renderer.ActiveCamera = nil
 		}
@@ -826,14 +863,14 @@ Step :: proc(
 	phase: Class_Step_Phase = .Render_2D,
 	gui_overlay: bool = false,
 ) {
-	if registry == nil || L == nil { return }
+	if registry == nil || L == nil {return}
 
 	Flush_Pending_Destroy(registry)
 
 	targets: [dynamic]class_step_target
 
 	for descriptor in registry.classes {
-		if descriptor._step == nil || descriptor._step_phase != phase { continue }
+		if descriptor._step == nil || descriptor._step_phase != phase {continue}
 
 		if descriptor.info != nil && descriptor.info.name == "ScreenGui" {
 			Sort_ScreenGui_Instances(descriptor)
@@ -846,14 +883,14 @@ Step :: proc(
 		}
 	}
 
-	step_context := Class_Step_Context{
-		L = L,
-		delta_time = delta_time,
-		renderer = registry.renderer,
-		data_model = registry.data_model,
-		viewport_width = viewport_width,
+	step_context := Class_Step_Context {
+		L               = L,
+		delta_time      = delta_time,
+		renderer        = registry.renderer,
+		data_model      = registry.data_model,
+		viewport_width  = viewport_width,
 		viewport_height = viewport_height,
-		gui_overlay = gui_overlay,
+		gui_overlay     = gui_overlay,
 	}
 
 	for target in targets {
@@ -890,11 +927,6 @@ instance_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-// Script_Require_Context_Of reports whether a script Instance may be required in
-// a runtime with the given role. Roblox modules run where they belong: a
-// ModuleScript is portable, a Script belongs to a server runtime and a
-// LocalScript to a client runtime. Editor runtimes host either side so in-editor
-// playtesting can require both.
 Script_Require_Context_Of :: proc(object: ^Object, mode: target.Mode) -> bool {
 	kind, ok := Script_Kind_Of(object)
 	if !ok {
@@ -950,8 +982,6 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 	}
 
 	if status != 0 {
-		// The module raised. Roblox does not cache a failed module, so reset the
-		// state and let the error propagate to the caller.
 		common.module_state = .Unloaded
 		return vm.Reraise(L)
 	}
@@ -962,11 +992,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 		common.module_state = .Unloaded
 		return vm.RaiseError(
 			L,
-			strings.concatenate({
-				REQUIRE_RESULT_COUNT_ERROR,
-				": ",
-				Get_Full_Name(object),
-			}),
+			strings.concatenate({REQUIRE_RESULT_COUNT_ERROR, ": ", Get_Full_Name(object)}),
 		)
 	}
 
@@ -977,19 +1003,6 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 	return 1
 }
 
-// require_script implements Roblox's require() as a runtime operation:
-//
-//  1. validate the argument is a ModuleScript (or a Script/LocalScript, which
-//     Roblox accepts and runs exactly like a module)
-//  2. resolve the module's execution context (the calling VM)
-//  3. consult that context's module cache
-//  4. return the cached value when the module is already initialized
-//  5. detect a circular dependency through the Loading state
-//  6. execute the module in its own environment
-//  7. capture the returned value, cache it and return it to the caller
-//
-// It is installed with a continuation so a module may yield; the cache write
-// therefore happens in require_continuation once execution completes.
 require_script :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
@@ -1007,20 +1020,14 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 
 	object := object_from_argument(L, 1)
 	if object == nil {
-		return vm.RaiseError(
-			L,
-			"require expects a ModuleScript, got a non-Instance value",
-		)
+		return vm.RaiseError(L, "require expects a ModuleScript, got a non-Instance value")
 	}
 	if !Script_Is_Script(object) {
 		describe := Script_Describe(object)
 		defer delete(describe)
 		return vm.RaiseError(
 			L,
-			strings.concatenate({
-				"require expects a ModuleScript, got ",
-				describe,
-			}),
+			strings.concatenate({"require expects a ModuleScript, got ", describe}),
 		)
 	}
 	if object.destroyed {
@@ -1044,12 +1051,7 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 		}
 		return vm.RaiseError(
 			L,
-			strings.concatenate({
-				"require: ",
-				describe,
-				" cannot be required from ",
-				reason,
-			}),
+			strings.concatenate({"require: ", describe, " cannot be required from ", reason}),
 		)
 	}
 
@@ -1066,10 +1068,7 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 		describe := Get_Full_Name(object)
 		return vm.RaiseError(
 			L,
-			strings.concatenate({
-				"cyclic require detected while loading ",
-				describe,
-			}),
+			strings.concatenate({"cyclic require detected while loading ", describe}),
 		)
 	case .Unloaded:
 	}
@@ -1121,13 +1120,7 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.Pop(vm_state.L)
 
 	vm.PushLightUserdata(vm_state.L, registry)
-	vm.PushFunctionWithContinuation(
-		vm_state.L,
-		"require",
-		require_script,
-		require_continuation,
-		1,
-	)
+	vm.PushFunctionWithContinuation(vm_state.L, "require", require_script, require_continuation, 1)
 	vm.SetGlobalFromStack(vm_state, "require")
 }
 
@@ -1136,8 +1129,8 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
 	Register_Instance(registry)
 	Register_ArcHandles(registry)
-	Register_BlurImageFilter(registry)
 	Register_BasePart(registry)
+	Register_BlurImageFilter(registry)
 	Register_BoolValue(registry)
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
@@ -1152,6 +1145,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_ColorSequenceValue(registry)
 	Register_Decal(registry)
 	Register_DoubleConstrainedValue(registry)
+	Register_EditableMesh(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
 	Register_GroundDetector(registry)
@@ -1224,4 +1218,3 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil
 }
-
