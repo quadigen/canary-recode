@@ -210,6 +210,11 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 			previous_ticks = sdl3.GetTicksNS()
 		}
 
+		// The desktop path has no viewport rect source of its own, so publish
+		// the window size here, before the engine step. Mouse reads this rect
+		// to build its camera ray and is skipped entirely when it is unset.
+		set_viewport_rect(renderer, 0, 0, frame_width, frame_height)
+
 		now := sdl3.GetTicksNS()
 		delta_time := min(f32(now - previous_ticks) / 1_000_000_000.0, 0.1)
 		previous_ticks = now

@@ -54,7 +54,13 @@ Load_Map_From_Data :: proc(
 	// Clearing first also keeps a stale entry from colliding with a new content
 	// id and making a perfectly good stream look corrupt.
 	assetstore.Clear()
-	root, ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data)
+
+	// The voxel grid rides in the format's own section rather than the tree,
+	// because Terrain is a singleton service and not an Instance.
+	terrain_table: serializer.Kine_Terrain
+	defer serializer.Kine_Terrain_Destroy(&terrain_table)
+
+	root, ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data, &terrain_table)
 	if !ok || root == nil {
 		// Leave nothing half-published behind from a stream that did not load.
 		assetstore.Clear()
@@ -103,6 +109,27 @@ Load_Map_From_Data :: proc(
 		classes.Destroy_Hierarchy(source)
 	}
 	classes.Destroy_Hierarchy(root)
-	fmt.printf("Loaded .kine DataModel %s (%d services, %d instances)\n", name, service_count, instance_count)
+
+	// Terrain is restored after the tree, so the grid that goes in is the one this
+	// file describes rather than whatever the previous map left behind.
+	cell_count := 0
+	terrain_object := services.Ensure_Service(&environment.services, "Terrain")
+	if terrain_object != nil {
+		// The service holds the renderer object it was built with, which is the
+		// one its chunk meshes belong to. Clearing it through any other renderer
+		// would free meshes the live one still points at.
+		terrain := cast(^services.Terrain)terrain_object
+		if services.Terrain_Read_Kine_Table(terrain, terrain.renderer, &terrain_table) {
+			cell_count = len(terrain_table.cells)
+		}
+	}
+
+	fmt.printf(
+		"Loaded .kine DataModel %s (%d services, %d instances, %d terrain cells)\n",
+		name,
+		service_count,
+		instance_count,
+		cell_count,
+	)
 	return true
 }

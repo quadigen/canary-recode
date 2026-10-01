@@ -138,6 +138,14 @@ Replication_Peer :: struct {
 	// inbound handler already requires player != nil, so a pending peer cannot
 	// drive the simulation even if it starts sending immediately.
 	handshake_complete: bool,
+	// Terrain delta state. terrain_cursor is the last change serial this peer was
+	// sent, and terrain_epoch the map generation it synced at. A cursor the
+	// server can no longer satisfy, or an epoch that moved because the map was
+	// wiped, sends a fresh snapshot instead of a delta.
+	terrain_initial_sent: bool,
+	terrain_cursor:       u64,
+	terrain_epoch:        u64,
+	terrain_deltas_sent:  u64,
 	// Cached focus point, in the form (x, y, z, valid).
 	//
 	// The live focus is the client's own character, which can disappear: a respawn
@@ -323,6 +331,18 @@ ReplicatorService :: struct {
 	asset_bytes_received:      u64,
 	asset_rejections:          u64,
 	asset_table_complete:      bool,
+	// Terrain transfer. Terrain is a Service holding a voxel map rather than an
+	// Instance with replicated properties, so the instance-tree snapshot cannot
+	// carry it and the server pushes it at connect time the way it does assets.
+	terrain_batches_received:  int,
+	terrain_cells_received:    int,
+	terrain_cells_declared:    u32,
+	terrain_draw_version:      u32,
+	terrain_rejections:        u64,
+	terrain_header_seen:       bool,
+	terrain_table_complete:    bool,
+	terrain_sync_tick:         u32,
+	terrain_sync_due:          bool,
 	// ack_elapsed paces the kind 4 rounds. ack_full_elapsed is a separate,
 	// coarser clock that drives the periodic full re-report; reusing
 	// ack_elapsed for it meant the threshold was never reached, because that
@@ -932,6 +952,15 @@ replication_namecall :: proc(
 		vm.PushNumber(L, f64(service.assets_received)); vm.SetField(L, -2, "assetsReceived")
 		vm.PushNumber(L, f64(service.asset_rejections)); vm.SetField(L, -2, "assetRejections")
 		vm.PushBoolean(L, service.asset_table_complete); vm.SetField(L, -2, "assetTableComplete")
+		// Terrain transfer visibility. A client that completed the handshake but
+		// never received the voxel database is standing on nothing, which looks
+		// like a physics bug rather than a missing connect-time transfer.
+		vm.PushBoolean(L, service.terrain_header_seen); vm.SetField(L, -2, "terrainHeaderSeen")
+		vm.PushNumber(L, f64(service.terrain_batches_received)); vm.SetField(L, -2, "terrainBatchesReceived")
+		vm.PushNumber(L, f64(service.terrain_cells_received)); vm.SetField(L, -2, "terrainCellsReceived")
+		vm.PushNumber(L, f64(service.terrain_cells_declared)); vm.SetField(L, -2, "terrainCellsDeclared")
+		vm.PushNumber(L, f64(service.terrain_rejections)); vm.SetField(L, -2, "terrainRejections")
+		vm.PushBoolean(L, service.terrain_table_complete); vm.SetField(L, -2, "terrainTableComplete")
 		// rejectedPackets separates unknown or reserved kinds from genuine
 		// corruption. A climb here during a rolling update means clients and
 		// servers disagree about the protocol, which is a different and much more

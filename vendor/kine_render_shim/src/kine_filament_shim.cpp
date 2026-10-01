@@ -68,6 +68,10 @@
 #include "kine_gizmo_package.h"
 #include "kine_particle_package.h"
 #include "kine_terrain_package.h"
+#include "kine_hl_outline_package.h"
+#include "kine_hl_outline_top_package.h"
+#include "kine_hl_fill_package.h"
+#include "kine_hl_fill_top_package.h"
 
 #include <geometry/SurfaceOrientation.h>
 using namespace filament::geometry;
@@ -500,8 +504,12 @@ struct KineFilamentContext {
     Material* decalMaterial = nullptr;
     Material* outlineMaterial = nullptr;
     Material* gizmoMaterial = nullptr;
-    Material* particleMaterial = nullptr;
-    Material* terrainMaterial = nullptr;
+    Material*        particleMaterial = nullptr;
+    Material*        terrainMaterial = nullptr;
+    Material*        hlOutlineMaterial = nullptr;
+    Material*        hlOutlineTopMaterial = nullptr;
+    Material*        hlFillMaterial = nullptr;
+    Material*        hlFillTopMaterial = nullptr;
 	KineFilamentShader* globalShader = nullptr;
 	KineFilamentShader* postProcessShader = nullptr;
     std::unordered_set<KineFilamentShader*> runtimeShaders;
@@ -2452,6 +2460,12 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
         mi->setParameter("clearCoatRoughness", 0.04f);
     } else if (key.materialKind == KINE_MAT_OUTLINE) {
         mi->setParameter("thickness", key.param1);
+    } else if (key.materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
+               key.materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP) {
+        mi->setParameter("thickness", key.param1);
+    } else if (key.materialKind == KINE_MAT_HIGHLIGHT_FILL ||
+               key.materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP) {
+        mi->setParameter("depthBias", key.param1);
     } else if (key.materialKind == KINE_MAT_GIZMO) {
         // Everything (including per-instance baseColor) is set per chunk.
     } else if (key.materialKind == KINE_MAT_PARTICLE) {
@@ -2583,6 +2597,32 @@ static Box kine_compute_dynamic_batch_bounds(
     return Box{(snappedMin + snappedMax) * 0.5f, (snappedMax - snappedMin) * 0.5f};
 }
 
+// Materials whose transparency comes from the per-instance float4 w channel
+// instead of a fixed material-level opacity. Particles and both Highlight
+// geometry paths (fill and outline) read their alpha this way.
+static bool kine_material_is_highlight(int materialKind)
+{
+    return materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
+           materialKind == KINE_MAT_HIGHLIGHT_FILL ||
+           materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP ||
+           materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP;
+}
+
+static bool kine_material_is_highlight_outline(int materialKind)
+{
+    return materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
+           materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP;
+}
+
+static bool kine_material_uses_instance_alpha(int materialKind)
+{
+    return materialKind == KINE_MAT_PARTICLE ||
+           materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
+           materialKind == KINE_MAT_HIGHLIGHT_FILL ||
+           materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP ||
+           materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP;
+}
+
 static Material* kine_select_material(
     KineFilamentContext* ctx, int materialKind, KineFilamentShader* shader = nullptr)
 {
@@ -2595,6 +2635,10 @@ static Material* kine_select_material(
     if (materialKind == KINE_MAT_GIZMO) return ctx->gizmoMaterial;
     if (materialKind == KINE_MAT_PARTICLE) return ctx->particleMaterial;
     if (materialKind == KINE_MAT_TERRAIN) return ctx->terrainMaterial;
+    if (materialKind == KINE_MAT_HIGHLIGHT_OUTLINE) return ctx->hlOutlineMaterial;
+    if (materialKind == KINE_MAT_HIGHLIGHT_FILL) return ctx->hlFillMaterial;
+    if (materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP) return ctx->hlOutlineTopMaterial;
+    if (materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP) return ctx->hlFillTopMaterial;
     return ctx->defaultMaterial;
 }
 
@@ -2718,6 +2762,10 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
             // Filament reserves channels 0/1 for the opaque scene copies used
             // by screen-space refraction.
             renderableBuilder.channel(2).priority(0);
+        } else if (kine_material_is_highlight(batch->key.materialKind)) {
+            // Outline shell before fill; see the note in kine_update_batches.
+            renderableBuilder.channel(3).priority(
+                kine_material_is_highlight_outline(batch->key.materialKind) ? 0 : 1);
         }
         renderableBuilder.build(*ctx->engine, entity);
 
@@ -2989,6 +3037,16 @@ static void kine_update_batches(KineFilamentContext* ctx)
                     // Filament's opaque pass. This keeps other transparent
                     // effects from being hidden behind its refractive surface.
                     renderableBuilder.channel(2).priority(0);
+                } else if (kine_material_is_highlight(key.materialKind)) {
+                    // Filament sorts translucent draws by depth first, which
+                    // cannot express the outline/fill relationship the
+                    // inverted hull depends on: the fill has to be composited
+                    // over the shell. Priority within a channel overrides
+                    // that, so the shell is submitted first and the fill lands
+                    // on top of it. Both depth modes share channel 3 and are
+                    // separated only by priority.
+                    renderableBuilder.channel(3).priority(
+                        kine_material_is_highlight_outline(key.materialKind) ? 0 : 1);
                 }
                 renderableBuilder.build(*ctx->engine, entity);
 
@@ -3166,6 +3224,30 @@ static Material* buildParticleMaterial(Engine* engine) {
 static Material* buildTerrainMaterial(Engine* engine) {
     return Material::Builder()
         .package(KINE_TERRAIN_PACKAGE_KINE_TERRAIN_DATA, KINE_TERRAIN_PACKAGE_KINE_TERRAIN_SIZE)
+        .build(*engine);
+}
+
+static Material* buildHighlightOutlineMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_HL_OUTLINE_PACKAGE_KINE_HL_OUTLINE_DATA, KINE_HL_OUTLINE_PACKAGE_KINE_HL_OUTLINE_SIZE)
+        .build(*engine);
+}
+
+static Material* buildHighlightOutlineTopMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_HL_OUTLINE_TOP_PACKAGE_KINE_HL_OUTLINE_TOP_DATA, KINE_HL_OUTLINE_TOP_PACKAGE_KINE_HL_OUTLINE_TOP_SIZE)
+        .build(*engine);
+}
+
+static Material* buildHighlightFillMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_HL_FILL_PACKAGE_KINE_HL_FILL_DATA, KINE_HL_FILL_PACKAGE_KINE_HL_FILL_SIZE)
+        .build(*engine);
+}
+
+static Material* buildHighlightFillTopMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_HL_FILL_TOP_PACKAGE_KINE_HL_FILL_TOP_DATA, KINE_HL_FILL_TOP_PACKAGE_KINE_HL_FILL_TOP_SIZE)
         .build(*engine);
 }
 
@@ -3426,6 +3508,10 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
     ctx->gizmoMaterial = buildGizmoMaterial(ctx->engine);
     ctx->particleMaterial = buildParticleMaterial(ctx->engine);
     ctx->terrainMaterial = buildTerrainMaterial(ctx->engine);
+    ctx->hlOutlineMaterial = buildHighlightOutlineMaterial(ctx->engine);
+    ctx->hlOutlineTopMaterial = buildHighlightOutlineTopMaterial(ctx->engine);
+    ctx->hlFillMaterial = buildHighlightFillMaterial(ctx->engine);
+    ctx->hlFillTopMaterial = buildHighlightFillTopMaterial(ctx->engine);
     ctx->particleQuadMesh = buildParticleQuad();
     uploadMesh(ctx->particleQuadMesh, ctx->engine);
     ctx->postProcessQuadMesh = buildPostProcessQuad();
@@ -4331,6 +4417,10 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
         if (ctx->gizmoMaterial)   ctx->engine->destroy(ctx->gizmoMaterial);
         if (ctx->particleMaterial) ctx->engine->destroy(ctx->particleMaterial);
         if (ctx->terrainMaterial) ctx->engine->destroy(ctx->terrainMaterial);
+        if (ctx->hlOutlineMaterial) ctx->engine->destroy(ctx->hlOutlineMaterial);
+        if (ctx->hlOutlineTopMaterial) ctx->engine->destroy(ctx->hlOutlineTopMaterial);
+        if (ctx->hlFillMaterial) ctx->engine->destroy(ctx->hlFillMaterial);
+        if (ctx->hlFillTopMaterial) ctx->engine->destroy(ctx->hlFillTopMaterial);
         if (ctx->colorTextureId) {
 #if !KINE_FILAMENT_USE_VULKAN
             GLuint id = (GLuint)ctx->colorTextureId;
@@ -5879,11 +5969,12 @@ static void kine_queue_mesh(
         math::float4{mat4[3], mat4[7], mat4[11], mat4[15]}
     );
     // Color rides along as per-instance data so differently-colored draws that
-    // share a mesh/material still fold into a single batch. Particles carry
-    // their per-particle alpha in the w channel (the same value already
-    // stored in key.transmission); every other material treats w as opaque.
+    // share a mesh/material still fold into a single batch. Particles and
+    // Highlight carry their per-instance alpha in the w channel (the same value
+    // already stored in key.transmission); every other material treats w as
+    // opaque.
     const math::float4 color{r, g, b,
-        materialKind == KINE_MAT_PARTICLE ? transmission : 1.0f};
+        kine_material_uses_instance_alpha(materialKind) ? transmission : 1.0f};
 	for (size_t offset = 0; offset < 4; ++offset) {
 		uint32_t bits = 0;
 		memcpy(&bits, &color[offset], sizeof(bits));
@@ -6075,7 +6166,7 @@ KINE_API KineFilamentInstanceBatch* Kine_Filament_CreateInstanceBatch(
         // may carry different colors inside one explicit instance batch.
         batch->colors.emplace_back(
             item.r, item.g, item.b,
-            key.materialKind == KINE_MAT_PARTICLE ? item.transmission : 1.0f);
+            kine_material_uses_instance_alpha(key.materialKind) ? item.transmission : 1.0f);
     }
 
     if (!kine_rebuild_instance_batch(batch)) {

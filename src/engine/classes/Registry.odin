@@ -1152,6 +1152,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_GuiButton(registry)
 	Register_GuiObject(registry)
 	Register_Handles(registry)
+	Register_Highlight(registry)
 	Register_Humanoid(registry)
 	Register_ImageButton(registry)
 	Register_ImageLabel(registry)

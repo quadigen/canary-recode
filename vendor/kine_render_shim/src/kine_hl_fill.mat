@@ -1,0 +1,39 @@
+material {
+    name : "kine_hl_fill",
+    // See kine_hl_outline.mat for why this is lit rather than unlit.
+    shadingModel : lit,
+    blending : transparent,
+    culling : back,
+    // depthWrite stays off: the fill is a translucent overlay and must not
+    // occlude the outline shell or later transparent passes.
+    depthWrite : false,
+    depthCulling : true,
+    vertexDomain : object,
+    instanced : true,
+    parameters : [
+        { type : float4[64], name : instanceColors },
+        { type : float,  name : depthBias }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The fill sits on the part's own surface, so without a push it z-fights
+        // the geometry it covers. A small move along the normal is portable
+        // across drivers in a way polygon offset is not.
+        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.depthBias;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 c = materialParams.instanceColors[getInstanceIndex()];
+        material.baseColor.rgb = c.rgb;
+        material.baseColor.a = c.a;
+        material.emissive.rgb = c.rgb;
+        material.emissive.a = c.a;
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+}

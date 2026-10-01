@@ -31,6 +31,7 @@ UserInputService :: struct {
 	input_began:             ^signals.Signal,
 	input_changed:           ^signals.Signal,
 	input_ended:             ^signals.Signal,
+	mouse:                   ^Mouse,
 	object_runtime:          ^classes.Registry,
 }
 
@@ -111,7 +112,8 @@ user_input_service_get :: proc(
 	     "IsMouseButtonPressed",
 	     "GetKeysPressed",
 	     "GetMouseButtonsPressed",
-	     "GetFocusedTextBox":
+	     "GetFocusedTextBox",
+	     "GetMouse":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -203,6 +205,9 @@ user_input_service_namecall :: proc(
 
 		return 1, true
 
+	case "GetMouse":
+		Mouse_Push(L, User_Input_Service_Mouse(service))
+		return 1, true
 	case "GetMouseLocation":
 		datatypes.Push_Vector2(L, datatype_registry, service.mouse_location)
 		return 1, true
@@ -284,10 +289,27 @@ user_input_service_namecall :: proc(
 }
 
 user_input_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
-	classes.Object_Destroy(object)
 	service := cast(^UserInputService)object
+	if service.mouse != nil {
+		classes.Destroy_Hierarchy(&service.mouse.object)
+		service.mouse = nil
+	}
+	classes.Object_Destroy(object)
 	delete(service.keys_down)
 	free(service)
+}
+
+User_Input_Service_Mouse :: proc(service: ^UserInputService) -> ^Mouse {
+	if service == nil { return nil }
+	if service.mouse != nil && !service.mouse.destroyed { return service.mouse }
+	if service.data_model == nil || service.data_model.registry == nil { return nil }
+	registry := service.data_model.registry
+	if registry.classes == nil || registry.vm_state == nil { return nil }
+	object, ok := classes.Push_New(registry.classes, registry.vm_state, "Mouse", false)
+	if !ok || object == nil { return nil }
+	service.mouse = cast(^Mouse)object
+	vm.Pop(registry.vm_state.L)
+	return service.mouse
 }
 
 Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
@@ -300,5 +322,24 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 		get = user_input_service_get,
 		set = user_input_service_set,
 		namecall = user_input_service_namecall,
+		methods = []string{
+			"GetFocusedTextBox",
+			"GetKeysPressed",
+			"GetLastInputType",
+			"GetMouse",
+			"GetMouseButtonsPressed",
+			"GetMouseDelta",
+			"GetMouseLocation",
+			"IsKeyDown",
+			"IsMouseButtonPressed",
+		},
+		member_security = []classes.Member_Security {
+			classes.Method_Security(
+				"GetMouse",
+				vm.SecurityRequirementFromValue(
+					datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+				),
+			),
+		},
 	)
 }

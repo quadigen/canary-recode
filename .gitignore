@@ -72,3 +72,4 @@ Testing/
 .git/
 .clang-format
 .bindgen
+tools/rbx2kine.py

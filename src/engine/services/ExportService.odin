@@ -41,12 +41,24 @@ export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: st
 	if model == nil || model.registry == nil || model.registry.classes == nil {
 		return false
 	}
+
+	// Terrain is a singleton service rather than an Instance, so the tree walk
+	// never reaches it. Its voxel grid travels in the format's own section
+	// instead, which is why a map edited with terrain still saves it.
+	terrain_table: serializer.Kine_Terrain
+	defer serializer.Kine_Terrain_Destroy(&terrain_table)
+	terrain_object := DataModel_Get_Service(model, "Terrain")
+	if terrain_object != nil {
+		Terrain_Write_Kine_Table(cast(^Terrain)terrain_object, &terrain_table)
+	}
+
 	return serializer.Serialize_To_File(
 		model.registry.classes,
 		L,
 		&model.object,
 		path,
 		export_content_service_filter,
+		&terrain_table,
 	)
 }
 

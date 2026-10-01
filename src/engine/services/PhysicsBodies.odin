@@ -551,6 +551,199 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 	}, true
 }
 
+// ---------------------------------------------------------------------------
+// Terrain collision
+// ---------------------------------------------------------------------------
+// Terrain is a Service holding a voxel map rather than a Part, so the Part walk
+// in Physics_Synchronize never sees it and the solver had no knowledge of the
+// ground at all. Both ends need this body: the server simulates character
+// capsules against it, and a client that can see the terrain but not collide
+// with it falls straight through the world.
+//
+// The shape is one static mesh built from the exposed faces of the solid
+// voxels. A body per voxel does not scale, since a modest terrain is tens of
+// thousands of voxels, and five of every six faces on any interior voxel are
+// buried against its neighbours and contribute nothing to collision.
+//
+// Liquid voxels are deliberately not collidable. Water and glass are stored in
+// the water channel with zero occupancy and the renderer draws them as a
+// surface rather than as rock, so treating them as solid would put an invisible
+// wall along every shoreline.
+
+// Bounds the mesh so a pathological or hostile voxel map cannot make the shape
+// build unbounded. Terrain is generated content, so reaching this means
+// something is already wrong; the body is simply not rebuilt.
+TERRAIN_COLLISION_MAX_TRIANGLES: int = 1 << 21
+
+// physics_terrain_occupies reports whether a cell is solid. Liquids have zero
+// occupancy by construction, so this is the same test the renderer uses to keep
+// them out of the solid mesh, and the two can never disagree about what counts
+// as ground.
+physics_terrain_occupies :: proc(terrain: ^Terrain, x, y, z: int) -> bool {
+	cell, ok := terrain.voxels[Terrain_Voxel_Key{x, y, z}]
+	return ok && cell.occupancy > 0
+}
+
+physics_terrain_corner :: proc(
+	terrain: ^Terrain,
+	x, y, z: int,
+	corner: [3]int,
+) -> kineffi.JPH_Vec3 {
+	return kineffi.JPH_Vec3{
+		f32(x + corner[0]) * terrain.voxel_size,
+		f32(y + corner[1]) * terrain.voxel_size,
+		f32(z + corner[2]) * terrain.voxel_size,
+	}
+}
+
+// physics_terrain_face emits both windings of one voxel face.
+//
+// Both directions are written because a character can legitimately arrive at
+// this surface from either side, and a mesh shape's collision with a back face
+// is not something to depend on here: getting it wrong produces a wall you can
+// stand on top of and fall through from underneath, which is exactly the
+// failure a terrain collider must not have.
+physics_terrain_face :: proc(
+	triangles: ^[dynamic]kineffi.JPH_Triangle,
+	terrain: ^Terrain,
+	x, y, z: int,
+	nx, ny, nz: int,
+	c0, c1, c2, c3: [3]int,
+) {
+	if len(triangles) + 4 > TERRAIN_COLLISION_MAX_TRIANGLES { return }
+	if physics_terrain_occupies(terrain, x + nx, y + ny, z + nz) { return }
+
+	a := physics_terrain_corner(terrain, x, y, z, c0)
+	b := physics_terrain_corner(terrain, x, y, z, c1)
+	c := physics_terrain_corner(terrain, x, y, z, c2)
+	d := physics_terrain_corner(terrain, x, y, z, c3)
+
+	append(
+		triangles,
+		kineffi.JPH_Triangle{v1 = a, v2 = b, v3 = c, materialIndex = 0},
+	)
+	append(
+		triangles,
+		kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = d, materialIndex = 0},
+	)
+	append(
+		triangles,
+		kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = b, materialIndex = 0},
+	)
+	append(
+		triangles,
+		kineffi.JPH_Triangle{v1 = a, v2 = d, v3 = c, materialIndex = 0},
+	)
+}
+
+physics_build_terrain_shape :: proc(terrain: ^Terrain) -> (shape: kineffi.JPH_ShapeRef, triangle_count: int) {
+	triangles: [dynamic]kineffi.JPH_Triangle
+	defer delete(triangles)
+
+	for key, cell in &terrain.voxels {
+		if cell.occupancy <= 0 { continue }
+		x := int(key.x)
+		y := int(key.y)
+		z := int(key.z)
+
+		// Corners are listed per face in cell space, where each component is 0 or
+		// 1. The winding is irrelevant because physics_terrain_face emits both
+		// directions.
+		physics_terrain_face(&triangles, terrain, x, y, z, 0, 1, 0, [3]int{0, 1, 0}, [3]int{0, 1, 1}, [3]int{1, 1, 1}, [3]int{1, 1, 0})
+		physics_terrain_face(&triangles, terrain, x, y, z, 0, -1, 0, [3]int{0, 0, 1}, [3]int{0, 0, 0}, [3]int{1, 0, 0}, [3]int{1, 0, 1})
+		physics_terrain_face(&triangles, terrain, x, y, z, 1, 0, 0, [3]int{1, 0, 1}, [3]int{1, 1, 1}, [3]int{1, 1, 0}, [3]int{1, 0, 0})
+		physics_terrain_face(&triangles, terrain, x, y, z, -1, 0, 0, [3]int{0, 0, 0}, [3]int{0, 1, 0}, [3]int{0, 1, 1}, [3]int{0, 0, 1})
+		physics_terrain_face(&triangles, terrain, x, y, z, 0, 0, 1, [3]int{1, 0, 1}, [3]int{1, 1, 1}, [3]int{0, 1, 1}, [3]int{0, 0, 1})
+		physics_terrain_face(&triangles, terrain, x, y, z, 0, 0, -1, [3]int{0, 0, 0}, [3]int{0, 1, 0}, [3]int{1, 1, 0}, [3]int{1, 0, 0})
+	}
+
+	triangle_count = len(triangles)
+	if triangle_count == 0 { return }
+	shape = kineffi.JPH_MeshShape_Create(&triangles[0], u32(triangle_count))
+	return
+}
+
+physics_destroy_terrain_body :: proc(service: ^Physics) {
+	if !service.terrain_valid { return }
+	kineffi.JPH_BodyInterface_RemoveAndDestroyBody(
+		service.system.body_interface,
+		service.terrain_body,
+	)
+	service.terrain_valid = false
+	service.terrain_body = kineffi.JPH_BODY_ID_INVALID
+	service.terrain_triangles = 0
+}
+
+Physics_Synchronize_Terrain :: proc(service: ^Physics) {
+	if service == nil || !service.initialized { return }
+
+	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
+	if terrain_object == nil { return }
+	terrain := cast(^Terrain)terrain_object
+	if terrain == nil { return }
+
+	// geometry_version advances on every stored voxel change, including the ones a
+	// client makes while applying replicated batches, so the floor appears on the
+	// same frame the voxels do rather than a frame or more later when the mesher
+	// gets around to rebuilding draw items. Comparing against draw_version here
+	// would leave a freshly replicated world briefly without any ground under it.
+	if service.terrain_valid &&
+		service.terrain_version == terrain.geometry_version {
+		return
+	}
+
+	// The old body goes first so a character is never pushed by the outgoing and
+	// incoming shapes at the same time, and so a map that has just been emptied
+	// loses its floor instead of keeping a stale one.
+	physics_destroy_terrain_body(service)
+
+	shape, triangle_count := physics_build_terrain_shape(terrain)
+	if shape == nil { return }
+	defer kineffi.JPH_Shape_Destroy(shape)
+
+	position := kineffi.JPH_RVec3{0, 0, 0}
+	rotation := kineffi.JPH_Quat{0, 0, 0, 1}
+
+	settings := kineffi.JPH_BodyCreationSettings_Create3(
+		shape,
+		&position,
+		&rotation,
+		.Static,
+		jolt.OBJECT_LAYER_NON_MOVING,
+	)
+	if settings == nil { return }
+	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
+
+	// Terrain friction is a single value rather than per-material because the
+	// shape is one body spanning every material in the map, and it is set high so
+	// a character does not slide down the usual terrain slopes.
+	kineffi.JPH_BodyCreationSettings_SetFriction(settings, 1.0)
+	kineffi.JPH_BodyCreationSettings_SetRestitution(settings, 0)
+
+	body := kineffi.JPH_BodyInterface_CreateBody(
+		service.system.body_interface,
+		settings,
+	)
+	if body == nil { return }
+
+	body_id := kineffi.JPH_Body_GetID(body)
+	if body_id == kineffi.JPH_BODY_ID_INVALID {
+		kineffi.JPH_BodyInterface_DestroyBody(service.system.body_interface, body)
+		return
+	}
+
+	kineffi.JPH_BodyInterface_AddBody(
+		service.system.body_interface,
+		body_id,
+		.DontActivate,
+	)
+
+	service.terrain_valid = true
+	service.terrain_body = body_id
+	service.terrain_version = terrain.geometry_version
+	service.terrain_triangles = triangle_count
+}
+
 physics_mesh_part_version :: proc(part: ^classes.Part) -> u64 {
 	if classes.Is_A(&part.object, "MeshPart") {
 		mesh_part := cast(^classes.MeshPart)part
@@ -622,6 +815,10 @@ physics_find_body_index :: proc(service: ^Physics, object: ^classes.Object) -> i
 
 Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 	if service == nil || !service.initialized || workspace == nil { return }
+	// Terrain is not part of the Part walk below, so it gets its own pass. It
+	// runs first because a client that has just been handed terrain needs the
+	// ground to exist before the character capsule is swept against anything.
+	Physics_Synchronize_Terrain(service)
 	parts: [dynamic]^classes.Part
 	defer delete(parts)
 	physics_collect_parts(workspace, &parts)
@@ -919,6 +1116,17 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 Physics_Candidate_Bodies :: proc(service: ^Physics, exclude: kineffi.JPH_BodyID) -> [dynamic]kineffi.JPH_BodyID {
 	result: [dynamic]kineffi.JPH_BodyID
 	if service == nil {return result}
+	// Terrain is not a Part and so has no entry in service.bodies, but it is a
+	// real static body that anything in the world has to collide with. Leaving it
+	// out here is what made a character walk through visible ground: the capsule
+	// sweep and every other shape cast gather their candidates here, so a body
+	// missing from this list is invisible to all of them even though the solver
+	// would happily have collided with it.
+	if service.terrain_valid &&
+	   service.terrain_body != kineffi.JPH_BODY_ID_INVALID &&
+	   service.terrain_body != exclude {
+		append(&result, service.terrain_body)
+	}
 	for body in service.bodies {
 		if body.body_id == exclude || body.body_id == kineffi.JPH_BODY_ID_INVALID {continue}
 		part := cast(^classes.Part)body.object

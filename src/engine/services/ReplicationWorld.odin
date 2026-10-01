@@ -949,6 +949,11 @@ replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Objec
 }
 
 replication_sync :: proc(service: ^ReplicatorService) {
+	// Terrain rides the snapshot clock at half rate. Adaptive load control already
+	// governs this call's frequency, so a server shedding load sheds terrain
+	// updates with it.
+	service.terrain_sync_tick += 1
+	service.terrain_sync_due = service.terrain_sync_tick % 2 == 0
 	if service.mode != .Server || service.data_model == nil {return}
 	for root_name in REPLICATION_ROOT_NAMES {
 		replication_sync_tree(service, DataModel_Get_Service(service.data_model, root_name))
@@ -1022,6 +1027,16 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		// be refused, and would put unversioned frames in front of a client that
 		// has not been told what it is allowed to understand.
 		if !connection.handshake_complete {continue}
+
+		// Terrain is pushed separately from the instance tree: it is a bulk,
+		// low-frequency transfer rather than per-entity state, and running it on
+		// the snapshot cadence would resend a voxel map whose changes are mostly
+		// other players standing on it. It rides the snapshot clock at half rate
+		// rather than its own, so the existing adaptive load control already
+		// throttles it instead of a second budget having to be invented.
+		if service.mode == .Server && service.terrain_sync_due {
+			replication_send_terrain_delta(service, &connection)
+		}
 
 		// The focus is resolved once here and reused by all three phases below.
 		// Resolving it per entity made every snapshot O(entities^2 * peers).

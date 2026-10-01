@@ -1,0 +1,44 @@
+material {
+    name : "kine_hl_outline",
+    // Lit rather than unlit: matc only emits MaterialVertexInputs.worldNormal
+    // when the shading model needs normals, and this vertex stage needs them to
+    // push the shell outward.
+    shadingModel : lit,
+    blending : transparent,
+    // Inverted hull. Only the back faces of the expanded shell survive, so what
+    // reaches the screen is the ring of hull sitting outside the part's own
+    // silhouette. depthWrite is off so the translucent fill covering the
+    // interior is not rejected by the shell's own depth.
+    culling : front,
+    depthWrite : false,
+    depthCulling : true,
+    vertexDomain : object,
+    instanced : true,
+    parameters : [
+        { type : float4[64], name : instanceColors },
+        { type : float,  name : thickness }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.thickness;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // RGB and alpha ride in the same float4 slot kine_queue_mesh queued,
+        // matching kine_particle.mat's per-instance alpha convention. Emissive
+        // carries the color so the outline reads as a flat author-chosen hue
+        // rather than something the scene lighting can dim.
+        vec4 c = materialParams.instanceColors[getInstanceIndex()];
+        material.baseColor.rgb = c.rgb;
+        material.baseColor.a = c.a;
+        material.emissive.rgb = c.rgb;
+        material.emissive.a = c.a;
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+}

@@ -1,0 +1,36 @@
+material {
+    name : "kine_hl_fill_top",
+    // See kine_hl_outline.mat for why this is lit rather than unlit.
+    shadingModel : lit,
+    blending : transparent,
+    culling : back,
+    // HighlightDepthMode.AlwaysOnTop: the overlay ignores the depth buffer so it
+    // covers the part even when something is in front of it.
+    depthWrite : false,
+    depthCulling : false,
+    vertexDomain : object,
+    instanced : true,
+    parameters : [
+        { type : float4[64], name : instanceColors },
+        { type : float,  name : depthBias }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.depthBias;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 c = materialParams.instanceColors[getInstanceIndex()];
+        material.baseColor.rgb = c.rgb;
+        material.baseColor.a = c.a;
+        material.emissive.rgb = c.rgb;
+        material.emissive.a = c.a;
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+}

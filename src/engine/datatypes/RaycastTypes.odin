@@ -27,6 +27,7 @@ RaycastResult :: struct {
 	Distance:     f32,
 	Material:     engine_enums.Material,
 	InstanceRef:  i32,
+	ObjectRef:    rawptr,
 }
 
 RaycastParams_New :: proc() -> RaycastParams {

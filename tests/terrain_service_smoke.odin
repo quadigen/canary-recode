@@ -93,6 +93,7 @@ main :: proc() {
 	assert(services.TERRAIN_CHUNK_SIZE == 16)
 	assert(services.TERRAIN_REBUILDS_PER_FRAME == 2)
 
+
 	// ------------------------------------------------------------------
 	// Service identity, Roblox properties and engine extension properties.
 	// ------------------------------------------------------------------
@@ -349,6 +350,94 @@ Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), Enum.Material.Grass
 	services.Prepare_3D(&environment.services, nil)
 	assert(len(terrain.chunks) == chunks_before)
 	assert(len(terrain.dirty_queue) == queue_before, "no renderer means the queue must not be drained")
+
+	// ------------------------------------------------------------------
+	// Liquid materials. Water and Glass are stored in the water channel and
+	// kept out of the solid surface, so the surface pass can draw them as
+	// translucent quads. Neon stays solid and is capped with an emissive one.
+	// ------------------------------------------------------------------
+	run_script(&script_vm, `
+Terrain:Clear()
+Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), Enum.Material.Water)
+assert(Terrain:CountCells() > 0, "a Water fill must create cells")
+local material, occupancy = Terrain:GetCell(0, 0, 0)
+assert(material == Enum.Material.Water, "a Water fill must keep its material")
+assert(occupancy == 0, "a Water fill must not be stored as solid rock")
+local _, depth = Terrain:GetWaterCell(0, 0, 0)
+assert(depth > 0, "a Water fill must land in the water channel")
+`, "terrain_liquid_water")
+
+	assert(len(terrain.voxels) > 0, "a Water fill must create cells")
+	for key, cell in terrain.voxels {
+		assert(cell.water == 1, "a Water fill must land in the water channel")
+		assert(cell.occupancy == 0, "a Water fill must not be stored as solid rock")
+	}
+
+	run_script(&script_vm, `
+Terrain:Clear()
+Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), Enum.Material.Glass)
+assert(Terrain:CountCells() > 0, "a Glass fill must create cells")
+local material, occupancy = Terrain:GetCell(0, 0, 0)
+assert(material == Enum.Material.Glass, "a Glass fill must keep its material")
+assert(occupancy == 0, "a Glass fill must not be stored as solid rock")
+local _, depth = Terrain:GetWaterCell(0, 0, 0)
+assert(depth > 0, "a Glass fill must land in the water channel")
+`, "terrain_liquid_glass")
+
+	assert(len(terrain.voxels) > 0, "a Glass fill must create cells")
+	for key, cell in terrain.voxels {
+		assert(cell.water == 1, "a Glass fill must land in the water channel")
+		assert(cell.occupancy == 0, "a Glass fill must not be stored as solid rock")
+	}
+
+	run_script(&script_vm, `
+Terrain:Clear()
+Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), Enum.Material.Neon)
+assert(Terrain:CountCells() > 0, "a Neon fill must create cells")
+local material, occupancy = Terrain:GetCell(0, 0, 0)
+assert(material == Enum.Material.Neon, "a Neon fill must keep its material")
+assert(occupancy == 1, "a Neon fill must stay solid")
+local _, neon_depth = Terrain:GetWaterCell(0, 0, 0)
+assert(neon_depth == 0, "Neon is not a liquid")
+`, "terrain_liquid_neon")
+
+	assert(len(terrain.voxels) > 0, "a Neon fill must create cells")
+	for key, cell in terrain.voxels {
+		assert(cell.occupancy == 1, "a Neon fill must stay solid")
+		assert(cell.water == 0, "Neon is not a liquid")
+	}
+
+	// A plain rock fill is untouched by the liquid rules.
+	run_script(&script_vm, `
+Terrain:Clear()
+Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), Enum.Material.Grass)
+assert(Terrain:CountCells() > 0)
+local material, occupancy = Terrain:GetCell(0, 0, 0)
+assert(material == Enum.Material.Grass)
+assert(occupancy == 1, "rock must stay solid")
+local _, rock_depth = Terrain:GetWaterCell(0, 0, 0)
+assert(rock_depth == 0, "rock must stay dry")
+`, "terrain_liquid_grass")
+
+	assert(len(terrain.voxels) > 0)
+	for key, cell in terrain.voxels {
+		assert(cell.occupancy == 1 && cell.water == 0, "rock must stay solid and dry")
+	}
+
+	// An explicit water channel value survives alongside a solid fill: the
+	// liquid rules only promote rock, they never demote existing liquid.
+	run_script(&script_vm, `
+Terrain:Clear()
+Terrain:SetCell(0, 0, 0, Enum.Material.Grass)
+Terrain:SetWaterCell(1, 0, 0, 1)
+local _, rock = Terrain:GetCell(0, 0, 0)
+assert(rock == 1, "the rock cell must stay solid")
+local _, explicit = Terrain:GetWaterCell(1, 0, 0)
+assert(explicit == 1, "explicit water must be visible to the surface pass")
+`, "terrain_liquid_mixed")
+
+	run_script(&script_vm, `Terrain:Clear()`, "terrain_liquid_cleanup")
+	assert(len(terrain.voxels) == 0)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

@@ -80,10 +80,6 @@ character_service_part :: proc(
 	return part
 }
 
-// CharacterService_Spawn_Position is where a character appears: on top of the
-// Part named "Spawn" in Workspace, or a default height if the map has no Spawn
-// part. First spawn and every respawn go through here, so a map only has to
-// place one Spawn part to cover both.
 CharacterService_Spawn_Position :: proc(
 	data_model: ^DataModel,
 ) -> datatypes.Vector3 {
@@ -105,14 +101,6 @@ CharacterService_Spawn_Position :: proc(
 	return position
 }
 
-// CharacterService_Begin_Ragdoll hands a dying character's body to the solver.
-//
-// Two things change at once. The collision capsule stops being kinematic, so the
-// solver integrates it and the body falls instead of hovering where the walk left
-// it. And the root's replication ownership moves to the server, because while a
-// living character is simulated by its owner, a dead one has no owner to simulate
-// it -- leaving ownership with the client would leave two peers writing a
-// transform for the same body.
 CharacterService_Begin_Ragdoll :: proc(
 	data_model: ^DataModel,
 	model: ^classes.CharacterModel,
@@ -145,17 +133,6 @@ CharacterService_Begin_Ragdoll :: proc(
 	}
 }
 
-// CharacterService_Update_Ragdoll copies the simulated capsule's transform onto
-// the character's visible parts.
-//
-// While alive the root is the source of truth and the capsule is teleported to
-// it. Ragdolling inverts that: the solver owns the body, and the root plus its
-// followers have to follow it, or the character would sit still while an
-// invisible capsule fell away from it.
-//
-// This runs before the physics step, so the root trails the body by one frame of
-// motion. On a corpse that is invisible, and remote peers see the replicated
-// transform through the interpolator regardless.
 CharacterService_Update_Ragdoll :: proc(
 	service: ^CharacterService,
 	model: ^classes.CharacterModel,
@@ -180,13 +157,6 @@ CharacterService_Update_Ragdoll :: proc(
 	}
 }
 
-// CharacterService_Update_Death runs the ragdoll and respawn lifecycle for one
-// player.
-//
-// Death and respawn are server decisions. The client learns about both through
-// the replication that already carries the character's transform, so running this
-// on both sides would leave the two peers disagreeing about who owns a dead body
-// and when it comes back.
 CharacterService_Update_Death :: proc(
 	service: ^CharacterService,
 	player: ^Player,
@@ -217,9 +187,6 @@ CharacterService_Update_Death :: proc(
 	player.respawn_timer += delta_time
 	if player.respawn_timer < service.respawn_time {return}
 
-	// Unload and Load rather than reviving in place: the replacement goes through
-	// the same Spawn-part placement as a first spawn, and the replication churn is
-	// the path that already works for every character load.
 	player.ragdoll = false
 	player.respawn_timer = 0
 	CharacterService_Unload(service, player)

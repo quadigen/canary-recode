@@ -39,7 +39,16 @@ Physics :: struct {
 	contact_listener: kineffi.JPH_ContactListenerRef,
 	gravity:       f32,
 	pcd_cache:     map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
-	initialized:   bool,
+	// Terrain collision. Terrain is a Service rather than a Part, so the Part walk
+	// in Physics_Synchronize never sees it and the solver had no idea the ground
+	// existed. terrain_version is the Terrain geometry_version the current shape was
+	// built from, so the body is only rebuilt when the voxels actually changed
+	// rather than every step.
+	terrain_valid:     bool,
+	terrain_body:      kineffi.JPH_BodyID,
+	terrain_version:   u64,
+	terrain_triangles: int,
+	initialized:       bool,
 }
 
 Physics_Shape_Cache_Key :: struct {
@@ -74,6 +83,9 @@ physics_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr
 physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^Physics)object
 	for body in service.bodies { physics_destroy_body(service, body) }
+	// The terrain body is not in service.bodies because it is not a Part, so it
+	// has to come down explicitly before the system it lives in is destroyed.
+	physics_destroy_terrain_body(service)
 	delete(service.body_to_part)
 	delete(service.bodies)
 	for _, shape in service.pcd_cache {

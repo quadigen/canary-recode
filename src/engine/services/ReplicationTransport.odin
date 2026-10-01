@@ -31,13 +31,18 @@ Replication_Capability_Time_Sync:       u32 = 1 << 2
 // peer that cannot apply the frames is never sent them in the first place,
 // rather than having the frames arrive and be dropped as unknown kinds.
 Replication_Capability_Asset_Transfer: u32 = 1 << 3
+// The server pushes its terrain voxel database at connect time. Terrain is a
+// Service holding a map, not an Instance with replicated properties, so the
+// instance-tree snapshot can never carry it and it needs its own frame.
+Replication_Capability_Terrain: u32 = 1 << 4
 
 // Every feature this build implements, advertised during the handshake.
 Replication_Local_Capabilities: u32 =
 	Replication_Capability_Ack_Tokens |
 	Replication_Capability_Batch_Properties |
 	Replication_Capability_Time_Sync |
-	Replication_Capability_Asset_Transfer
+	Replication_Capability_Asset_Transfer |
+	Replication_Capability_Terrain
 
 Replication_Handshake_Ok:                u8 = 0
 Replication_Handshake_Version_Mismatch:  u8 = 1
@@ -49,6 +54,7 @@ Replication_Handshake_Schema_Mismatch:   u8 = 5
 // Frame kinds are numbered by capability, so a new one takes the next free
 // number rather than reusing a retired meaning.
 Replication_Kind_Asset: u8 = 21
+Replication_Kind_Terrain: u8 = 22
 
 replication_string_compare :: proc(a, b: string) -> int {
 	if a < b {return -1}
@@ -59,6 +65,17 @@ replication_string_compare :: proc(a, b: string) -> int {
 replication_u64_compare :: proc(a, b: u64) -> int {
 	if a < b {return -1}
 	if a > b {return 1}
+	return 0
+}
+
+// replication_voxel_key_compare gives terrain batches a stable order. Go's map
+// iteration order is randomized, so without this the same map would split into
+// different batches on different sends and a truncated transfer would be
+// impossible to reproduce.
+replication_voxel_key_compare :: proc(a, b: Terrain_Voxel_Key) -> int {
+	if a.y != b.y {return a.y < b.y ? -1 : 1}
+	if a.z != b.z {return a.z < b.z ? -1 : 1}
+	if a.x != b.x {return a.x < b.x ? -1 : 1}
 	return 0
 }
 
@@ -341,6 +358,7 @@ replication_receive_hello :: proc(
 	// Assets go out after WELCOME, on the same reliable channel, so ENet ordering
 	// guarantees they are applied before any spawn that references one.
 	replication_send_asset_table(service, peer, capabilities)
+	replication_send_terrain(service, connection)
 }
 
 replication_receive_welcome :: proc(
@@ -597,7 +615,8 @@ replication_budgeted :: proc(
 	       kind != 3 &&
 	       kind != 8 &&
 	       kind != 20 &&
-	       kind != Replication_Kind_Asset
+	       kind != Replication_Kind_Asset &&
+	       kind != Replication_Kind_Terrain
 }
 
 replication_send :: proc(
@@ -704,6 +723,276 @@ replication_send_asset_table :: proc(
 	fmt.printf("Sent %d embedded assets to a client\n", sent)
 }
 
+// replication_send_terrain hands the client the server's voxel database.
+//
+// Terrain is a Service, so the instance-tree snapshot skips it entirely and a
+// client would otherwise come up on an empty world while the server stands on
+// solid ground. The transfer is chunked into bounded batches rather than one
+// frame so a large map cannot produce a single packet ENet will not send, and
+// so a rejected batch costs one batch of work rather than the whole map.
+replication_send_terrain :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) {
+	client_capabilities := connection.client_capabilities
+	if (client_capabilities & Replication_Capability_Terrain) == 0 {return}
+
+	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
+	if terrain_object == nil {return}
+	terrain := cast(^Terrain)terrain_object
+	if terrain == nil {return}
+
+	header: [dynamic]u8
+	encode_terrain_header(&header, terrain)
+	sent_ok := replication_send(service, connection.peer, Replication_Kind_Terrain, header[:], true)
+	delete(header)
+	if !sent_ok {return}
+
+	// Armed only now: every change before this point is already in the snapshot,
+	// and arming earlier would accumulate voxels for a map nobody is receiving.
+	//
+	// The pending map is deliberately NOT cleared here. A second client
+	// connecting would otherwise discard changes still owed to the first, whose
+	// cursor is already past the point where it can be told about them, and that
+	// client would be permanently stale. Entries no peer still needs are filtered
+	// out by serial on send, and the map is bounded by TERRAIN_DIRTY_LIMIT.
+	terrain.dirty_tracking = true
+
+	// Sorted so the client sees a stable order and a batch boundary is
+	// reproducible; Go's map iteration order is not.
+	cells: [dynamic]Terrain_Cell_Record
+	keys: [dynamic]Terrain_Voxel_Key
+	for key in terrain.voxels {append(&keys, key)}
+	sort.quick_sort_proc(keys[:], replication_voxel_key_compare)
+	reserve := min(len(keys), int(Replication_Terrain_Max_Cells))
+	cells = make([dynamic]Terrain_Cell_Record, 0, reserve)
+
+	batches := 0
+	sent_cells := 0
+	for key in keys {
+		cell := terrain.voxels[key]
+		append(&cells, Terrain_Cell_Record {
+			x = i32(key.x),
+			y = i32(key.y),
+			z = i32(key.z),
+			occupancy = cell.occupancy,
+			water = cell.water,
+			material = cell.material,
+		})
+		if len(cells) < int(Replication_Terrain_Max_Cells) {continue}
+
+		payload: [dynamic]u8
+		encode_terrain_batch(&payload, cells[:])
+		batch_cells := len(cells)
+		ok := replication_send(service, connection.peer, Replication_Kind_Terrain, payload[:], true)
+		delete(payload)
+		clear(&cells)
+		if !ok {
+			delete(cells)
+			delete(keys)
+			return
+		}
+		batches += 1
+		sent_cells += batch_cells
+	}
+
+	if len(cells) > 0 {
+		payload: [dynamic]u8
+		encode_terrain_batch(&payload, cells[:])
+		batch_cells := len(cells)
+		ok := replication_send(service, connection.peer, Replication_Kind_Terrain, payload[:], true)
+		delete(payload)
+		if !ok {
+			delete(cells)
+			delete(keys)
+			return
+		}
+		batches += 1
+		sent_cells += batch_cells
+	}
+
+	footer: [dynamic]u8
+	append(&footer, Replication_Terrain_Subtype_End)
+	replication_put_u32(&footer, u32(batches))
+	replication_put_u32(&footer, u32(sent_cells))
+	replication_send(service, connection.peer, Replication_Kind_Terrain, footer[:], true)
+	delete(footer)
+
+	delete(cells)
+	delete(keys)
+
+	// The peer's delta cursor is set here rather than by the caller so it cannot
+	// be left pointing at zero after a snapshot. A cursor of zero would make the
+	// next delta tick resend the entire map, because every pending serial would
+	// look newer than it.
+	connection.terrain_initial_sent = true
+	connection.terrain_cursor = terrain.change_serial
+	connection.terrain_epoch = terrain.dirty_epoch
+	fmt.printf("Sent %d terrain cells in %d batches to a client\n", sent_cells, batches)
+}
+
+// replication_receive_terrain applies one terrain frame. Batches are only
+// applied once the header has arrived, because the header is what establishes
+// the grid the batches are expressed in.
+replication_receive_terrain :: proc(
+	service: ^ReplicatorService,
+	peer: ^enet.Peer,
+	reader: ^Replication_Reader,
+) {
+	if service.mode != .Client || peer != service.remote {return}
+	if reader.offset >= len(reader.data) {reader.valid = false; return}
+	subtype := reader.data[reader.offset]
+	reader.offset += 1
+
+	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
+	if terrain_object == nil {reader.valid = false; return}
+	terrain := cast(^Terrain)terrain_object
+	if terrain == nil {reader.valid = false; return}
+
+	if subtype == Replication_Terrain_Subtype_Header {
+		voxel_size, iso_level, draw_version, declared, ok := decode_terrain_header(reader)
+		if !ok {return}
+		terrain.voxel_size = voxel_size
+		terrain.iso_level = iso_level
+		terrain_clear(terrain, terrain.renderer)
+		service.terrain_header_seen = true
+		service.terrain_cells_declared = declared
+		service.terrain_draw_version = draw_version
+		return
+	}
+
+	if subtype == Replication_Terrain_Subtype_End {
+		batches := replication_read_u32(reader)
+		cells := replication_read_u32(reader)
+		if !reader.valid {return}
+		if u32(service.terrain_batches_received) != batches ||
+		   u32(service.terrain_cells_received) != cells {
+			fmt.eprintf(
+				"[Replication] terrain transfer is incomplete: server closed after %d batches / %d cells, received %d / %d\n",
+				batches,
+				cells,
+				service.terrain_batches_received,
+				service.terrain_cells_received,
+			)
+			service.terrain_rejections += 1
+			return
+		}
+		service.terrain_table_complete = true
+		fmt.printf("Received %d terrain cells from the server\n", cells)
+		return
+	}
+
+	if subtype != Replication_Terrain_Subtype_Batch {reader.valid = false; return}
+	if !service.terrain_header_seen {reader.valid = false; return}
+
+	cells, ok := decode_terrain_batch(reader)
+	// The batch owns its own storage, so it is freed here rather than with a
+	// defer that would also run on the early returns above.
+	defer delete(cells)
+	if !ok {
+		service.terrain_rejections += 1
+		return
+	}
+
+	for cell in cells {
+		terrain_set_cell(
+			terrain,
+			int(cell.x),
+			int(cell.y),
+			int(cell.z),
+			cell.occupancy,
+			cell.water,
+			cell.material,
+		)
+	}
+
+	service.terrain_batches_received += 1
+	service.terrain_cells_received += len(cells)
+}
+
+// replication_send_terrain_delta pushes the voxels that changed since this peer
+// was last updated.
+//
+// Cells carry the same framing as a snapshot batch and the client applies them
+// the same way, so there is no second wire format to keep in step. Only cells
+// stamped after the peer's cursor go out, and the cursor is a serial rather than
+// an index into the map so a coalesced voxel that was edited repeatedly is sent
+// once, with its final state.
+//
+// The whole pending set is dropped and the epoch advanced when it outgrows
+// TERRAIN_DIRTY_LIMIT. A peer whose epoch no longer matches therefore cannot
+// have a stale cursor silently accepted: it is resent in full instead.
+replication_send_terrain_delta :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) {
+	if (connection.client_capabilities & Replication_Capability_Terrain) == 0 {return}
+
+	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
+	if terrain_object == nil {return}
+	terrain := cast(^Terrain)terrain_object
+	if terrain == nil {return}
+
+	if !connection.terrain_initial_sent {
+		replication_send_terrain(service, connection)
+		return
+	}
+
+	// The map was wiped or the pending set overflowed, so this peer's view is no
+	// longer a subset of anything we still have. Start it over.
+	if connection.terrain_epoch != terrain.dirty_epoch {
+		replication_send_terrain(service, connection)
+		return
+	}
+
+	if terrain.change_serial <= connection.terrain_cursor {return}
+
+	cells: [dynamic]Terrain_Cell_Record
+	defer delete(cells)
+	for key, dirty in terrain.replication_dirty {
+		if dirty.serial <= connection.terrain_cursor {continue}
+		append(&cells, dirty.record)
+	}
+	if len(cells) == 0 {
+		// Everything this peer was missing has already been trimmed away by
+		// another path, so there is nothing coherent left to send it.
+		connection.terrain_cursor = terrain.change_serial
+		return
+	}
+
+	// Sorted for the same reason snapshots are: a repeatable order means a
+	// truncated delta can be diagnosed by replaying it.
+	sort.quick_sort_proc(cells[:], replication_terrain_record_compare)
+
+	sent := 0
+	for start := 0; start < len(cells); {
+		end := min(start + int(Replication_Terrain_Max_Cells), len(cells))
+		payload: [dynamic]u8
+		encode_terrain_batch(&payload, cells[start:end])
+		ok := replication_send(
+			service,
+			connection.peer,
+			Replication_Kind_Terrain,
+			payload[:],
+			true,
+		)
+		delete(payload)
+		if !ok {return}
+		sent += end - start
+		start = end
+	}
+
+	connection.terrain_cursor = terrain.change_serial
+	connection.terrain_deltas_sent += u64(sent)
+}
+
+replication_terrain_record_compare :: proc(a, b: Terrain_Cell_Record) -> int {
+	if a.y != b.y {return a.y < b.y ? -1 : 1}
+	if a.z != b.z {return a.z < b.z ? -1 : 1}
+	if a.x != b.x {return a.x < b.x ? -1 : 1}
+	return 0
+}
+
 replication_receive_asset :: proc(
 	service: ^ReplicatorService,
 	peer: ^enet.Peer,
@@ -798,6 +1087,8 @@ replication_receive :: proc(
 		replication_receive_time_sync_reply(service, peer, &reader)
 	case Replication_Kind_Asset:
 		replication_receive_asset(service, peer, &reader)
+	case Replication_Kind_Terrain:
+		replication_receive_terrain(service, peer, &reader)
 	case 2:
 		if service.mode != .Client || peer != service.remote {return}
 		id := replication_read_u32(&reader)

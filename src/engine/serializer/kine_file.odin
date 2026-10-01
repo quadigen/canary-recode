@@ -88,8 +88,9 @@ Serialize_To_File :: proc(
 	object: ^classes.Object,
 	path: string,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
+	terrain: ^Kine_Terrain = nil,
 ) -> bool {
-	data, ok := Serialize(registry, L, object, exclude_child)
+	data, ok := Serialize(registry, L, object, exclude_child, terrain)
 	if !ok {
 		return false
 	}
@@ -112,11 +113,15 @@ Serialize_To_File :: proc(
 
 // Deserialize_From_Data restores an Instance hierarchy from an in-memory .KINE
 // byte stream (embedded binaries, network payloads) under parent.
+//
+// terrain may be nil, in which case a map's voxel grid is parsed and validated
+// but discarded. Pass an owned Kine_Terrain to also receive it.
 Deserialize_From_Data :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	parent: ^classes.Object,
 	data: []u8,
+	terrain: ^Kine_Terrain = nil,
 ) -> (^classes.Object, bool) {
 	if is_zstd_frame(data) {
 		decompressed, ok := decompress_kine(data)
@@ -125,10 +130,10 @@ Deserialize_From_Data :: proc(
 		}
 		defer delete(decompressed)
 
-		return Deserialize(registry, L, parent, decompressed)
+		return Deserialize(registry, L, parent, decompressed, terrain)
 	}
 
-	return Deserialize(registry, L, parent, data)
+	return Deserialize(registry, L, parent, data, terrain)
 }
 
 // Deserialize_From_File reads a .KINE file from disk and restores the
@@ -138,6 +143,7 @@ Deserialize_From_File :: proc(
 	L: ^vm.State,
 	parent: ^classes.Object,
 	path: string,
+	terrain: ^Kine_Terrain = nil,
 ) -> (^classes.Object, bool) {
 	data, err := os.read_entire_file(path, context.allocator)
 	if err != nil {
@@ -145,5 +151,5 @@ Deserialize_From_File :: proc(
 	}
 	defer delete(data)
 
-	return Deserialize_From_Data(registry, L, parent, data)
+	return Deserialize_From_Data(registry, L, parent, data, terrain)
 }

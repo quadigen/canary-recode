@@ -146,6 +146,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_LocalizationService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
 	Register_LuauService_Class(registry.classes)
+	Register_Mouse_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
 	Register_Path_Class(registry.classes)
 	Register_PathfindingService_Class(registry.classes)
@@ -197,7 +198,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService")
-	Register_Service(registry, "LuauService", "LuauService", "LuauService")
+	Register_Service(registry, "LuauService", "LuauService")
 	Register_Service(registry, "PathfindingService", "PathfindingService", "PathfindingService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "Players", "Players")
@@ -278,7 +279,9 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 		z := profiling.Begin("User Input BeginFrame", 0x56B6C2)
 		user_input := Find_Service(registry, "UserInputService")
 		if user_input != nil && user_input.object != nil {
-			User_Input_Begin_Frame(cast(^UserInputService)user_input.object)
+			service := cast(^UserInputService)user_input.object
+			User_Input_Begin_Frame(service)
+			Mouse_Begin_Frame(service.mouse, L, delta_time)
 		}
 	}
 	{

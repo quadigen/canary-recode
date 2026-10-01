@@ -1,8 +1,166 @@
 package engine_enums
 
+import sdl3 "../platform"
+
 AccessModifierType :: enum {
 	Allow = 0,
 	Deny = 1,
+}
+
+// Key_Code_From_Scancode translates a platform scancode into the KeyCode a
+// script sees. It lives here rather than in the input service because the
+// classes layer needs the same translation to report key codes on
+// GuiObject.KeyDown, and services cannot be imported from classes without a
+// package cycle.
+Key_Code_From_Scancode :: proc(scancode: sdl3.Scancode) -> KeyCode {
+	if scancode >= .A && scancode <= .Z {
+		return KeyCode(i64(KeyCode.A) + i64(scancode) - i64(sdl3.Scancode.A))
+	}
+	if scancode >= .F1 && scancode <= .F12 {
+		return KeyCode(i64(KeyCode.F1) + i64(scancode) - i64(sdl3.Scancode.F1))
+	}
+	#partial switch scancode {
+	case ._0:
+		return .Zero
+	case ._1:
+		return .One
+	case ._2:
+		return .Two
+	case ._3:
+		return .Three
+	case ._4:
+		return .Four
+	case ._5:
+		return .Five
+	case ._6:
+		return .Six
+	case ._7:
+		return .Seven
+	case ._8:
+		return .Eight
+	case ._9:
+		return .Nine
+	case .SPACE:
+		return .Space
+	case .APOSTROPHE:
+		return .Quote
+	case .COMMA:
+		return .Comma
+	case .MINUS:
+		return .Minus
+	case .PERIOD:
+		return .Period
+	case .SLASH:
+		return .Slash
+	case .SEMICOLON:
+		return .Semicolon
+	case .EQUALS:
+		return .Equals
+	case .LEFTBRACKET:
+		return .LeftBracket
+	case .BACKSLASH:
+		return .Backslash
+	case .RIGHTBRACKET:
+		return .RightBracket
+	case .GRAVE:
+		return .Grave
+	case .ESCAPE:
+		return .Escape
+	case .RETURN:
+		return .Return
+	case .TAB:
+		return .Tab
+	case .BACKSPACE:
+		return .Backspace
+	case .INSERT:
+		return .Insert
+	case .DELETE:
+		return .Delete
+	case .RIGHT:
+		return .Right
+	case .LEFT:
+		return .Left
+	case .DOWN:
+		return .Down
+	case .UP:
+		return .Up
+	case .PAGEUP:
+		return .PageUp
+	case .PAGEDOWN:
+		return .PageDown
+	case .HOME:
+		return .Home
+	case .END:
+		return .End
+	case .CAPSLOCK:
+		return .CapsLock
+	case .SCROLLLOCK:
+		return .ScrollLock
+	case .NUMLOCKCLEAR:
+		return .NumLock
+	case .PRINTSCREEN:
+		return .PrintScreen
+	case .PAUSE:
+		return .Pause
+	case .KP_0:
+		return .ZeroPad
+	case .KP_1:
+		return .OnePad
+	case .KP_2:
+		return .TwoPad
+	case .KP_3:
+		return .ThreePad
+	case .KP_4:
+		return .FourPad
+	case .KP_5:
+		return .FivePad
+	case .KP_6:
+		return .SixPad
+	case .KP_7:
+		return .SevenPad
+	case .KP_8:
+		return .EightPad
+	case .KP_9:
+		return .NinePad
+	case .KP_PERIOD:
+		return .Decimal
+	case .KP_DIVIDE:
+		return .Divide
+	case .KP_MULTIPLY:
+		return .Multiply
+	case .KP_MINUS:
+		return .Subtract
+	case .KP_PLUS:
+		return .Add
+	case .KP_ENTER:
+		return .KeypadEnter
+	case .KP_EQUALS:
+		return .KeypadEquals
+	case .LSHIFT:
+		return .LeftShift
+	case .LCTRL:
+		return .LeftControl
+	case .LALT:
+		return .LeftAlt
+	case .LGUI:
+		return .LeftSuper
+	case .RSHIFT:
+		return .RightShift
+	case .RCTRL:
+		return .RightControl
+	case .RALT:
+		return .RightAlt
+	case .RGUI:
+		return .RightSuper
+	case .APPLICATION:
+		return .Apps
+	case .VOLUMEUP:
+		return .VolumeUp
+	case .VOLUMEDOWN:
+		return .VolumeDown
+	case:
+		return .None
+	}
 }
 
 AccessoryType :: enum {

@@ -127,7 +127,7 @@ player_get :: proc(
 	case "CharacterRemoving":
 		if player.character_removing == nil {player.character_removing = signals.Create(player.signal_registry.signal_registry)}
 		signals.Push(L, player.character_removing)
-	case "LoadCharacter":
+	case "LoadCharacter", "GetMouse":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -161,6 +161,19 @@ player_controller :: proc(player: ^Player) -> ^classes.CharacterController {
 	return classes.CharacterController_From_Model(player.character)
 }
 
+Player_Mouse :: proc(player: ^Player) -> ^Mouse {
+	if player == nil || player.destroyed || player.signal_registry == nil {return nil}
+	model := cast(^DataModel)player.signal_registry.data_model
+	if model == nil || model.registry == nil {return nil}
+	players_object := DataModel_Get_Service(model, "Players")
+	if players_object == nil {return nil}
+	players := cast(^Players)players_object
+	if players.local_player != player {return nil}
+	input_object := DataModel_Get_Service(model, "UserInputService")
+	if input_object == nil {return nil}
+	return User_Input_Service_Mouse(cast(^UserInputService)input_object)
+}
+
 player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
 	player := cast(^Player)object
 	switch method {
@@ -172,6 +185,9 @@ player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry
 			model := CharacterService_Load(service, player)
 			if model == nil {vm.PushNil(L)} else {classes.Push_Object(L, &model.object)}
 		}
+		return 1, true
+	case "GetMouse":
+		Mouse_Push(L, Player_Mouse(player))
 		return 1, true
 	case "Teleport":
 		if player.character == nil || player.character.destroyed {
@@ -355,7 +371,7 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		get = player_get,
 		set = player_set,
 		namecall = player_namecall,
-		methods = []string{"LoadCharacter", "Teleport", "ApplyImpulse"},
+		methods = []string{"LoadCharacter", "GetMouse", "Teleport", "ApplyImpulse"},
 	)
 	classes.Register_Class(
 		registry,

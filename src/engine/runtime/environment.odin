@@ -269,10 +269,21 @@ Environment_Render_3D :: proc(
 	{
 		tracy.ZoneNC("Classes Step .Render3D", 0xD08770)
 		z := profiling.Begin("Classes Step .Render3D", 0xD08770)
+		// Unlike the 2D phase, the 3D phase is not handed a surface, so the
+		// viewport has to come from the renderer's published rect. Anything that
+		// scales with screen size -- Highlight's outline thickness -- reads these
+		// and would silently fall back to a fixed guess if they stayed zero.
+		viewport_width, viewport_height := i32(0), i32(0)
+		if environment.renderer.HasViewportRect {
+			viewport_width = environment.renderer.ViewportRect[2]
+			viewport_height = environment.renderer.ViewportRect[3]
+		}
 		classes.Step(
 			&environment.classes,
 			vm_state.L,
 			delta_time,
+			viewport_width,
+			viewport_height,
 			phase = .Render_3D,
 		)
 	}

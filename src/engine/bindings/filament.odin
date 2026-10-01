@@ -96,6 +96,13 @@ KINE_MAT_GIZMO :: 5
 KINE_MAT_PARTICLE :: 6
 KINE_MAT_TERRAIN :: 7
 
+// Highlight fill and outline, each in a depth-tested and an AlwaysOnTop
+// variant because Filament bakes depthCulling into the material.
+KINE_MAT_HIGHLIGHT_OUTLINE :: 8
+KINE_MAT_HIGHLIGHT_FILL :: 9
+KINE_MAT_HIGHLIGHT_OUTLINE_TOP :: 10
+KINE_MAT_HIGHLIGHT_FILL_TOP :: 11
+
 // Which arm/handle of a gizmo is being interacted with.
 KINE_GIZMO_AXIS_NONE :: 0
 KINE_GIZMO_AXIS_X :: 1

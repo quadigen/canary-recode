@@ -94,6 +94,16 @@ typedef struct KineFilamentVulkanBackend {
 #define KINE_MAT_PARTICLE 6
 #define KINE_MAT_TERRAIN 7
 
+// Highlight fill and outline. Each comes in a depth-tested and an
+// AlwaysOnTop variant because Filament bakes depthCulling into the material,
+// so DepthMode.AlwaysOnTop needs a separate material rather than a flag.
+// Order matters: kine_update_batches sorts by materialKind, and the outline
+// shell must be queued before the fill that covers its interior.
+#define KINE_MAT_HIGHLIGHT_OUTLINE 8
+#define KINE_MAT_HIGHLIGHT_FILL 9
+#define KINE_MAT_HIGHLIGHT_OUTLINE_TOP 10
+#define KINE_MAT_HIGHLIGHT_FILL_TOP 11
+
 // Which arm/handle of a gizmo is being interacted with.
 #define KINE_GIZMO_AXIS_NONE   0
 #define KINE_GIZMO_AXIS_X      1

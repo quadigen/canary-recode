@@ -71,6 +71,179 @@ replication_read_f32 :: proc(reader: ^Replication_Reader) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Terrain frames
+// ---------------------------------------------------------------------------
+// Terrain is a Service whose state is a sparse voxel map, so none of the
+// instance-tree replication machinery can carry it: it has no replicated
+// properties and it is not a child of any replicated root. It therefore gets a
+// connect-time transfer of its own, shaped like the asset table.
+//
+// The database is sent as a header frame describing the voxel grid, then a
+// series of batch frames, then a closing frame carrying the batch count. The
+// client cannot know how many cells a map holds until the header arrives, so
+// the header is what makes the rest of the stream self-describing.
+
+Replication_Terrain_Subtype_Header: u8 = 0
+Replication_Terrain_Subtype_Batch:  u8 = 1
+Replication_Terrain_Subtype_End:    u8 = 2
+
+// A single batch frame is capped so one reliable packet stays under what ENet
+// will carry. The cap is a statement about this frame, not the whole database:
+// a map larger than it is split across frames rather than truncated.
+Replication_Terrain_Max_Cells: u32 = 4096
+
+// Coordinates are bounded by TERRAIN_MAX_EXTENTS, so anything outside that is
+// corrupt or hostile and is rejected before it reaches the voxel map.
+Replication_Terrain_Max_Coordinate: i32 = 16000
+
+// Voxel occupancies and water depths are fractions in [0, 1] and are stored as
+// 16-bit fixed point. That is far finer than a marching-cubes surface needs at
+// any voxel size the engine supports, and it halves the wire cost.
+replication_put_u16 :: proc(bytes: ^[dynamic]u8, value: u16) {
+	append(bytes, u8(value >> 8))
+	append(bytes, u8(value & 0xFF))
+}
+
+replication_read_u16 :: proc(reader: ^Replication_Reader) -> u16 {
+	high := replication_read_u8(reader)
+	low := replication_read_u8(reader)
+	if !reader.valid {return 0}
+	return u16(high) << 8 | u16(low)
+}
+
+replication_put_fixed16 :: proc(bytes: ^[dynamic]u8, value: f32) {
+	scaled := u16(clamp(value, 0, 1) * 65535.0 + 0.5)
+	append(bytes, u8(scaled >> 8))
+	append(bytes, u8(scaled & 0xFF))
+}
+
+replication_read_fixed16 :: proc(reader: ^Replication_Reader) -> f32 {
+	return f32(replication_read_u16(reader)) / 65535.0
+}
+
+replication_put_i32 :: proc(bytes: ^[dynamic]u8, value: i32) {
+	bits := transmute(u32)value
+	append(bytes, u8(bits >> 24))
+	append(bytes, u8(bits >> 16))
+	append(bytes, u8(bits >> 8))
+	append(bytes, u8(bits))
+}
+
+replication_read_i32 :: proc(reader: ^Replication_Reader) -> i32 {
+	a := replication_read_u8(reader)
+	b := replication_read_u8(reader)
+	c := replication_read_u8(reader)
+	d := replication_read_u8(reader)
+	if !reader.valid {return 0}
+	return transmute(i32)(u32(a) << 24 | u32(b) << 16 | u32(c) << 8 | u32(d))
+}
+
+// encode_terrain_header writes the grid description every later batch is
+// measured against. The client refuses batches whose grid does not match, so a
+// stale batch from an earlier map cannot be applied to a newer one.
+encode_terrain_header :: proc(bytes: ^[dynamic]u8, terrain: ^Terrain) {
+	append(bytes, Replication_Terrain_Subtype_Header)
+	replication_put_u32(bytes, u32(len(terrain.voxels)))
+	replication_put_f32(bytes, terrain.voxel_size)
+	replication_put_f32(bytes, terrain.iso_level)
+	replication_put_u32(bytes, u32(terrain.draw_version))
+}
+
+// encode_terrain_batch writes at most Replication_Terrain_Max_Cells cells as
+// fixed-size records. Occupancy and water are 16-bit fixed point, which is far
+// finer than a marching-cubes surface needs at any voxel size the engine
+// supports and halves the wire cost of a full cell.
+encode_terrain_batch :: proc(bytes: ^[dynamic]u8, cells: []Terrain_Cell_Record) {
+	append(bytes, Replication_Terrain_Subtype_Batch)
+	replication_put_u32(bytes, u32(len(cells)))
+	for cell in cells {
+		replication_put_i32(bytes, cell.x)
+		replication_put_i32(bytes, cell.y)
+		replication_put_i32(bytes, cell.z)
+		append(bytes, u8(cell.material))
+		replication_put_fixed16(bytes, cell.occupancy)
+		replication_put_fixed16(bytes, cell.water)
+	}
+}
+
+// decode_terrain_header reads the grid description. The subtype byte must
+// already have been consumed by the caller, the same contract decode_terrain_batch
+// has, so a single dispatch site can branch on the subtype and hand the rest of
+// the frame to the matching reader.
+//
+// The cell count is a claim by the sender, so it is only recorded for logging:
+// the batches that follow carry their own counts and are what actually build
+// the map.
+decode_terrain_header :: proc(
+	reader: ^Replication_Reader,
+) -> (voxel_size, iso_level: f32, draw_version: u32, declared: u32, ok: bool) {
+	if !reader.valid {return 0, 0, 0, 0, false}
+	// Field order has to match encode_terrain_header exactly: the cell count comes
+	// first, then the grid description. Reading these in a different order
+	// silently reinterprets the count as a float rather than failing.
+	declared = replication_read_u32(reader)
+	voxel_size = replication_read_f32(reader)
+	iso_level = replication_read_f32(reader)
+	draw_version = replication_read_u32(reader)
+	if !reader.valid {return 0, 0, 0, 0, false}
+	// A zero or negative voxel size would make every world<->cell conversion
+	// divide by zero, so it is rejected rather than stored.
+	if !(voxel_size > 0) || !(iso_level > 0) {return 0, 0, 0, 0, false}
+	return voxel_size, iso_level, draw_version, declared, true
+}
+
+// decode_terrain_batch reads one batch into freshly allocated records. The
+// declared count is checked against the bytes actually present before a single
+// record is allocated, so a hostile count cannot drive an allocation loop.
+decode_terrain_batch :: proc(
+	reader: ^Replication_Reader,
+) -> (cells: [dynamic]Terrain_Cell_Record, ok: bool) {
+	if !reader.valid {return}
+	count := replication_read_u32(reader)
+	if !reader.valid {return}
+	if count > Replication_Terrain_Max_Cells {reader.valid = false; return}
+	// 17 bytes per cell is the exact record size: three i32 coordinates, one
+	// material byte, and two 16-bit fixed-point values. The check is made before
+	// a single record is allocated so a hostile count cannot drive an allocation
+	// loop; the constant is the real size, not a conservative guess, so a full
+	// legitimate batch is never refused.
+	if int(count) > (len(reader.data) - reader.offset) / 17 {
+		reader.valid = false
+		return
+	}
+
+	reserve := int(count)
+	cells = make([dynamic]Terrain_Cell_Record, 0, reserve)
+	for _ in 0..<int(count) {
+		cell: Terrain_Cell_Record
+		cell.x = replication_read_i32(reader)
+		cell.y = replication_read_i32(reader)
+		cell.z = replication_read_i32(reader)
+		material := replication_read_u8(reader)
+		cell.occupancy = replication_read_fixed16(reader)
+		cell.water = replication_read_fixed16(reader)
+		if !reader.valid {return}
+		if cell.x < -Replication_Terrain_Max_Coordinate ||
+		   cell.x > Replication_Terrain_Max_Coordinate ||
+		   cell.y < -Replication_Terrain_Max_Coordinate ||
+		   cell.y > Replication_Terrain_Max_Coordinate ||
+		   cell.z < -Replication_Terrain_Max_Coordinate ||
+		   cell.z > Replication_Terrain_Max_Coordinate {
+			reader.valid = false
+			return
+		}
+		// Air is the last member of the Material enum, so it is the highest value
+		// a sender can legally name. Clamping to it rather than to a material that
+		// merely happens to matter here keeps every value above it intact instead
+		// of folding Water, Sand, debug and Air into one material.
+		cell.material = enums.Material(min(int(material), int(enums.Material.Air)))
+		append(&cells, cell)
+	}
+	ok = true
+	return
+}
+
+// ---------------------------------------------------------------------------
 // Asset table frames
 // ---------------------------------------------------------------------------
 // A network client never loads a map, and the asset store is only ever filled as

@@ -45,13 +45,40 @@ test:
     odin test src/engine/assetstore
     @just test-serializer
     @just test-replication
+    @just test-services
+
+test-services:
+    #!pwsh
+    $ErrorActionPreference = 'Stop'
+    $tests = @(
+        'mouse_smoke',
+        'highlight_smoke',
+        'terrain_service_smoke',
+        'terrain_collision_smoke'
+    )
+    $failed = @()
+    foreach ($t in $tests) {
+        $output = (odin run "tests/$t.odin" -file 2>&1 | Out-String)
+        if ($output -match 'PASSED') {
+            Write-Host "PASS  $t"
+        } else {
+            Write-Host "FAIL  $t"
+            Write-Host $output
+            $failed += $t
+        }
+    }
+    if ($failed.Count -gt 0) {
+        throw "service tests failed: $($failed -join ', ')"
+    }
 
 test-serializer:
     #!pwsh
     $ErrorActionPreference = 'Stop'
     $tests = @(
         'serializer_smoke',
-        'asset_portability_smoke'
+        'asset_portability_smoke',
+        'kine_map_smoke',
+        'kine_terrain_smoke'
     )
     $failed = @()
     foreach ($t in $tests) {
@@ -68,9 +95,6 @@ test-serializer:
         throw "serializer tests failed: $($failed -join ', ')"
     }
 
-# The replication smoke tests are standalone `odin run` programs rather than
-# `odin test` suites, because each one boots a full engine environment pair over
-# real sockets. They live here so a change to the wire cannot pass CI silently.
 test-replication:
     #!pwsh
     $ErrorActionPreference = 'Stop'
@@ -88,6 +112,8 @@ test-replication:
          'replication_timebase_smoke',
          'replication_relevancy_smoke',
          'replication_asset_smoke',
+         'replication_terrain_smoke',
+         'terrain_character_ground_smoke',
          'character_death_smoke',
          'character_cancollide_smoke',
          'player_impulse_smoke',

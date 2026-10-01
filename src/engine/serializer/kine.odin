@@ -3,6 +3,7 @@ package serializer
 import "base:runtime"
 import "core:fmt"
 import "core:slice"
+import "core:sort"
 import "core:strings"
 import classes "../classes"
 import assetstore "../assetstore"
@@ -41,6 +42,29 @@ import vm "../vm"
 //     u32      child count
 //     per child:
 //       instance record
+//   terrain table (version 4 and later, absent before):
+//     u8       present flag (0 = no terrain in this map)
+//     u8       decoration
+//     f32      voxel size
+//     f32      iso level
+//     f32      grass length
+//     f32      water reflectance
+//     f32      water transparency
+//     f32      water wave size
+//     f32      water wave speed
+//     color3   water color (3 x f32)
+//     u32      material colour count
+//     per material:
+//       u32     material
+//       color3  colour (3 x f32)
+//     u32      cell count
+//     per cell (17 bytes):
+//       i32     x voxel coordinate
+//       i32     y voxel coordinate
+//       i32     z voxel coordinate
+//       u8      material
+//       u16     occupancy, fixed point (value * 65535)
+//       u16     water level, fixed point (value * 65535)
 //
 //   string := varuint length + raw bytes
 //   value  := u8 tag + payload (see Value_Tag below)
@@ -49,11 +73,19 @@ import vm "../vm"
 // runs with its referenced bytes already published. Asset-bearing property
 // values are stored as "kineasset://<content-id>", which round-trips losslessly:
 // the store keeps the original path so an editor can still show what was used.
+//
+// The terrain table comes last and is its own section because Terrain is a
+// singleton service rather than an Instance, so the tree walk cannot reach it.
+// Its cell record is deliberately byte-identical to a replicated terrain batch
+// cell, so one decoder shape serves both transports.
 
 KINE_MAGIC :: "KINE"
 
 // KINE_VERSION is the version written by this build.
-KINE_VERSION :: 3
+KINE_VERSION :: 4
+
+// KINE_ASSET_VERSION is the first layout with an asset table and no terrain.
+KINE_ASSET_VERSION :: 3
 
 // KINE_LEGACY_VERSION is the last layout without an asset table. Those files
 // still decode; they just cannot carry embedded assets.
@@ -1529,6 +1561,267 @@ read_asset_table :: proc(r: ^Reader) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Terrain table
+// ---------------------------------------------------------------------------
+
+// KINE_TERRAIN_MAX_CELLS bounds a single cell run. It matches the replication
+// snapshot cap so a map cannot hold terrain that a client would be unable to
+// receive anyway.
+KINE_TERRAIN_MAX_CELLS :: 4 * 1024 * 1024
+
+// KINE_TERRAIN_MAX_COORDINATE matches the replication bound. A file claiming a
+// coordinate beyond this is corrupt or hostile, and letting one through would
+// place voxels far outside any renderable or collidable range.
+KINE_TERRAIN_MAX_COORDINATE :: 16000
+
+// KINE_TERRAIN_MAX_MATERIAL_COLOURS bounds the per-map palette override table.
+KINE_TERRAIN_MAX_MATERIAL_COLOURS :: 4096
+
+KINE_TERRAIN_CELL_BYTES :: 17
+
+Kine_Terrain_Cell :: struct {
+	x, y, z:   i32,
+	material:  u32,
+	occupancy: f32,
+	water:     f32,
+}
+
+// Kine_Terrain is the serialized form of a map's voxel grid plus the terrain
+// settings a map owns. It is deliberately plain data with no reference to the
+// Terrain service, so the format stays independent of it and the service owns
+// the translation in both directions.
+Kine_Terrain :: struct {
+	cells:                [dynamic]Kine_Terrain_Cell,
+	voxel_size:           f32,
+	iso_level:            f32,
+	decoration:           bool,
+	grass_length:         f32,
+	water_color:          datatypes.Color3,
+	water_reflectance:    f32,
+	water_transparency:   f32,
+	water_wave_size:      f32,
+	water_wave_speed:     f32,
+	material_colours:     map[u32]datatypes.Color3,
+}
+
+// Kine_Terrain_Destroy releases a table and everything it owns.
+Kine_Terrain_Destroy :: proc(terrain: ^Kine_Terrain) {
+	if terrain == nil {
+		return
+	}
+	delete(terrain.cells)
+	delete(terrain.material_colours)
+	terrain^ = Kine_Terrain{}
+}
+
+kine_write_fixed16 :: proc(w: ^Writer, value: f32) {
+	scaled := u16(clamp(value, 0, 1) * 65535.0 + 0.5)
+	write_u16(w, scaled)
+}
+
+kine_read_fixed16 :: proc(r: ^Reader) -> (f32, bool) {
+	value, ok := read_u16(r)
+	if !ok {
+		return 0, false
+	}
+	return f32(value) / 65535.0, true
+}
+
+write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
+	if terrain == nil || !(terrain.voxel_size > 0) {
+		// A map with no terrain is a complete map, so this is a valid section
+		// rather than a missing one.
+		write_u8(w, 0)
+		return true
+	}
+
+	write_u8(w, 1)
+	write_u8(w, terrain.decoration ? 1 : 0)
+	write_f32(w, terrain.voxel_size)
+	write_f32(w, terrain.iso_level)
+	write_f32(w, terrain.grass_length)
+	write_f32(w, terrain.water_reflectance)
+	write_f32(w, terrain.water_transparency)
+	write_f32(w, terrain.water_wave_size)
+	write_f32(w, terrain.water_wave_speed)
+	write_f32(w, terrain.water_color.R)
+	write_f32(w, terrain.water_color.G)
+	write_f32(w, terrain.water_color.B)
+
+	colour_count: u32 = 0
+	if terrain.material_colours != nil {
+		for _ in terrain.material_colours {
+			colour_count += 1
+		}
+	}
+	write_u32(w, colour_count)
+	if colour_count > 0 {
+		// Sorted so the same palette always produces the same bytes, which keeps
+		// saving a map free of spurious differences from map iteration order.
+		keys := make([dynamic]u32, 0, int(colour_count))
+		defer delete(keys)
+		for material in terrain.material_colours {
+			append(&keys, material)
+		}
+		sort.quick_sort_proc(keys[:], proc(a, b: u32) -> int {
+			if a < b {return -1}
+			if a > b {return 1}
+			return 0
+		})
+		for material in keys {
+			colour := terrain.material_colours[material]
+			write_u32(w, material)
+			write_f32(w, colour.R)
+			write_f32(w, colour.G)
+			write_f32(w, colour.B)
+		}
+	}
+
+	write_u32(w, u32(len(terrain.cells)))
+	for cell in terrain.cells {
+		write_i32(w, cell.x)
+		write_i32(w, cell.y)
+		write_i32(w, cell.z)
+		write_u8(w, u8(cell.material))
+		kine_write_fixed16(w, cell.occupancy)
+		kine_write_fixed16(w, cell.water)
+	}
+	return true
+}
+
+// read_terrain_table parses the section into out, which must be an unowned
+// Kine_Terrain the caller already owns (see Kine_Terrain_Destroy).
+//
+// The section is always parsed and validated even when out is nil, so a caller
+// that ignores terrain still rejects a corrupt file instead of quietly accepting
+// one whose tail it never looked at.
+read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
+	present, ok := read_u8(r)
+	if !ok {
+		return false
+	}
+	// A map with no terrain is a complete, valid map, so this is not a failure.
+	if present == 0 {
+		return true
+	}
+
+	table: Kine_Terrain
+	table.material_colours = make(map[u32]datatypes.Color3)
+	// Every early return below runs this, so no partial table is ever leaked.
+	// The success path clears the two owning fields after handing them over,
+	// which turns this into a no-op.
+	defer Kine_Terrain_Destroy(&table)
+
+	decoration, decoration_ok := read_u8(r)
+	voxel_size, voxel_size_ok := read_f32(r)
+	iso_level, iso_level_ok := read_f32(r)
+	grass_length, grass_ok := read_f32(r)
+	reflectance, reflectance_ok := read_f32(r)
+	transparency, transparency_ok := read_f32(r)
+	wave_size, wave_size_ok := read_f32(r)
+	wave_speed, wave_speed_ok := read_f32(r)
+	red, red_ok := read_f32(r)
+	green, green_ok := read_f32(r)
+	blue, blue_ok := read_f32(r)
+	if !decoration_ok || !voxel_size_ok || !iso_level_ok || !grass_ok ||
+	   !reflectance_ok || !transparency_ok || !wave_size_ok || !wave_speed_ok ||
+	   !red_ok || !green_ok || !blue_ok {
+		fmt.eprintf("[kine] terrain table header is truncated\n")
+		return false
+	}
+	// A zero or negative voxel size makes every world<->cell conversion divide by
+	// zero, and an iso level of zero makes the isosurface degenerate. Both are
+	// rejected rather than stored, the same rule the replication header decoder
+	// applies.
+	if !(voxel_size > 0) || !(iso_level > 0) {
+		fmt.eprintf("[kine] terrain table has an unusable grid (voxel size %f, iso level %f)\n", voxel_size, iso_level)
+		return false
+	}
+
+	table.voxel_size = voxel_size
+	table.iso_level = iso_level
+	table.decoration = decoration != 0
+	table.grass_length = grass_length
+	table.water_reflectance = reflectance
+	table.water_transparency = transparency
+	table.water_wave_size = wave_size
+	table.water_wave_speed = wave_speed
+	table.water_color = datatypes.Color3{red, green, blue}
+
+	colour_count, colour_count_ok := read_u32(r)
+	if !colour_count_ok || colour_count > KINE_TERRAIN_MAX_MATERIAL_COLOURS {
+		fmt.eprintf("[kine] terrain material colour count %d is invalid\n", colour_count)
+		return false
+	}
+	for _ in 0 ..< int(colour_count) {
+		material, material_ok := read_u32(r)
+		if !material_ok {
+			return false
+		}
+		colour_red, colour_red_ok := read_f32(r)
+		colour_green, colour_green_ok := read_f32(r)
+		colour_blue, colour_blue_ok := read_f32(r)
+		if !colour_red_ok || !colour_green_ok || !colour_blue_ok {
+			return false
+		}
+		table.material_colours[material] = datatypes.Color3{colour_red, colour_green, colour_blue}
+	}
+
+	count, count_ok := read_u32(r)
+	if !count_ok {
+		return false
+	}
+	if count > u32(KINE_TERRAIN_MAX_CELLS) {
+		fmt.eprintf("[kine] terrain table claims %d cells, over the limit\n", count)
+		return false
+	}
+	// The count is a claim by the file, so it is checked against the bytes that
+	// are actually present before a single cell is allocated. Otherwise a short
+	// stream could ask for a multi-gigabyte reserve.
+	available := len(r.data) - r.pos
+	if i64(count) * KINE_TERRAIN_CELL_BYTES > i64(available) {
+		fmt.eprintf("[kine] terrain table claims %d cells but only %d bytes remain\n", count, available)
+		return false
+	}
+
+	table.cells = make([dynamic]Kine_Terrain_Cell, 0, int(count))
+	for _ in 0 ..< int(count) {
+		x, x_ok := read_i32(r)
+		y, y_ok := read_i32(r)
+		z, z_ok := read_i32(r)
+		material, material_ok := read_u8(r)
+		occupancy, occupancy_ok := kine_read_fixed16(r)
+		water, water_ok := kine_read_fixed16(r)
+		if !x_ok || !y_ok || !z_ok || !material_ok || !occupancy_ok || !water_ok {
+			return false
+		}
+		if x < -KINE_TERRAIN_MAX_COORDINATE || x > KINE_TERRAIN_MAX_COORDINATE ||
+		   y < -KINE_TERRAIN_MAX_COORDINATE || y > KINE_TERRAIN_MAX_COORDINATE ||
+		   z < -KINE_TERRAIN_MAX_COORDINATE || z > KINE_TERRAIN_MAX_COORDINATE {
+			fmt.eprintf("[kine] terrain cell coordinate is out of range\n")
+			return false
+		}
+		append(&table.cells, Kine_Terrain_Cell {
+			x = x,
+			y = y,
+			z = z,
+			material = u32(material),
+			occupancy = occupancy,
+			water = water,
+		})
+	}
+
+	// Ownership moves to the caller, so the local is emptied to keep the deferred
+	// cleanup from releasing what was just handed over.
+	if out != nil {
+		out^ = table
+		table.cells = nil
+		table.material_colours = nil
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -1540,8 +1833,9 @@ Serialize :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
+	terrain: ^Kine_Terrain = nil,
 ) -> ([]u8, bool) {
-	return serialize(registry, L, object, KINE_VERSION, exclude_child)
+	return serialize(registry, L, object, KINE_VERSION, exclude_child, terrain)
 }
 
 // Serialize_Legacy writes the version 2 layout: no asset table, and asset
@@ -1554,7 +1848,7 @@ Serialize_Legacy :: proc(
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
 ) -> ([]u8, bool) {
-	return serialize(registry, L, object, KINE_LEGACY_VERSION, exclude_child)
+	return serialize(registry, L, object, KINE_LEGACY_VERSION, exclude_child, nil)
 }
 
 serialize :: proc(
@@ -1563,6 +1857,7 @@ serialize :: proc(
 	object: ^classes.Object,
 	version: u8,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
+	terrain: ^Kine_Terrain,
 ) -> ([]u8, bool) {
 	if registry == nil || L == nil || object == nil {
 		return nil, false
@@ -1580,7 +1875,7 @@ serialize :: proc(
 	tree := Writer{
 		data         = make([dynamic]u8, 0, 4096),
 		exclude_child = exclude_child,
-		embed_assets  = version == KINE_VERSION,
+		embed_assets  = version >= KINE_ASSET_VERSION,
 		version       = version,
 	}
 	defer delete(tree.data)
@@ -1610,7 +1905,7 @@ serialize :: proc(
 	tree.used_seen = nil
 
 	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), version)
-	if version == KINE_VERSION && !write_asset_table(&writer) {
+	if version >= KINE_ASSET_VERSION && !write_asset_table(&writer) {
 		return nil, false
 	}
 	// Copy the tree in one shot rather than element by element.
@@ -1618,12 +1913,28 @@ serialize :: proc(
 	resize(&writer.data, tree_start + len(tree.data))
 	copy(writer.data[tree_start:], tree.data[:])
 
+	// The terrain table trails the tree so a reader that only cares about
+	// instances can stop after the tree it already understands. Only the
+	// current layout carries one; the older layouts have no section to write.
+	if version >= KINE_VERSION && !write_terrain_table(&writer, terrain) {
+		return nil, false
+	}
+
 	return slice.clone(writer.data[:]), true
 }
 
 // Deserialize reads a .KINE byte stream and restores the Instance hierarchy
 // under parent (which may be nil for a standalone root).
-Deserialize :: proc(registry: ^classes.Registry, L: ^vm.State, parent: ^classes.Object, data: []u8) -> (^classes.Object, bool) {
+//
+// terrain may be nil, in which case a map's voxel grid is parsed and validated
+// but discarded. Pass an owned Kine_Terrain to also receive it.
+Deserialize :: proc(
+	registry: ^classes.Registry,
+	L: ^vm.State,
+	parent: ^classes.Object,
+	data: []u8,
+	terrain: ^Kine_Terrain = nil,
+) -> (^classes.Object, bool) {
 	if registry == nil || L == nil || data == nil {
 		return nil, false
 	}
@@ -1651,15 +1962,16 @@ Deserialize :: proc(registry: ^classes.Registry, L: ^vm.State, parent: ^classes.
 	// Now that the version is known and accepted, hand it to the reader so each
 	// value record knows which layout to expect.
 	reader.version = version
-	// Version 2 has no asset table. Accepting it keeps older maps loadable; they
-	// simply have nothing embedded, so asset properties keep their bare paths.
-	if version != KINE_VERSION && version != KINE_LEGACY_VERSION {
+	// Version 2 has no asset table and version 3 has no terrain table. Accepting
+	// both keeps older maps loadable; they simply have no embedded assets or no
+	// voxel grid to restore.
+	if version != KINE_VERSION && version != KINE_ASSET_VERSION && version != KINE_LEGACY_VERSION {
 		return nil, false
 	}
 
 	// Publishing happens before the tree is walked so every property setter sees
 	// its bytes. A failure here means the file is unusable, not just degraded.
-	if version == KINE_VERSION && !read_asset_table(&reader) {
+	if version >= KINE_ASSET_VERSION && !read_asset_table(&reader) {
 		return nil, false
 	}
 
@@ -1667,6 +1979,12 @@ Deserialize :: proc(registry: ^classes.Registry, L: ^vm.State, parent: ^classes.
 	if !root_ok {
 		return nil, false
 	}
+	if version >= KINE_VERSION && !read_terrain_table(&reader, terrain) {
+		classes.Destroy_Hierarchy(object)
+		return nil, false
+	}
+	// Anything still unconsumed means the reader and the writer disagree about the
+	// layout, so the stream is rejected rather than half-applied.
 	if reader.pos != len(reader.data) {
 		classes.Destroy_Hierarchy(object)
 		return nil, false

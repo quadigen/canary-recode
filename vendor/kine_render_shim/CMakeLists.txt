@@ -230,6 +230,13 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_gizmo)
     kine_add_material(kine_particle)
     kine_add_material(kine_terrain)
+    # Highlight needs four materials rather than one: the fill and the outline
+    # shell already need different geometry paths, and DepthMode doubles each of
+    # them because Filament bakes depthCulling into the material.
+    kine_add_material(kine_hl_outline)
+    kine_add_material(kine_hl_outline_top)
+    kine_add_material(kine_hl_fill)
+    kine_add_material(kine_hl_fill_top)
 
     set(KINE_ASSIMP_TARGET "")
     if(KINE_WITH_ASSIMP)
@@ -282,6 +289,10 @@ if(KINE_WITH_FILAMENT)
         ${kine_gizmo_GEN_CPP}
         ${kine_particle_GEN_CPP}
         ${kine_terrain_GEN_CPP}
+        ${kine_hl_outline_GEN_CPP}
+        ${kine_hl_outline_top_GEN_CPP}
+        ${kine_hl_fill_GEN_CPP}
+        ${kine_hl_fill_top_GEN_CPP}
     )
 
     target_include_directories(kine_filament_shim

@@ -58,6 +58,14 @@ TextBox :: struct {
 	selection_anchor:        int,
 	drag_selecting:          bool,
 
+	// Set by a KeyDown listener before the box acts on the key. A listener
+	// that drives its own UI (an autocomplete popup claiming Up/Down/Enter)
+	// sets this so the box skips its own handling of the same key. It is
+	// cleared before every key so a listener only ever consumes the key it
+	// was handed.
+	key_handled:             bool,
+	key_down:                ^signals.Signal,
+
 	caret_color3:            datatypes.Color3,
 	selection_color3:        datatypes.Color3,
 	selection_transparency:  f32,
@@ -77,6 +85,12 @@ TextBox :: struct {
 	preferred_x:           f32,
 	preferred_x_valid:     bool,
 	caret_needs_scroll:    bool,
+
+	// Caret position in screen space, refreshed by the code editor renderer
+	// each frame. An autocomplete popup anchored to the caret reads this
+	// instead of re-deriving the layout (gutter width, scroll offset, font
+	// metrics), which it has no way to reproduce faithfully.
+	caret_screen_position: datatypes.Vector2,
 
 	auto_close:            bool,
 	wrap:                  bool,
@@ -140,6 +154,8 @@ TextBox_Init :: proc() -> TextBox {
 		cursor_byte            = 0,
 		selection_anchor       = 0,
 		drag_selecting         = false,
+		key_handled            = false,
+		key_down               = nil,
 
 		caret_color3           = datatypes.Color3{0.25, 0.5, 1.0},
 		selection_color3       = datatypes.Color3{0.25, 0.5, 1.0},
@@ -157,7 +173,9 @@ TextBox_Init :: proc() -> TextBox {
 		preferred_x             = 0,
 		preferred_x_valid       = false,
 		caret_needs_scroll      = true,
-		scroll_target_x        = 0,
+		scroll_target_x         = 0,
+
+		caret_screen_position   = datatypes.Vector2_Zero,
 
 		auto_close              = true,
 		wrap                    = false,
@@ -331,6 +349,53 @@ text_box_fire_text_changed :: proc(box: ^TextBox) {
 		box.text_changed,
 		0,
 	)
+}
+
+
+text_box_fire_key_down :: proc(
+	box: ^TextBox,
+	registry: ^Registry,
+	scancode: sdl3.Scancode,
+) {
+	if box == nil ||
+	   registry == nil {
+		return
+	}
+
+	if box.key_down == nil {
+		return
+	}
+
+	if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
+		return
+	}
+
+	L := box.object.signal_registry.signal_registry.L
+
+	if L == nil {
+		return
+	}
+
+	// The listener sees the same InputObject shape as every other input
+	// signal, so a script can share one handler between GuiObject and
+	// TextBox KeyDown without special casing the source.
+	if Push_InputObject(
+		L,
+		registry,
+		InputObject_Value {
+			UserInputType = .Keyboard,
+			UserInputState = .Begin,
+			KeyCode =
+				enums.Key_Code_From_Scancode(
+					scancode,
+				),
+		},
+	) == nil {
+		return
+	}
+
+	signals.Fire(L, box.key_down, 1)
+	vm.Pop(L)
 }
 
 
@@ -1141,6 +1206,15 @@ text_box_render_code_editor :: proc(
             box.scroll_y
         ) *
         scroll_lerp
+
+    // Published after the scroll lerp settles so a popup anchoring to the
+    // caret sees the offset the caret was actually drawn with this frame.
+    // content_x already includes the padding and the line number gutter, so
+    // this matches the x the caret itself is drawn at.
+    box.caret_screen_position = datatypes.Vector2 {
+        content_x + caret_x_local - box.scroll_x,
+        rect.y + padding + f32(caret_line) * line_height - box.scroll_y,
+    }
 
     guilib.save(surface)
     defer guilib.restore(surface)
@@ -1973,6 +2047,124 @@ text_box_utf8_prefix_bytes :: proc(
 	}
 
 	return index
+}
+
+
+text_box_utf8_index_at :: proc(
+	text: string,
+	byte_index: int,
+) -> int {
+	// Number of characters before byte_index. byte_index is clamped to the end
+	// of the text so a caller can pass len(text) without a special case.
+	target := clamp(byte_index, 0, len(text))
+
+	count := 0
+	index := 0
+
+	for index < target {
+		index =
+			text_box_utf8_next_boundary(
+				text,
+				index,
+			)
+
+		count += 1
+	}
+
+	return count
+}
+
+
+text_box_is_word_at :: proc(
+	text: string,
+	index: int,
+) -> bool {
+	if index < 0 ||
+	   index >= len(text) {
+		return false
+	}
+
+	return text_box_is_word_byte(text[index])
+}
+
+
+// Converts the 1-based character offset a script sees into the byte offset the
+// box stores. A position past the end of the text clamps to the end, so a
+// script can pass TextSize+1 without special casing it.
+text_box_character_offset :: proc(
+	box: ^TextBox,
+	position: f64,
+) -> int {
+	return text_box_utf8_prefix_bytes(
+		box.text,
+		max(int(position) - 1, 0),
+	)
+}
+
+
+text_box_word_range_at :: proc(
+	text: string,
+	cursor: int,
+) -> (
+	start: int,
+	finish: int,
+) {
+	// The identifier (plus any dotted path leading to it) under the cursor.
+	// Autocomplete replaces exactly this range, so it is computed here rather
+	// than in the caller: a caller working in character offsets cannot cheaply
+	// re-derive the byte offsets the box stores internally.
+	inside := clamp(cursor, 0, len(text))
+
+	start = inside
+	finish = inside
+
+	// A cursor sitting immediately after an identifier (the common case: the
+	// user has just typed a character) still counts as being on it.
+	if start > 0 &&
+	   !text_box_is_word_at(text, start) &&
+	   text_box_is_word_at(text, start - 1) {
+		start -= 1
+	}
+
+	finish = start
+
+	for start > 0 &&
+	    text_box_is_word_at(text, start - 1) {
+		start -= 1
+	}
+
+	for finish < len(text) &&
+	    text_box_is_word_at(text, finish) {
+		finish += 1
+	}
+
+	// Walk backwards over a dotted path (`game.Workspace.Par`) so a member
+	// completion can see the whole chain it belongs to.
+	for {
+		separator := start - 1
+
+		if separator < 0 ||
+		   text[separator] != '.' {
+			break
+		}
+
+		segment_start := separator
+
+		for segment_start > 0 &&
+		    text_box_is_word_at(text, segment_start - 1) {
+			segment_start -= 1
+		}
+
+		// A leading dot (`.method`) has no path in front of it, and a dot
+		// with no identifier after the previous segment ends the chain.
+		if segment_start == separator {
+			break
+		}
+
+		start = segment_start
+	}
+
+	return start, finish
 }
 
 
@@ -3455,6 +3647,11 @@ TextBox_destroy :: proc(
 		box.text_changed = nil
 	}
 
+	if box.key_down != nil {
+		signals.Destroy(box.key_down)
+		box.key_down = nil
+	}
+
 	Object_Destroy(object)
 
 	free(box)
@@ -3490,6 +3687,96 @@ TextBox_get :: proc(
 			box.text_changed = signals.Create(box.object.signal_registry.signal_registry)
 		}
 		signals.Push(L, box.text_changed)
+		return true
+
+	case "KeyDown":
+		if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
+			return false
+		}
+		if box.key_down == nil {
+			box.key_down = signals.Create(box.object.signal_registry.signal_registry)
+		}
+		signals.Push(L, box.key_down)
+		return true
+
+	case "KeyHandled":
+		vm.PushBoolean(
+			L,
+			box.key_handled,
+		)
+		return true
+
+	case "CaretScreenPosition":
+		if datatype_registry == nil {
+			return false
+		}
+		datatypes.Push_Vector2(
+			L,
+			datatype_registry,
+			box.caret_screen_position,
+		)
+		return true
+
+	case "CursorPosition":
+		// Roblox reports cursor and selection positions as 1-based character
+		// offsets, so scripts written against that API keep working here.
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					box.cursor_byte,
+				) + 1,
+			),
+		)
+		return true
+
+	case "SelectionStart":
+		start, finish, selected :=
+			text_box_selection_bounds(
+				box,
+			)
+
+		_ = finish
+
+		if !selected {
+			start =
+				box.cursor_byte
+		}
+
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					start,
+				) + 1,
+			),
+		)
+		return true
+
+	case "SelectionEnd":
+		start, finish, selected :=
+			text_box_selection_bounds(
+				box,
+			)
+
+		if !selected {
+			finish =
+				box.cursor_byte
+		}
+
+		_ = start
+
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					finish,
+				) + 1,
+			),
+		)
 		return true
 
 	case "Text":
@@ -3730,6 +4017,47 @@ TextBox_set :: proc(
 		cast(^TextBox)object
 
 	switch key {
+
+	case "KeyHandled":
+		box.key_handled =
+			vm.ArgBoolean(
+				L,
+				value_index,
+			)
+		return true
+
+	case "CursorPosition":
+		// 1-based character offset, matching the getter and Roblox. The cursor
+	// and the selection anchor are independent endpoints of the selection, so
+	// moving the cursor deliberately leaves SelectionStart alone; otherwise
+	// setting SelectionStart and then CursorPosition (the order a script needs
+	// to select a range) would silently discard the selection.
+	text_box_set_cursor(
+		box,
+		text_box_character_offset(box, vm.ArgNumber(L, value_index)),
+		true,
+	)
+
+	return true
+
+	case "SelectionStart":
+		box.selection_anchor =
+			text_box_character_offset(box, vm.ArgNumber(L, value_index))
+
+		text_box_restart_caret(
+			box,
+		)
+
+		return true
+
+	case "SelectionEnd":
+		text_box_set_cursor(
+			box,
+			text_box_character_offset(box, vm.ArgNumber(L, value_index)),
+			true,
+		)
+
+		return true
 
 	case "Text":
 		text_box_set_text(
@@ -4101,6 +4429,129 @@ TextBox_namecall :: proc(
 	case "Redo":
 		text_box_redo(box)
 		return 0, true
+
+	case "InsertText":
+		// Replaces the current selection with value as a single undoable
+		// edit. This is how autocomplete applies a completion: it can select
+		// the partial word through SelectionStart/SelectionEnd and let the
+		// box perform the swap, so the edit joins the undo history exactly
+		// like a typed character instead of wiping it.
+		text_box_insert(
+			box,
+			vm.ArgString(
+				L,
+				2,
+			),
+		)
+
+		return 0, true
+
+	case "ReplaceRange":
+		// Replaces the half-open character range [start, finish) with value as
+		// a single undoable edit. Autocomplete applies a completion through
+		// this rather than setting the selection and inserting, so the
+		// replacement and the undo entry that describes it are produced by one
+		// call instead of relying on the selection setters to line up.
+		text_box_replace_range(
+			box,
+			text_box_character_offset(box, vm.ArgNumber(L, 2)),
+			text_box_character_offset(box, vm.ArgNumber(L, 3)),
+			vm.ArgString(L, 4),
+		)
+
+		return 0, true
+
+	case "GetWordRangeAtCursor":
+		start, finish :=
+			text_box_word_range_at(
+				box.text,
+				box.cursor_byte,
+			)
+
+		vm.NewTable(L, 2, 0)
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					start,
+				) + 1,
+			),
+		)
+		vm.SetField(L, -2, "start")
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					finish,
+				) + 1,
+			),
+		)
+		vm.SetField(L, -2, "finish")
+		vm.PushString(
+			L,
+			box.text[start:finish],
+		)
+		vm.SetField(L, -2, "text")
+
+		return 1, true
+
+	case "GetLineAtCursor":
+		start :=
+			text_box_line_start(
+				box.text,
+				box.cursor_byte,
+			)
+
+		finish :=
+			text_box_line_end(
+				box.text,
+				box.cursor_byte,
+			)
+
+		vm.NewTable(L, 2, 0)
+
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_line_number(
+					box.text,
+					box.cursor_byte,
+				),
+			),
+		)
+		vm.SetField(L, -2, "line")
+
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					start,
+				) + 1,
+			),
+		)
+		vm.SetField(L, -2, "start")
+
+		vm.PushNumber(
+			L,
+			f64(
+				text_box_utf8_index_at(
+					box.text,
+					finish,
+				) + 1,
+			),
+		)
+		vm.SetField(L, -2, "finish")
+
+		vm.PushString(
+			L,
+			box.text[start:finish],
+		)
+		vm.SetField(L, -2, "text")
+
+		return 1, true
 	}
 
 	return 0, false
@@ -4960,6 +5411,25 @@ TextBox_Handle_Event :: proc(
 			return
 		}
 
+		//
+		// KeyDown listeners run first and may claim the key. An autocomplete
+		// popup listens here so it can consume Up/Down/Enter/Tab/Escape
+		// before the box moves the caret or inserts a newline for a key the
+		// popup has already acted on.
+		//
+
+		box.key_handled = false
+
+		text_box_fire_key_down(
+			box,
+			registry,
+			event.key.scancode,
+		)
+
+		if box.key_handled {
+			return
+		}
+
 		modifiers :=
 			event.key.mod
 
@@ -5384,6 +5854,12 @@ Register_TextBox :: proc(
 			"SelectedText",
 			"LineCount",
 
+			"CursorPosition",
+			"SelectionStart",
+			"SelectionEnd",
+			"CaretScreenPosition",
+			"KeyHandled",
+
 		},
 
 		methods = []string{
@@ -5395,11 +5871,16 @@ Register_TextBox :: proc(
 			"CopySelection",
 			"Undo",
 			"Redo",
+			"InsertText",
+			"ReplaceRange",
+			"GetWordRangeAtCursor",
+			"GetLineAtCursor",
 		},
 
 		events = []string{
 			"FocusLost",
 			"TextChanged",
+			"KeyDown",
 		},
 	)
 }

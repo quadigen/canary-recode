@@ -9,6 +9,8 @@ import profiling "../profiling"
 import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
+import datatypes "../datatypes"
+import enums "../enum"
 
 ScriptContext_Class := classes.Class_Info {
 	name   = "ScriptContext",
@@ -346,6 +348,67 @@ script_context_start :: proc(
 	return true
 }
 
+ScriptContext_Run_Source :: proc(
+    script_context: ^ScriptContext,
+    source: string,
+    chunk_name: string = "RunSource",
+) -> bool {
+    if script_context == nil ||
+       script_context.vm_state == nil ||
+       script_context.vm_state.L == nil ||
+       len(source) == 0 {
+        return false
+    }
+
+    main_thread := script_context.vm_state.L
+    thread := vm.NewThread(main_thread)
+
+    thread_ref := vm.RetainValue(main_thread)
+    vm.Pop(main_thread)
+    _ = thread_ref
+
+    ok, load_error := vm.LoadSource(
+        script_context.vm_state,
+        thread,
+        source,
+        chunk_name,
+    )
+
+    if !ok {
+        if len(load_error) > 0 {
+            fmt.eprintf("RunSource error:\n%s\n", load_error)
+            delete(load_error)
+        }
+        return false
+    }
+
+    finished, yielded, resume_error, traceback :=
+        vm.ResumeThreadTraceback(thread, main_thread, 0)
+
+    _ = yielded
+
+    if resume_error != "" {
+        fmt.eprintf("RunSource error:\n%s\n", traceback)
+
+        delete(resume_error)
+        delete(traceback)
+
+        return false
+    }
+
+    return finished
+}
+
+ScriptContext_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
+	service := cast(^ExampleService)object
+	switch method {
+	case "Run":
+		ScriptContext_Run_Source(cast(^ScriptContext)object, vm.ArgString(L, 2), vm.ArgString(L, 3))
+		return 1, true
+	}
+	return 0, false
+}
+
 ScriptContext_Run_Script :: proc(script_context: ^ScriptContext, object: ^classes.Object) -> bool {
 	if script_context == nil ||
 	   script_context.vm_state == nil ||
@@ -509,6 +572,7 @@ Register_ScriptContext_Class :: proc(registry: ^classes.Registry) {
 		&ScriptContext_Class,
 		ScriptContext_construct,
 		ScriptContext_destroy,
+		namecall = ScriptContext_namecall,
 		creatable = false,
 		_step = ScriptContext_step,
 		_step_phase = .Update,
