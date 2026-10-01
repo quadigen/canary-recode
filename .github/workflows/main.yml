@@ -19,15 +19,15 @@ jobs:
       matrix:
         include:
           - name: Windows x86-64
-            os: windows-latest
+            os: blacksmith-4vcpu-windows-2025
             folder: windows_x86-64
             executable: kinemium.exe
           - name: macOS arm64
-            os: macos-15
+            os: blacksmith-6vcpu-macos-15
             folder: macos_arm64
             executable: kinemium
           - name: Linux x86-64
-            os: ubuntu-24.04
+            os: blacksmith-4vcpu-ubuntu-2404
             folder: linux_x86-64
             executable: kinemium
 
@@ -578,7 +578,7 @@ jobs:
     name: Release
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
 
