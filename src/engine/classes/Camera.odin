@@ -33,6 +33,9 @@ Camera :: struct {
 	pending_scroll: f32,
 
 	orbit_distance: f32,
+
+	viewport_width:  f32,
+	viewport_height: f32,
 }
 
 Camera_Init :: proc() -> Camera {
@@ -59,6 +62,54 @@ Camera_Init :: proc() -> Camera {
 
 		orbit_distance = 12,
 	}
+}
+
+// The vertical field of view the renderer builds its perspective with, in
+// degrees. set_viewport_rect in src/engine/renderer/main.odin passes this to
+// Kine_Filament_SetCameraPerspective, and Mouse.odin mirrors it as
+// MOUSE_FIELD_OF_VIEW. Every screen<->world projection has to agree with it, so
+// the value lives here and the other two sites are expected to match.
+CAMERA_FIELD_OF_VIEW_DEGREES :: f32(60)
+
+// Copies the renderer's live viewport into the camera. The projection helpers
+// are pure functions of these two fields, so keeping them current is what makes
+// ScreenPointToRay and WorldToViewportPoint agree with the rendered frame after
+// a window resize.
+Camera_Sync_Viewport :: proc(camera: ^Camera, renderer: ^Renderer_Object) {
+	if camera == nil || renderer == nil || !renderer.HasViewportRect {
+		return
+	}
+
+	rect := renderer.ViewportRect
+	if rect[2] <= 0 || rect[3] <= 0 {
+		return
+	}
+
+	camera.viewport_width = f32(rect[2])
+	camera.viewport_height = f32(rect[3])
+}
+
+// The viewport a projection should actually use. A camera that has not been
+// stepped yet, or a renderer that never published a rect, still has to produce
+// usable rays instead of dividing by zero, so fall back to a single pixel.
+Camera_Effective_Viewport :: proc(camera: ^Camera) -> (f32, f32) {
+	width := camera.viewport_width
+	height := camera.viewport_height
+	if width <= 0 {
+		width = 1
+	}
+	if height <= 0 {
+		height = 1
+	}
+	return width, height
+}
+
+// The half-extent of the view frustum at unit distance: the tangent of the
+// vertical half field of view, and the aspect-widened horizontal one.
+Camera_Projection_Scale :: proc(camera: ^Camera) -> (f32, f32) {
+	width, height := Camera_Effective_Viewport(camera)
+	tangent := f32(math.tan(math.to_radians(f64(CAMERA_FIELD_OF_VIEW_DEGREES)) * 0.5))
+	return tangent, width / height
 }
 
 Camera_construct :: proc(
@@ -478,6 +529,13 @@ Camera_Step :: proc(
 		return
 	}
 
+	// Track the live render viewport before anything else. The projection
+	// helpers divide by these dimensions, so they have to follow a resize even
+	// when there is no Filament context to draw into. This has to happen before
+	// the context check below: a headless or not-yet-initialized renderer still
+	// reports a usable ViewportRect.
+	Camera_Sync_Viewport(camera, ctx.renderer)
+
 	if ctx.renderer.Filament == nil {
 		return
 	}
@@ -595,6 +653,42 @@ Camera_clone :: proc(
 	dst.mouse_captured = false
 }
 
+Camera_Namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method_name: string,
+) -> (i32, bool) {
+	switch method_name {
+	case "ScreenPointToRay", "ViewportPointToRay":
+		return Camera_Screen_Point_To_Ray(L, object, datatype_registry, method_name)
+	case "WorldToViewportPoint", "WorldToScreenPoint":
+		return Camera_World_To_Viewport_Point(L, object, datatype_registry, method_name)
+	case "ProjectLocalPosition":
+		datatypes.Push_Vector3(L, datatypes.Vector3{})
+		return 1, true
+	case "GetLargestCutoffDistance":
+		vm.PushNumber(L, 0)
+		return 1, true
+	case "FrustumExtentsSize":
+		camera := cast(^Camera)object
+		datatypes.Push_Vector2(
+			L,
+			datatype_registry,
+			datatypes.Vector2{camera.viewport_width, camera.viewport_height},
+		)
+		return 1, true
+	case "FrustumExtentsNearPlaneDistance", "FrustumExtentsFarPlaneDistance":
+		vm.PushNumber(L, 0)
+		return 1, true
+	case "GetFocusedPart":
+		Push_Object(L, nil)
+		return 1, true
+	}
+	return 0, false
+}
+
 Register_Camera :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -604,6 +698,8 @@ Register_Camera :: proc(registry: ^Registry) {
 
 		get = Camera_Get,
 		set = Camera_Set,
+
+		namecall = Camera_Namecall,
 
 		clone = Camera_clone,
 
@@ -683,11 +779,126 @@ Camera_Get :: proc(
 			f64(camera.yaw),
 		)
 
+	case "ViewportSize":
+		if types == nil {
+			return false
+		}
+
+		width, height := Camera_Effective_Viewport(camera)
+		datatypes.Push_Vector2(
+			L,
+			types,
+			datatypes.Vector2{width, height},
+		)
+		return true
+
+	case "ScreenPointToRay",
+	     "ViewportPointToRay",
+	     "WorldToViewportPoint",
+	     "WorldToScreenPoint",
+	     "ProjectLocalPosition",
+	     "GetLargestCutoffDistance",
+	     "FrustumExtentsSize",
+	     "FrustumExtentsNearPlaneDistance",
+	     "FrustumExtentsFarPlaneDistance",
+	     "FocusedPart",
+	     "GetFocusedPart":
+		vm.PushUserdataMethod(L, key)
+
 	case:
 		return false
 	}
 
 	return true
+}
+
+Camera_Screen_Point_To_Ray :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	method_name: string,
+) -> (i32, bool) {
+	camera := cast(^Camera)object
+	x := f32(vm.ArgNumber(L, 2))
+	y := f32(vm.ArgNumber(L, 3))
+
+	frame := camera.CFrame
+	origin := datatypes.CFrame_Position(frame)
+
+	tangent, aspect := Camera_Projection_Scale(camera)
+	width, height := Camera_Effective_Viewport(camera)
+
+	// Screen space is pixel-based with the origin at the top left, while the
+	// renderer projects onto normalized device coordinates centered on the
+	// viewport.
+	normalized_x := (x / width) * 2 - 1
+	normalized_y := 1 - (y / height) * 2
+
+	// Camera space is -Z forward, matching CFrame_VectorToWorldSpace and the
+	// perspective the renderer built. The horizontal extent is widened by the
+	// aspect ratio so a wide viewport does not stretch the vertical field of
+	// view sideways.
+	view := datatypes.Vector3{
+		normalized_x * aspect * tangent,
+		normalized_y * tangent,
+		-1,
+	}
+
+	direction := datatypes.Vec3_Unit(
+		datatypes.CFrame_VectorToWorldSpace(frame, view),
+	)
+
+	datatypes.Push_Ray(
+		L,
+		datatype_registry,
+		datatypes.Ray{Origin = origin, Direction = direction},
+	)
+	return 1, true
+}
+
+Camera_World_To_Viewport_Point :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	method_name: string,
+) -> (i32, bool) {
+	camera := cast(^Camera)object
+	world := datatypes.Arg_Vector3(L, 2)
+	frame := camera.CFrame
+	delta := datatypes.Vec3_Subtract(world, datatypes.CFrame_Position(frame))
+
+	tangent, aspect := Camera_Projection_Scale(camera)
+	width, height := Camera_Effective_Viewport(camera)
+
+	// Only points in front of the camera can project.
+	forward := datatypes.Vec3_Dot(delta, datatypes.CFrame_LookVector(frame))
+	if forward <= 0 {
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+	// Inverse of the camera-space ray built in Camera_Screen_Point_To_Ray: undo
+	// the perspective divide, then the aspect and tangent scaling.
+	normalized_x :=
+		datatypes.Vec3_Dot(delta, datatypes.CFrame_RightVector(frame)) /
+		(forward * tangent * aspect)
+	normalized_y :=
+		datatypes.Vec3_Dot(delta, datatypes.CFrame_UpVector(frame)) /
+		(forward * tangent)
+
+	on_screen :=
+		normalized_x >= -1 &&
+		normalized_x <= 1 &&
+		normalized_y >= -1 &&
+		normalized_y <= 1
+
+	x := (normalized_x + 1) * width * 0.5
+	y := (1 - normalized_y) * height * 0.5
+
+	vm.PushBoolean(L, on_screen)
+	vm.PushNumber(L, f64(x))
+	vm.PushNumber(L, f64(y))
+	return 3, true
 }
 
 Camera_Set :: proc(

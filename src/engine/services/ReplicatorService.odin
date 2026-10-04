@@ -1,6 +1,7 @@
 #+build !js
 package services
 
+import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -146,6 +147,17 @@ Replication_Peer :: struct {
 	terrain_cursor:       u64,
 	terrain_epoch:        u64,
 	terrain_deltas_sent:  u64,
+	// scene_ready_sent records that this peer has already been told its initial
+	// scene finished streaming. It is per peer because a peer that joins later
+	// needs the marker again, and it is sticky because the scene is only ever
+	// announced once: re-sending it would re-trigger the client's settle-on-ground
+	// teleport on a frame where nothing changed.
+	scene_ready_sent: bool,
+	// finished_replicating_sent records that this peer has already been told its
+	// whole scene finished replicating. Per peer and sticky, because a peer that
+	// joins later needs the frame and a script that connects late must not see
+	// the signal re-fire.
+	finished_replicating_sent: bool,
 	// Cached focus point, in the form (x, y, z, valid).
 	//
 	// The live focus is the client's own character, which can disappear: a respawn
@@ -251,6 +263,7 @@ ReplicatorService :: struct {
 	// present; on a client it is the value to present. Empty means no
 	// authentication, which is the right default for a local listen server.
 	join_token:                string,
+	username:                  string,
 	// join_address is the endpoint StartServer/ConnectClient was given, kept only
 	// so a stalled client can report which server it is stuck on.
 	join_address:               string,
@@ -294,6 +307,18 @@ ReplicatorService :: struct {
 	bandwidth_budget:          u32,
 	connected:                 bool,
 	enet_initialized:          bool,
+	// scene_ready is the client's view of "the server has finished streaming the
+	// initial scene". While it is false the client holds its character still
+	// instead of integrating gravity, because the floor it would land on has not
+	// arrived yet. The zero value (false) is the safe default: a client that never
+	// receives the marker simply never unfreezes, rather than falling through a
+	// world it never finished building.
+	scene_ready: bool,
+	// replication_finished is the client's view of "the whole scene has
+	// replicated", which is what workspace.FinishedReplicating reports. Unlike
+	// scene_ready (a spawn-area barrier), this waits for every entity this client
+	// is meant to see.
+	replication_finished: bool,
 	event_signal:              ^signals.Signal,
 	event_callbacks:           [dynamic]Replication_Event_Callback,
 	group_members:             [dynamic]Replication_Group_Member,
@@ -331,6 +356,17 @@ ReplicatorService :: struct {
 	asset_bytes_received:      u64,
 	asset_rejections:          u64,
 	asset_table_complete:      bool,
+	// Reassembly state for an asset too large to travel in one frame. The server
+	// announces it with a Begin frame and then sends Chunks, which arrive on the
+	// reliable channel in order, so one slot is enough: a second Begin simply
+	// abandons the first, which leaves the closing frame's count short and the
+	// table correctly reported as incomplete.
+	asset_pending_id:          string,
+	asset_pending_path:        string,
+	asset_pending_kind:        assetstore.Asset_Kind,
+	asset_pending_total:       u32,
+	asset_pending_next:        u32,
+	asset_pending_bytes:       [dynamic]u8,
 	// Terrain transfer. Terrain is a Service holding a voxel map rather than an
 	// Instance with replicated properties, so the instance-tree snapshot cannot
 	// carry it and the server pushes it at connect time the way it does assets.
@@ -362,6 +398,15 @@ ReplicatorService :: struct {
 	// separate from the cumulative bandwidth_drops stat, which used to be zeroed
 	// here and therefore always reported 0 to GetStats.
 	drops_window:               u64,
+	// drop_pressure is a smoothed measure of how hard the budget is being
+	// refused, in (0, 1]. It is an exponential moving average of the per-snapshot
+	// severity rather than a "did this snapshot drop anything" flag: under a
+	// sustained overload the budget is refused on most snapshots but not all of
+	// them (rotation makes any given snapshot cheaper), and a one-snapshot test
+	// therefore climbs the scale back up in the middle of an overload. Once the
+	// scene settles the drops stop entirely and this decays to ~0, which is what
+	// allows recovery.
+	drop_pressure:              f32,
 	// adaptive_scale is the fraction of the configured budget and snapshot rate
 	// currently in force, in (0, 1]. It moves DOWN when the budget refuses
 	// packets and creeps back UP when it does not.
@@ -445,6 +490,9 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	}
 	delete(service.peers)
 	service.peers = nil
+	// A client can be torn down mid transfer, leaving a half assembled asset
+	// holding a buffer nothing else owns.
+	replication_asset_pending_reset(service)
 	client_objects: [dynamic]^classes.Object
 	if service.mode == .Client && L != nil {
 		for item in service.entity_list {
@@ -583,6 +631,8 @@ replication_get :: proc(
 		signals.Push(L, service.event_signal)
 	case "Connected":
 		vm.PushBoolean(L, service.connected)
+	case "SceneReady":
+		vm.PushBoolean(L, service.scene_ready)
 	case "StartServer",
 	     "ConnectClient",
 	     "Stop",
@@ -973,6 +1023,8 @@ replication_namecall :: proc(
 		// the negotiation is sitting in a state that used to be indistinguishable
 		// from a healthy one.
 		vm.PushBoolean(L, service.handshake_complete); vm.SetField(L, -2, "handshakeComplete")
+		vm.PushBoolean(L, service.scene_ready); vm.SetField(L, -2, "sceneReady")
+		vm.PushBoolean(L, service.replication_finished); vm.SetField(L, -2, "replicationFinished")
 		vm.PushNumber(L, f64(service.handshake_status)); vm.SetField(L, -2, "handshakeStatus")
 		vm.PushNumber(L, f64(Replication_Protocol_Version)); vm.SetField(L, -2, "protocolVersion")
 		vm.PushNumber(L, f64(service.server_capabilities)); vm.SetField(L, -2, "serverCapabilities")
@@ -1020,5 +1072,41 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 		get = replication_get,
 		set = replication_set,
 		namecall = replication_namecall,
+		properties = []string{
+			"SnapshotRate",
+			"BandwidthBudget",
+			"InterpolationDelayTicks",
+			"TeleportThreshold",
+			"RelevancyDistance",
+			"LODNearFraction",
+			"LODFarInterval",
+			"EventReceived",
+			"Connected",
+			"SceneReady",
+		},
+		events = []string{
+			"EventReceived",
+		},
+		methods = []string{
+			"StartServer",
+			"ConnectClient",
+			"Stop",
+			"SendEvent",
+			"SendEventTo",
+			"OnEvent",
+			"Register",
+			"Unregister",
+			"RegisterSchema",
+			"CreateNetworkEmulator",
+			"AssignOwnership",
+			"AddPlayerToGroup",
+			"RemovePlayerFromGroup",
+			"IsPlayerInGroup",
+			"ReplicateTo",
+			"StopReplicatingTo",
+			"GetStats",
+			"GetActiveReplicator",
+			"SetJoinToken",
+		}
 	)
 }

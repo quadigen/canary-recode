@@ -29,6 +29,7 @@ GuiObject :: struct {
 	zindex:                   i32,
 	anchorpoint:              datatypes.Vector2,
 	border_size_pixels:       i32,
+	border_color3:            datatypes.Color3,
 	absolute_position:        datatypes.Vector2,
 	absolute_size:            datatypes.Vector2,
 	input_began:              ^signals.Signal,
@@ -199,6 +200,12 @@ GuiObject_get :: proc(
 
 	case "BorderSizePixel":
 		vm.PushNumber(L, f64(gui.border_size_pixels))
+
+	case "BorderColor3":
+		if datatype_registry == nil {
+			return false
+		}
+		datatypes.Push_Color3(L, datatype_registry, gui.border_color3)
 
 	case "BorderMode":
 		if enum_registry == nil {
@@ -1183,6 +1190,11 @@ GuiObject_set :: proc(
 		gui_object.zindex = i32(vm.ArgNumber(L, value_index))
 	case "BorderSizePixel":
 		gui_object.border_size_pixels = i32(vm.ArgNumber(L, value_index))
+	case "BorderColor3":
+		if datatype_registry == nil {
+			return false
+		}
+		gui_object.border_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case "BorderMode":
 		if enum_registry == nil {return false}
 		gui_object.border_mode = enums.BorderMode(
@@ -1253,6 +1265,7 @@ Register_GuiObject :: proc(registry: ^Registry) {
 		set = GuiObject_set,
 		clone = GuiObject_clone,
 		properties = []string {
+			"BorderColor3",
 			"BorderSizePixel",
 			"Selectable",
 			"Active",

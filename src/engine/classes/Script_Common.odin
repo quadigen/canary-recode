@@ -22,6 +22,7 @@ Script_Common :: struct {
 	source:          string,
 	module_state:    Script_Module_State,
 	module_ref:      i32,
+	require_frame_stack: ^Require_Frame_Stack,
 	execution_state: Script_Execution_State,
 	enabled:         bool,
 	restart_requested: bool,

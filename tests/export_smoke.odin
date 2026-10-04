@@ -64,12 +64,15 @@ main :: proc() {
 	vm.Pop(source_vm.L)
 	workspace_source := services.Ensure_Service(&source.services, "Workspace")
 	classes.Set_Parent(model, workspace_source)
-	assert(serializer.Serialize_To_File(
+	export_err := serializer.Serialize_To_File(
 		&source.classes,
 		source_vm.L,
 		&source.services.data_model.object,
 		"build/export-smoke.kine",
-	))
+	)
+	serializer.Error_Print(export_err, "could not export the map: ")
+	serializer.Error_Delete(&export_err)
+	assert(serializer.Error_Is_None(export_err), "the map should export")
 
 	map_bytes, map_ok := os.read_entire_file_from_path("build/export-smoke.kine", context.allocator)
 	assert(map_ok == nil && len(map_bytes) > 0)

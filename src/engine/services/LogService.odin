@@ -9,6 +9,7 @@ import "base:runtime"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 import "core:bytes"
 import "core:time"
@@ -26,6 +27,7 @@ LogService :: struct {
     warning_count: i64,
     error_count:   i64,
     history: [dynamic]LogEntry,
+    message_out: ^signals.Signal,
 }
 
 LOG_HISTORY_LIMIT :: 1000
@@ -56,6 +58,23 @@ log_service_add_entry :: proc(
 	}
 }
 
+log_service_fire_message_out :: proc(service: ^LogService, message: string) {
+	if service == nil || service.message_out == nil {
+		return
+	}
+	model := service.service.data_model
+	if model == nil || model.registry == nil || model.registry.vm_state == nil {
+		return
+	}
+	L := model.registry.vm_state.L
+	if L == nil {
+		return
+	}
+	vm.PushString(L, message)
+	signals.Fire(L, service.message_out, 1)
+	vm.Pop(L)
+}
+
 log_service_write :: proc(
 	service: ^LogService,
 	message: string,
@@ -74,6 +93,7 @@ log_service_write :: proc(
 		service.error_count += 1
 	}
 	log_service_add_entry(service, message, log_type)
+	log_service_fire_message_out(service, message)
 	switch log_type {
 	case "Info":
 		fmt.printf("[INFO] %s\n", message)
@@ -160,6 +180,13 @@ log_service_construct :: proc(
         data_model,
     )
 
+    model := cast(^DataModel)data_model
+    if model != nil &&
+       model.registry != nil &&
+       model.registry.signal_registry != nil {
+        service.message_out = signals.Create(model.registry.signal_registry)
+    }
+
     return &service.object
 }
 
@@ -184,6 +211,9 @@ log_service_get :: proc(
 
     case "ErrorCount":
         vm.PushNumber(L, f64(service.error_count))
+
+    case "MessageOut":
+        signals.Push(L, service.message_out)
 
     case "Log", "Info", "Warn", "Error", "Clear", "GetLogHistory":
 	    vm.PushUserdataMethod(L, key)

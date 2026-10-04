@@ -20,10 +20,14 @@ CharacterService :: struct {
 	input_sequence:         u32,
 	last_ack:               u32,
 	authoritative_received: bool,
-	// respawn_time is how long a dead character stays on the ground before it is
-	// replaced by a fresh one at the Spawn part.
-	respawn_time:         f32,
-	predictions:           [dynamic]Character_Prediction,
+	scene_frozen:           bool,
+	respawn_time:           f32,
+	predictions:            [dynamic]Character_Prediction,
+	// pending_binds holds client characters that replicated before the scene was
+	// ready to stand on. Building one early gives the client a capsule to simulate
+	// with no floor under it, and a kinematic capsule driven by a ground query that
+	// cannot hit anything integrates gravity forever.
+	pending_binds:          [dynamic]^classes.CharacterModel,
 }
 
 Character_Prediction :: struct {
@@ -42,7 +46,9 @@ character_service_construct :: proc(
 }
 
 character_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
-	delete((cast(^CharacterService)object).predictions)
+	service := cast(^CharacterService)object
+	delete(service.predictions)
+	delete(service.pending_binds)
 	classes.Object_Destroy(object)
 	free(cast(^CharacterService)object)
 }
@@ -80,9 +86,7 @@ character_service_part :: proc(
 	return part
 }
 
-CharacterService_Spawn_Position :: proc(
-	data_model: ^DataModel,
-) -> datatypes.Vector3 {
+CharacterService_Spawn_Position :: proc(data_model: ^DataModel) -> datatypes.Vector3 {
 	position := datatypes.Vector3{0, 5, 0}
 	if data_model == nil {return position}
 	workspace := DataModel_Get_Service(data_model, "Workspace")
@@ -93,18 +97,14 @@ CharacterService_Spawn_Position :: proc(
 		   child.name == "Spawn" &&
 		   classes.Is_A(child, "Part") {
 			part := cast(^classes.Part)child
-			position =
-				datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
+			position = datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
 			break
 		}
 	}
 	return position
 }
 
-CharacterService_Begin_Ragdoll :: proc(
-	data_model: ^DataModel,
-	model: ^classes.CharacterModel,
-) {
+CharacterService_Begin_Ragdoll :: proc(data_model: ^DataModel, model: ^classes.CharacterModel) {
 	if data_model == nil || model == nil || model.destroyed {return}
 	controller := classes.CharacterController_From_Model(model)
 	if controller == nil {return}
@@ -176,8 +176,6 @@ CharacterService_Update_Death :: proc(
 	}
 
 	if !player.ragdoll {
-		// Death is the transition into the ragdoll, so the timer starts here
-		// rather than when the character stopped walking.
 		player.ragdoll = true
 		player.respawn_timer = 0
 		CharacterService_Begin_Ragdoll(service.data_model, player.character)
@@ -235,7 +233,7 @@ CharacterService_Load :: proc(
 		spawn,
 		white,
 		false,
-		.Block
+		.Block,
 	)
 
 	_ = character_service_part(
@@ -246,7 +244,7 @@ CharacterService_Load :: proc(
 		spawn,
 		white,
 		true,
-		.Capsule
+		.Capsule,
 	)
 
 	classes.Set_Parent(object, workspace)
@@ -296,6 +294,86 @@ CharacterService_Unload :: proc(service: ^CharacterService, player: ^Player) -> 
 	return true
 }
 
+// character_service_player_for_model finds the Player that owns a character, if
+// that player has already joined this client.
+character_service_player_for_model :: proc(
+	players: ^Players,
+	model: ^classes.CharacterModel,
+) -> ^Player {
+	if players == nil || model == nil {return nil}
+	for child in players.children {
+		if child != nil &&
+		   !child.destroyed &&
+		   classes.Is_A(child, "Player") &&
+		   (cast(^Player)child).user_id == model.owner_user_id {
+			return cast(^Player)child
+		}
+	}
+	return nil
+}
+
+// character_service_bind_ready attaches an already-replicated character to its
+// player and builds the controller that simulates it. This is the half of a bind
+// that requires a world to simulate against, so a client only reaches it once
+// the scene is ready.
+character_service_bind_ready :: proc(
+	data_model: ^DataModel,
+	model: ^classes.CharacterModel,
+	L: ^vm.State,
+	player: ^Player,
+	players: ^Players,
+) {
+	Player_Set_Character(player, L, model)
+	root := classes.CharacterModel_Root(model)
+	if root != nil {player.ground_y = root.cframe.y}
+	if player == players.local_player {
+		workspace := cast(^Workspace)DataModel_Get_Service(data_model, "Workspace")
+		if workspace != nil && workspace.current_camera != nil {
+			workspace.current_camera.CameraSubject = &model.object
+		}
+		service := cast(^CharacterService)Ensure_Service(
+			data_model.registry,
+			"CharacterService",
+		)
+		if service != nil {
+			clear(&service.predictions)
+			service.last_ack = 0
+			service.authoritative_received = false
+		}
+	}
+	when !#config(FORCE_LEGACY_CHARACTERS, false) {
+		classes.CharacterController_Build(data_model.registry.classes, L, model)
+		controller := classes.CharacterController_From_Model(model)
+		StarterPlayer_Apply_Character(data_model, controller)
+	}
+}
+
+// CharacterService_Flush_Pending_Binds builds the characters a client held back
+// while the scene was still streaming. It runs when the scene-ready barrier
+// lands, which is the first moment the ground under the spawn has a physics body
+// on this client.
+CharacterService_Flush_Pending_Binds :: proc(data_model: ^DataModel) {
+	if data_model == nil ||
+	   data_model.registry == nil ||
+	   data_model.registry.vm_state == nil {return}
+	service := cast(^CharacterService)DataModel_Get_Service(data_model, "CharacterService")
+	if service == nil || len(service.pending_binds) == 0 {return}
+	players := cast(^Players)DataModel_Get_Service(data_model, "Players")
+	if players == nil {return}
+	pending := service.pending_binds
+	service.pending_binds = nil
+	defer delete(pending)
+	L := data_model.registry.vm_state.L
+	for model in pending {
+		// A character that despawned or was replaced while it waited must not be
+		// resurrected here; its replacement has its own bind.
+		if model == nil || model.destroyed {continue}
+		player := character_service_player_for_model(players, model)
+		if player == nil {continue}
+		character_service_bind_ready(data_model, model, L, player, players)
+	}
+}
+
 CharacterService_Bind :: proc(
 	data_model: ^DataModel,
 	model: ^classes.CharacterModel,
@@ -304,42 +382,36 @@ CharacterService_Bind :: proc(
 	if data_model == nil || model == nil || model.owner_user_id == 0 {return}
 	players := cast(^Players)DataModel_Get_Service(data_model, "Players")
 	if players == nil {return}
-	player: ^Player
-	for child in players.children {
-		if child != nil &&
-		   !child.destroyed &&
-		   classes.Is_A(child, "Player") &&
-		   (cast(^Player)child).user_id == model.owner_user_id {
-			player = cast(^Player)child
-			break
-		}
-	}
+	player := character_service_player_for_model(players, model)
 	if player == nil {player = Players_Add(players, L, model.owner_user_id, model.name)}
-	if player != nil {
-		Player_Set_Character(player, L, model)
-		root := classes.CharacterModel_Root(model)
-		if root != nil {player.ground_y = root.cframe.y}
-		if player == players.local_player {
-			workspace := cast(^Workspace)DataModel_Get_Service(data_model, "Workspace")
-			if workspace != nil && workspace.current_camera != nil {
-				workspace.current_camera.CameraSubject = &model.object
+	if player == nil {return}
+
+	// A client must not build a character against a world it has not finished
+	// receiving. The replicated shell arrives as soon as the server spawns it,
+	// which is well before the map underneath it exists; building the controller
+	// then starts the capsule integrating gravity against a floor that is not
+	// there yet, and the character falls out of the world before the geometry
+	// lands. workspace.FinishedReplicating is too early to gate on -- it reports
+	// that the scene was sent, not that the physics bodies for it were built --
+	// so the gate is the scene-ready barrier, which the server only sends once the
+	// spawn platform, the character's own parts, the geometry under it, and the
+	// terrain have all arrived.
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(data_model, "ReplicatorService")
+	if replicator != nil && replicator.mode == .Client && !replicator.scene_ready {
+		service := cast(^CharacterService)Ensure_Service(
+			data_model.registry,
+			"CharacterService",
+		)
+		if service != nil {
+			for queued in service.pending_binds {
+				if queued == model {return}
 			}
-			service := cast(^CharacterService)Ensure_Service(
-				data_model.registry,
-				"CharacterService",
-			)
-			if service != nil {
-				clear(&service.predictions)
-				service.last_ack = 0
-				service.authoritative_received = false
-			}
+			append(&service.pending_binds, model)
 		}
-		when !#config(FORCE_LEGACY_CHARACTERS, false) {
-			classes.CharacterController_Build(data_model.registry.classes, L, model)
-			controller := classes.CharacterController_From_Model(model)
-			StarterPlayer_Apply_Character(data_model, controller)
-		}
+		return
 	}
+
+	character_service_bind_ready(data_model, model, L, player, players)
 }
 
 CharacterService_Unbind :: proc(

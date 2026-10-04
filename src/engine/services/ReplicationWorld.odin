@@ -948,6 +948,315 @@ replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Objec
 	return false
 }
 
+// replication_spawn_part finds the Part a joining character is about to stand
+// on: the Spawn part the character service reads its spawn position from. It is
+// a direct child of Workspace and is the only part whose arrival the client
+// needs before its character can be simulated at all.
+replication_spawn_part :: proc(service: ^ReplicatorService) -> ^classes.Part {
+	if service == nil || service.data_model == nil {return nil}
+	workspace := DataModel_Get_Service(service.data_model, "Workspace")
+	if workspace == nil {return nil}
+	for child in workspace.children {
+		if child != nil &&
+		   !child.destroyed &&
+		   child.name == "Spawn" &&
+		   classes.Is_A(child, "Part") {
+			return cast(^classes.Part)child
+		}
+	}
+	return nil
+}
+
+// replication_spawn_entity sends one entity's spawn to a peer if the peer is
+// meant to see it and does not have it yet. It is the single spawn path used by
+// both the prioritized spawn pass and the general pass, so the two cannot drift
+// apart on what "already spawned" means.
+replication_spawn_entity :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	object: ^classes.Object,
+	focus_x, focus_y, focus_z: f32,
+	has_focus: bool,
+) -> bool {
+	if object == nil || object.destroyed {return false}
+	if !replication_visible_to(
+		service,
+		connection,
+		object,
+		focus_x,
+		focus_y,
+		focus_z,
+		has_focus,
+	) ||
+	   service.suppressed[object] {
+		return false
+	}
+	item := replication_entity(service, object)
+	if item == nil {return false}
+	parent_id := replication_entity_id(service, object.parent)
+	if parent_id != 0 && connection.known[parent_id] == 0 {
+		return false
+	}
+	if connection.known[item.id] == parent_id + 1 {return false}
+	if connection.known[item.id] != 0 {
+		bytes: [dynamic]u8
+		replication_put_u32(&bytes, item.id)
+		_ = replication_send(service, connection.peer, 8, bytes[:])
+		delete(bytes)
+	}
+	if !replication_send_spawn(service, connection.peer, object) {
+		return false
+	}
+	connection.known[item.id] = parent_id + 1
+	replication_forget_peer_entity(connection, item.id)
+	connection.known[item.id] = parent_id + 1
+	return true
+}
+
+// replication_spawn_tree walks a subtree depth first and spawns each of its
+// entities, parents before children. The depth first order is what lets the
+// spawn's own children be sent in the same pass as the spawn: a child is skipped
+// while its parent is unknown, and the parent is visited first.
+replication_spawn_tree :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	root: ^classes.Object,
+	focus_x, focus_y, focus_z: f32,
+	has_focus: bool,
+) -> int {
+	if service == nil || connection == nil || root == nil || root.destroyed {return 0}
+	spawned := 0
+	if replication_spawn_entity(
+		service,
+		connection,
+		root,
+		focus_x,
+		focus_y,
+		focus_z,
+		has_focus,
+	) {
+		spawned += 1
+	}
+	for child in root.children {
+		spawned += replication_spawn_tree(
+			service,
+			connection,
+			child,
+			focus_x,
+			focus_y,
+			focus_z,
+			has_focus,
+		)
+	}
+	return spawned
+}
+
+// replication_spawn_tree_with_ancestry makes a subtree usable immediately: its
+// replicated service and container ancestors are emitted before the subtree.
+// This is used for the joining player's character ahead of the bulk map, so a
+// large Workspace can never postpone the character behind unrelated geometry.
+replication_spawn_tree_with_ancestry :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	root: ^classes.Object,
+	focus_x, focus_y, focus_z: f32,
+	has_focus: bool,
+) -> int {
+	if service == nil || connection == nil || root == nil || root.destroyed {return 0}
+	spawned := 0
+	chain: [dynamic]^classes.Object
+	defer delete(chain)
+	for object := root.parent; object != nil; object = object.parent {
+		append(&chain, object)
+		if replication_root_service(service, object) {break}
+	}
+	for index := len(chain) - 1; index >= 0; index -= 1 {
+		if replication_spawn_entity(
+			service, connection, chain[index], focus_x, focus_y, focus_z, has_focus,
+		) {spawned += 1}
+	}
+	return spawned + replication_spawn_tree(
+		service, connection, root, focus_x, focus_y, focus_z, has_focus,
+	)
+}
+
+// replication_initialise_entity sends the first usable content for a spawn.
+// Initial Part transforms must be reliable and are intentionally emitted ahead
+// of the map stream for the local character and its spawn platform.
+replication_initialise_entity :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	item: ^Replication_Entity,
+) -> bool {
+	if service == nil || connection == nil || item == nil || item.object == nil ||
+	   item.object.destroyed || connection.known[item.id] == 0 {return false}
+	if connection.initialized[item.id] {return true}
+	sent := false
+	if classes.Is_A(item.object, "Part") {
+		state_sent, state_token, _ := replication_send_part_state(
+			service, connection.peer, cast(^classes.Part)item.object, false, 0, true,
+		)
+		sent = state_sent
+		if sent {connection.state_hashes[item.id] = state_token}
+	} else {
+		names := replication_builtin_property_names(item)
+		defer delete(names)
+		property_sent, property_token := replication_send_property_batch(
+			service, connection, item, names[:], replication_property_stream_builtin,
+			true, false, 0,
+		)
+		sent = property_sent
+		connection.property_hashes[item.id] = property_token
+	}
+	if sent {connection.initialized[item.id] = true}
+	replication_send_extra_properties(service, connection, item, sent)
+	replication_send_character_ack(service, connection, item.object)
+	return sent
+}
+
+replication_initialise_tree :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	root: ^classes.Object,
+) {
+	if service == nil || connection == nil || root == nil || root.destroyed {return}
+	if item := replication_entity(service, root); item != nil {
+		_ = replication_initialise_entity(service, connection, item)
+	}
+	for child in root.children {replication_initialise_tree(service, connection, child)}
+}
+
+// replication_peer_scene_complete reports whether every entity this peer is
+// meant to see has already been spawned to it.
+//
+// The test mirrors the spawn loop's own filter exactly. Reusing that filter is
+// the point: an entity the loop skips (out of relevancy range, suppressed, or
+// waiting on a parent that has not spawned yet) must not keep the marker from
+// being sent, and an entity the loop would send must not be reported complete
+// before it actually went out. An entity whose parent has not arrived yet is
+// still pending, because a later tick will spawn it.
+replication_peer_scene_complete :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	focus_x, focus_y, focus_z: f32,
+	has_focus: bool,
+) -> bool {
+	if service == nil || connection == nil {return false}
+	for item in service.entity_list {
+		if item == nil || item.object == nil || item.object.destroyed {continue}
+		if !replication_visible_to(
+			service,
+			connection,
+			item.object,
+			focus_x,
+			focus_y,
+			focus_z,
+			has_focus,
+		) ||
+		   service.suppressed[item.object] {
+			continue
+		}
+		if connection.known[item.id] == 0 {return false}
+	}
+	return true
+}
+
+// replication_terrain_complete reports whether this peer is done with the
+// initial terrain push.
+//
+// A map with no Terrain service, or a peer that never asked for terrain, is
+// complete immediately. Otherwise the initial snapshot has to have gone out,
+// and terrain runs at half rate, so "not due yet this tick" is not "never":
+// only the initial send is required, not the deltas that follow.
+replication_terrain_complete :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) -> bool {
+	if service == nil || connection == nil {return true}
+	if (connection.client_capabilities & Replication_Capability_Terrain) == 0 {return true}
+	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
+	if terrain_object == nil {return true}
+	return connection.terrain_initial_sent
+}
+
+// replication_peer_support_ready reports whether the geometry the character is
+// actually standing on has been flushed to this peer.
+//
+// The Spawn marker is usually a non-colliding position hint, so readiness keyed
+// only on it released the client into a world whose real floor had not arrived.
+// The client is client-authoritative, so it integrated gravity against nothing
+// and fell out of the map.
+//
+// This deliberately does NOT block forever. When the world genuinely has no
+// collidable surface below the spawn there is nothing to wait for, so the
+// caller falls through to ready rather than stalling the join indefinitely.
+replication_peer_support_ready :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) -> bool {
+	if service == nil ||
+	   connection == nil ||
+	   connection.player == nil ||
+	   service.data_model == nil {return true}
+	character := connection.player.character
+	if character == nil || character.destroyed {return true}
+	root := classes.CharacterModel_Root(character)
+	if root == nil {return true}
+	workspace := DataModel_Get_Service(service.data_model, "Workspace")
+	physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+	if workspace == nil || physics == nil || !physics.initialized {return true}
+	params := datatypes.RaycastParams{}
+	params.RespectCanCollide = true
+	params.ExcludeFilterSet = true
+	append(
+		&params.ExcludeInstances,
+		datatypes.Raycast_Instance_Reference{object = &character.object},
+	)
+	defer delete(params.ExcludeInstances)
+	origin := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+	result, hit := Physics_Raycast(physics, workspace, origin, datatypes.Vector3{0, -512, 0}, &params)
+	if !hit {return true}
+	// Terrain carries no Instance behind it; replication_terrain_complete covers it.
+	support := cast(^classes.Part)result.ObjectRef
+	if support == nil {return true}
+	item := replication_entity(service, &support.object)
+	// A body with no replication entity cannot be replicated, so waiting on it
+	// would stall the join forever.
+	if item == nil {return true}
+	return connection.initialized[item.id]
+}
+
+// replication_peer_spawn_ready is deliberately narrower than "the whole map
+// has streamed".  The local character only needs its own authoritative Parts,
+// the authored Spawn platform (when present), the geometry it will stand on,
+// and terrain before gravity is safe.  Waiting for every map Part made join time
+// proportional to map size.
+replication_peer_spawn_ready :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	spawn_part: ^classes.Part,
+) -> bool {
+	if service == nil || connection == nil || connection.player == nil {return false}
+	character := connection.player.character
+	if character == nil || character.destroyed {return false}
+	for child in character.children {
+		if child == nil || child.destroyed || !classes.Is_A(child, "Part") {continue}
+		item := replication_entity(service, child)
+		if item == nil || !connection.initialized[item.id] {return false}
+	}
+	if spawn_part != nil {
+		item := replication_entity(service, &spawn_part.object)
+		if item == nil || !connection.initialized[item.id] {return false}
+	}
+	if !replication_peer_support_ready(service, connection) {return false}
+	return replication_terrain_complete(service, connection)
+}
+
+// REPLICATION_DROP_PRESSURE_RECOVER_BELOW is the smoothed drop pressure below
+// which the link counts as unpressured and the scale is allowed to climb again.
+// It sits far below the pressure a real sustained overload settles at.
+REPLICATION_DROP_PRESSURE_RECOVER_BELOW: f32 = 0.02
+
 replication_sync :: proc(service: ^ReplicatorService) {
 	// Terrain rides the snapshot clock at half rate. Adaptive load control already
 	// governs this call's frequency, so a server shedding load sheds terrain
@@ -976,10 +1285,19 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	// -------------------------------------------------------------------------
 	drops := service.drops_window
 	service.drops_window = 0
-	if drops > 0 {
+	// Drop pressure is an exponential moving average of the per-snapshot severity
+	// rather than a "did this snapshot drop anything" flag. Under a sustained
+	// overload the budget refuses on most snapshots but not all of them (the
+	// rotation makes any given snapshot cheaper), so a one-snapshot test creeps the
+	// scale back up in the middle of an overload and the scale oscillates instead of
+	// holding its back-off. Once the scene settles the drops stop and the average
+	// decays, which is what permits recovery.
+	severity := f32(0)
+	if drops > 0 {severity = min(1, f32(drops) / 32)}
+	service.drop_pressure += 0.1 * (severity - service.drop_pressure)
+	if service.drop_pressure > REPLICATION_DROP_PRESSURE_RECOVER_BELOW {
 		// Back off in proportion to how badly we overshot, floored so a
 		// sustained overload settles at a reduced rate rather than at zero.
-		severity := min(1, f32(drops) / 32)
 		service.adaptive_scale = max(
 			service.adaptive_scale * (1 - 0.25 * severity),
 			service.adaptive_min_scale,
@@ -1046,8 +1364,56 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		// Phase 1: Spawns — always reliable, skip bandwidth check.
 		// -----------------------------------------------------------------------
 		spawned := 0
+		// Put this peer's character before the bulk Workspace.  On a large map
+		// entity_list is map-first, so the old single linear walk could enqueue
+		// thousands of map spawns before the one model that needs to begin play.
+		if connection.player != nil && connection.player.character != nil {
+			spawned += replication_spawn_tree_with_ancestry(
+				service,
+				&connection,
+				&connection.player.character.object,
+				focus_x,
+				focus_y,
+				focus_z,
+				has_focus,
+			)
+		}
+		spawn_part := replication_spawn_part(service)
+		if spawn_part != nil {
+			spawned += replication_spawn_tree_with_ancestry(
+				service,
+				&connection,
+				&spawn_part.object,
+				focus_x,
+				focus_y,
+				focus_z,
+				has_focus,
+			)
+		}
+		// Send the local character's first transforms before the general map
+		// stream.  A spawn alone constructs Parts at their default transform;
+		// allowing simulation before this state arrived was the direct cause of
+		// characters falling through a still-streaming world.
+		if connection.player != nil && connection.player.character != nil {
+			replication_initialise_tree(
+				service,
+				&connection,
+				&connection.player.character.object,
+			)
+		}
+		if spawn_part != nil {replication_initialise_tree(service, &connection, &spawn_part.object)}
+
+		// This marker is a spawn-area readiness barrier, not a whole-map barrier:
+		// the rest of the map continues to stream below while the player can
+		// safely stand on their replicated spawn platform.
+		if !connection.scene_ready_sent &&
+		   (connection.client_capabilities & Replication_Capability_Scene_Ready) != 0 &&
+		   replication_peer_spawn_ready(service, &connection, spawn_part) {
+			connection.scene_ready_sent =
+				replication_send(service, connection.peer, Replication_Kind_Scene_Ready, nil, true)
+		}
 		for item in service.entity_list {
-			if !replication_visible_to(
+			if replication_spawn_entity(
 				service,
 				&connection,
 				item.object,
@@ -1055,29 +1421,28 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				focus_y,
 				focus_z,
 				has_focus,
-			) ||
-			   service.suppressed[item.object] {
-				continue
-			}
-			parent_id := replication_entity_id(service, item.object.parent)
-			if parent_id != 0 && connection.known[parent_id] == 0 {
-				continue
-			}
-			if connection.known[item.id] == parent_id + 1 {continue}
-			if connection.known[item.id] != 0 {
-				bytes: [dynamic]u8
-				replication_put_u32(&bytes, item.id)
-				_ = replication_send(service, connection.peer, 8, bytes[:])
-				delete(bytes)
-			}
-			if replication_send_spawn(service, connection.peer, item.object) {
-				connection.known[item.id] = parent_id + 1
-				replication_forget_peer_entity(&connection, item.id)
-				connection.known[item.id] = parent_id + 1
+			) {
 				spawned += 1
 			}
 		}
-
+		// Now that the general pass has run, every entity this peer is meant to
+		// see has been considered, so the scene-completeness test is meaningful.
+		// This is the frame behind workspace.FinishedReplicating, and unlike the
+		// spawn-area barrier above it waits for the whole scene.
+		if !connection.finished_replicating_sent &&
+		   (connection.client_capabilities &
+			Replication_Capability_Finished_Replicating) != 0 &&
+		   replication_peer_scene_complete(service, &connection, focus_x, focus_y, focus_z, has_focus) &&
+		   replication_terrain_complete(service, &connection) {
+			connection.finished_replicating_sent =
+				replication_send(
+					service,
+					connection.peer,
+					Replication_Kind_Finished_Replicating,
+					nil,
+					true,
+				)
+		}
 		// -----------------------------------------------------------------------
 		// Phase 2: Despawns
 		// -----------------------------------------------------------------------

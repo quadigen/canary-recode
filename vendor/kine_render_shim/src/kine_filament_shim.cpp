@@ -72,6 +72,8 @@
 #include "kine_hl_outline_top_package.h"
 #include "kine_hl_fill_package.h"
 #include "kine_hl_fill_top_package.h"
+#include "kine_outline_mask_package.h"
+#include "kine_outline_composite_package.h"
 
 #include <geometry/SurfaceOrientation.h>
 using namespace filament::geometry;
@@ -87,6 +89,29 @@ struct VkQueue_T;
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <assimp/material.h>
+
+// Assimp hands back texture bytes, not pixels: an embedded texture is either
+// raw aiTexels or a still-compressed PNG/JPEG, and an external one is a path on
+// disk. stb_image decodes all of those into RGBA8 on the CPU, which is the only
+// place the decode can happen since the upload helper wants pixel bytes.
+//
+// The implementation is compiled in here rather than linked from elsewhere.
+// Only SDL3 exported these symbols, and relying on that left them unresolved
+// whenever the shim was linked ahead of SDL3 -- the model then loaded with its
+// geometry but silently without a texture. Compiling them privately settles it:
+// STBIDEF is redefined to "static" first, so every entry point below keeps
+// internal linkage and cannot collide with SDL3's copy or with any other.
+//
+// The STBI_ONLY_* restrictions are deliberately omitted. Unlike STBIDEF they
+// also rename the decoder's own internals, which is more renaming than this
+// needs, and the whole decoder is small enough that the unused formats cost
+// nothing worth the risk of a mismatch.
+#define STB_IMAGE_IMPLEMENTATION
+#define STBIDEF static
+#include <stb_image.h>
+#undef STBIDEF
+#undef STB_IMAGE_IMPLEMENTATION
 #endif
 
 #include <algorithm>
@@ -311,6 +336,16 @@ struct KineAnimation {
     std::vector<KineAnimationChannel> channels;
 };
 
+// A decoded image kept on the CPU by the loader. It only lives from the moment
+// the Assimp scene is read until the mesh's texture has been uploaded, after
+// which baseColorImage is cleared to release the pixels.
+struct KineImage {
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+struct KineTexHandle;   // defined below
+
 struct KineMesh {
     VertexBuffer* vb       = nullptr;
     IndexBuffer*  ib       = nullptr;
@@ -323,6 +358,13 @@ struct KineMesh {
     std::vector<math::mat4f> skinMatrices;
     std::vector<KineAnimation> animations;
     Box localBounds;
+
+    // Base colour texture carried by the model file. The CPU copy is filled by
+    // the Assimp loader and freed by kine_attach_mesh_texture; ownedTex is the
+    // GPU texture built from it and is used as the draw's default whenever the
+    // caller supplies no texture of its own.
+    KineImage      baseColorImage;
+    KineTexHandle* ownedTex = nullptr;
 };
 
 struct KineCpuMeshData {
@@ -510,6 +552,8 @@ struct KineFilamentContext {
     Material*        hlOutlineTopMaterial = nullptr;
     Material*        hlFillMaterial = nullptr;
     Material*        hlFillTopMaterial = nullptr;
+    Material*        outlineMaskMaterial = nullptr;
+    Material*        outlineCompositeMaterial = nullptr;
 	KineFilamentShader* globalShader = nullptr;
 	KineFilamentShader* postProcessShader = nullptr;
     std::unordered_set<KineFilamentShader*> runtimeShaders;
@@ -525,6 +569,25 @@ struct KineFilamentContext {
     Entity postCameraEntity;
     Entity postQuadEntity;
     MaterialInstance* postMaterialInstance = nullptr;
+
+    // Screen-space Highlight outline. Mask draws go to a private target via
+    // outlineMaskView (same camera as the main view); outlineView then draws a
+    // fullscreen composite quad over the final image. Built on demand the first
+    // time a KINE_MAT_OUTLINE_MASK draw is queued, rebuilt on resize, and only
+    // exercised on frames that actually queued mask draws.
+    Texture* outlineMaskColor = nullptr;
+    Texture* outlineMaskDepth = nullptr;
+    RenderTarget* outlineMaskTarget = nullptr;
+    Scene* outlineMaskScene = nullptr;
+    View* outlineMaskView = nullptr;
+    Scene* outlineScene = nullptr;
+    View* outlineView = nullptr;
+    Camera* outlineCamera = nullptr;
+    Entity outlineCameraEntity;
+    Entity outlineQuadEntity;
+    MaterialInstance* outlineCompositeMI = nullptr;
+    float outlineWidthPixels = 0.0f;   // last queued param2; drives composite "width"
+    bool outlineQueued = false;        // a mask draw arrived this frame
     float     time = 0.0f;   // accumulate once per frame for animation
 
     // Host GL context, captured at Create() time so we can hand control
@@ -1870,9 +1933,100 @@ static constexpr unsigned int KINE_ASSIMP_FLAGS =
     aiProcess_RemoveRedundantMaterials |
     aiProcess_SortByPType;
 
+// Decodes a still-compressed image (an embedded PNG/JPEG, or an external file)
+// into RGBA8. This is the only path that produces pixels out of Assimp's
+// compressed embedded-texture form.
+static bool kine_decode_image(const uint8_t* data, size_t size, KineImage& out)
+{
+    if (!data || size == 0 || size > (size_t)INT32_MAX) return false;
+
+    int w = 0, h = 0, c = 0;
+    stbi_uc* px = stbi_load_from_memory(data, (int)size, &w, &h, &c, 4);
+    if (!px) return false;
+    if (w <= 0 || h <= 0) {
+        stbi_image_free(px);
+        return false;
+    }
+
+    out.width = w; out.height = h;
+    out.rgba.assign(px, px + (size_t)w * h * 4);
+    stbi_image_free(px);
+    return true;
+}
+
+// Resolves a material's base colour texture into CPU pixels.
+//
+// Assimp reports the texture in one of two shapes. An embedded texture (GLB, or
+// FBX with embedded media) is referenced by the synthetic name "*0", "*1", ...
+// and may arrive either as raw aiTexels or still compressed. An external texture
+// is a path relative to the model file, so it needs the base directory the
+// caller resolved.
+static bool kine_load_assimp_base_color(
+    const aiScene* scene,
+    const aiMaterial* mat,
+    const std::string& baseDir,
+    KineImage& out)
+{
+    if (!scene || !mat) return false;
+
+    aiString path;
+    bool found = false;
+    // BASE_COLOR is the glTF/PBR name, DIFFUSE the legacy one. Prefer the
+    // former and fall back so older exports still resolve.
+    for (aiTextureType t : {aiTextureType_BASE_COLOR, aiTextureType_DIFFUSE}) {
+        if (mat->GetTextureCount(t) > 0 &&
+            mat->GetTexture(t, 0, &path) == AI_SUCCESS) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+
+    // Embedded: the name is "*0", "*1", ... and carries no directory.
+    if (const aiTexture* emb = scene->GetEmbeddedTexture(path.C_Str())) {
+        if (emb->mHeight == 0) {
+            // Compressed (png/jpg bytes); mWidth is the byte count.
+            return kine_decode_image(
+                reinterpret_cast<const uint8_t*>(emb->pcData), emb->mWidth, out);
+        }
+
+        // Raw aiTexels.
+        if (!emb->pcData || emb->mWidth == 0 || emb->mHeight == 0) return false;
+        out.width = (int)emb->mWidth;
+        out.height = (int)emb->mHeight;
+        out.rgba.resize((size_t)out.width * out.height * 4);
+        for (size_t i = 0; i < (size_t)out.width * out.height; ++i) {
+            out.rgba[i * 4 + 0] = emb->pcData[i].r;
+            out.rgba[i * 4 + 1] = emb->pcData[i].g;
+            out.rgba[i * 4 + 2] = emb->pcData[i].b;
+            out.rgba[i * 4 + 3] = emb->pcData[i].a;
+        }
+        return true;
+    }
+
+    // External file sitting next to the model. Windows-authored exports use
+    // backslashes, which stb_image will not resolve as a separator.
+    std::string rel = path.C_Str();
+    std::replace(rel.begin(), rel.end(), '\\', '/');
+    const std::string full = baseDir + rel;
+
+    int w = 0, h = 0, c = 0;
+    stbi_uc* px = stbi_load(full.c_str(), &w, &h, &c, 4);
+    if (!px) {
+        fprintf(stderr, "[Kine] could not load texture '%s'\n", full.c_str());
+        return false;
+    }
+
+    out.width = w; out.height = h;
+    out.rgba.assign(px, px + (size_t)w * h * 4);
+    stbi_image_free(px);
+    return true;
+}
+
 static KineMesh* buildMeshFromAssimpScene(
     const aiScene* scene,
-    const char* sourceName)
+    const char* sourceName,
+    const std::string& baseDir = "")
 {
     if (!scene || !scene->HasMeshes()) {
         return nullptr;
@@ -2186,6 +2340,18 @@ static KineMesh* buildMeshFromAssimpScene(
         );
     }
 
+    // Base colour texture. Every Assimp submesh is merged into this one
+    // KineMesh, and a merged mesh can only carry one texture, so this stops at
+    // the first material that has one. A model with several distinct materials
+    // needs one mesh per material or an atlas to come out right.
+    for (unsigned int i = 0; i < scene->mNumMeshes && m->baseColorImage.rgba.empty(); ++i) {
+        const aiMesh* src = scene->mMeshes[i];
+        if (src && src->mMaterialIndex < scene->mNumMaterials) {
+            kine_load_assimp_base_color(
+                scene, scene->mMaterials[src->mMaterialIndex], baseDir, m->baseColorImage);
+        }
+    }
+
     return m;
 }
 
@@ -2208,7 +2374,12 @@ static KineMesh* loadMeshWithAssimp(const char* path)
         return nullptr;
     }
 
-    return buildMeshFromAssimpScene(scene, path);
+    // External textures are referenced relative to the model file, so hand the
+    // directory down for path resolution.
+    std::string baseDir = path;
+    const size_t slash = baseDir.find_last_of("/\\");
+    baseDir = (slash == std::string::npos) ? "" : baseDir.substr(0, slash + 1);
+    return buildMeshFromAssimpScene(scene, path, baseDir);
 }
 
 static KineMesh* loadMeshWithAssimpMemory(
@@ -2466,6 +2637,12 @@ static void kine_apply_material_params(KineFilamentContext* ctx, MaterialInstanc
     } else if (key.materialKind == KINE_MAT_HIGHLIGHT_FILL ||
                key.materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP) {
         mi->setParameter("depthBias", key.param1);
+    } else if (key.materialKind == KINE_MAT_OUTLINE_MASK) {
+        // 1.0 paints the selection into the mask. Treat 0 as "unspecified"
+        // rather than a literal occluder so legacy callers that leave param1
+        // at zero still produce a visible outline; a future occluder pass
+        // would signal 0 through a dedicated material kind instead.
+        mi->setParameter("maskValue", key.param1 > 0.0f ? key.param1 : 1.0f);
     } else if (key.materialKind == KINE_MAT_GIZMO) {
         // Everything (including per-instance baseColor) is set per chunk.
     } else if (key.materialKind == KINE_MAT_PARTICLE) {
@@ -2614,13 +2791,19 @@ static bool kine_material_is_highlight_outline(int materialKind)
            materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP;
 }
 
+static bool kine_material_is_outline_mask(int materialKind)
+{
+    return materialKind == KINE_MAT_OUTLINE_MASK;
+}
+
 static bool kine_material_uses_instance_alpha(int materialKind)
 {
     return materialKind == KINE_MAT_PARTICLE ||
            materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
            materialKind == KINE_MAT_HIGHLIGHT_FILL ||
            materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP ||
-           materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP;
+           materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP ||
+           materialKind == KINE_MAT_OUTLINE_MASK;
 }
 
 static Material* kine_select_material(
@@ -2639,6 +2822,7 @@ static Material* kine_select_material(
     if (materialKind == KINE_MAT_HIGHLIGHT_FILL) return ctx->hlFillMaterial;
     if (materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP) return ctx->hlOutlineTopMaterial;
     if (materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP) return ctx->hlFillTopMaterial;
+    if (materialKind == KINE_MAT_OUTLINE_MASK) return ctx->outlineMaskMaterial;
     return ctx->defaultMaterial;
 }
 
@@ -2656,7 +2840,12 @@ static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem& item, uint64_
     key.castShadow = (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0;
     key.receiveShadow = (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0;
     key.culling = (item.flags & KINE_FILAMENT_DRAW_CULLING) != 0;
-    key.texture = (KineTexHandle*)item.tex;
+    // Fall back to the texture the model file carried when the caller passed
+    // none, so an imported mesh looks like its texture out of the box.
+    KineMesh* itemMesh = (KineMesh*)item.mesh;
+    key.texture = item.tex
+        ? (KineTexHandle*)item.tex
+        : (itemMesh ? itemMesh->ownedTex : nullptr);
     return key;
 }
 
@@ -2696,13 +2885,28 @@ static void kine_set_chunk_colors(
     mi->setParameter("instanceColors", colors, count);
 }
 
+// Forward declaration: builds the screen-space outline pipeline on demand;
+// defined with the other pipeline builders after kine_build_post_process_pipeline.
+static bool kine_ensure_outline_pipeline(KineFilamentContext* ctx);
+
+// Mask-kind batches render into the outline mask target via a dedicated scene;
+// everything else belongs to the main scene. Returns nullptr when the outline
+// pipeline is absent (build failed) -- callers must drop the batch instead of
+// leaking flat mask geometry into the main scene.
+static Scene* kine_scene_for_kind(KineFilamentContext* ctx, int materialKind)
+{
+    if (!kine_material_is_outline_mask(materialKind)) return ctx->scene;
+    return ctx->outlineMaskScene;
+}
+
 static void kine_destroy_instance_batch_chunks(KineFilamentInstanceBatch* batch)
 {
     if (!batch || !batch->ctx || !batch->ctx->engine) return;
     KineFilamentContext* ctx = batch->ctx;
+    Scene* scene = kine_scene_for_kind(ctx, batch->key.materialKind);
     for (KineBuiltBatch& chunk : batch->chunks) {
         if (!chunk.entity.isNull()) {
-            ctx->scene->remove(chunk.entity);
+            if (scene) scene->remove(chunk.entity);
             ctx->engine->destroy(chunk.entity);
             EntityManager::get().destroy(chunk.entity);
         }
@@ -2725,6 +2929,13 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
 
     Material* base = kine_select_material(ctx, batch->key.materialKind, batch->key.shader);
     if (!base) return false;
+    if (kine_material_is_outline_mask(batch->key.materialKind)) {
+        ctx->outlineQueued = true;
+        if (batch->key.param2 > 0.0f) ctx->outlineWidthPixels = batch->key.param2;
+        if (!kine_ensure_outline_pipeline(ctx)) {
+            return false;
+        }
+    }
 
     kine_destroy_instance_batch_chunks(batch);
 
@@ -2769,7 +2980,15 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch* batch)
         }
         renderableBuilder.build(*ctx->engine, entity);
 
-        ctx->scene->addEntity(entity);
+        Scene* targetScene = kine_scene_for_kind(ctx, batch->key.materialKind);
+        if (!targetScene) {
+            ctx->engine->destroy(entity);
+            EntityManager::get().destroy(entity);
+            ctx->engine->destroy(instanceBuffer);
+            ctx->engine->destroy(mi);
+            return false;
+        }
+        targetScene->addEntity(entity);
         batch->chunks.push_back({entity, instanceBuffer, mi, count});
         offset += count;
     }
@@ -2924,13 +3143,193 @@ static bool kine_build_post_process_pipeline(KineFilamentContext* ctx)
     return true;
 }
 
+// Defined below (after kine_build_post_process_pipeline); the outline pipeline
+// teardown has to drop mask batches that live in the scene it is destroying.
 static void kine_destroy_batch_chunks(
     KineFilamentContext* ctx,
+    const KineBatchKey& key,
+    KinePersistentBatch& batch);
+static void kine_destroy_persistent_batch(
+    KineFilamentContext* ctx,
+    const KineBatchKey& key,
+    KinePersistentBatch& batch);
+
+// ---------------------------------------------------------------------------
+// Screen-space Highlight outline, mirroring kine_build_post_process_pipeline:
+//
+//   1. A private RGBA8 mask target rendered with the MAIN view's camera.
+//      KINE_MAT_OUTLINE_MASK batches (routed to outlineMaskScene) paint the
+//      selected geometry as flat per-instance color+alpha over a transparent
+//      black clear. A future occluder pass would add non-selected geometry
+//      with maskValue=0 here to hide outlines behind walls.
+//   2. A fullscreen composite view (the shared post-process quad under an
+//      ortho camera) that dilates the mask into the outline ring and blends it
+//      over whatever the main/post passes left in ctx->renderTarget.
+//
+// Built on demand by kine_ensure_outline_pipeline the first time a mask draw
+// reaches the batcher, and rebuilt by Resize/SetViewport like the post
+// pipeline.
+// ---------------------------------------------------------------------------
+static void kine_destroy_outline_pipeline(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine) return;
+
+    // Mask-kind batches live in the scene about to be torn down, so release
+    // them first while the scene can still unregister their entities. Pending
+    // draws re-queue next frame and rebuild.
+    for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
+        if (kine_material_is_outline_mask(it->first.materialKind)) {
+            kine_destroy_persistent_batch(ctx, it->first, it->second);
+            it = ctx->builtBatches.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
+        if (batch && kine_material_is_outline_mask(batch->key.materialKind)) {
+            kine_destroy_instance_batch_chunks(batch);
+        }
+    }
+
+    if (ctx->outlineScene && !ctx->outlineQuadEntity.isNull()) {
+        ctx->outlineScene->remove(ctx->outlineQuadEntity);
+    }
+    if (!ctx->outlineQuadEntity.isNull()) {
+        ctx->engine->destroy(ctx->outlineQuadEntity);
+        EntityManager::get().destroy(ctx->outlineQuadEntity);
+        ctx->outlineQuadEntity.clear();
+    }
+    if (ctx->outlineCompositeMI) {
+        ctx->engine->destroy(ctx->outlineCompositeMI);
+        ctx->outlineCompositeMI = nullptr;
+    }
+    if (!ctx->outlineCameraEntity.isNull()) {
+        ctx->engine->destroyCameraComponent(ctx->outlineCameraEntity);
+        EntityManager::get().destroy(ctx->outlineCameraEntity);
+        ctx->outlineCameraEntity.clear();
+        ctx->outlineCamera = nullptr;
+    }
+    if (ctx->outlineView)     { ctx->engine->destroy(ctx->outlineView);      ctx->outlineView = nullptr; }
+    if (ctx->outlineScene)    { ctx->engine->destroy(ctx->outlineScene);     ctx->outlineScene = nullptr; }
+    if (ctx->outlineMaskView) { ctx->engine->destroy(ctx->outlineMaskView);  ctx->outlineMaskView = nullptr; }
+    if (ctx->outlineMaskScene){ ctx->engine->destroy(ctx->outlineMaskScene); ctx->outlineMaskScene = nullptr; }
+    if (ctx->outlineMaskTarget) { ctx->engine->destroy(ctx->outlineMaskTarget); ctx->outlineMaskTarget = nullptr; }
+    if (ctx->outlineMaskColor)  { ctx->engine->destroy(ctx->outlineMaskColor);  ctx->outlineMaskColor = nullptr; }
+    if (ctx->outlineMaskDepth)  { ctx->engine->destroy(ctx->outlineMaskDepth);  ctx->outlineMaskDepth = nullptr; }
+    ctx->outlineWidthPixels = 0.0f;
+}
+
+static bool kine_build_outline_pipeline(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine || !ctx->camera ||
+            !ctx->outlineMaskMaterial || !ctx->outlineCompositeMaterial ||
+            !ctx->postProcessQuadMesh || !ctx->postProcessQuadMesh->vb || !ctx->postProcessQuadMesh->ib) {
+        return false;
+    }
+
+    kine_destroy_outline_pipeline(ctx);
+    const int viewportWidth = ctx->viewportWidth > 0 ? ctx->viewportWidth : ctx->width;
+    const int viewportHeight = ctx->viewportHeight > 0 ? ctx->viewportHeight : ctx->height;
+    const int filamentY = std::clamp(
+        ctx->height - ctx->viewportY - viewportHeight,
+        0,
+        std::max(0, ctx->height - 1));
+
+    ctx->outlineMaskColor = Texture::Builder()
+        .width(uint32_t(viewportWidth)).height(uint32_t(viewportHeight)).levels(1)
+        .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+        .format(Texture::InternalFormat::RGBA8).build(*ctx->engine);
+    ctx->outlineMaskDepth = Texture::Builder()
+        .width(uint32_t(viewportWidth)).height(uint32_t(viewportHeight)).levels(1)
+        .usage(Texture::Usage::DEPTH_ATTACHMENT)
+        .format(Texture::InternalFormat::DEPTH24).build(*ctx->engine);
+    if (!ctx->outlineMaskColor || !ctx->outlineMaskDepth) {
+        kine_destroy_outline_pipeline(ctx);
+        return false;
+    }
+    ctx->outlineMaskTarget = RenderTarget::Builder()
+        .texture(RenderTarget::AttachmentPoint::COLOR, ctx->outlineMaskColor)
+        .texture(RenderTarget::AttachmentPoint::DEPTH, ctx->outlineMaskDepth)
+        .build(*ctx->engine);
+
+    ctx->outlineMaskScene = ctx->engine->createScene();
+    ctx->outlineMaskView  = ctx->engine->createView();
+    ctx->outlineScene = ctx->engine->createScene();
+    ctx->outlineView  = ctx->engine->createView();
+    ctx->outlineCameraEntity = EntityManager::get().create();
+    ctx->outlineCamera = ctx->engine->createCamera(ctx->outlineCameraEntity);
+    ctx->outlineCompositeMI = ctx->outlineCompositeMaterial->createInstance();
+    if (!ctx->outlineMaskTarget || !ctx->outlineMaskScene || !ctx->outlineMaskView ||
+            !ctx->outlineScene || !ctx->outlineView || !ctx->outlineCamera ||
+            !ctx->outlineCompositeMI) {
+        kine_destroy_outline_pipeline(ctx);
+        return false;
+    }
+
+    // Mask view: the main view's own camera keeps the mask aligned with the
+    // scene pixel for pixel. Post-processing, shadowing, and AA stay off so
+    // the target holds raw mask values only.
+    ctx->outlineMaskView->setScene(ctx->outlineMaskScene);
+    ctx->outlineMaskView->setCamera(ctx->camera);
+    ctx->outlineMaskView->setRenderTarget(ctx->outlineMaskTarget);
+    ctx->outlineMaskView->setViewport({0, 0, uint32_t(viewportWidth), uint32_t(viewportHeight)});
+    ctx->outlineMaskView->setPostProcessingEnabled(false);
+    ctx->outlineMaskView->setShadowingEnabled(false);
+    ctx->outlineMaskView->setAntiAliasing(AntiAliasing::NONE);
+
+    // Composite: bottom-left-origin render-target textures pair with the
+    // post-process quad's UVs, so the mask lands right side up (see
+    // buildPostProcessQuad). NEAREST keeps the binary mask unblurred; the
+    // composite's max() dilation supplies the softness.
+    TextureSampler sampler(TextureSampler::MinFilter::NEAREST, TextureSampler::MagFilter::NEAREST,
+        TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    ctx->outlineCompositeMI->setParameter("mask", ctx->outlineMaskColor, sampler);
+    ctx->outlineCompositeMI->setParameter("texel",
+        math::float2{1.0f / float(viewportWidth), 1.0f / float(viewportHeight)});
+
+    ctx->outlineQuadEntity = EntityManager::get().create();
+    RenderableManager::Builder(1)
+        .boundingBox({{0, 0, 0}, {1, 1, 0.1f}})
+        .material(0, ctx->outlineCompositeMI)
+        .geometry(0, RenderableManager::PrimitiveType::TRIANGLES,
+            ctx->postProcessQuadMesh->vb, ctx->postProcessQuadMesh->ib, 0, ctx->postProcessQuadMesh->indexCount)
+        .culling(false).castShadows(false).receiveShadows(false)
+        .build(*ctx->engine, ctx->outlineQuadEntity);
+    ctx->outlineScene->addEntity(ctx->outlineQuadEntity);
+    ctx->outlineCamera->setProjection(Camera::Projection::ORTHO, -0.5, 0.5, -0.5, 0.5, 0.1, 10.0);
+    ctx->outlineCamera->lookAt({0, 0, 1}, {0, 0, 0}, {0, 1, 0});
+    ctx->outlineView->setScene(ctx->outlineScene);
+    ctx->outlineView->setCamera(ctx->outlineCamera);
+    ctx->outlineView->setBlendMode(View::BlendMode::TRANSLUCENT);
+    // Same target as the main/post views: the swapchain in compositor modes,
+    // the headless color target otherwise. The mask view never touches this
+    // target, so no clear/discard juggling is needed beyond the frame logic
+    // in Kine_Filament_RenderFrame.
+    ctx->outlineView->setRenderTarget(ctx->renderTarget);
+    ctx->outlineView->setViewport({
+        int32_t(ctx->viewportX), int32_t(filamentY),
+        uint32_t(viewportWidth), uint32_t(viewportHeight)
+    });
+    ctx->outlineView->setPostProcessingEnabled(false);
+    return true;
+}
+
+static bool kine_ensure_outline_pipeline(KineFilamentContext* ctx)
+{
+    if (!ctx || !ctx->engine) return false;
+    if (ctx->outlineView && ctx->outlineMaskView && ctx->outlineCompositeMI) return true;
+    return kine_build_outline_pipeline(ctx);
+}
+
+static void kine_destroy_batch_chunks(
+    KineFilamentContext* ctx,
+    const KineBatchKey& key,
     KinePersistentBatch& batch)
 {
+    Scene* scene = kine_scene_for_kind(ctx, key.materialKind);
     for (KineBuiltBatch& chunk : batch.chunks) {
         if (!chunk.entity.isNull()) {
-            ctx->scene->remove(chunk.entity);
+            if (scene) scene->remove(chunk.entity);
             ctx->engine->destroy(chunk.entity);
             EntityManager::get().destroy(chunk.entity);
         }
@@ -2946,9 +3345,10 @@ static void kine_destroy_batch_chunks(
 
 static void kine_destroy_persistent_batch(
     KineFilamentContext* ctx,
+    const KineBatchKey& key,
     KinePersistentBatch& batch)
 {
-    kine_destroy_batch_chunks(ctx, batch);
+    kine_destroy_batch_chunks(ctx, key, batch);
 }
 
 // ---------------------------------------------------------------------------
@@ -2981,6 +3381,15 @@ static void kine_update_batches(KineFilamentContext* ctx)
 
         Material* base = kine_select_material(ctx, key.materialKind, key.shader);
         if (!base) continue;
+        if (kine_material_is_outline_mask(key.materialKind)) {
+            // Retained versioned lists re-use built batches without a fresh
+            // kine_queue_mesh call, so latch the frame flag here as well.
+            ctx->outlineQueued = true;
+            if (key.param2 > 0.0f) ctx->outlineWidthPixels = key.param2;
+            if (!kine_ensure_outline_pipeline(ctx)) {
+                continue;
+            }
+        }
 
         KinePersistentBatch& batch = ctx->builtBatches[key];
         batch.lastUsedFrame = ctx->batchFrame;
@@ -3001,7 +3410,7 @@ static void kine_update_batches(KineFilamentContext* ctx)
         }
 
         if (rebuildChunks) {
-            kine_destroy_batch_chunks(ctx, batch);
+            kine_destroy_batch_chunks(ctx, key, batch);
         }
 		const bool transformsChanged = rebuildChunks || batch.instanceHash != pending->instanceHash;
 
@@ -3050,7 +3459,15 @@ static void kine_update_batches(KineFilamentContext* ctx)
                 }
                 renderableBuilder.build(*ctx->engine, entity);
 
-                ctx->scene->addEntity(entity);
+                Scene* targetScene = kine_scene_for_kind(ctx, key.materialKind);
+                if (!targetScene) {
+                    ctx->engine->destroy(entity);
+                    EntityManager::get().destroy(entity);
+                    ctx->engine->destroy(instanceBuffer);
+                    ctx->engine->destroy(mi);
+                    continue;
+                }
+                targetScene->addEntity(entity);
                 batch.chunks.push_back({entity, instanceBuffer, mi, count});
 			} else if (transformsChanged) {
 				const Box bounds = kine_compute_batch_bounds(m, chunkTransforms, count);
@@ -3085,7 +3502,7 @@ static void kine_update_batches(KineFilamentContext* ctx)
 
     for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
         if (it->second.lastUsedFrame != ctx->batchFrame) {
-            kine_destroy_persistent_batch(ctx, it->second);
+            kine_destroy_persistent_batch(ctx, it->first, it->second);
             it = ctx->builtBatches.erase(it);
         } else {
             ++it;
@@ -3096,6 +3513,10 @@ static void kine_update_batches(KineFilamentContext* ctx)
 static void kine_finish_batch_frame(KineFilamentContext* ctx)
 {
     ctx->batchFrame++;
+    // The outline flag is a per-frame latch: Highlight layers re-queue every
+    // frame, so a frame without mask draws legitimately skips both outline
+    // passes (and stops compositing a stale mask).
+    ctx->outlineQueued = false;
     for (auto it = ctx->pendingBatches.begin(); it != ctx->pendingBatches.end();) {
         if (ctx->batchFrame - it->second.lastQueuedFrame > 120) {
             it = ctx->pendingBatches.erase(it);
@@ -3108,8 +3529,7 @@ static void kine_finish_batch_frame(KineFilamentContext* ctx)
 static void kine_destroy_built_batches(KineFilamentContext* ctx)
 {
     for (auto& [key, batch] : ctx->builtBatches) {
-        (void)key;
-        kine_destroy_persistent_batch(ctx, batch);
+        kine_destroy_persistent_batch(ctx, key, batch);
     }
     ctx->builtBatches.clear();
 }
@@ -3125,7 +3545,7 @@ static void kine_invalidate_batches(
 
     for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
         if (matches(it->first)) {
-            kine_destroy_persistent_batch(ctx, it->second);
+            kine_destroy_persistent_batch(ctx, it->first, it->second);
             it = ctx->builtBatches.erase(it);
         } else {
             ++it;
@@ -3251,6 +3671,18 @@ static Material* buildHighlightFillTopMaterial(Engine* engine) {
         .build(*engine);
 }
 
+static Material* buildOutlineMaskMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_OUTLINE_MASK_PACKAGE_KINE_OUTLINE_MASK_DATA, KINE_OUTLINE_MASK_PACKAGE_KINE_OUTLINE_MASK_SIZE)
+        .build(*engine);
+}
+
+static Material* buildOutlineCompositeMaterial(Engine* engine) {
+    return Material::Builder()
+        .package(KINE_OUTLINE_COMPOSITE_PACKAGE_KINE_OUTLINE_COMPOSITE_DATA, KINE_OUTLINE_COMPOSITE_PACKAGE_KINE_OUTLINE_COMPOSITE_SIZE)
+        .build(*engine);
+}
+
 static Texture* kine_create_uploaded_rgba_texture(
     Engine* engine,
     int width, int height,
@@ -3288,6 +3720,34 @@ static Texture* kine_create_uploaded_rgba_texture(
     tex->setImage(*engine, 0, 0, 0,
                   (uint32_t)width, (uint32_t)height, std::move(pb));
     return tex;
+}
+
+// Uploads a mesh's base colour texture, if the model carried one, and releases
+// the CPU-side pixels afterwards. The mesh keeps the GPU texture so the draw
+// path can fall back to it when the caller supplies no texture of its own.
+static void kine_attach_mesh_texture(KineFilamentContext* ctx, KineMesh* m)
+{
+    if (!ctx || !ctx->engine || !m) return;
+    if (m->baseColorImage.rgba.empty()) return;
+    // A texture can only be attached once; a reload onto an existing handle
+    // would leak the previous texture.
+    if (m->ownedTex) return;
+
+    Texture* tex = kine_create_uploaded_rgba_texture(
+        ctx->engine,
+        m->baseColorImage.width,
+        m->baseColorImage.height,
+        m->baseColorImage.width * 4,
+        m->baseColorImage.rgba.data());
+
+    // Release the decoded pixels either way. On failure there is nothing to
+    // keep them for, and holding a full RGBA image per mesh alive for the
+    // lifetime of the GPU buffer is a lot of memory to waste silently.
+    m->baseColorImage = {};
+    if (!tex) return;
+
+    m->ownedTex = new KineTexHandle();
+    m->ownedTex->tex = tex;
 }
 
 static QualityLevel kine_quality_from_int(int quality)
@@ -3512,6 +3972,8 @@ static KineFilamentContext* Kine_Filament_CreateInternal(
     ctx->hlOutlineTopMaterial = buildHighlightOutlineTopMaterial(ctx->engine);
     ctx->hlFillMaterial = buildHighlightFillMaterial(ctx->engine);
     ctx->hlFillTopMaterial = buildHighlightFillTopMaterial(ctx->engine);
+    ctx->outlineMaskMaterial = buildOutlineMaskMaterial(ctx->engine);
+    ctx->outlineCompositeMaterial = buildOutlineCompositeMaterial(ctx->engine);
     ctx->particleQuadMesh = buildParticleQuad();
     uploadMesh(ctx->particleQuadMesh, ctx->engine);
     ctx->postProcessQuadMesh = buildPostProcessQuad();
@@ -4334,6 +4796,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
     if (ctx->engine) {
         kine_destroy_post_process_pipeline(ctx);
         ctx->postProcessShader = nullptr;
+        kine_destroy_outline_pipeline(ctx);
         kine_destroy_built_batches(ctx);
         ctx->pendingBatches.clear();
 		for (KineFilamentInstanceBatch* batch : ctx->instanceBatches) {
@@ -4421,6 +4884,8 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext* ctx)
         if (ctx->hlOutlineTopMaterial) ctx->engine->destroy(ctx->hlOutlineTopMaterial);
         if (ctx->hlFillMaterial) ctx->engine->destroy(ctx->hlFillMaterial);
         if (ctx->hlFillTopMaterial) ctx->engine->destroy(ctx->hlFillTopMaterial);
+        if (ctx->outlineMaskMaterial) ctx->engine->destroy(ctx->outlineMaskMaterial);
+        if (ctx->outlineCompositeMaterial) ctx->engine->destroy(ctx->outlineCompositeMaterial);
         if (ctx->colorTextureId) {
 #if !KINE_FILAMENT_USE_VULKAN
             GLuint id = (GLuint)ctx->colorTextureId;
@@ -4523,7 +4988,23 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTim
                 ctx->width, ctx->height);
             ctx->loggedFirstFrame = true;
         }
+        // kine_update_batches latched this when a mask draw reached the batcher
+        // (or re-used a retained one); both outline passes run only then.
+        const bool outlineActive = ctx->outlineQueued && ctx->outlineMaskView && ctx->outlineView;
         Renderer::ClearOptions clearOptions;
+
+        // 1. Screen-space outline mask: selected geometry painted into the
+        // private target as flat color+alpha. Transparent black clear so the
+        // composite can key on the alpha channel; the mask view owns its own
+        // texture, so clearing here never disturbs the shared compositor.
+        if (outlineActive) {
+            clearOptions.clearColor = {0, 0, 0, 0};
+            clearOptions.clear = true;
+            clearOptions.discard = true;
+            ctx->renderer->setClearOptions(clearOptions);
+            ctx->renderer->render(ctx->outlineMaskView);
+        }
+
         clearOptions.clearColor = ctx->skyColor;
         const bool hasPostProcess =
             ctx->postProcessShader && ctx->postView && ctx->postMaterialInstance;
@@ -4533,6 +5014,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTim
         clearOptions.discard = hasPostProcess || !ctx->useFilamentOwnedCompositor;
         ctx->renderer->setClearOptions(clearOptions);
 
+        // 2. Main scene.
         ctx->renderer->render(ctx->view);
         if (hasPostProcess) {
             kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
@@ -4551,6 +5033,20 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext* ctx, float deltaTim
             clearOptions.discard = false;
             ctx->renderer->setClearOptions(clearOptions);
             ctx->renderer->render(ctx->postView);
+        }
+
+        // 3. Outline composite over the finished image (after post-processing
+        // so highlights stay crisp through user shaders). No clear: the ring
+        // blends on top of the frame the main/post passes just produced.
+        if (outlineActive && ctx->outlineCompositeMI) {
+            if (ctx->outlineCompositeMaterial->hasParameter("width")) {
+                const float ringWidth = ctx->outlineWidthPixels > 0.0f ? ctx->outlineWidthPixels : 1.0f;
+                ctx->outlineCompositeMI->setParameter("width", ringWidth);
+            }
+            clearOptions.clear = false;
+            clearOptions.discard = false;
+            ctx->renderer->setClearOptions(clearOptions);
+            ctx->renderer->render(ctx->outlineView);
         }
 #if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
         // Readback belongs only to texture-backed, offscreen contexts. Native
@@ -4659,6 +5155,12 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext* ctx, int width, int heig
         fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline after resize\n");
         ctx->postProcessShader = nullptr;
     }
+    // The mask target is viewport-sized; rebuild it like the post pipeline.
+    // Mask batches dropped by the rebuild re-queue and rebuild on the next
+    // frame's batch update.
+    if ((ctx->outlineView || ctx->outlineQueued) && !kine_build_outline_pipeline(ctx)) {
+        fprintf(stderr, "[Kine] failed to rebuild outline pipeline after resize\n");
+    }
 }
 
 KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, int width, int height)
@@ -4689,6 +5191,14 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext* ctx, int x, int y, 
     ctx->viewportHeight = clampedHeight;
 
     ctx->camera->setProjection(60.0, double(clampedWidth) / double(clampedHeight), ctx->nearPlane, ctx->farPlane);
+
+    // The outline mask target is viewport-sized; rebuild it alongside the
+    // post-process pipeline (both before the early return below).
+    if (viewportChanged && (ctx->outlineView || ctx->outlineQueued)) {
+        if (!kine_build_outline_pipeline(ctx)) {
+            fprintf(stderr, "[Kine] failed to rebuild outline pipeline for viewport\n");
+        }
+    }
 
     if (ctx->postProcessShader) {
         if (viewportChanged && !kine_build_post_process_pipeline(ctx)) {
@@ -5518,6 +6028,7 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromPath(KineFilamentContext*
     KineMesh* m = loadMeshWithAssimp(path);
     if (!m) return nullptr;
     uploadMesh(m, ctx->engine);
+    kine_attach_mesh_texture(ctx, m);
     return (KineFilamentMesh*)m;
 #else
     fprintf(stderr, "[Kine] CreateMeshFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
@@ -5547,6 +6058,7 @@ KINE_API KineFilamentMesh* Kine_Filament_CreateMeshFromMemory(
     }
 
     uploadMesh(m, ctx->engine);
+    kine_attach_mesh_texture(ctx, m);
 
     return reinterpret_cast<KineFilamentMesh*>(m);
 #else
@@ -5564,6 +6076,22 @@ KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh* mesh)
 {
     const auto* m = reinterpret_cast<const KineMesh*>(mesh);
     return m ? (int)m->bones.size() : 0;
+}
+
+// Returns the base colour texture the model file itself carried, or nil when
+// the mesh was built without one (the primitives, custom and terrain meshes).
+//
+// The draw path falls back to this when the caller supplies no texture, but
+// that fallback alone is not enough: a Part always supplies its material's
+// texture, so the fallback never fires and an imported model renders wearing
+// SmoothPlastic's albedo instead of its own. Callers that know they are
+// drawing an imported model use this to substitute the model's texture for
+// the material's.
+KINE_API KineFilamentTex* Kine_Filament_GetMeshTexture(const KineFilamentMesh* mesh)
+{
+    const auto* m = reinterpret_cast<const KineMesh*>(mesh);
+    if (!m || !m->ownedTex) return nullptr;
+    return reinterpret_cast<KineFilamentTex*>(m->ownedTex);
 }
 
 KINE_API const char* Kine_Filament_GetMeshBoneName(const KineFilamentMesh* mesh, int boneIndex)
@@ -5846,9 +6374,16 @@ KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext* ctx, KineFilamentMe
 {
     if (!ctx || !mesh) return;
     auto* m = (KineMesh*)mesh;
-    kine_invalidate_batches(ctx, m, nullptr);
+    // Batches keyed on this mesh may hold its owned texture, so that is what
+    // has to be invalidated, not just the mesh.
+    kine_invalidate_batches(ctx, m, m->ownedTex ? m->ownedTex : nullptr);
     if (m->vb) ctx->engine->destroy(m->vb);
     if (m->ib) ctx->engine->destroy(m->ib);
+    if (m->ownedTex) {
+        if (m->ownedTex->tex) ctx->engine->destroy(m->ownedTex->tex);
+        delete m->ownedTex;
+        m->ownedTex = nullptr;
+    }
     delete m;
 }
 
@@ -5933,6 +6468,14 @@ static void kine_queue_mesh(
 {
     if (!ctx || !mesh || !mat4) return;
 
+    if (kine_material_is_outline_mask(materialKind)) {
+        // Screen-space outline: mark the frame as having mask content and
+        // remember the ring width the composite should dilate by (param2, in
+        // screen pixels). Outline color/alpha ride in the per-instance color.
+        ctx->outlineQueued = true;
+        if (param2 > 0.0f) ctx->outlineWidthPixels = param2;
+    }
+
     KineBatchKey key;
     key.mesh          = (KineMesh*)mesh;
     key.shader        = shader && shader->ctx == ctx ? shader : nullptr;
@@ -5944,7 +6487,10 @@ static void kine_queue_mesh(
     key.castShadow    = castShadow;
     key.receiveShadow = receiveShadow;
     key.culling       = culling;
-    key.texture       = (KineTexHandle*)tex;
+    // Same fallback as kine_draw_item_key: a model that brought its own texture
+    // uses it unless the draw supplied one.
+    KineMesh* keyMesh = (KineMesh*)mesh;
+    key.texture       = tex ? (KineTexHandle*)tex : (keyMesh ? keyMesh->ownedTex : nullptr);
     if (outKey) {
         *outKey = key;
     }
@@ -6105,6 +6651,13 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
             auto built = ctx->builtBatches.find(key);
             if (built != ctx->builtBatches.end()) {
                 built->second.lastUsedFrame = ctx->batchFrame;
+                // Unchanged retained lists skip kine_queue_mesh entirely, so
+                // latch the outline frame flag here or a retained mask batch
+                // would stop compositing on its second frame.
+                if (kine_material_is_outline_mask(key.materialKind)) {
+                    ctx->outlineQueued = true;
+                    if (key.param2 > 0.0f) ctx->outlineWidthPixels = key.param2;
+                }
             }
         }
         return;

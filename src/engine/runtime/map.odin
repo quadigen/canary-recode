@@ -60,13 +60,21 @@ Load_Map_From_Data :: proc(
 	terrain_table: serializer.Kine_Terrain
 	defer serializer.Kine_Terrain_Destroy(&terrain_table)
 
-	root, ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data, &terrain_table)
-	if !ok || root == nil {
+	root, err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data, &terrain_table)
+	if root == nil || !serializer.Error_Is_None(err) {
 		// Leave nothing half-published behind from a stream that did not load.
 		assetstore.Clear()
-		fmt.eprintf("Could not load .kine map (expected KINE version %d): %s\n", serializer.KINE_VERSION, name)
+		// The serializer names the section, instance, or byte offset that broke,
+		// so a rejected map can be diagnosed without guessing which part of it is
+		// at fault. Cloned because fmt.tprintf allocates from the temp arena,
+		// whose memory must never be freed.
+		prefix := strings.clone(fmt.tprintf("Could not load .kine map %s: ", name))
+		defer delete(prefix)
+		serializer.Error_Print(err, prefix)
+		serializer.Error_Delete(&err)
 		return false
 	}
+	serializer.Error_Delete(&err)
 	if !classes.Is_A(root, "DataModel") {
 		classes.Destroy_Hierarchy(root)
 		fmt.eprintf(".kine map root must be a DataModel: %s\n", name)

@@ -590,6 +590,7 @@ renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
 		y,
 		width,
 		height,
+		true,
 	)
 	renderer.apply_viewport_rect(registry.renderer)
 

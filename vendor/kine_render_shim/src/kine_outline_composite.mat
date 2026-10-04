@@ -1,0 +1,44 @@
+material {
+    name : "kine_outline_composite",
+    // Fullscreen pass that turns the outline mask into an outline ring. For
+    // every pixel it samples the mask in a ring of `width`-pixel radius and
+    // takes the strongest (max alpha) sample; a pixel is outline when some
+    // neighbor carries mask alpha and the pixel itself does not. The winning
+    // sample's color+alpha pass through, so several Highlights with different
+    // OutlineColors keep their own hues. Constant pixel width at any distance,
+    // works on any topology, and never needs per-face color tricks.
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    depthCulling : false,
+    depthWrite : false,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : mask },
+        { type : float2,    name : texel },
+        { type : float,     name : width }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec2 uv = getUV0();
+        float center = texture(materialParams_mask, uv).a;
+        vec4 best = vec4(0.0);
+        float m = 0.0;
+        for (int i = 0; i < 16; i++) {
+            float a = 6.2831853 * float(i) / 16.0;
+            vec2 o = vec2(cos(a), sin(a)) * materialParams.texel * materialParams.width;
+            vec4 s = texture(materialParams_mask, uv + o);
+            if (s.a > m) {
+                m = s.a;
+                best = s;
+            }
+        }
+        // Straight (non-premultiplied) alpha output: Filament's `transparent`
+        // blending applies (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) itself, matching
+        // kine_hl_outline.mat's convention.
+        material.baseColor = vec4(best.rgb, best.a * clamp(m - center, 0.0, 1.0));
+    }
+}

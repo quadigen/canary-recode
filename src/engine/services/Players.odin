@@ -17,27 +17,24 @@ Players_Class := classes.Class_Info {
 }
 
 Player :: struct {
-	using object: classes.Object,
-	user_id:      u32,
-	character:    ^classes.CharacterModel,
-	character_added: ^signals.Signal,
+	using object:       classes.Object,
+	user_id:            u32,
+	character:          ^classes.CharacterModel,
+	character_added:    ^signals.Signal,
 	character_removing: ^signals.Signal,
-	player_scripts: ^classes.Object,
-	player_gui:     ^classes.Object,
+	player_scripts:     ^classes.Object,
+	player_gui:         ^classes.Object,
 	prepared_character: ^classes.CharacterModel,
-	move_direction: datatypes.Vector3,
-	jump_queued: bool,
-	input_sequence: u32,
-	ground_y: f32,
-	vertical_speed: f32,
-	walk_speed: f32,
-	jump_power: f32,
-	// ragdoll is true between the character's death and its respawn. The character
-	// service owns both ends of that window; the flag is what lets a character that
-	// has been unloaded not look like a fresh one still waiting to die.
-	ragdoll: bool,
-	// respawn_timer counts up from death towards CharacterService.respawn_time.
-	respawn_timer: f32,
+	move_direction:     datatypes.Vector3,
+	network_ping:       f64,
+	jump_queued:        bool,
+	input_sequence:     u32,
+	ground_y:           f32,
+	vertical_speed:     f32,
+	walk_speed:         f32,
+	jump_power:         f32,
+	ragdoll:            bool,
+	respawn_timer:      f32,
 }
 
 Players :: struct {
@@ -100,34 +97,29 @@ player_get :: proc(
 	case "JumpPower":
 		vm.PushNumber(L, f64(player.jump_power))
 	case "Character":
-		if player.character == nil || player.character.destroyed {vm.PushNil(L)} else {classes.Push_Object(L, &player.character.object)}
+		if player.character == nil ||
+		   player.character.destroyed {vm.PushNil(L)} else {classes.Push_Object(L, &player.character.object)}
 	case "PlayerScripts":
 		if player.player_scripts == nil || player.player_scripts.destroyed {
-			scripts, _ := ClientScripts_Ensure_Player_Containers(
-				player.signal_registry,
-				L,
-				player,
-			)
+			scripts, _ := ClientScripts_Ensure_Player_Containers(player.signal_registry, L, player)
 			if scripts == nil {vm.PushNil(L); break}
 		}
 		classes.Push_Object(L, player.player_scripts)
 	case "PlayerGui":
 		if player.player_gui == nil || player.player_gui.destroyed {
-			_, gui := ClientScripts_Ensure_Player_Containers(
-				player.signal_registry,
-				L,
-				player,
-			)
+			_, gui := ClientScripts_Ensure_Player_Containers(player.signal_registry, L, player)
 			if gui == nil {vm.PushNil(L); break}
 		}
 		classes.Push_Object(L, player.player_gui)
 	case "CharacterAdded":
-		if player.character_added == nil {player.character_added = signals.Create(player.signal_registry.signal_registry)}
+		if player.character_added ==
+		   nil {player.character_added = signals.Create(player.signal_registry.signal_registry)}
 		signals.Push(L, player.character_added)
 	case "CharacterRemoving":
-		if player.character_removing == nil {player.character_removing = signals.Create(player.signal_registry.signal_registry)}
+		if player.character_removing ==
+		   nil {player.character_removing = signals.Create(player.signal_registry.signal_registry)}
 		signals.Push(L, player.character_removing)
-	case "LoadCharacter", "GetMouse":
+	case "LoadCharacter", "GetMouse", "GetNetworkPing":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -135,17 +127,27 @@ player_get :: proc(
 	return true
 }
 
-player_set :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string, value_index: int) -> bool {
+player_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
 	player := cast(^Player)object
 	switch key {
 	case "WalkSpeed":
 		value := vm.ArgNumber(L, value_index)
-		if value < 0 || value > 100 {_ = vm.RaiseError(L, "WalkSpeed must be between 0 and 100"); return true}
+		if value < 0 ||
+		   value > 100 {_ = vm.RaiseError(L, "WalkSpeed must be between 0 and 100"); return true}
 		player.walk_speed = f32(value)
-		if controller := player_controller(player); controller != nil {controller.walk_speed = f32(value)}
+		if controller := player_controller(player);
+		   controller != nil {controller.walk_speed = f32(value)}
 	case "JumpPower":
 		value := vm.ArgNumber(L, value_index)
-		if value < 0 || value > 100 {_ = vm.RaiseError(L, "JumpPower must be between 0 and 100"); return true}
+		if value < 0 ||
+		   value > 100 {_ = vm.RaiseError(L, "JumpPower must be between 0 and 100"); return true}
 		player.jump_power = f32(value)
 		if controller := player_controller(player); controller != nil {
 			controller.jump_height = f32(value * value / (2 * classes.CHARACTER_GRAVITY))
@@ -174,14 +176,26 @@ Player_Mouse :: proc(player: ^Player) -> ^Mouse {
 	return User_Input_Service_Mouse(cast(^UserInputService)input_object)
 }
 
-player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
+player_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	player := cast(^Player)object
 	switch method {
 	case "LoadCharacter":
 		when ODIN_OS == .JS {
 			vm.PushNil(L)
 		} else {
-			service := cast(^CharacterService)DataModel_Get_Service(cast(^DataModel)player.signal_registry.data_model, "CharacterService")
+			service := cast(^CharacterService)DataModel_Get_Service(
+				cast(^DataModel)player.signal_registry.data_model,
+				"CharacterService",
+			)
 			model := CharacterService_Load(service, player)
 			if model == nil {vm.PushNil(L)} else {classes.Push_Object(L, &model.object)}
 		}
@@ -189,19 +203,26 @@ player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry
 	case "GetMouse":
 		Mouse_Push(L, Player_Mouse(player))
 		return 1, true
+	case "GetNetworkPing":
+		vm.PushNumber(L, player.network_ping)
+		return 1, true
 	case "Teleport":
 		if player.character == nil || player.character.destroyed {
 			return vm.RaiseError(L, "Player:Teleport requires a loaded character"), true
 		}
 		root := classes.CharacterModel_Root(player.character)
-		if root == nil {return vm.RaiseError(L, "Player:Teleport requires a HumanoidRootPart"), true}
+		if root ==
+		   nil {return vm.RaiseError(L, "Player:Teleport requires a HumanoidRootPart"), true}
 		frame := datatypes.Arg_CFrame(L, 2, datatype_registry)
 		previous := root.cframe
 		root.cframe = frame
 		root.position = datatypes.Vector3{frame.x, frame.y, frame.z}
 		character_delta := datatypes.CFrame_Mul_CFrame(frame, datatypes.CFrame_Inverse(previous))
 		for child in player.character.children {
-			if child == nil || child.destroyed || child == &root.object || !classes.Is_A(child, "Part") {continue}
+			if child == nil ||
+			   child.destroyed ||
+			   child == &root.object ||
+			   !classes.Is_A(child, "Part") {continue}
 			part := cast(^classes.Part)child
 			part.cframe = datatypes.CFrame_Mul_CFrame(character_delta, part.cframe)
 			part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
@@ -211,13 +232,23 @@ player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry
 			if controller := player_controller(player); controller != nil {
 				controller.vertical_speed = 0
 				controller.coyote_time = 0
-				if rotation := cast(^classes.RotationController)classes.CharacterController_Find(controller, "RotationController"); rotation != nil {
+				if rotation := cast(^classes.RotationController)classes.CharacterController_Find(
+					   controller,
+					   "RotationController",
+				   ); rotation != nil {
 					rotation.yaw = math.to_degrees(yaw)
 					rotation.target_yaw = rotation.yaw
 				}
-				if collision := cast(^classes.CollisionController)classes.CharacterController_Find(controller, "CollisionController"); collision != nil {
-					physics := cast(^Physics)DataModel_Get_Service(cast(^DataModel)player.signal_registry.data_model, "Physics")
-					if physics != nil {Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{frame.x, frame.y, frame.z}, math.to_degrees(yaw))}
+				if collision := cast(^classes.CollisionController)classes.CharacterController_Find(
+					   controller,
+					   "CollisionController",
+				   ); collision != nil {
+					physics := cast(^Physics)DataModel_Get_Service(
+						cast(^DataModel)player.signal_registry.data_model,
+						"Physics",
+					)
+					if physics !=
+					   nil {Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{frame.x, frame.y, frame.z}, math.to_degrees(yaw))}
 				}
 			}
 			player.vertical_speed = 0
@@ -226,18 +257,9 @@ player_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry
 		vm.PushBoolean(L, true)
 		return 1, true
 	case "ApplyImpulse":
-		// Roblox keeps this as a legacy way to push a character around. The
-		// character is a kinematic capsule rather than a solver body, so the
-		// impulse becomes character velocity here instead of being handed to Jolt.
 		impulse := datatypes.Arg_Vector3(L, 2)
-		if !classes.CharacterController_Apply_Impulse(
-			   player_controller(player),
-			   impulse,
-		   ) {
-			return vm.RaiseError(
-				L,
-				"Player:ApplyImpulse requires a loaded character",
-			), true
+		if !classes.CharacterController_Apply_Impulse(player_controller(player), impulse) {
+			return vm.RaiseError(L, "Player:ApplyImpulse requires a loaded character"), true
 		}
 		return 0, true
 
@@ -349,8 +371,12 @@ Players_Forget_Client_Container :: proc(object: ^classes.Object) {
 Players_Remove :: proc(service: ^Players, L: ^vm.State, player: ^Player) {
 	if service == nil || player == nil || player.destroyed {return}
 	when ODIN_OS != .JS {
-		character_service := cast(^CharacterService)DataModel_Get_Service(service.data_model, "CharacterService")
-		if character_service != nil && player.character != nil {CharacterService_Unload(character_service, player)}
+		character_service := cast(^CharacterService)DataModel_Get_Service(
+			service.data_model,
+			"CharacterService",
+		)
+		if character_service != nil &&
+		   player.character != nil {CharacterService_Unload(character_service, player)}
 	}
 	if service.player_removing != nil {
 		classes.Push_Object(L, &player.object)
@@ -381,5 +407,8 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = players_get,
 		namecall = players_namecall,
+		events = []string{"PlayerAdded", "PlayerRemoving"},
+		methods = []string{"GetPlayers"},
+		properties = []string{"LocalPlayer"},
 	)
 }

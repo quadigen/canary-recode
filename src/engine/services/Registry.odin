@@ -1,14 +1,14 @@
 package services
 
-import "core:fmt"
-import sdl3 "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
+import sdl3 "../platform"
+import profiling "../profiling"
 import signals "../signals"
 import target "../target"
-import vm "../vm"
 import tracy "../util/odin-tracy"
-import profiling "../profiling"
+import vm "../vm"
+import "core:fmt"
 
 Service_Descriptor :: struct {
 	name:         string,
@@ -22,6 +22,16 @@ Service_Descriptor :: struct {
 Registry :: struct {
 	classes:         ^classes.Registry,
 	services:        [dynamic]Service_Descriptor,
+	// service_index maps a service name to its position in `services`, so
+	// Find_Service is a hash lookup instead of a walk over every registered
+	// service. Physics alone asks for Workspace, Terrain, ReplicatorService and
+	// Players once per Part per frame, which made the walk a per-frame cost
+	// proportional to the whole service list times the Part count.
+	//
+	// It holds an index rather than a pointer on purpose: `services` is
+	// append-only after registration, so an index stays valid where a pointer
+	// would dangle on the next Register_Service.
+	service_index:   map[string]int,
 	data_model:      ^DataModel,
 	vm_state:        ^vm.VM,
 	signal_registry: ^signals.Registry,
@@ -36,36 +46,42 @@ Registry_Init :: proc(
 	signal_registry: ^signals.Registry = nil,
 	mode: target.Mode = target.current_mode,
 ) -> Registry {
-	return Registry{
+	return Registry {
 		classes = class_registry,
 		signal_registry = signal_registry,
 		mode = mode,
+		service_index = make(map[string]int),
 	}
 }
 
 Register_Service :: proc(registry: ^Registry, name, class_name: string, global_name: string = "") {
 	assert(registry != nil)
 	assert(Find_Service(registry, name) == nil)
-	append(&registry.services, Service_Descriptor{
-		name        = name,
-		class_name  = class_name,
-		global_name = global_name,
-	})
+	// Keyed before the append so that the index and the array cannot disagree if
+	// the append reallocates.
+	registry.service_index[name] = len(registry.services)
+	append(
+		&registry.services,
+		Service_Descriptor{name = name, class_name = class_name, global_name = global_name},
+	)
 }
 
 Find_Service :: proc(registry: ^Registry, name: string) -> ^Service_Descriptor {
 	if registry == nil {
 		return nil
 	}
-	for service, index in registry.services {
-		if service.name == name {
-			return &registry.services[index]
-		}
+	index, ok := registry.service_index[name]
+	if !ok || index < 0 || index >= len(registry.services) {
+		return nil
 	}
-	return nil
+	return &registry.services[index]
 }
 
-Set_Service_Security :: proc(registry: ^Registry, name: string, requirement: vm.Security_Requirement) -> bool {
+Set_Service_Security :: proc(
+	registry: ^Registry,
+	name: string,
+	requirement: vm.Security_Requirement,
+) -> bool {
 	descriptor := Find_Service(registry, name)
 	if descriptor == nil {
 		return false
@@ -81,7 +97,14 @@ Service_Access_Allowed :: proc(L: ^vm.State, descriptor: ^Service_Descriptor) ->
 	return descriptor != nil && vm.ThreadMeetsSecurityRequirement(L, descriptor.security)
 }
 
-Get_Service_For_Thread :: proc(registry: ^Registry, L: ^vm.State, name: string) -> (^classes.Object, bool) {
+Get_Service_For_Thread :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	name: string,
+) -> (
+	^classes.Object,
+	bool,
+) {
 	descriptor := Find_Service(registry, name)
 	if descriptor == nil || !Service_Access_Allowed(L, descriptor) {
 		return nil, false
@@ -91,14 +114,19 @@ Get_Service_For_Thread :: proc(registry: ^Registry, L: ^vm.State, name: string) 
 
 Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	descriptor := Find_Service(registry, name)
-	if descriptor == nil || registry.vm_state == nil { return nil }
-	if descriptor.object != nil { return descriptor.object }
-	if descriptor.constructing { return nil }
+	if descriptor == nil || registry.vm_state == nil {return nil}
+	if descriptor.object != nil {return descriptor.object}
+	if descriptor.constructing {return nil}
 
 	descriptor.constructing = true
 	defer descriptor.constructing = false
-	object, ok := classes.Push_New(registry.classes, registry.vm_state, descriptor.class_name, false)
-	if !ok || object == nil { return nil }
+	object, ok := classes.Push_New(
+		registry.classes,
+		registry.vm_state,
+		descriptor.class_name,
+		false,
+	)
+	if !ok || object == nil {return nil}
 	classes.Set_Name(object, descriptor.name)
 	object.security_requirement = descriptor.security
 	descriptor.object = object
@@ -107,7 +135,7 @@ Ensure_Service :: proc(registry: ^Registry, name: string) -> ^classes.Object {
 	return object
 }
 
-MAP_CONTENT_SERVICES := [?]string{
+MAP_CONTENT_SERVICES := [?]string {
 	"Workspace",
 	"ReplicatedFirst",
 	"ReplicatedStorage",
@@ -133,36 +161,42 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
-	when ODIN_OS != .JS { Register_CharacterService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_CharacterService_Class(registry.classes)}
 	Register_CollectionService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ContentProvider_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_EditorService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ContentProvider_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_DialogService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_EditorService_Class(registry.classes)}
+	Register_EncodingService_Class(registry.classes)
 	Register_ExampleService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ExporterService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_ExportService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_HttpService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ExporterService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_ExportService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_HttpService_Class(registry.classes)}
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
+	Register_DataStoreService_Class(registry.classes)
+	Register_MemoryStoreService_Class(registry.classes)
+	Register_MessagingService_Class(registry.classes)
+	Register_MarketplaceService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
 	Register_LuauService_Class(registry.classes)
 	Register_Mouse_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
 	Register_Path_Class(registry.classes)
 	Register_PathfindingService_Class(registry.classes)
+	Register_PhysicsService_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
 	Register_PlayerGui_Class(registry.classes)
 	Register_Players_Class(registry.classes)
 	Register_PlayerScripts_Class(registry.classes)
-	when ODIN_OS != .JS { Register_PlaytestService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_PlaytestService_Class(registry.classes)}
 	Register_Plugin_Class(registry.classes)
-	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_PluginMarketplace_Class(registry.classes)}
 	Register_ProfilerService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_Project_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_Project_Class(registry.classes)}
 	Register_ReflectionService_Class(registry.classes)
 	Register_ReplicatedFirst_Class(registry.classes)
 	Register_ReplicatedStorage_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ReplicatorService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ReplicatorService_Class(registry.classes)}
 	Register_RunService_Class(registry.classes)
 	Register_ScriptContext_Class(registry.classes)
 	Register_Selection_Class(registry.classes)
@@ -174,43 +208,53 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_StarterPack_Class(registry.classes)
 	Register_StarterPlayer_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
+	Register_Team_Class(registry.classes)
+	Register_Teams_Class(registry.classes)
+	Register_Debris_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
-	when ODIN_OS != .JS { Register_TemplateService_Class(registry.classes) }
+	Register_TeleportService_Class(registry.classes)
+	when ODIN_OS != .JS {Register_TemplateService_Class(registry.classes)}
 	Register_Terrain_Class(registry.classes)
 	Register_TextService_Class(registry.classes)
 	Register_Tween_Class(registry.classes)
 	Register_TweenService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_UpdateService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_UpdateService_Class(registry.classes)}
 	Register_UserInputService_Class(registry.classes)
 	Register_WebviewService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
 	// wire:end service-classes
 	// wire:begin services
-	when ODIN_OS != .JS { Register_Service(registry, "CharacterService", "CharacterService") }
+	when ODIN_OS != .JS {Register_Service(registry, "CharacterService", "CharacterService")}
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
-	when ODIN_OS != .JS { Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider") }
-	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService") }
-	when ODIN_OS != .JS { Register_Service(registry, "EditorService", "EditorService", "EditorService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider")}
+	Register_Service(registry, "DataStoreService", "DataStoreService")
+	when ODIN_OS != .JS {Register_Service(registry, "DialogService", "DialogService")}
+	when ODIN_OS != .JS {Register_Service(registry, "EditorService", "EditorService", "EditorService")}
+	Register_Service(registry, "EncodingService", "EncodingService")
 	Register_Service(registry, "ExampleService", "ExampleService", "exampleService")
-	when ODIN_OS != .JS { Register_Service(registry, "ExporterService", "ExporterService", "ExporterService") }
-	when ODIN_OS != .JS { Register_Service(registry, "ExportService", "ExportService", "ExportService") }
-	when ODIN_OS != .JS { Register_Service(registry, "HttpService", "HttpService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ExporterService", "ExporterService", "ExporterService")}
+	when ODIN_OS != .JS {Register_Service(registry, "ExportService", "ExportService", "ExportService")}
+	when ODIN_OS != .JS {Register_Service(registry, "HttpService", "HttpService")}
 	Register_Service(registry, "Lighting", "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
+	Register_Service(registry, "MessagingService", "MessagingService")
+	Register_Service(registry, "MarketplaceService", "MarketplaceService")
+	Register_Service(registry, "MemoryStoreService", "MemoryStoreService")
 	Register_Service(registry, "LogService", "LogService")
 	Register_Service(registry, "LuauService", "LuauService")
 	Register_Service(registry, "PathfindingService", "PathfindingService", "PathfindingService")
 	Register_Service(registry, "Physics", "Physics")
+	Register_Service(registry, "PhysicsService", "PhysicsService")
 	Register_Service(registry, "Players", "Players")
-	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService") }
+	when ODIN_OS != .JS {Register_Service(registry, "PlaytestService", "PlaytestService")}
 	Register_Service(registry, "Plugin", "Plugin", "Plugin")
-	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace") }
+	when ODIN_OS != .JS {Register_Service(registry, "PluginMarketplace", "PluginMarketplace")}
 	Register_Service(registry, "ProfilerService", "ProfilerService", "profilerService")
-	when ODIN_OS != .JS { Register_Service(registry, "Project", "Project") }
+	when ODIN_OS != .JS {Register_Service(registry, "Project", "Project")}
 	Register_Service(registry, "ReflectionService", "ReflectionService")
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
 	Register_Service(registry, "ReplicatedStorage", "ReplicatedStorage", "ReplicatedStorage")
-	when ODIN_OS != .JS { Register_Service(registry, "ReplicatorService", "ReplicatorService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ReplicatorService", "ReplicatorService")}
 	Register_Service(registry, "RunService", "RunService")
 	Register_Service(registry, "ScriptContext", "ScriptContext")
 	Register_Service(registry, "Selection", "Selection", "Selection")
@@ -221,46 +265,51 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "StarterPack", "StarterPack", "StarterPack")
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService", "StudioThemeService")
+	Register_Service(registry, "Teams", "Teams")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
-	when ODIN_OS != .JS { Register_Service(registry, "TemplateService", "TemplateService", "TemplateService") }
+	when ODIN_OS != .JS {Register_Service(registry, "TemplateService", "TemplateService", "TemplateService")}
+	Register_Service(registry, "TeleportService", "TeleportService")
 	Register_Service(registry, "Terrain", "Terrain", "terrain")
+	Register_Service(registry, "Debris", "Debris")
 	Register_Service(registry, "TextService", "TextService", "TextService")
 	Register_Service(registry, "TweenService", "TweenService")
-	when ODIN_OS != .JS { Register_Service(registry, "UpdateService", "UpdateService") }
+	when ODIN_OS != .JS {Register_Service(registry, "UpdateService", "UpdateService")}
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "WebviewService", "WebviewService", "WebviewService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	// wire:end services
 	Register_Service(registry, "CoreGui", "StarterGui")
 
-	assert(Set_Service_Security(
-		registry,
-		"ScriptContext",
-		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_CONTEXT),
-	))
-	assert(Set_Service_Security(
-		registry,
-		"StudioThemeService",
-		vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
-	))
+	assert(
+		Set_Service_Security(
+			registry,
+			"ScriptContext",
+			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_CONTEXT),
+		),
+	)
 	when ODIN_OS != .JS {
-		assert(Set_Service_Security(
-			registry,
-			"PlaytestService",
-			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
-		))
-		assert(Set_Service_Security(
-			registry,
-			"ExportService",
-			vm.SecurityRequirementFromValue(datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS),
-		))
+		assert(
+			Set_Service_Security(
+				registry,
+				"PlaytestService",
+				vm.SecurityRequirementFromValue(
+					datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+				),
+			),
+		)
+		assert(
+			Set_Service_Security(
+				registry,
+				"ExportService",
+				vm.SecurityRequirementFromValue(
+					datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+				),
+			),
+		)
 	}
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
-	// Idempotent: the environment constructor already installs these, but a
-	// registry assembled any other way still needs them before a script can read a
-	// Part's velocity.
 	Install_Part_Body_Access(registry)
 	when ODIN_OS != .JS {
 		replicator := Find_Service(registry, "ReplicatorService")
@@ -326,50 +375,56 @@ Set_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
 }
 
 Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
-	if registry == nil || renderer == nil || renderer.Filament == nil { return }
+	if registry == nil || renderer == nil || renderer.Filament == nil {return}
 	{
 		tracy.ZoneNC("Lighting Apply", 0xC586C0)
 		z := profiling.Begin("Lighting Apply", 0xC586C0)
 		lighting := Find_Service(registry, "Lighting")
-		if lighting != nil && lighting.object != nil { Lighting_Apply(cast(^Lighting)lighting.object, renderer) }
+		if lighting != nil &&
+		   lighting.object != nil {Lighting_Apply(cast(^Lighting)lighting.object, renderer)}
 	}
 	workspace_service := Find_Service(registry, "Workspace")
 	terrain_service := Find_Service(registry, "Terrain")
-	if workspace_service == nil || workspace_service.object == nil { return }
-	if terrain_service == nil || terrain_service.object == nil { return }
+	if workspace_service == nil || workspace_service.object == nil {return}
+	if terrain_service == nil || terrain_service.object == nil {return}
 	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
 	Terrain_Prepare_3D(cast(^Terrain)terrain_service.object, renderer)
 }
 
-Render_3D :: proc(registry: ^Registry, L: ^vm.State, renderer: ^classes.Renderer_Object, delta_time: f32) {
-	if registry == nil || renderer == nil || renderer.Filament == nil { return }
+Render_3D :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	renderer: ^classes.Renderer_Object,
+	delta_time: f32,
+) {
+	if registry == nil || renderer == nil || renderer.Filament == nil {return}
 	workspace_service := Find_Service(registry, "Workspace")
 	terrain_service := Find_Service(registry, "Terrain")
-	if workspace_service == nil || workspace_service.object == nil { return }
-	ctx := classes.Class_Step_Context{L = L, delta_time = delta_time, renderer = renderer}
+	if workspace_service == nil || workspace_service.object == nil {return}
+	ctx := classes.Class_Step_Context {
+		L          = L,
+		delta_time = delta_time,
+		renderer   = renderer,
+	}
 	Terrain_Render_3D(cast(^Terrain)terrain_service.object, ctx.renderer)
 	workspace_render_3d(workspace_service.object, &ctx)
 }
 
-Resize :: proc(
-    registry: ^Registry,
-    datatype_registry: ^datatypes.Registry,
-    width, height: i32,
-) {
-    if registry == nil ||
-       registry.vm_state == nil ||
-       registry.vm_state.L == nil ||
-       datatype_registry == nil {
-        return
-    }
+Resize :: proc(registry: ^Registry, datatype_registry: ^datatypes.Registry, width, height: i32) {
+	if registry == nil ||
+	   registry.vm_state == nil ||
+	   registry.vm_state.L == nil ||
+	   datatype_registry == nil {
+		return
+	}
 
-    StudioThemeService_Update_Layout(
-        registry,
-        registry.vm_state.L,
-        datatype_registry,
-        width,
-        height,
-    )
+	StudioThemeService_Update_Layout(
+		registry,
+		registry.vm_state.L,
+		datatype_registry,
+		width,
+		height,
+	)
 }
 
 Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
@@ -395,11 +450,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 			network_ownership_namecall,
 			registry.data_model,
 		)
-		classes.Set_Remote_Call(
-			registry.classes,
-			remote_call_dispatch,
-			registry.data_model,
-		)
+		classes.Set_Remote_Call(registry.classes, remote_call_dispatch, registry.data_model)
 	}
 	vm.Pop(vm_state.L)
 
@@ -411,7 +462,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	assert(camera_ok && camera != nil)
 	classes.Set_Parent(camera, &workspace.object)
 	workspace.current_camera = cast(^classes.Camera)camera
-	if registry.classes.renderer != nil { registry.classes.renderer.ActiveCamera = camera }
+	if registry.classes.renderer != nil {registry.classes.renderer.ActiveCamera = camera}
 	vm.Pop(vm_state.L)
 	task_scheduler := Find_Service(registry, "TaskScheduler")
 	assert(task_scheduler != nil && task_scheduler.object != nil)
@@ -436,12 +487,17 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	}
 	when ODIN_OS != .JS {
 		replicator := Find_Service(registry, "ReplicatorService")
-		if registry.vm_state != nil && registry.vm_state.L != nil && replicator != nil && replicator.object != nil {
+		if registry.vm_state != nil &&
+		   registry.vm_state.L != nil &&
+		   replicator != nil &&
+		   replicator.object != nil {
 			replication_stop(cast(^ReplicatorService)replicator.object)
 		}
 	}
 	delete(registry.services)
 	registry.services = nil
+	delete(registry.service_index)
+	registry.service_index = nil
 	registry.data_model = nil
 	registry.vm_state = nil
 }
@@ -455,7 +511,7 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 	}
 	registry := cast(^Registry)ctx
 	for &descriptor in registry.services {
-		if descriptor.object == object { descriptor.object = nil; break }
+		if descriptor.object == object {descriptor.object = nil; break}
 	}
 
 	// A destroyed script must not leave a thread behind: cancel any pending

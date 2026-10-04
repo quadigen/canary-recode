@@ -3,7 +3,6 @@
 package serializer
 
 import "core:c"
-import "core:fmt"
 import "core:os"
 import assetstore "../assetstore"
 import classes "../classes"
@@ -30,7 +29,7 @@ is_zstd_frame :: proc(data: []u8) -> bool {
 	return data[0] == bytes[0] && data[1] == bytes[1] && data[2] == bytes[2] && data[3] == bytes[3]
 }
 
-compress_kine :: proc(data: []u8) -> ([]u8, bool) {
+compress_kine :: proc(data: []u8) -> ([]u8, Error) {
 	bound := kineffi.ZSTD_compressBound(c.size_t(len(data)))
 	compressed := make([]u8, int(bound))
 
@@ -43,24 +42,39 @@ compress_kine :: proc(data: []u8) -> ([]u8, bool) {
 	)
 	if kineffi.ZSTD_isError(written) != 0 {
 		delete(compressed)
-		return nil, false
+		return nil, Error_Make(
+			.Compress_Failed,
+			-1,
+			"zstd could not compress %d bytes: %s",
+			len(data),
+			string(kineffi.ZSTD_getErrorName(written)),
+		)
 	}
 
-	return compressed[:int(written)], true
+	return compressed[:int(written)], Error_None
 }
 
 // decompress_kine expands a zstd frame. It refuses anything that would exceed
 // KINE_MAX_STREAM_BYTES rather than trusting a size the frame claims for itself.
-decompress_kine :: proc(data: []u8) -> ([]u8, bool) {
+decompress_kine :: proc(data: []u8) -> ([]u8, Error) {
 	content_size := kineffi.ZSTD_getFrameContentSize(raw_data(data), c.size_t(len(data)))
 	if content_size == ~u64(0) || content_size == ~u64(1) {
 		// The frame does not record its size, so there is nothing to bound the
 		// allocation against. Refuse rather than decompress untrusted input blind.
-		return nil, false
+		return nil, Error_Make(
+			.Stream_Too_Large,
+			0,
+			"the zstd frame records no decompressed size, so there is nothing to bound the allocation against",
+		)
 	}
 	if content_size > KINE_MAX_STREAM_BYTES {
-		fmt.eprintf("kine: stream claims %d bytes, over the %d byte limit\n", content_size, KINE_MAX_STREAM_BYTES)
-		return nil, false
+		return nil, Error_Make(
+			.Stream_Too_Large,
+			0,
+			"the zstd frame claims %d decompressed bytes, over the %d byte limit",
+			content_size,
+			KINE_MAX_STREAM_BYTES,
+		)
 	}
 
 	decompressed := make([]u8, int(content_size))
@@ -71,17 +85,26 @@ decompress_kine :: proc(data: []u8) -> ([]u8, bool) {
 		c.size_t(len(data)),
 	)
 	if kineffi.ZSTD_isError(written) != 0 {
-		fmt.eprintf("kine: decompression failed: %s\n", kineffi.ZSTD_getErrorName(written))
 		delete(decompressed)
-		return nil, false
+		return nil, Error_Make(
+			.Decompress_Failed,
+			0,
+			"zstd could not expand the %d byte frame: %s",
+			len(data),
+			string(kineffi.ZSTD_getErrorName(written)),
+		)
 	}
 
-	return decompressed[:int(written)], true
+	return decompressed[:int(written)], Error_None
 }
 
 // Serialize_To_File writes an Instance hierarchy to a .KINE file on disk.
 // exclude_child (optional) lets the caller strip selected children and their
 // subtrees from the written tree (for example editor-only services).
+//
+// The returned Error distinguishes a stream that could not be built from a file
+// that could not be written, which are very different problems for whoever is
+// trying to save a map.
 Serialize_To_File :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
@@ -89,10 +112,15 @@ Serialize_To_File :: proc(
 	path: string,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
 	terrain: ^Kine_Terrain = nil,
-) -> bool {
-	data, ok := Serialize(registry, L, object, exclude_child, terrain)
-	if !ok {
-		return false
+) -> Error {
+	if path == "" {
+		return Error_Make(.Invalid_Argument, -1, "the destination path is empty")
+	}
+
+	data, err := Serialize(registry, L, object, exclude_child, terrain)
+	defer Error_Delete(&err)
+	if !Error_Is_None(err) {
+		return Error_Take(&err)
 	}
 	defer delete(data)
 
@@ -100,15 +128,36 @@ Serialize_To_File :: proc(
 	// fails, or does not actually help, the raw stream is still a valid .KINE
 	// and the reader detects it by its KINE header. Losing compression must
 	// never cost the author their save.
-	compressed, compress_ok := compress_kine(data)
-	if compress_ok {
+	compressed, compress_err := compress_kine(data)
+	defer Error_Delete(&compress_err)
+	if Error_Is_None(compress_err) && len(compressed) < len(data) {
 		defer delete(compressed)
-		if len(compressed) < len(data) {
-			return os.write_entire_file(path, compressed) == nil
+		write_err := os.write_entire_file(path, compressed)
+		if write_err != nil {
+			return Error_Make(
+				.File_Write_Failed,
+				-1,
+				"could not write %d compressed bytes to %s: %v",
+				len(compressed),
+				path,
+				write_err,
+			)
 		}
+		return Error_None
 	}
 
-	return os.write_entire_file(path, data) == nil
+	write_err := os.write_entire_file(path, data)
+	if write_err != nil {
+		return Error_Make(
+			.File_Write_Failed,
+			-1,
+			"could not write %d bytes to %s: %v",
+			len(data),
+			path,
+			write_err,
+		)
+	}
+	return Error_None
 }
 
 // Deserialize_From_Data restores an Instance hierarchy from an in-memory .KINE
@@ -122,11 +171,16 @@ Deserialize_From_Data :: proc(
 	parent: ^classes.Object,
 	data: []u8,
 	terrain: ^Kine_Terrain = nil,
-) -> (^classes.Object, bool) {
+) -> (^classes.Object, Error) {
+	if data == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the stream is nil")
+	}
+
 	if is_zstd_frame(data) {
-		decompressed, ok := decompress_kine(data)
-		if !ok {
-			return nil, false
+		decompressed, err := decompress_kine(data)
+		defer Error_Delete(&err)
+		if !Error_Is_None(err) {
+			return nil, Error_Take(&err)
 		}
 		defer delete(decompressed)
 
@@ -144,10 +198,20 @@ Deserialize_From_File :: proc(
 	parent: ^classes.Object,
 	path: string,
 	terrain: ^Kine_Terrain = nil,
-) -> (^classes.Object, bool) {
+) -> (^classes.Object, Error) {
+	if path == "" {
+		return nil, Error_Make(.Invalid_Argument, -1, "the source path is empty")
+	}
+
 	data, err := os.read_entire_file(path, context.allocator)
 	if err != nil {
-		return nil, false
+		return nil, Error_Make(
+			.File_Read_Failed,
+			-1,
+			"could not read %s: %v",
+			path,
+			err,
+		)
 	}
 	defer delete(data)
 

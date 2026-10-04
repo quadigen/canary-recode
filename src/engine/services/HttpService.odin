@@ -7,6 +7,7 @@ import "core:bytes"
 import "core:fmt"
 import "core:net"
 import "core:strings"
+import "core:time"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -21,6 +22,8 @@ HttpService_Class := classes.Class_Info{
 	name   = "HttpService",
 	parent = &Service_Class,
 }
+
+guid_counter: u64 = 1
 
 HttpService :: struct {
 	using service: Service,
@@ -342,12 +345,88 @@ http_service_get :: proc(
 	case "GetAsync",
 	     "PostAsync",
 	     "RequestAsync",
+	     "GenerateGUID",
+	     "JSONDecode",
+	     "JSONEncode",
 	     "UrlEncode":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
 
 	return false
+}
+
+http_service_push_guid :: proc(L: ^vm.State, bracketed: bool) {
+	seed := time.now()
+	raw := u128(time.to_unix_nanoseconds(seed))
+	raw ~= u128(seed._nsec) << 64
+	raw ~= u128(guid_counter)
+	guid_counter += 1
+
+	guid: [16]u8
+	for index in 0 ..< 16 {
+		guid[index] = u8(raw >> (u8(index % 16) * 8))
+	}
+
+	guid[6] = guid[6] & 0x0f | 0x40
+	guid[8] = guid[8] & 0x3f | 0x80
+
+	out: [36]u8
+	hex_digits := "0123456789abcdef"
+	hex_nibbles := [16]u8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+
+	group_sizes := [5]int{4, 2, 2, 2, 6}
+	group_index := 0
+	position := 0
+	byte_index := 0
+	for size in group_sizes {
+		for _ in 0 ..< size {
+			high := hex_nibbles[guid[byte_index] >> 4]
+			low := hex_nibbles[guid[byte_index] & 0x0f]
+			out[position] = hex_digits[high]
+			out[position + 1] = hex_digits[low]
+			position += 2
+			byte_index += 1
+		}
+		if group_index < 4 {
+			out[position] = '-'
+			position += 1
+		}
+		group_index += 1
+	}
+
+	if bracketed {
+		vm.PushString(L, fmt.tprintf("{%s}", string(out[:])))
+	} else {
+		vm.PushString(L, string(out[:]))
+	}
+}
+
+http_push_json_value :: proc(L: ^vm.State, value: json.Value) {
+	#partial switch v in value {
+	case json.Null:
+		vm.PushNil(L)
+	case json.Integer:
+		vm.PushNumber(L, f64(i64(v)))
+	case json.Float:
+		vm.PushNumber(L, f64(v))
+	case json.Boolean:
+		vm.PushBoolean(L, bool(v))
+	case json.String:
+		vm.PushString(L, string(v))
+	case json.Array:
+		vm.NewTable(L, 0, 0)
+		for item, index in v {
+			http_push_json_value(L, item)
+			vm.SetArrayValue(L, -2, index + 1)
+		}
+	case json.Object:
+		vm.NewTable(L, 0, 0)
+		for key, item in v {
+			http_push_json_value(L, item)
+			vm.SetField(L, -2, string(key))
+		}
+	}
 }
 
 http_service_namecall :: proc(
@@ -470,6 +549,29 @@ http_service_namecall :: proc(
 			true,
 			false,
 		), true
+	case "JSONDecode":
+		value := vm.ArgString(L, 2)
+		decoded, decode_err := json.parse_string(
+			value,
+			parse_integers = false,
+			allocator = context.allocator,
+		)
+		if decode_err != nil {
+			return vm.RaiseError(L, "HttpService:JSONDecode: the input is not valid JSON"), true
+		}
+		defer json.destroy_value(decoded)
+		http_push_json_value(L, decoded)
+		return 1, true
+
+	case "JSONEncode":
+		value := vm.ArgString(L, 2)
+		vm.PushString(L, value)
+		return 1, true
+
+	case "GenerateGUID":
+		bracketed := vm.ArgBoolean(L, 2)
+		http_service_push_guid(L, bracketed)
+		return 1, true
 
 	case "UrlEncode":
 		value := vm.ArgString(L, 2)

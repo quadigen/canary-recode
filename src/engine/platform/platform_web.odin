@@ -139,6 +139,14 @@ GetWindowSizeInPixels :: proc(value: ^Window, width, height: ^i32) -> bool {
 	if height != nil { height^ = host_height() }
 	return true
 }
+// The browser canvas backing store and its CSS size are kept in sync by the
+// host, so logical and pixel window sizes coincide and the mouse needs no
+// density correction.
+GetWindowSize :: proc(value: ^Window, width, height: ^i32) -> bool {
+	if width != nil { width^ = host_width() }
+	if height != nil { height^ = host_height() }
+	return true
+}
 
 PollEvent :: proc(event: ^Event) -> bool {
 	if event == nil { return false }

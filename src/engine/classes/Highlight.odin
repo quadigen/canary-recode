@@ -1,7 +1,12 @@
 package classes
 
-// Highlight draws a translucent fill over a part or model plus an inverted-hull
-// outline around it. Roblox keeps no InstanceAdornment parent here: Adornee is
+// Highlight draws a translucent fill over a part or model plus a screen-space
+// outline around it. The outline is a mask: highlighted geometry is drawn into
+// a private offscreen target as flat color+alpha, and a fullscreen composite
+// pass dilates that mask into the outline ring. That gives a constant pixel
+// width at any camera distance on any topology -- the old inverted-hull shell
+// had to rescale a world-space offset per frame and rounded off on thin or
+// skinned geometry. Roblox keeps no InstanceAdornment parent here: Adornee is
 // just a reference the Highlight reads each frame, so an unset Adornee resolves
 // to the Highlight's own Parent at draw time rather than at assignment time.
 
@@ -248,22 +253,19 @@ highlight_set :: proc(
 	return true
 }
 
-// Roblox keeps the outline the same pixel width no matter how far away the part
-// is, so the world-space thickness has to grow with the camera distance.
-//
-// Four pixels is what makes the outline read as an outline. Roblox's own
+// Ring width, in screen pixels, that the outline composite dilates the mask
+// by. Four pixels is what makes the outline read as an outline. Roblox's own
 // selection highlight is noticeably heavier than a one-pixel hairline, and at
-// two pixels this ring was legible only on parts close to the camera.
+// two pixels the ring was legible only on parts close to the camera.
 HIGHLIGHT_OUTLINE_PIXELS :: f32(4.0)
 
 // Must match the vertical field of view main.odin hands Filament in
 // set_viewport_rect, since world_per_pixel is derived from it.
 HIGHLIGHT_FIELD_OF_VIEW_DEGREES :: f32(60.0)
 
-// Distance assumed when there is no active camera to measure against, and a
-// floor that keeps the shell from collapsing into the part it outlines.
+// Distance assumed when there is no active camera to measure against. Only the
+// fill's depth bias needs world-space scaling now; the outline is screen-space.
 HIGHLIGHT_FALLBACK_DISTANCE :: f32(40.0)
-HIGHLIGHT_MIN_THICKNESS :: f32(0.02)
 
 highlight_world_per_pixel :: proc(distance: f32, viewport_height: i32) -> f32 {
 	if viewport_height <= 0 {
@@ -370,23 +372,11 @@ highlight_append_part_items :: proc(
 
 	world_per_pixel := highlight_world_per_pixel(distance, ctx.viewport_height)
 
-	thickness := world_per_pixel * HIGHLIGHT_OUTLINE_PIXELS
-	if thickness <= 0 {
-		// Guard against a degenerate viewport. Below this the shell expands too
-		// little to survive depth quantization and the outline disappears.
-		thickness = HIGHLIGHT_MIN_THICKNESS
-	}
-
 	transform := highlight_transform(part)
 
-	// Neither draw sets KINE_FILAMENT_DRAW_CULLING. The outline expands vertices
-	// past the source mesh bounds, so bounds derived from the mesh alone would
-	// let Filament cull a visible highlight.
+	// Neither draw sets KINE_FILAMENT_DRAW_CULLING so a highlight is never
+	// frustum-culled away.
 	if highlight.outline_transparency < 1.0 {
-		outline_kind := i32(kineffi.KINE_MAT_HIGHLIGHT_OUTLINE)
-		if highlight.depth_mode == .AlwaysOnTop {
-			outline_kind = kineffi.KINE_MAT_HIGHLIGHT_OUTLINE_TOP
-		}
 		append(
 			items,
 			kineffi.KineFilamentDrawItem{
@@ -395,9 +385,16 @@ highlight_append_part_items :: proc(
 				r = highlight.outline_color.R,
 				g = highlight.outline_color.G,
 				b = highlight.outline_color.B,
-				param1 = thickness,
+				// maskValue: 1.0 paints this geometry into the outline mask.
+				param1 = 1.0,
+				// Ring width for the composite pass, in screen pixels. The mask
+				// lives in screen space, so this is the real outline width at
+				// every distance -- no world_per_pixel rescaling needed.
+				param2 = HIGHLIGHT_OUTLINE_PIXELS,
+				// Outline alpha rides in w, like particles (see
+				// kine_material_uses_instance_alpha on the shim side).
 				transmission = f32(1.0 - highlight.outline_transparency),
-				materialKind = outline_kind,
+				materialKind = i32(kineffi.KINE_MAT_OUTLINE_MASK),
 			},
 		)
 	}

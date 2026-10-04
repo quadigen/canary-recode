@@ -2,13 +2,14 @@ package services
 
 // wire:service global="workspace"
 
-import kineffi "../bindings"
 import assetstore "../assetstore"
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import materials "../material"
 import profiling "../profiling"
+import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:strings"
@@ -39,7 +40,9 @@ Workspace :: struct {
 	fallen_parts_destroy_height: f32,
 	fall_height_enabled:         bool,
 	distributed_game_time:       f64,
+	simulate_physics:            bool,
 	current_camera:              ^classes.Camera,
+	finished_replicating:        ^signals.Signal,
 }
 
 load_mesh :: proc(
@@ -63,6 +66,7 @@ workspace_construct :: proc(
 	workspace.service = Service_Init(&Workspace_Class, "Workspace", data_model)
 	workspace.fallen_parts_destroy_height = -500
 	workspace.fall_height_enabled = true
+	workspace.simulate_physics = true
 	return &workspace.object
 }
 
@@ -200,9 +204,7 @@ workspace_part_mesh :: proc(
 // Water parts render on a dense subdivided grid so the water material can
 // displace real geometry with Gerstner waves; the Block.glb cube only has 4
 // vertices per face, far too few for meaningful waves.
-workspace_water_mesh :: proc(
-	workspace: ^Workspace,
-) -> ^kineffi.KineFilamentMesh {
+workspace_water_mesh :: proc(workspace: ^Workspace) -> ^kineffi.KineFilamentMesh {
 	if workspace.water_grid_mesh != nil {
 		return workspace.water_grid_mesh
 	}
@@ -227,9 +229,7 @@ workspace_meshpart_mesh :: proc(
 		}
 		return nil
 	}
-	if part.native_mesh != nil &&
-	   part.native_context == ctx &&
-	   !part.native_is_editable {
+	if part.native_mesh != nil && part.native_context == ctx && !part.native_is_editable {
 		return part.native_mesh
 	}
 	if part.native_mesh != nil && part.native_context != nil {
@@ -334,7 +334,7 @@ workspace_editable_meshpart_mesh :: proc(
 
 	for corner_index in 0 ..< vertex_count {
 		corner := corners[corner_index]
-		position := datatypes.Vector3{
+		position := datatypes.Vector3 {
 			(corner.position.x - center.x) * scale.x,
 			(corner.position.y - center.y) * scale.y,
 			(corner.position.z - center.z) * scale.z,
@@ -404,6 +404,22 @@ Workspace_Apply_View :: proc(
 	)
 }
 
+workspace_part_flags :: proc(part: ^classes.Part) -> u32 {
+	flags := u32(kineffi.KINE_FILAMENT_DRAW_CULLING)
+
+	// CastShadow is authored per part, so a part that opts out must not
+	// contribute to anyone else's shadow.
+	if part.castshadow {
+		flags |= u32(kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS)
+	}
+
+	// Receiving is unconditional: a part with CastShadow off still has to
+	// show the shadow falling across it.
+	flags |= u32(kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS)
+
+	return flags
+}
+
 workspace_append_draw_items :: proc(
 	workspace: ^Workspace,
 	object: ^classes.Object,
@@ -455,7 +471,28 @@ workspace_append_draw_items :: proc(
 				render_size.z = size.z
 			}
 
-			if material_kind == kineffi.KINE_MAT_DEFAULT && render_material.texture != nil {
+			// An imported model carries its own base colour texture, and that
+			// texture is the one its UVs were authored against. It has to be
+			// asked for here: a Part always hands its material's texture to
+			// the draw, and SmoothPlastic -- the default material, with a
+			// non-nil texture -- would otherwise win, so the model's own
+			// texture was never sampled at all.
+			draw_texture := render_material.texture
+			mesh_texture: ^kineffi.KineFilamentTex = nil
+			if mesh != nil && material_kind == kineffi.KINE_MAT_DEFAULT {
+				mesh_texture = kineffi.Kine_Filament_GetMeshTexture(mesh)
+				if mesh_texture != nil {
+					draw_texture = mesh_texture
+					// The model's UVs already span the texture once. Retiling
+					// by part size, which the stud texture needs below, would
+					// repeat the model's texture across the part instead.
+					param3 = 1.0
+				}
+			}
+
+			if material_kind == kineffi.KINE_MAT_DEFAULT &&
+			   render_material.texture != nil &&
+			   mesh_texture == nil {
 				STUDS_PER_TILE :: f32(4.0)
 
 				largest_dimension := size.x
@@ -476,9 +513,9 @@ workspace_append_draw_items :: proc(
 			append(
 				items,
 				kineffi.KineFilamentDrawItem {
-					mesh = mesh,
-					tex = render_material.texture,
-					transform = {
+					mesh         = mesh,
+					tex          = draw_texture,
+					transform    = {
 						cframe.r00 * render_size.x,
 						cframe.r01 * render_size.y,
 						cframe.r02 * render_size.z,
@@ -496,15 +533,22 @@ workspace_append_draw_items :: proc(
 						0,
 						1,
 					},
-					r = part.color.R,
-					g = part.color.G,
-					b = part.color.B,
-					param1 = param1,
-					param2 = param2,
-					param3 = param3,
+					r            = part.color.R,
+					g            = part.color.G,
+					b            = part.color.B,
+					param1       = param1,
+					param2       = param2,
+					param3       = param3,
 					transmission = transmission,
 					materialKind = material_kind,
-					flags = kineffi.KINE_FILAMENT_DRAW_CULLING,
+					// Both shadow flags have to be set per item. The shim reads
+					// them straight into RenderableManager's castShadows and
+					// receiveShadows, and a Part with either left clear is
+					// dropped from the shadow pass entirely -- so with only
+					// culling set, nothing in the world cast or received a
+					// shadow and the sun's shadow map had no reason to show
+					// up on screen.
+					flags        = workspace_part_flags(part),
 				},
 			)
 		}
@@ -562,6 +606,35 @@ workspace_physics :: proc(workspace: ^Workspace) -> ^Physics {
 	return cast(^Physics)object
 }
 
+// Workspace_Finished_Replicating_Signal returns the FinishedReplicating signal,
+// creating it on first use. A client that never reads the property never
+// allocates one.
+Workspace_Finished_Replicating_Signal :: proc(workspace: ^Workspace) -> ^signals.Signal {
+	if workspace == nil {return nil}
+	if workspace.finished_replicating != nil {return workspace.finished_replicating}
+	registry := workspace.signal_registry
+	if registry == nil {return nil}
+	L := registry.vm_state
+	if L == nil || registry.signal_registry == nil {return nil}
+	signal := signals.Create(registry.signal_registry)
+	workspace.finished_replicating = signal
+	return signal
+}
+
+// Workspace_Fire_Finished_Replicating delivers workspace.FinishedReplicating.
+//
+// It is a no-op when nothing is listening, which is the common case: the signal
+// only exists once a script has connected to it. Firing is idempotent at the
+// replication layer (the frame is sent once per peer), so the guard here only
+// exists to avoid re-entering the signal on a repeated frame.
+Workspace_Fire_Finished_Replicating :: proc(L: ^vm.State, workspace: ^Workspace) {
+	if workspace == nil || L == nil {return}
+	signal := workspace.finished_replicating
+	if signal == nil || signal.destroyed {return}
+	if len(signal.listeners) == 0 && len(signal.waiters) == 0 {return}
+	signals.Fire(L, signal, 0)
+}
+
 workspace_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -574,6 +647,8 @@ workspace_get :: proc(
 	switch key {
 	case "CurrentCamera":
 		classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
+	case "SimulatePhysics":
+		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
 		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
 	case "FallenPartsDestroyHeight":
@@ -582,6 +657,10 @@ workspace_get :: proc(
 		vm.PushBoolean(L, workspace.fall_height_enabled)
 	case "DistributedGameTime":
 		vm.PushNumber(L, workspace.distributed_game_time)
+	case "FinishedReplicating":
+		signal := Workspace_Finished_Replicating_Signal(workspace)
+		if signal == nil {return false}
+		signals.Push(L, signal)
 	case "Raycast",
 	     "GetNumAwakeParts",
 	     "GetPhysicsThrottling",
@@ -612,6 +691,8 @@ workspace_set :: proc(
 		if registry != nil && registry.registry.classes.renderer != nil {
 			registry.registry.classes.renderer.ActiveCamera = camera
 		}
+	case "SimulatePhysics":
+		workspace.simulate_physics = vm.ArgBoolean(L, value_index)
 	case "Gravity":
 		physics := workspace_physics(workspace)
 		if physics == nil {return false}
@@ -706,5 +787,24 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		get = workspace_get,
 		set = workspace_set,
 		namecall = workspace_namecall,
+		properties = []string{
+			"CurrentCamera",
+			"SimulatePhysics",
+			"Gravity",
+			"FallenPartsDestroyHeight",
+			"FallHeightEnabled",
+			"DistributedGameTime",
+			"FinishedReplicating",
+		},
+		methods = []string{
+			"Raycast",
+			"GetNumAwakeParts",
+			"GetPhysicsThrottling",
+			"GetRealPhysicsFPS",
+			"PGSIsEnabled",
+		},
+		events = []string{
+			"FinishedReplicating",
+		}
 	)
 }

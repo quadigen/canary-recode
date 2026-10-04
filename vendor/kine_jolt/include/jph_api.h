@@ -246,6 +246,22 @@ typedef struct JPH_RayCastResult
     float fraction;
 } JPH_RayCastResult;
 
+typedef struct JPH_PhysicsSettings
+{
+    // Solver knobs the engine actually tunes. This is deliberately a subset of
+    // Jolt's own PhysicsSettings rather than a copy of it: the wrapper copies
+    // each field across individually, so this struct's layout is ours and cannot
+    // drift out of step with Jolt's internals across an upgrade.
+    uint32_t numVelocitySteps;
+    uint32_t numPositionSteps;
+    float speculativeContactDistance;
+    float minVelocityForRestitution;
+    float timeBeforeSleep;
+    float pointVelocitySleepThreshold;
+    uint32_t allowSleeping;
+    uint32_t _padding;
+} JPH_PhysicsSettings;
+
 typedef struct JPH_PhysicsSystemSettings
 {
     uint32_t maxBodies;
@@ -268,6 +284,11 @@ typedef struct JPH_JobSystemConfig
     JPH_QueueJobsFunction queueJobs;
     uint32_t maxConcurrency;
     uint32_t maxBarriers;
+    // Non-zero makes the pool report how many worker threads it really started,
+    // via JPH_JobSystem_Get_Observed_Thread_Count. Diagnostic only: it installs
+    // a thread init/exit callback, so leave it off unless measuring.
+    uint32_t observeThreads;
+    uint32_t _padding;
 } JPH_JobSystemConfig;
 
 typedef struct JPH_ContactManifoldData
@@ -308,8 +329,29 @@ typedef struct JPH_ContactListener_Procs
 JPH_API int32_t JPH_Init(void);
 JPH_API void JPH_Shutdown(void);
 
+// Logical cores visible to the process, never below 1. Reported through Jolt's
+// own thread::hardware_concurrency so that a thread count chosen from it agrees
+// by construction with the body mutex count Jolt sizes itself from the same
+// number.
+JPH_API uint32_t JPH_Get_Num_Cores(void);
+
 JPH_API JPH_JobSystemRef JPH_JobSystemThreadPool_Create(const JPH_JobSystemConfig* config);
 JPH_API void JPH_JobSystem_Destroy(JPH_JobSystemRef jobSystem);
+
+// Threads that may run jobs at once, counting the submitting thread. 0 for a
+// null handle.
+JPH_API uint32_t JPH_JobSystem_Get_Num_Threads(JPH_JobSystemRef jobSystem);
+
+// Threads the process has that can run jobs: the calling thread plus the pool
+// workers that have started and not yet exited. Always 1 for a job system that
+// was not created with JPH_JobSystemConfig::observeThreads, or whose workers have
+// all exited. 0 for a null handle.
+//
+// This is the only way to tell a pool that is doing work from a pool whose
+// workers never started, because results alone cannot: bodies that are not
+// touching form one solver island each and solve identically on any thread count.
+// Tracks the most recently created pool, so concurrent pools will conflate.
+JPH_API uint32_t JPH_JobSystem_Get_Observed_Thread_Count(JPH_JobSystemRef jobSystem);
 
 JPH_API JPH_BroadPhaseLayerInterfaceRef JPH_BroadPhaseLayerInterfaceTable_Create(
     uint32_t numObjectLayers,
@@ -417,6 +459,7 @@ JPH_API void JPH_BodyCreationSettings_SetGravityFactor(JPH_BodyCreationSettingsR
 
 JPH_API JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings* settings);
 JPH_API void JPH_PhysicsSystem_Destroy(JPH_PhysicsSystemRef system);
+JPH_API void JPH_PhysicsSystem_SetPhysicsSettings(JPH_PhysicsSystemRef system, const JPH_PhysicsSettings* settings);
 JPH_API JPH_BodyInterfaceRef JPH_PhysicsSystem_GetBodyInterface(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetGravity(JPH_PhysicsSystemRef system, const JPH_Vec3* gravity);
 JPH_API void JPH_PhysicsSystem_Update(

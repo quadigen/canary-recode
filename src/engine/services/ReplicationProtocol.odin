@@ -56,6 +56,9 @@ replication_read_u64 :: proc(reader: ^Replication_Reader) -> u64 {
 	return value
 }
 
+// The returned string borrows the reader's buffer and is only valid while the
+// packet that backs it is. A caller that keeps it past this dispatch -- as the
+// chunked asset transfer does with an id and a path -- has to clone it first.
 replication_read_string :: proc(reader: ^Replication_Reader) -> string {
 	size := replication_read_u32(reader)
 	if !reader.valid ||
@@ -258,6 +261,19 @@ decode_terrain_batch :: proc(
 
 Replication_Asset_Subtype_Entry: u8 = 0
 Replication_Asset_Subtype_End:   u8 = 1
+// A mesh is routinely several megabytes, which is more than a single frame can
+// carry, so an asset that does not fit is announced with Begin and then sent as
+// a run of Chunks the client stitches back together. Entry stays for the assets
+// that fit in one frame, which is the overwhelming majority, so the common case
+// still costs exactly one packet.
+Replication_Asset_Subtype_Begin: u8 = 2
+Replication_Asset_Subtype_Chunk: u8 = 3
+
+// Replication_Asset_Max_Chunk bounds one Chunk's body so the finished frame
+// stays inside what a single reliable packet can carry. Like
+// Replication_Terrain_Max_Cells this is a statement about a frame and not about
+// the asset: something larger is split across frames rather than refused.
+Replication_Asset_Max_Chunk: u32 = 256 * 1024
 
 // MAX_ASSET_WIRE_PATH bounds the authored path string on the wire. The path
 // only ever supplies a file extension, so anything longer is either corrupt or
@@ -336,6 +352,79 @@ decode_asset_entry :: proc(
 		return "", "", .Unknown, nil, false
 	}
 	return decode_asset_entry_body(reader)
+}
+
+// encode_asset_begin opens a chunked transfer: everything an entry frame would
+// have carried except the bytes themselves, plus the total they will add up to.
+// The total is what lets the client know when the asset is whole, so a truncated
+// transfer is detectable instead of registering a short file.
+encode_asset_begin :: proc(
+	bytes: ^[dynamic]u8,
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	total: u32,
+) {
+	append(bytes, Replication_Asset_Subtype_Begin)
+	replication_put_string(bytes, id)
+	replication_put_string(bytes, path)
+	append(bytes, u8(kind))
+	replication_put_u32(bytes, total)
+}
+
+// encode_asset_chunk writes one slice of the body. The index is what the client
+// checks the next chunk against, so a gap or a repeat is caught rather than
+// silently stitched into the wrong place.
+encode_asset_chunk :: proc(bytes: ^[dynamic]u8, index: u32, data: []u8) {
+	append(bytes, Replication_Asset_Subtype_Chunk)
+	replication_put_u32(bytes, index)
+	append(bytes, ..data)
+}
+
+decode_asset_begin :: proc(
+	reader: ^Replication_Reader,
+) -> (id: string, path: string, kind: assetstore.Asset_Kind, total: u32, ok: bool) {
+	if !reader.valid {return "", "", .Unknown, 0, false}
+	id = replication_read_string(reader)
+	if !reader.valid || id == "" || len(id) > int(Replication_Asset_Max_Id_Length) {
+		reader.valid = false
+		return
+	}
+	path = replication_read_string(reader)
+	if !reader.valid || len(path) > int(Replication_Asset_Max_Path) {
+		reader.valid = false
+		return
+	}
+	kind = assetstore.Asset_Kind(replication_read_u8(reader))
+	if !reader.valid {return}
+	total = replication_read_u32(reader)
+	// Bounded by the same per asset cap the single frame form uses, so an
+	// announced total can never describe more than the store would accept.
+	if !reader.valid || total > u32(assetstore.MAX_ASSET_BYTES) {
+		reader.valid = false
+		return
+	}
+	ok = true
+	return
+}
+
+// decode_asset_chunk reads one slice. The bytes run to the end of the frame, so
+// there is no length to believe: what arrived is what is there. The slice
+// borrows from the packet buffer, so the caller copies before keeping it.
+decode_asset_chunk :: proc(
+	reader: ^Replication_Reader,
+) -> (index: u32, data: []u8, ok: bool) {
+	if !reader.valid {return 0, nil, false}
+	index = replication_read_u32(reader)
+	if !reader.valid {return}
+	data = reader.data[reader.offset:]
+	reader.offset = len(reader.data)
+	if len(data) > int(Replication_Asset_Max_Chunk) {
+		reader.valid = false
+		return 0, nil, false
+	}
+	ok = true
+	return
 }
 
 replication_encode_value :: proc(

@@ -5,10 +5,7 @@ set shell := ["powershell.exe", "-NoProfile", "-Command"]
 git_commit := `git rev-parse --short HEAD`
 git_branch := `git rev-parse --abbrev-ref HEAD`
 
-# Release version. Bump when cutting a release; the `release` recipe stamps
-# it over the "1.19.0-dev" defaults so released binaries stop offering updates
-# to their own version.
-version := "1.19.0"
+version := "1.19.2"
 
 default:
     @just --list
@@ -17,7 +14,7 @@ build:
     odin build src -out:build/kinemium.exe
 
 debug:
-    odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099"
+    odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099" -define:TRACY_ENABLE=true
 
 release:
     odin build src -o:speed -out:build/kinemium.exe -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}}
@@ -51,8 +48,22 @@ test-services:
     #!pwsh
     $ErrorActionPreference = 'Stop'
     $tests = @(
+        'jolt_bindings_smoke',
+        'jolt_threading_smoke',
+        'part_teardown_smoke',
+        'part_body_churn_smoke',
+        'part_nil_body_smoke',
+        'physics_sleep_tuning_smoke',
+        'physics_collider_smoke',
+        'workspace_physics_smoke',
+        'character_controller_smoke',
+        'character_cancollide_smoke',
+        'terrain_character_ground_smoke',
+        'character_push_smoke',
         'mouse_smoke',
         'highlight_smoke',
+        'handles_smoke',
+        'lighting_smoke',
         'terrain_service_smoke',
         'terrain_collision_smoke'
     )
@@ -78,7 +89,7 @@ test-serializer:
         'serializer_smoke',
         'asset_portability_smoke',
         'kine_map_smoke',
-        'kine_terrain_smoke'
+        'kine_terrain_smoke',
     )
     $failed = @()
     foreach ($t in $tests) {
@@ -104,11 +115,16 @@ test-replication:
         'replication_remote_smoke',
         'replication_breadth_smoke',
         'character_replication_smoke',
+        'character_void_world_drive_smoke',
+        'character_jump_smoke',
+        'character_finished_replicating_smoke',
+        'workspace_finished_replicating_smoke',
         'ownership_api_smoke',
         'replication_ack_suppression_smoke',
         'replication_authority_smoke',
          'replication_handshake_smoke',
          'replication_load_control_smoke',
+         'replication_spawn_priority_smoke',
          'replication_timebase_smoke',
          'replication_relevancy_smoke',
          'replication_asset_smoke',
@@ -116,6 +132,7 @@ test-replication:
          'terrain_character_ground_smoke',
          'character_death_smoke',
          'character_cancollide_smoke',
+         'character_push_smoke',
          'player_impulse_smoke',
          'part_velocity_smoke'
     )

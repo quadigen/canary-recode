@@ -6,6 +6,7 @@ import "core:strings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import target "../target"
 import vm "../vm"
 import signals "../signals"
 
@@ -65,10 +66,43 @@ run_service_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry
 	case "Heartbeat":
 		run_service_push_signal(L, &service.heartbeat_ref)
 
+	case "IsRunning":
+		vm.PushBoolean(L, true)
+
+	case "IsServer", "IsClient", "IsStudio", "IsEdit", "IsStandalone", "IsRunningAsync":
+		vm.PushUserdataMethod(L, key)
+
 	case:
 		return false
 	}
 	return true
+}
+
+run_service_mode :: proc(service: ^RunService) -> target.Mode {
+	if service == nil ||
+	   service.service.data_model == nil ||
+	   service.service.data_model.registry == nil {
+		return .Editor
+	}
+	return service.service.data_model.registry.mode
+}
+
+run_service_is_server :: proc(service: ^RunService) -> bool {
+	mode := run_service_mode(service)
+	return mode == .Server || mode == .Standalone
+}
+
+run_service_is_client :: proc(service: ^RunService) -> bool {
+	mode := run_service_mode(service)
+	return mode == .Client || mode == .Standalone
+}
+
+run_service_is_standalone :: proc(service: ^RunService) -> bool {
+	return run_service_mode(service) == .Standalone
+}
+
+run_service_is_studio :: proc(service: ^RunService) -> bool {
+	return run_service_mode(service) == .Editor
 }
 
 run_service_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
@@ -105,6 +139,24 @@ run_service_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_reg
 			ordered_remove(&service.callbacks, index)
 		}
 		return 0, true
+	case "IsServer":
+		vm.PushBoolean(L, run_service_is_server(service))
+		return 1, true
+	case "IsClient":
+		vm.PushBoolean(L, run_service_is_client(service))
+		return 1, true
+	case "IsStudio":
+		vm.PushBoolean(L, run_service_is_studio(service))
+		return 1, true
+	case "IsEdit":
+		vm.PushBoolean(L, run_service_is_studio(service))
+		return 1, true
+	case "IsStandalone":
+		vm.PushBoolean(L, run_service_is_standalone(service))
+		return 1, true
+	case "IsRunningAsync":
+		vm.PushBoolean(L, false)
+		return 1, true
 	}
 	return 0, false
 }

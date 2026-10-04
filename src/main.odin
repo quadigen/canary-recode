@@ -4,6 +4,7 @@ package main
 import tracy "./engine/util/odin-tracy"
 import sandbox "./sandboxed"
 import "core:fmt"
+import "core:os"
 import sdl3 "engine/platform"
 import profiling "engine/profiling"
 import renderer "engine/renderer"
@@ -255,6 +256,12 @@ run_desktop :: proc(options: Startup_Options) {
 
 main :: proc() {
 	services.Update_Handle_Command_Line()
+	when ODIN_OS == .Windows {
+		exe_path, err := os.get_executable_path(context.allocator)
+		if err == nil {
+			sdl3.register_protocol(exe_path)
+		}
+	}
 	options, options_ok := startup_options()
 	if !options_ok {return}
 	target.set_mode(options.mode)

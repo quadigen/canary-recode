@@ -22,6 +22,9 @@ ScreenGui :: struct {
     screen_insets: enums.ScreenInsets,
     enabled: bool,
 	render_on_top: bool,
+	reset_on_spawn: bool,
+	auto_localize:   bool,
+	ignore_cursor_inset: bool,
 
     // kinemium-specific props
     render_offset: datatypes.Vector2,
@@ -57,6 +60,12 @@ ScreenGui_get :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatyp
     switch key {
     case "Enabled":
 		vm.PushBoolean(L, ScreenGui.enabled)
+	case "ResetOnSpawn":
+		vm.PushBoolean(L, ScreenGui.reset_on_spawn)
+	case "AutoLocalize":
+		vm.PushBoolean(L, ScreenGui.auto_localize)
+	case "IgnoreCursorInset":
+		vm.PushBoolean(L, ScreenGui.ignore_cursor_inset)
 	case "DisplayOrder":
 		vm.PushNumber(L, ScreenGui.displayorder)
 	case "ClipToDeviceSafeArea":
@@ -194,6 +203,15 @@ ScreenGui_set :: proc(
     case "Enabled":
         screen_gui.enabled = vm.ArgBoolean(L, value_index)
 
+    case "ResetOnSpawn":
+        screen_gui.reset_on_spawn = vm.ArgBoolean(L, value_index)
+
+    case "AutoLocalize":
+        screen_gui.auto_localize = vm.ArgBoolean(L, value_index)
+
+    case "IgnoreCursorInset":
+        screen_gui.ignore_cursor_inset = vm.ArgBoolean(L, value_index)
+
     case "DisplayOrder":
         screen_gui.displayorder = vm.ArgNumber(L, value_index)
 
@@ -273,6 +291,7 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 		clone = ScreenGui_clone,
 		_step = ScreenGui_render,
 		properties = []string{
+			"ResetOnSpawn",
 			"DisplayOrder",
 			"ClipToDeviceSafeArea",
 			"Enabled",

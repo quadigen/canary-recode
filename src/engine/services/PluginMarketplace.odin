@@ -10,9 +10,9 @@ import vm "../vm"
 import "core:encoding/json"
 import "core:fmt"
 
-PLUGIN_MARKETPLACE_BASE_URL :: "https://quadigen.github.io/Kinemium-Engine-Plugins/"
+PLUGIN_MARKETPLACE_BASE_URL :: "https://kinemiumplugins.quadigen.com/"
 
-PLUGIN_MARKETPLACE_REGISTRY_URL :: "https://quadigen.github.io/Kinemium-Engine-Plugins/plugins.json"
+PLUGIN_MARKETPLACE_REGISTRY_URL :: "https://kinemiumplugins.quadigen.com/plugins.json"
 PLUGIN_MARKETPLACE_INTERNALS_CAPABILITY :: i64(2)
 
 PluginMarketplace_Class := classes.Class_Info {

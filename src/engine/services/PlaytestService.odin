@@ -6,6 +6,7 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import serializer "../serializer"
 import vm "../vm"
 import "core:os"
 import "core:strings"
@@ -185,14 +186,22 @@ playtest_namecall :: proc(
 				vm.PushBoolean(L, false)
 				return 1, true
 			}
-			if !export_datamodel_to_file(export_service, L, file_path) {
-				_ = os.remove_all(temp_dir)
-				delete(temp_dir)
-				delete(file_path)
-				playtest_set_error(service, "failed to export the DataModel to a .kine file")
-				vm.PushBoolean(L, false)
-				return 1, true
-			}
+export_err := export_datamodel_to_file(export_service, L, file_path)
+		if !serializer.Error_Is_None(export_err) {
+			// The serializer already says which record could not be written, so
+			// that detail is what the playtest failure reports rather than a
+			// generic "export failed".
+			export_detail := serializer.Error_String(export_err)
+			defer delete(export_detail)
+			_ = os.remove_all(temp_dir)
+			delete(temp_dir)
+			delete(file_path)
+			playtest_set_error(service, export_detail)
+			serializer.Error_Delete(&export_err)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		serializer.Error_Delete(&export_err)
 			playtest_cleanup_temp_map(service)
 			service.temp_map_dir = strings.clone(temp_dir)
 			delete(temp_dir)

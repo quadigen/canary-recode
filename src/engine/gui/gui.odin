@@ -488,6 +488,25 @@ drawText :: proc(
 	)
 }
 
+beginEdgeFade :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect) {
+	if surface == nil { return }
+	kineffi.Kine_Skia_Surface_BeginEdgeFade(
+		surface, rect.x, rect.y, rect.width, rect.height,
+	)
+}
+
+endEdgeFade :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	rect: Rect,
+	top: f32 = 0, bottom: f32 = 0, left: f32 = 0, right: f32 = 0,
+) {
+	if surface == nil { return }
+	kineffi.Kine_Skia_Surface_EndEdgeFade(
+		surface, rect.x, rect.y, rect.width, rect.height,
+		top, bottom, left, right,
+	)
+}
+
 drawTextShadow :: proc(
 	surface: ^kineffi.KineSkiaSurface,
 	text: cstring,

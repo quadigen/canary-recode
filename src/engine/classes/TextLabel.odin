@@ -64,6 +64,9 @@ TextLabel :: struct {
 	text_padding: f32,
 
 	text_bounds: datatypes.Vector2,
+	automatic_size: enums.AutomaticSize,
+	rich_text:      bool,
+	truncate_at_end: bool,
 }
 
 TextLabel_Resolve_Font_Memory :: proc(
@@ -122,6 +125,55 @@ TextLabel_Load_Typeface_From_Family :: proc(
 	return kineffi.Kine_Skia_Typeface_LoadFromFile(
 		cpath,
 	)
+}
+
+text_label_font_size_enum :: proc(pixels: f32) -> enums.FontSize {
+	sizes := [15]f32{8, 9, 10, 11, 12, 14, 18, 24, 28, 32, 36, 42, 48, 60, 96}
+	names := [15]enums.FontSize{
+		.Size8,
+		.Size9,
+		.Size10,
+		.Size11,
+		.Size12,
+		.Size14,
+		.Size18,
+		.Size24,
+		.Size28,
+		.Size32,
+		.Size36,
+		.Size42,
+		.Size48,
+		.Size60,
+		.Size96,
+	}
+	best := 0
+	for index in 1 ..< len(sizes) {
+		if abs(sizes[index] - pixels) < abs(sizes[best] - pixels) {
+			best = index
+		}
+	}
+	return names[best]
+}
+
+text_label_font_size_pixels :: proc(value: enums.FontSize) -> f32 {
+	switch value {
+	case .Size8:   return 8
+	case .Size9:   return 9
+	case .Size10:  return 10
+	case .Size11:  return 11
+	case .Size12:  return 12
+	case .Size14:  return 14
+	case .Size18:  return 18
+	case .Size24:  return 24
+	case .Size36:  return 36
+	case .Size48:  return 48
+	case .Size28:  return 28
+	case .Size32:  return 32
+	case .Size42:  return 42
+	case .Size60:  return 60
+	case .Size96:  return 96
+	case:          return 14
+	}
 }
 
 TextLabel_Init :: proc() -> TextLabel {
@@ -379,7 +431,7 @@ TextLabel_Set_Font_Enum :: proc(
 TextLabel_Font_Enum_To_Family :: proc(
 	font: enums.Font,
 ) -> string {
-	switch font {
+	#partial switch font {
 	case .Legacy:
 		return DEFAULT_FONT
 	case .Arial:
@@ -1269,6 +1321,34 @@ TextLabel_get :: proc(
 			label.font_face,
 		)
 
+	case "FontSize":
+		if enum_registry == nil {
+			return false
+		}
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"FontSize",
+			i64(text_label_font_size_enum(label.text_size)),
+		)
+
+	case "AutomaticSize":
+		if enum_registry == nil {
+			return false
+		}
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"AutomaticSize",
+			i64(label.automatic_size),
+		)
+
+	case "RichText":
+		vm.PushBoolean(L, label.rich_text)
+
+	case "TruncateAtEnd":
+		vm.PushBoolean(L, label.truncate_at_end)
+
 	case "TextSize":
 		vm.PushNumber(
 			L,
@@ -1469,6 +1549,37 @@ TextLabel_set :: proc(
 			font,
 		)
 
+
+	case "AutomaticSize":
+		if enum_registry == nil {
+			return false
+		}
+		auto_item := enums.Arg_Item(
+			L,
+			value_index,
+			enum_registry,
+			"AutomaticSize",
+		)
+		if auto_item == nil {
+			return false
+		}
+		label.automatic_size = enums.AutomaticSize(auto_item.value)
+
+	case "FontSize":
+		if enum_registry == nil {
+			return false
+		}
+		size_item := enums.Arg_Item(L, value_index, enum_registry, "FontSize")
+		if size_item == nil {
+			return false
+		}
+		label.text_size = text_label_font_size_pixels(enums.FontSize(size_item.value))
+
+	case "RichText":
+		label.rich_text = vm.ArgBoolean(L, value_index)
+
+	case "TruncateAtEnd":
+		label.truncate_at_end = vm.ArgBoolean(L, value_index)
 
 	case "TextSize":
 		label.text_size =
@@ -2178,6 +2289,10 @@ Register_TextLabel :: proc(
 			"TextSize",
 			"TextColor3",
 			"TextTransparency",
+
+			"AutomaticSize",
+			"RichText",
+			"TruncateAtEnd",
 
 			"TextStrokeColor3",
 			"TextStrokeTransparency",

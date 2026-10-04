@@ -325,12 +325,26 @@ enum_item_from_value :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
+enum_table_get_enums :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	registry := cast(^Registry)vm.UpvaluePointer(L)
+	vm.NewTable(L, len(registry.types), 0)
+	for enum_type, index in registry.types {
+		push_enum_type(L, registry, enum_type)
+		vm.SetArrayValue(L, -2, index + 1)
+	}
+	return 1
+}
+
 Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.NewTable(vm_state.L, 0, len(registry.types))
 	for enum_type in registry.types {
 		push_enum_type(vm_state.L, registry, enum_type)
 		vm.SetField(vm_state.L, -2, enum_type.name)
 	}
+	vm.PushLightUserdata(vm_state.L, registry)
+	vm.PushFunction(vm_state.L, "GetEnums", enum_table_get_enums, 1)
+	vm.SetField(vm_state.L, -2, "GetEnums")
 	vm.SetReadOnly(vm_state.L, -1)
 	vm.SetGlobalFromStack(vm_state, "Enum")
 

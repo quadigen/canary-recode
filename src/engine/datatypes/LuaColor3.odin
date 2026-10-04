@@ -65,6 +65,33 @@ color3_from_hex :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
+color3_to_hsv :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	color := require_color3(L, 1, binding_from_upvalue(L))
+	h, s, v := ToHSV(color^)
+	vm.PushNumber(L, f64(h))
+	vm.PushNumber(L, f64(s))
+	vm.PushNumber(L, f64(v))
+	return 3
+}
+
+color3_to_rgb :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	color := require_color3(L, 1, binding_from_upvalue(L))
+	r, g, b := ToRGB(color^)
+	vm.PushNumber(L, f64(r))
+	vm.PushNumber(L, f64(g))
+	vm.PushNumber(L, f64(b))
+	return 3
+}
+
+color3_to_hex :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	color := require_color3(L, 1, binding_from_upvalue(L))
+	vm.PushString(L, ToHex(color^))
+	return 1
+}
+
 color3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	color := cast(^Color3)value
 	switch key {
@@ -74,7 +101,7 @@ color3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushNumber(L, f64(color.G))
 	case "B":
 		vm.PushNumber(L, f64(color.B))
-	case "Lerp", "ToHSV", "ToHex", "ToRGB":
+	case "Lerp", "ToHSV", "ToHex", "ToRGB", "lerp", "toHSV", "toHex", "toRGB", "fromHSV", "fromRGB":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -86,25 +113,31 @@ color3_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	color := cast(^Color3)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	switch method {
-	case "Lerp":
+	case "Lerp", "lerp":
 		goal := require_color3(L, 2, binding)
 		push_color3(L, binding, Lerp(color^, goal^, f32(vm.ArgNumber(L, 3))))
 		return 1, true
-	case "ToHSV":
+	case "ToHSV", "toHSV":
 		h, s, v := ToHSV(color^)
 		vm.PushNumber(L, f64(h))
 		vm.PushNumber(L, f64(s))
 		vm.PushNumber(L, f64(v))
 		return 3, true
-	case "ToHex":
+	case "ToHex", "toHex":
 		vm.PushString(L, ToHex(color^))
 		return 1, true
-	case "ToRGB":
+	case "ToRGB", "toRGB":
 		r, g, b := ToRGB(color^)
 		vm.PushNumber(L, f64(r))
 		vm.PushNumber(L, f64(g))
 		vm.PushNumber(L, f64(b))
 		return 3, true
+	case "FromHSV", "fromHSV":
+		push_color3(L, binding, FromHSV(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))))
+		return 1, true
+	case "FromRGB", "fromRGB":
+		push_color3(L, binding, FromRGB(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))))
+		return 1, true
 	}
 	return 0, false
 }
@@ -196,6 +229,9 @@ Color3_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "fromRGB", color3_from_rgb)
 	add_library_function(L, binding, "fromHSV", color3_from_hsv)
 	add_library_function(L, binding, "fromHex", color3_from_hex)
+	add_library_function(L, binding, "toHSV", color3_to_hsv)
+	add_library_function(L, binding, "toRGB", color3_to_rgb)
+	add_library_function(L, binding, "toHex", color3_to_hex)
 	push_color3(L, binding, Color3{1, 1, 1})
 	vm.SetField(L, -2, "white")
 	push_color3(L, binding, Color3{})

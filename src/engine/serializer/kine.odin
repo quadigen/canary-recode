@@ -143,6 +143,64 @@ Datatype_Id :: enum u16 {
 	Vector3int16,
 }
 
+// Datatype_Id_Name is the label used in error messages, so a bad record names
+// the type a person recognises rather than an ordinal in the table above.
+Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
+	switch id {
+	case .Axes:
+		return "Axes"
+	case .BrickColor:
+		return "BrickColor"
+	case .CFrame:
+		return "CFrame"
+	case .Color3:
+		return "Color3"
+	case .ColorSequence:
+		return "ColorSequence"
+	case .Content:
+		return "Content"
+	case .DateTime:
+		return "DateTime"
+	case .Faces:
+		return "Faces"
+	case .Font:
+		return "Font"
+	case .NumberRange:
+		return "NumberRange"
+	case .NumberSequence:
+		return "NumberSequence"
+	case .PathWaypoint:
+		return "PathWaypoint"
+	case .PhysicalProperties:
+		return "PhysicalProperties"
+	case .Quaternion:
+		return "Quaternion"
+	case .Region3:
+		return "Region3"
+	case .Region3int16:
+		return "Region3int16"
+	case .SecurityCapabilities:
+		return "SecurityCapabilities"
+	case .TweenInfo:
+		return "TweenInfo"
+	case .UDim:
+		return "UDim"
+	case .UDim2:
+		return "UDim2"
+	case .UniqueId:
+		return "UniqueId"
+	case .Vector2:
+		return "Vector2"
+	case .Vector2int16:
+		return "Vector2int16"
+	case .Vector3:
+		return "Vector3"
+	case .Vector3int16:
+		return "Vector3int16"
+	}
+	return fmt.tprintf("datatype #%d", int(id))
+}
+
 Writer :: struct {
 	data: [dynamic]u8,
 	// Excludes a child during serialization. Called with the child and its
@@ -162,6 +220,12 @@ Writer :: struct {
 	// version is the layout being written. A few value records changed shape
 	// between versions, so a record can consult it rather than guessing.
 	version: u8,
+	// warn carries the reason a record was left out of the stream, owned by the
+	// Writer. Writing never fails the whole file over one bad record: the call
+	// site that skipped the record takes this detail and logs it instead, which
+	// is what makes an incomplete map report itself rather than load as a
+	// mysteriously missing property.
+	warn: string,
 }
 
 Reader :: struct {
@@ -170,6 +234,11 @@ Reader :: struct {
 	// version is the layout being read, so a record can tell which shape to
 	// expect instead of guessing.
 	version: u8,
+	// err is the failure that ended the decode, owned by the Reader. Reading
+	// cannot recover from a bad record: a tree whose stream disagrees with its
+	// writer is not a tree, so the first failure is recorded here with the byte
+	// offset that produced it and returned to the caller.
+	err: Error,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +311,23 @@ patch_u32 :: proc(w: ^Writer, offset: int, value: u32) {
 // ---------------------------------------------------------------------------
 
 read_bytes :: proc(r: ^Reader, count: int) -> ([]u8, bool) {
-	if r == nil || count < 0 || r.pos + count > len(r.data) {
+	if r == nil {
 		return nil, false
+	}
+	if count < 0 {
+		return nil, reader_fail(r, .Malformed_Record, "negative read of %d bytes", count)
+	}
+	// Every truncation funnels through here, so the one that reports it names the
+	// offset the reader actually stopped at rather than leaving a bare "failed".
+	available := len(r.data) - r.pos
+	if count > available {
+		return nil, reader_fail(
+			r,
+			.Truncated,
+			"stream ended while reading %d byte(s); only %d remain",
+			count,
+			available,
+		)
 	}
 	result := r.data[r.pos:r.pos + count]
 	r.pos += count
@@ -278,11 +362,17 @@ read_var_u32 :: proc(r: ^Reader) -> (u32, bool) {
 	value: u32
 	for shift: u32 = 0; shift < 35; shift += 7 {
 		byte, ok := read_u8(r)
-		if !ok || (shift == 28 && byte > 0x0f) {return 0, false}
+		if !ok {
+			// read_u8 already recorded where the stream ended.
+			return 0, false
+		}
+		if shift == 28 && byte > 0x0f {
+			return 0, reader_fail(r, .Malformed_Record, "varuint is longer than 32 bits")
+		}
 		value |= u32(byte & 0x7f) << shift
 		if byte & 0x80 == 0 {return value, true}
 	}
-	return 0, false
+	return 0, reader_fail(r, .Malformed_Record, "varuint did not terminate within 5 bytes")
 }
 
 read_u64 :: proc(r: ^Reader) -> (u64, bool) {
@@ -322,12 +412,33 @@ read_f64 :: proc(r: ^Reader) -> (f64, bool) {
 }
 
 read_string :: proc(r: ^Reader) -> (string, bool) {
+	length_offset := r.pos
 	length, ok := read_var_u32(r)
 	if !ok {
 		return "", false
 	}
-	if length > KINE_MAX_STRING_LENGTH || u64(length) > u64(len(r.data) - r.pos) {
-		return "", false
+	available := len(r.data) - r.pos
+	if length > KINE_MAX_STRING_LENGTH {
+		return "", reader_fail_at(
+			r,
+			.Malformed_Record,
+			length_offset,
+			"string declares %d bytes, over the %d byte limit",
+			length,
+			KINE_MAX_STRING_LENGTH,
+		)
+	}
+	// Checked against what is actually left before reading, so a bogus length
+	// cannot ask for a huge copy out of a short stream.
+	if u64(length) > u64(available) {
+		return "", reader_fail_at(
+			r,
+			.Truncated,
+			length_offset,
+			"string declares %d bytes but only %d remain in the stream",
+			length,
+			available,
+		)
 	}
 	bytes, bytes_ok := read_bytes(r, int(length))
 	if !bytes_ok {
@@ -340,7 +451,7 @@ read_f32s :: proc(r: ^Reader, out: []f32) -> bool {
 	for i in 0 ..< len(out) {
 		value, ok := read_f32(r)
 		if !ok {
-			return false
+			return reader_context(r, "while reading float %d of %d", i + 1, len(out))
 		}
 		out[i] = value
 	}
@@ -351,7 +462,7 @@ read_i16s :: proc(r: ^Reader, out: []i16) -> bool {
 	for i in 0 ..< len(out) {
 		value, ok := read_i16(r)
 		if !ok {
-			return false
+			return reader_context(r, "while reading int16 %d of %d", i + 1, len(out))
 		}
 		out[i] = value
 	}
@@ -518,7 +629,7 @@ datatype_id_of_binding :: proc(name: string) -> (Datatype_Id, bool) {
 write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_index: int) -> bool {
 	ptr := vm.UserdataValue(L, value_index)
 	if ptr == nil {
-		return false
+		return writer_skip(w, "the %s value is not a live userdata", Datatype_Id_Name(id))
 	}
 
 	switch id {
@@ -682,7 +793,7 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_i16(w, value.Y)
 		write_i16(w, value.Z)
 	case:
-		return false
+		return writer_skip(w, "this build has no layout for %s", Datatype_Id_Name(id))
 	}
 
 	return true
@@ -690,7 +801,7 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 
 write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value_index: int) -> bool {
 	if w == nil || L == nil || registry == nil {
-		return false
+		return writer_skip(w, "a nil writer, VM, or registry")
 	}
 
 	#partial switch vm.TypeOf(L, value_index) {
@@ -723,12 +834,12 @@ write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value
 	case .Userdata:
 		binding := vm.UserdataBindingOf(L, value_index)
 		if binding == nil {
-			return false
+			return writer_skip(w, "a userdata with no registered binding")
 		}
 		if binding.name == "EnumItem" {
 			item := cast(^enums.Enum_Item)vm.UserdataValue(L, value_index)
 			if item == nil || item.enum_type == nil {
-				return false
+				return writer_skip(w, "an EnumItem with no enum behind it")
 			}
 			write_u8(w, u8(Value_Tag.EnumItem))
 			write_string(w, item.enum_type.name)
@@ -737,13 +848,13 @@ write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value
 		}
 		id, ok := datatype_id_of_binding(binding.name)
 		if !ok {
-			return false
+			return writer_skip(w, "%s has no serialized layout", binding.name)
 		}
 		write_u8(w, u8(Value_Tag.Userdata))
 		write_u16(w, u16(id))
 		return write_datatype_value(w, L, id, value_index)
 	case:
-		return false
+		return writer_skip(w, "a value of Lua type %v", vm.TypeName(L, value_index))
 	}
 }
 
@@ -751,7 +862,21 @@ write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value
 // Value decoding
 // ---------------------------------------------------------------------------
 
+// read_datatype_value decodes one typed payload and pushes it. Every failure
+// from the record itself is given the datatype's name here, so the detail the
+// record reported reads as "while reading a CFrame value: ..." rather than as a
+// bare offset with nothing attached to it.
 read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Registry, id: Datatype_Id) -> bool {
+	if r == nil || L == nil || registry == nil {
+		return reader_fail(r, .Invalid_Argument, "a nil reader, VM, or datatype registry")
+	}
+	if !read_datatype_value_record(r, L, registry, id) {
+		return reader_context(r, "while reading a %s value", Datatype_Id_Name(id))
+	}
+	return true
+}
+
+read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Registry, id: Datatype_Id) -> bool {
 	switch id {
 	case .Axes:
 		x, o1 := read_u8(r)
@@ -790,7 +915,7 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 			return false
 		}
 		if count > u32(len(r.data)) {
-			return false
+			return reader_fail(r, .Malformed_Record, "colour sequence declares %d keypoints", count)
 		}
 		keypoints := make([]datatypes.ColorSequenceKeypoint, count)
 		for i in 0 ..< int(count) {
@@ -874,7 +999,7 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 			return false
 		}
 		if count > u32(len(r.data)) {
-			return false
+			return reader_fail(r, .Malformed_Record, "number sequence declares %d keypoints", count)
 		}
 		keypoints := make([]datatypes.NumberSequenceKeypoint, count)
 		for i in 0 ..< int(count) {
@@ -1019,22 +1144,56 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 		}
 		datatypes.Push_Vector3int16(L, registry, datatypes.Vector3int16{X = values[0], Y = values[1], Z = values[2]})
 	case:
-		return false
+		return reader_fail(r, .Unknown_Datatype, "this build has no layout for %s", Datatype_Id_Name(id))
 	}
 
 	return true
 }
 
+// read_value decodes one tagged value record and pushes exactly one value. The
+// tag is named on failure so a truncated payload is reported as "while reading a
+// Boolean value: ..." rather than as a bare offset.
 read_value :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry) -> bool {
 	if r == nil || L == nil || registry == nil {
-		return false
+		return reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
 	}
 
 	tag_byte, ok := read_u8(r)
 	if !ok {
 		return false
 	}
+	if !read_value_record(r, L, registry, tag_byte) {
+		return reader_context(r, "while reading a %s value", value_tag_name(tag_byte))
+	}
+	return true
+}
 
+// value_tag_name labels a tag for messages. An unrecognised tag reports its own
+// raw byte, because the reader has already recorded the detailed complaint about
+// it and must not describe it a second time here.
+value_tag_name :: proc(tag_byte: u8) -> string {
+	switch Value_Tag(tag_byte) {
+	case .Nil:
+		return "nil"
+	case .Boolean:
+		return "Boolean"
+	case .Number:
+		return "number"
+	case .Integer:
+		return "integer"
+	case .String:
+		return "string"
+	case .Vector3:
+		return "Vector3"
+	case .Userdata:
+		return "userdata"
+	case .EnumItem:
+		return "EnumItem"
+	}
+	return fmt.tprintf("unknown tag %d", int(tag_byte))
+}
+
+read_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, tag_byte: u8) -> bool {
 	switch Value_Tag(tag_byte) {
 	case .Nil:
 		vm.PushNil(L)
@@ -1098,7 +1257,7 @@ read_value :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry) -> boo
 		delete(enum_name)
 		return true
 	case:
-		return false
+		return reader_fail(r, .Unknown_Value_Tag, "value tag %d is not one this build knows", int(tag_byte))
 	}
 }
 
@@ -1137,14 +1296,15 @@ read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registr
 	vm.PushLightUserdata(L, &read_context)
 	vm.PushFunction(L, "kine_read_property", serialize_read_property, 1)
 
-	ok, _ := vm.ProtectedCall(L, 0, 1)
+	ok, call_err := vm.ProtectedCall(L, 0, 1)
 	if !ok {
 		vm.SetStackTop(L, base)
-		return false
+		defer delete(call_err)
+		return writer_skip(w, "property %s getter raised: %s", property, call_err)
 	}
 	if vm.StackTop(L) != base + 1 {
 		vm.SetStackTop(L, base)
-		return false
+		return writer_skip(w, "property %s getter returned nothing", property)
 	}
 
 	// A declared asset property holding a local path is rewritten to point at
@@ -1158,7 +1318,7 @@ read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registr
 	if !write_value(w, L, registry, base + 1) {
 		resize(&w.data, offset)
 		vm.SetStackTop(L, base)
-		return false
+		return writer_skip_context(w, "property %s", property)
 	}
 	vm.SetStackTop(L, base)
 	return true
@@ -1177,17 +1337,52 @@ property_is_saveable :: proc(property: string) -> bool {
 	return true
 }
 
+// instance_label names an object in a message even when it is only half built,
+// which is exactly when the writer needs to say what it could not write.
+//
+// The result is cloned out of context.temp_allocator so the caller owns it and
+// may delete it. fmt.tprintf alone allocates from the temp arena, and deleting
+// that memory corrupts the heap; read_instance frees this label twice (once
+// after the rename), so it must be a real allocation.
+instance_label :: proc(object: ^classes.Object) -> string {
+	if object == nil {
+		return strings.clone("(nil instance)")
+	}
+	name := object.name
+	if name == "" {
+		name = "(unnamed)"
+	}
+	if object.class == nil || object.class.name == "" {
+		return strings.clone(fmt.tprintf("%q", name))
+	}
+	return strings.clone(fmt.tprintf("%s %q", object.class.name, name))
+}
+
+// report_skip logs a record the writer left out. Nothing about a dropped
+// property or subtree invalidates the rest of the file, so the save continues,
+// but the gap has to be announced: a map that loads without a property the
+// author set looks identical to one that was never authored that way.
+report_skip :: proc(w: ^Writer, object: ^classes.Object, format: string, args: ..any) {
+	warning := writer_take_warning(w)
+	defer delete(warning)
+	// Cloned out of the temp arena for the same reason instance_label is:
+	// fmt.tprintf memory must not be handed to delete.
+	what := strings.clone(fmt.tprintf(format, ..args))
+	defer delete(what)
+	fmt.eprintf("[kine] skipped %s of %s: %s\n", what, instance_label(object), warning)
+}
+
 write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object) -> bool {
 	if w == nil || L == nil || registry == nil || object == nil {
-		return false
+		return writer_skip(w, "a nil writer, VM, registry, or instance")
 	}
 	if object.class == nil {
-		return false
+		return writer_skip(w, "the instance has no class")
 	}
 
 	descriptor := classes.Find_Class(registry, object.class.name)
 	if descriptor == nil {
-		return false
+		return writer_skip(w, "class %q is not registered", object.class.name)
 	}
 
 	write_string(w, object.class.name)
@@ -1210,7 +1405,10 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		}
 		if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {
 			property_count += 1
+			continue
 		}
+		writer_skip_context(w, "%s", instance_label(object))
+		report_skip(w, object, "property")
 	}
 	patch_u32(w, property_count_offset, property_count)
 
@@ -1226,10 +1424,13 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		write_string(w, attribute.name)
 		if write_value(w, L, registry, base + 1) {
 			attribute_count += 1
-		} else {
-			resize(&w.data, offset)
+			vm.SetStackTop(L, base)
+			continue
 		}
+		resize(&w.data, offset)
 		vm.SetStackTop(L, base)
+writer_skip_context(w, "%s", instance_label(object))
+		report_skip(w, object, "attribute %q", attribute.name)
 	}
 	patch_u32(w, attribute_count_offset, attribute_count)
 
@@ -1247,9 +1448,11 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		offset := len(w.data)
 		if write_instance(w, L, registry, child) {
 			child_count += 1
-		} else {
-			resize(&w.data, offset)
+			continue
 		}
+		resize(&w.data, offset)
+		writer_skip_context(w, "%s", instance_label(child))
+		report_skip(w, object, "child")
 	}
 	patch_u32(w, child_count_offset, child_count)
 
@@ -1280,9 +1483,9 @@ deserialize_apply_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-apply_property :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, key: string, value_index: int) -> bool {
+apply_property :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, key: string, value_index: int) -> (ok: bool, err: string) {
 	if L == nil || object == nil || descriptor == nil {
-		return false
+		return false, ""
 	}
 	_ = registry
 
@@ -1292,9 +1495,9 @@ apply_property :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^class
 	// lua_pcall expects the function below its arguments: push the value on top.
 	vm.PushValue(L, value_index)
 
-	ok, _ := vm.ProtectedCall(L, 1, 0)
+	ok, err = vm.ProtectedCall(L, 1, 0)
 	vm.SetStackTop(L, value_index - 1)
-	return ok
+	return ok, err
 }
 
 deserialize_apply_attribute :: proc "c" (L: ^vm.State) -> i32 {
@@ -1308,9 +1511,9 @@ deserialize_apply_attribute :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-apply_attribute :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, name: string, value_index: int) -> bool {
+apply_attribute :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, name: string, value_index: int) -> (ok: bool, err: string) {
 	if L == nil || object == nil {
-		return false
+		return false, ""
 	}
 	_ = registry
 
@@ -1321,25 +1524,28 @@ apply_attribute :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^clas
 	vm.PushString(L, name)
 	vm.PushValue(L, value_index)
 
-	ok, _ := vm.ProtectedCall(L, 2, 0)
+	ok, err = vm.ProtectedCall(L, 2, 0)
 	vm.SetStackTop(L, value_index - 1)
-	return ok
+	return ok, err
 }
 
+// read_instance decodes one instance record and everything under it. Every
+// failure past the class name is reported against the instance it belonged to,
+// so the byte offset alone never has to carry the whole diagnosis.
 read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, parent: ^classes.Object) -> (^classes.Object, bool) {
 	if r == nil || L == nil || registry == nil {
-		return nil, false
+		return nil, reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
 	}
 
 	class_name, ok := read_string(r)
 	if !ok {
-		return nil, false
+		return nil, reader_context(r, "while reading an instance's class name")
 	}
 	defer delete(class_name)
 
 	object, object_ok := classes.Push_New(registry, &vm.VM{L = L}, class_name, false)
 	if !object_ok || object == nil {
-		return nil, false
+		return nil, reader_fail(r, .Object_Create_Failed, "class %q could not be constructed", class_name)
 	}
 	// Push_New leaves userdata on the stack; the object stays alive through
 	// the retained lua_ref, so we keep the native stack flat.
@@ -1349,18 +1555,26 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 		classes.Set_Parent(object, parent)
 	}
 
+	// From here the record belongs to a real object, so every later failure can
+	// be reported against it.
+	label := instance_label(object)
+
 	name, name_ok := read_string(r)
 	if !name_ok {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the name of %s", label)
 	}
 	classes.Set_Name(object, name)
 	delete(name)
+	// The record can rename the instance, so the label has to follow it.
+	delete(label)
+	label = instance_label(object)
+	defer delete(label)
 
 	archivable, archivable_ok := read_u8(r)
 	if !archivable_ok {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the archivable flag of %s", label)
 	}
 	object.archivable = archivable != 0
 
@@ -1369,37 +1583,47 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 	index, o3 := read_u32(r)
 	if !o1 || !o2 || !o3 {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the unique id of %s", label)
 	}
 	object.unique_id = datatypes.UniqueId{Random = random, Time = time, Index = index}
 
 	descriptor := classes.Find_Class(registry, class_name)
 	if descriptor == nil {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_fail(r, .Unknown_Class, "class %q is not registered", class_name)
 	}
 
 	// Properties.
 	property_count, property_count_ok := read_u32(r)
 	if !property_count_ok {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the property count of %s", label)
 	}
 	for i in 0 ..< property_count {
 		key, ok := read_string(r)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			return nil, reader_context(r, "while reading property %d name of %s", i, label)
 		}
 		if !read_value(r, L, registry) {
 			delete(key)
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			return nil, reader_context(r, "while reading property %q of %s", key, label)
 		}
 		value_index := vm.StackTop(L)
-		if !apply_property(L, registry, object, descriptor, key, value_index) {
-			fmt.eprintf("[kine] Deserialize skipped un-applyable property %s on %s (%s)\n", key, class_name, classes.Get_Name(object))
+		applied, apply_err := apply_property(L, registry, object, descriptor, key, value_index)
+		if !applied {
+			// A setter the runtime refuses costs that one property, not the
+			// load, so the stream keeps going and the reason is announced.
+			fmt.eprintf(
+				"[kine] skipped property %s of %s: the setter refused the value%s%s\n",
+				key,
+				label,
+				apply_err == "" ? "" : ": ",
+				apply_err,
+			)
 		}
+		delete(apply_err)
 		delete(key)
 	}
 
@@ -1407,24 +1631,33 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 	attribute_count, attribute_count_ok := read_u32(r)
 	if !attribute_count_ok {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the attribute count of %s", label)
 	}
 	for i in 0 ..< attribute_count {
 		name, ok := read_string(r)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			return nil, reader_context(r, "while reading attribute %d name of %s", i, label)
 		}
 		if !read_value(r, L, registry) {
 			delete(name)
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			return nil, reader_context(r, "while reading attribute %q of %s", name, label)
 		}
-		if !apply_attribute(L, registry, object, name, vm.StackTop(L)) {
-			delete(name)
+		applied, apply_err := apply_attribute(L, registry, object, name, vm.StackTop(L))
+		if !applied {
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			defer delete(apply_err)
+			return nil, reader_fail(
+				r,
+				.Property_Rejected,
+				"attribute %q of %s could not be stored: %s",
+				name,
+				label,
+				apply_err,
+			)
 		}
+		delete(apply_err)
 		delete(name)
 	}
 
@@ -1432,13 +1665,13 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 	child_count, child_count_ok := read_u32(r)
 	if !child_count_ok {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_context(r, "while reading the child count of %s", label)
 	}
 	for i in 0 ..< child_count {
 		child, ok := read_instance(r, L, registry, object)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
-			return nil, false
+			return nil, reader_context(r, "while reading child %d of %s", i, label)
 		}
 		_ = child
 	}
@@ -1453,25 +1686,37 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 write_asset_table :: proc(w: ^Writer) -> bool {
 	count := len(w.used_ids)
 	if count > assetstore.MAX_ASSET_COUNT {
-		fmt.eprintf("[kine] refusing to write %d assets (limit %d)\n", count, assetstore.MAX_ASSET_COUNT)
-		return false
+		return writer_skip(
+			w,
+			"refusing to write %d assets, over the limit of %d",
+			count,
+			assetstore.MAX_ASSET_COUNT,
+		)
 	}
 
 	total: i64 = 0
 	for id in w.used_ids {
 		entry, ok := assetstore.Find(id)
 		if !ok {
-			fmt.eprintf("[kine] asset %s vanished before the table was written\n", id)
-			return false
+			return writer_skip(w, "asset %q was registered but is gone by the time the table is written", id)
 		}
 		if len(entry.bytes) > assetstore.MAX_ASSET_BYTES {
-			fmt.eprintf("[kine] asset %s is %d bytes, over the %d limit\n", id, len(entry.bytes), assetstore.MAX_ASSET_BYTES)
-			return false
+			return writer_skip(
+				w,
+				"asset %q is %d bytes, over the %d byte limit",
+				id,
+				len(entry.bytes),
+				assetstore.MAX_ASSET_BYTES,
+			)
 		}
 		total += i64(len(entry.bytes))
 		if total > i64(assetstore.MAX_ASSET_TOTAL_BYTES) {
-			fmt.eprintf("[kine] embedded assets total %d bytes, over the %d limit\n", total, assetstore.MAX_ASSET_TOTAL_BYTES)
-			return false
+			return writer_skip(
+				w,
+				"embedded assets total %d bytes, over the %d byte limit",
+				total,
+				assetstore.MAX_ASSET_TOTAL_BYTES,
+			)
 		}
 	}
 
@@ -1494,68 +1739,74 @@ write_asset_table :: proc(w: ^Writer) -> bool {
 read_asset_table :: proc(r: ^Reader) -> bool {
 	count, ok := read_u32(r)
 	if !ok {
-		return false
+		return reader_context(r, "while reading the asset count")
 	}
 	if count > u32(assetstore.MAX_ASSET_COUNT) {
-		fmt.eprintf("[kine] asset count %d exceeds the limit\n", count)
-		return false
+		return reader_fail(r, .Asset_Count_Exceeded, "asset count %d is over the limit of %d", count, assetstore.MAX_ASSET_COUNT)
 	}
 
 	total: i64 = 0
 	for i in 0 ..< int(count) {
 		id, id_ok := read_string(r)
 		if !id_ok {
-			return false
+			return reader_context(r, "while reading the content id of asset %d", i)
 		}
+		defer delete(id)
 		path, path_ok := read_string(r)
 		if !path_ok {
-			delete(id)
-			return false
+			return reader_context(r, "while reading the authored path of asset %q", id)
 		}
+		defer delete(path)
+
 		kind_byte, kind_ok := read_u8(r)
 		if !kind_ok {
-			delete(id)
-			delete(path)
-			return false
+			return reader_context(r, "while reading the kind of asset %q", id)
 		}
+		length_offset := r.pos
 		length, length_ok := read_var_u32(r)
 		if !length_ok {
-			delete(id)
-			delete(path)
-			return false
+			return reader_context(r, "while reading the byte length of asset %q", id)
 		}
 		if length > u32(assetstore.MAX_ASSET_BYTES) {
-			fmt.eprintf("[kine] asset %s claims %d bytes, over the limit\n", id, length)
-			delete(id)
-			delete(path)
-			return false
+			return reader_fail_at(
+				r,
+				.Asset_Size_Exceeded,
+				length_offset,
+				"asset %q claims %d bytes, over the %d byte limit",
+				id,
+				length,
+				assetstore.MAX_ASSET_BYTES,
+			)
 		}
 		total += i64(length)
 		if total > i64(assetstore.MAX_ASSET_TOTAL_BYTES) {
-			fmt.eprintf("[kine] asset table declares %d bytes, over the limit\n", total)
-			delete(id)
-			delete(path)
-			return false
+			return reader_fail(
+				r,
+				.Asset_Total_Exceeded,
+				"the asset table declares %d bytes, over the %d byte limit",
+				total,
+				assetstore.MAX_ASSET_TOTAL_BYTES,
+			)
 		}
 
 		bytes, bytes_ok := read_bytes(r, int(length))
 		if !bytes_ok {
-			delete(id)
-			delete(path)
-			return false
+			return reader_context(r, "while reading the %d bytes of asset %q", length, id)
 		}
 
 		// Register_As consumes the bytes, so hand it a copy it may own.
 		owned := slice.clone(bytes)
 		accepted := assetstore.Register_As(id, owned, path, assetstore.Asset_Kind(kind_byte))
 		if !accepted {
-			fmt.eprintf("[kine] asset table entry %s is corrupt or duplicated\n", id)
-			delete(id)
-			delete(path)
-			return false
+			return reader_fail(
+				r,
+				.Asset_Corrupt,
+				"asset %q (%s, kind %d) is corrupt or already stored under a different id",
+				id,
+				path,
+				int(kind_byte),
+			)
 		}
-		delete(id)
-		delete(path)
 	}
 	return true
 }
@@ -1698,7 +1949,7 @@ write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
 read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	present, ok := read_u8(r)
 	if !ok {
-		return false
+		return reader_context(r, "while reading the terrain presence flag")
 	}
 	// A map with no terrain is a complete, valid map, so this is not a failure.
 	if present == 0 {
@@ -1726,16 +1977,20 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	if !decoration_ok || !voxel_size_ok || !iso_level_ok || !grass_ok ||
 	   !reflectance_ok || !transparency_ok || !wave_size_ok || !wave_speed_ok ||
 	   !red_ok || !green_ok || !blue_ok {
-		fmt.eprintf("[kine] terrain table header is truncated\n")
-		return false
+		return reader_fail(r, .Terrain_Truncated, "the terrain header needs 45 bytes but the stream ends partway through it")
 	}
 	// A zero or negative voxel size makes every world<->cell conversion divide by
 	// zero, and an iso level of zero makes the isosurface degenerate. Both are
 	// rejected rather than stored, the same rule the replication header decoder
 	// applies.
 	if !(voxel_size > 0) || !(iso_level > 0) {
-		fmt.eprintf("[kine] terrain table has an unusable grid (voxel size %f, iso level %f)\n", voxel_size, iso_level)
-		return false
+		return reader_fail(
+			r,
+			.Terrain_Invalid_Grid,
+			"voxel size %f and iso level %f; both must be greater than zero",
+			voxel_size,
+			iso_level,
+		)
 	}
 
 	table.voxel_size = voxel_size
@@ -1749,43 +2004,65 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	table.water_color = datatypes.Color3{red, green, blue}
 
 	colour_count, colour_count_ok := read_u32(r)
-	if !colour_count_ok || colour_count > KINE_TERRAIN_MAX_MATERIAL_COLOURS {
-		fmt.eprintf("[kine] terrain material colour count %d is invalid\n", colour_count)
-		return false
+	if !colour_count_ok {
+		return reader_context(r, "while reading the terrain material colour count")
 	}
-	for _ in 0 ..< int(colour_count) {
+	if colour_count > KINE_TERRAIN_MAX_MATERIAL_COLOURS {
+		return reader_fail(
+			r,
+			.Malformed_Record,
+			"terrain material colour count %d is over the limit of %d",
+			colour_count,
+			KINE_TERRAIN_MAX_MATERIAL_COLOURS,
+		)
+	}
+	for i in 0 ..< int(colour_count) {
 		material, material_ok := read_u32(r)
 		if !material_ok {
-			return false
+			return reader_context(r, "while reading material colour %d", i)
 		}
 		colour_red, colour_red_ok := read_f32(r)
 		colour_green, colour_green_ok := read_f32(r)
 		colour_blue, colour_blue_ok := read_f32(r)
 		if !colour_red_ok || !colour_green_ok || !colour_blue_ok {
-			return false
+			return reader_context(r, "while reading the colour of material %d", material)
 		}
 		table.material_colours[material] = datatypes.Color3{colour_red, colour_green, colour_blue}
 	}
 
+	count_offset := r.pos
 	count, count_ok := read_u32(r)
 	if !count_ok {
-		return false
+		return reader_context(r, "while reading the terrain cell count")
 	}
 	if count > u32(KINE_TERRAIN_MAX_CELLS) {
-		fmt.eprintf("[kine] terrain table claims %d cells, over the limit\n", count)
-		return false
+		return reader_fail_at(
+			r,
+			.Terrain_Cell_Count_Exceeded,
+			count_offset,
+			"terrain claims %d cells, over the limit of %d",
+			count,
+			KINE_TERRAIN_MAX_CELLS,
+		)
 	}
 	// The count is a claim by the file, so it is checked against the bytes that
 	// are actually present before a single cell is allocated. Otherwise a short
 	// stream could ask for a multi-gigabyte reserve.
 	available := len(r.data) - r.pos
 	if i64(count) * KINE_TERRAIN_CELL_BYTES > i64(available) {
-		fmt.eprintf("[kine] terrain table claims %d cells but only %d bytes remain\n", count, available)
-		return false
+		return reader_fail_at(
+			r,
+			.Terrain_Cell_Count_Exceeded,
+			count_offset,
+			"terrain claims %d cells needing %d bytes but only %d remain",
+			count,
+			int(i64(count) * KINE_TERRAIN_CELL_BYTES),
+			available,
+		)
 	}
 
 	table.cells = make([dynamic]Kine_Terrain_Cell, 0, int(count))
-	for _ in 0 ..< int(count) {
+	for i in 0 ..< int(count) {
 		x, x_ok := read_i32(r)
 		y, y_ok := read_i32(r)
 		z, z_ok := read_i32(r)
@@ -1793,13 +2070,22 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 		occupancy, occupancy_ok := kine_read_fixed16(r)
 		water, water_ok := kine_read_fixed16(r)
 		if !x_ok || !y_ok || !z_ok || !material_ok || !occupancy_ok || !water_ok {
-			return false
+			return reader_context(r, "while reading terrain cell %d of %d", i, count)
 		}
 		if x < -KINE_TERRAIN_MAX_COORDINATE || x > KINE_TERRAIN_MAX_COORDINATE ||
 		   y < -KINE_TERRAIN_MAX_COORDINATE || y > KINE_TERRAIN_MAX_COORDINATE ||
 		   z < -KINE_TERRAIN_MAX_COORDINATE || z > KINE_TERRAIN_MAX_COORDINATE {
-			fmt.eprintf("[kine] terrain cell coordinate is out of range\n")
-			return false
+			return reader_fail(
+				r,
+				.Terrain_Cell_Out_Of_Range,
+				"cell %d of %d sits at (%d, %d, %d); every axis must be within %d",
+				i,
+				count,
+				x,
+				y,
+				z,
+				KINE_TERRAIN_MAX_COORDINATE,
+			)
 		}
 		append(&table.cells, Kine_Terrain_Cell {
 			x = x,
@@ -1828,13 +2114,18 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 // Serialize writes an Instance hierarchy into a .KINE byte stream, embedding
 // every referenced asset so the file is portable. The returned slice is owned
 // by the caller (free it with delete).
+//
+// On failure the returned Error says which record could not be written and why.
+// Records that could not be written but were safely left out of the stream are
+// reported on stderr by the writer instead, because they cost the stream
+// nothing: check the log if a saved map comes back missing something.
 Serialize :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
 	terrain: ^Kine_Terrain = nil,
-) -> ([]u8, bool) {
+) -> ([]u8, Error) {
 	return serialize(registry, L, object, KINE_VERSION, exclude_child, terrain)
 }
 
@@ -1847,7 +2138,7 @@ Serialize_Legacy :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
-) -> ([]u8, bool) {
+) -> ([]u8, Error) {
 	return serialize(registry, L, object, KINE_LEGACY_VERSION, exclude_child, nil)
 }
 
@@ -1858,9 +2149,15 @@ serialize :: proc(
 	version: u8,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 	terrain: ^Kine_Terrain,
-) -> ([]u8, bool) {
-	if registry == nil || L == nil || object == nil {
-		return nil, false
+) -> ([]u8, Error) {
+	if registry == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the class registry is nil")
+	}
+	if L == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the script VM is nil")
+	}
+	if object == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the root instance is nil")
 	}
 
 	base := vm.StackTop(L)
@@ -1884,9 +2181,10 @@ serialize :: proc(
 	}
 	defer delete(tree.used_ids)
 	defer delete(tree.used_seen)
+	defer delete(tree.warn)
 
 	if !write_instance(&tree, L, registry, object) {
-		return nil, false
+		return nil, writer_error(&tree, .Internal, "could not write the root instance record")
 	}
 
 	writer := Writer{data = make([dynamic]u8, 0, len(tree.data) + 1024)}
@@ -1896,6 +2194,7 @@ serialize :: proc(
 	}
 	defer delete(writer.used_ids)
 	defer delete(writer.used_seen)
+	defer delete(writer.warn)
 
 	// The tree walk is what discovered the assets, so its list is the one the
 	// table describes. Hand ownership to the output writer before writing it.
@@ -1906,7 +2205,7 @@ serialize :: proc(
 
 	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), version)
 	if version >= KINE_ASSET_VERSION && !write_asset_table(&writer) {
-		return nil, false
+		return nil, writer_error(&writer, .Internal, "could not write the asset table")
 	}
 	// Copy the tree in one shot rather than element by element.
 	tree_start := len(writer.data)
@@ -1917,10 +2216,10 @@ serialize :: proc(
 	// instances can stop after the tree it already understands. Only the
 	// current layout carries one; the older layouts have no section to write.
 	if version >= KINE_VERSION && !write_terrain_table(&writer, terrain) {
-		return nil, false
+		return nil, writer_error(&writer, .Internal, "could not write the terrain table")
 	}
 
-	return slice.clone(writer.data[:]), true
+	return slice.clone(writer.data[:]), Error_None
 }
 
 // Deserialize reads a .KINE byte stream and restores the Instance hierarchy
@@ -1928,15 +2227,25 @@ serialize :: proc(
 //
 // terrain may be nil, in which case a map's voxel grid is parsed and validated
 // but discarded. Pass an owned Kine_Terrain to also receive it.
+//
+// A failure returns a nil object and an Error naming the section, instance, or
+// property that went wrong along with the byte offset it was found at, so a bad
+// map can be diagnosed without a hex editor.
 Deserialize :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	parent: ^classes.Object,
 	data: []u8,
 	terrain: ^Kine_Terrain = nil,
-) -> (^classes.Object, bool) {
-	if registry == nil || L == nil || data == nil {
-		return nil, false
+) -> (^classes.Object, Error) {
+	if registry == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the class registry is nil")
+	}
+	if L == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the script VM is nil")
+	}
+	if data == nil {
+		return nil, Error_Make(.Invalid_Argument, -1, "the stream is nil")
 	}
 
 	base := vm.StackTop(L)
@@ -1946,18 +2255,38 @@ Deserialize :: proc(
 	defer vm.SetStackTop(L, base)
 
 	reader := Reader{data = data}
+	defer Error_Delete(&reader.err)
+
+	if len(reader.data) < 5 {
+		Error_Set(
+			&reader.err,
+			.Truncated,
+			0,
+			"a .kine stream needs at least a 4 byte magic and a version byte; this one is %d byte(s)",
+			len(reader.data),
+		)
+		return nil, reader_take(&reader)
+	}
 
 	magic, ok := read_bytes(&reader, 4)
 	if !ok {
-		return nil, false
+		return nil, reader_take(&reader)
 	}
 	if string(magic) != KINE_MAGIC {
-		return nil, false
+		Error_Set(
+			&reader.err,
+			.Bad_Magic,
+			0,
+			"expected the magic %q but found %q; this is not a .kine file",
+			KINE_MAGIC,
+			string(magic),
+		)
+		return nil, reader_take(&reader)
 	}
 
 	version, version_ok := read_u8(&reader)
 	if !version_ok {
-		return nil, false
+		return nil, reader_take(&reader)
 	}
 	// Now that the version is known and accepted, hand it to the reader so each
 	// value record knows which layout to expect.
@@ -1966,29 +2295,46 @@ Deserialize :: proc(
 	// both keeps older maps loadable; they simply have no embedded assets or no
 	// voxel grid to restore.
 	if version != KINE_VERSION && version != KINE_ASSET_VERSION && version != KINE_LEGACY_VERSION {
-		return nil, false
+		Error_Set(
+			&reader.err,
+			.Unsupported_Version,
+			4,
+			"the file is version %d; this build reads %d, %d, and %d",
+			version,
+			KINE_VERSION,
+			KINE_ASSET_VERSION,
+			KINE_LEGACY_VERSION,
+		)
+		return nil, reader_take(&reader)
 	}
 
 	// Publishing happens before the tree is walked so every property setter sees
 	// its bytes. A failure here means the file is unusable, not just degraded.
 	if version >= KINE_ASSET_VERSION && !read_asset_table(&reader) {
-		return nil, false
+		return nil, reader_take(&reader)
 	}
 
 	object, root_ok := read_instance(&reader, L, registry, parent)
 	if !root_ok {
-		return nil, false
+		return nil, reader_take(&reader)
 	}
 	if version >= KINE_VERSION && !read_terrain_table(&reader, terrain) {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		return nil, reader_take(&reader)
 	}
 	// Anything still unconsumed means the reader and the writer disagree about the
 	// layout, so the stream is rejected rather than half-applied.
 	if reader.pos != len(reader.data) {
 		classes.Destroy_Hierarchy(object)
-		return nil, false
+		Error_Set(
+			&reader.err,
+			.Trailing_Bytes,
+			reader.pos,
+			"the stream ends after the last record but %d byte(s) follow it",
+			len(reader.data) - reader.pos,
+		)
+		return nil, reader_take(&reader)
 	}
 
-	return object, true
+	return object, Error_None
 }

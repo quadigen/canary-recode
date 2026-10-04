@@ -103,6 +103,14 @@ KINE_MAT_HIGHLIGHT_FILL :: 9
 KINE_MAT_HIGHLIGHT_OUTLINE_TOP :: 10
 KINE_MAT_HIGHLIGHT_FILL_TOP :: 11
 
+// Selected geometry for the screen-space Highlight outline. Mask draws are
+// routed to a private offscreen target instead of the main scene; a fullscreen
+// composite pass dilates that mask into the visible ring. param1 carries
+// maskValue (1.0 = selected), param2 the outline width in screen pixels, and
+// the outline color/alpha ride in the per-instance color (alpha in w, like
+// particles).
+KINE_MAT_OUTLINE_MASK :: 12
+
 // Which arm/handle of a gizmo is being interacted with.
 KINE_GIZMO_AXIS_NONE :: 0
 KINE_GIZMO_AXIS_X :: 1
@@ -156,6 +164,7 @@ foreign kine_filament {
 	Kine_Filament_SetDecalColor :: proc(ctx: ^KineFilamentContext, decal: i32, r: f32, g: f32, b: f32, a: f32) -> i32 ---
 	Kine_Filament_CreateMeshFromMemory :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateMeshFromPath :: proc(ctx: ^KineFilamentContext, path: cstring) -> ^KineFilamentMesh ---
+	Kine_Filament_GetMeshTexture :: proc(mesh: ^KineFilamentMesh) -> ^KineFilamentTex ---
 	Kine_Filament_LoadMeshDataFromPath :: proc(path: cstring) -> ^KineFilamentMeshData ---
 	Kine_Filament_CreateSky :: proc(ctx: ^KineFilamentContext, r: f32, g: f32, b: f32, a: f32) ---
 	Kine_Filament_SetPostProcessing :: proc(ctx: ^KineFilamentContext, enabled: bool) -> i32 ---

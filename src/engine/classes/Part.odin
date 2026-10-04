@@ -27,6 +27,19 @@ Part :: struct {
     castshadow: bool,
     position: datatypes.Vector3,
 	touched: ^signals.Signal,
+	// part_index is this Part's position in Physics::bodies, or -1 when it has
+	// no body.
+	//
+	// Physics used to find a Part's body through a map rebuilt on every
+	// synchronize, which cost a hash insert and a hash lookup per Part per frame
+	// purely to learn something the Part could have said itself. The index goes
+	// stale when a body is removed from the middle of the array, which is why
+	// the walk also verifies `part_index == position` before trusting it, and
+	// rewrites every index after a removal.
+	//
+	// Owned by the physics service, not by Part, but stored here because Part is
+	// the thing being looked up. Nothing outside physics may read or write it.
+	part_index: int,
 }
 
 Part_Init :: proc() -> Part {
@@ -45,7 +58,10 @@ Part_Init :: proc() -> Part {
         shape =  enums.PartType.Block,
         material = enums.Material.SmoothPlastic,
         castshadow = true,
-        position = datatypes.Vector3{0, 0, 0}
+        position = datatypes.Vector3{0, 0, 0},
+		// -1 is "no body". Zero would be a valid index, so the walk would treat
+		// a brand new Part as already owning the first body.
+		part_index = -1,
     }
 }
 
@@ -176,6 +192,19 @@ part_set :: proc(L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Re
     case:
         return false
     }
+
+	// A property a cached physics body mirrors has just changed: Anchored, Size,
+	// Shape, Material, CFrame, Position, MeshId and CollisionFidelity all feed
+	// either the body's shape or its transform, and physics decides whether to
+	// rebuild by comparing the Part against its cached copy.
+	//
+	// Without this, a script that resizes a Part and then raycasts in the same
+	// frame would be served the pre-resize body, because the tree walk is cached
+	// and the tree itself did not move. Properties physics does not mirror
+	// (Color, Transparency, CastShadow, CollisionGroup) also land here, which
+	// costs an extra walk for those; that is cheaper than enumerating which of
+	// the above are which, and wrong-by-omission here means a stale body.
+	Hierarchy_Touched()
     return true
 }
 

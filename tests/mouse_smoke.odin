@@ -428,6 +428,143 @@ assert(mouse.Icon == "", "clearing Icon failed")
 assert(mouse.IconContent == Content.fromUri(""), "clearing Icon must clear IconContent")
 `, "mouse_icon_clear")
 
+	view.MouseScale = {1.5, 1.5}
+	view.ViewportRect = {0, 0, 1200, 900}
+	{
+		motion: sdl3.Event
+		motion.type = .MOUSE_MOTION
+		motion.motion.x = 400
+		motion.motion.y = 300
+		motion.motion.xrel = 0
+		motion.motion.yrel = 0
+		motion.motion.state = {}
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, motion)
+	}
+
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
+
+	run_script(&script_vm, `
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+assert(mouse.ViewSizeX == 1200 and mouse.ViewSizeY == 900, "view size is still in pixels")
+
+-- Mouse.X/Y have to be reported in the same space as ViewSizeX/ViewSizeY.
+assert(mouse.X == 600 and mouse.Y == 450,
+	"Mouse.X/Y must be scaled into render pixels, got " .. mouse.X .. "," .. mouse.Y)
+
+assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1),
+	"the logical centre must still cast down -Z, got " .. tostring(mouse.UnitRay.Direction))
+assert(mouse.Target ~= nil, "the ray must still reach the part on a scaled display")
+assert(mouse.Target == target, "Target must still be the part under the pointer")
+`, "mouse_scaled_density_centre")
+
+	{
+		motion: sdl3.Event
+		motion.type = .MOUSE_MOTION
+		motion.motion.x = 0
+		motion.motion.y = 0
+		motion.motion.xrel = 0
+		motion.motion.yrel = 0
+		motion.motion.state = {}
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, motion)
+	}
+
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
+
+	run_script(&script_vm, `
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+assert(mouse.X == 0 and mouse.Y == 0,
+	"the logical origin must map to the pixel origin, got " .. mouse.X .. "," .. mouse.Y)
+
+local direction = mouse.UnitRay.Direction
+assert(direction.X < 0 and direction.Y > 0 and direction.Z < 0,
+	"the top-left corner ray must tilt left, up and forward, got " .. tostring(direction))
+
+local tangent = math.tan(math.pi / 6)
+local aspect = 1200 / 900
+-- The corner is top-left, so X is negative and Y positive.
+assert(
+	math.abs(-direction.X / -direction.Z - tangent * aspect) < 1.0e-4 and
+	math.abs(direction.Y / -direction.Z - tangent) < 1.0e-4,
+	"the corner ray must land on the 60-degree frustum boundary, got " .. tostring(direction)
+)
+`, "mouse_scaled_density_corner")
+
+	// The editor does not render into the whole window: the viewport is a panel
+	// at a non-zero offset, which is the case the full-window tests above can
+	// never catch. The cursor is still reported in window coordinates, so the
+	// viewport origin has to be removed before the position is normalized by the
+	// viewport size. Without that, normalized_x tracks the panel offset and every
+	// ray tilts toward the window's left edge regardless of where the pointer is.
+	// The density is reset so this isolates the origin correction; the two are
+	// independent and combining them here would hide which one regressed.
+	view.MouseScale = {1, 1}
+	view.ViewportRect = {300, 200, 900, 600}
+	{
+		motion: sdl3.Event
+		motion.type = .MOUSE_MOTION
+		motion.motion.x = 750
+		motion.motion.y = 500
+		motion.motion.xrel = 0
+		motion.motion.yrel = 0
+		motion.motion.state = {}
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, motion)
+	}
+
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
+
+	run_script(&script_vm, `
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+assert(mouse.ViewSizeX == 900 and mouse.ViewSizeY == 600,
+	"view size must stay the viewport size, got " .. mouse.ViewSizeX .. "," .. mouse.ViewSizeY)
+
+-- 750,500 is the centre of the 300,200 900x600 viewport, so it must read as the
+-- local origin rather than as 750,500 in the window.
+assert(mouse.X == 450 and mouse.Y == 300,
+	"Mouse.X/Y must be viewport-local, got " .. mouse.X .. "," .. mouse.Y)
+assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1),
+	"the viewport centre must cast down -Z, got " .. tostring(mouse.UnitRay.Direction))
+assert(mouse.Target == target, "Target must be the part under the pointer in a panel")
+`, "mouse_offset_viewport_centre")
+
+	// Top-left corner of the offset viewport: local (0,0), window (300,200).
+	{
+		motion: sdl3.Event
+		motion.type = .MOUSE_MOTION
+		motion.motion.x = 300
+		motion.motion.y = 200
+		motion.motion.xrel = 0
+		motion.motion.yrel = 0
+		motion.motion.state = {}
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, motion)
+	}
+
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
+
+	run_script(&script_vm, `
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+assert(mouse.X == 0 and mouse.Y == 0,
+	"the viewport origin must map to the local origin, got " .. mouse.X .. "," .. mouse.Y)
+
+local direction = mouse.UnitRay.Direction
+assert(direction.X < 0 and direction.Y > 0 and direction.Z < 0,
+	"the offset viewport corner must tilt left, up and forward, got " .. tostring(direction))
+
+-- The corner ray must be identical to the full-window corner ray; only the
+-- viewport size changes the frustum, never the panel's position in the window.
+local tangent = math.tan(math.pi / 6)
+local aspect = 900 / 600
+assert(
+	math.abs(-direction.X / -direction.Z - tangent * aspect) < 1.0e-4 and
+	math.abs(direction.Y / -direction.Z - tangent) < 1.0e-4,
+	"the offset corner ray must land on the 60-degree frustum boundary, got " .. tostring(direction)
+)
+`, "mouse_offset_viewport_corner")
+
+	// Back to an unscaled display for anything that follows.
+	view.MouseScale = {1, 1}
+	view.ViewportRect = {0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT}
+
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("MOUSE_SMOKE_PASSED")

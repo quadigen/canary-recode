@@ -301,7 +301,8 @@ CharacterController_Sweep :: proc(
 		length := datatypes.Vec3_Magnitude(remaining)
 		if length <= 0.0001 {break}
 		direction := datatypes.Vec3_Divide(remaining, length)
-		_, contact_normal, body_id, fraction, hit := physics_character_sweep(physics, coll, position, remaining)
+		_, contact_normal, body_id, fraction, hit :=
+			physics_character_sweep(physics, coll, position, remaining, true)
 		if !hit {
 			position = datatypes.Vec3_Add(position, remaining)
 			break
@@ -500,9 +501,9 @@ CharacterController_Tick :: proc(
 	cf.z = position.z
 	root.cframe = cf
 	root.position = datatypes.Vector3{position.x, position.y, position.z}
-	if collision != nil {
-		Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{position.x, position.y, position.z}, yaw)
-	}
+	// The capsule body is deliberately not touched here. The solver integrates
+	// it across a whole physics step, so CharacterMotor_Advance drives it once
+	// per frame with the frame's travel instead of once per sub-step.
 	// Carry the rest of the character (the visible CharacterCollider capsule,
 	// accessories, ...) along with the root so it does not stay at the spawn
 	// point while the root moves.
@@ -562,13 +563,34 @@ CharacterMotor_Advance :: proc(
 	dt: f32,
 ) {
 	if motor == nil || cc == nil {return}
+	collision := cast(^classes.CollisionController)classes.CharacterController_Find(cc, "CollisionController")
 	frame_dt := min(dt, motor.max_step)
+	// The capsule is moved once per frame, over the frame the solver is about to
+	// integrate. Solving its velocity from the frame's start and end is what
+	// gives it a real speed to push Parts with; doing it per sub-step would hand
+	// the solver a target the character has already passed.
+	frame_start: datatypes.Vector3
+	if root := classes.CharacterController_Root(cc); root != nil {
+		frame_start = datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+	}
 	motor.accumulator += frame_dt
 	step := 1 / motor.steps_per_second
 	for motor.accumulator >= step {
 		CharacterController_Tick(cc, physics, L, step)
 		motor.accumulator -= step
 	}
+	root := classes.CharacterController_Root(cc)
+	if collision == nil || root == nil {return}
+	frame_end := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+	_, yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(root.cframe)
+	Physics_Advance_Character_Capsule(
+		physics,
+		collision,
+		frame_start,
+		frame_end,
+		math.to_degrees(yaw),
+		frame_dt,
+	)
 }
 
 // character_simulation_suspended reports whether this peer must stop simulating a

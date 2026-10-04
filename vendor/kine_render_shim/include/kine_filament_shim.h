@@ -104,6 +104,14 @@ typedef struct KineFilamentVulkanBackend {
 #define KINE_MAT_HIGHLIGHT_OUTLINE_TOP 10
 #define KINE_MAT_HIGHLIGHT_FILL_TOP 11
 
+// Selected geometry for the screen-space Highlight outline. Mask draws render
+// into a private offscreen target (flat per-instance color+alpha) instead of
+// the main scene; a fullscreen composite pass dilates that mask into the
+// visible outline ring, giving a constant pixel width on any topology.
+// param1 = maskValue (1.0 = selected), param2 = outline width in pixels,
+// color/alpha (w) ride along as per-instance data like other instanced kinds.
+#define KINE_MAT_OUTLINE_MASK 12
+
 // Which arm/handle of a gizmo is being interacted with.
 #define KINE_GIZMO_AXIS_NONE   0
 #define KINE_GIZMO_AXIS_X      1
@@ -378,6 +386,10 @@ KINE_API bool Kine_Filament_UpdateCustomMesh(
     KineFilamentMesh* mesh,
     const float* vertexData,
     int vertexCount);
+// Returns the base colour texture the model file carried (GLB/gltf embedded
+// image, or an external file next to the model), or NULL when the mesh was
+// built without one. Owned by the mesh; do not destroy it.
+KINE_API KineFilamentTex* Kine_Filament_GetMeshTexture(const KineFilamentMesh* mesh);
     
 KINE_API void Kine_Filament_DrawMeshEx(
     KineFilamentContext* ctx,

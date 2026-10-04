@@ -43,13 +43,44 @@ RendererObject :: struct {
 	HasViewportRect: bool,
 	RenderFilament:  bool,
 	ViewportRect:    [4]i32,
+	// Set once the host publishes its own viewport rect through Set3DTexProps.
+	// The desktop loop offers the window size as a fallback, and must not keep
+	// writing it over a host-supplied rect: an editor renders 3D into a panel at
+	// a non-zero offset inside the window, so overwriting that with the window
+	// rect left the mouse ray (built during the step, from the rect published
+	// before it) describing a different region than the one Filament drew.
+	ViewportRect_Host: bool,
+	// Pixels per logical (point) unit for the render target. SDL reports mouse
+	// positions in window/logical coordinates while ViewportRect is in physical
+	// pixels, so anything mapping a cursor position into the viewport has to
+	// multiply by this first. It is 1 on an unscaled display.
+	MouseScale:      [2]f32,
 	CurrentEvent:    ^sdl3.Event,
 	Window:          ^sdl3.Window,
 }
 
-set_viewport_rect :: proc(renderer: ^RendererObject, x, y, width, height: i32) {
-	if width <= 0 || height <= 0 {
-		return
+// Publishes the viewport rect. from_host marks the rect as owned by the host,
+// which permanently retires the window-size fallback: the host is the only side
+// that knows where its viewport actually sits inside the window.
+//
+// A zero extent is how the host says "no 3D viewport right now", so it clears
+// HasViewportRect instead of leaving the last rect readable -- consumers would
+// otherwise keep building rays and highlight outlines for a viewport that is not
+// being drawn. A negative extent cannot describe any viewport and is refused, so
+// the caller learns about the mistake instead of silently getting stale geometry.
+set_viewport_rect :: proc(
+	renderer: ^RendererObject,
+	x, y, width, height: i32,
+	from_host: bool,
+) -> bool {
+	if renderer == nil {return false}
+	if width < 0 || height < 0 {return false}
+
+	if from_host {renderer.ViewportRect_Host = true}
+
+	if width == 0 || height == 0 {
+		renderer.HasViewportRect = false
+		return true
 	}
 
 	old := renderer.ViewportRect
@@ -72,6 +103,36 @@ set_viewport_rect :: proc(renderer: ^RendererObject, x, y, width, height: i32) {
 			1000,
 		)
 	}
+	return true
+}
+
+// SDL reports mouse positions in window/logical coordinates, while the render
+// target and ViewportRect are in physical pixels. Measure the ratio between the
+// two so a cursor position maps onto the same point the renderer drew, on a
+// scaled display as well as an unscaled one.
+update_mouse_scale :: proc(renderer: ^RendererObject, window: ^sdl3.Window) {
+	if renderer == nil || window == nil {return}
+
+	pixel_width, pixel_height: i32
+	if !sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height) {return}
+
+	logical_width, logical_height: i32
+	if !sdl3.GetWindowSize(window, &logical_width, &logical_height) {return}
+	if logical_width <= 0 || logical_height <= 0 {return}
+
+	scale := [2]f32 {
+		f32(pixel_width) / f32(logical_width),
+		f32(pixel_height) / f32(logical_height),
+	}
+	if renderer.MouseScale == scale {return}
+
+	renderer.MouseScale = scale
+	fmt.eprintln(
+		"Kinemium: mouse density ",
+		scale[0], "x", scale[1],
+		" (logical ", logical_width, "x", logical_height,
+		", pixels ", pixel_width, "x", pixel_height, ")",
+	)
 }
 
 apply_viewport_rect :: proc(renderer: ^RendererObject) {
@@ -213,7 +274,10 @@ init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObj
 		// The desktop path has no viewport rect source of its own, so publish
 		// the window size here, before the engine step. Mouse reads this rect
 		// to build its camera ray and is skipped entirely when it is unset.
-		set_viewport_rect(renderer, 0, 0, frame_width, frame_height)
+		if !renderer.ViewportRect_Host {
+			set_viewport_rect(renderer, 0, 0, frame_width, frame_height, false)
+		}
+		update_mouse_scale(renderer, window)
 
 		now := sdl3.GetTicksNS()
 		delta_time := min(f32(now - previous_ticks) / 1_000_000_000.0, 0.1)

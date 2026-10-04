@@ -37,6 +37,7 @@ Quit :: sdl.Quit
 CreateWindow :: sdl.CreateWindow
 DestroyWindow :: sdl.DestroyWindow
 GetWindowSizeInPixels :: sdl.GetWindowSizeInPixels
+GetWindowSize :: sdl.GetWindowSize
 PollEvent :: sdl.PollEvent
 GetTicksNS :: sdl.GetTicksNS
 Delay :: sdl.Delay

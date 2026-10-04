@@ -17,6 +17,7 @@ Startup_Options :: struct {
 	window:       bool,
 	mode:         target.Mode,
 	standalone:   bool,
+	username:     string,
 }
 
 startup_options :: proc() -> (Startup_Options, bool) {
@@ -108,10 +109,37 @@ startup_options :: proc() -> (Startup_Options, bool) {
 			options.no_update = true
 		case "--window":
 			options.window = true
+		case "--username":
+			if index + 1 >= len(os.args) {
+				fmt.eprintln("--username requires a value")
+				return options, false
+			}
+			index += 1
+			options.username = os.args[index]
 		case:
-			if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
-				if options.map_path !=
-				   "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
+			if strings.has_prefix(arg, "kinemium://") {
+				query_start := strings.index(arg, "?")
+				if query_start >= 0 {
+					query := arg[query_start+1:]
+					parts := strings.split(query, "&")
+					defer delete(parts)
+					for p in parts {
+						kv := strings.split(p, "=")
+						if len(kv) == 2 {
+							key := kv[0]; val := kv[1]
+							if key == "username" { options.username = val }
+							if key == "address" { options.address = val }
+							if key == "port" {
+								v, ok := strconv.parse_int(val)
+								if ok && v >= 1 && v <= 65535 { options.port = u16(v) }
+							}
+							delete(kv)
+						}
+					}
+				}
+				options.mode = target.Mode.Client
+			} else if strings.has_suffix(arg, ".kine") || strings.has_suffix(arg, ".KINE") {
+				if options.map_path != "" {fmt.eprintln("Only one .kine file can be loaded"); return options, false}
 				options.map_path = arg
 				options.playtest = true
 			} else {
@@ -131,6 +159,9 @@ startup_options :: proc() -> (Startup_Options, bool) {
 		options.address = "0.0.0.0"
 	} else if options.address == "" && !options.standalone {
 		options.address = "127.0.0.1"
+	}
+	if options.username == "" {
+		if options.mode == target.Mode.Client { options.username = "Player" } else { options.username = "Server" }
 	}
 	return options, true
 }

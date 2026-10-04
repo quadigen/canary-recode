@@ -15,6 +15,7 @@ package main
 // really went over the wire.
 
 import "core:fmt"
+import "core:slice"
 import assetstore "../src/engine/assetstore"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
@@ -37,6 +38,15 @@ bytes_of :: proc(text: string) -> [dynamic]u8 {
 	for ch in text {
 		append(&out, u8(ch))
 	}
+	return out
+}
+
+// repeated_bytes builds `size` bytes whose value depends on the offset, so a
+// reassembled asset can be compared byte for byte and not merely by length. A
+// buffer of constant bytes would survive almost any chunking mistake.
+repeated_bytes :: proc(size: int, seed: u8) -> [dynamic]u8 {
+	out := make([dynamic]u8, size)
+	for index in 0 ..< size {out[index] = u8(index) + seed}
 	return out
 }
 
@@ -113,7 +123,21 @@ main :: proc() {
 	texture_bytes := bytes_of("TEXTURE-BYTES-FOR-TEST")
 	texture_id := assetstore.Register(texture_bytes[:], "textures/hero.png", .Texture)
 	defer delete(texture_id)
-	check_frame("fixtures published into the store", mesh_id != "" && texture_id != "")
+
+	// Past the ceiling replication_send puts on a single frame. Meshes are
+	// routinely this size -- a glTF mesh with baked textures runs to several
+	// megabytes -- and one of them used to abort the whole table, leaving the
+	// client unable to resolve any kineasset:// reference and rendering the
+	// model as a primitive box.
+	BIG_ASSET_SIZE :: 1536 * 1024
+	big_bytes := repeated_bytes(BIG_ASSET_SIZE, 7)
+	big_id := assetstore.Register(big_bytes[:], "meshes/big.fbx", .Mesh)
+	defer delete(big_id)
+
+	check_frame(
+		"fixtures published into the store",
+		mesh_id != "" && texture_id != "" && big_id != "",
+	)
 
 	run_script(&server_vm, `
 local r = game:GetService("ReplicatorService")
@@ -187,7 +211,7 @@ assert(r:ConnectClient("127.0.0.1", 39471))
 		client_service.assets_received == server_service.assets_sent,
 	)
 	check_frame("no asset was refused", client_service.asset_rejections == 0)
-	expected_bytes := len("MESH-BYTES-FOR-TEST") + len("TEXTURE-BYTES-FOR-TEST")
+	expected_bytes := len("MESH-BYTES-FOR-TEST") + len("TEXTURE-BYTES-FOR-TEST") + BIG_ASSET_SIZE
 	check_frame(
 		"the bytes that arrived match what was sent",
 		client_service.asset_bytes_received == u64(expected_bytes),
@@ -228,6 +252,102 @@ assert(r:ConnectClient("127.0.0.1", 39471))
 			"an overstated closing frame is counted as a rejection",
 			client_service.asset_rejections == before + 1,
 		)
+	}
+
+	// -------------------------------------------------------------------------
+	// A mesh is routinely larger than one frame, so it travels as a Begin frame
+	// followed by Chunks. Two things have to hold: every frame stays inside the
+	// cap the sender enforces, and the reassembled bytes are identical to what
+	// was sent. A length-only check would pass on a chunker that reordered or
+	// dropped a slice, which is the failure that actually corrupts a model.
+	// -------------------------------------------------------------------------
+	{
+		HUGE :: 700 * 1024
+		source := repeated_bytes(HUGE, 3)
+		defer delete(source)
+
+		// subtype + index on the chunk, plus the 5 byte frame header that
+		// replication_send adds. If this fails, a full sized chunk cannot fit a
+		// frame and a chunked asset deadlocks against its own limit.
+		check_frame(
+			"a full sized chunk still fits inside one frame",
+			int(services.Replication_Asset_Max_Chunk) + 1 + 4 + 5 <=
+				int(services.Replication_Max_Frame_Payload),
+		)
+
+		begin: [dynamic]u8
+		defer delete(begin)
+		services.encode_asset_begin(
+			&begin,
+			"0123456789abcdef",
+			"meshes/huge.fbx",
+			assetstore.Asset_Kind.Mesh,
+			u32(HUGE),
+		)
+		// The subtype byte is consumed by the dispatcher, so the decoder is
+		// handed the frame the way it is at runtime.
+		reader := services.Replication_Reader{data = begin[1:], valid = true}
+		id, path, kind, total, accepted := services.decode_asset_begin(&reader)
+		check_frame(
+			"a chunked asset announces its size and identity",
+			accepted &&
+			id == "0123456789abcdef" &&
+			path == "meshes/huge.fbx" &&
+			kind == assetstore.Asset_Kind.Mesh &&
+			total == u32(HUGE),
+		)
+
+		// An announced total beyond what the store would ever accept is a claim
+		// about memory this client is being asked to reserve, so it is refused
+		// before any bytes are accepted.
+		overblown: [dynamic]u8
+		defer delete(overblown)
+		services.encode_asset_begin(
+			&overblown,
+			"0123456789abcdef",
+			"meshes/huge.fbx",
+			assetstore.Asset_Kind.Mesh,
+			0xFFFFFFFF,
+		)
+		reader = services.Replication_Reader{data = overblown[1:], valid = true}
+		_, _, _, _, accepted = services.decode_asset_begin(&reader)
+		check_frame("an absurd announced total is refused", !accepted)
+		check_frame("an absurd total is reported as a reader fault", !reader.valid)
+
+		CHUNK :: 128 * 1024
+		rebuilt: [dynamic]u8
+		defer delete(rebuilt)
+		in_order := true
+		expected_index := 0
+		for start := 0; start < HUGE; start += CHUNK {
+			end := min(start + CHUNK, HUGE)
+			frame: [dynamic]u8
+			services.encode_asset_chunk(&frame, u32(expected_index), source[start:end])
+			chunk_reader := services.Replication_Reader{data = frame[1:], valid = true}
+			index, data, chunk_ok := services.decode_asset_chunk(&chunk_reader)
+			if !chunk_ok || int(index) != expected_index {in_order = false}
+			expected_index += 1
+			append(&rebuilt, ..data)
+			delete(frame)
+		}
+		check_frame("every chunk of a large asset is accepted", in_order)
+		check_frame("a large asset is split across several chunks", expected_index > 1)
+		check_frame(
+			"a chunked asset reassembles byte for byte",
+			len(rebuilt) == HUGE &&
+			slice.equal(rebuilt[:], source[:]),
+		)
+
+		// A chunk larger than the per frame ceiling is refused outright rather
+		// than copied into a reassembly buffer.
+		oversized_body := repeated_bytes(int(services.Replication_Asset_Max_Chunk) + 1, 9)
+		defer delete(oversized_body)
+		oversized: [dynamic]u8
+		defer delete(oversized)
+		services.encode_asset_chunk(&oversized, 0, oversized_body[:])
+		chunk_reader := services.Replication_Reader{data = oversized[1:], valid = true}
+		_, _, accepted = services.decode_asset_chunk(&chunk_reader)
+		check_frame("an oversized chunk is refused", !accepted)
 	}
 
 	fmt.println("ASSET_REPLICATION_PASSED")

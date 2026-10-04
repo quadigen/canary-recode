@@ -39,6 +39,7 @@
 #include <vector>
 #include <deque>
 #include <mutex>
+#include <atomic>
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
@@ -59,18 +60,32 @@ void TraceJolt(const char* format, ...)
     std::fflush(stderr);
 }
 
+// Membership test over a caller-owned list of packed body IDs.
+//
+// Jolt calls this for every body that the broad phase and the narrow phase
+// visit, so the cost of one test is multiplied by the number of bodies a query
+// touches. Testing membership with a linear scan therefore makes a raycast or a
+// character sweep in a scene of N bodies cost O(N) per body visited, which is
+// quadratic in N overall and made casting far more expensive than the broad
+// phase underneath it.
+//
+// A short list keeps the scan, because below roughly this size it beats building
+// an index. A long one is loaded into an open-addressed set once per query, for
+// O(1) membership. The set's storage is thread_local and kept between calls, so
+// a steady stream of queries allocates nothing after the first.
 class BodyIDFilter final : public JPH::BodyFilter
 {
 public:
     BodyIDFilter(const JPH_BodyID* bodyIDs, uint32_t count, bool include)
-        : mBodyIDs(bodyIDs), mCount(count), mInclude(include) {}
+        : mBodyIDs(bodyIDs), mCount(count), mInclude(include)
+    {
+        if (count > kLinearScanLimit)
+            Build();
+    }
 
     bool ShouldCollide(const JPH::BodyID& bodyID) const override
     {
-        const JPH_BodyID packedID = bodyID.GetIndexAndSequenceNumber();
-        const bool found = mBodyIDs != nullptr
-            && std::find(mBodyIDs, mBodyIDs + mCount, packedID) != mBodyIDs + mCount;
-        return mInclude ? found : !found;
+        return mInclude ? Contains(bodyID) : !Contains(bodyID);
     }
 
     bool ShouldCollideLocked(const JPH::Body& body) const override
@@ -79,10 +94,74 @@ public:
     }
 
 private:
+    static constexpr uint32_t kLinearScanLimit = 24;
+
+    // A body ID that is never handed out by Jolt, so it cannot collide with a
+    // real member. 0xffffffff is JPH_BODY_ID_INVALID and does occur, but every
+    // other value with the broad phase bit set is rejected by Jolt's own
+    // BodyID constructor.
+    static constexpr JPH_BodyID kEmptySlot = 0xfffffffeu;
+
+    static thread_local std::vector<JPH_BodyID> sSlots;
+
+    static uint32_t Hash(JPH_BodyID id)
+    {
+        // Multiplicative hashing. Body IDs are a dense index/sequence pair, so
+        // the low bits on their own are nearly sequential and would pile into a
+        // handful of buckets in a power-of-two table.
+        return id * 2654435761u;
+    }
+
+    void Build()
+    {
+        uint32_t capacity = kLinearScanLimit * 2;
+        while (capacity < mCount * 2)
+            capacity <<= 1;
+
+        sSlots.resize(capacity);
+        std::fill(sSlots.begin(), sSlots.end(), kEmptySlot);
+
+        const uint32_t mask = capacity - 1;
+        for (uint32_t i = 0; i < mCount; ++i)
+        {
+            uint32_t slot = Hash(mBodyIDs[i]) & mask;
+            while (sSlots[slot] != kEmptySlot)
+                slot = (slot + 1) & mask;
+            sSlots[slot] = mBodyIDs[i];
+        }
+    }
+
+    bool Contains(const JPH::BodyID& bodyID) const
+    {
+        const JPH_BodyID packedID = bodyID.GetIndexAndSequenceNumber();
+
+        if (mCount <= kLinearScanLimit)
+        {
+            for (uint32_t i = 0; i < mCount; ++i)
+                if (mBodyIDs[i] == packedID)
+                    return true;
+            return false;
+        }
+
+        const uint32_t mask = static_cast<uint32_t>(sSlots.size()) - 1;
+        uint32_t slot = Hash(packedID) & mask;
+        for (;;)
+        {
+            const JPH_BodyID stored = sSlots[slot];
+            if (stored == kEmptySlot)
+                return false;
+            if (stored == packedID)
+                return true;
+            slot = (slot + 1) & mask;
+        }
+    }
+
     const JPH_BodyID* mBodyIDs;
     uint32_t mCount;
     bool mInclude;
 };
+
+thread_local std::vector<JPH_BodyID> BodyIDFilter::sSlots;
 
 inline JPH::Vec3 ToJPH(const JPH_Vec3& v)
 {
@@ -527,21 +606,91 @@ void JPH_Shutdown(void)
     sJphInitialized = false;
 }
 
+uint32_t JPH_Get_Num_Cores(void)
+{
+    return JPH::thread::hardware_concurrency() == 0
+        ? 1
+        : static_cast<uint32_t>(JPH::thread::hardware_concurrency());
+}
+
+// Counts worker threads that a pool has actually started.
+//
+// This exists so a caller can tell "a pool was requested" from "the process really
+// has N extra threads doing work". Those are different claims: a scene of bodies
+// that are not touching forms one island per body, each solved independently, so
+// it produces bit-identical results whether one thread or fifteen are available,
+// and comparing results cannot distinguish the two. Without a hook like this the
+// only honest check is a timing comparison, which is too noisy to assert on.
+//
+// Jolt exposes SetThreadInitFunction/SetThreadExitFunction as std::function, so
+// the callbacks capture this counter and no global lookup is needed at the call
+// site. It tracks the most recently created pool, which is all a diagnostic needs;
+// concurrent pools would conflate their counts.
+struct WorkerThreadTally
+{
+    std::atomic<int> live{0};
+};
+
+WorkerThreadTally &worker_tally()
+{
+    static WorkerThreadTally tally;
+    return tally;
+}
+
 JPH_JobSystemRef JPH_JobSystemThreadPool_Create(const JPH_JobSystemConfig* config)
 {
     if (config == nullptr)
         return nullptr;
 
+    // One unit of concurrency is the thread that called Create: Jolt's pool
+    // treats the count as inclusive of the submitting thread and spawns
+    // maxConcurrency - 1 OS threads. A request for concurrency 1 therefore has
+    // nothing to spawn, and the single-threaded job system is both the correct
+    // and the cheaper answer.
     if (config->maxConcurrency <= 1)
         return new JPH::JobSystemSingleThreaded(JPH::cMaxPhysicsJobs);
 
-    auto* jobSystem = new JPH::JobSystemThreadPool(
+    auto *pool = new JPH::JobSystemThreadPool(
         JPH::cMaxPhysicsJobs,
         JPH::cMaxPhysicsBarriers,
         static_cast<int>(config->maxConcurrency - 1)
     );
 
-    return jobSystem;
+    if (config->observeThreads != 0)
+    {
+        // Must be set before Init, which is what starts the threads.
+        worker_tally().live.store(0, std::memory_order_relaxed);
+        pool->SetThreadInitFunction([](int) {
+            worker_tally().live.fetch_add(1, std::memory_order_relaxed);
+        });
+        pool->SetThreadExitFunction([](int) {
+            worker_tally().live.fetch_sub(1, std::memory_order_relaxed);
+        });
+    }
+
+    return pool;
+}
+
+uint32_t JPH_JobSystem_Get_Num_Threads(JPH_JobSystemRef jobSystem)
+{
+    if (jobSystem == nullptr)
+        return 0;
+
+    JPH::JobSystem *system = reinterpret_cast<JPH::JobSystem *>(jobSystem);
+    const int concurrency = system->GetMaxConcurrency();
+    return concurrency < 0 ? 0u : static_cast<uint32_t>(concurrency);
+}
+
+uint32_t JPH_JobSystem_Get_Observed_Thread_Count(JPH_JobSystemRef jobSystem)
+{
+    if (jobSystem == nullptr)
+        return 0;
+
+    // Threads that can run jobs: the caller's own thread, plus the pool's workers
+    // that have started and not yet exited. A pool that never reported a start
+    // has no workers, so this correctly reports 1 rather than a hopeful number.
+    const int live = worker_tally().live.load(std::memory_order_relaxed);
+    return static_cast<uint32_t>(live > 0 ? live + 1 : 1);
 }
 
 void JPH_JobSystem_Destroy(JPH_JobSystemRef jobSystem)
@@ -1049,6 +1198,31 @@ JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings* s
 void JPH_PhysicsSystem_Destroy(JPH_PhysicsSystemRef system)
 {
     delete ToPhysicsSystem(system);
+}
+
+void JPH_PhysicsSystem_SetPhysicsSettings(
+    JPH_PhysicsSystemRef system,
+    const JPH_PhysicsSettings* settings
+)
+{
+    if (system == nullptr || settings == nullptr)
+        return;
+
+    // Copy-modify-write rather than mutating in place: Jolt only offers a const
+    // getter plus a whole-struct setter, and starting from the current value
+    // means every field this wrapper does not name keeps the value Jolt chose.
+    // Each field is then copied across individually rather than assigned as a
+    // block, so a Jolt default that moves cannot scramble the others.
+    JPH::PhysicsSettings tuned = ToPhysicsSystem(system)->GetPhysicsSettings();
+    tuned.mNumVelocitySteps = settings->numVelocitySteps;
+    tuned.mNumPositionSteps = settings->numPositionSteps;
+    tuned.mSpeculativeContactDistance = settings->speculativeContactDistance;
+    tuned.mMinVelocityForRestitution = settings->minVelocityForRestitution;
+    tuned.mTimeBeforeSleep = settings->timeBeforeSleep;
+    tuned.mPointVelocitySleepThreshold = settings->pointVelocitySleepThreshold;
+    tuned.mAllowSleeping = settings->allowSleeping != 0;
+
+    ToPhysicsSystem(system)->SetPhysicsSettings(tuned);
 }
 
 JPH_BodyInterfaceRef JPH_PhysicsSystem_GetBodyInterface(JPH_PhysicsSystemRef system)

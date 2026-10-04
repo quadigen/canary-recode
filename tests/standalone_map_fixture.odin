@@ -113,13 +113,17 @@ author_fixture :: proc(destroy: bool) {
 	classes.Set_Parent(local_script, template)
 	vm.Pop(source_vm.L)
 
+	fixture_err := serializer.Serialize_To_File(
+		&source.classes,
+		source_vm.L,
+		&source.services.data_model.object,
+		FIXTURE_PATH,
+	)
+	serializer.Error_Print(fixture_err, "could not write the fixture map: ")
+	serializer.Error_Delete(&fixture_err)
 	assert(
-		serializer.Serialize_To_File(
-			&source.classes,
-			source_vm.L,
-			&source.services.data_model.object,
-			FIXTURE_PATH,
-		),
+		serializer.Error_Is_None(fixture_err),
+		"the fixture map should serialize",
 	)
 	fmt.println("FIXTURE_WRITTEN", FIXTURE_PATH)
 

@@ -1,41 +1,72 @@
 package services
 
-import "core:math"
-import "core:strings"
 import assetstore "../assetstore"
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import jolt "../physics"
-import kineffi "../bindings"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:math"
+import "core:strings"
 
 physics_finite_f32 :: proc(value: f32) -> bool {
 	return value == value && value > -1.0e20 && value < 1.0e20
 }
 
 physics_valid_cframe :: proc(cf: datatypes.CFrame) -> bool {
-	return physics_finite_f32(cf.x) && physics_finite_f32(cf.y) && physics_finite_f32(cf.z) &&
-		physics_finite_f32(cf.r00) && physics_finite_f32(cf.r01) && physics_finite_f32(cf.r02) &&
-		physics_finite_f32(cf.r10) && physics_finite_f32(cf.r11) && physics_finite_f32(cf.r12) &&
-		physics_finite_f32(cf.r20) && physics_finite_f32(cf.r21) && physics_finite_f32(cf.r22)
+	return(
+		physics_finite_f32(cf.x) &&
+		physics_finite_f32(cf.y) &&
+		physics_finite_f32(cf.z) &&
+		physics_finite_f32(cf.r00) &&
+		physics_finite_f32(cf.r01) &&
+		physics_finite_f32(cf.r02) &&
+		physics_finite_f32(cf.r10) &&
+		physics_finite_f32(cf.r11) &&
+		physics_finite_f32(cf.r12) &&
+		physics_finite_f32(cf.r20) &&
+		physics_finite_f32(cf.r21) &&
+		physics_finite_f32(cf.r22) \
+	)
 }
 
 physics_quaternion_from_cframe :: proc(cf: datatypes.CFrame) -> kineffi.JPH_Quat {
 	trace := cf.r00 + cf.r11 + cf.r22
 	result: kineffi.JPH_Quat
 	if trace > 0 {
-		s := math.sqrt(trace+1.0)*2.0
-		result = kineffi.JPH_Quat{(cf.r21-cf.r12)/s, (cf.r02-cf.r20)/s, (cf.r10-cf.r01)/s, 0.25*s}
+		s := math.sqrt(trace + 1.0) * 2.0
+		result = kineffi.JPH_Quat {
+			(cf.r21 - cf.r12) / s,
+			(cf.r02 - cf.r20) / s,
+			(cf.r10 - cf.r01) / s,
+			0.25 * s,
+		}
 	} else if cf.r00 > cf.r11 && cf.r00 > cf.r22 {
-		s := math.sqrt(1.0+cf.r00-cf.r11-cf.r22)*2.0
-		result = kineffi.JPH_Quat{0.25*s, (cf.r01+cf.r10)/s, (cf.r02+cf.r20)/s, (cf.r21-cf.r12)/s}
+		s := math.sqrt(1.0 + cf.r00 - cf.r11 - cf.r22) * 2.0
+		result = kineffi.JPH_Quat {
+			0.25 * s,
+			(cf.r01 + cf.r10) / s,
+			(cf.r02 + cf.r20) / s,
+			(cf.r21 - cf.r12) / s,
+		}
 	} else if cf.r11 > cf.r22 {
-		s := math.sqrt(1.0+cf.r11-cf.r00-cf.r22)*2.0
-		result = kineffi.JPH_Quat{(cf.r01+cf.r10)/s, 0.25*s, (cf.r12+cf.r21)/s, (cf.r02-cf.r20)/s}
+		s := math.sqrt(1.0 + cf.r11 - cf.r00 - cf.r22) * 2.0
+		result = kineffi.JPH_Quat {
+			(cf.r01 + cf.r10) / s,
+			0.25 * s,
+			(cf.r12 + cf.r21) / s,
+			(cf.r02 - cf.r20) / s,
+		}
 	} else {
-		s := math.sqrt(1.0+cf.r22-cf.r00-cf.r11)*2.0
-		result = kineffi.JPH_Quat{(cf.r02+cf.r20)/s, (cf.r12+cf.r21)/s, 0.25*s, (cf.r10-cf.r01)/s}
+		s := math.sqrt(1.0 + cf.r22 - cf.r00 - cf.r11) * 2.0
+		result = kineffi.JPH_Quat {
+			(cf.r02 + cf.r20) / s,
+			(cf.r12 + cf.r21) / s,
+			0.25 * s,
+			(cf.r10 - cf.r01) / s,
+		}
 	}
 	return result
 }
@@ -43,12 +74,22 @@ physics_quaternion_from_cframe :: proc(cf: datatypes.CFrame) -> kineffi.JPH_Quat
 physics_shape_for_part :: proc(
 	service: ^Physics,
 	part: ^classes.Part,
+	mesh_part: ^classes.MeshPart = nil,
 ) -> kineffi.JPH_ShapeRef {
-	half := datatypes.Vector3{max(part.size.x*0.5, 0.001), max(part.size.y*0.5, 0.001), max(part.size.z*0.5, 0.001)}
+	half := datatypes.Vector3 {
+		max(part.size.x * 0.5, 0.001),
+		max(part.size.y * 0.5, 0.001),
+		max(part.size.z * 0.5, 0.001),
+	}
 	scale := datatypes.Vector3{half.x, half.y, half.z}
 
-	if classes.Is_A(&part.object, "MeshPart") {
-		if shape := physics_meshpart_shape(service, cast(^classes.MeshPart)part, scale); shape != nil {
+
+	mesh := mesh_part
+	if mesh == nil {
+		mesh = physics_mesh_part_of(part)
+	}
+	if mesh != nil {
+		if shape := physics_meshpart_shape(service, mesh, scale); shape != nil {
 			return shape
 		}
 	}
@@ -79,39 +120,39 @@ physics_shape_for_part :: proc(
 	}
 }
 
-physics_wedge_verts := [6]datatypes.Vector3{
-	{ 1, -1, -1},
-	{ 1, -1,  1},
-	{-1,  1, -1},
+physics_wedge_verts := [6]datatypes.Vector3 {
+	{1, -1, -1},
+	{1, -1, 1},
+	{-1, 1, -1},
 	{-1, -1, -1},
-	{-1,  1,  1},
-	{-1, -1,  1},
+	{-1, 1, 1},
+	{-1, -1, 1},
 }
 
-physics_corner_wedge_verts := [7]datatypes.Vector3{
+physics_corner_wedge_verts := [7]datatypes.Vector3 {
 	{-1, -1, 1},
 	{-1, -1, -1},
-	{ 1, -1, 1},
-	{ 1, -1, -1},
-	{-1,  1, 1},
-	{-1,  1, -1},
-	{ 1,  1, 1},
+	{1, -1, 1},
+	{1, -1, -1},
+	{-1, 1, 1},
+	{-1, 1, -1},
+	{1, 1, 1},
 }
 
-physics_pyramid_verts := [5]datatypes.Vector3{
+physics_pyramid_verts := [5]datatypes.Vector3 {
 	{-1, -1, 1},
 	{-1, -1, -1},
-	{ 1, -1, 1},
-	{ 1, -1, -1},
-	{ 0,  1,  0},
+	{1, -1, 1},
+	{1, -1, -1},
+	{0, 1, 0},
 }
 
-physics_triangle_wedge_verts := [5]datatypes.Vector3{
+physics_triangle_wedge_verts := [5]datatypes.Vector3 {
 	{-1, -1, 1},
 	{-1, -1, -1},
-	{ 1, -1, 1},
-	{ 1, -1, -1},
-	{-1,  1,  1},
+	{1, -1, 1},
+	{1, -1, -1},
+	{-1, 1, 1},
 }
 
 physics_convex_hull_shape :: proc(
@@ -124,26 +165,21 @@ physics_convex_hull_shape :: proc(
 	points := make([]kineffi.JPH_Vec3, len(unit_verts))
 	defer delete(points)
 	for vert, i in unit_verts {
-		points[i] = kineffi.JPH_Vec3{
-			vert.x * scale.x,
-			vert.y * scale.y,
-			vert.z * scale.z,
-		}
+		points[i] = kineffi.JPH_Vec3{vert.x * scale.x, vert.y * scale.y, vert.z * scale.z}
 	}
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(points), u32(len(points)), 0)
 }
 
 physics_cone_shape :: proc(scale: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 	SEGMENTS :: 16
-	points := make([dynamic]kineffi.JPH_Vec3, 0, SEGMENTS+1)
+	points := make([dynamic]kineffi.JPH_Vec3, 0, SEGMENTS + 1)
 	defer delete(points)
 	for i in 0 ..< SEGMENTS {
 		angle := f32(i) * 2.0 * math.PI / SEGMENTS
-		append(&points, kineffi.JPH_Vec3{
-			math.cos(angle) * scale.x,
-			-scale.y,
-			math.sin(angle) * scale.z,
-		})
+		append(
+			&points,
+			kineffi.JPH_Vec3{math.cos(angle) * scale.x, -scale.y, math.sin(angle) * scale.z},
+		)
 	}
 	append(&points, kineffi.JPH_Vec3{0, scale.y, 0})
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(points), u32(len(points)), 0)
@@ -151,7 +187,7 @@ physics_cone_shape :: proc(scale: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 
 physics_capsule_shape :: proc(size: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 	radius := max(min(size.x, size.z) * 0.5, 0.001)
-	half_height := max(size.y*0.5 - radius, 0)
+	half_height := max(size.y * 0.5 - radius, 0)
 	return kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
 }
 
@@ -160,10 +196,15 @@ physics_meshpart_shape :: proc(
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
 ) -> kineffi.JPH_ShapeRef {
-	if classes.Is_A(&mesh_part.object, "MeshPart") && (mesh_part.mesh_id != "" || mesh_part.editable_mesh_id != 0) {
+	if classes.Is_A(&mesh_part.object, "MeshPart") &&
+	   (mesh_part.mesh_id != "" || mesh_part.editable_mesh_id != 0) {
 		#partial switch mesh_part.collision_fidelity {
 		case .Box:
-			half := datatypes.Vector3{max(mesh_part.size.x*0.5, 0.001), max(mesh_part.size.y*0.5, 0.001), max(mesh_part.size.z*0.5, 0.001)}
+			half := datatypes.Vector3 {
+				max(mesh_part.size.x * 0.5, 0.001),
+				max(mesh_part.size.y * 0.5, 0.001),
+				max(mesh_part.size.z * 0.5, 0.001),
+			}
 			value := kineffi.JPH_Vec3{half.x, half.y, half.z}
 			return kineffi.JPH_BoxShape_Create(&value, 0)
 		case .Hull, .Default:
@@ -177,14 +218,18 @@ physics_meshpart_shape :: proc(
 
 physics_load_mesh_data :: proc(
 	mesh_part: ^classes.MeshPart,
-) -> ([]kineffi.JPH_Vec3, [dynamic]u32, bool) {
-	// Physics reads collision data through a path-only binding, so an embedded
-	// mesh is extracted to the content-addressed cache first.
+) -> (
+	[]kineffi.JPH_Vec3,
+	[dynamic]u32,
+	bool,
+) {
+
+
 	resolved := assetstore.Resolve_Path(mesh_part.mesh_id)
 	defer delete(resolved)
 	if resolved == "" {
-		// No collision data is quieter than no render mesh: the part looks
-		// correct and simply does not collide. Name the reason.
+
+
 		assetstore.Report_Missing_Asset(mesh_part.mesh_id, "Physics collision mesh")
 		return nil, nil, false
 	}
@@ -200,17 +245,22 @@ physics_load_mesh_data :: proc(
 	if vertex_count <= 0 || index_count < 3 || index_count % 3 != 0 {
 		return nil, nil, false
 	}
-	positions := make([]f32, vertex_count*3)
+	positions := make([]f32, vertex_count * 3)
 	defer delete(positions)
 	indices := make([]u32, index_count)
 	defer delete(indices)
-	if kineffi.Kine_Filament_CopyMeshDataPositions(data, raw_data(positions), i32(len(positions))) == 0 ||
+	if kineffi.Kine_Filament_CopyMeshDataPositions(
+		   data,
+		   raw_data(positions),
+		   i32(len(positions)),
+	   ) ==
+		   0 ||
 	   kineffi.Kine_Filament_CopyMeshDataIndices(data, raw_data(indices), i32(len(indices))) == 0 {
 		return nil, nil, false
 	}
 	verts := make([]kineffi.JPH_Vec3, vertex_count)
 	for i in 0 ..< vertex_count {
-		verts[i] = kineffi.JPH_Vec3{positions[i*3], positions[i*3+1], positions[i*3+2]}
+		verts[i] = kineffi.JPH_Vec3{positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]}
 	}
 	idx := make([dynamic]u32, index_count)
 	copy(idx[:], indices)
@@ -233,7 +283,7 @@ physics_mesh_hull_shape :: proc(
 	}
 	defer delete(verts)
 	for i in 0 ..< len(verts) {
-		verts[i] = kineffi.JPH_Vec3{
+		verts[i] = kineffi.JPH_Vec3 {
 			verts[i].x * scale.x,
 			verts[i].y * scale.y,
 			verts[i].z * scale.z,
@@ -247,7 +297,10 @@ physics_mesh_hull_shape :: proc(
 
 physics_editable_mesh_vertices :: proc(
 	mesh_part: ^classes.MeshPart,
-) -> ([]kineffi.JPH_Vec3, bool) {
+) -> (
+	[]kineffi.JPH_Vec3,
+	bool,
+) {
 	mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
 	if mesh == nil {
 		return nil, false
@@ -265,7 +318,7 @@ physics_editable_mesh_vertices :: proc(
 	}
 	verts := make([]kineffi.JPH_Vec3, len(corners))
 	for corner, i in corners {
-		verts[i] = kineffi.JPH_Vec3{
+		verts[i] = kineffi.JPH_Vec3 {
 			(corner.position.x - center.x) * scale.x,
 			(corner.position.y - center.y) * scale.y,
 			(corner.position.z - center.z) * scale.z,
@@ -276,7 +329,11 @@ physics_editable_mesh_vertices :: proc(
 
 physics_editable_mesh_triangles :: proc(
 	mesh_part: ^classes.MeshPart,
-) -> ([]kineffi.JPH_Vec3, [dynamic]u32, bool) {
+) -> (
+	[]kineffi.JPH_Vec3,
+	[dynamic]u32,
+	bool,
+) {
 	mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
 	if mesh == nil {
 		return nil, nil, false
@@ -295,7 +352,7 @@ physics_editable_mesh_triangles :: proc(
 	verts := make([]kineffi.JPH_Vec3, len(corners))
 	idx := make([dynamic]u32, len(corners))
 	for corner, i in corners {
-		verts[i] = kineffi.JPH_Vec3{
+		verts[i] = kineffi.JPH_Vec3 {
 			(corner.position.x - center.x) * scale.x,
 			(corner.position.y - center.y) * scale.y,
 			(corner.position.z - center.z) * scale.z,
@@ -318,11 +375,11 @@ physics_mesh_pcd_shape :: proc(
 			version = mesh.version
 		}
 	}
-	key := Physics_Shape_Cache_Key{
-		mesh_id = strings.clone(mesh_part.mesh_id),
-		editable_mesh_id = mesh_part.editable_mesh_id,
+	key := Physics_Shape_Cache_Key {
+		mesh_id               = strings.clone(mesh_part.mesh_id),
+		editable_mesh_id      = mesh_part.editable_mesh_id,
 		editable_mesh_version = version,
-		size = mesh_part.size,
+		size                  = mesh_part.size,
 	}
 	if service != nil && service.pcd_cache != nil {
 		if cached, ok := service.pcd_cache[key]; ok {
@@ -369,108 +426,117 @@ part_in_character_model :: proc(part: ^classes.Part) -> bool {
 	if part == nil {return false}
 	node: ^classes.Object = &part.object
 	for node != nil {
-		if classes.Is_A(node, "CharacterModel") {return true}
+
+
+		if classes.Is_A_Class(node, &classes.CharacterModel_Class) {return true}
 		node = node.parent
 	}
 	return false
 }
 
-physics_remote_owned :: proc(service: ^Physics, part: ^classes.Part) -> bool {
+
+Physics_Ownership_Context :: struct {
+	replicator: ^ReplicatorService,
+	players:    ^Players,
+}
+
+physics_ownership_context :: proc(service: ^Physics) -> Physics_Ownership_Context {
+
+	resolved: Physics_Ownership_Context
+	if service == nil || service.data_model == nil {return resolved}
+
+
+	when ODIN_OS == .JS {
+		return resolved
+	} else {
+		resolved.replicator = cast(^ReplicatorService)DataModel_Get_Service(
+			service.data_model,
+			"ReplicatorService",
+		)
+		resolved.players = cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+		return resolved
+	}
+}
+
+physics_remote_owned :: proc(
+	service: ^Physics,
+	part: ^classes.Part,
+	ownership: Physics_Ownership_Context,
+) -> bool {
 	if service == nil || service.data_model == nil || part == nil {return false}
-	// ReplicatorService and replication_entity live in `#+build !js` files, and
-	// there is no replication on Web at all. Reporting "not remotely owned" is
-	// the same answer the nil-replicator check below already gives, so the Web
-	// build keeps every Part locally authoritative and its body dynamic.
+
+
 	when ODIN_OS == .JS {
 		return false
 	} else {
-		replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+		replicator := ownership.replicator
 		if replicator == nil || replicator.mode == .Stopped {return false}
 		entity := replication_entity(replicator, &part.object)
 		if entity == nil {return false}
-		// The two roles are asymmetric here, and this used to share a single early
-		// exit for owner_id == 0, which is wrong in opposite directions on each
-		// side.
-		//
-		// On the server, owner_id 0 means "nobody owns this, the server simulates
-		// it", so it is local authority and the body stays dynamic.
-		//
-		// On a client, owner_id 0 means "the server owns this". Treating that as
-		// local authority made the client build a dynamic body and run its own Jolt
-		// simulation of a Part the server is already simulating. The same Part then
-		// had two disagreeing sources of motion: the client's integration drifted
-		// away from the replicated transform, and because the client's solver was
-		// also resolving contacts the server never resolved, replicated Parts
-		// visibly collided with and shoved each other around on the client only.
-		//
-		// So the client branch is decided before the owner_id check, and only a
-		// Part this client actually owns is simulated locally.
+
+
 		if replicator.mode == .Client {
-			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
-			// With no local player yet nothing can be the owner, so every replicated
-			// Part belongs to the server and none may be simulated here.
+			players := ownership.players
+
+
 			if players == nil || players.local_player == nil {return true}
 			return entity.owner_id != players.local_player.user_id
 		}
-		// On the server an unowned Part is simulated locally; one with an owner is
-		// driven by that client and must stay static so the two solvers never both
-		// move it.
+
+
 		return entity.owner_id != 0
 	}
 }
 
-// physics_part_awaiting_transform reports whether `part` is a replicated Part on
-// a client that has not yet been sent an authoritative transform.
-//
-// Such a Part exists only because its spawn arrived; it is sitting at whatever
-// transform its constructor produced, which for a Part is the world origin.
-// Building a body from that placeholder is what put a burst of newly replicated
-// Parts in a heap at the middle of the map, colliding with each other and with
-// whatever else lives near the origin. Declining the body is safe: the first
-// transform is sent reliably in the same snapshot pass as the spawn, so the body
-// is built on the next synchronize from the real transform instead.
-physics_part_awaiting_transform :: proc(service: ^Physics, part: ^classes.Part) -> bool {
+
+physics_part_awaiting_transform :: proc(
+	service: ^Physics,
+	part: ^classes.Part,
+	ownership: Physics_Ownership_Context,
+) -> bool {
 	if service == nil || service.data_model == nil || part == nil {return false}
-	// Nothing is replicated on Web, so no Part is ever awaiting an authoritative
-	// transform and the body is built from the local transform straight away.
+
+
 	when ODIN_OS == .JS {
 		return false
 	} else {
-		replicator := cast(^ReplicatorService)DataModel_Get_Service(service.data_model, "ReplicatorService")
+		replicator := ownership.replicator
 		if replicator == nil || replicator.mode != .Client {return false}
 		entity := replication_entity(replicator, &part.object)
 		return entity != nil && !entity.has_transform
 	}
 }
 
-physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_Body, bool) {
+physics_create_body :: proc(
+	service: ^Physics,
+	part: ^classes.Part,
+	ownership: Physics_Ownership_Context,
+	mesh_part: ^classes.MeshPart = nil,
+) -> (
+	Physics_Body,
+	bool,
+) {
 	if part == nil {return Physics_Body{}, false}
 	if part_in_character_model(part) {return Physics_Body{}, false}
-	// Never build a body from a placeholder transform: a replicated Part the
-	// client has not been given a real position for yet has no business existing
-	// in the solver.
-	if physics_part_awaiting_transform(service, part) {return Physics_Body{}, false}
 
-	shape := physics_shape_for_part(service, part)
+
+	if physics_part_awaiting_transform(service, part, ownership) {return Physics_Body{}, false}
+
+	shape := physics_shape_for_part(service, part, mesh_part)
 	if shape == nil {
 		return Physics_Body{}, false
 	}
 	defer kineffi.JPH_Shape_Destroy(shape)
 
-	position := kineffi.JPH_RVec3{
-		f64(part.cframe.x),
-		f64(part.cframe.y),
-		f64(part.cframe.z),
-	}
+	position := kineffi.JPH_RVec3{f64(part.cframe.x), f64(part.cframe.y), f64(part.cframe.z)}
 
 	rotation := physics_quaternion_from_cframe(part.cframe)
 
-	remote := physics_remote_owned(service, part)
+	remote := physics_remote_owned(service, part, ownership)
 
 	static := part.anchored || remote
 
-	motion_type: kineffi.JPH_MotionType =
-		static ? .Static : .Dynamic
+	motion_type: kineffi.JPH_MotionType = static ? .Static : .Dynamic
 
 	layer: kineffi.JPH_ObjectLayer =
 		static ? jolt.OBJECT_LAYER_NON_MOVING : jolt.OBJECT_LAYER_MOVING
@@ -490,20 +556,11 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 
 	properties := jolt.Material_Get_Properties(part.material)
 
-	kineffi.JPH_BodyCreationSettings_SetFriction(
-		settings,
-		properties.friction,
-	)
+	kineffi.JPH_BodyCreationSettings_SetFriction(settings, properties.friction)
 
-	kineffi.JPH_BodyCreationSettings_SetRestitution(
-		settings,
-		properties.restitution,
-	)
+	kineffi.JPH_BodyCreationSettings_SetRestitution(settings, properties.restitution)
 
-	body := kineffi.JPH_BodyInterface_CreateBody(
-		service.system.body_interface,
-		settings,
-	)
+	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
 
 	if body == nil {
 		return Physics_Body{}, false
@@ -516,69 +573,46 @@ physics_create_body :: proc(service: ^Physics, part: ^classes.Part) -> (Physics_
 		return Physics_Body{}, false
 	}
 
-	activation: kineffi.JPH_ActivationMode =
-		static ? .DontActivate : .Activate
+	activation: kineffi.JPH_ActivationMode = static ? .DontActivate : .Activate
 
-	kineffi.JPH_BodyInterface_AddBody(
-		service.system.body_interface,
-		body_id,
-		activation,
-	)
+	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, activation)
 
 	service.body_to_part[body_id] = part
+
+
+	mesh := mesh_part
+	if mesh == nil {
+		mesh = physics_mesh_part_of(part)
+	}
 
 	mesh_id := ""
 	editable_mesh_id := u32(0)
 
-	if classes.Is_A(&part.object, "MeshPart") {
-		mesh_part := cast(^classes.MeshPart)part
-		mesh_id = strings.clone(mesh_part.mesh_id)
-		editable_mesh_id = mesh_part.editable_mesh_id
+	if mesh != nil {
+		mesh_id = strings.clone(mesh.mesh_id)
+		editable_mesh_id = mesh.editable_mesh_id
 	}
 
-	return Physics_Body{
-		&part.object,
-		body_id,
-		part.size,
-		part.shape,
-		part.anchored,
-		remote,
-		part.cframe,
-		mesh_id,
-		editable_mesh_id,
-		physics_mesh_part_version(part),
-		mesh_part_collision_fidelity(part),
-	}, true
+	return Physics_Body {
+			&part.object,
+			body_id,
+			part.size,
+			part.shape,
+			part.anchored,
+			remote,
+			part.cframe,
+			mesh_id,
+			editable_mesh_id,
+			physics_mesh_part_version(mesh),
+			mesh_part_collision_fidelity(mesh),
+		},
+		true
 }
 
-// ---------------------------------------------------------------------------
-// Terrain collision
-// ---------------------------------------------------------------------------
-// Terrain is a Service holding a voxel map rather than a Part, so the Part walk
-// in Physics_Synchronize never sees it and the solver had no knowledge of the
-// ground at all. Both ends need this body: the server simulates character
-// capsules against it, and a client that can see the terrain but not collide
-// with it falls straight through the world.
-//
-// The shape is one static mesh built from the exposed faces of the solid
-// voxels. A body per voxel does not scale, since a modest terrain is tens of
-// thousands of voxels, and five of every six faces on any interior voxel are
-// buried against its neighbours and contribute nothing to collision.
-//
-// Liquid voxels are deliberately not collidable. Water and glass are stored in
-// the water channel with zero occupancy and the renderer draws them as a
-// surface rather than as rock, so treating them as solid would put an invisible
-// wall along every shoreline.
 
-// Bounds the mesh so a pathological or hostile voxel map cannot make the shape
-// build unbounded. Terrain is generated content, so reaching this means
-// something is already wrong; the body is simply not rebuilt.
 TERRAIN_COLLISION_MAX_TRIANGLES: int = 1 << 21
 
-// physics_terrain_occupies reports whether a cell is solid. Liquids have zero
-// occupancy by construction, so this is the same test the renderer uses to keep
-// them out of the solid mesh, and the two can never disagree about what counts
-// as ground.
+
 physics_terrain_occupies :: proc(terrain: ^Terrain, x, y, z: int) -> bool {
 	cell, ok := terrain.voxels[Terrain_Voxel_Key{x, y, z}]
 	return ok && cell.occupancy > 0
@@ -589,20 +623,14 @@ physics_terrain_corner :: proc(
 	x, y, z: int,
 	corner: [3]int,
 ) -> kineffi.JPH_Vec3 {
-	return kineffi.JPH_Vec3{
+	return kineffi.JPH_Vec3 {
 		f32(x + corner[0]) * terrain.voxel_size,
 		f32(y + corner[1]) * terrain.voxel_size,
 		f32(z + corner[2]) * terrain.voxel_size,
 	}
 }
 
-// physics_terrain_face emits both windings of one voxel face.
-//
-// Both directions are written because a character can legitimately arrive at
-// this surface from either side, and a mesh shape's collision with a back face
-// is not something to depend on here: getting it wrong produces a wall you can
-// stand on top of and fall through from underneath, which is exactly the
-// failure a terrain collider must not have.
+
 physics_terrain_face :: proc(
 	triangles: ^[dynamic]kineffi.JPH_Triangle,
 	terrain: ^Terrain,
@@ -610,61 +638,139 @@ physics_terrain_face :: proc(
 	nx, ny, nz: int,
 	c0, c1, c2, c3: [3]int,
 ) {
-	if len(triangles) + 4 > TERRAIN_COLLISION_MAX_TRIANGLES { return }
-	if physics_terrain_occupies(terrain, x + nx, y + ny, z + nz) { return }
+	if len(triangles) + 4 > TERRAIN_COLLISION_MAX_TRIANGLES {return}
+	if physics_terrain_occupies(terrain, x + nx, y + ny, z + nz) {return}
 
 	a := physics_terrain_corner(terrain, x, y, z, c0)
 	b := physics_terrain_corner(terrain, x, y, z, c1)
 	c := physics_terrain_corner(terrain, x, y, z, c2)
 	d := physics_terrain_corner(terrain, x, y, z, c3)
 
-	append(
-		triangles,
-		kineffi.JPH_Triangle{v1 = a, v2 = b, v3 = c, materialIndex = 0},
-	)
-	append(
-		triangles,
-		kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = d, materialIndex = 0},
-	)
-	append(
-		triangles,
-		kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = b, materialIndex = 0},
-	)
-	append(
-		triangles,
-		kineffi.JPH_Triangle{v1 = a, v2 = d, v3 = c, materialIndex = 0},
-	)
+	append(triangles, kineffi.JPH_Triangle{v1 = a, v2 = b, v3 = c, materialIndex = 0})
+	append(triangles, kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = d, materialIndex = 0})
+	append(triangles, kineffi.JPH_Triangle{v1 = a, v2 = c, v3 = b, materialIndex = 0})
+	append(triangles, kineffi.JPH_Triangle{v1 = a, v2 = d, v3 = c, materialIndex = 0})
 }
 
-physics_build_terrain_shape :: proc(terrain: ^Terrain) -> (shape: kineffi.JPH_ShapeRef, triangle_count: int) {
+physics_build_terrain_shape :: proc(
+	terrain: ^Terrain,
+) -> (
+	shape: kineffi.JPH_ShapeRef,
+	triangle_count: int,
+) {
 	triangles: [dynamic]kineffi.JPH_Triangle
 	defer delete(triangles)
 
 	for key, cell in &terrain.voxels {
-		if cell.occupancy <= 0 { continue }
+		if cell.occupancy <= 0 {continue}
 		x := int(key.x)
 		y := int(key.y)
 		z := int(key.z)
 
-		// Corners are listed per face in cell space, where each component is 0 or
-		// 1. The winding is irrelevant because physics_terrain_face emits both
-		// directions.
-		physics_terrain_face(&triangles, terrain, x, y, z, 0, 1, 0, [3]int{0, 1, 0}, [3]int{0, 1, 1}, [3]int{1, 1, 1}, [3]int{1, 1, 0})
-		physics_terrain_face(&triangles, terrain, x, y, z, 0, -1, 0, [3]int{0, 0, 1}, [3]int{0, 0, 0}, [3]int{1, 0, 0}, [3]int{1, 0, 1})
-		physics_terrain_face(&triangles, terrain, x, y, z, 1, 0, 0, [3]int{1, 0, 1}, [3]int{1, 1, 1}, [3]int{1, 1, 0}, [3]int{1, 0, 0})
-		physics_terrain_face(&triangles, terrain, x, y, z, -1, 0, 0, [3]int{0, 0, 0}, [3]int{0, 1, 0}, [3]int{0, 1, 1}, [3]int{0, 0, 1})
-		physics_terrain_face(&triangles, terrain, x, y, z, 0, 0, 1, [3]int{1, 0, 1}, [3]int{1, 1, 1}, [3]int{0, 1, 1}, [3]int{0, 0, 1})
-		physics_terrain_face(&triangles, terrain, x, y, z, 0, 0, -1, [3]int{0, 0, 0}, [3]int{0, 1, 0}, [3]int{1, 1, 0}, [3]int{1, 0, 0})
+
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			0,
+			1,
+			0,
+			[3]int{0, 1, 0},
+			[3]int{0, 1, 1},
+			[3]int{1, 1, 1},
+			[3]int{1, 1, 0},
+		)
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			0,
+			-1,
+			0,
+			[3]int{0, 0, 1},
+			[3]int{0, 0, 0},
+			[3]int{1, 0, 0},
+			[3]int{1, 0, 1},
+		)
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			1,
+			0,
+			0,
+			[3]int{1, 0, 1},
+			[3]int{1, 1, 1},
+			[3]int{1, 1, 0},
+			[3]int{1, 0, 0},
+		)
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			-1,
+			0,
+			0,
+			[3]int{0, 0, 0},
+			[3]int{0, 1, 0},
+			[3]int{0, 1, 1},
+			[3]int{0, 0, 1},
+		)
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			0,
+			0,
+			1,
+			[3]int{1, 0, 1},
+			[3]int{1, 1, 1},
+			[3]int{0, 1, 1},
+			[3]int{0, 0, 1},
+		)
+		physics_terrain_face(
+			&triangles,
+			terrain,
+			x,
+			y,
+			z,
+			0,
+			0,
+			-1,
+			[3]int{0, 0, 0},
+			[3]int{0, 1, 0},
+			[3]int{1, 1, 0},
+			[3]int{1, 0, 0},
+		)
 	}
 
 	triangle_count = len(triangles)
-	if triangle_count == 0 { return }
+	if triangle_count == 0 {return}
 	shape = kineffi.JPH_MeshShape_Create(&triangles[0], u32(triangle_count))
 	return
 }
 
+
+physics_reset_scratch_parts :: proc(parts: ^[dynamic]^classes.Part) {
+	resize(parts, 0)
+}
+
+physics_reset_scratch_ids :: proc(ids: ^[dynamic]kineffi.JPH_BodyID) {
+	resize(ids, 0)
+}
+
 physics_destroy_terrain_body :: proc(service: ^Physics) {
-	if !service.terrain_valid { return }
+	if !service.terrain_valid {return}
 	kineffi.JPH_BodyInterface_RemoveAndDestroyBody(
 		service.system.body_interface,
 		service.terrain_body,
@@ -675,30 +781,23 @@ physics_destroy_terrain_body :: proc(service: ^Physics) {
 }
 
 Physics_Synchronize_Terrain :: proc(service: ^Physics) {
-	if service == nil || !service.initialized { return }
+	if service == nil || !service.initialized {return}
 
 	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
-	if terrain_object == nil { return }
+	if terrain_object == nil {return}
 	terrain := cast(^Terrain)terrain_object
-	if terrain == nil { return }
+	if terrain == nil {return}
 
-	// geometry_version advances on every stored voxel change, including the ones a
-	// client makes while applying replicated batches, so the floor appears on the
-	// same frame the voxels do rather than a frame or more later when the mesher
-	// gets around to rebuilding draw items. Comparing against draw_version here
-	// would leave a freshly replicated world briefly without any ground under it.
-	if service.terrain_valid &&
-		service.terrain_version == terrain.geometry_version {
+
+	if service.terrain_valid && service.terrain_version == terrain.geometry_version {
 		return
 	}
 
-	// The old body goes first so a character is never pushed by the outgoing and
-	// incoming shapes at the same time, and so a map that has just been emptied
-	// loses its floor instead of keeping a stale one.
+
 	physics_destroy_terrain_body(service)
 
 	shape, triangle_count := physics_build_terrain_shape(terrain)
-	if shape == nil { return }
+	if shape == nil {return}
 	defer kineffi.JPH_Shape_Destroy(shape)
 
 	position := kineffi.JPH_RVec3{0, 0, 0}
@@ -711,20 +810,15 @@ Physics_Synchronize_Terrain :: proc(service: ^Physics) {
 		.Static,
 		jolt.OBJECT_LAYER_NON_MOVING,
 	)
-	if settings == nil { return }
+	if settings == nil {return}
 	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
 
-	// Terrain friction is a single value rather than per-material because the
-	// shape is one body spanning every material in the map, and it is set high so
-	// a character does not slide down the usual terrain slopes.
+
 	kineffi.JPH_BodyCreationSettings_SetFriction(settings, 1.0)
 	kineffi.JPH_BodyCreationSettings_SetRestitution(settings, 0)
 
-	body := kineffi.JPH_BodyInterface_CreateBody(
-		service.system.body_interface,
-		settings,
-	)
-	if body == nil { return }
+	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
+	if body == nil {return}
 
 	body_id := kineffi.JPH_Body_GetID(body)
 	if body_id == kineffi.JPH_BODY_ID_INVALID {
@@ -732,11 +826,7 @@ Physics_Synchronize_Terrain :: proc(service: ^Physics) {
 		return
 	}
 
-	kineffi.JPH_BodyInterface_AddBody(
-		service.system.body_interface,
-		body_id,
-		.DontActivate,
-	)
+	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, .DontActivate)
 
 	service.terrain_valid = true
 	service.terrain_body = body_id
@@ -744,24 +834,25 @@ Physics_Synchronize_Terrain :: proc(service: ^Physics) {
 	service.terrain_triangles = triangle_count
 }
 
-physics_mesh_part_version :: proc(part: ^classes.Part) -> u64 {
-	if classes.Is_A(&part.object, "MeshPart") {
-		mesh_part := cast(^classes.MeshPart)part
-		if mesh_part.editable_mesh_id != 0 {
-			mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
-			if mesh != nil {
-				return mesh.version
-			}
+
+physics_mesh_part_of :: proc(part: ^classes.Part) -> ^classes.MeshPart {
+	if part == nil || !classes.Is_A_Class(&part.object, &classes.MeshPart_Class) {return nil}
+	return cast(^classes.MeshPart)part
+}
+
+physics_mesh_part_version :: proc(mesh_part: ^classes.MeshPart) -> u64 {
+	if mesh_part != nil && mesh_part.editable_mesh_id != 0 {
+		mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
+		if mesh != nil {
+			return mesh.version
 		}
 	}
 	return 0
 }
 
-mesh_part_collision_fidelity :: proc(part: ^classes.Part) -> enums.CollisionFidelity {
-	if classes.Is_A(&part.object, "MeshPart") {
-		return (cast(^classes.MeshPart)part).collision_fidelity
-	}
-	return enums.CollisionFidelity.Default
+mesh_part_collision_fidelity :: proc(mesh_part: ^classes.MeshPart) -> enums.CollisionFidelity {
+	if mesh_part == nil {return enums.CollisionFidelity.Default}
+	return mesh_part.collision_fidelity
 }
 
 physics_refresh_part :: proc(service: ^Physics, part: ^classes.Part) {
@@ -770,20 +861,40 @@ physics_refresh_part :: proc(service: ^Physics, part: ^classes.Part) {
 	if body_index < 0 {return}
 	body := service.bodies[body_index]
 	physics_destroy_body(service, body)
-	new_body, ok := physics_create_body(service, part)
+	new_body, ok := physics_create_body(service, part, physics_ownership_context(service))
 	if ok {
 		service.bodies[body_index] = new_body
+
+		part.part_index = body_index
 	} else {
-		ordered_remove(&service.bodies, body_index)
+		service.bodies[body_index].body_id = kineffi.JPH_BODY_ID_INVALID
+		service.bodies[body_index].object = nil
+		part.part_index = -1
 	}
-	kineffi.JPH_PhysicsSystem_OptimizeBroadPhase(service.system.handle)
+
+
+	Physics_Reindex_Bodies(service)
+
+
+	classes.Hierarchy_Touched()
+
+
+	service.broadphase_dirty = true
 }
 
-physics_destroy_body :: proc(service: ^Physics, body: Physics_Body) {
+
+physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_index := true) {
 	if service.system.body_interface != nil && body.body_id != kineffi.JPH_BODY_ID_INVALID {
 		kineffi.JPH_BodyInterface_RemoveAndDestroyBody(service.system.body_interface, body.body_id)
 	}
 	delete_key(&service.body_to_part, body.body_id)
+
+
+	if clear_part_index {
+		if part := cast(^classes.Part)body.object; part != nil {
+			part.part_index = -1
+		}
+	}
 	delete(body.mesh_id)
 }
 
@@ -794,94 +905,253 @@ physics_part_for_body :: proc(service: ^Physics, body_id: kineffi.JPH_BodyID) ->
 	return part
 }
 
+
+Physics_Reindex_Bodies :: proc(service: ^Physics) {
+	for body, index in service.bodies {
+		if part := cast(^classes.Part)body.object; part != nil {
+			part.part_index = index
+		}
+	}
+}
+
 physics_collect_parts :: proc(object: ^classes.Object, parts: ^[dynamic]^classes.Part) {
-	if object == nil { return }
+	if object == nil {return}
 	for child in object.children {
-		if child == nil || child.destroyed { continue }
-		if classes.Is_A(child, "Part") { append(parts, cast(^classes.Part)child) }
+		if child == nil || child.destroyed {continue}
+
+
+		if classes.Is_A_Class(child, &classes.Part_Class) {
+			append(parts, cast(^classes.Part)child)
+		}
 		physics_collect_parts(child, parts)
 	}
 }
 
+
+Physics_Collect_Service_Parts :: proc(
+	service: ^Physics,
+	workspace: ^classes.Object,
+) -> [dynamic]^classes.Part {
+	parts := service.scratch_parts
+	physics_reset_scratch_parts(&parts)
+	physics_collect_parts(workspace, &parts)
+	service.scratch_parts = parts
+	return parts
+}
+
 physics_contains_part :: proc(parts: []^classes.Part, object: ^classes.Object) -> bool {
-	for part in parts { if &part.object == object { return true } }
+	for part in parts {if &part.object == object {return true}}
 	return false
 }
 
 physics_find_body_index :: proc(service: ^Physics, object: ^classes.Object) -> int {
-	for body, i in service.bodies { if body.object == object { return i } }
+	for body, i in service.bodies {if body.object == object {return i}}
 	return -1
 }
 
+
+Physics_Sync_Needed :: proc(service: ^Physics) -> bool {
+	if service == nil {return false}
+	epoch := classes.Hierarchy_Epoch()
+
+
+	if service.has_synced && service.synced_epoch == epoch && !service.sync_bumped {
+		return false
+	}
+	service.sync_epoch = epoch
+	return true
+}
+
+
+Physics_Sync_Complete :: proc(service: ^Physics, epoch: u64) {
+	service.synced_epoch = epoch
+	service.has_synced = true
+	service.sync_bumped = false
+}
+
+// Physics_Request_Sync re-arms the next Physics_Synchronize.
+//
+// Physics_Synchronize normally short-circuits on the Instance tree's structural
+// epoch, because walking the whole tree every frame is the expensive part. That
+// is sound for reparenting, but it is blind to the other reason a Part can
+// become collidable: eligibility that lives outside the tree. The client refuses
+// to give a replicated Part a body until that Part's first authoritative
+// transform arrives (physics_part_awaiting_transform), and that arrival is a
+// property update, not a structural change, so it moves no epoch. A Part that
+// was walked before its transform landed was skipped and was then never
+// revisited, which left a permanently bodyless Part: the client could not collide
+// with it and had no ground under the character standing on it.
+//
+// Anything that changes a Part's eligibility outside the tree calls this so the
+// skipped Parts are retried on the next synchronize.
+Physics_Request_Sync :: proc(service: ^Physics) {
+	if service == nil {return}
+	service.sync_bumped = true
+}
+
+// Physics_Request_Sync_For_Data_Model is the service-lookup form of
+// Physics_Request_Sync, for callers that hold a DataModel rather than the
+// Physics service itself.
+Physics_Request_Sync_For_Data_Model :: proc(data_model: ^DataModel) {
+	if data_model == nil {return}
+	physics := cast(^Physics)DataModel_Get_Service(data_model, "Physics")
+	Physics_Request_Sync(physics)
+}
+
+
+Physics_Part_Transform_Applied :: proc() {}
+
 Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
-	if service == nil || !service.initialized || workspace == nil { return }
-	// Terrain is not part of the Part walk below, so it gets its own pass. It
-	// runs first because a client that has just been handed terrain needs the
-	// ground to exist before the character capsule is swept against anything.
+	if service == nil || !service.initialized || workspace == nil {
+		return
+	}
+
+
+	tracy.ZoneNC("Jolt Terrain Synchronize", 0xE06C75)
 	Physics_Synchronize_Terrain(service)
-	parts: [dynamic]^classes.Part
-	defer delete(parts)
+
+	if !Physics_Sync_Needed(service) {
+
+
+		if service.broadphase_dirty {
+			tracy.ZoneNC("Jolt Optimize Broad Phase", 0xE06C75)
+
+			kineffi.JPH_PhysicsSystem_OptimizeBroadPhase(service.system.handle)
+			service.broadphase_dirty = false
+		}
+		return
+	}
+	sync_epoch := service.sync_epoch
+
+
+	tracy.ZoneNC("Physics Ownership", 0xE06C75)
+
+	ownership := physics_ownership_context(service)
+
+
+	parts := service.scratch_parts
+	physics_reset_scratch_parts(&parts)
 	physics_collect_parts(workspace, &parts)
-	i := len(service.bodies)
+	service.scratch_parts = parts
+
 	topology_changed := false
+
+
+	tracy.ZoneNC("Physics Drop Bodies", 0xE06C75)
+
+	i := len(service.bodies)
 	for i > 0 {
 		i -= 1
-		if !physics_contains_part(parts[:], service.bodies[i].object) {
-			physics_destroy_body(service, service.bodies[i])
-			ordered_remove(&service.bodies, i)
-			topology_changed = true
+
+		body := service.bodies[i]
+		part := cast(^classes.Part)body.object
+		if part != nil && part.part_index == i && !part.destroyed {
+			continue
 		}
+		physics_destroy_body(service, body)
+		unordered_remove(&service.bodies, i)
+		topology_changed = true
 	}
+
+
+	if topology_changed {
+		tracy.ZoneNC("Jolt Reindex", 0xE06C75)
+
+		Physics_Reindex_Bodies(service)
+	}
+
+	tracy.ZoneNC("Physics Create Bodies", 0xE06C75)
+
 	for part in parts {
-		body_index := physics_find_body_index(service, &part.object)
-		if body_index < 0 {
-			body, ok := physics_create_body(service, part)
+
+
+		mesh_part := physics_mesh_part_of(part)
+
+		body_index := part.part_index
+
+
+		exists :=
+			body_index >= 0 &&
+			body_index < len(service.bodies) &&
+			service.bodies[body_index].object == &part.object
+
+		if !exists {
+			body, ok := physics_create_body(service, part, ownership, mesh_part)
+
 			if ok {
+				part.part_index = len(service.bodies)
 				append(&service.bodies, body)
 				topology_changed = true
 			}
+
 			continue
 		}
+
 		body := &service.bodies[body_index]
+
 		mesh_id := ""
 		editable_mesh_id := u32(0)
-		if classes.Is_A(&part.object, "MeshPart") {
-			mesh_part := cast(^classes.MeshPart)part
+
+		if mesh_part != nil {
 			mesh_id = mesh_part.mesh_id
 			editable_mesh_id = mesh_part.editable_mesh_id
 		}
-		remote := physics_remote_owned(service, part)
-		if body.size != part.size || body.shape != part.shape || body.anchored != part.anchored || body.remote != remote || body.mesh_id != mesh_id || body.editable_mesh_id != editable_mesh_id || body.editable_mesh_version != physics_mesh_part_version(part) || body.collision_fidelity != mesh_part_collision_fidelity(part) {
+
+		mesh_version := physics_mesh_part_version(mesh_part)
+		collision_fidelity := mesh_part_collision_fidelity(mesh_part)
+		remote := physics_remote_owned(service, part, ownership)
+
+		if body.size != part.size ||
+		   body.shape != part.shape ||
+		   body.anchored != part.anchored ||
+		   body.remote != remote ||
+		   body.mesh_id != mesh_id ||
+		   body.editable_mesh_id != editable_mesh_id ||
+		   body.editable_mesh_version != mesh_version ||
+		   body.collision_fidelity != collision_fidelity {
+
 			physics_destroy_body(service, body^)
-			new_body, ok := physics_create_body(service, part)
+
+			new_body, ok := physics_create_body(service, part, ownership, mesh_part)
+
 			if ok {
 				body^ = new_body
+
+
+				part.part_index = body_index
 			} else {
-				ordered_remove(&service.bodies, body_index)
+				body.body_id = kineffi.JPH_BODY_ID_INVALID
+				body.object = nil
 			}
+
 			topology_changed = true
 			continue
 		}
+
 		if body.last_cframe != part.cframe {
-			position := kineffi.JPH_RVec3{f64(part.cframe.x), f64(part.cframe.y), f64(part.cframe.z)}
-			activation: kineffi.JPH_ActivationMode = (part.anchored || remote) ? .DontActivate : .Activate
-			if body.last_cframe.r00 == part.cframe.r00 &&
-			   body.last_cframe.r01 == part.cframe.r01 &&
-			   body.last_cframe.r02 == part.cframe.r02 &&
-			   body.last_cframe.r10 == part.cframe.r10 &&
-			   body.last_cframe.r11 == part.cframe.r11 &&
-			   body.last_cframe.r12 == part.cframe.r12 &&
-			   body.last_cframe.r20 == part.cframe.r20 &&
-			   body.last_cframe.r21 == part.cframe.r21 &&
-			   body.last_cframe.r22 == part.cframe.r22 {
-				kineffi.JPH_BodyInterface_SetPosition(
-					service.system.body_interface,
-					body.body_id,
-					&position,
-					activation,
-				)
-			} else {
+			position := kineffi.JPH_RVec3 {
+				f64(part.cframe.x),
+				f64(part.cframe.y),
+				f64(part.cframe.z),
+			}
+
+			activation: kineffi.JPH_ActivationMode =
+				(part.anchored || remote) ? .DontActivate : .Activate
+
+			rotation_changed :=
+				body.last_cframe.r00 != part.cframe.r00 ||
+				body.last_cframe.r01 != part.cframe.r01 ||
+				body.last_cframe.r02 != part.cframe.r02 ||
+				body.last_cframe.r10 != part.cframe.r10 ||
+				body.last_cframe.r11 != part.cframe.r11 ||
+				body.last_cframe.r12 != part.cframe.r12 ||
+				body.last_cframe.r20 != part.cframe.r20 ||
+				body.last_cframe.r21 != part.cframe.r21 ||
+				body.last_cframe.r22 != part.cframe.r22
+
+			if rotation_changed {
 				rotation := physics_quaternion_from_cframe(part.cframe)
+
 				kineffi.JPH_BodyInterface_SetPositionAndRotation(
 					service.system.body_interface,
 					body.body_id,
@@ -889,13 +1159,49 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 					&rotation,
 					activation,
 				)
+			} else {
+				kineffi.JPH_BodyInterface_SetPosition(
+					service.system.body_interface,
+					body.body_id,
+					&position,
+					activation,
+				)
 			}
+
 			body.last_cframe = part.cframe
 		}
 	}
-	if topology_changed {
-		kineffi.JPH_PhysicsSystem_OptimizeBroadPhase(service.system.handle)
+
+
+	i = len(service.bodies)
+	for i > 0 {
+		i -= 1
+
+		if service.bodies[i].body_id == kineffi.JPH_BODY_ID_INVALID {
+			unordered_remove(&service.bodies, i)
+			topology_changed = true
+		}
 	}
+
+
+	tracy.ZoneNC("Jolt Reindex", 0xE06C75)
+
+	if topology_changed {
+		Physics_Reindex_Bodies(service)
+	}
+
+
+	tracy.ZoneNC("Jolt Optimize Broad Phase 2", 0xE06C75)
+
+	if topology_changed || service.broadphase_dirty {
+		kineffi.JPH_PhysicsSystem_OptimizeBroadPhase(service.system.handle)
+		service.broadphase_dirty = false
+	}
+
+
+	tracy.ZoneNC("Jolt Sync Complete", 0xE06C75)
+
+	Physics_Sync_Complete(service, sync_epoch)
 }
 
 physics_capsule_size_from_root :: proc(root: ^classes.Part) -> (radius, half_height: f32) {
@@ -906,9 +1212,6 @@ physics_capsule_size_from_root :: proc(root: ^classes.Part) -> (radius, half_hei
 	return
 }
 
-// The inverse of physics_quaternion_from_cframe. Jolt's Quat is (x, y, z, w)
-// and builds a column-convention rotation matrix, which is the same convention
-// physics_quaternion_from_cframe reads, so this round-trips through it.
 physics_cframe_from_quaternion :: proc(q: kineffi.JPH_Quat) -> datatypes.CFrame {
 	x := q.x
 	y := q.y
@@ -951,10 +1254,14 @@ Physics_Ensure_Character_Capsule :: proc(
 	if coll.shape == nil {return}
 	pos := kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)}
 	identity := kineffi.JPH_Quat{0, 0, 0, 1}
-	// A dead character gets a dynamic capsule from the moment its body appears,
-	// even if the body is created after death.
 	motion: kineffi.JPH_MotionType = coll.ragdoll ? .Dynamic : .Kinematic
-	settings := kineffi.JPH_BodyCreationSettings_Create3(coll.shape, &pos, &identity, motion, jolt.OBJECT_LAYER_MOVING)
+	settings := kineffi.JPH_BodyCreationSettings_Create3(
+		coll.shape,
+		&pos,
+		&identity,
+		motion,
+		jolt.OBJECT_LAYER_MOVING,
+	)
 	if settings == nil {return}
 	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
@@ -977,28 +1284,107 @@ Physics_Set_Character_Capsule :: proc(
 	position: datatypes.Vector3,
 	yaw: f32,
 ) {
-	if service == nil || coll == nil || !coll.body_created || service.system.body_interface == nil {return}
+	if service == nil ||
+	   coll == nil ||
+	   !coll.body_created ||
+	   service.system.body_interface == nil {return}
 	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
 	cf.x = position.x
 	cf.y = position.y
 	cf.z = position.z
 	rotation := physics_quaternion_from_cframe(cf)
 	pos := kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)}
-	kineffi.JPH_BodyInterface_SetPositionAndRotation(service.system.body_interface, coll.body_id, &pos, &rotation, .DontActivate)
+	kineffi.JPH_BodyInterface_SetPositionAndRotation(
+		service.system.body_interface,
+		coll.body_id,
+		&pos,
+		&rotation,
+		.DontActivate,
+	)
 }
 
-// Physics_Set_Character_Capsule_Dynamic hands the character capsule to the solver
-// or takes it back, without rebuilding the body.
+// A sanity ceiling on the velocity handed to the capsule. Anything past this is
+// not a character walking, it is a respawn or a teleport, and those have to
+// snap rather than fling the capsule across the map.
+CHARACTER_CAPSULE_MAX_SPEED :: 500.0
+
+// Parks the capsule at `from` and gives it the velocity that carries it to `to`
+// across the next physics step, so the solver integrates it onto the character
+// instead of leaving it behind.
 //
-// A living character is a kinematic body: CharacterController_Tick sweeps it and
-// teleports it to the root every frame, so the solver never integrates it. On
-// death there is nothing driving it, so the same capsule is switched to dynamic
-// and the solver takes over -- it falls, collides and tumbles. The flag is sticky
-// so a body created later is still created dynamic.
+// This is what lets the character push unanchored Parts. The capsule is
+// kinematic, and a kinematic body teleported straight onto its destination has
+// no velocity as far as the contact solver is concerned: it behaves like a wall
+// that Parts rest against but never move. Driving it with the frame's real
+// velocity is what makes the contact constraints see the character actually
+// travelling, so anything dynamic in front of it gets shoved.
 //
-// Note this is a rigid-body ragdoll: the character's parts stay anchored and move
-// together, so the body topples as one piece. An articulated ragdoll with limbs on
-// their own bodies would need a joint solver the engine does not have.
+// Callers hand over the frame's start and end and drive the body once per
+// physics step, because that is the window the solver integrates over. Driving
+// it per sub-step instead would solve the velocity from a position already
+// several sub-steps along, and the body would spend the step chasing a target
+// the character passed long ago.
+Physics_Advance_Character_Capsule :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	from: datatypes.Vector3,
+	to: datatypes.Vector3,
+	yaw: f32,
+	delta_time: f32,
+) {
+	if service == nil ||
+	   coll == nil ||
+	   !coll.body_created ||
+	   coll.body_id == kineffi.JPH_BODY_ID_INVALID ||
+	   service.system.body_interface == nil {return}
+	// A ragdolling capsule is simulated rather than driven, so the solver owns
+	// its transform. Leaving it alone is what keeps the ragdoll intact.
+	if coll.ragdoll {return}
+	body_interface := service.system.body_interface
+	velocity := kineffi.JPH_Vec3{0, 0, 0}
+	if delta_time > 0 {
+		velocity.x = (to.x - from.x) / delta_time
+		velocity.y = (to.y - from.y) / delta_time
+		velocity.z = (to.z - from.z) / delta_time
+	}
+	// Too fast to be walking means the character was moved wholesale, so snap to
+	// the destination with no velocity rather than throwing the capsule at it.
+	speed_squared :=
+		velocity.x * velocity.x +
+		velocity.y * velocity.y +
+		velocity.z * velocity.z
+	limit := f32(CHARACTER_CAPSULE_MAX_SPEED)
+	resting_point := to
+	if delta_time <= 0 || speed_squared > limit * limit {
+		velocity = kineffi.JPH_Vec3{0, 0, 0}
+		resting_point = to
+	} else {
+		resting_point = from
+	}
+	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
+	cf.x = resting_point.x
+	cf.y = resting_point.y
+	cf.z = resting_point.z
+	rotation := physics_quaternion_from_cframe(cf)
+	kineffi.JPH_BodyInterface_SetLinearVelocity(body_interface, coll.body_id, &velocity)
+	// Writing the position does not clear the velocity above. While walking this
+	// re-seats the body at the start of the frame and lets the solver do the
+	// travelling, which is what keeps the body exactly on the character at the
+	// end of the step.
+	rest := kineffi.JPH_RVec3{
+		f64(resting_point.x),
+		f64(resting_point.y),
+		f64(resting_point.z),
+	}
+	kineffi.JPH_BodyInterface_SetPositionAndRotation(
+		body_interface,
+		coll.body_id,
+		&rest,
+		&rotation,
+		.DontActivate,
+	)
+}
+
 Physics_Set_Character_Capsule_Dynamic :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
@@ -1015,8 +1401,8 @@ Physics_Set_Character_Capsule_Dynamic :: proc(
 		motion,
 		.Activate,
 	)
-	// Handing the body to the solver with momentum left over from the walk would
-	// launch the corpse sideways.
+
+
 	if simulated {
 		zero := kineffi.JPH_Vec3{0, 0, 0}
 		kineffi.JPH_BodyInterface_SetLinearVelocity(
@@ -1033,14 +1419,7 @@ Physics_Set_Character_Capsule_Dynamic :: proc(
 	return true
 }
 
-// Physics_Start_Character_Ragdoll creates the character capsule if it is missing
-// and hands it to the solver.
-//
-// The server usually has no capsule for a character at all: a living character is
-// simulated by its owning client, and the server skips ticking it. A dead one has
-// to be simulated by the server, so the body is created here. The ragdoll flag is
-// set before the create so the body comes into existence dynamic and active
-// rather than being built kinematic and immediately converted.
+
 Physics_Start_Character_Ragdoll :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
@@ -1058,13 +1437,14 @@ Physics_Start_Character_Ragdoll :: proc(
 	return Physics_Set_Character_Capsule_Dynamic(service, coll, true)
 }
 
-// Physics_Get_Character_Capsule_CFrame reads the solved transform of a character
-// capsule, so the visible parts of a ragdolling character can follow the body
-// the solver is actually simulating.
+
 Physics_Get_Character_Capsule_CFrame :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
-) -> (datatypes.CFrame, bool) {
+) -> (
+	datatypes.CFrame,
+	bool,
+) {
 	if service == nil ||
 	   coll == nil ||
 	   !coll.body_created ||
@@ -1092,7 +1472,10 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 	if service == nil || coll == nil {return}
 	if coll.body_created {
 		if service.system.body_interface != nil && coll.body_id != kineffi.JPH_BODY_ID_INVALID {
-			kineffi.JPH_BodyInterface_RemoveAndDestroyBody(service.system.body_interface, coll.body_id)
+			kineffi.JPH_BodyInterface_RemoveAndDestroyBody(
+				service.system.body_interface,
+				coll.body_id,
+			)
 		}
 		delete_key(&service.body_to_part, coll.body_id)
 		coll.body_created = false
@@ -1104,39 +1487,40 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 	}
 }
 
-// Lists the bodies the character capsule is allowed to collide with, excluding
-// its own body.
-//
-// A Part with CanCollide off is a ghost: it is still a body, so it would
-// otherwise stop the character dead even though nothing else in the engine
-// treats it as solid. Filtering it out here is what makes the character pass
-// through it, matching how Physics_Raycast already respects the same flag.
-// The character sweep is the only consumer of this list, so the filter lives
-// here rather than being repeated at every call site.
-Physics_Candidate_Bodies :: proc(service: ^Physics, exclude: kineffi.JPH_BodyID) -> [dynamic]kineffi.JPH_BodyID {
-	result: [dynamic]kineffi.JPH_BodyID
-	if service == nil {return result}
-	// Terrain is not a Part and so has no entry in service.bodies, but it is a
-	// real static body that anything in the world has to collide with. Leaving it
-	// out here is what made a character walk through visible ground: the capsule
-	// sweep and every other shape cast gather their candidates here, so a body
-	// missing from this list is invisible to all of them even though the solver
-	// would happily have collided with it.
+
+Physics_Fill_Candidate_Bodies :: proc(
+	service: ^Physics,
+	exclude: kineffi.JPH_BodyID,
+	out: ^[dynamic]kineffi.JPH_BodyID,
+	static_only := false,
+) {
+	physics_reset_scratch_ids(out)
+	if service == nil {return}
+
+
 	if service.terrain_valid &&
 	   service.terrain_body != kineffi.JPH_BODY_ID_INVALID &&
 	   service.terrain_body != exclude {
-		append(&result, service.terrain_body)
+		append(out, service.terrain_body)
 	}
 	for body in service.bodies {
 		if body.body_id == exclude || body.body_id == kineffi.JPH_BODY_ID_INVALID {continue}
 		part := cast(^classes.Part)body.object
 		if part == nil || !part.can_collide {continue}
-		append(&result, body.body_id)
+		// A static-only pass drops everything the solver moves. The character
+		// walks with one, so an unanchored Part cannot stop the character dead
+		// in front of it: the capsule drives through it and the contact solver
+		// shoves it aside instead.
+		if static_only && !body.anchored {continue}
+		append(out, body.body_id)
 	}
-	return result
 }
 
-physics_fire_touched :: proc(service: ^Physics, body_id: kineffi.JPH_BodyID, owner: ^classes.Part) {
+physics_fire_touched :: proc(
+	service: ^Physics,
+	body_id: kineffi.JPH_BodyID,
+	owner: ^classes.Part,
+) {
 	if service == nil || body_id == kineffi.JPH_BODY_ID_INVALID || owner == nil {return}
 	part := physics_part_for_body(service, body_id)
 	if part == nil || part == owner {return}
@@ -1152,14 +1536,13 @@ physics_fire_touched :: proc(service: ^Physics, body_id: kineffi.JPH_BodyID, own
 	part_touched(owner, part, L)
 }
 
-// Sweeps the character capsule from `origin` along `displacement` against the
-// scene's collidable bodies, excluding the character's own capsule. The reported
-// `position` is where the capsule centre ends up when it first touches its target.
+
 physics_character_sweep :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
 	origin: datatypes.Vector3,
 	displacement: datatypes.Vector3,
+	static_only := false,
 ) -> (
 	position: datatypes.Vector3,
 	normal: datatypes.Vector3,
@@ -1169,9 +1552,11 @@ physics_character_sweep :: proc(
 ) {
 	if service == nil || coll == nil || !coll.body_created || coll.shape == nil {return}
 	if datatypes.Vec3_Magnitude_Squared(displacement) <= 0 {return}
-	candidates := Physics_Candidate_Bodies(service, coll.body_id)
-	defer delete(candidates)
-	if len(candidates) == 0 {return}
+
+
+	candidates := &service.scratch_sweep_candidates
+	Physics_Fill_Candidate_Bodies(service, coll.body_id, candidates, static_only)
+	if len(candidates^) == 0 {return}
 	native, did_hit := jolt.System_Cast_Shape(
 		&service.system,
 		kineffi.JPH_RVec3{f64(origin.x), f64(origin.y), f64(origin.z)},
@@ -1181,7 +1566,11 @@ physics_character_sweep :: proc(
 		.Include,
 	)
 	if !did_hit {return}
-	position = datatypes.Vector3{f32(native.position.x), f32(native.position.y), f32(native.position.z)}
+	position = datatypes.Vector3 {
+		f32(native.position.x),
+		f32(native.position.y),
+		f32(native.position.z),
+	}
 	normal = datatypes.Vector3{native.normal.x, native.normal.y, native.normal.z}
 	body_id = native.bodyID
 	fraction = native.fraction

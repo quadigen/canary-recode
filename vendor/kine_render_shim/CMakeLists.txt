@@ -237,6 +237,11 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_hl_outline_top)
     kine_add_material(kine_hl_fill)
     kine_add_material(kine_hl_fill_top)
+    # Screen-space Highlight outline: selected geometry is painted into a
+    # private mask target (kine_outline_mask) and a fullscreen pass dilates
+    # that mask into the visible ring (kine_outline_composite).
+    kine_add_material(kine_outline_mask)
+    kine_add_material(kine_outline_composite)
 
     set(KINE_ASSIMP_TARGET "")
     if(KINE_WITH_ASSIMP)
@@ -293,6 +298,8 @@ if(KINE_WITH_FILAMENT)
         ${kine_hl_outline_top_GEN_CPP}
         ${kine_hl_fill_GEN_CPP}
         ${kine_hl_fill_top_GEN_CPP}
+        ${kine_outline_mask_GEN_CPP}
+        ${kine_outline_composite_GEN_CPP}
     )
 
     target_include_directories(kine_filament_shim
@@ -300,6 +307,7 @@ if(KINE_WITH_FILAMENT)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../kine_vulkan_compositor/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/third_party
             ${Vulkan_INCLUDE_DIRS}
             ${CMAKE_BINARY_DIR}/kine_skia/skia-src/third_party/externals/vulkan-headers/include
             ${FILAMENT_DIR}/include

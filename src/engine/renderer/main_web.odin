@@ -29,6 +29,9 @@ RendererObject :: struct {
 	Filament:    ^kineffi.KineFilamentContext,
 	HasViewportRect: bool,
 	ViewportRect: [4]i32,
+	// The browser canvas reports CSS-pixel mouse positions against a backing
+	// store the host keeps in sync with it, so there is no density correction.
+	MouseScale: [2]f32,
 }
 
 Web_State :: struct {

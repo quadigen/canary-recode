@@ -21,6 +21,12 @@ CELL_BYTES :: 17
 // One 16-bit fixed point step is 1/65535 of the range.
 FIXED_POINT_TOLERANCE :: f32(1.0 / 65535.0)
 
+// The terrain section opens with a presence byte, a decoration byte, ten f32
+// settings, and a palette count before the cell count. Cutting forty bytes back
+// from the cell count therefore lands inside the settings, with the presence flag
+// still saying there is a grid.
+TERRAIN_SETTINGS_BYTES :: 42
+
 // The chunk name is only used for diagnostics on a failed run.
 @(private="file")
 run_script :: proc(script_vm: ^vm.VM, body, name: string) {
@@ -213,8 +219,15 @@ check_malformed_streams_rejected :: proc(
 	append(&table.cells, serializer.Kine_Terrain_Cell{x = 1, y = 0, z = 0, material = 1, occupancy = 1})
 	defer serializer.Kine_Terrain_Destroy(&table)
 
-	data, ok := serializer.Serialize(&environment.classes, script_vm.L, root, nil, &table)
-	assert(ok && data != nil, "a map with terrain should serialize")
+	data, serialize_err := serializer.Serialize(&environment.classes, script_vm.L, root, nil, &table)
+	if !serializer.Error_Is_None(serialize_err) {
+		panic(fmt.tprintf(
+			"a map with terrain should serialize: %s",
+			serializer.Error_String(serialize_err),
+		))
+	}
+	serializer.Error_Delete(&serialize_err)
+	assert(data != nil, "a map with terrain should serialize to bytes")
 	defer delete(data)
 
 	// The documented version has to be what was written, since older builds read
@@ -229,8 +242,15 @@ check_malformed_streams_rejected :: proc(
 	// what causes the rejection, not the format itself.
 	control: serializer.Kine_Terrain
 	defer serializer.Kine_Terrain_Destroy(&control)
-	loaded, control_ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data, &control)
-	assert(control_ok && loaded != nil, "a well formed stream should load")
+	loaded, control_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, data, &control)
+	if !serializer.Error_Is_None(control_err) {
+		panic(fmt.tprintf(
+			"a well formed stream should load: %s",
+			serializer.Error_String(control_err),
+		))
+	}
+	serializer.Error_Delete(&control_err)
+	assert(loaded != nil, "a well formed stream should produce an object")
 	assert(control.cells != nil && len(control.cells) == cell_count, "cells should round trip")
 	if loaded != nil {
 		classes.Destroy_Hierarchy(loaded)
@@ -245,8 +265,8 @@ check_malformed_streams_rejected :: proc(
 	hostile[count_offset + 1] = 0xFF
 	hostile[count_offset + 2] = 0xFF
 	hostile[count_offset + 3] = 0xFF
-	rejected, hostile_ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, hostile)
-	assert(!hostile_ok && rejected == nil, "an impossible cell count must be rejected")
+	rejected, hostile_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, hostile)
+	expect_rejection(rejected, &hostile_err, .Terrain_Cell_Count_Exceeded, "an impossible cell count")
 
 	// A coordinate past the supported range would place a voxel far outside any
 	// renderable or collidable area.
@@ -256,15 +276,77 @@ check_malformed_streams_rejected :: proc(
 	out_of_range[count_offset + 4 + 1] = 0x00
 	out_of_range[count_offset + 4 + 2] = 0x40
 	out_of_range[count_offset + 4 + 3] = 0x00
-	rejected_range, range_ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, out_of_range)
-	assert(!range_ok && rejected_range == nil, "an out of range coordinate must be rejected")
+	rejected_range, range_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, out_of_range)
+	expect_rejection(rejected_range, &range_err, .Terrain_Cell_Out_Of_Range, "an out of range coordinate")
 
-	// Truncating the tail leaves the tree intact and the terrain section short,
-	// which must be caught rather than applied as a partial world.
+	// Cutting the tail leaves the tree intact but takes the last few cells with it.
+	// The count is still what the file claimed, so this is caught as a count that
+	// no longer matches the bytes behind it rather than as a bare short read.
 	truncated := slice.clone(data[:len(data)-3])
 	defer delete(truncated)
-	rejected_truncated, truncated_ok := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, truncated)
-	assert(!truncated_ok && rejected_truncated == nil, "a truncated terrain section must be rejected")
+	rejected_truncated, truncated_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, truncated)
+	expect_rejection(rejected_truncated, &truncated_err, .Terrain_Cell_Count_Exceeded, "a terrain section missing its last cells")
+
+	// Cutting into the terrain header itself is a different failure: the presence
+	// flag still says there is a grid, but the settings behind it never arrive.
+	assert(
+		count_offset > TERRAIN_SETTINGS_BYTES + 1,
+		"the terrain section should be long enough to cut into its settings",
+	)
+	short_header := slice.clone(data[:count_offset - 40])
+	defer delete(short_header)
+	rejected_header, header_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, short_header)
+	expect_rejection(rejected_header, &header_err, .Terrain_Truncated, "a stream cut inside the terrain header")
+
+	// Appending junk leaves a complete, valid terrain section behind extra bytes,
+	// which means the reader and writer disagree about the layout.
+	trailing := slice.clone(data)
+	defer delete(trailing)
+	append(&trailing, 0x00)
+	rejected_trailing, trailing_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, trailing)
+	expect_rejection(rejected_trailing, &trailing_err, .Trailing_Bytes, "a stream with trailing bytes")
+
+	// Bytes that are not a .kine stream at all are named as such, rather than
+	// being reported as a generic parse failure.
+	not_kine := []u8{'N', 'O', 'P', 'E', 0x04, 0x00}
+	rejected_magic, magic_err := serializer.Deserialize_From_Data(&environment.classes, script_vm.L, nil, not_kine)
+	expect_rejection(rejected_magic, &magic_err, .Bad_Magic, "a stream that is not a .kine file")
+}
+
+// expect_rejection asserts that a hostile stream was refused for a specific
+// reason. Checking the kind rather than only the failure is what proves the
+// error says something useful about the file. The error is consumed.
+@(private="file")
+expect_rejection :: proc(
+	object: ^classes.Object,
+	err: ^serializer.Error,
+	expected: serializer.Error_Kind,
+	what: string,
+) {
+	if object != nil {
+		panic(fmt.tprintf("%s must not produce an object", what))
+	}
+	message := serializer.Error_String(err^)
+	actual := err.kind
+	offset := err.offset
+	serializer.Error_Delete(err)
+	if actual != expected {
+		detail := fmt.tprintf(
+			"%s should be rejected as %v but came back as %v: %s",
+			what,
+			expected,
+			actual,
+			message,
+		)
+		delete(message)
+		panic(detail)
+	}
+	if offset < 0 {
+		detail := fmt.tprintf("%s should report a byte offset: %s", what, message)
+		delete(message)
+		panic(detail)
+	}
+	delete(message)
 }
 
 

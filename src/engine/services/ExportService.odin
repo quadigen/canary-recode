@@ -4,11 +4,13 @@ package services
 
 // wire:service global="ExportService"
 
+import "core:fmt"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import serializer "../serializer"
 import vm "../vm"
+import strings "core:strings"
 
 ExportService_Class := classes.Class_Info {
 	name   = "ExportService",
@@ -33,13 +35,13 @@ export_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rende
 	free(cast(^ExportService)object)
 }
 
-export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: string) -> bool {
+export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: string) -> serializer.Error {
 	if service == nil || L == nil || path == "" {
-		return false
+		return serializer.Error_Make(.Invalid_Argument, -1, "the service, VM, or destination path is missing")
 	}
 	model := service.data_model
 	if model == nil || model.registry == nil || model.registry.classes == nil {
-		return false
+		return serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
 	}
 
 	// Terrain is a singleton service rather than an Instance, so the tree walk
@@ -76,15 +78,23 @@ export_content_service_filter :: proc(parent: ^classes.Object, object: ^classes.
 	return !Map_Content_Service(object.name)
 }
 
-export_object_to_file :: proc(service: ^ExportService, L: ^vm.State, object: ^classes.Object, path: string) -> bool {
+export_object_to_file :: proc(service: ^ExportService, L: ^vm.State, object: ^classes.Object, path: string) -> serializer.Error {
 	if service == nil || L == nil || object == nil || path == "" {
-		return false
+		return serializer.Error_Make(.Invalid_Argument, -1, "the service, VM, instance, or destination path is missing")
 	}
 	model := service.data_model
 	if model == nil || model.registry == nil || model.registry.classes == nil {
-		return false
+		return serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
 	}
 	return serializer.Serialize_To_File(model.registry.classes, L, object, path)
+}
+
+export_raise :: proc(L: ^vm.State, method: string, err: ^serializer.Error) -> (i32, bool) {
+	detail := serializer.Error_String(err^)
+	serializer.Error_Delete(err)
+	message := strings.clone(fmt.tprintf("ExportService:%s failed: %s", method, detail))
+	delete(detail)
+	return vm.RaiseOwnedError(L, &message), true
 }
 
 export_object_from_argument :: proc(L: ^vm.State, index: int) -> ^classes.Object {
@@ -125,14 +135,19 @@ export_service_namecall :: proc(
 	i32,
 	bool,
 ) {
-	service := cast(^ExportService)object
+service := cast(^ExportService)object
 	switch method {
 	case "ExportToFile":
 		path := vm.ArgString(L, 2)
 		if path == "" {
 			return vm.RaiseError(L, "ExportService:ExportToFile expects a file path"), true
 		}
-		vm.PushBoolean(L, export_datamodel_to_file(service, L, path))
+		err := export_datamodel_to_file(service, L, path)
+		if !serializer.Error_Is_None(err) {
+			return export_raise(L, method, &err)
+		}
+		serializer.Error_Delete(&err)
+		vm.PushBoolean(L, true)
 		return 1, true
 	case "Export":
 		target := export_object_from_argument(L, 2)
@@ -143,7 +158,12 @@ export_service_namecall :: proc(
 		if path == "" {
 			return vm.RaiseError(L, "ExportService:Export expects a file path"), true
 		}
-		vm.PushBoolean(L, export_object_to_file(service, L, target, path))
+		err := export_object_to_file(service, L, target, path)
+		if !serializer.Error_Is_None(err) {
+			return export_raise(L, method, &err)
+		}
+		serializer.Error_Delete(&err)
+		vm.PushBoolean(L, true)
 		return 1, true
 	case "ImportFile":
 		path := vm.ArgString(L, 2)
@@ -156,15 +176,16 @@ export_service_namecall :: proc(
 		   model.registry.classes == nil {
 			return vm.RaiseError(L, "ExportService:ImportFile has no DataModel"), true
 		}
-		imported, ok := serializer.Deserialize_From_File(
+		imported, err := serializer.Deserialize_From_File(
 			model.registry.classes,
 			L,
 			service,
 			path,
 		)
-		if !ok {
-			return vm.RaiseError(L, "ExportService:ImportFile could not read the file"), true
+		if imported == nil || !serializer.Error_Is_None(err) {
+			return export_raise(L, method, &err)
 		}
+		serializer.Error_Delete(&err)
 		classes.Push_Object(L, imported)
 		return 1, true
 	}

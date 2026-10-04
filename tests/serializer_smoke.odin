@@ -15,6 +15,51 @@ run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
 	}
 }
 
+// assert_no_error fails the run with the serializer's own diagnosis, so a broken
+// round trip reports which record was at fault rather than just that something
+// was. The error is consumed, so the caller must not report it again.
+@(private="file")
+assert_no_error :: proc(err: ^serializer.Error, what: string) {
+	if serializer.Error_Is_None(err^) {
+		return
+	}
+	message := serializer.Error_String(err^)
+	serializer.Error_Delete(err)
+	detail := fmt.tprintf("%s: %s", what, message)
+	delete(message)
+	panic(detail)
+}
+
+// assert_kind fails unless the stream was rejected for exactly the expected
+// reason, which is the point of returning a structured error: a rejected file
+// has to say which rule caught it, and where.
+@(private="file")
+assert_kind :: proc(err: ^serializer.Error, expected: serializer.Error_Kind, what: string) {
+	message := serializer.Error_String(err^)
+	actual := err.kind
+	offset := err.offset
+	serializer.Error_Delete(err)
+	if actual != expected {
+		detail := fmt.tprintf(
+			"%s: expected %v but got %v (%s)",
+			what,
+			expected,
+			actual,
+			message,
+		)
+		delete(message)
+		panic(detail)
+	}
+	// A useful diagnosis names where it happened; an error with no position is
+	// the failure mode this whole change exists to remove.
+	if offset < 0 {
+		detail := fmt.tprintf("%s: no stream offset was reported (%s)", what, message)
+		delete(message)
+		panic(detail)
+	}
+	delete(message)
+}
+
 main :: proc() {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
@@ -63,15 +108,19 @@ KineRoot = model
 	}
 
 	// In-memory round trip.
-	data, ok := serializer.Serialize(&environment.classes, script_vm.L, root)
-	if !ok || data == nil {
-		panic("serialize failed")
+	data, serialize_err := serializer.Serialize(&environment.classes, script_vm.L, root)
+	assert_no_error(&serialize_err, "serialize")
+	if data == nil {
+		panic("serialize reported success but produced no bytes")
 	}
 	defer delete(data)
 	fmt.printf("serialized KINE v%d %d bytes\n", serializer.KINE_VERSION, len(data))
 	data[4] = 1
-	rejected, accepted_v1 := serializer.Deserialize(&environment.classes, script_vm.L, nil, data)
-	if accepted_v1 || rejected != nil {panic("KINE v1 must be rejected")}
+	rejected, rejected_err := serializer.Deserialize(&environment.classes, script_vm.L, nil, data)
+	assert_kind(&rejected_err, .Unsupported_Version, "a KINE v1 stream")
+	if rejected != nil {
+		panic("a KINE v1 stream produced an object")
+	}
 	data[4] = serializer.KINE_VERSION
 
 	base := vm.StackTop(script_vm.L)
@@ -84,12 +133,13 @@ KineRoot = model
 	invalid_child := classes.Object{archivable = true}
 	non_archivable_child := classes.Object{}
 	append(&root.children, &invalid_child, &non_archivable_child)
-	filtered, filtered_ok := serializer.Serialize(&environment.classes, script_vm.L, root)
+	filtered, filtered_err := serializer.Serialize(&environment.classes, script_vm.L, root)
 	resize(&root.attributes, attribute_count)
 	resize(&root.children, child_count)
 	vm.ReleaseValue(script_vm.L, unsupported_ref)
+	assert_no_error(&filtered_err, "serialize with unencodable records")
 	defer delete(filtered)
-	if !filtered_ok || len(filtered) != len(data) || vm.StackTop(script_vm.L) != base {
+	if len(filtered) != len(data) || vm.StackTop(script_vm.L) != base {
 		panic("skipped records changed the stream or VM stack")
 	}
 	for byte, index in data {
@@ -104,9 +154,10 @@ KineRoot = model
 	}
 	vm.Pop(script_vm.L)
 
-	loaded, load_ok := serializer.Deserialize(&environment.classes, script_vm.L, parent, data)
-	if !load_ok || loaded == nil {
-		panic("deserialize failed")
+	loaded, load_err := serializer.Deserialize(&environment.classes, script_vm.L, parent, data)
+	assert_no_error(&load_err, "deserialize")
+	if loaded == nil {
+		panic("deserialize reported success but produced no object")
 	}
 	vm.PushRegistryReference(script_vm.L, loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "LoadedRoot")
@@ -170,14 +221,31 @@ assert(text:IsDescendantOf(LoadedRoot))
 `, "serializer_verify")
 
 	// File round trip.
-	save_ok := serializer.Serialize_To_File(&environment.classes, script_vm.L, root, "build/smoke.kine")
-	if !save_ok {
-		panic("saving .kine file failed")
+	save_err := serializer.Serialize_To_File(&environment.classes, script_vm.L, root, "build/smoke.kine")
+	assert_no_error(&save_err, "saving a .kine file")
+
+	loaded_file, file_err := serializer.Deserialize_From_File(&environment.classes, script_vm.L, parent, "build/smoke.kine")
+	assert_no_error(&file_err, "loading a .kine file")
+	if loaded_file == nil {
+		panic("loading a .kine file reported success but produced no object")
 	}
 
-	loaded_file, file_ok := serializer.Deserialize_From_File(&environment.classes, script_vm.L, parent, "build/smoke.kine")
-	if !file_ok || loaded_file == nil {
-		panic("loading .kine file failed")
+	// A path that does not exist is reported as a file read failure rather than a
+	// bare false, so a mistyped path says so.
+	missing_file, missing_err := serializer.Deserialize_From_File(
+		&environment.classes,
+		script_vm.L,
+		parent,
+		"build/does-not-exist.kine",
+	)
+	if missing_err.kind != .File_Read_Failed {
+		serializer.Error_Print(missing_err, "a missing file should be a read failure: ")
+		serializer.Error_Delete(&missing_err)
+		panic("a missing .kine file was not reported as a read failure")
+	}
+	serializer.Error_Delete(&missing_err)
+	if missing_file != nil {
+		panic("a missing .kine file produced an object")
 	}
 
 	vm.PushRegistryReference(script_vm.L, loaded_file.lua_ref)

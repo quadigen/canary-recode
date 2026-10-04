@@ -42,7 +42,10 @@ main :: proc() {
 	classes.Set_Name(secret_folder, "ServerSecret")
 	classes.Set_Parent(secret_folder, server_storage_source)
 	vm.Pop(source_vm.L)
-	assert(serializer.Serialize_To_File(&source.classes, source_vm.L, &source.services.data_model.object, "build/kine-map-smoke.kine"))
+	map_err := serializer.Serialize_To_File(&source.classes, source_vm.L, &source.services.data_model.object, "build/kine-map-smoke.kine")
+	serializer.Error_Print(map_err, "could not save the map: ")
+	serializer.Error_Delete(&map_err)
+	assert(serializer.Error_Is_None(map_err), "the map should save")
 
 	client_vm := vm.New()
 	client: engine_runtime.Environment

@@ -1,5 +1,8 @@
 package services
 
+import "core:fmt"
+import "core:strings"
+
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -55,9 +58,32 @@ data_model_get :: proc(
 	}
 	switch key {
 	case "GetService", "FindService": vm.PushUserdataMethod(L, key)
+	case "PlaceId":
+		vm.PushInteger(L, 0)
+	case "PlaceVersion":
+		vm.PushInteger(L, 1)
+	case "GameId":
+		vm.PushInteger(L, 0)
+	case "JobId":
+		vm.PushString(L, "")
+	case "Name":
+		vm.PushString(L, "game")
 	case: return false
 	}
 	return true
+}
+
+service_names :: proc(registry: ^Registry) -> string {
+	if registry == nil {
+		return ""
+	}
+	names: [dynamic]string
+	for service in registry.services {
+		append(&names, service.name)
+	}
+	joined := strings.concatenate(names[:])
+	delete(names)
+	return joined
 }
 
 data_model_namecall :: proc(
@@ -73,6 +99,7 @@ data_model_namecall :: proc(
 		name := vm.ArgString(L, 2)
 		descriptor := Find_Service(model.registry, name)
 		if descriptor == nil {
+			fmt.eprintfln("[DataModel] unknown service %q (known: %s)", name, service_names(model.registry))
 			return vm.RaiseError(L, "unknown service"), true
 		}
 		if !Service_Access_Allowed(L, descriptor) {

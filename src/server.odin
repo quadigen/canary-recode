@@ -43,6 +43,7 @@ run_server :: proc(options: Startup_Options) {
 			   options.address,
 			   options.port,
 			   .Server,
+			   options.username,
 		   ) {
 		fmt.eprintf("Could not start the server on %s:%d\n", options.address, options.port)
 		return

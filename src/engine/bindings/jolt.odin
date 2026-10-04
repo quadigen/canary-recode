@@ -211,6 +211,21 @@ JPH_RayCastResult :: struct {
 	fraction: f32,
 }
 
+// Solver tuning. This is deliberately NOT a mirror of Jolt's own PhysicsSettings
+// layout: the wrapper copies each field into place individually, so adding a
+// knob here cannot silently misread Jolt's internals after an upgrade, and a
+// Jolt default that moves keeps whatever this engine means it to be.
+JPH_PhysicsSettings :: struct {
+	num_velocity_steps:           u32,
+	num_position_steps:           u32,
+	speculative_contact_distance: f32,
+	min_velocity_for_restitution: f32,
+	time_before_sleep:            f32,
+	point_velocity_sleep_threshold: f32,
+	allow_sleeping:                 u32,
+	_padding:                       u32,
+}
+
 JPH_PhysicsSystemSettings :: struct {
 	maxBodies:                     u32,
 	numBodyMutexes:                u32, // 0 = let Jolt pick a default
@@ -231,6 +246,8 @@ JPH_JobSystemConfig :: struct {
 	queueJobs:      JPH_QueueJobsFunction,
 	maxConcurrency: u32,
 	maxBarriers:    u32,
+	observeThreads: u32,
+	_padding:       u32,
 }
 
 JPH_ContactManifoldData :: struct {
@@ -255,8 +272,11 @@ foreign lib {
 	// Returns 1 on success, 0 on failure (already initialized counts as failure).
 	JPH_Init                                                     :: proc() -> i32 ---
 	JPH_Shutdown                                                 :: proc() ---
+	JPH_Get_Num_Cores                                            :: proc() -> u32 ---
 	JPH_JobSystemThreadPool_Create                               :: proc(config: ^JPH_JobSystemConfig) -> JPH_JobSystemRef ---
 	JPH_JobSystem_Destroy                                        :: proc(jobSystem: JPH_JobSystemRef) ---
+	JPH_JobSystem_Get_Num_Threads                               :: proc(jobSystem: JPH_JobSystemRef) -> u32 ---
+	JPH_JobSystem_Get_Observed_Thread_Count                     :: proc(jobSystem: JPH_JobSystemRef) -> u32 ---
 	JPH_BroadPhaseLayerInterfaceTable_Create                     :: proc(numObjectLayers: u32, numBroadPhaseLayers: u32) -> JPH_BroadPhaseLayerInterfaceRef ---
 	JPH_BroadPhaseLayerInterfaceTable_Destroy                    :: proc(bpInterface: JPH_BroadPhaseLayerInterfaceRef) ---
 	JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer :: proc(bpInterface: JPH_BroadPhaseLayerInterfaceRef, objectLayer: JPH_ObjectLayer, broadPhaseLayer: JPH_BroadPhaseLayer) ---
@@ -289,6 +309,7 @@ foreign lib {
 	JPH_BodyCreationSettings_SetGravityFactor                    :: proc(settings: JPH_BodyCreationSettingsRef, factor: f32) ---
 	JPH_PhysicsSystem_Create                                     :: proc(settings: ^JPH_PhysicsSystemSettings) -> JPH_PhysicsSystemRef ---
 	JPH_PhysicsSystem_Destroy                                    :: proc(system: JPH_PhysicsSystemRef) ---
+	JPH_PhysicsSystem_SetPhysicsSettings                        :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_PhysicsSettings) ---
 	JPH_PhysicsSystem_GetBodyInterface                           :: proc(system: JPH_PhysicsSystemRef) -> JPH_BodyInterfaceRef ---
 	JPH_PhysicsSystem_SetGravity                                 :: proc(system: JPH_PhysicsSystemRef, gravity: ^JPH_Vec3) ---
 	JPH_PhysicsSystem_Update                                     :: proc(system: JPH_PhysicsSystemRef, deltaTime: f32, collisionSteps: i32, jobSystem: JPH_JobSystemRef) ---

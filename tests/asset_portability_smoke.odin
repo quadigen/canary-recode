@@ -153,19 +153,21 @@ KineRoot = model
 
 	// The legacy stream is written first, from the same tree, so its paths are
 	// still on disk when the version 2 reader is exercised below.
-	legacy, legacy_ok := serializer.Serialize_Legacy(&environment.classes, script_vm.L, root)
-	if !legacy_ok || legacy == nil {
-		panic("legacy serialize failed")
+	legacy, legacy_err := serializer.Serialize_Legacy(&environment.classes, script_vm.L, root)
+	if !serializer.Error_Is_None(legacy_err) || legacy == nil {
+		panic(fmt.tprintf("legacy serialize failed: %s", serializer.Error_String(legacy_err)))
 	}
+	serializer.Error_Delete(&legacy_err)
 	defer delete(legacy)
 	if legacy[4] != u8(serializer.KINE_LEGACY_VERSION) {
 		panic("the legacy stream is not tagged as version 2")
 	}
 
-	stream, ok := serializer.Serialize(&environment.classes, script_vm.L, root)
-	if !ok || stream == nil {
-		panic("serialize failed")
+	stream, err := serializer.Serialize(&environment.classes, script_vm.L, root)
+	if !serializer.Error_Is_None(err) || stream == nil {
+		panic(fmt.tprintf("serialize failed: %s", serializer.Error_String(err)))
 	}
+	serializer.Error_Delete(&err)
 	defer delete(stream)
 	if stream[4] != u8(serializer.KINE_VERSION) {
 		panic("the stream is not tagged as the current version")
@@ -194,10 +196,11 @@ KineRoot = model
 	}
 	vm.Pop(script_vm.L)
 
-	loaded, load_ok := serializer.Deserialize(&environment.classes, script_vm.L, parent, stream)
-	if !load_ok || loaded == nil {
-		panic("deserialize failed")
+	loaded, load_err := serializer.Deserialize(&environment.classes, script_vm.L, parent, stream)
+	if !serializer.Error_Is_None(load_err) || loaded == nil {
+		panic(fmt.tprintf("deserialize failed: %s", serializer.Error_String(load_err)))
 	}
+	serializer.Error_Delete(&load_err)
 	vm.PushRegistryReference(script_vm.L, loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "LoadedRoot")
 
@@ -249,21 +252,24 @@ KineRoot = model
 	vm.GetGlobal(script_vm.L, "KineRoot")
 	missing_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
-	missing_stream, missing_ok := serializer.Serialize(&environment.classes, script_vm.L, missing_root)
+	missing_stream, missing_err := serializer.Serialize(&environment.classes, script_vm.L, missing_root)
 	defer delete(missing_stream)
-	if !missing_ok {
+	if !serializer.Error_Is_None(missing_err) {
+		serializer.Error_Delete(&missing_err)
 		panic("serializing a map with a missing asset failed")
 	}
+	serializer.Error_Delete(&missing_err)
 	missing_parent, missing_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
 	if !missing_parent_ok || missing_parent == nil {
 		panic("could not create a Folder for the missing-asset map")
 	}
 	vm.Pop(script_vm.L)
-	missing_loaded, missing_load_ok :=
+	missing_loaded, missing_load_err :=
 		serializer.Deserialize(&environment.classes, script_vm.L, missing_parent, missing_stream)
-	if !missing_load_ok || missing_loaded == nil {
-		panic("loading the missing-asset map failed")
+	if !serializer.Error_Is_None(missing_load_err) || missing_loaded == nil {
+		panic(fmt.tprintf("loading the missing-asset map failed: %s", serializer.Error_String(missing_load_err)))
 	}
+	serializer.Error_Delete(&missing_load_err)
 	vm.PushRegistryReference(script_vm.L, missing_loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "MissingRoot")
 	run_script_or_fail(
@@ -295,21 +301,24 @@ KineRoot = model
 	vm.GetGlobal(script_vm.L, "KineRoot")
 	builtin_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
-	builtin_stream, builtin_ok := serializer.Serialize(&environment.classes, script_vm.L, builtin_root)
+	builtin_stream, builtin_err := serializer.Serialize(&environment.classes, script_vm.L, builtin_root)
 	defer delete(builtin_stream)
-	if !builtin_ok {
+	if !serializer.Error_Is_None(builtin_err) {
+		serializer.Error_Delete(&builtin_err)
 		panic("serializing a builtin mesh failed")
 	}
+	serializer.Error_Delete(&builtin_err)
 	builtin_parent, builtin_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
 	if !builtin_parent_ok || builtin_parent == nil {
 		panic("could not create a Folder for the builtin map")
 	}
 	vm.Pop(script_vm.L)
-	builtin_loaded, builtin_load_ok :=
+	builtin_loaded, builtin_load_err :=
 		serializer.Deserialize(&environment.classes, script_vm.L, builtin_parent, builtin_stream)
-	if !builtin_load_ok || builtin_loaded == nil {
-		panic("loading the builtin map failed")
+	if !serializer.Error_Is_None(builtin_load_err) || builtin_loaded == nil {
+		panic(fmt.tprintf("loading the builtin map failed: %s", serializer.Error_String(builtin_load_err)))
 	}
+	serializer.Error_Delete(&builtin_load_err)
 	vm.PushRegistryReference(script_vm.L, builtin_loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "BuiltinRoot")
 	run_script_or_fail(
@@ -386,21 +395,27 @@ KineHandleObjectId = part.MeshContent.ObjectId
 	handle_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
 	handle_source_id := read_global_number(&script_vm, "KineHandleObjectId")
-	handle_stream, handle_ok := serializer.Serialize(&environment.classes, script_vm.L, handle_root)
+	handle_stream, handle_err := serializer.Serialize(&environment.classes, script_vm.L, handle_root)
 	defer delete(handle_stream)
-	if !handle_ok {
+	if !serializer.Error_Is_None(handle_err) {
+		serializer.Error_Delete(&handle_err)
 		panic("serializing an object-backed Content failed")
 	}
+	serializer.Error_Delete(&handle_err)
 	handle_parent, handle_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
 	if !handle_parent_ok || handle_parent == nil {
 		panic("could not create a Folder for the object-handle map")
 	}
 	vm.Pop(script_vm.L)
-	handle_loaded, handle_load_ok :=
+	handle_loaded, handle_load_err :=
 		serializer.Deserialize(&environment.classes, script_vm.L, handle_parent, handle_stream)
-	if !handle_load_ok || handle_loaded == nil {
-		panic("loading the object-handle map failed")
+	if !serializer.Error_Is_None(handle_load_err) || handle_loaded == nil {
+		panic(fmt.tprintf(
+			"loading the object-handle map failed: %s",
+			serializer.Error_String(handle_load_err),
+		))
 	}
+	serializer.Error_Delete(&handle_load_err)
 	vm.PushRegistryReference(script_vm.L, handle_loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "HandleRoot")
 	run_script_or_fail(

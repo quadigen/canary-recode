@@ -1,5 +1,7 @@
 package globals
 
+import "core:time"
+import "base:runtime"
 import vm "../vm"
 
 RUNTIME_NAME            :: "kinemium"
@@ -186,7 +188,139 @@ runtime_install_luau_global :: proc(vm_state: ^vm.VM) {
 }
 
 
+runtime_global_tick :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	vm.PushNumber(L, f64(time.to_unix_nanoseconds(time.now())) / 1e9)
+	return 1
+}
+
+runtime_global_time :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	vm.PushNumber(L, f64(time.to_unix_nanoseconds(time.now())) / 1e9)
+	return 1
+}
+
+runtime_civil_from_days :: proc(days: i64) -> (year, month, day: i64) {
+	z := days + 719468
+	if z < 0 {
+		z = z - 146096
+	}
+	era := z / 146097
+	doe := z - era * 146097
+	yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+	y := yoe + era * 400
+	doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+	mp := (5 * doy + 2) / 153
+	d := doy - (153 * mp + 2) / 5 + 1
+	m := mp + 3
+	if mp >= 10 {
+		m = mp - 9
+	}
+	if m <= 2 {
+		y += 1
+	}
+	return y, m, d
+}
+
+runtime_global_date :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	seconds := i64(time.to_unix_seconds(time.now()))
+	days := seconds / 86400
+	remainder := seconds % 86400
+	if remainder < 0 {
+		remainder += 86400
+		days -= 1
+	}
+	hour := remainder / 3600
+	minute := (remainder % 3600) / 60
+	second := remainder % 60
+	year, month, day := runtime_civil_from_days(days)
+
+	vm.NewTable(L, 0, 9)
+	vm.PushInteger(L, year)
+	vm.SetField(L, -2, "year")
+	vm.PushInteger(L, month)
+	vm.SetField(L, -2, "month")
+	vm.PushInteger(L, day)
+	vm.SetField(L, -2, "day")
+	vm.PushInteger(L, hour)
+	vm.SetField(L, -2, "hour")
+	vm.PushInteger(L, minute)
+	vm.SetField(L, -2, "min")
+	vm.PushInteger(L, second)
+	vm.SetField(L, -2, "sec")
+	vm.PushInteger(L, (days + 4) % 7 + 1)
+	vm.SetField(L, -2, "wday")
+	vm.PushInteger(L, 0)
+	vm.SetField(L, -2, "yday")
+	vm.PushBoolean(L, false)
+	vm.SetField(L, -2, "isdst")
+	return 1
+}
+
+runtime_global_collectgarbage :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	option := "collect"
+	if vm.StackTop(L) >= 1 {
+		option = vm.ArgString(L, 1)
+	}
+	if option == "count" {
+		vm.PushNumber(L, f64(0))
+		return 1
+	}
+	if option == "collect" {
+		vm.PushNumber(L, f64(0))
+		return 1
+	}
+	vm.PushNil(L)
+	return 1
+}
+
+runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+	vm.NewTable(L, 0, 2)
+	vm.PushBoolean(L, settings_studio)
+	vm.SetField(L, -2, "Studio")
+	vm.PushBoolean(L, false)
+	vm.SetField(L, -2, "DeviceCamera")
+	return 1
+}
+
+settings_studio: bool
+
+runtime_install_time_global :: proc(vm_state: ^vm.VM) {
+	assert(vm_state != nil)
+	assert(vm_state.L != nil)
+
+	L := vm_state.L
+
+	vm.PushFunction(L, "tick", runtime_global_tick, 0)
+	vm.SetGlobalFromStack(vm_state, "tick")
+
+	vm.PushFunction(L, "time", runtime_global_time, 0)
+	vm.SetGlobalFromStack(vm_state, "time")
+
+	vm.NewTable(L, 0, 3)
+	vm.PushFunction(L, "clock", runtime_global_tick, 0)
+	vm.SetField(L, -2, "clock")
+	vm.PushFunction(L, "time", runtime_global_time, 0)
+	vm.SetField(L, -2, "time")
+	vm.PushFunction(L, "date", runtime_global_date, 0)
+	vm.SetField(L, -2, "date")
+	vm.SetReadOnly(L, -1)
+	vm.SetGlobalFromStack(vm_state, "os")
+
+	vm.NewTable(L, 0, 0)
+	vm.SetGlobalFromStack(vm_state, "shared")
+
+	vm.PushFunction(L, "collectgarbage", runtime_global_collectgarbage, 0)
+	vm.SetGlobalFromStack(vm_state, "collectgarbage")
+
+	vm.PushFunction(L, "settings", runtime_global_settings, 0)
+	vm.SetGlobalFromStack(vm_state, "settings")
+}
 Install_Runtime_Globals :: proc(vm_state: ^vm.VM) {
 	runtime_install_runtime_global(vm_state)
 	runtime_install_luau_global(vm_state)
+	runtime_install_time_global(vm_state)
 }

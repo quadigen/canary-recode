@@ -330,8 +330,10 @@ script_context_start :: proc(
 		return false
 	}
 
+	classes.Require_Frame_Push(script_context.object_registry, thread, common, object)
 	finished, yielded, resume_error, traceback := vm.ResumeThreadTraceback(thread, main_thread, 0)
 	if resume_error != "" {
+		classes.Require_Frame_Pop(script_context.object_registry, thread)
 		script_context_report_error(script_context, object, resume_error, traceback)
 		delete(resume_error)
 		delete(traceback)
@@ -342,6 +344,7 @@ script_context_start :: proc(
 	_ = yielded
 
 	if finished {
+		classes.Require_Frame_Pop(script_context.object_registry, thread)
 		script_context_finish_script(script_context, object, common)
 	}
 

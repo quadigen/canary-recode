@@ -1,0 +1,31 @@
+material {
+    name : "kine_outline_mask",
+    // Screen-space selection mask. Selected geometry is drawn into a private
+    // RGBA8 target as flat per-instance color+alpha (the highlight's outline
+    // color and 1-OutlineTransparency); everything else stays at the black,
+    // alpha-0 clear color. A fullscreen composite pass then dilates the alpha
+    // channel to build the outline ring. culling none because the mask must
+    // register every silhouette, not just front faces.
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    vertexDomain : object,
+    instanced : true,
+    parameters : [
+        { type : float4[64], name : instanceColors },
+        { type : float, name : maskValue }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // maskValue=1 paints the selection; a future occluder pass would draw
+        // geometry with maskValue=0 to hide outlines behind walls. Alpha is the
+        // "object present" channel the composite dilates, so it must stay 0
+        // outside selected geometry (the target clears to {0,0,0,0}).
+        float present = materialParams.maskValue;
+        vec4 c = materialParams.instanceColors[getInstanceIndex()];
+        material.baseColor = vec4(c.rgb * present, c.a * present);
+    }
+}

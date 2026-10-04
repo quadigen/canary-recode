@@ -159,6 +159,33 @@ reflection_class_visible :: proc(
 }
 
 // reflection_push_class builds one ReflectedClass dictionary.
+reflection_push_enums :: proc(
+	L: ^vm.State,
+	services_registry: ^Registry,
+	registry: ^classes.Registry,
+) {
+	enum_registry: ^enums.Registry = nil
+	if registry != nil {
+		enum_registry = registry.enums
+	}
+	if enum_registry == nil {
+		vm.NewTable(L, 0)
+		return
+	}
+
+	vm.NewTable(L, len(enum_registry.types), 0)
+	for enum_type, index in enum_registry.types {
+		vm.NewTable(L, 0, 3)
+		vm.PushString(L, enum_type.name)
+		vm.SetField(L, -2, "Name")
+		vm.PushString(L, enum_type.name)
+		vm.SetField(L, -2, "DisplayName")
+		vm.NewTable(L, 0, 0)
+		vm.SetField(L, -2, "Tags")
+		vm.SetArrayValue(L, -2, index + 1)
+	}
+}
+
 reflection_push_class :: proc(
 	L: ^vm.State,
 	datatype_registry: ^datatypes.Registry,
@@ -416,6 +443,7 @@ reflection_service_get :: proc(
 	switch key {
 	case "GetClass",
 	     "GetClasses",
+	     "GetEnums",
 	     "GetEventsOfClass",
 	     "GetMethodsOfClass",
 	     "GetPropertiesOfClass":
@@ -502,6 +530,10 @@ reflection_service_namecall :: proc(
 		}
 		return 1, true
 
+	case "GetEnums":
+		reflection_push_enums(L, services_registry, class_registry)
+		return 1, true
+
 	case "GetPropertiesOfClass",
 	     "GetMethodsOfClass",
 	     "GetEventsOfClass":
@@ -563,5 +595,15 @@ Register_ReflectionService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = reflection_service_get,
 		namecall = reflection_service_namecall,
+		properties = []string{},
+		events = []string{},
+		methods = []string{
+			"GetClass",
+			"GetClasses",
+			"GetEnums",
+			"GetEventsOfClass",
+			"GetMethodsOfClass",
+			"GetPropertiesOfClass",
+		},
 	)
 }

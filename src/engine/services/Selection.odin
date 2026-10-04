@@ -363,5 +363,8 @@ Register_Selection_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = selection_get,
 		namecall = selection_namecall,
+		properties = []string{"SelectionThickness", "SelectionChanged"},
+		methods = []string{"Get", "Set", "Add", "Remove"},
+		events = []string{},
 	)
 }

@@ -81,6 +81,43 @@ font_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
+font_from_enum :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+
+	binding := binding_from_upvalue(L)
+	registry := registry_from_binding(binding)
+	if registry == nil || registry.enums == nil {
+		return vm.RaiseError(L, "Font enum registry is unavailable")
+	}
+
+	item := engine_enums.Arg_Item(L, 1, registry.enums, "Font")
+	if item == nil {
+		return vm.RaiseError(L, "expected Enum.Font")
+	}
+
+	push_font(L, binding, Font_From_Enum(engine_enums.Font(item.value)))
+	return 1
+}
+
+font_from_name :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+
+	binding := binding_from_upvalue(L)
+	registry := registry_from_binding(binding)
+	if registry == nil || registry.enums == nil {
+		return vm.RaiseError(L, "Font enum registry is unavailable")
+	}
+
+	family := vm.ArgString(L, 1)
+	if item := engine_enums.Enum_Item_By_Name(registry.enums, "Font", family); item != nil {
+		push_font(L, binding, Font_From_Enum(engine_enums.Font(item.value)))
+		return 1
+	}
+
+	push_font(L, binding, Font_New(family))
+	return 1
+}
+
 font_get :: proc(
 	L: ^vm.State,
 	value,
@@ -162,4 +199,6 @@ Font_Install_Fields :: proc(
 	binding: ^vm.Userdata_Binding,
 ) {
 	add_library_function(L, binding, "new", font_new)
+	add_library_function(L, binding, "fromEnum", font_from_enum)
+	add_library_function(L, binding, "fromName", font_from_name)
 }

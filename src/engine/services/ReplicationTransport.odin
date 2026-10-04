@@ -17,7 +17,16 @@ import enet "vendor:ENet"
 // Wire protocol revision. Bumping this is the only supported way to change the
 // packet layout: both sides compare it during the handshake and refuse to talk
 // to a peer they cannot parse, instead of silently misinterpreting frames.
-Replication_Protocol_Version: u32 = 7
+Replication_Protocol_Version: u32 = 9
+
+// The largest payload one frame may carry, in bytes. ENet fragments a reliable
+// packet internally, but a frame this size has to be something a single send can
+// actually push, so it is a hard ceiling rather than a hint.
+//
+// Anything larger than this has to be split by its sender, which is why the asset
+// and terrain transfers both chunk: this cap is a statement about a frame, not
+// about what may be replicated.
+Replication_Max_Frame_Payload: u32 = 1048576
 
 // The framing layer still accepts revision 5 so that a stale client can reach
 // the HELLO handler and be told why it is being refused. Rejecting it at the
@@ -35,6 +44,16 @@ Replication_Capability_Asset_Transfer: u32 = 1 << 3
 // Service holding a map, not an Instance with replicated properties, so the
 // instance-tree snapshot can never carry it and it needs its own frame.
 Replication_Capability_Terrain: u32 = 1 << 4
+// The server tells the client when the initial scene has finished streaming.
+// A client builds its world purely from spawns, so until this arrives the map is
+// still arriving: the character would integrate gravity against a floor that does
+// not exist yet and fall out of the world. A peer without this capability never
+// receives the marker, so a version-skewed client keeps its previous behaviour
+// instead of waiting forever for a frame it cannot parse.
+Replication_Capability_Scene_Ready: u32 = 1 << 5
+// The server tells the client when the whole Workspace has finished replicating,
+// not just the spawn lane. This is what backs workspace.FinishedReplicating.
+Replication_Capability_Finished_Replicating: u32 = 1 << 6
 
 // Every feature this build implements, advertised during the handshake.
 Replication_Local_Capabilities: u32 =
@@ -42,7 +61,9 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Batch_Properties |
 	Replication_Capability_Time_Sync |
 	Replication_Capability_Asset_Transfer |
-	Replication_Capability_Terrain
+	Replication_Capability_Terrain |
+	Replication_Capability_Scene_Ready |
+	Replication_Capability_Finished_Replicating
 
 Replication_Handshake_Ok:                u8 = 0
 Replication_Handshake_Version_Mismatch:  u8 = 1
@@ -55,6 +76,12 @@ Replication_Handshake_Schema_Mismatch:   u8 = 5
 // number rather than reusing a retired meaning.
 Replication_Kind_Asset: u8 = 21
 Replication_Kind_Terrain: u8 = 22
+// Sent once per peer, after the last of the initial scene's spawns (and the
+// initial terrain, when the map has any) has been flushed for that peer.
+Replication_Kind_Scene_Ready: u8 = 23
+// Sent once per peer when every entity this peer is meant to see has spawned,
+// which is what workspace.FinishedReplicating reports to scripts.
+Replication_Kind_Finished_Replicating: u8 = 24
 
 replication_string_compare :: proc(a, b: string) -> int {
 	if a < b {return -1}
@@ -188,6 +215,7 @@ replication_send_hello :: proc(service: ^ReplicatorService) {
 	// then misapplying every frame that follows.
 	replication_put_u64(&bytes, replication_schema_hash(service))
 	replication_put_string(&bytes, service.join_token)
+	replication_put_string(&bytes, service.username)
 	_ = replication_send(service, service.remote, 1, bytes[:], true)
 }
 
@@ -240,6 +268,14 @@ replication_receive_hello :: proc(
 	schema_hash := replication_read_u64(reader)
 	token := replication_read_string(reader)
 	if !reader.valid || len(token) > 256 {reader.valid = false; return}
+	// The display name rides at the end of HELLO. It is read only when the frame
+	// still has bytes for it, so a frame that stops after the join token is
+	// still parsed as a handshake rather than rejected as truncated.
+	username := ""
+	if reader.offset < len(reader.data) {
+		username = replication_read_string(reader)
+		if !reader.valid || len(username) > 32 {reader.valid = false; return}
+	}
 	connection: ^Replication_Peer
 	for &candidate in service.peers {if candidate.peer == peer {connection = &candidate; break}}
 	if connection == nil {reader.valid = false; return}
@@ -331,7 +367,10 @@ replication_receive_hello :: proc(
 
 	id := service.next_user_id
 	service.next_user_id += 1
-	name := fmt.tprintf("Player%d", id)
+	name := username
+	if name == "" {
+		name = fmt.tprintf("Player%d", id)
+	}
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	player := Players_Add(players, L, id, name)
 	character_service := cast(^CharacterService)Ensure_Service(
@@ -529,6 +568,7 @@ replication_start :: proc(
 	address: string,
 	port: u16,
 	mode: Replication_Mode,
+	username: string = "",
 ) -> bool {
 	replication_stop(service)
 	if mode == .Client && (address == "" || address == "0.0.0.0") {
@@ -610,13 +650,23 @@ replication_budgeted :: proc(
 	// snapshot, so it must not be measured against the tick budget. A drop here
 	// would leave the client permanently missing a mesh, and unlike a lost
 	// property frame nothing would ever retry it.
+	//
+	// The scene-ready marker is excluded for the same reason, and it matters
+	// even more: it is sent exactly once, so a budget drop would not merely lose
+	// a frame, it would strand the client in its frozen pre-scene state forever
+	// with nothing left to retry it.
 	return kind != 1 &&
 	       kind != 2 &&
 	       kind != 3 &&
+	       // A spawn is a prerequisite for every later state frame.  Charging it
+	       // to the steady-state budget lets a large map consume the whole tick
+	       // before a new player's CharacterModel can even exist client-side.
+	       kind != 7 &&
 	       kind != 8 &&
 	       kind != 20 &&
 	       kind != Replication_Kind_Asset &&
-	       kind != Replication_Kind_Terrain
+	       kind != Replication_Kind_Terrain &&
+	       kind != Replication_Kind_Scene_Ready
 }
 
 replication_send :: proc(
@@ -626,7 +676,9 @@ replication_send :: proc(
 	payload: []u8,
 	reliable: bool = true,
 ) -> bool {
-	if peer == nil || service.host == nil || len(payload) > 1048576 {return false}
+	if peer == nil ||
+	   service.host == nil ||
+	   len(payload) > int(Replication_Max_Frame_Payload) {return false}
 	if int(kind) < len(service.diag_kind_counts) {
 		service.diag_kind_counts[int(kind)] += 1
 		service.diag_kind_bytes[int(kind)] += u64(len(payload))
@@ -677,6 +729,83 @@ replication_apply_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
+// replication_send_asset_entry pushes one asset, choosing between the single
+// frame form and the chunked form.
+//
+// The split matters because the store accepts assets far larger than a frame
+// (MAX_ASSET_BYTES is 256 MiB and meshes are the big case) while replication_send
+// caps a frame at Replication_Max_Frame_Payload. Sending an oversized asset as
+// one entry used to be refused outright, and because the loop below gave up at
+// the first refusal the whole table was lost: the client kept an empty store,
+// every kineasset:// reference missed, and the model rendered as a primitive.
+//
+// Chunk sizes are derived from the frame cap rather than hardcoded, so raising
+// the cap cannot leave the chunker quietly emitting frames the sender rejects.
+replication_send_asset_entry :: proc(
+	service: ^ReplicatorService,
+	peer: ^enet.Peer,
+	entry: ^assetstore.Asset,
+) -> bool {
+	// Worst case for the entry framing: subtype, two length-prefixed strings
+	// bounded by the caps, the kind byte and the payload length.
+	entry_overhead :=
+		1 +
+		4 + int(Replication_Asset_Max_Id_Length) +
+		4 + int(Replication_Asset_Max_Path) +
+		1 +
+		4
+	body := int(Replication_Max_Frame_Payload) - entry_overhead
+
+	if len(entry.bytes) <= body {
+		payload: [dynamic]u8
+		encode_asset_entry(&payload, entry.id, entry.path, entry.kind, entry.bytes)
+		sent_ok := replication_send(
+			service,
+			peer,
+			Replication_Kind_Asset,
+			payload[:],
+			true,
+		)
+		// Freed here rather than deferred so both framings release their buffer
+		// the same way, at the point the send is done with.
+		delete(payload)
+		return sent_ok
+	}
+
+	header: [dynamic]u8
+	encode_asset_begin(&header, entry.id, entry.path, entry.kind, u32(len(entry.bytes)))
+	sent_ok := replication_send(
+		service,
+		peer,
+		Replication_Kind_Asset,
+		header[:],
+		true,
+	)
+	delete(header)
+	if !sent_ok {return false}
+
+	// Subtype plus the chunk index, so the body's room shrinks by a few bytes.
+	chunk_size := min(int(Replication_Asset_Max_Chunk), body - 5)
+	if chunk_size <= 0 {return false}
+
+	for start := 0; start < len(entry.bytes); {
+		end := min(start + chunk_size, len(entry.bytes))
+		frame: [dynamic]u8
+		encode_asset_chunk(&frame, u32(start / chunk_size), entry.bytes[start:end])
+		sent_ok = replication_send(
+			service,
+			peer,
+			Replication_Kind_Asset,
+			frame[:],
+			true,
+		)
+		delete(frame)
+		if !sent_ok {return false}
+		start = end
+	}
+	return true
+}
+
 // replication_send_asset_table hands a freshly connected client every asset the
 // loaded map published. Without it the client's store stays empty for the life
 // of the process, because only deserializing a .kine stream ever fills it, and
@@ -698,14 +827,7 @@ replication_send_asset_table :: proc(
 		// pointer stays valid to the end of the iteration.
 		entry, ok := assetstore.At(index)
 		if !ok || entry == nil {continue}
-		payload: [dynamic]u8
-		encode_asset_entry(&payload, entry.id, entry.path, entry.kind, entry.bytes)
-		sent_ok := replication_send(service, peer, Replication_Kind_Asset, payload[:], true)
-		// Freed here rather than with defer: a defer inside a loop body runs at
-		// procedure exit, so one per iteration would free the same final buffer
-		// once per asset.
-		delete(payload)
-		if !sent_ok {return}
+		if !replication_send_asset_entry(service, peer, entry) {return}
 		sent += 1
 	}
 
@@ -993,6 +1115,61 @@ replication_terrain_record_compare :: proc(a, b: Terrain_Cell_Record) -> int {
 	return 0
 }
 
+// replication_asset_pending_reset drops any half assembled asset. Called when a
+// transfer is abandoned or a new one starts, so a stale buffer cannot be
+// mistaken for a complete one later.
+replication_asset_pending_reset :: proc(service: ^ReplicatorService) {
+	delete(service.asset_pending_bytes)
+	service.asset_pending_bytes = nil
+	// The id and path are owned clones, not the borrowed strings the decoder
+	// handed back, because they outlive the packet they arrived in.
+	delete(service.asset_pending_id)
+	delete(service.asset_pending_path)
+	service.asset_pending_id = ""
+	service.asset_pending_path = ""
+	service.asset_pending_total = 0
+	service.asset_pending_next = 0
+}
+
+// replication_asset_commit applies a fully reassembled asset to the store. Both
+// the single frame and the chunked path land here, so the caps, the ownership
+// transfer and the counters cannot drift between them.
+replication_asset_commit :: proc(
+	service: ^ReplicatorService,
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	data: []u8,
+) -> bool {
+	// The cumulative caps are enforced here rather than left to the store, because
+	// bytes now arrive from the network instead of a file the user chose. Count
+	// and total size are both bounded so a peer cannot make this client reserve
+	// an unbounded amount of memory by claiming more than it sent.
+	if service.assets_received >= u64(assetstore.MAX_ASSET_COUNT) {
+		fmt.eprintln("[Replication] refused an asset past the asset count limit")
+		service.asset_rejections += 1
+		return false
+	}
+	if service.asset_bytes_received + u64(len(data)) > u64(assetstore.MAX_ASSET_TOTAL_BYTES) {
+		fmt.eprintln("[Replication] refused an asset past the total size limit")
+		service.asset_rejections += 1
+		return false
+	}
+
+	// Register_As takes ownership, and the caller's buffer is released once this
+	// dispatch returns, so the store gets a copy it may keep.
+	owned := slice.clone(data)
+	if !assetstore.Register_As(id, owned, path, kind) {
+		delete(owned)
+		fmt.eprintf("[Replication] refused a malformed asset entry: %s\n", id)
+		service.asset_rejections += 1
+		return false
+	}
+	service.assets_received += 1
+	service.asset_bytes_received += u64(len(data))
+	return true
+}
+
 replication_receive_asset :: proc(
 	service: ^ReplicatorService,
 	peer: ^enet.Peer,
@@ -1004,6 +1181,19 @@ replication_receive_asset :: proc(
 	reader.offset += 1
 
 	if subtype == Replication_Asset_Subtype_End {
+		// A table cannot close while an asset is still half delivered. Without
+		// this the count would still line up and the client would sit on a
+		// truncated buffer believing it had a file.
+		if service.asset_pending_id != "" {
+			fmt.eprintf(
+				"[Replication] asset table closed with %s still incomplete (%d of %d bytes)\n",
+				service.asset_pending_id,
+				len(service.asset_pending_bytes),
+				service.asset_pending_total,
+			)
+			service.asset_rejections += 1
+			replication_asset_pending_reset(service)
+		}
 		count := replication_read_u32(reader)
 		if !reader.valid {return}
 		// The declared count is checked against what actually arrived rather than
@@ -1023,35 +1213,92 @@ replication_receive_asset :: proc(
 		fmt.printf("Received %d embedded assets from the server\n", count)
 		return
 	}
+
+	if subtype == Replication_Asset_Subtype_Begin {
+		id, path, kind, total, ok := decode_asset_begin(reader)
+		if !ok {return}
+		// A second Begin without a closing End means the previous transfer was
+		// abandoned. Dropping it here keeps the closing frame's count honest.
+		replication_asset_pending_reset(service)
+		// Cloned because the decoder's strings borrow the packet buffer, which is
+		// released as soon as this dispatch returns while the transfer lives on
+		// across every following chunk frame.
+		service.asset_pending_id = strings.clone(id)
+		service.asset_pending_path = strings.clone(path)
+		service.asset_pending_kind = kind
+		service.asset_pending_total = total
+		service.asset_pending_next = 0
+		service.asset_pending_bytes = make([dynamic]u8, 0, int(total))
+		// A zero length asset has no chunks coming, so it is whole the moment it
+		// is announced.
+		if total == 0 {
+			replication_asset_commit(
+				service,
+				service.asset_pending_id,
+				service.asset_pending_path,
+				service.asset_pending_kind,
+				service.asset_pending_bytes[:],
+			)
+			replication_asset_pending_reset(service)
+		}
+		return
+	}
+
+	if subtype == Replication_Asset_Subtype_Chunk {
+		if service.asset_pending_id == "" {
+			// A chunk with nothing to attach it to. Counted so a peer cannot
+			// pad the wire with frames that are silently ignored.
+			fmt.eprintln("[Replication] refused an asset chunk with no transfer open")
+			service.asset_rejections += 1
+			return
+		}
+		index, data, ok := decode_asset_chunk(reader)
+		if !ok {return}
+		// Chunks ride the reliable channel, so they arrive in order. Requiring
+		// the exact next index means a gap or a repeat is caught instead of
+		// being stitched into the wrong offset.
+		if index != service.asset_pending_next {
+			fmt.eprintf(
+				"[Replication] refused an out of order asset chunk for %s: got %d, wanted %d\n",
+				service.asset_pending_id,
+				index,
+				service.asset_pending_next,
+			)
+			service.asset_rejections += 1
+			replication_asset_pending_reset(service)
+			return
+		}
+		// Bounds checked against the announced total, not just the store cap, so
+		// a peer cannot make this client allocate past what it agreed to.
+		if len(service.asset_pending_bytes) + len(data) > int(service.asset_pending_total) {
+			fmt.eprintf("[Replication] refused an oversized asset chunk for %s\n", service.asset_pending_id)
+			service.asset_rejections += 1
+			replication_asset_pending_reset(service)
+			return
+		}
+		append(&service.asset_pending_bytes, ..data)
+		service.asset_pending_next += 1
+		if len(service.asset_pending_bytes) == int(service.asset_pending_total) {
+			replication_asset_commit(
+				service,
+				service.asset_pending_id,
+				service.asset_pending_path,
+				service.asset_pending_kind,
+				service.asset_pending_bytes[:],
+			)
+			replication_asset_pending_reset(service)
+		}
+		return
+	}
+
 	if subtype != Replication_Asset_Subtype_Entry {reader.valid = false; return}
 
 	id, path, kind, data, ok := decode_asset_entry_body(reader)
 	if !ok {return}
-	// The cumulative caps are enforced here rather than left to the store, because
-	// bytes now arrive from the network instead of a file the user chose. Count
-	// and total size are both bounded so a peer cannot make this client reserve
-	// an unbounded amount of memory by claiming more than it sent.
-	if service.assets_received >= u64(assetstore.MAX_ASSET_COUNT) {
-		fmt.eprintln("[Replication] refused an asset past the asset count limit")
-		service.asset_rejections += 1
-		return
-	}
-	if service.asset_bytes_received + u64(len(data)) > u64(assetstore.MAX_ASSET_TOTAL_BYTES) {
-		fmt.eprintln("[Replication] refused an asset past the total size limit")
-		service.asset_rejections += 1
-		return
-	}
-
-	// Register_As takes ownership, and the packet buffer is released once this
-	// dispatch returns, so the store gets a copy it may keep.
-	owned := slice.clone(data)
-	if !assetstore.Register_As(id, owned, path, kind) {
-		fmt.eprintf("[Replication] refused a malformed asset entry: %s\n", id)
-		service.asset_rejections += 1
-		return
-	}
-	service.assets_received += 1
-	service.asset_bytes_received += u64(len(data))
+	// The chunked buffer is cleared as each asset lands, so nothing can be left
+	// holding a borrow of a packet that is about to be released.
+	if service.asset_pending_id != "" {replication_asset_pending_reset(service)}
+	replication_asset_commit(service, id, path, kind, data)
 }
 
 replication_receive :: proc(
@@ -1089,6 +1336,27 @@ replication_receive :: proc(
 		replication_receive_asset(service, peer, &reader)
 	case Replication_Kind_Terrain:
 		replication_receive_terrain(service, peer, &reader)
+	case Replication_Kind_Scene_Ready:
+		// The server has finished streaming the initial scene. Until this frame
+		// the client is still receiving the map, and a character built against a
+		// floor that does not exist yet is what drops it through the world, so
+		// CharacterService_Bind holds those characters back until here. The frame
+		// is idempotent on purpose: a duplicate must not rebuild them.
+		if service.mode != .Client || peer != service.remote {return}
+		if !service.scene_ready {
+			service.scene_ready = true
+			CharacterService_Flush_Pending_Binds(service.data_model)
+			fmt.println("Network scene ready; client may now build its character")
+		}
+	case Replication_Kind_Finished_Replicating:
+		// The whole scene this client is meant to see has now spawned. This is
+		// what delivers workspace.FinishedReplicating to scripts.
+		if service.mode != .Client || peer != service.remote {return}
+		if service.replication_finished {return}
+		service.replication_finished = true
+		workspace_object := DataModel_Get_Service(service.data_model, "Workspace")
+		workspace := cast(^Workspace)workspace_object
+		Workspace_Fire_Finished_Replicating(L, workspace)
 	case 2:
 		if service.mode != .Client || peer != service.remote {return}
 		id := replication_read_u32(&reader)
@@ -1373,7 +1641,18 @@ replication_receive :: proc(
 			// The first accepted transform frame is what makes this Part's
 			// placement authoritative; until it lands the client is looking at the
 			// constructor's placeholder transform.
-			entity.has_transform = true
+			if !entity.has_transform {
+				// This Part was invisible to physics until now. The client holds a
+				// replicated Part back from getting a body until its authoritative
+				// transform lands, so a Part the physics sync walked before this
+				// frame was skipped, and it will not be looked at again unless the
+				// sync is re-armed. The hierarchy epoch does not move here (this is
+				// a property update, not a reparent), so without this the Part
+				// stays permanently bodyless and the client cannot collide with
+				// it.
+				entity.has_transform = true
+				Physics_Request_Sync_For_Data_Model(service.data_model)
+			}
 			entity.applied_state_token = replication_read_u32(&reader)
 			service.states_applied += 1
 		}
