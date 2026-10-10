@@ -5,191 +5,59 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Qquaded/Kinemium-Engine)
 ## Introduction
-Kinemium is a sandbox engine written in Luau (Zune Runtime). It includes a custom scripting language called Kilang, with Luau-style syntax and additional features.
+Kinemium Engine is a performant game engine written in Odin with Luau scripting, a native editor, modern rendering, custom engine APIs, and support for building standalone multiplayer (or singleplayer) games.
 
-# Notice
-Kinemium is an independent project not affiliated with, endorsed by, 
-or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
+## Getting Started
+`NOTE: This repository is unstable, Expect bugs!`
 
-# Another notice
-This is an `ODIN` recode of Kinemium Engine, stuff may be unstable, Please run at your own risk!
+You can download the engine using the [github artifacts](https://github.com/quadigen/canary-recode/actions), Simply download one of the ready artifacts (based on your OS) and run the executable.
 
-## Odin build targets
+## Previews
+<img width="1535" height="813" alt="image" src="https://github.com/user-attachments/assets/11400841-a857-47c5-9ad5-9fa6e7884a3e" />
+<img width="1535" height="813" alt="image" src="https://github.com/user-attachments/assets/39a27297-53cf-4523-a884-4575ada276b9" />
+<img width="1535" height="813" alt="image" src="https://github.com/user-attachments/assets/bc714241-2260-4d7e-949e-04cb8581a581" />
 
-Run `just editor`, `just client`, or `just server` to build the corresponding executable. The editor loads the editor UI, the client connects to `127.0.0.1:1234`, and the server listens headlessly on `0.0.0.0:1234`. Client and server accept `--address` and `--port` arguments. `0.0.0.0` is a server bind address, not a client destination; use `127.0.0.1` on the same computer or the server's LAN/public IP from another computer. The `BUILD_TARGET` Odin definition selects the mode and exposes `IsEditor`, `IsClient`, `IsServer`, and `BuildTarget` to Luau.
-
-To host a native KINE version-1 map, run `just server`, then `./build/kinemium-server.exe --map path/to/world.kine`. In another terminal run `just client`, then `./build/kinemium-client.exe --address 127.0.0.1 --port 1234`. The file can contain a `Model`, `Folder`, `Part`, or serialized `Workspace` root. The server imports its contents into the live Workspace before accepting clients; clients receive the map through replication and should not pass `--map`. The older Luau engine's KINE version-2 table files are a different format and are not yet supported by this loader.
-
-# Features
-## Datatypes
-- Axes
-- BoundingBox
-- BrickColor
-- CFrame
-- Color3
-- Color4
-- ColorSequence
-- ColorSequenceKeypoint
-- CustomPhysicalProperties
-- NumberSequence
-- NumberSequenceKeypoint
-- Random
-- Ray
-- Region
-- Spring
-- UDim
-- UDim2
-- Vector2
-- Vector3
-- Enum
-- Faces / NormalId
-- Rect / Region3
-- And a whole lot more..
-
-## Default Services
-- Debris
-- GuiSelectionService
-- HttpService
-- Lighting
-- LogService
-- Players
-- ReplicatedStorage
-- RunService
-- Selection
-- ServerScriptService
-- ServerStorage
-- StarterGui
-- TweenService
-- UserInputService
-- Workspace
-
-## Kinemium Custom Services
-*(All custom services start with Kinemium.)*
-- KinemiumFFIService
-- KinemiumFontService
-- KinemiumIconLoader
-- KinemiumModService
-- KinemiumPhysicsService
-- KinemiumRaylib
-- KinemiumShaderService
-
-# That's cool.. But how do I use this?
-Fortunately theres a tutorial:
-
-- Clone the repo:
-```git clone --depth 1 https://github.com/Qquaded/Kinemium-Engine.git```
-
-- Get zune *(skip this step if you have it already installed.)*<br>
-https://zune.sh/guides/install
-
-- Run the engine<br>
-```zune run engine```<br>
-*This tutorial works on Windows, Linux, and macOS.*
-
-# Commands
-Kinemium provides with several flags you can run with ```zune run game```<br>
-- headless (lets you run the engine without graphics)<br>
-- server (lets you run a server version of the engine, this is used for games and such)<br>
-- client (lets you run a client, it removes all the core UI only)<br>
-- kilang (lets you run kilang code in the terminal, you can add this flag with any other flag and it will still work)<br>
-- editor (enables studio UI)
-
-## Engine packages
-
-Native Luau packages live in `src/engine/packages/<PackageName>`. Add one
-`// wire:package name="PackageName"` marker and expose these procedures from the
-package:
-
-```odin
-Context :: struct {}
-Install :: proc(L: ^vm.State, context: rawptr, renderer: ^renderer.RendererObject)
-Begin_Frame :: proc(context: rawptr, width, height: i32)
+## Compiling from source
+### Prerequisites  
+- [Odin compiler](https://odin-lang.org/) (latest release)  
+- CMake + Ninja  
+- A C/C++ toolchain (clang recommended on Linux/macOS, MSVC on Windows)  
+- Vulkan SDK (1.4.304.1 or compatible)
+- [Just](https://github.com/casey/just)
+- Platform dev libraries (Linux: X11/Wayland/GTK/WebKit dev packages; macOS: `enet` via Homebrew)  
+  
+### 1. Clone with submodules  
+```bash  
+git clone --recurse-submodules https://github.com/quadigen/canary-recode.git
 ```
 
-Run `just wire` after adding the folder. It regenerates the typed package
-registry, and Luau can then load it with `require("@engine/PackageName")`.
-The shorter `require("@PackageName")` form remains available for older scripts.
-
-# Multiplayer
-Kinemium provides multiplayer support with the ```server``` and ```client``` flags:
-
-Making a server with an address and port:<br>
-```zune run game --server --address 0.0.0.0 --port 1234 --auth_token your_token```<br>
-
-Connecting a client:<br>
-```zune run game --client --address server_ip --port 1234 --auth_token your_token```<br>
-
-You can also just do --server and --client without any arguments and it will run on localhost.
-
-Running live on localhost:<br>
-```zune run game --server```<br>
-Connect a client:<br>
-```zune run game --client```<br>
-
-# Editor
-Kinemium has a built-in editor GUI that lets you playtest, script, build, and edit objects.
-
-Enabling Editor mode:<br>
-```zune run game --editor```<br>
-Running server with editor mode<br>
-```zune run game --server --editor```<br>
-
-# Examples
-example command with a flag:<br>
-```zune run game --client```<br>
-```zune run game --client --kilang```<br>
-```zune run game --server --kilang```<br>
-```zune run game --headless```<br>
-
-# Preview
-<img width="991" height="800" alt="image" src="https://github.com/user-attachments/assets/7e29dc74-0518-465a-a502-ea6ae0972bc3" />
-<img width="1391" height="944" alt="image" src="https://github.com/user-attachments/assets/419b7324-5586-467b-a8f5-774217e87ed7" />
-
-# How do I add scripts?
-Once you clone the github repo, you will find a folder called ```sandboxed``` inside the engine *(src)*<br>
-There are a set of predefined scripts in there as examples, but you can change any of them.
-
-# Can I make my games have modding support?
-Yes! there is a modding service called KinemiumModService (said up there)<br>
-This lets you add mods to your game, and you can set the environment of your said mods!
-
-# How do I spell Kinemium?
-Ki-nem-yum!!
-
-# This project uses
-- SDL3
-- SDL_Image
-- Google Filament
-- Google Skia
-- Manifold
-- Box2D
-- Jolt Physics
-
-## WebAssembly build
-
-The browser runtime is the engine's Odin `js_wasm32` target, not a separate web
-demo. It boots the same Luau VM, engine environment, instance/service registry,
-Studio scripts, and Jolt physics wrapper. SDL3/Vulkan are replaced at the
-platform boundary by browser input/window events, CanvasKit (Skia), and
-Filament WebGL while the desktop target remains unchanged.
-
-```powershell
-just wasm
-just wasm-serve
+### 2. Build dependencies
+```bash
+just deps
 ```
 
-Open `http://127.0.0.1:8000` in Firefox. The page reports **Running in Firefox**
-only after the real engine module has initialized Luau, Jolt, the Studio
-environment, CanvasKit surfaces, and a Filament WebGL renderer.
-
-With the server running, verify rendered frames and save a screenshot with:
-
-```powershell
-py -3 tools/firefox_wasm_smoke.py --url http://127.0.0.1:8000/
+### 3. Run Engine
+```bash
+just run
 ```
-- Luau
-- and most importantly.. Zune Runtime
-kv1.10.7
 
-# Do you like cats?
-<img width="444" height="200" alt="Silly Cat.... Hello.... Random Person...." src="https://github.com/user-attachments/assets/21672df2-d59e-4a6d-aee1-3b89c9263627" />
+## Compilation flags
+```bash
+just client # Build a client
+just server # Build a client
+just editor # Build a editor
+just build # Build the engine normally (editor included)
+```
+
+## Engine flags
+```bash
+./kinemium --client --port PORT --address ADDRESS --username USERNAME
+./kinemium --server --port PORT --address ADDRESS --map MAP.KINE --window
+./kinemium --editor
+```
+All of these flags are optional.
+
+## Notice
+Kinemium is an independent project not affiliated with, endorsed by, or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
+
+API features such as Instances, data types and services are implemented solely for developer familiarity, platform portability, and software interoperability under applicable fair use law including but not limited to the Copyright Act of 1976, 17 U.S.C. § 107.
