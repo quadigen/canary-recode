@@ -19,17 +19,47 @@ jobs:
       matrix:
         include:
           - name: Windows x86-64
-            os: blacksmith-4vcpu-windows-2025
+            os: windows-latest
             folder: windows_x86-64
             executable: kinemium.exe
-          - name: macOS arm64
-            os: blacksmith-6vcpu-macos-15
-            folder: macos_arm64
-            executable: kinemium
+            template_os: windows
+            template_arch: x86_64
+            template_ext: .exe
+          - name: Windows arm64
+            os: windows-latest
+            folder: windows_arm64
+            executable: kinemium.exe
+            template_os: windows
+            template_arch: arm64
+            template_ext: .exe
           - name: Linux x86-64
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-latest
             folder: linux_x86-64
             executable: kinemium
+            template_os: linux
+            template_arch: x86_64
+            template_ext: ""
+          - name: Linux arm64
+            os: ubuntu-latest
+            folder: linux_arm64
+            executable: kinemium
+            template_os: linux
+            template_arch: arm64
+            template_ext: ""
+          - name: macOS arm64
+            os: macos-latest
+            folder: macos_arm64
+            executable: kinemium
+            template_os: macos
+            template_arch: arm64
+            template_ext: ""
+          - name: macOS x86-64
+            os: macos-latest
+            folder: macos_x86-64
+            executable: kinemium
+            template_os: macos
+            template_arch: x86_64
+            template_ext: ""
 
     steps:
       - name: Enable Windows long paths
@@ -124,15 +154,9 @@ jobs:
         run: |
           cmake_platform_args=()
           if [[ "${{ runner.os }}" == 'Linux' ]]; then
-            # Keep GNU binutils explicit for the native component archives
-            # consumed through the Linux linker group.
             cmake_platform_args+=(
               -DCMAKE_AR=/usr/bin/ar
               -DCMAKE_RANLIB=/usr/bin/ranlib
-              # Jolt's Release builds enable thin LTO by default, producing
-              # LLVM bitcode archives that GNU ld cannot consume when Odin
-              # links the aggregate kernel. Keep the Jolt archive in plain
-              # relocatable objects instead.
               -DINTERPROCEDURAL_OPTIMIZATION=OFF
             )
           fi
@@ -254,7 +278,7 @@ jobs:
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
 
-          New-Item -ItemType Directory -Force 'dist/${{ matrix.folder }}' | Out-Null
+          New-Item -ItemType Directory -Force "dist/${{ matrix.folder }}" | Out-Null
           $versionDefine = @()
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $v = $env:GITHUB_REF_NAME
@@ -263,27 +287,25 @@ jobs:
           }
           & odin build src `
             -o:speed `
-            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' `
+            -out:"dist/${{ matrix.folder }}/${{ matrix.executable }}" `
             @versionDefine `
             -define:BUILD_TARGET=editor `
             -define:RUNTIME_GIT_ENABLED=true `
             -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
             -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
 
-          # SDL3 is consumed through Odin's bundled vendor:sdl3 binding, which
-          # links SDL3.lib and expects SDL3.dll next to the executable.
           $odinRoot = "$(odin root)".TrimEnd()
           $sdl3Dll = Join-Path $odinRoot 'vendor/sdl3/SDL3.dll'
           if (!(Test-Path -LiteralPath $sdl3Dll)) {
             throw "SDL3.dll was not found next to the Odin SDK: $sdl3Dll"
           }
-          Copy-Item -LiteralPath $sdl3Dll -Destination 'dist/${{ matrix.folder }}/SDL3.dll'
+          Copy-Item -LiteralPath $sdl3Dll -Destination "dist/${{ matrix.folder }}/SDL3.dll"
 
-          # Server/client templates for the exporter (Windows)
+          $flavor_ext = "${{ matrix.template_ext }}"
           foreach ($flavor in @('server', 'client')) {
             & odin build src `
               -o:speed `
-              -out:"dist/${{ matrix.folder }}/kinemium-$flavor-windows-x86_64.exe" `
+              -out:"dist/${{ matrix.folder }}/kinemium-$flavor-${{ matrix.template_os }}-${{ matrix.template_arch }}$flavor_ext" `
               @versionDefine `
               -define:BUILD_TARGET=$flavor `
               -define:RUNTIME_GIT_ENABLED=true `
@@ -296,23 +318,23 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir -p 'dist/${{ matrix.folder }}'
+          mkdir -p "dist/${{ matrix.folder }}"
           version_define=()
           if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
             version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
           fi
           odin build src \
             -o:speed \
-            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+            -out:"dist/${{ matrix.folder }}/${{ matrix.executable }}" \
             "${version_define[@]}" \
             -define:BUILD_TARGET=editor \
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
-          cp -a vendor/build/_deps/sdl3-build/libSDL3.so* 'dist/${{ matrix.folder }}/'
-          cp -a /usr/lib/x86_64-linux-gnu/libenet.so* 'dist/${{ matrix.folder }}/'
-          cp -a "${VULKAN_SDK}"/lib/libvulkan.so* 'dist/${{ matrix.folder }}/'
+          cp -a vendor/build/_deps/sdl3-build/libSDL3.so* "dist/${{ matrix.folder }}/"
+          cp -a /usr/lib/x86_64-linux-gnu/libenet.so* "dist/${{ matrix.folder }}/"
+          cp -a "${VULKAN_SDK}"/lib/libvulkan.so* "dist/${{ matrix.folder }}/"
           for soname in libc++.so.1 libc++abi.so.1 libunwind.so.1; do
             source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
             test -n "$source_path" && test -f "$source_path" || {
@@ -322,11 +344,11 @@ jobs:
             cp -L "$source_path" "dist/${{ matrix.folder }}/$soname"
           done
 
-          # Server/client templates for the exporter (Linux)
+          ext="${{ matrix.template_ext }}"
           for flavor in server client; do
             odin build src \
               -o:speed \
-              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-linux-x86_64" \
+              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
               "${version_define[@]}" \
               -define:BUILD_TARGET="$flavor" \
               -define:RUNTIME_GIT_ENABLED=true \
@@ -335,34 +357,35 @@ jobs:
               -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
-          chmod +x dist/${{ matrix.folder }}/kinemium-server-linux-x86_64 dist/${{ matrix.folder }}/kinemium-client-linux-x86_64
+          chmod +x "dist/${{ matrix.folder }}/kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
+                   "dist/${{ matrix.folder }}/kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"
 
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          mkdir -p 'dist/${{ matrix.folder }}'
+          mkdir -p "dist/${{ matrix.folder }}"
           version_define=()
           if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
             version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
           fi
           odin build src \
             -o:speed \
-            -out:'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+            -out:"dist/${{ matrix.folder }}/${{ matrix.executable }}" \
             "${version_define[@]}" \
             -define:BUILD_TARGET=editor \
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
-          cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib 'dist/${{ matrix.folder }}/'
-          cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib 'dist/${{ matrix.folder }}/'
+          cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib "dist/${{ matrix.folder }}/"
+          cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib "dist/${{ matrix.folder }}/"
 
-          # Server/client templates for the exporter (macOS)
+          ext="${{ matrix.template_ext }}"
           for flavor in server client; do
             odin build src \
               -o:speed \
-              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-macos-arm64" \
+              -out:"dist/${{ matrix.folder }}/kinemium-${flavor}-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
               "${version_define[@]}" \
               -define:BUILD_TARGET="$flavor" \
               -define:RUNTIME_GIT_ENABLED=true \
@@ -376,39 +399,40 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          cd 'dist/${{ matrix.folder }}'
-          ls -lh kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64
-          for f in kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64; do
+          cd "dist/${{ matrix.folder }}"
+          ext="${{ matrix.template_ext }}"
+          ls -lh kinemium "kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" "kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"
+          for f in kinemium "kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" "kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"; do
             strip --strip-unneeded "$f"
           done
-          ls -lh kinemium kinemium-server-linux-x86_64 kinemium-client-linux-x86_64
+          ls -lh kinemium "kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" "kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"
 
       - name: Inspect Linux executable
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          file 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
-          ldd 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
-          ! ldd 'dist/${{ matrix.folder }}/${{ matrix.executable }}' | grep -q 'not found'
-          readelf -W -l 'dist/${{ matrix.folder }}/${{ matrix.executable }}' | grep GNU_STACK
-          ! readelf -W -l 'dist/${{ matrix.folder }}/${{ matrix.executable }}' \
+          file "dist/${{ matrix.folder }}/${{ matrix.executable }}"
+          ldd "dist/${{ matrix.folder }}/${{ matrix.executable }}"
+          ! ldd "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep -q 'not found'
+          readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep GNU_STACK
+          ! readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" \
             | grep GNU_STACK | grep -q RWE
 
       - name: Inspect macOS executable
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          file 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
-          otool -L 'dist/${{ matrix.folder }}/${{ matrix.executable }}'
+          file "dist/${{ matrix.folder }}/${{ matrix.executable }}"
+          otool -L "dist/${{ matrix.folder }}/${{ matrix.executable }}"
 
       - name: Inspect Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (!(Test-Path -LiteralPath 'dist/${{ matrix.folder }}/${{ matrix.executable }}')) {
+          if (!(Test-Path -LiteralPath "dist/${{ matrix.folder }}/${{ matrix.executable }}")) {
             throw 'Kinemium executable was not created'
           }
-          if (!(Test-Path -LiteralPath 'dist/${{ matrix.folder }}/SDL3.dll')) {
+          if (!(Test-Path -LiteralPath "dist/${{ matrix.folder }}/SDL3.dll")) {
             throw 'SDL3.dll was not copied next to the executable'
           }
 
@@ -578,111 +602,132 @@ jobs:
     name: Release
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download Windows artifact
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download Windows x86-64 artifact
         uses: actions/download-artifact@v6
         with:
           name: windows_x86-64
-          path: release/windows
+          path: release/windows_x86-64
 
-      - name: Download Linux artifact
+      - name: Download Windows arm64 artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: windows_arm64
+          path: release/windows_arm64
+
+      - name: Download Linux x86-64 artifact
         uses: actions/download-artifact@v6
         with:
           name: linux_x86-64
-          path: release/linux
+          path: release/linux_x86-64
 
-      - name: Download macOS artifact
+      - name: Download Linux arm64 artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: linux_arm64
+          path: release/linux_arm64
+
+      - name: Download macOS arm64 artifact
         uses: actions/download-artifact@v6
         with:
           name: macos_arm64
-          path: release/macos
+          path: release/macos_arm64
+
+      - name: Download macOS x86-64 artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: macos_x86-64
+          path: release/macos_x86-64
+
+      - name: Download web artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: web
+          path: release/web
+
+      - name: Download android artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: android
+          path: release/android
 
       - name: Create executable archives
         shell: bash
         run: |
           mkdir -p release/archives
 
-          # Windows
-          mkdir -p release/windows/kinemium
-          cp release/windows/kinemium.exe release/windows/SDL3.dll release/windows/kinemium/
-          (cd release/windows/kinemium && zip -r ../../archives/kinemium-windows-x86_64.zip .)
-          rm -rf release/windows/kinemium
+          platforms=(
+            "windows_x86-64 windows x86_64 .exe"
+            "windows_arm64 windows arm64 .exe"
+            "linux_x86-64 linux x86_64 ''"
+            "linux_arm64 linux arm64 ''"
+            "macos_arm64 macos arm64 ''"
+            "macos_x86-64 macos x86_64 ''"
+          )
 
-          mkdir -p release/windows/kinemium-server
-          cp release/windows/kinemium-server-windows-x86_64.exe release/windows/SDL3.dll release/windows/kinemium-server/
-          (cd release/windows/kinemium-server && zip -r ../../archives/kinemium-server-windows-x86_64.zip .)
-          rm -rf release/windows/kinemium-server
+          for spec in "${platforms[@]}"; do
+            read -r folder os arch ext <<< "$spec"
+            src="release/$folder"
 
-          mkdir -p release/windows/kinemium-client
-          cp release/windows/kinemium-client-windows-x86_64.exe release/windows/SDL3.dll release/windows/kinemium-client/
-          (cd release/windows/kinemium-client && zip -r ../../archives/kinemium-client-windows-x86_64.zip .)
-          rm -rf release/windows/kinemium-client
+            exe="kinemium"
+            if [[ "$os" == "windows" ]]; then exe="kinemium.exe"; fi
+            mkdir -p "release/$folder/kinemium"
+            cp "$src/$exe" "release/$folder/kinemium/"
+            case "$os" in
+              windows) cp "$src/SDL3.dll" "release/$folder/kinemium/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
+                       "release/$folder/kinemium/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium/" ;;
+            esac
+            (cd "release/$folder/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
+            rm -rf "release/$folder/kinemium"
 
-          # Linux
-          mkdir -p release/linux/kinemium
-          cp release/linux/kinemium \
-            release/linux/libSDL3.so* \
-            release/linux/libenet.so* \
-            release/linux/libvulkan.so* \
-            release/linux/libc++.so.1 \
-            release/linux/libc++abi.so.1 \
-            release/linux/libunwind.so.1 \
-            release/linux/kinemium/
-          (cd release/linux/kinemium && zip -r ../../archives/kinemium-linux-x86_64.zip .)
-          rm -rf release/linux/kinemium
+            server="kinemium-server-${os}-${arch}${ext}"
+            mkdir -p "release/$folder/kinemium-server"
+            cp "$src/$server" "release/$folder/kinemium-server/"
+            case "$os" in
+              windows) cp "$src/SDL3.dll" "release/$folder/kinemium-server/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
+                       "release/$folder/kinemium-server/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium-server/" ;;
+            esac
+            (cd "release/$folder/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
+            rm -rf "release/$folder/kinemium-server"
 
-          mkdir -p release/linux/kinemium-server
-          cp release/linux/kinemium-server-linux-x86_64 \
-            release/linux/libSDL3.so* \
-            release/linux/libenet.so* \
-            release/linux/libvulkan.so* \
-            release/linux/libc++.so.1 \
-            release/linux/libc++abi.so.1 \
-            release/linux/libunwind.so.1 \
-            release/linux/kinemium-server/
-          (cd release/linux/kinemium-server && zip -r ../../archives/kinemium-server-linux-x86_64.zip .)
-          rm -rf release/linux/kinemium-server
+            client="kinemium-client-${os}-${arch}${ext}"
+            mkdir -p "release/$folder/kinemium-client"
+            cp "$src/$client" "release/$folder/kinemium-client/"
+            case "$os" in
+              windows) cp "$src/SDL3.dll" "release/$folder/kinemium-client/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
+                       "release/$folder/kinemium-client/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium-client/" ;;
+            esac
+            (cd "release/$folder/kinemium-client" && zip -r "../../archives/kinemium-client-${os}-${arch}${ext}.zip" .)
+            rm -rf "release/$folder/kinemium-client"
+          done
 
-          mkdir -p release/linux/kinemium-client
-          cp release/linux/kinemium-client-linux-x86_64 \
-            release/linux/libSDL3.so* \
-            release/linux/libenet.so* \
-            release/linux/libvulkan.so* \
-            release/linux/libc++.so.1 \
-            release/linux/libc++abi.so.1 \
-            release/linux/libunwind.so.1 \
-            release/linux/kinemium-client/
-          (cd release/linux/kinemium-client && zip -r ../../archives/kinemium-client-linux-x86_64.zip .)
-          rm -rf release/linux/kinemium-client
+          # Web (WASM)
+          if [[ -d release/web ]]; then
+            (cd release/web && zip -r ../archives/kinemium-web.zip .)
+          fi
 
-          # macOS
-          mkdir -p release/macos/kinemium
-          cp release/macos/kinemium \
-            release/macos/libSDL3*.dylib \
-            release/macos/libvulkan*.dylib \
-            release/macos/kinemium/
-          (cd release/macos/kinemium && zip -r ../../archives/kinemium-macos-arm64.zip .)
-          rm -rf release/macos/kinemium
-
-          mkdir -p release/macos/kinemium-server
-          cp release/macos/kinemium-server-macos-arm64 \
-            release/macos/libSDL3*.dylib \
-            release/macos/libvulkan*.dylib \
-            release/macos/kinemium-server/
-          (cd release/macos/kinemium-server && zip -r ../../archives/kinemium-server-macos-arm64.zip .)
-          rm -rf release/macos/kinemium-server
-
-          mkdir -p release/macos/kinemium-client
-          cp release/macos/kinemium-client-macos-arm64 \
-            release/macos/libSDL3*.dylib \
-            release/macos/libvulkan*.dylib \
-            release/macos/kinemium-client/
-          (cd release/macos/kinemium-client && zip -r ../../archives/kinemium-client-macos-arm64.zip .)
-          rm -rf release/macos/kinemium-client
+          # Android APK
+          if [[ -f release/android/app-debug.apk ]]; then
+            cp release/android/app-debug.apk release/archives/kinemium-android.apk
+          fi
 
       - name: Publish release
         shell: bash
@@ -692,4 +737,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             release/archives/*.zip \
+            release/archives/*.apk \
             --generate-notes
