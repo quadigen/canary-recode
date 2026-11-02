@@ -123,7 +123,7 @@ jobs:
 
       - name: Cache remaining native libraries
         id: native-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             vendor/build/**/*.a
@@ -219,7 +219,9 @@ jobs:
           fi
           cmake_env=(CC=clang CXX=clang++)
           if [[ "${{ runner.os }}" == 'macOS' ]]; then
-            cmake_env+=(CXXFLAGS=-stdlib=libc++)
+            cmake_env=(CC="$(xcrun --find clang)" CXX="$(xcrun --find clang++)")
+            cmake_env+=(OBJC="$(xcrun --find clang)" OBJCXX="$(xcrun --find clang++)")
+            cmake_platform_args+=(-DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)")
           fi
           env "${cmake_env[@]}" cmake \
             -S . \
@@ -292,6 +294,18 @@ jobs:
           find vendor/build/_deps/sdl3-build -maxdepth 1 -type f \
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
+
+      - name: Save native libraries before Odin linking
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            vendor/build/**/*.a
+            vendor/build/**/*.lib
+            vendor/build/**/*.so*
+            vendor/build/**/*.dylib
+            vendor/build/lib/*.anchor
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
 
       - name: Build Odin vendor libraries (Unix)
         if: runner.os != 'Windows'
@@ -384,6 +398,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "dist/${{ matrix.folder }}"
+          webview_link_flags="$(pkg-config --libs gtk+-3.0 webkit2gtk-4.1)"
           version_define=()
           if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
             version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
@@ -396,7 +411,7 @@ jobs:
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL $webview_link_flags"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* "dist/${{ matrix.folder }}/"
           for soname in libenet.so.7 libvulkan.so.1 libc++.so.1 libc++abi.so.1 libunwind.so.1; do
             source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
@@ -417,7 +432,7 @@ jobs:
               -define:RUNTIME_GIT_ENABLED=true \
               -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
               -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL"
+              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL $webview_link_flags"
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
           chmod +x "dist/${{ matrix.folder }}/kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
@@ -637,11 +652,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Cache Android dependency downloads
-        uses: actions/cache@v4
+        id: android-deps
+        uses: actions/cache/restore@v4
         with:
           path: |
             .cache/android
             build/vcpkg-binary-cache
+            build/vcpkg-installed
           key: android-deps-v1-${{ runner.os }}-${{ hashFiles('tools/build_android.ps1') }}
 
       - name: Setup Java
@@ -674,6 +691,25 @@ jobs:
           if (!(Test-Path -LiteralPath (Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370/build/cmake/android.toolchain.cmake'))) {
             throw 'Android NDK 30.0.16248370 was not installed'
           }
+
+      - name: Prepare Android dependency packages
+        shell: pwsh
+        run: |
+          $binaryCache = Join-Path $PWD 'build/vcpkg-binary-cache'
+          New-Item -ItemType Directory -Force $binaryCache | Out-Null
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$binaryCache,readwrite"
+          & './tools/build_android.ps1' -UsePrebuiltSkia -PrepareOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save Android packages before native compilation
+        if: steps.android-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/android
+            build/vcpkg-binary-cache
+            build/vcpkg-installed
+          key: ${{ steps.android-deps.outputs.cache-primary-key }}
 
       - name: Build Kinemium Android (APK)
         shell: pwsh

@@ -485,10 +485,13 @@ if(KINE_WITH_FILAMENT)
     if(UNIX AND NOT APPLE AND NOT ANDROID)
         # The prebuilt Linux Filament SDK uses libc++ for C++ API symbols.
         # Skia's GN build uses libstdc++, so limit this ABI choice to the
-        # Filament-facing shim and the Assimp library it calls directly.
+        # Filament-facing shim and the C++ libraries it calls directly.
         target_compile_options(kine_filament_shim PRIVATE -stdlib=libc++)
         if(TARGET assimp)
             target_compile_options(assimp PRIVATE -stdlib=libc++)
+        endif()
+        if(KINE_RAY_TARGET)
+            target_compile_options(${KINE_RAY_TARGET} PRIVATE -stdlib=libc++)
         endif()
     endif()
 

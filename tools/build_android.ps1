@@ -3,7 +3,8 @@ param(
     [string]$NdkVersion = "30.0.16248370",
     [int]$ApiLevel = 30,
     [string[]]$Abis = @("arm64-v8a", "x86_64"),
-    [switch]$UsePrebuiltSkia
+    [switch]$UsePrebuiltSkia,
+    [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,6 +135,11 @@ if (-not (Test-Path (Join-Path $box2dRoot ".git"))) {
     New-Item -ItemType Directory -Force (Split-Path $box2dRoot) | Out-Null
     & git clone --depth 1 --branch v3.1.1 https://github.com/erincatto/box2d.git $box2dRoot
     if ($LASTEXITCODE -ne 0) { throw "Box2D checkout failed" }
+}
+
+if ($PrepareOnly) {
+    Write-Host 'Android dependency packages are ready'
+    return
 }
 
 # ---- Python shim for Skia GN/Ninja (ABI-agnostic, run once) ----

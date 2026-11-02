@@ -235,7 +235,7 @@ set(KINE_COMPONENT_TARGETS
     rocksdb
     yaml
     miniz
-    webview
+    webview_core_static
     uberarchive
     shaders
 

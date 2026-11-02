@@ -429,6 +429,9 @@ WebviewService_namecall :: proc(
 		classes.Push_Object(L, Service_Get_Service(&service.service, vm.ArgString(L, 2)))
 		return 1, true
 	case "Open":
+		when #config(KINE_ANDROID, false) {
+			return vm.RaiseError(L, "WebviewService: desktop webview windows are unavailable on Android"), true
+		}
 		webview_service_reap(service)
 		url := vm.ArgString(L, 2)
 		title := vm.ArgOptionalString(L, 3)

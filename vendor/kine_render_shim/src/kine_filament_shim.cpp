@@ -723,11 +723,11 @@ struct KineFilamentContext {
 	std::vector<unsigned char> readbackPixels;
 #endif
 
+	int renderMode = KINE_RENDER_MODE_FILAMENT;
 #if KINE_WITH_RAY
 	// Ray path tracer (render mode 2). The path tracer itself lives in
 	// kine_ray_shim.cpp; everything here is the Filament side of the bridge.
 	void *rayState = nullptr;
-	int renderMode = KINE_RENDER_MODE_FILAMENT;
 	// Kept here as well so settings survive a NewRay/DestroyRay cycle and can be
 	// set before the path tracer exists.
 	KineRayProperties rayProperties = kine_ray_default_properties();
@@ -9785,7 +9785,12 @@ KINE_API int Kine_Filament_GetRenderMode(KineFilamentContext *ctx) {
 }
 
 KINE_API bool Kine_Filament_HasRay(KineFilamentContext *ctx) {
+#if KINE_WITH_RAY
 	return ctx && ctx->rayState != nullptr;
+#else
+	(void)ctx;
+	return false;
+#endif
 }
 
 KINE_API bool Kine_Ray_SetProperties(KineFilamentContext *ctx, const KineRayProperties *properties) {

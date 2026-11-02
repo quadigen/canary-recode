@@ -7,7 +7,9 @@ when ODIN_OS == .JS {
         "../../../vendor/build/vendor/webview/core/webview_static.lib",
     }
 } else when #config(KINE_ANDROID, false) {
-    foreign import lib "../../../build/android-native/lib/libJoltWrapper.a"
+    // The upstream native-window backend supports desktop platforms only.
+} else when ODIN_OS == .Darwin {
+    foreign import lib {"../../../vendor/build/lib/KinemiumLibs.a", "system:WebKit.framework"}
 } else {
     foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
 }
@@ -64,58 +66,60 @@ Version_Info :: struct {
 Dispatch_Proc :: #type proc "c" (w: Webview, arg: rawptr)
 Bind_Proc     :: #type proc "c" (seq: cstring, req: cstring, arg: rawptr)
 
-@(default_calling_convention="c")
-foreign lib {
-    @(link_name="webview_create")
-    create_raw :: proc(debug: c.int, window: rawptr) -> Webview ---
+when !#config(KINE_ANDROID, false) {
+    @(default_calling_convention="c")
+    foreign lib {
+        @(link_name="webview_create")
+        create_raw :: proc(debug: c.int, window: rawptr) -> Webview ---
 
-    @(link_name="webview_destroy")
-    destroy :: proc(w: Webview) -> Error ---
+        @(link_name="webview_destroy")
+        destroy :: proc(w: Webview) -> Error ---
 
-    @(link_name="webview_run")
-    run :: proc(w: Webview) -> Error ---
+        @(link_name="webview_run")
+        run :: proc(w: Webview) -> Error ---
 
-    @(link_name="webview_terminate")
-    terminate :: proc(w: Webview) -> Error ---
+        @(link_name="webview_terminate")
+        terminate :: proc(w: Webview) -> Error ---
 
-    @(link_name="webview_dispatch")
-    dispatch :: proc(w: Webview, fn: Dispatch_Proc, arg: rawptr) -> Error ---
+        @(link_name="webview_dispatch")
+        dispatch :: proc(w: Webview, fn: Dispatch_Proc, arg: rawptr) -> Error ---
 
-    @(link_name="webview_get_window")
-    get_window :: proc(w: Webview) -> rawptr ---
+        @(link_name="webview_get_window")
+        get_window :: proc(w: Webview) -> rawptr ---
 
-    @(link_name="webview_get_native_handle")
-    get_native_handle :: proc(w: Webview, kind: Native_Handle_Kind) -> rawptr ---
+        @(link_name="webview_get_native_handle")
+        get_native_handle :: proc(w: Webview, kind: Native_Handle_Kind) -> rawptr ---
 
-    @(link_name="webview_set_title")
-    set_title :: proc(w: Webview, title: cstring) -> Error ---
+        @(link_name="webview_set_title")
+        set_title :: proc(w: Webview, title: cstring) -> Error ---
 
-    @(link_name="webview_set_size")
-    set_size :: proc(w: Webview, width, height: c.int, hints: Hint) -> Error ---
+        @(link_name="webview_set_size")
+        set_size :: proc(w: Webview, width, height: c.int, hints: Hint) -> Error ---
 
-    @(link_name="webview_navigate")
-    navigate :: proc(w: Webview, url: cstring) -> Error ---
+        @(link_name="webview_navigate")
+        navigate :: proc(w: Webview, url: cstring) -> Error ---
 
-    @(link_name="webview_set_html")
-    set_html :: proc(w: Webview, html: cstring) -> Error ---
+        @(link_name="webview_set_html")
+        set_html :: proc(w: Webview, html: cstring) -> Error ---
 
-    @(link_name="webview_init")
-    init :: proc(w: Webview, js: cstring) -> Error ---
+        @(link_name="webview_init")
+        init :: proc(w: Webview, js: cstring) -> Error ---
 
-    @(link_name="webview_eval")
-    eval :: proc(w: Webview, js: cstring) -> Error ---
+        @(link_name="webview_eval")
+        eval :: proc(w: Webview, js: cstring) -> Error ---
 
-    @(link_name="webview_bind")
-    bind :: proc(w: Webview, name: cstring, fn: Bind_Proc, arg: rawptr) -> Error ---
+        @(link_name="webview_bind")
+        bind :: proc(w: Webview, name: cstring, fn: Bind_Proc, arg: rawptr) -> Error ---
 
-    @(link_name="webview_unbind")
-    unbind :: proc(w: Webview, name: cstring) -> Error ---
+        @(link_name="webview_unbind")
+        unbind :: proc(w: Webview, name: cstring) -> Error ---
 
-    @(link_name="webview_return")
-    ret :: proc(w: Webview, seq: cstring, status: c.int, result: cstring) -> Error ---
+        @(link_name="webview_return")
+        ret :: proc(w: Webview, seq: cstring, status: c.int, result: cstring) -> Error ---
 
-    @(link_name="webview_version")
-    version :: proc() -> ^Version_Info ---
+        @(link_name="webview_version")
+        version :: proc() -> ^Version_Info ---
+    }
 }
 
 create :: proc "contextless" (debug: bool, window: rawptr = nil) -> Webview {
