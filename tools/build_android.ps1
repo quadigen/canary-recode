@@ -17,6 +17,17 @@ $env:ANDROID_NDK_HOME = $ndk
 $odinRoot = (& odin root).Trim()
 if ($LASTEXITCODE -ne 0) { throw "Could not locate the Odin SDK" }
 
+# The Android job does not enter a Visual Studio shell. Prefer Ninja on PATH,
+# then the copy shipped with the Android SDK's CMake package.
+$ninjaCommand = Get-Command ninja -ErrorAction SilentlyContinue
+$ninjaExecutable = if ($null -ne $ninjaCommand) { $ninjaCommand.Source } else { "" }
+if (-not $ninjaExecutable) {
+    $sdkNinja = Get-ChildItem -Path (Join-Path $AndroidSdk 'cmake/*/bin/ninja.exe') -File -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if ($sdkNinja) { $ninjaExecutable = $sdkNinja.FullName }
+}
+if (-not $ninjaExecutable) { throw "Ninja is required; install it or an Android SDK CMake package" }
+
 # Per-ABI toolchain mappings.
 $VcpkgTriplets = @{
     "arm64-v8a" = "arm64-android"
@@ -200,19 +211,19 @@ foreach ($abi in $Abis) {
         try {
             & .\bin\gn.exe gen $skiaOut "--args=$gnArgs"
             if ($LASTEXITCODE -ne 0) { throw "Skia Android $abi configuration failed" }
-            & ninja -C $skiaOut skia svg skshaper skunicode_core skunicode_icu
+            & $ninjaExecutable -C $skiaOut skia svg skshaper skunicode_core skunicode_icu
             if ($LASTEXITCODE -ne 0) { throw "Skia Android $abi build failed" }
         } finally { Pop-Location }
     }
 
     # ---- CMake native dependencies (per ABI) ----
-    & cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja @skiaCmakeArgs "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=$abi "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DFILAMENT_LIB_ARCH=$filamentArch" "-DKINE_SKIA_DIR=$skiaRoot" "-DKINE_SKIA_BUILD_NAME=$skiaBuildName" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" "-DKINE_ANDROID_VCPKG_DIR=$(Join-Path $vcpkgInstalled $VcpkgTriplets[$abi])" "-DKINE_ANDROID_JNI_DIR=$jniOut" "-DKINE_ANDROID_VENDOR_DIR=$vendorOut" -DCMAKE_BUILD_TYPE=Release
+    & cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja @skiaCmakeArgs "-DCMAKE_MAKE_PROGRAM=$ninjaExecutable" "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DANDROID_ABI=$abi" "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DFILAMENT_LIB_ARCH=$filamentArch" "-DKINE_SKIA_DIR=$skiaRoot" "-DKINE_SKIA_BUILD_NAME=$skiaBuildName" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" "-DKINE_ANDROID_VCPKG_DIR=$(Join-Path $vcpkgInstalled $VcpkgTriplets[$abi])" "-DKINE_ANDROID_JNI_DIR=$jniOut" "-DKINE_ANDROID_VENDOR_DIR=$vendorOut" -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "Native Android $abi configuration failed" }
     & cmake --build $nativeBuild --parallel
     if ($LASTEXITCODE -ne 0) { throw "Native Android $abi dependency build failed" }
 
     $boxBuild = Join-Path $repo "build\android-box2d-$abi"
-    & cmake -S $box2dRoot -B $boxBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=$abi "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static -DBOX2D_SAMPLES=OFF -DBOX2D_UNIT_TESTS=OFF -DBOX2D_VALIDATE=OFF -DCMAKE_BUILD_TYPE=Release
+    & cmake -S $box2dRoot -B $boxBuild -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninjaExecutable" "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DANDROID_ABI=$abi" "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static -DBOX2D_SAMPLES=OFF -DBOX2D_UNIT_TESTS=OFF -DBOX2D_VALIDATE=OFF -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "Box2D Android $abi configuration failed" }
     & cmake --build $boxBuild --parallel
     if ($LASTEXITCODE -ne 0) { throw "Box2D Android $abi build failed" }
@@ -268,7 +279,7 @@ $env:PATH = $oldPath
 # ---- Package APK with every requested ABI ----
 $env:ANDROID_HOME = $AndroidSdk
 if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr" }
-& (Join-Path $repo "android\gradlew.bat") --no-daemon -p (Join-Path $repo "android") :app:assembleDebug -PandroidAbiFilters=$($Abis -join ',')
+& (Join-Path $repo "android\gradlew.bat") --no-daemon -p (Join-Path $repo "android") :app:assembleDebug "-PandroidAbiFilters=$($Abis -join ',')"
 if ($LASTEXITCODE -ne 0) { throw "APK packaging failed" }
 
 $apk = Join-Path $repo "android\app\build\outputs\apk\debug\app-debug.apk"

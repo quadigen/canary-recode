@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 
 
@@ -93,6 +94,18 @@ def configure(root, metadata):
     return output
 
 
+def rename_directory(source, destination):
+    # Windows scanners can briefly hold newly extracted files open.
+    for attempt in range(5):
+        try:
+            source.rename(destination)
+            return
+        except PermissionError as error:
+            if os.name != "nt" or error.winerror not in (5, 32, 33) or attempt == 4:
+                raise
+            time.sleep(0.05 * 2**attempt)
+
+
 def download(root, metadata):
     root = root.resolve()
     marker = root / "release.json"
@@ -117,14 +130,19 @@ def download(root, metadata):
                     raise RuntimeError(f"Invalid archive entry: {item.filename}")
             package.extractall(staging)
         configure(staging, metadata)
+        previous = Path(temporary) / "previous"
         if root.exists():
             # Both targets are resolved children of this download's cache
             # directory; never recursively remove a computed external path.
-            previous = Path(temporary) / "previous"
             if root == root.parent or not previous.resolve().is_relative_to(root.parent):
                 raise RuntimeError("Skia cache replacement escaped its parent directory")
-            root.rename(previous)
-        staging.rename(root)
+            rename_directory(root, previous)
+        try:
+            rename_directory(staging, root)
+        except OSError:
+            if previous.exists() and not root.exists():
+                rename_directory(previous, root)
+            raise
     configure(root, metadata)
     marker.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"Downloaded Skia {metadata['tag']} ({metadata['platform']}/{metadata['arch']})")

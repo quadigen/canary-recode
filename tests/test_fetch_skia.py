@@ -47,7 +47,7 @@ class SkiaBinaryTests(unittest.TestCase):
         with self.downloader(archive):
             fetch_skia.download(self.root, metadata)
         config = (self.root / "skia.cmake").read_text()
-        self.assertIn(self.root.as_posix(), config)
+        self.assertIn(self.root.resolve().as_posix(), config)
         self.assertIn("SK_GANESH;SK_GL;SK_VULKAN", config)
         self.assertNotIn("SKIA_IMPLEMENTATION", config)
         self.assertNotIn("SK_USE_INTERNAL_VULKAN_HEADERS", config)
@@ -80,6 +80,30 @@ class SkiaBinaryTests(unittest.TestCase):
         with self.downloader(archive), self.assertRaisesRegex(RuntimeError, "checksum"):
             fetch_skia.download(self.root, metadata)
         self.assertTrue((self.root / "existing").is_file())
+
+    def test_install_failure_restores_existing_cache(self):
+        archive = self.package()
+        self.root.mkdir(parents=True)
+        (self.root / "existing").write_text("keep")
+
+        def rename(source, destination):
+            if source.name == "package":
+                raise OSError("cannot install the extracted package")
+            source.rename(destination)
+
+        with self.downloader(archive), patch.object(fetch_skia, "rename_directory", side_effect=rename):
+            with self.assertRaisesRegex(OSError, "cannot install"):
+                fetch_skia.download(self.root, self.metadata(archive))
+        self.assertEqual((self.root / "existing").read_text(), "keep")
+
+    def test_windows_temporary_file_lock_is_retried(self):
+        error = PermissionError("sharing violation")
+        error.winerror = 32
+        with patch.object(Path, "rename", side_effect=[error, None]) as rename:
+            with patch.object(fetch_skia.os, "name", "nt"), patch.object(fetch_skia.time, "sleep") as sleep:
+                fetch_skia.rename_directory(self.root, self.directory / "destination")
+        self.assertEqual(rename.call_count, 2)
+        sleep.assert_called_once_with(0.05)
 
     def test_rejects_non_vulkan_package(self):
         archive = self.package(vulkan=False)

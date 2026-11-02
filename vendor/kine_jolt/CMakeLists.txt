@@ -30,6 +30,15 @@ set(CPP_RTTI_ENABLED OFF CACHE BOOL "" FORCE)
 
 set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 
+if(NOT EMSCRIPTEN)
+    # The runtime uses Jolt's rigid-body API, not its optional compute/hair
+    # backends. Avoid compiling their shaders or requiring DXC/Metal tools.
+    set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+    set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+    set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+    set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
+endif()
+
 if(EMSCRIPTEN OR ANDROID OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64|ARM64")
     set(USE_SSE4_1 OFF CACHE BOOL "" FORCE)
     set(USE_SSE4_2 OFF CACHE BOOL "" FORCE)
