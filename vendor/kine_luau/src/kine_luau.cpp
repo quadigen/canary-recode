@@ -2,9 +2,13 @@
 #include "lualib.h"
 #include "luacode.h"
 #include "Luau/Lexer.h"
+#include "Luau/Parser.h"
 
 #include <cstdlib>
 #include <new>
+#include <cstring>
+#include <string>
+#include <unordered_set>
 
 struct kine_luau_token
 {
@@ -28,9 +32,143 @@ struct Kine_Luau_Lexer
     {
     }
 };
+
+// AST locals already carry lexical identity. Only inspect statically known
+// call targets; never execute user code or index userdata during diagnostics.
+struct CallDefinitions : Luau::AstVisitor
+{
+    std::unordered_set<std::string> globals;
+    bool visit(Luau::AstStatAssign* node) override
+    {
+        for (auto* var : node->vars)
+            if (auto* global = var->as<Luau::AstExprGlobal>()) globals.insert(global->name.value);
+        return true;
+    }
+    bool visit(Luau::AstStatFunction* node) override
+    {
+        if (auto* global = node->name->as<Luau::AstExprGlobal>()) globals.insert(global->name.value);
+        return true;
+    }
+};
+
+struct CallDiagnostics : Luau::AstVisitor
+{
+    lua_State* L;
+    const CallDefinitions& definitions;
+    std::string message;
+    unsigned line = 0;
+
+    CallDiagnostics(lua_State* L, const CallDefinitions& definitions) : L(L), definitions(definitions) {}
+
+    Luau::AstExpr* unwrap(Luau::AstExpr* expr)
+    {
+        for (;;)
+            if (auto* group = expr->as<Luau::AstExprGroup>()) expr = group->expr;
+            else if (auto* assertion = expr->as<Luau::AstExprTypeAssertion>()) expr = assertion->expr;
+            else return expr;
+    }
+
+    // Leaves a value only when a target can be resolved without running code.
+    bool resolve(Luau::AstExpr* expr, std::string& name)
+    {
+        expr = unwrap(expr);
+        if (auto* global = expr->as<Luau::AstExprGlobal>())
+        {
+            name = global->name.value;
+            if (definitions.globals.count(name)) return false;
+            lua_pushstring(L, name.c_str());
+            lua_rawget(L, LUA_GLOBALSINDEX);
+            return true;
+        }
+        if (auto* index = expr->as<Luau::AstExprIndexName>())
+        {
+            if (!resolve(index->expr, name)) return false;
+            if (!lua_istable(L, -1))
+            {
+                // Userdata members require engine reflection; leave them dynamic.
+                const bool dynamic = lua_isuserdata(L, -1);
+                lua_pop(L, 1);
+                if (dynamic) return false;
+                name += ".";
+                name += index->index.value;
+                lua_pushnil(L);
+                return true;
+            }
+            name += ".";
+            name += index->index.value;
+            lua_pushstring(L, index->index.value);
+            lua_rawget(L, -2);
+            lua_remove(L, -2);
+            return true;
+        }
+        if (expr->is<Luau::AstExprConstantNil>()) { name = "nil"; lua_pushnil(L); return true; }
+        if (expr->is<Luau::AstExprConstantNumber>() || expr->is<Luau::AstExprConstantString>() ||
+            expr->is<Luau::AstExprConstantBool>()) { name = "literal"; lua_pushboolean(L, false); return true; }
+        return false;
+    }
+
+    void check(Luau::AstExpr* expr)
+    {
+        if (!message.empty()) return;
+        std::string name;
+        if (!resolve(expr, name)) return;
+        const int type = lua_type(L, -1);
+        // Tables and userdata may implement __call; their callability is dynamic.
+        if (type != LUA_TFUNCTION && type != LUA_TTABLE && type != LUA_TUSERDATA)
+        {
+            line = expr->location.begin.line + 1;
+            message = "Cannot call '" + name + "' (" + lua_typename(L, type) + ")";
+        }
+        lua_pop(L, 1);
+    }
+
+    bool visit(Luau::AstExprCall* node) override
+    {
+        check(node->func);
+        auto* global = unwrap(node->func)->as<Luau::AstExprGlobal>();
+        if (global && !definitions.globals.count(global->name.value) &&
+            (strcmp(global->name.value, "pcall") == 0 || strcmp(global->name.value, "xpcall") == 0))
+        {
+            if (node->args.size == 0 && message.empty())
+            {
+                line = node->location.begin.line + 1;
+                message = std::string(global->name.value) + " requires a function argument";
+            }
+            else if (node->args.size > 0) check(node->args.data[0]);
+            if (strcmp(global->name.value, "xpcall") == 0 && message.empty())
+            {
+                if (node->args.size < 2) {line = node->location.begin.line + 1; message = "xpcall requires an error handler";}
+                else check(node->args.data[1]);
+            }
+        }
+        return message.empty();
+    }
+};
 }
 
 extern "C" {
+
+char* kine_luau_diagnose_calls(lua_State* L, const char* text, size_t size, unsigned* line)
+{
+    try
+    {
+        Luau::Allocator allocator;
+        Luau::AstNameTable names(allocator);
+        auto result = Luau::Parser::parse(text, size, names, allocator);
+        if (!result.root || !result.errors.empty()) return nullptr;
+        CallDefinitions definitions;
+        result.root->visit(&definitions);
+        CallDiagnostics diagnostics(L, definitions);
+        result.root->visit(&diagnostics);
+        if (diagnostics.message.empty()) return nullptr;
+        char* message = static_cast<char*>(malloc(diagnostics.message.size() + 1));
+        if (!message) return nullptr;
+        memcpy(message, diagnostics.message.c_str(), diagnostics.message.size() + 1);
+        *line = diagnostics.line;
+        return message;
+    }
+    catch (...) { return nullptr; }
+}
 
 lua_State* kine_luaL_newstate() { return luaL_newstate(); }
 void kine_luaL_openlibs(lua_State* L) { luaL_openlibs(L); }
@@ -60,6 +198,7 @@ void kine_lua_settop(lua_State* L, int index) { lua_settop(L, index); }
 int kine_lua_gettop(lua_State* L) { return lua_gettop(L); }
 int kine_lua_objlen(lua_State* L, int index) { return lua_objlen(L, index); }
 void kine_lua_pushvalue(lua_State* L, int index) { lua_pushvalue(L, index); }
+void kine_lua_remove(lua_State* L, int index) { lua_remove(L, index); }
 lua_State* kine_lua_newthread(lua_State* L) { return lua_newthread(L); }
 lua_State* kine_lua_tothread(lua_State* L, int index) { return lua_tothread(L, index); }
 int kine_lua_pushthread(lua_State* L) { return lua_pushthread(L); }
@@ -115,6 +254,10 @@ int kine_lua_error(lua_State* L)
 }
 int kine_lua_userdatatag(lua_State* L, int index) { return lua_userdatatag(L, index); }
 void* kine_lua_touserdata(lua_State* L, int index) { return lua_touserdata(L, index); }
+// Views a Luau buffer's bytes, which is how raw font data handed over by script
+// reaches the engine. The returned pointer is owned by the buffer, so it stays
+// valid only while that buffer is reachable.
+void* kine_lua_tobuffer(lua_State* L, int index, size_t* size) { return lua_tobuffer(L, index, size); }
 const char* kine_lua_namecallatom(lua_State* L, int* atom) { return lua_namecallatom(L, atom); }
 void kine_lua_getuserdatametatable(lua_State* L, int tag) { lua_getuserdatametatable(L, tag); }
 void kine_lua_setuserdatametatable(lua_State* L, int tag) { lua_setuserdatametatable(L, tag); }

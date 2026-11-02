@@ -1,6 +1,6 @@
 package services
+// wire:service
 
-// wire:service global="LuauService"
 
 import "core:strings"
 
@@ -90,9 +90,104 @@ luau_service_tokenize :: proc(source: string) -> [dynamic]luauh.kine_luau_Token 
 }
 
 
-// -----------------------------------------------------------------------------
-// Luau API
-// -----------------------------------------------------------------------------
+Luau_Diagnostic :: struct {
+	ok:      bool,
+	line:    int,
+	message: string,
+}
+
+
+luau_service_parse_error :: proc(raw: string) -> (line: int, message: string) {
+	rest := raw
+
+	for {
+		colon := strings.index_byte(rest, ':')
+
+		if colon < 0 {
+			break
+		}
+
+		after := rest[colon + 1:]
+		end := 0
+
+		for end < len(after) && after[end] >= '0' && after[end] <= '9' {
+			end += 1
+		}
+
+		if end > 0 && end < len(after) && after[end] == ':' {
+			value := 0
+
+			for i in 0 ..< end {
+				value = value * 10 + int(after[i] - '0')
+			}
+
+			return value, after[end + 1:]
+		}
+
+		rest = after
+	}
+
+	return 0, raw
+}
+
+
+luau_service_diagnose :: proc(source: string) -> Luau_Diagnostic {
+	c_source := strings.clone_to_cstring(source)
+	defer delete(c_source)
+
+	out_size: uintptr
+	options := luauh.lua_CompileOptions{}
+
+	bytecode := luauh.luau_compile(c_source, uintptr(len(source)), &options, &out_size)
+
+	if bytecode == nil {
+		return Luau_Diagnostic {
+			ok = false,
+			line = 0,
+			message = strings.clone("Luau compiler failed"),
+		}
+	}
+
+	defer luauh.luau_free(cast(rawptr)bytecode)
+
+	state := luauh.luaL_newstate()
+
+	if state == nil {
+		return Luau_Diagnostic {
+			ok = false,
+			line = 0,
+			message = strings.clone("Could not create Luau state"),
+		}
+	}
+
+	defer luauh.lua_close(state)
+
+	status := luauh.luau_load(state, "Script", bytecode, out_size, 0)
+
+	if status == 0 {
+		return Luau_Diagnostic{ok = true}
+	}
+
+	size: uintptr
+	ptr := luauh.lua_tolstring(state, -1, &size)
+
+	if ptr == nil {
+		return Luau_Diagnostic {
+			ok = false,
+			line = 0,
+			message = strings.clone("Unknown syntax error"),
+		}
+	}
+
+	line, message := luau_service_parse_error(strings.string_from_ptr(cast(^u8)ptr, int(size)))
+
+	return Luau_Diagnostic {
+		ok = false,
+		line = line,
+		message = strings.clone(strings.trim_space(message)),
+	}
+}
+
 
 luau_service_get :: proc(
 	L: ^vm.State,
@@ -132,6 +227,39 @@ luau_service_namecall :: proc(
 	_ = enum_registry
 
 	switch method {
+	case "Diagnose":
+		source := vm.ArgString(L, 2)
+
+		diagnostic := luau_service_diagnose(source)
+		if diagnostic.ok {
+			c_source := strings.clone_to_cstring(source)
+			line: u32
+			message := luauh.luau_diagnose_calls(L, c_source, uintptr(len(source)), &line)
+			delete(c_source)
+			if message != nil {
+				diagnostic = Luau_Diagnostic {
+					ok      = false,
+					line    = int(line),
+					message = strings.clone(string(message)),
+				}
+				luauh.luau_free(cast(rawptr)message)
+			}
+		}
+
+		vm.NewTable(L, 0, 3)
+		vm.PushBoolean(L, diagnostic.ok)
+		vm.SetField(L, -2, "Ok")
+		vm.PushNumber(L, f64(diagnostic.line))
+		vm.SetField(L, -2, "Line")
+		vm.PushString(L, diagnostic.message)
+		vm.SetField(L, -2, "Message")
+
+		if diagnostic.message != "" {
+			delete(diagnostic.message)
+		}
+
+		return 1, true
+
 	case "Tokenize":
 		source := vm.ArgString(L, 2)
 
@@ -164,10 +292,6 @@ luau_service_namecall :: proc(
 	return 0, false
 }
 
-
-// -----------------------------------------------------------------------------
-// Lifecycle
-// -----------------------------------------------------------------------------
 
 LuauService_construct :: proc(
 	renderer: ^classes.Renderer_Object,

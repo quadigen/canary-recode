@@ -2,79 +2,63 @@ package classes
 
 import sdl3 "../platform"
 
-import datatypes "../datatypes"
 import kineffi "../bindings"
-import "core:math"
-import vm "../vm"
+import datatypes "../datatypes"
 import enums "../enum"
+import vm "../vm"
+import "core:math"
 
-Camera_Class := Class_Info{
+Camera_Class := Class_Info {
 	name   = "Camera",
 	parent = &Instance_Class,
 }
 
 Camera :: struct {
-	using object: Object,
-
-	CFrame: datatypes.CFrame,
-	Focus:  datatypes.CFrame,
-
-	CameraSubject: ^Object,
-	CameraType:    enums.CameraType,
-
-	yaw:   f32,
-	pitch: f32,
-
+	using object:      Object,
+	CFrame:            datatypes.CFrame,
+	Focus:             datatypes.CFrame,
+	CameraSubject:     ^Object,
+	CameraType:        enums.CameraType,
+	yaw:               f32,
+	pitch:             f32,
 	move_speed:        f32,
 	mouse_sensitivity: f32,
 	mouse_captured:    bool,
-
-	scroll_step:    f32,
-	pending_scroll: f32,
-
-	orbit_distance: f32,
-
-	viewport_width:  f32,
-	viewport_height: f32,
+	scroll_step:       f32,
+	pending_scroll:    f32,
+	orbit_distance:    f32,
+	field_of_view:     f32,
+	viewport_width:    f32,
+	viewport_height:   f32,
+	velocity:          datatypes.Vector3,
+	move_smoothing:    f32,
 }
 
 Camera_Init :: proc() -> Camera {
 	cframe := datatypes.CFrame_New_XYZ(0, 4, 10)
 
-	return Camera{
+	return Camera {
 		object = Object_Init(&Camera_Class),
-
 		CFrame = cframe,
-		Focus  = datatypes.CFrame_New_XYZ(0, 4, 0),
-
+		Focus = datatypes.CFrame_New_XYZ(0, 4, 0),
 		CameraSubject = nil,
-		CameraType    = .Custom,
-
-		yaw   = 0,
+		CameraType = .Custom,
+		yaw = 0,
 		pitch = 0,
-
-		move_speed        = 10,
+		field_of_view = 60,
+		move_speed = 10,
 		mouse_sensitivity = 0.003,
-		mouse_captured    = false,
-
-		scroll_step    = 5,
+		mouse_captured = false,
+		scroll_step = 5,
 		pending_scroll = 0,
-
 		orbit_distance = 12,
+		velocity = datatypes.Vector3{},
+		move_smoothing = 10,
 	}
 }
 
-// The vertical field of view the renderer builds its perspective with, in
-// degrees. set_viewport_rect in src/engine/renderer/main.odin passes this to
-// Kine_Filament_SetCameraPerspective, and Mouse.odin mirrors it as
-// MOUSE_FIELD_OF_VIEW. Every screen<->world projection has to agree with it, so
-// the value lives here and the other two sites are expected to match.
 CAMERA_FIELD_OF_VIEW_DEGREES :: f32(60)
 
-// Copies the renderer's live viewport into the camera. The projection helpers
-// are pure functions of these two fields, so keeping them current is what makes
-// ScreenPointToRay and WorldToViewportPoint agree with the rendered frame after
-// a window resize.
 Camera_Sync_Viewport :: proc(camera: ^Camera, renderer: ^Renderer_Object) {
 	if camera == nil || renderer == nil || !renderer.HasViewportRect {
 		return
@@ -89,9 +73,6 @@ Camera_Sync_Viewport :: proc(camera: ^Camera, renderer: ^Renderer_Object) {
 	camera.viewport_height = f32(rect[3])
 }
 
-// The viewport a projection should actually use. A camera that has not been
-// stepped yet, or a renderer that never published a rect, still has to produce
-// usable rays instead of dividing by zero, so fall back to a single pixel.
 Camera_Effective_Viewport :: proc(camera: ^Camera) -> (f32, f32) {
 	width := camera.viewport_width
 	height := camera.viewport_height
@@ -104,18 +85,14 @@ Camera_Effective_Viewport :: proc(camera: ^Camera) -> (f32, f32) {
 	return width, height
 }
 
-// The half-extent of the view frustum at unit distance: the tangent of the
-// vertical half field of view, and the aspect-widened horizontal one.
+
 Camera_Projection_Scale :: proc(camera: ^Camera) -> (f32, f32) {
 	width, height := Camera_Effective_Viewport(camera)
-	tangent := f32(math.tan(math.to_radians(f64(CAMERA_FIELD_OF_VIEW_DEGREES)) * 0.5))
+	tangent := f32(math.tan(math.to_radians(f64(camera.field_of_view)) * 0.5))
 	return tangent, width / height
 }
 
-Camera_construct :: proc(
-	renderer: ^Renderer_Object,
-	data_Camera: rawptr,
-) -> ^Object {
+Camera_construct :: proc(renderer: ^Renderer_Object, data_Camera: rawptr) -> ^Object {
 	camera := new(Camera)
 	camera^ = Camera_Init()
 	camera.name = "Camera"
@@ -131,7 +108,7 @@ Camera_Sync_Angles_From_CFrame :: proc(camera: ^Camera) {
 	look := datatypes.CFrame_LookVector(camera.CFrame)
 
 	camera.pitch = math.asin(clamp(look.y, -1, 1))
-	camera.yaw   = math.atan2(-look.x, -look.z)
+	camera.yaw = math.atan2(-look.x, -look.z)
 }
 
 Camera_Release_Mouse :: proc(camera: ^Camera) {
@@ -147,15 +124,9 @@ Camera_Release_Mouse :: proc(camera: ^Camera) {
 	camera.mouse_captured = false
 }
 
-Camera_Update_Mouse_Look :: proc(
-	camera: ^Camera,
-	focused: bool,
-) -> bool {
+Camera_Update_Mouse_Look :: proc(camera: ^Camera, focused: bool) -> bool {
 	mouse_dx, mouse_dy: f32
-	mouse_buttons := sdl3.GetRelativeMouseState(
-		&mouse_dx,
-		&mouse_dy,
-	)
+	mouse_buttons := sdl3.GetRelativeMouseState(&mouse_dx, &mouse_dy)
 
 	rotating := focused && .RIGHT in mouse_buttons
 
@@ -173,16 +144,12 @@ Camera_Update_Mouse_Look :: proc(
 			mouse_dy = 0
 		}
 
-		camera.yaw   -= mouse_dx * camera.mouse_sensitivity
+		camera.yaw -= mouse_dx * camera.mouse_sensitivity
 		camera.pitch -= mouse_dy * camera.mouse_sensitivity
 
-		max_pitch: f32 = 1.55334306 // 89 degrees
+		max_pitch: f32 = 1.55334306
 
-		camera.pitch = clamp(
-			camera.pitch,
-			-max_pitch,
-			max_pitch,
-		)
+		camera.pitch = clamp(camera.pitch, -max_pitch, max_pitch)
 	} else {
 		Camera_Release_Mouse(camera)
 	}
@@ -190,13 +157,8 @@ Camera_Update_Mouse_Look :: proc(
 	return rotating
 }
 
-// Called by the SDL event path.
-// Positive = wheel forward/up.
-// Negative = wheel backward/down.
-Camera_Add_Scroll :: proc(
-	camera: ^Camera,
-	steps: f32,
-) {
+
+Camera_Add_Scroll :: proc(camera: ^Camera, steps: f32) {
 	if camera == nil {
 		return
 	}
@@ -204,9 +166,7 @@ Camera_Add_Scroll :: proc(
 	camera.pending_scroll += steps
 }
 
-Camera_Find_Subject_Part :: proc(
-	object: ^Object,
-) -> ^Part {
+Camera_Find_Subject_Part :: proc(object: ^Object) -> ^Part {
 	if object == nil || object.destroyed {
 		return nil
 	}
@@ -226,15 +186,8 @@ Camera_Find_Subject_Part :: proc(
 	return nil
 }
 
-Camera_Get_Subject_Position :: proc(
-	camera: ^Camera,
-) -> (
-	position: datatypes.Vector3,
-	ok: bool,
-) {
-	if camera == nil ||
-	   camera.CameraSubject == nil ||
-	   camera.CameraSubject.destroyed {
+Camera_Get_Subject_Position :: proc(camera: ^Camera) -> (position: datatypes.Vector3, ok: bool) {
+	if camera == nil || camera.CameraSubject == nil || camera.CameraSubject.destroyed {
 		return datatypes.Vector3{}, false
 	}
 
@@ -247,132 +200,114 @@ Camera_Get_Subject_Position :: proc(
 	return datatypes.CFrame_Position(part.cframe), true
 }
 
-Camera_Update_Focus :: proc(
-	camera: ^Camera,
-	position: datatypes.Vector3,
-) {
+Camera_Update_Focus :: proc(camera: ^Camera, position: datatypes.Vector3) {
 	camera.Focus = datatypes.CFrame_New_Position(position)
 }
 
-Camera_Set_Position :: proc(
-	camera: ^Camera,
-	position: datatypes.Vector3,
-) {
+Camera_Set_Position :: proc(camera: ^Camera, position: datatypes.Vector3) {
 	camera.CFrame.x = position.x
 	camera.CFrame.y = position.y
 	camera.CFrame.z = position.z
 }
 
-Camera_Freecam_Step :: proc(
-	camera: ^Camera,
-	dt: f32,
-	focused: bool,
-	rotating: bool,
-) {
-	rotation := datatypes.CFrame_FromOrientation(
-		camera.pitch,
-		camera.yaw,
-		0,
-	)
+Camera_Freecam_Step :: proc(camera: ^Camera, dt: f32, focused: bool, rotating: bool) {
+	rotation := datatypes.CFrame_FromOrientation(camera.pitch, camera.yaw, 0)
 
 	orientation := camera.CFrame
-
 	if rotating {
 		orientation = rotation
 	}
 
-	look  := datatypes.CFrame_LookVector(orientation)
+	look := datatypes.CFrame_LookVector(orientation)
 	right := datatypes.CFrame_RightVector(orientation)
-	up    := datatypes.CFrame_UpVector(orientation)
+	up := datatypes.CFrame_UpVector(orientation)
 
 	keys := sdl3.GetKeyboardState(nil)
+	mod := sdl3.GetModState()
+
+	input_blocked := !focused || TEXTBOX_IS_USED == true || .LCTRL in mod
 
 	movement := datatypes.Vector3{}
 
-	if focused && keys[int(sdl3.Scancode.W)] {
-		movement.x += look.x
-		movement.y += look.y
-		movement.z += look.z
+	if !input_blocked {
+		if keys[int(sdl3.Scancode.W)] {
+			movement.x += look.x; movement.y += look.y; movement.z += look.z
+		}
+		if keys[int(sdl3.Scancode.S)] {
+			movement.x -= look.x; movement.y -= look.y; movement.z -= look.z
+		}
+		if keys[int(sdl3.Scancode.D)] {
+			movement.x += right.x; movement.y += right.y; movement.z += right.z
+		}
+		if keys[int(sdl3.Scancode.A)] {
+			movement.x -= right.x; movement.y -= right.y; movement.z -= right.z
+		}
+		if keys[int(sdl3.Scancode.E)] {
+			movement.x += up.x; movement.y += up.y; movement.z += up.z
+		}
+		if keys[int(sdl3.Scancode.Q)] {
+			movement.x -= up.x; movement.y -= up.y; movement.z -= up.z
+		}
 	}
 
-	if focused && keys[int(sdl3.Scancode.S)] {
-		movement.x -= look.x
-		movement.y -= look.y
-		movement.z -= look.z
-	}
-
-	if focused && keys[int(sdl3.Scancode.D)] {
-		movement.x += right.x
-		movement.y += right.y
-		movement.z += right.z
-	}
-
-	if focused && keys[int(sdl3.Scancode.A)] {
-		movement.x -= right.x
-		movement.y -= right.y
-		movement.z -= right.z
-	}
-
-	if focused && keys[int(sdl3.Scancode.E)] {
-		movement.x += up.x
-		movement.y += up.y
-		movement.z += up.z
-	}
-
-	if focused && keys[int(sdl3.Scancode.Q)] {
-		movement.x -= up.x
-		movement.y -= up.y
-		movement.z -= up.z
-	}
-
-	if focused && keys[int(sdl3.Scancode.LSHIFT)] || keys[int(sdl3.Scancode.RSHIFT)] {
-		camera.move_speed = 5 
+	if focused && (keys[int(sdl3.Scancode.LSHIFT)] || keys[int(sdl3.Scancode.RSHIFT)]) {
+		camera.move_speed = 5
 	} else {
 		camera.move_speed = 10
 	}
 
-	length_squared :=
-		movement.x * movement.x +
-		movement.y * movement.y +
-		movement.z * movement.z
-
-	position := datatypes.CFrame_Position(camera.CFrame)
-
+	target := datatypes.Vector3{}
+	length_squared := movement.x * movement.x + movement.y * movement.y + movement.z * movement.z
 	if length_squared > 0 {
-		length := math.sqrt(length_squared)
-		scale := camera.move_speed * dt / length
-
-		position.x += movement.x * scale
-		position.y += movement.y * scale
-		position.z += movement.z * scale
+		scale := camera.move_speed / math.sqrt(length_squared)
+		target = datatypes.Vector3{movement.x * scale, movement.y * scale, movement.z * scale}
 	}
 
-	if rotating == true && camera.pending_scroll != 0 {
-		scroll_look := datatypes.CFrame_LookVector(orientation)
+	alpha := 1 - math.exp(-camera.move_smoothing * dt)
+
+	camera.velocity.x += (target.x - camera.velocity.x) * alpha
+	camera.velocity.y += (target.y - camera.velocity.y) * alpha
+	camera.velocity.z += (target.z - camera.velocity.z) * alpha
+
+	speed_squared :=
+		camera.velocity.x * camera.velocity.x +
+		camera.velocity.y * camera.velocity.y +
+		camera.velocity.z * camera.velocity.z
+	if length_squared == 0 && speed_squared < 0.0001 {
+		camera.velocity = datatypes.Vector3{}
+	}
+
+	position := datatypes.CFrame_Position(camera.CFrame)
+	position.x += camera.velocity.x * dt
+	position.y += camera.velocity.y * dt
+	position.z += camera.velocity.z * dt
+
+	if rotating && camera.pending_scroll != 0 {
 		distance := camera.pending_scroll * camera.scroll_step
 
-		position.x += scroll_look.x * distance
-		position.y += scroll_look.y * distance
-		position.z += scroll_look.z * distance
+		position.x += look.x * distance
+		position.y += look.y * distance
+		position.z += look.z * distance
 	}
 
 	camera.pending_scroll = 0
-	
+
 	if rotating {
 		camera.CFrame = rotation
 	}
 
 	Camera_Set_Position(camera, position)
 
-	look = datatypes.CFrame_LookVector(camera.CFrame)
+	final_look := datatypes.CFrame_LookVector(camera.CFrame)
 
-	focus_position := datatypes.Vector3{
-		position.x + look.x * 10,
-		position.y + look.y * 10,
-		position.z + look.z * 10,
-	}
-
-	Camera_Update_Focus(camera, focus_position)
+	Camera_Update_Focus(
+		camera,
+		datatypes.Vector3 {
+			position.x + final_look.x * 10,
+			position.y + final_look.y * 10,
+			position.z + final_look.z * 10,
+		},
+	)
 }
 
 Camera_Consume_Orbit_Scroll :: proc(camera: ^Camera) {
@@ -380,14 +315,9 @@ Camera_Consume_Orbit_Scroll :: proc(camera: ^Camera) {
 		return
 	}
 
-	camera.orbit_distance -=
-		camera.pending_scroll * camera.scroll_step
+	camera.orbit_distance -= camera.pending_scroll * camera.scroll_step
 
-	camera.orbit_distance = clamp(
-		camera.orbit_distance,
-		1.0,
-		512.0,
-	)
+	camera.orbit_distance = clamp(camera.orbit_distance, 1.0, 512.0)
 
 	camera.pending_scroll = 0
 }
@@ -399,15 +329,11 @@ Camera_Subject_Orbit_Step :: proc(
 ) {
 	Camera_Consume_Orbit_Scroll(camera)
 
-	rotation := datatypes.CFrame_FromOrientation(
-		camera.pitch,
-		camera.yaw,
-		0,
-	)
+	rotation := datatypes.CFrame_FromOrientation(camera.pitch, camera.yaw, 0)
 
-	look  := datatypes.CFrame_LookVector(rotation)
+	look := datatypes.CFrame_LookVector(rotation)
 	right := datatypes.CFrame_RightVector(rotation)
-	up    := datatypes.CFrame_UpVector(rotation)
+	up := datatypes.CFrame_UpVector(rotation)
 
 	position := target
 
@@ -421,23 +347,16 @@ Camera_Subject_Orbit_Step :: proc(
 	case .TopDown:
 		position.y += camera.orbit_distance
 
-		camera.CFrame = datatypes.CFrame_LookAt(
-			position,
-			target,
-		)
+		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
 	case .Isometric:
-		horizontal :=
-			camera.orbit_distance * 0.70710678
+		horizontal := camera.orbit_distance * 0.70710678
 
 		position.x += math.sin(camera.yaw) * horizontal
 		position.z += math.cos(camera.yaw) * horizontal
 		position.y += horizontal
 
-		camera.CFrame = datatypes.CFrame_LookAt(
-			position,
-			target,
-		)
+		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
 	case .Shoulder:
 		position.x -= look.x * camera.orbit_distance
@@ -452,63 +371,68 @@ Camera_Subject_Orbit_Step :: proc(
 		position.y += up.y * 1.5
 		position.z += up.z * 1.5
 
-		camera.CFrame = datatypes.CFrame_LookAt(
-			position,
-			target,
-		)
+		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
-	case .Custom,
-	     .Orbital,
-	     .ThirdPerson,
-	     .Follow:
+	case .Custom, .Orbital, .ThirdPerson, .Follow:
 		position.x -= look.x * camera.orbit_distance
 		position.y -= look.y * camera.orbit_distance
 		position.z -= look.z * camera.orbit_distance
 
-		camera.CFrame = datatypes.CFrame_LookAt(
-			position,
-			target,
-		)
+		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 	}
 
 	Camera_Update_Focus(camera, target)
 	Camera_Sync_Angles_From_CFrame(camera)
 }
 
-Camera_Update_World_To_View :: proc(
-	camera: ^Camera,
-	renderer: ^Renderer_Object,
-) {
+Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object) {
 	if camera == nil || renderer == nil {
 		return
 	}
 
+	if renderer.HasViewportRect && renderer.Filament != nil {
+		rect := renderer.ViewportRect
+		if rect[2] > 0 && rect[3] > 0 {
+			kineffi.Kine_Filament_SetCameraPerspective(
+				renderer.Filament,
+				f64(camera.field_of_view),
+				f64(rect[2]) / f64(rect[3]),
+				0.1,
+				1000,
+			)
+		}
+	}
 	view := datatypes.CFrame_Inverse(camera.CFrame)
 
-	renderer.WorldToView = [12]f32{
-		view.x, view.y, view.z,
-		view.r00, view.r01, view.r02,
-		view.r10, view.r11, view.r12,
-		view.r20, view.r21, view.r22,
+	renderer.WorldToView = [12]f32 {
+		view.x,
+		view.y,
+		view.z,
+		view.r00,
+		view.r01,
+		view.r02,
+		view.r10,
+		view.r11,
+		view.r12,
+		view.r20,
+		view.r21,
+		view.r22,
 	}
 
 	renderer.HasWorldToView = true
 
 	if renderer.Filament != nil {
 		look := datatypes.CFrame_LookVector(camera.CFrame)
-		up   := datatypes.CFrame_UpVector(camera.CFrame)
+		up := datatypes.CFrame_UpVector(camera.CFrame)
 
 		kineffi.Kine_Filament_SetCameraLookAt(
 			renderer.Filament,
-
 			camera.CFrame.x,
 			camera.CFrame.y,
 			camera.CFrame.z,
-
 			camera.CFrame.x + look.x,
 			camera.CFrame.y + look.y,
 			camera.CFrame.z + look.z,
-
 			up.x,
 			up.y,
 			up.z,
@@ -516,140 +440,102 @@ Camera_Update_World_To_View :: proc(
 	}
 }
 
-Camera_Step :: proc(
-	object: ^Object,
-	ctx: ^Class_Step_Context,
-) {
+Camera_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	camera := cast(^Camera)object
 
-	if camera == nil ||
-	   ctx == nil ||
-	   ctx.renderer == nil ||
-	   ctx.renderer.ActiveCamera != object {
+	if camera == nil || ctx == nil || ctx.renderer == nil || ctx.renderer.ActiveCamera != object {
 		return
 	}
 
-	// Track the live render viewport before anything else. The projection
-	// helpers divide by these dimensions, so they have to follow a resize even
-	// when there is no Filament context to draw into. This has to happen before
-	// the context check below: a headless or not-yet-initialized renderer still
-	// reports a usable ViewportRect.
 	Camera_Sync_Viewport(camera, ctx.renderer)
 
 	if ctx.renderer.Filament == nil {
 		return
 	}
 
-	// Scriptable means Kinemium does not alter the camera at all.
-	// Luau owns CFrame and Focus.
+
 	if camera.CameraType == .Scriptable {
 		Camera_Release_Mouse(camera)
 		camera.pending_scroll = 0
 
-		Camera_Update_World_To_View(
-			camera,
-			ctx.renderer,
-		)
+		Camera_Update_World_To_View(camera, ctx.renderer)
 
 		return
 	}
 
 	focused := sdl3.GetKeyboardFocus() != nil
 
-	rotating := Camera_Update_Mouse_Look(
-		camera,
-		focused,
-	)
+	rotating := Camera_Update_Mouse_Look(camera, focused)
 
-	subject_position, has_subject :=
-		Camera_Get_Subject_Position(camera)
+	subject_position, has_subject := Camera_Get_Subject_Position(camera)
 
-	// Custom without a subject remains the editor/freecam mode.
+
 	if camera.CameraType == .Custom && !has_subject {
-		Camera_Freecam_Step(
-			camera,
-			ctx.delta_time,
-			focused,
-			rotating,
-		)
+		Camera_Freecam_Step(camera, ctx.delta_time, focused, rotating)
 
-		Camera_Update_World_To_View(
-			camera,
-			ctx.renderer,
-		)
+		Camera_Update_World_To_View(camera, ctx.renderer)
 
 		return
 	}
 
-	// Subject camera modes need a valid subject.
-	// If none exists, fall back to normal freecam instead of freezing.
+
 	if !has_subject {
-		Camera_Freecam_Step(
-			camera,
-			ctx.delta_time,
-			focused,
-			rotating,
-		)
+		Camera_Freecam_Step(camera, ctx.delta_time, focused, rotating)
 
-		Camera_Update_World_To_View(
-			camera,
-			ctx.renderer,
-		)
+		Camera_Update_World_To_View(camera, ctx.renderer)
 
 		return
 	}
 
-	Camera_Subject_Orbit_Step(
-		camera,
-		subject_position,
-		camera.CameraType,
-	)
+	Camera_Subject_Orbit_Step(camera, subject_position, camera.CameraType)
+	if registry := camera.signal_registry; registry != nil && registry.camera_obstruction != nil {
+		position := registry.camera_obstruction(
+			registry.network_ownership_ctx,
+			camera,
+			datatypes.CFrame_Position(camera.Focus),
+			datatypes.CFrame_Position(camera.CFrame),
+		)
+		Camera_Set_Position(camera, position)
+	}
 
-	Camera_Update_World_To_View(
-		camera,
-		ctx.renderer,
-	)
+	Camera_Update_World_To_View(camera, ctx.renderer)
 }
 
-Camera_destroy :: proc(
-	object: ^Object,
-	renderer: ^Renderer_Object,
-) {
+Camera_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	camera := cast(^Camera)object
 
 	Camera_Release_Mouse(camera)
 
+	ViewportFrame_Camera_Destroyed(camera)
 	camera.CameraSubject = nil
 
 	Object_Destroy(object)
 	free(camera)
 }
 
-Camera_clone :: proc(
-	source: ^Object,
-	destination: ^Object,
-) {
+Camera_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^Camera)source
 	dst := cast(^Camera)destination
 
+	dst.field_of_view = src.field_of_view
 	dst.CFrame = src.CFrame
-	dst.Focus  = src.Focus
+	dst.Focus = src.Focus
 
 	dst.CameraSubject = src.CameraSubject
-	dst.CameraType    = src.CameraType
+	dst.CameraType = src.CameraType
 
-	dst.yaw   = src.yaw
+	dst.yaw = src.yaw
 	dst.pitch = src.pitch
 
-	dst.move_speed        = src.move_speed
+	dst.move_speed = src.move_speed
 	dst.mouse_sensitivity = src.mouse_sensitivity
 
-	dst.scroll_step    = src.scroll_step
+	dst.scroll_step = src.scroll_step
 	dst.pending_scroll = 0
 
 	dst.orbit_distance = src.orbit_distance
 
-	// Never clone active OS mouse capture.
+
 	dst.mouse_captured = false
 }
 
@@ -659,7 +545,10 @@ Camera_Namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method_name: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	switch method_name {
 	case "ScreenPointToRay", "ViewportPointToRay":
 		return Camera_Screen_Point_To_Ray(L, object, datatype_registry, method_name)
@@ -695,18 +584,14 @@ Register_Camera :: proc(registry: ^Registry) {
 		&Camera_Class,
 		Camera_construct,
 		Camera_destroy,
-
 		get = Camera_Get,
 		set = Camera_Set,
-
 		namecall = Camera_Namecall,
-
 		clone = Camera_clone,
-
 		_step = Camera_Step,
 		_step_phase = .Render_3D,
-
-		properties = []string{
+		properties = []string {
+			"FieldOfView",
 			"CFrame",
 			"Focus",
 			"CameraSubject",
@@ -727,57 +612,37 @@ Camera_Get :: proc(
 	camera := cast(^Camera)object
 
 	switch key {
+	case "FieldOfView":
+		vm.PushNumber(L, f64(camera.field_of_view))
 	case "CFrame":
 		if types == nil {
 			return false
 		}
 
-		datatypes.Push_CFrame(
-			L,
-			types,
-			camera.CFrame,
-		)
+		datatypes.Push_CFrame(L, types, camera.CFrame)
 
 	case "Focus":
 		if types == nil {
 			return false
 		}
 
-		datatypes.Push_CFrame(
-			L,
-			types,
-			camera.Focus,
-		)
+		datatypes.Push_CFrame(L, types, camera.Focus)
 
 	case "CameraSubject":
-		Push_Object(
-			L,
-			camera.CameraSubject,
-		)
+		Push_Object(L, camera.CameraSubject)
 
 	case "CameraType":
 		if enum_registry == nil {
 			return false
 		}
 
-		_ = enums.Push_Item_By_Value(
-			L,
-			enum_registry,
-			"CameraType",
-			i64(camera.CameraType),
-		)
+		_ = enums.Push_Item_By_Value(L, enum_registry, "CameraType", i64(camera.CameraType))
 
 	case "Pitch":
-		vm.PushNumber(
-			L,
-			f64(camera.pitch),
-		)
+		vm.PushNumber(L, f64(camera.pitch))
 
 	case "Yaw":
-		vm.PushNumber(
-			L,
-			f64(camera.yaw),
-		)
+		vm.PushNumber(L, f64(camera.yaw))
 
 	case "ViewportSize":
 		if types == nil {
@@ -785,11 +650,7 @@ Camera_Get :: proc(
 		}
 
 		width, height := Camera_Effective_Viewport(camera)
-		datatypes.Push_Vector2(
-			L,
-			types,
-			datatypes.Vector2{width, height},
-		)
+		datatypes.Push_Vector2(L, types, datatypes.Vector2{width, height})
 		return true
 
 	case "ScreenPointToRay",
@@ -817,7 +678,10 @@ Camera_Screen_Point_To_Ray :: proc(
 	object: ^Object,
 	datatype_registry: ^datatypes.Registry,
 	method_name: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	camera := cast(^Camera)object
 	x := f32(vm.ArgNumber(L, 2))
 	y := f32(vm.ArgNumber(L, 3))
@@ -828,31 +692,16 @@ Camera_Screen_Point_To_Ray :: proc(
 	tangent, aspect := Camera_Projection_Scale(camera)
 	width, height := Camera_Effective_Viewport(camera)
 
-	// Screen space is pixel-based with the origin at the top left, while the
-	// renderer projects onto normalized device coordinates centered on the
-	// viewport.
+
 	normalized_x := (x / width) * 2 - 1
 	normalized_y := 1 - (y / height) * 2
 
-	// Camera space is -Z forward, matching CFrame_VectorToWorldSpace and the
-	// perspective the renderer built. The horizontal extent is widened by the
-	// aspect ratio so a wide viewport does not stretch the vertical field of
-	// view sideways.
-	view := datatypes.Vector3{
-		normalized_x * aspect * tangent,
-		normalized_y * tangent,
-		-1,
-	}
 
-	direction := datatypes.Vec3_Unit(
-		datatypes.CFrame_VectorToWorldSpace(frame, view),
-	)
+	view := datatypes.Vector3{normalized_x * aspect * tangent, normalized_y * tangent, -1}
 
-	datatypes.Push_Ray(
-		L,
-		datatype_registry,
-		datatypes.Ray{Origin = origin, Direction = direction},
-	)
+	direction := datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(frame, view))
+
+	datatypes.Push_Ray(L, datatype_registry, datatypes.Ray{Origin = origin, Direction = direction})
 	return 1, true
 }
 
@@ -861,7 +710,10 @@ Camera_World_To_Viewport_Point :: proc(
 	object: ^Object,
 	datatype_registry: ^datatypes.Registry,
 	method_name: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	camera := cast(^Camera)object
 	world := datatypes.Arg_Vector3(L, 2)
 	frame := camera.CFrame
@@ -870,27 +722,21 @@ Camera_World_To_Viewport_Point :: proc(
 	tangent, aspect := Camera_Projection_Scale(camera)
 	width, height := Camera_Effective_Viewport(camera)
 
-	// Only points in front of the camera can project.
+
 	forward := datatypes.Vec3_Dot(delta, datatypes.CFrame_LookVector(frame))
 	if forward <= 0 {
 		vm.PushBoolean(L, false)
 		return 1, true
 	}
 
-	// Inverse of the camera-space ray built in Camera_Screen_Point_To_Ray: undo
-	// the perspective divide, then the aspect and tangent scaling.
+
 	normalized_x :=
 		datatypes.Vec3_Dot(delta, datatypes.CFrame_RightVector(frame)) /
 		(forward * tangent * aspect)
 	normalized_y :=
-		datatypes.Vec3_Dot(delta, datatypes.CFrame_UpVector(frame)) /
-		(forward * tangent)
+		datatypes.Vec3_Dot(delta, datatypes.CFrame_UpVector(frame)) / (forward * tangent)
 
-	on_screen :=
-		normalized_x >= -1 &&
-		normalized_x <= 1 &&
-		normalized_y >= -1 &&
-		normalized_y <= 1
+	on_screen := normalized_x >= -1 && normalized_x <= 1 && normalized_y >= -1 && normalized_y <= 1
 
 	x := (normalized_x + 1) * width * 0.5
 	y := (1 - normalized_y) * height * 0.5
@@ -912,16 +758,14 @@ Camera_Set :: proc(
 	camera := cast(^Camera)object
 
 	switch key {
+	case "FieldOfView":
+		camera.field_of_view = clamp(f32(vm.ArgNumber(L, index)), 1, 120)
 	case "CFrame":
 		if types == nil {
 			return false
 		}
 
-		camera.CFrame = datatypes.Arg_CFrame(
-			L,
-			index,
-			types,
-		)
+		camera.CFrame = datatypes.Arg_CFrame(L, index, types)
 
 		Camera_Sync_Angles_From_CFrame(camera)
 
@@ -930,11 +774,7 @@ Camera_Set :: proc(
 			return false
 		}
 
-		camera.Focus = datatypes.Arg_CFrame(
-			L,
-			index,
-			types,
-		)
+		camera.Focus = datatypes.Arg_CFrame(L, index, types)
 
 	case "CameraSubject":
 		if vm.IsNil(L, index) {
@@ -942,16 +782,10 @@ Camera_Set :: proc(
 			return true
 		}
 
-		subject := object_from_argument(
-			L,
-			index,
-		)
+		subject := object_from_argument(L, index)
 
 		if subject == nil {
-			_ = vm.RaiseError(
-				L,
-				"CameraSubject must be an Instance or nil",
-			)
+			_ = vm.RaiseError(L, "CameraSubject must be an Instance or nil")
 
 			return true
 		}
@@ -963,15 +797,9 @@ Camera_Set :: proc(
 			return false
 		}
 
-		item := enums.Arg_Item(
-			L,
-			index,
-			enum_registry,
-			"CameraType",
-		)
+		item := enums.Arg_Item(L, index, enum_registry, "CameraType")
 
-		camera.CameraType =
-			enums.CameraType(item.value)
+		camera.CameraType = enums.CameraType(item.value)
 
 		if camera.CameraType == .Scriptable {
 			Camera_Release_Mouse(camera)
@@ -979,22 +807,14 @@ Camera_Set :: proc(
 		}
 
 	case "Pitch":
-		camera.pitch = f32(
-			vm.ArgNumber(L, index),
-		)
+		camera.pitch = f32(vm.ArgNumber(L, index))
 
 		max_pitch: f32 = 1.55334306
 
-		camera.pitch = clamp(
-			camera.pitch,
-			-max_pitch,
-			max_pitch,
-		)
+		camera.pitch = clamp(camera.pitch, -max_pitch, max_pitch)
 
 	case "Yaw":
-		camera.yaw = f32(
-			vm.ArgNumber(L, index),
-		)
+		camera.yaw = f32(vm.ArgNumber(L, index))
 
 	case:
 		return false

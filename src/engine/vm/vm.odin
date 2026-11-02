@@ -1,16 +1,14 @@
 package luau
 
-import "core:strings"
 import "base:runtime"
+import "core:strings"
 
 import luauh "luauh"
 
-State     :: luauh.lua_State
+State :: luauh.lua_State
 CFunction :: luauh.lua_CFunction
 
-// MULTIPLE_RESULTS mirrors LUA_MULTRET: a protected call that keeps every value
-// the callee returns. `require` uses it to enforce Roblox's "exactly one return
-// value" rule for ModuleScripts.
+
 MULTIPLE_RESULTS :: -1
 
 Compile_Options :: struct {
@@ -18,7 +16,7 @@ Compile_Options :: struct {
 	debug_level:        i32,
 	type_info_level:    i32,
 	coverage_level:     i32,
-	vector_precision:   i32
+	vector_precision:   i32,
 }
 
 VM :: struct {
@@ -44,31 +42,40 @@ Value_Type :: enum i32 {
 	Object        = 13,
 }
 
-Userdata_Get_Proc      :: proc(L: ^State, value, ctx: rawptr, key: string) -> bool
-Userdata_Set_Proc      :: proc(L: ^State, value, ctx: rawptr, key: string, value_index: int) -> bool
-Userdata_Namecall_Proc :: proc(L: ^State, value, ctx: rawptr, method: string) -> (result_count: i32, handled: bool)
-Userdata_String_Proc   :: proc(value, ctx: rawptr) -> string
-Userdata_Destroy_Proc  :: proc(value, ctx: rawptr)
-Userdata_Binary_Proc   :: proc(L: ^State, value, ctx: rawptr, self_index, other_index: int) -> bool
-Userdata_Unary_Proc    :: proc(L: ^State, value, ctx: rawptr) -> bool
-Userdata_Equal_Proc    :: proc(value, other, ctx: rawptr) -> bool
+Userdata_Get_Proc :: proc(L: ^State, value, ctx: rawptr, key: string) -> bool
+Userdata_Set_Proc :: proc(L: ^State, value, ctx: rawptr, key: string, value_index: int) -> bool
+Userdata_Namecall_Proc :: proc(
+	L: ^State,
+	value, ctx: rawptr,
+	method: string,
+) -> (
+	result_count: i32,
+	handled: bool,
+)
+Userdata_String_Proc :: proc(value, ctx: rawptr) -> string
+Userdata_Destroy_Proc :: proc(value, ctx: rawptr)
+Userdata_Binary_Proc :: proc(L: ^State, value, ctx: rawptr, self_index, other_index: int) -> bool
+Userdata_Unary_Proc :: proc(L: ^State, value, ctx: rawptr) -> bool
+Userdata_Equal_Proc :: proc(value, other, ctx: rawptr) -> bool
 
 Userdata_Binding :: struct {
-	name:     string,
-	tag:      i32,
-	ctx:      rawptr,
-	owner:    rawptr,
-	get:      Userdata_Get_Proc,
-	set:      Userdata_Set_Proc,
-	namecall: Userdata_Namecall_Proc,
-	string:   Userdata_String_Proc,
-	destroy:  Userdata_Destroy_Proc,
-	add:      Userdata_Binary_Proc,
-	subtract: Userdata_Binary_Proc,
-	multiply: Userdata_Binary_Proc,
-	divide:   Userdata_Binary_Proc,
-	negate:   Userdata_Unary_Proc,
-	equal:    Userdata_Equal_Proc,
+	name:         string,
+	tag:          i32,
+	ctx:          rawptr,
+	owner:        rawptr,
+	get:          Userdata_Get_Proc,
+	set:          Userdata_Set_Proc,
+	namecall:     Userdata_Namecall_Proc,
+	string:       Userdata_String_Proc,
+	destroy:      Userdata_Destroy_Proc,
+	add:          Userdata_Binary_Proc,
+	subtract:     Userdata_Binary_Proc,
+	multiply:     Userdata_Binary_Proc,
+	divide:       Userdata_Binary_Proc,
+	negate:       Userdata_Unary_Proc,
+	equal:        Userdata_Equal_Proc,
+	track_values: bool,
+	values:       [dynamic]^Userdata_Header,
 }
 
 Userdata_Header :: struct {
@@ -89,13 +96,13 @@ Struct_Field_Kind :: enum {
 }
 
 Struct_Field :: struct {
-	name:          string,
-	kind:          Struct_Field_Kind,
-	number:        f64,
-	integer:       i64,
-	boolean:       bool,
-	string_value:  string,
-	function:      CFunction,
+	name:         string,
+	kind:         Struct_Field_Kind,
+	number:       f64,
+	integer:      i64,
+	boolean:      bool,
+	string_value: string,
+	function:     CFunction,
 }
 
 New :: proc(open_libraries := true) -> VM {
@@ -105,20 +112,20 @@ New :: proc(open_libraries := true) -> VM {
 	}
 
 	if open_libraries {
-		// Open standard Lua libraries
+
 		luauh.luaL_openlibs(L)
-		// Remove the os library since we have DateTime datatype in the engine
-		// We use lua_setfield with LUA_GLOBALSINDEX since lua_setglobal doesn't exist in bindings
+
+
 		luauh.lua_pushnil(L)
 		luauh.lua_setfield(L, luauh.LUA_GLOBALSINDEX, "os")
 	}
 
-	return VM{
+	return VM {
 		L = L,
-		compile_options = Compile_Options{
+		compile_options = Compile_Options {
 			optimization_level = 1,
-			debug_level        = 1,
-			vector_precision = 1
+			debug_level = 1,
+			vector_precision = 1,
 		},
 	}
 }
@@ -148,11 +155,7 @@ set_global_from_stack :: proc(vm: ^VM, name: string) {
 	c_name := strings.clone_to_cstring(name)
 	defer delete(c_name)
 
-	luauh.lua_setfield(
-		vm.L,
-		luauh.LUA_GLOBALSINDEX,
-		c_name,
-	)
+	luauh.lua_setfield(vm.L, luauh.LUA_GLOBALSINDEX, c_name)
 }
 
 SetGlobalFromStack :: proc(vm: ^VM, name: string) {
@@ -195,23 +198,13 @@ push_struct_field :: proc(L: ^State, field: Struct_Field) {
 		value := strings.clone_to_cstring(field.string_value)
 		defer delete(value)
 
-		luauh.lua_pushlstring(
-			L,
-			value,
-			uintptr(len(field.string_value)),
-		)
+		luauh.lua_pushlstring(L, value, uintptr(len(field.string_value)))
 
 	case .Function:
 		debug_name := strings.clone_to_cstring(field.name)
 		defer delete(debug_name)
 
-		luauh.lua_pushcclosurek(
-			L,
-			field.function,
-			debug_name,
-			0,
-			nil,
-		)
+		luauh.lua_pushcclosurek(L, field.function, debug_name, 0, nil)
 	}
 }
 
@@ -253,50 +246,27 @@ AddGlobal_String :: proc(vm: ^VM, name: string, value: string) {
 }
 
 Field_Number :: proc(name: string, value: f64) -> Struct_Field {
-	return Struct_Field{
-		name   = name,
-		kind   = .Number,
-		number = value,
-	}
+	return Struct_Field{name = name, kind = .Number, number = value}
 }
 
 Field_Integer :: proc(name: string, value: int) -> Struct_Field {
-	return Struct_Field{
-		name    = name,
-		kind    = .Integer,
-		integer = i64(value),
-	}
+	return Struct_Field{name = name, kind = .Integer, integer = i64(value)}
 }
 
 Field_Boolean :: proc(name: string, value: bool) -> Struct_Field {
-	return Struct_Field{
-		name    = name,
-		kind    = .Boolean,
-		boolean = value,
-	}
+	return Struct_Field{name = name, kind = .Boolean, boolean = value}
 }
 
 Field_String :: proc(name: string, value: string) -> Struct_Field {
-	return Struct_Field{
-		name         = name,
-		kind         = .String,
-		string_value = value,
-	}
+	return Struct_Field{name = name, kind = .String, string_value = value}
 }
 
 Field_Function :: proc(name: string, value: CFunction) -> Struct_Field {
-	return Struct_Field{
-		name     = name,
-		kind     = .Function,
-		function = value,
-	}
+	return Struct_Field{name = name, kind = .Function, function = value}
 }
 
 Field_Nil :: proc(name: string) -> Struct_Field {
-	return Struct_Field{
-		name = name,
-		kind = .Nil,
-	}
+	return Struct_Field{name = name, kind = .Nil}
 }
 
 Field :: proc {
@@ -315,24 +285,14 @@ AddGlobal_Nil :: proc(vm: ^VM, name: string) {
 	set_global_from_stack(vm, name)
 }
 
-AddGlobal_Function :: proc(
-	vm: ^VM,
-	name: string,
-	fn: CFunction,
-) {
+AddGlobal_Function :: proc(vm: ^VM, name: string, fn: CFunction) {
 	assert_open(vm)
 
 	c_name := strings.clone_to_cstring(name)
 	defer delete(c_name)
 
-	// lua_pushcfunction is also a C macro.
-	luauh.lua_pushcclosurek(
-		vm.L,
-		fn,
-		c_name,
-		0,
-		nil,
-	)
+
+	luauh.lua_pushcclosurek(vm.L, fn, c_name, 0, nil)
 
 	set_global_from_stack(vm, name)
 }
@@ -353,30 +313,18 @@ RemoveGlobal :: proc(vm: ^VM, name: string) {
 }
 
 
-
-GetGlobalNumber :: proc(
-	vm: ^VM,
-	name: string,
-) -> (value: f64, ok: bool) {
+GetGlobalNumber :: proc(vm: ^VM, name: string) -> (value: f64, ok: bool) {
 	assert_open(vm)
 
 	c_name := strings.clone_to_cstring(name)
 	defer delete(c_name)
 
-	luauh.lua_getfield(
-		vm.L,
-		luauh.LUA_GLOBALSINDEX,
-		c_name,
-	)
+	luauh.lua_getfield(vm.L, luauh.LUA_GLOBALSINDEX, c_name)
 
 	is_number: i32
-	value = luauh.lua_tonumberx(
-		vm.L,
-		-1,
-		&is_number,
-	)
+	value = luauh.lua_tonumberx(vm.L, -1, &is_number)
 
-	// pop value
+
 	luauh.lua_settop(vm.L, -2)
 
 	return value, is_number != 0
@@ -427,41 +375,22 @@ SetVectorPrecision :: proc(vm: ^VM, use_f64: bool) {
 ArgString :: proc(L: ^State, index: int) -> string {
 	size: uintptr
 
-	ptr := luauh.luaL_checklstring(
-		L,
-		i32(index),
-		&size,
-	)
+	ptr := luauh.luaL_checklstring(L, i32(index), &size)
 
-	return strings.string_from_ptr(
-		cast(^u8)ptr,
-		int(size),
-	)
+	return strings.string_from_ptr(cast(^u8)ptr, int(size))
 }
 
-AddStruct :: proc(
-	vm: ^VM,
-	name: string,
-	fields: ..Struct_Field,
-) {
+AddStruct :: proc(vm: ^VM, name: string, fields: ..Struct_Field) {
 	assert_open(vm)
 
-	luauh.lua_createtable(
-		vm.L,
-		0,
-		i32(len(fields)),
-	)
+	luauh.lua_createtable(vm.L, 0, i32(len(fields)))
 
 	for field in fields {
 		push_struct_field(vm.L, field)
 
 		field_name := strings.clone_to_cstring(field.name)
 
-		luauh.lua_setfield(
-			vm.L,
-			-2,
-			field_name,
-		)
+		luauh.lua_setfield(vm.L, -2, field_name)
 
 		delete(field_name)
 	}
@@ -493,6 +422,15 @@ PushString :: proc(L: ^State, value: string) {
 	luauh.lua_pushstring(L, c_value)
 }
 
+PushBytes :: proc(L: ^State, value: []u8) {
+	if len(value) == 0 {
+		luauh.lua_pushstring(L, "")
+		return
+	}
+
+	luauh.lua_pushlstring(L, cstring(raw_data(value)), uintptr(len(value)))
+}
+
 PushNil :: proc(L: ^State) {
 	luauh.lua_pushnil(L)
 }
@@ -505,6 +443,11 @@ PushValue :: proc(L: ^State, index: int) {
 	luauh.lua_pushvalue(L, i32(index))
 }
 
+
+Remove :: proc(L: ^State, index: int) {
+	luauh.lua_remove(L, i32(index))
+}
+
 PushLightUserdata :: proc(L: ^State, value: rawptr, tag: i32 = 0) {
 	luauh.lua_pushlightuserdatatagged(L, value, tag)
 }
@@ -515,27 +458,21 @@ PushFunction :: proc(L: ^State, name: string, function: CFunction, upvalue_count
 	luauh.lua_pushcclosurek(L, function, c_name, i32(upvalue_count), nil)
 }
 
-// PushFunctionWithContinuation installs a C closure that is allowed to yield
-// across its own call boundary. The continuation is invoked by Luau after the
-// protected call finishes (or is resumed after a yield) so the C function can
-// complete its bookkeeping and produce its results.
-//
-// This is what makes runtime operations such as `require` able to suspend the
-// calling script (task.wait inside a ModuleScript) without blocking the host.
+
 PushFunctionWithContinuation :: proc(
 	L: ^State,
 	name: string,
 	function: CFunction,
 	continuation: luauh.lua_Continuation,
 	upvalue_count: int = 0,
-	) {
+) {
 	c_name := strings.clone_to_cstring(name)
 	defer delete(c_name)
 	luauh.lua_pushcclosurek(L, function, c_name, i32(upvalue_count), continuation)
 }
 
 UpvalueIndex :: proc(index: int) -> i32 {
-	return luauh.LUA_GLOBALSINDEX-i32(index)
+	return luauh.LUA_GLOBALSINDEX - i32(index)
 }
 
 UpvaluePointer :: proc(L: ^State, index: int = 1) -> rawptr {
@@ -558,7 +495,7 @@ SetStackTop :: proc(L: ^State, index: int) {
 
 Pop :: proc(L: ^State, count: int = 1) {
 	if count > 0 {
-		luauh.lua_settop(L, -i32(count)-1)
+		luauh.lua_settop(L, -i32(count) - 1)
 	}
 }
 
@@ -586,7 +523,13 @@ YieldThread :: proc(L: ^State, result_count: int = 0) -> i32 {
 	return luauh.lua_yield(L, i32(result_count))
 }
 
-ResumeThread :: proc(thread, from: ^State, argument_count: int = 0) -> (finished, yielded: bool, err: string) {
+ResumeThread :: proc(
+	thread, from: ^State,
+	argument_count: int = 0,
+) -> (
+	finished, yielded: bool,
+	err: string,
+) {
 	status := luauh.lua_Status(luauh.lua_resume(thread, from, i32(argument_count)))
 	#partial switch status {
 	case .OK:
@@ -605,9 +548,7 @@ ClearStack :: proc(L: ^State) {
 	luauh.lua_settop(L, 0)
 }
 
-// ResumeThreadTraceback resumes a thread like ResumeThread but captures a Luau
-// traceback before the thread is reset, so script error reporting can show both
-// the failing source location and the call stack.
+
 ResumeThreadTraceback :: proc(
 	thread, from: ^State,
 	argument_count: int = 0,
@@ -632,33 +573,25 @@ ResumeThreadTraceback :: proc(
 }
 
 PushGlobals :: proc(L: ^State) {
-	luauh.lua_pushvalue(
-		L,
-		luauh.LUA_GLOBALSINDEX,
-	)
+	luauh.lua_pushvalue(L, luauh.LUA_GLOBALSINDEX)
 }
 
-SetMetatable :: proc(
+SetMetatable :: proc(L: ^State, index: int) -> bool {
+	return luauh.lua_setmetatable(L, i32(index)) != 0
+}
+
+SetFunctionEnvironment :: proc(L: ^State, function_index: int) -> bool {
+	return luauh.lua_setfenv(L, i32(function_index)) != 0
+}
+
+ProtectedCall :: proc(
 	L: ^State,
-	index: int,
-) -> bool {
-	return luauh.lua_setmetatable(
-		L,
-		i32(index),
-	) != 0
-}
-
-SetFunctionEnvironment :: proc(
-	L: ^State,
-	function_index: int,
-) -> bool {
-	return luauh.lua_setfenv(
-		L,
-		i32(function_index),
-	) != 0
-}
-
-ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> (ok: bool, err: string) {
+	argument_count: int,
+	result_count: int = 0,
+) -> (
+	ok: bool,
+	err: string,
+) {
 	status := luauh.lua_pcall(L, i32(argument_count), i32(result_count), 0)
 	if status == 0 {
 		return true, ""
@@ -669,25 +602,14 @@ ProtectedCall :: proc(L: ^State, argument_count: int, result_count: int = 0) -> 
 	return false, err
 }
 
-// CallYieldableProtected performs a protected call that may yield. It must only
-// be invoked from a C closure that was installed with a continuation (see
-// PushFunctionWithContinuation).
-//
-// The return value mirrors Luau's contract: a negative value (C_CALL_YIELD)
-// means execution yielded and the C function must return that value to
-// propagate the yield; otherwise the value is the continuation's result count.
-CallYieldableProtected :: proc(
-	L: ^State,
-	argument_count: int,
-	result_count: int = 0,
-) -> i32 {
+
+CallYieldableProtected :: proc(L: ^State, argument_count: int, result_count: int = 0) -> i32 {
 	return luauh.lua_pcallyieldable(L, i32(argument_count), i32(result_count), 0)
 }
 
 C_CALL_YIELD :: -1
 
-// DidCallYield reports whether CallYieldableProtected asked the caller to
-// propagate a yield.
+
 DidCallYield :: proc(status: i32) -> bool {
 	return status == C_CALL_YIELD
 }
@@ -787,6 +709,34 @@ IsNumber :: proc(L: ^State, index: int) -> bool {
 
 IsString :: proc(L: ^State, index: int) -> bool {
 	return luauh.lua_isstring(L, i32(index)) != 0
+}
+
+IsBuffer :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Buffer
+}
+
+
+ToBuffer :: proc(L: ^State, index: int) -> ([]u8, bool) {
+	if TypeOf(L, index) != .Buffer {
+		return nil, false
+	}
+	size: uintptr
+	ptr := luauh.lua_tobuffer(L, i32(index), &size)
+	if ptr == nil || size == 0 {
+		return nil, false
+	}
+
+
+	raw := ([^]u8)(ptr)
+	return raw[:int(size)], true
+}
+
+ArgBuffer :: proc(L: ^State, index: int) -> []u8 {
+	if data, ok := ToBuffer(L, index); ok {
+		return data
+	}
+	_ = RaiseError(L, "expected a buffer")
+	return nil
 }
 
 IsTable :: proc(L: ^State, index: int) -> bool {
@@ -898,12 +848,12 @@ ReleaseValue :: proc(L: ^State, reference: i32) {
 }
 
 RaiseError :: proc(L: ^State, message: string) -> i32 {
-    c_message := strings.clone_to_cstring(message, context.temp_allocator)
-    return luauh.luaL_error(L, c_message)
+	c_message := strings.clone_to_cstring(message, context.temp_allocator)
+	return luauh.luaL_error(L, c_message)
 }
 
 RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {
-	if message == nil { return RaiseError(L, "Unknown Luau error") }
+	if message == nil {return RaiseError(L, "Unknown Luau error")}
 	luauh.lua_pushlstring(L, cast(cstring)raw_data(message^), uintptr(len(message^)))
 	delete(message^)
 	message^ = ""
@@ -911,22 +861,19 @@ RaiseOwnedError :: proc(L: ^State, message: ^string) -> i32 {
 	return 0
 }
 
-// StackError takes ownership of the error value on top of the stack, converts
-// it to an owned string and pops it. The caller owns the returned string.
+
 StackError :: proc(L: ^State) -> string {
 	message := get_stack_error(L)
 	Pop(L)
 	return message
 }
 
-// Reraise raises the value currently on top of the stack as an error. Used by
-// continuations that receive a non-zero status from a yieldable call.
+
 Reraise :: proc(L: ^State) -> i32 {
 	return luauh.lua_error(L)
 }
 
-// Traceback builds an owned Luau traceback for `message`, starting at `level`.
-// A new string is pushed for the duration of the call and popped before return.
+
 Traceback :: proc(L: ^State, message: string, level: i32 = 1) -> string {
 	c_message := strings.clone_to_cstring(message)
 	defer delete(c_message)
@@ -944,8 +891,7 @@ Traceback :: proc(L: ^State, message: string, level: i32 = 1) -> string {
 	return result
 }
 
-// Thread_Status mirrors lua_CoStatus so engine code does not need to reach into
-// the low level bindings.
+
 Thread_Status :: enum i32 {
 	Running   = 0,
 	Suspended = 1,
@@ -1014,10 +960,7 @@ IsUserdataType :: proc(L: ^State, index: int, binding: ^Userdata_Binding) -> boo
 	return binding != nil && UserdataBindingOf(L, index) == binding
 }
 
-// A destroyed Instance keeps its userdata shell but with a detached value so
-// stale references can never read freed memory. Any access through such a
-// shell has to report the real cause instead of whatever error the binding
-// would raise for a nil value.
+
 userdata_detached :: proc(L: ^State, header: ^Userdata_Header) -> bool {
 	if header == nil || header.value != nil {
 		return false
@@ -1056,7 +999,8 @@ userdata_newindex :: proc "c" (L: ^State) -> i32 {
 	}
 
 	key := ArgString(L, 2)
-	if header.binding.set != nil && header.binding.set(L, header.value, header.binding.ctx, key, 3) {
+	if header.binding.set != nil &&
+	   header.binding.set(L, header.value, header.binding.ctx, key, 3) {
 		return 0
 	}
 
@@ -1081,7 +1025,12 @@ userdata_namecall :: proc "c" (L: ^State) -> i32 {
 	method := string(method_value)
 
 	if header.binding.namecall != nil {
-		result_count, handled := header.binding.namecall(L, header.value, header.binding.ctx, method)
+		result_count, handled := header.binding.namecall(
+			L,
+			header.value,
+			header.binding.ctx,
+			method,
+		)
 		if handled {
 			return result_count
 		}
@@ -1119,7 +1068,9 @@ userdata_binary :: proc(L: ^State, operation: Userdata_Binary_Proc) -> i32 {
 		header = userdata_header(L, 2)
 		self_index, other_index = 2, 1
 	}
-	if header == nil || operation == nil || !operation(L, header.value, header.binding.ctx, self_index, other_index) {
+	if header == nil ||
+	   operation == nil ||
+	   !operation(L, header.value, header.binding.ctx, self_index, other_index) {
 		return RaiseError(L, "unsupported datatype operation")
 	}
 	return 1
@@ -1164,7 +1115,9 @@ userdata_divide :: proc "c" (L: ^State) -> i32 {
 userdata_negate :: proc "c" (L: ^State) -> i32 {
 	context = runtime.default_context()
 	header := userdata_header(L, 1)
-	if header == nil || header.binding.negate == nil || !header.binding.negate(L, header.value, header.binding.ctx) {
+	if header == nil ||
+	   header.binding.negate == nil ||
+	   !header.binding.negate(L, header.value, header.binding.ctx) {
 		return RaiseError(L, "unsupported datatype operation")
 	}
 	return 1
@@ -1201,10 +1154,30 @@ userdata_tostring :: proc "c" (L: ^State) -> i32 {
 userdata_destroy :: proc "c" (L: ^State, userdata: rawptr) {
 	context = runtime.default_context()
 	header := cast(^Userdata_Header)userdata
-	if header != nil && header.binding != nil && header.binding.destroy != nil && header.value != nil {
+	if header != nil && header.binding != nil && header.binding.track_values {
+		for entry, index in header.binding.values {
+			if entry == header {ordered_remove(&header.binding.values, index); break}
+		}
+	}
+	if header != nil &&
+	   header.binding != nil &&
+	   header.binding.destroy != nil &&
+	   header.value != nil {
 		header.binding.destroy(header.value, header.binding.ctx)
 		header.value = nil
 	}
+}
+
+
+DetachBinding :: proc(binding: ^Userdata_Binding) {
+	for header in binding.values {
+		if header.value != nil &&
+		   binding.destroy != nil {binding.destroy(header.value, binding.ctx)}
+		header.value = nil
+		header.binding = nil
+	}
+	delete(binding.values)
+	binding.values = nil
 }
 
 ensure_userdata_support :: proc(vm: ^VM, binding: ^Userdata_Binding) {
@@ -1274,10 +1247,11 @@ PushUserdata :: proc(vm: ^VM, value: rawptr, binding: ^Userdata_Binding) {
 		size_of(Userdata_Header),
 		tag,
 	)
-	header^ = Userdata_Header{
+	header^ = Userdata_Header {
 		value   = value,
 		binding = binding,
 	}
+	if binding.track_values {append(&binding.values, header)}
 }
 
 LoadSource :: proc(
@@ -1285,7 +1259,10 @@ LoadSource :: proc(
 	L: ^State,
 	source: string,
 	chunk_name: string = "Kinemium",
-) -> (ok: bool, err: string) {
+) -> (
+	ok: bool,
+	err: string,
+) {
 	assert_open(vm)
 	assert(L != nil)
 
@@ -1297,30 +1274,24 @@ LoadSource :: proc(
 
 	bytecode_size: uintptr
 
-    options := luauh.lua_CompileOptions{
-        optimizationLevel = vm.compile_options.optimization_level,
-        debugLevel        = vm.compile_options.debug_level,
-        typeInfoLevel     = vm.compile_options.type_info_level,
-        coverageLevel     = vm.compile_options.coverage_level,
-        vectorPrecision   = vm.compile_options.vector_precision,
+	options := luauh.lua_CompileOptions {
+		optimizationLevel         = vm.compile_options.optimization_level,
+		debugLevel                = vm.compile_options.debug_level,
+		typeInfoLevel             = vm.compile_options.type_info_level,
+		coverageLevel             = vm.compile_options.coverage_level,
+		vectorPrecision           = vm.compile_options.vector_precision,
+		vectorLib                 = nil,
+		vectorCtor                = nil,
+		vectorType                = nil,
+		mutableGlobals            = nil,
+		userdataTypes             = nil,
+		librariesWithKnownMembers = nil,
+		libraryMemberTypeCb       = nil,
+		libraryMemberConstantCb   = nil,
+		disabledBuiltins          = nil,
+	}
 
-        vectorLib                = nil,
-        vectorCtor               = nil,
-        vectorType               = nil,
-        mutableGlobals           = nil,
-        userdataTypes            = nil,
-        librariesWithKnownMembers = nil,
-        libraryMemberTypeCb      = nil,
-        libraryMemberConstantCb  = nil,
-        disabledBuiltins         = nil,
-    }
-
-    bytecode := luauh.luau_compile(
-        c_source,
-        uintptr(len(source)),
-        &options,
-        &bytecode_size,
-    )
+	bytecode := luauh.luau_compile(c_source, uintptr(len(source)), &options, &bytecode_size)
 
 	if bytecode == nil {
 		return false, strings.clone("luau_compile returned nil")
@@ -1328,13 +1299,7 @@ LoadSource :: proc(
 
 	defer luauh.luau_free(cast(rawptr)bytecode)
 
-	status := luauh.luau_load(
-		L,
-		c_chunk,
-		bytecode,
-		bytecode_size,
-		0,
-	)
+	status := luauh.luau_load(L, c_chunk, bytecode, bytecode_size, 0)
 
 	if status != 0 {
 		err = get_stack_error(L)
@@ -1344,11 +1309,7 @@ LoadSource :: proc(
 	return true, ""
 }
 
-Run :: proc(
-	vm: ^VM,
-	source: string,
-	chunk_name: string = "Kinemium",
-) -> (ok: bool, err: string) {
+Run :: proc(vm: ^VM, source: string, chunk_name: string = "Kinemium") -> (ok: bool, err: string) {
 	assert_open(vm)
 
 	ok, err = LoadSource(vm, vm.L, source, chunk_name)
@@ -1356,12 +1317,7 @@ Run :: proc(
 		return
 	}
 
-	status := luauh.lua_pcall(
-		vm.L,
-		0,
-		0,
-		0,
-	)
+	status := luauh.lua_pcall(vm.L, 0, 0, 0)
 
 	if status != 0 {
 		err = get_stack_error(vm.L)
@@ -1375,18 +1331,11 @@ Run :: proc(
 get_stack_error :: proc(L: ^State) -> string {
 	size: uintptr
 
-	ptr := luauh.lua_tolstring(
-		L,
-		-1,
-		&size,
-	)
+	ptr := luauh.lua_tolstring(L, -1, &size)
 
 	if ptr == nil {
 		return strings.clone("Unknown Luau error")
 	}
 
-	return strings.clone_from_ptr(
-		cast(^u8)ptr,
-		int(size),
-	)
+	return strings.clone_from_ptr(cast(^u8)ptr, int(size))
 }

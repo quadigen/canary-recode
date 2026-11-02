@@ -2,17 +2,18 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
-import "core:time"
 import windows "core:sys/windows"
+import "core:time"
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import luauh "../src/engine/vm/luauh"
+import sandbox "../src/sandboxed"
 
 PROCESS_MEMORY_COUNTERS :: struct {
 	cb:                         windows.DWORD,
@@ -31,11 +32,7 @@ foreign import psapi "system:Psapi.lib"
 
 @(default_calling_convention = "system")
 foreign psapi {
-	GetProcessMemoryInfo :: proc(
-		hProcess: windows.HANDLE,
-		ppsmemCounters: ^PROCESS_MEMORY_COUNTERS,
-		cb: windows.DWORD,
-	) -> windows.BOOL ---
+	GetProcessMemoryInfo :: proc(hProcess: windows.HANDLE, ppsmemCounters: ^PROCESS_MEMORY_COUNTERS, cb: windows.DWORD) -> windows.BOOL ---
 }
 
 process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
@@ -44,22 +41,19 @@ process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
 	if GetProcessMemoryInfo(windows.GetCurrentProcess(), &counters, counters.cb) == false {
 		return 0, 0
 	}
-	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0), f64(counters.PagefileUsage) / (1024.0 * 1024.0)
+	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0),
+		f64(counters.PagefileUsage) / (1024.0 * 1024.0)
 }
 
 LEAK_PROBE_MODE :: "LEAK_PROBE_MODE"
 
-EDITOR_SOURCE_CANDIDATES :: []string{
+EDITOR_SOURCE_CANDIDATES :: []string {
 	"C:/Users/devco/Documents/kinemium-editor/internal",
 	"../kinemium-editor/internal",
 	"../../kinemium-editor/internal",
 }
 
-// Module ablation driven by env var (no rebuild needed between configs):
-//   LEAK_PROBE_MODE=none   -> pack only editor_ui (no editor windows at all)
-//   LEAK_PROBE_MODE=noexpl -> exclude explorer + viewport
-//   LEAK_PROBE_MODE=noinsp -> exclude inspector
-//   LEAK_PROBE_MODE=full   -> all modules
+
 pack_mode :: proc(archive_path: string) -> bool {
 	mode_buf: [64]u8
 	mode := os.get_env(mode_buf[:], LEAK_PROBE_MODE)
@@ -78,11 +72,8 @@ pack_mode :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
+	walker := os.walker_create(source_dir)
+	defer os.walker_destroy(&walker)
 
 	archive, created := kineffi.Zip_Create(archive_path)
 	if !created {
@@ -90,35 +81,51 @@ pack_mode :: proc(archive_path: string) -> bool {
 	}
 
 	added := 0
-	for entry in entries {
+	for entry in os.walker_walk(&walker) {
 		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
 			continue
 		}
 
-		name := entry.name
+		relative, rel_err := filepath.rel(source_dir, entry.fullpath, context.allocator)
+		if rel_err != nil {
+			continue
+		}
+
+		zip_relative, replaced := strings.replace_all(relative, "\\", "/", context.allocator)
+		if !replaced {
+			zip_relative = strings.clone(relative, context.allocator)
+		}
+		delete(relative, context.allocator)
+
+		is_component := strings.has_prefix(zip_relative, "Components/")
 		switch mode {
 		case "none":
-			if name != "editor_ui.luau" {
+			if zip_relative != "editor_ui.luau" && !is_component {
+				delete(zip_relative, context.allocator)
 				continue
 			}
 		case "noexpl":
-			if name == "explorer.luau" || name == "viewport.luau" {
+			if !is_component && (entry.name == "explorer.luau" || entry.name == "viewport.luau") {
+				delete(zip_relative, context.allocator)
 				continue
 			}
 		case "noinsp":
-			if name == "inspector.luau" {
+			if !is_component && entry.name == "inspector.luau" {
+				delete(zip_relative, context.allocator)
 				continue
 			}
 		}
 
 		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
 		if read_err != nil {
+			delete(zip_relative, context.allocator)
 			continue
 		}
 
-		module_path := strings.concatenate({"internal/", entry.name})
+		module_path := strings.concatenate({"internal/", zip_relative}, context.allocator)
 		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
+		delete(module_path, context.allocator)
+		delete(zip_relative, context.allocator)
 		delete(data, context.allocator)
 
 		if !stored {
@@ -142,13 +149,7 @@ pack_mode :: proc(archive_path: string) -> bool {
 snapshot :: proc(label: string, start: time.Time) {
 	elapsed := time.duration_seconds(time.since(start))
 	ws, priv := process_memory_mb()
-	fmt.printf(
-		"[LeakProbe] %-24s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n",
-		label,
-		ws,
-		priv,
-		elapsed,
-	)
+	fmt.printf("[LeakProbe] %-24s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n", label, ws, priv, elapsed)
 }
 
 run :: proc(v: ^vm.VM, source: string, chunk: string) {
@@ -158,7 +159,13 @@ run :: proc(v: ^vm.VM, source: string, chunk: string) {
 	}
 }
 
-frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.KineSkiaSurface, w, h: i32, n: int) {
+frames :: proc(
+	environment: ^engine_runtime.Environment,
+	v: ^vm.VM,
+	s: ^kineffi.KineSkiaSurface,
+	w, h: i32,
+	n: int,
+) {
 	for _ in 0 ..< n {
 		engine_runtime.Environment_Update_Step(environment, v, 1.0 / 60.0)
 		engine_runtime.Environment_Render_2D(environment, v, s, w, h, 1.0 / 60.0)
@@ -224,7 +231,7 @@ main :: proc() {
 
 	run(&script_vm, SEL_BOOT, "probe7_boot")
 
-	// Selection churn through whatever editor reaction paths exist in this config.
+
 	for round in 0 ..< 3 {
 		start := time.now()
 		for _ in 0 ..< 30 {
@@ -235,7 +242,7 @@ main :: proc() {
 		snapshot(fmt.tprintf("sel r%d", round), start)
 	}
 
-	// Log-print churn (probe1 showed ~15-19MB/round with output.luau present).
+
 	for round in 0 ..< 3 {
 		start := time.now()
 		for _ in 0 ..< 30 {

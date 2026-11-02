@@ -1,13 +1,17 @@
 #+build !js
+// wire:service
 package services
 
-// wire:service global="Project"
+import "vendor:sdl3"
+
 
 import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import fsutil "../fsutil"
 import vm "../vm"
+import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -71,6 +75,18 @@ Project_Name_Is_Valid :: proc(name: string) -> bool {
 	return true
 }
 
+Project_CreateFolders :: proc(project: KinemiumProject) {
+	path := project.path
+
+	fsutil.Make_Directory(strings.concatenate({path, "/assets"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/scripts"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/scripts/client"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/scripts/server"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/assets/replicated"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/assets/server"}))
+	fsutil.Make_Directory(strings.concatenate({path, "/assets/client"}))
+}
+
 Project_Create :: proc(
 	service: ^ProjectService,
 	name: string,
@@ -78,31 +94,51 @@ Project_Create :: proc(
 	description: string = "",
 	icon: string = "",
 ) -> bool {
+	fmt.eprintf(
+		"[Project] CreateProject name=%q folder=%q desc=%q\n",
+		name,
+		folder_path,
+		description,
+	)
 	if !Project_Name_Is_Valid(name) {
+		fmt.eprintf("[Project] create failed: invalid name\n")
 		return false
 	}
 
-	base_path, ok := Project_Normalize_Path(folder_path)
-	if !ok {
-		return false
+	base_path: string
+	base_ok := false
+	if len(folder_path) > 0 {
+		base_path, base_ok = Project_Normalize_Path(folder_path)
+	}
+	if !base_ok {
+		base_path, base_ok = Project_Default_Projects_Dir(context.allocator)
+		fmt.eprintf("[Project] create: using default projects dir %q\n", base_path)
+		if !base_ok {
+			fmt.eprintf("[Project] create failed: no default projects dir\n")
+			return false
+		}
 	}
 	defer delete(base_path)
 
-	if err := os.make_directory_all(base_path); err != nil {
+	if err := fsutil.Make_Directory_All(base_path); err != nil {
+		fmt.eprintf("[Project] create failed: mkdir base %q err=%v\n", base_path, err)
 		return false
 	}
 
 	project_path, join_err := os.join_path({base_path, name}, context.allocator)
 	if join_err != nil {
+		fmt.eprintf("[Project] create failed: join path err=%v\n", join_err)
 		return false
 	}
 	defer delete(project_path)
 
 	if os.exists(project_path) {
+		fmt.eprintf("[Project] create failed: project path exists %q\n", project_path)
 		return false
 	}
 
-	if err := os.make_directory_all(project_path); err != nil {
+	if err := fsutil.Make_Directory_All(project_path); err != nil {
+		fmt.eprintf("[Project] create failed: mkdir project %q err=%v\n", project_path, err)
 		return false
 	}
 
@@ -114,11 +150,18 @@ Project_Create :: proc(
 		description    = description,
 	}
 
+	Project_CreateFolders(project)
+
 	if !Project_Add(service, project) {
+		fmt.eprintf("[Project] create failed: Project_Add (registry %q)\n", service.registry_path)
 		return false
 	}
 
-	return Project_Set_Active(service, project_path)
+	if active_ok := Project_Set_Active(service, project_path); !active_ok {
+		fmt.eprintf("[Project] create succeeded but failed to set active\n")
+	}
+	fmt.eprintf("[Project] created project at %q\n", project_path)
+	return true
 }
 
 Project_push_project :: proc(L: ^vm.State, project: ^KinemiumProject) {
@@ -184,12 +227,31 @@ Project_Set_Active :: proc(service: ^ProjectService, path: string) -> bool {
 }
 
 Project_Normalize_Path :: proc(path: string) -> (string, bool) {
+	if len(path) == 0 {
+		return "", false
+	}
+
 	absolute, err := filepath.abs(path)
 	if err != nil {
 		return "", false
 	}
 
 	return absolute, true
+}
+
+Project_Default_Projects_Dir :: proc(allocator := context.allocator) -> (string, bool) {
+	data_dir, err := os.user_data_dir(allocator)
+	if err != nil {
+		return "", false
+	}
+	defer delete(data_dir, allocator)
+
+	base, err2 := os.join_path({data_dir, "Kinemium", "projects"}, allocator)
+	if err2 != nil {
+		return "", false
+	}
+
+	return base, true
 }
 
 Project_Find_By_Path :: proc(service: ^ProjectService, path: string) -> (int, bool) {
@@ -208,6 +270,148 @@ Project_Find_By_Path :: proc(service: ^ProjectService, path: string) -> (int, bo
 	return -1, false
 }
 
+Project_Separator_Index :: proc(path: string) -> int {
+	index := strings.last_index(path, "/")
+
+	if backslash := strings.last_index(path, "\\"); backslash > index {
+		index = backslash
+	}
+
+	return index
+}
+
+Project_Entry_Name :: proc(path: string) -> string {
+	if index := Project_Separator_Index(path); index >= 0 {
+		return path[index + 1:]
+	}
+
+	return path
+}
+
+Project_Entry_Parent :: proc(path: string) -> (string, bool) {
+	index := Project_Separator_Index(path)
+
+	if index <= 0 {
+		return "", false
+	}
+
+	return path[:index], true
+}
+
+Project_Join_Path :: proc(parent, name: string) -> (string, bool) {
+	if len(parent) == 0 || len(name) == 0 {
+		return "", false
+	}
+
+	path, err := os.join_path({parent, name}, context.allocator)
+	if err != nil {
+		return "", false
+	}
+
+	return path, true
+}
+
+Project_Is_Same_Or_Descendant :: proc(path, ancestor: string) -> bool {
+	if len(path) == 0 || len(ancestor) == 0 {
+		return false
+	}
+
+	if path == ancestor {
+		return true
+	}
+
+	for separator in ([]string{"/", "\\"}) {
+		probe := strings.concatenate({ancestor, separator})
+		defer delete(probe)
+
+		if strings.has_prefix(path, probe) {
+			return true
+		}
+	}
+
+	return false
+}
+
+Project_Unique_Child_Path :: proc(parent, name: string) -> (string, bool) {
+	if len(parent) == 0 || len(name) == 0 {
+		return "", false
+	}
+
+	extension := filepath.ext(name)
+	stem := name[:len(name) - len(extension)]
+
+	candidate := strings.clone(name)
+	defer delete(candidate)
+
+	for index := 2;; index += 1 {
+		path, ok := Project_Join_Path(parent, candidate)
+		if !ok {
+			return "", false
+		}
+		defer delete(path)
+
+		if !os.exists(path) {
+			return strings.clone(path), true
+		}
+
+
+		delete(candidate)
+		candidate = fmt.aprintf("%s (%d)%s", stem, index, extension)
+	}
+
+	return "", false
+}
+
+Project_Copy_File_Bytes :: proc(from, to: string) -> bool {
+	data, err := os.read_entire_file(from, context.allocator)
+	if err != nil {
+		return false
+	}
+	defer delete(data, context.allocator)
+
+	return fsutil.Write_File(to, data) == nil
+}
+
+Project_Copy_Entry :: proc(from, to: string) -> bool {
+	if os.is_directory(from) {
+		if err := fsutil.Make_Directory_All(to); err != nil {
+			return false
+		}
+
+		dir, open_err := os.open(from)
+		if open_err != nil {
+			return false
+		}
+		defer os.close(dir)
+
+		entries, read_err := os.read_dir(dir, -1, context.allocator)
+		if read_err != nil {
+			return false
+		}
+		defer os.file_info_slice_delete(entries, context.allocator)
+
+		for entry in entries {
+			child_to, ok := Project_Join_Path(to, entry.name)
+			if !ok {
+				return false
+			}
+			defer delete(child_to)
+
+			if !Project_Copy_Entry(entry.fullpath, child_to) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	return Project_Copy_File_Bytes(from, to)
+}
+
+Project_Is_Case_Only_Rename :: proc(path, destination: string) -> bool {
+	return os.exists(destination) && strings.equal_fold(destination, path)
+}
+
 Project_Registry_Path :: proc() -> (string, bool) {
 	data_dir, err := os.user_data_dir(context.allocator)
 	if err != nil {
@@ -222,7 +426,7 @@ Project_Registry_Path :: proc() -> (string, bool) {
 	defer delete(kinemium_dir)
 
 	if !os.exists(kinemium_dir) {
-		if err := os.make_directory_all(kinemium_dir); err != nil {
+		if err := fsutil.Make_Directory_All(kinemium_dir); err != nil {
 			return "", false
 		}
 	}
@@ -495,7 +699,13 @@ Project_get :: proc(
 ) -> bool {
 	service := cast(^ProjectService)object
 	switch key {
-	case "GetProjects", "GetActiveProject", "SetActiveProject", "CreateProject":
+	case "GetProjects",
+	     "GetActiveProject",
+	     "SetActiveProject",
+	     "CreateProject",
+	     "GetProjectEntries",
+	     "PathExists",
+	     "IsDirectory":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return false
 		}
@@ -528,11 +738,6 @@ Project_namecall :: proc(
 		return 1, true
 
 	case "GetActiveProject":
-		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
-			return vm.RaiseError(L, "Project:GetActiveProject() requires Internals capability"),
-				true
-		}
-
 		project := Project_Get_Active(service)
 
 		if project == nil {
@@ -574,8 +779,73 @@ Project_namecall :: proc(
 
 		vm.PushBoolean(L, true)
 		return 1, true
+	case "GetProjectEntries":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Project:GetProjectEntries() requires Internals capability"),
+				true
+		}
+
+		path := vm.ArgString(L, 2)
+
+		dir, open_err := os.open(path)
+		if open_err != nil {
+			return vm.RaiseError(L, "Project:GetProjectEntries() failed to open directory"), true
+		}
+		defer os.close(dir)
+
+		entries, read_err := os.read_dir(dir, -1, context.allocator)
+		if read_err != nil {
+			return vm.RaiseError(L, "Project:GetProjectEntries() failed to read directory"), true
+		}
+		defer os.file_info_slice_delete(entries, context.allocator)
+
+		vm.NewTable(L, len(entries), 0)
+
+		for entry, i in entries {
+			vm.NewTable(L, 0, 4)
+
+			vm.PushString(L, entry.name)
+			vm.SetField(L, -2, "Name")
+
+			vm.PushString(L, entry.fullpath)
+			vm.SetField(L, -2, "Path")
+
+			type_name: string
+			#partial switch entry.type {
+			case .Directory:
+				type_name = "Directory"
+			case .Regular:
+				type_name = "File"
+			case .Symlink:
+				type_name = "Symlink"
+			case:
+				type_name = "Other"
+			}
+			vm.PushString(L, type_name)
+			vm.SetField(L, -2, "Type")
+
+			vm.SetArrayValue(L, -2, i + 1)
+		}
+
+		return 1, true
+	case "CopyPathWindow":
+		path := vm.ArgString(L, 2)
+
+		text := strings.clone_to_cstring(path)
+		sdl3.SetClipboardText(text)
+		delete(text)
 	}
 	return 0, false
+}
+
+Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) {
+	current := Project_Get_Active(service)
+	ExportService := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
+	Path := current.path
+	File := "/autosave.kine"
+	final := strings.concatenate({Path, File})
+
+	export_datamodel_to_file(ExportService, L, final)
 }
 
 Register_Project_Class :: proc(registry: ^classes.Registry) {

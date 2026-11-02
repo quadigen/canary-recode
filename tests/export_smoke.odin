@@ -1,17 +1,17 @@
 package main
 
-import "core:fmt"
-import "core:os"
-import "core:path/filepath"
-import "core:strings"
-import "core:time"
-import enet "vendor:ENet"
 import classes "../src/engine/classes"
 import engine_runtime "../src/engine/runtime"
 import serializer "../src/engine/serializer"
 import services "../src/engine/services"
 import target "../src/engine/target"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:os"
+import "core:path/filepath"
+import "core:strings"
+import "core:time"
+import enet "vendor:ENet"
 
 enet_connect_ok :: proc(port: u16) -> bool {
 	if enet.initialize() != 0 {
@@ -23,7 +23,9 @@ enet_connect_ok :: proc(port: u16) -> bool {
 		return false
 	}
 	defer enet.host_destroy(host)
-	endpoint := enet.Address{port = port}
+	endpoint := enet.Address {
+		port = port,
+	}
 	name := strings.clone_to_cstring("127.0.0.1")
 	defer delete(name)
 	if enet.address_set_host(&endpoint, name) != 0 {
@@ -74,12 +76,16 @@ main :: proc() {
 	serializer.Error_Delete(&export_err)
 	assert(serializer.Error_Is_None(export_err), "the map should export")
 
-	map_bytes, map_ok := os.read_entire_file_from_path("build/export-smoke.kine", context.allocator)
+	map_bytes, map_ok := os.read_entire_file_from_path(
+		"build/export-smoke.kine",
+		context.allocator,
+	)
 	assert(map_ok == nil && len(map_bytes) > 0)
 	defer delete(map_bytes)
 
 	ok, message := services.ExportToExecutable(
 		services.Template_Kind.Server,
+		services.Template_Host_Platform(),
 		"build/export-smoke-export.exe",
 		target.Mode.Server,
 		"127.0.0.1",
@@ -91,23 +97,27 @@ main :: proc() {
 	defer delete(message)
 	assert(os.is_file("build/export-smoke-export.exe"))
 
-	server, start_err := os.process_start(os.Process_Desc{
-		command = []string{"build/export-smoke-export.exe"},
-		stdin   = os.stdin,
-		stdout  = os.stdout,
-		stderr  = os.stderr,
-	})
+	server, start_err := os.process_start(
+		os.Process_Desc {
+			command = []string{"build/export-smoke-export.exe"},
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
+		},
+	)
 	assert(start_err == nil)
 	assert(enet_connect_ok(34567), "baked port 34567 did not accept an ENet connection")
 	_ = os.process_kill(server)
 	_, _ = os.process_wait(server)
 
-	server2, start2_err := os.process_start(os.Process_Desc{
-		command = []string{"build/export-smoke-export.exe", "--port", "24444"},
-		stdin   = os.stdin,
-		stdout  = os.stdout,
-		stderr  = os.stderr,
-	})
+	server2, start2_err := os.process_start(
+		os.Process_Desc {
+			command = []string{"build/export-smoke-export.exe", "--port", "24444"},
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
+		},
+	)
 	assert(start2_err == nil)
 	assert(enet_connect_ok(24444), "CLI override port 24444 did not accept an ENet connection")
 	_ = os.process_kill(server2)
@@ -117,14 +127,21 @@ main :: proc() {
 	assert(cache_dir != "", "could not locate the template cache dir")
 	defer delete(cache_dir)
 	defer delete(version_file)
-	server_asset_name := services.Template_Asset_Name(services.Template_Kind.Server, "windows", "x86_64")
-	server_asset, server_join := filepath.join([]string{cache_dir, server_asset_name}, context.allocator)
+	host := services.Template_Host_Platform()
+	server_asset_name := services.Template_Asset_Name(services.Template_Kind.Server, host)
+	server_asset, server_join := filepath.join(
+		[]string{cache_dir, server_asset_name},
+		context.allocator,
+	)
 	delete(server_asset_name)
 	assert(server_join == nil)
 	defer delete(server_asset)
 	assert(os.copy_file(server_asset, "build/kinemium-server.exe") == os.ERROR_NONE)
-	client_asset_name := services.Template_Asset_Name(services.Template_Kind.Client, "windows", "x86_64")
-	client_asset, client_join := filepath.join([]string{cache_dir, client_asset_name}, context.allocator)
+	client_asset_name := services.Template_Asset_Name(services.Template_Kind.Client, host)
+	client_asset, client_join := filepath.join(
+		[]string{cache_dir, client_asset_name},
+		context.allocator,
+	)
 	delete(client_asset_name)
 	assert(client_join == nil)
 	defer delete(client_asset)
@@ -142,20 +159,35 @@ main :: proc() {
 		"export-smoke.kine",
 		map_bytes,
 		services.Exporter_Kind.Both,
+		host,
 	)
 	assert(bake_ok, bake_message)
 	defer delete(bake_message)
-	assert(os.is_file("build/export-smoke-out/KinemiumServer.exe"), "Exporter_Bake did not emit the server exe")
-	assert(os.is_file("build/export-smoke-out/KinemiumClient.exe"), "Exporter_Bake did not emit the client exe")
-	assert(os.is_file("build/export-smoke-out/config.toml"), "Exporter_Bake did not copy the template's runtime siblings")
-	server3, start3_err := os.process_start(os.Process_Desc{
-		command = []string{"build/export-smoke-out/KinemiumServer.exe"},
-		stdin   = os.stdin,
-		stdout  = os.stdout,
-		stderr  = os.stderr,
-	})
+	assert(
+		os.is_file("build/export-smoke-out/KinemiumServer.exe"),
+		"Exporter_Bake did not emit the server exe",
+	)
+	assert(
+		os.is_file("build/export-smoke-out/KinemiumClient.exe"),
+		"Exporter_Bake did not emit the client exe",
+	)
+	assert(
+		os.is_file("build/export-smoke-out/config.toml"),
+		"Exporter_Bake did not copy the template's runtime siblings",
+	)
+	server3, start3_err := os.process_start(
+		os.Process_Desc {
+			command = []string{"build/export-smoke-out/KinemiumServer.exe"},
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
+		},
+	)
 	assert(start3_err == nil)
-	assert(enet_connect_ok(45678), "Exporter_Bake server port 45678 did not accept an ENet connection")
+	assert(
+		enet_connect_ok(45678),
+		"Exporter_Bake server port 45678 did not accept an ENet connection",
+	)
 	_ = os.process_kill(server3)
 	_, _ = os.process_wait(server3)
 

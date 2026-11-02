@@ -1,0 +1,308 @@
+// GPU marching-cubes mesher for one terrain chunk.
+//
+// Mirrors the CPU mesher in src/engine/services/Terrain.odin:
+//   * terrain_march_cell / MC_March_Cube_Edges  -> the cube pass
+//   * terrain_edge_vertex (one vertex per lattice edge) -> the edge pass
+//   * terrain_normal_at_world / terrain_sample_occupancy -> normalAt()
+//   * terrain_material_weights_at_world -> materialWeightsAt()
+//
+// Two passes over the same storage buffers, dispatched back to back with a
+// compute->compute barrier between them:
+//
+//   pass 1 (edge pass): one thread per lattice edge in the chunk's 17^3 corner
+//     lattice. A cut edge (its two corner occupancies straddle the iso level)
+//     allocates one output vertex and records its index in edge_vert; the
+//     vertex's normal and material weights are computed here, exactly once per
+//     edge, so shared vertices are not recomputed.
+//
+//   pass 2 (cube pass): one thread per 16^3 cell. Reads MC_TRI to find each
+//     cell's triangles, maps their cube-local edges to the shared edge_vert
+//     indices written by pass 1, orients each face to the outward normal, and
+//     appends the triangle to the index buffer.
+//
+// The direct-mapped edge_vert array (no hashing) is what makes this race-free:
+// an edge's slot is unique, so pass 1 never writes the same index twice and
+// pass 2 only ever reads indices that are already final.
+//
+// NOTE: This is a template; the table marker below is replaced by
+// tools/gen_terrain_mc_tables.py, which writes the finished kine_terrain_mc.comp
+// compiled by the build. Edit this file, not the generated one.
+
+#version 450
+
+//@MC_TRI_TABLE@
+
+layout(local_size_x = 64) in;
+
+const int CHUNK = 16;        // TERRAIN_CHUNK_SIZE
+const int PAD = 2;           // TERRAIN_CACHE_PAD
+const int CACHE_DIM = CHUNK + 1 + 2 * PAD; // 21
+const int LATT = CHUNK + 1;  // 17 corner-lattice points per axis
+const int LATT3 = LATT * LATT * LATT;   // 4913
+const int EDGE_COUNT = 3 * LATT3;       // 14739 direct-mapped edge slots
+const int CELL_COUNT = CHUNK * CHUNK * CHUNK;
+
+// MC_Corner_Offsets from marching_cubes/cubes.odin.
+const ivec3 MC_OFF[8] = ivec3[8](
+    ivec3(0, 0, 0), ivec3(1, 0, 0), ivec3(1, 1, 0), ivec3(0, 1, 0),
+    ivec3(0, 0, 1), ivec3(1, 0, 1), ivec3(1, 1, 1), ivec3(0, 1, 1));
+
+// MC_Edge_Corners from marching_cubes/cubes.odin.
+const ivec2 MC_EC[12] = ivec2[12](
+    ivec2(0, 1), ivec2(1, 2), ivec2(2, 3), ivec2(3, 0),
+    ivec2(4, 5), ivec2(5, 6), ivec2(6, 7), ivec2(7, 4),
+    ivec2(0, 4), ivec2(1, 5), ivec2(2, 6), ivec2(3, 7));
+
+layout(push_constant) uniform Push {
+    ivec4 origin_pass; // xyz = chunk lattice origin (absolute voxel coords), w = pass id
+    vec4 params;       // x = voxel size, y = iso level
+} pc;
+
+layout(std430, set = 0, binding = 0) readonly buffer Occ { float occ[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Mat { uint mat[]; };
+layout(std430, set = 0, binding = 2) buffer EdgeVert { uint edge_vert[]; };
+layout(std430, set = 0, binding = 3) buffer OutVert { float out_vert[]; };
+layout(std430, set = 0, binding = 4) buffer OutWeight { float out_weight[]; };
+layout(std430, set = 0, binding = 5) buffer OutIndex { uint out_index[]; };
+layout(std430, set = 0, binding = 6) buffer Counters { uint vertex_count; uint index_count; };
+
+float voxelSize() { return pc.params.x; }
+float isoLevel() { return pc.params.y; }
+
+// cacheOcc / cacheMat sample the chunk density cache, keyed by absolute voxel
+// coordinates. The cache origin is the chunk origin minus PAD on every axis.
+float cacheOcc(ivec3 v) {
+    ivec3 c = v - pc.origin_pass.xyz + ivec3(PAD);
+    if (c.x < 0 || c.y < 0 || c.z < 0 ||
+        c.x >= CACHE_DIM || c.y >= CACHE_DIM || c.z >= CACHE_DIM) {
+        return 0.0;
+    }
+    return occ[(c.x * CACHE_DIM + c.y) * CACHE_DIM + c.z];
+}
+
+uint cacheMat(ivec3 v) {
+    ivec3 c = v - pc.origin_pass.xyz + ivec3(PAD);
+    if (c.x < 0 || c.y < 0 || c.z < 0 ||
+        c.x >= CACHE_DIM || c.y >= CACHE_DIM || c.z >= CACHE_DIM) {
+        return 0u;
+    }
+    return mat[(c.x * CACHE_DIM + c.y) * CACHE_DIM + c.z];
+}
+
+// Trilinear occupancy sample at a voxel-space position (Terrain.odin
+// terrain_sample_occupancy).
+float sampleOcc(vec3 p) {
+    vec3 fp = floor(p);
+    vec3 f = p - fp;
+    ivec3 b = ivec3(fp);
+    float r = 0.0;
+    for (int dx = 0; dx < 2; ++dx) {
+        float wx = dx == 0 ? 1.0 - f.x : f.x;
+        for (int dy = 0; dy < 2; ++dy) {
+            float wy = dy == 0 ? 1.0 - f.y : f.y;
+            for (int dz = 0; dz < 2; ++dz) {
+                float wz = dz == 0 ? 1.0 - f.z : f.z;
+                r += cacheOcc(b + ivec3(dx, dy, dz)) * wx * wy * wz;
+            }
+        }
+    }
+    return r;
+}
+
+// terrain_normal_at_world: central differences of the trilinear field.
+vec3 normalAt(vec3 world) {
+    vec3 p = world * (1.0 / voxelSize());
+    const float eps = 0.5;
+    float dx = sampleOcc(p - vec3(eps, 0.0, 0.0)) - sampleOcc(p + vec3(eps, 0.0, 0.0));
+    float dy = sampleOcc(p - vec3(0.0, eps, 0.0)) - sampleOcc(p + vec3(0.0, eps, 0.0));
+    float dz = sampleOcc(p - vec3(0.0, 0.0, eps)) - sampleOcc(p + vec3(0.0, 0.0, eps));
+    vec3 n = vec3(dx, dy, dz);
+    float len = length(n);
+    if (len < 1.0e-6) {
+        return vec3(0.0, 1.0, 0.0);
+    }
+    return n / len;
+}
+
+// terrain_material_weights_at_world: trilinear blend of the six shader layers.
+void materialWeightsAt(vec3 world, out float w[8]) {
+    vec3 v = world * (1.0 / voxelSize());
+    vec3 fp = floor(v);
+    vec3 f = v - fp;
+    ivec3 b = ivec3(fp);
+
+    float layers[6] = float[6](0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    float total = 0.0;
+    for (int dx = 0; dx < 2; ++dx) {
+        float wx = dx == 0 ? 1.0 - f.x : f.x;
+        for (int dy = 0; dy < 2; ++dy) {
+            float wy = dy == 0 ? 1.0 - f.y : f.y;
+            for (int dz = 0; dz < 2; ++dz) {
+                float wz = dz == 0 ? 1.0 - f.z : f.z;
+                ivec3 cell = b + ivec3(dx, dy, dz);
+                float o = cacheOcc(cell);
+                if (o > 0.0) {
+                    float weight = wx * wy * wz * o;
+                    layers[cacheMat(cell)] += weight;
+                    total += weight;
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        w[i] = 0.0;
+    }
+    if (total <= 1.0e-6) {
+        w[0] = 1.0;
+        return;
+    }
+    for (int i = 0; i < 6; ++i) {
+        w[i] = layers[i] / total;
+    }
+}
+
+uint edgeIndex(ivec3 low, int axis) {
+    ivec3 l = low - pc.origin_pass.xyz;
+    return uint(axis) * uint(LATT3) + uint((l.x * LATT + l.y) * LATT + l.z);
+}
+
+// Maps a cube-local edge (0..11) to the shared slot of its lattice edge. The
+// endpoints are sorted so both cells that share the edge agree on the slot.
+uint cubeEdgeIndex(ivec3 g, int e) {
+    ivec2 cc = MC_EC[e];
+    ivec3 a = g + MC_OFF[cc.x];
+    ivec3 b = g + MC_OFF[cc.y];
+    ivec3 low = a;
+    ivec3 high = b;
+    if (b.x < a.x || (b.x == a.x && (b.y < a.y || (b.y == a.y && b.z < a.z)))) {
+        low = b;
+        high = a;
+    }
+    int axis = high.x != low.x ? 0 : (high.y != low.y ? 1 : 2);
+    return edgeIndex(low, axis);
+}
+
+vec3 vertPos(uint i) { return vec3(out_vert[i * 8u], out_vert[i * 8u + 1u], out_vert[i * 8u + 2u]); }
+vec3 vertNrm(uint i) { return vec3(out_vert[i * 8u + 3u], out_vert[i * 8u + 4u], out_vert[i * 8u + 5u]); }
+
+void edgePass(uint e) {
+    if (e >= uint(EDGE_COUNT)) {
+        return;
+    }
+    int axis = int(e / uint(LATT3));
+    uint rem = e % uint(LATT3);
+    int lx = int(rem / uint(LATT * LATT));
+    int ly = int((rem / uint(LATT)) % uint(LATT));
+    int lz = int(rem % uint(LATT));
+
+    if ((axis == 0 && lx >= CHUNK) || (axis == 1 && ly >= CHUNK) || (axis == 2 && lz >= CHUNK)) {
+        edge_vert[e] = 0xFFFFFFFFu;
+        return;
+    }
+
+    ivec3 low = pc.origin_pass.xyz + ivec3(lx, ly, lz);
+    ivec3 step = axis == 0 ? ivec3(1, 0, 0) : (axis == 1 ? ivec3(0, 1, 0) : ivec3(0, 0, 1));
+    ivec3 high = low + step;
+
+    float d0 = cacheOcc(low);
+    float d1 = cacheOcc(high);
+    if ((d0 <= isoLevel()) == (d1 <= isoLevel())) {
+        edge_vert[e] = 0xFFFFFFFFu;
+        return;
+    }
+
+    float t = 0.5;
+    float denom = d1 - d0;
+    if (abs(denom) > 1.0e-6) {
+        t = clamp((isoLevel() - d0) / denom, 0.0, 1.0);
+    }
+
+    vec3 pa = vec3(low) * voxelSize();
+    vec3 pb = vec3(high) * voxelSize();
+    vec3 position = pa + (pb - pa) * t;
+    vec3 normal = normalAt(position);
+
+    float w[8];
+    materialWeightsAt(position, w);
+
+    uint slot = atomicAdd(vertex_count, 1u);
+    edge_vert[e] = slot;
+    out_vert[slot * 8u] = position.x;
+    out_vert[slot * 8u + 1u] = position.y;
+    out_vert[slot * 8u + 2u] = position.z;
+    out_vert[slot * 8u + 3u] = normal.x;
+    out_vert[slot * 8u + 4u] = normal.y;
+    out_vert[slot * 8u + 5u] = normal.z;
+    out_vert[slot * 8u + 6u] = 0.0;
+    out_vert[slot * 8u + 7u] = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        out_weight[slot * 8u + uint(i)] = w[i];
+    }
+}
+
+void cubePass(uint idx) {
+    if (idx >= uint(CELL_COUNT)) {
+        return;
+    }
+    int cx = int(idx / uint(CHUNK * CHUNK));
+    int cy = int((idx / uint(CHUNK)) % uint(CHUNK));
+    int cz = int(idx % uint(CHUNK));
+    ivec3 g = pc.origin_pass.xyz + ivec3(cx, cy, cz);
+
+    int cubeIndex = 0;
+    for (int i = 0; i < 8; ++i) {
+        float d = cacheOcc(g + MC_OFF[i]);
+        if (d <= isoLevel()) {
+            cubeIndex |= (1 << i);
+        }
+    }
+
+    int base = cubeIndex * 16;
+    for (int t = 0; t < 16; t += 3) {
+        int e0 = MC_TRI[base + t];
+        if (e0 < 0) {
+            break;
+        }
+        int e1 = MC_TRI[base + t + 1];
+        int e2 = MC_TRI[base + t + 2];
+
+        uint i0 = edge_vert[cubeEdgeIndex(g, e0)];
+        uint i1 = edge_vert[cubeEdgeIndex(g, e1)];
+        uint i2 = edge_vert[cubeEdgeIndex(g, e2)];
+        if (i0 == 0xFFFFFFFFu || i1 == 0xFFFFFFFFu || i2 == 0xFFFFFFFFu) {
+            // Edge not meshed (chunk boundary); the neighbouring chunk owns it.
+            continue;
+        }
+
+        vec3 p0 = vertPos(i0);
+        vec3 p1 = vertPos(i1);
+        vec3 p2 = vertPos(i2);
+        vec3 n0 = vertNrm(i0);
+        vec3 n1 = vertNrm(i1);
+        vec3 n2 = vertNrm(i2);
+
+        vec3 face = cross(p1 - p0, p2 - p0);
+        vec3 avg = n0 + n1 + n2;
+
+        uint slot = atomicAdd(index_count, 3u);
+        if (dot(face, avg) < 0.0) {
+            out_index[slot] = i0;
+            out_index[slot + 1u] = i2;
+            out_index[slot + 2u] = i1;
+        } else {
+            out_index[slot] = i0;
+            out_index[slot + 1u] = i1;
+            out_index[slot + 2u] = i2;
+        }
+    }
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (pc.origin_pass.w == 1) {
+        edgePass(id);
+    } else {
+        cubePass(id);
+    }
+}

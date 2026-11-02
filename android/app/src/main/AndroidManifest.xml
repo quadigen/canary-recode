@@ -4,6 +4,7 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
@@ -11,7 +12,7 @@
         android:label="Kinemium"
         android:theme="@style/AppTheme">
         <activity
-            android:name="org.libsdl.app.SDLActivity"
+            android:name="dev.kinemium.engine.EditorActivity"
             android:alwaysRetainTaskState="true"
             android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:exported="true"
@@ -22,5 +23,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- A playtest is a second window, so it runs in its own process and
+             task; that keeps its SDL instance and GL context independent from
+             the editor's. It is only ever started by EditorActivity. -->
+        <activity
+            android:name="dev.kinemium.engine.PlaytestActivity"
+            android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:documentLaunchMode="always"
+            android:exported="false"
+            android:launchMode="standard"
+            android:preferMinimalPostProcessing="true"
+            android:process=":playtest"
+            android:taskAffinity="dev.kinemium.engine.playtest"
+            android:theme="@style/AppTheme" />
     </application>
 </manifest>

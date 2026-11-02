@@ -1,13 +1,19 @@
 package services
+// wire:service
 
-import "base:runtime"
-import "core:fmt"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import profiling "../profiling"
+import target "../target"
 import vm "../vm"
+import "base:runtime"
+import "core:fmt"
 
-TaskScheduler_Class := classes.Class_Info{name = "TaskScheduler", parent = &Service_Class}
+TaskScheduler_Class := classes.Class_Info {
+	name   = "TaskScheduler",
+	parent = &Service_Class,
+}
 
 Scheduled_Task :: struct {
 	thread:              ^vm.State,
@@ -21,10 +27,10 @@ Scheduled_Task :: struct {
 
 TaskScheduler :: struct {
 	using service: Service,
-	L:            ^vm.State,
-	tasks:        [dynamic]Scheduled_Task,
-	elapsed:      f64,
-	frame:        u64,
+	L:             ^vm.State,
+	tasks:         [dynamic]Scheduled_Task,
+	elapsed:       f64,
+	frame:         u64,
 }
 
 Task_Library_Entry :: struct {
@@ -32,26 +38,38 @@ Task_Library_Entry :: struct {
 	callback: vm.CFunction,
 }
 
-task_scheduler_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+task_scheduler_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	scheduler := new(TaskScheduler)
 	scheduler.service = Service_Init(&TaskScheduler_Class, "TaskScheduler", data_model)
 	return &scheduler.object
 }
 
-task_scheduler_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string) -> bool {
+task_scheduler_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
 	scheduler := cast(^TaskScheduler)object
 	switch key {
-	case "PendingTaskCount": vm.PushNumber(L, f64(len(scheduler.tasks)))
-	case "CancelAll": vm.PushUserdataMethod(L, key)
-	case: return false
+	case "PendingTaskCount":
+		vm.PushNumber(L, f64(len(scheduler.tasks)))
+	case "CancelAll":
+		vm.PushUserdataMethod(L, key)
+	case:
+		return false
 	}
 	return true
 }
 
 cancel_all_tasks :: proc(scheduler: ^TaskScheduler) {
-	if scheduler == nil { return }
+	if scheduler == nil {return}
 	if scheduler.L != nil {
-		for task in scheduler.tasks { vm.ReleaseValue(scheduler.L, task.thread_ref) }
+		for task in scheduler.tasks {vm.ReleaseValue(scheduler.L, task.thread_ref)}
 	}
 	clear(&scheduler.tasks)
 }
@@ -68,9 +86,7 @@ TaskScheduler_Owns_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) 
 	return false
 }
 
-// TaskScheduler_Cancel_Thread drops every pending resume for a thread and
-// releases the retained references. Script contexts use it to stop a disabled or
-// destroyed script without leaking the suspended thread.
+
 TaskScheduler_Cancel_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> bool {
 	if scheduler == nil || thread == nil {
 		return false
@@ -86,8 +102,7 @@ TaskScheduler_Cancel_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State
 	return cancelled
 }
 
-// task_scheduler_describe_thread names the script owning a thread so scheduled
-// failures can be reported with script context.
+
 task_scheduler_describe_thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> string {
 	script_context := cast(^ScriptContext)Service_Get_Service(&scheduler.service, "ScriptContext")
 	if script_context == nil {
@@ -96,8 +111,17 @@ task_scheduler_describe_thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.St
 	return ScriptContext_Describe_Thread(script_context, thread)
 }
 
-task_scheduler_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
-	if method != "CancelAll" { return 0, false }
+task_scheduler_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	if method != "CancelAll" {return 0, false}
 	cancel_all_tasks(cast(^TaskScheduler)object)
 	return 0, true
 }
@@ -109,12 +133,29 @@ task_scheduler_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rende
 	free(scheduler)
 }
 
-queue_function :: proc(scheduler: ^TaskScheduler, L: ^vm.State, function_index, first_argument: int, delay: f64, defer_frame: bool) -> i32 {
-	if scheduler == nil || scheduler.destroyed { return vm.RaiseError(L, "TaskScheduler is unavailable") }
-	if !vm.IsFunction(L, function_index) { return vm.RaiseError(L, "task callback must be a function") }
+queue_function :: proc(
+	scheduler: ^TaskScheduler,
+	L: ^vm.State,
+	function_index, first_argument: int,
+	delay: f64,
+	defer_frame: bool,
+	label: string = "task.spawn",
+) -> i32 {
+	if scheduler == nil ||
+	   scheduler.destroyed {return vm.RaiseError(L, "TaskScheduler is unavailable")}
+	if !vm.IsFunction(
+		L,
+		function_index,
+	) {return vm.RaiseError(L, "task callback must be a function")}
 
 	source_top := vm.StackTop(L)
 	thread := vm.NewThread(L)
+	thread_name := label
+	describe := task_scheduler_describe_thread(scheduler, L)
+	if describe != "" {
+		thread_name = fmt.tprintf("%s @ %s", label, describe)
+	}
+	profiling.set_thread_name(thread, thread_name, describe)
 	vm.CopyValueToThread(L, thread, function_index)
 	argument_count := 0
 	for index := first_argument; index <= source_top; index += 1 {
@@ -123,14 +164,17 @@ queue_function :: proc(scheduler: ^TaskScheduler, L: ^vm.State, function_index, 
 	}
 	thread_ref := vm.RetainValue(L)
 	wake_frame := scheduler.frame
-	if defer_frame { wake_frame += 1 }
-	append(&scheduler.tasks, Scheduled_Task{
-		thread = thread,
-		thread_ref = thread_ref,
-		argument_count = i32(argument_count),
-		wake_time = scheduler.elapsed+max(delay, 0),
-		wake_frame = wake_frame,
-	})
+	if defer_frame {wake_frame += 1}
+	append(
+		&scheduler.tasks,
+		Scheduled_Task {
+			thread = thread,
+			thread_ref = thread_ref,
+			argument_count = i32(argument_count),
+			wake_time = scheduler.elapsed + max(delay, 0),
+			wake_frame = wake_frame,
+		},
+	)
 	return 1
 }
 
@@ -141,33 +185,45 @@ task_spawn :: proc "c" (L: ^vm.State) -> i32 {
 
 task_defer :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 1, 2, 0, true)
+	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 1, 2, 0, true, "task.defer")
 }
 
 task_delay :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	delay := vm.ArgNumber(L, 1)
-	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 2, 3, delay, false)
+	return queue_function(
+		cast(^TaskScheduler)vm.UpvaluePointer(L),
+		L,
+		2,
+		3,
+		delay,
+		false,
+		"task.delay",
+	)
 }
 
 task_wait :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
-	if scheduler == nil || scheduler.destroyed { return vm.RaiseError(L, "TaskScheduler is unavailable") }
-	// Remove the IsYieldable check - task.wait should work from any thread,
-	// including the main script thread, not just spawned coroutines
+	if scheduler == nil ||
+	   scheduler.destroyed {return vm.RaiseError(L, "TaskScheduler is unavailable")}
+
+
 	delay := max(vm.ArgOptionalNumber(L, 1, 0), 0)
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L)
-	append(&scheduler.tasks, Scheduled_Task{
-		thread = L,
-		thread_ref = thread_ref,
-		wake_time = scheduler.elapsed+delay,
-		wake_frame = scheduler.frame,
-		wait_started_at = scheduler.elapsed,
-		resume_with_elapsed = true,
-	})
+	append(
+		&scheduler.tasks,
+		Scheduled_Task {
+			thread = L,
+			thread_ref = thread_ref,
+			wake_time = scheduler.elapsed + delay,
+			wake_frame = scheduler.frame,
+			wait_started_at = scheduler.elapsed,
+			resume_with_elapsed = true,
+		},
+	)
 	return vm.YieldThread(L)
 }
 
@@ -175,7 +231,7 @@ task_cancel :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
 	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
 	thread := vm.ThreadFromArgument(L, 1)
-	if thread == nil { return vm.RaiseError(L, "task.cancel expects a thread") }
+	if thread == nil {return vm.RaiseError(L, "task.cancel expects a thread")}
 	for task, index in scheduler.tasks {
 		if task.thread == thread {
 			vm.ReleaseValue(scheduler.L, task.thread_ref)
@@ -189,7 +245,7 @@ task_cancel :: proc "c" (L: ^vm.State) -> i32 {
 Install_Task_Library :: proc(scheduler: ^TaskScheduler, vm_state: ^vm.VM) {
 	scheduler.L = vm_state.L
 	vm.NewTable(vm_state.L, 0, 5)
-	entries := [?]Task_Library_Entry{
+	entries := [?]Task_Library_Entry {
 		Task_Library_Entry{name = "spawn", callback = task_spawn},
 		Task_Library_Entry{name = "defer", callback = task_defer},
 		Task_Library_Entry{name = "delay", callback = task_delay},
@@ -206,7 +262,7 @@ Install_Task_Library :: proc(scheduler: ^TaskScheduler, vm_state: ^vm.VM) {
 }
 
 Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
-	if scheduler == nil || scheduler.destroyed || scheduler.L == nil { return }
+	if scheduler == nil || scheduler.destroyed || scheduler.L == nil {return}
 	scheduler.elapsed += f64(max(delta_time, 0))
 	current_frame := scheduler.frame
 	scheduler.frame += 1
@@ -226,19 +282,28 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 	for task in ready {
 		argument_count := int(task.argument_count)
 		if task.resume_with_elapsed {
-			vm.PushNumber(task.thread, scheduler.elapsed-task.wait_started_at)
+			vm.PushNumber(task.thread, scheduler.elapsed - task.wait_started_at)
 			argument_count = 1
 		}
 		_, _, err, traceback := vm.ResumeThreadTraceback(task.thread, scheduler.L, argument_count)
 		vm.ReleaseValue(scheduler.L, task.thread_ref)
 		if err != "" {
 			describe := task_scheduler_describe_thread(scheduler, task.thread)
-			if len(describe) > 0 {
-				if len(traceback) > 0 {
-					fmt.eprintf("Script error in %s:\n%s\n", describe, traceback)
+			detail := err
+			if len(traceback) > 0 {
+				detail = traceback
+			}
+			if target.is_playtest() {
+				if len(describe) > 0 {
+					log_service_emit_tagged(
+						"ERROR",
+						fmt.tprintf("Script error in %s:\n%s", describe, detail),
+					)
 				} else {
-					fmt.eprintf("Script error in %s:\n%s\n", describe, err)
+					log_service_emit_tagged("ERROR", fmt.tprintf("Scheduled task failed: %s", err))
 				}
+			} else if len(describe) > 0 {
+				fmt.eprintf("Script error in %s:\n%s\n", describe, detail)
 			} else {
 				fmt.eprintf("Scheduled task failed: %s\n", err)
 			}
@@ -260,4 +325,3 @@ Register_TaskScheduler_Class :: proc(registry: ^classes.Registry) {
 		namecall = task_scheduler_namecall,
 	)
 }
-

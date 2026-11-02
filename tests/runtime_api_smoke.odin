@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -18,16 +18,18 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(typeof(Enum.Material) == "Enum")
 assert(typeof(Enum.Material.SmoothPlastic) == "EnumItem")
 assert(tostring(Enum.Material) == "Enum.Material")
 assert(tostring(Enum.Material.Wood) == "Enum.Material.Wood")
 assert(Enum.Material.Wood.Name == "Wood")
-assert(Enum.Material.Wood.Value == 1)
+assert(Enum.Material.Wood.Value == 512)
 assert(Enum.Material.Wood.EnumType == Enum.Material)
 assert(EnumItem.fromName(Enum.Material, "Wood") == Enum.Material.Wood)
-assert(EnumItem.fromValue(Enum.Material, 1) == Enum.Material.Wood)
+assert(EnumItem.fromValue(Enum.Material, 512) == Enum.Material.Wood)
 assert(#Enum.BorderMode:GetEnumItems() == 3)
 assert(Enum.AccessoryType.Hat.Value == 1)
 
@@ -65,20 +67,28 @@ runService:BindToRenderStep("gui", 10, function()
     renderSteps += 1
     renderGui.ZIndex = renderGui.ZIndex + 1
 end)
-`, "runtime_api_setup")
+`,
+		"runtime_api_setup",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 0.25)
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 0.5)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(renderOrder == "GLGL")
 assert(renderSteps == 2 and renderGui.ZIndex == 2)
 assert(math.abs(renderDelta - 0.5) < 1e-6)
 game:GetService("RunService"):UnbindFromRenderStep("gui")
-`, "runtime_api_verify")
+`,
+		"runtime_api_verify",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 1.0)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(renderOrder == "GLGLL")
 assert(renderSteps == 2 and renderGui.ZIndex == 2)
 
@@ -91,14 +101,20 @@ end)
 runService:BindToRenderStep("victim", 2, function()
     snapshotOrder ..= "V"
 end)
-`, "runtime_api_unbind")
+`,
+		"runtime_api_unbind",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 1.0)
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 1.0)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(snapshotOrder == "RVR")
 game:GetService("RunService"):UnbindFromRenderStep("remove-victim")
-`, "runtime_api_snapshot")
+`,
+		"runtime_api_snapshot",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

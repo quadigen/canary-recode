@@ -1,29 +1,5 @@
 package main
 
-// Roblox-style script execution semantics smoke test.
-//
-// It builds real runtimes (a server and two clients) with explicit roles and
-// drives them frame by frame. Assertions run inside Luau (see `verify`), so they
-// observe exactly what script code observes. Covered scenarios:
-//
-//	1.  basic Script execution
-//	2.  basic LocalScript execution
-//	3.  basic ModuleScript require
-//	4.  ModuleScript caching
-//	5.  server/client module cache isolation
-//	6.  multiple clients with independent module state
-//	7.  `script` referencing the correct Instance
-//	8.  Enabled behavior
-//	9.  script destruction while running
-//	10. LocalScript not running on the server
-//	11. Script not running on the client
-//	12. circular ModuleScript dependencies
-//	13. ModuleScript errors
-//	14. yielding inside Scripts
-//	15. yielding inside ModuleScripts
-//	16. multiple Scripts requiring the same ModuleScript
-//	17. replicated LocalScripts starting on clients
-//	18. server/client access boundaries
 
 import "core:fmt"
 import "core:strings"
@@ -54,8 +30,7 @@ part :: proc(index: int, title: string) {
 	fmt.printf("PART %d: %s\n", index, title)
 }
 
-// run executes a setup chunk; a failure is fatal because later assertions would
-// be meaningless.
+
 run :: proc(v: ^vm.VM, source, name: string) {
 	ok, err := vm.RunInternal(v, source, name)
 	if !ok {
@@ -65,8 +40,7 @@ run :: proc(v: ^vm.VM, source, name: string) {
 	}
 }
 
-// verify runs Luau assertions. `expect` collects every failure in one chunk so a
-// single run reports all of them.
+
 verify :: proc(v: ^vm.VM, body: string, name: string) {
 	source := strings.concatenate(
 		{
@@ -96,15 +70,13 @@ end
 }
 
 step :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, frames: int) {
-	for _ in 0..<frames {
+	for _ in 0 ..< frames {
 		engine_runtime.Environment_Update_Step(environment, v, STEP_DT)
 		engine_runtime.Environment_Render_Step(environment, v, STEP_DT)
 	}
 }
 
-// step_seconds advances roughly `seconds` of simulated time. Each iteration
-// steps both the update and the render phase, so the scheduler (which runs in
-// both) sees two deltas per iteration.
+
 step_seconds :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, seconds: f32) {
 	step(environment, v, int(seconds / (2 * STEP_DT)) + 2)
 }
@@ -187,9 +159,9 @@ main :: proc() {
 		panic("script_semantics_smoke: clients need a local player")
 	}
 
-	// =====================================================================
+
 	part(1, "basic Script execution (server)")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -240,9 +212,9 @@ expect(_G.server_module_value == 42, "Scripts can require ModuleScripts")
 		"part1_verify",
 	)
 
-	// =====================================================================
+
 	part(7, "`script` refers to the executing Instance")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -292,9 +264,9 @@ expect(require(game.ReplicatedStorage.ReturnsSelf) == module, "require is cached
 		"part7_verify",
 	)
 
-	// =====================================================================
+
 	part(10, "LocalScript does not run on the server")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -323,9 +295,9 @@ expect(game:GetService("ReplicatedStorage"):FindFirstChild("ServerSidedLocal") ~
 		}
 	}
 
-	// =====================================================================
+
 	part(11, "Script does not run on the client")
-	// =====================================================================
+
 	run(
 		&client_a_vm,
 		`
@@ -353,9 +325,9 @@ expect(_G.client_ran_server_script == nil, "a Script must not run on the client"
 		}
 	}
 
-	// =====================================================================
+
 	part(2, "basic LocalScript execution (client, via StarterPlayerScripts)")
-	// =====================================================================
+
 	run(
 		&client_a_vm,
 		`
@@ -402,7 +374,7 @@ expect(player.PlayerGui ~= nil, "PlayerGui exists for the local player")
 		"part2_verify",
 	)
 
-	// The template itself must not have executed.
+
 	{
 		template := descendant(service(&client_a, "StarterPlayer"), "ClientBootstrap")
 		if template == nil {
@@ -412,9 +384,9 @@ expect(player.PlayerGui ~= nil, "PlayerGui exists for the local player")
 		}
 	}
 
-	// =====================================================================
+
 	part(8, "Enabled behavior")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -459,7 +431,7 @@ expect(_G.waiting_resumed == nil, "the waiting script is suspended")
 		"part8_verify_a",
 	)
 
-	// Disabling a *running* script stops it; re-enabling restarts it from the top.
+
 	run(
 		&server_vm,
 		`
@@ -484,9 +456,9 @@ expect(_G.gated_runs == 1, "enabling a disabled script starts it")
 		"part8_verify_b",
 	)
 
-	// =====================================================================
+
 	part(9, "script destruction while running")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -518,8 +490,7 @@ bystander.Source = [[
 		"part9_destroy",
 	)
 
-	// The destroy is flushed on the next step; the pending task.wait resume must
-	// be cancelled with it.
+
 	step_seconds(&server, &server_vm, 1.5)
 
 	verify(
@@ -538,8 +509,8 @@ expect(_G.bystander_runs == 1, "a destroyed script does not disturb others")
 	}
 
 	{
-		// Engine scripts (for example the profiler overlay) legitimately keep a
-		// thread, so the check is that the destroyed script left nothing behind.
+
+
 		script_context := cast(^services.ScriptContext)service(&server, "ScriptContext")
 		for entry in script_context.threads {
 			if strings.contains(entry.description, "Victim") ||
@@ -550,9 +521,9 @@ expect(_G.bystander_runs == 1, "a destroyed script does not disturb others")
 		}
 	}
 
-	// =====================================================================
+
 	part(14, "yielding inside Scripts")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -611,9 +582,9 @@ expect(_G.spawn_stage == "spawn-finished", "task.spawn runs independently")
 		}
 	}
 
-	// =====================================================================
+
 	part(15, "yielding inside ModuleScripts")
-	// =====================================================================
+
 	{
 		tasks_before := scheduled_task_count(&server)
 		run(
@@ -670,9 +641,9 @@ expect(again.ready == true and _G.slow_runs == 1, "a yielded module caches its r
 		_ = tasks_before
 	}
 
-	// =====================================================================
+
 	part(3, "require, 4: ModuleScript caching, 16: many requirers")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -716,9 +687,9 @@ expect(_G.counter_first.owner == "Counter", "the cached table keeps the module i
 		"part3_verify",
 	)
 
-	// =====================================================================
+
 	part(13, "ModuleScript errors")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -773,9 +744,9 @@ expect(_G.survivor_still_works == true, "unrelated requires keep working after a
 		"part13_verify",
 	)
 
-	// =====================================================================
+
 	part(12, "circular ModuleScript dependencies")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -821,9 +792,9 @@ expect(_G.after_cycle == true, "the runtime keeps running after a cycle")
 		"part12_verify",
 	)
 
-	// =====================================================================
+
 	part(7, "ModuleScript return value types")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -873,9 +844,9 @@ expect(_G.instance_identity == true, "a returned Instance keeps its identity")
 		"part7_types_verify",
 	)
 
-	// =====================================================================
+
 	part(14, "reparenting does not re-run a script")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -932,11 +903,51 @@ expect(_G.late_runs == 1, "a Script runs once when it becomes active")
 		"part14_reparent_verify_b",
 	)
 
-	// =====================================================================
+
+	part(19, "re-applying an identical Source does not re-run a script")
+
+
+	run(
+		&client_a_vm,
+		`
+local storage = game:GetService("ReplicatedStorage")
+local stable = Instance.new("LocalScript", storage)
+stable.Name = "StableSource"
+stable.Source = [[ _G.stable_runs = (_G.stable_runs or 0) + 1 ]]
+_G.stable_original = stable.Source
+`,
+		"part19_setup",
+	)
+
+	step(&client_a, &client_a_vm, 3)
+
+	verify(
+		&client_a_vm,
+		`expect(_G.stable_runs == 1, "the LocalScript ran once before the redundant assignment")`,
+		"part19_verify_a",
+	)
+
+	run(
+		&client_a_vm,
+		`
+local stable = game:GetService("ReplicatedStorage"):FindFirstChild("StableSource")
+stable.Source = _G.stable_original
+`,
+		"part19_reapply",
+	)
+
+	step(&client_a, &client_a_vm, 3)
+
+	verify(
+		&client_a_vm,
+		`expect(_G.stable_runs == 1, "re-applying an identical Source must not re-run the script")`,
+		"part19_verify_b",
+	)
+
+
 	part(5, "server/client module cache isolation, 6: independent clients")
-	// =====================================================================
-	// Every runtime owns its own Instances, VM and module cache. Each side runs
-	// the same module source and must see its own execution and its own table.
+
+
 	shared_module_setup := `
 local storage = game:GetService("ReplicatedStorage")
 local shared = Instance.new("ModuleScript", storage)
@@ -1025,7 +1036,7 @@ expect(_G.shared_runs == 1, "client B has its own module count")
 		"part5_verify_client_b",
 	)
 
-	// The same isolation holds for the module *values*.
+
 	run(
 		&server_vm,
 		`_G.server_value = require(game.ReplicatedStorage.SharedState).value`,
@@ -1041,13 +1052,25 @@ expect(_G.shared_runs == 1, "client B has its own module count")
 		`_G.client_value = require(game.ReplicatedStorage.SharedState).value`,
 		"part5_client_b_value",
 	)
-	verify(&server_vm, `expect(_G.server_value == "server", "server module value")`, "part5_value_server")
-	verify(&client_a_vm, `expect(_G.client_value == "Player1", "client A module value")`, "part5_value_a")
-	verify(&client_b_vm, `expect(_G.client_value == "Player2", "client B module value")`, "part5_value_b")
+	verify(
+		&server_vm,
+		`expect(_G.server_value == "server", "server module value")`,
+		"part5_value_server",
+	)
+	verify(
+		&client_a_vm,
+		`expect(_G.client_value == "Player1", "client A module value")`,
+		"part5_value_a",
+	)
+	verify(
+		&client_b_vm,
+		`expect(_G.client_value == "Player2", "client B module value")`,
+		"part5_value_b",
+	)
 
-	// =====================================================================
+
 	part(18, "server/client access boundaries and require rules")
-	// =====================================================================
+
 	verify(
 		&server_vm,
 		`
@@ -1065,7 +1088,7 @@ expect(game:GetService("Players").LocalPlayer ~= nil, "LocalPlayer exists on the
 		"part18_verify_client",
 	)
 
-	// Required from the wrong runtime, a Script/LocalScript is rejected.
+
 	run(
 		&server_vm,
 		`
@@ -1094,8 +1117,7 @@ _G.client_require_script_message = tostring(_G.client_require_script_message)
 		"part18_client_require_script",
 	)
 
-	// ModuleScripts work in both runtimes, and a Script/LocalScript is requirable
-	// in the runtime that owns it.
+
 	run(
 		&server_vm,
 		`
@@ -1145,12 +1167,12 @@ expect(_G.client_require_local_value.kind == "client script", "requiring a Local
 		"part18_verify_require_client",
 	)
 
-	// A LocalScript that is required does not also run as a client script.
+
 	step(&server, &server_vm, 2)
 
-	// =====================================================================
+
 	part(17, "replicated LocalScripts starting on clients")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`
@@ -1211,7 +1233,7 @@ secret_part.Name = "NetSecretPart"
 		"part17_client_connect",
 	)
 
-	for _ in 0..<150 {
+	for _ in 0 ..< 150 {
 		engine_runtime.Environment_Update_Step(&server, &server_vm, STEP_DT)
 		engine_runtime.Environment_Update_Step(&client_a, &client_a_vm, STEP_DT)
 		engine_runtime.Environment_Render_Step(&server, &server_vm, STEP_DT)
@@ -1258,9 +1280,9 @@ expect(require(game.ReplicatedStorage.NetModule) == module, "the client caches i
 		"part17_verify_client",
 	)
 
-	// =====================================================================
+
 	part(18, "shutdown leaves nothing running")
-	// =====================================================================
+
 	run(
 		&server_vm,
 		`

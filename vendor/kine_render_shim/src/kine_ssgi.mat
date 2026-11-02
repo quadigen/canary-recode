@@ -1,0 +1,78 @@
+material {
+    name : "KineSSGI",
+    shadingModel : unlit,
+    culling : none,
+    depthCulling : false,
+    depthWrite : false,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : inputTexture },
+        { type : sampler2d, name : depthTexture },
+        { type : float2, name : texel },
+        { type : float2, name : focal },
+        { type : float, name : nearPlane },
+        { type : float, name : intensity },
+        { type : float, name : radius },
+        { type : float, name : bias },
+        { type : int, name : sampleCount },
+        { type : float, name : maxDistance }
+    ]
+}
+fragment {
+    // Filament uses reversed, infinite-far depth: near / positive view depth.
+    vec3 viewPosition(vec2 uv) {
+        float z = materialParams.nearPlane / max(texture(materialParams_depthTexture, uv).r, 0.000001);
+        return vec3((uv * 2.0 - 1.0) / materialParams.focal, -1.0) * z;
+    }
+    vec3 surfaceNormal(vec2 uv, vec3 p) {
+        vec2 t = materialParams.texel;
+        vec3 a = viewPosition(uv + vec2(t.x,0.0)) - p;
+        vec3 b = p - viewPosition(uv - vec2(t.x,0.0));
+        vec3 c = viewPosition(uv + vec2(0.0,t.y)) - p;
+        vec3 d = p - viewPosition(uv - vec2(0.0,t.y));
+        vec3 n = normalize(cross(dot(a,a) < dot(b,b) ? a : b, dot(c,c) < dot(d,d) ? c : d));
+        return dot(n,-p) < 0.0 ? -n : n;
+    }
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec2 uv = getUV0();
+        vec3 color = texture(materialParams_inputTexture,uv).rgb;
+        vec3 p = viewPosition(uv);
+        vec3 bounce = vec3(0.0);
+        if (-p.z < materialParams.maxDistance && materialParams.intensity > 0.0) {
+            vec3 normal = surfaceNormal(uv,p);
+            vec2 projectedRadius = materialParams.radius * materialParams.focal / max(-p.z,0.1) * 0.5;
+            // Deterministic low-discrepancy disk sampling. No per-frame sparkle.
+            for (int i=0;i<64;i++) {
+                if (i >= materialParams.sampleCount) break;
+                float a = float(i) * 2.39996323;
+                float r = sqrt((float(i)+0.5)/float(materialParams.sampleCount));
+                vec2 qUV = uv + vec2(cos(a),sin(a)) * projectedRadius * r;
+                if (any(lessThan(qUV,materialParams.texel*2.0)) || any(greaterThan(qUV,vec2(1.0)-materialParams.texel*2.0))) continue;
+                vec3 q = viewPosition(qUV), delta = q-p;
+                float distance2 = dot(delta,delta);
+                if (distance2 > materialParams.radius*materialParams.radius || distance2 < materialParams.bias*materialParams.bias) continue;
+                vec3 direction = normalize(delta);
+                vec3 sourceNormal = surfaceNormal(qUV,q);
+                float form = max(dot(normal,direction),0.0) * max(dot(sourceNormal,-direction),0.0);
+                if (form < 0.001) continue;
+                // Reject samples whose connection crosses foreground geometry.
+                float visibility = 1.0;
+                for (int j=1;j<=3;j++) {
+                    float t = float(j)*0.25;
+                    vec3 ray = mix(p,q,t);
+                    vec2 rayUV = (ray.xy / max(-ray.z,0.001) * materialParams.focal + 1.0)*0.5;
+                    float sceneZ = -viewPosition(rayUV).z;
+                    if (sceneZ + materialParams.bias < -ray.z) visibility = 0.0;
+                }
+                float falloff = 1.0-sqrt(distance2)/materialParams.radius;
+                bounce += texture(materialParams_inputTexture,qUV).rgb * form * falloff * visibility;
+            }
+            bounce *= 6.2831853 * materialParams.intensity / float(materialParams.sampleCount);
+            // Receiver color modulates diffuse bounce; this is indirect light,
+            // not a blur of neighboring display pixels.
+            color += bounce * sqrt(max(color,vec3(0.0)));
+        }
+        material.baseColor = vec4(color,1.0);
+    }
+}

@@ -1,7 +1,11 @@
 material {
     name : "KineGizmo",
     shadingModel : unlit,
-    blending : opaque,
+    // Transparent so the gizmo composites in the transparent pass, after the
+    // skybox. As an opaque material with depthWrite off it left the background
+    // pixels at far depth and the skybox pass painted over it, clipping the
+    // handles wherever they crossed the sky.
+    blending : transparent,
     culling : none,
     depthWrite : false,
     depthCulling : false,

@@ -5,83 +5,62 @@ import "core:strings"
 
 import image "vendor:stb/image"
 
+import assetstore "../assetstore"
+import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
-import kineffi "../bindings"
 import vm "../vm"
-import assetstore "../assetstore"
 
-Decal_Class := Class_Info{
+Decal_Class := Class_Info {
 	name   = "Decal",
 	parent = &Instance_Class,
 }
 
 Decal :: struct {
-	using object: Object,
-
-	texture:      string,
-	color:        datatypes.Color3,
-	transparency: f32,
-	face:         enums.NormalId,
-
+	using object:     Object,
+	texture:          string,
+	color:            datatypes.Color3,
+	transparency:     f32,
+	face:             enums.NormalId,
 	studs_per_tile_u: f32,
 	studs_per_tile_v: f32,
-	offset_studs_u:  f32,
-	offset_studs_v:  f32,
-
-	z_offset: f32,
-
-	enabled:         bool,
-	culling:         bool,
-	cast_shadows:    bool,
-	receive_shadows: bool,
-
-	native_texture: ^kineffi.KineFilamentTex,
-	native_decal:   i32,
-
-	texture_dirty: bool,
-	color_dirty:   bool,
+	offset_studs_u:   f32,
+	offset_studs_v:   f32,
+	z_offset:         f32,
+	enabled:          bool,
+	culling:          bool,
+	cast_shadows:     bool,
+	receive_shadows:  bool,
+	native_texture:   ^kineffi.KineFilamentTex,
+	native_decal:     i32,
+	texture_dirty:    bool,
+	color_dirty:      bool,
 }
 
 Decal_Init :: proc() -> Decal {
-	return Decal{
+	return Decal {
 		object = Object_Init(&Decal_Class),
-
 		texture = strings.clone(""),
-
-		color = datatypes.Color3{
-			R = 1,
-			G = 1,
-			B = 1,
-		},
-
+		color = datatypes.Color3{R = 1, G = 1, B = 1},
 		transparency = 0,
-		face         = .Front,
-
+		face = .Front,
 		studs_per_tile_u = 1,
 		studs_per_tile_v = 1,
-		offset_studs_u   = 0,
-		offset_studs_v   = 0,
-
+		offset_studs_u = 0,
+		offset_studs_v = 0,
 		z_offset = 0.002,
-
-		enabled         = true,
-		culling         = false,
-		cast_shadows    = false,
+		enabled = true,
+		culling = false,
+		cast_shadows = false,
 		receive_shadows = true,
-
 		native_texture = nil,
-		native_decal   = -1,
-
+		native_decal = -1,
 		texture_dirty = true,
-		color_dirty   = true,
+		color_dirty = true,
 	}
 }
 
-Decal_construct :: proc(
-	renderer: ^Renderer_Object,
-	data_model: rawptr,
-) -> ^Object {
+Decal_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	decal := new(Decal)
 	decal^ = Decal_Init()
 	decal.name = "Decal"
@@ -89,51 +68,32 @@ Decal_construct :: proc(
 	return &decal.object
 }
 
-decal_destroy_renderable :: proc(
-	decal: ^Decal,
-	renderer: ^Renderer_Object,
-) {
+decal_destroy_renderable :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 	if decal == nil {
 		return
 	}
 
-	if decal.native_decal >= 0 &&
-	   renderer != nil &&
-	   renderer.Filament != nil {
-		kineffi.Kine_Filament_RemoveDecal(
-			renderer.Filament,
-			decal.native_decal,
-		)
+	if decal.native_decal >= 0 && renderer != nil && renderer.Filament != nil {
+		kineffi.Kine_Filament_RemoveDecal(renderer.Filament, decal.native_decal)
 	}
 
 	decal.native_decal = -1
 }
 
-decal_destroy_texture :: proc(
-	decal: ^Decal,
-	renderer: ^Renderer_Object,
-) {
+decal_destroy_texture :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 	if decal == nil || decal.native_texture == nil {
 		return
 	}
 
 	if renderer != nil && renderer.Filament != nil {
-		_ = kineffi.Kine_Filament_DestroyTex(
-			renderer.Filament,
-			decal.native_texture,
-		)
+		_ = kineffi.Kine_Filament_DestroyTex(renderer.Filament, decal.native_texture)
 	}
 
 	decal.native_texture = nil
 }
 
-decal_reload_texture :: proc(
-	decal: ^Decal,
-	renderer: ^Renderer_Object,
-) -> bool {
-	if decal == nil ||
-	   renderer == nil ||
-	   renderer.Filament == nil {
+decal_reload_texture :: proc(decal: ^Decal, renderer: ^Renderer_Object) -> bool {
+	if decal == nil || renderer == nil || renderer.Filament == nil {
 		return false
 	}
 
@@ -149,15 +109,13 @@ decal_reload_texture :: proc(
 	when ODIN_OS == .JS {
 		return false
 	} else {
-		// Decals decode through stb, which only reads from a file. An embedded
-		// texture is extracted to the content-addressed cache first, so the
-		// authored path is never needed.
+
+
 		resolved := assetstore.Resolve_Path(decal.texture)
 		defer delete(resolved)
 		if resolved == "" {
-			// A decal with no decal is easy to miss in a busy scene, and an
-			// embedded reference that resolved to nothing means the table is
-			// incomplete rather than the texture being absent.
+
+
 			assetstore.Report_Missing_Asset(decal.texture, "Decal texture")
 			return false
 		}
@@ -166,13 +124,7 @@ decal_reload_texture :: proc(
 
 		width, height, channels: c.int
 
-		pixels := image.load(
-			path,
-			&width,
-			&height,
-			&channels,
-			4,
-		)
+		pixels := image.load(path, &width, &height, &channels, 4)
 
 		if pixels == nil {
 			return false
@@ -184,14 +136,13 @@ decal_reload_texture :: proc(
 			return false
 		}
 
-		decal.native_texture =
-			kineffi.Kine_Filament_CreateTexFromPixels(
-				renderer.Filament,
-				i32(width),
-				i32(height),
-				i32(width) * 4,
-				pixels,
-			)
+		decal.native_texture = kineffi.Kine_Filament_CreateTexFromPixels(
+			renderer.Filament,
+			i32(width),
+			i32(height),
+			i32(width) * 4,
+			pixels,
+		)
 
 		return decal.native_texture != nil
 	}
@@ -227,32 +178,15 @@ decal_parent_part :: proc(decal: ^Decal) -> ^Part {
 }
 
 decal_vec_neg :: proc(v: datatypes.Vector3) -> datatypes.Vector3 {
-	return datatypes.Vector3{
-		-v.x,
-		-v.y,
-		-v.z,
-	}
+	return datatypes.Vector3{-v.x, -v.y, -v.z}
 }
 
-decal_vec_mul :: proc(
-	v: datatypes.Vector3,
-	s: f32,
-) -> datatypes.Vector3 {
-	return datatypes.Vector3{
-		v.x * s,
-		v.y * s,
-		v.z * s,
-	}
+decal_vec_mul :: proc(v: datatypes.Vector3, s: f32) -> datatypes.Vector3 {
+	return datatypes.Vector3{v.x * s, v.y * s, v.z * s}
 }
 
-decal_vec_add :: proc(
-	a, b: datatypes.Vector3,
-) -> datatypes.Vector3 {
-	return datatypes.Vector3{
-		a.x + b.x,
-		a.y + b.y,
-		a.z + b.z,
-	}
+decal_vec_add :: proc(a, b: datatypes.Vector3) -> datatypes.Vector3 {
+	return datatypes.Vector3{a.x + b.x, a.y + b.y, a.z + b.z}
 }
 
 Decal_Face_Info :: struct {
@@ -264,141 +198,105 @@ Decal_Face_Info :: struct {
 	height:     f32,
 }
 
-decal_face_info :: proc(
-	decal: ^Decal,
-	part: ^Part,
-) -> Decal_Face_Info {
+decal_face_info :: proc(decal: ^Decal, part: ^Part) -> Decal_Face_Info {
+	return part_face_info(part, decal.face, decal.z_offset)
+}
+
+part_face_info :: proc(part: ^Part, face: enums.NormalId, z_offset: f32) -> Decal_Face_Info {
 	position := datatypes.CFrame_Position(part.cframe)
 
 	right := datatypes.CFrame_RightVector(part.cframe)
-	up    := datatypes.CFrame_UpVector(part.cframe)
-	look  := datatypes.CFrame_LookVector(part.cframe)
-	back  := decal_vec_neg(look)
+	up := datatypes.CFrame_UpVector(part.cframe)
+	look := datatypes.CFrame_LookVector(part.cframe)
+	back := decal_vec_neg(look)
 
 	info := Decal_Face_Info{}
 
-	switch decal.face {
+	switch face {
 	case .Front:
-		info.normal     = look
+		info.normal = look
 		info.horizontal = right
-		info.vertical   = up
-		info.width      = part.size.x
-		info.height     = part.size.y
+		info.vertical = up
+		info.width = part.size.x
+		info.height = part.size.y
 
-		info.center = decal_vec_add(
-			position,
-			decal_vec_mul(
-				look,
-				part.size.z * 0.5 + decal.z_offset,
-			),
-		)
+		info.center = decal_vec_add(position, decal_vec_mul(look, part.size.z * 0.5 + z_offset))
 
 	case .Back:
-		info.normal     = back
+		info.normal = back
 		info.horizontal = decal_vec_neg(right)
-		info.vertical   = up
-		info.width      = part.size.x
-		info.height     = part.size.y
+		info.vertical = up
+		info.width = part.size.x
+		info.height = part.size.y
 
-		info.center = decal_vec_add(
-			position,
-			decal_vec_mul(
-				back,
-				part.size.z * 0.5 + decal.z_offset,
-			),
-		)
+		info.center = decal_vec_add(position, decal_vec_mul(back, part.size.z * 0.5 + z_offset))
 
 	case .Right:
-		info.normal     = right
+		info.normal = right
 		info.horizontal = back
-		info.vertical   = up
-		info.width      = part.size.z
-		info.height     = part.size.y
+		info.vertical = up
+		info.width = part.size.z
+		info.height = part.size.y
 
-		info.center = decal_vec_add(
-			position,
-			decal_vec_mul(
-				right,
-				part.size.x * 0.5 + decal.z_offset,
-			),
-		)
+		info.center = decal_vec_add(position, decal_vec_mul(right, part.size.x * 0.5 + z_offset))
 
 	case .Left:
-		info.normal     = decal_vec_neg(right)
+		info.normal = decal_vec_neg(right)
 		info.horizontal = look
-		info.vertical   = up
-		info.width      = part.size.z
-		info.height     = part.size.y
+		info.vertical = up
+		info.width = part.size.z
+		info.height = part.size.y
 
 		info.center = decal_vec_add(
 			position,
-			decal_vec_mul(
-				info.normal,
-				part.size.x * 0.5 + decal.z_offset,
-			),
+			decal_vec_mul(info.normal, part.size.x * 0.5 + z_offset),
 		)
 
 	case .Top:
-		info.normal     = up
+		info.normal = up
 		info.horizontal = right
-		info.vertical   = back
-		info.width      = part.size.x
-		info.height     = part.size.z
+		info.vertical = back
+		info.width = part.size.x
+		info.height = part.size.z
 
-		info.center = decal_vec_add(
-			position,
-			decal_vec_mul(
-				up,
-				part.size.y * 0.5 + decal.z_offset,
-			),
-		)
+		info.center = decal_vec_add(position, decal_vec_mul(up, part.size.y * 0.5 + z_offset))
 
 	case .Bottom:
-		info.normal     = decal_vec_neg(up)
+		info.normal = decal_vec_neg(up)
 		info.horizontal = right
-		info.vertical   = look
-		info.width      = part.size.x
-		info.height     = part.size.z
+		info.vertical = look
+		info.width = part.size.x
+		info.height = part.size.z
 
 		info.center = decal_vec_add(
 			position,
-			decal_vec_mul(
-				info.normal,
-				part.size.y * 0.5 + decal.z_offset,
-			),
+			decal_vec_mul(info.normal, part.size.y * 0.5 + z_offset),
 		)
 	}
 
 	return info
 }
 
-decal_transform :: proc(
-	info: Decal_Face_Info,
-) -> [16]f32 {
-	// Native decal geometry is a unit quad in the XZ plane:
-	//
-	// X = horizontal
-	// Y = surface normal
-	// Z = vertical
-	//
-	// Scale X/Z to the selected Part face dimensions.
-	return [16]f32{
+decal_transform :: proc(info: Decal_Face_Info) -> [16]f32 {
+
+
+	return [16]f32 {
 		info.horizontal.x * info.width,
 		info.normal.x,
 		info.vertical.x * info.height,
 		info.center.x,
-
 		info.horizontal.y * info.width,
 		info.normal.y,
 		info.vertical.y * info.height,
 		info.center.y,
-
 		info.horizontal.z * info.width,
 		info.normal.z,
 		info.vertical.z * info.height,
 		info.center.z,
-
-		0, 0, 0, 1,
+		0,
+		0,
+		0,
+		1,
 	}
 }
 
@@ -415,25 +313,19 @@ decal_ensure_native :: proc(
 		return false
 	}
 
-	decal.native_decal =
-		kineffi.Kine_Filament_CreateDecal(
-			renderer.Filament,
-
-			info.width,
-			info.height,
-
-			decal.native_texture,
-
-			decal.offset_studs_u,
-			decal.offset_studs_v,
-
-			decal.studs_per_tile_u,
-			decal.studs_per_tile_v,
-
-			decal.culling,
-			decal.cast_shadows,
-			decal.receive_shadows,
-		)
+	decal.native_decal = kineffi.Kine_Filament_CreateDecal(
+		renderer.Filament,
+		info.width,
+		info.height,
+		decal.native_texture,
+		decal.offset_studs_u,
+		decal.offset_studs_v,
+		decal.studs_per_tile_u,
+		decal.studs_per_tile_v,
+		decal.culling,
+		decal.cast_shadows,
+		decal.receive_shadows,
+	)
 
 	if decal.native_decal < 0 {
 		return false
@@ -444,34 +336,21 @@ decal_ensure_native :: proc(
 	return true
 }
 
-Decal_Step :: proc(
-	object: ^Object,
-	ctx: ^Class_Step_Context,
-) {
+Decal_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	decal := cast(^Decal)object
 
-	if decal == nil ||
-	   ctx == nil ||
-	   ctx.renderer == nil ||
-	   ctx.renderer.Filament == nil {
+	if decal == nil || ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {
 		return
 	}
 
 	renderer := ctx.renderer
 
 	if decal.texture_dirty {
-		_ = decal_reload_texture(
-			decal,
-			renderer,
-		)
+		_ = decal_reload_texture(decal, renderer)
 	}
 
-	if !decal.enabled ||
-	   decal.native_texture == nil {
-		decal_destroy_renderable(
-			decal,
-			renderer,
-		)
+	if !decal.enabled || decal.native_texture == nil {
+		decal_destroy_renderable(decal, renderer)
 
 		return
 	}
@@ -479,33 +358,20 @@ Decal_Step :: proc(
 	part := decal_parent_part(decal)
 
 	if part == nil {
-		decal_destroy_renderable(
-			decal,
-			renderer,
-		)
+		decal_destroy_renderable(decal, renderer)
 
 		return
 	}
 
-	info := decal_face_info(
-		decal,
-		part,
-	)
+	info := decal_face_info(decal, part)
 
 	if info.width <= 0 || info.height <= 0 {
-		decal_destroy_renderable(
-			decal,
-			renderer,
-		)
+		decal_destroy_renderable(decal, renderer)
 
 		return
 	}
 
-	if !decal_ensure_native(
-		decal,
-		renderer,
-		info,
-	) {
+	if !decal_ensure_native(decal, renderer, info) {
 		return
 	}
 
@@ -520,13 +386,10 @@ Decal_Step :: proc(
 	_ = kineffi.Kine_Filament_SetDecalTiling(
 		renderer.Filament,
 		decal.native_decal,
-
 		info.width,
 		info.height,
-
 		decal.offset_studs_u,
 		decal.offset_studs_v,
-
 		decal.studs_per_tile_u,
 		decal.studs_per_tile_v,
 	)
@@ -534,10 +397,8 @@ Decal_Step :: proc(
 	_ = kineffi.Kine_Filament_EditDecal(
 		renderer.Filament,
 		decal.native_decal,
-
 		info.width,
 		info.height,
-
 		decal.culling,
 		decal.cast_shadows,
 		decal.receive_shadows,
@@ -547,11 +408,9 @@ Decal_Step :: proc(
 		_ = kineffi.Kine_Filament_SetDecalColor(
 			renderer.Filament,
 			decal.native_decal,
-
 			decal.color.R,
 			decal.color.G,
 			decal.color.B,
-
 			1.0 - decal.transparency,
 		)
 
@@ -559,21 +418,12 @@ Decal_Step :: proc(
 	}
 }
 
-Decal_destroy :: proc(
-	object: ^Object,
-	renderer: ^Renderer_Object,
-) {
+Decal_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	decal := cast(^Decal)object
 
-	decal_destroy_renderable(
-		decal,
-		renderer,
-	)
+	decal_destroy_renderable(decal, renderer)
 
-	decal_destroy_texture(
-		decal,
-		renderer,
-	)
+	decal_destroy_texture(decal, renderer)
 
 	delete(decal.texture)
 
@@ -581,40 +431,35 @@ Decal_destroy :: proc(
 	free(decal)
 }
 
-Decal_clone :: proc(
-	source: ^Object,
-	destination: ^Object,
-) {
+Decal_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^Decal)source
 	dst := cast(^Decal)destination
 
 	delete(dst.texture)
 
-	dst.texture = strings.clone(
-		src.texture,
-	)
+	dst.texture = strings.clone(src.texture)
 
-	dst.color        = src.color
+	dst.color = src.color
 	dst.transparency = src.transparency
-	dst.face         = src.face
+	dst.face = src.face
 
 	dst.studs_per_tile_u = src.studs_per_tile_u
 	dst.studs_per_tile_v = src.studs_per_tile_v
-	dst.offset_studs_u   = src.offset_studs_u
-	dst.offset_studs_v   = src.offset_studs_v
+	dst.offset_studs_u = src.offset_studs_u
+	dst.offset_studs_v = src.offset_studs_v
 
 	dst.z_offset = src.z_offset
 
-	dst.enabled         = src.enabled
-	dst.culling         = src.culling
-	dst.cast_shadows    = src.cast_shadows
+	dst.enabled = src.enabled
+	dst.culling = src.culling
+	dst.cast_shadows = src.cast_shadows
 	dst.receive_shadows = src.receive_shadows
 
 	dst.native_texture = nil
-	dst.native_decal   = -1
+	dst.native_decal = -1
 
 	dst.texture_dirty = true
-	dst.color_dirty   = true
+	dst.color_dirty = true
 }
 
 Decal_Get :: proc(
@@ -628,93 +473,51 @@ Decal_Get :: proc(
 
 	switch key {
 	case "Texture":
-		vm.PushString(
-			L,
-			decal.texture,
-		)
+		vm.PushString(L, decal.texture)
 
 	case "Color3":
 		if datatype_registry == nil {
 			return false
 		}
 
-		datatypes.Push_Color3(
-			L,
-			datatype_registry,
-			decal.color,
-		)
+		datatypes.Push_Color3(L, datatype_registry, decal.color)
 
 	case "Transparency":
-		vm.PushNumber(
-			L,
-			f64(decal.transparency),
-		)
+		vm.PushNumber(L, f64(decal.transparency))
 
 	case "Face":
 		if enum_registry == nil {
 			return false
 		}
 
-		_ = enums.Push_Item_By_Value(
-			L,
-			enum_registry,
-			"NormalId",
-			i64(decal.face),
-		)
+		_ = enums.Push_Item_By_Value(L, enum_registry, "NormalId", i64(decal.face))
 
 	case "StudsPerTileU":
-		vm.PushNumber(
-			L,
-			f64(decal.studs_per_tile_u),
-		)
+		vm.PushNumber(L, f64(decal.studs_per_tile_u))
 
 	case "StudsPerTileV":
-		vm.PushNumber(
-			L,
-			f64(decal.studs_per_tile_v),
-		)
+		vm.PushNumber(L, f64(decal.studs_per_tile_v))
 
 	case "OffsetStudsU":
-		vm.PushNumber(
-			L,
-			f64(decal.offset_studs_u),
-		)
+		vm.PushNumber(L, f64(decal.offset_studs_u))
 
 	case "OffsetStudsV":
-		vm.PushNumber(
-			L,
-			f64(decal.offset_studs_v),
-		)
+		vm.PushNumber(L, f64(decal.offset_studs_v))
 
 	case "ZOffset":
-		vm.PushNumber(
-			L,
-			f64(decal.z_offset),
-		)
+		vm.PushNumber(L, f64(decal.z_offset))
 
 	case "Enabled":
-		vm.PushBoolean(
-			L,
-			decal.enabled,
-		)
+		vm.PushBoolean(L, decal.enabled)
 
 	case "Culling":
-		vm.PushBoolean(
-			L,
-			decal.culling,
-		)
+		vm.PushBoolean(L, decal.culling)
 
 	case "CastShadows":
-		vm.PushBoolean(
-			L,
-			decal.cast_shadows,
-		)
+		vm.PushBoolean(L, decal.cast_shadows)
 
 	case "ReceiveShadows":
-		vm.PushBoolean(
-			L,
-			decal.receive_shadows,
-		)
+		vm.PushBoolean(L, decal.receive_shadows)
 
 	case:
 		return false
@@ -737,12 +540,7 @@ Decal_Set :: proc(
 	case "Texture":
 		delete(decal.texture)
 
-		decal.texture = strings.clone(
-			vm.ArgString(
-				L,
-				value_index,
-			),
-		)
+		decal.texture = strings.clone(vm.ArgString(L, value_index))
 
 		decal.texture_dirty = true
 
@@ -751,23 +549,12 @@ Decal_Set :: proc(
 			return false
 		}
 
-		decal.color = datatypes.Arg_Color3(
-			L,
-			value_index,
-			datatype_registry,
-		)
+		decal.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
 
 		decal.color_dirty = true
 
 	case "Transparency":
-		decal.transparency = clamp(
-			f32(vm.ArgNumber(
-				L,
-				value_index,
-			)),
-			0,
-			1,
-		)
+		decal.transparency = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
 
 		decal.color_dirty = true
 
@@ -776,82 +563,36 @@ Decal_Set :: proc(
 			return false
 		}
 
-		item := enums.Arg_Item(
-			L,
-			value_index,
-			enum_registry,
-			"NormalId",
-		)
+		item := enums.Arg_Item(L, value_index, enum_registry, "NormalId")
 
-		decal.face = enums.NormalId(
-			item.value,
-		)
+		decal.face = enums.NormalId(item.value)
 
 	case "StudsPerTileU":
-		decal.studs_per_tile_u = max(
-			f32(vm.ArgNumber(
-				L,
-				value_index,
-			)),
-			0.001,
-		)
+		decal.studs_per_tile_u = max(f32(vm.ArgNumber(L, value_index)), 0.001)
 
 	case "StudsPerTileV":
-		decal.studs_per_tile_v = max(
-			f32(vm.ArgNumber(
-				L,
-				value_index,
-			)),
-			0.001,
-		)
+		decal.studs_per_tile_v = max(f32(vm.ArgNumber(L, value_index)), 0.001)
 
 	case "OffsetStudsU":
-		decal.offset_studs_u = f32(
-			vm.ArgNumber(
-				L,
-				value_index,
-			),
-		)
+		decal.offset_studs_u = f32(vm.ArgNumber(L, value_index))
 
 	case "OffsetStudsV":
-		decal.offset_studs_v = f32(
-			vm.ArgNumber(
-				L,
-				value_index,
-			),
-		)
+		decal.offset_studs_v = f32(vm.ArgNumber(L, value_index))
 
 	case "ZOffset":
-		decal.z_offset = f32(
-			vm.ArgNumber(
-				L,
-				value_index,
-			),
-		)
+		decal.z_offset = f32(vm.ArgNumber(L, value_index))
 
 	case "Enabled":
-		decal.enabled = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		decal.enabled = vm.ArgBoolean(L, value_index)
 
 	case "Culling":
-		decal.culling = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		decal.culling = vm.ArgBoolean(L, value_index)
 
 	case "CastShadows":
-		decal.cast_shadows = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		decal.cast_shadows = vm.ArgBoolean(L, value_index)
 
 	case "ReceiveShadows":
-		decal.receive_shadows = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		decal.receive_shadows = vm.ArgBoolean(L, value_index)
 
 	case:
 		return false
@@ -860,19 +601,15 @@ Decal_Set :: proc(
 	return true
 }
 
-Register_Decal :: proc(
-	registry: ^Registry,
-) {
+Register_Decal :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
 		&Decal_Class,
-
 		Decal_construct,
 		Decal_destroy,
-
 		get = Decal_Get,
 		set = Decal_Set,
-		properties = []string{
+		properties = []string {
 			"Texture",
 			"Color3",
 			"Transparency",
@@ -887,9 +624,7 @@ Register_Decal :: proc(
 			"CastShadows",
 			"ReceiveShadows",
 		},
-
 		clone = Decal_clone,
-
 		_step = Decal_Step,
 		_step_phase = .Render_3D,
 	)

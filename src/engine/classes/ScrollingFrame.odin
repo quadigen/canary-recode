@@ -23,9 +23,6 @@ ScrollingFrame :: struct {
 	automatic_canvas_size:  enums.AutomaticSize,
 	scrolling_enabled:      bool,
 	scroll_speed:           f32,
-
-	// X / Y / XY, matching Enum.ScrollingDirection. X and Y gate which axes can
-	// scroll and clamp the corresponding max_scroll_* to zero.
 	scrolling_direction:    enums.ScrollingDirection,
 	smooth_scrolling:       bool,
 	smoothness:             f32,
@@ -42,9 +39,14 @@ ScrollingFrame :: struct {
 	max_scroll_y:           f32,
 	dragging_vertical:      bool,
 	dragging_horizontal:    bool,
+	dragging_content:       bool,
 	drag_mouse_start:       f32,
 	edge_fade_size:         f32,
 	drag_canvas_start:      f32,
+	content_start_x:        f32,
+	content_start_y:        f32,
+	content_canvas_x:       f32,
+	content_canvas_y:       f32,
 }
 
 
@@ -84,6 +86,7 @@ ScrollingFrame_Init :: proc() -> ScrollingFrame {
 		max_scroll_y = 0,
 		dragging_vertical = false,
 		dragging_horizontal = false,
+		dragging_content = false,
 	}
 }
 
@@ -159,10 +162,17 @@ scrolling_frame_resolve_canvas :: proc(
 
 	height = frame.canvas_size.Y_Scale * viewport_height + frame.canvas_size.Y_Offset
 
-	width = max(width, viewport_width)
-	height = max(height, viewport_height)
+	automatic := frame.automatic_canvas_size
 
-	return width, height
+	if automatic == enums.AutomaticSize.X || automatic == enums.AutomaticSize.XY {
+		width = max(width, frame.content_size.X)
+	}
+
+	if automatic == enums.AutomaticSize.Y || automatic == enums.AutomaticSize.XY {
+		height = max(height, frame.content_size.Y)
+	}
+
+	return max(width, f32(0)), max(height, f32(0))
 }
 
 
@@ -177,8 +187,7 @@ scrolling_frame_update_bounds :: proc(frame: ^ScrollingFrame, rect: guilib.Rect)
 
 	frame.max_scroll_y = max(canvas_height - rect.height, f32(0))
 
-	// A direction of X or Y disables the other axis entirely; clamping the
-	// extent to zero makes every wheel/drag path fall out for free.
+
 	allows_x := frame.scrolling_direction == .X || frame.scrolling_direction == .XY
 	allows_y := frame.scrolling_direction == .Y || frame.scrolling_direction == .XY
 
@@ -213,7 +222,7 @@ scrolling_frame_set_target :: proc(frame: ^ScrollingFrame, x, y: f32) {
 }
 
 
-scrolling_frame_update_animation :: proc(
+ScrollingFrame_update_animation :: proc(
 	frame: ^ScrollingFrame,
 	rect: guilib.Rect,
 	delta_time: f32,
@@ -483,6 +492,24 @@ ScrollingFrame_get :: proc(
 		)
 		return true
 
+	case "AbsoluteCanvasSize":
+		if datatype_registry == nil {
+			return false
+		}
+
+		canvas_width, canvas_height := scrolling_frame_resolve_canvas(
+			frame,
+			frame.absolute_size.X,
+			frame.absolute_size.Y,
+		)
+
+		datatypes.Push_Vector2(
+			L,
+			datatype_registry,
+			datatypes.Vector2{canvas_width, canvas_height},
+		)
+		return true
+
 	case "VirtualizedScrolling":
 		vm.PushBoolean(L, frame.virtualized_scrolling)
 		return true
@@ -559,6 +586,8 @@ ScrollingFrame_set :: proc(
 ) -> bool {
 	frame := cast(^ScrollingFrame)object
 
+	Gui_Layout_Mark_Dirty()
+
 	switch key {
 	case "CanvasPosition":
 		if datatype_registry == nil {
@@ -585,6 +614,7 @@ ScrollingFrame_set :: proc(
 		}
 
 		frame.canvas_size = datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		Gui_Layout_Mark_Dirty()
 
 		return true
 
@@ -597,6 +627,11 @@ ScrollingFrame_set :: proc(
 			return false
 		}
 		frame.automatic_canvas_size = enums.AutomaticSize(item.value)
+		Gui_Layout_Mark_Dirty()
+		return true
+
+	case "AbsoluteCanvasSize":
+		_ = vm.RaiseError(L, "AbsoluteCanvasSize cannot be changed")
 		return true
 
 	case "VirtualizedScrolling":
@@ -622,7 +657,7 @@ ScrollingFrame_set :: proc(
 
 		frame.scrolling_direction = enums.ScrollingDirection(item.value)
 
-		// A disallowed axis must not keep a stale offset, so snap it back now.
+
 		if frame.scrolling_direction == .X {
 			frame.canvas_position.Y = 0
 			frame.target_position.Y = 0
@@ -701,7 +736,7 @@ ScrollingFrame_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 
-	scrolling_frame_update_animation(frame, rect, ctx.delta_time)
+	ScrollingFrame_update_animation(frame, rect, ctx.delta_time)
 
 	fade_top, fade_bottom, fade_left, fade_right: f32
 
@@ -736,7 +771,7 @@ ScrollingFrame_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		)
 	}
 
-	// Drawn after the fade ends so the scrollbar isn't faded
+
 	scrolling_frame_draw_scrollbars(frame, ctx)
 }
 
@@ -748,6 +783,7 @@ ScrollingFrame_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.canvas_position = src.canvas_position
 	dst.target_position = src.canvas_position
 	dst.canvas_size = src.canvas_size
+	dst.automatic_canvas_size = src.automatic_canvas_size
 	dst.virtualized_scrolling = src.virtualized_scrolling
 
 	dst.scrolling_enabled = src.scrolling_enabled
@@ -773,32 +809,43 @@ ScrollingFrame_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst.dragging_vertical = false
 	dst.dragging_horizontal = false
+	dst.dragging_content = false
 	dst.drag_mouse_start = 0
 	dst.drag_canvas_start = 0
+	dst.content_start_x = 0
+	dst.content_start_y = 0
+	dst.content_canvas_x = 0
+	dst.content_canvas_y = 0
 }
 
 
-scrolling_frame_from_hit :: proc(registry: ^Registry, x, y: f32) -> ^ScrollingFrame {
+scrolling_frame_from_hit :: proc(
+	registry: ^Registry,
+	x, y: f32,
+) -> (
+	frame: ^ScrollingFrame,
+	local_x, local_y: f32,
+) {
 	if registry == nil {
-		return nil
+		return
 	}
 
-	chain := GuiObject_hit_chain(registry, x, y)
-	defer delete(chain)
+	hit := GuiObject_hit_chain_ex(registry, x, y)
+	defer delete(hit.chain)
 
-	for gui in chain {
+	for gui in hit.chain {
 		if gui == nil || !Is_A(&gui.object, "ScrollingFrame") {
 			continue
 		}
 
-		frame := cast(^ScrollingFrame)gui
+		candidate := cast(^ScrollingFrame)gui
 
-		if frame.scrolling_enabled && scrolling_frame_contains_point(frame, x, y) {
-			return frame
+		if candidate.scrolling_enabled && scrolling_frame_contains_point(candidate, hit.x, hit.y) {
+			return candidate, hit.x, hit.y
 		}
 	}
 
-	return nil
+	return
 }
 
 
@@ -809,7 +856,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 
 	#partial switch event.type {
 	case .MOUSE_WHEEL:
-		frame := scrolling_frame_from_hit(registry, event.wheel.mouse_x, event.wheel.mouse_y)
+		frame, _, _ := scrolling_frame_from_hit(registry, event.wheel.mouse_x, event.wheel.mouse_y)
 
 		if frame == nil {
 			return
@@ -819,8 +866,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 
 		delta_y := event.wheel.y
 
-		// SDL reports wheel-up as positive Y.
-		// CanvasPosition should decrease when scrolling upward.
+
 		modifiers := sdl3.GetModState()
 
 		shift := .LSHIFT in modifiers || .RSHIFT in modifiers
@@ -841,7 +887,11 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 			return
 		}
 
-		frame := scrolling_frame_from_hit(registry, event.button.x, event.button.y)
+		frame, point_x, point_y := scrolling_frame_from_hit(
+			registry,
+			event.button.x,
+			event.button.y,
+		)
 
 		if frame == nil {
 			return
@@ -853,11 +903,10 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 			frame,
 		)
 
-		if vertical_visible &&
-		   scrolling_frame_point_in_rect(vertical_handle, event.button.x, event.button.y) {
+		if vertical_visible && scrolling_frame_point_in_rect(vertical_handle, point_x, point_y) {
 			frame.dragging_vertical = true
 			frame.dragging_horizontal = false
-			frame.drag_mouse_start = event.button.y
+			frame.drag_mouse_start = point_y
 			frame.drag_canvas_start = frame.canvas_position.Y
 
 			scrolling_frame_dragged = frame
@@ -866,10 +915,10 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 		}
 
 		if horizontal_visible &&
-		   scrolling_frame_point_in_rect(horizontal_handle, event.button.x, event.button.y) {
+		   scrolling_frame_point_in_rect(horizontal_handle, point_x, point_y) {
 			frame.dragging_horizontal = true
 			frame.dragging_vertical = false
-			frame.drag_mouse_start = event.button.x
+			frame.drag_mouse_start = point_x
 			frame.drag_canvas_start = frame.canvas_position.X
 
 			scrolling_frame_dragged = frame
@@ -877,16 +926,15 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 			return
 		}
 
-		// Clicking the scrollbar track pages toward the mouse.
-		if vertical_visible &&
-		   scrolling_frame_point_in_rect(vertical_track, event.button.x, event.button.y) {
-			if event.button.y < vertical_handle.y {
+
+		if vertical_visible && scrolling_frame_point_in_rect(vertical_track, point_x, point_y) {
+			if point_y < vertical_handle.y {
 				scrolling_frame_set_target(
 					frame,
 					frame.target_position.X,
 					frame.target_position.Y - frame.absolute_size.Y,
 				)
-			} else if event.button.y > vertical_handle.y + vertical_handle.height {
+			} else if point_y > vertical_handle.y + vertical_handle.height {
 				scrolling_frame_set_target(
 					frame,
 					frame.target_position.X,
@@ -898,14 +946,14 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 		}
 
 		if horizontal_visible &&
-		   scrolling_frame_point_in_rect(horizontal_track, event.button.x, event.button.y) {
-			if event.button.x < horizontal_handle.x {
+		   scrolling_frame_point_in_rect(horizontal_track, point_x, point_y) {
+			if point_x < horizontal_handle.x {
 				scrolling_frame_set_target(
 					frame,
 					frame.target_position.X - frame.absolute_size.X,
 					frame.target_position.Y,
 				)
-			} else if event.button.x > horizontal_handle.x + horizontal_handle.width {
+			} else if point_x > horizontal_handle.x + horizontal_handle.width {
 				scrolling_frame_set_target(
 					frame,
 					frame.target_position.X + frame.absolute_size.X,
@@ -916,10 +964,46 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 			return
 		}
 
+
+		when #config(KINE_ANDROID, false) || ODIN_OS == .JS {
+			frame.dragging_content = true
+			frame.content_start_x = point_x
+			frame.content_start_y = point_y
+			frame.content_canvas_x = frame.canvas_position.X
+			frame.content_canvas_y = frame.canvas_position.Y
+			scrolling_frame_dragged = frame
+			scrolling_frame_interact(frame)
+		}
+
 	case .MOUSE_MOTION:
 		frame := scrolling_frame_dragged
 
 		if frame == nil || !frame.scrolling_enabled {
+			return
+		}
+
+		point_x, point_y, _ := GuiObject_pointer_point(
+			registry,
+			&frame.gui_object,
+			f32(event.motion.x),
+			f32(event.motion.y),
+		)
+
+		if frame.dragging_content {
+
+
+			dx := point_x - frame.content_start_x
+			dy := point_y - frame.content_start_y
+
+			target_x := clamp(frame.content_canvas_x - dx, f32(0), frame.max_scroll_x)
+			target_y := clamp(frame.content_canvas_y - dy, f32(0), frame.max_scroll_y)
+
+			frame.target_position.X = target_x
+			frame.target_position.Y = target_y
+			frame.canvas_position.X = target_x
+			frame.canvas_position.Y = target_y
+
+			scrolling_frame_interact(frame)
 			return
 		}
 
@@ -936,7 +1020,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 				return
 			}
 
-			mouse_delta := event.motion.y - frame.drag_mouse_start
+			mouse_delta := point_y - frame.drag_mouse_start
 
 			canvas_delta := mouse_delta / travel * frame.max_scroll_y
 
@@ -944,7 +1028,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 
 			frame.target_position.Y = target_y
 
-			// Scrollbar dragging tracks the mouse directly.
+
 			frame.canvas_position.Y = target_y
 
 			scrolling_frame_interact(frame)
@@ -964,7 +1048,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 				return
 			}
 
-			mouse_delta := event.motion.x - frame.drag_mouse_start
+			mouse_delta := point_x - frame.drag_mouse_start
 
 			canvas_delta := mouse_delta / travel * frame.max_scroll_x
 
@@ -991,6 +1075,7 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 
 		frame.dragging_vertical = false
 		frame.dragging_horizontal = false
+		frame.dragging_content = false
 
 		scrolling_frame_interact(frame)
 		scrolling_frame_dragged = nil
@@ -1010,6 +1095,8 @@ Register_ScrollingFrame :: proc(registry: ^Registry) {
 		properties = []string {
 			"CanvasPosition",
 			"CanvasSize",
+			"AutomaticCanvasSize",
+			"AbsoluteCanvasSize",
 			"VirtualizedScrolling",
 			"ScrollingEnabled",
 			"ScrollSpeed",

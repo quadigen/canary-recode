@@ -1,4 +1,5 @@
 package services
+// wire:service
 
 
 import "core:strings"

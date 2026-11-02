@@ -19,20 +19,12 @@ require_overlap_params :: proc(
 	return cast(^OverlapParams)vm.UserdataValue(L, index)
 }
 
-Arg_OverlapParams :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> ^OverlapParams {
+Arg_OverlapParams :: proc(L: ^vm.State, index: int, registry: ^Registry) -> ^OverlapParams {
 	if registry == nil {
 		return nil
 	}
 
-	return require_overlap_params(
-		L,
-		index,
-		&registry.overlap_params,
-	)
+	return require_overlap_params(L, index, &registry.overlap_params)
 }
 
 overlap_params_new :: proc "c" (L: ^vm.State) -> i32 {
@@ -41,50 +33,32 @@ overlap_params_new :: proc "c" (L: ^vm.State) -> i32 {
 	value := OverlapParams_New()
 	value.CollisionGroup = strings.clone(value.CollisionGroup)
 
-	push_value(
-		L,
-		binding_from_upvalue(L),
-		value,
-	)
+	push_value(L, binding_from_upvalue(L), value)
 
 	return 1
 }
 
-overlap_params_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+overlap_params_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	params := cast(^OverlapParams)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
 
 	switch key {
 	case "FilterDescendantsInstances":
-		push_instance_references(
-			L,
-			params.FilterDescendantsInstances[:],
-		)
+		push_instance_references(L, params.FilterDescendantsInstances[:])
 
 	case "ExcludeInstances":
 		if !params.ExcludeFilterSet {
 			vm.PushNil(L)
 		} else {
-			push_instance_references(
-				L,
-				params.ExcludeInstances[:],
-			)
+			push_instance_references(L, params.ExcludeInstances[:])
 		}
 
 	case "IncludeInstances":
 		if !params.IncludeFilterSet {
 			vm.PushNil(L)
 		} else {
-			push_instance_references(
-				L,
-				params.IncludeInstances[:],
-			)
+			push_instance_references(L, params.IncludeInstances[:])
 		}
 
 	case "FilterType":
@@ -126,8 +100,7 @@ overlap_params_get :: proc(
 
 overlap_params_set :: proc(
 	L: ^vm.State,
-	value,
-	ctx: rawptr,
+	value, ctx: rawptr,
 	key: string,
 	value_index: int,
 ) -> bool {
@@ -144,53 +117,29 @@ overlap_params_set :: proc(
 		)
 
 	case "ExcludeInstances":
-		params.ExcludeFilterSet = !vm.IsNoneOrNil(
-			L,
-			value_index,
-		)
+		params.ExcludeFilterSet = !vm.IsNoneOrNil(L, value_index)
 
-		_ = read_instance_references(
-			L,
-			value_index,
-			&params.ExcludeInstances,
-		)
+		_ = read_instance_references(L, value_index, &params.ExcludeInstances)
 
 	case "IncludeInstances":
-		params.IncludeFilterSet = !vm.IsNoneOrNil(
-			L,
-			value_index,
-		)
+		params.IncludeFilterSet = !vm.IsNoneOrNil(L, value_index)
 
-		_ = read_instance_references(
-			L,
-			value_index,
-			&params.IncludeInstances,
-		)
+		_ = read_instance_references(L, value_index, &params.IncludeInstances)
 
 	case "FilterType":
 		if registry == nil || registry.enums == nil {
 			return false
 		}
 
-		item := engine_enums.Arg_Item(
-			L,
-			value_index,
-			registry.enums,
-			"RaycastFilterType",
-		)
+		item := engine_enums.Arg_Item(L, value_index, registry.enums, "RaycastFilterType")
 
-		params.FilterType = engine_enums.RaycastFilterType(
-			item.value,
-		)
+		params.FilterType = engine_enums.RaycastFilterType(item.value)
 
 	case "MaxParts":
 		max_parts := vm.ArgInteger(L, value_index)
 
 		if max_parts < 0 {
-			_ = vm.RaiseError(
-				L,
-				"MaxParts must be greater than or equal to 0",
-			)
+			_ = vm.RaiseError(L, "MaxParts must be greater than or equal to 0")
 			return true
 		}
 
@@ -199,28 +148,16 @@ overlap_params_set :: proc(
 	case "CollisionGroup":
 		delete(params.CollisionGroup)
 
-		params.CollisionGroup = strings.clone(
-			vm.ArgString(L, value_index),
-		)
+		params.CollisionGroup = strings.clone(vm.ArgString(L, value_index))
 
 	case "Tolerance":
-		params.Tolerance = clamp(
-			f32(vm.ArgNumber(L, value_index)),
-			0,
-			0.05,
-		)
+		params.Tolerance = clamp(f32(vm.ArgNumber(L, value_index)), 0, 0.05)
 
 	case "RespectCanCollide":
-		params.RespectCanCollide = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		params.RespectCanCollide = vm.ArgBoolean(L, value_index)
 
 	case "BruteForceAllSlow":
-		params.BruteForceAllSlow = vm.ArgBoolean(
-			L,
-			value_index,
-		)
+		params.BruteForceAllSlow = vm.ArgBoolean(L, value_index)
 
 	case:
 		return false
@@ -229,27 +166,22 @@ overlap_params_set :: proc(
 	return true
 }
 
-overlap_params_namecall :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	method: string,
-) -> (i32, bool) {
+overlap_params_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	if method != "AddToFilter" {
 		return 0, false
 	}
 
 	params := cast(^OverlapParams)value
 
-	append_filter_argument(
-		L,
-		2,
-		&params.FilterDescendantsInstances,
-	)
+	append_filter_argument(L, 2, &params.FilterDescendantsInstances)
 
 	params.LegacyFilterSet = true
 
 	return 0, true
+}
+
+Push_OverlapParams :: proc(L: ^vm.State, registry: ^Registry, params: OverlapParams) {
+	push_value(L, &registry.overlap_params, OverlapParams_Clone(params))
 }
 
 overlap_params_destroy :: proc(value, ctx: rawptr) {
@@ -264,23 +196,15 @@ overlap_params_destroy :: proc(value, ctx: rawptr) {
 }
 
 OverlapParams_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "OverlapParams",
-		get      = overlap_params_get,
-		set      = overlap_params_set,
+	return vm.Userdata_Binding {
+		name = "OverlapParams",
+		get = overlap_params_get,
+		set = overlap_params_set,
 		namecall = overlap_params_namecall,
-		destroy  = overlap_params_destroy,
+		destroy = overlap_params_destroy,
 	}
 }
 
-OverlapParams_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
-	add_library_function(
-		L,
-		binding,
-		"new",
-		overlap_params_new,
-	)
+OverlapParams_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
+	add_library_function(L, binding, "new", overlap_params_new)
 }

@@ -6,26 +6,25 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-UIPadding_Class := Class_Info{
+UIPadding_Class := Class_Info {
 	name   = "UIPadding",
 	parent = &Instance_Class,
 }
 
 UIPadding :: struct {
-	using object: Object,
-
-	padding_left:    datatypes.UDim,
-	padding_right:   datatypes.UDim,
-	padding_top:     datatypes.UDim,
-	padding_bottom:  datatypes.UDim,
+	using object:   Object,
+	padding_left:   datatypes.UDim,
+	padding_right:  datatypes.UDim,
+	padding_top:    datatypes.UDim,
+	padding_bottom: datatypes.UDim,
 }
 
 UIPadding_Init :: proc() -> UIPadding {
-	return UIPadding{
+	return UIPadding {
 		object = Object_Init(&UIPadding_Class),
-		padding_left   = datatypes.UDim{0, 0},
-		padding_right  = datatypes.UDim{0, 0},
-		padding_top    = datatypes.UDim{0, 0},
+		padding_left = datatypes.UDim{0, 0},
+		padding_right = datatypes.UDim{0, 0},
+		padding_top = datatypes.UDim{0, 0},
 		padding_bottom = datatypes.UDim{0, 0},
 	}
 }
@@ -70,15 +69,19 @@ ui_padding_set :: proc(
 	switch key {
 	case "PaddingLeft":
 		padding.padding_left = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		Gui_Layout_Mark_Dirty()
 		return true
 	case "PaddingRight":
 		padding.padding_right = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		Gui_Layout_Mark_Dirty()
 		return true
 	case "PaddingTop":
 		padding.padding_top = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		Gui_Layout_Mark_Dirty()
 		return true
 	case "PaddingBottom":
 		padding.padding_bottom = datatypes.Arg_UDim(L, value_index, datatype_registry)
+		Gui_Layout_Mark_Dirty()
 		return true
 	}
 
@@ -102,9 +105,9 @@ ui_padding_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^UIPadding)source
 	dst := cast(^UIPadding)destination
 
-	dst.padding_left   = src.padding_left
-	dst.padding_right  = src.padding_right
-	dst.padding_top    = src.padding_top
+	dst.padding_left = src.padding_left
+	dst.padding_right = src.padding_right
+	dst.padding_top = src.padding_top
 	dst.padding_bottom = src.padding_bottom
 }
 
@@ -117,11 +120,6 @@ Register_UIPadding :: proc(registry: ^Registry) {
 		get = ui_padding_get,
 		set = ui_padding_set,
 		clone = ui_padding_clone,
-		properties = []string{
-			"PaddingLeft",
-			"PaddingRight",
-			"PaddingTop",
-			"PaddingBottom",
-		},
+		properties = []string{"PaddingLeft", "PaddingRight", "PaddingTop", "PaddingBottom"},
 	)
 }

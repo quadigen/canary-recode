@@ -5,16 +5,16 @@ import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
-import "core:time"
 import windows "core:sys/windows"
+import "core:time"
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import luauh "../src/engine/vm/luauh"
+import sandbox "../src/sandboxed"
 
 PROCESS_MEMORY_COUNTERS :: struct {
 	cb:                         windows.DWORD,
@@ -33,11 +33,7 @@ foreign import psapi "system:Psapi.lib"
 
 @(default_calling_convention = "system")
 foreign psapi {
-	GetProcessMemoryInfo :: proc(
-		hProcess: windows.HANDLE,
-		ppsmemCounters: ^PROCESS_MEMORY_COUNTERS,
-		cb: windows.DWORD,
-	) -> windows.BOOL ---
+	GetProcessMemoryInfo :: proc(hProcess: windows.HANDLE, ppsmemCounters: ^PROCESS_MEMORY_COUNTERS, cb: windows.DWORD) -> windows.BOOL ---
 }
 
 process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
@@ -46,10 +42,11 @@ process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
 	if GetProcessMemoryInfo(windows.GetCurrentProcess(), &counters, counters.cb) == false {
 		return 0, 0
 	}
-	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0), f64(counters.PagefileUsage) / (1024.0 * 1024.0)
+	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0),
+		f64(counters.PagefileUsage) / (1024.0 * 1024.0)
 }
 
-EDITOR_SOURCE_CANDIDATES :: []string{
+EDITOR_SOURCE_CANDIDATES :: []string {
 	"C:/Users/devco/Documents/kinemium-editor/internal",
 	"../kinemium-editor/internal",
 	"../../kinemium-editor/internal",
@@ -67,41 +64,12 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-
-	archive, created := kineffi.Zip_Create(archive_path)
-	if !created {
-		return false
-	}
-
-	added := 0
-	for entry in entries {
-		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
-			continue
-		}
-
-		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
-		if read_err != nil {
-			continue
-		}
-
-		module_path := strings.concatenate({"internal/", entry.name})
-		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
-		delete(data, context.allocator)
-
-		if !stored {
-			_ = kineffi.Zip_Close(archive)
-			return false
-		}
-		added += 1
-	}
-
-	if !kineffi.Zip_Close(archive) || added == 0 {
+	added, ok := packages.Pack_Internal_Modules_From_Directory(
+		archive_path,
+		source_dir,
+		context.allocator,
+	)
+	if !ok {
 		return false
 	}
 
@@ -112,13 +80,7 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 snapshot :: proc(label: string, start: time.Time) {
 	elapsed := time.duration_seconds(time.since(start))
 	ws, priv := process_memory_mb()
-	fmt.printf(
-		"[LeakProbe] %-20s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n",
-		label,
-		ws,
-		priv,
-		elapsed,
-	)
+	fmt.printf("[LeakProbe] %-20s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n", label, ws, priv, elapsed)
 }
 
 run :: proc(v: ^vm.VM, source: string, chunk: string) {
@@ -128,7 +90,13 @@ run :: proc(v: ^vm.VM, source: string, chunk: string) {
 	}
 }
 
-frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.KineSkiaSurface, w, h: i32, n: int) {
+frames :: proc(
+	environment: ^engine_runtime.Environment,
+	v: ^vm.VM,
+	s: ^kineffi.KineSkiaSurface,
+	w, h: i32,
+	n: int,
+) {
 	for _ in 0 ..< n {
 		engine_runtime.Environment_Update_Step(environment, v, 1.0 / 60.0)
 		engine_runtime.Environment_Render_2D(environment, v, s, w, h, 1.0 / 60.0)
@@ -137,12 +105,13 @@ frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.
 }
 
 churn_chunk :: proc(mode: string) -> string {
-	// Recreate a VirtualizedScrolling ScrollingFrame with 20 rows each round.
+
 	case_mode := mode
 	_ = case_mode
 	switch mode {
 	case "virtscroll":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	if _G.__vsf ~= nil then _G.__vsf:Destroy() end
 	local sf = UI.create("ScrollingFrame", {
@@ -157,14 +126,16 @@ churn_chunk :: proc(mode: string) -> string {
 	for i = 1, 20 do
 		local row = UI.frame(sf, UDim2.fromOffset(0, i * 20), UDim2.fromOffset(396, 19), nil)
 		UI.label(row, "Row " .. i, UDim2.fromOffset(4, 2), UDim2.fromOffset(100, 15), nil, nil)
-		UI.image(row, "builtin://icons/ArrowRight.svg", UDim2.fromOffset(110, 3), UDim2.fromOffset(12, 12))
+		UI.image(row, "builtin:
 	end
 	_G.__vsf = sf
-	`
+	` \
+		)
 
-	// Breadcrumb-style churn: UI.clear + GetTextSize + label + UIShadow + image.
+
 	case "breadcrumb":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	local TextService = game:GetService("TextService")
 	local bc = _G.__breadcrumb
@@ -179,7 +150,7 @@ churn_chunk :: proc(mode: string) -> string {
 	UI.clear(bc)
 	local x = 8
 	for index, item in ipairs({"game", "Workspace", "Camera", "Part"}) do
-		local textSize = TextService:GetTextSize(item, 11, "builtin://fonts/Montserrat-Regular.ttf", Vector2.new(10000, 10000))
+		local textSize = TextService:GetTextSize(item, 11, "builtin:
 		local width = math.max(34, math.ceil(textSize.X) + 4)
 		local label = UI.label(bc, item, UDim2.fromOffset(x, 4), UDim2.fromOffset(width, 18), nil, Color3.new(1, 1, 1))
 		local shadow = Instance.new("UIShadow")
@@ -192,16 +163,17 @@ churn_chunk :: proc(mode: string) -> string {
 		shadow.Parent = label
 		x += width + 2
 		if index < 4 then
-			UI.image(bc, "builtin://icons/ArrowRight.svg", UDim2.fromOffset(x + 1, 7), UDim2.fromOffset(10, 10))
+			UI.image(bc, "builtin:
 			x += 13
 		end
 	end
-	`
+	` \
+		)
 
-	// Inspector-style churn: UI.clear on a ScrollingFrame + category bubbles
-	// with rows (label + textbutton/input + stroke + corner).
+
 	case "inspbubble":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	local sf = _G.__inssf
 	if sf == nil then
@@ -235,11 +207,13 @@ churn_chunk :: proc(mode: string) -> string {
 		end
 		y += 190
 	end
-	`
+	` \
+		)
 
-	// Bisect: UI.clear + labels + UIShadow only (no GetTextSize).
+
 	case "shadowonly":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	local bc = _G.__breadcrumb
 	if bc == nil then
@@ -264,11 +238,13 @@ churn_chunk :: proc(mode: string) -> string {
 		shadow.Parent = label
 		x += 65
 	end
-	`
+	` \
+		)
 
-	// Bisect: UI.clear + GetTextSize + labels (no UIShadow).
+
 	case "gtslabel":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	local TextService = game:GetService("TextService")
 	local bc = _G.__breadcrumb
@@ -283,17 +259,18 @@ churn_chunk :: proc(mode: string) -> string {
 	UI.clear(bc)
 	local x = 8
 	for _, item in ipairs({"game", "Workspace", "Camera", "Part"}) do
-		local textSize = TextService:GetTextSize(item, 11, "builtin://fonts/Montserrat-Regular.ttf", Vector2.new(10000, 10000))
+		local textSize = TextService:GetTextSize(item, 11, "builtin:
 		local width = math.max(34, math.ceil(textSize.X) + 4)
 		UI.label(bc, item, UDim2.fromOffset(x, 4), UDim2.fromOffset(width, 18), nil, Color3.new(1, 1, 1))
 		x += width + 2
 	end
-	`
+	` \
+		)
 
-	// Explorer exact shape: kept virtualized list + UI.clear + addRow-shaped
-	// rows (button + Activated connect + images + label).
+
 	case "explorer":
-		return `
+		return(
+			`
 	local UI = require("@internal/editor_ui")
 	local Selection = game:GetService("Selection")
 	local list = _G.__explorerlist
@@ -321,32 +298,37 @@ churn_chunk :: proc(mode: string) -> string {
 			_ = input
 			_ = clickCount
 		end)
-		UI.image(row, "builtin://icons/ArrowRight.svg", UDim2.fromOffset(7, 4), UDim2.fromOffset(12, 12))
-		UI.image(row, "builtin://icons/Part.svg", UDim2.fromOffset(23, 3), UDim2.fromOffset(14, 14))
+		UI.image(row, "builtin:
+		UI.image(row, "builtin:
 		UI.label(row, "Instance" .. i, UDim2.fromOffset(38, 2), UDim2.new(1, -41, 0, 17), nil, nil)
 		y += 20
 	end
-	`
+	` \
+		)
 
-	// Pure GetTextSize churn.
+
 	case "gettextsize":
-		return `
+		return(
+			`
 	local TextService = game:GetService("TextService")
 	for i = 1, 30 do
-		local ts = TextService:GetTextSize("Some Label Text " .. i, 11, "builtin://fonts/Montserrat-Regular.ttf", Vector2.new(10000, 10000))
+		local ts = TextService:GetTextSize("Some Label Text " .. i, 11, "builtin:
 		_ = ts
 	end
-	`
+	` \
+		)
 
-	// Control: the real selection churn.
+
 	case "sel":
-		return `
+		return(
+			`
 	local Selection = game:GetService("Selection")
 	local list = _G.__sel_candidates
 	local index = _G.__sel_index
 	_G.__sel_index = (index % #list) + 1
 	Selection:Set({ list[index] })
-	`
+	` \
+		)
 	}
 	return ""
 }
@@ -390,7 +372,9 @@ main :: proc() {
 	frames(&environment, &script_vm, surface, width, height, 20)
 	snapshot("warmup", time.now())
 
-	run(&script_vm, `
+	run(
+		&script_vm,
+		`
 	local Selection = game:GetService("Selection")
 	local candidates = {}
 	for _, child in ipairs(game:GetChildren()) do
@@ -398,7 +382,9 @@ main :: proc() {
 	end
 	_G.__sel_candidates = candidates
 	_G.__sel_index = 1
-	`, "probe13_boot")
+	`,
+		"probe13_boot",
+	)
 
 	chunk := churn_chunk(mode)
 	assert(chunk != "", "unknown churn mode")

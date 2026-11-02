@@ -7,6 +7,7 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import fsutil "../fsutil"
 import target "../target"
 import vm "../vm"
 import "core:fmt"
@@ -35,6 +36,7 @@ Exporter_Bake :: proc(
 	game_name: string,
 	map_bytes: []u8,
 	kind: Exporter_Kind,
+	p: Target_Platform,
 ) -> (
 	ok: bool,
 	message: string,
@@ -48,7 +50,7 @@ Exporter_Bake :: proc(
 	if folder == "" {
 		return false, "Destination folder must not be empty"
 	}
-	if os.make_directory_all(folder) != nil && !os.is_directory(folder) {
+	if fsutil.Make_Directory_All(folder) != nil && !os.is_directory(folder) {
 		return false, fmt.tprintf("Could not create the destination folder %s", folder)
 	}
 	targets: [dynamic]Exporter_Kind
@@ -62,7 +64,7 @@ Exporter_Bake :: proc(
 		template_kind := Template_Kind.Server if candidate == .Server else Template_Kind.Client
 		mode := target.Mode.Server if candidate == .Server else target.Mode.Client
 		base := "KinemiumServer" if candidate == .Server else "KinemiumClient"
-		file_name := strings.concatenate({base, template_binary_ext()})
+		file_name := strings.concatenate({base, p.ext})
 		destination, join_err := filepath.join([]string{folder, file_name}, context.allocator)
 		delete(file_name)
 		if join_err != nil {
@@ -70,6 +72,7 @@ Exporter_Bake :: proc(
 		}
 		exe_ok, exe_problem := ExportToExecutable(
 			template_kind,
+			p,
 			destination,
 			mode,
 			address,
@@ -156,6 +159,20 @@ exporter_service_namecall :: proc(
 		address := vm.ArgString(L, 4)
 		port := i32(vm.ArgNumber(L, 5))
 		game_file := vm.ArgString(L, 6)
+		platform := Template_Host_Platform()
+		if !vm.IsNoneOrNil(L, 7) {
+			os_name := vm.ArgString(L, 7)
+			arch_name := vm.ArgString(L, 8)
+			p, ok := Template_Platform_From(os_name, arch_name)
+			if !ok {
+				return vm.RaiseError(
+						L,
+						fmt.tprintf("ExporterService: unknown platform %s", os_name),
+					),
+					true
+			}
+			platform = p
+		}
 		kind, kind_ok := exporter_kind_from_string(kind_name)
 		if folder == "" || address == "" || game_file == "" || !kind_ok {
 			return vm.RaiseError(
@@ -181,7 +198,15 @@ exporter_service_namecall :: proc(
 		}
 		defer delete(map_bytes)
 		game_name := filepath.base(game_file)
-		bake_ok, message := Exporter_Bake(folder, address, u16(port), game_name, map_bytes, kind)
+		bake_ok, message := Exporter_Bake(
+			folder,
+			address,
+			u16(port),
+			game_name,
+			map_bytes,
+			kind,
+			platform,
+		)
 		if !bake_ok {
 			return vm.RaiseError(
 					L,

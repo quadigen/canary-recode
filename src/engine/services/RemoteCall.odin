@@ -1,13 +1,10 @@
-#+build !js
 package services
 
-// wire:remote-call
 
 import classes "../classes"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
-import enet "vendor:ENet"
 
 REMOTE_FUNCTION_TIMEOUT_MS :: 10_000
 
@@ -16,13 +13,16 @@ Remote_Invoke_Pending :: struct {
 	invoke_id:  u32,
 	thread:     ^vm.State,
 	thread_ref: i32,
-	deadline:   u32, // enet.time_get() ms when the call must be answered
+	deadline:   u32,
 }
 
 remote_find_player_peer :: proc(
 	service: ^ReplicatorService,
 	player_object: ^classes.Object,
-) -> (^enet.Peer, ^Replication_Peer) {
+) -> (
+	^Replication_Transport_Peer,
+	^Replication_Peer,
+) {
 	if service == nil || service.mode != .Server {
 		return nil, nil
 	}
@@ -36,12 +36,7 @@ remote_find_player_peer :: proc(
 	return nil, nil
 }
 
-remote_encode_args :: proc(
-	L: ^vm.State,
-	first: int,
-	last: int,
-	bytes: ^[dynamic]u8,
-) -> bool {
+remote_encode_args :: proc(L: ^vm.State, first: int, last: int, bytes: ^[dynamic]u8) -> bool {
 	for index := first; index <= last; index += 1 {
 		if !replication_encode_value(L, index, bytes, 0) {
 			return false
@@ -52,7 +47,7 @@ remote_encode_args :: proc(
 
 remote_send_fire :: proc(
 	service: ^ReplicatorService,
-	peer: ^enet.Peer,
+	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	args: []u8,
 ) -> bool {
@@ -65,7 +60,7 @@ remote_send_fire :: proc(
 
 remote_send_invoke_request :: proc(
 	service: ^ReplicatorService,
-	peer: ^enet.Peer,
+	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	invoke_id: u32,
 	args: []u8,
@@ -80,7 +75,7 @@ remote_send_invoke_request :: proc(
 
 remote_send_invoke_result :: proc(
 	service: ^ReplicatorService,
-	peer: ^enet.Peer,
+	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	invoke_id: u32,
 	results: []u8,
@@ -96,7 +91,7 @@ remote_send_invoke_result :: proc(
 
 remote_send_invoke_error :: proc(
 	service: ^ReplicatorService,
-	peer: ^enet.Peer,
+	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	invoke_id: u32,
 	message: string,
@@ -122,11 +117,11 @@ remote_yield_for_invoke :: proc(
 	append(
 		&service.invoke_pending,
 		Remote_Invoke_Pending {
-			entity_id  = entity_id,
-			invoke_id  = invoke_id,
-			thread     = L,
+			entity_id = entity_id,
+			invoke_id = invoke_id,
+			thread = L,
 			thread_ref = thread_ref,
-			deadline   = enet.time_get() + REMOTE_FUNCTION_TIMEOUT_MS,
+			deadline = transport_time_get() + REMOTE_FUNCTION_TIMEOUT_MS,
 		},
 	)
 	service.next_invoke_id += 1
@@ -137,7 +132,10 @@ remote_call_dispatch :: proc(
 	L: ^vm.State,
 	instance: ^classes.Object,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	if instance == nil || instance.destroyed || ctx == nil {
 		return 0, false
 	}
@@ -169,7 +167,7 @@ remote_call_dispatch :: proc(
 					bytes[:],
 				)
 			case .Server:
-				// Roblox semantics: FireServer on the server is a no-op.
+
 			case .Stopped:
 				vm.PushNil(L)
 				for index := 2; index <= top; index += 1 {
@@ -187,7 +185,8 @@ remote_call_dispatch :: proc(
 					target = cast(^classes.Object)vm.UserdataValue(L, 2)
 				}
 				if target == nil || !classes.Is_A(target, "Player") {
-					return vm.RaiseError(L, "FireClient expects a Player as the first argument"), true
+					return vm.RaiseError(L, "FireClient expects a Player as the first argument"),
+						true
 				}
 				first_arg = 3
 			}
@@ -212,7 +211,7 @@ remote_call_dispatch :: proc(
 					}
 				}
 			case .Client:
-				// Roblox semantics: FireClient on the client is a no-op.
+
 			case .Stopped:
 				signal := classes.RemoteEvent_Client_Signal(cast(^classes.RemoteEvent)instance)
 				signals.Fire(L, signal, max(top - first_arg + 1, 0))
@@ -243,14 +242,8 @@ remote_call_dispatch :: proc(
 			case .Server:
 				return vm.RaiseError(L, "InvokeServer can only be called from a client"), true
 			case .Stopped:
-				return remote_invoke_loopback(
-					replicator,
-					L,
-					instance,
-					2,
-					max(top - 1, 0),
-					true,
-				), true
+				return remote_invoke_loopback(replicator, L, instance, 2, max(top - 1, 0), true),
+					true
 			}
 			return 0, true
 		case "InvokeClient", "InvokeClients":
@@ -261,7 +254,8 @@ remote_call_dispatch :: proc(
 					target = cast(^classes.Object)vm.UserdataValue(L, 2)
 				}
 				if target == nil || !classes.Is_A(target, "Player") {
-					return vm.RaiseError(L, "InvokeClient expects a Player as the first argument"), true
+					return vm.RaiseError(L, "InvokeClient expects a Player as the first argument"),
+						true
 				}
 				first_arg = 3
 			}
@@ -278,12 +272,26 @@ remote_call_dispatch :: proc(
 				if method == "InvokeClient" {
 					peer, _ := remote_find_player_peer(replicator, target)
 					if peer != nil {
-						sent = remote_send_invoke_request(replicator, peer, entity_id, invoke_id, bytes[:])
+						sent = remote_send_invoke_request(
+							replicator,
+							peer,
+							entity_id,
+							invoke_id,
+							bytes[:],
+						)
 					}
 				} else {
 					for &connection in replicator.peers {
 						if connection.peer != nil {
-							sent = remote_send_invoke_request(replicator, connection.peer, entity_id, invoke_id, bytes[:]) || sent
+							sent =
+								remote_send_invoke_request(
+									replicator,
+									connection.peer,
+									entity_id,
+									invoke_id,
+									bytes[:],
+								) ||
+								sent
 						}
 					}
 				}
@@ -296,13 +304,14 @@ remote_call_dispatch :: proc(
 				return vm.RaiseError(L, "InvokeClient can only be called from the server"), true
 			case .Stopped:
 				return remote_invoke_loopback(
-					replicator,
-					L,
-					instance,
-					first_arg,
-					max(top - first_arg + 1, 0),
-					false,
-				), true
+						replicator,
+						L,
+						instance,
+						first_arg,
+						max(top - first_arg + 1, 0),
+						false,
+					),
+					true
 			}
 			return 0, true
 		}
@@ -316,7 +325,7 @@ remote_invoke_loopback :: proc(
 	instance: ^classes.Object,
 	first_arg_index: int,
 	arg_count: int,
-	server_side: bool, // true = run OnServerInvoke handler (InvokeServer)
+	server_side: bool,
 ) -> i32 {
 	remote_function := cast(^classes.RemoteFunction)instance
 	handler: i32
@@ -336,7 +345,7 @@ remote_invoke_loopback :: proc(
 
 	vm.PushRegistryReference(L, handler)
 	if server_side {
-		// OnServerInvoke receives the player first; the loopback has none.
+
 		vm.PushNil(L)
 	}
 	for offset := 0; offset < arg_count; offset += 1 {
@@ -354,12 +363,11 @@ remote_invoke_loopback :: proc(
 	return i32(max(vm.StackTop(L) - base, 0))
 }
 
-// ---- receive side ----------------------------------------------------------
 
 remote_receive_fire :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
-	peer: ^enet.Peer,
+	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	reader: ^Replication_Reader,
 ) {
@@ -375,8 +383,7 @@ remote_receive_fire :: proc(
 	top := vm.StackTop(L)
 	defer vm.SetStackTop(L, top)
 
-	// On the server the player is the first callback argument, so push it
-	// before decoding the data arguments.
+
 	player_object: ^classes.Object
 	offset_before := 0
 	if service.mode == .Server {
@@ -394,7 +401,7 @@ remote_receive_fire :: proc(
 
 	arg_count := offset_before
 	for reader.valid && reader.offset < len(reader.data) {
-		replication_decode_value(L, reader, service.signal_registry.datatypes, 0)
+		replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 		if !reader.valid {
 			return
 		}
@@ -413,12 +420,12 @@ remote_receive_fire :: proc(
 remote_run_invoke :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
-	request_peer: ^enet.Peer,
+	request_peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	invoke_id: u32,
 	reader: ^Replication_Reader,
 ) {
-entity := replication_entity_by_id(service, entity_id)
+	entity := replication_entity_by_id(service, entity_id)
 	if entity == nil || entity.object == nil || entity.object.destroyed {
 		reader.offset = len(reader.data)
 		return
@@ -456,7 +463,7 @@ entity := replication_entity_by_id(service, entity_id)
 
 	arg_count := 0
 	for reader.valid && reader.offset < len(reader.data) {
-		replication_decode_value(L, reader, service.signal_registry.datatypes, 0)
+		replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 		if !reader.valid {
 			reader.valid = false
 			return
@@ -518,8 +525,7 @@ remote_receive_invoke_response :: proc(
 
 	pending_index := -1
 	for pending, index in service.invoke_pending {
-		if pending.invoke_id == invoke_id &&
-		   pending.entity_id == entity_id {
+		if pending.invoke_id == invoke_id && pending.entity_id == entity_id {
 			pending_index = index
 			break
 		}
@@ -537,7 +543,7 @@ remote_receive_invoke_response :: proc(
 	value_count := 0
 	if status == 1 {
 		for reader.valid && reader.offset < len(reader.data) {
-			replication_decode_value(L, reader, service.signal_registry.datatypes, 0)
+			replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 			if !reader.valid {
 				value_count = 0
 				vm.PushNil(L)
@@ -575,7 +581,7 @@ remote_invoke_timeouts :: proc(service: ^ReplicatorService, L: ^vm.State) {
 	if service == nil || L == nil || len(service.invoke_pending) == 0 {
 		return
 	}
-	now := enet.time_get()
+	now := transport_time_get()
 	for index := len(service.invoke_pending) - 1; index >= 0; index -= 1 {
 		pending := service.invoke_pending[index]
 		if transmute(i32)(now - pending.deadline) < 0 {

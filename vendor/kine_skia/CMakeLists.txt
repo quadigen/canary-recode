@@ -36,13 +36,14 @@ set(
     KINE_SKIA_BACKEND
     "VULKAN"
     CACHE STRING
-    "Skia build backend: VULKAN or RASTER"
+    "Skia build backend: VULKAN, OPENGL or RASTER"
 )
 
 set_property(
     CACHE KINE_SKIA_BACKEND
     PROPERTY STRINGS
         VULKAN
+        OPENGL
         RASTER
 )
 
@@ -122,11 +123,13 @@ string(
 if(
     NOT KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN"
     AND
+    NOT KINE_SKIA_BACKEND_UPPER STREQUAL "OPENGL"
+    AND
     NOT KINE_SKIA_BACKEND_UPPER STREQUAL "RASTER"
 )
     message(
         FATAL_ERROR
-        "KINE_SKIA_BACKEND must be VULKAN or RASTER"
+        "KINE_SKIA_BACKEND must be VULKAN, OPENGL or RASTER"
     )
 endif()
 
@@ -453,6 +456,14 @@ if(
             "skia_use_vulkan=true"
             "skia_use_gl=false"
         )
+    elseif(KINE_SKIA_BACKEND_UPPER STREQUAL "OPENGL")
+        list(
+            APPEND
+            KINE_SKIA_GN_ARGS
+
+            "skia_use_vulkan=false"
+            "skia_use_gl=true"
+        )
     else()
         list(
             APPEND
@@ -705,6 +716,13 @@ if(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
                 Vulkan::Vulkan
         )
     endif()
+elseif(KINE_SKIA_BACKEND_UPPER STREQUAL "OPENGL")
+    target_compile_definitions(
+        kine_skia
+
+        PRIVATE
+            KINE_SKIA_BUILD_GL=1
+    )
 endif()
 
 # -----------------------------------------------------------------------------
@@ -722,6 +740,15 @@ if(WIN32)
             shell32
             advapi32
     )
+
+    if(KINE_SKIA_BACKEND_UPPER STREQUAL "OPENGL")
+        target_link_libraries(
+            kine_skia
+
+            PRIVATE
+                opengl32
+        )
+    endif()
 
 elseif(APPLE)
     target_link_libraries(
@@ -742,6 +769,23 @@ elseif(ANDROID)
             dl
             m
     )
+
+    if(KINE_SKIA_BACKEND_UPPER STREQUAL "OPENGL")
+        target_link_libraries(
+            kine_skia
+
+            PRIVATE
+                EGL
+                GLESv3
+        )
+    elseif(KINE_SKIA_BACKEND_UPPER STREQUAL "VULKAN")
+        target_link_libraries(
+            kine_skia
+
+            PRIVATE
+                vulkan
+        )
+    endif()
 
 else()
     target_link_libraries(

@@ -3,16 +3,16 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import "core:time"
 import windows "core:sys/windows"
+import "core:time"
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import luauh "../src/engine/vm/luauh"
+import sandbox "../src/sandboxed"
 
 PROCESS_MEMORY_COUNTERS :: struct {
 	cb:                         windows.DWORD,
@@ -31,11 +31,7 @@ foreign import psapi "system:Psapi.lib"
 
 @(default_calling_convention = "system")
 foreign psapi {
-	GetProcessMemoryInfo :: proc(
-		hProcess: windows.HANDLE,
-		ppsmemCounters: ^PROCESS_MEMORY_COUNTERS,
-		cb: windows.DWORD,
-	) -> windows.BOOL ---
+	GetProcessMemoryInfo :: proc(hProcess: windows.HANDLE, ppsmemCounters: ^PROCESS_MEMORY_COUNTERS, cb: windows.DWORD) -> windows.BOOL ---
 }
 
 process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
@@ -44,10 +40,11 @@ process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
 	if GetProcessMemoryInfo(windows.GetCurrentProcess(), &counters, counters.cb) == false {
 		return 0, 0
 	}
-	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0), f64(counters.PagefileUsage) / (1024.0 * 1024.0)
+	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0),
+		f64(counters.PagefileUsage) / (1024.0 * 1024.0)
 }
 
-EDITOR_SOURCE_CANDIDATES :: []string{
+EDITOR_SOURCE_CANDIDATES :: []string {
 	"C:/Users/devco/Documents/kinemium-editor/internal",
 	"../kinemium-editor/internal",
 	"../../kinemium-editor/internal",
@@ -65,41 +62,12 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-
-	archive, created := kineffi.Zip_Create(archive_path)
-	if !created {
-		return false
-	}
-
-	added := 0
-	for entry in entries {
-		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
-			continue
-		}
-
-		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
-		if read_err != nil {
-			continue
-		}
-
-		module_path := strings.concatenate({"internal/", entry.name})
-		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
-		delete(data, context.allocator)
-
-		if !stored {
-			_ = kineffi.Zip_Close(archive)
-			return false
-		}
-		added += 1
-	}
-
-	if !kineffi.Zip_Close(archive) || added == 0 {
+	added, ok := packages.Pack_Internal_Modules_From_Directory(
+		archive_path,
+		source_dir,
+		context.allocator,
+	)
+	if !ok {
 		return false
 	}
 
@@ -110,13 +78,7 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 snapshot :: proc(label: string, start: time.Time) {
 	elapsed := time.duration_seconds(time.since(start))
 	ws, priv := process_memory_mb()
-	fmt.printf(
-		"[LeakProbe] %-20s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n",
-		label,
-		ws,
-		priv,
-		elapsed,
-	)
+	fmt.printf("[LeakProbe] %-20s mem(ws=%.1fMB priv=%.1fMB) | %.2fs\n", label, ws, priv, elapsed)
 }
 
 run :: proc(v: ^vm.VM, source: string, chunk: string) {
@@ -126,7 +88,13 @@ run :: proc(v: ^vm.VM, source: string, chunk: string) {
 	}
 }
 
-frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.KineSkiaSurface, w, h: i32, n: int) {
+frames :: proc(
+	environment: ^engine_runtime.Environment,
+	v: ^vm.VM,
+	s: ^kineffi.KineSkiaSurface,
+	w, h: i32,
+	n: int,
+) {
 	for _ in 0 ..< n {
 		engine_runtime.Environment_Update_Step(environment, v, 1.0 / 60.0)
 		engine_runtime.Environment_Render_2D(environment, v, s, w, h, 1.0 / 60.0)
@@ -164,7 +132,9 @@ main :: proc() {
 	frames(&environment, &script_vm, surface, width, height, 20)
 	snapshot("warmup", time.now())
 
-	run(&script_vm, `
+	run(
+		&script_vm,
+		`
 	local Selection = game:GetService("Selection")
 	local candidates = {}
 	for _, child in ipairs(game:GetChildren()) do
@@ -172,10 +142,14 @@ main :: proc() {
 	end
 	_G.__sel_candidates = candidates
 	_G.__sel_index = 1
-	`, "probe9_boot")
+	`,
+		"probe9_boot",
+	)
 
-	// Baseline class histogram stored in _G.
-	run(&script_vm, `
+
+	run(
+		&script_vm,
+		`
 	local counts = {}
 	local stack = {game}
 	while #stack > 0 do
@@ -191,26 +165,34 @@ main :: proc() {
 	local total = 0
 	for _, c in pairs(counts) do total += c end
 	print("[ClassCounts] baseline total=" .. total)
-	`, "probe9_baseline")
+	`,
+		"probe9_baseline",
+	)
 
 	for round in 0 ..< 3 {
 		start := time.now()
 		for _ in 0 ..< 30 {
-			run(&script_vm, `
+			run(
+				&script_vm,
+				`
 			local Selection = game:GetService("Selection")
 			local list = _G.__sel_candidates
 			local index = _G.__sel_index
 			_G.__sel_index = (index % #list) + 1
 			Selection:Set({ list[index] })
-			`, "probe9_sel")
+			`,
+				"probe9_sel",
+			)
 			frames(&environment, &script_vm, surface, width, height, 1)
 		}
 		luauh.lua_gc(script_vm.L, 2, 0)
 		snapshot(fmt.tprintf("sel r%d", round), start)
 	}
 
-	// Final histogram + diff.
-	run(&script_vm, `
+
+	run(
+		&script_vm,
+		`
 	local counts = {}
 	local stack = {game}
 	while #stack > 0 do
@@ -251,7 +233,9 @@ main :: proc() {
 		end
 		print(("[CoreGui]   %-28s subtree=%d"):format(child.Name, n))
 	end
-	`, "probe9_diff")
+	`,
+		"probe9_diff",
+	)
 
 	fmt.println("EDITOR_LEAK_PROBE9_DONE")
 }

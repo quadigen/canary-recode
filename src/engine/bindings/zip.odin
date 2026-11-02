@@ -3,11 +3,12 @@ package kineffi
 
 import "core:c"
 import "core:mem"
-import "core:strings"
 import "core:os"
 import "core:path/filepath"
 import "core:path/slashpath"
+import "core:strings"
 
+import fsutil "../fsutil"
 import zip "./miniz"
 
 ZIP_DEFAULT_COMPRESSION :: zip.mz_uint(0xFFFF_FFFF)
@@ -24,10 +25,7 @@ Zip_Handle :: struct {
 	allocator: mem.Allocator,
 }
 
-zip_safe_entry_path :: proc(
-	name: string,
-	strip_root: bool,
-) -> (string, bool) {
+zip_safe_entry_path :: proc(name: string, strip_root: bool) -> (string, bool) {
 	if len(name) == 0 {
 		return "", false
 	}
@@ -38,14 +36,9 @@ zip_safe_entry_path :: proc(
 		return "", false
 	}
 
-	cleaned := slashpath.clean(
-		name,
-		context.temp_allocator,
-	)
+	cleaned := slashpath.clean(name, context.temp_allocator)
 
-	if slashpath.is_abs(cleaned) ||
-	   cleaned == ".." ||
-	   strings.has_prefix(cleaned, "../") {
+	if slashpath.is_abs(cleaned) || cleaned == ".." || strings.has_prefix(cleaned, "../") {
 		return "", false
 	}
 
@@ -75,66 +68,49 @@ Zip_Extract_All :: proc(
 		return false
 	}
 
-	if err := os.make_directory_all(destination); err != nil {
+	if err := fsutil.Make_Directory_All(destination); err != nil {
 		return false
 	}
 
-	file_count := zip.mz_zip_reader_get_num_files(
-		&handle.archive,
-	)
+	file_count := zip.mz_zip_reader_get_num_files(&handle.archive)
 
 	for index := zip.mz_uint(0); index < file_count; index += 1 {
-		filename_size := zip.mz_zip_reader_get_filename(
-			&handle.archive,
-			index,
-			nil,
-			0,
-		)
+		filename_size := zip.mz_zip_reader_get_filename(&handle.archive, index, nil, 0)
 
 		if filename_size == 0 {
 			return false
 		}
 
-		filename_buffer := make(
-			[]u8,
-			int(filename_size),
-		)
+		filename_buffer := make([]u8, int(filename_size))
 		defer delete(filename_buffer)
 
-		filename_cstring := cast(cstring)raw_data(
-			filename_buffer,
-		)
+		filename_cstring := cast(cstring)raw_data(filename_buffer)
 
 		if zip.mz_zip_reader_get_filename(
-			&handle.archive,
-			index,
-			filename_cstring,
-			filename_size,
-		) == 0 {
+			   &handle.archive,
+			   index,
+			   filename_cstring,
+			   filename_size,
+		   ) ==
+		   0 {
 			return false
 		}
 
 		archive_path := string(filename_cstring)
 
-		safe_path, safe := zip_safe_entry_path(
-			archive_path,
-			strip_root,
-		)
+		safe_path, safe := zip_safe_entry_path(archive_path, strip_root)
 
 		if !safe {
 			return false
 		}
 
-		// Can happen when stripping the ZIP's root directory.
+
 		if len(safe_path) == 0 {
 			continue
 		}
 
 		output_path, path_err := filepath.join(
-			[]string{
-				destination,
-				safe_path,
-			},
+			[]string{destination, safe_path},
 			context.temp_allocator,
 		)
 
@@ -143,15 +119,10 @@ Zip_Extract_All :: proc(
 		}
 
 		is_directory :=
-			zip.mz_zip_reader_is_file_a_directory(
-				&handle.archive,
-				index,
-			) != zip.MZ_FALSE
+			zip.mz_zip_reader_is_file_a_directory(&handle.archive, index) != zip.MZ_FALSE
 
 		if is_directory {
-			if err := os.make_directory_all(
-				output_path,
-			); err != nil {
+			if err := fsutil.Make_Directory_All(output_path); err != nil {
 				return false
 			}
 
@@ -160,24 +131,18 @@ Zip_Extract_All :: proc(
 
 		parent := os.dir(output_path)
 
-		if err := os.make_directory_all(parent); err != nil {
+		if err := fsutil.Make_Directory_All(parent); err != nil {
 			return false
 		}
 
-		c_output, c_error := strings.clone_to_cstring(
-			output_path,
-		)
+		c_output, c_error := strings.clone_to_cstring(output_path)
 
 		if c_error != nil {
 			return false
 		}
 
-		extracted := zip.mz_zip_reader_extract_to_file(
-			&handle.archive,
-			index,
-			c_output,
-			0,
-		) != zip.MZ_FALSE
+		extracted :=
+			zip.mz_zip_reader_extract_to_file(&handle.archive, index, c_output, 0) != zip.MZ_FALSE
 
 		delete(c_output)
 
@@ -207,11 +172,7 @@ Zip_Open :: proc(path: string) -> (^Zip_Handle, bool) {
 	}
 	defer delete(c_path)
 
-	if zip.mz_zip_reader_init_file(
-		&handle.archive,
-		c_path,
-		0,
-	) == zip.MZ_FALSE {
+	if zip.mz_zip_reader_init_file(&handle.archive, c_path, 0) == zip.MZ_FALSE {
 		_ = mem.free(handle, handle.allocator)
 		return nil, false
 	}
@@ -258,22 +219,12 @@ Zip_File_Count :: proc(handle: ^Zip_Handle) -> u32 {
 	return u32(zip.mz_zip_reader_get_num_files(&handle.archive))
 }
 
-Zip_File_Name :: proc(
-	handle: ^Zip_Handle,
-	index: u32,
-) -> (string, bool) {
-	if handle == nil ||
-	   handle.mode != .Reader ||
-	   index >= Zip_File_Count(handle) {
+Zip_File_Name :: proc(handle: ^Zip_Handle, index: u32) -> (string, bool) {
+	if handle == nil || handle.mode != .Reader || index >= Zip_File_Count(handle) {
 		return "", false
 	}
 
-	filename_size := zip.mz_zip_reader_get_filename(
-		&handle.archive,
-		zip.mz_uint(index),
-		nil,
-		0,
-	)
+	filename_size := zip.mz_zip_reader_get_filename(&handle.archive, zip.mz_uint(index), nil, 0)
 
 	if filename_size == 0 {
 		return "", false
@@ -284,34 +235,25 @@ Zip_File_Name :: proc(
 
 	filename := cast(cstring)raw_data(filename_buffer)
 	if zip.mz_zip_reader_get_filename(
-		&handle.archive,
-		zip.mz_uint(index),
-		filename,
-		filename_size,
-	) == 0 {
+		   &handle.archive,
+		   zip.mz_uint(index),
+		   filename,
+		   filename_size,
+	   ) ==
+	   0 {
 		return "", false
 	}
 
 	return strings.clone(string(filename)), true
 }
 
-Zip_Read_Index :: proc(
-	handle: ^Zip_Handle,
-	index: u32,
-) -> ([]u8, bool) {
-	if handle == nil ||
-	   handle.mode != .Reader ||
-	   index >= Zip_File_Count(handle) {
+Zip_Read_Index :: proc(handle: ^Zip_Handle, index: u32) -> ([]u8, bool) {
+	if handle == nil || handle.mode != .Reader || index >= Zip_File_Count(handle) {
 		return nil, false
 	}
 
 	size: c.size_t
-	data := zip.mz_zip_reader_extract_to_heap(
-		&handle.archive,
-		zip.mz_uint(index),
-		&size,
-		0,
-	)
+	data := zip.mz_zip_reader_extract_to_heap(&handle.archive, zip.mz_uint(index), &size, 0)
 
 	if data == nil {
 		return nil, false
@@ -326,10 +268,7 @@ Zip_Read_Index :: proc(
 	return result, true
 }
 
-Zip_Has_File :: proc(
-	handle: ^Zip_Handle,
-	path: string,
-) -> bool {
+Zip_Has_File :: proc(handle: ^Zip_Handle, path: string) -> bool {
 	if handle == nil || handle.mode != .Reader {
 		return false
 	}
@@ -340,20 +279,12 @@ Zip_Has_File :: proc(
 	}
 	defer delete(c_path)
 
-	index := zip.mz_zip_reader_locate_file(
-		&handle.archive,
-		c_path,
-		nil,
-		0,
-	)
+	index := zip.mz_zip_reader_locate_file(&handle.archive, c_path, nil, 0)
 
 	return index >= 0
 }
 
-Zip_Read :: proc(
-	handle: ^Zip_Handle,
-	path: string,
-) -> ([]u8, bool) {
+Zip_Read :: proc(handle: ^Zip_Handle, path: string) -> ([]u8, bool) {
 	if handle == nil || handle.mode != .Reader {
 		return nil, false
 	}
@@ -366,12 +297,7 @@ Zip_Read :: proc(
 
 	size: c.size_t
 
-	data := zip.mz_zip_reader_extract_file_to_heap(
-		&handle.archive,
-		c_path,
-		&size,
-		0,
-	)
+	data := zip.mz_zip_reader_extract_file_to_heap(&handle.archive, c_path, &size, 0)
 
 	if data == nil {
 		return nil, false
@@ -382,10 +308,7 @@ Zip_Read :: proc(
 	result := make([]u8, int(size))
 
 	if size > 0 {
-		source := mem.slice_ptr(
-			cast(^u8)data,
-			int(size),
-		)
+		source := mem.slice_ptr(cast(^u8)data, int(size))
 
 		copy(result, source)
 	}
@@ -393,10 +316,7 @@ Zip_Read :: proc(
 	return result, true
 }
 
-Zip_Read_String :: proc(
-	handle: ^Zip_Handle,
-	path: string,
-) -> (string, bool) {
+Zip_Read_String :: proc(handle: ^Zip_Handle, path: string) -> (string, bool) {
 	data, ok := Zip_Read(handle, path)
 	if !ok {
 		return "", false
@@ -408,11 +328,7 @@ Zip_Read_String :: proc(
 	return result, true
 }
 
-Zip_Extract :: proc(
-	handle: ^Zip_Handle,
-	archive_path: string,
-	destination: string,
-) -> bool {
+Zip_Extract :: proc(handle: ^Zip_Handle, archive_path: string, destination: string) -> bool {
 	if handle == nil || handle.mode != .Reader {
 		return false
 	}
@@ -429,12 +345,15 @@ Zip_Extract :: proc(
 	}
 	defer delete(c_destination)
 
-	return zip.mz_zip_reader_extract_file_to_file(
-		&handle.archive,
-		c_archive_path,
-		c_destination,
-		0,
-	) != zip.MZ_FALSE
+	return(
+		zip.mz_zip_reader_extract_file_to_file(
+			&handle.archive,
+			c_archive_path,
+			c_destination,
+			0,
+		) !=
+		zip.MZ_FALSE \
+	)
 }
 
 Zip_Create :: proc(path: string) -> (^Zip_Handle, bool) {
@@ -455,11 +374,7 @@ Zip_Create :: proc(path: string) -> (^Zip_Handle, bool) {
 	}
 	defer delete(c_path)
 
-	if zip.mz_zip_writer_init_file(
-		&handle.archive,
-		c_path,
-		0,
-	) == zip.MZ_FALSE {
+	if zip.mz_zip_writer_init_file(&handle.archive, c_path, 0) == zip.MZ_FALSE {
 		_ = mem.free(handle, handle.allocator)
 		return nil, false
 	}
@@ -473,9 +388,7 @@ Zip_Add_File :: proc(
 	source_path: string,
 	compression: zip.mz_uint = ZIP_DEFAULT_COMPRESSION,
 ) -> bool {
-	if handle == nil ||
-	   handle.mode != .Writer ||
-	   handle.finalized {
+	if handle == nil || handle.mode != .Writer || handle.finalized {
 		return false
 	}
 
@@ -491,14 +404,10 @@ Zip_Add_File :: proc(
 	}
 	defer delete(c_source)
 
-	return zip.mz_zip_writer_add_file(
-		&handle.archive,
-		c_archive,
-		c_source,
-		nil,
-		0,
-		compression,
-	) != zip.MZ_FALSE
+	return(
+		zip.mz_zip_writer_add_file(&handle.archive, c_archive, c_source, nil, 0, compression) !=
+		zip.MZ_FALSE \
+	)
 }
 
 Zip_Add_Data :: proc(
@@ -507,9 +416,7 @@ Zip_Add_Data :: proc(
 	data: []u8,
 	compression: zip.mz_uint = ZIP_DEFAULT_COMPRESSION,
 ) -> bool {
-	if handle == nil ||
-	   handle.mode != .Writer ||
-	   handle.finalized {
+	if handle == nil || handle.mode != .Writer || handle.finalized {
 		return false
 	}
 
@@ -525,13 +432,16 @@ Zip_Add_Data :: proc(
 		data_ptr = raw_data(data)
 	}
 
-	return zip.mz_zip_writer_add_mem(
-		&handle.archive,
-		c_archive,
-		data_ptr,
-		c.size_t(len(data)),
-		compression,
-	) != zip.MZ_FALSE
+	return(
+		zip.mz_zip_writer_add_mem(
+			&handle.archive,
+			c_archive,
+			data_ptr,
+			c.size_t(len(data)),
+			compression,
+		) !=
+		zip.MZ_FALSE \
+	)
 }
 
 Zip_Add_String :: proc(
@@ -540,9 +450,7 @@ Zip_Add_String :: proc(
 	data: string,
 	compression: zip.mz_uint = ZIP_DEFAULT_COMPRESSION,
 ) -> bool {
-	if handle == nil ||
-	   handle.mode != .Writer ||
-	   handle.finalized {
+	if handle == nil || handle.mode != .Writer || handle.finalized {
 		return false
 	}
 
@@ -558,13 +466,16 @@ Zip_Add_String :: proc(
 		data_ptr = raw_data(data)
 	}
 
-	return zip.mz_zip_writer_add_mem(
-		&handle.archive,
-		c_archive,
-		data_ptr,
-		c.size_t(len(data)),
-		compression,
-	) != zip.MZ_FALSE
+	return(
+		zip.mz_zip_writer_add_mem(
+			&handle.archive,
+			c_archive,
+			data_ptr,
+			c.size_t(len(data)),
+			compression,
+		) !=
+		zip.MZ_FALSE \
+	)
 }
 
 Zip_Finalize :: proc(handle: ^Zip_Handle) -> bool {
@@ -576,9 +487,7 @@ Zip_Finalize :: proc(handle: ^Zip_Handle) -> bool {
 		return true
 	}
 
-	if zip.mz_zip_writer_finalize_archive(
-		&handle.archive,
-	) == zip.MZ_FALSE {
+	if zip.mz_zip_writer_finalize_archive(&handle.archive) == zip.MZ_FALSE {
 		return false
 	}
 
@@ -587,9 +496,7 @@ Zip_Finalize :: proc(handle: ^Zip_Handle) -> bool {
 	return true
 }
 
-Zip_Last_Error_Code :: proc(
-	handle: ^Zip_Handle,
-) -> zip.mz_zip_error {
+Zip_Last_Error_Code :: proc(handle: ^Zip_Handle) -> zip.mz_zip_error {
 	if handle == nil {
 		return .INVALID_PARAMETER
 	}

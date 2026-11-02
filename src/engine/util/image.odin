@@ -1,35 +1,33 @@
 package util
-import renderer "../renderer"
+import kineffi "../bindings"
 import sdl3 "../platform"
-import "vendor:stb/image"
-import "../vm"
+import renderer "../renderer"
 import "../services"
 import "../signals"
-import kineffi "../bindings"
+import "../vm"
+import "vendor:stb/image"
 
 EngineImage :: struct {
-    width: i32,
-    height: i32,
-    pixels: [^]byte
+	width:  i32,
+	height: i32,
+	pixels: [^]byte,
 }
 
 image_from_mem :: proc(loaded: []u8) -> EngineImage {
-    width, height, channels: i32
+	width, height, channels: i32
 
-    pixels := image.load_from_memory(
-        raw_data(loaded),
-        i32(len(loaded)),
-        &width,
-        &height,
-        &channels,
-        4,
-    )
+	pixels := image.load_from_memory(
+		raw_data(loaded),
+		i32(len(loaded)),
+		&width,
+		&height,
+		&channels,
+		4,
+	)
 
-    if pixels == nil {
-        return EngineImage{}
-    }
+	if pixels == nil {
+		return EngineImage{}
+	}
 
-    // NOTE: no `defer image_free` here — the caller owns `pixels` and must
-    // free it. Freeing here would hand back a dangling pointer.
-    return EngineImage{width = width, height = height, pixels = pixels}
+	return EngineImage{width = width, height = height, pixels = pixels}
 }

@@ -1,10 +1,10 @@
 package main
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import sandbox "../src/sandboxed"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
@@ -15,7 +15,9 @@ main :: proc() {
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
 
-	ok, err := vm.Run(&script_vm, `
+	ok, err := vm.Run(
+		&script_vm,
+		`
 -- A plain Part is enough: GetPropertyChangedSignal lives on the base Instance
 -- binding, so this also proves every class inherits it.
 local part = Instance.new("Part")
@@ -72,7 +74,33 @@ assert(folderFired == 1, "Folder did not fire")
 
 -- Requesting the same property again returns an already-live signal.
 assert(part:GetPropertyChangedSignal("Name") ~= nil)
-`, "property_changed_signal_smoke")
+
+-- The general Instance.Changed event reports the property that changed.
+local changedName
+local changedCount = 0
+part.Changed:Connect(function(property)
+	changedCount += 1
+	changedName = property
+end)
+part.Name = "changed-general"
+assert(changedCount == 1, "Changed should fire once, got " .. tostring(changedCount))
+assert(changedName == "Name", "Changed reported " .. tostring(changedName))
+part.Transparency = 0.25
+assert(changedCount == 2 and changedName == "Transparency", "Changed missed Transparency")
+
+-- ValueBase subclasses use the same base event.
+local toggle = Instance.new("BoolValue")
+local toggleCount = 0
+toggle.Changed:Connect(function()
+	toggleCount += 1
+end)
+toggle.Value = false
+assert(toggleCount == 1, "BoolValue.Changed should fire")
+toggle.Value = true
+assert(toggleCount == 2, "BoolValue.Changed should fire on every write")
+`,
+		"property_changed_signal_smoke",
+	)
 
 	if !ok {
 		fmt.eprintln(err)

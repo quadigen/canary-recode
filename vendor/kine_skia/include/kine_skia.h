@@ -12,6 +12,7 @@ extern "C" {
 typedef struct KineSkiaSurface KineSkiaSurface;
 typedef struct KineSkiaImage KineSkiaImage;
 typedef struct KineSkiaVulkanContext KineSkiaVulkanContext;
+typedef struct KineSkiaGLContext KineSkiaGLContext;
 typedef struct KineSkiaRuntimeShader KineSkiaRuntimeShader;
 typedef struct KineSkiaTypeface KineSkiaTypeface;
 
@@ -37,6 +38,24 @@ typedef struct KineSkiaVulkanImageInfo {
 	uint32_t currentQueueFamily; /* queue family owning image, or VK_QUEUE_FAMILY_IGNORED */
 } KineSkiaVulkanImageInfo;
 
+/* A GL function loader of the form: void *(*)(void *context, const char *name).
+   The returned pointer is a castable GL function address (GrGLFuncPtr). */
+typedef void *(*KineSkiaGLGetProc)(void *context, const char *name);
+
+typedef struct KineSkiaGLBackend {
+	void *getProcAddr;	 /* KineSkiaGLGetProc loader, e.g. wglGetProcAddress + GetProcAddress */
+	void *getProcContext;	 /* opaque context passed to getProcAddr; may be NULL */
+} KineSkiaGLBackend;
+
+typedef struct KineSkiaGLImageInfo {
+	uint32_t framebufferId; /* GL FBO id owned by the engine */
+	uint32_t format;	 /* GL sized internal format: GL_RGBA8=0x8058, GL_BGRA8=0x93A1,
+				    GL_SRGB8_ALPHA8=0x8C43; 0 = GL_RGBA8 */
+	uint32_t stencilBits;	 /* 0, 8 or 16; 0 acceptable */
+	uint32_t sampleCount;	 /* MSAA samples, usually 1 */
+	uint32_t origin;	 /* 0 = bottom-left (GL native), 1 = top-left */
+} KineSkiaGLImageInfo;
+
 /* ---------------- Version ---------------- */
 
 KINE_SKIA_API const char *Kine_Skia_GetVersion(void);
@@ -50,6 +69,20 @@ KINE_SKIA_API KineSkiaVulkanContext *Kine_Skia_Vulkan_CreateContext(
 	const KineSkiaVulkanBackend *backend);
 KINE_SKIA_API void Kine_Skia_Vulkan_DestroyContext(KineSkiaVulkanContext *context);
 
+/* ---------------- OpenGL GPU context ----------------
+   These entry points are enabled when kine_skia is built with KINE_SKIA_BACKEND=OPENGL.
+   Skia does not own the GL context; the calling thread must make the desired GL
+   context current before creating the context and before every draw/flush sequence.
+   The caller keeps ownership of the GL context, FBOs and their textures. */
+
+KINE_SKIA_API KineSkiaGLContext *Kine_Skia_GL_CreateContext(
+	const KineSkiaGLBackend *backend);
+KINE_SKIA_API void Kine_Skia_GL_DestroyContext(KineSkiaGLContext *context);
+/* Invalidates Skia's cached GL state. Call this after any external code (for
+   example another renderer sharing the same GL context) issues raw GL calls,
+   so the next Skia flush re-synchronizes bound program/texture/FBO state. */
+KINE_SKIA_API void Kine_Skia_GL_ResetContext(KineSkiaGLContext *context);
+
 /* ---------------- Surface lifecycle ---------------- */
 
 KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_Create(int width, int height);
@@ -58,6 +91,11 @@ KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_CreateVulkanRenderTarget(
 	int width,
 	int height,
 	const KineSkiaVulkanImageInfo *imageInfo);
+KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_CreateGLRenderTarget(
+	KineSkiaGLContext *context,
+	int width,
+	int height,
+	const KineSkiaGLImageInfo *imageInfo);
 KINE_SKIA_API void Kine_Skia_Surface_Destroy(KineSkiaSurface *surface);
 
 KINE_SKIA_API int Kine_Skia_Surface_GetWidth(const KineSkiaSurface *surface);
@@ -122,6 +160,14 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawSquircle(
 	uint8_t r, uint8_t g, uint8_t b, uint8_t a,
 	float strokeWidth);
 
+KINE_SKIA_API void Kine_Skia_Surface_DrawSquircleCorners(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float radiusTL, float radiusTR, float radiusBR, float radiusBL,
+	float exponent,
+	uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+	float strokeWidth);
+
 KINE_SKIA_API void Kine_Skia_Surface_DrawUIShadow(
 	KineSkiaSurface *surface,
 	float x, float y, float width, float height,
@@ -145,6 +191,38 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurSquircle(
 	float blurSigma,
 	uint8_t alpha,
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float radiusX, float radiusY,
+	float exponent,
+	float offsetX, float offsetY,
+	float blurSigma,
+	float brightness, float contrast, float saturation, float hueShift,
+	float morphology,
+	float displacement,
+	float pixelate,
+	float zoom,
+	uint8_t alpha,
+	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
+
+/* Magnifier / loupe over the frozen frame.
+     zoomAmount : magnification factor (1 disables the refraction)
+     inset      : width of the fish-eye distortion band around the content */
+KINE_SKIA_API void Kine_Skia_Surface_DrawMagnifierRect(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float zoomAmount, float inset,
+	uint8_t alpha);
+
+/* Directional motion blur applied to everything drawn between Begin and End.
+   The blur runs along `angleDegrees` for `lengthPixels`. */
+KINE_SKIA_API void Kine_Skia_Surface_BeginMotionBlur(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float angleDegrees, float lengthPixels);
+KINE_SKIA_API void Kine_Skia_Surface_EndMotionBlur(KineSkiaSurface *surface);
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawCircle(
 	KineSkiaSurface *surface,
@@ -199,6 +277,12 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
 	KineSkiaSurface *surface,
 	float x, float y, float width, float height,
 	float radius, float exponent);
+
+KINE_SKIA_API void Kine_Skia_Surface_ClipSquircleCorners(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float radiusTL, float radiusTR, float radiusBR, float radiusBL,
+	float exponent);
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
 	KineSkiaSurface *surface,
@@ -381,6 +465,13 @@ KINE_SKIA_API float Kine_Skia_Surface_GetFontLineHeight(
 
 KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_LoadFromFile(const char *path);
 KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_LoadFromMemory(const uint8_t *data, size_t size);
+
+// Wrap an engine-owned, shader-read-only atlas texture on the shared GPU.
+KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapVulkan(KineSkiaVulkanContext *context,
+    int width, int height, const KineSkiaVulkanImageInfo *info);
+KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapGL(KineSkiaSurface *surface,
+    uint32_t texture, int width, int height);
+
 KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage *image);
 
 KINE_SKIA_API int Kine_Skia_Image_GetWidth(const KineSkiaImage *image);
@@ -399,6 +490,25 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageRect(
 	KineSkiaImage *image,
 	float srcX, float srcY, float srcWidth, float srcHeight,
 	float dstX, float dstY, float dstWidth, float dstHeight,
+	uint8_t alpha);
+
+/* Draw an image with the GUI-facing ImageLabel feature set.
+     srcX/srcY/srcWidth/srcHeight : sub-rect of the source, <= 0 falls back to the
+                                    full image / remaining extent
+     scaleType : 0 Stretch, 1 Slice, 2 Tile, 3 Fit, 4 Crop
+     resample  : 0 Default (linear), 1 Linear, 2 Nearest
+     tileSizeX/tileSizeY : resolved tile step in pixels for scaleType Tile
+     r/g/b/colorA : ImageColor3 tint; colorA == 0 means no tint
+     alpha : overall transparency, 0..255 */
+KINE_SKIA_API void Kine_Skia_Surface_DrawImageScaled(
+	KineSkiaSurface *surface,
+	KineSkiaImage *image,
+	float srcX, float srcY, float srcWidth, float srcHeight,
+	float dstX, float dstY, float dstWidth, float dstHeight,
+	float tileSizeX, float tileSizeY,
+	int scaleType,
+	int resample,
+	uint8_t r, uint8_t g, uint8_t b, uint8_t colorA,
 	uint8_t alpha);
 
 #ifdef __cplusplus

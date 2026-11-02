@@ -1,9 +1,9 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -16,7 +16,11 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 
 step_network :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM) {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
-	services.Replication_Step(cast(^services.ReplicatorService)descriptor.object, script_vm.L, 1.0 / 60.0)
+	services.Replication_Step(
+		cast(^services.ReplicatorService)descriptor.object,
+		script_vm.L,
+		1.0 / 60.0,
+	)
 }
 
 settle :: proc(
@@ -40,9 +44,7 @@ main :: proc() {
 	engine_runtime.Environment_Init(&server, &server_vm)
 	engine_runtime.Environment_Init(&client, &client_vm)
 
-	// A deliberately tiny budget against a large static scene. Every snapshot
-	// wants more bytes than the connection is allowed, so the budget refuses
-	// packets on essentially every tick.
+
 	run_script(
 		&server_vm,
 		`
@@ -75,9 +77,7 @@ assert(r:ConnectClient("127.0.0.1", 39217))
 
 	settle(&server, &server_vm, &client, &client_vm, 30)
 
-	// Under sustained overload the controller must shrink its footprint. The
-	// previous implementation responded to drops by widening the budget and
-	// raising the snapshot rate, which is a positive feedback loop.
+
 	run_script(
 		&server_vm,
 		`
@@ -92,9 +92,13 @@ assert(
     stats.effectiveBandwidthBudget <= 1024,
     "effective budget grew above the configured value: " .. tostring(stats.effectiveBandwidthBudget)
 )
+-- The load controller sheds load with the budget only. The rate must stay at
+-- the configured cadence: it was advertised to the client at handshake and its
+-- interpolation timebase is derived from it, so any silent change (in either
+-- direction) desynchronises remote Part rendering.
 assert(
-    stats.effectiveSnapshotRate <= 20,
-    "snapshot rate was raised under overload: " .. tostring(stats.effectiveSnapshotRate)
+    stats.effectiveSnapshotRate <= r.SnapshotRate,
+    "snapshot rate left the configured value under overload: " .. tostring(stats.effectiveSnapshotRate)
 )
 `,
 		"load_control_backoff",
@@ -108,8 +112,7 @@ scale_after_backoff = game:GetService("ReplicatorService"):GetStats().adaptiveSc
 		"load_control_scale_snapshot",
 	)
 
-	// Keep the pressure on and confirm the scale keeps falling rather than
-	// oscillating back up, which is what the old inverted logic did.
+
 	settle(&server, &server_vm, &client, &client_vm, 240)
 	run_script(
 		&server_vm,
@@ -120,16 +123,15 @@ assert(
     stats.adaptiveScale <= scale_after_backoff + 1e-6,
     "scale climbed back up while still overloaded: " .. tostring(scale_after_backoff) .. " -> " .. tostring(stats.adaptiveScale)
 )
-assert(stats.adaptiveScale >= 0.25, "scale fell below the configured floor: " .. tostring(stats.adaptiveScale))
+assert(stats.adaptiveScale >= 0.05, "scale fell below the configured floor: " .. tostring(stats.adaptiveScale))
 -- Still replicating, just more slowly. A controller that starves the link
 -- outright would be no better than the runaway it replaced.
-assert(stats.effectiveSnapshotRate >= 5, "degraded rate fell below the floor")
+assert(stats.effectiveSnapshotRate == r.SnapshotRate, "the snapshot rate must stay at the configured cadence under overload")
 `,
 		"load_control_sustained",
 	)
 
-	// Release the pressure: the scene stops changing, suppression takes over,
-	// and the link becomes unpressured, so the scale must recover.
+
 	run_script(
 		&server_vm,
 		`

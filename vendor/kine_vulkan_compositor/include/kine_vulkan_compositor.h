@@ -80,6 +80,28 @@ Kine_VulkanCompositor_GetInfo(
     const KineVulkanCompositor* compositor,
     KineVulkanCompositorInfo* outInfo);
 
+/* One-shot GPU terrain meshing on the compositor's device. occ/mat are the
+   chunk density cache, CACHE_DIM^3 with the last axis fastest. See
+   kine_terrain_mc.h for the layout and capacity requirements. Returns 1 and
+   writes outVertexCount/outIndexCount on success, 0 on failure. */
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_MeshTerrainChunk(
+    KineVulkanCompositor* compositor,
+    const float* occ,
+    const uint32_t* mat,
+    int originX,
+    int originY,
+    int originZ,
+    float voxelSize,
+    float isoLevel,
+    float* outVertices,
+    float* outWeights,
+    uint32_t* outIndices,
+    uint32_t vertexCapacity,
+    uint32_t indexCapacity,
+    uint32_t* outVertexCount,
+    uint32_t* outIndexCount);
+
 /* Returns the KineSkiaVulkanContext owned by the compositor. */
 KINE_VULKAN_COMPOSITOR_API void*
 Kine_VulkanCompositor_GetSkiaContext(KineVulkanCompositor* compositor);

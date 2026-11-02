@@ -25,3 +25,6 @@
 [submodule "vendor/webview"]
 	path = vendor/webview
 	url = https://github.com/webview/webview
+[submodule "vendor/Ray"]
+	path = vendor/Ray
+	url = https://github.com/sergcpp/Ray.git

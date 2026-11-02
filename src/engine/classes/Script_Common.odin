@@ -19,15 +19,16 @@ Script_Module_State :: enum {
 }
 
 Script_Common :: struct {
-	source:          string,
-	module_state:    Script_Module_State,
-	module_ref:      i32,
+	source:              string,
+	module_state:        Script_Module_State,
+	module_ref:          i32,
 	require_frame_stack: ^Require_Frame_Stack,
-	execution_state: Script_Execution_State,
-	enabled:         bool,
-	restart_requested: bool,
-	thread:            ^vm.State,
-	thread_ref:        i32,
+	execution_state:     Script_Execution_State,
+	enabled:             bool,
+	run_as_plugin:       bool,
+	restart_requested:   bool,
+	thread:              ^vm.State,
+	thread_ref:          i32,
 }
 
 Script_Kind :: enum {
@@ -118,6 +119,9 @@ Script_Reset :: proc(L: ^vm.State, common: ^Script_Common) {
 
 Script_Common_Set_Source :: proc(L: ^vm.State, common: ^Script_Common, source: string) {
 	if common == nil {
+		return
+	}
+	if common.source == source {
 		return
 	}
 	Script_Reset(L, common)

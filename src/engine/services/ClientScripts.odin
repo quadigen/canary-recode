@@ -232,7 +232,9 @@ ClientScripts_Ensure_Player_Containers :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
 	player: ^Player,
-) -> (player_scripts, player_gui: ^classes.Object) {
+) -> (
+	player_scripts, player_gui: ^classes.Object,
+) {
 	if registry == nil || L == nil || player == nil || player.destroyed {
 		return nil, nil
 	}
@@ -259,10 +261,7 @@ ClientScripts_Ensure_Player_Containers :: proc(
 	return player.player_scripts, player.player_gui
 }
 
-ClientScripts_Prepare_Local_Player :: proc(
-	data_model: ^DataModel,
-	player: ^Player,
-) -> int {
+ClientScripts_Prepare_Local_Player :: proc(data_model: ^DataModel, player: ^Player) -> int {
 	if data_model == nil || data_model.registry == nil || player == nil || player.destroyed {
 		return 0
 	}
@@ -293,10 +292,7 @@ ClientScripts_Prepare_Local_Player :: proc(
 		"StarterCharacterScripts",
 	)
 
-	// A server that authored into its own StarterPlayerScripts replicates the
-	// whole container to us. Move its contents into our local template, then
-	// destroy the replicated shell so its name does not shadow the template
-	// and its copies are not mistaken for already-synced scripts.
+
 	for container in starter_player.object.children {
 		if container == nil ||
 		   container.destroyed ||
@@ -312,16 +308,13 @@ ClientScripts_Prepare_Local_Player :: proc(
 		}
 		if destination != nil {
 			copied := client_scripts_copy_contents(L, registry.classes, container, destination)
-			if copied > 0 {fmt.eprintln("[ClientScripts] merged", copied, "template items from", container.name)}
+			if copied >
+			   0 {fmt.eprintln("[ClientScripts] merged", copied, "template items from", container.name)}
 		}
 		classes.Destroy_Hierarchy(container)
 	}
 
-	player_scripts, _ := ClientScripts_Ensure_Player_Containers(
-		registry.classes,
-		L,
-		player,
-	)
+	player_scripts, _ := ClientScripts_Ensure_Player_Containers(registry.classes, L, player)
 
 	copied := 0
 	if player_scripts != nil {
@@ -345,10 +338,7 @@ ClientScripts_Prepare_Local_Player :: proc(
 	return copied
 }
 
-ClientScripts_Run :: proc(
-	script_context: ^ScriptContext,
-	data_model: ^DataModel,
-) -> bool {
+ClientScripts_Run :: proc(script_context: ^ScriptContext, data_model: ^DataModel) -> bool {
 	if script_context == nil || data_model == nil || data_model.registry == nil {
 		return false
 	}
@@ -411,12 +401,14 @@ ClientScripts_Run :: proc(
 }
 
 ClientScripts_Mode_Allows_Local_Script :: proc(mode: target.Mode) -> bool {
-	return mode == .Client || mode == .Standalone
+	return mode == .Client || mode == .Standalone || mode == .Singleplayer
 }
 
 ClientScripts_Describe_Containers :: proc() -> string {
-	return strings.concatenate({
-		"PlayerScripts (from StarterPlayerScripts), PlayerGui, Character ",
-		"(from StarterCharacterScripts)",
-	})
+	return strings.concatenate(
+		{
+			"PlayerScripts (from StarterPlayerScripts), PlayerGui, Character ",
+			"(from StarterCharacterScripts)",
+		},
+	)
 }

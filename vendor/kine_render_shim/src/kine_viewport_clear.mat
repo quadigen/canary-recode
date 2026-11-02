@@ -1,0 +1,58 @@
+material {
+    name : "kine_viewport_copy",
+    shadingModel : unlit,
+    blending : opaque,
+    vertexDomain : device,
+    flipUV : false,
+    culling : none,
+    depthWrite : false,
+    depthCulling : false,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : source },
+        { type : float2, name : sourceScale },
+        { type : float2, name : sourceOffset },
+        { type : float, name : clearOnly },
+        { type : float, name : haloStrength },
+        { type : float, name : haloThreshold },
+        { type : float, name : haloRadius },
+        { type : float2, name : haloTexel }
+    ]
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Device-domain clipping uses clipSpaceTransform, not worldPosition.
+        // The shared mesh spans [-0.5,0.5]; expand it to the complete viewport.
+        material.clipSpaceTransform = mat4(
+            2.0,0.0,0.0,0.0,
+            0.0,2.0,0.0,0.0,
+            0.0,0.0,1.0,0.0,
+            0.0,0.0,0.0,1.0);
+    }
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec2 uv = getUV0() * materialParams.sourceScale + materialParams.sourceOffset;
+        vec4 c = texture(materialParams_source, uv);
+        if (materialParams.haloStrength > 0.0 && materialParams.clearOnly < 0.5) {
+            // Filament's transparent colour-grading multiplies bloom by the
+            // original coverage. Supply the missing outside halo from the
+            // already graded image, without another renderer or CPU readback.
+            vec3 glow = vec3(0.0);
+            for (int i = 0; i < 16; ++i) {
+                float angle = 6.2831853 * float(i % 8) / 8.0;
+                float radius = i < 8 ? 0.5 : 1.0;
+                vec2 offset = vec2(cos(angle),sin(angle)) * materialParams.haloTexel * materialParams.haloRadius * radius;
+                vec4 s = texture(materialParams_source, uv + offset);
+                float brightness = max(s.r,max(s.g,s.b)) / max(s.a,0.0001);
+                if (s.a > 0.01 && brightness >= materialParams.haloThreshold) glow += s.rgb;
+            }
+            glow *= materialParams.haloStrength / 16.0;
+            float outside = 1.0 - c.a;
+            c.rgb += glow * outside;
+            c.a += clamp(max(glow.r,max(glow.g,glow.b)),0.0,1.0) * outside;
+        }
+        material.baseColor = materialParams.clearOnly > 0.5 ? vec4(0.0) : c;
+    }
+}

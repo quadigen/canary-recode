@@ -1,14 +1,5 @@
 package classes
 
-// Highlight draws a translucent fill over a part or model plus a screen-space
-// outline around it. The outline is a mask: highlighted geometry is drawn into
-// a private offscreen target as flat color+alpha, and a fullscreen composite
-// pass dilates that mask into the outline ring. That gives a constant pixel
-// width at any camera distance on any topology -- the old inverted-hull shell
-// had to rescale a world-space offset per frame and rounded off on thin or
-// skinned geometry. Roblox keeps no InstanceAdornment parent here: Adornee is
-// just a reference the Highlight reads each frame, so an unset Adornee resolves
-// to the Highlight's own Parent at draw time rather than at assignment time.
 
 import kineffi "../bindings"
 import datatypes "../datatypes"
@@ -16,13 +7,13 @@ import enums "../enum"
 import vm "../vm"
 import "core:math"
 
-Highlight_Class := Class_Info{
+Highlight_Class := Class_Info {
 	name   = "Highlight",
 	parent = &Instance_Class,
 }
 
 Highlight :: struct {
-	using object:          Object,
+	using object:         Object,
 	adornee:              ^Object,
 	depth_mode:           enums.HighlightDepthMode,
 	enabled:              bool,
@@ -30,13 +21,8 @@ Highlight :: struct {
 	fill_transparency:    f64,
 	outline_color:        datatypes.Color3,
 	outline_transparency: f64,
-
-	// Shape meshes are built lazily and cached per PartType, so a Highlight over
-	// a Model uploads each distinct shape once instead of once per part. The
-	// context is tracked separately because a Filament teardown invalidates the
-	// buffers without touching this object.
-	meshes:       [11]^kineffi.KineFilamentMesh,
-	mesh_context: ^kineffi.KineFilamentContext,
+	meshes:               [11]^kineffi.KineFilamentMesh,
+	mesh_context:         ^kineffi.KineFilamentContext,
 }
 
 highlight_shape_glb :: proc(shape: enums.PartType) -> (data: string, ok: bool) {
@@ -94,8 +80,8 @@ highlight_shape_mesh :: proc(
 	}
 
 	if highlight.mesh_context != ctx {
-		// The old context's GPU buffers went away with the engine they belonged
-		// to, so only this object still holds pointers to them.
+
+
 		highlight.meshes = {}
 		highlight.mesh_context = ctx
 	}
@@ -106,8 +92,7 @@ highlight_shape_mesh :: proc(
 
 	data, ok := highlight_shape_glb(shape)
 	if !ok {
-		highlight.meshes[slot] =
-			kineffi.Kine_Filament_CreateMesh(ctx, kineffi.KINE_MESH_CUBE)
+		highlight.meshes[slot] = kineffi.Kine_Filament_CreateMesh(ctx, kineffi.KINE_MESH_CUBE)
 		return highlight.meshes[slot]
 	}
 
@@ -117,31 +102,23 @@ highlight_shape_mesh :: proc(
 		uintptr(len(data)),
 		"glb",
 	)
+	kineffi.Kine_Filament_SetUseImportedMaterials(ctx, highlight.meshes[slot], false)
 	return highlight.meshes[slot]
 }
 
 Highlight_Init :: proc() -> Highlight {
-	return Highlight{
+	return Highlight {
 		object = Object_Init(&Highlight_Class, "Highlight"),
-		// Roblox authors a new Highlight visibly on: enabled, with a red fill at
-		// half transparency and an opaque white outline.
 		depth_mode = .AlwaysOnTop,
 		enabled = true,
-		fill_color = datatypes.Color3 {
-			R = 255.0 / 255.0,
-			G = 100.0 / 255.0,
-			B =  50.0 / 255.0,
-		},
-		fill_transparency    = 0.5,
-		outline_color        = datatypes.Color3{1, 1, 1},
+		fill_color = datatypes.Color3{R = 255.0 / 255.0, G = 100.0 / 255.0, B = 50.0 / 255.0},
+		fill_transparency = 0.5,
+		outline_color = datatypes.Color3{1, 1, 1},
 		outline_transparency = 0,
 	}
 }
 
-highlight_construct :: proc(
-	renderer: ^Renderer_Object,
-	data_model: rawptr,
-) -> ^Object {
+highlight_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	highlight := new(Highlight)
 	highlight^ = Highlight_Init()
 	return &highlight.object
@@ -253,18 +230,13 @@ highlight_set :: proc(
 	return true
 }
 
-// Ring width, in screen pixels, that the outline composite dilates the mask
-// by. Four pixels is what makes the outline read as an outline. Roblox's own
-// selection highlight is noticeably heavier than a one-pixel hairline, and at
-// two pixels the ring was legible only on parts close to the camera.
+
 HIGHLIGHT_OUTLINE_PIXELS :: f32(4.0)
 
-// Must match the vertical field of view main.odin hands Filament in
-// set_viewport_rect, since world_per_pixel is derived from it.
+
 HIGHLIGHT_FIELD_OF_VIEW_DEGREES :: f32(60.0)
 
-// Distance assumed when there is no active camera to measure against. Only the
-// fill's depth bias needs world-space scaling now; the outline is screen-space.
+
 HIGHLIGHT_FALLBACK_DISTANCE :: f32(40.0)
 
 highlight_world_per_pixel :: proc(distance: f32, viewport_height: i32) -> f32 {
@@ -275,9 +247,7 @@ highlight_world_per_pixel :: proc(distance: f32, viewport_height: i32) -> f32 {
 	return 2.0 * distance * f32(half_fov) / f32(viewport_height)
 }
 
-// The fill overlays the part's own surface, so it needs a small push toward the
-// viewer to avoid z-fighting with it. It scales with distance for the same
-// reason the outline thickness does.
+
 highlight_depth_bias :: proc(world_per_pixel: f32) -> f32 {
 	bias := world_per_pixel * 0.5
 	if bias < 1.0 / 4096.0 {
@@ -288,10 +258,11 @@ highlight_depth_bias :: proc(world_per_pixel: f32) -> f32 {
 
 highlight_camera_position :: proc(
 	ctx: ^Class_Step_Context,
-) -> (position: datatypes.Vector3, ok: bool) {
-	if ctx == nil ||
-	   ctx.renderer == nil ||
-	   ctx.renderer.ActiveCamera == nil {
+) -> (
+	position: datatypes.Vector3,
+	ok: bool,
+) {
+	if ctx == nil || ctx.renderer == nil || ctx.renderer.ActiveCamera == nil {
 		return datatypes.Vector3{}, false
 	}
 	camera := cast(^Camera)ctx.renderer.ActiveCamera
@@ -307,9 +278,8 @@ highlight_part_mesh :: proc(
 	ctx: ^kineffi.KineFilamentContext,
 ) -> ^kineffi.KineFilamentMesh {
 	if Is_A(&part.object, "MeshPart") {
-		// Reuse the MeshPart's own upload when it is live in this context. That
-		// is what keeps an EditableMesh-backed part highlighted as its current
-		// geometry rather than its block-shaped fallback.
+
+
 		mesh_part := cast(^MeshPart)part
 		if mesh_part.native_mesh != nil && mesh_part.native_context == ctx {
 			return mesh_part.native_mesh
@@ -320,12 +290,11 @@ highlight_part_mesh :: proc(
 
 highlight_transform :: proc(part: ^Part) -> [16]f32 {
 	cframe := part.cframe
-	// The shape GLBs are authored two units wide, so half the part size is the
-	// scale that reproduces the part's real dimensions.
-	render_size :=
-		datatypes.Vector3{part.size.x * 0.5, part.size.y * 0.5, part.size.z * 0.5}
 
-	return [16]f32{
+
+	render_size := datatypes.Vector3{part.size.x * 0.5, part.size.y * 0.5, part.size.z * 0.5}
+
+	return [16]f32 {
 		cframe.r00 * render_size.x,
 		cframe.r01 * render_size.y,
 		cframe.r02 * render_size.z,
@@ -345,9 +314,7 @@ highlight_transform :: proc(part: ^Part) -> [16]f32 {
 	}
 }
 
-// Queues one part's outline and fill. Called for the part itself as well as
-// for each descendant, because a Part used as an Adornee is not in its own
-// children list.
+
 highlight_append_part_items :: proc(
 	highlight: ^Highlight,
 	part: ^Part,
@@ -357,16 +324,15 @@ highlight_append_part_items :: proc(
 	have_camera: bool,
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
 ) {
-	delta := datatypes.Vector3{
+	delta := datatypes.Vector3 {
 		x = part.cframe.x - camera_position.x,
 		y = part.cframe.y - camera_position.y,
 		z = part.cframe.z - camera_position.z,
 	}
 	distance := datatypes.Vec3_Magnitude(delta)
 	if !have_camera {
-		// No camera means no distance to scale from, and most parts sit tens of
-		// studs out. Guessing low here made the outline vanish entirely, so fall
-		// back to a distance that produces a readable ring at a typical framing.
+
+
 		distance = HIGHLIGHT_FALLBACK_DISTANCE
 	}
 
@@ -374,25 +340,18 @@ highlight_append_part_items :: proc(
 
 	transform := highlight_transform(part)
 
-	// Neither draw sets KINE_FILAMENT_DRAW_CULLING so a highlight is never
-	// frustum-culled away.
+
 	if highlight.outline_transparency < 1.0 {
 		append(
 			items,
-			kineffi.KineFilamentDrawItem{
+			kineffi.KineFilamentDrawItem {
 				mesh = mesh,
 				transform = transform,
 				r = highlight.outline_color.R,
 				g = highlight.outline_color.G,
 				b = highlight.outline_color.B,
-				// maskValue: 1.0 paints this geometry into the outline mask.
 				param1 = 1.0,
-				// Ring width for the composite pass, in screen pixels. The mask
-				// lives in screen space, so this is the real outline width at
-				// every distance -- no world_per_pixel rescaling needed.
 				param2 = HIGHLIGHT_OUTLINE_PIXELS,
-				// Outline alpha rides in w, like particles (see
-				// kine_material_uses_instance_alpha on the shim side).
 				transmission = f32(1.0 - highlight.outline_transparency),
 				materialKind = i32(kineffi.KINE_MAT_OUTLINE_MASK),
 			},
@@ -406,7 +365,7 @@ highlight_append_part_items :: proc(
 		}
 		append(
 			items,
-			kineffi.KineFilamentDrawItem{
+			kineffi.KineFilamentDrawItem {
 				mesh = mesh,
 				transform = transform,
 				r = highlight.fill_color.R,
@@ -428,8 +387,8 @@ highlight_append_part :: proc(
 	have_camera: bool,
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
 ) {
-	// Both layers fully transparent means the Highlight draws nothing, so the
-	// whole subtree is skipped rather than walked looking for invisible geometry.
+
+
 	if highlight.fill_transparency >= 1.0 && highlight.outline_transparency >= 1.0 {
 		return
 	}
@@ -458,16 +417,10 @@ highlight_append_part :: proc(
 	}
 }
 
-// Roblox draws a Highlight in 3D space, so it participates in the Render_3D
-// phase alongside Workspace. Each Highlight submits its own draw list rather
-// than sharing Workspace's: Workspace only walks the DataModel's own parts and
-// would never see a Highlight's Adornee.
+
 highlight_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	highlight := cast(^Highlight)object
-	if highlight == nil ||
-	   ctx == nil ||
-	   ctx.renderer == nil ||
-	   ctx.renderer.Filament == nil {
+	if highlight == nil || ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {
 		return
 	}
 	if !highlight.enabled {
@@ -487,8 +440,7 @@ highlight_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 	camera_position, have_camera := highlight_camera_position(ctx)
 
-	// The walk covers the adornee itself, so a Part Adornee highlights just that
-	// part while a Model Adornee highlights its part descendants.
+
 	items: [dynamic]kineffi.KineFilamentDrawItem
 	highlight_append_part(highlight, adornee, ctx, camera_position, have_camera, &items)
 	if len(items) > 0 {
@@ -512,7 +464,7 @@ Register_Highlight :: proc(registry: ^Registry) {
 		clone = highlight_clone,
 		_step = highlight_step,
 		_step_phase = .Render_3D,
-		properties = []string{
+		properties = []string {
 			"Adornee",
 			"DepthMode",
 			"Enabled",

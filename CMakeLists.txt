@@ -18,6 +18,7 @@ endif()
 
 # The application is written in Odin. CMake owns only the native wrappers and
 # their third-party dependencies; there is no C++ executable target here.
+
 add_subdirectory(vendor)
 add_subdirectory(vendor/kine_luau)
 
@@ -38,6 +39,7 @@ set(KINEMIUM_ODIN_LIBRARY_TARGETS
     kine_skia
     kine_vulkan_compositor
     JoltWrapper
+    rocksdb
 )
 
 # Bindings for compression and YAML import the consolidated archive on every

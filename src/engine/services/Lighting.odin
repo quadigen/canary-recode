@@ -1,46 +1,41 @@
 package services
+// wire:service
 
-// wire:service global="Lighting"
 
 import "core:math"
 
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
-import vm "../vm"
 import guilib "../gui"
-import kineffi "../bindings"
+import vm "../vm"
 
-Lighting_Class := classes.Class_Info{name = "Lighting", parent = &Service_Class}
+Lighting_Class := classes.Class_Info {
+	name   = "Lighting",
+	parent = &Service_Class,
+}
 
-// ClockTime is a plain number, the way Roblox exposes it: a script writes
-// `Lighting.ClockTime = 14.5`, not an EnumItem. 0 is midnight, 12 is noon,
-// and a value outside [0, 24) wraps rather than clamping, so a script can keep
-// advancing the clock with `ClockTime += deltaTime` forever.
+
 CLOCK_TIME_DAY :: f64(24.0)
 
-// The daily arc is tilted off the pure XY plane. Without a tilt the sun tracks
-// straight along one world axis, and the shadows on half the world sit
-// identically at every hour.
+
 SUN_ARC_TILT :: 0.62
 
-// ShadowSoftness buckets onto Filament's shadow filters. The shim maps these
-// integers in Kine_Filament_SetShadowOptions: 0 PCF, 1 VSM, 2 DPCF, 3 PCSS.
-SHADOW_FILTER_HARD    :: i32(0)
-SHADOW_FILTER_SOFT    :: i32(2)
+
+SHADOW_FILTER_HARD :: i32(0)
+SHADOW_FILTER_SOFT :: i32(2)
 SHADOW_FILTER_SOFTEST :: i32(3)
 
-// Night sky palette. Kept dim rather than black so surfaces away from the sun
-// still read as geometry instead of holes in the frame.
-NIGHT_SKY_COLOR     :: datatypes.Color3{0.012, 0.018, 0.048}
+
+NIGHT_SKY_COLOR :: datatypes.Color3{0.012, 0.018, 0.048}
 NIGHT_HORIZON_COLOR :: datatypes.Color3{0.030, 0.038, 0.075}
-NIGHT_GROUND_COLOR  :: datatypes.Color3{0.010, 0.012, 0.020}
+NIGHT_GROUND_COLOR :: datatypes.Color3{0.010, 0.012, 0.020}
 
 Lighting :: struct {
-	using service: Service,
-	call_count: i64,
-	applied_context: ^kineffi.KineFilamentContext,
-
+	using service:         Service,
+	call_count:            i64,
+	applied_context:       ^kineffi.KineFilamentContext,
 	clock_time:            f64,
 	brightness:            f64,
 	ambient:               datatypes.Color3,
@@ -49,23 +44,20 @@ Lighting :: struct {
 	global_shadows:        bool,
 	shadow_softness:       f64,
 	exposure_compensation: f64,
-
-	// Fingerprint of every input applied to Filament on the last frame that
-	// actually pushed state. Lighting_Apply runs every frame but only calls
-	// into Filament when this changes, which is what keeps a static scene off
-	// the sky-cubemap rebuild path.
-	applied_fingerprint: u64,
+	dynamic_resolution:    bool,
+	resolution_min_scale:  f64,
+	shadow_cascades:       i64,
+	shadow_map_size:       i64,
+	applied_fingerprint:   u64,
 }
 
-// The stock Roblox Lighting hierarchy, so a fresh place has effects to reach
-// for without constructing them first. The two that blur the entire frame stay
-// disabled: turning on DepthOfField or BlurEffect with no authored focus
-// distance or size makes every scene an unreadable smear.
+
 Lighting_Default_Effects :: []struct {
 	class_name: string,
 	name:       string,
 	enabled:    bool,
-}{
+} {
+	{"Clouds", "Clouds", true},
 	{"Atmosphere", "Atmosphere", true},
 	{"BloomEffect", "BloomEffect", true},
 	{"ColorCorrectionEffect", "ColorCorrectionEffect", true},
@@ -73,20 +65,25 @@ Lighting_Default_Effects :: []struct {
 	{"SunRaysEffect", "SunRaysEffect", true},
 	{"SSAOEffect", "SSAOEffect", true},
 	{"BlurEffect", "BlurEffect", false},
-
-	// These ship present but disabled. They used to be hardcoded on in the
-	// lighting step, and FXAA in particular cost real frame time, so they are
-	// opt-in: a place adds the instance it wants and turns it on.
 	{"AntiAliasingEffect", "AntiAliasingEffect", false},
 	{"DitheringEffect", "DitheringEffect", false},
 	{"RenderQualityEffect", "RenderQualityEffect", false},
 	{"VignetteEffect", "VignetteEffect", false},
-	{"ScreenSpaceReflectionsEffect", "ScreenSpaceReflectionsEffect", false},
+	{"ScreenSpaceReflectionsEffect", "ScreenSpaceReflectionsEffect", true},
+	{"ReflectionProbeEffect", "ReflectionProbeEffect", true},
+	{"SSGIEffect", "SSGIEffect", false},
+	{"FogEffect", "FogEffect", false},
+	{"ScreenSpaceConeTracingEffect", "ScreenSpaceConeTracingEffect", false},
+	{"TemporalAntiAliasingEffect", "TemporalAntiAliasingEffect", false},
+	{"DynamicResolutionEffect", "DynamicResolutionEffect", false},
+	{"ToneMappingEffect", "ToneMappingEffect", false},
 }
 
-// BloomEffect's class default is a strength of 1.0, which is Filament's
-// full-strength bloom and blows a daylight frame out to white. The stock
-// hierarchy gets a value that reads as a glow instead of a flash.
+
+LIGHTING_CLOUD_HEIGHT :: f32(700)
+LIGHTING_CLOUD_THICKNESS :: f32(240)
+
+
 DEFAULT_BLOOM_INTENSITY :: 0.25
 
 lighting_tune_default_effect :: proc(object: ^classes.Object) {
@@ -102,15 +99,18 @@ lighting_tune_default_effect :: proc(object: ^classes.Object) {
 		ao := cast(^classes.SSAOEffect)object
 		ao.radius = 0.5
 		ao.intensity = 0.6
+	case "ScreenSpaceReflectionsEffect":
+		reflections := cast(^classes.ScreenSpaceReflectionsEffect)object
+		reflections.max_distance = 100
+		reflections.thickness = 0.2
+		reflections.bias = 0.01
 	}
 }
 
-// Wraps a clock time into [0, 24). Anything the script hands us is accepted so
-// that an unclamped `ClockTime += dt` stays monotonic across midnight.
+
 lighting_wrap_clock_time :: proc(clock_time: f64) -> f64 {
-	// Written with trunc rather than a float modulo: this stays in core:math's
-	// portable surface and the day length is always positive, so subtracting
-	// whole days and adding one more for a negative result wraps correctly.
+
+
 	wrapped := clock_time - math.trunc(clock_time / CLOCK_TIME_DAY) * CLOCK_TIME_DAY
 	if wrapped < 0 {
 		wrapped += CLOCK_TIME_DAY
@@ -121,9 +121,7 @@ lighting_wrap_clock_time :: proc(clock_time: f64) -> f64 {
 	return wrapped
 }
 
-// Maps the 24-hour dial onto one full turn of the sun. Midnight lands a
-// quarter turn below the horizon, 6:00 on the rising horizon, noon overhead,
-// and 18:00 on the setting horizon.
+
 lighting_sun_direction :: proc(clock_time: f64) -> datatypes.Vector3 {
 	phase := (clock_time / CLOCK_TIME_DAY) * 2.0 * math.PI - (math.PI * 0.5)
 	horizontal := math.cos(phase)
@@ -148,18 +146,13 @@ color3_lerp :: proc(from, to: datatypes.Color3, t: f32) -> datatypes.Color3 {
 	}
 }
 
-// Ambient has no dedicated knob on the Filament side of the shim; the sky
-// cubemap is what actually lights the scene. Ambient therefore scales how far
-// the night palette is lifted off black, which is the visible behaviour a
-// script expects from it: higher Ambient means the same night stays readable.
+
 lighting_ambient_gain :: proc(ambient: datatypes.Color3) -> f32 {
 	luma := (ambient.R + ambient.G + ambient.B) / 3.0
 	return 0.25 + 0.75 * clamp(luma, 0.0, 1.0)
 }
 
-// Blends the authored daylight colour toward the night palette, then lifts the
-// night end back up by the ambient gain. Doing it in this order keeps a bright
-// Ambient from tinting the daytime sky as well.
+
 lerp_night :: proc(
 	night: datatypes.Color3,
 	day: datatypes.Color3,
@@ -181,26 +174,24 @@ lighting_shadow_filter :: proc(softness: f64) -> i32 {
 	}
 }
 
-// The resolved effect instances for one frame, as a record rather than a long
-// positional return so the set can be extended without touching every caller.
+
 Lighting_Effect_Set :: struct {
-	atmosphere: ^classes.Atmosphere,
-	blur: ^classes.BlurEffect,
-	bloom: ^classes.BloomEffect,
-	ao: ^classes.SSAOEffect,
-	dof: ^classes.DepthOfFieldEffect,
-	color: ^classes.ColorCorrectionEffect,
-	sun_rays: ^classes.SunRaysEffect,
+	clouds:       ^classes.Clouds,
+	atmosphere:   ^classes.Atmosphere,
+	blur:         ^classes.BlurEffect,
+	bloom:        ^classes.BloomEffect,
+	ao:           ^classes.SSAOEffect,
+	dof:          ^classes.DepthOfFieldEffect,
+	color:        ^classes.ColorCorrectionEffect,
+	sun_rays:     ^classes.SunRaysEffect,
 	antialiasing: ^classes.AntiAliasingEffect,
-	dithering: ^classes.DitheringEffect,
-	quality: ^classes.RenderQualityEffect,
-	vignette: ^classes.VignetteEffect,
-	reflections: ^classes.ScreenSpaceReflectionsEffect,
+	dithering:    ^classes.DitheringEffect,
+	quality:      ^classes.RenderQualityEffect,
+	vignette:     ^classes.VignetteEffect,
+	reflections:  ^classes.ScreenSpaceReflectionsEffect,
 }
 
-// FNV-1a over the raw bytes of each value. This is a change detector, not a
-// hash function: identical inputs must never produce a different fingerprint,
-// and any change to an applied input must produce one.
+
 lighting_hash_mix :: proc(hash: u64, value: u64) -> u64 {
 	return (hash ~ value) * 0x100000001B3
 }
@@ -223,25 +214,13 @@ lighting_hash_color3 :: proc(hash: u64, value: datatypes.Color3) -> u64 {
 	return lighting_hash_f32(result, value.B)
 }
 
-// Hashes a pointer as present-or-absent plus its identity, so swapping one
-// effect instance for another is treated as a change.
+
 lighting_hash_ptr :: proc(hash: u64, value: rawptr) -> u64 {
 	return lighting_hash_mix(hash, u64(uintptr(value)))
 }
 
-// Folds every input Lighting_Apply feeds to Filament into one value.
-//
-// Lighting_Apply has to run every frame, because a script can change any of
-// these at any time without telling the engine first. Re-sending unchanged
-// state is not free, though: Kine_Filament_SetSkyAtmosphere destroys and
-// rebuilds the sky cubemap, the Skybox and the IndirectLight on every single
-// call, which measured at ~12ms per frame and grew past 40ms with the
-// post-processing effects live. Hashing the inputs first means the GPU-facing
-// calls only happen on the frames where something actually changed.
-lighting_effects_fingerprint :: proc(
-	service: ^Lighting,
-	effects: Lighting_Effect_Set,
-) -> u64 {
+
+lighting_effects_fingerprint :: proc(service: ^Lighting, effects: Lighting_Effect_Set) -> u64 {
 	hash := lighting_hash_mix(0xCBF29CE484222325, 0x4C696768)
 
 	hash = lighting_hash_f64(hash, service.clock_time)
@@ -252,6 +231,10 @@ lighting_effects_fingerprint :: proc(
 	hash = lighting_hash_bool(hash, service.global_shadows)
 	hash = lighting_hash_f64(hash, service.shadow_softness)
 	hash = lighting_hash_f64(hash, service.exposure_compensation)
+	hash = lighting_hash_bool(hash, service.dynamic_resolution)
+	hash = lighting_hash_f64(hash, service.resolution_min_scale)
+	hash = lighting_hash_f64(hash, f64(service.shadow_cascades))
+	hash = lighting_hash_f64(hash, f64(service.shadow_map_size))
 
 	hash = lighting_hash_ptr(hash, rawptr(effects.atmosphere))
 	hash = lighting_hash_ptr(hash, rawptr(effects.blur))
@@ -266,9 +249,7 @@ lighting_effects_fingerprint :: proc(
 	hash = lighting_hash_ptr(hash, rawptr(effects.vignette))
 	hash = lighting_hash_ptr(hash, rawptr(effects.reflections))
 
-	// Pointer identity above only catches an instance being added, removed or
-	// swapped. The values have to be hashed too, since a script mutates them in
-	// place through the property setters.
+
 	if atmosphere := effects.atmosphere; atmosphere != nil {
 		hash = lighting_hash_bool(hash, atmosphere.enabled)
 		hash = lighting_hash_color3(hash, atmosphere.sky_color)
@@ -345,17 +326,15 @@ lighting_effects_fingerprint :: proc(
 
 	return hash
 }
-// Everything ClockTime drives, resolved once per frame so the sky, the sun
-// entity and the ambient fill can never disagree about what time it is.
+
+
 Lighting_Sun_Profile :: struct {
 	direction:     datatypes.Vector3,
 	sky_color:     datatypes.Color3,
 	horizon_color: datatypes.Color3,
 	ground_color:  datatypes.Color3,
-	// 0 at full night, 1 in full day.
-	daylight: f32,
-	// Sun light intensity for this time of day.
-	intensity: f64,
+	daylight:      f32,
+	intensity:     f64,
 }
 
 lighting_sun_profile :: proc(
@@ -364,38 +343,36 @@ lighting_sun_profile :: proc(
 ) -> Lighting_Sun_Profile {
 	direction := lighting_sun_direction(service.clock_time)
 
-	// Dawn and dusk get a wide ramp so the sun does not snap between full day
-	// and full night the instant the direction crosses the horizon.
+
 	daylight := lighting_smoothstep(-0.12, 0.28, direction.y)
 
-	gain := lighting_ambient_gain(datatypes.Color3 {
-		R = (service.ambient.R + service.outdoor_ambient.R) * 0.5,
-		G = (service.ambient.G + service.outdoor_ambient.G) * 0.5,
-		B = (service.ambient.B + service.outdoor_ambient.B) * 0.5,
-	})
+	gain := lighting_ambient_gain(
+		datatypes.Color3 {
+			R = (service.ambient.R + service.outdoor_ambient.R) * 0.5,
+			G = (service.ambient.G + service.outdoor_ambient.G) * 0.5,
+			B = (service.ambient.B + service.outdoor_ambient.B) * 0.5,
+		},
+	)
 
 	profile := Lighting_Sun_Profile {
-		direction = direction,
-		daylight = daylight,
-		// Brightness is the day-intensity dial and 2 is the stock value, so 2
-		// leaves Atmosphere.SunIntensity exactly as authored.
-		intensity = max(0.0, atmosphere.sun_intensity) * max(0.0, service.brightness / 2.0) * f64(daylight),
-
-		sky_color = lerp_night(
-			NIGHT_SKY_COLOR, atmosphere.sky_color, daylight, gain,
-		),
-		horizon_color = lerp_night(
-			NIGHT_HORIZON_COLOR, atmosphere.horizon_color, daylight, gain,
-		),
-		ground_color = lerp_night(
-			NIGHT_GROUND_COLOR, atmosphere.ground_color, daylight, gain,
-		),
+		direction     = direction,
+		daylight      = daylight,
+		intensity     = max(
+			0.0,
+			atmosphere.sun_intensity,
+		) * max(0.0, service.brightness / 2.0) * f64(daylight),
+		sky_color     = lerp_night(NIGHT_SKY_COLOR, atmosphere.sky_color, daylight, gain),
+		horizon_color = lerp_night(NIGHT_HORIZON_COLOR, atmosphere.horizon_color, daylight, gain),
+		ground_color  = lerp_night(NIGHT_GROUND_COLOR, atmosphere.ground_color, daylight, gain),
 	}
 
 	return profile
 }
 
-Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+Lighting_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	service := new(Lighting)
 	service.service = Service_Init(&Lighting_Class, "Lighting", data_model)
 
@@ -407,10 +384,13 @@ Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawpt
 	service.global_shadows = true
 	service.shadow_softness = 0.0
 	service.exposure_compensation = 0.0
+	service.dynamic_resolution = true
+	service.resolution_min_scale = 0.5
+	service.shadow_cascades = 2
+	service.shadow_map_size = 2048
 
-	if model := cast(^DataModel)data_model; model != nil &&
-	   model.registry != nil &&
-	   model.registry.vm_state != nil {
+	if model := cast(^DataModel)data_model;
+	   model != nil && model.registry != nil && model.registry.vm_state != nil {
 		for def in Lighting_Default_Effects {
 			object, ok := classes.Push_New(
 				model.registry.classes,
@@ -428,15 +408,7 @@ Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawpt
 			}
 			lighting_tune_default_effect(object)
 
-			// Lighting is a replication root, so without this the server would
-			// ship all twelve of these to the client. The client builds the same
-			// twelve from its own Lighting_construct, and the spawn path only
-			// adopts locally-owned copies for StarterPlayer children and
-			// character subtrees, so every one of these arrived as a duplicate
-			// with the same name. Marking them non-replicable is also just
-			// correct: Roblox never replicates Lighting, and the visibility walk
-			// stops at Service boundaries, so this per-instance flag is the only
-			// thing that keeps them off the wire.
+
 			classes.Set_Can_Replicate(object, false)
 
 			classes.Set_Parent(object, &service.object)
@@ -447,28 +419,41 @@ Lighting_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawpt
 	return &service.object
 }
 
-// Reads the effect instances a script parented to Lighting, so Lighting_Apply
-// can resolve them without walking the tree itself.
+
 lighting_collect_effects :: proc(service: ^Lighting) -> Lighting_Effect_Set {
-	effects := Lighting_Effect_Set {}
+	effects := Lighting_Effect_Set{}
 
 	for child in classes.Get_Children(&service.object) {
 		if child == nil {
 			continue
 		}
 		switch classes.Get_Class_Name(child) {
-		case "Atmosphere": effects.atmosphere = cast(^classes.Atmosphere)child
-		case "BlurEffect": effects.blur = cast(^classes.BlurEffect)child
-		case "BloomEffect": effects.bloom = cast(^classes.BloomEffect)child
-		case "SSAOEffect": effects.ao = cast(^classes.SSAOEffect)child
-		case "DepthOfFieldEffect": effects.dof = cast(^classes.DepthOfFieldEffect)child
-		case "ColorCorrectionEffect": effects.color = cast(^classes.ColorCorrectionEffect)child
-		case "SunRaysEffect": effects.sun_rays = cast(^classes.SunRaysEffect)child
-		case "AntiAliasingEffect": effects.antialiasing = cast(^classes.AntiAliasingEffect)child
-		case "DitheringEffect": effects.dithering = cast(^classes.DitheringEffect)child
-		case "RenderQualityEffect": effects.quality = cast(^classes.RenderQualityEffect)child
-		case "VignetteEffect": effects.vignette = cast(^classes.VignetteEffect)child
-		case "ScreenSpaceReflectionsEffect": effects.reflections = cast(^classes.ScreenSpaceReflectionsEffect)child
+		case "Clouds":
+			effects.clouds = cast(^classes.Clouds)child
+		case "Atmosphere":
+			effects.atmosphere = cast(^classes.Atmosphere)child
+		case "BlurEffect":
+			effects.blur = cast(^classes.BlurEffect)child
+		case "BloomEffect":
+			effects.bloom = cast(^classes.BloomEffect)child
+		case "SSAOEffect":
+			effects.ao = cast(^classes.SSAOEffect)child
+		case "DepthOfFieldEffect":
+			effects.dof = cast(^classes.DepthOfFieldEffect)child
+		case "ColorCorrectionEffect":
+			effects.color = cast(^classes.ColorCorrectionEffect)child
+		case "SunRaysEffect":
+			effects.sun_rays = cast(^classes.SunRaysEffect)child
+		case "AntiAliasingEffect":
+			effects.antialiasing = cast(^classes.AntiAliasingEffect)child
+		case "DitheringEffect":
+			effects.dithering = cast(^classes.DitheringEffect)child
+		case "RenderQualityEffect":
+			effects.quality = cast(^classes.RenderQualityEffect)child
+		case "VignetteEffect":
+			effects.vignette = cast(^classes.VignetteEffect)child
+		case "ScreenSpaceReflectionsEffect":
+			effects.reflections = cast(^classes.ScreenSpaceReflectionsEffect)child
 		}
 	}
 
@@ -484,18 +469,41 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 	effects := lighting_collect_effects(service)
 
-	// The change detector. Everything below this line talks to Filament, and
-	// every one of those calls is far more expensive than hashing the inputs,
-	// so an unchanged frame returns before reaching any of it. A new Filament
-	// context always forces a full reapply, since the old one went away.
+
+	if clouds := effects.clouds; clouds != nil && clouds.enabled {
+		kineffi.Kine_Filament_SetClouds(
+			filament,
+			true,
+			f32(clouds.cover),
+			f32(clouds.density),
+			f32(clouds.height),
+			f32(clouds.thickness),
+			f32(clouds.color.R),
+			f32(clouds.color.G),
+			f32(clouds.color.B),
+		)
+	} else {
+		kineffi.Kine_Filament_SetClouds(
+			filament,
+			false,
+			0,
+			0,
+			LIGHTING_CLOUD_HEIGHT,
+			LIGHTING_CLOUD_THICKNESS,
+			1,
+			1,
+			1,
+		)
+	}
+
+
 	fingerprint := lighting_effects_fingerprint(service, effects)
-	if fingerprint == service.applied_fingerprint &&
-	   service.applied_context == filament {
+	fingerprint = lighting_hash_mix(fingerprint, lighting_advanced_fingerprint(service))
+	if fingerprint == service.applied_fingerprint && service.applied_context == filament {
 		return
 	}
 
-	// ClockTime is the driver, so a sky is required even when no script added
-	// an Atmosphere. The fallback is a stack temporary released before return.
+
 	borrowed_atmosphere := effects.atmosphere == nil
 	if borrowed_atmosphere {
 		effects.atmosphere = new(classes.Atmosphere)
@@ -521,20 +529,22 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 	_ = kineffi.Kine_Filament_SetSkyAtmosphere(
 		filament,
-		f32(profile.direction.x), f32(profile.direction.y), f32(profile.direction.z),
-		f32(profile.sky_color.R), f32(profile.sky_color.G), f32(profile.sky_color.B),
-		f32(profile.horizon_color.R), f32(profile.horizon_color.G), f32(profile.horizon_color.B),
-		f32(profile.ground_color.R), f32(profile.ground_color.G), f32(profile.ground_color.B),
+		f32(profile.direction.x),
+		f32(profile.direction.y),
+		f32(profile.direction.z),
+		f32(profile.sky_color.R),
+		f32(profile.sky_color.G),
+		f32(profile.sky_color.B),
+		f32(profile.horizon_color.R),
+		f32(profile.horizon_color.G),
+		f32(profile.horizon_color.B),
+		f32(profile.ground_color.R),
+		f32(profile.ground_color.G),
+		f32(profile.ground_color.B),
 		f32(profile.intensity),
 	)
 
-	// --- shadows -----------------------------------------------------------
-	//
-	// Neither of these was ever called. Filament kept its own shadow filter
-	// default and the sun light was never given the cascade and contact-shadow
-	// options it was constructed with, so there was no way to turn shadows off
-	// or soften them, and the per-light and per-part flags below had nothing
-	// reading them.
+
 	_ = kineffi.Kine_Filament_SetShadowOptions(
 		filament,
 		service.global_shadows,
@@ -542,16 +552,26 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	)
 	_ = kineffi.Kine_Filament_SetSunShadowOptions(
 		filament,
-		2048, // mapSize
-		3, // cascades
-		0.0, // shadowFar; 0 lets Filament choose
-		0.5, // shadowNearHint
-		160.0, // shadowFarHint
-		true, // stable
-		service.shadow_softness > 0.25, // contactShadows
+		i32(service.shadow_map_size),
+		i32(service.shadow_cascades),
+		0.0,
+		0.5,
+		160.0,
+		true,
+		service.shadow_softness > 0.25,
 	)
 
-	// --- post-processing effects -------------------------------------------
+
+	_ = kineffi.Kine_Filament_SetDynamicResolution(
+		filament,
+		service.dynamic_resolution,
+		f32(service.resolution_min_scale),
+		1.0,
+		2,
+		0.0,
+	)
+
+
 	if bloom != nil {
 		_ = kineffi.Kine_Filament_SetBloom(
 			filament,
@@ -563,8 +583,8 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 			bloom.lens_flare,
 		)
 	} else if blur != nil {
-		// Filament has no standalone blur option; its bloom pass is the
-		// closest built-in fullscreen softening effect available here.
+
+
 		_ = kineffi.Kine_Filament_SetBloom(
 			filament,
 			blur.enabled,
@@ -593,22 +613,22 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 	if dof != nil {
+		options := classes.DepthOfFieldEffect_Render_Options(dof)
 		_ = kineffi.Kine_Filament_SetDepthOfField(
 			filament,
-			dof.enabled,
-			f32(dof.near_intensity + dof.far_intensity),
+			options[0] > 0,
+			options[1],
 			1,
-			f32(dof.in_focus_radius),
-			16,
-			16,
+			options[2],
+			i32(options[4]),
+			i32(options[5]),
 		)
-		_ = kineffi.Kine_Filament_SetFocusDistance(filament, f32(dof.focus_distance))
+		_ = kineffi.Kine_Filament_SetFocusDistance(filament, options[3])
 	} else {
 		_ = kineffi.Kine_Filament_SetDepthOfField(filament, false, 0, 1, 0, 0, 0)
 	}
 
-	// Exposure carries a night lift so a ClockTime-driven night is dim rather
-	// than unreadable, without washing out a day scene.
+
 	night_lift := (1.0 - f64(profile.daylight)) * 0.15
 	if color != nil && color.enabled {
 		_ = kineffi.Kine_Filament_SetColorGrading(
@@ -616,7 +636,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 			f32(color.brightness + service.exposure_compensation + night_lift),
 			f32(1 + color.contrast),
 			f32(1 + color.saturation),
-			0,
+			1,
 			0,
 			0,
 		)
@@ -626,7 +646,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 			f32(service.exposure_compensation + night_lift),
 			1,
 			1,
-			0,
+			1,
 			0,
 			0,
 		)
@@ -634,8 +654,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 		_ = kineffi.Kine_Filament_ClearColorGrading(filament)
 	}
 
-	// Sun rays need a sun to scatter through, so they fade out with the
-	// daylight term instead of glowing in full darkness.
+
 	if sun_rays != nil {
 		ray_intensity := f32(sun_rays.intensity) * profile.daylight
 		_ = kineffi.Kine_Filament_SetSunRays(
@@ -655,16 +674,25 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 			true,
 		)
 	} else {
-		_ = kineffi.Kine_Filament_SetSunRays(filament, false, 0, 1000, 0, 0, 1, 0, 0, 0.001, 1, 1, 1, true)
+		_ = kineffi.Kine_Filament_SetSunRays(
+			filament,
+			false,
+			0,
+			1000,
+			0,
+			0,
+			1,
+			0,
+			0,
+			0.001,
+			1,
+			1,
+			1,
+			true,
+		)
 	}
 
-	// --- view-level effects ------------------------------------------------
-	//
-	// These were previously hardcoded here, which meant every place paid for
-	// FXAA, dithering, a HIGH HDR buffer and a vignette whether it wanted them
-	// or not. They are instances now, so each one is applied only when an
-	// author has both added it and enabled it, and the absent-instance branches
-	// pass the neutral value rather than leaving last frame's setting in place.
+
 	if antialiasing != nil && antialiasing.enabled {
 		_ = kineffi.Kine_Filament_SetAntiAliasing(
 			filament,
@@ -687,9 +715,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 		_ = kineffi.Kine_Filament_SetRenderQuality(filament, i32(quality.quality))
 	}
 
-	// Screen-space reflections are instance-driven like the rest, and ship
-	// disabled: an extra scene pass for materials that were not authored to
-	// show it is a poor trade by default.
+
 	if reflections := effects.reflections; reflections != nil && reflections.enabled {
 		_ = kineffi.Kine_Filament_SetScreenSpaceReflections(
 			filament,
@@ -720,9 +746,9 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 	_ = kineffi.Kine_Filament_SetPostProcessing(filament, true)
+	lighting_apply_advanced(service, filament)
 
-	// Recorded last, and only on the path that actually pushed state, so the
-	// next unchanged frame short-circuits on the fingerprint comparison above.
+
 	service.applied_fingerprint = fingerprint
 	service.applied_context = filament
 }
@@ -741,8 +767,6 @@ lighting_get :: proc(
 
 	switch key {
 	case "ClockTime":
-		// A number, not an EnumItem, so `Lighting.ClockTime` reads back as the
-		// exact fractional hour the script set.
 		vm.PushNumber(L, service.clock_time)
 
 	case "Brightness":
@@ -766,6 +790,18 @@ lighting_get :: proc(
 	case "ExposureCompensation":
 		vm.PushNumber(L, service.exposure_compensation)
 
+	case "DynamicResolution":
+		vm.PushBoolean(L, service.dynamic_resolution)
+
+	case "ResolutionScale":
+		vm.PushNumber(L, service.resolution_min_scale)
+
+	case "ShadowCascades":
+		vm.PushNumber(L, f64(service.shadow_cascades))
+
+	case "ShadowMapSize":
+		vm.PushNumber(L, f64(service.shadow_map_size))
+
 	case:
 		return false
 	}
@@ -788,8 +824,6 @@ lighting_set :: proc(
 
 	switch key {
 	case "ClockTime":
-		// Wrapping instead of clamping is what lets a script advance the clock
-		// forever with `ClockTime += dt`.
 		service.clock_time = lighting_wrap_clock_time(vm.ArgNumber(L, value_index))
 
 	case "Brightness":
@@ -813,13 +847,22 @@ lighting_set :: proc(
 	case "ExposureCompensation":
 		service.exposure_compensation = vm.ArgNumber(L, value_index)
 
+	case "DynamicResolution":
+		service.dynamic_resolution = vm.ArgBoolean(L, value_index)
+
+	case "ResolutionScale":
+		service.resolution_min_scale = clamp(vm.ArgNumber(L, value_index), 0.1, 1.0)
+
+	case "ShadowCascades":
+		service.shadow_cascades = clamp(i64(vm.ArgNumber(L, value_index)), 1, 4)
+
+	case "ShadowMapSize":
+		service.shadow_map_size = clamp(i64(vm.ArgNumber(L, value_index)), 256, 8192)
+
 	case:
 		return false
 	}
 
-	// No signal is fired here: descriptor_set already does it for every
-	// successful class setter, so firing again would deliver every
-	// Lighting property change to subscribers twice.
 	return true
 }
 
@@ -841,9 +884,13 @@ Register_Lighting_Class :: proc(registry: ^classes.Registry) {
 			"Ambient",
 			"Brightness",
 			"ClockTime",
+			"DynamicResolution",
 			"ExposureCompensation",
 			"GlobalShadows",
 			"OutdoorAmbient",
+			"ResolutionScale",
+			"ShadowCascades",
+			"ShadowMapSize",
 			"ShadowSoftness",
 			"SunColor",
 		},

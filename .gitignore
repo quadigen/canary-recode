@@ -73,3 +73,5 @@ Testing/
 .clang-format
 .bindgen
 tools/rbx2kine.py
+
+docs

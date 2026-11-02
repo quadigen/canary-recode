@@ -1,33 +1,33 @@
 package services
+// wire:service
 
-// wire:service global="logService"
 
+import "base:runtime"
 import "core:fmt"
 import "core:strings"
-import "base:runtime"
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
+import target "../target"
 import vm "../vm"
 import "core:bytes"
 import "core:time"
 
-LogService_Class := classes.Class_Info{
-    name   = "LogService",
-    parent = &Service_Class,
+LogService_Class := classes.Class_Info {
+	name   = "LogService",
+	parent = &Service_Class,
 }
 
 LogService :: struct {
-    using service: Service,
-
-    message_count: i64,
-    info_count:    i64,
-    warning_count: i64,
-    error_count:   i64,
-    history: [dynamic]LogEntry,
-    message_out: ^signals.Signal,
+	using service: Service,
+	message_count: i64,
+	info_count:    i64,
+	warning_count: i64,
+	error_count:   i64,
+	history:       [dynamic]LogEntry,
+	message_out:   ^signals.Signal,
 }
 
 LOG_HISTORY_LIMIT :: 1000
@@ -38,16 +38,15 @@ LogEntry :: struct {
 	timestamp: i64,
 }
 
-log_service_add_entry :: proc(
-	service: ^LogService,
-	message: string,
-	log_type: string,
-) {
-	append(&service.history, LogEntry{
-		message   = bytes.clone(transmute([]u8)message),
-		log_type  = log_type,
-		timestamp = time.to_unix_seconds(time.now()),
-	})
+log_service_add_entry :: proc(service: ^LogService, message: string, log_type: string) {
+	append(
+		&service.history,
+		LogEntry {
+			message = bytes.clone(transmute([]u8)message),
+			log_type = log_type,
+			timestamp = time.to_unix_seconds(time.now()),
+		},
+	)
 
 	if len(service.history) > LOG_HISTORY_LIMIT {
 		overflow := len(service.history) - LOG_HISTORY_LIMIT
@@ -75,11 +74,25 @@ log_service_fire_message_out :: proc(service: ^LogService, message: string) {
 	vm.Pop(L)
 }
 
-log_service_write :: proc(
-	service: ^LogService,
-	message: string,
-	log_type: string,
-) {
+
+log_service_emit_tagged :: proc(tag, message: string) {
+	line_start := 0
+	for index in 0 ..= len(message) {
+		if index < len(message) && message[index] != '\n' {
+			continue
+		}
+
+		line := message[line_start:index]
+		if len(line) > 0 && line[len(line) - 1] == '\r' {
+			line = line[:len(line) - 1]
+		}
+
+		fmt.eprintf("[%s] %s\n", tag, line)
+		line_start = index + 1
+	}
+}
+
+log_service_write :: proc(service: ^LogService, message: string, log_type: string) {
 	if service == nil {
 		return
 	}
@@ -94,6 +107,24 @@ log_service_write :: proc(
 	}
 	log_service_add_entry(service, message, log_type)
 	log_service_fire_message_out(service, message)
+	if target.is_playtest() {
+
+
+		switch log_type {
+		case "Info":
+			log_service_emit_tagged("INFO", message)
+			return
+		case "Warn":
+			log_service_emit_tagged("WARN", message)
+			return
+		case "Error":
+			log_service_emit_tagged("ERROR", message)
+			return
+		case "Log":
+			log_service_emit_tagged("LOG", message)
+			return
+		}
+	}
 	switch log_type {
 	case "Info":
 		fmt.printf("[INFO] %s\n", message)
@@ -101,6 +132,8 @@ log_service_write :: proc(
 		fmt.eprintf("[WARN] %s\n", message)
 	case "Error":
 		fmt.eprintf("[ERROR] %s\n", message)
+	case "Log":
+		fmt.println(message)
 	case:
 		fmt.println(message)
 	}
@@ -169,144 +202,138 @@ log_service_clear_history :: proc(service: ^LogService) {
 }
 
 log_service_construct :: proc(
-    renderer: ^classes.Renderer_Object,
-    data_model: rawptr,
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
 ) -> ^classes.Object {
-    service := new(LogService)
+	service := new(LogService)
 
-    service.service = Service_Init(
-        &LogService_Class,
-        "LogService",
-        data_model,
-    )
+	service.service = Service_Init(&LogService_Class, "LogService", data_model)
 
-    model := cast(^DataModel)data_model
-    if model != nil &&
-       model.registry != nil &&
-       model.registry.signal_registry != nil {
-        service.message_out = signals.Create(model.registry.signal_registry)
-    }
+	model := cast(^DataModel)data_model
+	if model != nil && model.registry != nil && model.registry.signal_registry != nil {
+		service.message_out = signals.Create(model.registry.signal_registry)
+	}
 
-    return &service.object
+	return &service.object
 }
 
 log_service_get :: proc(
-    L: ^vm.State,
-    object: ^classes.Object,
-    datatype_registry: ^datatypes.Registry,
-    enum_registry: ^enums.Registry,
-    key: string,
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
 ) -> bool {
-    service := cast(^LogService)object
+	service := cast(^LogService)object
 
-    switch key {
-    case "MessageCount":
-        vm.PushNumber(L, f64(service.message_count))
+	switch key {
+	case "MessageCount":
+		vm.PushNumber(L, f64(service.message_count))
 
-    case "InfoCount":
-        vm.PushNumber(L, f64(service.info_count))
+	case "InfoCount":
+		vm.PushNumber(L, f64(service.info_count))
 
-    case "WarningCount":
-        vm.PushNumber(L, f64(service.warning_count))
+	case "WarningCount":
+		vm.PushNumber(L, f64(service.warning_count))
 
-    case "ErrorCount":
-        vm.PushNumber(L, f64(service.error_count))
+	case "ErrorCount":
+		vm.PushNumber(L, f64(service.error_count))
 
-    case "MessageOut":
-        signals.Push(L, service.message_out)
+	case "MessageOut":
+		signals.Push(L, service.message_out)
 
-    case "Log", "Info", "Warn", "Error", "Clear", "GetLogHistory":
-	    vm.PushUserdataMethod(L, key)
+	case "Log", "Info", "Warn", "Error", "Clear", "GetLogHistory":
+		vm.PushUserdataMethod(L, key)
 
-    case:
-        return false
-    }
+	case:
+		return false
+	}
 
-    return true
+	return true
 }
 
 log_service_namecall :: proc(
-    L: ^vm.State,
-    object: ^classes.Object,
-    datatype_registry: ^datatypes.Registry,
-    enum_registry: ^enums.Registry,
-    method: string,
-) -> (i32, bool) {
-    service := cast(^LogService)object
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	service := cast(^LogService)object
 
-    switch method {
-    case "Log":
-        message := vm.ArgString(L, 2)
-        log_service_write(service, message, "Log")
-        return 0, true
+	switch method {
+	case "Log":
+		message := vm.ArgString(L, 2)
+		log_service_write(service, message, "Log")
+		return 0, true
 
-    case "Info":
-        message := vm.ArgString(L, 2)
+	case "Info":
+		message := vm.ArgString(L, 2)
 
-        log_service_write(service, message, "Info")
-        return 0, true
+		log_service_write(service, message, "Info")
+		return 0, true
 
-    case "Warn":
-        message := vm.ArgString(L, 2)
+	case "Warn":
+		message := vm.ArgString(L, 2)
 
-        log_service_write(service, message, "Warn")
-        return 0, true
+		log_service_write(service, message, "Warn")
+		return 0, true
 
-    case "Error":
-        message := vm.ArgString(L, 2)
+	case "Error":
+		message := vm.ArgString(L, 2)
 
-        log_service_write(service, message, "Error")
-        return 0, true
+		log_service_write(service, message, "Error")
+		return 0, true
 
-    case "Clear":
-        service.message_count = 0
-        service.info_count = 0
-        service.warning_count = 0
-        service.error_count = 0
-        log_service_clear_history(service)
+	case "Clear":
+		service.message_count = 0
+		service.info_count = 0
+		service.warning_count = 0
+		service.error_count = 0
+		log_service_clear_history(service)
 
-        return 0, true
-    case "GetLogHistory":
-        vm.NewTable(L, len(service.history), 0)
+		return 0, true
+	case "GetLogHistory":
+		vm.NewTable(L, len(service.history), 0)
 
-        for entry, i in service.history {
-            vm.NewTable(L, 0, 3)
+		for entry, i in service.history {
+			vm.NewTable(L, 0, 3)
 
-            vm.PushString(L, string(entry.message))
-            vm.SetField(L, -2, "message")
+			vm.PushString(L, string(entry.message))
+			vm.SetField(L, -2, "message")
 
-            vm.PushString(L, entry.log_type)
-            vm.SetField(L, -2, "type")
+			vm.PushString(L, entry.log_type)
+			vm.SetField(L, -2, "type")
 
-            vm.PushNumber(L, f64(entry.timestamp))
-            vm.SetField(L, -2, "timestamp")
+			vm.PushNumber(L, f64(entry.timestamp))
+			vm.SetField(L, -2, "timestamp")
 
-            vm.RawSetIndex(L, -2, i + 1)
-        }
+			vm.RawSetIndex(L, -2, i + 1)
+		}
 
-        return 1, true
-    }
+		return 1, true
+	}
 
-    return 0, false
+	return 0, false
 }
 
-log_service_destroy :: proc(
-    object: ^classes.Object,
-    renderer: ^classes.Renderer_Object,
-) {
-    log_service_clear_history(cast(^LogService)object)
-    classes.Object_Destroy(object)
-    free(cast(^LogService)object)
+log_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	log_service_clear_history(cast(^LogService)object)
+	classes.Object_Destroy(object)
+	free(cast(^LogService)object)
 }
 
 Register_LogService_Class :: proc(registry: ^classes.Registry) {
-    classes.Register_Class(
-        registry,
-        &LogService_Class,
-        log_service_construct,
-        log_service_destroy,
-        creatable = false,
-        get       = log_service_get,
-        namecall  = log_service_namecall,
-    )
+	classes.Register_Class(
+		registry,
+		&LogService_Class,
+		log_service_construct,
+		log_service_destroy,
+		creatable = false,
+		get = log_service_get,
+		namecall = log_service_namecall,
+	)
 }

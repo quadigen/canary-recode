@@ -20,9 +20,8 @@ TextParams :: struct {
 	TextSize:     f32,
 	color:        datatypes.Color3,
 	transparency: f32,
-
-	font:     cstring,
-	typeface: ^kineffi.KineSkiaTypeface,
+	font:         cstring,
+	typeface:     ^kineffi.KineSkiaTypeface,
 }
 
 ShadowParams :: struct {
@@ -32,6 +31,23 @@ ShadowParams :: struct {
 	spread:    f32,
 	color:     datatypes.Color3,
 	alpha:     f32,
+}
+
+BackdropParams :: struct {
+	cornerRadiusX: f32,
+	cornerRadiusY: f32,
+	exponent:      f32,
+	offsetX:       f32,
+	offsetY:       f32,
+	blurSigma:     f32,
+	brightness:    f32,
+	contrast:      f32,
+	saturation:    f32,
+	hueShift:      f32,
+	morphology:    f32,
+	displacement:  f32,
+	pixelate:      f32,
+	zoom:          f32,
 }
 
 colorToU8 :: proc(color: datatypes.Color3) -> (u8, u8, u8) {
@@ -67,11 +83,7 @@ drawRect :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect) {
 	)
 }
 
-drawRectStroke :: proc(
-	surface: ^kineffi.KineSkiaSurface,
-	rect: Rect,
-	strokeWidth: f32,
-) {
+drawRectStroke :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, strokeWidth: f32) {
 	if surface == nil {
 		return
 	}
@@ -93,11 +105,7 @@ drawRectStroke :: proc(
 	)
 }
 
-drawRoundedRect :: proc(
-	surface: ^kineffi.KineSkiaSurface,
-	rect: Rect,
-	cornerRadius: f32,
-) {
+drawRoundedRect :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, cornerRadius: f32) {
 	if surface == nil {
 		return
 	}
@@ -179,11 +187,40 @@ drawSquircle :: proc(
 	)
 }
 
-drawRotatedRect :: proc(
+drawSquircleCorners :: proc(
 	surface: ^kineffi.KineSkiaSurface,
 	rect: Rect,
-	rotation: f32,
+	radius_tl, radius_tr, radius_br, radius_bl: f32,
+	exponent: f32,
+	strokeWidth: f32,
 ) {
+	if surface == nil {
+		return
+	}
+
+	r, g, b := colorToU8(rect.color)
+	a := alphaToU8(rect.bgTransparency)
+
+	kineffi.Kine_Skia_Surface_DrawSquircleCorners(
+		surface,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		radius_tl,
+		radius_tr,
+		radius_br,
+		radius_bl,
+		exponent,
+		r,
+		g,
+		b,
+		a,
+		strokeWidth,
+	)
+}
+
+drawRotatedRect :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, rotation: f32) {
 	if surface == nil {
 		return
 	}
@@ -219,17 +256,7 @@ drawCircle :: proc(
 	r, g, b := colorToU8(color)
 	a := alphaToU8(transparency)
 
-	kineffi.Kine_Skia_Surface_DrawCircle(
-		surface,
-		x,
-		y,
-		radius,
-		r,
-		g,
-		b,
-		a,
-		0,
-	)
+	kineffi.Kine_Skia_Surface_DrawCircle(surface, x, y, radius, r, g, b, a, 0)
 }
 
 drawOval :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect) {
@@ -300,18 +327,7 @@ drawLine :: proc(
 	r, g, b := colorToU8(color)
 	a := alphaToU8(transparency)
 
-	kineffi.Kine_Skia_Surface_DrawLine(
-		surface,
-		x0,
-		y0,
-		x1,
-		y1,
-		width,
-		r,
-		g,
-		b,
-		a,
-	)
+	kineffi.Kine_Skia_Surface_DrawLine(surface, x0, y0, x1, y1, width, r, g, b, a)
 }
 
 drawShadow :: proc(
@@ -375,6 +391,88 @@ drawBackdropBlur :: proc(
 		b,
 		a,
 	)
+}
+
+drawBackdrop :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, params: BackdropParams) {
+	if surface == nil {
+		return
+	}
+
+	r, g, b := colorToU8(rect.color)
+	a := alphaToU8(rect.bgTransparency)
+
+	kineffi.Kine_Skia_Surface_DrawBackdropRect(
+		surface,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		params.cornerRadiusX,
+		params.cornerRadiusY,
+		params.exponent,
+		params.offsetX,
+		params.offsetY,
+		params.blurSigma,
+		params.brightness,
+		params.contrast,
+		params.saturation,
+		params.hueShift,
+		params.morphology,
+		params.displacement,
+		params.pixelate,
+		params.zoom,
+		255,
+		r,
+		g,
+		b,
+		a,
+	)
+}
+
+drawMagnifier :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, zoomAmount: f32, inset: f32) {
+	if surface == nil {
+		return
+	}
+
+	kineffi.Kine_Skia_Surface_DrawMagnifierRect(
+		surface,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		zoomAmount,
+		inset,
+		alphaToU8(rect.bgTransparency),
+	)
+}
+
+beginMotionBlur :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	rect: Rect,
+	angleDegrees: f32,
+	lengthPixels: f32,
+) {
+	if surface == nil {
+		return
+	}
+
+	kineffi.Kine_Skia_Surface_BeginMotionBlur(
+		surface,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		angleDegrees,
+		lengthPixels,
+	)
+}
+
+endMotionBlur :: proc(surface: ^kineffi.KineSkiaSurface) {
+	if surface == nil {
+		return
+	}
+
+	kineffi.Kine_Skia_Surface_EndMotionBlur(surface)
 }
 
 drawTextBlurred :: proc(
@@ -445,11 +543,7 @@ drawImageBlurred :: proc(
 	)
 }
 
-drawText :: proc(
-	surface: ^kineffi.KineSkiaSurface,
-	text: cstring,
-	params: TextParams,
-) {
+drawText :: proc(surface: ^kineffi.KineSkiaSurface, text: cstring, params: TextParams) {
 	if surface == nil {
 		return
 	}
@@ -489,21 +583,29 @@ drawText :: proc(
 }
 
 beginEdgeFade :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect) {
-	if surface == nil { return }
-	kineffi.Kine_Skia_Surface_BeginEdgeFade(
-		surface, rect.x, rect.y, rect.width, rect.height,
-	)
+	if surface == nil {return}
+	kineffi.Kine_Skia_Surface_BeginEdgeFade(surface, rect.x, rect.y, rect.width, rect.height)
 }
 
 endEdgeFade :: proc(
 	surface: ^kineffi.KineSkiaSurface,
 	rect: Rect,
-	top: f32 = 0, bottom: f32 = 0, left: f32 = 0, right: f32 = 0,
+	top: f32 = 0,
+	bottom: f32 = 0,
+	left: f32 = 0,
+	right: f32 = 0,
 ) {
-	if surface == nil { return }
+	if surface == nil {return}
 	kineffi.Kine_Skia_Surface_EndEdgeFade(
-		surface, rect.x, rect.y, rect.width, rect.height,
-		top, bottom, left, right,
+		surface,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		top,
+		bottom,
+		left,
+		right,
 	)
 }
 
@@ -519,11 +621,7 @@ drawTextShadow :: proc(
 
 	r, g, b := colorToU8(shadow.color)
 
-	a := u8(
-		math.round(
-			clamp(shadow.alpha, 0, 1) * 255,
-		),
-	)
+	a := u8(math.round(clamp(shadow.alpha, 0, 1) * 255))
 
 	if params.typeface != nil {
 		kineffi.Kine_Skia_Surface_DrawTextShadowTypeface(
@@ -533,12 +631,10 @@ drawTextShadow :: proc(
 			params.y,
 			params.TextSize,
 			params.typeface,
-
 			shadow.offsetX,
 			shadow.offsetY,
 			shadow.blurSigma,
 			shadow.spread,
-
 			r,
 			g,
 			b,
@@ -555,12 +651,10 @@ drawTextShadow :: proc(
 		params.y,
 		params.TextSize,
 		params.font,
-
 		shadow.offsetX,
 		shadow.offsetY,
 		shadow.blurSigma,
 		shadow.spread,
-
 		r,
 		g,
 		b,
@@ -568,16 +662,8 @@ drawTextShadow :: proc(
 	)
 }
 
-measureText :: proc(
-	text: cstring,
-	fontSize: f32,
-	font: cstring,
-) -> f32 {
-	return kineffi.Kine_Skia_Surface_MeasureText(
-		text,
-		fontSize,
-		font,
-	)
+measureText :: proc(text: cstring, fontSize: f32, font: cstring) -> f32 {
+	return kineffi.Kine_Skia_Surface_MeasureText(text, fontSize, font)
 }
 
 measureTextTypeface :: proc(
@@ -589,11 +675,7 @@ measureTextTypeface :: proc(
 		return 0
 	}
 
-	return kineffi.Kine_Skia_Typeface_MeasureText(
-		typeface,
-		text,
-		fontSize,
-	)
+	return kineffi.Kine_Skia_Typeface_MeasureText(typeface, text, fontSize)
 }
 
 getFontLineHeight :: proc(fontSize: f32, font: cstring) -> f32 {
@@ -614,13 +696,7 @@ drawImage :: proc(
 		return
 	}
 
-	kineffi.Kine_Skia_Surface_DrawImage(
-		surface,
-		imageObject,
-		x,
-		y,
-		alphaToU8(transparency),
-	)
+	kineffi.Kine_Skia_Surface_DrawImage(surface, imageObject, x, y, alphaToU8(transparency))
 }
 
 drawImageSized :: proc(
@@ -699,6 +775,48 @@ drawImageRect :: proc(
 	)
 }
 
+drawImageScaled :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	imageObject: ^kineffi.KineSkiaImage,
+	srcX, srcY, srcWidth, srcHeight: f32,
+	dstX, dstY, dstWidth, dstHeight: f32,
+	tileSizeX, tileSizeY: f32,
+	scaleType: i32,
+	resample: i32,
+	color: datatypes.Color3,
+	hasColor: bool,
+	transparency: f32,
+) {
+	if surface == nil || imageObject == nil {
+		return
+	}
+
+	r, g, b := colorToU8(color)
+	colorA := hasColor ? u8(255) : u8(0)
+
+	kineffi.Kine_Skia_Surface_DrawImageScaled(
+		surface,
+		imageObject,
+		srcX,
+		srcY,
+		srcWidth,
+		srcHeight,
+		dstX,
+		dstY,
+		dstWidth,
+		dstHeight,
+		tileSizeX,
+		tileSizeY,
+		scaleType,
+		resample,
+		r,
+		g,
+		b,
+		colorA,
+		alphaToU8(transparency),
+	)
+}
+
 save :: proc(surface: ^kineffi.KineSkiaSurface) {
 	if surface != nil {
 		kineffi.Kine_Skia_Surface_Save(surface)
@@ -731,21 +849,11 @@ scale :: proc(surface: ^kineffi.KineSkiaSurface, x, y: f32) {
 
 clipRect :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect) {
 	if surface != nil {
-		kineffi.Kine_Skia_Surface_ClipRect(
-			surface,
-			rect.x,
-			rect.y,
-			rect.width,
-			rect.height,
-		)
+		kineffi.Kine_Skia_Surface_ClipRect(surface, rect.x, rect.y, rect.width, rect.height)
 	}
 }
 
-clipRoundedRect :: proc(
-	surface: ^kineffi.KineSkiaSurface,
-	rect: Rect,
-	cornerRadius: f32,
-) {
+clipRoundedRect :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, cornerRadius: f32) {
 	if surface != nil {
 		kineffi.Kine_Skia_Surface_ClipRoundRect(
 			surface,
@@ -755,6 +863,28 @@ clipRoundedRect :: proc(
 			rect.height,
 			cornerRadius,
 			cornerRadius,
+		)
+	}
+}
+
+clipSquircleCorners :: proc(
+	surface: ^kineffi.KineSkiaSurface,
+	rect: Rect,
+	radius_tl, radius_tr, radius_br, radius_bl: f32,
+	exponent: f32,
+) {
+	if surface != nil {
+		kineffi.Kine_Skia_Surface_ClipSquircleCorners(
+			surface,
+			rect.x,
+			rect.y,
+			rect.width,
+			rect.height,
+			radius_tl,
+			radius_tr,
+			radius_br,
+			radius_bl,
+			exponent,
 		)
 	}
 }

@@ -1,23 +1,19 @@
-﻿package classes
+package classes
 
 import datatypes "../datatypes"
+import debuglog "../debuglog"
 import enums "../enum"
-import luauh "../vm/luauh"
 import renderer "../renderer"
 import signals "../signals"
 import target "../target"
 import vm "../vm"
+import luauh "../vm/luauh"
 import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
 Renderer_Object :: renderer.RendererObject
 Class_Constructor :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object
-// Class_Constructor_With_Context is the context-carrying form of
-// Class_Constructor. Only classes whose callbacks live in another module need
-// it -- the native plugin loader uses `ctx` to recover the record describing
-// which plugin class is being constructed, since a bare Class_Constructor gets
-// no argument identifying the class it is being called for.
 Class_Constructor_With_Context :: proc(
 	ctx: rawptr,
 	renderer: ^Renderer_Object,
@@ -51,6 +47,35 @@ Class_Namecall :: proc(
 )
 Class_Clone :: proc(source: ^Object, destination: ^Object)
 Require_Resolver :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
+
+// Class_Export is an opt-in method published to KNE extensions. The engine
+// calls `handler` when one is provided; a nil handler means "run this class's
+// normal namecall" (the generic invoke path). Arguments are on `ctx.L` starting
+// at index 2, exactly like a Luau namecall.
+Class_Export_Context :: struct {
+	L:         ^vm.State,
+	object:    ^Object,
+	datatypes: ^datatypes.Registry,
+	enums:     ^enums.Registry,
+	method:    string,
+}
+Class_Export_Handler :: proc "contextless" (ctx: ^Class_Export_Context) -> i32
+Class_Export :: struct {
+	name:    string,
+	handler: Class_Export_Handler,
+}
+
+Find_Export :: proc(descriptor: ^Class_Descriptor, name: string) -> ^Class_Export {
+	if descriptor == nil {
+		return nil
+	}
+	for export, index in descriptor.exports {
+		if export.name == name {
+			return &descriptor.exports[index]
+		}
+	}
+	return nil
+}
 
 Class_Step_Phase :: enum {
 	Update,
@@ -108,10 +133,6 @@ Method_Security :: proc(name: string, requirement: vm.Security_Requirement) -> M
 Class_Descriptor :: struct {
 	info:               ^Class_Info,
 	construct:          Class_Constructor,
-	// construct_with_ctx, when set, replaces `construct`. The pair is how a
-	// module that owns its class callbacks identifies which of its classes is
-	// being built: `construct` is the shared engine-side entry point and
-	// `construct_ctx` is the per-class record it forwards.
 	construct_with_ctx: Class_Constructor_With_Context,
 	construct_ctx:      rawptr,
 	destroy:            Class_Destructor,
@@ -129,6 +150,7 @@ Class_Descriptor :: struct {
 	methods:            [dynamic]string,
 	events:             [dynamic]string,
 	member_security:    [dynamic]Member_Security,
+	exports:            [dynamic]Class_Export,
 }
 
 Pending_Destroy :: struct {
@@ -158,17 +180,6 @@ Remote_Call_Dispatch :: proc(
 	bool,
 )
 
-// Part_Body_Access bridges the rigid-body members of a Part --
-// AssemblyLinearVelocity, AssemblyAngularVelocity and ApplyImpulse -- to the
-// physics service.
-//
-// The bridge is necessary because of the package graph: services imports
-// classes, so classes cannot import services and a Part has no way to reach the
-// Jolt body that represents it. Network ownership and remote calls already cross
-// this boundary the same way, through hooks the services layer installs at
-// startup. Every entry point is optional; a Part with no installed access, or
-// one whose service has no body for it, reads as a zero velocity and ignores
-// writes, which is what an anchored Part should report anyway.
 Part_Body_Access :: struct {
 	get_linear_velocity:  proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
 	set_linear_velocity:  proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
@@ -217,6 +228,7 @@ Part_Apply_Impulse :: proc(
 }
 
 Registry :: struct {
+	active_post_process:   ^Object,
 	classes:               [dynamic]^Class_Descriptor,
 	datatypes:             ^datatypes.Registry,
 	enums:                 ^enums.Registry,
@@ -234,6 +246,12 @@ Registry :: struct {
 	destroy_hook_ctx:      rawptr,
 	network_ownership:     Network_Ownership_Dispatch,
 	network_ownership_ctx: rawptr,
+	model_pivoted:         proc(ctx: rawptr, model: ^Model),
+	camera_obstruction:    proc(
+		ctx: rawptr,
+		camera: ^Camera,
+		target, desired: datatypes.Vector3,
+	) -> datatypes.Vector3,
 	remote_call:           Remote_Call_Dispatch,
 	remote_call_ctx:       rawptr,
 	part_body:             Part_Body_Access,
@@ -374,11 +392,15 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		// The write succeeded, so notify subscribers of this exact property.
 		// Funnelling here means every class gets change signals for free,
 		// without each setter having to remember to fire its own.
+		surfacegui_mark_dirty_for(object)
+
 		Object_Fire_Property_Changed(object, key)
 		return true
 	}
 
 	if Object_Set_Property(L, value, ctx, key, value_index) {
+		surfacegui_mark_dirty_for(object)
+
 		Object_Fire_Property_Changed(object, key)
 		return true
 	}
@@ -537,7 +559,10 @@ descriptor_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) ->
 
 	if descriptor.registry != nil && descriptor.registry.network_ownership != nil {
 		switch method {
-		case "SetNetworkOwner", "GetNetworkOwner", "SetNetworkOwnershipAuto":
+		case "SetNetworkOwner",
+		     "GetNetworkOwner",
+		     "SetNetworkOwnershipAuto",
+		     "GetNetworkOwnershipStatus":
 			result_count, handled := descriptor.registry.network_ownership(
 				descriptor.registry.network_ownership_ctx,
 				L,
@@ -603,6 +628,24 @@ descriptor_destroy :: proc(value, ctx: rawptr) {
 		}
 	}
 
+	// A live Instance can reach this finalizer without going through
+	// Destroy_Hierarchy: lua_close finalizes every remaining userdata, so every
+	// still-registered Instance is torn down here in an unspecified order. Run
+	// the same pre-destroy hook Flush_Pending_Destroy uses so services drop
+	// their references (e.g. ScriptContext forgets a destroyed Script's thread)
+	// before the class destructor frees the object. Without this a destroyed
+	// Script left a dangling entry in script_context.threads and ScriptContext's
+	// own destructor dereferenced freed memory.
+	if descriptor != nil && descriptor.registry != nil {
+		if descriptor.registry.renderer != nil &&
+		   descriptor.registry.renderer.ActiveCamera == object {
+			descriptor.registry.renderer.ActiveCamera = nil
+		}
+		if descriptor.registry.destroy_hook != nil {
+			descriptor.registry.destroy_hook(object, descriptor.registry.destroy_hook_ctx)
+		}
+	}
+
 	if descriptor != nil && descriptor.destroy != nil {
 		descriptor.destroy(object, descriptor.registry.renderer)
 	}
@@ -626,6 +669,7 @@ Register_Class :: proc(
 	member_security: []Member_Security = nil,
 	construct_with_ctx: Class_Constructor_With_Context = nil,
 	construct_ctx: rawptr = nil,
+	exports: []Class_Export = nil,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
@@ -663,6 +707,10 @@ Register_Class :: proc(
 
 	for rule in member_security {
 		append(&descriptor.member_security, rule)
+	}
+
+	for entry in exports {
+		append(&descriptor.exports, Class_Export{name = entry.name, handler = entry.handler})
 	}
 
 	descriptor.binding = vm.Userdata_Binding {
@@ -720,6 +768,38 @@ Find_Class :: proc(registry: ^Registry, name: string) -> ^Class_Descriptor {
 	return nil
 }
 
+// Unregister_Class removes a descriptor registered by Register_Class and frees
+// it. Native extension host code calls this when it unloads a library: every
+// callback stored in the descriptor points into that library, so the descriptor
+// cannot outlive it. Instances of the class must already be destroyed.
+Unregister_Class :: proc(registry: ^Registry, descriptor: ^Class_Descriptor) {
+	if registry == nil || descriptor == nil {
+		return
+	}
+
+	for entry, index in registry.classes {
+		if entry == descriptor {
+			ordered_remove(&registry.classes, index)
+			break
+		}
+	}
+
+	delete(descriptor.instances)
+	delete(descriptor.properties)
+	delete(descriptor.methods)
+	delete(descriptor.events)
+	delete(descriptor.member_security)
+	delete(descriptor.exports)
+	free(descriptor)
+}
+
+Class_Count :: proc(registry: ^Registry) -> int {
+	if registry == nil {
+		return 0
+	}
+	return len(registry.classes)
+}
+
 Clone_Class_State :: proc(
 	registry: ^Registry,
 	info: ^Class_Info,
@@ -753,6 +833,18 @@ Push_New :: proc(
 ) {
 	descriptor := Find_Class(registry, class_name)
 	if descriptor == nil || (require_creatable && !descriptor.creatable) {
+		when #config(KINE_ANDROID, false) {
+			registered := 0
+			if registry != nil {registered = len(registry.classes)}
+			debuglog.Log(
+				fmt.tprintf(
+					"Push_New(%q): no descriptor (require_creatable=%v), classes registered=%d",
+					class_name,
+					require_creatable,
+					registered,
+				),
+			)
+		}
 		return nil, false
 	}
 
@@ -769,6 +861,15 @@ Push_New :: proc(
 	}
 
 	if object == nil {
+		when #config(KINE_ANDROID, false) {
+			debuglog.Log_Error(
+				fmt.tprintf(
+					"Push_New(%q): constructor returned nil (construct_with_ctx=%v)",
+					class_name,
+					descriptor.construct_with_ctx != nil,
+				),
+			)
+		}
 		return nil, false
 	}
 
@@ -953,6 +1054,8 @@ Script_Require_Context_Of :: proc(object: ^Object, mode: target.Mode) -> bool {
 		return kind != .Script
 	case .Standalone:
 		return true
+	case .Singleplayer:
+		return true
 	case .Editor:
 		return true
 	}
@@ -980,10 +1083,7 @@ Require_Frame_Stack :: struct {
 }
 
 // Require_Frame_Stack_For returns the thread's stack, creating it on first use.
-Require_Frame_Stack_For :: proc(
-	registry: ^Registry,
-	L: ^vm.State,
-) -> ^Require_Frame_Stack {
+Require_Frame_Stack_For :: proc(registry: ^Registry, L: ^vm.State) -> ^Require_Frame_Stack {
 	if stack, ok := registry.require_frames[L]; ok {
 		return stack
 	}
@@ -1072,8 +1172,7 @@ require_walk_children :: proc(root: ^Object, path: string) -> ^Object {
 	remaining := path
 	for remaining != "" && target != nil {
 		slash := strings.index(remaining, "/")
-		segment :=
-			remaining
+		segment := remaining
 		if slash >= 0 {
 			segment = remaining[:slash]
 			remaining = remaining[slash + 1:]
@@ -1106,11 +1205,7 @@ require_replace_arg1 :: proc(L: ^vm.State, object: ^Object) {
 // `@self/X` names a child of the script that is calling require, and `@game/X`
 // names a child of the DataModel root. Returns false when the alias does not
 // apply or does not resolve, letting the caller fall back.
-require_resolve_alias :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	path: string,
-) -> bool {
+require_resolve_alias :: proc(L: ^vm.State, registry: ^Registry, path: string) -> bool {
 	if strings.has_prefix(path, "@self/") {
 		caller := Require_Current_Script(registry, L)
 		if caller == nil {
@@ -1334,14 +1429,18 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
 	Register_Instance(registry)
+	Register_Advanced_Lighting_Effects(registry)
 	Register_ArcHandles(registry)
+	Register_Attachment(registry)
 	Register_BasePart(registry)
 	Register_BindableEvent(registry)
 	Register_BindableFunction(registry)
 	Register_BlurImageFilter(registry)
 	Register_BoolValue(registry)
+	Register_BoxHandleAdornment(registry)
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
+	Register_CanvasGroup(registry)
 	Register_CFrameValue(registry)
 	Register_CharacterAnimator(registry)
 	Register_CharacterController(registry)
@@ -1351,6 +1450,9 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_CollisionController(registry)
 	Register_Color3Value(registry)
 	Register_ColorSequenceValue(registry)
+	Register_ConeHandleAdornment(registry)
+	Register_Constraint(registry)
+	Register_CylinderHandleAdornment(registry)
 	Register_Decal(registry)
 	Register_DoubleConstrainedValue(registry)
 	Register_EditableMesh(registry)
@@ -1369,7 +1471,9 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_IntValue(registry)
 	Register_Light(registry)
 	Register_Lighting_Effect(registry)
+	Register_LineHandleAdornment(registry)
 	Register_LocalScript(registry)
+	Register_MaterialVariant(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
 	Register_ModuleScript(registry)
@@ -1380,18 +1484,21 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_ObjectValue(registry)
 	Register_Part(registry)
 	Register_PointLight(registry)
-	Register_PostProcessShader(registry)
+	Register_PostProcess(registry)
 	Register_RayValue(registry)
 	Register_RemoteEvent(registry)
 	Register_RemoteFunction(registry)
+	Register_RopeConstraint(registry)
 	Register_RotationController(registry)
 	Register_ScreenGui(registry)
 	Register_Script(registry)
 	Register_ScrollingFrame(registry)
 	Register_Sound(registry)
+	Register_SphereHandleAdornment(registry)
 	Register_SpotLight(registry)
 	Register_StateMachine(registry)
 	Register_StringValue(registry)
+	Register_SurfaceGui(registry)
 	Register_SurfaceLight(registry)
 	Register_SyntaxHighlighter(registry)
 	Register_TextBox(registry)
@@ -1399,15 +1506,24 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_TextLabel(registry)
 	Register_UIBackdrop(registry)
 	Register_UICorner(registry)
-	Register_UIPadding(registry)
+	Register_UIDragDetector(registry)
 	Register_UIGradient(registry)
 	Register_UIGridLayout(registry)
 	Register_UIListLayout(registry)
+	Register_UIMagnifier(registry)
+	Register_UIMotionBlur(registry)
+	Register_UIPadding(registry)
+	Register_UIScaleDetector(registry)
 	Register_UIShadow(registry)
+	Register_UISquircle(registry)
 	Register_UIStroke(registry)
 	Register_ValueBase(registry)
 	Register_Vector2Value(registry)
 	Register_Vector3Value(registry)
+	Register_VectorForce(registry)
+	Register_ViewportFrame(registry)
+	Register_Water(registry)
+	Register_WeldConstraint(registry)
 	// wire:end classes
 }
 

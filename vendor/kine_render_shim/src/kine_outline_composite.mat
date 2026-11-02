@@ -36,9 +36,10 @@ fragment {
                 best = s;
             }
         }
-        // Straight (non-premultiplied) alpha output: Filament's `transparent`
-        // blending applies (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) itself, matching
-        // kine_hl_outline.mat's convention.
-        material.baseColor = vec4(best.rgb, best.a * clamp(m - center, 0.0, 1.0));
+        // Subtract coverage once so OutlineTransparency remains linear.
+        // Filament's transparent blend expects premultiplied RGB; zero-alpha
+        // pixels must contribute no color, including the silhouette interior.
+        float alpha = clamp(m - center, 0.0, 1.0);
+        material.baseColor = vec4(best.rgb * alpha, alpha);
     }
 }

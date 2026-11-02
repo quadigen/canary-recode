@@ -9,7 +9,9 @@ init :: proc() {
 	reset_state()
 }
 
-shutdown :: proc() {}
+shutdown :: proc() {
+	shutdown_thread_state()
+}
 
 reset_state :: proc() {
 	enabled = false

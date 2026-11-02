@@ -225,6 +225,9 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_glass)
     kine_add_material(kine_neon)
     kine_add_material(kine_water)
+    kine_add_material(kine_forcefield)
+    kine_add_material(kine_cloud)
+    kine_add_material(kine_ssgi)
     kine_add_material(kine_decal)
     kine_add_material(kine_outline)
     kine_add_material(kine_gizmo)
@@ -240,8 +243,58 @@ if(KINE_WITH_FILAMENT)
     # Screen-space Highlight outline: selected geometry is painted into a
     # private mask target (kine_outline_mask) and a fullscreen pass dilates
     # that mask into the visible ring (kine_outline_composite).
+    kine_add_material(kine_viewport)
+    kine_add_material(kine_viewport_clear)
     kine_add_material(kine_outline_mask)
     kine_add_material(kine_outline_composite)
+    # Fullscreen pass that presents the Ray path tracer output (render mode 2).
+    kine_add_material(kine_ray_output)
+
+    # ------------------------------------------------------------------
+    # Optional Ray path tracer integration (kine_ray_shim).
+    # ------------------------------------------------------------------
+    # Ray traces on the Vulkan device Filament already owns, so it is only
+    # available with the Vulkan backend. The CPU (reference/SIMD) and D3D12
+    # backends are switched off: they are not reachable from the Filament
+    # integration and would only add build time.
+    option(KINE_WITH_RAY "Build the Ray path tracer integration (render mode 2)" ON)
+
+    set(KINE_RAY_TARGET "")
+    if(KINE_WITH_RAY AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
+        set(RAY_ENABLE_REF_IMPL OFF CACHE BOOL "" FORCE)
+        set(RAY_ENABLE_SIMD_IMPL OFF CACHE BOOL "" FORCE)
+        set(RAY_ENABLE_VK_IMPL ON CACHE BOOL "" FORCE)
+        set(RAY_ENABLE_DX_IMPL OFF CACHE BOOL "" FORCE)
+        set(RAY_ENABLE_ASM_CONV OFF CACHE BOOL "" FORCE)
+
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../Ray ${CMAKE_BINARY_DIR}/ray)
+
+        # Ray ships its own Vulkan platform headers but takes vulkan_core.h from
+        # the SDK, same as this project.
+        target_include_directories(Ray PRIVATE
+            ${Vulkan_INCLUDE_DIRS}
+            ${CMAKE_BINARY_DIR}/kine_skia/skia-src/third_party/externals/vulkan-headers/include
+        )
+        if(MSVC)
+            # Ray's renderer entry points use exceptions to report an unusable
+            # device; without /EHsc MSVC would assume no unwinding.
+            target_compile_options(Ray PRIVATE /EHsc)
+        endif()
+
+        # Ray's CMakeLists unconditionally adds its samples and tests. They are
+        # useful standalone but must not join this project's default build.
+        foreach(_kine_ray_extra 00_basic 01_texturing 02_multithreading 03_principled
+                                04_denoising 05_physical_sky test_Ray)
+            if(TARGET ${_kine_ray_extra})
+                set_target_properties(${_kine_ray_extra} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+            endif()
+        endforeach()
+
+        set(KINE_RAY_TARGET Ray)
+        message(STATUS "kine_filament_shim: Ray path tracer integration enabled")
+    else()
+        message(STATUS "kine_filament_shim: Ray path tracer integration disabled")
+    endif()
 
     set(KINE_ASSIMP_TARGET "")
     if(KINE_WITH_ASSIMP)
@@ -289,6 +342,9 @@ if(KINE_WITH_FILAMENT)
         ${kine_glass_GEN_CPP}
         ${kine_neon_GEN_CPP}
         ${kine_water_GEN_CPP}
+        ${kine_forcefield_GEN_CPP}
+        ${kine_cloud_GEN_CPP}
+        ${kine_ssgi_GEN_CPP}
         ${kine_decal_GEN_CPP}
         ${kine_outline_GEN_CPP}
         ${kine_gizmo_GEN_CPP}
@@ -298,14 +354,23 @@ if(KINE_WITH_FILAMENT)
         ${kine_hl_outline_top_GEN_CPP}
         ${kine_hl_fill_GEN_CPP}
         ${kine_hl_fill_top_GEN_CPP}
+        ${kine_viewport_GEN_CPP}
+        ${kine_viewport_clear_GEN_CPP}
         ${kine_outline_mask_GEN_CPP}
         ${kine_outline_composite_GEN_CPP}
+        ${kine_ray_output_GEN_CPP}
     )
+
+    if(KINE_RAY_TARGET)
+        target_sources(kine_filament_shim PRIVATE src/kine_ray_shim.cpp)
+    endif()
 
     target_include_directories(kine_filament_shim
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         PRIVATE
+            # <Ray/Ray.h> in src/kine_ray_shim.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/..
             ${CMAKE_CURRENT_SOURCE_DIR}/../kine_vulkan_compositor/include
             ${CMAKE_CURRENT_SOURCE_DIR}/third_party
             ${Vulkan_INCLUDE_DIRS}
@@ -319,6 +384,7 @@ if(KINE_WITH_FILAMENT)
             $<$<STREQUAL:${KINE_FILAMENT_BACKEND_UPPER},VULKAN>:KINE_FILAMENT_USE_VULKAN=1>
             $<$<BOOL:${KINE_FILAMENT_VULKAN_READBACK}>:KINE_FILAMENT_ENABLE_VULKAN_READBACK=1>
             $<$<BOOL:${KINE_ASSIMP_TARGET}>:KINE_WITH_ASSIMP=1>
+            $<$<BOOL:${KINE_RAY_TARGET}>:KINE_WITH_RAY=1>
     )
 
     if(WIN32)
@@ -337,6 +403,7 @@ if(KINE_WITH_FILAMENT)
     # PUBLIC link dependencies so the final whole-archive bundle inherits the
     # transitive Filament static libraries instead of leaving them unresolved.
     set(KINE_FILAMENT_CORE_LIBS
+        filament-iblprefilter
         filamat
         filament
         backend
@@ -376,6 +443,7 @@ if(KINE_WITH_FILAMENT)
         target_link_libraries(kine_filament_shim
             PRIVATE
                 ${KINE_SDL3_TARGET}
+                ${KINE_ASSIMP_TARGET}
                 android log EGL GLESv3 vulkan dl
         )
     elseif(APPLE)
@@ -398,6 +466,11 @@ if(KINE_WITH_FILAMENT)
                 ${KINE_ASSIMP_TARGET}
                 GL X11 dl pthread
         )
+    endif()
+
+    if(KINE_RAY_TARGET)
+        # Ray's archives are only reachable through this shim.
+        target_link_libraries(kine_filament_shim PUBLIC ${KINE_RAY_TARGET})
     endif()
 
     target_compile_features(kine_filament_shim PRIVATE cxx_std_20)
@@ -453,4 +526,12 @@ if(KINE_WITH_FILAMENT)
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
         )
     endif()
+endif()
+
+# Explicit GPU regression / stress target, excluded from normal builds.
+if(KINE_WITH_FILAMENT AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
+    add_executable(kine_viewport_smoke EXCLUDE_FROM_ALL test/viewport_gpu_smoke.cpp)
+    target_include_directories(kine_viewport_smoke PRIVATE ${FILAMENT_DIR}/include ../kine_vulkan_compositor/include ../kine_skia/include)
+    target_link_libraries(kine_viewport_smoke PRIVATE kine_filament_shim ${KINE_SDL3_TARGET})
+    target_compile_features(kine_viewport_smoke PRIVATE cxx_std_20)
 endif()

@@ -1,0 +1,23 @@
+material {
+    name : "kine_ray_output",
+    // Fullscreen pass that presents the Ray path tracer image (render mode 2).
+    // The texture is SRGB8_A8, so sampling converts the tonemapped bytes that
+    // Ray produced back to linear and the sRGB target converts them again on
+    // write: the pixels reach the screen unchanged as long as the view running
+    // this material uses a linear (non-tonemapping) color grading.
+    shadingModel : unlit,
+    culling : none,
+    depthCulling : false,
+    depthWrite : false,
+    requires : [ uv0 ],
+    parameters : [
+        { type : sampler2d, name : inputTexture }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(texture(materialParams_inputTexture, getUV0()).rgb, 1.0);
+    }
+}

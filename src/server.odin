@@ -4,17 +4,15 @@ package main
 import sandbox "./sandboxed"
 import "core:fmt"
 import "core:time"
+import classes "engine/classes"
 import engine_runtime "engine/runtime"
 import services "engine/services"
 import target "engine/target"
 import vm "engine/vm"
-import classes "engine/classes"
 
 run_server :: proc(options: Startup_Options) {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
-	// Published before the runtime initializes, matching the desktop path, so
-	// scripts can read IsPlaytest while they load.
 	target.set_playtest(options.playtest)
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
 	sandbox.init_runtime(&script_vm, &environment, nil)
@@ -22,18 +20,15 @@ run_server :: proc(options: Startup_Options) {
 	defer vm.Close(&script_vm)
 	if !load_game_map(&environment, &script_vm, options) {return}
 
-	server_script_service := cast(^services.ServerScriptService)(
-		services.Ensure_Service(&environment.services, "ServerScriptService")
-	)
+	server_script_service := cast(^services.ServerScriptService)(services.Ensure_Service(
+			&environment.services,
+			"ServerScriptService",
+		))
 
 	datamodel := environment.services.data_model
 
 	fmt.println("Running scripts")
-	services.ServerScriptService_RunScripts(
-		environment.renderer,
-		datamodel,
-		server_script_service,
-	)
+	services.ServerScriptService_RunScripts(environment.renderer, datamodel, server_script_service)
 	fmt.println("Finished running scripts")
 
 	object := services.Ensure_Service(&environment.services, "ReplicatorService")

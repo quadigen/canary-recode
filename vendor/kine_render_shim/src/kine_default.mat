@@ -2,12 +2,16 @@ material {
     name : "KineDefault",
     shadingModel : lit,
     blending : opaque,
+    doubleSided : true,
     instanced : true,
-    requires : [ uv0 ],
+    requires : [ uv0, color ],
     parameters : [
         { type : float4[64], name : instanceColors },
+        { type : float[64],  name : instanceUvScale },
         { type : float,     name : roughness },
         { type : float,     name : metallic },
+        { type : float4,    name : baseColorFactor },
+        { type : float,     name : alphaCutoff },
         { type : float,     name : hasTexture },
         { type : sampler2d, name : baseColorMap },
         { type : float,     name : hasNormalMap },
@@ -24,7 +28,12 @@ material {
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
         if (materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
-            vec2 uv = material.uv0 * materialParams.uvScale;
+            // Per-instance UV tiling: the stud-scale factor is stored per
+            // instance (indexed by getInstanceIndex()) so parts of different
+            // sizes can share one material instance / draw call.
+            float instTile = materialParams.instanceUvScale[getInstanceIndex()];
+            instTile = instTile > 0.0001 ? instTile : 1.0;
+            vec2 uv = material.uv0 * materialParams.uvScale * instTile;
             float height = textureLod(materialParams_heightMap, uv, 0.0).r;
 
             // Move actual vertices in world units so the height map changes
@@ -37,7 +46,12 @@ vertex {
 }
 fragment {
     void material(inout MaterialInputs material) {
-        vec2 uv = getUV0() * materialParams.uvScale;
+        // Per-instance UV tiling (see the vertex stage): the stud-scale factor
+        // rides in a fixed 64-slot array indexed by getInstanceIndex(), so
+        // differently-sized parts still batch into a single material instance.
+        float instTile = materialParams.instanceUvScale[getInstanceIndex()];
+        instTile = instTile > 0.0001 ? instTile : 1.0;
+        vec2 uv = getUV0() * materialParams.uvScale * instTile;
 
         // -------------------------------------------------------------------
         // Parallax Occlusion Mapping
@@ -106,9 +120,12 @@ fragment {
         // Surface properties. The per-instance tint lives in a fixed 64-slot
         // array indexed by getInstanceIndex() (each batching chunk is at most
         // 64 instances, see kine_max_chunk_instances()).
-        vec4 color = materialParams.instanceColors[getInstanceIndex()];
+        vec4 color = materialParams.instanceColors[getInstanceIndex()] * materialParams.baseColorFactor;
         if (materialParams.hasTexture > 0.5) {
             color *= texture(materialParams_baseColorMap, uv);
+        }
+        if (materialParams.alphaCutoff > 0.0 && color.a * getColor().a < materialParams.alphaCutoff) {
+            discard;
         }
 
         float roughness = materialParams.roughness;
@@ -126,6 +143,10 @@ fragment {
         }
 
         material.baseColor = color;
+        // Per-vertex color (VertexAttribute::COLOR) modulates the instance tint.
+        // Meshes without color data upload white (1,1,1,1), so this is a no-op
+        // for them. EditableMesh vertex-painted colors ride here.
+        material.baseColor *= getColor();
         material.roughness = roughness;
         material.metallic  = metallic;
     }

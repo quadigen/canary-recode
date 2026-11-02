@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -18,7 +18,9 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local function close(a, b, epsilon)
 	return math.abs(a - b) <= (epsilon or 1e-5)
 end
@@ -82,10 +84,10 @@ assert(label:IsA("GuiObject"))
 -- ImageLabel
 local img = Instance.new("ImageLabel", frame)
 img.Name = "BackgroundImg"
-img.Image = "rbxasset://test.png"
+img.Image = "rbxasset:
 img.ImageTransparency = 0.5
 
-assert(img.Image == "rbxasset://test.png")
+assert(img.Image == "rbxasset:
 assert(img.ImageTransparency == 0.5)
 assert(img.ClassName == "ImageLabel")
 assert(img:IsA("ImageLabel"))
@@ -162,8 +164,7 @@ assert(label:IsDescendantOf(screen))
 
 -- Cleanup
 screen:Destroy()
-assert(#frame:GetChildren() == 0)
-assert(frame.Parent == nil)
+assert(not pcall(function() return frame.Parent end))
 
 -- TextButton
 local btn = Instance.new("TextButton")
@@ -185,7 +186,9 @@ container:Destroy()
 
 assert(not pcall(function() frame.AbsolutePosition = UDim2.new() end))
 assert(not pcall(function() frame.AbsoluteSize = UDim2.new() end))
-`, "gui_component_properties")
+`,
+		"gui_component_properties",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

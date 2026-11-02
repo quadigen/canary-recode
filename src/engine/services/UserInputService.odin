@@ -1,4 +1,5 @@
 package services
+// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -28,11 +29,18 @@ UserInputService :: struct {
 	mouse_location:          datatypes.Vector2,
 	pending_mouse_delta:     datatypes.Vector2,
 	frame_mouse_delta:       datatypes.Vector2,
+	touches:                 [dynamic]UserInputTouch,
 	input_began:             ^signals.Signal,
 	input_changed:           ^signals.Signal,
 	input_ended:             ^signals.Signal,
 	mouse:                   ^Mouse,
 	object_runtime:          ^classes.Registry,
+}
+
+
+UserInputTouch :: struct {
+	id:    sdl3.FingerID,
+	value: classes.InputObject_Value,
 }
 
 user_input_service_construct :: proc(
@@ -45,6 +53,7 @@ user_input_service_construct :: proc(
 	service.mouse_enabled = true
 	service.mouse_icon_enabled = true
 	service.mouse_delta_sensitivity = 1
+	service.touch_enabled = #config(KINE_ANDROID, false) || ODIN_OS == .JS
 	model := cast(^DataModel)data_model
 	if model != nil && model.registry != nil {
 		service.signal_registry = model.registry.classes
@@ -113,6 +122,7 @@ user_input_service_get :: proc(
 	     "GetKeysPressed",
 	     "GetMouseButtonsPressed",
 	     "GetFocusedTextBox",
+	     "GetTouches",
 	     "GetMouse":
 		vm.PushUserdataMethod(L, key)
 	case:
@@ -211,6 +221,17 @@ user_input_service_namecall :: proc(
 	case "GetMouseLocation":
 		datatypes.Push_Vector2(L, datatype_registry, service.mouse_location)
 		return 1, true
+	case "GetTouches":
+		vm.NewTable(L, len(service.touches), 0)
+		for entry, i in service.touches {
+			input := classes.Push_InputObject(L, service.signal_registry, entry.value)
+			if input == nil {
+				vm.PushNil(L)
+			} else {
+				vm.SetArrayValue(L, -2, i + 1)
+			}
+		}
+		return 1, true
 	case "GetMouseDelta":
 		datatypes.Push_Vector2(L, datatype_registry, service.frame_mouse_delta)
 		return 1, true
@@ -296,17 +317,18 @@ user_input_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.R
 	}
 	classes.Object_Destroy(object)
 	delete(service.keys_down)
+	delete(service.touches)
 	free(service)
 }
 
 User_Input_Service_Mouse :: proc(service: ^UserInputService) -> ^Mouse {
-	if service == nil { return nil }
-	if service.mouse != nil && !service.mouse.destroyed { return service.mouse }
-	if service.data_model == nil || service.data_model.registry == nil { return nil }
+	if service == nil {return nil}
+	if service.mouse != nil && !service.mouse.destroyed {return service.mouse}
+	if service.data_model == nil || service.data_model.registry == nil {return nil}
 	registry := service.data_model.registry
-	if registry.classes == nil || registry.vm_state == nil { return nil }
+	if registry.classes == nil || registry.vm_state == nil {return nil}
 	object, ok := classes.Push_New(registry.classes, registry.vm_state, "Mouse", false)
-	if !ok || object == nil { return nil }
+	if !ok || object == nil {return nil}
 	service.mouse = cast(^Mouse)object
 	vm.Pop(registry.vm_state.L)
 	return service.mouse
@@ -322,7 +344,7 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 		get = user_input_service_get,
 		set = user_input_service_set,
 		namecall = user_input_service_namecall,
-		methods = []string{
+		methods = []string {
 			"GetFocusedTextBox",
 			"GetKeysPressed",
 			"GetLastInputType",
@@ -332,6 +354,7 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 			"GetMouseLocation",
 			"IsKeyDown",
 			"IsMouseButtonPressed",
+			"GetTouches",
 		},
 		member_security = []classes.Member_Security {
 			classes.Method_Security(

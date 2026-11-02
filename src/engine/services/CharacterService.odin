@@ -1,9 +1,10 @@
-#+build !js
 package services
+// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import target "../target"
 import vm "../vm"
 
 CharacterService_Class := classes.Class_Info {
@@ -23,10 +24,6 @@ CharacterService :: struct {
 	scene_frozen:           bool,
 	respawn_time:           f32,
 	predictions:            [dynamic]Character_Prediction,
-	// pending_binds holds client characters that replicated before the scene was
-	// ready to stand on. Building one early gives the client a capsule to simulate
-	// with no floor under it, and a kinematic capsule driven by a ground query that
-	// cannot hit anything integrates gravity forever.
 	pending_binds:          [dynamic]^classes.CharacterModel,
 }
 
@@ -84,6 +81,14 @@ character_service_part :: proc(
 	classes.Set_Parent(object, &model.object)
 	vm.Pop(service.data_model.registry.vm_state.L)
 	return part
+}
+
+character_service_singleplayer :: proc(data_model: ^DataModel) -> bool {
+	return(
+		data_model != nil &&
+		data_model.registry != nil &&
+		data_model.registry.mode == .Singleplayer \
+	)
 }
 
 CharacterService_Spawn_Position :: proc(data_model: ^DataModel) -> datatypes.Vector3 {
@@ -201,11 +206,17 @@ CharacterService_Load :: proc(
 	   service.data_model == nil ||
 	   service.data_model.registry == nil {return nil}
 	if player.character != nil && !player.character.destroyed {return player.character}
-	replicator := cast(^ReplicatorService)DataModel_Get_Service(
-		service.data_model,
-		"ReplicatorService",
-	)
-	if replicator == nil || replicator.mode != .Server {return nil}
+
+
+	singleplayer := character_service_singleplayer(service.data_model)
+	replicator: ^ReplicatorService
+	if !singleplayer {
+		replicator = cast(^ReplicatorService)DataModel_Get_Service(
+			service.data_model,
+			"ReplicatorService",
+		)
+		if replicator == nil || replicator.mode != .Server {return nil}
+	}
 	workspace := DataModel_Get_Service(service.data_model, "Workspace")
 	if workspace == nil {return nil}
 	object, ok := classes.Push_New(
@@ -252,12 +263,26 @@ CharacterService_Load :: proc(
 	Player_Set_Character(player, service.data_model.registry.vm_state.L, model)
 	player.ground_y = spawn.y
 	player.vertical_speed = 0
-	_ = replication_register(replicator, object)
-	root := classes.CharacterModel_Root(model)
-	if root != nil {
-		id := replication_register(replicator, &root.object)
-		entity := replication_entity_by_id(replicator, id)
-		if entity != nil {entity.owner_id = player.user_id}
+
+
+	if !singleplayer {
+		_ = replication_register(replicator, object)
+		root := classes.CharacterModel_Root(model)
+		if root != nil {
+			id := replication_register(replicator, &root.object)
+			entity := replication_entity_by_id(replicator, id)
+			if entity != nil {entity.owner_id = player.user_id}
+		}
+	} else {
+
+
+		players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+		if player == players.local_player {
+			workspace_service := cast(^Workspace)workspace
+			if workspace_service != nil && workspace_service.current_camera != nil {
+				workspace_service.current_camera.CameraSubject = &model.object
+			}
+		}
 	}
 	when !#config(FORCE_LEGACY_CHARACTERS, false) {
 		classes.CharacterController_Build(
@@ -294,8 +319,7 @@ CharacterService_Unload :: proc(service: ^CharacterService, player: ^Player) -> 
 	return true
 }
 
-// character_service_player_for_model finds the Player that owns a character, if
-// that player has already joined this client.
+
 character_service_player_for_model :: proc(
 	players: ^Players,
 	model: ^classes.CharacterModel,
@@ -312,10 +336,7 @@ character_service_player_for_model :: proc(
 	return nil
 }
 
-// character_service_bind_ready attaches an already-replicated character to its
-// player and builds the controller that simulates it. This is the half of a bind
-// that requires a world to simulate against, so a client only reaches it once
-// the scene is ready.
+
 character_service_bind_ready :: proc(
 	data_model: ^DataModel,
 	model: ^classes.CharacterModel,
@@ -331,10 +352,7 @@ character_service_bind_ready :: proc(
 		if workspace != nil && workspace.current_camera != nil {
 			workspace.current_camera.CameraSubject = &model.object
 		}
-		service := cast(^CharacterService)Ensure_Service(
-			data_model.registry,
-			"CharacterService",
-		)
+		service := cast(^CharacterService)Ensure_Service(data_model.registry, "CharacterService")
 		if service != nil {
 			clear(&service.predictions)
 			service.last_ack = 0
@@ -348,10 +366,7 @@ character_service_bind_ready :: proc(
 	}
 }
 
-// CharacterService_Flush_Pending_Binds builds the characters a client held back
-// while the scene was still streaming. It runs when the scene-ready barrier
-// lands, which is the first moment the ground under the spawn has a physics body
-// on this client.
+
 CharacterService_Flush_Pending_Binds :: proc(data_model: ^DataModel) {
 	if data_model == nil ||
 	   data_model.registry == nil ||
@@ -365,8 +380,8 @@ CharacterService_Flush_Pending_Binds :: proc(data_model: ^DataModel) {
 	defer delete(pending)
 	L := data_model.registry.vm_state.L
 	for model in pending {
-		// A character that despawned or was replaced while it waited must not be
-		// resurrected here; its replacement has its own bind.
+
+
 		if model == nil || model.destroyed {continue}
 		player := character_service_player_for_model(players, model)
 		if player == nil {continue}
@@ -386,22 +401,10 @@ CharacterService_Bind :: proc(
 	if player == nil {player = Players_Add(players, L, model.owner_user_id, model.name)}
 	if player == nil {return}
 
-	// A client must not build a character against a world it has not finished
-	// receiving. The replicated shell arrives as soon as the server spawns it,
-	// which is well before the map underneath it exists; building the controller
-	// then starts the capsule integrating gravity against a floor that is not
-	// there yet, and the character falls out of the world before the geometry
-	// lands. workspace.FinishedReplicating is too early to gate on -- it reports
-	// that the scene was sent, not that the physics bodies for it were built --
-	// so the gate is the scene-ready barrier, which the server only sends once the
-	// spawn platform, the character's own parts, the geometry under it, and the
-	// terrain have all arrived.
+
 	replicator := cast(^ReplicatorService)DataModel_Get_Service(data_model, "ReplicatorService")
 	if replicator != nil && replicator.mode == .Client && !replicator.scene_ready {
-		service := cast(^CharacterService)Ensure_Service(
-			data_model.registry,
-			"CharacterService",
-		)
+		service := cast(^CharacterService)Ensure_Service(data_model.registry, "CharacterService")
 		if service != nil {
 			for queued in service.pending_binds {
 				if queued == model {return}

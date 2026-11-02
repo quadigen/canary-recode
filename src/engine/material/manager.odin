@@ -1,12 +1,12 @@
 package materialmanager
 
-import "base:runtime"
-import enums "../enum"
 import kineffi "../bindings"
+import enums "../enum"
 import renderer "../renderer"
+import "base:runtime"
 import "vendor:stb/image"
 
-MATERIAL_COUNT :: 11
+MATERIAL_COUNT :: enums.MATERIAL_COUNT
 
 Decoded_Image :: struct {
 	width:  i32,
@@ -15,15 +15,13 @@ Decoded_Image :: struct {
 }
 
 Material :: struct {
-	texture: ^kineffi.KineFilamentTex,
-	loaded:  bool,
-
-	material_kind: i32,
-	roughness:     f32,
-	metallic:      f32,
-	uv_scale:      f32,
-	height_scale:  f32,
-
+	texture:            ^kineffi.KineFilamentTex,
+	loaded:             bool,
+	material_kind:      i32,
+	roughness:          f32,
+	metallic:           f32,
+	uv_scale:           f32,
+	height_scale:       f32,
 	ior:                f32,
 	thickness:          f32,
 	transmission:       f32,
@@ -31,12 +29,11 @@ Material :: struct {
 }
 
 Material_Config :: struct {
-	material_kind: i32,
-	roughness:     f32,
-	metallic:      f32,
-	uv_scale:      f32,
-	height_scale:  f32,
-
+	material_kind:      i32,
+	roughness:          f32,
+	metallic:           f32,
+	uv_scale:           f32,
+	height_scale:       f32,
 	ior:                f32,
 	thickness:          f32,
 	transmission:       f32,
@@ -53,24 +50,13 @@ decode_image :: proc(data: []u8) -> Decoded_Image {
 	}
 
 	width, height, channels: i32
-	pixels := image.load_from_memory(
-		raw_data(data),
-		i32(len(data)),
-		&width,
-		&height,
-		&channels,
-		4,
-	)
+	pixels := image.load_from_memory(raw_data(data), i32(len(data)), &width, &height, &channels, 4)
 
 	if pixels == nil {
 		return Decoded_Image{}
 	}
 
-	return Decoded_Image{
-		width = width,
-		height = height,
-		pixels = pixels,
-	}
+	return Decoded_Image{width = width, height = height, pixels = pixels}
 }
 
 destroy_decoded_image :: proc(decoded: ^Decoded_Image) {
@@ -82,7 +68,7 @@ destroy_decoded_image :: proc(decoded: ^Decoded_Image) {
 }
 
 material_from_config :: proc(config: Material_Config) -> Material {
-	return Material{
+	return Material {
 		material_kind = config.material_kind,
 		roughness = config.roughness,
 		metallic = config.metallic,
@@ -139,19 +125,19 @@ create_pbr_texture :: proc(
 		renderer_object.Filament,
 		albedo.width,
 		albedo.height,
-		albedo.width*4,
+		albedo.width * 4,
 		albedo.pixels,
 		normal.width,
 		normal.height,
-		normal.width*4,
+		normal.width * 4,
 		normal.pixels,
 		orm.width,
 		orm.height,
-		orm.width*4,
+		orm.width * 4,
 		orm.pixels,
 		height.width,
 		height.height,
-		height.width*4,
+		height.width * 4,
 		height.pixels,
 		height_scale,
 	)
@@ -163,6 +149,7 @@ set_material :: proc(material: enums.Material, config: Material_Config) {
 		return
 	}
 	materials[index] = material_from_config(config)
+	draw_params_valid[index] = false
 }
 
 load_texture :: proc(material: enums.Material, entry: ^Material) {
@@ -170,59 +157,7 @@ load_texture :: proc(material: enums.Material, entry: ^Material) {
 		return
 	}
 
-	#partial switch material {
-	case .Glass, .Neon, .Water:
-		entry.loaded = true
-		return
-	case .SmoothPlastic:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/smoothplastic"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Wood:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/wood"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Brick:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/brick"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Grass:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/grass"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Concrete:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/concrete"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Slate:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/slate"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .Sand:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/sand"),
-			active_renderer,
-			entry.height_scale,
-		)
-	case .debug:
-		entry.texture = create_pbr_texture(
-			#load_directory("../assets/materials/compressed/debug"),
-			active_renderer,
-			entry.height_scale,
-		)
-	}
+	entry.texture = builtin_material_texture(material, entry.height_scale)
 
 	entry.loaded = true
 }
@@ -241,7 +176,9 @@ Get :: proc(material: enums.Material) -> ^Material {
 	return entry
 }
 
-Draw_Parameters :: proc(material: ^Material) -> (
+Draw_Parameters :: proc(
+	material: ^Material,
+) -> (
 	material_kind: i32,
 	param1: f32,
 	param2: f32,
@@ -255,23 +192,44 @@ Draw_Parameters :: proc(material: ^Material) -> (
 	switch material.material_kind {
 	case kineffi.KINE_MAT_GLASS, kineffi.KINE_MAT_WATER:
 		return material.material_kind,
-		       material.roughness,
-		       material.ior,
-		       material.thickness,
-		       material.transmission
+			material.roughness,
+			material.ior,
+			material.thickness,
+			material.transmission
 	case kineffi.KINE_MAT_NEON:
-		return material.material_kind,
-		       material.emissive_intensity,
-		       0,
-		       0,
-		       0
+		return material.material_kind, material.emissive_intensity, 0, 0, 0
 	case:
-		return material.material_kind,
-		       material.roughness,
-		       material.metallic,
-		       material.uv_scale,
-		       0
+		return material.material_kind, material.roughness, material.metallic, material.uv_scale, 0
 	}
+}
+
+
+Draw_Params :: struct {
+	kind:         i32,
+	param1:       f32,
+	param2:       f32,
+	param3:       f32,
+	transmission: f32,
+}
+
+draw_params_cache: [MATERIAL_COUNT]Draw_Params
+draw_params_valid: [MATERIAL_COUNT]bool
+
+
+Lookup :: proc(material: enums.Material) -> (^Material, Draw_Params) {
+	index := int(material)
+	if index < 0 || index >= MATERIAL_COUNT {
+		index = int(enums.Material.SmoothPlastic)
+	}
+
+	if !draw_params_valid[index] {
+		entry := Get(enums.Material(index))
+		kind, param1, param2, param3, transmission := Draw_Parameters(entry)
+		draw_params_cache[index] = Draw_Params{kind, param1, param2, param3, transmission}
+		draw_params_valid[index] = true
+	}
+
+	return &materials[index], draw_params_cache[index]
 }
 
 init :: proc(renderer_object: ^renderer.RendererObject) {
@@ -284,83 +242,7 @@ init :: proc(renderer_object: ^renderer.RendererObject) {
 		return
 	}
 
-	set_material(.SmoothPlastic, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.35,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.005,
-	})
-	set_material(.Wood, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.72,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.025,
-	})
-	set_material(.Brick, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.80,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.055,
-	})
-	set_material(.Grass, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.92,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.025,
-	})
-	set_material(.Concrete, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.85,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.020,
-	})
-	set_material(.Slate, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.72,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.020,
-	})
-	set_material(.Glass, Material_Config{
-		material_kind = kineffi.KINE_MAT_GLASS,
-		roughness = 0.08,
-		ior = 1.50,
-		thickness = 0.08,
-		transmission = 0.92,
-		uv_scale = 1,
-	})
-	set_material(.Neon, Material_Config{
-		material_kind = kineffi.KINE_MAT_NEON,
-		emissive_intensity = 6,
-		uv_scale = 1,
-	})
-	set_material(.Sand, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.95,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0.018,
-	})
-	set_material(.Water, Material_Config{
-		material_kind = kineffi.KINE_MAT_WATER,
-		roughness = 0.08,
-		ior = 1.333,
-		thickness = 0.12,
-		transmission = 0.88,
-		uv_scale = 1,
-	})
-	set_material(.debug, Material_Config{
-		material_kind = kineffi.KINE_MAT_DEFAULT,
-		roughness = 0.55,
-		metallic = 0,
-		uv_scale = 1,
-		height_scale = 0,
-	})
+	for config, index in builtin_material_configs {set_material(enums.Material(index), config)}
 
 	initialized = true
 }
@@ -371,19 +253,17 @@ shutdown :: proc(renderer_object: ^renderer.RendererObject) {
 	}
 
 	if renderer_object != nil && renderer_object.Filament != nil {
-		for index in 0..<MATERIAL_COUNT {
+		for index in 0 ..< MATERIAL_COUNT {
 			entry := &materials[index]
 			if entry.texture != nil {
-				_ = kineffi.Kine_Filament_DestroyTex(
-					renderer_object.Filament,
-					entry.texture,
-				)
+				_ = kineffi.Kine_Filament_DestroyTex(renderer_object.Filament, entry.texture)
 				entry.texture = nil
 			}
 		}
 	}
 
 	materials = [MATERIAL_COUNT]Material{}
+	draw_params_valid = [MATERIAL_COUNT]bool{}
 	active_renderer = nil
 	initialized = false
 }

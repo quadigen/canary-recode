@@ -40,9 +40,6 @@ Handles :: struct {
 	mouse_drag:         ^signals.Signal,
 	native_gizmo:       ^kineffi.KineFilamentGizmo,
 	native_context:     ^kineffi.KineFilamentContext,
-	// native_type remembers which gizmo type the live native gizmo was built
-	// for, so changing Style can rebuild it: the native handle caches its mesh
-	// and never learns the type changed on its own.
 	native_type:        i32,
 	hovered_axis:       i32,
 	snap:               f64,
@@ -53,9 +50,6 @@ Handles :: struct {
 	drag_start_y:       f32,
 	drag_last_delta:    f32,
 	drag_last_delta2:   f32,
-	// drag_pivot is the frame captured when a drag begins. Models rotate and
-	// scale about it for the whole drag so a non-symmetric model cannot drag
-	// its own handles around as its bounding box changes.
 	drag_pivot:         datatypes.CFrame,
 }
 
@@ -178,6 +172,22 @@ handles_snap_increment :: proc(current_delta: f32, last_applied_delta: ^f32, sna
 	return increment
 }
 
+
+handles_plane_snap_increment :: proc(
+	first, second: f32,
+	last_first, last_second: ^f32,
+	snap: f64,
+) -> (
+	f32,
+	f32,
+) {
+	return handles_snap_increment(
+		first,
+		last_first,
+		snap,
+	), handles_snap_increment(second, last_second, snap)
+}
+
 arc_handles_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	handles := cast(^ArcHandles)object
 	handles_destroy_native(handles.native_gizmo, handles.native_context)
@@ -237,10 +247,7 @@ handles_cframe_matrix :: proc(cf: datatypes.CFrame) -> [16]f32 {
 	}
 }
 
-// A handles selection is the thing a Handles or ArcHandles adorns: either a
-// single BasePart or a Model. `pivot` is the world-space frame the gizmo sits
-// on and every transform is measured from -- a Part's own CFrame, or a Model's
-// bounding-box centre (Roblox's default WorldPivot).
+
 handles_selection :: struct {
 	part:  ^Part,
 	model: ^Object,
@@ -263,18 +270,14 @@ handles_resolve_selection :: proc(adornee: ^Object) -> (handles_selection, bool)
 	return {}, false
 }
 
-// A cached physics body mirrors a Part's transform, and Part's setter is what
-// tells physics a mirrored property moved. Writing `cframe` fields directly
-// from the gizmo leaves `position` -- the copy the physics service reads -- out
-// of date, so every write goes through here.
+
 handles_part_sync_position :: proc(part: ^Part) {
 	if part != nil {
 		part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
 	}
 }
 
-// The world-space half extents of a Part's oriented box: the half size of the
-// axis-aligned box that contains it once its rotation is applied.
+
 handles_part_half_extents :: proc(part: ^Part) -> (x, y, z: f32) {
 	hx := part.size.x * 0.5
 	hy := part.size.y * 0.5
@@ -300,51 +303,47 @@ handles_expand_bounds :: proc(
 	max^ = datatypes.Vec3_Max(max^, point)
 }
 
-handles_accumulate_bounds :: proc(
-	object: ^Object,
-	min, max: ^datatypes.Vector3,
-	found: ^bool,
-) {
+handles_accumulate_bounds :: proc(object: ^Object, min, max: ^datatypes.Vector3, found: ^bool) {
 	if object == nil || object.destroyed {
 		return
 	}
 	if Is_A(object, "Part") {
 		part := cast(^Part)object
 		ex, ey, ez := handles_part_half_extents(part)
-		handles_expand_bounds(min, max, found, datatypes.Vector3{
-			part.cframe.x - ex,
-			part.cframe.y - ey,
-			part.cframe.z - ez,
-		})
-		handles_expand_bounds(min, max, found, datatypes.Vector3{
-			part.cframe.x + ex,
-			part.cframe.y + ey,
-			part.cframe.z + ez,
-		})
+		handles_expand_bounds(
+			min,
+			max,
+			found,
+			datatypes.Vector3{part.cframe.x - ex, part.cframe.y - ey, part.cframe.z - ez},
+		)
+		handles_expand_bounds(
+			min,
+			max,
+			found,
+			datatypes.Vector3{part.cframe.x + ex, part.cframe.y + ey, part.cframe.z + ez},
+		)
 	}
 	for child in object.children {
 		handles_accumulate_bounds(child, min, max, found)
 	}
 }
 
-// Handles_Model_Bounds returns the world-space axis-aligned box containing
-// every BasePart under `model`. `found` is false when the subtree has no parts.
+
 Handles_Model_Bounds :: proc(model: ^Object) -> (min, max: datatypes.Vector3, found: bool) {
 	handles_accumulate_bounds(model, &min, &max, &found)
 	return
 }
 
-// Handles_Model_Pivot is the frame a Model's handles are anchored to: the
-// centre of its bounding box, rotation-free, matching Roblox's default
-// WorldPivot for a model with no explicit pivot.
+
 Handles_Model_Pivot :: proc(model: ^Object) -> (datatypes.CFrame, bool) {
 	min, max, found := Handles_Model_Bounds(model)
 	if !found {
 		return {}, false
 	}
 	return datatypes.CFrame_New_Position(
-		datatypes.Vec3_Multiply(datatypes.Vec3_Add(min, max), 0.5),
-	), true
+			datatypes.Vec3_Multiply(datatypes.Vec3_Add(min, max), 0.5),
+		),
+		true
 }
 
 handles_translate_state :: struct {
@@ -374,7 +373,7 @@ handles_scale_state :: struct {
 
 handles_scale_visit :: proc(part: ^Part, data: rawptr) {
 	state := cast(^handles_scale_state)data
-	part.size = datatypes.Vector3{
+	part.size = datatypes.Vector3 {
 		max(0.05, part.size.x * state.factors.x),
 		max(0.05, part.size.y * state.factors.y),
 		max(0.05, part.size.z * state.factors.z),
@@ -383,7 +382,7 @@ handles_scale_visit :: proc(part: ^Part, data: rawptr) {
 		datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z},
 		state.pivot,
 	)
-	offset = datatypes.Vector3{
+	offset = datatypes.Vector3 {
 		offset.x * state.factors.x,
 		offset.y * state.factors.y,
 		offset.z * state.factors.z,
@@ -412,17 +411,24 @@ handles_for_each_model_part :: proc(
 }
 
 handles_model_translate :: proc(model: ^Object, offset: datatypes.Vector3) {
-	state := handles_translate_state{offset = offset}
+	state := handles_translate_state {
+		offset = offset,
+	}
 	handles_for_each_model_part(model, &state, handles_translate_visit)
 }
 
 handles_model_transform :: proc(model: ^Object, transform: datatypes.CFrame) {
-	state := handles_transform_state{transform = transform}
+	state := handles_transform_state {
+		transform = transform,
+	}
 	handles_for_each_model_part(model, &state, handles_transform_visit)
 }
 
 handles_model_scale :: proc(model: ^Object, pivot: datatypes.Vector3, factors: datatypes.Vector3) {
-	state := handles_scale_state{pivot = pivot, factors = factors}
+	state := handles_scale_state {
+		pivot   = pivot,
+		factors = factors,
+	}
 	handles_for_each_model_part(model, &state, handles_scale_visit)
 }
 
@@ -461,16 +467,8 @@ handles_vector_set_component :: proc(v: ^datatypes.Vector3, component: int, valu
 	}
 }
 
-// handles_model_scale_axis grows (or shrinks) the model along `axis` so its
-// bounding-box extent changes by `delta`, keeping the supplied pivot fixed.
-// Sizes and offsets from the pivot scale together, which is what makes the
-// whole model grow rather than each part inflate independently.
-handles_model_scale_axis :: proc(
-	model: ^Object,
-	pivot: datatypes.CFrame,
-	axis: i32,
-	delta: f32,
-) {
+
+handles_model_scale_axis :: proc(model: ^Object, pivot: datatypes.CFrame, axis: i32, delta: f32) {
 	component := handles_axis_component(axis)
 	if component < 0 {
 		return
@@ -492,10 +490,7 @@ handles_model_scale_axis :: proc(
 	handles_model_scale(model, datatypes.Vector3{pivot.x, pivot.y, pivot.z}, factors)
 }
 
-// Handles_Apply_Model_Axis applies one axis of a drag to every BasePart under
-// `model`, about `pivot`. Movement translates the whole model, rotation revolves
-// it around the pivot, and Resize scales it so its extent along `axis` grows by
-// `delta`.
+
 Handles_Apply_Model_Axis :: proc(
 	model: ^Object,
 	pivot: datatypes.CFrame,
@@ -523,8 +518,7 @@ Handles_Apply_Model_Axis :: proc(
 	}
 }
 
-// Handles_Apply_Model_Plane is the plane-handle twin of Handles_Apply_Model_Axis.
-// Rotation has no in-plane drag, so it is a no-op there.
+
 Handles_Apply_Model_Plane :: proc(
 	model: ^Object,
 	pivot: datatypes.CFrame,
@@ -583,8 +577,7 @@ handles_selection_apply_plane :: proc(
 	}
 }
 
-// handles_gizmo_type_for_style maps a Handles style onto the native gizmo that
-// draws the matching handle set. ArcHandles is always Rotation.
+
 handles_gizmo_type_for_style :: proc(style: enums.HandlesStyle) -> i32 {
 	switch style {
 	case .Movement:
@@ -613,8 +606,8 @@ handles_ensure_native :: proc(
 		native_context^ = ctx
 		native_type^ = 0
 	}
-	// The native gizmo bakes its mesh at creation, so a Style change has to
-	// throw the old one away rather than mutate it in place.
+
+
 	if gizmo^ != nil && native_type^ != gizmo_type {
 		handles_destroy_native(gizmo^, native_context^)
 		gizmo^ = nil
@@ -802,11 +795,9 @@ handles_step_common :: proc(
 		return
 	}
 
-	// A model drag is pinned to the pivot captured when the drag began, so a
-	// non-symmetric model does not drag its own handles around as its bounding
-	// box changes under rotation or scaling.
+
 	active_pivot := selection.pivot
-	if dragging^ && selection.model != nil {
+	if dragging^ {
 		active_pivot = drag_pivot^
 	}
 	model := handles_cframe_matrix(active_pivot)
@@ -836,6 +827,12 @@ handles_step_common :: proc(
 	}
 
 	if dragging^ && left {
+
+
+		effective_snap := snap^
+		if style == .Rotation {
+			effective_snap = snap^ * (f64(math.PI) / 180.0)
+		}
 		first_axis, second_axis, _, is_plane := handles_plane(selected_axis^)
 		if is_plane {
 			first, second: f32
@@ -852,10 +849,13 @@ handles_step_common :: proc(
 				   &second,
 			   ) !=
 			   0 {
-				first_increment := handles_snap_increment(first, drag_last_delta, snap^)
-				second_increment := handles_snap_increment(second, drag_last_delta2, snap^)
-				drag_last_delta^ = first
-				drag_last_delta2^ = second
+				first_increment, second_increment := handles_plane_snap_increment(
+					first,
+					second,
+					drag_last_delta,
+					drag_last_delta2,
+					effective_snap,
+				)
 				if apply_delta {
 					handles_selection_apply_plane(
 						selection,
@@ -880,9 +880,15 @@ handles_step_common :: proc(
 				mouse_x,
 				mouse_y,
 			)
-			increment := handles_snap_increment(delta, drag_last_delta, snap^)
+			increment := handles_snap_increment(delta, drag_last_delta, effective_snap)
 			if apply_delta && increment != 0 {
-				handles_selection_apply_axis(selection, drag_pivot^, selected_axis^, increment, style)
+				handles_selection_apply_axis(
+					selection,
+					drag_pivot^,
+					selected_axis^,
+					increment,
+					style,
+				)
 			}
 			handles_fire_drag(L, mouse_drag, enum_registry, selected_axis^, delta)
 		}
@@ -895,10 +901,14 @@ handles_step_common :: proc(
 	}
 
 	previous_left^ = left
+
+	draw_pivot := selection.pivot
+	if dragging^ && selection.model != nil {draw_pivot = drag_pivot^}
+	draw_model := handles_cframe_matrix(draw_pivot)
 	kineffi.Kine_Filament_DrawGizmo(
 		renderer.Filament,
 		gizmo^,
-		&model[0],
+		&draw_model[0],
 		hovered_axis^,
 		selected_axis^,
 	)
@@ -929,6 +939,12 @@ handles_get :: proc(
 		_ = enums.Push_Item_By_Value(L, enum_registry, "HandlesStyle", i64(handles.Style))
 	case "Visible":
 		vm.PushBoolean(L, handles.Visible)
+
+
+	case "Hovered":
+		vm.PushBoolean(L, handles.hovered_axis != kineffi.KINE_GIZMO_AXIS_NONE)
+	case "Dragging":
+		vm.PushBoolean(L, handles.dragging)
 	case "MouseButton1Down", "MouseButton1Up", "MouseDrag":
 		handles_ensure_signals(
 			&handles.object,
@@ -1102,6 +1118,11 @@ arc_handles_get :: proc(
 		vm.PushNumber(L, handles.snap)
 	case "Visible":
 		vm.PushBoolean(L, handles.Visible)
+
+	case "Hovered":
+		vm.PushBoolean(L, handles.hovered_axis != kineffi.KINE_GIZMO_AXIS_NONE)
+	case "Dragging":
+		vm.PushBoolean(L, handles.dragging)
 	case "MouseButton1Down", "MouseButton1Up", "MouseDrag":
 		handles_ensure_signals(
 			&handles.object,
@@ -1199,6 +1220,8 @@ Register_Handles :: proc(registry: ^Registry) {
 			"Faces",
 			"Style",
 			"Visible",
+			"Hovered",
+			"Dragging",
 			"MouseButton1Down",
 			"MouseButton1Up",
 			"MouseDrag",
@@ -1224,6 +1247,8 @@ Register_ArcHandles :: proc(registry: ^Registry) {
 			"Axes",
 			"Color3",
 			"Visible",
+			"Hovered",
+			"Dragging",
 			"MouseButton1Down",
 			"MouseButton1Up",
 			"MouseDrag",

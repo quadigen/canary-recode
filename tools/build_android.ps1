@@ -1,7 +1,8 @@
 param(
     [string]$AndroidSdk = $env:ANDROID_HOME,
     [string]$NdkVersion = "30.0.16248370",
-    [int]$ApiLevel = 30
+    [int]$ApiLevel = 30,
+    [string[]]$Abis = @("arm64-v8a", "x86_64")
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,31 @@ if (-not (Test-Path (Join-Path $ndk "build\cmake\android.toolchain.cmake"))) {
 }
 $env:ANDROID_NDK_HOME = $ndk
 
+# Per-ABI toolchain mappings.
+$VcpkgTriplets = @{
+    "arm64-v8a" = "arm64-android"
+    "x86_64"    = "x86_64-android"
+}
+$SkiaCpus = @{
+    "arm64-v8a" = "arm64"
+    "x86_64"    = "x86_64"
+}
+$ClangTargets = @{
+    "arm64-v8a" = "aarch64-linux-android"
+    "x86_64"    = "x86_64-linux-android"
+}
+$FilamentArchs = @{
+    "arm64-v8a" = "arm64-v8a"
+    "x86_64"    = "x86_64"
+}
+
+foreach ($abi in $Abis) {
+    if (-not $VcpkgTriplets.ContainsKey($abi)) {
+        throw "Unsupported Android ABI '$abi'. Supported: $($VcpkgTriplets.Keys -join ', ')"
+    }
+}
+
+# ---- vcpkg: install every required triplet into one install root ----
 $vcpkgCommand = Get-Command vcpkg -ErrorAction SilentlyContinue
 $vcpkgExecutable = if ($null -ne $vcpkgCommand) { $vcpkgCommand.Source } else { "" }
 foreach ($vcpkgRoot in @($env:VCPKG_INSTALLATION_ROOT, "C:\vcpkg")) {
@@ -26,7 +52,13 @@ if (-not $vcpkgExecutable) {
     throw "vcpkg is required to build the Android OpenSSL and ENet libraries"
 }
 $vcpkgInstalled = Join-Path $repo "build\vcpkg-installed"
-& $vcpkgExecutable install openssl:arm64-android enet:arm64-android "--x-install-root=$vcpkgInstalled"
+$vcpkgArgs = New-Object System.Collections.ArrayList
+foreach ($abi in $Abis) {
+    $triplet = $VcpkgTriplets[$abi]
+    $vcpkgArgs.Add("openssl:$triplet")
+    $vcpkgArgs.Add("enet:$triplet")
+}
+& $vcpkgExecutable install $vcpkgArgs "--x-install-root=$vcpkgInstalled"
 if ($LASTEXITCODE -ne 0) { throw "Android OpenSSL/ENet dependency build failed" }
 
 $filamentVersion = "1.74.0"
@@ -40,7 +72,6 @@ if (Test-Path (Join-Path $localFilamentHost "bin\matc.exe")) {
 }
 $sdlAar = Join-Path $cache "sdl3\SDL3-$sdlVersion.aar"
 $skiaRoot = Join-Path $repo "vendor\build\vendor\kine_skia\skia-src"
-$skiaOut = Join-Path $skiaRoot "out\KinemiumAndroid"
 $box2dRoot = Join-Path $cache "box2d"
 
 function Expand-Tarball([string]$Url, [string]$Archive, [string]$Destination) {
@@ -50,9 +81,15 @@ function Expand-Tarball([string]$Url, [string]$Archive, [string]$Destination) {
     if ($LASTEXITCODE -ne 0) { throw "Could not extract $Archive" }
 }
 
-if (-not (Test-Path (Join-Path $filamentRoot "lib\arm64-v8a\libfilament.a"))) {
-    $archive = Join-Path $cache "filament\filament-v$filamentVersion-android-native.tgz"
-    Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-android-native.tgz" $archive (Split-Path $filamentRoot)
+# ---- Filament: one native bundle typically ships every ABI ----
+foreach ($abi in $Abis) {
+    $filamentArch = $FilamentArchs[$abi]
+    $filamentLib = Join-Path $filamentRoot "lib\$filamentArch\libfilament.a"
+    if (-not (Test-Path $filamentLib)) {
+        $archive = Join-Path $cache "filament\filament-v$filamentVersion-android-native.tgz"
+        Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-android-native.tgz" $archive (Split-Path $filamentRoot)
+        break
+    }
 }
 if (-not (Test-Path (Join-Path $filamentHostRoot "bin\matc.exe"))) {
     $archive = Join-Path $cache "filament-host\filament-v$filamentVersion-windows.tgz"
@@ -81,6 +118,7 @@ if (-not (Test-Path (Join-Path $box2dRoot ".git"))) {
     if ($LASTEXITCODE -ne 0) { throw "Box2D checkout failed" }
 }
 
+# ---- Python shim for Skia GN/Ninja (ABI-agnostic, run once) ----
 $oldPath = $env:PATH
 $pythonExecutable = ""
 foreach ($pythonName in @("python", "python3")) {
@@ -110,60 +148,96 @@ $pythonShimExecutable = Join-Path $pythonShim "python3.exe"
 if (Test-Path -LiteralPath $pythonShimExecutable) {
     Remove-Item -LiteralPath $pythonShimExecutable -Force
 }
-New-Item -ItemType HardLink -Path $pythonShimExecutable -Target $pythonExecutable | Out-Null
+    New-Item -ItemType HardLink -Path $pythonShimExecutable -Target $pythonExecutable | Out-Null
 $env:PATH = "$pythonShim;$(Split-Path $pythonExecutable);$oldPath"
-if (-not (Test-Path (Join-Path $skiaOut "libsvg.a"))) {
-    $gnArgs = 'target_os="android" target_cpu="arm64" ndk="' + ($ndk -replace '\\','/') + '" is_debug=false is_official_build=true is_component_build=false skia_enable_ganesh=true skia_enable_svg=true skia_enable_skshaper=true skia_use_vulkan=true skia_use_gl=false skia_use_expat=true skia_use_system_expat=false skia_use_harfbuzz=true skia_use_system_harfbuzz=false skia_use_icu=true skia_use_system_icu=false skia_use_freetype=true skia_use_system_freetype2=false skia_use_libpng_decode=true skia_use_libpng_encode=true skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_dng_sdk=false'
-    Push-Location $skiaRoot
-    try {
-        & .\bin\gn.exe gen out/KinemiumAndroid "--args=$gnArgs"
-    & ninja -C out/KinemiumAndroid skia svg skshaper skunicode_core skunicode_icu
-        if ($LASTEXITCODE -ne 0) { throw "Skia Android build failed" }
-    } finally { Pop-Location }
+
+# ---- Per-ABI builds ----
+$toolchain = Join-Path $ndk "build\cmake\android.toolchain.cmake"
+
+foreach ($abi in $Abis) {
+    $skiaCpu = $SkiaCpus[$abi]
+    $clangTarget = $ClangTargets[$abi]
+    $filamentArch = $FilamentArchs[$abi]
+    $skiaOut = Join-Path $skiaRoot "out\KinemiumAndroid-$abi"
+    $nativeBuild = Join-Path $repo "build\android-native-$abi"
+    $boxBuild = Join-Path $repo "build\android-box2d-$abi"
+    $vendorOut = Join-Path $repo "build\android-vendor-$abi"
+    $jniOut = Join-Path $repo "build\android-jni\$abi"
+    $odinObjects = Join-Path $repo "build\android-$abi"
+
+    Write-Host "=== Building Android $abi ==="
+
+    # ---- Skia (per ABI) ----
+    $skiaArgsFile = Join-Path $skiaOut "args.gn"
+    $skiaNeedsBuild = $true
+    if ((Test-Path (Join-Path $skiaOut "libsvg.a")) -and (Test-Path $skiaArgsFile) -and (Select-String -Path $skiaArgsFile -Pattern 'skia_use_gl\s*=\s*true' -Quiet)) {
+        $skiaNeedsBuild = $false
+    }
+    if ($skiaNeedsBuild) {
+        $gnArgs = 'target_os="android" target_cpu="' + $skiaCpu + '" ndk="' + ($ndk -replace '\\','/') + '" is_debug=false is_official_build=true is_component_build=false skia_enable_ganesh=true skia_enable_svg=true skia_enable_skshaper=true skia_use_vulkan=false skia_use_gl=true skia_gl_standard="gles" skia_use_expat=true skia_use_system_expat=false skia_use_harfbuzz=true skia_use_system_harfbuzz=false skia_use_icu=true skia_use_system_icu=false skia_use_freetype=true skia_use_system_freetype2=false skia_use_libpng_decode=true skia_use_libpng_encode=true skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_dng_sdk=false'
+        Push-Location $skiaRoot
+        try {
+            & .\bin\gn.exe gen $skiaOut "--args=$gnArgs"
+            & ninja -C $skiaOut skia svg skshaper skunicode_core skunicode_icu
+            if ($LASTEXITCODE -ne 0) { throw "Skia Android $abi build failed" }
+        } finally { Pop-Location }
+    }
+    $env:PATH = $oldPath
+
+    # ---- CMake native dependencies (per ABI) ----
+    & cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=$abi "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DFILAMENT_LIB_ARCH=$filamentArch" "-DKINE_SKIA_DIR=$skiaRoot" "-DKINE_SKIA_BUILD_NAME=KinemiumAndroid-$abi" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" "-DKINE_ANDROID_VCPKG_DIR=$(Join-Path $vcpkgInstalled $VcpkgTriplets[$abi])" "-DKINE_ANDROID_JNI_DIR=$jniOut" "-DKINE_ANDROID_VENDOR_DIR=$vendorOut" -DCMAKE_BUILD_TYPE=Release
+    & cmake --build $nativeBuild --parallel
+    if ($LASTEXITCODE -ne 0) { throw "Native Android $abi dependency build failed" }
+
+    $boxBuild = Join-Path $repo "build\android-box2d-$abi"
+    & cmake -S $box2dRoot -B $boxBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=$abi "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static -DBOX2D_SAMPLES=OFF -DBOX2D_UNIT_TESTS=OFF -DBOX2D_VALIDATE=OFF -DCMAKE_BUILD_TYPE=Release
+    & cmake --build $boxBuild --parallel
+    if ($LASTEXITCODE -ne 0) { throw "Box2D Android $abi build failed" }
+
+    # ---- Odin vendor static libs (per ABI) ----
+    $clang = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\$clangTarget$ApiLevel-clang.cmd"
+    $ar = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-ar.exe"
+    New-Item -ItemType Directory -Force $vendorOut | Out-Null
+    & $clang -O3 -fPIC -c (Join-Path $odinRoot "vendor\miniaudio\src\miniaudio.c") -o (Join-Path $vendorOut "miniaudio.o")
+    & $ar rcs (Join-Path $vendorOut "miniaudio.a") (Join-Path $vendorOut "miniaudio.o")
+    foreach ($name in @("stb_image", "stb_image_resize", "stb_image_write")) {
+        & $clang -O3 -fPIC -c (Join-Path $odinRoot "vendor\stb\src\$name.c") -o (Join-Path $vendorOut "$name.o")
+        & $ar rcs (Join-Path $vendorOut "$name.a") (Join-Path $vendorOut "$name.o")
+    }
+    New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\miniaudio\lib\$abi") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\stb\lib\$abi") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\box2d\lib\$abi") | Out-Null
+    Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\$abi\miniaudio.a") -Force
+    Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\miniaudio.a") -Force
+    foreach ($name in @("stb_image", "stb_image_resize", "stb_image_write")) {
+        Copy-Item (Join-Path $vendorOut "$name.a") (Join-Path $odinRoot "vendor\stb\lib\$abi\$name.a") -Force
+        Copy-Item (Join-Path $vendorOut "$name.a") (Join-Path $odinRoot "vendor\stb\lib\$name.a") -Force
+    }
+    Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\$abi\box2d_other.a") -Force
+    Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\box2d_other.a") -Force
+
+    # ---- Odin compilation (per ABI target) ----
+    $odinRoot = Split-Path (Get-Command odin).Source
+    $odinTarget = if ($abi -eq "arm64-v8a") { "linux_arm64" } else { "linux_amd64" }
+    New-Item -ItemType Directory -Force $odinObjects | Out-Null
+    Get-ChildItem -LiteralPath $odinObjects -Filter "kinemium-*.o" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    $env:ODIN_ANDROID_NDK = $ndk
+    & odin check (Join-Path $repo "src") -target:$odinTarget -subtarget:android -define:KINE_ANDROID=true -define:KINE_RENDERER_GL=true
+    & odin build (Join-Path $repo "src") -target:$odinTarget -subtarget:android "-minimum-os-version:$ApiLevel" -build-mode:obj "-out:$odinObjects\kinemium.o" -define:KINE_ANDROID=true -define:KINE_RENDERER_GL=true
+    if ($LASTEXITCODE -ne 0) { throw "Odin Android $abi compilation failed" }
+
+    # ---- Link libmain.so (per ABI) ----
+    & cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')"
+    & cmake --build $nativeBuild --target kinemium_android --parallel
+    if ($LASTEXITCODE -ne 0) { throw "libmain.so link failed for $abi" }
 }
+
 $env:PATH = $oldPath
 
-$toolchain = Join-Path $ndk "build\cmake\android.toolchain.cmake"
-$nativeBuild = Join-Path $repo "build\android-native"
-& cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=arm64-v8a "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static "-DFILAMENT_DIR=$filamentRoot" "-DKINE_SKIA_DIR=$skiaRoot" "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')" "-DKINE_ANDROID_VCPKG_DIR=$(Join-Path $vcpkgInstalled 'arm64-android')" -DCMAKE_BUILD_TYPE=Release
-& cmake --build $nativeBuild --parallel
-if ($LASTEXITCODE -ne 0) { throw "Native Android dependency build failed" }
-
-$boxBuild = Join-Path $repo "build\android-box2d"
-& cmake -S $box2dRoot -B $boxBuild -G Ninja "-DCMAKE_TOOLCHAIN_FILE=$toolchain" -DANDROID_ABI=arm64-v8a "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static -DBOX2D_SAMPLES=OFF -DBOX2D_UNIT_TESTS=OFF -DBOX2D_VALIDATE=OFF -DCMAKE_BUILD_TYPE=Release
-& cmake --build $boxBuild --parallel
-if ($LASTEXITCODE -ne 0) { throw "Box2D Android build failed" }
-
-$odinRoot = Split-Path (Get-Command odin).Source
-$clang = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\aarch64-linux-android$ApiLevel-clang.cmd"
-$ar = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-ar.exe"
-$vendorOut = Join-Path $repo "build\android-vendor"
-New-Item -ItemType Directory -Force $vendorOut | Out-Null
-& $clang -O3 -fPIC -c (Join-Path $odinRoot "vendor\miniaudio\src\miniaudio.c") -o (Join-Path $vendorOut "miniaudio.o")
-& $ar rcs (Join-Path $vendorOut "miniaudio.a") (Join-Path $vendorOut "miniaudio.o")
-foreach ($name in @("stb_image", "stb_image_resize", "stb_image_write")) {
-    & $clang -O3 -fPIC -c (Join-Path $odinRoot "vendor\stb\src\$name.c") -o (Join-Path $vendorOut "$name.o")
-    & $ar rcs (Join-Path $vendorOut "$name.a") (Join-Path $vendorOut "$name.o")
-    Copy-Item (Join-Path $vendorOut "$name.a") (Join-Path $odinRoot "vendor\stb\lib\$name.a") -Force
-}
-Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\miniaudio.a") -Force
-Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\box2d_other.a") -Force
-
-$odinObjects = Join-Path $repo "build\android"
-New-Item -ItemType Directory -Force $odinObjects | Out-Null
-Get-ChildItem -LiteralPath $odinObjects -Filter "kinemium-*.o" -File -ErrorAction SilentlyContinue | Remove-Item -Force
-$env:ODIN_ANDROID_NDK = $ndk
-& odin check (Join-Path $repo "src") -target:linux_arm64 -subtarget:android -define:KINE_ANDROID=true
-& odin build (Join-Path $repo "src") -target:linux_arm64 -subtarget:android "-minimum-os-version:$ApiLevel" -build-mode:obj "-out:$odinObjects\kinemium.o" -define:KINE_ANDROID=true
-if ($LASTEXITCODE -ne 0) { throw "Odin Android compilation failed" }
-
-& cmake -S (Join-Path $repo "cmake\android-native") -B $nativeBuild "-DFILAMENT_HOST_TOOLS_DIR=$(Join-Path $filamentHostRoot 'bin')"
-& cmake --build $nativeBuild --target kinemium_android --parallel
-if ($LASTEXITCODE -ne 0) { throw "libmain.so link failed" }
-
+# ---- Package APK with every requested ABI ----
 $env:ANDROID_HOME = $AndroidSdk
 if (-not $env:JAVA_HOME) { $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr" }
-& (Join-Path $repo "android\gradlew.bat") --no-daemon -p (Join-Path $repo "android") :app:assembleDebug
+& (Join-Path $repo "android\gradlew.bat") --no-daemon -p (Join-Path $repo "android") :app:assembleDebug -PandroidAbiFilters=$($Abis -join ',')
 if ($LASTEXITCODE -ne 0) { throw "APK packaging failed" }
 
 $apk = Join-Path $repo "android\app\build\outputs\apk\debug\app-debug.apk"

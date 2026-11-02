@@ -1,9 +1,10 @@
 #+build !js
+// wire:service
 
 package services
 
-// wire:service global="UpdateService"
 
+import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -12,56 +13,50 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
-import json "core:encoding/json"
 
-import globals "../global"
-import target "../target"
 import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import fsutil "../fsutil"
+import globals "../global"
+import target "../target"
 import vm "../vm"
 
 import http "../util/odin-http"
 import http_client "../util/odin-http/client"
 
-UPDATE_ARCHIVE_EXT         :: ".zip"
-UPDATE_DIR_NAME            :: "updates"
-UPDATE_PENDING_NAME        :: "pending"
+UPDATE_ARCHIVE_EXT :: ".zip"
+UPDATE_DIR_NAME :: "updates"
+UPDATE_PENDING_NAME :: "pending"
 UPDATE_PENDING_VERSION_NAME :: "pending.version"
-UPDATE_STALE_SUFFIX        :: ".kinemium-old"
-UPDATE_CHECK_TTL_SECONDS   :: 1800
-UPDATE_MAX_REDIRECTS       :: 5
+UPDATE_STALE_SUFFIX :: ".kinemium-old"
+UPDATE_CHECK_TTL_SECONDS :: 1800
+UPDATE_MAX_REDIRECTS :: 5
 
-UpdateService_Class := classes.Class_Info{
+UpdateService_Class := classes.Class_Info {
 	name   = "UpdateService",
 	parent = &Service_Class,
 }
 
 UpdateService :: struct {
-	using service: Service,
-
-	cached:            UpdateReport,
-	cached_valid:      bool,
-	cached_time:       i64,
-
+	using service:      Service,
+	cached:             UpdateReport,
+	cached_valid:       bool,
+	cached_time:        i64,
 	background_started: bool,
-
-	apply_mutex: sync.Mutex,
-	apply:       UpdateApply,
-
-	stage_mutex: sync.Mutex,
+	apply_mutex:        sync.Mutex,
+	apply:              UpdateApply,
+	stage_mutex:        sync.Mutex,
 }
 
 UpdateApply :: struct {
-	running:   bool,
-	status:    Update_Apply_Status,
-
+	running:    bool,
+	status:     Update_Apply_Status,
 	downloaded: i64,
 	total:      i64,
 	percent:    f64,
-
-	message: string,
+	message:    string,
 }
 
 Update_Apply_Status :: enum u8 {
@@ -80,30 +75,25 @@ UpdateStatus :: enum u8 {
 }
 
 UpdateReport :: struct {
-	status:    UpdateStatus,
-	available: bool,
-
+	status:             UpdateStatus,
+	available:          bool,
 	current_display:    string,
 	current_prerelease: string,
 	current_git:        string,
 	current_major:      int,
 	current_minor:      int,
 	current_patch:      int,
-
-	latest_version:   string,
-	latest_tag:       string,
-	latest_url:       string,
-	latest_published: string,
-	latest_notes:     string,
-
-	asset_name: string,
-	asset_url:  string,
-	asset_size: i64,
-
-	staged_ready:   bool,
-	staged_version: string,
-
-	error: string,
+	latest_version:     string,
+	latest_tag:         string,
+	latest_url:         string,
+	latest_published:   string,
+	latest_notes:       string,
+	asset_name:         string,
+	asset_url:          string,
+	asset_size:         i64,
+	staged_ready:       bool,
+	staged_version:     string,
+	error:              string,
 }
 
 GitHub_Asset :: struct {
@@ -113,11 +103,11 @@ GitHub_Asset :: struct {
 }
 
 GitHub_Release :: struct {
-	tag_name:    string,
-	html_url:    string,
+	tag_name:     string,
+	html_url:     string,
 	published_at: string,
-	body:        string,
-	assets:      []GitHub_Asset,
+	body:         string,
+	assets:       []GitHub_Asset,
 }
 
 update_service_construct :: proc(
@@ -129,10 +119,7 @@ update_service_construct :: proc(
 	return &service.object
 }
 
-update_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+update_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^UpdateService)object
 	sync.mutex_lock(&service.apply_mutex)
 	if len(service.apply.message) > 0 {
@@ -165,7 +152,10 @@ update_service_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^UpdateService)object
 	switch method {
 	case "IsUpdateAvailable":
@@ -190,8 +180,8 @@ Register_UpdateService_Class :: proc(registry: ^classes.Registry) {
 		update_service_construct,
 		update_service_destroy,
 		creatable = false,
-		get       = update_service_get,
-		namecall  = update_service_namecall,
+		get = update_service_get,
+		namecall = update_service_namecall,
 	)
 }
 
@@ -205,9 +195,12 @@ update_service_enabled :: proc() -> bool {
 
 update_status_string :: proc(status: UpdateStatus) -> string {
 	switch status {
-	case .Up_To_Date:      return "up_to_date"
-	case .Update_Available: return "update_available"
-	case .Check_Failed:     return "check_failed"
+	case .Up_To_Date:
+		return "up_to_date"
+	case .Update_Available:
+		return "update_available"
+	case .Check_Failed:
+		return "check_failed"
 	}
 	return "check_failed"
 }
@@ -262,7 +255,10 @@ update_arch_tag :: proc() -> string {
 }
 
 Update_Asset_Name :: proc(os_name, arch_name: string) -> string {
-	return strings.concatenate({"kinemium-", os_name, "-", arch_name, UPDATE_ARCHIVE_EXT}, context.allocator)
+	return strings.concatenate(
+		{"kinemium-", os_name, "-", arch_name, UPDATE_ARCHIVE_EXT},
+		context.allocator,
+	)
 }
 
 update_strip_v :: proc(version: string) -> string {
@@ -312,7 +308,13 @@ Update_Version_Compare :: proc(a, b: string) -> int {
 	return 0
 }
 
-update_parse_version :: proc(version: string) -> (major, minor, patch: int, prerelease: string, ok: bool) {
+update_parse_version :: proc(
+	version: string,
+) -> (
+	major, minor, patch: int,
+	prerelease: string,
+	ok: bool,
+) {
 	text := strings.trim_space(version)
 	if len(text) == 0 {
 		return 0, 0, 0, "", false
@@ -368,7 +370,10 @@ update_http_get :: proc(url: string) -> (body: string, status: int, ok: bool) {
 	}
 	defer http_client.response_destroy(&response)
 
-	response_body, body_allocated, body_error := http_client.response_body(&response, allocator = context.allocator)
+	response_body, body_allocated, body_error := http_client.response_body(
+		&response,
+		allocator = context.allocator,
+	)
 	if body_error != nil {
 		return "", 0, false
 	}
@@ -376,7 +381,10 @@ update_http_get :: proc(url: string) -> (body: string, status: int, ok: bool) {
 
 	#partial switch value in response_body {
 	case http_client.Body_Plain:
-		return strings.clone(string(value), context.allocator), int(response.status), http.status_is_success(response.status)
+		return strings.clone(
+			string(value),
+			context.allocator,
+		), int(response.status), http.status_is_success(response.status)
 	case:
 		return "", int(response.status), false
 	}
@@ -398,15 +406,16 @@ update_pick_asset :: proc(release: GitHub_Release) -> (name, url: string, size: 
 
 	for asset in release.assets {
 		if asset.name == expected {
-			return strings.clone(asset.name), strings.clone(asset.browser_download_url), asset.size, true
+			return strings.clone(asset.name),
+				strings.clone(asset.browser_download_url),
+				asset.size,
+				true
 		}
 	}
 	return "", "", 0, false
 }
 
-// Root directory that keeps all self-update state:
-//   <user data>/Kinemium/updates/pending/<tag>/...
-//   <tag>/pending.version        - marker written once a bundle is staged
+
 update_update_roots :: proc() -> (updates_dir, pending_root: string, ok: bool) {
 	data_dir, err := os.user_data_dir(context.allocator)
 	if err != nil {
@@ -420,18 +429,24 @@ update_update_roots :: proc() -> (updates_dir, pending_root: string, ok: bool) {
 	}
 	defer delete(kinemium_dir)
 
-	updates_dir, join_err = filepath.join([]string{kinemium_dir, UPDATE_DIR_NAME}, context.allocator)
+	updates_dir, join_err = filepath.join(
+		[]string{kinemium_dir, UPDATE_DIR_NAME},
+		context.allocator,
+	)
 	if join_err != nil {
 		return "", "", false
 	}
 
-	pending_root, join_err = filepath.join([]string{updates_dir, UPDATE_PENDING_NAME}, context.allocator)
+	pending_root, join_err = filepath.join(
+		[]string{updates_dir, UPDATE_PENDING_NAME},
+		context.allocator,
+	)
 	if join_err != nil {
 		delete(updates_dir)
 		return "", "", false
 	}
 
-	if os.make_directory_all(pending_root) != nil && !os.is_directory(pending_root) {
+	if fsutil.Make_Directory_All(pending_root) != nil && !os.is_directory(pending_root) {
 		delete(updates_dir)
 		delete(pending_root)
 		return "", "", false
@@ -443,12 +458,18 @@ update_sanitize_tag :: proc(tag: string) -> string {
 	builder := strings.builder_make()
 	for rune_value in tag {
 		switch {
-		case 'a' <= rune_value && rune_value <= 'z',
-		     'A' <= rune_value && rune_value <= 'Z',
-		     '0' <= rune_value && rune_value <= '9',
-		     rune_value == '_',
-		     rune_value == '-',
-		     rune_value == '.':
+		case 'a' <= rune_value &&
+		     rune_value <= 'z',
+		     'A' <= rune_value &&
+		     rune_value <= 'Z',
+		     '0' <= rune_value &&
+		     rune_value <= '9',
+		     rune_value ==
+		     '_',
+		     rune_value ==
+		     '-',
+		     rune_value ==
+		     '.':
 			strings.write_rune(&builder, rune_value)
 		case:
 			strings.write_rune(&builder, '_')
@@ -505,7 +526,7 @@ update_pending_has_engine :: proc(dir: string) -> bool {
 		}
 	}
 
-	// POSIX artifacts carry no extension: any regular file counts as the payload.
+
 	when ODIN_OS != .Windows {
 		for entry in entries {
 			if entry.type != os.File_Type.Directory && entry.name != UPDATE_PENDING_VERSION_NAME {
@@ -550,9 +571,7 @@ update_join_dir :: proc(base_dir, name: string) -> string {
 	return joined
 }
 
-// Downloads a release asset, following redirects (GitHub release assets
-// redirect to a signed object-storage URL). Returns the raw bytes allocated on
-// `context.allocator`.
+
 update_download_asset :: proc(url: string) -> (body: string, ok: bool) {
 	current_url := strings.clone(url, context.allocator)
 	defer delete(current_url)
@@ -582,9 +601,16 @@ update_download_asset :: proc(url: string) -> (body: string, ok: bool) {
 			return "", false
 		}
 
-		parsed, body_allocated, body_error := http_client.response_body(&response, allocator = context.allocator)
+		parsed, body_allocated, body_error := http_client.response_body(
+			&response,
+			allocator = context.allocator,
+		)
 		if body_error != nil {
-			fmt.eprintf("[UpdateService] asset body read failed at %s: %v\n", current_url, body_error)
+			fmt.eprintf(
+				"[UpdateService] asset body read failed at %s: %v\n",
+				current_url,
+				body_error,
+			)
 			return "", false
 		}
 		defer http_client.body_destroy(parsed, body_allocated, context.allocator)
@@ -653,7 +679,7 @@ update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateRepor
 	defer delete(tag_dir)
 
 	_ = os.remove_all(tag_dir)
-	if os.make_directory_all(tag_dir) != nil {
+	if fsutil.Make_Directory_All(tag_dir) != nil {
 		return false
 	}
 	cleanup_on_failure := true
@@ -670,7 +696,10 @@ update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateRepor
 	}
 
 	version_path: string
-	version_path, join_err = filepath.join([]string{tag_dir, UPDATE_PENDING_VERSION_NAME}, context.allocator)
+	version_path, join_err = filepath.join(
+		[]string{tag_dir, UPDATE_PENDING_VERSION_NAME},
+		context.allocator,
+	)
 	if join_err != nil {
 		return false
 	}
@@ -684,8 +713,7 @@ update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateRepor
 	return true
 }
 
-// Scans the pending directory, cleaning up stale partial stages, and returns
-// the first ready update. Callers own the returned strings.
+
 Update_Pending_Read :: proc() -> (version, tag_dir: string, ok: bool) {
 	updates_dir, pending_root, roots_ok := update_update_roots()
 	if !roots_ok {
@@ -705,7 +733,10 @@ Update_Pending_Read :: proc() -> (version, tag_dir: string, ok: bool) {
 			continue
 		}
 
-		version_path, join_err := filepath.join([]string{pending_root, entry.name, UPDATE_PENDING_VERSION_NAME}, context.allocator)
+		version_path, join_err := filepath.join(
+			[]string{pending_root, entry.name, UPDATE_PENDING_VERSION_NAME},
+			context.allocator,
+		)
 		if join_err != nil {
 			continue
 		}
@@ -713,7 +744,7 @@ Update_Pending_Read :: proc() -> (version, tag_dir: string, ok: bool) {
 		data, read_err := os.read_entire_file(version_path, context.allocator)
 		delete(version_path)
 		if read_err != nil {
-			// Partial or abandoned stage: drop it.
+
 			_ = os.remove_all(entry.fullpath)
 			continue
 		}
@@ -736,10 +767,7 @@ update_forwarded_args :: proc(args: []string) -> []string {
 	return result[:]
 }
 
-// Launches the staged engine executable as a one-shot installer:
-//   <new exe> --apply-update <pending dir> <application exe> -- <original args>
-// The installer process is the freshly downloaded binary, so the running
-// application's files are free to be replaced once it exits.
+
 Update_Service_Spawn_Helper :: proc(pending_dir: string) -> bool {
 	pending_executable, found := update_locate_engine_executable(pending_dir)
 	if !found {
@@ -770,9 +798,9 @@ Update_Service_Spawn_Helper :: proc(pending_dir: string) -> bool {
 	process, start_error := os.process_start(
 		os.Process_Desc {
 			command = command[:],
-			stdin   = os.stdin,
-			stdout  = os.stdout,
-			stderr  = os.stderr,
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
 		},
 	)
 	delete(command)
@@ -785,16 +813,15 @@ Update_Service_Spawn_Helper :: proc(pending_dir: string) -> bool {
 	return true
 }
 
-// Applies a pending update at a clean application exit: if a bundle is staged,
-// it spawns the installer helper and lets the process terminate normally.
+
 Update_Service_Shutdown :: proc() {
 	if !update_service_enabled() {
 		return
 	}
 
 	version, pending_dir, ready := Update_Pending_Read()
-	defer if len(version) > 0 { delete(version) }
-	defer if len(pending_dir) > 0 { delete(pending_dir) }
+	defer if len(version) > 0 {delete(version)}
+	defer if len(pending_dir) > 0 {delete(pending_dir)}
 	if !ready {
 		return
 	}
@@ -804,9 +831,7 @@ Update_Service_Shutdown :: proc() {
 	}
 }
 
-// Replaces the files of `target_exe` (application executable path) with the
-// staged bundle. Used both by the `--apply-update` installer process and by
-// the tests. `pending.version` is never copied into the destination.
+
 Update_Swap_Bundle :: proc(pending_dir, target_exe: string) -> bool {
 	if len(pending_dir) == 0 || len(target_exe) == 0 {
 		return false
@@ -858,9 +883,8 @@ Update_Swap_Bundle :: proc(pending_dir, target_exe: string) -> bool {
 
 update_replace_file :: proc(src, dest: string) -> bool {
 	when ODIN_OS == .Windows {
-		// A mapped image (or an antivirus scan) can hold the destination open
-		// for a short while, so move it aside with retries before installing
-		// the replacement. The stale aside is cleaned up best-effort.
+
+
 		aside_path := strings.concatenate({dest, UPDATE_STALE_SUFFIX})
 		defer delete(aside_path)
 
@@ -890,12 +914,7 @@ update_replace_file :: proc(src, dest: string) -> bool {
 	}
 }
 
-// Primary entry point for the `--apply-update <pending dir> <app exe> [-- args]`
-// flag: swaps the bundle into place, relaunches the application with the
-// original arguments, and returns. The staging directory is left behind for the
-// next boot to sweep away (a running installer cannot delete its own image),
-// but the pending.version marker is removed so the applied update is not
-// replayed on every subsequent boot.
+
 Update_Apply_Pending :: proc(pending_dir, target_exe: string, forwarded_args: []string) -> bool {
 	if !Update_Swap_Bundle(pending_dir, target_exe) {
 		return false
@@ -910,9 +929,9 @@ Update_Apply_Pending :: proc(pending_dir, target_exe: string, forwarded_args: []
 	process, start_error := os.process_start(
 		os.Process_Desc {
 			command = command[:],
-			stdin   = os.stdin,
-			stdout  = os.stdout,
-			stderr  = os.stderr,
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
 		},
 	)
 	delete(command)
@@ -925,14 +944,15 @@ Update_Apply_Pending :: proc(pending_dir, target_exe: string, forwarded_args: []
 	return true
 }
 
-// Removes the ready marker for a pending update bundle so an already-applied
-// update is not replayed. The bundle directory itself is left for the next boot
-// to sweep away once this installer process has exited its own image.
+
 update_pending_clear :: proc(pending_dir: string) {
 	if len(pending_dir) == 0 {
 		return
 	}
-	marker, join_err := filepath.join([]string{pending_dir, UPDATE_PENDING_VERSION_NAME}, context.allocator)
+	marker, join_err := filepath.join(
+		[]string{pending_dir, UPDATE_PENDING_VERSION_NAME},
+		context.allocator,
+	)
 	if join_err != nil {
 		return
 	}
@@ -940,7 +960,7 @@ update_pending_clear :: proc(pending_dir: string) {
 	_ = os.remove(marker)
 }
 
-// Forces a check plus stage plus install and exits. Used by `--update`.
+
 Update_Service_Run_Now :: proc(service: ^UpdateService) {
 	if service == nil || !update_service_enabled() {
 		fmt.eprintln("[UpdateService] updates are disabled for this build")
@@ -977,9 +997,7 @@ Update_Service_Run_Now :: proc(service: ^UpdateService) {
 	fmt.eprintln("[UpdateService] failed to launch the update installer")
 }
 
-// Spawns a background thread that opportunistically checks and stages the
-// latest release at startup. When `apply_now` is set (--update), the check and
-// install path runs synchronously instead.
+
 Update_Service_Startup_Check :: proc(service: ^UpdateService, apply_now: bool) {
 	if service == nil || !update_service_enabled() {
 		return
@@ -1013,10 +1031,7 @@ update_service_background_main :: proc(t: ^thread.Thread) {
 	update_service_stage_to_dir(service, report)
 }
 
-// First thing called from main: if the process was started as the one-shot
-// installer (--apply-update <pending dir> <app exe> [-- args]), it swaps the
-// bundle in, relaunches the application, and exits the process. Returns true
-// only when an update command was handled (i.e. the process terminated).
+
 Update_Handle_Command_Line :: proc() -> bool {
 	apply_index := -1
 	for argument, index in os.args {
@@ -1028,7 +1043,9 @@ Update_Handle_Command_Line :: proc() -> bool {
 		return false
 	}
 	if apply_index + 3 > len(os.args) {
-		fmt.eprintln("--apply-update requires: --apply-update <pending dir> <application executable> [-- args]")
+		fmt.eprintln(
+			"--apply-update requires: --apply-update <pending dir> <application executable> [-- args]",
+		)
 		os.exit(1)
 	}
 
@@ -1046,10 +1063,7 @@ Update_Handle_Command_Line :: proc() -> bool {
 	os.exit(0)
 }
 
-// Startup hook: resolves the UpdateService on the registry and runs either the
-// synchronous `--update` install path or the background opportunistic check.
-// `enabled` is false for playtests; `apply_now`/`no_update` mirror the
-// `--update`/`--no-update` flags.
+
 Update_Service_Boot :: proc(registry: ^Registry, enabled, apply_now, no_update: bool) {
 	if registry == nil || !enabled || !update_service_enabled() || no_update {
 		return
@@ -1061,8 +1075,7 @@ Update_Service_Boot :: proc(registry: ^Registry, enabled, apply_now, no_update: 
 	Update_Service_Startup_Check(cast(^UpdateService)object, apply_now)
 }
 
-// Fetches a fresh manifest and compares it against the running build. All
-// strings are allocated on `context.allocator`; callers own the report.
+
 update_fetch_report :: proc() -> (UpdateReport, bool) {
 	report := UpdateReport{}
 
@@ -1093,7 +1106,7 @@ update_fetch_report :: proc() -> (UpdateReport, bool) {
 	}
 
 	body, status, http_ok := update_http_get(globals.RUNTIME_UPDATE_URL)
-	defer if body != "" { delete(body) }
+	defer if body != "" {delete(body)}
 	if !http_ok {
 		report.status = .Check_Failed
 		report.error = strings.clone("could not reach the update server")
@@ -1142,19 +1155,20 @@ update_fetch_report :: proc() -> (UpdateReport, bool) {
 	return report, true
 }
 
-// Keeps a TTL-bounded snapshot of the last successful manifest check so the UI
-// can re-query without hammering the GitHub API.
+
 update_service_cache_sync :: proc(service: ^UpdateService, force_recheck := false) -> bool {
 	if service == nil {
 		return false
 	}
-	if !force_recheck && service.cached_valid && time.to_unix_seconds(time.now()) - service.cached_time < UPDATE_CHECK_TTL_SECONDS {
+	if !force_recheck &&
+	   service.cached_valid &&
+	   time.to_unix_seconds(time.now()) - service.cached_time < UPDATE_CHECK_TTL_SECONDS {
 		return true
 	}
 
 	fresh, ok := update_fetch_report()
 	if !ok {
-		// Transient failure: keep serving a previous healthy snapshot.
+
 		if service.cached_valid {
 			return true
 		}
@@ -1174,12 +1188,18 @@ update_service_cache_sync :: proc(service: ^UpdateService, force_recheck := fals
 
 update_apply_status_string :: proc(status: Update_Apply_Status) -> string {
 	#partial switch status {
-	case .Idle:       return "idle"
-	case .Fetching:   return "fetching"
-	case .Downloading: return "downloading"
-	case .Extracting: return "extracting"
-	case .Ready:      return "ready"
-	case .Failed:     return "failed"
+	case .Idle:
+		return "idle"
+	case .Fetching:
+		return "fetching"
+	case .Downloading:
+		return "downloading"
+	case .Extracting:
+		return "extracting"
+	case .Ready:
+		return "ready"
+	case .Failed:
+		return "failed"
 	}
 	return "idle"
 }
@@ -1233,11 +1253,7 @@ update_apply_finish :: proc(service: ^UpdateService, asset_size: i64) {
 	service.apply.percent = 100.0
 }
 
-// Background apply flow: fetch the manifest, download the asset with progress,
-// stage it and mark it Ready for `FinishUpdateRestart`. Runs the staging lane
-// and the download entirely off the main thread so the engine window stays
-// responsive. If a bundle for the same version is already staged (startup check
-// beat us to it), skip straight to Ready.
+
 update_service_apply_thread_main :: proc(t: ^thread.Thread) {
 	service := cast(^UpdateService)t.data
 	if service == nil {
@@ -1258,8 +1274,8 @@ update_service_apply_thread_main :: proc(t: ^thread.Thread) {
 	}
 
 	version, pending_dir, staged := Update_Pending_Read()
-	defer if len(version) > 0 { delete(version) }
-	defer if len(pending_dir) > 0 { delete(pending_dir) }
+	defer if len(version) > 0 {delete(version)}
+	defer if len(pending_dir) > 0 {delete(pending_dir)}
 	if staged && version == report.latest_version {
 		update_apply_finish(service, report.asset_size)
 		return
@@ -1268,8 +1284,7 @@ update_service_apply_thread_main :: proc(t: ^thread.Thread) {
 	update_apply_set_status(service, .Downloading)
 	update_apply_set_total(service, report.asset_size)
 
-	// Transient network failures reset a slow download; retry once before the
-	// UI reports a failed apply (the user can always retry from the prompt).
+
 	staged_ok := false
 	for attempt in 0 ..< 2 {
 		sync.mutex_lock(&service.stage_mutex)
@@ -1292,9 +1307,7 @@ update_service_apply_thread_main :: proc(t: ^thread.Thread) {
 	update_apply_finish(service, report.asset_size)
 }
 
-// Starts applying the update in the background. Returns immediately; progress
-// is exposed through GetUpdateProgress, and the caller is expected to invoke
-// FinishUpdateRestart once the state reaches Ready.
+
 update_service_apply_now :: proc(service: ^UpdateService) -> bool {
 	if service == nil || !update_service_enabled() {
 		return false
@@ -1312,7 +1325,11 @@ update_service_apply_now :: proc(service: ^UpdateService) -> bool {
 	if service.apply.running {
 		return false
 	}
-	service.apply = UpdateApply{running = true, status = .Fetching, percent = -1}
+	service.apply = UpdateApply {
+		running = true,
+		status  = .Fetching,
+		percent = -1,
+	}
 
 	apply_thread := thread.create(update_service_apply_thread_main)
 	apply_thread.data = service
@@ -1320,7 +1337,7 @@ update_service_apply_now :: proc(service: ^UpdateService) -> bool {
 	return true
 }
 
-// Pushes a snapshot of the asynchronous apply state to the VM.
+
 update_service_push_progress :: proc(L: ^vm.State, service: ^UpdateService) {
 	if service == nil {
 		vm.PushNil(L)
@@ -1357,9 +1374,7 @@ update_service_push_progress :: proc(L: ^vm.State, service: ^UpdateService) {
 	vm.SetReadOnly(L, -1)
 }
 
-// Called by the UI once GetUpdateProgress reports Ready: atomically claims the
-// transition, spawns the installer helper, and exits the process (mirrors
-// Update_Service_Run_Now).
+
 update_service_finish_restart :: proc(L: ^vm.State, service: ^UpdateService) -> (i32, bool) {
 	if service == nil || !update_service_enabled() {
 		vm.PushBoolean(L, false)

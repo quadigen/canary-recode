@@ -1,15 +1,15 @@
 package serializer
 
+import assetstore "../assetstore"
+import classes "../classes"
+import datatypes "../datatypes"
+import enums "../enum"
+import vm "../vm"
 import "base:runtime"
 import "core:fmt"
 import "core:slice"
 import "core:sort"
 import "core:strings"
-import classes "../classes"
-import assetstore "../assetstore"
-import datatypes "../datatypes"
-import enums "../enum"
-import vm "../vm"
 
 // Kine is the Kinemium save-file format.
 //
@@ -53,6 +53,7 @@ import vm "../vm"
 //     f32      water wave size
 //     f32      water wave speed
 //     color3   water color (3 x f32)
+//     string   terrain material variant name (version 7 and later)
 //     u32      material colour count
 //     per material:
 //       u32     material
@@ -78,11 +79,27 @@ import vm "../vm"
 // singleton service rather than an Instance, so the tree walk cannot reach it.
 // Its cell record is deliberately byte-identical to a replicated terrain batch
 // cell, so one decoder shape serves both transports.
+//
+// Version 5 extends the Font datatype record with a u8 flag and, when set, the
+// face bytes, so a font created with Font.fromMemory survives a save. Version 4
+// and earlier stop the Font record after Style; they still decode, they simply
+// cannot carry a face that has no file behind it.
 
 KINE_MAGIC :: "KINE"
 
 // KINE_VERSION is the version written by this build.
-KINE_VERSION :: 4
+KINE_VERSION :: 7
+
+// Version 7 adds the terrain material variant; version 6 introduced extension
+// datatypes and remains readable without the new terrain setting.
+KINE_EXTENSION_VERSION :: 6
+
+// KINE_FONT_VERSION is the last layout before extension datatypes; it still
+// decodes, including the Font face-bytes flag.
+KINE_FONT_VERSION :: 5
+
+// KINE_TERRAIN_VERSION is the first layout with a terrain table.
+KINE_TERRAIN_VERSION :: 4
 
 // KINE_ASSET_VERSION is the first layout with an asset table and no terrain.
 KINE_ASSET_VERSION :: 3
@@ -91,15 +108,22 @@ KINE_ASSET_VERSION :: 3
 // still decode; they just cannot carry embedded assets.
 KINE_LEGACY_VERSION :: 2
 
+// KINE_MAX_FONT_BYTES caps the face bytes a Font record may carry, so a corrupt
+// length cannot ask for an unbounded allocation on load.
+KINE_MAX_FONT_BYTES :: 32 * 1024 * 1024
+
 KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 
-READ_ONLY_PROPERTIES := [?]string{
+READ_ONLY_PROPERTIES := [?]string {
+	"LastError",
+	"Compiled",
 	"AbsolutePosition",
 	"AbsoluteSize",
 	"TextBounds",
 	"AbsoluteContentSize",
 	"AbsoluteCellCount",
 	"AbsoluteCellSize",
+	"PositionCallback",
 }
 
 Value_Tag :: enum u8 {
@@ -111,6 +135,7 @@ Value_Tag :: enum u8 {
 	Vector3,
 	Userdata,
 	EnumItem,
+	ExtensionDatatype = 18,
 }
 
 // Stable ids for every serializable userdata datatype. New types are appended
@@ -202,7 +227,7 @@ Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 }
 
 Writer :: struct {
-	data: [dynamic]u8,
+	data:          [dynamic]u8,
 	// Excludes a child during serialization. Called with the child and its
 	// immediate parent for every child that would otherwise be written; returning
 	// true skips that child and its subtree. The exporter uses it to strip
@@ -212,25 +237,25 @@ Writer :: struct {
 	// Ids this stream actually referenced, in first-use order. Only these are
 	// written to the asset table, so assets left in the store by an
 	// already-loaded map do not leak into the file being written.
-	used_ids: [dynamic]string,
-	used_seen: map[string]bool,
+	used_ids:      [dynamic]string,
+	used_seen:     map[string]bool,
 	// embed_assets is false for a version 2 stream, where asset properties keep
 	// the author's bare paths and no table is written.
-	embed_assets: bool,
+	embed_assets:  bool,
 	// version is the layout being written. A few value records changed shape
 	// between versions, so a record can consult it rather than guessing.
-	version: u8,
+	version:       u8,
 	// warn carries the reason a record was left out of the stream, owned by the
 	// Writer. Writing never fails the whole file over one bad record: the call
 	// site that skipped the record takes this detail and logs it instead, which
 	// is what makes an incomplete map report itself rather than load as a
 	// mysteriously missing property.
-	warn: string,
+	warn:          string,
 }
 
 Reader :: struct {
-	data: []u8,
-	pos:  int,
+	data:    []u8,
+	pos:     int,
 	// version is the layout being read, so a record can tell which shape to
 	// expect instead of guessing.
 	version: u8,
@@ -238,7 +263,7 @@ Reader :: struct {
 	// cannot recover from a bad record: a tree whose stream disagrees with its
 	// writer is not a tree, so the first failure is recorded here with the byte
 	// offset that produced it and returned to the caller.
-	err: Error,
+	err:     Error,
 }
 
 // ---------------------------------------------------------------------------
@@ -380,10 +405,17 @@ read_u64 :: proc(r: ^Reader) -> (u64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return transmute(u64)[8]u8{
-		bytes[0], bytes[1], bytes[2], bytes[3],
-		bytes[4], bytes[5], bytes[6], bytes[7],
-	}, true
+	return transmute(u64)[8]u8 {
+			bytes[0],
+			bytes[1],
+			bytes[2],
+			bytes[3],
+			bytes[4],
+			bytes[5],
+			bytes[6],
+			bytes[7],
+		},
+		true
 }
 
 read_i16 :: proc(r: ^Reader) -> (i16, bool) {
@@ -494,6 +526,19 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		if property == "Texture" {
 			return .Texture, true
 		}
+	case "MaterialVariant":
+		switch property {
+		case "ColorMap",
+		     "AlbedoMap",
+		     "NormalMap",
+		     "RoughnessMap",
+		     "MetalnessMap",
+		     "HeightMap",
+		     "AOMap",
+		     "AmbientOcclusionMap",
+		     "EmissiveMap":
+			return .Texture, true
+		}
 	}
 	return .Unknown, false
 }
@@ -551,7 +596,12 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 
 // replace_stack_asset rewrites a string already on the Lua stack with its
 // embedded reference, keeping the value at the same stack index.
-replace_stack_asset :: proc(w: ^Writer, L: ^vm.State, value_index: int, kind: assetstore.Asset_Kind) -> bool {
+replace_stack_asset :: proc(
+	w: ^Writer,
+	L: ^vm.State,
+	value_index: int,
+	kind: assetstore.Asset_Kind,
+) -> bool {
 	if vm.TypeOf(L, value_index) != .String {
 		return false
 	}
@@ -699,6 +749,18 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_string(w, value.Family)
 		write_i64(w, i64(value.Weight))
 		write_i64(w, i64(value.Style))
+		// A face built from downloaded bytes has no file or installed family to
+		// fall back on, so the bytes themselves have to travel with the record or
+		// the font is gone on reload. Older readers stop after Style, so this is
+		// only written by the layout that carries it.
+		if w.version >= KINE_FONT_VERSION {
+			has_face_bytes := datatypes.Font_Has_Memory(value^)
+			write_u8(w, has_face_bytes ? 1 : 0)
+			if has_face_bytes {
+				write_var_u32(w, u32(len(value.Data)))
+				append(&w.data, ..value.Data[:])
+			}
+		}
 	case .NumberRange:
 		value := cast(^datatypes.NumberRange)ptr
 		write_f32(w, value.Min)
@@ -799,7 +861,12 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 	return true
 }
 
-write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value_index: int) -> bool {
+write_value :: proc(
+	w: ^Writer,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	value_index: int,
+) -> bool {
 	if w == nil || L == nil || registry == nil {
 		return writer_skip(w, "a nil writer, VM, or registry")
 	}
@@ -846,6 +913,48 @@ write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value
 			write_i64(w, item.value)
 			return true
 		}
+		if codec := datatypes.Find_Extension_Codec_By_Binding(registry.datatypes, binding);
+		   codec != nil {
+			if w.version <
+			   KINE_EXTENSION_VERSION {return writer_skip(w, "%s requires KINE version 6", binding.name)}
+			if codec.flags & datatypes.EXTENSION_PERSISTABLE ==
+			   0 {return writer_skip(w, "%s does not allow persistence", binding.name)}
+			write_u8(w, u8(Value_Tag.ExtensionDatatype))
+			write_string(w, codec.extension_id)
+			write_string(w, codec.type_name)
+			write_u32(w, codec.wire_version)
+			size: uintptr
+			payload := vm.UserdataValue(L, value_index)
+			status := datatypes.Extension_Codec_Encode_Value(
+				registry.datatypes,
+				binding,
+				payload,
+				nil,
+				0,
+				&size,
+			)
+			if status < 0 || size > KINE_MAX_STRING_LENGTH {
+				return writer_skip(w, "%s failed to encode", binding.name)
+			}
+			write_var_u32(w, u32(size))
+			if size > 0 {
+				offset := len(w.data)
+				resize(&w.data, offset + int(size))
+				status = datatypes.Extension_Codec_Encode_Value(
+					registry.datatypes,
+					binding,
+					payload,
+					&w.data[offset],
+					size,
+					&size,
+				)
+				if status < 0 {
+					resize(&w.data, offset)
+					return writer_skip(w, "%s failed to encode", binding.name)
+				}
+			}
+			return true
+		}
 		id, ok := datatype_id_of_binding(binding.name)
 		if !ok {
 			return writer_skip(w, "%s has no serialized layout", binding.name)
@@ -866,7 +975,12 @@ write_value :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, value
 // from the record itself is given the datatype's name here, so the detail the
 // record reported reads as "while reading a CFrame value: ..." rather than as a
 // bare offset with nothing attached to it.
-read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Registry, id: Datatype_Id) -> bool {
+read_datatype_value :: proc(
+	r: ^Reader,
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	id: Datatype_Id,
+) -> bool {
 	if r == nil || L == nil || registry == nil {
 		return reader_fail(r, .Invalid_Argument, "a nil reader, VM, or datatype registry")
 	}
@@ -876,7 +990,12 @@ read_datatype_value :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Regis
 	return true
 }
 
-read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatypes.Registry, id: Datatype_Id) -> bool {
+read_datatype_value_record :: proc(
+	r: ^Reader,
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	id: Datatype_Id,
+) -> bool {
 	switch id {
 	case .Axes:
 		x, o1 := read_u8(r)
@@ -897,25 +1016,46 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_CFrame(L, registry, datatypes.CFrame{
-			x = values[0], y = values[1], z = values[2],
-			r00 = values[3], r01 = values[4], r02 = values[5],
-			r10 = values[6], r11 = values[7], r12 = values[8],
-			r20 = values[9], r21 = values[10], r22 = values[11],
-		})
+		datatypes.Push_CFrame(
+			L,
+			registry,
+			datatypes.CFrame {
+				x = values[0],
+				y = values[1],
+				z = values[2],
+				r00 = values[3],
+				r01 = values[4],
+				r02 = values[5],
+				r10 = values[6],
+				r11 = values[7],
+				r12 = values[8],
+				r20 = values[9],
+				r21 = values[10],
+				r22 = values[11],
+			},
+		)
 	case .Color3:
 		values := [3]f32{}
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Color3(L, registry, datatypes.Color3{R = values[0], G = values[1], B = values[2]})
+		datatypes.Push_Color3(
+			L,
+			registry,
+			datatypes.Color3{R = values[0], G = values[1], B = values[2]},
+		)
 	case .ColorSequence:
 		count, ok := read_u32(r)
 		if !ok {
 			return false
 		}
 		if count > u32(len(r.data)) {
-			return reader_fail(r, .Malformed_Record, "colour sequence declares %d keypoints", count)
+			return reader_fail(
+				r,
+				.Malformed_Record,
+				"colour sequence declares %d keypoints",
+				count,
+			)
 		}
 		keypoints := make([]datatypes.ColorSequenceKeypoint, count)
 		for i in 0 ..< int(count) {
@@ -924,8 +1064,8 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 				delete(keypoints)
 				return false
 			}
-			keypoints[i] = datatypes.ColorSequenceKeypoint{
-				Time  = values[0],
+			keypoints[i] = datatypes.ColorSequenceKeypoint {
+				Time = values[0],
 				Value = datatypes.Color3{R = values[1], G = values[2], B = values[3]},
 			}
 		}
@@ -936,7 +1076,9 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !ok {
 			return false
 		}
-		content := datatypes.Content{uri = uri}
+		content := datatypes.Content {
+			uri = uri,
+		}
 		if r.version >= 3 {
 			object_id, id_ok := read_u32(r)
 			object_kind, kind_ok := read_u8(r)
@@ -963,10 +1105,18 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !o1 || !o2 || !o3 || !o4 || !o5 || !o6 {
 			return false
 		}
-		datatypes.Push_Faces(L, registry, datatypes.Faces{
-			Top = top != 0, Bottom = bottom != 0, Left = left != 0,
-			Right = right != 0, Front = front != 0, Back = back != 0,
-		})
+		datatypes.Push_Faces(
+			L,
+			registry,
+			datatypes.Faces {
+				Top = top != 0,
+				Bottom = bottom != 0,
+				Left = left != 0,
+				Right = right != 0,
+				Front = front != 0,
+				Back = back != 0,
+			},
+		)
 	case .Font:
 		family, ok := read_string(r)
 		if !ok {
@@ -978,13 +1128,51 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 			delete(family)
 			return false
 		}
-		font := datatypes.Font{
+		font := datatypes.Font {
 			Family = strings.clone(family),
 			Weight = enums.FontWeight(weight),
 			Style  = enums.FontStyle(style),
 		}
+		if r.version >= KINE_FONT_VERSION {
+			has_data, data_ok := read_u8(r)
+			if !data_ok {
+				delete(font.Family)
+				delete(family)
+				return false
+			}
+			if has_data != 0 {
+				length, length_ok := read_var_u32(r)
+				if !length_ok || length > KINE_MAX_FONT_BYTES {
+					delete(font.Family)
+					delete(family)
+					return reader_context(
+						r,
+						"a Font record declares %d face byte(s), over the %d byte limit",
+						length,
+						KINE_MAX_FONT_BYTES,
+					)
+				}
+				bytes, bytes_ok := read_bytes(r, int(length))
+				if !bytes_ok {
+					delete(font.Family)
+					delete(family)
+					return false
+				}
+				// read_bytes views the stream, so the face is copied before the
+				// record is handed to Lua.
+				owned := make([]u8, len(bytes))
+				if owned == nil {
+					delete(font.Family)
+					delete(family)
+					return reader_context(r, "could not allocate %d font byte(s)", len(bytes))
+				}
+				copy(owned, bytes)
+				font.Data = owned
+			}
+		}
 		datatypes.Push_Font(L, registry, font)
 		delete(font.Family)
+		delete(font.Data)
 		delete(family)
 	case .NumberRange:
 		minimum, o1 := read_f32(r)
@@ -992,14 +1180,23 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !o1 || !o2 {
 			return false
 		}
-		datatypes.Push_NumberRange(L, registry, datatypes.NumberRange{Min = minimum, Max = maximum})
+		datatypes.Push_NumberRange(
+			L,
+			registry,
+			datatypes.NumberRange{Min = minimum, Max = maximum},
+		)
 	case .NumberSequence:
 		count, ok := read_u32(r)
 		if !ok {
 			return false
 		}
 		if count > u32(len(r.data)) {
-			return reader_fail(r, .Malformed_Record, "number sequence declares %d keypoints", count)
+			return reader_fail(
+				r,
+				.Malformed_Record,
+				"number sequence declares %d keypoints",
+				count,
+			)
 		}
 		keypoints := make([]datatypes.NumberSequenceKeypoint, count)
 		for i in 0 ..< int(count) {
@@ -1008,8 +1205,10 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 				delete(keypoints)
 				return false
 			}
-			keypoints[i] = datatypes.NumberSequenceKeypoint{
-				Time = values[0], Value = values[1], Envelope = values[2],
+			keypoints[i] = datatypes.NumberSequenceKeypoint {
+				Time     = values[0],
+				Value    = values[1],
+				Envelope = values[2],
 			}
 		}
 		// push_number_sequence clones Keypoints internally.
@@ -1025,10 +1224,10 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !o1 || !o2 {
 			return false
 		}
-		waypoint := datatypes.PathWaypoint{
+		waypoint := datatypes.PathWaypoint {
 			Position = datatypes.Vector3{x = values[0], y = values[1], z = values[2]},
-			Action   = enums.PathWaypointAction(action),
-			Label    = strings.clone(label),
+			Action = enums.PathWaypointAction(action),
+			Label = strings.clone(label),
 		}
 		// push_path_waypoint clones Label internally.
 		datatypes.Push_PathWaypoint(L, registry, waypoint)
@@ -1039,43 +1238,64 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_PhysicalProperties(L, registry, datatypes.PhysicalProperties{
-			Density = values[0], Friction = values[1], Elasticity = values[2],
-			FrictionWeight = values[3], ElasticityWeight = values[4],
-		})
+		datatypes.Push_PhysicalProperties(
+			L,
+			registry,
+			datatypes.PhysicalProperties {
+				Density = values[0],
+				Friction = values[1],
+				Elasticity = values[2],
+				FrictionWeight = values[3],
+				ElasticityWeight = values[4],
+			},
+		)
 	case .Quaternion:
 		values := [4]f32{}
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Quaternion(L, registry, datatypes.Quaternion{
-			X = values[0], Y = values[1], Z = values[2], W = values[3],
-		})
+		datatypes.Push_Quaternion(
+			L,
+			registry,
+			datatypes.Quaternion{X = values[0], Y = values[1], Z = values[2], W = values[3]},
+		)
 	case .Region3:
 		values := [6]f32{}
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Region3(L, registry, datatypes.Region3{
-			Min = datatypes.Vector3{x = values[0], y = values[1], z = values[2]},
-			Max = datatypes.Vector3{x = values[3], y = values[4], z = values[5]},
-		})
+		datatypes.Push_Region3(
+			L,
+			registry,
+			datatypes.Region3 {
+				Min = datatypes.Vector3{x = values[0], y = values[1], z = values[2]},
+				Max = datatypes.Vector3{x = values[3], y = values[4], z = values[5]},
+			},
+		)
 	case .Region3int16:
 		values := [6]i16{}
 		if !read_i16s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Region3int16(L, registry, datatypes.Region3int16{
-			Min = datatypes.Vector3int16{X = values[0], Y = values[1], Z = values[2]},
-			Max = datatypes.Vector3int16{X = values[3], Y = values[4], Z = values[5]},
-		})
+		datatypes.Push_Region3int16(
+			L,
+			registry,
+			datatypes.Region3int16 {
+				Min = datatypes.Vector3int16{X = values[0], Y = values[1], Z = values[2]},
+				Max = datatypes.Vector3int16{X = values[3], Y = values[4], Z = values[5]},
+			},
+		)
 	case .SecurityCapabilities:
 		low, o1 := read_u64(r)
 		high, o2 := read_u64(r)
 		if !o1 || !o2 {
 			return false
 		}
-		datatypes.Push_SecurityCapabilities(L, registry, datatypes.SecurityCapabilities{bits_low = low, bits_high = high})
+		datatypes.Push_SecurityCapabilities(
+			L,
+			registry,
+			datatypes.SecurityCapabilities{bits_low = low, bits_high = high},
+		)
 	case .TweenInfo:
 		time, o1 := read_f32(r)
 		style, o2 := read_i64(r)
@@ -1086,14 +1306,18 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !o1 || !o2 || !o3 || !o4 || !o5 || !o6 {
 			return false
 		}
-		datatypes.Push_TweenInfo(L, registry, datatypes.TweenInfo{
-			Time = time,
-			EasingStyle = enums.EasingStyle(style),
-			EasingDirection = enums.EasingDirection(direction),
-			RepeatCount = repeat,
-			Reverses = reverses != 0,
-			DelayTime = delay,
-		})
+		datatypes.Push_TweenInfo(
+			L,
+			registry,
+			datatypes.TweenInfo {
+				Time = time,
+				EasingStyle = enums.EasingStyle(style),
+				EasingDirection = enums.EasingDirection(direction),
+				RepeatCount = repeat,
+				Reverses = reverses != 0,
+				DelayTime = delay,
+			},
+		)
 	case .UDim:
 		scale, o1 := read_f32(r)
 		offset, o2 := read_f32(r)
@@ -1106,10 +1330,16 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_UDim2(L, registry, datatypes.UDim2{
-			X_Scale = values[0], X_Offset = values[1],
-			Y_Scale = values[2], Y_Offset = values[3],
-		})
+		datatypes.Push_UDim2(
+			L,
+			registry,
+			datatypes.UDim2 {
+				X_Scale = values[0],
+				X_Offset = values[1],
+				Y_Scale = values[2],
+				Y_Offset = values[3],
+			},
+		)
 	case .UniqueId:
 		random, o1 := read_i64(r)
 		time, o2 := read_u32(r)
@@ -1117,7 +1347,11 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !o1 || !o2 || !o3 {
 			return false
 		}
-		datatypes.Push_UniqueId(L, registry, datatypes.UniqueId{Random = random, Time = time, Index = index})
+		datatypes.Push_UniqueId(
+			L,
+			registry,
+			datatypes.UniqueId{Random = random, Time = time, Index = index},
+		)
 	case .Vector2:
 		values := [2]f32{}
 		if !read_f32s(r, values[:]) {
@@ -1142,9 +1376,18 @@ read_datatype_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^datatype
 		if !read_i16s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Vector3int16(L, registry, datatypes.Vector3int16{X = values[0], Y = values[1], Z = values[2]})
+		datatypes.Push_Vector3int16(
+			L,
+			registry,
+			datatypes.Vector3int16{X = values[0], Y = values[1], Z = values[2]},
+		)
 	case:
-		return reader_fail(r, .Unknown_Datatype, "this build has no layout for %s", Datatype_Id_Name(id))
+		return reader_fail(
+			r,
+			.Unknown_Datatype,
+			"this build has no layout for %s",
+			Datatype_Id_Name(id),
+		)
 	}
 
 	return true
@@ -1189,11 +1432,18 @@ value_tag_name :: proc(tag_byte: u8) -> string {
 		return "userdata"
 	case .EnumItem:
 		return "EnumItem"
+	case .ExtensionDatatype:
+		return "extension datatype"
 	}
 	return fmt.tprintf("unknown tag %d", int(tag_byte))
 }
 
-read_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, tag_byte: u8) -> bool {
+read_value_record :: proc(
+	r: ^Reader,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	tag_byte: u8,
+) -> bool {
 	switch Value_Tag(tag_byte) {
 	case .Nil:
 		vm.PushNil(L)
@@ -1242,6 +1492,43 @@ read_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry,
 			return false
 		}
 		return read_datatype_value(r, L, registry.datatypes, Datatype_Id(id))
+	case .ExtensionDatatype:
+		extension_id, id_ok := read_string(r)
+		type_name, type_ok := read_string(r)
+		wire_version, version_ok := read_u32(r)
+		size, size_ok := read_var_u32(r)
+		if !id_ok || !type_ok || !version_ok || !size_ok || size > KINE_MAX_STRING_LENGTH {
+			delete(extension_id)
+			delete(type_name)
+			return reader_fail(r, .Unknown_Datatype, "a truncated extension datatype record")
+		}
+		bytes, bytes_ok := read_bytes(r, int(size))
+		if !bytes_ok {
+			delete(extension_id)
+			delete(type_name)
+			return reader_fail(r, .Truncated, "the extension datatype payload")
+		}
+		decoded := datatypes.Extension_Codec_Decode_Value(
+			registry.datatypes,
+			L,
+			extension_id,
+			type_name,
+			wire_version,
+			raw_data(bytes),
+			uintptr(size),
+		)
+		if !decoded {
+			fmt.eprintf(
+				"[kine] skipped unavailable extension datatype %s.%s (wire %d)\n",
+				extension_id,
+				type_name,
+				wire_version,
+			)
+			vm.PushNil(L)
+		}
+		delete(extension_id)
+		delete(type_name)
+		return true
 	case .EnumItem:
 		enum_name, ok := read_string(r)
 		if !ok {
@@ -1257,7 +1544,12 @@ read_value_record :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry,
 		delete(enum_name)
 		return true
 	case:
-		return reader_fail(r, .Unknown_Value_Tag, "value tag %d is not one this build knows", int(tag_byte))
+		return reader_fail(
+			r,
+			.Unknown_Value_Tag,
+			"value tag %d is not one this build knows",
+			int(tag_byte),
+		)
 	}
 }
 
@@ -1289,10 +1581,22 @@ serialize_read_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-read_class_property :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, class_name: string, property: string) -> bool {
+read_class_property :: proc(
+	w: ^Writer,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	object: ^classes.Object,
+	descriptor: ^classes.Class_Descriptor,
+	class_name: string,
+	property: string,
+) -> bool {
 	base := vm.StackTop(L)
 
-	read_context := serialize_read_context{object = object, descriptor = descriptor, key = property}
+	read_context := serialize_read_context {
+		object     = object,
+		descriptor = descriptor,
+		key        = property,
+	}
 	vm.PushLightUserdata(L, &read_context)
 	vm.PushFunction(L, "kine_read_property", serialize_read_property, 1)
 
@@ -1372,7 +1676,12 @@ report_skip :: proc(w: ^Writer, object: ^classes.Object, format: string, args: .
 	fmt.eprintf("[kine] skipped %s of %s: %s\n", what, instance_label(object), warning)
 }
 
-write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object) -> bool {
+write_instance :: proc(
+	w: ^Writer,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	object: ^classes.Object,
+) -> bool {
 	if w == nil || L == nil || registry == nil || object == nil {
 		return writer_skip(w, "a nil writer, VM, registry, or instance")
 	}
@@ -1429,7 +1738,7 @@ write_instance :: proc(w: ^Writer, L: ^vm.State, registry: ^classes.Registry, ob
 		}
 		resize(&w.data, offset)
 		vm.SetStackTop(L, base)
-writer_skip_context(w, "%s", instance_label(object))
+		writer_skip_context(w, "%s", instance_label(object))
 		report_skip(w, object, "attribute %q", attribute.name)
 	}
 	patch_u32(w, attribute_count_offset, attribute_count)
@@ -1483,13 +1792,28 @@ deserialize_apply_property :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-apply_property :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, descriptor: ^classes.Class_Descriptor, key: string, value_index: int) -> (ok: bool, err: string) {
+apply_property :: proc(
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	object: ^classes.Object,
+	descriptor: ^classes.Class_Descriptor,
+	key: string,
+	value_index: int,
+) -> (
+	ok: bool,
+	err: string,
+) {
 	if L == nil || object == nil || descriptor == nil {
 		return false, ""
 	}
 	_ = registry
 
-	apply_context := deserialize_apply_context{registry = registry, object = object, descriptor = descriptor, key = key}
+	apply_context := deserialize_apply_context {
+		registry   = registry,
+		object     = object,
+		descriptor = descriptor,
+		key        = key,
+	}
 	vm.PushLightUserdata(L, &apply_context)
 	vm.PushFunction(L, "kine_apply_property", deserialize_apply_property, 1)
 	// lua_pcall expects the function below its arguments: push the value on top.
@@ -1511,13 +1835,27 @@ deserialize_apply_attribute :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-apply_attribute :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^classes.Object, name: string, value_index: int) -> (ok: bool, err: string) {
+apply_attribute :: proc(
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	object: ^classes.Object,
+	name: string,
+	value_index: int,
+) -> (
+	ok: bool,
+	err: string,
+) {
 	if L == nil || object == nil {
 		return false, ""
 	}
 	_ = registry
 
-	apply_context := deserialize_apply_context{registry = registry, object = object, descriptor = nil, key = ""}
+	apply_context := deserialize_apply_context {
+		registry   = registry,
+		object     = object,
+		descriptor = nil,
+		key        = "",
+	}
 	vm.PushLightUserdata(L, &apply_context)
 	vm.PushFunction(L, "kine_apply_attribute", deserialize_apply_attribute, 1)
 	// The closure expects (name, value) with the function below its arguments.
@@ -1532,7 +1870,15 @@ apply_attribute :: proc(L: ^vm.State, registry: ^classes.Registry, object: ^clas
 // read_instance decodes one instance record and everything under it. Every
 // failure past the class name is reported against the instance it belonged to,
 // so the byte offset alone never has to carry the whole diagnosis.
-read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, parent: ^classes.Object) -> (^classes.Object, bool) {
+read_instance :: proc(
+	r: ^Reader,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	parent: ^classes.Object,
+) -> (
+	^classes.Object,
+	bool,
+) {
 	if r == nil || L == nil || registry == nil {
 		return nil, reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
 	}
@@ -1545,7 +1891,12 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 
 	object, object_ok := classes.Push_New(registry, &vm.VM{L = L}, class_name, false)
 	if !object_ok || object == nil {
-		return nil, reader_fail(r, .Object_Create_Failed, "class %q could not be constructed", class_name)
+		return nil, reader_fail(
+			r,
+			.Object_Create_Failed,
+			"class %q could not be constructed",
+			class_name,
+		)
 	}
 	// Push_New leaves userdata on the stack; the object stays alive through
 	// the retained lua_ref, so we keep the native stack flat.
@@ -1585,7 +1936,11 @@ read_instance :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry, par
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_context(r, "while reading the unique id of %s", label)
 	}
-	object.unique_id = datatypes.UniqueId{Random = random, Time = time, Index = index}
+	object.unique_id = datatypes.UniqueId {
+		Random = random,
+		Time   = time,
+		Index  = index,
+	}
 
 	descriptor := classes.Find_Class(registry, class_name)
 	if descriptor == nil {
@@ -1698,7 +2053,11 @@ write_asset_table :: proc(w: ^Writer) -> bool {
 	for id in w.used_ids {
 		entry, ok := assetstore.Find(id)
 		if !ok {
-			return writer_skip(w, "asset %q was registered but is gone by the time the table is written", id)
+			return writer_skip(
+				w,
+				"asset %q was registered but is gone by the time the table is written",
+				id,
+			)
 		}
 		if len(entry.bytes) > assetstore.MAX_ASSET_BYTES {
 			return writer_skip(
@@ -1742,7 +2101,13 @@ read_asset_table :: proc(r: ^Reader) -> bool {
 		return reader_context(r, "while reading the asset count")
 	}
 	if count > u32(assetstore.MAX_ASSET_COUNT) {
-		return reader_fail(r, .Asset_Count_Exceeded, "asset count %d is over the limit of %d", count, assetstore.MAX_ASSET_COUNT)
+		return reader_fail(
+			r,
+			.Asset_Count_Exceeded,
+			"asset count %d is over the limit of %d",
+			count,
+			assetstore.MAX_ASSET_COUNT,
+		)
 	}
 
 	total: i64 = 0
@@ -1830,6 +2195,13 @@ KINE_TERRAIN_MAX_MATERIAL_COLOURS :: 4096
 
 KINE_TERRAIN_CELL_BYTES :: 17
 
+// KINE_TERRAIN_HEADER_BYTES is the fixed terrain section preamble: the presence
+// byte, the ten grid/water settings, and the material colour count. It is
+// checked up front so a stream cut inside the header is reported as
+// Terrain_Truncated rather than the generic truncation the first field read
+// would otherwise record (Error_Set keeps the first failure).
+KINE_TERRAIN_HEADER_BYTES :: 45
+
 Kine_Terrain_Cell :: struct {
 	x, y, z:   i32,
 	material:  u32,
@@ -1842,17 +2214,18 @@ Kine_Terrain_Cell :: struct {
 // Terrain service, so the format stays independent of it and the service owns
 // the translation in both directions.
 Kine_Terrain :: struct {
-	cells:                [dynamic]Kine_Terrain_Cell,
-	voxel_size:           f32,
-	iso_level:            f32,
-	decoration:           bool,
-	grass_length:         f32,
-	water_color:          datatypes.Color3,
-	water_reflectance:    f32,
-	water_transparency:   f32,
-	water_wave_size:      f32,
-	water_wave_speed:     f32,
-	material_colours:     map[u32]datatypes.Color3,
+	material_variant:   string,
+	cells:              [dynamic]Kine_Terrain_Cell,
+	voxel_size:         f32,
+	iso_level:          f32,
+	decoration:         bool,
+	grass_length:       f32,
+	water_color:        datatypes.Color3,
+	water_reflectance:  f32,
+	water_transparency: f32,
+	water_wave_size:    f32,
+	water_wave_speed:   f32,
+	material_colours:   map[u32]datatypes.Color3,
 }
 
 // Kine_Terrain_Destroy releases a table and everything it owns.
@@ -1862,6 +2235,7 @@ Kine_Terrain_Destroy :: proc(terrain: ^Kine_Terrain) {
 	}
 	delete(terrain.cells)
 	delete(terrain.material_colours)
+	delete(terrain.material_variant)
 	terrain^ = Kine_Terrain{}
 }
 
@@ -1898,6 +2272,7 @@ write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
 	write_f32(w, terrain.water_color.R)
 	write_f32(w, terrain.water_color.G)
 	write_f32(w, terrain.water_color.B)
+	if w.version >= 7 {write_string(w, terrain.material_variant)}
 
 	colour_count: u32 = 0
 	if terrain.material_colours != nil {
@@ -1956,6 +2331,21 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 		return true
 	}
 
+	// The fixed header must be fully present before any field is read. The field
+	// readers record a generic truncation on their own, and Error_Set keeps the
+	// first failure, so without this pre-check a stream cut inside the header
+	// would be reported as a plain truncated stream at the byte it died on
+	// instead of naming the terrain header that was cut.
+	if len(r.data) - r.pos < KINE_TERRAIN_HEADER_BYTES {
+		return reader_fail(
+			r,
+			.Terrain_Truncated,
+			"the terrain header needs %d bytes but only %d remain",
+			KINE_TERRAIN_HEADER_BYTES,
+			len(r.data) - r.pos,
+		)
+	}
+
 	table: Kine_Terrain
 	table.material_colours = make(map[u32]datatypes.Color3)
 	// Every early return below runs this, so no partial table is ever leaked.
@@ -1974,10 +2364,22 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	red, red_ok := read_f32(r)
 	green, green_ok := read_f32(r)
 	blue, blue_ok := read_f32(r)
-	if !decoration_ok || !voxel_size_ok || !iso_level_ok || !grass_ok ||
-	   !reflectance_ok || !transparency_ok || !wave_size_ok || !wave_speed_ok ||
-	   !red_ok || !green_ok || !blue_ok {
-		return reader_fail(r, .Terrain_Truncated, "the terrain header needs 45 bytes but the stream ends partway through it")
+	if !decoration_ok ||
+	   !voxel_size_ok ||
+	   !iso_level_ok ||
+	   !grass_ok ||
+	   !reflectance_ok ||
+	   !transparency_ok ||
+	   !wave_size_ok ||
+	   !wave_speed_ok ||
+	   !red_ok ||
+	   !green_ok ||
+	   !blue_ok {
+		return reader_fail(
+			r,
+			.Terrain_Truncated,
+			"the terrain header needs 45 bytes but the stream ends partway through it",
+		)
 	}
 	// A zero or negative voxel size makes every world<->cell conversion divide by
 	// zero, and an iso level of zero makes the isosurface degenerate. Both are
@@ -2002,6 +2404,11 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	table.water_wave_size = wave_size
 	table.water_wave_speed = wave_speed
 	table.water_color = datatypes.Color3{red, green, blue}
+	if r.version >= 7 {
+		variant, variant_ok := read_string(r)
+		if !variant_ok {return reader_context(r, "while reading the terrain material variant")}
+		table.material_variant = variant
+	}
 
 	colour_count, colour_count_ok := read_u32(r)
 	if !colour_count_ok {
@@ -2072,9 +2479,12 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 		if !x_ok || !y_ok || !z_ok || !material_ok || !occupancy_ok || !water_ok {
 			return reader_context(r, "while reading terrain cell %d of %d", i, count)
 		}
-		if x < -KINE_TERRAIN_MAX_COORDINATE || x > KINE_TERRAIN_MAX_COORDINATE ||
-		   y < -KINE_TERRAIN_MAX_COORDINATE || y > KINE_TERRAIN_MAX_COORDINATE ||
-		   z < -KINE_TERRAIN_MAX_COORDINATE || z > KINE_TERRAIN_MAX_COORDINATE {
+		if x < -KINE_TERRAIN_MAX_COORDINATE ||
+		   x > KINE_TERRAIN_MAX_COORDINATE ||
+		   y < -KINE_TERRAIN_MAX_COORDINATE ||
+		   y > KINE_TERRAIN_MAX_COORDINATE ||
+		   z < -KINE_TERRAIN_MAX_COORDINATE ||
+		   z > KINE_TERRAIN_MAX_COORDINATE {
 			return reader_fail(
 				r,
 				.Terrain_Cell_Out_Of_Range,
@@ -2087,14 +2497,17 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 				KINE_TERRAIN_MAX_COORDINATE,
 			)
 		}
-		append(&table.cells, Kine_Terrain_Cell {
-			x = x,
-			y = y,
-			z = z,
-			material = u32(material),
-			occupancy = occupancy,
-			water = water,
-		})
+		append(
+			&table.cells,
+			Kine_Terrain_Cell {
+				x = x,
+				y = y,
+				z = z,
+				material = u32(material),
+				occupancy = occupancy,
+				water = water,
+			},
+		)
 	}
 
 	// Ownership moves to the caller, so the local is emptied to keep the deferred
@@ -2103,6 +2516,7 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 		out^ = table
 		table.cells = nil
 		table.material_colours = nil
+		table.material_variant = ""
 	}
 	return true
 }
@@ -2125,7 +2539,10 @@ Serialize :: proc(
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
 	terrain: ^Kine_Terrain = nil,
-) -> ([]u8, Error) {
+) -> (
+	[]u8,
+	Error,
+) {
 	return serialize(registry, L, object, KINE_VERSION, exclude_child, terrain)
 }
 
@@ -2138,7 +2555,10 @@ Serialize_Legacy :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool = nil,
-) -> ([]u8, Error) {
+) -> (
+	[]u8,
+	Error,
+) {
 	return serialize(registry, L, object, KINE_LEGACY_VERSION, exclude_child, nil)
 }
 
@@ -2149,7 +2569,10 @@ serialize :: proc(
 	version: u8,
 	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 	terrain: ^Kine_Terrain,
-) -> ([]u8, Error) {
+) -> (
+	[]u8,
+	Error,
+) {
 	if registry == nil {
 		return nil, Error_Make(.Invalid_Argument, -1, "the class registry is nil")
 	}
@@ -2169,8 +2592,8 @@ serialize :: proc(
 	// The instance tree is built first because an asset reference is only
 	// discovered while properties are read, and the asset table has to precede
 	// the tree in the output. The tree buffer is then copied in one step.
-	tree := Writer{
-		data         = make([dynamic]u8, 0, 4096),
+	tree := Writer {
+		data          = make([dynamic]u8, 0, 4096),
 		exclude_child = exclude_child,
 		embed_assets  = version >= KINE_ASSET_VERSION,
 		version       = version,
@@ -2187,7 +2610,10 @@ serialize :: proc(
 		return nil, writer_error(&tree, .Internal, "could not write the root instance record")
 	}
 
-	writer := Writer{data = make([dynamic]u8, 0, len(tree.data) + 1024)}
+	writer := Writer {
+		data    = make([dynamic]u8, 0, len(tree.data) + 1024),
+		version = version,
+	}
 	defer delete(writer.data)
 	defer for id in writer.used_ids {
 		delete(id)
@@ -2215,7 +2641,7 @@ serialize :: proc(
 	// The terrain table trails the tree so a reader that only cares about
 	// instances can stop after the tree it already understands. Only the
 	// current layout carries one; the older layouts have no section to write.
-	if version >= KINE_VERSION && !write_terrain_table(&writer, terrain) {
+	if version >= KINE_TERRAIN_VERSION && !write_terrain_table(&writer, terrain) {
 		return nil, writer_error(&writer, .Internal, "could not write the terrain table")
 	}
 
@@ -2237,7 +2663,10 @@ Deserialize :: proc(
 	parent: ^classes.Object,
 	data: []u8,
 	terrain: ^Kine_Terrain = nil,
-) -> (^classes.Object, Error) {
+) -> (
+	^classes.Object,
+	Error,
+) {
 	if registry == nil {
 		return nil, Error_Make(.Invalid_Argument, -1, "the class registry is nil")
 	}
@@ -2254,7 +2683,9 @@ Deserialize :: proc(
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, base)
 
-	reader := Reader{data = data}
+	reader := Reader {
+		data = data,
+	}
 	defer Error_Delete(&reader.err)
 
 	if len(reader.data) < 5 {
@@ -2293,15 +2724,24 @@ Deserialize :: proc(
 	reader.version = version
 	// Version 2 has no asset table and version 3 has no terrain table. Accepting
 	// both keeps older maps loadable; they simply have no embedded assets or no
-	// voxel grid to restore.
-	if version != KINE_VERSION && version != KINE_ASSET_VERSION && version != KINE_LEGACY_VERSION {
+	// voxel grid to restore. Version 4 also decodes, but its Font records carry
+	// no face bytes, so a font that only existed in memory does not survive it.
+	if version != KINE_VERSION &&
+	   version != KINE_EXTENSION_VERSION &&
+	   version != KINE_FONT_VERSION &&
+	   version != KINE_TERRAIN_VERSION &&
+	   version != KINE_ASSET_VERSION &&
+	   version != KINE_LEGACY_VERSION {
 		Error_Set(
 			&reader.err,
 			.Unsupported_Version,
-			4,
-			"the file is version %d; this build reads %d, %d, and %d",
+			5,
+			"the file is version %d; this build reads %d, %d, %d, %d, %d, and %d",
 			version,
 			KINE_VERSION,
+			KINE_EXTENSION_VERSION,
+			KINE_FONT_VERSION,
+			KINE_TERRAIN_VERSION,
 			KINE_ASSET_VERSION,
 			KINE_LEGACY_VERSION,
 		)
@@ -2318,7 +2758,7 @@ Deserialize :: proc(
 	if !root_ok {
 		return nil, reader_take(&reader)
 	}
-	if version >= KINE_VERSION && !read_terrain_table(&reader, terrain) {
+	if version >= KINE_TERRAIN_VERSION && !read_terrain_table(&reader, terrain) {
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_take(&reader)
 	}

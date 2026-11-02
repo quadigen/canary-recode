@@ -107,6 +107,21 @@ SSAOEffect :: struct {
 	ao_type:      i64,
 }
 
+Clouds_Class := Class_Info {
+	name   = "Clouds",
+	parent = &Instance_Class,
+}
+
+Clouds :: struct {
+	using object: Object,
+	enabled:      bool,
+	cover:        f32,
+	density:      f32,
+	height:       f32,
+	thickness:    f32,
+	color:        datatypes.Color3,
+}
+
 Atmosphere :: struct {
 	using effect:  LightingEffect,
 	density:       f64,
@@ -122,14 +137,7 @@ Atmosphere :: struct {
 	sun_intensity: f64,
 }
 
-// AntiAliasingEffect exposes Filament's three edge-anti-aliasing modes. They
-// are independent flags rather than one enum because Filament configures them
-// that way, and because FXAA and MSAA cost real frame time on a blocky scene.
-//
-// SampleCount is stored as f64 and exchanged with the VM as a number. Luau's
-// 64-bit integer type is distinct from number, so an integer-typed property
-// rejects a plain `SampleCount = 8` and reads back as something that does not
-// compare equal to a number literal.
+
 AntiAliasingEffect :: struct {
 	using effect: LightingEffect,
 	fxaa:         bool,
@@ -138,22 +146,18 @@ AntiAliasingEffect :: struct {
 	sample_count: f64,
 }
 
-// DitheringEffect maps to Filament's temporal dithering, which trades a little
-// temporal noise for the removal of banding in smooth gradients.
+
 DitheringEffect :: struct {
 	using effect: LightingEffect,
 }
 
-// RenderQualityEffect selects Filament's HDR quality level, which is what
-// post-processing gets to work with. 0 LOW, 1 MEDIUM, 2 HIGH, 3 ULTRA, matching
-// the shim's kine_quality_from_int. Held as f64 for the same reason
-// AntiAliasingEffect.SampleCount is.
+
 RenderQualityEffect :: struct {
 	using effect: LightingEffect,
 	quality:      f64,
 }
 
-// VignetteEffect darkens the frame corners.
+
 VignetteEffect :: struct {
 	using effect: LightingEffect,
 	midpoint:     f64,
@@ -205,6 +209,18 @@ DepthOfFieldEffect_Init :: proc() -> DepthOfFieldEffect {
 	}
 }
 
+
+DepthOfFieldEffect_Render_Options :: proc(effect: ^DepthOfFieldEffect) -> [6]f32 {
+	return {
+		effect.enabled && (effect.near_intensity > 0 || effect.far_intensity > 0) ? 1 : 0,
+		400 / max(1, f32(effect.in_focus_radius)),
+		0.01,
+		max(0.051, f32(effect.focus_distance)),
+		max(1, f32(i32(clamp(effect.near_intensity, 0, 1) * 32 + 0.5))),
+		max(1, f32(i32(clamp(effect.far_intensity, 0, 1) * 32 + 0.5))),
+	}
+}
+
 SunRaysEffect_Init :: proc() -> SunRaysEffect {
 	return SunRaysEffect {
 		effect = lighting_effect_init(&SunRaysEffect_Class, "SunRaysEffect"),
@@ -223,8 +239,7 @@ SSAOEffect_Init :: proc() -> SSAOEffect {
 	}
 }
 
-// Every anti-aliasing mode defaults off. The engine used to force FXAA on and
-// it cost visible frame time, so opting in has to be deliberate.
+
 AntiAliasingEffect_Init :: proc() -> AntiAliasingEffect {
 	return AntiAliasingEffect {
 		effect = lighting_effect_init(&AntiAliasingEffect_Class, "AntiAliasingEffect"),
@@ -240,9 +255,7 @@ DitheringEffect_Init :: proc() -> DitheringEffect {
 
 RenderQualityEffect_Init :: proc() -> RenderQualityEffect {
 	return RenderQualityEffect {
-		effect  = lighting_effect_init(&RenderQualityEffect_Class, "RenderQualityEffect"),
-		// MEDIUM is Filament's own default, so enabling this instance is a
-		// no-op until the quality is actually moved.
+		effect = lighting_effect_init(&RenderQualityEffect_Class, "RenderQualityEffect"),
 		quality = 1,
 	}
 }
@@ -259,8 +272,8 @@ VignetteEffect_Init :: proc() -> VignetteEffect {
 }
 
 ScreenSpaceReflectionsEffect_Init :: proc() -> ScreenSpaceReflectionsEffect {
-	// These match the values the lighting step used to hardcode, so enabling
-	// the instance without touching them reproduces the previous behaviour.
+
+
 	return ScreenSpaceReflectionsEffect {
 		effect = lighting_effect_init(
 			&ScreenSpaceReflectionsEffect_Class,
@@ -270,6 +283,18 @@ ScreenSpaceReflectionsEffect_Init :: proc() -> ScreenSpaceReflectionsEffect {
 		bias = 0.05,
 		max_distance = 10.0,
 		stride = 0.5,
+	}
+}
+
+Clouds_Init :: proc() -> Clouds {
+	return Clouds {
+		object = Object_Init(&Clouds_Class, "Clouds"),
+		enabled = true,
+		cover = 0.5,
+		density = 0.01,
+		thickness = 240,
+		height = 700,
+		color = datatypes.Color3{1, 1, 1},
 	}
 }
 
@@ -299,7 +324,7 @@ BlurEffect_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> 
 		new(BlurEffect)
 	effect^ = BlurEffect_Init()
 	return &effect.object}
-	
+
 BloomEffect_construct :: proc(
 	renderer: ^Renderer_Object,
 	data_model: rawptr,
@@ -328,6 +353,11 @@ Atmosphere_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> 
 		new(Atmosphere)
 	effect^ = Atmosphere_Init()
 	return &effect.object}
+Clouds_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {clouds := new(
+		Clouds,
+	)
+	clouds^ = Clouds_Init()
+	return &clouds.object}
 AntiAliasingEffect_construct :: proc(
 	renderer: ^Renderer_Object,
 	data_model: rawptr,
@@ -362,7 +392,13 @@ ScreenSpaceReflectionsEffect_construct :: proc(
 lighting_effect_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {Object_Destroy(
 		object,
 	)
-	free(object)}
+	free(object)
+}
+
+clouds_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	Object_Destroy(object)
+	free(object)
+}
 
 lighting_effect_get :: proc(
 	L: ^vm.State,
@@ -415,9 +451,27 @@ lighting_effect_get :: proc(
 			vm.PushNumber(L, value.radius); case "Power":
 			vm.PushNumber(L, value.power); case "Intensity":
 			vm.PushNumber(L, value.intensity); case "Quality":
-			vm.PushInteger(L, value.quality); case "AOType":
-			vm.PushInteger(L, value.ao_type); case:
+			vm.PushNumber(L, f64(value.quality)); case "AOType":
+			vm.PushNumber(L, f64(value.ao_type)); case:
 			return false}; return true
+	case "Clouds":
+		value := cast(^Clouds)object
+		switch key {
+		case "Enabled":
+			vm.PushBoolean(L, value.enabled)
+		case "Cover":
+			vm.PushNumber(L, f64(value.cover))
+		case "Density":
+			vm.PushNumber(L, f64(value.density))
+		case "Color":
+			datatypes.Push_Color3(L, dr, value.color)
+		case "Thickness":
+			vm.PushNumber(L, f64(value.thickness))
+		case "Height":
+			vm.PushNumber(L, f64(value.height))
+		case:
+			return false
+		}; return true
 	case "Atmosphere":
 		value := cast(^Atmosphere)object
 		switch key {
@@ -461,8 +515,6 @@ lighting_effect_get :: proc(
 			return false
 		}; return true
 	case "DitheringEffect":
-		// Dithering is a pure on/off, so Enabled is the whole contract and it
-		// is already handled by the LightingEffect branch above.
 		return false
 	case "RenderQualityEffect":
 		value := cast(^RenderQualityEffect)object
@@ -504,6 +556,12 @@ lighting_effect_get :: proc(
 		}; return true
 	}
 	return false
+}
+
+lighting_effect_integer_option :: proc(L: ^vm.State, index: int, upper: i64) -> i64 {
+
+	if vm.TypeOf(L, index) == .Integer {return clamp(vm.ArgInteger(L, index), 0, upper)}
+	return i64(clamp(vm.ArgNumber(L, index), 0, f64(upper)))
 }
 
 lighting_effect_set :: proc(
@@ -557,8 +615,22 @@ lighting_effect_set :: proc(
 			value.radius = max(0, vm.ArgNumber(L, index)); case "Power":
 			value.power = max(0.001, vm.ArgNumber(L, index)); case "Intensity":
 			value.intensity = max(0, vm.ArgNumber(L, index)); case "Quality":
-			value.quality = clamp(vm.ArgInteger(L, index), 0, 3); case "AOType":
-			value.ao_type = clamp(vm.ArgInteger(L, index), 0, 1); case:
+			value.quality = lighting_effect_integer_option(L, index, 3); case "AOType":
+			value.ao_type = lighting_effect_integer_option(L, index, 1); case:
+			return false}; return true
+	case "Clouds":
+		value := cast(^Clouds)object; switch key {case "Enabled":
+			value.enabled = vm.ArgBoolean(L, index)
+		case "Cover":
+			value.cover = f32(vm.ArgNumber(L, index))
+		case "Density":
+			value.density = f32(vm.ArgNumber(L, index))
+		case "Thickness":
+			value.thickness = f32(vm.ArgNumber(L, index))
+		case "Height":
+			value.height = f32(vm.ArgNumber(L, index))
+		case "Color":
+			value.color = datatypes.Arg_Color3(L, index, dr); case:
 			return false}; return true
 	case "Atmosphere":
 		value := cast(^Atmosphere)object; switch key {case "Density":
@@ -575,8 +647,6 @@ lighting_effect_set :: proc(
 			value.sun_intensity = max(0, vm.ArgNumber(L, index)); case:
 			return false}; return true
 	case "AntiAliasingEffect":
-		// The modes are independent booleans rather than a single enum so a
-		// place can pick exactly the one it is willing to pay for.
 		value := cast(^AntiAliasingEffect)object; switch key {case "FXAA":
 			value.fxaa = vm.ArgBoolean(L, index); case "TAA":
 			value.taa = vm.ArgBoolean(L, index); case "MSAA":
@@ -586,9 +656,6 @@ lighting_effect_set :: proc(
 	case "DitheringEffect":
 		return false
 	case "RenderQualityEffect":
-		// 0 LOW, 1 MEDIUM, 2 HIGH, 3 ULTRA. Clamped because the shim maps an
-		// out-of-range integer onto MEDIUM, which would silently override the
-		// value the script just set.
 		value := cast(^RenderQualityEffect)object; switch key {case "Quality":
 			value.quality = clamp(vm.ArgNumber(L, index), 0, 3); case:
 			return false}; return true
@@ -601,10 +668,6 @@ lighting_effect_set :: proc(
 			value.transparency = clamp(vm.ArgNumber(L, index), 0, 1); case:
 			return false}; return true
 	case "ScreenSpaceReflectionsEffect":
-		// Thickness, Bias and Stride are Filament tuning dials with no natural
-		// upper bound, so only the ones that cannot be nonsensical are clamped.
-		// MaxDistance is floored at zero because a negative range would make
-		// Filament trace backwards.
 		value := cast(^ScreenSpaceReflectionsEffect)object; switch key {case "Thickness":
 			value.thickness = max(0, vm.ArgNumber(L, index)); case "Bias":
 			value.bias = vm.ArgNumber(L, index); case "MaxDistance":
@@ -647,6 +710,10 @@ lighting_effect_clone :: proc(source: ^Object, destination: ^Object) {
 		src, dst := cast(^SSAOEffect)source, cast(^SSAOEffect)destination
 		dst.enabled, dst.radius, dst.power, dst.intensity, dst.quality, dst.ao_type =
 			src.enabled, src.radius, src.power, src.intensity, src.quality, src.ao_type
+	case "Clouds":
+		src, dst := cast(^Clouds)source, cast(^Clouds)destination
+		dst.enabled, dst.cover, dst.density, dst.color, dst.height, dst.thickness =
+			src.enabled, src.cover, src.density, src.color, src.height, dst.thickness
 	case "Atmosphere":
 		src, dst := cast(^Atmosphere)source, cast(^Atmosphere)destination
 		dst.enabled, dst.density, dst.offset = src.enabled, src.density, src.offset
@@ -681,6 +748,7 @@ lighting_effect_clone :: proc(source: ^Object, destination: ^Object) {
 }
 
 Register_Lighting_Effect :: proc(registry: ^Registry) {
+	Register_Advanced_Lighting_Effects(registry)
 	Register_Class(
 		registry,
 		&LightingEffect_Class,
@@ -756,6 +824,16 @@ Register_Lighting_Effect :: proc(registry: ^Registry) {
 		set = lighting_effect_set,
 		clone = lighting_effect_clone,
 		properties = []string{"Enabled", "Radius", "Power", "Intensity", "Quality", "AOType"},
+	)
+	Register_Class(
+		registry,
+		&Clouds_Class,
+		Clouds_construct,
+		clouds_destroy,
+		get = lighting_effect_get,
+		set = lighting_effect_set,
+		clone = lighting_effect_clone,
+		properties = []string{"Enabled", "Cover", "Density", "Color", "Thickness", "Height"},
 	)
 	Register_Class(
 		registry,

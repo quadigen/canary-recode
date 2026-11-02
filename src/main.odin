@@ -9,9 +9,11 @@ import sdl3 "engine/platform"
 import profiling "engine/profiling"
 import renderer "engine/renderer"
 import engine_runtime "engine/runtime"
+import extensions "engine/extensions"
 import services "engine/services"
 import target "engine/target"
 import vm "engine/vm"
+import audio "engine/audio"
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -114,6 +116,10 @@ run_desktop :: proc(options: Startup_Options) {
 		}
 	}
 	script_vm := vm.New()
+	if !audio.init() {
+        return
+    }
+    defer audio.shutdown()
 
 	environment: engine_runtime.Environment
 	render_context := Runtime_Render_Context {
@@ -129,16 +135,12 @@ run_desktop :: proc(options: Startup_Options) {
 		UserData = &render_context,
 		RenderFilament = true,
 		KeyDown = proc(scancode: sdl3.Scancode) {
-			fmt.println("Key down: ", scancode)
 		},
 		KeyUp = proc(scancode: sdl3.Scancode) {
-			fmt.println("Key up: ", scancode)
 		},
 		MouseClick = proc(button: sdl3.MouseButtonEvent) {
-			fmt.println("Mouse button clicked: ", button.button)
 		},
 		OnClose = proc() {
-			fmt.println("Window closed")
 		},
 		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,
@@ -158,10 +160,28 @@ run_desktop :: proc(options: Startup_Options) {
 		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
 		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
+
+	// Load KNE native extensions from ./extensions before any game code runs, so
+	// a script can use what they registered from its first line.
+	{
+		loaded, extension_error := extensions.Discover_Default(&environment.extensions)
+		if loaded > 0 {
+			fmt.printf("Loaded %d native KNE extension(s)\n", loaded)
+		}
+		if extension_error != "" {
+			fmt.eprintln(extension_error)
+			delete(extension_error)
+		}
+	}
+
+	if options.singleplayer {
+		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
+		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
+	}
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
 
-	if target.is_server() {
+	if target.is_server() || options.singleplayer {
 		if !load_game_map(&environment, &script_vm, options) {
 			return
 		}
@@ -171,30 +191,52 @@ run_desktop :: proc(options: Startup_Options) {
 		}
 	}
 
-	if options.standalone {
+	if options.standalone || options.singleplayer {
 		players_object := services.Ensure_Service(&environment.services, "Players")
 		if players_object != nil {
 			players := cast(^services.Players)players_object
 			if players != nil && players.local_player == nil {
-				players.local_player = services.Players_Add(players, script_vm.L, 1, "Player")
+				players.local_player = services.Players_Add(
+					players,
+					script_vm.L,
+					1,
+					options.username,
+				)
+			}
+			if players != nil && players.local_player != nil {
+				character_service := cast(^services.CharacterService)(
+					services.Ensure_Service(&environment.services, "CharacterService")
+				)
+				if character_service != nil {
+					_ = services.CharacterService_Load(
+						character_service,
+						players.local_player,
+					)
+				}
 			}
 		}
 	}
 
-	if target.is_server() {
+	if target.is_server() || options.singleplayer {
 		server_script_service := cast(^services.ServerScriptService)(services.Ensure_Service(
 				&environment.services,
 				"ServerScriptService",
 			))
 		if server_script_service != nil {
-			fmt.println("Running scripts")
-			services.ServerScriptService_RunScripts(
-				environment.renderer,
-				environment.services.data_model,
-				&server_script_service.object,
-			)
-			fmt.println("Finished running scripts")
+			script_context := services.ScriptContext_From_Registry(&environment.services)
+			if services.ScriptContext_Runs_Server_Scripts(script_context) {
+				fmt.println("Running scripts")
+				services.ServerScriptService_RunScripts(
+					environment.renderer,
+					environment.services.data_model,
+					&server_script_service.object,
+				)
+				fmt.println("Finished running scripts")
+			}
 		}
+	}
+
+	if target.is_server() {
 		object := services.Ensure_Service(&environment.services, "ReplicatorService")
 		if object == nil ||
 		   !services.replication_start(
@@ -240,7 +282,9 @@ run_desktop :: proc(options: Startup_Options) {
 	if options.standalone {
 		title = "Kinemium Engine"
 	}
-	if target.is_server() {
+	if options.singleplayer {
+		title = "Kinemium Singleplayer"
+	} else if target.is_server() {
 		title = "Kinemium Server"
 	} else if target.is_client() {
 		title = "Kinemium Client"

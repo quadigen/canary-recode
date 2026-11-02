@@ -7,8 +7,6 @@ material {
     refractionType : solid,
     instanced : true,
     requires : [ uv0 ],
-    // Custom interpolant carrying the world-space Gerstner normal from the
-    // vertex stage to the fragment stage (drives shading + crest foam).
     variables : [ worldWaveNormal ],
     parameters : [
         { type : float4[64], name : instanceColors },
@@ -18,8 +16,10 @@ material {
         { type : float,  name : transmission },
         { type : float,  name : time },
         { type : float,  name : waveScale },
-        { type : float,  name : waveSpeed },
-        { type : float,  name : waveAmplitude },
+        { type : float,  name : speed },
+        { type : float,  name : strength },
+        { type : float,  name : octaves },
+        { type : float,  name : height },
         { type : float,  name : foamAmount },
         // Declared so the renderer's per-batch setup can set them: see
         // kine_apply_material_params's KINE_MAT_WATER branch. Filament treats
@@ -34,126 +34,100 @@ material {
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        // True world-space position of the undisplaced vertex. Wave phases are
-        // a function of world XZ, so every chunk/instance of the same ocean
-        // tiles seamlessly and stays put as the camera moves.
-        vec3 baseWorld = (getWorldFromModelMatrix() * vec4(getPosition().xyz, 1.0)).xyz;
-        float t   = materialParams.time * materialParams.waveSpeed;
-        float amp = materialParams.waveAmplitude;
-
-        // Steepness per wave stays below the sum-of-Q <= 1 loop-avoidance
-        // bound so overlapping crests never fold over themselves.
-        vec2 dxz = vec2(0.0);
-        float dy = 0.0;
-        vec3 dTx = vec3(1.0, 0.0, 0.0);
-        vec3 dTz = vec3(0.0, 0.0, 1.0);
-
-        // Gerstner wave: displacement + partial derivatives.
-        // Args: direction, steepness, wavelength, phase speed.
-        #define KINE_GERSTNER(DIR, STEEPNESS, WAVELENGTH, PHASE_SPEED)   \
-        {                                                                \
-            vec2 D = normalize(DIR);                                     \
-            float k = 6.2831853 / (WAVELENGTH);                          \
-            float f = k * dot(D, baseWorld.xz) + (PHASE_SPEED) * t;      \
-            float S = (STEEPNESS) * amp;                                 \
-            float sf = sin(f);                                           \
-            float cf = cos(f);                                           \
-            dxz += D * (S / k) * cf;                                     \
-            dy  += (S / k) * sf;                                         \
-            dTx += vec3(-D.x * D.x * S * sf,                             \
-                         D.x * S * cf,                                   \
-                        -D.x * D.y * S * sf);                            \
-            dTz += vec3(-D.x * D.y * S * sf,                             \
-                         D.y * S * cf,                                   \
-                        -D.y * D.y * S * sf);                            \
+        mat4 model = getWorldFromModelMatrix();
+        vec3 baseWorld = (model * vec4(getPosition().xyz,1.0)).xyz;
+        float scale = max(materialParams.waveScale, 0.25);
+        vec2 p = baseWorld.xz;
+        float time = materialParams.time * materialParams.speed;
+        // Identical spectrum and phases to datatypes/WaterWaves.odin.
+        vec2 directions[6] = vec2[](vec2(.940,.342),vec2(-.574,.819),vec2(.259,-.966),vec2(-.848,-.530),vec2(.719,.695),vec2(-.196,.981));
+        vec3 waves[6] = vec3[](vec3(32,.50,.4),vec3(19,.23,2.1),vec3(11,.13,4.7),vec3(7,.075,1.3),vec3(4,.04,5.5),vec3(2.5,.025,3.2));
+        vec3 displacement = vec3(0.0);
+        vec3 tangentX = vec3(1,0,0), tangentZ = vec3(0,0,1);
+        int count = int(clamp(materialParams.octaves,1.0,6.0));
+        for (int i=0;i<count;++i) {
+            vec2 d = normalize(directions[i]);
+            float k = 6.28318530718/(waves[i].x*scale);
+            float amplitude = .65*materialParams.strength*materialParams.height*waves[i].y;
+            float horizontal = min(amplitude*.35,.12/k);
+            float phase = k*dot(d,p)-sqrt(9.81*k)*time+waves[i].z;
+            float s = sin(phase), c = cos(phase);
+            displacement += vec3(d.x*horizontal*c,amplitude*s,d.y*horizontal*c);
+            tangentX += vec3(-d.x*d.x*horizontal*k*s,d.x*amplitude*k*c,-d.x*d.y*horizontal*k*s);
+            tangentZ += vec3(-d.x*d.y*horizontal*k*s,d.y*amplitude*k*c,-d.y*d.y*horizontal*k*s);
         }
-
-        // Primary swell.
-        KINE_GERSTNER(vec2( 1.0,  0.2), 0.16, 18.0, 1.4);
-        KINE_GERSTNER(vec2(-0.4,  1.0), 0.12, 11.0, 1.9);
-        // Cross chop.
-        KINE_GERSTNER(vec2( 0.8, -0.6), 0.07,  4.5, 2.8);
-        KINE_GERSTNER(vec2(-0.6, -0.8), 0.05,  2.2, 3.6);
-
-        // The default worldPosition is expressed camera-relative for
-        // precision; a displacement offset is translation-invariant, so
-        // adding it is correct in that space.
-        material.worldPosition.xyz += vec3(dxz.x, dy, dxz.y);
-
-        // Analytic normal of the displaced surface. With T = dP/dX and
-        // B = dP/dZ and the undisturbed height constant along Y, N = B x T
-        // is unit-up on a flat sea and follows every crest and trough.
-        vec3 N = normalize(cross(dTz, dTx));
-        material.worldWaveNormal = vec4(N, 0.0);
+        material.worldPosition.xyz += displacement;
+        material.worldWaveNormal = vec4(normalize(cross(tangentZ,tangentX)),displacement.y);
     }
 }
 
 fragment {
-// Accumulates the 2D surface gradient of a small fan of directional sine
-// waves over world XZ; used as an x/y normal perturbation this is equivalent
-// to shading a heightfield. phaseSkew decorrelates the two sample sets.
-vec2 kineRippleGradient(vec2 xz, float t, float phaseSkew) {
-    vec2 gradient = vec2(0.0);
-    float amplitude = 0.30;
-    float frequency = 2.4;
-    vec2 direction = normalize(vec2(1.0, 0.35));
-    for (int i = 0; i < 4; i++) {
-        float phase = dot(direction, xz) * frequency + t * (1.1 + float(i) * 0.35) + phaseSkew;
-        gradient += direction * (frequency * amplitude * cos(phase));
-        direction = vec2(direction.x * 0.7986 - direction.y * 0.6018,
-                         direction.x * 0.6018 + direction.y * 0.7986);
-        frequency *= 1.9;
-        amplitude *= 0.58;
+    float waterHash(vec2 p) {
+        p = fract(p*vec2(123.34,456.21));
+        p += dot(p,p+45.32);
+        return fract(p.x*p.y);
     }
-    return gradient;
-}
+    float waterNoise(vec2 p) {
+        vec2 cell = floor(p), f = fract(p);
+        f = f*f*(3.0-2.0*f);
+        return mix(mix(waterHash(cell),waterHash(cell+vec2(1,0)),f.x),
+                   mix(waterHash(cell+vec2(0,1)),waterHash(cell+vec2(1,1)),f.x),f.y);
+    }
+    vec2 waterRipples(vec2 p, float time) {
+        // Slow coherent flow breaks up straight wave bands without textures.
+        vec2 flow = vec2(waterNoise(p*0.48+vec2(time*0.025,0.0)),
+                         waterNoise(p*0.48+vec2(7.3,2.8-time*0.02)));
+        p += (flow-0.5)*2.2;
+        vec2 gradient = vec2(0);
+        vec2 direction = normalize(vec2(1.0,0.38));
+        float frequency = 1.8, amplitude = 0.075;
+        int count = int(clamp(materialParams.octaves,1.0,32.0));
+        for (int i=0; i<count; ++i) {
+            float phase = dot(direction,p)*frequency + time*(0.7+float(i)*0.13);
+            // Analytic pixel footprint filtering avoids sparkles at a distance.
+            float visible = 1.0-smoothstep(0.65,2.8,fwidth(phase));
+            gradient += direction*cos(phase)*amplitude*visible;
+            p += direction*sin(phase)*0.035;
+            direction = vec2(direction.x*0.7986-direction.y*0.6018,
+                             direction.x*0.6018+direction.y*0.7986);
+            frequency *= 1.75;
+            amplitude *= 0.68;
+        }
+        return gradient;
+    }
+    void material(inout MaterialInputs material) {
+        float time = materialParams.time*materialParams.speed;
+        vec2 world = getUserWorldPosition().xz;
+        float scale = max(materialParams.waveScale,0.25);
+        vec2 p = world*max(materialParams.height,0.05)/scale;
+        vec2 detail = waterRipples(p,time);
+        vec3 waveNormal = normalize(variable_worldWaveNormal.xyz);
+        vec3 N = normalize(waveNormal+vec3(-detail.x,0.0,-detail.y)*min(materialParams.strength,2.0));
+        // Filament consumes normal in prepareMaterial, so assign it first.
+        material.normal = transpose(getWorldTangentFrame())*N;
+        prepareMaterial(material);
 
-void material(inout MaterialInputs material) {
-    prepareMaterial(material);
+        float cloud = waterNoise(p*0.28+vec2(time*0.025,-time*0.018));
+        float small = waterNoise(p*2.8+vec2(-time*0.05,time*0.035));
+        // Foam follows crests and ripples; tile boundaries have no rim or tint.
+        float foam = smoothstep(0.085,0.16,length(detail))*smoothstep(0.65,0.9,small)*0.12;
+        foam = saturate(foam*materialParams.foamAmount);
 
-    float t = materialParams.time * materialParams.waveSpeed;
-
-    // Small-scale ripples: the surface gradient of two decorrelated octave
-    // fans scrolling across world XZ at different scales. (getUV0 is
-    // world-mapped for water meshes, i.e. uv * uvScale == world XZ.)
-    vec2 xz1 = getUV0() * materialParams.waveScale * 1.05 + t * vec2( 0.11,  0.045);
-    vec2 xz2 = getUV0() * materialParams.waveScale * 3.20 - t * vec2(-0.041,  0.13);
-
-    vec2 detail = kineRippleGradient(xz1, t, 0.0)
-                + kineRippleGradient(xz2, t, 2.3);
-
-    // Final world-space surface normal: Gerstner normal from the vertex stage
-    // perturbed by the ripple gradient. Then into tangent space for
-    // material.normal (the TBN is orthonormal, from generated mesh tangents).
-    vec3 waveNormal = normalize(variable_worldWaveNormal.xyz);
-    vec3 N = normalize(waveNormal + vec3(detail.x, 0.0, detail.y) * 0.35);
-
-    mat3 tbn = getWorldTangentFrame();
-    material.normal = transpose(tbn) * N;
-
-    material.baseColor.rgb = materialParams.instanceColors[getInstanceIndex()].rgb;
-    material.roughness     = materialParams.roughness;
-    material.ior           = materialParams.ior;
-    material.thickness     = materialParams.thickness;
-    material.transmission  = materialParams.transmission;
-
-    // Beer-Lambert extinction through the water body: a warm-channel-heavy
-    // coefficient (red absorbs fastest) is what gives depth its blue/green
-    // falloff instead of a flat tint.
-    material.absorption = materialParams.absorption;
-
-    // A crisp secondary specular lobe, dimmed where foam breaks the surface.
-    material.clearCoat          = materialParams.clearCoat;
-    material.clearCoatRoughness = materialParams.clearCoatRoughness;
-
-    // Foam: wave crests are where the displaced surface tips away from up.
-    // Blend the geometric slope of the Gerstner normal with a little of the
-    // ripple noise so the foam breaks up instead of tracing a perfect band.
-    float crest = 1.0 - saturate(waveNormal.y);
-    float foamMask = smoothstep(0.015, 0.10, crest + detail.x * 0.03);
-    foamMask *= materialParams.foamAmount;
-    material.baseColor.rgb = mix(material.baseColor.rgb, vec3(1.0), foamMask);
-
-    material.baseColor.a = 1.0;
-}
+        vec3 tint = clamp(materialParams.instanceColors[getInstanceIndex()].rgb,0.0,1.0);
+        // White/default Parts still read as water; authored hues tint the water.
+        vec3 colorFilter = mix(vec3(1.0),tint/max(max(tint.r,tint.g),max(tint.b,0.001)),0.65);
+        vec3 deepColor = vec3(0.006,0.095,0.40);
+        vec3 color = deepColor;
+        color *= (0.82+cloud*0.27+small*0.07)*colorFilter;
+        color *= mix(0.65,1.2,dot(tint,vec3(0.2126,0.7152,0.0722)));
+        color = mix(color,vec3(0.76,0.9,0.94),foam);
+        material.baseColor = vec4(color,1.0);
+        material.roughness = clamp(materialParams.roughness+foam*0.35,0.045,1.0);
+        material.ior = materialParams.ior;
+        material.thickness = materialParams.thickness*2.2;
+        material.transmission = materialParams.transmission*0.45*(1.0-foam*0.9);
+        material.absorption = materialParams.absorption*1.6;
+        material.clearCoat = materialParams.clearCoat*(1.0-foam);
+        material.clearCoatRoughness = materialParams.clearCoatRoughness;
+    }
 }

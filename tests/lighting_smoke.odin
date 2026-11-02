@@ -1,20 +1,10 @@
 package main
 
-// Smoke test for the Lighting service. It covers the script-visible surface of
-// the ClockTime work: that ClockTime reads and writes as a plain number rather
-// than an EnumItem, that it wraps instead of clamping, that the shadow and
-// effect controls round-trip, and that the default effect hierarchy exists with
-// the intended enabled flags.
-//
-// The headless environment here has no Filament context, so Lighting_Apply
-// returns before touching any GPU state. What this test can prove is that the
-// property contract and the defaults hold, and that the clock wraps over a full
-// day; the rasterized result needs a real window to judge.
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 STEP_DT :: f32(1.0 / 60.0)
 VIEWPORT_WIDTH :: i32(800)
@@ -38,9 +28,10 @@ main :: proc() {
 	view.HasViewportRect = true
 	view.ViewportRect = {0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT}
 
-	// ClockTime has to behave like a number. That is the contract which differs
-	// from an EnumItem reading, so it is asserted first.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	assert(type(lighting.ClockTime) == "number",
@@ -79,10 +70,14 @@ main :: proc() {
 	end
 	assert(lighting.ClockTime >= 0 and lighting.ClockTime < 24,
 		"ClockTime must stay within a single day, got " .. tostring(lighting.ClockTime))
-	`, "lighting_clocktime")
+	`,
+		"lighting_clocktime",
+	)
 
-	// The shadow and grading controls round-trip and clamp the way they should.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	assert(lighting.GlobalShadows == true, "GlobalShadows must default on")
@@ -114,11 +109,14 @@ main :: proc() {
 	lighting.ExposureCompensation = 0.25
 	assert(lighting.ExposureCompensation == 0.25,
 		"ExposureCompensation round trip failed")
-	`, "lighting_shadow_properties")
+	`,
+		"lighting_shadow_properties",
+	)
 
-	// The stock effect hierarchy has to exist so scripts can reach the effects
-	// without constructing them, with the frame-blurring ones left off.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	for _, name in ipairs({
@@ -151,11 +149,14 @@ main :: proc() {
 	assert(lighting.BloomEffect.Intensity < 1.0,
 		"default BloomEffect intensity must be softened, got "
 			.. tostring(lighting.BloomEffect.Intensity))
-	`, "lighting_default_effects")
+	`,
+		"lighting_default_effects",
+	)
 
-	// The view-level Filament options are instances now, and they ship off.
-	// FXAA in particular used to be forced on and cost visible frame time.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	for _, name in ipairs({
@@ -166,8 +167,8 @@ main :: proc() {
 		assert(effect ~= nil, "Lighting must ship a default " .. name)
 		assert(effect.ClassName == name,
 			"default " .. name .. " has the wrong class: " .. tostring(effect.ClassName))
-		assert(effect.Enabled == false,
-			name .. " must default disabled, since it was previously forced on")
+		assert(effect.Enabled == (name == "ScreenSpaceReflectionsEffect"),
+			name .. " has the wrong default enabled state")
 	end
 
 	-- No anti-aliasing mode is on until a script asks for one.
@@ -175,10 +176,14 @@ main :: proc() {
 	assert(aa.FXAA == false, "FXAA must not default on")
 	assert(aa.TAA == false, "TAA must not default on")
 	assert(aa.MSAA == false, "MSAA must not default on")
-	`, "lighting_view_effect_defaults")
+	`,
+		"lighting_view_effect_defaults",
+	)
 
-	// Each of them has to round-trip and clamp the way its Filament option does.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	local aa = lighting.AntiAliasingEffect
@@ -243,10 +248,14 @@ main :: proc() {
 	assert(ssr.MaxDistance == 0, "SSR MaxDistance must floor at zero")
 	ssr.Thickness = -1
 	assert(ssr.Thickness == 0, "SSR Thickness must floor at zero")
-	`, "lighting_view_effect_properties")
+	`,
+		"lighting_view_effect_properties",
+	)
 
-	// These are creatable on demand too, and Clone has to carry the settings.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local aa = Instance.new("AntiAliasingEffect")
 	aa.FXAA = true
 	aa.SampleCount = 4
@@ -266,11 +275,14 @@ main :: proc() {
 
 	clone:Destroy()
 	vignette_clone:Destroy()
-	`, "lighting_view_effect_clone")
+	`,
+		"lighting_view_effect_clone",
+	)
 
-	// Setting a time of day must stay safe across frames with no Filament
-	// context, which is the path a headless host actually exercises.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	for hour = 0, 23 do
@@ -280,13 +292,14 @@ main :: proc() {
 
 	lighting.ClockTime = 12
 	assert(lighting.ClockTime == 12, "noon must round trip after a sweep")
-	`, "lighting_clock_sweep")
+	`,
+		"lighting_clock_sweep",
+	)
 
-	// Lighting is a replication root, so the runtime-built default effects must
-	// never be sent to a client that has already built its own copy. Getting
-	// this wrong produced a second same-named instance of every effect on the
-	// client and took the session down at connect time.
-	run_script(&script_vm, `
+
+	run_script(
+		&script_vm,
+		`
 	local lighting = game:GetService("Lighting")
 
 	for _, name in ipairs({
@@ -319,7 +332,9 @@ main :: proc() {
 	assert(authored.CanReplicate == true,
 		"a script-created effect must keep the default replication behaviour")
 	authored:Destroy()
-	`, "lighting_no_replication")
+	`,
+		"lighting_no_replication",
+	)
 
 	fmt.println("lighting_smoke: PASSED")
 }

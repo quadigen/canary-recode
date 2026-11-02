@@ -1,16 +1,15 @@
-#+build !js
 package services
+// wire:service
 
 import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
+import target "../target"
 import vm "../vm"
 import "core:fmt"
 import "core:strings"
-import enet "vendor:ENet"
-import target "../target"
 
 ReplicatorService_Class := classes.Class_Info {
 	name   = "ReplicatorService",
@@ -29,168 +28,84 @@ Replication_Sample :: struct {
 }
 
 Replication_Entity :: struct {
-	id:                     u32,
-	object:                 ^classes.Object,
-	owner_id:               u32,
-	recipients:             map[u32]bool,
-	// last_state_tick and last_property_tick are tracked separately. Sharing one
-	// counter let an interleaved property frame overwrite the ordering guard for
-	// transform frames (and vice versa), which dropped legitimate snapshots.
-	last_state_tick:         u32,
-	last_property_tick:      u32,
-	// has_transform records that an authoritative transform has been accepted for
-	// this entity. On a client a freshly spawned instance exists at whatever
-	// transform its constructor gave it (the world origin for a Part) until the
-	// first transform frame lands, and physics must not act on that placeholder:
-	// a body built there collides with whatever else is near the origin and, for
-	// an unanchored Part, is immediately shoved out of it. Replication clears
-	// this once the first transform arrives and the body is built from the real
-	// one instead.
-	has_transform:           bool,
-	// The transform stream, the builtin property stream (Name/Value) and the
-	// extra property stream (asset ids and schema properties) are three
-	// independent suppression channels. They need separate tokens because a
-	// client can hold an up-to-date transform while a property is still missing,
-	// and sharing one token let any one of the three mask the other two.
+	id:                       u32,
+	object:                   ^classes.Object,
+	owner_id:                 u32,
+	owner_locked:             bool,
+	recipients:               map[u32]bool,
+	last_state_tick:          u32,
+	last_property_tick:       u32,
+	has_transform:            bool,
 	applied_state_token:      u32,
 	applied_property_token:   u32,
 	applied_extra_token:      u32,
-	// property_batch_* accumulate a property batch member by member, indexed by
-	// stream (0 builtin, 1 extra). The applied token above is only published once
-	// every member of the batch has arrived. Publishing it on the first arrival
-	// would tell the server the batch landed in full, and the server suppresses
-	// against that token, so members lost in transit would never be resent and the
-	// property would stay wrong on the client for the life of the session.
-	property_batch_token: [2]u32,
-	property_batch_size:  [2]u8,
-	property_batch_mask:  [2]u64,
-	// reported_* is what we last put on the wire. Tokens are re-reported on a
-	// timer rather than latched, so a dropped kind 4 packet self-heals on the
-	// next round instead of stranding the server's suppression state forever.
+	property_batch_token:     [2]u32,
+	property_batch_size:      [2]u8,
+	property_batch_mask:      [2]u64,
 	reported_state_token:     u32,
 	reported_property_token:  u32,
 	reported_extra_token:     u32,
 	ack_repeat:               f32,
-	last_accepted_ms:       u32,
-	last_accepted_position: datatypes.Vector3,
-	// owned_window_origin anchors a one-second sliding window used to bound how
-	// far an owning client may travel in total. The per-packet displacement cap
-	// alone cannot catch a client that moves just under the cap on every packet
-	// and accumulates an unbounded teleport.
-	//
-	// These are measured against the simulation clock rather than the wall clock.
-	// ENet's clock does not advance in the loopback test harness, so a wall-clock
-	// window never expires there and the rate limit latches off permanently.
-	owned_window_origin:       datatypes.Vector3,
-	owned_window_time:         f32,
-	owned_updates_window:      u32,
-	owned_rate_window_time:    f32,
-	force_correction:       bool,
-	samples:                [dynamic]Replication_Sample,
-	sample_age:             f32,
-	// velocity_sq is the squared magnitude of the last inter-sample delta,
-	// updated on the server each tick and used to priority-sort state sends
-	// so fast-moving parts are never starved out by the bandwidth budget.
-	velocity_sq:            f32,
-	// velocity_origin is the position the velocity delta was measured from. It
-	// used to share last_accepted_position with the ownership-transfer path,
-	// so a SetNetworkOwner on the same tick silently perturbed the sort.
-	velocity_origin:        datatypes.Vector3,
-	velocity_seeded:        bool,
-	// dead_reckoning holds the last interpolated CFrame and the linear
-	// velocity estimated from the two most recent samples. The client uses
-	// it to extrapolate position when the sample buffer runs dry.
-	last_frame:             datatypes.CFrame,
-	// frame_seeded records whether last_frame holds a real transform yet. The
-	// zero value of last_frame is a degenerate CFrame: the world origin with an
-	// all-zero rotation basis, which is singular and collapses the Part's world
-	// bounds to a point. Dead reckoning must never start from it.
-	frame_seeded:           bool,
-	last_velocity:          datatypes.Vector3,
-	// dr_age tracks how many seconds the client has been dead-reckoning so
-	// the extrapolation can be capped to avoid wild divergence.
-	dr_age:                 f32,
-	// server_frame holds the last authoritative transform the server sent for
-	// an entity this client does not own. Reconciliation replays it against the
-	// input sequence carried in a kind 14 packet, so the transform and the
-	// acknowledgement no longer have to arrive in the same message.
-	server_frame:           datatypes.CFrame,
-	server_frame_valid:     bool,
+	last_accepted_ms:         u32,
+	last_accepted_position:   datatypes.Vector3,
+	owned_window_origin:      datatypes.Vector3,
+	owned_window_time:        f32,
+	owned_updates_window:     u32,
+	owned_rate_window_time:   f32,
+	force_correction:         bool,
+	pivot_revision:           u32,
+	pivot_pending:            bool,
+	pivot_upload_guard:       bool,
+	pivot_upload_after:       u32,
+	owned_request_pending:    bool,
+	owned_linear_velocity:    datatypes.Vector3,
+	owned_angular_velocity:   datatypes.Vector3,
+	pending_linear_velocity:  datatypes.Vector3,
+	pending_angular_velocity: datatypes.Vector3,
+	pending_velocity_valid:   bool,
+	owned_as_model:           bool,
+	samples:                  [dynamic]Replication_Sample,
+	sample_age:               f32,
+	velocity_sq:              f32,
+	velocity_origin:          datatypes.Vector3,
+	velocity_seeded:          bool,
+	last_frame:               datatypes.CFrame,
+	frame_seeded:             bool,
+	last_velocity:            datatypes.Vector3,
+	dr_age:                   f32,
+	server_frame:             datatypes.CFrame,
+	server_frame_valid:       bool,
 }
 
 Replication_Peer :: struct {
-	peer:            ^enet.Peer,
-	player:          ^Player,
-	known:           map[u32]u32,
-	initialized:     map[u32]bool,
-	state_hashes:    map[u32]u32,
-	property_hashes: map[u32]u32,
-	extra_hashes:    map[u32]u32,
-	// acked_* are what the client has confirmed holding, per suppression
-	// channel. Suppression is only allowed when one of these agrees with what we
-	// last sent on that same channel, so a lost packet is retried instead of
-	// being silently assumed delivered.
-	acked_state:     map[u32]u32,
-	acked_property:  map[u32]u32,
-	acked_extra:     map[u32]u32,
-	bytes_this_tick: u32,
-	// A peer is created as soon as ENet reports a connection but stays
-	// unassigned, and therefore inert, until it completes the handshake. Every
-	// inbound handler already requires player != nil, so a pending peer cannot
-	// drive the simulation even if it starts sending immediately.
-	handshake_complete: bool,
-	// Terrain delta state. terrain_cursor is the last change serial this peer was
-	// sent, and terrain_epoch the map generation it synced at. A cursor the
-	// server can no longer satisfy, or an epoch that moved because the map was
-	// wiped, sends a fresh snapshot instead of a delta.
-	terrain_initial_sent: bool,
-	terrain_cursor:       u64,
-	terrain_epoch:        u64,
-	terrain_deltas_sent:  u64,
-	// scene_ready_sent records that this peer has already been told its initial
-	// scene finished streaming. It is per peer because a peer that joins later
-	// needs the marker again, and it is sticky because the scene is only ever
-	// announced once: re-sending it would re-trigger the client's settle-on-ground
-	// teleport on a frame where nothing changed.
-	scene_ready_sent: bool,
-	// finished_replicating_sent records that this peer has already been told its
-	// whole scene finished replicating. Per peer and sticky, because a peer that
-	// joins later needs the frame and a script that connects late must not see
-	// the signal re-fire.
+	peer:                      ^Replication_Transport_Peer,
+	player:                    ^Player,
+	known:                     map[u32]u32,
+	initialized:               map[u32]bool,
+	state_hashes:              map[u32]u32,
+	property_hashes:           map[u32]u32,
+	extra_hashes:              map[u32]u32,
+	acked_state:               map[u32]u32,
+	acked_property:            map[u32]u32,
+	acked_extra:               map[u32]u32,
+	bytes_this_tick:           u32,
+	handshake_complete:        bool,
+	terrain_initial_sent:      bool,
+	terrain_cursor:            u64,
+	terrain_epoch:             u64,
+	terrain_deltas_sent:       u64,
+	scene_ready_sent:          bool,
 	finished_replicating_sent: bool,
-	// Cached focus point, in the form (x, y, z, valid).
-	//
-	// The live focus is the client's own character, which can disappear: a respawn
-	// unbinds the old model, and there is a window where the client has no owned
-	// Part on the server at all. Under spatial relevancy, having no focus means
-	// "replicate nothing", so without a cache every respawn would briefly blank
-	// the world for that client and then spend time re-spawning the scene. The
-	// last known focus point is a much better answer than either extreme.
-	focus_x:  f32,
-	focus_y:  f32,
-	focus_z:  f32,
-	focus_ok: bool,
-	client_capabilities: u32,
-	client_nonce:        u32,
-	// server_nonce is the value this peer was given in WELCOME. It is per peer
-	// rather than per service because a service wide nonce is overwritten by the
-	// next client to connect, after which every earlier client's time samples are
-	// rejected as forged.
-	server_nonce: u32,
-	// bandwidth_cursor rotates which entity is considered first when the snapshot
-	// budget runs out. Without it the send order is fixed, so the same entities
-	// win the budget every tick and the rest are starved forever: they never get
-	// sent, so they are never acknowledged, so they are retried every tick
-	// forever. That is a hard deadlock, and it is reachable at the budget floor
-	// whenever the scene needs more per snapshot than the degraded budget allows.
-	bandwidth_cursor: u32,
-	// init_cursor does the same for the first-content pass, which is separately
-	// budget limited and separately ordered.
-	init_cursor: u32,
-	// last_ack_sent is the most recent input sequence shipped to this peer in
-	// a kind 14 packet, so we only re-send when the server has actually
-	// consumed new input.
-	last_ack_sent:   u32,
+	focus_x:                   f32,
+	focus_y:                   f32,
+	focus_z:                   f32,
+	focus_ok:                  bool,
+	client_capabilities:       u32,
+	client_nonce:              u32,
+	server_nonce:              u32,
+	bandwidth_cursor:          u32,
+	init_cursor:               u32,
+	last_ack_sent:             u32,
 }
 
 Replication_Event_Callback :: struct {
@@ -229,210 +144,111 @@ Replication_Schema :: struct {
 }
 
 ReplicatorService :: struct {
-	using service:             Service,
-	mode:                      Replication_Mode,
-	host:                      ^enet.Host,
-	remote:                    ^enet.Peer,
-	peers:                     [dynamic]Replication_Peer,
-	// entity_list preserves registration order, which is parent-before-child
-	// because the tree walk visits roots top-down. Spawn ordering depends on it.
-	entity_list:               [dynamic]^Replication_Entity,
-	// entity_by_id and entity_ids give O(1) lookup in both directions. Entities
-	// are individually heap allocated so the pointers handed out by
-	// replication_entity / replication_entity_by_id stay valid when the
-	// container grows or an entry is removed.
-	entity_by_id:              map[u32]^Replication_Entity,
-	entity_ids:                map[^classes.Object]u32,
-	suppressed:                map[^classes.Object]bool,
-	next_id:                   u32,
-	next_user_id:              u32,
-	// Handshake state. The protocol previously had no handshake at all: the
-	// server assigned an id the instant ENet reported a connection, so a client
-	// speaking a different dialect was silently accepted and then misparsed, and
-	// there was no way to authenticate the peer.
-	//
-	// client_capabilities / server_capabilities are feature bitmasks so a peer
-	// can advertise what it understands and the other side can avoid sending
-	// frames the receiver would drop.
-	client_capabilities:       u32,
-	server_capabilities:       u32,
-	handshake_complete:        bool,
-	handshake_status:          u8,
-	handshake_elapsed:         f32,
-	// join_token is the shared secret. On a server it is the value clients must
-	// present; on a client it is the value to present. Empty means no
-	// authentication, which is the right default for a local listen server.
-	join_token:                string,
-	username:                  string,
-	// join_address is the endpoint StartServer/ConnectClient was given, kept only
-	// so a stalled client can report which server it is stuck on.
-	join_address:               string,
-	// server_nonce is issued in WELCOME and echoed by the client in every time
-	// sync, which proves the client actually processed the handshake rather than
-	// just opening a socket. On a client this holds the nonce of its one remote
-	// server. On a server the authoritative copy lives on the peer, because two
-	// clients connecting at once must not overwrite each other's nonce and start
-	// discarding each other's time samples.
-	server_nonce:              u32,
-	// time_offset is the estimated difference between the server clock and the
-	// local one, in seconds. Clients need it to age interpolation samples against
-	// the same timebase the server sampled on.
-	//
-	// time_offset_measured distinguishes "no estimate has arrived yet" from "the
-	// estimate is genuinely zero". A client that joins a server which has been up
-	// for a while has a large real offset but starts out at zero, and a renderer
-	// that trusts a zero offset would anchor its samples to a clock that is
-	// nowhere near the server's.
-	time_offset:               f32,
-	time_offset_measured:      bool,
-	time_sync_sequence:        u32,
-	time_sync_elapsed:         f32,
-	handshake_rejections:      u64,
-	tick:                      u32,
-	elapsed:                   f32,
-	// clock is a monotonic simulation clock in seconds. elapsed is not usable for
-	// rate limiting because it is reset every time a snapshot fires, so a window
-	// measured against it would restart constantly and never bound anything.
-	clock:                     f32,
-	snapshot_rate:             f32,
-	interpolation_delay_ticks: f32,
-	teleport_threshold:        f32,
-	relevancy_distance:       f32,
-	// Level of detail. Parts inside relevancy_distance * lod_near_fraction are
-	// refreshed every snapshot; the rest are refreshed every lod_far_interval
-	// snapshots. lod_near_fraction of 1 disables the split and restores the old
-	// every-snapshot behaviour for everything in range.
-	lod_near_fraction:         f32,
-	lod_far_interval:          int,
-	bandwidth_budget:          u32,
-	connected:                 bool,
-	enet_initialized:          bool,
-	// scene_ready is the client's view of "the server has finished streaming the
-	// initial scene". While it is false the client holds its character still
-	// instead of integrating gravity, because the floor it would land on has not
-	// arrived yet. The zero value (false) is the safe default: a client that never
-	// receives the marker simply never unfreezes, rather than falling through a
-	// world it never finished building.
-	scene_ready: bool,
-	// replication_finished is the client's view of "the whole scene has
-	// replicated", which is what workspace.FinishedReplicating reports. Unlike
-	// scene_ready (a spawn-area barrier), this waits for every entity this client
-	// is meant to see.
-	replication_finished: bool,
-	event_signal:              ^signals.Signal,
-	event_callbacks:           [dynamic]Replication_Event_Callback,
-	group_members:             [dynamic]Replication_Group_Member,
-	schemas:                   [dynamic]Replication_Schema,
-	packets_sent:              u64,
-	bytes_sent:                u64,
-	packets_received:          u64,
-	bytes_received:            u64,
-	malformed_packets:          u64,
-	// rejected_packets counts frames whose kind is reserved or unknown. These are
-	// tracked separately from malformed_packets: an unknown kind is a version
-	// skew signal, not corruption, and lumping the two together hid it.
-	rejected_packets:           u64,
-	version_mismatches:         u64,
-	// schema_mismatches counts connections refused because the two builds
-	// replicate a different class surface. It is separate from version_mismatches
-	// because the two are fixed by different things: the revision by a deliberate
-	// protocol change, the schema by whichever classes and properties the build
-	// happens to contain.
-	schema_mismatches:     u64,
-	auth_failures:          u64,
-	bandwidth_drops:           u64,
-	unchanged_states_skipped:  u64,
-	owned_states_accepted:     u64,
-	owned_states_rejected:     u64,
-	acks_received:             u64,
-	char_acks_received:        u64,
-	acks_sent:                 u64,
-	states_applied:            u64,
-	// Asset transfer. A network client never loads a map, so the server pushes its
-	// asset table at connect time; without it every `kineasset://` reference on the
-	// client misses and the mesh silently renders as a primitive shape.
-	assets_sent:               u64,
-	assets_received:           u64,
-	asset_bytes_received:      u64,
-	asset_rejections:          u64,
-	asset_table_complete:      bool,
-	// Reassembly state for an asset too large to travel in one frame. The server
-	// announces it with a Begin frame and then sends Chunks, which arrive on the
-	// reliable channel in order, so one slot is enough: a second Begin simply
-	// abandons the first, which leaves the closing frame's count short and the
-	// table correctly reported as incomplete.
-	asset_pending_id:          string,
-	asset_pending_path:        string,
-	asset_pending_kind:        assetstore.Asset_Kind,
-	asset_pending_total:       u32,
-	asset_pending_next:        u32,
-	asset_pending_bytes:       [dynamic]u8,
-	// Terrain transfer. Terrain is a Service holding a voxel map rather than an
-	// Instance with replicated properties, so the instance-tree snapshot cannot
-	// carry it and the server pushes it at connect time the way it does assets.
-	terrain_batches_received:  int,
-	terrain_cells_received:    int,
-	terrain_cells_declared:    u32,
-	terrain_draw_version:      u32,
-	terrain_rejections:        u64,
-	terrain_header_seen:       bool,
-	terrain_table_complete:    bool,
-	terrain_sync_tick:         u32,
-	terrain_sync_due:          bool,
-	// ack_elapsed paces the kind 4 rounds. ack_full_elapsed is a separate,
-	// coarser clock that drives the periodic full re-report; reusing
-	// ack_elapsed for it meant the threshold was never reached, because that
-	// counter is reset on every round.
-	ack_elapsed:               f32,
-	ack_full_elapsed:          f32,
-	// Per-packet-kind and per-(subtype, kind) tallies. Kinds 5 and 6 multiplex
-	// several frame types behind a leading subtype byte, so a kind-only counter
-	// cannot distinguish a transform update from a property update; suppression
-	// bugs are only visible once the two are counted apart.
-	diag_kind_counts:          [32]u64,
-	diag_kind_bytes:           [32]u64,
-	diag_subtype_counts:       [16][32]u64,
-	invoke_pending:            [dynamic]Remote_Invoke_Pending,
-	next_invoke_id:            u32,
-	// drops_window counts budget refusals since the last snapshot. It is kept
-	// separate from the cumulative bandwidth_drops stat, which used to be zeroed
-	// here and therefore always reported 0 to GetStats.
-	drops_window:               u64,
-	// drop_pressure is a smoothed measure of how hard the budget is being
-	// refused, in (0, 1]. It is an exponential moving average of the per-snapshot
-	// severity rather than a "did this snapshot drop anything" flag: under a
-	// sustained overload the budget is refused on most snapshots but not all of
-	// them (rotation makes any given snapshot cheaper), and a one-snapshot test
-	// therefore climbs the scale back up in the middle of an overload. Once the
-	// scene settles the drops stop entirely and this decays to ~0, which is what
-	// allows recovery.
-	drop_pressure:              f32,
-	// adaptive_scale is the fraction of the configured budget and snapshot rate
-	// currently in force, in (0, 1]. It moves DOWN when the budget refuses
-	// packets and creeps back UP when it does not.
-	adaptive_scale:             f32,
-	// base_bandwidth_budget / base_snapshot_rate are the values set by the
-	// user (or defaults). The adaptive logic only ever scales down from them, so
-	// a user's setting is a ceiling rather than something that gets overridden.
-	base_bandwidth_budget:     u32,
-	base_snapshot_rate:        f32,
-	// Floors for the adaptive scale, so a sustained overload degrades to a
-	// lower but still usable frame rate instead of starving replication entirely.
-	adaptive_min_scale:         f32,
-	adaptive_min_snapshot_rate: u32,
-	// Limits applied to state a client uploads for a part it owns.
-	// owned_teleport_tolerance is the largest single-packet jump still treated
-	// as a teleport rather than a cheat, owned_max_speed bounds travel across a
-	// one-second window, and owned_max_updates_per_second bounds the per-part
-	// packet rate those two are enforced at. The rate limit is per part rather
-	// than per connection: a single shared budget let a character uploading its
-	// own root and followers starve every other part the client owns.
-	owned_teleport_tolerance:     f32,
-	owned_max_speed:              f32,
-	owned_max_updates_per_second: u32,
+	using service:                 Service,
+	mode:                          Replication_Mode,
+	host:                          ^Replication_Transport_Host,
+	remote:                        ^Replication_Transport_Peer,
+	peers:                         [dynamic]Replication_Peer,
+	entity_list:                   [dynamic]^Replication_Entity,
+	entity_by_id:                  map[u32]^Replication_Entity,
+	entity_ids:                    map[^classes.Object]u32,
+	suppressed:                    map[^classes.Object]bool,
+	next_id:                       u32,
+	next_user_id:                  u32,
+	client_capabilities:           u32,
+	server_capabilities:           u32,
+	handshake_complete:            bool,
+	handshake_status:              u8,
+	handshake_elapsed:             f32,
+	join_token:                    string,
+	username:                      string,
+	join_address:                  string,
+	server_nonce:                  u32,
+	time_offset:                   f32,
+	time_offset_measured:          bool,
+	time_sync_sequence:            u32,
+	time_sync_elapsed:             f32,
+	handshake_rejections:          u64,
+	tick:                          u32,
+	elapsed:                       f32,
+	clock:                         f32,
+	snapshot_rate:                 f32,
+	interpolation_delay_ticks:     f32,
+	teleport_threshold:            f32,
+	relevancy_distance:            f32,
+	lod_near_fraction:             f32,
+	lod_far_interval:              int,
+	bandwidth_budget:              u32,
+	connected:                     bool,
+	transport_initialized:         bool,
+	scene_ready:                   bool,
+	replication_finished:          bool,
+	event_signal:                  ^signals.Signal,
+	event_callbacks:               [dynamic]Replication_Event_Callback,
+	group_members:                 [dynamic]Replication_Group_Member,
+	schemas:                       [dynamic]Replication_Schema,
+	packets_sent:                  u64,
+	bytes_sent:                    u64,
+	packets_received:              u64,
+	bytes_received:                u64,
+	malformed_packets:             u64,
+	rejected_packets:              u64,
+	version_mismatches:            u64,
+	schema_mismatches:             u64,
+	auth_failures:                 u64,
+	bandwidth_drops:               u64,
+	unchanged_states_skipped:      u64,
+	owned_states_accepted:         u64,
+	owned_states_rejected:         u64,
+	acks_received:                 u64,
+	char_acks_received:            u64,
+	acks_sent:                     u64,
+	states_applied:                u64,
+	assets_sent:                   u64,
+	assets_received:               u64,
+	asset_bytes_received:          u64,
+	asset_rejections:              u64,
+	asset_table_complete:          bool,
+	asset_pending_id:              string,
+	asset_pending_path:            string,
+	asset_pending_kind:            assetstore.Asset_Kind,
+	asset_pending_total:           u32,
+	asset_pending_next:            u32,
+	asset_pending_bytes:           [dynamic]u8,
+	terrain_batches_received:      int,
+	terrain_cells_received:        int,
+	terrain_cells_declared:        u32,
+	terrain_draw_version:          u32,
+	terrain_rejections:            u64,
+	terrain_header_seen:           bool,
+	terrain_table_complete:        bool,
+	terrain_receiving:             bool,
+	terrain_pending:               map[Terrain_Voxel_Key]Terrain_Cell_Record,
+	terrain_pending_voxel_size:    f32,
+	terrain_pending_iso_level:     f32,
+	terrain_sync_tick:             u32,
+	terrain_sync_due:              bool,
+	ack_elapsed:                   f32,
+	ack_full_elapsed:              f32,
+	diag_kind_counts:              [32]u64,
+	diag_kind_bytes:               [32]u64,
+	diag_subtype_counts:           [16][32]u64,
+	invoke_pending:                [dynamic]Remote_Invoke_Pending,
+	next_invoke_id:                u32,
+	drops_window:                  u64,
+	drop_pressure:                 f32,
+	adaptive_scale:                f32,
+	base_bandwidth_budget:         u32,
+	base_snapshot_rate:            f32,
+	adaptive_min_scale:            f32,
+	owned_teleport_tolerance:      f32,
+	owned_max_speed:               f32,
+	owned_max_updates_per_second:  u32,
+	auto_ownership_enabled:        bool,
+	auto_ownership_acquire_radius: f32,
+	auto_ownership_release_radius: f32,
+	auto_ownership_clock:          f32,
 }
-
-replication_enet_users: int
 
 replication_construct :: proc(
 	renderer: ^classes.Renderer_Object,
@@ -440,36 +256,48 @@ replication_construct :: proc(
 ) -> ^classes.Object {
 	service := new(ReplicatorService)
 	service.service = Service_Init(&ReplicatorService_Class, "ReplicatorService", data_model)
-	service.snapshot_rate = 20
+
+
+	service.snapshot_rate = 30
 	service.interpolation_delay_ticks = 2
 	service.teleport_threshold = 12
 	service.relevancy_distance = 1024
-	// Half the sphere is the near band; beyond it a part is refreshed every
-	// fourth snapshot. Four is coarse enough to be worth having and fine enough
-	// that a moving part still interpolates rather than visibly stuttering.
+
+
 	service.lod_near_fraction = 0.5
 	service.lod_far_interval = 4
 	service.bandwidth_budget = 48 * 1024
-	service.base_snapshot_rate = 20
+	service.base_snapshot_rate = 30
 	service.adaptive_scale = 1
-	service.adaptive_min_scale = 0.25
-	service.adaptive_min_snapshot_rate = 5
+
+
+	service.adaptive_min_scale = 0.05
 	service.owned_teleport_tolerance = 128
 	service.owned_max_speed = 1024
 	service.owned_max_updates_per_second = 120
+
+
+	service.auto_ownership_enabled = true
+	service.auto_ownership_acquire_radius = 50
+	service.auto_ownership_release_radius = 80
 	service.base_bandwidth_budget = 48 * 1024
 	service.next_id = 1
 	service.next_user_id = 1
-	// Both roles advertise the same feature set; they are separate fields because
-	// what matters is the intersection of the two, and folding them into one
-	// would make "the peer does not support this" indistinguishable from "we do
-	// not support this".
+
+
 	service.client_capabilities = Replication_Local_Capabilities
 	service.server_capabilities = Replication_Local_Capabilities
 	return &service.object
 }
 
 replication_stop :: proc(service: ^ReplicatorService) {
+	delete(service.terrain_pending)
+	service.terrain_pending = nil
+	service.terrain_receiving = false
+	service.terrain_header_seen = false
+	service.terrain_table_complete = false
+	service.terrain_batches_received = 0
+	service.terrain_cells_received = 0
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	L: ^vm.State
 	if service.signal_registry != nil && service.signal_registry.vm_state != nil {
@@ -477,28 +305,32 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	}
 	if service.host != nil {
 		if service.mode == .Client && service.remote != nil {
-			enet.peer_disconnect(service.remote, 0)
-			enet.host_flush(service.host)
+			transport_peer_disconnect(service.remote)
+			transport_host_flush(service.host)
 		}
 		for &item in service.peers {
-			if item.peer != nil {enet.peer_disconnect_now(item.peer, 0)}
+			if item.peer != nil {transport_peer_disconnect_now(item.peer)}
 			if L != nil && item.player != nil {Players_Remove(players, L, item.player)}
 			Replication_Peer_Dispose(&item)
 		}
-		enet.host_destroy(service.host)
+		transport_host_destroy(service.host)
 		service.host = nil
 	}
 	delete(service.peers)
 	service.peers = nil
-	// A client can be torn down mid transfer, leaving a half assembled asset
-	// holding a buffer nothing else owns.
+
+
 	replication_asset_pending_reset(service)
 	client_objects: [dynamic]^classes.Object
 	if service.mode == .Client && L != nil {
 		for item in service.entity_list {
 			if item.object == nil || item.object.destroyed {continue}
 			if classes.Is_A(item.object, "CharacterModel") {
-				CharacterService_Unbind(service.data_model, cast(^classes.CharacterModel)item.object, L)
+				CharacterService_Unbind(
+					service.data_model,
+					cast(^classes.CharacterModel)item.object,
+					L,
+				)
 			}
 			append(&client_objects, item.object)
 		}
@@ -522,7 +354,8 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	delete(service.group_members)
 	service.group_members = nil
 	for pending in service.invoke_pending {
-		if pending.thread_ref != 0 && service.data_model != nil &&
+		if pending.thread_ref != 0 &&
+		   service.data_model != nil &&
 		   service.data_model.registry != nil &&
 		   service.data_model.registry.vm_state != nil &&
 		   service.data_model.registry.vm_state.L != nil {
@@ -537,38 +370,38 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	service.remote = nil
 	service.mode = .Stopped
 	service.connected = false
-	// The join token is a heap copy owned by the service, so it has to be
-	// released on teardown. It is deliberately kept across a stop/start cycle
-	// though: a server restarted in place should not silently drop the secret it
-	// was configured with, which would turn into a wave of auth failures.
+
+
 	service.handshake_complete = false
 	service.handshake_status = Replication_Handshake_Ok
 	service.handshake_elapsed = 0
 	service.time_sync_elapsed = 0
-	// The offset is only meaningful against the peer it was measured from, so it
-	// is dropped with the rest of the session state. A reconnect to a different
-	// peer would otherwise render against a timebase that no longer applies, and
-	// until the first reply arrives there is no evidence the value was ever right.
-	// The sample counter goes with it so a new session renegotiates from zero.
+
+
 	service.time_offset = 0
 	service.time_offset_measured = false
 	service.time_sync_sequence = 0
 	service.server_nonce = 0
-	if service.data_model != nil && service.data_model.registry != nil && service.data_model.registry.vm_state != nil && service.data_model.registry.vm_state.L != nil {
+	if service.data_model != nil &&
+	   service.data_model.registry != nil &&
+	   service.data_model.registry.vm_state != nil &&
+	   service.data_model.registry.vm_state.L != nil {
 		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsServer", target.is_server())
 		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsClient", target.is_client())
 	}
 	service.elapsed = 0
 	service.tick = 0
+
+
+	service.clock = 0
 	service.next_id = 1
 	service.next_user_id = 1
 	if L != nil &&
 	   players != nil &&
 	   players.local_player != nil {Players_Remove(players, L, players.local_player)}
-	if service.enet_initialized {
-		replication_enet_users -= 1
-		if replication_enet_users == 0 {enet.deinitialize()}
-		service.enet_initialized = false
+	if service.transport_initialized {
+		transport_deinit()
+		service.transport_initialized = false
 	}
 }
 
@@ -591,9 +424,8 @@ replication_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 		}
 	}
 	delete(service.event_callbacks)
-	// The join token survives stop/start so a server restarted in place keeps the
-	// secret it was configured with, which means the only place it can be
-	// released is here, at destruction.
+
+
 	if len(service.join_token) > 0 {delete(service.join_token)}
 	service.join_token = ""
 	if len(service.join_address) > 0 {delete(service.join_address)}
@@ -687,33 +519,43 @@ replication_set :: proc(
 	}
 	if key == "InterpolationDelayTicks" {
 		delay := vm.ArgNumber(L, value_index)
-		if delay < 0 || delay > 8 {_ = vm.RaiseError(L, "InterpolationDelayTicks must be between 0 and 8"); return true}
+		if delay < 0 ||
+		   delay >
+			   8 {_ = vm.RaiseError(L, "InterpolationDelayTicks must be between 0 and 8"); return true}
 		service.interpolation_delay_ticks = f32(delay)
 		return true
 	}
 	if key == "TeleportThreshold" {
 		threshold := vm.ArgNumber(L, value_index)
-		if threshold < 0 || threshold > 100000 {_ = vm.RaiseError(L, "TeleportThreshold must be between 0 and 100000"); return true}
+		if threshold < 0 ||
+		   threshold >
+			   100000 {_ = vm.RaiseError(L, "TeleportThreshold must be between 0 and 100000"); return true}
 		service.teleport_threshold = f32(threshold)
 		return true
 	}
 	if key == "RelevancyDistance" {
 		distance := vm.ArgNumber(L, value_index)
-		if distance < 0 || distance > 1000000 {_ = vm.RaiseError(L, "RelevancyDistance must be between 0 and 1000000"); return true}
+		if distance < 0 ||
+		   distance >
+			   1000000 {_ = vm.RaiseError(L, "RelevancyDistance must be between 0 and 1000000"); return true}
 		service.relevancy_distance = f32(distance)
 		return true
 	}
 	if key == "LODNearFraction" {
 		fraction := vm.ArgNumber(L, value_index)
-		// 0 disables the near band, meaning everything in range is treated as far.
-		// Values above 1 are the old behaviour, so they are allowed and clamped.
-		if fraction < 0 || fraction > 1 {_ = vm.RaiseError(L, "LODNearFraction must be between 0 and 1"); return true}
+
+
+		if fraction < 0 ||
+		   fraction >
+			   1 {_ = vm.RaiseError(L, "LODNearFraction must be between 0 and 1"); return true}
 		service.lod_near_fraction = f32(fraction)
 		return true
 	}
 	if key == "LODFarInterval" {
 		interval := vm.ArgNumber(L, value_index)
-		if interval < 1 || interval > 64 {_ = vm.RaiseError(L, "LODFarInterval must be between 1 and 64"); return true}
+		if interval < 1 ||
+		   interval >
+			   64 {_ = vm.RaiseError(L, "LODFarInterval must be between 1 and 64"); return true}
 		service.lod_far_interval = int(interval)
 		return true
 	}
@@ -745,9 +587,8 @@ replication_namecall :: proc(
 			method == "StartServer" ? .Server : .Client,
 		)
 		if ok {
-			// Remembered purely so a client can name the endpoint it is stuck
-			// talking to. The join token must never be used for that; it is a
-			// shared secret and this ends up in the log.
+
+
 			if len(service.join_address) > 0 {delete(service.join_address)}
 			service.join_address = strings.clone(address)
 			classes.Push_Object(L, object)
@@ -783,20 +624,17 @@ replication_namecall :: proc(
 		   !vm.IsTable(L, 3) {return vm.RaiseError(L, "invalid replication schema"), true}
 		if classes.Find_Class(service.data_model.registry.classes, class_name) ==
 		   nil {return vm.RaiseError(L, "unknown replicated class"), true}
-		// The client tracks which members of a property batch have arrived with a
-		// fixed-width mask, so a schema wider than that could never be reported
-		// complete and its properties would be resent forever. Refusing the
-		// registration surfaces the mistake where it is made instead of as a
-		// silent bandwidth leak at runtime.
+
+
 		if vm.RawLen(L, 3) > int(replication_property_batch_limit) {
 			return vm.RaiseError(
-				L,
-				fmt.tprintf(
-					"a replication schema may declare at most %d properties",
-					replication_property_batch_limit,
+					L,
+					fmt.tprintf(
+						"a replication schema may declare at most %d properties",
+						replication_property_batch_limit,
+					),
 				),
-			),
-			       true
+				true
 		}
 		schema := replication_schema(service, class_name)
 		if schema == nil {
@@ -814,9 +652,7 @@ replication_namecall :: proc(
 				-1,
 			) {vm.Pop(L); return vm.RaiseError(L, "schema property must be a string"), true}
 			property := vm.ArgString(L, -1)
-			if len(property) == 0 ||
-			   len(property) > 64 ||
-			   property == "Parent" {
+			if len(property) == 0 || len(property) > 64 || property == "Parent" {
 				vm.Pop(L)
 				return vm.RaiseError(L, "invalid schema property"), true
 			}
@@ -861,7 +697,7 @@ replication_namecall :: proc(
 		return 1, true
 	case "Register":
 		id := replication_register(service, collection_object_from_argument(L, 2))
-		if id == 0 {vm.PushNil(L)} else {vm.PushInteger(L, i64(id))}
+		if id == 0 {vm.PushNil(L)} else {vm.PushNumber(L, f64(id))}
 		return 1, true
 	case "Unregister":
 		instance := collection_object_from_argument(L, 2)
@@ -897,6 +733,7 @@ replication_namecall :: proc(
 				   ) {return vm.RaiseError(L, "owner must be a Player or nil"), true}
 			owner_id = (cast(^Player)player_object).user_id
 		}
+		entity.owner_locked = true
 		replication_set_ownership(service, entity, owner_id)
 		vm.NewTable(L, 0, 2)
 		vm.PushNumber(L, f64(owner_id)); vm.SetField(L, -2, "owner")
@@ -975,12 +812,9 @@ replication_namecall :: proc(
 		vm.PushBoolean(L, ok)
 		return 1, true
 	case "SetJoinToken":
-		// On a server this is the value clients must present; on a client it is
-		// the value to present. Rejecting an over-long token here means a
-		// malformed value is caught at configuration time rather than turning
-		// every future connection into an authentication failure.
 		token := vm.ArgString(L, 2)
-		if len(token) > 256 {return vm.RaiseError(L, "join token must be 256 characters or fewer"), true}
+		if len(token) >
+		   256 {return vm.RaiseError(L, "join token must be 256 characters or fewer"), true}
 		if len(service.join_token) > 0 {delete(service.join_token)}
 		if len(token) > 0 {service.join_token = strings.clone(token)}
 		vm.PushBoolean(L, true)
@@ -996,67 +830,79 @@ replication_namecall :: proc(
 		vm.PushNumber(L, f64(service.bytes_received)); vm.SetField(L, -2, "bytesReceived")
 		vm.PushNumber(L, f64(service.malformed_packets)); vm.SetField(L, -2, "malformedPackets")
 		vm.PushNumber(L, f64(service.bandwidth_drops)); vm.SetField(L, -2, "bandwidthDrops")
-		// Asset transfer visibility. A client that is connected but never received
-		// the table is the shape of "connected, everything renders as a primitive".
+
+
 		vm.PushNumber(L, f64(service.assets_sent)); vm.SetField(L, -2, "assetsSent")
 		vm.PushNumber(L, f64(service.assets_received)); vm.SetField(L, -2, "assetsReceived")
 		vm.PushNumber(L, f64(service.asset_rejections)); vm.SetField(L, -2, "assetRejections")
 		vm.PushBoolean(L, service.asset_table_complete); vm.SetField(L, -2, "assetTableComplete")
-		// Terrain transfer visibility. A client that completed the handshake but
-		// never received the voxel database is standing on nothing, which looks
-		// like a physics bug rather than a missing connect-time transfer.
+
+
 		vm.PushBoolean(L, service.terrain_header_seen); vm.SetField(L, -2, "terrainHeaderSeen")
-		vm.PushNumber(L, f64(service.terrain_batches_received)); vm.SetField(L, -2, "terrainBatchesReceived")
-		vm.PushNumber(L, f64(service.terrain_cells_received)); vm.SetField(L, -2, "terrainCellsReceived")
-		vm.PushNumber(L, f64(service.terrain_cells_declared)); vm.SetField(L, -2, "terrainCellsDeclared")
+		vm.PushNumber(
+			L,
+			f64(service.terrain_batches_received),
+		); vm.SetField(L, -2, "terrainBatchesReceived")
+		vm.PushNumber(
+			L,
+			f64(service.terrain_cells_received),
+		); vm.SetField(L, -2, "terrainCellsReceived")
+		vm.PushNumber(
+			L,
+			f64(service.terrain_cells_declared),
+		); vm.SetField(L, -2, "terrainCellsDeclared")
 		vm.PushNumber(L, f64(service.terrain_rejections)); vm.SetField(L, -2, "terrainRejections")
-		vm.PushBoolean(L, service.terrain_table_complete); vm.SetField(L, -2, "terrainTableComplete")
-		// rejectedPackets separates unknown or reserved kinds from genuine
-		// corruption. A climb here during a rolling update means clients and
-		// servers disagree about the protocol, which is a different and much more
-		// actionable problem than a malformed-packet climb.
+		vm.PushBoolean(
+			L,
+			service.terrain_table_complete,
+		); vm.SetField(L, -2, "terrainTableComplete")
+
+
 		vm.PushNumber(L, f64(service.rejected_packets)); vm.SetField(L, -2, "rejectedPackets")
 		vm.PushNumber(L, f64(service.version_mismatches)); vm.SetField(L, -2, "versionMismatches")
 		vm.PushNumber(L, f64(service.schema_mismatches)); vm.SetField(L, -2, "schemaMismatches")
 		vm.PushNumber(L, f64(service.auth_failures)); vm.SetField(L, -2, "authFailures")
-		// Handshake visibility: a client that is connected but has not completed
-		// the negotiation is sitting in a state that used to be indistinguishable
-		// from a healthy one.
+
+
 		vm.PushBoolean(L, service.handshake_complete); vm.SetField(L, -2, "handshakeComplete")
 		vm.PushBoolean(L, service.scene_ready); vm.SetField(L, -2, "sceneReady")
 		vm.PushBoolean(L, service.replication_finished); vm.SetField(L, -2, "replicationFinished")
 		vm.PushNumber(L, f64(service.handshake_status)); vm.SetField(L, -2, "handshakeStatus")
 		vm.PushNumber(L, f64(Replication_Protocol_Version)); vm.SetField(L, -2, "protocolVersion")
-		vm.PushNumber(L, f64(service.server_capabilities)); vm.SetField(L, -2, "serverCapabilities")
-		// timeOffset is the estimated server-minus-local clock difference and is
-		// what makes client interpolation run on the server's timebase instead of
-		// drifting by the round trip.
+		vm.PushNumber(
+			L,
+			f64(service.server_capabilities),
+		); vm.SetField(L, -2, "serverCapabilities")
+
+
 		vm.PushNumber(L, f64(service.time_offset)); vm.SetField(L, -2, "timeOffset")
-		vm.PushNumber(L, f64(service.unchanged_states_skipped)); vm.SetField(L, -2, "unchangedStatesSkipped")
+		vm.PushNumber(
+			L,
+			f64(service.unchanged_states_skipped),
+		); vm.SetField(L, -2, "unchangedStatesSkipped")
 		vm.PushNumber(L, f64(service.tick)); vm.SetField(L, -2, "tick")
-		// Acknowledgement counters. statesApplied counts transform snapshots the
-		// client actually took, and the ack pair shows whether the kind 4
-		// content-token exchange is flowing in both directions, which is what
-		// makes unchanged-state suppression safe under packet loss.
+
+
 		vm.PushNumber(L, f64(service.states_applied)); vm.SetField(L, -2, "statesApplied")
 		vm.PushNumber(L, f64(service.acks_sent)); vm.SetField(L, -2, "acksSent")
 		vm.PushNumber(L, f64(service.acks_received)); vm.SetField(L, -2, "acksReceived")
 		vm.PushNumber(L, f64(service.char_acks_received)); vm.SetField(L, -2, "charAcksReceived")
-		// adaptiveScale and the effective budget/rate make the load controller
-		// observable; a scale pinned at the floor means replication is running
-		// degraded and the scene is probably too large for the configured budget.
+
+
 		vm.PushNumber(L, f64(service.adaptive_scale)); vm.SetField(L, -2, "adaptiveScale")
-		vm.PushNumber(L, f64(service.bandwidth_budget)); vm.SetField(L, -2, "effectiveBandwidthBudget")
+		vm.PushNumber(
+			L,
+			f64(service.bandwidth_budget),
+		); vm.SetField(L, -2, "effectiveBandwidthBudget")
 		vm.PushNumber(L, f64(service.snapshot_rate)); vm.SetField(L, -2, "effectiveSnapshotRate")
-		vm.PushNumber(L, f64(service.owned_states_accepted)); vm.SetField(L, -2, "ownedStatesAccepted")
-		vm.PushNumber(L, f64(service.owned_states_rejected)); vm.SetField(L, -2, "ownedStatesRejected")
-		if service.mode == .Client && service.remote != nil {
-			vm.PushNumber(L, f64(service.remote.roundTripTime)); vm.SetField(L, -2, "rtt")
-			vm.PushNumber(
-				L,
-				f64(service.remote.roundTripTimeVariance),
-			); vm.SetField(L, -2, "jitter")
-		}
+		vm.PushNumber(
+			L,
+			f64(service.owned_states_accepted),
+		); vm.SetField(L, -2, "ownedStatesAccepted")
+		vm.PushNumber(
+			L,
+			f64(service.owned_states_rejected),
+		); vm.SetField(L, -2, "ownedStatesRejected")
 		return 1, true
 	}
 	return 0, false
@@ -1072,7 +918,7 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 		get = replication_get,
 		set = replication_set,
 		namecall = replication_namecall,
-		properties = []string{
+		properties = []string {
 			"SnapshotRate",
 			"BandwidthBudget",
 			"InterpolationDelayTicks",
@@ -1084,10 +930,8 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 			"Connected",
 			"SceneReady",
 		},
-		events = []string{
-			"EventReceived",
-		},
-		methods = []string{
+		events = []string{"EventReceived"},
+		methods = []string {
 			"StartServer",
 			"ConnectClient",
 			"Stop",
@@ -1107,6 +951,6 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 			"GetStats",
 			"GetActiveReplicator",
 			"SetJoinToken",
-		}
+		},
 	)
 }

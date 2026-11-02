@@ -1,7 +1,9 @@
-#+build !js
 package services
 
+import "core:fmt"
+
 import assetstore "../assetstore"
+import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
@@ -56,9 +58,6 @@ replication_read_u64 :: proc(reader: ^Replication_Reader) -> u64 {
 	return value
 }
 
-// The returned string borrows the reader's buffer and is only valid while the
-// packet that backs it is. A caller that keeps it past this dispatch -- as the
-// chunked asset transfer does with an id and a path -- has to clone it first.
 replication_read_string :: proc(reader: ^Replication_Reader) -> string {
 	size := replication_read_u32(reader)
 	if !reader.valid ||
@@ -73,35 +72,17 @@ replication_read_f32 :: proc(reader: ^Replication_Reader) -> f32 {
 	return transmute(f32)replication_read_u32(reader)
 }
 
-// ---------------------------------------------------------------------------
-// Terrain frames
-// ---------------------------------------------------------------------------
-// Terrain is a Service whose state is a sparse voxel map, so none of the
-// instance-tree replication machinery can carry it: it has no replicated
-// properties and it is not a child of any replicated root. It therefore gets a
-// connect-time transfer of its own, shaped like the asset table.
-//
-// The database is sent as a header frame describing the voxel grid, then a
-// series of batch frames, then a closing frame carrying the batch count. The
-// client cannot know how many cells a map holds until the header arrives, so
-// the header is what makes the rest of the stream self-describing.
-
 Replication_Terrain_Subtype_Header: u8 = 0
-Replication_Terrain_Subtype_Batch:  u8 = 1
-Replication_Terrain_Subtype_End:    u8 = 2
+Replication_Terrain_Subtype_Batch: u8 = 1
+Replication_Terrain_Subtype_End: u8 = 2
 
-// A single batch frame is capped so one reliable packet stays under what ENet
-// will carry. The cap is a statement about this frame, not the whole database:
-// a map larger than it is split across frames rather than truncated.
+
 Replication_Terrain_Max_Cells: u32 = 4096
 
-// Coordinates are bounded by TERRAIN_MAX_EXTENTS, so anything outside that is
-// corrupt or hostile and is rejected before it reaches the voxel map.
+
 Replication_Terrain_Max_Coordinate: i32 = 16000
 
-// Voxel occupancies and water depths are fractions in [0, 1] and are stored as
-// 16-bit fixed point. That is far finer than a marching-cubes surface needs at
-// any voxel size the engine supports, and it halves the wire cost.
+
 replication_put_u16 :: proc(bytes: ^[dynamic]u8, value: u16) {
 	append(bytes, u8(value >> 8))
 	append(bytes, u8(value & 0xFF))
@@ -141,21 +122,16 @@ replication_read_i32 :: proc(reader: ^Replication_Reader) -> i32 {
 	return transmute(i32)(u32(a) << 24 | u32(b) << 16 | u32(c) << 8 | u32(d))
 }
 
-// encode_terrain_header writes the grid description every later batch is
-// measured against. The client refuses batches whose grid does not match, so a
-// stale batch from an earlier map cannot be applied to a newer one.
+
 encode_terrain_header :: proc(bytes: ^[dynamic]u8, terrain: ^Terrain) {
 	append(bytes, Replication_Terrain_Subtype_Header)
-	replication_put_u32(bytes, u32(len(terrain.voxels)))
+	replication_put_u32(bytes, u32(Terrain_Cell_Count(terrain)))
 	replication_put_f32(bytes, terrain.voxel_size)
 	replication_put_f32(bytes, terrain.iso_level)
 	replication_put_u32(bytes, u32(terrain.draw_version))
 }
 
-// encode_terrain_batch writes at most Replication_Terrain_Max_Cells cells as
-// fixed-size records. Occupancy and water are 16-bit fixed point, which is far
-// finer than a marching-cubes surface needs at any voxel size the engine
-// supports and halves the wire cost of a full cell.
+
 encode_terrain_batch :: proc(bytes: ^[dynamic]u8, cells: []Terrain_Cell_Record) {
 	append(bytes, Replication_Terrain_Subtype_Batch)
 	replication_put_u32(bytes, u32(len(cells)))
@@ -169,47 +145,42 @@ encode_terrain_batch :: proc(bytes: ^[dynamic]u8, cells: []Terrain_Cell_Record) 
 	}
 }
 
-// decode_terrain_header reads the grid description. The subtype byte must
-// already have been consumed by the caller, the same contract decode_terrain_batch
-// has, so a single dispatch site can branch on the subtype and hand the rest of
-// the frame to the matching reader.
-//
-// The cell count is a claim by the sender, so it is only recorded for logging:
-// the batches that follow carry their own counts and are what actually build
-// the map.
+
 decode_terrain_header :: proc(
 	reader: ^Replication_Reader,
-) -> (voxel_size, iso_level: f32, draw_version: u32, declared: u32, ok: bool) {
+) -> (
+	voxel_size, iso_level: f32,
+	draw_version: u32,
+	declared: u32,
+	ok: bool,
+) {
 	if !reader.valid {return 0, 0, 0, 0, false}
-	// Field order has to match encode_terrain_header exactly: the cell count comes
-	// first, then the grid description. Reading these in a different order
-	// silently reinterprets the count as a float rather than failing.
+
+
 	declared = replication_read_u32(reader)
 	voxel_size = replication_read_f32(reader)
 	iso_level = replication_read_f32(reader)
 	draw_version = replication_read_u32(reader)
 	if !reader.valid {return 0, 0, 0, 0, false}
-	// A zero or negative voxel size would make every world<->cell conversion
-	// divide by zero, so it is rejected rather than stored.
+
+
 	if !(voxel_size > 0) || !(iso_level > 0) {return 0, 0, 0, 0, false}
 	return voxel_size, iso_level, draw_version, declared, true
 }
 
-// decode_terrain_batch reads one batch into freshly allocated records. The
-// declared count is checked against the bytes actually present before a single
-// record is allocated, so a hostile count cannot drive an allocation loop.
+
 decode_terrain_batch :: proc(
 	reader: ^Replication_Reader,
-) -> (cells: [dynamic]Terrain_Cell_Record, ok: bool) {
+) -> (
+	cells: [dynamic]Terrain_Cell_Record,
+	ok: bool,
+) {
 	if !reader.valid {return}
 	count := replication_read_u32(reader)
 	if !reader.valid {return}
 	if count > Replication_Terrain_Max_Cells {reader.valid = false; return}
-	// 17 bytes per cell is the exact record size: three i32 coordinates, one
-	// material byte, and two 16-bit fixed-point values. The check is made before
-	// a single record is allocated so a hostile count cannot drive an allocation
-	// loop; the constant is the real size, not a conservative guess, so a full
-	// legitimate batch is never refused.
+
+
 	if int(count) > (len(reader.data) - reader.offset) / 17 {
 		reader.valid = false
 		return
@@ -217,7 +188,7 @@ decode_terrain_batch :: proc(
 
 	reserve := int(count)
 	cells = make([dynamic]Terrain_Cell_Record, 0, reserve)
-	for _ in 0..<int(count) {
+	for _ in 0 ..< int(count) {
 		cell: Terrain_Cell_Record
 		cell.x = replication_read_i32(reader)
 		cell.y = replication_read_i32(reader)
@@ -235,54 +206,29 @@ decode_terrain_batch :: proc(
 			reader.valid = false
 			return
 		}
-		// Air is the last member of the Material enum, so it is the highest value
-		// a sender can legally name. Clamping to it rather than to a material that
-		// merely happens to matter here keeps every value above it intact instead
-		// of folding Water, Sand, debug and Air into one material.
-		cell.material = enums.Material(min(int(material), int(enums.Material.Air)))
+		if !enums.Material_Is_Valid(int(material)) {reader.valid = false; return}
+		cell.material = enums.Material(material)
 		append(&cells, cell)
 	}
 	ok = true
 	return
 }
 
-// ---------------------------------------------------------------------------
-// Asset table frames
-// ---------------------------------------------------------------------------
-// A network client never loads a map, and the asset store is only ever filled as
-// a side effect of deserializing a .kine stream, so the server has to hand the
-// client the bytes its `kineasset://` references point at.
-//
-// One frame per asset, then a closing frame carrying the count. Per asset
-// framing keeps each reliable packet a size ENet can carry on its own, and a
-// single bad entry cannot take the rest of the table down with it. Every frame
-// goes out on the reliable channel, which is ordered, so the whole table is
-// applied before the first spawn that can reference it.
 
 Replication_Asset_Subtype_Entry: u8 = 0
-Replication_Asset_Subtype_End:   u8 = 1
-// A mesh is routinely several megabytes, which is more than a single frame can
-// carry, so an asset that does not fit is announced with Begin and then sent as
-// a run of Chunks the client stitches back together. Entry stays for the assets
-// that fit in one frame, which is the overwhelming majority, so the common case
-// still costs exactly one packet.
+Replication_Asset_Subtype_End: u8 = 1
+
+
 Replication_Asset_Subtype_Begin: u8 = 2
 Replication_Asset_Subtype_Chunk: u8 = 3
 
-// Replication_Asset_Max_Chunk bounds one Chunk's body so the finished frame
-// stays inside what a single reliable packet can carry. Like
-// Replication_Terrain_Max_Cells this is a statement about a frame and not about
-// the asset: something larger is split across frames rather than refused.
+
 Replication_Asset_Max_Chunk: u32 = 256 * 1024
 
-// MAX_ASSET_WIRE_PATH bounds the authored path string on the wire. The path
-// only ever supplies a file extension, so anything longer is either corrupt or
-// a peer trying to make this frame expensive to parse.
+
 Replication_Asset_Max_Path: u32 = 4096
 
-// Asset keys are content hashes, so they are a fixed 16 lowercase hex digits.
-// Register_As re-checks the real rule, so this is only a cheap early reject that
-// keeps a hostile length out of the string reader.
+
 Replication_Asset_Max_Id_Length: u32 = 16
 
 encode_asset_entry :: proc(
@@ -300,16 +246,16 @@ encode_asset_entry :: proc(
 	append(bytes, ..data)
 }
 
-// decode_asset_entry_body reads one entry with the leading subtype already
-// consumed. `data` borrows from the reader and is only valid while the packet
-// that backs it is, so the caller must copy before handing it to the store.
-//
-// The payload length is checked against both the per asset cap and the bytes
-// actually present. A declared length is a claim by the sender, and believing a
-// claim larger than the buffer is how a parser ends up reading past its input.
+
 decode_asset_entry_body :: proc(
 	reader: ^Replication_Reader,
-) -> (id: string, path: string, kind: assetstore.Asset_Kind, data: []u8, ok: bool) {
+) -> (
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	data: []u8,
+	ok: bool,
+) {
 	if !reader.valid {return "", "", .Unknown, nil, false}
 	id = replication_read_string(reader)
 	if !reader.valid || id == "" || len(id) > int(Replication_Asset_Max_Id_Length) {
@@ -325,8 +271,7 @@ decode_asset_entry_body :: proc(
 	if !reader.valid {return}
 	length := replication_read_u32(reader)
 	if !reader.valid {return}
-	if length > u32(assetstore.MAX_ASSET_BYTES) ||
-	   int(length) > len(reader.data) - reader.offset {
+	if length > u32(assetstore.MAX_ASSET_BYTES) || int(length) > len(reader.data) - reader.offset {
 		reader.valid = false
 		return
 	}
@@ -336,11 +281,16 @@ decode_asset_entry_body :: proc(
 	return
 }
 
-// decode_asset_entry reads a complete entry frame, subtype included. Used where
-// the frame is expected to be an entry rather than the closing marker.
+
 decode_asset_entry :: proc(
 	reader: ^Replication_Reader,
-) -> (id: string, path: string, kind: assetstore.Asset_Kind, data: []u8, ok: bool) {
+) -> (
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	data: []u8,
+	ok: bool,
+) {
 	if !reader.valid || reader.offset >= len(reader.data) {
 		reader.valid = false
 		return "", "", .Unknown, nil, false
@@ -354,10 +304,7 @@ decode_asset_entry :: proc(
 	return decode_asset_entry_body(reader)
 }
 
-// encode_asset_begin opens a chunked transfer: everything an entry frame would
-// have carried except the bytes themselves, plus the total they will add up to.
-// The total is what lets the client know when the asset is whole, so a truncated
-// transfer is detectable instead of registering a short file.
+
 encode_asset_begin :: proc(
 	bytes: ^[dynamic]u8,
 	id: string,
@@ -372,9 +319,7 @@ encode_asset_begin :: proc(
 	replication_put_u32(bytes, total)
 }
 
-// encode_asset_chunk writes one slice of the body. The index is what the client
-// checks the next chunk against, so a gap or a repeat is caught rather than
-// silently stitched into the wrong place.
+
 encode_asset_chunk :: proc(bytes: ^[dynamic]u8, index: u32, data: []u8) {
 	append(bytes, Replication_Asset_Subtype_Chunk)
 	replication_put_u32(bytes, index)
@@ -383,7 +328,13 @@ encode_asset_chunk :: proc(bytes: ^[dynamic]u8, index: u32, data: []u8) {
 
 decode_asset_begin :: proc(
 	reader: ^Replication_Reader,
-) -> (id: string, path: string, kind: assetstore.Asset_Kind, total: u32, ok: bool) {
+) -> (
+	id: string,
+	path: string,
+	kind: assetstore.Asset_Kind,
+	total: u32,
+	ok: bool,
+) {
 	if !reader.valid {return "", "", .Unknown, 0, false}
 	id = replication_read_string(reader)
 	if !reader.valid || id == "" || len(id) > int(Replication_Asset_Max_Id_Length) {
@@ -398,8 +349,8 @@ decode_asset_begin :: proc(
 	kind = assetstore.Asset_Kind(replication_read_u8(reader))
 	if !reader.valid {return}
 	total = replication_read_u32(reader)
-	// Bounded by the same per asset cap the single frame form uses, so an
-	// announced total can never describe more than the store would accept.
+
+
 	if !reader.valid || total > u32(assetstore.MAX_ASSET_BYTES) {
 		reader.valid = false
 		return
@@ -408,12 +359,8 @@ decode_asset_begin :: proc(
 	return
 }
 
-// decode_asset_chunk reads one slice. The bytes run to the end of the frame, so
-// there is no length to believe: what arrived is what is there. The slice
-// borrows from the packet buffer, so the caller copies before keeping it.
-decode_asset_chunk :: proc(
-	reader: ^Replication_Reader,
-) -> (index: u32, data: []u8, ok: bool) {
+
+decode_asset_chunk :: proc(reader: ^Replication_Reader) -> (index: u32, data: []u8, ok: bool) {
 	if !reader.valid {return 0, nil, false}
 	index = replication_read_u32(reader)
 	if !reader.valid {return}
@@ -432,6 +379,7 @@ replication_encode_value :: proc(
 	index: int,
 	bytes: ^[dynamic]u8,
 	depth: int,
+	connection: ^Replication_Peer = nil,
 ) -> bool {
 	if depth > 8 || len(bytes^) > 1048576 {return false}
 	#partial switch vm.TypeOf(L, index) {
@@ -463,8 +411,8 @@ replication_encode_value :: proc(
 				vm.Pop(L)
 				return false
 			}
-			if !replication_encode_value(L, -2, bytes, depth + 1) ||
-			   !replication_encode_value(L, -1, bytes, depth + 1) {
+			if !replication_encode_value(L, -2, bytes, depth + 1, connection) ||
+			   !replication_encode_value(L, -1, bytes, depth + 1, connection) {
 				vm.Pop(L)
 				vm.Pop(L)
 				return false
@@ -482,6 +430,10 @@ replication_encode_value :: proc(
 	case .Userdata:
 		binding := vm.UserdataBindingOf(L, index)
 		if binding == nil {return false}
+		extension_codec := datatypes.Find_Extension_Codec_By_Binding(
+			cast(^datatypes.Registry)binding.owner,
+			binding,
+		)
 		if binding.name == "Color3" {
 			append(bytes, 7)
 			color := cast(^datatypes.Color3)vm.UserdataValue(L, index)
@@ -557,6 +509,46 @@ replication_encode_value :: proc(
 			replication_put_string(bytes, value.Family)
 			replication_put_f32(bytes, f32(value.Weight))
 			replication_put_f32(bytes, f32(value.Style))
+		} else if binding.name == "Instance" {
+			object := cast(^classes.Object)vm.UserdataValue(L, index)
+			if object == nil || object.destroyed || object.network_id == 0 {return false}
+			if connection != nil && connection.known[object.network_id] == 0 {return false}
+			append(bytes, 17)
+			replication_put_u32(bytes, object.network_id)
+		} else if extension_codec != nil {
+			if extension_codec.flags & datatypes.EXTENSION_REPLICATED == 0 {return false}
+			size: uintptr
+			payload := vm.UserdataValue(L, index)
+			status := datatypes.Extension_Codec_Encode_Value(
+				cast(^datatypes.Registry)binding.owner,
+				binding,
+				payload,
+				nil,
+				0,
+				&size,
+			)
+			if status < 0 || size > 1048576 {return false}
+			append(bytes, 18)
+			replication_put_string(bytes, extension_codec.extension_id)
+			replication_put_string(bytes, extension_codec.type_name)
+			replication_put_u32(bytes, extension_codec.wire_version)
+			replication_put_u32(bytes, u32(size))
+			if size > 0 {
+				offset := len(bytes^)
+				resize(bytes, offset + int(size))
+				status = datatypes.Extension_Codec_Encode_Value(
+					cast(^datatypes.Registry)binding.owner,
+					binding,
+					payload,
+					&bytes[offset],
+					size,
+					&size,
+				)
+				if status < 0 {
+					resize(bytes, offset)
+					return false
+				}
+			}
 		} else if binding.tag == enums.ENUM_ITEM_TAG {
 			append(bytes, 16)
 			item := cast(^enums.Enum_Item)vm.UserdataValue(L, index)
@@ -575,6 +567,7 @@ replication_decode_value :: proc(
 	reader: ^Replication_Reader,
 	datatype_registry: ^datatypes.Registry,
 	depth: int,
+	service: ^ReplicatorService = nil,
 ) {
 	if !reader.valid ||
 	   depth > 8 ||
@@ -600,8 +593,8 @@ replication_decode_value :: proc(
 		if count > 256 {reader.valid = false; vm.PushNil(L); return}
 		vm.NewTable(L, 0, int(count))
 		for _ in 0 ..< int(count) {
-			replication_decode_value(L, reader, datatype_registry, depth + 1)
-			replication_decode_value(L, reader, datatype_registry, depth + 1)
+			replication_decode_value(L, reader, datatype_registry, depth + 1, service)
+			replication_decode_value(L, reader, datatype_registry, depth + 1, service)
 			if !reader.valid {vm.Pop(L); vm.Pop(L); break}
 			if vm.TypeOf(L, -2) == .String {
 				key, _ := vm.ToString(L, -2)
@@ -689,7 +682,7 @@ replication_decode_value :: proc(
 		keypoints := make([]datatypes.ColorSequenceKeypoint, count)
 		for i in 0 ..< int(count) {
 			keypoints[i] = datatypes.ColorSequenceKeypoint {
-				Time  = replication_read_f32(reader),
+				Time = replication_read_f32(reader),
 				Value = datatypes.Color3 {
 					R = replication_read_f32(reader),
 					G = replication_read_f32(reader),
@@ -732,18 +725,45 @@ replication_decode_value :: proc(
 	case 16:
 		enum_name := replication_read_string(reader)
 		value := i64(replication_read_u32(reader))
-		if !reader.valid ||
-		   datatype_registry == nil ||
-		   datatype_registry.enums == nil {
+		if !reader.valid || datatype_registry == nil || datatype_registry.enums == nil {
 			reader.valid = false; vm.PushNil(L); return
 		}
-		if !enums.Push_Item_By_Value(
-			L,
-			datatype_registry.enums,
-			enum_name,
-			value,
-		) {
+		if !enums.Push_Item_By_Value(L, datatype_registry.enums, enum_name, value) {
 			reader.valid = false
+		}
+	case 17:
+		id := replication_read_u32(reader)
+		entity := replication_entity_by_id(service, id)
+		if entity == nil || entity.object == nil {
+			reader.valid = false; vm.PushNil(L); return
+		}
+		classes.Push_Object(L, entity.object)
+	case 18:
+		extension_id := replication_read_string(reader)
+		type_name := replication_read_string(reader)
+		wire_version := replication_read_u32(reader)
+		size := replication_read_u32(reader)
+		if !reader.valid || size > 1048576 || int(size) > len(reader.data) - reader.offset {
+			reader.valid = false; vm.PushNil(L); return
+		}
+		payload := reader.data[reader.offset:reader.offset + int(size)]
+		reader.offset += int(size)
+		if !datatypes.Extension_Codec_Decode_Value(
+			datatype_registry,
+			L,
+			extension_id,
+			type_name,
+			wire_version,
+			raw_data(payload),
+			uintptr(size),
+		) {
+			fmt.eprintf(
+				"[replication] skipped unavailable extension datatype %s.%s (wire %d)\n",
+				extension_id,
+				type_name,
+				wire_version,
+			)
+			vm.PushNil(L)
 		}
 	case:
 		reader.valid = false; vm.PushNil(L)

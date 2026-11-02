@@ -40,7 +40,7 @@ dock_make_anchor :: proc(col: Dock_Column, row: Dock_Row) -> Dock_Anchor {
 
 Dock_Panel :: enum {
 	Topbar,
-	Viewport, // also drives CodeEditor
+	Viewport,
 	Explorer,
 	Inspector,
 	Output,
@@ -48,20 +48,19 @@ Dock_Panel :: enum {
 
 Dock_Slot :: struct {
 	anchor:    Dock_Anchor,
-	order:     i32, // tie-break between panels in the same cell
-	weight:    f32, // share of the space along the stacking axis
+	order:     i32,
+	weight:    f32,
 	visible:   bool,
-	full_span: bool, // Top/Bottom rows only: span every column
+	full_span: bool,
 }
 
 Dock_State :: struct {
 	slots:         [Dock_Panel]Dock_Slot,
-	column_weight: [Dock_Column]f32, // relative column widths (empty ones collapse)
-	band_size:     [Dock_Row]f32, // window-height fraction for full_span bars with no fixed height
+	column_weight: [Dock_Column]f32,
+	band_size:     [Dock_Row]f32,
 }
 
-// Reproduces the original hardcoded layout:
-//   full-width Topbar, then [Viewport over Output] | [Explorer over Inspector]
+
 Dock_Default_State :: proc() -> Dock_State {
 	s: Dock_State
 
@@ -137,7 +136,7 @@ dock_column_id :: proc(c: Dock_Column) -> string {
 	return ""
 }
 
-// The topbar is the only panel with a fixed height (config.TopH).
+
 dock_panel_fixed_height :: proc(p: Dock_Panel, config: ^Editor_Layout_Config) -> f32 {
 	if p == .Topbar {
 		return config.TopH
@@ -162,11 +161,6 @@ dock_band_thickness :: proc(
 	return t
 }
 
-// ---------------------------------------------------------------------------
-// Lay out one group of panels inside a rect.
-//   vertical = true  -> a column (stacked top to bottom, ordered by row)
-//   vertical = false -> a full-width bar (left to right, ordered by column)
-// ---------------------------------------------------------------------------
 
 dock_layout_group :: proc(
 	state: ^Dock_State,
@@ -223,18 +217,13 @@ dock_layout_group :: proc(
 		items[:n],
 	)
 
-	// layout_calculate sorts the slice, so map results back by id.
+
 	for p in members {
 		if it := layout_find(items[:n], dock_panel_id(p)); it != nil {
 			out[p] = layout_to_coordinate(it, x, y)
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Full editor layout. `bounds` is the whole window rect, which is what you
-// want for drop-target hit testing (every window can go anywhere).
-// ---------------------------------------------------------------------------
 
 Editor_Layout_Compute_Docked :: proc(
 	config: ^Editor_Layout_Config,
@@ -247,7 +236,7 @@ Editor_Layout_Compute_Docked :: proc(
 	assert(config != nil && dock != nil)
 	P := config.P
 
-	// 1. Bucket visible panels into columns and the two full-width bars.
+
 	columns: [Dock_Column][len(Dock_Panel)]Dock_Panel
 	column_n: [Dock_Column]int
 	top_bar: [len(Dock_Panel)]Dock_Panel
@@ -275,7 +264,7 @@ Editor_Layout_Compute_Docked :: proc(
 		}
 	}
 
-	// 2. Root column: [top bar] [body] [bottom bar]
+
 	root: [3]Layout_Item
 	rn := 0
 
@@ -322,7 +311,7 @@ Editor_Layout_Compute_Docked :: proc(
 		panels[p] = hidden
 	}
 
-	// 3. Bars
+
 	if it := layout_find(root[:rn], "TopBar"); it != nil {
 		dock_layout_group(
 			dock,
@@ -352,7 +341,7 @@ Editor_Layout_Compute_Docked :: proc(
 		)
 	}
 
-	// 4. Body row: one item per non-empty column
+
 	if body := layout_find(root[:rn], "Body"); body != nil {
 		cols: [3]Layout_Item
 		cn := 0
@@ -393,7 +382,7 @@ Editor_Layout_Compute_Docked :: proc(
 				body.y + it.y,
 				it.actual_width,
 				it.actual_height,
-				config.Padding, // same top/bottom padding the old side columns had
+				config.Padding,
 				true,
 				&panels,
 			)
@@ -416,12 +405,7 @@ Editor_Layout_Compute_Docked :: proc(
 	return
 }
 
-// ---------------------------------------------------------------------------
-// Editing the layout
-// ---------------------------------------------------------------------------
 
-// Move a panel to an anchor, appended after whatever is already in that cell.
-// full_span only applies to the Top/Bottom rows.
 dock_move_panel :: proc(
 	state: ^Dock_State,
 	panel: Dock_Panel,
@@ -443,7 +427,7 @@ dock_move_panel :: proc(
 	slot.full_span = full_span && dock_anchor_row(anchor) != .Middle
 }
 
-// Swap the positions of two panels (weights stay with their panel).
+
 dock_swap_panels :: proc(state: ^Dock_State, a, b: Dock_Panel) {
 	sa := &state.slots[a]
 	sb := &state.slots[b]
@@ -456,20 +440,16 @@ dock_set_visible :: proc(state: ^Dock_State, panel: Dock_Panel, visible: bool) {
 	state.slots[panel].visible = visible
 }
 
-// Size of a panel relative to the others in its column (or bar).
+
 dock_set_weight :: proc(state: ^Dock_State, panel: Dock_Panel, weight: f32) {
 	state.slots[panel].weight = max(weight, 0.01)
 }
 
-// Width of a column relative to the other non-empty columns.
+
 dock_set_column_weight :: proc(state: ^Dock_State, col: Dock_Column, weight: f32) {
 	state.column_weight[col] = max(weight, 0.01)
 }
 
-// ---------------------------------------------------------------------------
-// Drag & drop: which of the 9 cells is the mouse over?
-// Pass the `bounds` returned by Editor_Layout_Compute_Docked.
-// ---------------------------------------------------------------------------
 
 dock_hit_test :: proc(x, y, w, h: f32, mouse_x, mouse_y: f32) -> (anchor: Dock_Anchor, ok: bool) {
 	if w <= 0 || h <= 0 {
@@ -487,7 +467,7 @@ dock_hit_test :: proc(x, y, w, h: f32, mouse_x, mouse_y: f32) -> (anchor: Dock_A
 	return dock_make_anchor(Dock_Column(col), Dock_Row(row)), true
 }
 
-// Rect of an anchor cell, for drawing the drop highlight while dragging.
+
 dock_anchor_rect :: proc(anchor: Dock_Anchor, x, y, w, h: f32) -> (rx, ry, rw, rh: f32) {
 	cw, ch := w / 3, h / 3
 	return x + f32(int(dock_anchor_column(anchor))) * cw,

@@ -3,6 +3,7 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import sdl3 "../platform"
 import signals "../signals"
 import vm "../vm"
 import "core:math"
@@ -53,9 +54,6 @@ Mouse :: struct {
 	using object:     classes.Object,
 	x:                f32,
 	y:                f32,
-	// The cursor position exactly as SDL delivered it, in window/logical units.
-	// x and y hold the same position converted to render pixels, which is the
-	// space ViewSizeX/ViewSizeY and the render target are measured in.
 	logical_x:        f32,
 	logical_y:        f32,
 	view_size_x:      f32,
@@ -190,10 +188,7 @@ Mouse_Workspace :: proc(mouse: ^Mouse) -> ^Workspace {
 	return cast(^Workspace)object
 }
 
-// The render viewport is a sub-rectangle of the window rather than the whole
-// thing: an editor hosting this engine draws it inside a panel, so its origin is
-// generally non-zero. The origin matters as much as the size, because the ray
-// normalizes the cursor against the size and Mouse_Viewport only reports size.
+
 Mouse_Viewport_Rect :: proc(mouse: ^Mouse) -> (x, y, width, height: f32) {
 	if mouse == nil || mouse.signal_registry == nil {return 0, 0, 0, 0}
 	renderer := mouse.signal_registry.renderer
@@ -207,17 +202,6 @@ Mouse_Viewport :: proc(mouse: ^Mouse) -> (f32, f32) {
 	return width, height
 }
 
-// Converts the raw SDL cursor position into viewport-local render pixels. Two
-// corrections are needed and they are not interchangeable:
-//
-//   - SDL reports the cursor in window/logical units, while the render target
-//     and the published viewport rect are physical pixels. On a scaled display
-//     those differ, and dividing one by the other skews every ray toward the
-//     top-left of the screen.
-//   - the viewport sits at an offset inside the window, so window pixels must
-//     have the viewport origin removed before they are normalized by the
-//     viewport size. Skipping this leaves normalized_x proportional to the
-//     panel offset, which is why picking only worked for a full-window viewport.
 Mouse_Sync_Position :: proc(mouse: ^Mouse) {
 	if mouse == nil {return}
 
@@ -230,14 +214,14 @@ Mouse_Sync_Position :: proc(mouse: ^Mouse) {
 		origin_x, origin_y, _, _ = Mouse_Viewport_Rect(mouse)
 	}
 
-	// RendererObject is used zero-initialized in tests and before the first
-	// frame publishes a density, so an unset component has to mean "unscaled"
-	// rather than collapse the cursor to the origin.
+
 	x_scale := scale[0] > 0 ? scale[0] : 1
 	y_scale := scale[1] > 0 ? scale[1] : 1
 
-	mouse.x = mouse.logical_x * x_scale - origin_x
-	mouse.y = mouse.logical_y * y_scale - origin_y
+	ui_scale := sdl3.UI_Scale > 0 ? sdl3.UI_Scale : 1
+
+	mouse.x = mouse.logical_x * x_scale * ui_scale + sdl3.UI_Safe_Left - origin_x
+	mouse.y = mouse.logical_y * y_scale * ui_scale + sdl3.UI_Safe_Top - origin_y
 }
 
 Mouse_Direction :: proc(mouse: ^Mouse, camera: ^classes.Camera) -> datatypes.Vector3 {
@@ -293,8 +277,7 @@ Mouse_Begin_Frame :: proc(mouse: ^Mouse, L: ^vm.State, delta_time: f32) {
 
 	mouse.view_size_x, mouse.view_size_y = Mouse_Viewport(mouse)
 
-	// The window's pixel density can change when it moves between monitors, so
-	// re-derive the pixel position every frame rather than only on motion.
+
 	Mouse_Sync_Position(mouse)
 
 	workspace := Mouse_Workspace(mouse)
@@ -347,8 +330,8 @@ Mouse_Set_Location :: proc(mouse: ^Mouse, x, y: f32) {
 	if mouse == nil || mouse.destroyed {return}
 	mouse.logical_x = x
 	mouse.logical_y = y
-	// Convert straight away so a script reading Mouse.X in the same tick sees
-	// pixels rather than the unscaled SDL value.
+
+
 	Mouse_Sync_Position(mouse)
 	mouse.idle_elapsed = 0
 }

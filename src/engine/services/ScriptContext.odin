@@ -1,16 +1,16 @@
 package services
-
 // wire:service
+
 
 import "core:fmt"
 
 import classes "../classes"
+import datatypes "../datatypes"
+import enums "../enum"
 import profiling "../profiling"
 import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
-import datatypes "../datatypes"
-import enums "../enum"
 
 ScriptContext_Class := classes.Class_Info {
 	name   = "ScriptContext",
@@ -24,10 +24,29 @@ Script_Thread :: struct {
 }
 
 ScriptContext :: struct {
-	using service:   Service,
-	vm_state:        ^vm.VM,
-	object_registry: ^classes.Registry,
-	threads:         [dynamic]Script_Thread,
+	using service:            Service,
+	vm_state:                 ^vm.VM,
+	object_registry:          ^classes.Registry,
+	threads:                  [dynamic]Script_Thread,
+	singleplayer_script_mode: enums.SingleplayerScriptMode,
+}
+
+
+ScriptContext_Runs_Server_Scripts :: proc(script_context: ^ScriptContext) -> bool {
+	if script_context == nil {
+		return true
+	}
+	mode := script_context.singleplayer_script_mode
+	return mode != .RunClientScripts
+}
+
+
+ScriptContext_Runs_Client_Scripts :: proc(script_context: ^ScriptContext) -> bool {
+	if script_context == nil {
+		return true
+	}
+	mode := script_context.singleplayer_script_mode
+	return mode != .RunServerScripts
 }
 
 ScriptContext_construct :: proc(
@@ -46,6 +65,18 @@ ScriptContext_construct :: proc(
 	}
 
 	return &script_context.object
+}
+
+
+ScriptContext_From_Registry :: proc(registry: ^Registry) -> ^ScriptContext {
+	if registry == nil {
+		return nil
+	}
+	object := Ensure_Service(registry, "ScriptContext")
+	if object == nil || object.destroyed {
+		return nil
+	}
+	return cast(^ScriptContext)object
 }
 
 ScriptContext_Get_VM :: proc(script_context: ^ScriptContext) -> ^vm.VM {
@@ -86,14 +117,12 @@ script_context_remember_thread :: proc(
 		return
 	}
 	script_context_forget_thread(script_context, object)
+	description := classes.Script_Describe(object)
 	append(
 		&script_context.threads,
-		Script_Thread {
-			object = object,
-			thread = thread,
-			description = classes.Script_Describe(object),
-		},
+		Script_Thread{object = object, thread = thread, description = description},
 	)
+	profiling.set_thread_name(thread, description)
 }
 
 ScriptContext_Describe_Thread :: proc(
@@ -142,16 +171,26 @@ script_context_report_error :: proc(
 	_ = script_context
 	name := classes.Get_Full_Name(object)
 	class_name := classes.Get_Class_Name(object)
+	detail := message
 	if len(traceback) > 0 {
-		fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, traceback)
-	} else {
-		fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, message)
+		detail = traceback
 	}
+	if target.is_playtest() {
+		log_service_emit_tagged(
+			"ERROR",
+			fmt.tprintf("Script error in %s %s:\n%s", class_name, name, detail),
+		)
+		return
+	}
+	fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, detail)
 }
 
 script_context_is_active :: proc(object: ^classes.Object) -> bool {
 	if object == nil || object.destroyed {
 		return false
+	}
+	if common := classes.Script_Common_Of(object); common != nil && common.run_as_plugin {
+		return true
 	}
 	ancestor := object.parent
 	for ancestor != nil {
@@ -166,10 +205,17 @@ script_context_is_active :: proc(object: ^classes.Object) -> bool {
 	return false
 }
 
-script_context_should_run :: proc(mode: target.Mode, object: ^classes.Object) -> bool {
+script_context_should_run :: proc(
+	script_context: ^ScriptContext,
+	mode: target.Mode,
+	object: ^classes.Object,
+) -> bool {
 	kind, ok := classes.Script_Kind_Of(object)
 	if !ok || kind == .ModuleScript {
 		return false
+	}
+	if common := classes.Script_Common_Of(object); common != nil && common.run_as_plugin {
+		return true
 	}
 	if kind == .LocalScript && ClientScripts_In_Template(object) {
 		return false
@@ -181,6 +227,14 @@ script_context_should_run :: proc(mode: target.Mode, object: ^classes.Object) ->
 		return kind == .LocalScript
 	case .Standalone:
 		return kind == .Script || kind == .LocalScript
+	case .Singleplayer:
+		if kind == .Script {
+			return ScriptContext_Runs_Server_Scripts(script_context)
+		}
+		if kind == .LocalScript {
+			return ScriptContext_Runs_Client_Scripts(script_context)
+		}
+		return false
 	case .Editor:
 		return false
 	}
@@ -352,61 +406,130 @@ script_context_start :: proc(
 }
 
 ScriptContext_Run_Source :: proc(
-    script_context: ^ScriptContext,
-    source: string,
-    chunk_name: string = "RunSource",
+	script_context: ^ScriptContext,
+	source: string,
+	chunk_name: string = "RunSource",
 ) -> bool {
-    if script_context == nil ||
-       script_context.vm_state == nil ||
-       script_context.vm_state.L == nil ||
-       len(source) == 0 {
-        return false
-    }
+	if script_context == nil ||
+	   script_context.vm_state == nil ||
+	   script_context.vm_state.L == nil ||
+	   len(source) == 0 {
+		return false
+	}
 
-    main_thread := script_context.vm_state.L
-    thread := vm.NewThread(main_thread)
+	main_thread := script_context.vm_state.L
+	thread := vm.NewThread(main_thread)
 
-    thread_ref := vm.RetainValue(main_thread)
-    vm.Pop(main_thread)
-    _ = thread_ref
+	thread_ref := vm.RetainValue(main_thread)
+	vm.Pop(main_thread)
+	_ = thread_ref
 
-    ok, load_error := vm.LoadSource(
-        script_context.vm_state,
-        thread,
-        source,
-        chunk_name,
-    )
+	ok, load_error := vm.LoadSource(script_context.vm_state, thread, source, chunk_name)
 
-    if !ok {
-        if len(load_error) > 0 {
-            fmt.eprintf("RunSource error:\n%s\n", load_error)
-            delete(load_error)
-        }
-        return false
-    }
+	if !ok {
+		if len(load_error) > 0 {
+			if target.is_playtest() {
+				log_service_emit_tagged("ERROR", fmt.tprintf("RunSource error:\n%s", load_error))
+			} else {
+				fmt.eprintf("RunSource error:\n%s\n", load_error)
+			}
+			delete(load_error)
+		}
+		return false
+	}
 
-    finished, yielded, resume_error, traceback :=
-        vm.ResumeThreadTraceback(thread, main_thread, 0)
+	finished, yielded, resume_error, traceback := vm.ResumeThreadTraceback(thread, main_thread, 0)
 
-    _ = yielded
+	_ = yielded
 
-    if resume_error != "" {
-        fmt.eprintf("RunSource error:\n%s\n", traceback)
+	if resume_error != "" {
+		if target.is_playtest() {
+			log_service_emit_tagged("ERROR", fmt.tprintf("RunSource error:\n%s", traceback))
+		} else {
+			fmt.eprintf("RunSource error:\n%s\n", traceback)
+		}
 
-        delete(resume_error)
-        delete(traceback)
+		delete(resume_error)
+		delete(traceback)
 
-        return false
-    }
+		return false
+	}
 
-    return finished
+	return finished
 }
 
-ScriptContext_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
+SINGLEPLAYER_SCRIPT_MODE_ENUM :: "SingleplayerScriptMode"
+
+ScriptContext_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
+	script_context := cast(^ScriptContext)object
+	if script_context == nil {
+		return false
+	}
+	switch key {
+	case "SingleplayerScriptMode":
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			SINGLEPLAYER_SCRIPT_MODE_ENUM,
+			i64(script_context.singleplayer_script_mode),
+		)
+	case "IsSingleplayer":
+		vm.PushBoolean(L, ScriptContext_Mode(script_context) == .Singleplayer)
+	case:
+		return false
+	}
+	return true
+}
+
+ScriptContext_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	script_context := cast(^ScriptContext)object
+	if script_context == nil {
+		return false
+	}
+	switch key {
+	case "SingleplayerScriptMode":
+		item := enums.Arg_Item(L, value_index, enum_registry, SINGLEPLAYER_SCRIPT_MODE_ENUM)
+		if item == nil {
+			return false
+		}
+		script_context.singleplayer_script_mode = enums.SingleplayerScriptMode(item.value)
+		return true
+	case:
+		return false
+	}
+}
+
+ScriptContext_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^ExampleService)object
 	switch method {
 	case "Run":
-		ScriptContext_Run_Source(cast(^ScriptContext)object, vm.ArgString(L, 2), vm.ArgString(L, 3))
+		ScriptContext_Run_Source(
+			cast(^ScriptContext)object,
+			vm.ArgString(L, 2),
+			vm.ArgString(L, 3),
+		)
 		return 1, true
 	}
 	return 0, false
@@ -431,7 +554,7 @@ ScriptContext_Run_Script :: proc(script_context: ^ScriptContext, object: ^classe
 	if len(common.source) == 0 {
 		return false
 	}
-	if !script_context_should_run(ScriptContext_Mode(script_context), object) {
+	if !script_context_should_run(script_context, ScriptContext_Mode(script_context), object) {
 		return false
 	}
 
@@ -474,16 +597,15 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 
 	mode := ScriptContext_Mode(script_context)
 
-	if mode == .Client || mode == .Standalone {
+
+	if (mode == .Client || mode == .Standalone) ||
+	   (mode == .Singleplayer && ScriptContext_Runs_Client_Scripts(script_context)) {
 		if data_model := script_context.service.data_model; data_model != nil {
 			if players_object := Ensure_Service(data_model.registry, "Players");
 			   players_object != nil {
 				players := cast(^Players)players_object
 				if players != nil && players.local_player != nil {
-					ClientScripts_Prepare_Local_Player(
-						data_model,
-						players.local_player,
-					)
+					ClientScripts_Prepare_Local_Player(data_model, players.local_player)
 				}
 			}
 		}
@@ -509,7 +631,7 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 				continue
 			}
 
-			if !script_context_should_run(mode, instance) {
+			if !script_context_should_run(script_context, mode, instance) {
 				continue
 			}
 
@@ -549,15 +671,15 @@ ScriptContext_destroy :: proc(object: ^classes.Object, renderer: ^classes.Render
 	script_context := cast(^ScriptContext)object
 
 	if script_context != nil {
-		// The execution context is going away: stop every running script so no
-		// thread or scheduled resume outlives the runtime.
+
+
 		ScriptContext_Stop_All(script_context)
 
 		for entry in script_context.threads {
 			delete(entry.description)
 		}
-		// Thread references themselves are owned by the script Instances and are
-		// released when those Instances are destroyed.
+
+
 		delete(script_context.threads)
 		script_context.threads = nil
 	}
@@ -575,8 +697,11 @@ Register_ScriptContext_Class :: proc(registry: ^classes.Registry) {
 		&ScriptContext_Class,
 		ScriptContext_construct,
 		ScriptContext_destroy,
+		get = ScriptContext_get,
+		set = ScriptContext_set,
 		namecall = ScriptContext_namecall,
 		creatable = false,
+		properties = []string{"SingleplayerScriptMode", "IsSingleplayer"},
 		_step = ScriptContext_step,
 		_step_phase = .Update,
 	)

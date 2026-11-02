@@ -1,7 +1,8 @@
 package services
+// wire:service
 
 import "core:fmt"
-// wire:service global="StarterGui"
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -42,6 +43,8 @@ StarterGui_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 }
 
 Register_StarterGui_Class :: proc(registry: ^classes.Registry) {
+
+
 	classes.Register_Class(
 		registry,
 		&StarterGui_Class,

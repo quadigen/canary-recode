@@ -1,19 +1,13 @@
 package main
 
-// Reproduction: an unanchored Part created on the server and replicated to the
-// client should appear at the position the server put it at. This drives the
-// FULL frame loop (Environment_Update_Step runs Render_Step, which is
-// replication then physics) on both ends, because the existing replication
-// smoke tests only step Replication_Step and never exercise the client's local
-// physics simulation at all.
 
-import "core:fmt"
-import "core:math"
-import "core:strings"
 import classes "../src/engine/classes"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:math"
+import "core:strings"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.RunInternal(script_vm, source, name)
@@ -37,9 +31,16 @@ step_pair :: proc(
 	}
 }
 
-// client_part_x reads a replicated part's world position straight out of the
-// client runtime, which is what the renderer would draw.
-client_part_pos :: proc(client: ^engine_runtime.Environment, name: string) -> (f64, f64, f64, bool) {
+
+client_part_pos :: proc(
+	client: ^engine_runtime.Environment,
+	name: string,
+) -> (
+	f64,
+	f64,
+	f64,
+	bool,
+) {
 	descriptor := services.Find_Service(&client.services, "ReplicatorService")
 	service := cast(^services.ReplicatorService)descriptor.object
 	for entity in service.entity_list {
@@ -51,7 +52,7 @@ client_part_pos :: proc(client: ^engine_runtime.Environment, name: string) -> (f
 	return 0, 0, 0, false
 }
 
-// burst_part_counts summarises where the client's replicated Parts are sitting.
+
 burst_part_counts :: proc(client: ^engine_runtime.Environment) -> (at_origin, total: int) {
 	descriptor := services.Find_Service(&client.services, "ReplicatorService")
 	service := cast(^services.ReplicatorService)descriptor.object
@@ -94,8 +95,7 @@ floor.CFrame = CFrame.new(0, -0.5, 0)
 	)
 	step_pair(&server, &server_vm, &client, &client_vm, 120)
 
-	// A burst larger than one snapshot's bandwidth budget, so the first-content
-	// pass cannot ship every transform on the tick the instances are spawned.
+
 	run_script(
 		&server_vm,
 		`
@@ -118,7 +118,7 @@ end
 			"frame %2d  client debris total=%d  sitting at the world origin=%d\n",
 			frame,
 			total,
-			at_origin
+			at_origin,
 		)
 	}
 	step_pair(&server, &server_vm, &client, &client_vm, 90)
@@ -178,9 +178,7 @@ end
 		"unanchored_client_setup",
 	)
 
-	// Let the client fully join before the parts exist, so the parts are created
-	// on the server while a client is already watching. This is the ordinary
-	// gameplay case and the one the report describes.
+
 	step_pair(&server, &server_vm, &client, &client_vm, 120)
 
 	run_script(
@@ -203,8 +201,7 @@ end
 		"unanchored_server_create_late",
 	)
 
-	// Walk the first frames by hand: the interesting window is the one where the
-	// client has the instances but has not yet been told where they are.
+
 	names := []string{"Crate0", "Crate1", "Crate2", "Crate3"}
 	for frame in 0 ..< 4 {
 		engine_runtime.Environment_Update_Step(&server, &server_vm, 1.0 / 60.0)
@@ -216,16 +213,18 @@ end
 				"frame %2d  %-8s server=(%6.1f,%6.1f,%6.1f)  client=(%6.1f,%6.1f,%6.1f) spawned=%v\n",
 				frame,
 				name,
-				sx, sy, sz,
-				cx, cy, cz,
-				cok
+				sx,
+				sy,
+				sz,
+				cx,
+				cy,
+				cz,
+				cok,
 			)
 		}
 	}
 
-	// How many bodies is the CLIENT simulating on its own? Every crate here is
-	// server-authoritative and unowned, so a correct client simulates none of
-	// them: it only follows the replicated transform.
+
 	run_script(
 		&client_vm,
 		`
@@ -238,8 +237,7 @@ print(
 		"unanchored_client_physics_probe",
 	)
 
-	// Now make the parts move on the server, which is the case the report calls
-	// out: on the server they move freely.
+
 	run_script(
 		&server_vm,
 		`
@@ -274,8 +272,14 @@ end
 		fmt.printf(
 			"%-8s server=(%7.2f,%7.2f,%7.2f)%v  client=(%7.2f,%7.2f,%7.2f)%v\n",
 			name,
-			sx, sy, sz, sok,
-			cx, cy, cz, cok
+			sx,
+			sy,
+			sz,
+			sok,
+			cx,
+			cy,
+			cz,
+			cok,
 		)
 	}
 
@@ -287,15 +291,7 @@ end
 	engine_runtime.Environment_Destroy(&client)
 }
 
-// dead_reckoning_first_pass is the regression guard for the degenerate CFrame.
-//
-// A client only dead reckons when its render target is ahead of the newest
-// sample it holds. Pushing the measured clock offset forward forces exactly that
-// on the very first interpolation pass a Part sees, which is the case that used
-// to extrapolate from the unseeded last_frame: the world origin with a
-// singular all-zero rotation basis. Every affected Part landed on the same point
-// (so they piled up and shoved each other) and its world bounds collapsed to
-// nothing, which the renderer rejects as an empty AABB.
+
 dead_reckoning_first_pass :: proc() {
 	server_vm := vm.New()
 	client_vm := vm.New()
@@ -323,8 +319,7 @@ floor.CFrame = CFrame.new(0, -0.5, 0)
 	)
 	step_pair(&server, &server_vm, &client, &client_vm, 120)
 
-	// Far enough ahead of the server's own timeline that target > latest.tick
-	// holds for every sample, so have_data is false from the first pass.
+
 	client_service := service_of(&client)
 	client_service.time_offset = 30.0
 	client_service.time_offset_measured = true
@@ -352,13 +347,13 @@ part.CFrame = CFrame.new(300, 120, -250)
 		math.abs(cx - 300) < 40 && math.abs(cy - 120) < 40 && math.abs(cz + 250) < 40,
 		fmt.tprintf(
 			"a client that dead reckons before it has interpolated put the part at (%f,%f,%f) instead of near (300,120,-250)",
-			cx, cy, cz
+			cx,
+			cy,
+			cz,
 		),
 	)
 
-	// The rotation basis has to stay a real rotation. The zero CFrame that used
-	// to be installed here has an all-zero basis, whose rows have length 0
-	// instead of 1, and which collapses the world bounds to a point.
+
 	descriptor := services.Find_Service(&client.services, "ReplicatorService")
 	service := cast(^services.ReplicatorService)descriptor.object
 	for entity in service.entity_list {
@@ -366,17 +361,20 @@ part.CFrame = CFrame.new(300, 120, -250)
 		part := cast(^classes.Part)entity.object
 		if part.name != "Meteor" {continue}
 		ROTATION_TOLERANCE: f64 = 0.01
-		row0: f64 = f64(part.cframe.r00) * f64(part.cframe.r00) +
+		row0: f64 =
+			f64(part.cframe.r00) * f64(part.cframe.r00) +
 			f64(part.cframe.r01) * f64(part.cframe.r01) +
 			f64(part.cframe.r02) * f64(part.cframe.r02)
-		row1: f64 = f64(part.cframe.r10) * f64(part.cframe.r10) +
+		row1: f64 =
+			f64(part.cframe.r10) * f64(part.cframe.r10) +
 			f64(part.cframe.r11) * f64(part.cframe.r11) +
 			f64(part.cframe.r12) * f64(part.cframe.r12)
-		row2: f64 = f64(part.cframe.r20) * f64(part.cframe.r20) +
+		row2: f64 =
+			f64(part.cframe.r20) * f64(part.cframe.r20) +
 			f64(part.cframe.r21) * f64(part.cframe.r21) +
 			f64(part.cframe.r22) * f64(part.cframe.r22)
-		// A degenerate basis (all zeroes) gives a row length squared of 0, so
-		// each row is compared against 1 without needing an absolute value.
+
+
 		d0: f64 = row0 - f64(1.0)
 		if d0 < f64(0) {d0 = -d0}
 		d1: f64 = row1 - f64(1.0)
@@ -385,15 +383,24 @@ part.CFrame = CFrame.new(300, 120, -250)
 		if d2 < f64(0) {d2 = -d2}
 		assert(
 			d0 < ROTATION_TOLERANCE,
-			fmt.tprintf("rotation basis row 0 length^2 is %f, not 1: transform is degenerate", row0),
+			fmt.tprintf(
+				"rotation basis row 0 length^2 is %f, not 1: transform is degenerate",
+				row0,
+			),
 		)
 		assert(
 			d1 < ROTATION_TOLERANCE,
-			fmt.tprintf("rotation basis row 1 length^2 is %f, not 1: transform is degenerate", row1),
+			fmt.tprintf(
+				"rotation basis row 1 length^2 is %f, not 1: transform is degenerate",
+				row1,
+			),
 		)
 		assert(
 			d2 < ROTATION_TOLERANCE,
-			fmt.tprintf("rotation basis row 2 length^2 is %f, not 1: transform is degenerate", row2),
+			fmt.tprintf(
+				"rotation basis row 2 length^2 is %f, not 1: transform is degenerate",
+				row2,
+			),
 		)
 	}
 
@@ -405,17 +412,13 @@ part.CFrame = CFrame.new(300, 120, -250)
 	engine_runtime.Environment_Destroy(&client)
 }
 
-// service_of reaches a runtime's ReplicatorService so a case can force a
-// specific render timebase the way the timebase smoke test does.
+
 service_of :: proc(environment: ^engine_runtime.Environment) -> ^services.ReplicatorService {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
 	return cast(^services.ReplicatorService)descriptor.object
 }
 
-// falling_lag quantifies how far behind the authoritative position a client
-// renders a freely falling Part, expressed in milliseconds of the server's own
-// motion. It is the number that decides whether replicated physics reads as
-// "smooth" or "laggy", so it is measured rather than eyeballed.
+
 falling_lag :: proc() {
 	server_vm := vm.New()
 	client_vm := vm.New()
@@ -443,8 +446,7 @@ floor.CFrame = CFrame.new(0, -0.5, 0)
 	)
 	step_pair(&server, &server_vm, &client, &client_vm, 120)
 
-	// Shaped and placed like the reported meteor: an unanchored ball dropped
-	// from high up, so gravity makes it fast and any lag scales with speed.
+
 	run_script(
 		&server_vm,
 		`
@@ -473,10 +475,10 @@ meteor.Position = vector.create(0, 250, 0)
 		_, cy, _, cfound := client_part_pos(&client, "Meteor")
 		if !found || !cfound {continue}
 		if have_previous {
-			// The server's own downward speed over this frame.
+
 			speed := (previous_server_y - sy) / dt
 			if speed > 1.0 && frame > warmup {
-				// A client rendering behind sits higher than the server.
+
 				lag_ms := (cy - sy) / speed * 1000.0
 				lag_sum += lag_ms
 				lag_samples += 1
@@ -494,18 +496,16 @@ meteor.Position = vector.create(0, 250, 0)
 		"falling meteor render lag: mean %.1f ms, worst %.1f ms over %d samples\n",
 		mean,
 		worst,
-		lag_samples
+		lag_samples,
 	)
 
-	// The interpolated target sits interpolation_delay_ticks behind by design
-	// (2 ticks at 20 Hz is 100 ms). Much on top of that is not the deliberate
-	// delay, it is a filter smearing the render position.
+
 	BUDGET_MS :: f64(190.0)
 	assert(
 		mean < BUDGET_MS,
 		fmt.tprintf(
-			"a falling Part rendered %.1f ms behind the server on average, beyond the 100ms interpolation delay",
-			mean
+			"a falling Part rendered %.1f ms behind the server on average, beyond the 67ms interpolation delay",
+			mean,
 		),
 	)
 

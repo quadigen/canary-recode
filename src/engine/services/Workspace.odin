@@ -1,6 +1,8 @@
 package services
-
 // wire:service global="workspace"
+
+import "base:runtime"
+
 
 import assetstore "../assetstore"
 import kineffi "../bindings"
@@ -8,11 +10,16 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import materials "../material"
+import platform "../platform"
 import profiling "../profiling"
 import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:math"
 import "core:strings"
+
+window_width: i32
+window_height: i32
 
 Workspace_Class := classes.Class_Info {
 	name   = "Workspace",
@@ -21,11 +28,8 @@ Workspace_Class := classes.Class_Info {
 
 Workspace :: struct {
 	using service:               Service,
-
-	// meshes
+	water_time:                  f64,
 	cube_mesh:                   ^kineffi.KineFilamentMesh,
-	// Dense subdivided top-face grid; the water material displaces these
-	// vertices on the GPU with Gerstner waves (KINE_MESH_WATER_GRID).
 	water_grid_mesh:             ^kineffi.KineFilamentMesh,
 	sphere_mesh:                 ^kineffi.KineFilamentMesh,
 	cylinder_mesh:               ^kineffi.KineFilamentMesh,
@@ -43,6 +47,13 @@ Workspace :: struct {
 	simulate_physics:            bool,
 	current_camera:              ^classes.Camera,
 	finished_replicating:        ^signals.Signal,
+	draw_items:                  [dynamic]kineffi.KineFilamentDrawItem,
+	draw_version:                u64,
+	draw_hash:                   u64,
+	draw_hash_valid:             bool,
+	cull_parts:                  bool,
+	max_draw_distance:           f32,
+	lod_distance:                f32,
 }
 
 load_mesh :: proc(
@@ -50,12 +61,14 @@ load_mesh :: proc(
 	data: string,
 	format_hint: cstring = "glb",
 ) -> ^kineffi.KineFilamentMesh {
-	return kineffi.Kine_Filament_CreateMeshFromMemory(
+	mesh := kineffi.Kine_Filament_CreateMeshFromMemory(
 		ctx,
 		raw_data(data),
 		uintptr(len(data)),
 		format_hint,
 	)
+	kineffi.Kine_Filament_SetUseImportedMaterials(ctx, mesh, false)
+	return mesh
 }
 
 workspace_construct :: proc(
@@ -67,6 +80,9 @@ workspace_construct :: proc(
 	workspace.fallen_parts_destroy_height = -500
 	workspace.fall_height_enabled = true
 	workspace.simulate_physics = true
+	workspace.cull_parts = true
+	workspace.max_draw_distance = 0
+	workspace.lod_distance = 0
 	return &workspace.object
 }
 
@@ -201,9 +217,6 @@ workspace_part_mesh :: proc(
 	return workspace.cube_mesh
 }
 
-// Water parts render on a dense subdivided grid so the water material can
-// displace real geometry with Gerstner waves; the Block.glb cube only has 4
-// vertices per face, far too few for meaningful waves.
 workspace_water_mesh :: proc(workspace: ^Workspace) -> ^kineffi.KineFilamentMesh {
 	if workspace.water_grid_mesh != nil {
 		return workspace.water_grid_mesh
@@ -229,7 +242,10 @@ workspace_meshpart_mesh :: proc(
 		}
 		return nil
 	}
-	if part.native_mesh != nil && part.native_context == ctx && !part.native_is_editable {
+	if part.native_mesh != nil &&
+	   part.native_context == ctx &&
+	   !part.native_is_editable &&
+	   part.native_mesh_id == part.mesh_id {
 		return part.native_mesh
 	}
 	if part.native_mesh != nil && part.native_context != nil {
@@ -237,14 +253,11 @@ workspace_meshpart_mesh :: proc(
 		part.native_mesh = nil
 		part.native_context = nil
 	}
-	// A saved map carries its meshes inside the .kine, so try the embedded bytes
-	// first. Assimp needs a format hint to pick an importer for in-memory data,
-	// and the authored path recorded in the asset table is what supplies it.
+	delete(part.native_mesh_id)
+	part.native_mesh_id = strings.clone(part.mesh_id)
 	if data, found := assetstore.Resolve_Bytes(part.mesh_id); found && len(data) > 0 {
 		hint := assetstore.Format_Hint(part.mesh_id)
 		defer delete(hint)
-		// An author can name a file without an extension, in which case there is
-		// no hint to pass and the importer default is the only thing to go on.
 		c_hint := hint == "" ? "glb" : strings.clone_to_cstring(hint)
 		defer delete(c_hint)
 		part.native_mesh = kineffi.Kine_Filament_CreateMeshFromMemory(
@@ -260,10 +273,6 @@ workspace_meshpart_mesh :: proc(
 		return part.native_mesh
 	}
 
-	// Otherwise the value is a plain path, which Resolve_Path passes through
-	// after stripping any "file://" prefix. Reaching here with an embedded
-	// reference means the store never received those bytes, so say so instead of
-	// letting the load fail into a primitive box with no explanation.
 	if assetstore.Is_Uri(part.mesh_id) {
 		assetstore.Report_Missing_Asset(part.mesh_id, "Part mesh")
 	}
@@ -317,7 +326,7 @@ workspace_editable_meshpart_mesh :: proc(
 	_ = classes.EditableMesh_Collect_Triangles(mesh, &corners)
 	defer delete(corners)
 
-	vertex_count := min(len(corners), 65532)
+	vertex_count := len(corners)
 	if vertex_count == 0 {
 		part.editable_mesh_version = mesh.version
 		return nil
@@ -329,7 +338,9 @@ workspace_editable_meshpart_mesh :: proc(
 
 	vertex_data := make([dynamic]f32, 0, vertex_count * 8)
 	defer delete(vertex_data)
-	indices := make([dynamic]u16, 0, vertex_count)
+	color_data := make([dynamic]f32, 0, vertex_count * 4)
+	defer delete(color_data)
+	indices := make([dynamic]u32, 0, vertex_count)
 	defer delete(indices)
 
 	for corner_index in 0 ..< vertex_count {
@@ -339,17 +350,19 @@ workspace_editable_meshpart_mesh :: proc(
 			(corner.position.y - center.y) * scale.y,
 			(corner.position.z - center.z) * scale.z,
 		}
-		append(&indices, u16(corner_index))
+		append(&indices, u32(corner_index))
 		append(&vertex_data, position.x, position.y, position.z)
 		append(&vertex_data, corner.normal.x, corner.normal.y, corner.normal.z)
 		append(&vertex_data, corner.uv.X, corner.uv.Y)
+		append(&color_data, corner.color.R, corner.color.G, corner.color.B, corner.alpha)
 	}
 
-	part.native_mesh = kineffi.Kine_Filament_CreateCustomMesh(
+	part.native_mesh = kineffi.Kine_Filament_CreateCustomMeshEx32(
 		ctx,
 		cast(^f32)raw_data(vertex_data),
-		i32(len(vertex_data)),
-		cast(^u16)raw_data(indices),
+		cast(^f32)raw_data(color_data),
+		i32(vertex_count),
+		cast(^u32)raw_data(indices),
 		i32(len(indices)),
 	)
 	if part.native_mesh != nil {
@@ -363,8 +376,12 @@ workspace_editable_meshpart_mesh :: proc(
 workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 	if object == nil {return false}
 	for child in object.children {
-		if child == nil || child.destroyed {continue}
-		if classes.Is_A(child, "Part") || workspace_has_parts(child) {return true}
+		if child == nil ||
+		   child.destroyed ||
+		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
+		if classes.Is_A_Class(child, &classes.Part_Class) || workspace_has_parts(child) {
+			return true
+		}
 	}
 	return false
 }
@@ -407,17 +424,127 @@ Workspace_Apply_View :: proc(
 workspace_part_flags :: proc(part: ^classes.Part) -> u32 {
 	flags := u32(kineffi.KINE_FILAMENT_DRAW_CULLING)
 
-	// CastShadow is authored per part, so a part that opts out must not
-	// contribute to anyone else's shadow.
+
 	if part.castshadow {
 		flags |= u32(kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS)
 	}
 
-	// Receiving is unconditional: a part with CastShadow off still has to
-	// show the shadow falling across it.
+
 	flags |= u32(kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS)
 
 	return flags
+}
+
+
+WORKSPACE_FRUSTUM_NEAR :: f32(0.1)
+WORKSPACE_FRUSTUM_FAR :: f32(1000.0)
+WORKSPACE_CULL_MARGIN :: f32(2.0)
+
+
+WORKSPACE_STREAM_ID :: u64(0x574F524B53504345)
+
+Workspace_Frustum_Plane :: struct {
+	normal: datatypes.Vector3,
+	offset: f32,
+}
+
+Workspace_Frustum :: struct {
+	planes: [6]Workspace_Frustum_Plane,
+}
+
+Workspace_Frustum_Build :: proc(
+	camera: ^classes.Camera,
+	far: f32,
+) -> (
+	frustum: Workspace_Frustum,
+	ok: bool,
+) {
+	if camera == nil {return {}, false}
+
+	width, height := classes.Camera_Effective_Viewport(camera)
+	if width <= 0 || height <= 0 {return {}, false}
+
+	tan_half_v := f32(math.tan(math.to_radians(f64(camera.field_of_view)) * 0.5))
+	tan_half_x := tan_half_v * (width / height)
+
+	cframe := camera.CFrame
+	eye := datatypes.Vector3{cframe.x, cframe.y, cframe.z}
+	forward := datatypes.CFrame_LookVector(cframe)
+	right := datatypes.CFrame_RightVector(cframe)
+	up := datatypes.CFrame_UpVector(cframe)
+
+
+	normals := [6]datatypes.Vector3 {
+		forward,
+		datatypes.Vec3_Negate(forward),
+		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, tan_half_v), up),
+		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, tan_half_v), up),
+		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, tan_half_x), right),
+		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, tan_half_x), right),
+	}
+
+	offsets := [6]f32 {
+		-datatypes.Vec3_Dot(normals[0], eye) - WORKSPACE_FRUSTUM_NEAR,
+		-datatypes.Vec3_Dot(normals[1], eye) + far,
+		-datatypes.Vec3_Dot(normals[2], eye),
+		-datatypes.Vec3_Dot(normals[3], eye),
+		-datatypes.Vec3_Dot(normals[4], eye),
+		-datatypes.Vec3_Dot(normals[5], eye),
+	}
+
+	for i in 0 ..< 6 {
+		length := datatypes.Vec3_Magnitude(normals[i])
+		if length <= 0 {return {}, false}
+		inverse := 1.0 / length
+		frustum.planes[i] = Workspace_Frustum_Plane {
+			normal = datatypes.Vec3_Multiply(normals[i], inverse),
+			offset = offsets[i] * inverse,
+		}
+	}
+
+	return frustum, true
+}
+
+
+Workspace_Frustum_Contains_Sphere :: proc(
+	frustum: ^Workspace_Frustum,
+	center: datatypes.Vector3,
+	radius: f32,
+) -> bool {
+	if frustum == nil {return true}
+	for plane in frustum.planes {
+		if datatypes.Vec3_Dot(plane.normal, center) + plane.offset < -radius {
+			return false
+		}
+	}
+	return true
+}
+
+
+Workspace_Draw_Params :: struct {
+	reflection_center: datatypes.Vector3,
+	reflection_radius: f32,
+	frustum:           ^Workspace_Frustum,
+	eye:               datatypes.Vector3,
+	max_distance_sq:   f32,
+	lod_distance_sq:   f32,
+	lod_mesh:          ^kineffi.KineFilamentMesh,
+	hash:              u64,
+}
+
+workspace_hash_f32 :: proc(hash: u64, value: f32) -> u64 {
+	return (hash ~ u64(transmute(u32)value)) * 1099511628211
+}
+
+workspace_hash_u64 :: proc(hash: u64, value: u64) -> u64 {
+	return (hash ~ value) * 1099511628211
+}
+
+workspace_distance_squared :: proc(a, b: datatypes.Vector3) -> f32 {
+	dx := a.x - b.x
+	dy := a.y - b.y
+	dz := a.z - b.z
+	return dx * dx + dy * dy + dz * dz
 }
 
 workspace_append_draw_items :: proc(
@@ -425,19 +552,23 @@ workspace_append_draw_items :: proc(
 	object: ^classes.Object,
 	renderer: ^classes.Renderer_Object,
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
+	params: ^Workspace_Draw_Params,
 ) {
 	for child in object.children {
-		if child == nil || child.destroyed {continue}
+		if child == nil ||
+		   child.destroyed ||
+		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
 
-		if classes.Is_A(child, "Part") {
+		if classes.Is_A_Class(child, &classes.Part_Class) {
 			part := cast(^classes.Part)child
 			mesh := workspace_part_mesh(workspace, part.shape)
+			is_meshpart := classes.Is_A_Class(child, &classes.MeshPart_Class)
 			if part.transparency >= 1.0 {
-				workspace_append_draw_items(workspace, child, renderer, items)
+				workspace_append_draw_items(workspace, child, renderer, items, params)
 				continue
 			}
 
-			if classes.Is_A(child, "MeshPart") {
+			if is_meshpart {
 				mesh = workspace_meshpart_mesh(cast(^classes.MeshPart)child, renderer.Filament)
 				if mesh == nil {
 					mesh = workspace_part_mesh(workspace, part.shape)
@@ -447,72 +578,131 @@ workspace_append_draw_items :: proc(
 			size := part.size
 			render_size := datatypes.Vector3{size.x * 0.5, size.y * 0.5, size.z * 0.5}
 
-			render_material := materials.Get(part.material)
-			material_kind, param1, param2, param3, transmission := materials.Draw_Parameters(
-				render_material,
-			)
+			render_material, material_params := materials.Lookup(part.material)
+			material_kind := material_params.kind
+			param1 := material_params.param1
+			param2 := material_params.param2
+			param3 := material_params.param3
+			transmission := material_params.transmission
+
+			if material_kind == kineffi.KINE_MAT_GLASS {
+				transmission = f32(part.transparency)
+			}
 
 			if material_kind == kineffi.KINE_MAT_WATER {
-				// Vertex waves only make sense on the water's top surface, so a
-				// water Part swaps its shape mesh for a flat grid whose surface
-				// sits at mesh y = +0.5.
-				//
-				// That grid is authored 1 unit wide in X/Z, while every other
-				// part mesh (Block.glb and friends) is a 2-unit-wide cube. The
-				// shared render_size is half the part size, which is correct for
-				// the 2-unit meshes but would shrink the water surface to half
-				// the part's footprint and drop it to mid-height. Scaling by the
-				// full size lines the 0.5-unit offsets back up: X/Z become
-				// size*0.5 = the part's half-extent, and y = +0.5*size.y is the
-				// top face.
 				mesh = workspace_water_mesh(workspace)
 				render_size.x = size.x
 				render_size.y = size.y
 				render_size.z = size.z
 			}
 
-			// An imported model carries its own base colour texture, and that
-			// texture is the one its UVs were authored against. It has to be
-			// asked for here: a Part always hands its material's texture to
-			// the draw, and SmoothPlastic -- the default material, with a
-			// non-nil texture -- would otherwise win, so the model's own
-			// texture was never sampled at all.
-			draw_texture := render_material.texture
-			mesh_texture: ^kineffi.KineFilamentTex = nil
-			if mesh != nil && material_kind == kineffi.KINE_MAT_DEFAULT {
-				mesh_texture = kineffi.Kine_Filament_GetMeshTexture(mesh)
-				if mesh_texture != nil {
-					draw_texture = mesh_texture
-					// The model's UVs already span the texture once. Retiling
-					// by part size, which the stud texture needs below, would
-					// repeat the model's texture across the part instead.
-					param3 = 1.0
+			center := datatypes.Vector3{cframe.x, cframe.y, cframe.z}
+			radius := 0.5 * datatypes.Vec3_Magnitude(size) + WORKSPACE_CULL_MARGIN
+			if is_meshpart && mesh != nil {
+
+
+				local_center, half_extent: [3]f32
+				if kineffi.Kine_Filament_GetMeshBounds(mesh, &local_center[0], &half_extent[0]) {
+					center = datatypes.CFrame_PointToWorldSpace(
+						cframe,
+						{
+							local_center[0] * render_size.x,
+							local_center[1] * render_size.y,
+							local_center[2] * render_size.z,
+						},
+					)
+					radius =
+						datatypes.Vec3_Magnitude(
+							datatypes.Vector3 {
+								half_extent[0] * render_size.x,
+								half_extent[1] * render_size.y,
+								half_extent[2] * render_size.z,
+							},
+						) +
+						WORKSPACE_CULL_MARGIN
+				}
+			}
+			if variant := classes.MaterialVariant_Find(
+				child.signal_registry,
+				part.material_variant,
+			); variant != nil {
+				radius += abs(variant.height_scale) + variant.displacement_bounds
+			}
+
+			visible := true
+			distance_sq: f32
+			if params != nil {
+				distance_sq = workspace_distance_squared(center, params.eye)
+				if params.max_distance_sq > 0 &&
+				   distance_sq > math.pow(math.sqrt(params.max_distance_sq) + radius, 2) {
+					visible = false
+				}
+				if visible &&
+				   params.frustum != nil &&
+				   !Workspace_Frustum_Contains_Sphere(params.frustum, center, radius) {
+					visible = false
+				}
+
+
+				if !visible && params.reflection_radius > 0 {
+					capture_radius := params.reflection_radius + radius
+					visible =
+						workspace_distance_squared(center, params.reflection_center) <=
+						capture_radius * capture_radius
 				}
 			}
 
-			if material_kind == kineffi.KINE_MAT_DEFAULT &&
-			   render_material.texture != nil &&
-			   mesh_texture == nil {
-				STUDS_PER_TILE :: f32(4.0)
+			if visible {
 
-				largest_dimension := size.x
-				if size.y > largest_dimension {
-					largest_dimension = size.y
+
+				if params != nil &&
+				   params.lod_mesh != nil &&
+				   params.lod_distance_sq > 0 &&
+				   !is_meshpart &&
+				   material_kind != kineffi.KINE_MAT_WATER &&
+				   distance_sq > params.lod_distance_sq {
+					mesh = params.lod_mesh
 				}
-				if size.z > largest_dimension {
-					largest_dimension = size.z
+
+				draw_texture := render_material.texture
+				mesh_texture: ^kineffi.KineFilamentTex = nil
+				if mesh != nil && material_kind == kineffi.KINE_MAT_DEFAULT {
+					mesh_texture = kineffi.Kine_Filament_GetMeshTexture(mesh)
+					if mesh_texture != nil {
+						draw_texture = mesh_texture
+
+
+						param3 = 1.0
+					}
 				}
 
-				param3 = largest_dimension / STUDS_PER_TILE
+				if material_kind == kineffi.KINE_MAT_DEFAULT &&
+				   render_material.texture != nil &&
+				   mesh_texture == nil {
+					STUDS_PER_TILE :: f32(4.0)
 
-				if param3 < 1.0 {
-					param3 = 1.0
+					largest_dimension := size.x
+					if size.y > largest_dimension {
+						largest_dimension = size.y
+					}
+					if size.z > largest_dimension {
+						largest_dimension = size.z
+					}
+
+					param3 = largest_dimension / STUDS_PER_TILE
+
+					if param3 < 1.0 {
+						param3 = 1.0
+					}
 				}
-			}
 
-			append(
-				items,
-				kineffi.KineFilamentDrawItem {
+				shader, shader_revision := classes.MaterialVariant_Resolve(
+					child.signal_registry,
+					part.material_variant,
+					renderer.Filament,
+				)
+				item := kineffi.KineFilamentDrawItem {
+					shader       = shader,
 					mesh         = mesh,
 					tex          = draw_texture,
 					transform    = {
@@ -541,19 +731,34 @@ workspace_append_draw_items :: proc(
 					param3       = param3,
 					transmission = transmission,
 					materialKind = material_kind,
-					// Both shadow flags have to be set per item. The shim reads
-					// them straight into RenderableManager's castShadows and
-					// receiveShadows, and a Part with either left clear is
-					// dropped from the shadow pass entirely -- so with only
-					// culling set, nothing in the world cast or received a
-					// shadow and the sun's shadow map had no reason to show
-					// up on screen.
 					flags        = workspace_part_flags(part),
-				},
-			)
+				}
+
+
+				if params != nil {
+					params.hash = workspace_hash_u64(params.hash, u64(uintptr(shader)))
+					params.hash = workspace_hash_u64(params.hash, shader_revision)
+					params.hash = workspace_hash_u64(params.hash, u64(uintptr(mesh)))
+					params.hash = workspace_hash_u64(params.hash, u64(uintptr(draw_texture)))
+					for i in 0 ..< 16 {
+						params.hash = workspace_hash_f32(params.hash, item.transform[i])
+					}
+					params.hash = workspace_hash_f32(params.hash, item.r)
+					params.hash = workspace_hash_f32(params.hash, item.g)
+					params.hash = workspace_hash_f32(params.hash, item.b)
+					params.hash = workspace_hash_f32(params.hash, item.param1)
+					params.hash = workspace_hash_f32(params.hash, item.param2)
+					params.hash = workspace_hash_f32(params.hash, item.param3)
+					params.hash = workspace_hash_f32(params.hash, item.transmission)
+					params.hash = workspace_hash_u64(params.hash, u64(item.materialKind))
+					params.hash = workspace_hash_u64(params.hash, u64(item.flags))
+				}
+
+				append(items, item)
+			}
 		}
 
-		workspace_append_draw_items(workspace, child, renderer, items)
+		workspace_append_draw_items(workspace, child, renderer, items, params)
 	}
 }
 
@@ -571,32 +776,79 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 		materials.init(ctx.renderer)
 	}
 
-	// The collect and submit halves are timed separately on purpose. This runs for
-	// every part in the tree on every frame, so "the frame is slow" is never enough
-	// to act on: the question is whether the cost is our per-part CPU work walking
-	// the tree, or Filament consuming the submitted list. Those have completely
-	// different fixes, and they are indistinguishable inside a single zone.
-	//
-	// The zone value is the item count, so the capture also gives a per-part cost and
-	// reveals whether the frame time scales with the scene.
 	{
 		tc := tracy.ZoneNC("WS Collect Draw Items", 0xB48EAD)
 		collect := profiling.Begin("WS Collect Draw Items", 0xB48EAD)
-		items: [dynamic]kineffi.KineFilamentDrawItem
-		workspace_append_draw_items(workspace, object, ctx.renderer, &items)
-		tracy.ZoneValue(tc, u64(len(items)))
 
-		if len(items) > 0 {
+
+		platform.GetWindowSize(ctx.renderer.Window, &window_width, &window_height)
+
+		items := &workspace.draw_items
+		clear(items)
+
+		params := Workspace_Draw_Params {
+			hash = 1469598103934665603,
+		}
+		probe_center: [3]f32
+		if kineffi.Kine_Filament_GetReflectionProbeRegion(
+			ctx.renderer.Filament,
+			&probe_center[0],
+			&params.reflection_radius,
+		) {
+			params.reflection_center = {probe_center[0], probe_center[1], probe_center[2]}
+		}
+		frustum: Workspace_Frustum
+
+		if camera := cast(^classes.Camera)ctx.renderer.ActiveCamera; camera != nil {
+			params.eye = datatypes.Vector3{camera.CFrame.x, camera.CFrame.y, camera.CFrame.z}
+
+			if workspace.lod_distance > 0 {
+				params.lod_distance_sq = workspace.lod_distance * workspace.lod_distance
+				params.lod_mesh = workspace.cube_mesh
+			}
+
+			if workspace.max_draw_distance > 0 {
+				params.max_distance_sq = workspace.max_draw_distance * workspace.max_draw_distance
+			}
+
+			if workspace.cull_parts {
+				far := WORKSPACE_FRUSTUM_FAR
+				if workspace.max_draw_distance > 0 && workspace.max_draw_distance < far {
+					far = workspace.max_draw_distance
+				}
+				if built, ok := Workspace_Frustum_Build(camera, far); ok {
+					frustum = built
+					params.frustum = &frustum
+				}
+			}
+		}
+
+		workspace_append_draw_items(workspace, object, ctx.renderer, items, &params)
+		tracy.ZoneValue(tc, u64(len(items^)))
+
+		if len(items^) > 0 {
 			ts := tracy.ZoneNC("WS Filament Submit", 0xC678DD)
 			submit := profiling.Begin("WS Filament Submit", 0xC678DD)
-			tracy.ZoneValue(ts, u64(len(items)))
-			_ = kineffi.Kine_Filament_DrawMeshList(
+			tracy.ZoneValue(ts, u64(len(items^)))
+
+
+			hash := workspace_hash_u64(params.hash, u64(len(items^)))
+			if !workspace.draw_hash_valid || hash != workspace.draw_hash {
+				workspace.draw_version += 1
+				workspace.draw_hash = hash
+				workspace.draw_hash_valid = true
+			}
+
+			_ = kineffi.Kine_Filament_DrawMeshListVersioned(
 				ctx.renderer.Filament,
-				raw_data(items),
-				u32(len(items)),
+				raw_data(items^),
+				u32(len(items^)),
+				WORKSPACE_STREAM_ID,
+				workspace.draw_version,
 			)
+		} else {
+			workspace.draw_hash_valid = false
 		}
-		delete(items)
 	}
 }
 
@@ -606,9 +858,7 @@ workspace_physics :: proc(workspace: ^Workspace) -> ^Physics {
 	return cast(^Physics)object
 }
 
-// Workspace_Finished_Replicating_Signal returns the FinishedReplicating signal,
-// creating it on first use. A client that never reads the property never
-// allocates one.
+
 Workspace_Finished_Replicating_Signal :: proc(workspace: ^Workspace) -> ^signals.Signal {
 	if workspace == nil {return nil}
 	if workspace.finished_replicating != nil {return workspace.finished_replicating}
@@ -621,12 +871,7 @@ Workspace_Finished_Replicating_Signal :: proc(workspace: ^Workspace) -> ^signals
 	return signal
 }
 
-// Workspace_Fire_Finished_Replicating delivers workspace.FinishedReplicating.
-//
-// It is a no-op when nothing is listening, which is the common case: the signal
-// only exists once a script has connected to it. Firing is idempotent at the
-// replication layer (the frame is sent once per peer), so the guard here only
-// exists to avoid re-entering the signal on a repeated frame.
+
 Workspace_Fire_Finished_Replicating :: proc(L: ^vm.State, workspace: ^Workspace) {
 	if workspace == nil || L == nil {return}
 	signal := workspace.finished_replicating
@@ -657,6 +902,12 @@ workspace_get :: proc(
 		vm.PushBoolean(L, workspace.fall_height_enabled)
 	case "DistributedGameTime":
 		vm.PushNumber(L, workspace.distributed_game_time)
+	case "RenderCulling":
+		vm.PushBoolean(L, workspace.cull_parts)
+	case "MaxDrawDistance":
+		vm.PushNumber(L, f64(workspace.max_draw_distance))
+	case "LODDistance":
+		vm.PushNumber(L, f64(workspace.lod_distance))
 	case "FinishedReplicating":
 		signal := Workspace_Finished_Replicating_Signal(workspace)
 		if signal == nil {return false}
@@ -705,10 +956,22 @@ workspace_set :: proc(
 		)
 	case "FallHeightEnabled":
 		workspace.fall_height_enabled = vm.ArgBoolean(L, value_index)
+	case "RenderCulling":
+		workspace.cull_parts = vm.ArgBoolean(L, value_index)
+	case "MaxDrawDistance":
+		workspace.max_draw_distance = max(0, f32(vm.ArgNumber(L, value_index)))
+	case "LODDistance":
+		workspace.lod_distance = max(0, f32(vm.ArgNumber(L, value_index)))
 	case:
 		return false
 	}
 	return true
+}
+
+workspace_kne_raycast :: proc "contextless" (ctx: ^classes.Class_Export_Context) -> i32 {
+	context = runtime.default_context()
+	count, _ := workspace_namecall(ctx.L, ctx.object, ctx.datatypes, ctx.enums, "Raycast")
+	return count
 }
 
 workspace_namecall :: proc(
@@ -756,6 +1019,10 @@ workspace_namecall :: proc(
 	case "PGSIsEnabled":
 		vm.PushBoolean(L, true)
 		return 1, true
+	case "GetWindowDimensions":
+		vec2 := datatypes.Vector2{f32(window_width), f32(window_height)}
+		datatypes.Push_Vector2(L, datatype_registry, vec2)
+		return 1, true
 	}
 	return 0, false
 }
@@ -773,11 +1040,13 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 		if workspace.cylinder_mesh !=
 		   nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.cylinder_mesh)}
 	}
+	delete(workspace.draw_items)
 	classes.Object_Destroy(object)
 	free(workspace)
 }
 
 Register_Workspace_Class :: proc(registry: ^classes.Registry) {
+	classes.ViewportFrame_MeshPart_Provider = workspace_meshpart_mesh
 	classes.Register_Class(
 		registry,
 		&Workspace_Class,
@@ -787,24 +1056,26 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		get = workspace_get,
 		set = workspace_set,
 		namecall = workspace_namecall,
-		properties = []string{
+		properties = []string {
 			"CurrentCamera",
 			"SimulatePhysics",
 			"Gravity",
 			"FallenPartsDestroyHeight",
 			"FallHeightEnabled",
 			"DistributedGameTime",
+			"RenderCulling",
+			"MaxDrawDistance",
+			"LODDistance",
 			"FinishedReplicating",
 		},
-		methods = []string{
+		methods = []string {
 			"Raycast",
 			"GetNumAwakeParts",
 			"GetPhysicsThrottling",
 			"GetRealPhysicsFPS",
 			"PGSIsEnabled",
 		},
-		events = []string{
-			"FinishedReplicating",
-		}
+		events = []string{"FinishedReplicating"},
+		exports = []classes.Class_Export{{name = "Raycast", handler = workspace_kne_raycast}},
 	)
 }

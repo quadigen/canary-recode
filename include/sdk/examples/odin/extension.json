@@ -1,0 +1,10 @@
+{
+	"id": "kne.hello",
+	"name": "Hello KNE",
+	"version": "1.0.0",
+	"author": "Kinemium",
+	"description": "Reference KNE extension: a native Luau library, a native class and a native service.",
+	"api": 2,
+	"enabled": true,
+	"capabilities": []
+}

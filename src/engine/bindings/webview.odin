@@ -4,7 +4,7 @@ when ODIN_OS == .JS {
     foreign import lib "../../../build/web-native/lib/kine_jolt_web.o"
 } else when ODIN_OS == .Windows {
     foreign import lib {
-        "../../../vendor/build/vendor/webview/core/webview.lib",
+        "../../../vendor/build/vendor/webview/core/webview_static.lib",
     }
 } else when #config(KINE_ANDROID, false) {
     foreign import lib "../../../build/android-native/lib/libJoltWrapper.a"

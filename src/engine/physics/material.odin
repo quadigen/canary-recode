@@ -35,6 +35,10 @@ Material_Get_Properties :: proc(material: enums.Material) -> Material_Properties
 		return {1.6, 0.90, 0.00}
 
 	case:
+		if enums.Material_Is_Valid(int(material)) {
+			values := enums.Material_Physical_Properties[int(material)]
+			return {values[0], values[1], values[2]}
+		}
 		return {1.0, 0.30, 0.10}
 	}
 }

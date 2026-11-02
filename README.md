@@ -94,6 +94,16 @@ Kinemium provides with several flags you can run with ```zune run game```<br>
 - kilang (lets you run kilang code in the terminal, you can add this flag with any other flag and it will still work)<br>
 - editor (enables studio UI)
 
+## Custom materials and shaders
+
+`MaterialVariant` instances define reusable materials for `Part`, `MeshPart`,
+and `Terrain`, with `ColorMap`, `NormalMap`, `RoughnessMap`, `MetalnessMap`, and
+`StudsPerTile` for PBR textures. Edit their Filamat `Source` to customize the
+shader or create a new one. `PostProcess` instances apply a custom fullscreen shader to the scene.
+Variants also support height displacement, parallax occlusion, AO/emissive maps,
+and `FragmentSource`/`VertexSource` hooks that preserve the textured base shader.
+See [material variants and shader examples](docs/material-variants.md).
+
 ## Engine packages
 
 Native Luau packages live in `src/engine/packages/<PackageName>`. Add one

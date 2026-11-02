@@ -8,16 +8,38 @@ import tracy "../util/odin-tracy"
 
 DEFAULT_COLLISION_SUBSTEPS :: 1
 
+Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics) {
+	for child in object.children {
+		if child == nil || child.destroyed {continue}
+
+		matched := false
+		for entry in classes.Constraint_Steps {
+			if classes.Is_A_Class(child, entry.class) {
+				entry.step(child, service.system.handle, service.body_ids[:])
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			Physics_StepConstraints(child, service)
+		}
+	}
+}
+
 Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	if service == nil || !service.initialized {return}
 	workspace := cast(^Workspace)Service_Get_Service(&service.service, "Workspace")
 
 	if workspace == nil {return}
-	
+
 	if !workspace.simulate_physics {return}
+
+	tracy.ZoneNC("Step Constraints", 0xE06C75)
+	Physics_StepConstraints(workspace, service)
 
 	tracy.ZoneNC("Jolt Synchronize", 0xE06C75)
 	Physics_Synchronize(service, workspace)
+	Physics_Apply_Water(service, min(delta_time, 0.1))
 
 	tracy.ZoneNC("Jolt Step", 0xE06C75)
 	jolt.System_Step(&service.system, min(delta_time, 0.1), i32(service.collision_steps))

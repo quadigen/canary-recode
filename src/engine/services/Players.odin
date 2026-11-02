@@ -1,4 +1,5 @@
 package services
+// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"

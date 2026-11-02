@@ -1,42 +1,39 @@
 package globals
 
-import "core:time"
-import "base:runtime"
 import vm "../vm"
+import "base:runtime"
+import "core:time"
 
-RUNTIME_NAME            :: "kinemium"
+RUNTIME_NAME :: "kinemium"
 RUNTIME_VERSION_DISPLAY := string(#config(RUNTIME_VERSION_DISPLAY, "1.19.0-dev"))
-RUNTIME_URL             := string(#config(RUNTIME_URL, "https://github.com/quadigen/canary-recode"))
+RUNTIME_URL := string(#config(RUNTIME_URL, "https://github.com/quadigen/canary-recode"))
 
-// The update manifest for the engine self-update flow. Release builds are
-// stamped (see justfile / CI) with everything except this constant; the
-// self-update system is disabled unless RUNTIME_GIT_COMMIT is non-empty.
-RUNTIME_UPDATE_URL := string(#config(RUNTIME_UPDATE_URL, "https://api.github.com/repos/quadigen/canary-recode/releases/latest"))
+RUNTIME_UPDATE_URL := string(
+	#config(
+		RUNTIME_UPDATE_URL,
+		"https://api.github.com/repos/quadigen/canary-recode/releases/latest",
+	),
+)
 
-RUNTIME_SEMANTIC_ENABLED    := bool(#config(RUNTIME_SEMANTIC_ENABLED, true))
-RUNTIME_SEMANTIC_MAJOR      := int(#config(RUNTIME_SEMANTIC_MAJOR, 1))
-RUNTIME_SEMANTIC_MINOR      := int(#config(RUNTIME_SEMANTIC_MINOR, 19))
-RUNTIME_SEMANTIC_PATCH      := int(#config(RUNTIME_SEMANTIC_PATCH, 0))
+RUNTIME_SEMANTIC_ENABLED := bool(#config(RUNTIME_SEMANTIC_ENABLED, true))
+RUNTIME_SEMANTIC_MAJOR := int(#config(RUNTIME_SEMANTIC_MAJOR, 1))
+RUNTIME_SEMANTIC_MINOR := int(#config(RUNTIME_SEMANTIC_MINOR, 19))
+RUNTIME_SEMANTIC_PATCH := int(#config(RUNTIME_SEMANTIC_PATCH, 0))
 RUNTIME_SEMANTIC_PRERELEASE := string(#config(RUNTIME_SEMANTIC_PRERELEASE, "dev"))
-RUNTIME_SEMANTIC_BUILD      := string(#config(RUNTIME_SEMANTIC_BUILD, ""))
+RUNTIME_SEMANTIC_BUILD := string(#config(RUNTIME_SEMANTIC_BUILD, ""))
 
 RUNTIME_GIT_ENABLED := bool(#config(RUNTIME_GIT_ENABLED, false))
-RUNTIME_GIT_URL     := string(#config(RUNTIME_GIT_URL, "https://github.com/quadigen/canary-recode"))
-RUNTIME_GIT_COMMIT  := string(#config(RUNTIME_GIT_COMMIT, ""))
-RUNTIME_GIT_BRANCH  := string(#config(RUNTIME_GIT_BRANCH, ""))
+RUNTIME_GIT_URL := string(#config(RUNTIME_GIT_URL, "https://github.com/quadigen/canary-recode"))
+RUNTIME_GIT_COMMIT := string(#config(RUNTIME_GIT_COMMIT, ""))
+RUNTIME_GIT_BRANCH := string(#config(RUNTIME_GIT_BRANCH, ""))
 
-LUAU_INFO_ENABLED    :: false
+LUAU_INFO_ENABLED :: false
 LUAU_VERSION_DISPLAY :: ""
-LUAU_VERSION_MAJOR   :: 0
-LUAU_VERSION_MINOR   :: 0
-LUAU_URL             :: "https://github.com/luau-lang/luau"
+LUAU_VERSION_MAJOR :: 0
+LUAU_VERSION_MINOR :: 0
+LUAU_URL :: "https://github.com/luau-lang/luau"
 
-runtime_set_optional_string :: proc(
-	L: ^vm.State,
-	table_index: int,
-	name: string,
-	value: string,
-) {
+runtime_set_optional_string :: proc(L: ^vm.State, table_index: int, name: string, value: string) {
 	if len(value) == 0 {
 		return
 	}
@@ -58,18 +55,8 @@ runtime_push_semantic_version :: proc(L: ^vm.State) {
 	vm.PushInteger(L, i64(RUNTIME_SEMANTIC_PATCH))
 	vm.SetField(L, -2, "patch")
 
-	runtime_set_optional_string(
-		L,
-		-2,
-		"prerelease",
-		RUNTIME_SEMANTIC_PRERELEASE,
-	)
-	runtime_set_optional_string(
-		L,
-		-2,
-		"build",
-		RUNTIME_SEMANTIC_BUILD,
-	)
+	runtime_set_optional_string(L, -2, "prerelease", RUNTIME_SEMANTIC_PRERELEASE)
+	runtime_set_optional_string(L, -2, "build", RUNTIME_SEMANTIC_BUILD)
 
 	vm.SetReadOnly(L, -1)
 }
@@ -77,22 +64,12 @@ runtime_push_semantic_version :: proc(L: ^vm.State) {
 runtime_push_git_version :: proc(L: ^vm.State) {
 	vm.NewTable(L, 0, 3)
 
-	runtime_set_optional_string(
-		L,
-		-2,
-		"url",
-		RUNTIME_GIT_URL,
-	)
+	runtime_set_optional_string(L, -2, "url", RUNTIME_GIT_URL)
 
 	vm.PushString(L, RUNTIME_GIT_COMMIT)
 	vm.SetField(L, -2, "commit")
 
-	runtime_set_optional_string(
-		L,
-		-2,
-		"branch",
-		RUNTIME_GIT_BRANCH,
-	)
+	runtime_set_optional_string(L, -2, "branch", RUNTIME_GIT_BRANCH)
 
 	vm.SetReadOnly(L, -1)
 }
@@ -135,12 +112,7 @@ runtime_install_runtime_global :: proc(vm_state: ^vm.VM) {
 	runtime_push_version(L)
 	vm.SetField(L, -2, "version")
 
-	runtime_set_optional_string(
-		L,
-		-2,
-		"url",
-		RUNTIME_URL,
-	)
+	runtime_set_optional_string(L, -2, "url", RUNTIME_URL)
 
 	vm.SetReadOnly(L, -1)
 	vm.SetGlobalFromStack(vm_state, "_RUNTIME")
@@ -176,12 +148,7 @@ runtime_install_luau_global :: proc(vm_state: ^vm.VM) {
 	vm.SetReadOnly(L, -1)
 	vm.SetField(L, -2, "version")
 
-	runtime_set_optional_string(
-		L,
-		-2,
-		"url",
-		LUAU_URL,
-	)
+	runtime_set_optional_string(L, -2, "url", LUAU_URL)
 
 	vm.SetReadOnly(L, -1)
 	vm.SetGlobalFromStack(vm_state, "_LUAU")
@@ -278,11 +245,13 @@ runtime_global_collectgarbage :: proc "c" (L: ^vm.State) -> i32 {
 
 runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	vm.NewTable(L, 0, 2)
-	vm.PushBoolean(L, settings_studio)
-	vm.SetField(L, -2, "Studio")
-	vm.PushBoolean(L, false)
-	vm.SetField(L, -2, "DeviceCamera")
+	vm.PushGlobals(L)
+	if vm.GetField(L, -1, "Studio") == .Nil {
+		vm.Pop(L, 2)
+		vm.PushNil(L)
+		return 1
+	}
+	vm.Remove(L, -2)
 	return 1
 }
 

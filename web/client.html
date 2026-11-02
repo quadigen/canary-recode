@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kinemium Client — Web</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main id="desktop" aria-label="Kinemium client web view">
+    <canvas id="filament-canvas"></canvas>
+    <canvas id="skia-base"></canvas>
+    <canvas id="skia-overlay"></canvas>
+    <div id="startup"><div class="spinner"></div><strong>Kinemium Client</strong><span id="startup-status">Loading engine technologies…</span></div>
+    <div id="runtime-badge"><span></span><b id="runtime-value">Starting</b><small>Odin · Luau · Jolt · Skia · Filament</small></div>
+  </main>
+  <script src="odin.js"></script>
+  <script src="canvaskit/canvaskit.js"></script>
+  <script src="filament/filament.js"></script>
+  <script src="app.js"></script>
+  <script type="module">
+    // The client connects to a native server using the build-time defaults or
+    // ?address=host&port=1234 appended to this page's URL.
+    const deadline = performance.now() + 30000;
+    while (!document.documentElement.dataset.engineReady &&
+           !document.documentElement.dataset.engineError &&
+           performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  </script>
+</body>
+</html>

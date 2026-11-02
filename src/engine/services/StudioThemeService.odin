@@ -1,6 +1,6 @@
 package services
+// wire:service
 
-// wire:service global="StudioThemeService"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -11,37 +11,19 @@ import vm "../vm"
 import "core:fmt"
 
 THEME_BASE_COLOR := Studio_Theme_Color{15, 15, 15, 255}
-
 THEME_BACKGROUND_COLOR := Studio_Theme_Color{35, 35, 35, 255}
-
 THEME_ACCENT_COLOR := Studio_Theme_Color{214, 133, 37, 255}
-
 THEME_SECONDARY_COLOR := Studio_Theme_Color{43, 43, 43, 255}
-
 THEME_THIRD_COLOR := Studio_Theme_Color{25, 25, 25, 255}
-
-
 THEME_TEXT_COLOR := Studio_Theme_Color{220, 220, 220, 255}
-
 THEME_SECONDARY_TEXT_COLOR := Studio_Theme_Color{180, 180, 180, 255}
-
 THEME_DIMMED_TEXT_COLOR := Studio_Theme_Color{170, 170, 170, 255}
-
-
 THEME_INPUT_COLOR := Studio_Theme_Color{38, 38, 38, 255}
-
 THEME_INPUT_FOCUS_COLOR := Studio_Theme_Color{51, 51, 64, 255}
-
 THEME_INPUT_TEXT_COLOR := Studio_Theme_Color{255, 255, 255, 255}
-
 THEME_INPUT_PLACEHOLDER_COLOR := Studio_Theme_Color{128, 128, 128, 255}
-
-
 THEME_ROW_EVEN_COLOR := Studio_Theme_Color{50, 50, 50, 255}
-
 THEME_ROW_ODD_COLOR := Studio_Theme_Color{45, 45, 45, 255}
-
-
 THEME_CODE_EDITOR_BACKGROUND := Studio_Theme_Color{0, 0, 0, 204}
 
 Studio_Theme_Color :: struct {
@@ -308,10 +290,6 @@ studio_theme_set_coordinates :: proc(
 }
 
 
-// -----------------------------------------------------------------------------
-// LayoutConfig
-// -----------------------------------------------------------------------------
-
 studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeService) {
 	vm.NewTable(L, 0, 12)
 
@@ -325,21 +303,18 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "BottomPad")
 
 
-	// Topbar
 	vm.NewTable(L, 0, 1)
 	vm.PushNumber(L, 0)
 	vm.SetField(L, -2, "flexGrow")
 	vm.SetField(L, -2, "Topbar")
 
 
-	// Content
 	vm.NewTable(L, 0, 1)
 	vm.PushNumber(L, 1)
 	vm.SetField(L, -2, "flexGrow")
 	vm.SetField(L, -2, "Content")
 
 
-	// Left
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.78)
@@ -351,7 +326,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "Left")
 
 
-	// Right
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.22)
@@ -363,7 +337,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "Right")
 
 
-	// Viewport
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.7)
@@ -375,7 +348,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "Viewport")
 
 
-	// CodeEditor
 	vm.NewTable(L, 0, 1)
 
 	vm.PushString(L, "Viewport")
@@ -384,7 +356,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "CodeEditor")
 
 
-	// Output
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.3)
@@ -396,7 +367,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "Output")
 
 
-	// Explorer
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.5)
@@ -408,7 +378,6 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 	vm.SetField(L, -2, "Explorer")
 
 
-	// Inspector
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.5)
@@ -421,15 +390,10 @@ studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeServi
 }
 
 
-// -----------------------------------------------------------------------------
-// Window layouts
-// -----------------------------------------------------------------------------
-
 studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatypes.Registry) {
 	vm.NewTable(L, 0, 6)
 
 
-	// Explorer
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, -20, 0, 40)
@@ -444,7 +408,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "Explorer")
 
 
-	// GameSettings
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
@@ -459,7 +422,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "GameSettings")
 
 
-	// Toolbox
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
@@ -474,7 +436,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "Toolbox")
 
 
-	// Inspector
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, -20, 0.44, 0)
@@ -489,7 +450,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "Inspector")
 
 
-	// Output
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 20, 0.99, 0)
@@ -504,7 +464,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "Output")
 
 
-	// Toolbar
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 0, 0)
@@ -519,7 +478,6 @@ studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatype
 	vm.SetField(L, -2, "Toolbar")
 
 
-	// CodeEditor
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 20, 0, 40)
@@ -541,7 +499,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.NewTable(L, 0, 7)
 
 
-	// Toolbar
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 0, 0)
@@ -556,7 +513,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "Toolbar")
 
 
-	// Explorer
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0, 30)
@@ -571,7 +527,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "Explorer")
 
 
-	// Inspector
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0.5, -20)
@@ -586,7 +541,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "Inspector")
 
 
-	// CodeEditor
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, X_SIZE, 0, 0)
@@ -601,7 +555,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "CodeEditor")
 
 
-	// Output
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 1, 0)
@@ -616,7 +569,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "Output")
 
 
-	// GameSettings
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
@@ -631,7 +583,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "GameSettings")
 
 
-	// Toolbox
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
@@ -646,7 +597,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "Toolbox")
 
 
-	// FileBrowser
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 1, 0)
@@ -661,18 +611,6 @@ studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes
 	vm.SetField(L, -2, "FileBrowser")
 }
 
-
-// -----------------------------------------------------------------------------
-// ThemeObject compatibility object
-// -----------------------------------------------------------------------------
-//
-// The old Luau implementation creates Instance.new("StudioTheme").
-// That Instance has not been ported to the current Odin class registry yet,
-// so for now this is a table of Color3 values with the same color names.
-//
-// Once StudioTheme.odin exists this function can be replaced by an actual
-// classes.Push_New(..., "StudioTheme") call.
-//
 
 studio_theme_push_theme_object :: proc(L: ^vm.State, registry: ^datatypes.Registry) {
 	vm.NewTable(L, 0, 7)
@@ -699,10 +637,6 @@ studio_theme_push_theme_object :: proc(L: ^vm.State, registry: ^datatypes.Regist
 	vm.SetField(L, -2, "InputFieldBackground")
 }
 
-
-// -----------------------------------------------------------------------------
-// Default theme
-// -----------------------------------------------------------------------------
 
 studio_theme_set_color_value :: proc(L: ^vm.State, name: string, color: Studio_Theme_Color) {
 	studio_theme_set_color(L, name, color.r, color.g, color.b, color.a)
@@ -767,10 +701,6 @@ studio_theme_push_default_theme :: proc(
 	vm.SetField(L, -2, "WindowConfig")
 }
 
-
-// -----------------------------------------------------------------------------
-// Lifetime helpers
-// -----------------------------------------------------------------------------
 
 studio_theme_release_ref :: proc(L: ^vm.State, ref: ^i32) {
 	if ref == nil || ref^ <= 0 {
@@ -874,10 +804,6 @@ studio_theme_fire_changed :: proc(L: ^vm.State, service: ^StudioThemeService) {
 }
 
 
-// -----------------------------------------------------------------------------
-// Property API
-// -----------------------------------------------------------------------------
-
 studio_theme_service_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -970,10 +896,6 @@ studio_theme_service_set :: proc(
 }
 
 
-// -----------------------------------------------------------------------------
-// Methods
-// -----------------------------------------------------------------------------
-
 studio_theme_service_namecall :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -988,13 +910,6 @@ studio_theme_service_namecall :: proc(
 
 	switch method {
 
-	// -------------------------------------------------------------------------
-	// InitRenderer
-	//
-	// The Luau implementation creates all state here. Native services are
-	// already engine-owned, so this resets the native service to the exact
-	// default theme/layout instead.
-	// -------------------------------------------------------------------------
 
 	case "InitRenderer":
 		service.padding = 4
@@ -1010,10 +925,6 @@ studio_theme_service_namecall :: proc(
 		return 0, true
 
 
-	// -------------------------------------------------------------------------
-	// GetTheme
-	// -------------------------------------------------------------------------
-
 	case "GetTheme":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
 
@@ -1021,10 +932,6 @@ studio_theme_service_namecall :: proc(
 
 		return 1, true
 
-
-	// -------------------------------------------------------------------------
-	// SetTheme(theme, robloxTheme?)
-	// -------------------------------------------------------------------------
 
 	case "SetTheme":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
@@ -1041,10 +948,6 @@ studio_theme_service_namecall :: proc(
 
 		return 0, true
 
-
-	// -------------------------------------------------------------------------
-	// ChangeLayoutSettings(padding, headerHeight, bottomPadding)
-	// -------------------------------------------------------------------------
 
 	case "ChangeLayoutSettings":
 		service.padding = vm.ArgOptionalNumber(L, 2, service.padding)
@@ -1070,15 +973,11 @@ studio_theme_service_namecall :: proc(
 			vm.SetField(L, -2, "BottomPad")
 		}
 
-		vm.Pop(L) // LayoutConfig / nil
-		vm.Pop(L) // SelectedTheme
+		vm.Pop(L)
+		vm.Pop(L)
 
 		return 0, true
 
-
-	// -------------------------------------------------------------------------
-	// MakeUIPadded
-	// -------------------------------------------------------------------------
 
 	case "MakeUIPadded":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
@@ -1124,7 +1023,7 @@ studio_theme_service_namecall :: proc(
 			return vm.RaiseError(L, "DockWindow: unknown anchor, e.g. TopRight"), true
 		}
 
-		full_span := vm.ArgOptionalBoolean(L, 4, false) // check your vm name for this
+		full_span := vm.ArgOptionalBoolean(L, 4, false)
 		gui.dock_move_panel(&service.dock, panel, anchor, full_span)
 		if panel == .Output {
 			service.show_output = true

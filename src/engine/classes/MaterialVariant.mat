@@ -1,0 +1,119 @@
+material {
+    name : "MaterialVariant",
+    shadingModel : lit,
+    instanced : true,
+    parameters : [
+        { type : float4[64], name : instanceColors },
+        { type : float4, name : baseColor },
+        { type : float, name : roughness },
+        { type : float, name : metallic },
+        { type : sampler2d, name : colorMap },
+        { type : sampler2d, name : normalMap },
+        { type : sampler2d, name : roughnessMap },
+        { type : sampler2d, name : metalnessMap },
+        { type : sampler2d, name : heightMap },
+        { type : sampler2d, name : aoMap },
+        { type : sampler2d, name : emissiveMap },
+        { type : float, name : hasNormalMap },
+        { type : float, name : hasRoughnessMap },
+        { type : float, name : hasMetalnessMap },
+        { type : float, name : hasHeightMap },
+        { type : float, name : hasAOMap },
+        { type : float, name : studsPerTile },
+        { type : float, name : heightScale },
+        { type : float, name : heightMidlevel },
+        { type : float, name : parallaxDepth },
+        { type : float, name : parallaxSteps },
+        { type : float, name : normalStrength },
+        { type : float, name : aoStrength },
+        { type : float3, name : emissiveColor },
+        { type : float, name : emissiveStrength }
+    ]
+}
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        if (materialParams.hasHeightMap > 0.5 && abs(materialParams.heightScale) > 0.00001) {
+            vec3 p = (getUserWorldFromWorldMatrix() * material.worldPosition).xyz
+                / max(materialParams.studsPerTile, 0.0001);
+            vec3 n = normalize(mat3(getUserWorldFromWorldMatrix()) * material.worldNormal);
+            vec3 weights = pow(abs(n), vec3(4.0));
+            weights /= max(dot(weights, vec3(1.0)), 0.0001);
+            float height = textureLod(materialParams_heightMap, p.zy, 0.0).r * weights.x
+                         + textureLod(materialParams_heightMap, p.xz, 0.0).r * weights.y
+                         + textureLod(materialParams_heightMap, p.xy, 0.0).r * weights.z;
+            material.worldPosition.xyz += normalize(material.worldNormal)
+                * ((height - materialParams.heightMidlevel) * materialParams.heightScale);
+        }
+        // MATERIAL_VARIANT_VERTEX_HOOK
+    }
+}
+fragment {
+    vec2 parallaxUV(vec2 uv, vec3 view, vec2 dx, vec2 dy) {
+        if (materialParams.hasHeightMap < 0.5 || materialParams.parallaxDepth <= 0.00001) return uv;
+        float layers = clamp(materialParams.parallaxSteps, 8.0, 64.0);
+        float stepDepth = 1.0 / layers;
+        vec2 stepUV = view.xy / max(abs(view.z), 0.08)
+            * (materialParams.parallaxDepth / max(materialParams.studsPerTile, 0.0001)) / layers;
+        vec2 currentUV = uv;
+        float depth = 0.0;
+        float surfaceDepth = 1.0 - textureGrad(materialParams_heightMap, currentUV, dx, dy).r;
+        for (int i = 0; i < 64; ++i) {
+            if (float(i) >= layers || depth >= surfaceDepth) break;
+            currentUV -= stepUV;
+            depth += stepDepth;
+            surfaceDepth = 1.0 - textureGrad(materialParams_heightMap, currentUV, dx, dy).r;
+        }
+        vec2 previousUV = currentUV + stepUV;
+        float after = surfaceDepth - depth;
+        float before = 1.0 - textureGrad(materialParams_heightMap, previousUV, dx, dy).r - depth + stepDepth;
+        float denominator = after - before;
+        float blend = abs(denominator) > 0.000001 ? clamp(after / denominator, 0.0, 1.0) : 0.0;
+        return mix(currentUV, previousUV, blend);
+    }
+    vec4 sampleMap(sampler2D map, vec3 p, vec2 uvX, vec2 uvY, vec2 uvZ, vec3 weights) {
+        return textureGrad(map, uvX, dFdx(p.zy), dFdy(p.zy)) * weights.x
+             + textureGrad(map, uvY, dFdx(p.xz), dFdy(p.xz)) * weights.y
+             + textureGrad(map, uvZ, dFdx(p.xy), dFdy(p.xy)) * weights.z;
+    }
+    void material(inout MaterialInputs material) {
+        mat3 userFromWorld = mat3(getUserWorldFromWorldMatrix());
+        vec3 n = normalize(userFromWorld * getWorldGeometricNormalVector());
+        vec3 weights = pow(abs(n), vec3(4.0));
+        weights /= max(dot(weights, vec3(1.0)), 0.0001);
+        vec3 p = getUserWorldPosition() / max(materialParams.studsPerTile, 0.0001);
+        vec3 view = normalize(userFromWorld * (getWorldCameraPosition() - getWorldPosition()));
+        vec2 uvX = p.zy, uvY = p.xz, uvZ = p.xy;
+        vec2 dxX = dFdx(p.zy), dyX = dFdy(p.zy);
+        vec2 dxY = dFdx(p.xz), dyY = dFdy(p.xz);
+        vec2 dxZ = dFdx(p.xy), dyZ = dFdy(p.xy);
+        if (weights.x > 0.001) uvX = parallaxUV(uvX, view.zyx, dxX, dyX);
+        if (weights.y > 0.001) uvY = parallaxUV(uvY, view.xzy, dxY, dyY);
+        if (weights.z > 0.001) uvZ = parallaxUV(uvZ, view.xyz, dxZ, dyZ);
+        if (materialParams.hasNormalMap > 0.5 && materialParams.normalStrength > 0.00001) {
+            vec3 nx = textureGrad(materialParams_normalMap, uvX, dFdx(p.zy), dFdy(p.zy)).xyz * 2.0 - 1.0;
+            vec3 ny = textureGrad(materialParams_normalMap, uvY, dFdx(p.xz), dFdy(p.xz)).xyz * 2.0 - 1.0;
+            vec3 nz = textureGrad(materialParams_normalMap, uvZ, dFdx(p.xy), dFdy(p.xy)).xyz * 2.0 - 1.0;
+            nx.xy *= materialParams.normalStrength;
+            ny.xy *= materialParams.normalStrength;
+            nz.xy *= materialParams.normalStrength;
+            vec3 wx = vec3(n.x * abs(nx.z), n.y + nx.y, n.z + nx.x);
+            vec3 wy = vec3(n.x + ny.x, n.y * abs(ny.z), n.z + ny.y);
+            vec3 wz = vec3(n.x + nz.x, n.y + nz.y, n.z * abs(nz.z));
+            vec3 worldNormal = transpose(userFromWorld)
+                * normalize(wx * weights.x + wy * weights.y + wz * weights.z);
+            material.normal = transpose(getWorldTangentFrame()) * worldNormal;
+        }
+        prepareMaterial(material);
+        material.baseColor = sampleMap(materialParams_colorMap, p, uvX, uvY, uvZ, weights)
+            * materialParams.baseColor * materialParams.instanceColors[getInstanceIndex()];
+        material.roughness = materialParams.hasRoughnessMap > 0.5
+            ? sampleMap(materialParams_roughnessMap, p, uvX, uvY, uvZ, weights).r : materialParams.roughness;
+        material.metallic = materialParams.hasMetalnessMap > 0.5
+            ? sampleMap(materialParams_metalnessMap, p, uvX, uvY, uvZ, weights).r : materialParams.metallic;
+        material.ambientOcclusion = mix(1.0,
+            sampleMap(materialParams_aoMap, p, uvX, uvY, uvZ, weights).r, materialParams.aoStrength);
+        material.emissive = vec4(sampleMap(materialParams_emissiveMap, p, uvX, uvY, uvZ, weights).rgb
+            * materialParams.emissiveColor * materialParams.emissiveStrength, 0.0);
+        // MATERIAL_VARIANT_FRAGMENT_HOOK
+    }
+}

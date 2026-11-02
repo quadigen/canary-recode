@@ -8,8 +8,9 @@ import "core:strings"
 
 EDITABLE_MESH_NONE :: i32(-1)
 
-EDITABLE_MESH_MAX_VERTICES :: 65532
-EDITABLE_MESH_MAX_FACES :: 65532
+
+EDITABLE_MESH_MAX_VERTICES :: 1_000_000
+EDITABLE_MESH_MAX_FACES :: 2_000_000
 
 EDITABLE_MESH_MAX_FACE_VERTICES :: 64
 EDITABLE_MESH_MAX_BONES :: 512
@@ -249,9 +250,6 @@ editable_mesh_finite :: proc(value: f32) -> bool {
 	return value == value && value > -1.0e18 && value < 1.0e18
 }
 
-// ---------------------------------------------------------------------------
-// Attribute pools
-// ---------------------------------------------------------------------------
 
 EditableMesh_Add_Vertex :: proc(mesh: ^EditableMesh, position: datatypes.Vector3) -> i32 {
 	if mesh == nil || !EditableMesh_Can_Grow(mesh, 1) {return EDITABLE_MESH_NONE}
@@ -349,9 +347,6 @@ EditableMesh_Set_UV :: proc(mesh: ^EditableMesh, uv_id: i32, uv: datatypes.Vecto
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Faces
-// ---------------------------------------------------------------------------
 
 editable_mesh_face_has_vertex :: proc(
 	mesh: ^EditableMesh,
@@ -610,9 +605,6 @@ EditableMesh_Set_Vertex_Face_Attribute :: proc(
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Vertex adjacency
-// ---------------------------------------------------------------------------
 
 editable_mesh_push_unique :: proc(list: ^[dynamic]i32, value: i32) {
 	for id in list^ {
@@ -743,9 +735,6 @@ EditableMesh_Get_Adjacent_Vertices :: proc(mesh: ^EditableMesh, vertex_id: i32) 
 	return result
 }
 
-// ---------------------------------------------------------------------------
-// Bounds and spatial queries
-// ---------------------------------------------------------------------------
 
 EditableMesh_Get_Size :: proc(mesh: ^EditableMesh) -> datatypes.Vector3 {
 	if mesh == nil || len(mesh.vertices) == 0 {return datatypes.Vector3{}}
@@ -882,10 +871,7 @@ editable_mesh_closest_point_on_triangle :: proc(
 	), datatypes.Vector3{1 - v - w, v, w}
 }
 
-// EditableMesh_Triangle_Iterator drives every polygon through a triangle fan.
-// Faces carry an arbitrary number of vertices, and both the renderer and the
-// collider need the same fan so a polygon and the triangles it degenerates to
-// can never disagree.
+
 EditableMesh_Triangle_Iterator :: struct {
 	mesh: ^EditableMesh,
 }
@@ -1056,9 +1042,6 @@ EditableMesh_Raycast_Local :: proc(
 	return face_id, point, barycentric, vertex_ids
 }
 
-// ---------------------------------------------------------------------------
-// Editing operations
-// ---------------------------------------------------------------------------
 
 EditableMesh_Triangulate :: proc(mesh: ^EditableMesh) -> bool {
 	if mesh == nil || mesh.fixed_size {return false}
@@ -1411,9 +1394,6 @@ EditableMesh_Prune_Unused :: proc(
 	return
 }
 
-// ---------------------------------------------------------------------------
-// Bones
-// ---------------------------------------------------------------------------
 
 EditableMesh_Add_Bone :: proc(
 	mesh: ^EditableMesh,
@@ -1598,9 +1578,6 @@ EditableMesh_Set_Vertex_Bone_Weights :: proc(
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Facial action poses
-// ---------------------------------------------------------------------------
 
 EditableMesh_Find_Facs_Pose :: proc(
 	mesh: ^EditableMesh,
@@ -1660,9 +1637,6 @@ EditableMesh_Prune_Empty_Facs_Poses :: proc(mesh: ^EditableMesh) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Referencing queries
-// ---------------------------------------------------------------------------
 
 EditableMesh_Get_Vertices_With_Attribute :: proc(mesh: ^EditableMesh, id: i32) -> [dynamic]i32 {
 	result: [dynamic]i32

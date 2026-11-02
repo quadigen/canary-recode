@@ -4,14 +4,14 @@
 // map. Anything that silently kept reading from disk fails here.
 package main
 
+import assetstore "../src/engine/assetstore"
+import classes "../src/engine/classes"
+import engine_runtime "../src/engine/runtime"
+import serializer "../src/engine/serializer"
+import vm "../src/engine/vm"
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import engine_runtime "../src/engine/runtime"
-import assetstore "../src/engine/assetstore"
-import classes "../src/engine/classes"
-import serializer "../src/engine/serializer"
-import vm "../src/engine/vm"
 
 MESH_BODY :: "mesh bytes that are not really an fbx but are definitely bytes"
 TEXTURE_BODY :: "texture bytes that are not really a png but are definitely bytes"
@@ -252,22 +252,40 @@ KineRoot = model
 	vm.GetGlobal(script_vm.L, "KineRoot")
 	missing_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
-	missing_stream, missing_err := serializer.Serialize(&environment.classes, script_vm.L, missing_root)
+	missing_stream, missing_err := serializer.Serialize(
+		&environment.classes,
+		script_vm.L,
+		missing_root,
+	)
 	defer delete(missing_stream)
 	if !serializer.Error_Is_None(missing_err) {
 		serializer.Error_Delete(&missing_err)
 		panic("serializing a map with a missing asset failed")
 	}
 	serializer.Error_Delete(&missing_err)
-	missing_parent, missing_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
+	missing_parent, missing_parent_ok := classes.Push_New(
+		&environment.classes,
+		&script_vm,
+		"Folder",
+		true,
+	)
 	if !missing_parent_ok || missing_parent == nil {
 		panic("could not create a Folder for the missing-asset map")
 	}
 	vm.Pop(script_vm.L)
-	missing_loaded, missing_load_err :=
-		serializer.Deserialize(&environment.classes, script_vm.L, missing_parent, missing_stream)
+	missing_loaded, missing_load_err := serializer.Deserialize(
+		&environment.classes,
+		script_vm.L,
+		missing_parent,
+		missing_stream,
+	)
 	if !serializer.Error_Is_None(missing_load_err) || missing_loaded == nil {
-		panic(fmt.tprintf("loading the missing-asset map failed: %s", serializer.Error_String(missing_load_err)))
+		panic(
+			fmt.tprintf(
+				"loading the missing-asset map failed: %s",
+				serializer.Error_String(missing_load_err),
+			),
+		)
 	}
 	serializer.Error_Delete(&missing_load_err)
 	vm.PushRegistryReference(script_vm.L, missing_loaded.lua_ref)
@@ -301,22 +319,40 @@ KineRoot = model
 	vm.GetGlobal(script_vm.L, "KineRoot")
 	builtin_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
-	builtin_stream, builtin_err := serializer.Serialize(&environment.classes, script_vm.L, builtin_root)
+	builtin_stream, builtin_err := serializer.Serialize(
+		&environment.classes,
+		script_vm.L,
+		builtin_root,
+	)
 	defer delete(builtin_stream)
 	if !serializer.Error_Is_None(builtin_err) {
 		serializer.Error_Delete(&builtin_err)
 		panic("serializing a builtin mesh failed")
 	}
 	serializer.Error_Delete(&builtin_err)
-	builtin_parent, builtin_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
+	builtin_parent, builtin_parent_ok := classes.Push_New(
+		&environment.classes,
+		&script_vm,
+		"Folder",
+		true,
+	)
 	if !builtin_parent_ok || builtin_parent == nil {
 		panic("could not create a Folder for the builtin map")
 	}
 	vm.Pop(script_vm.L)
-	builtin_loaded, builtin_load_err :=
-		serializer.Deserialize(&environment.classes, script_vm.L, builtin_parent, builtin_stream)
+	builtin_loaded, builtin_load_err := serializer.Deserialize(
+		&environment.classes,
+		script_vm.L,
+		builtin_parent,
+		builtin_stream,
+	)
 	if !serializer.Error_Is_None(builtin_load_err) || builtin_loaded == nil {
-		panic(fmt.tprintf("loading the builtin map failed: %s", serializer.Error_String(builtin_load_err)))
+		panic(
+			fmt.tprintf(
+				"loading the builtin map failed: %s",
+				serializer.Error_String(builtin_load_err),
+			),
+		)
 	}
 	serializer.Error_Delete(&builtin_load_err)
 	vm.PushRegistryReference(script_vm.L, builtin_loaded.lua_ref)
@@ -335,13 +371,24 @@ KineBuiltinValue = BuiltinRoot.MeshPart.MeshId
 	// A version 2 stream has no asset table and must still load, keeping bare
 	// paths. The source files are gone by now, which is exactly the situation it
 	// cannot survive, so the check is on the value, not on loading a mesh.
-	legacy_parent, legacy_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
+	legacy_parent, legacy_parent_ok := classes.Push_New(
+		&environment.classes,
+		&script_vm,
+		"Folder",
+		true,
+	)
 	if !legacy_parent_ok || legacy_parent == nil {
 		panic("could not create a Folder for the legacy map")
 	}
 	vm.Pop(script_vm.L)
-	legacy_loaded, legacy_load_ok :=
-		serializer.Deserialize(&environment.classes, script_vm.L, legacy_parent, legacy)
+	legacy_loaded, legacy_load_err := serializer.Deserialize(
+		&environment.classes,
+		script_vm.L,
+		legacy_parent,
+		legacy,
+	)
+	legacy_load_ok := serializer.Error_Is_None(legacy_load_err)
+	serializer.Error_Delete(&legacy_load_err)
 	if !legacy_load_ok || legacy_loaded == nil {
 		panic("a KINE v2 stream failed to load")
 	}
@@ -395,25 +442,40 @@ KineHandleObjectId = part.MeshContent.ObjectId
 	handle_root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
 	vm.Pop(script_vm.L)
 	handle_source_id := read_global_number(&script_vm, "KineHandleObjectId")
-	handle_stream, handle_err := serializer.Serialize(&environment.classes, script_vm.L, handle_root)
+	handle_stream, handle_err := serializer.Serialize(
+		&environment.classes,
+		script_vm.L,
+		handle_root,
+	)
 	defer delete(handle_stream)
 	if !serializer.Error_Is_None(handle_err) {
 		serializer.Error_Delete(&handle_err)
 		panic("serializing an object-backed Content failed")
 	}
 	serializer.Error_Delete(&handle_err)
-	handle_parent, handle_parent_ok := classes.Push_New(&environment.classes, &script_vm, "Folder", true)
+	handle_parent, handle_parent_ok := classes.Push_New(
+		&environment.classes,
+		&script_vm,
+		"Folder",
+		true,
+	)
 	if !handle_parent_ok || handle_parent == nil {
 		panic("could not create a Folder for the object-handle map")
 	}
 	vm.Pop(script_vm.L)
-	handle_loaded, handle_load_err :=
-		serializer.Deserialize(&environment.classes, script_vm.L, handle_parent, handle_stream)
+	handle_loaded, handle_load_err := serializer.Deserialize(
+		&environment.classes,
+		script_vm.L,
+		handle_parent,
+		handle_stream,
+	)
 	if !serializer.Error_Is_None(handle_load_err) || handle_loaded == nil {
-		panic(fmt.tprintf(
-			"loading the object-handle map failed: %s",
-			serializer.Error_String(handle_load_err),
-		))
+		panic(
+			fmt.tprintf(
+				"loading the object-handle map failed: %s",
+				serializer.Error_String(handle_load_err),
+			),
+		)
 	}
 	serializer.Error_Delete(&handle_load_err)
 	vm.PushRegistryReference(script_vm.L, handle_loaded.lua_ref)
@@ -431,11 +493,13 @@ KineHandleRestoredId = HandleRoot:FindFirstChild("Piece").MeshContent.ObjectId
 	}
 	handle_restored_id := read_global_number(&script_vm, "KineHandleRestoredId")
 	if handle_restored_id != handle_source_id {
-		panic(fmt.tprintf(
-			"Content object id changed across the round-trip: %v became %v",
-			handle_source_id,
-			handle_restored_id,
-		))
+		panic(
+			fmt.tprintf(
+				"Content object id changed across the round-trip: %v became %v",
+				handle_source_id,
+				handle_restored_id,
+			),
+		)
 	}
 
 	vm.Close(&script_vm)

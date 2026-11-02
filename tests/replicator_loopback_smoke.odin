@@ -1,9 +1,9 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -16,7 +16,11 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 
 step_network :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM) {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
-	services.Replication_Step(cast(^services.ReplicatorService)descriptor.object, script_vm.L, 1.0 / 60.0)
+	services.Replication_Step(
+		cast(^services.ReplicatorService)descriptor.object,
+		script_vm.L,
+		1.0 / 60.0,
+	)
 }
 
 main :: proc() {
@@ -27,7 +31,9 @@ main :: proc() {
 	engine_runtime.Environment_Init(&server, &server_vm)
 	engine_runtime.Environment_Init(&client, &client_vm)
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 local r = game:GetService("ReplicatorService")
 assert(r:RegisterSchema("Part", { "CanQuery" }))
 assert(r:StartServer("127.0.0.1", 39183))
@@ -92,9 +98,13 @@ end)
 r:OnEvent("structured", function(data)
     structured = data
 end)
-`, "replicator_server_setup")
+`,
+		"replicator_server_setup",
+	)
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 local r = game:GetService("ReplicatorService")
 assert(r:RegisterSchema("Part", { "CanQuery" }))
 assert(r:ConnectClient("127.0.0.1", 39183))
@@ -102,14 +112,18 @@ r.EventReceived:Connect(function(name, data)
     if name == "server-test" then received = data end
     if name == "targeted" then targeted = data end
 end)
-`, "replicator_client_setup")
+`,
+		"replicator_client_setup",
+	)
 
-	for _ in 0..<180 {
+	for _ in 0 ..< 180 {
 		engine_runtime.Environment_Render_Step(&server, &server_vm, 1.0 / 60.0)
 		engine_runtime.Environment_Render_Step(&client, &client_vm, 1.0 / 60.0)
 	}
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 local r = game:GetService("ReplicatorService")
 assert(r.Connected, "client packets " .. tostring(r:GetStats().packetsReceived) .. " malformed " .. tostring(r:GetStats().malformedPackets) .. " player " .. tostring(game:GetService("Players").LocalPlayer))
 assert(game:GetService("Players").LocalPlayer)
@@ -144,44 +158,70 @@ end
 assert(game:GetService("ReplicatorService"):GetStats().malformedPackets == 0, "no snapshot should be malformed")
 assert(r:SendEvent("client-test", "hello"))
 assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint = Color3.new(0.1, 0.2, 0.3), frame = CFrame.new(2, 3, 4), list = { 10, 20 }, nested = { ok = true } }))
-`, "replicator_client_verify")
-	run_script(&server_vm, `
+`,
+		"replicator_client_verify",
+	)
+	run_script(
+		&server_vm,
+		`
 local stats = game:GetService("ReplicatorService"):GetStats()
 assert(stats.bytesReceived > 0)
 assert(stats.unchangedStatesSkipped > 0)
-`, "replicator_delta_stats")
+`,
+		"replicator_delta_stats",
+	)
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(6, 5, 6)
-`, "replicator_server_interpolation")
-	for _ in 0..<6 {
+`,
+		"replicator_server_interpolation",
+	)
+
+
+	for _ in 0 ..< 3 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 local x = game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X
 assert(x > 4 and x < 6, "expected buffered interpolation, got " .. tostring(x))
-`, "replicator_client_interpolation")
-	for _ in 0..<20 {
+`,
+		"replicator_client_interpolation",
+	)
+	for _ in 0 ..< 20 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 local x = game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame.Position.X
 -- Interpolation blends toward the target and stops correcting within its
 -- jitter deadband, so compare with a small tolerance instead of exactly.
 assert(math.abs(x - 6) < 0.1, "expected converged interpolation, got " .. tostring(x))
-`, "replicator_client_interpolation_complete")
-	run_script(&server_vm, `
+`,
+		"replicator_client_interpolation_complete",
+	)
+	run_script(
+		&server_vm,
+		`
 game:GetService("Workspace"):FindFirstChild("ReplicatedPart").CFrame = CFrame.new(4, 5, 6)
-`, "replicator_server_interpolation_reset")
+`,
+		"replicator_server_interpolation_reset",
+	)
 
-	for _ in 0..<20 {
+	for _ in 0 ..< 20 {
 		engine_runtime.Environment_Render_Step(&server, &server_vm, 1.0 / 60.0)
 		engine_runtime.Environment_Render_Step(&client, &client_vm, 1.0 / 60.0)
 	}
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 assert(received == "hello")
 assert(structured.count == 4 and structured.point == Vector3.new(1, 2, 3))
 assert(structured.tint == Color3.new(0.1, 0.2, 0.3))
@@ -212,14 +252,18 @@ part.Name = "MovedPart"
 part.CFrame = CFrame.new(8, 9, 10)
 part.Parent = folder
 game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value = 23
-`, "replicator_server_event")
+`,
+		"replicator_server_event",
+	)
 
-	for _ in 0..<60 {
+	for _ in 0 ..< 60 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 assert(received == "world")
 assert(targeted and targeted.value == 42)
 local folder = game:GetService("Workspace"):FindFirstChild("NetworkFolder")
@@ -235,49 +279,77 @@ assert(game:GetService("Workspace"):FindFirstChild("OwnedPart"))
 -- instance at its last replicated position.
 assert(game:GetService("Workspace"):FindFirstChild("DistantPart") == nil, "a part 2100 studs out must not replicate through a 100 stud sphere")
 assert(game:GetService("Players").LocalPlayer.UserId > 0)
-`, "replicator_client_event")
+`,
+		"replicator_client_event",
+	)
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 game:GetService("ReplicatorService").RelevancyDistance = 5000
-`, "replicator_server_relevancy_restore")
-	for _ in 0..<15 {
+`,
+		"replicator_server_relevancy_restore",
+	)
+	for _ in 0 ..< 15 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 assert(game:GetService("Workspace"):FindFirstChild("DistantPart").CFrame.Position.X == 2100)
-`, "replicator_client_relevancy_restore")
+`,
+		"replicator_client_relevancy_restore",
+	)
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 game:GetService("Workspace"):FindFirstChild("OwnedPart").CFrame = CFrame.new(2, 0, 0)
-`, "replicator_client_owned_motion")
+`,
+		"replicator_client_owned_motion",
+	)
 
-	for _ in 0..<30 {
+	for _ in 0 ..< 30 {
 		step_network(&client, &client_vm)
 		step_network(&server, &server_vm)
 	}
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 local r = game:GetService("ReplicatorService")
 assert(r:GetStats().ownedStatesAccepted > 0)
 assert(math.abs(game:GetService("Workspace"):FindFirstChild("OwnedPart").CFrame.Position.X - 2) < 0.1)
-`, "replicator_server_owned_motion")
+`,
+		"replicator_server_owned_motion",
+	)
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 game:GetService("Workspace"):FindFirstChild("OwnedPart").CFrame = CFrame.new(10000, 0, 0)
-`, "replicator_client_invalid_motion")
+`,
+		"replicator_client_invalid_motion",
+	)
 
-	for _ in 0..<35 {
+	for _ in 0 ..< 35 {
 		step_network(&client, &client_vm)
 		step_network(&server, &server_vm)
 	}
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 assert(game:GetService("ReplicatorService"):GetStats().ownedStatesRejected > 0)
 assert(math.abs(game:GetService("Workspace"):FindFirstChild("OwnedPart").CFrame.Position.X - 2) < 0.1)
-`, "replicator_server_reject_motion")
+`,
+		"replicator_server_reject_motion",
+	)
 
-	run_script(&server_vm, `
+	run_script(
+		&server_vm,
+		`
 local r = game:GetService("ReplicatorService")
 local player = game:GetService("Players"):GetPlayers()[1]
 local workspace = game:GetService("Workspace")
@@ -285,14 +357,18 @@ assert(r:StopReplicatingTo(workspace:FindFirstChild("ManualPart"), player))
 assert(r:RemovePlayerFromGroup(player, "Team"))
 assert(r:AssignOwnership(workspace:FindFirstChild("OwnedPart"), nil))
 assert(r:Unregister(workspace:FindFirstChild("NetworkFolder"):FindFirstChild("MovedPart")))
-`, "replicator_server_visibility")
+`,
+		"replicator_server_visibility",
+	)
 
-	for _ in 0..<40 {
+	for _ in 0 ..< 40 {
 		engine_runtime.Environment_Render_Step(&server, &server_vm, 1.0 / 60.0)
 		engine_runtime.Environment_Render_Step(&client, &client_vm, 1.0 / 60.0)
 	}
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("GroupedPart") == nil)
 assert(game:GetService("Workspace"):FindFirstChild("OwnedPart") == nil)
@@ -302,14 +378,18 @@ assert(game:GetService("Workspace"):FindFirstChild("NetworkFolder") == nil)
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score") == nil)
 assert(game:GetService("Players").LocalPlayer == nil)
 assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39183))
-`, "replicator_client_visibility")
+`,
+		"replicator_client_visibility",
+	)
 
-	for _ in 0..<100 {
+	for _ in 0 ..< 100 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
 
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 assert(game:GetService("ReplicatorService").Connected)
 assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 23)
 local count = 0
@@ -318,7 +398,9 @@ for _, child in game:GetService("Workspace"):GetChildren() do
 end
 assert(count == 1)
 game:GetService("ReplicatorService"):Stop()
-`, "replicator_client_reconnect")
+`,
+		"replicator_client_reconnect",
+	)
 	run_script(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "replicator_server_stop")
 	vm.Close(&server_vm)
 	vm.Close(&client_vm)

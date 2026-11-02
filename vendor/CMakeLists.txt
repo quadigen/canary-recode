@@ -116,6 +116,30 @@ add_subdirectory(zstd)
 # minizip
 add_subdirectory(miniz)
 
+# RocksDB (embedded DataStore storage)
+set(ROCKSDB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ROCKSDB_SKIP_THIRDPARTY ON CACHE BOOL "" FORCE)
+set(WITH_MD_LIBRARY OFF CACHE BOOL "" FORCE)
+set(WITH_GFLAGS OFF CACHE BOOL "" FORCE)
+set(WITH_SNAPPY OFF CACHE BOOL "" FORCE)
+set(WITH_LZ4 OFF CACHE BOOL "" FORCE)
+set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+set(WITH_ZSTD OFF CACHE BOOL "" FORCE)
+set(WITH_BZ2 OFF CACHE BOOL "" FORCE)
+set(WITH_LIBURING OFF CACHE BOOL "" FORCE)
+set(WITH_JEMALLOC OFF CACHE BOOL "" FORCE)
+set(WITH_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_ALL_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_BENCHMARK_TOOLS OFF CACHE BOOL "" FORCE)
+set(WITH_CORE_TOOLS OFF CACHE BOOL "" FORCE)
+set(WITH_TOOLS OFF CACHE BOOL "" FORCE)
+set(WITH_TRACE_TOOLS OFF CACHE BOOL "" FORCE)
+set(WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(WITH_JNI OFF CACHE BOOL "" FORCE)
+set(FAIL_ON_WARNINGS OFF CACHE BOOL "" FORCE)
+add_subdirectory(rocksdb)
+
 # webview
 add_subdirectory(webview)
 
@@ -186,6 +210,12 @@ if(TARGET RecastWrapper)
     kine_add_odin_library_alias(kine_detour "$<TARGET_FILE:Detour>")
 endif()
 kine_add_odin_library_alias(kine_assimp "$<TARGET_FILE:assimp>")
+if(TARGET Ray)
+    kine_add_odin_library_alias(kine_ray "$<TARGET_FILE:Ray>")
+endif()
+if(TARGET rocksdb)
+    kine_add_odin_library_alias(kine_rocksdb "$<TARGET_FILE:rocksdb>")
+endif()
 if(TARGET zlibstatic)
     kine_add_odin_library_alias(kine_zlib "$<TARGET_FILE:zlibstatic>")
 endif()
@@ -209,6 +239,8 @@ set(KINE_COMPONENT_TARGETS
     # Renderer
     kine_render_shim
     kine_filament_shim
+    # Ray path tracer (optional; absent when KINE_WITH_RAY is off)
+    Ray
     matp
     filamat
     filament
@@ -266,6 +298,7 @@ endforeach()
 # Resolve those archives explicitly so the aggregate library contains the
 # implementation, not only the kine_filament_shim wrapper that calls it.
 set(KINE_FILAMENT_ARCHIVE_NAMES
+    filament-iblprefilter
     matp filamat filament backend bluegl bluevk filabridge filaflat utils
     geometry smol-v zstd uberarchive shaders
 )

@@ -1,4 +1,5 @@
 package services
+// wire:service
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -35,7 +36,9 @@ Physics :: struct {
 	gravity:                  f32,
 	pcd_cache:                map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
 	terrain_valid:            bool,
-	terrain_body:             kineffi.JPH_BodyID,
+	terrain_bodies:           map[Terrain_Chunk_Key]kineffi.JPH_BodyID,
+	terrain_chunk_triangles:  map[Terrain_Chunk_Key]int,
+	terrain_body_ids:         map[kineffi.JPH_BodyID]bool,
 	terrain_version:          u64,
 	terrain_triangles:        int,
 	collision_steps:          int,
@@ -47,6 +50,7 @@ Physics :: struct {
 	synced_epoch:             u64,
 	has_synced:               bool,
 	sync_bumped:              bool,
+	body_ids:                 [dynamic]kineffi.JPH_BodyID,
 	initialized:              bool,
 }
 
@@ -105,6 +109,9 @@ physics_construct :: proc(
 	service.service = Service_Init(&Physics_Class, "Physics", data_model)
 	service.gravity = 196.2
 	service.pcd_cache = make(map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef)
+	service.terrain_bodies = make(map[Terrain_Chunk_Key]kineffi.JPH_BodyID)
+	service.terrain_chunk_triangles = make(map[Terrain_Chunk_Key]int)
+	service.terrain_body_ids = make(map[kineffi.JPH_BodyID]bool)
 	service.collision_steps = DEFAULT_COLLISION_SUBSTEPS
 	service.system, service.initialized = jolt.System_Create_3D()
 	if service.initialized {
@@ -126,6 +133,9 @@ physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obj
 	for body in service.bodies {physics_destroy_body(service, body, false)}
 
 	physics_destroy_terrain_body(service)
+	delete(service.terrain_bodies)
+	delete(service.terrain_chunk_triangles)
+	delete(service.terrain_body_ids)
 	delete(service.body_to_part)
 	delete(service.bodies)
 
@@ -211,7 +221,7 @@ Register_Physics_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = physics_get,
 		set = physics_set,
-		properties = []string{
+		properties = []string {
 			"Enabled",
 			"Gravity",
 			"BodyCount",

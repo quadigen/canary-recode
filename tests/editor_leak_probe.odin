@@ -41,45 +41,26 @@ LUA_GCCOUNT :: 3
 LUA_GCCOLLECT :: 2
 
 luau_heap_mb :: proc(script_vm: ^vm.VM) -> f64 {
-	// LUA_GCCOUNT reports kibibytes, not bytes. Dividing by 1024*1024 labelled
-	// the result "MB" and printed values ~1024x too large, which made a 2MB
-	// Luau heap look like 2GB.
+
+
 	return f64(luauh.lua_gc(script_vm.L, LUA_GCCOUNT, 0)) / 1024.0
 }
 
-// ---- Tracking allocator: attributes live bytes to Odin call sites ---------
 
 track: mem.Tracking_Allocator
 
-// The tracking allocator only observes allocations that go through
-// context.allocator. Nothing ever installed it, so track.allocation_map stayed
-// empty, every snapshot printed live=0.0MB, and the per-callsite report was
-// never produced. That reads as a clean bill of health no matter what is
-// actually leaking, which is worse than having no probe at all.
-// Installed after module boot on purpose. odin-http swaps context.allocator for
-// its own arena during the marketplace fetches
-// (src/engine/util/odin-http/allocator.odin), so a tracker installed before
-// boot gets detached partway through the run.
+
 install_tracking_allocator :: proc() {
 	mem.tracking_allocator_init(&track, context.allocator)
 	context.allocator = mem.tracking_allocator(&track)
 }
 
-// NOTE: this does not actually attribute engine allocations, and
-// total_allocation_count stays 0. Every VM entry point re-establishes a fresh
-// context (`context = runtime.default_context()`) on the way in -- see
-// object_method in src/engine/classes/Object.odin and the 12 sites in
-// src/engine/vm/vm.odin -- so the allocator installed here is discarded at the
-// first Luau call boundary. Wiring this up for real means changing
-// default_context() to return a tracking-backed context, not editing this
-// probe. The numbers that do work are the native (working set / private bytes),
-// Luau, and instance-count metrics.
 
 tracking_live_mb :: proc() -> f64 {
 	return f64(track.current_memory_allocated) / (1024.0 * 1024.0)
 }
 
-// Tracking_Site aggregates live allocations by source location.
+
 Tracking_Site :: struct {
 	live_bytes: i64,
 	live_count: i64,
@@ -103,7 +84,7 @@ tracking_report_top :: proc(label: string, top_n: int) {
 		sites[key] = site
 	}
 
-	// Sort by live bytes descending (simple insertion sort; the list is small).
+
 	keys := make([dynamic]string, 0, len(sites))
 	defer delete(keys)
 	for key, _ in sites {
@@ -139,7 +120,6 @@ tracking_report_top :: proc(label: string, top_n: int) {
 	}
 }
 
-// ---- Tracking allocator: reports live bytes at each snapshot ---------------
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
@@ -188,41 +168,12 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-
-	archive, created := kineffi.Zip_Create(archive_path)
-	if !created {
-		return false
-	}
-
-	added := 0
-	for entry in entries {
-		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
-			continue
-		}
-
-		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
-		if read_err != nil {
-			continue
-		}
-
-		module_path := strings.concatenate({"internal/", entry.name})
-		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
-		delete(data, context.allocator)
-
-		if !stored {
-			_ = kineffi.Zip_Close(archive)
-			return false
-		}
-		added += 1
-	}
-
-	if !kineffi.Zip_Close(archive) || added == 0 {
+	added, ok := packages.Pack_Internal_Modules_From_Directory(
+		archive_path,
+		source_dir,
+		context.allocator,
+	)
+	if !ok {
 		return false
 	}
 
@@ -255,8 +206,8 @@ snapshot :: proc(
 		per = elapsed * 1000.0 / f64(frames)
 	}
 	ws, priv := process_memory_mb()
-	// Print "untracked" rather than 0.0MB when the tracker never got wired up,
-	// so a broken column cannot be misread as zero live memory.
+
+
 	live_field := fmt.tprintf("%.1fMB", tracking_live_mb())
 	if track.total_allocation_count == 0 {
 		live_field = "untracked"
@@ -322,8 +273,7 @@ main :: proc() {
 	}
 	snapshot(&environment, &script_vm, "warmup", time.now(), 0)
 
-	// Idle memory trend: if native memory grows with no user activity this is the
-	// leak the report describes.
+
 	for block in 0 ..< 6 {
 		start := time.now()
 		for _ in 0 ..< 50 {
@@ -351,9 +301,7 @@ _G.__leak_probe_index = 1
 		panic("leak probe boot failed")
 	}
 
-	// Phase B: isolate which action leaks native memory. Each block runs 30
-	// frames while changing exactly one input. Repeating blocks distinguishes
-	// one-time rebuild cost (a plateau) from a true per-action leak (a slope).
+
 	for round in 0 ..< 3 {
 		{
 			start := time.now()
@@ -394,20 +342,18 @@ Selection:Set({ list[index] })
 		snapshot(&environment, &script_vm, "resize-only", start, 30)
 	}
 
-	// Phase C: quiet frames after the activity, to see whether cost persists.
+
 	start := time.now()
 	for _ in 0 ..< 100 {
 		frame(&environment, &script_vm, surface, width, height)
 	}
 	snapshot(&environment, &script_vm, "post-idle", start, 100)
 
-	// Force a full Luau collection. If private memory collapses afterwards the
-	// growth was uncollected Luau garbage, not a native leak.
+
 	luauh.lua_gc(script_vm.L, LUA_GCCOLLECT, 0)
 	snapshot(&environment, &script_vm, "post-gc", time.now(), 0)
 
-	// Phase D: pure create/destroy churn per GUI class. Repeats must plateau if
-	// the class cleans up after itself; a rising slope names the leaking class.
+
 	churn_classes := []string{"TextLabel-raw", "Frame-raw", "TextLabel-rendered"}
 	churn_builders := []string {
 		"Instance.new(\"TextLabel\")",
@@ -460,14 +406,7 @@ Selection:Set({ list[index] })
 		}
 	}
 
-	// Phase E: the two typeface-heavy paths no churn covered.
-	// E1: TextService:GetTextSize (loads + destroys a typeface per call).
-	// Split: first 2 rounds measure growth while calling, then GC + measure to
-	// see whether the cost is uncollected garbage or a hard native leak.
-	//
-	// start is re-taken inside the round loop on purpose. Capturing it once
-	// before the loop made the reported ms/frame cumulative, so a perfectly
-	// steady per-round cost printed as a straight ramp and read as a leak.
+
 	for round in 0 ..< 6 {
 		start := time.now()
 		for _ in 0 ..< 40 {
@@ -476,7 +415,7 @@ Selection:Set({ list[index] })
 				`
 local TextService = game:GetService("TextService")
 for i = 1, 20 do
-	TextService:GetTextSize("Workspace.Part", 12, "builtin://fonts/Montserrat-Regular.ttf", Vector2.new(10000, 10000))
+	TextService:GetTextSize("Workspace.Part", 12, "builtin:
 end
 `,
 				"leak_probe_textsize",
@@ -490,13 +429,13 @@ end
 	}
 	luauh.lua_gc(script_vm.L, LUA_GCCOLLECT, 0)
 	snapshot(&environment, &script_vm, "gettextsize+gc", time.now(), 0)
-	// E2: rendered labels inside the live Studio ScreenGui (construct + render + destroy).
-	// start is re-taken per round for the same reason as E1.
+
+
 	for round in 0 ..< 3 {
 		start := time.now()
 		ok, err := vm.RunInternal(
-				&script_vm,
-				`
+			&script_vm,
+			`
 local UI = require("@internal/editor_ui")
 local host = UI.frame(UI.root(), UDim2.fromOffset(0, 0), UDim2.fromOffset(300, 400), Color3.new(0, 0, 0))
 local made = {}
@@ -532,7 +471,7 @@ _G.__leak_probe_render_host = nil
 		snapshot(&environment, &script_vm, label, start, 5)
 	}
 
-	// Attribute the growth: count live GUI nodes per major editor container.
+
 	count_ok, count_err := vm.RunInternal(
 		&script_vm,
 		`
@@ -574,18 +513,21 @@ print("OVERLAY=" .. tostring(shared.overlayRoot and countDescendants(shared.over
 		track.peak_memory_allocated,
 		len(track.allocation_map),
 	)
-	// Without this guard a tracker that never received a single allocation
-	// prints "(0 live allocations, 0.0MB)" and reads as a clean result.
+
+
 	if track.total_allocation_count == 0 {
 		fmt.println(
 			"[LeakProbe] WARNING: tracker saw zero allocations; the live= column is a false negative, not a clean bill of health.",
 		)
-		fmt.println("[LeakProbe] WARNING: engine resets context at every VM entry point, so Odin-side attribution is unavailable.")
-		fmt.println("[LeakProbe] WARNING: trust ws/priv/luau/instances instead; see install_tracking_allocator.")
+		fmt.println(
+			"[LeakProbe] WARNING: engine resets context at every VM entry point, so Odin-side attribution is unavailable.",
+		)
+		fmt.println(
+			"[LeakProbe] WARNING: trust ws/priv/luau/instances instead; see install_tracking_allocator.",
+		)
 	}
 
-	// The per-callsite report was defined but never called, so the run ended
-	// without ever naming the Odin side of anything still live.
+
 	tracking_report_top("final", 15)
 
 	fmt.println("EDITOR_LEAK_PROBE_DONE")

@@ -1,4 +1,10 @@
-param([string]$OutputDirectory = "build/web")
+param(
+    [string]$OutputDirectory = "build/web",
+    [string]$BuildTarget = "editor",
+    [string]$ClientAddress = "",
+    [string]$ClientPort = "",
+    [string]$Shell = "index.html"
+)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -61,18 +67,57 @@ foreach ($archive in $runtimeArchives) {
 }
 $linkFlags = @(
     "--allow-multiple-definition", "--export-table",
+    # Emscripten setjmp/longjmp + C++ exception runtime (Luau/Jolt throw across
+    # the JS boundary). The browser shell implements __cxa_* / invoke_* in JS and
+    # calls these wasm helpers, so they must be exported and force-linked.
+    "--export=setThrew", "--export=_emscripten_tempret_set", "--export=_emscripten_tempret_get",
+    "--export=__cxa_increment_exception_refcount", "--export=__cxa_decrement_exception_refcount",
+    "--export=__cxa_can_catch", "--export=__cxa_get_exception_ptr",
+    "--export=emscripten_stack_get_current", "--export=_emscripten_stack_restore",
+    "--undefined=setThrew", "--undefined=_emscripten_tempret_set",
+    "--undefined=__cxa_increment_exception_refcount", "--undefined=__cxa_decrement_exception_refcount",
+    "--undefined=__cxa_can_catch", "--undefined=__cxa_get_exception_ptr",
+    "--undefined=emscripten_stack_get_current", "--undefined=_emscripten_stack_restore",
     "--wrap=malloc", "--wrap=free", "--wrap=calloc", "--wrap=realloc",
     "--wrap=posix_memalign", "--wrap=strcmp", (Join-Path $nativeLib "web_allocator.o"),
     (Join-Path $nativeLib "libc++.a"), (Join-Path $nativeLib "libc++abi.a"),
     (Join-Path $nativeLib "libc.a"), (Join-Path $nativeLib "libcompiler_rt.a")
 ) -join " "
 
-& $odinCommand.Source build (Join-Path $repoRoot "src") -target:js_wasm32 -o:speed `
-    -out:(Join-Path $outputPath "kinemium_engine.wasm") "-extra-linker-flags:$linkFlags"
+# Embed the editor UI for the browser. The Web target cannot fetch the desktop
+# editor ZIP at runtime, so pack a kinemium-editor checkout's internal tree into
+# the binary at compile time. A client build never embeds the editor.
+$editorModules = if ($env:KINEMIUM_EDITOR_MODULES) { $env:KINEMIUM_EDITOR_MODULES } else {
+    Join-Path (Split-Path -Parent $repoRoot) "kinemium-editor/internal"
+}
+$odinArguments = @(
+    "build", (Join-Path $repoRoot "src"), "-target:js_wasm32", "-o:speed",
+    "-define:BUILD_TARGET=$BuildTarget",
+    "-out:$(Join-Path $outputPath 'kinemium_engine.wasm')",
+    "-extra-linker-flags:$linkFlags"
+)
+if ($BuildTarget -eq "editor" -and (Test-Path -LiteralPath $editorModules)) {
+    $resolvedEditor = (Resolve-Path -LiteralPath $editorModules).Path
+    Write-Host "Embedding editor modules from $resolvedEditor"
+    $odinArguments += "-define:EDITOR_MODULES=$resolvedEditor"
+
+    $editorComponents = Join-Path $editorModules "Components"
+    if (Test-Path -LiteralPath $editorComponents) {
+        $resolvedComponents = (Resolve-Path -LiteralPath $editorComponents).Path
+        Write-Host "Embedding editor components from $resolvedComponents"
+        $odinArguments += "-define:EDITOR_COMPONENTS=$resolvedComponents"
+    }
+} elseif ($BuildTarget -eq "editor") {
+    Write-Host "No kinemium-editor checkout found; building without the embedded editor UI"
+}
+if ($ClientAddress) { $odinArguments += "-define:KINE_ADDRESS=$ClientAddress" }
+if ($ClientPort) { $odinArguments += "-define:KINE_PORT=$ClientPort" }
+
+& $odinCommand.Source @odinArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Stage the desktop shell and official CanvasKit/Filament browser distributions.
-Copy-Item -LiteralPath (Join-Path $repoRoot "web/index.html") -Destination $outputPath -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "web/$Shell") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.css") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.js") -Destination $outputPath -Force
 Copy-Item -LiteralPath $odinRuntime -Destination (Join-Path $outputPath "odin.js") -Force

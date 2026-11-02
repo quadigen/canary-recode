@@ -2,6 +2,8 @@
 
 #include "kine_skia.h"
 
+#include "kine_terrain_mc.h"
+
 #include <SDL3/SDL_vulkan.h>
 
 #include <vulkan/vulkan.h>
@@ -56,6 +58,7 @@ struct KineVulkanCompositor {
     uint32_t apiVersion = VK_API_VERSION_1_0;
 
     KineSkiaVulkanContext* skiaContext = nullptr;
+    KineTerrainMc* terrainMc = nullptr;
     std::string lastError;
     bool ownsInstance = true;
     bool ownsDevice = true;
@@ -353,12 +356,40 @@ static bool kine_vk_create_device(KineVulkanCompositor* compositor)
         extensions.push_back(portabilitySubset);
     }
 
+    // Ray, the path tracer embedded in kine_filament_shim, builds descriptor set
+    // layouts with VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT on whatever device
+    // it is handed, so this device has to enable descriptor indexing for it.
+    // Filament and Skia do not use these features; they are only enabled when
+    // the physical device advertises them.
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
+    bool enableDescriptorIndexing = false;
+    constexpr const char* descriptorIndexing = "VK_EXT_descriptor_indexing";
+    auto vkGetPhysicalDeviceFeatures2 = kine_vk_instance_proc<PFN_vkGetPhysicalDeviceFeatures2>(
+        compositor, "vkGetPhysicalDeviceFeatures2");
+    if (deviceExtensionAvailable(descriptorIndexing) && vkGetPhysicalDeviceFeatures2) {
+        indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &indexingFeatures;
+        vkGetPhysicalDeviceFeatures2(compositor->physicalDevice, &features2);
+        enableDescriptorIndexing = indexingFeatures.descriptorBindingPartiallyBound == VK_TRUE;
+    }
+    if (enableDescriptorIndexing) {
+        indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+        indexingFeatures.pNext = nullptr;
+        indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+        extensions.push_back(descriptorIndexing);
+    }
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = 1;
     createInfo.pQueueCreateInfos = &queueInfo;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
+    if (enableDescriptorIndexing) {
+        createInfo.pNext = &indexingFeatures;
+    }
 
     VkResult result = vkCreateDevice(compositor->physicalDevice, &createInfo, nullptr, &compositor->device);
     if (result != VK_SUCCESS) {
@@ -1152,6 +1183,10 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         if (auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(compositor, "vkDeviceWaitIdle")) {
             vkDeviceWaitIdle(compositor->device);
         }
+        if (compositor->terrainMc) {
+            Kine_TerrainMc_Destroy(compositor->terrainMc);
+            compositor->terrainMc = nullptr;
+        }
         if (compositor->acquireFence) {
             if (auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(
                     compositor, "vkDestroyFence")) {
@@ -1306,6 +1341,69 @@ Kine_VulkanCompositor_GetInfo(
     outInfo->width = compositor->width;
     outInfo->height = compositor->height;
     return 1;
+}
+
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_MeshTerrainChunk(
+    KineVulkanCompositor* compositor,
+    const float* occ,
+    const uint32_t* mat,
+    int originX,
+    int originY,
+    int originZ,
+    float voxelSize,
+    float isoLevel,
+    float* outVertices,
+    float* outWeights,
+    uint32_t* outIndices,
+    uint32_t vertexCapacity,
+    uint32_t indexCapacity,
+    uint32_t* outVertexCount,
+    uint32_t* outIndexCount)
+{
+    if (!compositor || !compositor->device || !compositor->graphicsQueue) {
+        return 0;
+    }
+
+    if (!compositor->terrainMc) {
+        char err[256] = {0};
+        compositor->terrainMc = Kine_TerrainMc_Create(
+            compositor->instance,
+            compositor->physicalDevice,
+            compositor->device,
+            compositor->graphicsQueue,
+            compositor->graphicsQueueFamilyIndex,
+            err,
+            sizeof(err));
+        if (!compositor->terrainMc) {
+            compositor->lastError = err[0] ? err : "terrain mesher creation failed";
+            return 0;
+        }
+    }
+
+    char err[256] = {0};
+    int ok = Kine_TerrainMc_Mesh(
+        compositor->terrainMc,
+        occ,
+        mat,
+        originX,
+        originY,
+        originZ,
+        voxelSize,
+        isoLevel,
+        outVertices,
+        outWeights,
+        outIndices,
+        vertexCapacity,
+        indexCapacity,
+        outVertexCount,
+        outIndexCount,
+        err,
+        sizeof(err));
+    if (!ok) {
+        compositor->lastError = err[0] ? err : "terrain mesh failed";
+    }
+    return ok;
 }
 
 KINE_VULKAN_COMPOSITOR_API void*

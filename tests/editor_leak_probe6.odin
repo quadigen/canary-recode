@@ -1,20 +1,20 @@
 package main
 
-import "core:fmt"
-import "core:os"
-import "core:mem"
 import "base:runtime"
+import "core:fmt"
+import "core:mem"
+import "core:os"
 import "core:strings"
-import "core:time"
 import windows "core:sys/windows"
+import "core:time"
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import luauh "../src/engine/vm/luauh"
+import sandbox "../src/sandboxed"
 
 PROCESS_MEMORY_COUNTERS :: struct {
 	cb:                         windows.DWORD,
@@ -33,11 +33,7 @@ foreign import psapi "system:Psapi.lib"
 
 @(default_calling_convention = "system")
 foreign psapi {
-	GetProcessMemoryInfo :: proc(
-		hProcess: windows.HANDLE,
-		ppsmemCounters: ^PROCESS_MEMORY_COUNTERS,
-		cb: windows.DWORD,
-	) -> windows.BOOL ---
+	GetProcessMemoryInfo :: proc(hProcess: windows.HANDLE, ppsmemCounters: ^PROCESS_MEMORY_COUNTERS, cb: windows.DWORD) -> windows.BOOL ---
 }
 
 process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
@@ -46,10 +42,11 @@ process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
 	if GetProcessMemoryInfo(windows.GetCurrentProcess(), &counters, counters.cb) == false {
 		return 0, 0
 	}
-	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0), f64(counters.PagefileUsage) / (1024.0 * 1024.0)
+	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0),
+		f64(counters.PagefileUsage) / (1024.0 * 1024.0)
 }
 
-EDITOR_SOURCE_CANDIDATES := []string{
+EDITOR_SOURCE_CANDIDATES := []string {
 	"C:/Users/devco/Documents/kinemium-editor/internal",
 	"../kinemium-editor/internal",
 	"../../kinemium-editor/internal",
@@ -67,41 +64,12 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-
-	archive, created := kineffi.Zip_Create(archive_path)
-	if !created {
-		return false
-	}
-
-	added := 0
-	for entry in entries {
-		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
-			continue
-		}
-
-		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
-		if read_err != nil {
-			continue
-		}
-
-		module_path := strings.concatenate({"internal/", entry.name})
-		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
-		delete(data, context.allocator)
-
-		if !stored {
-			_ = kineffi.Zip_Close(archive)
-			return false
-		}
-		added += 1
-	}
-
-	if !kineffi.Zip_Close(archive) || added == 0 {
+	added, ok := packages.Pack_Internal_Modules_From_Directory(
+		archive_path,
+		source_dir,
+		context.allocator,
+	)
+	if !ok {
 		return false
 	}
 
@@ -109,14 +77,16 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 	return true
 }
 
-// ---- Tracking allocator -----------------------------------------------------
 
 track: mem.Tracking_Allocator
 
-bad_free_ignore :: proc(t: ^mem.Tracking_Allocator, memory: rawptr, location: runtime.Source_Code_Location) {
-	// The engine allocates inside Luau C callbacks under the default allocator
-	// and frees under the main context; those show up as bad frees here. They
-	// are not leaks, so ignore them instead of panicking.
+bad_free_ignore :: proc(
+	t: ^mem.Tracking_Allocator,
+	memory: rawptr,
+	location: runtime.Source_Code_Location,
+) {
+
+
 	_ = t
 	_ = memory
 	_ = location
@@ -134,7 +104,12 @@ Tracking_Site :: struct {
 tracking_report_top :: proc(label: string, top_n: int) {
 	sites := map[string]Tracking_Site{}
 	for _, entry in track.allocation_map {
-		key := fmt.tprintf("%s:%d %s", entry.location.file_path, entry.location.line, entry.location.procedure)
+		key := fmt.tprintf(
+			"%s:%d %s",
+			entry.location.file_path,
+			entry.location.line,
+			entry.location.procedure,
+		)
 		site := sites[key]
 		site.live_bytes += i64(entry.size)
 		site.live_count += 1
@@ -150,10 +125,10 @@ tracking_report_top :: proc(label: string, top_n: int) {
 		current := keys[i]
 		j := i - 1
 		for j >= 0 && sites[keys[j]].live_bytes < sites[current].live_bytes {
-			keys[j+1] = keys[j]
+			keys[j + 1] = keys[j]
 			j -= 1
 		}
-		keys[j+1] = current
+		keys[j + 1] = current
 	}
 
 	fmt.printf(
@@ -167,11 +142,15 @@ tracking_report_top :: proc(label: string, top_n: int) {
 			break
 		}
 		site := sites[key]
-		fmt.printf("[LeakSites]   %9.1fKB %7dx  %s\n", f64(site.live_bytes)/1024.0, site.live_count, key)
+		fmt.printf(
+			"[LeakSites]   %9.1fKB %7dx  %s\n",
+			f64(site.live_bytes) / 1024.0,
+			site.live_count,
+			key,
+		)
 	}
 }
 
-// ---- Probe ------------------------------------------------------------------
 
 snapshot :: proc(label: string, start: time.Time) {
 	elapsed := time.duration_seconds(time.since(start))
@@ -193,7 +172,13 @@ run :: proc(v: ^vm.VM, source: string, chunk: string) {
 	}
 }
 
-frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.KineSkiaSurface, w, h: i32, n: int) {
+frames :: proc(
+	environment: ^engine_runtime.Environment,
+	v: ^vm.VM,
+	s: ^kineffi.KineSkiaSurface,
+	w, h: i32,
+	n: int,
+) {
 	for _ in 0 ..< n {
 		engine_runtime.Environment_Update_Step(environment, v, 1.0 / 60.0)
 		engine_runtime.Environment_Render_2D(environment, v, s, w, h, 1.0 / 60.0)
@@ -202,8 +187,8 @@ frames :: proc(environment: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.
 }
 
 main :: proc() {
-	// Install the tracking allocator over the whole process so every Odin-side
-	// allocation is attributed to its call site.
+
+
 	track_backing := context.allocator
 	mem.tracking_allocator_init(&track, track_backing)
 	context.allocator = mem.tracking_allocator(&track)
@@ -238,20 +223,25 @@ main :: proc() {
 	frames(&environment, &script_vm, surface, width, height, 20)
 	snapshot("warmup", time.now())
 
-	// Baseline site report, so one-time boot costs don't masquerade as leaks.
+
 	tracking_report_top("baseline", 12)
 
-	run(&script_vm, `
+	run(
+		&script_vm,
+		`
 	local UI = require("@internal/editor_ui")
 	_G.__UI = UI
 	_G.__churn_root = UI.create("ScreenGui", { Name = "ChurnRoot", DisplayOrder = 5000 }, game.CoreGui)
-	`, "probe6_setup")
+	`,
+		"probe6_setup",
+	)
 
-	// Phase T: tooltip churn (known +43.5MB/round from probe5). The tracker
-	// should name exactly which call sites retain the bytes.
+
 	for round in 0 ..< 3 {
 		start := time.now()
-		run(&script_vm, `
+		run(
+			&script_vm,
+			`
 		local UI = _G.__UI
 		local root = _G.__churn_root
 		for i = 1, 200 do
@@ -259,16 +249,19 @@ main :: proc() {
 			UI.tooltip(target, "tip " .. i, {})
 		end
 		UI.clear(root)
-		`, "probe6_tooltip")
+		`,
+			"probe6_tooltip",
+		)
 		frames(&environment, &script_vm, surface, width, height, 2)
 		luauh.lua_gc(script_vm.L, 2, 0)
 		snapshot(fmt.tprintf("T tooltip r%d", round), start)
 	}
 	tracking_report_top("after tooltip churn", 15)
 
-	// Phase S: selection churn through the real editor reaction path (probe3
-	// showed ~135MB/round). Same attribution, cross-check.
-	run(&script_vm, `
+
+	run(
+		&script_vm,
+		`
 	local Selection = game:GetService("Selection")
 	local candidates = {}
 	for _, child in ipairs(game:GetChildren()) do
@@ -276,18 +269,24 @@ main :: proc() {
 	end
 	_G.__sel_candidates = candidates
 	_G.__sel_index = 1
-	`, "probe6_boot")
+	`,
+		"probe6_boot",
+	)
 
 	for round in 0 ..< 3 {
 		start := time.now()
 		for _ in 0 ..< 30 {
-			run(&script_vm, `
+			run(
+				&script_vm,
+				`
 			local Selection = game:GetService("Selection")
 			local list = _G.__sel_candidates
 			local index = _G.__sel_index
 			_G.__sel_index = (index % #list) + 1
 			Selection:Set({ list[index] })
-			`, "probe6_sel")
+			`,
+				"probe6_sel",
+			)
 			frames(&environment, &script_vm, surface, width, height, 1)
 		}
 		luauh.lua_gc(script_vm.L, 2, 0)

@@ -3,16 +3,16 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import "core:time"
 import windows "core:sys/windows"
+import "core:time"
 
 import kineffi "../src/engine/bindings"
 import packages "../src/engine/packages"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import luauh "../src/engine/vm/luauh"
+import sandbox "../src/sandboxed"
 
 PROCESS_MEMORY_COUNTERS :: struct {
 	cb:                         windows.DWORD,
@@ -31,11 +31,7 @@ foreign import psapi "system:Psapi.lib"
 
 @(default_calling_convention = "system")
 foreign psapi {
-	GetProcessMemoryInfo :: proc(
-		hProcess: windows.HANDLE,
-		ppsmemCounters: ^PROCESS_MEMORY_COUNTERS,
-		cb: windows.DWORD,
-	) -> windows.BOOL ---
+	GetProcessMemoryInfo :: proc(hProcess: windows.HANDLE, ppsmemCounters: ^PROCESS_MEMORY_COUNTERS, cb: windows.DWORD) -> windows.BOOL ---
 }
 
 process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
@@ -44,10 +40,11 @@ process_memory_mb :: proc() -> (working_set_mb: f64, private_mb: f64) {
 	if GetProcessMemoryInfo(windows.GetCurrentProcess(), &counters, counters.cb) == false {
 		return 0, 0
 	}
-	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0), f64(counters.PagefileUsage) / (1024.0 * 1024.0)
+	return f64(counters.WorkingSetSize) / (1024.0 * 1024.0),
+		f64(counters.PagefileUsage) / (1024.0 * 1024.0)
 }
 
-EDITOR_SOURCE_CANDIDATES := []string{
+EDITOR_SOURCE_CANDIDATES := []string {
 	"C:/Users/devco/Documents/kinemium-editor/internal",
 	"../kinemium-editor/internal",
 	"../../kinemium-editor/internal",
@@ -65,41 +62,12 @@ local_editor_archive :: proc(archive_path: string) -> bool {
 		return false
 	}
 
-	entries, err := os.read_directory_by_path(source_dir, -1, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer os.file_info_slice_delete(entries, context.allocator)
-
-	archive, created := kineffi.Zip_Create(archive_path)
-	if !created {
-		return false
-	}
-
-	added := 0
-	for entry in entries {
-		if entry.type != .Regular || !strings.has_suffix(entry.name, ".luau") {
-			continue
-		}
-
-		data, read_err := os.read_entire_file(entry.fullpath, context.allocator)
-		if read_err != nil {
-			continue
-		}
-
-		module_path := strings.concatenate({"internal/", entry.name})
-		stored := kineffi.Zip_Add_String(archive, module_path, string(data))
-		delete(module_path)
-		delete(data, context.allocator)
-
-		if !stored {
-			_ = kineffi.Zip_Close(archive)
-			return false
-		}
-		added += 1
-	}
-
-	if !kineffi.Zip_Close(archive) || added == 0 {
+	added, ok := packages.Pack_Internal_Modules_From_Directory(
+		archive_path,
+		source_dir,
+		context.allocator,
+	)
+	if !ok {
 		return false
 	}
 
@@ -152,10 +120,15 @@ main :: proc() {
 	defer kineffi.Kine_Skia_Surface_Destroy(surface)
 	kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 255)
 
-	frame :: proc(env: ^engine_runtime.Environment, v: ^vm.VM, s: ^kineffi.KineSkiaSurface, w, h: i32) {
-		engine_runtime.Environment_Update_Step(env, v, 1.0/60.0)
-		engine_runtime.Environment_Render_2D(env, v, s, w, h, 1.0/60.0)
-		engine_runtime.Environment_Render_Overlay(env, v, s, w, h, 1.0/60.0)
+	frame :: proc(
+		env: ^engine_runtime.Environment,
+		v: ^vm.VM,
+		s: ^kineffi.KineSkiaSurface,
+		w, h: i32,
+	) {
+		engine_runtime.Environment_Update_Step(env, v, 1.0 / 60.0)
+		engine_runtime.Environment_Render_2D(env, v, s, w, h, 1.0 / 60.0)
+		engine_runtime.Environment_Render_Overlay(env, v, s, w, h, 1.0 / 60.0)
 	}
 
 	for _ in 0 ..< 20 {
@@ -181,8 +154,7 @@ _G.__leak_probe_index = 1
 		panic("leak probe boot failed")
 	}
 
-	// Selection:Set churn with an explicit full Luau GC between rounds so any
-	// residual growth is native, not uncollected garbage.
+
 	for round in 0 ..< 5 {
 		start := time.now()
 
@@ -204,7 +176,7 @@ Selection:Set({ list[index] })
 			frame(&environment, &script_vm, surface, width, height)
 		}
 
-		luauh.lua_gc(script_vm.L, 2, 0) // LUA_GCCOLLECT
+		luauh.lua_gc(script_vm.L, 2, 0)
 		label := fmt.tprintf("selchurn r%d", round)
 		snapshot(label, start, 30)
 	}

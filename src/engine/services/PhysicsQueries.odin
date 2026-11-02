@@ -71,12 +71,12 @@ Physics_Raycast :: proc(
 
 	candidates := &service.scratch_ray_candidates
 	physics_reset_scratch_ids(candidates)
-	// Terrain is a single aggregate body rather than a Part, so it cannot come
-	// from the loop below. It has to be added explicitly or a terrain-only world
-	// (no Parts at all) produces an empty candidate set and every ray misses the
-	// one surface that is actually there.
-	if service.terrain_valid && service.terrain_body != kineffi.JPH_BODY_ID_INVALID {
-		append(candidates, service.terrain_body)
+
+
+	for _, terrain_body in service.terrain_bodies {
+		if terrain_body != kineffi.JPH_BODY_ID_INVALID {
+			append(candidates, terrain_body)
+		}
 	}
 	for body in service.bodies {
 		part := cast(^classes.Part)body.object
@@ -95,7 +95,7 @@ Physics_Raycast :: proc(
 	if !did_hit {return}
 
 
-	if service.terrain_valid && native_result.bodyID == service.terrain_body {
+	if service.terrain_body_ids[native_result.bodyID] {
 		hit_position := datatypes.Vector3 {
 			f32(native_result.position.x),
 			f32(native_result.position.y),

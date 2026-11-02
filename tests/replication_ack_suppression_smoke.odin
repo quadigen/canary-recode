@@ -1,9 +1,9 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -16,10 +16,14 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 
 step_network :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM) {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
-	services.Replication_Step(cast(^services.ReplicatorService)descriptor.object, script_vm.L, 1.0 / 60.0)
+	services.Replication_Step(
+		cast(^services.ReplicatorService)descriptor.object,
+		script_vm.L,
+		1.0 / 60.0,
+	)
 }
 
-// Steps both environments together for `count` frames.
+
 settle :: proc(
 	server: ^engine_runtime.Environment,
 	server_vm: ^vm.VM,
@@ -73,9 +77,7 @@ assert(r:ConnectClient("127.0.0.1", 39213))
 		"ack_suppression_client_setup",
 	)
 
-	// Let the initial snapshot land and the first acknowledgements get back to
-	// the server. Until the server has a confirmed token for an entity it is
-	// obliged to keep re-sending, so this window is expected to be busy.
+
 	settle(&server, &server_vm, &client, &client_vm, 150)
 
 	run_script(
@@ -91,9 +93,7 @@ assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 5)
 		"ack_suppression_client_content",
 	)
 
-	// Measure a steady-state window where nothing on the server changes. If
-	// suppression is working, this should be a trickle of acks and spawns for
-	// newly relevant entities rather than a full snapshot every frame.
+
 	descriptor := services.Find_Service(&server.services, "ReplicatorService")
 	service := cast(^services.ReplicatorService)descriptor.object
 	kind_before := service.diag_kind_counts
@@ -124,20 +124,23 @@ assert(idle_skipped > 0, "nothing was suppressed while the scene was static")
 
 -- A static scene must not cost a full snapshot per frame. 120 frames at 60Hz
 -- with 2 entities would be well over 100 packets if suppression were broken.
-assert(idle_packets < 60, "idle window sent " .. tostring(idle_packets) .. " packets, suppression is not engaging")`,
+-- The floor is the snapshot cadence itself (one packet per snapshot in this
+-- window at 30 Hz over 2 seconds), so scale the budget with the rate instead
+-- of hardcoding the old 20 Hz figure.
+local rate = game:GetService("ReplicatorService"):GetStats().effectiveSnapshotRate
+assert(idle_packets < rate * 2 + 20, "idle window sent " .. tostring(idle_packets) .. " packets, suppression is not engaging")`,
 		"ack_suppression_idle_after",
 	)
-	// The remaining idle traffic is character input acknowledgement, which is
-	// deduplicated per input sequence and unrelated to content suppression. The
-	// assertion that matters is that the two content channels went completely
-	// quiet. Kinds 5 and 6 multiplex frame types behind a leading subtype byte:
-	// subtype 1 is part state, subtype 2 is a property.
+
+
 	state_packets :=
-		service.diag_subtype_counts[1][5] - subtype_before[1][5] +
+		service.diag_subtype_counts[1][5] -
+		subtype_before[1][5] +
 		service.diag_subtype_counts[1][6] -
 		subtype_before[1][6]
 	property_packets :=
-		service.diag_subtype_counts[2][5] - subtype_before[2][5] +
+		service.diag_subtype_counts[2][5] -
+		subtype_before[2][5] +
 		service.diag_subtype_counts[2][6] -
 		subtype_before[2][6]
 	spawn_packets := service.diag_kind_counts[7] - kind_before[7]
@@ -154,8 +157,7 @@ assert(idle_packets < 60, "idle window sent " .. tostring(idle_packets) .. " pac
 		fmt.tprintf("static scene still sent %d spawn packets", spawn_packets),
 	)
 
-	// Now change real content and confirm it still flows. A suppressed channel
-	// that never wakes up is just as broken as one that never sleeps.
+
 	moved_before := service.diag_subtype_counts[1][5] + service.diag_subtype_counts[1][6]
 	run_script(
 		&server_vm,
@@ -180,8 +182,7 @@ assert(game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value == 9, 
 		"ack_suppression_client_change",
 	)
 
-	// And a second idle window after the change, to prove the new content is
-	// acknowledged and the channels settle back down.
+
 	kind_before = service.diag_kind_counts
 	subtype_before = service.diag_subtype_counts
 	run_script(
@@ -194,11 +195,13 @@ settled_packets_before = game:GetService("ReplicatorService"):GetStats().packets
 	)
 	settle(&server, &server_vm, &client, &client_vm, 120)
 	resettled_state :=
-		service.diag_subtype_counts[1][5] - subtype_before[1][5] +
+		service.diag_subtype_counts[1][5] -
+		subtype_before[1][5] +
 		service.diag_subtype_counts[1][6] -
 		subtype_before[1][6]
 	resettled_property :=
-		service.diag_subtype_counts[2][5] - subtype_before[2][5] +
+		service.diag_subtype_counts[2][5] -
+		subtype_before[2][5] +
 		service.diag_subtype_counts[2][6] -
 		subtype_before[2][6]
 	assert(

@@ -1,8 +1,9 @@
 package datatypes
 
+import vm "../vm"
 import "base:runtime"
 import "core:fmt"
-import vm "../vm"
+import "core:time"
 
 push_date_time :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: DateTime) {
 	push_value(L, binding, value)
@@ -34,7 +35,24 @@ date_time_from_unix_timestamp :: proc "c" (L: ^vm.State) -> i32 {
 
 date_time_from_unix_timestamp_millis :: proc "c" (L: ^vm.State) -> i32 {
 	context = runtime.default_context()
-	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestampMillis(vm.ArgNumber(L, 1)))
+	push_date_time(
+		L,
+		binding_from_upvalue(L),
+		DateTime_FromUnixTimestampMillis(vm.ArgNumber(L, 1)),
+	)
+	return 1
+}
+
+date_time_from_iso_date :: proc "c" (L: ^vm.State) -> i32 {
+	context = runtime.default_context()
+
+	binding := binding_from_upvalue(L)
+	value := Arg_DateTime(L, 1, registry_from_binding(binding))
+
+	t := time.unix(i64(value.UnixTimestampMillis) / 1000, 0)
+	y, m, d := time.date(t)
+
+	vm.PushString(L, fmt.tprintf("%04d-%02d-%02d", y, int(m), d))
 	return 1
 }
 
@@ -45,6 +63,10 @@ date_time_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushNumber(L, DateTime_UnixTimestamp(date_time^))
 	case "UnixTimestampMillis":
 		vm.PushNumber(L, date_time.UnixTimestampMillis)
+	case "fromIsoDate":
+		t := time.unix(i64(date_time.UnixTimestampMillis) / 1000, 0)
+		y, m, d := time.date(t)
+		vm.PushString(L, fmt.tprintf("%04d-%02d-%02d", y, int(m), d))
 	case:
 		return false
 	}
@@ -65,17 +87,23 @@ date_time_destroy :: proc(value, ctx: rawptr) {
 }
 
 DateTime_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "DateTime",
-		get     = date_time_get,
-		string  = date_time_string,
+	return vm.Userdata_Binding {
+		name = "DateTime",
+		get = date_time_get,
+		string = date_time_string,
 		destroy = date_time_destroy,
-		equal   = date_time_equal,
+		equal = date_time_equal,
 	}
 }
 
 DateTime_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "now", date_time_now)
 	add_library_function(L, binding, "fromUnixTimestamp", date_time_from_unix_timestamp)
-	add_library_function(L, binding, "fromUnixTimestampMillis", date_time_from_unix_timestamp_millis)
+	add_library_function(
+		L,
+		binding,
+		"fromUnixTimestampMillis",
+		date_time_from_unix_timestamp_millis,
+	)
+	add_library_function(L, binding, "fromIsoDate", date_time_from_iso_date)
 }

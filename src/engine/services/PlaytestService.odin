@@ -1,13 +1,14 @@
 #+build !js
+// wire:service
 package services
 
-// wire:service global="PlaytestService"
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import serializer "../serializer"
 import vm "../vm"
+import "core:fmt"
 import "core:os"
 import "core:strings"
 
@@ -16,19 +17,33 @@ PlaytestService_Class := classes.Class_Info {
 	parent = &Service_Class,
 }
 
+Playtest_Output :: struct {
+	read:    ^os.File,
+	pending: [dynamic]u8,
+}
+
 PlaytestService :: struct {
-	using service:  Service,
-	server_process: os.Process,
-	client_process: os.Process,
-	running:        bool,
-	last_exit_code: int,
-	last_error:     string,
-	map_path:       string,
-	temp_map_dir:   string,
+	using service:   Service,
+	server_process:  os.Process,
+	client_process:  os.Process,
+	server_output:   Playtest_Output,
+	client_output:   Playtest_Output,
+	running:         bool,
+	singleplayer:    bool,
+	android_session: bool,
+	last_exit_code:  int,
+	last_error:      string,
+	map_path:        string,
+	temp_map_dir:    string,
 }
 
 PLAYTEST_ADDRESS :: "127.0.0.1"
-PLAYTEST_PORT    :: "1234"
+PLAYTEST_PORT :: u16(1234)
+PLAYTEST_STDERR_CHUNK :: 4096
+
+playtest_process_active :: proc(process: os.Process) -> bool {
+	return process.pid != 0
+}
 
 playtest_set_error :: proc(service: ^PlaytestService, value: string) {
 	delete(service.last_error)
@@ -44,45 +59,219 @@ playtest_cleanup_temp_map :: proc(service: ^PlaytestService) {
 	service.temp_map_dir = ""
 }
 
+playtest_close_output :: proc(output: ^Playtest_Output) {
+	if output == nil {return}
+	if output.read != nil {
+		_ = os.close(output.read)
+		output.read = nil
+	}
+	if output.pending != nil {
+		delete(output.pending)
+		output.pending = nil
+	}
+}
+
+playtest_log_line :: proc(service: ^PlaytestService, source, message, kind: string) {
+	if service == nil || service.service.data_model == nil {return}
+	registry := service.service.data_model.registry
+	if registry == nil {return}
+	descriptor := Find_Service(registry, "LogService")
+	if descriptor == nil || descriptor.object == nil {return}
+	log_service := cast(^LogService)descriptor.object
+	full_message := strings.concatenate({"[Playtest ", source, "] ", message})
+	defer delete(full_message)
+	log_service_write(log_service, full_message, kind)
+}
+
+playtest_after_tag :: proc(line, tag: string) -> string {
+	message := line[len(tag):]
+
+
+	if len(message) > 0 && message[0] == ' ' {
+		message = message[1:]
+	}
+	return message
+}
+
+playtest_forward_line :: proc(service: ^PlaytestService, source: string, raw_line: string) {
+	line := strings.trim_space(raw_line)
+	if line == "" {return}
+
+	kind := ""
+	message := line
+
+	switch {
+	case strings.has_prefix(line, "[ERROR]"):
+		message = playtest_after_tag(line, "[ERROR]")
+		kind = "Error"
+	case strings.has_prefix(line, "[WARN]"):
+		message = playtest_after_tag(line, "[WARN]")
+		kind = "Warn"
+	case strings.has_prefix(line, "[INFO]"):
+		message = playtest_after_tag(line, "[INFO]")
+		kind = "Info"
+	case strings.has_prefix(line, "[LOG]"):
+		message = playtest_after_tag(line, "[LOG]")
+		kind = "Log"
+	case:
+		return
+	}
+
+	playtest_log_line(service, source, message, kind)
+}
+
+
+playtest_pump_output :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output) {
+	if service == nil || output == nil || output.read == nil {return}
+
+	for {
+		has_data, has_error := os.pipe_has_data(output.read)
+		if has_error != nil || !has_data {break}
+
+		chunk: [PLAYTEST_STDERR_CHUNK]u8
+		count, read_error := os.read(output.read, chunk[:])
+		if read_error != nil || count <= 0 {break}
+		append(&output.pending, ..chunk[:count])
+	}
+
+	line_start := 0
+	for index in 0 ..< len(output.pending) {
+		if output.pending[index] != '\n' {continue}
+		playtest_forward_line(service, source, string(output.pending[line_start:index]))
+		line_start = index + 1
+	}
+
+	if line_start > 0 {
+		remove_range(&output.pending, 0, line_start)
+	}
+}
+
+playtest_pump_outputs :: proc(service: ^PlaytestService) {
+	if service == nil {return}
+	playtest_pump_output(service, "server", &service.server_output)
+	playtest_pump_output(service, "client", &service.client_output)
+}
+
+
+Playtest_Reap :: struct {
+	exit_code: int,
+	ok:        bool,
+}
+
+playtest_reap :: proc(process: os.Process) -> Playtest_Reap {
+	result: Playtest_Reap
+	if !playtest_process_active(process) {
+		result.ok = true
+		return result
+	}
+	kill_err := os.process_kill(process)
+	state, wait_err := os.process_wait(process)
+	result.exit_code = state.exit_code
+	result.ok = kill_err == nil && wait_err == nil
+	return result
+}
+
 playtest_refresh :: proc(service: ^PlaytestService) {
 	if service == nil || !service.running {return}
-	server_state, server_err := os.process_wait(service.server_process, timeout = 0)
-	client_state, client_err := os.process_wait(service.client_process, timeout = 0)
-	if (server_err == nil && server_state.exited) ||
-	   (client_err == nil && client_state.exited) {
-		service.last_exit_code =
-			client_err == nil && client_state.exited ? client_state.exit_code : server_state.exit_code
-		if server_err != nil || !server_state.exited {
-			_ = os.process_kill(service.server_process)
-			_, _ = os.process_wait(service.server_process)
+
+	playtest_pump_outputs(service)
+
+	server_started := playtest_process_active(service.server_process)
+	client_started := playtest_process_active(service.client_process)
+	server_alive := false
+	client_alive := false
+	server_exit := 0
+	client_exit := 0
+
+	if server_started {
+		server_state, server_err := os.process_wait(service.server_process, timeout = 0)
+		server_alive = server_err != nil || !server_state.exited
+		if server_err == nil && server_state.exited {
+			server_exit = server_state.exit_code
 		}
-		if client_err != nil || !client_state.exited {
-			_ = os.process_kill(service.client_process)
-			_, _ = os.process_wait(service.client_process)
-		}
-		service.server_process = {}
-		service.client_process = {}
-		service.running = false
-		playtest_cleanup_temp_map(service)
 	}
+	if client_started {
+		client_state, client_err := os.process_wait(service.client_process, timeout = 0)
+		client_alive = client_err != nil || !client_state.exited
+		if client_err == nil && client_state.exited {
+			client_exit = client_state.exit_code
+		}
+	}
+
+	if (server_alive || !server_started) && (client_alive || !client_started) {
+		return
+	}
+
+	if playtest_process_active(service.server_process) && server_alive {
+		_ = playtest_reap(service.server_process)
+	}
+	if playtest_process_active(service.client_process) && client_alive {
+		_ = playtest_reap(service.client_process)
+	}
+
+	playtest_pump_outputs(service)
+
+	service.last_exit_code = client_exit != 0 ? client_exit : server_exit
+	service.server_process = {}
+	service.client_process = {}
+	playtest_close_output(&service.server_output)
+	playtest_close_output(&service.client_output)
+	service.running = false
+	service.singleplayer = false
+	playtest_cleanup_temp_map(service)
 }
 
 playtest_stop :: proc(service: ^PlaytestService) -> bool {
 	playtest_refresh(service)
 	if service == nil || !service.running {return false}
-	server_kill_err := os.process_kill(service.server_process)
-	client_kill_err := os.process_kill(service.client_process)
-	server_state, server_wait_err := os.process_wait(service.server_process)
-	client_state, client_wait_err := os.process_wait(service.client_process)
+
+
+	when #config(KINE_ANDROID, false) {
+		if service.android_session {
+			stopped := android_playtest_stop()
+			service.running = false
+			service.android_session = false
+			service.singleplayer = false
+			service.server_process = {}
+			service.client_process = {}
+			if !stopped {
+				playtest_set_error(service, "failed to close the Android playtest window")
+				return false
+			}
+			playtest_cleanup_temp_map(service)
+			return true
+		}
+	}
+
+	server_ok := true
+	client_ok := true
+	server_exit := 0
+	client_exit := 0
+
+	if playtest_process_active(service.server_process) {
+		server_reap := playtest_reap(service.server_process)
+		server_ok = server_reap.ok
+		server_exit = server_reap.exit_code
+	}
+	if playtest_process_active(service.client_process) {
+		client_reap := playtest_reap(service.client_process)
+		client_ok = client_reap.ok
+		client_exit = client_reap.exit_code
+	}
+
+	playtest_pump_outputs(service)
+
 	service.running = false
+	service.singleplayer = false
 	service.server_process = {}
 	service.client_process = {}
-	if server_kill_err != nil || client_kill_err != nil ||
-	   server_wait_err != nil || client_wait_err != nil {
-		playtest_set_error(service, "failed to stop the playtest server and client")
+	playtest_close_output(&service.server_output)
+	playtest_close_output(&service.client_output)
+	if !server_ok || !client_ok {
+		playtest_set_error(service, "failed to stop the playtest processes")
 		return false
 	}
-	service.last_exit_code = client_state.exit_code != 0 ? client_state.exit_code : server_state.exit_code
+	service.last_exit_code = client_exit != 0 ? client_exit : server_exit
 	playtest_cleanup_temp_map(service)
 	return true
 }
@@ -99,6 +288,8 @@ playtest_construct :: proc(
 playtest_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^PlaytestService)object
 	_ = playtest_stop(service)
+	playtest_close_output(&service.server_output)
+	playtest_close_output(&service.client_output)
 	playtest_cleanup_temp_map(service)
 	delete(service.last_error)
 	delete(service.map_path)
@@ -118,10 +309,16 @@ playtest_get :: proc(
 	switch key {
 	case "IsRunning":
 		vm.PushBoolean(L, service.running)
+	case "IsSingleplayer":
+		vm.PushBoolean(L, service.singleplayer)
 	case "ProcessId":
 		vm.PushNumber(L, service.running ? f64(service.client_process.pid) : 0)
 	case "ServerProcessId":
-		vm.PushNumber(L, service.running ? f64(service.server_process.pid) : 0)
+		server_pid := 0.0
+		if service.running && playtest_process_active(service.server_process) {
+			server_pid = f64(service.server_process.pid)
+		}
+		vm.PushNumber(L, server_pid)
 	case "ClientProcessId":
 		vm.PushNumber(L, service.running ? f64(service.client_process.pid) : 0)
 	case "LastExitCode":
@@ -130,12 +327,448 @@ playtest_get :: proc(
 		vm.PushString(L, service.last_error)
 	case "MapPath":
 		vm.PushString(L, service.map_path)
-	case "Start", "Stop":
+	case "Start", "StartServer", "StartClient", "StartSinglePlayer", "Stop":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
 	}
 	return true
+}
+
+
+Playtest_Session_Mode :: enum {
+	Pair,
+	Server_Only,
+	Client_Only,
+	Singleplayer,
+}
+
+
+Playtest_Launch :: struct {
+	mode:     Playtest_Session_Mode,
+	map_path: string,
+	address:  string,
+	port:     u16,
+	headless: bool,
+}
+
+playtest_default_launch :: proc(mode: Playtest_Session_Mode) -> Playtest_Launch {
+	return Playtest_Launch {
+		mode = mode,
+		address = PLAYTEST_ADDRESS,
+		port = PLAYTEST_PORT,
+		headless = mode == .Server_Only,
+	}
+}
+
+
+playtest_owns_map :: proc(mode: Playtest_Session_Mode) -> bool {
+	return mode != .Client_Only
+}
+
+
+playtest_check_map_path :: proc(L: ^vm.State, method, path: string) -> bool {
+	if path == "" {return true}
+	if !strings.has_suffix(path, ".kine") && !strings.has_suffix(path, ".KINE") {
+		detail := strings.concatenate({"PlaytestService:", method, " expects a .kine file path"})
+		defer delete(detail)
+		_ = vm.RaiseError(L, detail)
+		return false
+	}
+	if !os.exists(path) {
+		detail := strings.concatenate(
+			{"PlaytestService:", method, " could not find the .kine file"},
+		)
+		defer delete(detail)
+		_ = vm.RaiseError(L, detail)
+		return false
+	}
+	return true
+}
+
+
+playtest_abandon_map :: proc(service: ^PlaytestService, path: string, owned: bool) {
+	if !owned {return}
+	delete(path)
+	playtest_cleanup_temp_map(service)
+}
+
+
+playtest_resolve_map :: proc(
+	L: ^vm.State,
+	service: ^PlaytestService,
+	map_path: string,
+) -> (
+	path: string,
+	owned: bool,
+	ok: bool,
+) {
+	if map_path != "" {
+		return map_path, false, true
+	}
+
+	export_service := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
+	if export_service == nil {
+		_ = vm.RaiseError(L, "PlaytestService could not access ExportService")
+		return "", false, false
+	}
+
+	temp_dir, temp_err := os.make_directory_temp("", "kinemium-playtest-*", context.allocator)
+	if temp_err != nil {
+		playtest_set_error(service, os.error_string(temp_err))
+		return "", false, false
+	}
+
+	file_path, join_err := os.join_path({temp_dir, "map.kine"}, context.allocator)
+	if join_err != nil {
+		_ = os.remove_all(temp_dir)
+		delete(temp_dir)
+		playtest_set_error(service, os.error_string(join_err))
+		return "", false, false
+	}
+
+	export_err := export_datamodel_to_file(export_service, L, file_path)
+	if !serializer.Error_Is_None(export_err) {
+
+
+		export_detail := serializer.Error_String(export_err)
+		defer delete(export_detail)
+		_ = os.remove_all(temp_dir)
+		delete(temp_dir)
+		delete(file_path)
+		playtest_set_error(service, export_detail)
+		serializer.Error_Delete(&export_err)
+		return "", false, false
+	}
+	serializer.Error_Delete(&export_err)
+
+
+	playtest_cleanup_temp_map(service)
+	service.temp_map_dir = strings.clone(temp_dir)
+	delete(temp_dir)
+	return file_path, true, true
+}
+
+
+playtest_spawn :: proc(
+	command: []string,
+) -> (
+	process: os.Process,
+	stderr_read: ^os.File,
+	failure: string,
+	failed: bool,
+) {
+	read_end, write_end, pipe_error := os.pipe()
+	if pipe_error != nil {
+		return {}, nil, os.error_string(pipe_error), true
+	}
+
+	started, start_error := os.process_start(
+		os.Process_Desc {
+			command = command,
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = write_end,
+		},
+	)
+
+	_ = os.close(write_end)
+
+	if start_error != nil {
+		_ = os.close(read_end)
+		return {}, nil, os.error_string(start_error), true
+	}
+	return started, read_end, "", false
+}
+
+
+playtest_record :: proc(
+	service: ^PlaytestService,
+	server_process: os.Process,
+	server_stderr: ^os.File,
+	client_process: os.Process,
+	client_stderr: ^os.File,
+	map_path: string,
+	mode: Playtest_Session_Mode,
+) {
+	delete(service.map_path)
+	service.map_path = strings.clone(map_path)
+	service.server_process = server_process
+	service.client_process = client_process
+	service.server_output.read = server_stderr
+	service.client_output.read = client_stderr
+	service.singleplayer = mode == .Singleplayer
+	service.running = true
+	service.last_exit_code = 0
+	playtest_set_error(service, "")
+}
+
+
+playtest_launch :: proc(
+	L: ^vm.State,
+	service: ^PlaytestService,
+	launch: Playtest_Launch,
+) -> (
+	i32,
+	bool,
+) {
+	playtest_refresh(service)
+	if service.running {_ = playtest_stop(service)}
+
+
+	needs_map := playtest_owns_map(launch.mode)
+	path := ""
+	map_owned := false
+	if needs_map {
+		resolved, resolved_owned, resolved_ok := playtest_resolve_map(L, service, launch.map_path)
+		if !resolved_ok {
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		path = resolved
+		map_owned = resolved_owned
+	}
+
+
+	when #config(KINE_ANDROID, false) {
+		return playtest_launch_android(L, service, launch, path, map_owned)
+	}
+
+	executable, executable_err := os.get_executable_path(context.temp_allocator)
+	if executable_err != nil {
+		playtest_abandon_map(service, path, map_owned)
+		playtest_set_error(service, os.error_string(executable_err))
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+
+
+	port := fmt.tprintf("%d", launch.port)
+
+	switch launch.mode {
+	case .Singleplayer:
+		process, stderr_pipe, failure, failed := playtest_spawn(
+			[]string {
+				executable,
+				"--singleplayer",
+				"--playtest-host",
+				"--map",
+				path,
+				"--username",
+				"SinglePlayer",
+			},
+		)
+		if failed {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		playtest_record(service, {}, nil, process, stderr_pipe, path, .Singleplayer)
+
+	case .Server_Only:
+		command: []string
+		if launch.headless {
+			command = []string {
+				executable,
+				"--server",
+				"--playtest-host",
+				"--map",
+				path,
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			}
+		} else {
+			command = []string {
+				executable,
+				"--server",
+				"--window",
+				"--playtest-host",
+				"--map",
+				path,
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			}
+		}
+		process, stderr_pipe, failure, failed := playtest_spawn(command)
+		if failed {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		playtest_record(service, process, stderr_pipe, {}, nil, path, .Server_Only)
+
+	case .Client_Only:
+		process, stderr_pipe, failure, failed := playtest_spawn(
+			[]string {
+				executable,
+				"--client",
+				"--playtest-host",
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			},
+		)
+		if failed {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		playtest_record(service, {}, nil, process, stderr_pipe, "", .Client_Only)
+
+	case .Pair:
+		server_command := []string {
+			executable,
+			"--server",
+			"--window",
+			"--playtest-host",
+			"--map",
+			path,
+			"--address",
+			launch.address,
+			"--port",
+			port,
+		}
+		server_process, server_stderr, server_failure, server_failed := playtest_spawn(
+			server_command,
+		)
+		if server_failed {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, server_failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+
+
+		client_process, client_stderr, client_failure, client_failed := playtest_spawn(
+			[]string {
+				executable,
+				"--client",
+				"--playtest-host",
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			},
+		)
+		if client_failed {
+
+
+			_ = playtest_reap(server_process)
+			if server_stderr != nil {_ = os.close(server_stderr)}
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, client_failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		playtest_record(
+			service,
+			server_process,
+			server_stderr,
+			client_process,
+			client_stderr,
+			path,
+			.Pair,
+		)
+	}
+
+	if map_owned {delete(path)}
+	vm.PushBoolean(L, true)
+	return 1, true
+}
+
+when #config(KINE_ANDROID, false) {
+
+
+	playtest_record_android :: proc(
+		service: ^PlaytestService,
+		map_path: string,
+		mode: Playtest_Session_Mode,
+	) {
+		delete(service.map_path)
+		service.map_path = strings.clone(map_path)
+		service.server_process = {}
+		service.client_process = {}
+		service.singleplayer = mode == .Singleplayer || mode == .Pair
+		service.android_session = true
+		service.running = true
+		service.last_exit_code = 0
+		playtest_set_error(service, "")
+	}
+
+
+	playtest_launch_android :: proc(
+		L: ^vm.State,
+		service: ^PlaytestService,
+		launch: Playtest_Launch,
+		path: string,
+		map_owned: bool,
+	) -> (
+		i32,
+		bool,
+	) {
+		args: [dynamic]string
+		defer delete(args)
+
+
+		port := fmt.tprintf("%d", launch.port)
+
+		switch launch.mode {
+		case .Singleplayer, .Pair:
+			append(
+				&args,
+				"--singleplayer",
+				"--playtest-host",
+				"--map",
+				path,
+				"--username",
+				"SinglePlayer",
+			)
+		case .Server_Only:
+			append(
+				&args,
+				"--server",
+				"--window",
+				"--playtest-host",
+				"--map",
+				path,
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			)
+		case .Client_Only:
+			append(
+				&args,
+				"--client",
+				"--playtest-host",
+				"--address",
+				launch.address,
+				"--port",
+				port,
+			)
+		}
+
+		failure, launched := android_playtest_launch(args[:])
+		if !launched {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, failure)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+
+		playtest_record_android(service, path, launch.mode)
+		if map_owned {delete(path)}
+		vm.PushBoolean(L, true)
+		return 1, true
+	}
 }
 
 playtest_namecall :: proc(
@@ -151,153 +784,52 @@ playtest_namecall :: proc(
 	service := cast(^PlaytestService)object
 	switch method {
 	case "Start":
-		path := ""
-		if vm.StackTop(L) >= 2 && !vm.IsNoneOrNil(L, 2) {
-			path = vm.ArgString(L, 2)
+		launch := playtest_default_launch(.Pair)
+		launch.map_path = vm.ArgOptionalString(L, 2)
+		if vm.ArgOptionalBoolean(L, 3, false) {
+			launch.mode = .Singleplayer
 		}
-		if path != "" &&
-		   (!strings.has_suffix(path, ".kine") && !strings.has_suffix(path, ".KINE")) {
-			return vm.RaiseError(L, "PlaytestService:Start expects a .kine file path"), true
-		}
-		if path != "" && !os.exists(path) {
-			return vm.RaiseError(L, "PlaytestService:Start could not find the .kine file"), true
-		}
+		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
+		return playtest_launch(L, service, launch)
 
-		playtest_refresh(service)
-		if service.running {_ = playtest_stop(service)}
+	case "StartServer":
+		launch := playtest_default_launch(.Server_Only)
+		launch.map_path = vm.ArgOptionalString(L, 2)
+		launch.headless = vm.ArgOptionalBoolean(L, 3, true)
+		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
+		return playtest_launch(L, service, launch)
 
-		map_owned := false
-		if path == "" {
-			export_service := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
-			if export_service == nil {
-				return vm.RaiseError(L, "PlaytestService:Start could not access ExportService"), true
-			}
-			temp_dir, temp_err := os.make_directory_temp("", "kinemium-playtest-*", context.allocator)
-			if temp_err != nil {
-				playtest_set_error(service, os.error_string(temp_err))
-				vm.PushBoolean(L, false)
-				return 1, true
-			}
-			file_path, join_err := os.join_path({temp_dir, "map.kine"}, context.allocator)
-			if join_err != nil {
-				_ = os.remove_all(temp_dir)
-				delete(temp_dir)
-				playtest_set_error(service, os.error_string(join_err))
-				vm.PushBoolean(L, false)
-				return 1, true
-			}
-export_err := export_datamodel_to_file(export_service, L, file_path)
-		if !serializer.Error_Is_None(export_err) {
-			// The serializer already says which record could not be written, so
-			// that detail is what the playtest failure reports rather than a
-			// generic "export failed".
-			export_detail := serializer.Error_String(export_err)
-			defer delete(export_detail)
-			_ = os.remove_all(temp_dir)
-			delete(temp_dir)
-			delete(file_path)
-			playtest_set_error(service, export_detail)
-			serializer.Error_Delete(&export_err)
-			vm.PushBoolean(L, false)
-			return 1, true
+	case "StartClient":
+		launch := playtest_default_launch(.Client_Only)
+		launch.address = vm.ArgOptionalString(L, 2, PLAYTEST_ADDRESS)
+		port_number := vm.ArgOptionalNumber(L, 3, f64(PLAYTEST_PORT))
+		if port_number < 1 || port_number > 65535 {
+			return vm.RaiseError(
+					L,
+					"PlaytestService:StartClient port must be between 1 and 65535",
+				),
+				true
 		}
-		serializer.Error_Delete(&export_err)
-			playtest_cleanup_temp_map(service)
-			service.temp_map_dir = strings.clone(temp_dir)
-			delete(temp_dir)
-			path = file_path
-			map_owned = true
-		}
+		launch.port = u16(i64(port_number))
+		return playtest_launch(L, service, launch)
 
-		executable, executable_err := os.get_executable_path(context.temp_allocator)
+	case "StartSinglePlayer":
+		launch := playtest_default_launch(.Singleplayer)
+		launch.map_path = vm.ArgOptionalString(L, 2)
+		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
+		return playtest_launch(L, service, launch)
 
-		if executable_err != nil {
-			if map_owned {
-				delete(path)
-				playtest_cleanup_temp_map(service)
-			}
-			playtest_set_error(service, os.error_string(executable_err))
-			vm.PushBoolean(L, false)
-			return 1, true
-		}
-
-		server_command := []string{
-			executable,
-			"--server",
-			"--window",
-			// Marks this child as a playtest host. The server keeps its own
-			// --map handling, so the flag is passed without a value here and the
-			// map continues to travel on --map below.
-			"--playtest-host",
-			"--map",
-			path,
-			"--address",
-			PLAYTEST_ADDRESS,
-			"--port",
-			PLAYTEST_PORT,
-		}
-		server_process, server_start_err := os.process_start(
-			os.Process_Desc {
-				command = server_command,
-				stdin = os.stdin,
-				stdout = os.stdout,
-				stderr = os.stderr,
-			},
-		)
-		if server_start_err != nil {
-			if map_owned {
-				delete(path)
-				playtest_cleanup_temp_map(service)
-			}
-			playtest_set_error(service, os.error_string(server_start_err))
-			vm.PushBoolean(L, false)
-			return 1, true
-		}
-		client_command := []string{
-			executable,
-			"--client",
-			// The client receives the map through replication, so it is marked as
-			// a playtest host without being given a --map of its own.
-			"--playtest-host",
-			"--address",
-			PLAYTEST_ADDRESS,
-			"--port",
-			PLAYTEST_PORT,
-		}
-		client_process, client_start_err := os.process_start(
-			os.Process_Desc {
-				command = client_command,
-				stdin = os.stdin,
-				stdout = os.stdout,
-				stderr = os.stderr,
-			},
-		)
-		if client_start_err != nil {
-			_ = os.process_kill(server_process)
-			_, _ = os.process_wait(server_process)
-			if map_owned {
-				delete(path)
-				playtest_cleanup_temp_map(service)
-			}
-			playtest_set_error(service, os.error_string(client_start_err))
-			vm.PushBoolean(L, false)
-			return 1, true
-		}
-		delete(service.map_path)
-		service.map_path = strings.clone(path)
-		if map_owned {delete(path)}
-		service.server_process = server_process
-		service.client_process = client_process
-		service.running = true
-		service.last_exit_code = 0
-		playtest_set_error(service, "")
-		vm.PushBoolean(L, true)
-		return 1, true
 	case "Stop":
 		vm.PushBoolean(L, playtest_stop(service))
 		return 1, true
 	}
 	return 0, false
+}
+
+playtest_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	service := cast(^PlaytestService)object
+	if service == nil || !service.running {return}
+	playtest_refresh(service)
 }
 
 Register_PlaytestService_Class :: proc(registry: ^classes.Registry) {
@@ -309,5 +841,7 @@ Register_PlaytestService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = playtest_get,
 		namecall = playtest_namecall,
+		_step = playtest_step,
+		_step_phase = .Update,
 	)
 }

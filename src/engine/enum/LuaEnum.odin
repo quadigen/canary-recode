@@ -1,9 +1,9 @@
 package engine_enums
 
+import vm "../vm"
+import "base:runtime"
 import "core:reflect"
 import "core:strings"
-import "base:runtime"
-import vm "../vm"
 
 ENUM_TAG :: 47
 ENUM_ITEM_TAG :: 48
@@ -16,7 +16,7 @@ Enum_Type :: struct {
 }
 
 Enum_Item :: struct {
-	enum_type: ^Enum_Type,
+	enum_type:    ^Enum_Type,
 	name:         string,
 	display_name: string,
 	value:        i64,
@@ -101,7 +101,7 @@ enum_type_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	switch key {
 	case "Name":
 		vm.PushString(L, enum_type.name)
-	case "GetEnumItems":
+	case "GetEnumItems", "FromName", "FromValue":
 		vm.PushUserdataMethod(L, key)
 	case:
 		item := find_item_by_name(enum_type, key)
@@ -116,16 +116,34 @@ enum_type_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 enum_type_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	registry := cast(^Registry)ctx
 	enum_type := cast(^Enum_Type)value
-	if method != "GetEnumItems" || enum_type == nil {
+	if enum_type == nil {
 		return 0, false
 	}
 
-	vm.NewTable(L, len(enum_type.items))
-	for item, index in enum_type.items {
-		push_enum_item(L, registry, item)
-		vm.SetArrayValue(L, -2, index+1)
+	switch method {
+	case "GetEnumItems":
+		if enum_type.name == "Material" {
+			vm.NewTable(L, MATERIAL_PUBLIC_COUNT)
+			for material, index in Material_Public_Order {
+				push_enum_item(L, registry, find_item_by_value(enum_type, i64(material)))
+				vm.SetArrayValue(L, -2, index + 1)
+			}
+			return 1, true
+		}
+		vm.NewTable(L, len(enum_type.items))
+		for item, index in enum_type.items {
+			push_enum_item(L, registry, item)
+			vm.SetArrayValue(L, -2, index + 1)
+		}
+		return 1, true
+	case "FromName":
+		push_enum_item(L, registry, find_item_by_name(enum_type, vm.ArgString(L, 2)))
+		return 1, true
+	case "FromValue":
+		push_enum_item(L, registry, find_item_by_public_value(enum_type, i64(vm.ArgNumber(L, 2))))
+		return 1, true
 	}
-	return 1, true
+	return 0, false
 }
 
 enum_type_string :: proc(value, ctx: rawptr) -> string {
@@ -147,7 +165,8 @@ enum_item_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	case "Name":
 		vm.PushString(L, item.name)
 	case "Value":
-		vm.PushNumber(L, f64(item.value))
+		if item.enum_type.name ==
+		   "Material" {vm.PushNumber(L, f64(Material_Roblox_Value(Material(item.value))))} else {vm.PushNumber(L, f64(item.value))}
 	case "EnumType":
 		push_enum_type(L, registry, item.enum_type)
 	case:
@@ -185,27 +204,12 @@ Enum_Item_By_Name :: proc(
 	return find_item_by_name(find_type(registry, enum_name), item_name)
 }
 
-Enum_Item_By_Value :: proc(
-	registry: ^Registry,
-	enum_name: string,
-	value: i64,
-) -> ^Enum_Item {
+Enum_Item_By_Value :: proc(registry: ^Registry, enum_name: string, value: i64) -> ^Enum_Item {
 	return find_item_by_value(find_type(registry, enum_name), value)
 }
 
-// Register_Named_Enum registers an enum from an explicit name/value list rather
-// than from an Odin `typeid`. Native plugins cross a C boundary and cannot hand
-// the host a typeid, so they describe the enum as data instead.
-//
-// The registry takes its own copy of the name and of every item name, so the
-// caller may free the source strings as soon as this returns. It reports
-// failure instead of asserting on a duplicate so a plugin can react to the
-// conflict itself.
-Register_Named_Enum :: proc(
-	registry: ^Registry,
-	name: string,
-	items: []Enum_Item_Def,
-) -> bool {
+
+Register_Named_Enum :: proc(registry: ^Registry, name: string, items: []Enum_Item_Def) -> bool {
 	if registry == nil || name == "" || find_type(registry, name) != nil {
 		return false
 	}
@@ -219,11 +223,11 @@ Register_Named_Enum :: proc(
 			continue
 		}
 		item := new(Enum_Item)
-		item^ = Enum_Item{
-			enum_type = enum_type,
-			name      = strings.clone(def.name),
+		item^ = Enum_Item {
+			enum_type    = enum_type,
+			name         = strings.clone(def.name),
 			display_name = strings.concatenate({enum_type.display_name, ".", def.name}),
-			value     = def.value,
+			value        = def.value,
 		}
 		append(&enum_type.items, item)
 	}
@@ -240,11 +244,11 @@ Register_Reflected_Enum :: proc(registry: ^Registry, name: string, Enum_Type_Id:
 	enum_type.display_name = strings.concatenate({"Enum.", name})
 	for field in reflect.enum_fields_zipped(Enum_Type_Id) {
 		item := new(Enum_Item)
-		item^ = Enum_Item{
-			enum_type = enum_type,
-			name      = field.name,
+		item^ = Enum_Item {
+			enum_type    = enum_type,
+			name         = field.name,
 			display_name = strings.concatenate({enum_type.display_name, ".", field.name}),
-			value     = i64(field.value),
+			value        = i64(field.value),
 		}
 		append(&enum_type.items, item)
 	}
@@ -253,7 +257,7 @@ Register_Reflected_Enum :: proc(registry: ^Registry, name: string, Enum_Type_Id:
 
 Registry_Init :: proc(registry: ^Registry) {
 	assert(registry != nil)
-	registry.enum_binding = vm.Userdata_Binding{
+	registry.enum_binding = vm.Userdata_Binding {
 		name     = "Enum",
 		tag      = ENUM_TAG,
 		ctx      = registry,
@@ -262,7 +266,7 @@ Registry_Init :: proc(registry: ^Registry) {
 		string   = enum_type_string,
 		equal    = enum_pointer_equal,
 	}
-	registry.item_binding = vm.Userdata_Binding{
+	registry.item_binding = vm.Userdata_Binding {
 		name   = "EnumItem",
 		tag    = ENUM_ITEM_TAG,
 		ctx    = registry,
@@ -273,7 +277,12 @@ Registry_Init :: proc(registry: ^Registry) {
 	Register_Default_Enums(registry)
 }
 
-Push_Item_By_Value :: proc(L: ^vm.State, registry: ^Registry, enum_name: string, value: i64) -> bool {
+Push_Item_By_Value :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	enum_name: string,
+	value: i64,
+) -> bool {
 	item := find_item_by_value(find_type(registry, enum_name), value)
 	if item == nil {
 		vm.PushNil(L)
@@ -283,7 +292,12 @@ Push_Item_By_Value :: proc(L: ^vm.State, registry: ^Registry, enum_name: string,
 	return true
 }
 
-Arg_Item :: proc(L: ^vm.State, index: int, registry: ^Registry, enum_name: string = "") -> ^Enum_Item {
+Arg_Item :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^Registry,
+	enum_name: string = "",
+) -> ^Enum_Item {
 	if registry == nil || !vm.IsUserdataType(L, index, &registry.item_binding) {
 		_ = vm.RaiseError(L, "expected EnumItem")
 		return nil
@@ -321,8 +335,18 @@ enum_item_from_value :: proc "c" (L: ^vm.State) -> i32 {
 		return vm.RaiseError(L, "expected Enum")
 	}
 	enum_type := cast(^Enum_Type)vm.UserdataValue(L, 1)
-	push_enum_item(L, registry, find_item_by_value(enum_type, i64(vm.ArgNumber(L, 2))))
+	push_enum_item(L, registry, find_item_by_public_value(enum_type, i64(vm.ArgNumber(L, 2))))
 	return 1
+}
+
+
+find_item_by_public_value :: proc(enum_type: ^Enum_Type, value: i64) -> ^Enum_Item {
+	if enum_type != nil && enum_type.name == "Material" {
+		material, ok := Material_From_Roblox_Value(value)
+		if !ok {return nil}
+		return find_item_by_value(enum_type, i64(material))
+	}
+	return find_item_by_value(enum_type, value)
 }
 
 enum_table_get_enums :: proc "c" (L: ^vm.State) -> i32 {

@@ -1,20 +1,26 @@
 package services
+// wire:service
 
-// wire:service global="profilerService"
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
-import vm "../vm"
 import profiling "../profiling"
+import vm "../vm"
 
-ProfilerService_Class := classes.Class_Info{name = "ProfilerService", parent = &Service_Class}
+ProfilerService_Class := classes.Class_Info {
+	name   = "ProfilerService",
+	parent = &Service_Class,
+}
 
 ProfilerService :: struct {
 	using service: Service,
 }
 
-profiler_service_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+profiler_service_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	service := new(ProfilerService)
 	service.service = Service_Init(&ProfilerService_Class, "ProfilerService", data_model)
 	return &service.object
@@ -38,20 +44,50 @@ fps_value :: proc() -> f64 {
 
 HISTORY_POINTS :: 30
 
-profiler_service_get :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string) -> bool {
+profiler_service_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
 	switch key {
-	case "Enabled": vm.PushBoolean(L, profiling.is_enabled())
-	case "Paused": vm.PushBoolean(L, profiling.is_capture_paused())
-	case "FrameCount": vm.PushInteger(L, i64(profiling.frame_count()))
-	case "FrameTime": vm.PushNumber(L, frame_time_ms())
-	case "FPS": vm.PushNumber(L, fps_value())
-	case "GetService", "FindService": vm.PushUserdataMethod(L, key)
-	case: return false
+	case "Enabled":
+		vm.PushBoolean(L, profiling.is_enabled())
+	case "Paused":
+		vm.PushBoolean(L, profiling.is_capture_paused())
+	case "FrameCount":
+		vm.PushNumber(L, f64(profiling.frame_count()))
+	case "FrameTime":
+		vm.PushNumber(L, frame_time_ms())
+	case "FPS":
+		vm.PushNumber(L, fps_value())
+	case "TrackingEnabled":
+		vm.PushBoolean(L, profiling.is_tracking_enabled())
+	case "GetService",
+	     "FindService",
+	     "GetThreads",
+	     "GetThreadStats",
+	     "GetThreadHistory",
+	     "GetScripts",
+	     "SetTrackingEnabled":
+		vm.PushUserdataMethod(L, key)
+	case:
+		return false
 	}
 	return true
 }
 
-profiler_service_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatype_registry: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string) -> (i32, bool) {
+profiler_service_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^ProfilerService)object
 	switch method {
 	case "GetService":
@@ -66,12 +102,33 @@ profiler_service_namecall :: proc(L: ^vm.State, object: ^classes.Object, datatyp
 	case "Pause":
 		profiling.set_capture_paused(true)
 		return 0, true
+	case "GetFrameTimes":
+		push_frame_times(L, i64(vm.ArgNumber(L, 2)))
+		return 1, true
+	case "GetZoneHistory":
+		push_zone_history(L, vm.ArgString(L, 2), i64(vm.ArgNumber(L, 3)))
+		return 1, true
 	case "Resume":
 		profiling.set_capture_paused(false)
 		return 0, true
 	case "GetFrameRecord":
 		push_frame_record(L, i64(vm.ArgInteger(L, 2)))
 		return 1, true
+	case "GetThreads":
+		push_threads(L)
+		return 1, true
+	case "GetThreadStats":
+		push_thread_stats(L)
+		return 1, true
+	case "GetThreadHistory":
+		push_thread_history(L, i64(vm.ArgNumber(L, 2)))
+		return 1, true
+	case "GetScripts":
+		push_scripts(L)
+		return 1, true
+	case "SetTrackingEnabled":
+		profiling.set_tracking_enabled(vm.ArgBoolean(L, 2))
+		return 0, true
 	}
 	return 0, false
 }
@@ -105,31 +162,67 @@ push_frame_stats :: proc(L: ^vm.State) {
 	vm.NewTable(L, 0, 0)
 	if len(frames) > 0 {
 		last := frames[len(frames) - 1]
-		index := 1
+		base_ns := zones_base_ns(last.zones[:])
 		for zone_index in 0 ..< len(last.zones) {
-			record := last.zones[zone_index]
-			vm.NewTable(L, 0, 3)
-			vm.PushString(L, record.name)
-			vm.SetField(L, -2, "name")
-			vm.PushNumber(L, f64(record.color))
-			vm.SetField(L, -2, "color")
-			vm.PushNumber(L, f64(record.end_ns - record.start_ns) * 1e-6)
-			vm.SetField(L, -2, "ms")
-			vm.RawSetIndex(L, -2, index)
-			index += 1
+			push_zone_record(L, last.zones[zone_index], base_ns)
+			vm.RawSetIndex(L, -2, zone_index + 1)
 		}
 	}
 	vm.SetField(L, -2, "zones")
 }
 
-push_zone_record :: proc(L: ^vm.State, record: profiling.Zone_Record) {
-	vm.NewTable(L, 0, 3)
+zones_base_ns :: proc(zones: []profiling.Zone_Record) -> u64 {
+	if len(zones) == 0 {
+		return 0
+	}
+	base := zones[0].start_ns
+	for zone in zones {
+		if zone.start_ns < base {
+			base = zone.start_ns
+		}
+	}
+	return base
+}
+
+push_frame_times :: proc(L: ^vm.State, count: i64) {
+	frames := profiling.history_frames()
+	n := min(int(max(count, 1)), len(frames))
+	first := len(frames) - n
+	vm.NewTable(L, 0, n)
+	for i in 0 ..< n {
+		vm.PushNumber(L, f64(frames[first + i].delta_ns) * 1e-6)
+		vm.RawSetIndex(L, -2, i + 1)
+	}
+}
+
+push_zone_history :: proc(L: ^vm.State, name: string, count: i64) {
+	frames := profiling.history_frames()
+	n := min(int(max(count, 1)), len(frames))
+	first := len(frames) - n
+	vm.NewTable(L, 0, n)
+	for i in 0 ..< n {
+		total_ns: u64
+		zones := frames[first + i].zones
+		for zone_index in 0 ..< len(zones) {
+			if zones[zone_index].name == name {
+				total_ns += zones[zone_index].end_ns - zones[zone_index].start_ns
+			}
+		}
+		vm.PushNumber(L, f64(total_ns) * 1e-6)
+		vm.RawSetIndex(L, -2, i + 1)
+	}
+}
+
+push_zone_record :: proc(L: ^vm.State, record: profiling.Zone_Record, base_ns: u64) {
+	vm.NewTable(L, 0, 4)
 	vm.PushString(L, record.name)
 	vm.SetField(L, -2, "name")
 	vm.PushNumber(L, f64(record.color))
 	vm.SetField(L, -2, "color")
 	vm.PushNumber(L, f64(record.end_ns - record.start_ns) * 1e-6)
 	vm.SetField(L, -2, "ms")
+	vm.PushNumber(L, f64(record.start_ns - base_ns) * 1e-6)
+	vm.SetField(L, -2, "startMs")
 }
 
 push_frame_record :: proc(L: ^vm.State, index: i64) {
@@ -145,7 +238,7 @@ push_frame_record :: proc(L: ^vm.State, index: i64) {
 
 	vm.NewTable(L, 0, 4)
 
-	vm.PushInteger(L, index)
+	vm.PushNumber(L, f64(index))
 	vm.SetField(L, -2, "index")
 
 	frame_ms := f64(record.delta_ns) * 1e-6
@@ -159,12 +252,269 @@ push_frame_record :: proc(L: ^vm.State, index: i64) {
 	}
 	vm.SetField(L, -2, "fps")
 
+	base_ns := zones_base_ns(record.zones[:])
+
 	vm.NewTable(L, 0, len(record.zones))
 	for zone_idx in 0 ..< len(record.zones) {
-		push_zone_record(L, record.zones[zone_idx])
+		push_zone_record(L, record.zones[zone_idx], base_ns)
 		vm.RawSetIndex(L, -2, zone_idx + 1)
 	}
 	vm.SetField(L, -2, "zones")
+}
+
+thread_status_text :: proc(L: ^vm.State, record: ^profiling.Thread_Record) -> string {
+	if !record.alive {
+		return "Dead"
+	}
+	switch vm.ThreadStatus(L, record.L) {
+	case .Running:
+		return "Running"
+	case .Suspended:
+		return "Suspended"
+	case .Normal:
+		return "Normal"
+	case .Finished:
+		return "Finished"
+	case .Error:
+		return "Error"
+	}
+	return "Unknown"
+}
+
+push_thread_record :: proc(L: ^vm.State, record: ^profiling.Thread_Record) {
+	vm.NewTable(L, 0, 13)
+
+	vm.PushNumber(L, f64(record.id))
+	vm.SetField(L, -2, "Id")
+
+	vm.PushString(L, profiling.thread_display_name(record))
+	vm.SetField(L, -2, "Name")
+
+	vm.PushString(L, thread_status_text(L, record))
+	vm.SetField(L, -2, "Status")
+
+	vm.PushNumber(L, f64(record.cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "CpuMs")
+
+	vm.PushNumber(L, f64(record.total_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "TotalCpuMs")
+
+	vm.PushNumber(L, f64(record.resumes))
+	vm.SetField(L, -2, "Resumes")
+
+	vm.PushNumber(L, f64(record.alloc_bytes))
+	vm.SetField(L, -2, "AllocatedBytes")
+
+	vm.PushNumber(L, f64(record.free_bytes))
+	vm.SetField(L, -2, "FreedBytes")
+
+	vm.PushNumber(L, f64(record.live_bytes))
+	vm.SetField(L, -2, "LiveBytes")
+
+	vm.PushNumber(L, f64(record.frame_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "FrameCpuMs")
+
+	vm.PushNumber(L, f64(record.frame_total_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "FrameTotalCpuMs")
+
+	vm.PushNumber(L, f64(record.frame_alloc_bytes))
+	vm.SetField(L, -2, "FrameAllocatedBytes")
+
+	vm.PushNumber(L, f64(record.frame_resumes))
+	vm.SetField(L, -2, "FrameResumes")
+}
+
+push_threads :: proc(L: ^vm.State) {
+	records := profiling.all_thread_records()
+	root := profiling.caller_root(L)
+
+	count := 0
+	for record in records {
+		if record.alive && record.root == root {
+			count += 1
+		}
+	}
+
+	vm.NewTable(L, 0, count)
+	index := 1
+	for record in records {
+		if !record.alive || record.root != root {
+			continue
+		}
+		push_thread_record(L, record)
+		vm.RawSetIndex(L, -2, index)
+		index += 1
+	}
+}
+
+push_thread_stats :: proc(L: ^vm.State) {
+	records := profiling.all_thread_records()
+	root := profiling.caller_root(L)
+
+	alive := 0
+	dead := 0
+	frame_cpu_ns: u64
+	frame_total_cpu_ns: u64
+	frame_alloc_bytes: u64
+	frame_free_bytes: u64
+	frame_resumes: u64
+	total_cpu_ns: u64
+	tracked_live_bytes: i64
+	for record in records {
+		if record.root != root {
+			continue
+		}
+		if record.alive {
+			alive += 1
+		} else {
+			dead += 1
+		}
+		frame_cpu_ns += record.frame_cpu_ns
+		frame_total_cpu_ns += record.frame_total_cpu_ns
+		frame_alloc_bytes += record.frame_alloc_bytes
+		frame_free_bytes += record.frame_free_bytes
+		frame_resumes += record.frame_resumes
+		total_cpu_ns += record.cpu_ns
+		tracked_live_bytes += record.live_bytes
+	}
+
+	vm.NewTable(L, 0, 13)
+
+	vm.PushNumber(L, f64(alive))
+	vm.SetField(L, -2, "threads")
+
+	vm.PushNumber(L, f64(dead))
+	vm.SetField(L, -2, "deadThreads")
+
+	vm.PushNumber(L, f64(frame_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "frameCpuMs")
+
+	vm.PushNumber(L, f64(frame_total_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "frameTotalCpuMs")
+
+	vm.PushNumber(L, f64(total_cpu_ns) * 1e-6)
+	vm.SetField(L, -2, "totalCpuMs")
+
+	vm.PushNumber(L, f64(frame_alloc_bytes))
+	vm.SetField(L, -2, "frameAllocatedBytes")
+
+	vm.PushNumber(L, f64(frame_free_bytes))
+	vm.SetField(L, -2, "frameFreedBytes")
+
+	vm.PushNumber(L, f64(frame_resumes))
+	vm.SetField(L, -2, "frameResumes")
+
+	vm.PushNumber(L, f64(tracked_live_bytes))
+	vm.SetField(L, -2, "trackedLiveBytes")
+
+	vm.PushNumber(L, f64(profiling.heap_bytes(L)))
+	vm.SetField(L, -2, "heapBytes")
+
+	vm.PushNumber(L, profiling.allocation_rate_bytes_per_sec())
+	vm.SetField(L, -2, "allocationRateBytesPerSecond")
+
+	vm.PushBoolean(L, profiling.is_tracking_enabled())
+	vm.SetField(L, -2, "trackingEnabled")
+
+	vm.PushBoolean(L, profiling.is_capture_paused())
+	vm.SetField(L, -2, "paused")
+}
+
+
+push_scripts :: proc(L: ^vm.State) {
+	root := profiling.caller_root(L)
+	stats := profiling.script_stats(root)
+	defer delete(stats)
+
+	vm.NewTable(L, 0, len(stats))
+	index := 1
+	for stat in stats {
+		vm.NewTable(L, 0, 9)
+
+		vm.PushString(L, stat.name)
+		vm.SetField(L, -2, "Name")
+
+		vm.PushNumber(L, f64(stat.cpu_ns) * 1e-6)
+		vm.SetField(L, -2, "CpuMs")
+
+		vm.PushNumber(L, f64(stat.total_cpu_ns) * 1e-6)
+		vm.SetField(L, -2, "TotalCpuMs")
+
+		vm.PushNumber(L, f64(stat.resumes))
+		vm.SetField(L, -2, "Resumes")
+
+		vm.PushNumber(L, f64(stat.alloc_bytes))
+		vm.SetField(L, -2, "AllocatedBytes")
+
+		vm.PushNumber(L, f64(stat.free_bytes))
+		vm.SetField(L, -2, "FreedBytes")
+
+		vm.PushNumber(L, f64(stat.live_bytes))
+		vm.SetField(L, -2, "LiveBytes")
+
+		vm.PushNumber(L, f64(stat.threads))
+		vm.SetField(L, -2, "Threads")
+
+		vm.PushNumber(L, f64(stat.alive_threads))
+		vm.SetField(L, -2, "AliveThreads")
+
+		vm.RawSetIndex(L, -2, index)
+		index += 1
+	}
+}
+
+
+push_thread_history :: proc(L: ^vm.State, index: i64) {
+	frames := profiling.thread_history_frames()
+	total := i64(len(frames))
+
+	if total == 0 || index < 1 || index > total {
+		vm.PushNil(L)
+		return
+	}
+
+	frame := frames[total - index]
+	root := profiling.caller_root(L)
+
+	vm.NewTable(L, 0, 2)
+
+	vm.PushNumber(L, f64(index))
+	vm.SetField(L, -2, "index")
+
+	vm.NewTable(L, 0, len(frame.rows))
+	row_index := 1
+	for row in frame.rows {
+		record := profiling.find_thread_record(row.id)
+		if record == nil || record.root != root {
+			continue
+		}
+		vm.NewTable(L, 0, 7)
+
+		vm.PushNumber(L, f64(row.id))
+		vm.SetField(L, -2, "id")
+
+		vm.PushString(L, profiling.thread_display_name(record))
+		vm.SetField(L, -2, "name")
+
+		vm.PushNumber(L, f64(row.cpu_ns) * 1e-6)
+		vm.SetField(L, -2, "cpuMs")
+
+		vm.PushNumber(L, f64(row.total_cpu_ns) * 1e-6)
+		vm.SetField(L, -2, "totalCpuMs")
+
+		vm.PushNumber(L, f64(row.resumes))
+		vm.SetField(L, -2, "resumes")
+
+		vm.PushNumber(L, f64(row.alloc_bytes))
+		vm.SetField(L, -2, "allocatedBytes")
+
+		vm.PushNumber(L, f64(row.free_bytes))
+		vm.SetField(L, -2, "freedBytes")
+
+		vm.RawSetIndex(L, -2, row_index)
+		row_index += 1
+	}
+	vm.SetField(L, -2, "threads")
 }
 
 profiler_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -173,7 +523,15 @@ profiler_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Ren
 }
 
 Register_ProfilerService_Class :: proc(registry: ^classes.Registry) {
-	classes.Register_Class(registry, &ProfilerService_Class, profiler_service_construct, profiler_service_destroy, creatable = false, get = profiler_service_get, namecall = profiler_service_namecall)
+	classes.Register_Class(
+		registry,
+		&ProfilerService_Class,
+		profiler_service_construct,
+		profiler_service_destroy,
+		creatable = false,
+		get = profiler_service_get,
+		namecall = profiler_service_namecall,
+	)
 }
 
 PROFILER_OVERLAY_SOURCE :: `local profiler = game:GetService("ProfilerService")

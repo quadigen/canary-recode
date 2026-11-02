@@ -11,6 +11,7 @@ import "core:strings"
 
 import kineffi "../bindings"
 import classes "../classes"
+import fsutil "../fsutil"
 
 EDITOR_REPOSITORY_API_URL :: "https://api.github.com/repos/quadigen/kinemium-editor/commits/main"
 EDITOR_ARCHIVE_BASE_URL :: "https://codeload.github.com/quadigen/kinemium-editor/zip/"
@@ -50,7 +51,7 @@ EditorService_Ensure_Directory :: proc(path: string) -> bool {
 		return false
 	}
 
-	err := os.make_directory_all(path)
+	err := fsutil.Make_Directory_All(path)
 	if err != nil && !os.is_directory(path) {
 		fmt.eprintf("[EditorService] failed creating cache directory %s: %v\n", path, err)
 		return false
@@ -63,19 +64,28 @@ EditorService_Cache_Paths_From_Base :: proc(
 	base_dir: string,
 	folder_name: string,
 	location_name: string,
-) -> (string, string, bool) {
-	kinemium_dir, join_err := filepath.join(
-		[]string{base_dir, folder_name},
-		context.allocator,
-	)
+) -> (
+	string,
+	string,
+	bool,
+) {
+	kinemium_dir, join_err := filepath.join([]string{base_dir, folder_name}, context.allocator)
 	if join_err != nil {
-		fmt.eprintf("[EditorService] failed joining %s cache directory: %v\n", location_name, join_err)
+		fmt.eprintf(
+			"[EditorService] failed joining %s cache directory: %v\n",
+			location_name,
+			join_err,
+		)
 		return "", "", false
 	}
 	defer delete(kinemium_dir)
 
 	if !EditorService_Ensure_Directory(kinemium_dir) {
-		fmt.eprintf("[EditorService] %s cache location is unavailable: %s\n", location_name, kinemium_dir)
+		fmt.eprintf(
+			"[EditorService] %s cache location is unavailable: %s\n",
+			location_name,
+			kinemium_dir,
+		)
 		return "", "", false
 	}
 
@@ -84,7 +94,11 @@ EditorService_Cache_Paths_From_Base :: proc(
 		context.allocator,
 	)
 	if archive_err != nil {
-		fmt.eprintf("[EditorService] failed resolving editor archive path in %s: %v\n", location_name, archive_err)
+		fmt.eprintf(
+			"[EditorService] failed resolving editor archive path in %s: %v\n",
+			location_name,
+			archive_err,
+		)
 		return "", "", false
 	}
 
@@ -93,7 +107,11 @@ EditorService_Cache_Paths_From_Base :: proc(
 		context.allocator,
 	)
 	if version_err != nil {
-		fmt.eprintf("[EditorService] failed resolving editor version path in %s: %v\n", location_name, version_err)
+		fmt.eprintf(
+			"[EditorService] failed resolving editor version path in %s: %v\n",
+			location_name,
+			version_err,
+		)
 		delete(archive_path)
 		return "", "", false
 	}
@@ -102,11 +120,7 @@ EditorService_Cache_Paths_From_Base :: proc(
 	return archive_path, version_path, true
 }
 
-EditorService_Cache_Paths :: proc() -> (
-	string,
-	string,
-	bool,
-) {
+EditorService_Cache_Paths :: proc() -> (string, string, bool) {
 	data_dir, err := os.user_data_dir(context.allocator)
 	if err == nil {
 		archive_path, version_path, ok := EditorService_Cache_Paths_From_Base(
@@ -162,8 +176,8 @@ EditorService_Commit_Is_Valid :: proc(sha: string) -> bool {
 
 	for character in sha {
 		if !((character >= '0' && character <= '9') ||
-		     (character >= 'a' && character <= 'f') ||
-		     (character >= 'A' && character <= 'F')) {
+			   (character >= 'a' && character <= 'f') ||
+			   (character >= 'A' && character <= 'F')) {
 			return false
 		}
 	}
@@ -186,17 +200,25 @@ EditorService_Validate_Blob :: proc(path: string) -> bool {
 			continue
 		}
 
-		is_entrypoint := name == "internal/editor_ui.luau" ||
-		                 strings.has_suffix(name, EDITOR_ENTRYPOINT_SUFFIX)
+		is_entrypoint :=
+			name == "internal/editor_ui.luau" || strings.has_suffix(name, EDITOR_ENTRYPOINT_SUFFIX)
 		delete(name)
 
 		if is_entrypoint {
-			fmt.eprintf("[EditorService] validated editor archive %s (%d entries)\n", path, file_count)
+			fmt.eprintf(
+				"[EditorService] validated editor archive %s (%d entries)\n",
+				path,
+				file_count,
+			)
 			return true
 		}
 	}
 
-	fmt.eprintf("[EditorService] editor archive has no internal/editor_ui.luau: %s (%d entries)\n", path, file_count)
+	fmt.eprintf(
+		"[EditorService] editor archive has no internal/editor_ui.luau: %s (%d entries)\n",
+		path,
+		file_count,
+	)
 	return false
 }
 
@@ -219,9 +241,7 @@ EditorService_Read_Cached_Version :: proc(path: string) -> string {
 	return strings.clone(version)
 }
 
-EditorService_Remote_Version :: proc(
-	service: ^EditorService,
-) -> (string, bool) {
+EditorService_Remote_Version :: proc(service: ^EditorService) -> (string, bool) {
 	http_object := Service_Get_Service(&service.service, "HttpService")
 	if http_object == nil {
 		fmt.eprintln("[EditorService] HttpService unavailable for version check")
@@ -229,17 +249,16 @@ EditorService_Remote_Version :: proc(
 	}
 
 	commit: Editor_Commit
-	if !HttpService_GetJSON(
-		cast(^HttpService)http_object,
-		EDITOR_REPOSITORY_API_URL,
-		&commit,
-	) {
+	if !HttpService_GetJSON(cast(^HttpService)http_object, EDITOR_REPOSITORY_API_URL, &commit) {
 		fmt.eprintf("[EditorService] version request failed: %s\n", EDITOR_REPOSITORY_API_URL)
 		return "", false
 	}
 
 	if !EditorService_Commit_Is_Valid(commit.sha) {
-		fmt.eprintf("[EditorService] version response contained invalid commit SHA: %q\n", commit.sha)
+		fmt.eprintf(
+			"[EditorService] version response contained invalid commit SHA: %q\n",
+			commit.sha,
+		)
 		if len(commit.sha) > 0 {
 			delete(commit.sha)
 		}
@@ -333,7 +352,16 @@ EditorService_Download_Blob :: proc(
 	return true
 }
 
-EditorService_Get_Editor :: proc(service: ^EditorService) -> Editor_Fetch_Result {
+// EditorService_Get_Editor resolves the editor archive to run. `check_remote`
+// gates the blocking GitHub version query: an editor process checks it to pick
+// up updates, but a playtest process skips it because the editor that launched
+// the session already validated the cache, and the query only adds startup
+// latency to every playtest window. With it off, a valid cache is used as-is and
+// a missing one still falls back to downloading `main`.
+EditorService_Get_Editor :: proc(
+	service: ^EditorService,
+	check_remote := true,
+) -> Editor_Fetch_Result {
 	result := Editor_Fetch_Result{}
 
 	archive_path, version_path, paths_ok := EditorService_Cache_Paths()
@@ -345,15 +373,26 @@ EditorService_Get_Editor :: proc(service: ^EditorService) -> Editor_Fetch_Result
 
 	valid_cache := os.is_file(archive_path) && EditorService_Validate_Blob(archive_path)
 	cached_version := EditorService_Read_Cached_Version(version_path)
-	defer if len(cached_version) > 0 { delete(cached_version) }
-	fmt.eprintf("[EditorService] cache archive=%s valid=%v cachedVersion=%q\n",
-		archive_path, valid_cache, cached_version)
+	defer if len(cached_version) > 0 {delete(cached_version)}
+	fmt.eprintf(
+		"[EditorService] cache archive=%s valid=%v cachedVersion=%q\n",
+		archive_path,
+		valid_cache,
+		cached_version,
+	)
 
-	remote_version, update_checked := EditorService_Remote_Version(service)
-	defer if len(remote_version) > 0 { delete(remote_version) }
+	remote_version := ""
+	update_checked := false
+	if check_remote {
+		remote_version, update_checked = EditorService_Remote_Version(service)
+	}
+	defer if len(remote_version) > 0 {delete(remote_version)}
 	result.update_checked = update_checked
-	fmt.eprintf("[EditorService] updateChecked=%v remoteVersion=%q\n",
-		update_checked, remote_version)
+	fmt.eprintf(
+		"[EditorService] updateChecked=%v remoteVersion=%q\n",
+		update_checked,
+		remote_version,
+	)
 
 	needs_download := EditorService_Needs_Download(
 		valid_cache,
@@ -365,7 +404,7 @@ EditorService_Get_Editor :: proc(service: ^EditorService) -> Editor_Fetch_Result
 
 	if !needs_download {
 		result.path = archive_path
-		if !update_checked {
+		if check_remote && !update_checked {
 			result.using_stale_cache = true
 			result.warning = "Editor update check failed; using the cached editor"
 		}
@@ -408,10 +447,7 @@ editor_service_construct :: proc(
 	return &service.object
 }
 
-editor_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+editor_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^EditorService)object)
 }

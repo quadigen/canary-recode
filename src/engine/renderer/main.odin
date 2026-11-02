@@ -9,413 +9,436 @@ import sdl3 "../platform"
 import profiling "../profiling"
 import tracy "../util/odin-tracy"
 
-Filament_Context :: kineffi.KineFilamentContext
-Skia_Surface :: kineffi.KineSkiaSurface
 
-RendererObject :: struct {
-	KeyDown:         proc(scancode: sdl3.Scancode),
-	KeyUp:           proc(scancode: sdl3.Scancode),
-	MouseClick:      proc(button: sdl3.MouseButtonEvent),
-	OnClose:         proc(),
-	Step:            proc(user_data: rawptr, delta_time: f32),
-	UserData:        rawptr,
-	Draw3D:          proc(user_data: rawptr, ctx: ^kineffi.KineFilamentContext, delta_time: f32),
-	Draw2D:          proc(
-		user_data: rawptr,
-		surface: ^kineffi.KineSkiaSurface,
-		width, height: i32,
-		delta_time: f32,
-	),
-	DrawOverlay:     proc(
-		user_data: rawptr,
-		surface: ^kineffi.KineSkiaSurface,
-		width, height: i32,
-		delta_time: f32,
-	),
-	OnEvent:         proc(user_data: rawptr, event: sdl3.Event),
-	OnResize:        proc(user_data: rawptr, width, height: i32),
-	Ready:           bool,
-	HasWorldToView:  bool,
-	WorldToView:     [12]f32,
-	ActiveCamera:    rawptr,
-	SkiaSurface:     ^kineffi.KineSkiaSurface,
-	Filament:        ^kineffi.KineFilamentContext,
-	HasViewportRect: bool,
-	RenderFilament:  bool,
-	ViewportRect:    [4]i32,
-	// Set once the host publishes its own viewport rect through Set3DTexProps.
-	// The desktop loop offers the window size as a fallback, and must not keep
-	// writing it over a host-supplied rect: an editor renders 3D into a panel at
-	// a non-zero offset inside the window, so overwriting that with the window
-	// rect left the mouse ray (built during the step, from the rect published
-	// before it) describing a different region than the one Filament drew.
-	ViewportRect_Host: bool,
-	// Pixels per logical (point) unit for the render target. SDL reports mouse
-	// positions in window/logical coordinates while ViewportRect is in physical
-	// pixels, so anything mapping a cursor position into the viewport has to
-	// multiply by this first. It is 1 on an unscaled display.
-	MouseScale:      [2]f32,
-	CurrentEvent:    ^sdl3.Event,
-	Window:          ^sdl3.Window,
-}
+KINE_RENDERER_GL :: #config(KINE_RENDERER_GL, false)
 
-// Publishes the viewport rect. from_host marks the rect as owned by the host,
-// which permanently retires the window-size fallback: the host is the only side
-// that knows where its viewport actually sits inside the window.
-//
-// A zero extent is how the host says "no 3D viewport right now", so it clears
-// HasViewportRect instead of leaving the last rect readable -- consumers would
-// otherwise keep building rays and highlight outlines for a viewport that is not
-// being drawn. A negative extent cannot describe any viewport and is refused, so
-// the caller learns about the mistake instead of silently getting stale geometry.
-set_viewport_rect :: proc(
-	renderer: ^RendererObject,
-	x, y, width, height: i32,
-	from_host: bool,
-) -> bool {
-	if renderer == nil {return false}
-	if width < 0 || height < 0 {return false}
+when !KINE_RENDERER_GL {
 
-	if from_host {renderer.ViewportRect_Host = true}
+	Filament_Context :: kineffi.KineFilamentContext
+	Skia_Surface :: kineffi.KineSkiaSurface
 
-	if width == 0 || height == 0 {
-		renderer.HasViewportRect = false
+	RendererObject :: struct {
+		KeyDown:           proc(scancode: sdl3.Scancode),
+		KeyUp:             proc(scancode: sdl3.Scancode),
+		MouseClick:        proc(button: sdl3.MouseButtonEvent),
+		OnClose:           proc(),
+		Step:              proc(user_data: rawptr, delta_time: f32),
+		UserData:          rawptr,
+		Draw3D:            proc(
+			user_data: rawptr,
+			ctx: ^kineffi.KineFilamentContext,
+			delta_time: f32,
+		),
+		Draw2D:            proc(
+			user_data: rawptr,
+			surface: ^kineffi.KineSkiaSurface,
+			width, height: i32,
+			delta_time: f32,
+		),
+		DrawOverlay:       proc(
+			user_data: rawptr,
+			surface: ^kineffi.KineSkiaSurface,
+			width, height: i32,
+			delta_time: f32,
+		),
+		OnEvent:           proc(user_data: rawptr, event: sdl3.Event),
+		OnResize:          proc(user_data: rawptr, width, height: i32),
+		Ready:             bool,
+		HasWorldToView:    bool,
+		WorldToView:       [12]f32,
+		ActiveCamera:      rawptr,
+		SkiaSurface:       ^kineffi.KineSkiaSurface,
+		Filament:          ^kineffi.KineFilamentContext,
+		HasViewportRect:   bool,
+		RenderFilament:    bool,
+		ViewportRect:      [4]i32,
+		ViewportRect_Host: bool,
+		MouseScale:        [2]f32,
+		CurrentEvent:      ^sdl3.Event,
+		Window:            ^sdl3.Window,
+		Compositor:        ^kineffi.KineVulkanCompositor,
+	}
+
+
+	viewport_size :: proc(renderer: ^RendererObject) -> (width, height: i32) {
+		if renderer == nil {return 0, 0}
+		if renderer.HasViewportRect {
+			return renderer.ViewportRect[2], renderer.ViewportRect[3]
+		}
+		if renderer.Filament != nil {
+			return kineffi.Kine_Filament_GetWidth(
+				renderer.Filament,
+			), kineffi.Kine_Filament_GetHeight(renderer.Filament)
+		}
+		return 0, 0
+	}
+
+
+	set_viewport_rect :: proc(
+		renderer: ^RendererObject,
+		x, y, width, height: i32,
+		from_host: bool,
+	) -> bool {
+		if renderer == nil {return false}
+		if width < 0 || height < 0 {return false}
+
+		if from_host {renderer.ViewportRect_Host = true}
+
+		if width == 0 || height == 0 {
+			renderer.HasViewportRect = false
+			return true
+		}
+
+		old := renderer.ViewportRect
+		changed :=
+			!renderer.HasViewportRect ||
+			old[0] != x ||
+			old[1] != y ||
+			old[2] != width ||
+			old[3] != height
+
+		renderer.HasViewportRect = true
+		renderer.ViewportRect = {x, y, width, height}
+
+		if changed && renderer.Filament != nil {
+			kineffi.Kine_Filament_SetCameraPerspective(
+				renderer.Filament,
+				60,
+				f64(width) / f64(height),
+				0.1,
+				1000,
+			)
+		}
 		return true
 	}
 
-	old := renderer.ViewportRect
-	changed :=
-		!renderer.HasViewportRect ||
-		old[0] != x ||
-		old[1] != y ||
-		old[2] != width ||
-		old[3] != height
 
-	renderer.HasViewportRect = true
-	renderer.ViewportRect = {x, y, width, height}
-
-	if changed && renderer.Filament != nil {
-		kineffi.Kine_Filament_SetCameraPerspective(
-			renderer.Filament,
-			60,
-			f64(width) / f64(height),
-			0.1,
-			1000,
-		)
-	}
-	return true
-}
-
-// SDL reports mouse positions in window/logical coordinates, while the render
-// target and ViewportRect are in physical pixels. Measure the ratio between the
-// two so a cursor position maps onto the same point the renderer drew, on a
-// scaled display as well as an unscaled one.
-update_mouse_scale :: proc(renderer: ^RendererObject, window: ^sdl3.Window) {
-	if renderer == nil || window == nil {return}
-
-	pixel_width, pixel_height: i32
-	if !sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height) {return}
-
-	logical_width, logical_height: i32
-	if !sdl3.GetWindowSize(window, &logical_width, &logical_height) {return}
-	if logical_width <= 0 || logical_height <= 0 {return}
-
-	scale := [2]f32 {
-		f32(pixel_width) / f32(logical_width),
-		f32(pixel_height) / f32(logical_height),
-	}
-	if renderer.MouseScale == scale {return}
-
-	renderer.MouseScale = scale
-	fmt.eprintln(
-		"Kinemium: mouse density ",
-		scale[0], "x", scale[1],
-		" (logical ", logical_width, "x", logical_height,
-		", pixels ", pixel_width, "x", pixel_height, ")",
-	)
-}
-
-apply_viewport_rect :: proc(renderer: ^RendererObject) {
-	if renderer.HasViewportRect && renderer.Filament != nil {
-		rect := renderer.ViewportRect
-		kineffi.Kine_Filament_SetViewport(renderer.Filament, rect[0], rect[1], rect[2], rect[3])
-	}
-}
-
-show_fatal_error :: proc(message: string, window: ^sdl3.Window = nil) {
-	fmt.eprintln("Kinemium: ", message, ": ", sdl3.GetError())
-	title := strings.clone_to_cstring("Kinemium could not start")
-	text := strings.clone_to_cstring(message)
-	defer delete(title)
-	defer delete(text)
-	_ = sdl3.ShowSimpleMessageBox(sdl3.MessageBoxFlags{.ERROR}, title, text, window)
-}
-
-init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
-	width, height := width, height
-	if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
-		show_fatal_error("Failed to initialize SDL")
-		return
-	}
-	defer sdl3.Quit()
-
-	name := strings.clone_to_cstring(windowName)
-	defer delete(name)
-
-	window := sdl3.CreateWindow(name, width, height, sdl3.WINDOW_RESIZABLE | sdl3.WINDOW_VULKAN)
-
-	renderer.Window = window
-	defer {
-		renderer.Window = nil
-	}
-
-	if window == nil {
-		show_fatal_error("Failed to create the Vulkan window")
-		return
-	}
-	defer sdl3.DestroyWindow(window)
-	_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
-
-	filament := kineffi.Kine_Filament_CreateForVulkanCompositorWindow(window, width, height)
-	if filament == nil {
-		show_fatal_error("Failed to create the Filament Vulkan renderer", window)
-		return
-	}
-	defer kineffi.Kine_Filament_Destroy(filament)
-
-	renderer.Filament = filament
-	renderer.Ready = false
-	renderer.HasWorldToView = false
-	defer {
-		renderer.Ready = false
-		renderer.HasWorldToView = false
-		renderer.SkiaSurface = nil
-		renderer.Filament = nil
-	}
-
-	compositor := cast(^kineffi.KineVulkanCompositor)kineffi.Kine_Filament_GetVulkanCompositor(
-		filament,
-	)
-	if compositor == nil || kineffi.Kine_VulkanCompositor_IsReady(compositor) == 0 {
-		show_fatal_error("Failed to create the Vulkan compositor", window)
-		return
-	}
-
-	running := true
-	drawable := true
-	frame_width, frame_height := width, height
-	previous_ticks := sdl3.GetTicksNS()
-
-	tracy.SetThreadName("Main/Render")
-
-	for running {
-		{
-			tracy.ZoneNC("Polling Events", 0x61AFEF)
-			z := profiling.Begin("Polling Events", 0x61AFEF)
-			event: sdl3.Event
-
-			for sdl3.PollEvent(&event) {
-				if renderer.OnEvent != nil {
-					renderer.OnEvent(renderer.UserData, event)
-				}
-				renderer.CurrentEvent = &event
-				#partial switch event.type {
-				case .QUIT, .WINDOW_CLOSE_REQUESTED:
-					running = false
-				case .KEY_DOWN:
-					if renderer.KeyDown != nil {
-						renderer.KeyDown(event.key.scancode)
-					}
-				case .KEY_UP:
-					if renderer.KeyUp != nil {
-						renderer.KeyUp(event.key.scancode)
-					}
-				case .WINDOW_DESTROYED:
-					running = false
-				case .MOUSE_BUTTON_DOWN:
-					if renderer.MouseClick != nil {
-						renderer.MouseClick(event.button)
-					}
-				case .WINDOW_MINIMIZED:
-					drawable = false
-				case .WINDOW_RESTORED:
-					drawable = true
-				case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
-					drawable = true
-				}
-			}
-		}
-
-		if !running || !drawable {
-			previous_ticks = sdl3.GetTicksNS()
-			sdl3.Delay(10)
-			continue
-		}
+	update_mouse_scale :: proc(renderer: ^RendererObject, window: ^sdl3.Window) {
+		if renderer == nil || window == nil {return}
 
 		pixel_width, pixel_height: i32
-		_ = sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height)
-		if pixel_width <= 0 || pixel_height <= 0 {sdl3.Delay(10); continue}
-		if pixel_width != frame_width ||
-		   pixel_height != frame_height ||
-		   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
-			size_changed := pixel_width != frame_width || pixel_height != frame_height
+		if !sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height) {return}
 
-			frame_width, frame_height = pixel_width, pixel_height
+		logical_width, logical_height: i32
+		if !sdl3.GetWindowSize(window, &logical_width, &logical_height) {return}
+		if logical_width <= 0 || logical_height <= 0 {return}
 
-			kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
-
-			if size_changed && renderer.OnResize != nil {
-				renderer.OnResize(renderer.UserData, frame_width, frame_height)
-			}
-
-			previous_ticks = sdl3.GetTicksNS()
+		scale := [2]f32 {
+			f32(pixel_width) / f32(logical_width),
+			f32(pixel_height) / f32(logical_height),
 		}
+		if renderer.MouseScale == scale {return}
 
-		// The desktop path has no viewport rect source of its own, so publish
-		// the window size here, before the engine step. Mouse reads this rect
-		// to build its camera ray and is skipped entirely when it is unset.
-		if !renderer.ViewportRect_Host {
-			set_viewport_rect(renderer, 0, 0, frame_width, frame_height, false)
-		}
-		update_mouse_scale(renderer, window)
+		renderer.MouseScale = scale
+		fmt.eprintln(
+			"Kinemium: mouse density ",
+			scale[0],
+			"x",
+			scale[1],
+			" (logical ",
+			logical_width,
+			"x",
+			logical_height,
+			", pixels ",
+			pixel_width,
+			"x",
+			pixel_height,
+			")",
+		)
+	}
 
-		now := sdl3.GetTicksNS()
-		delta_time := min(f32(now - previous_ticks) / 1_000_000_000.0, 0.1)
-		previous_ticks = now
-		renderer.SkiaSurface = nil
-
-		{
-			tracy.ZoneNC("Engine Step", 0xD08770)
-			z := profiling.Begin("Engine Step", 0xD08770)
-			if renderer.Step != nil {
-				renderer.Step(renderer.UserData, delta_time)
-			}
-		}
-
-		base_surface: rawptr
-		{
-			tracy.ZoneNC("Vulkan BeginFrame", 0x56B6C2)
-			z := profiling.Begin("Vulkan BeginFrame", 0x56B6C2)
-			base_surface = kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
-			if base_surface == nil {
-				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {continue}
-				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
-				fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
-				break
-			}
-		}
-
-		{
-			tracy.ZoneNC("Skia Clear", 0xA3BE8C)
-			z := profiling.Begin("Skia Clear", 0xA3BE8C)
-			kineffi.Kine_Skia_Surface_Clear(
-				cast(^kineffi.KineSkiaSurface)base_surface,
-				20,
-				28,
-				41,
-				255,
+	apply_viewport_rect :: proc(renderer: ^RendererObject) {
+		if renderer.HasViewportRect && renderer.Filament != nil {
+			rect := renderer.ViewportRect
+			kineffi.Kine_Filament_SetViewport(
+				renderer.Filament,
+				rect[0],
+				rect[1],
+				rect[2],
+				rect[3],
 			)
 		}
+	}
 
-		renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)base_surface
+	show_fatal_error :: proc(message: string, window: ^sdl3.Window = nil) {
+		fmt.eprintln("Kinemium: ", message, ": ", sdl3.GetError())
+		title := strings.clone_to_cstring("Kinemium could not start")
+		text := strings.clone_to_cstring(message)
+		defer delete(title)
+		defer delete(text)
+		_ = sdl3.ShowSimpleMessageBox(sdl3.MessageBoxFlags{.ERROR}, title, text, window)
+	}
 
-		{
-			tracy.ZoneNC("Draw2D", 0x61AFEF)
-			z := profiling.Begin("Draw2D", 0x61AFEF)
-			if renderer.Draw2D != nil {
-				renderer.Draw2D(
-					renderer.UserData,
-					renderer.SkiaSurface,
-					frame_width,
-					frame_height,
-					delta_time,
-				)
+	init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
+		width, height := width, height
+		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
+			show_fatal_error("Failed to initialize SDL")
+			return
+		}
+		sdl3.Reset_UI_Scale()
+		defer sdl3.Quit()
+
+		name := strings.clone_to_cstring(windowName)
+		defer delete(name)
+
+		window := sdl3.CreateWindow(
+			name,
+			width,
+			height,
+			sdl3.WINDOW_RESIZABLE | sdl3.WINDOW_VULKAN,
+		)
+
+		renderer.Window = window
+		defer {
+			renderer.Window = nil
+		}
+
+		if window == nil {
+			show_fatal_error("Failed to create the Vulkan window")
+			return
+		}
+		defer sdl3.DestroyWindow(window)
+		_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
+
+		filament := kineffi.Kine_Filament_CreateForVulkanCompositorWindow(window, width, height)
+		if filament == nil {
+			show_fatal_error("Failed to create the Filament Vulkan renderer", window)
+			return
+		}
+		defer kineffi.Kine_Filament_Destroy(filament)
+
+		renderer.Filament = filament
+		renderer.Ready = false
+		renderer.HasWorldToView = false
+		defer {
+			renderer.Ready = false
+			renderer.HasWorldToView = false
+			renderer.SkiaSurface = nil
+			renderer.Filament = nil
+			renderer.Compositor = nil
+		}
+
+		compositor := cast(^kineffi.KineVulkanCompositor)kineffi.Kine_Filament_GetVulkanCompositor(
+			filament,
+		)
+		if compositor == nil || kineffi.Kine_VulkanCompositor_IsReady(compositor) == 0 {
+			show_fatal_error("Failed to create the Vulkan compositor", window)
+			return
+		}
+		renderer.Compositor = compositor
+
+		running := true
+		drawable := true
+		frame_width, frame_height := width, height
+		previous_ticks := sdl3.GetTicksNS()
+
+		tracy.SetThreadName("Main/Render")
+
+		for running {
+			{
+				tracy.ZoneNC("Polling Events", 0x61AFEF)
+				z := profiling.Begin("Polling Events", 0x61AFEF)
+				event: sdl3.Event
+
+				for sdl3.PollEvent(&event) {
+					if renderer.OnEvent != nil {
+						renderer.OnEvent(renderer.UserData, event)
+					}
+					renderer.CurrentEvent = &event
+					#partial switch event.type {
+					case .QUIT, .WINDOW_CLOSE_REQUESTED:
+						running = false
+					case .KEY_DOWN:
+						if renderer.KeyDown != nil {
+							renderer.KeyDown(event.key.scancode)
+						}
+					case .KEY_UP:
+						if renderer.KeyUp != nil {
+							renderer.KeyUp(event.key.scancode)
+						}
+					case .WINDOW_DESTROYED:
+						running = false
+					case .MOUSE_BUTTON_DOWN:
+						if renderer.MouseClick != nil {
+							renderer.MouseClick(event.button)
+						}
+					case .WINDOW_MINIMIZED:
+						drawable = false
+					case .WINDOW_RESTORED:
+						drawable = true
+					case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
+						drawable = true
+					}
+				}
 			}
-		}
 
-		{
-			tracy.ZoneNC("Draw3D", 0x98C379)
-			z := profiling.Begin("Draw3D", 0x98C379)
-			if renderer.Draw3D != nil {
-				renderer.Draw3D(renderer.UserData, filament, delta_time)
+			if !running || !drawable {
+				previous_ticks = sdl3.GetTicksNS()
+				sdl3.Delay(10)
+				continue
 			}
-		}
 
-		{
-			tracy.ZoneNC("Skia Flush", 0xE5C07B)
-			z := profiling.Begin("Skia Flush", 0xE5C07B)
-			kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
-		}
-		base_skia_surface := renderer.SkiaSurface
-		renderer.SkiaSurface = nil
-		apply_viewport_rect(renderer)
+			pixel_width, pixel_height: i32
+			_ = sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height)
+			if pixel_width <= 0 || pixel_height <= 0 {sdl3.Delay(10); continue}
+			if pixel_width != frame_width ||
+			   pixel_height != frame_height ||
+			   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
+				size_changed := pixel_width != frame_width || pixel_height != frame_height
 
-		rendered_3d := renderer.RenderFilament
-		if rendered_3d {
-			tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
-			z := profiling.Begin("Filament RenderFrame", 0xC678DD)
-			kineffi.Kine_Filament_RenderFrame(filament, delta_time)
-			// PrepareFilament destroys the base Skia wrapper before handing
-			// the image to Filament. Do not touch base_skia_surface below.
-			base_skia_surface = nil
-		}
+				frame_width, frame_height = pixel_width, pixel_height
 
-		if renderer.DrawOverlay != nil {
-			tracy.ZoneNC("Overlay", 0xE06C75)
-			z := profiling.Begin("Overlay", 0xE06C75)
+				kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
 
-			overlay_surface := kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
-			if overlay_surface != nil {
-				// 2D-only: BeginOverlay returns base_skia_surface unchanged, so the
-				// overlay still needs its backdrop snapshotted (self-snapshot).
-				// 3D: base_skia_surface was nilled after Filament render to avoid a
-				// use-after-free (PrepareFilament destroys that wrapper), and the
-				// compositor already captured the post-Filament image internally, so
-				// we skip the Odin-side call.
-				if rendered_3d == false && base_skia_surface != nil {
-					kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
-						cast(^kineffi.KineSkiaSurface)overlay_surface,
-						cast(^kineffi.KineSkiaSurface)base_skia_surface,
-					)
+				if size_changed && renderer.OnResize != nil {
+					renderer.OnResize(renderer.UserData, frame_width, frame_height)
 				}
 
-				renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)overlay_surface
-
-				renderer.DrawOverlay(
-					renderer.UserData,
-					renderer.SkiaSurface,
-					frame_width,
-					frame_height,
-					delta_time,
-				)
-
-				tracy.ZoneNC("Skia Flush", 0xE5C07B)
-				z := profiling.Begin("Overlay Skia Flush", 0xE5C07B)
-
-				kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
-				renderer.SkiaSurface = nil
+				previous_ticks = sdl3.GetTicksNS()
 			}
+
+
+			if !renderer.ViewportRect_Host {
+				set_viewport_rect(renderer, 0, 0, frame_width, frame_height, false)
+			}
+			update_mouse_scale(renderer, window)
+
+			now := sdl3.GetTicksNS()
+			delta_time := min(f32(now - previous_ticks) / 1_000_000_000.0, 0.1)
+			previous_ticks = now
+			renderer.SkiaSurface = nil
+
+			{
+				tracy.ZoneNC("Engine Step", 0xD08770)
+				z := profiling.Begin("Engine Step", 0xD08770)
+				if renderer.Step != nil {
+					renderer.Step(renderer.UserData, delta_time)
+				}
+			}
+
+			base_surface: rawptr
+			{
+				tracy.ZoneNC("Vulkan BeginFrame", 0x56B6C2)
+				z := profiling.Begin("Vulkan BeginFrame", 0x56B6C2)
+				base_surface = kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
+				if base_surface == nil {
+					if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {continue}
+					error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
+					fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
+					break
+				}
+			}
+
+			{
+				tracy.ZoneNC("Skia Clear", 0xA3BE8C)
+				z := profiling.Begin("Skia Clear", 0xA3BE8C)
+				kineffi.Kine_Skia_Surface_Clear(
+					cast(^kineffi.KineSkiaSurface)base_surface,
+					20,
+					28,
+					41,
+					255,
+				)
+			}
+
+			renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)base_surface
+
+			{
+				tracy.ZoneNC("Draw2D", 0x61AFEF)
+				z := profiling.Begin("Draw2D", 0x61AFEF)
+				if renderer.Draw2D != nil {
+					renderer.Draw2D(
+						renderer.UserData,
+						renderer.SkiaSurface,
+						frame_width,
+						frame_height,
+						delta_time,
+					)
+				}
+			}
+
+			{
+				tracy.ZoneNC("Draw3D", 0x98C379)
+				z := profiling.Begin("Draw3D", 0x98C379)
+				if renderer.Draw3D != nil {
+					renderer.Draw3D(renderer.UserData, filament, delta_time)
+				}
+			}
+
+			{
+				tracy.ZoneNC("Skia Flush", 0xE5C07B)
+				z := profiling.Begin("Skia Flush", 0xE5C07B)
+				kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
+			}
+			base_skia_surface := renderer.SkiaSurface
+			renderer.SkiaSurface = nil
+			apply_viewport_rect(renderer)
+
+			world_3d := renderer.RenderFilament && renderer.HasViewportRect
+			rendered_3d := world_3d || kineffi.Kine_Filament_Viewport_HasWork(filament)
+			if rendered_3d {
+				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
+				z := profiling.Begin("Filament RenderFrame", 0xC678DD)
+				kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+
+
+				base_skia_surface = nil
+			}
+
+			if renderer.DrawOverlay != nil {
+				tracy.ZoneNC("Overlay", 0xE06C75)
+				z := profiling.Begin("Overlay", 0xE06C75)
+
+				overlay_surface := kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
+				if overlay_surface != nil {
+
+
+					if rendered_3d == false && base_skia_surface != nil {
+						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
+							cast(^kineffi.KineSkiaSurface)overlay_surface,
+							cast(^kineffi.KineSkiaSurface)base_skia_surface,
+						)
+					}
+
+					renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)overlay_surface
+
+					renderer.DrawOverlay(
+						renderer.UserData,
+						renderer.SkiaSurface,
+						frame_width,
+						frame_height,
+						delta_time,
+					)
+
+					tracy.ZoneNC("Skia Flush", 0xE5C07B)
+					z := profiling.Begin("Overlay Skia Flush", 0xE5C07B)
+
+					kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
+					renderer.SkiaSurface = nil
+				}
+			}
+
+			if kineffi.Kine_VulkanCompositor_EndFrame(compositor) == 0 {
+				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
+				tracy.ZoneNC("Vulkan Present", 0xD19A66)
+				z := profiling.Begin("Vulkan Present", 0xD19A66)
+				fmt.eprintf("Vulkan presentation failed: %s\n", error)
+				break
+			}
+			renderer.Ready = true
+			renderer.SkiaSurface = nil
+
+			tracy.FrameMark()
 		}
 
-		if kineffi.Kine_VulkanCompositor_EndFrame(compositor) == 0 {
-			error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
-			tracy.ZoneNC("Vulkan Present", 0xD19A66)
-			z := profiling.Begin("Vulkan Present", 0xD19A66)
-			fmt.eprintf("Vulkan presentation failed: %s\n", error)
-			break
+		if renderer.OnClose != nil {
+			renderer.OnClose()
 		}
-		renderer.Ready = true
-		renderer.SkiaSurface = nil
-
-		tracy.FrameMark()
 	}
 
-	if renderer.OnClose != nil {
+	close :: proc(renderer: RendererObject, running: ^bool) {
 		renderer.OnClose()
+		running^ = false
 	}
-}
 
-close :: proc(renderer: RendererObject, running: ^bool) {
-	renderer.OnClose()
-	running^ = false
 }

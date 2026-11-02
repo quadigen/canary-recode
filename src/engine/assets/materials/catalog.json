@@ -1,0 +1,1065 @@
+{
+  "reference": "https://create.roblox.com/docs/reference/engine/enums/Material",
+  "license": "https://docs.ambientcg.com/license/",
+  "texture_resolution": 512,
+  "materials": [
+    {
+      "name": "SmoothPlastic",
+      "native_id": 0,
+      "roblox_value": 272,
+      "asset_id": null,
+      "texture_directory": "smoothplastic",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.35,
+      "metallic": 0,
+      "height_scale": 0.005,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 0.7,
+        "friction": 0.2,
+        "restitution": 0.5
+      }
+    },
+    {
+      "name": "Wood",
+      "native_id": 1,
+      "roblox_value": 512,
+      "asset_id": null,
+      "texture_directory": "wood",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.72,
+      "metallic": 0,
+      "height_scale": 0.025,
+      "uv_scale": 1,
+      "color": [
+        172,
+        148,
+        108
+      ],
+      "physics": {
+        "density": 0.35,
+        "friction": 0.48,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Brick",
+      "native_id": 2,
+      "roblox_value": 848,
+      "asset_id": null,
+      "texture_directory": "brick",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.8,
+      "metallic": 0,
+      "height_scale": 0.055,
+      "uv_scale": 1,
+      "color": [
+        138,
+        97,
+        73
+      ],
+      "physics": {
+        "density": 1.922,
+        "friction": 0.8,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "Grass",
+      "native_id": 3,
+      "roblox_value": 1280,
+      "asset_id": null,
+      "texture_directory": "grass",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.92,
+      "metallic": 0,
+      "height_scale": 0.025,
+      "uv_scale": 1,
+      "color": [
+        111,
+        126,
+        62
+      ],
+      "physics": {
+        "density": 0.9,
+        "friction": 0.4,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "Concrete",
+      "native_id": 4,
+      "roblox_value": 816,
+      "asset_id": null,
+      "texture_directory": "concrete",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.85,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        152,
+        152,
+        152
+      ],
+      "physics": {
+        "density": 2.403,
+        "friction": 0.7,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Slate",
+      "native_id": 5,
+      "roblox_value": 800,
+      "asset_id": null,
+      "texture_directory": "slate",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.72,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        88,
+        89,
+        86
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.4,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Glass",
+      "native_id": 6,
+      "roblox_value": 1568,
+      "asset_id": null,
+      "texture_directory": "glass",
+      "source": "existing",
+      "kind": "GLASS",
+      "roughness": 0.08,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        138,
+        167,
+        168
+      ],
+      "physics": {
+        "density": 2.403,
+        "friction": 0.25,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Neon",
+      "native_id": 7,
+      "roblox_value": 288,
+      "asset_id": null,
+      "texture_directory": "neon",
+      "source": "existing",
+      "kind": "NEON",
+      "roughness": 0,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 0.7,
+        "friction": 0.3,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Sand",
+      "native_id": 8,
+      "roblox_value": 1296,
+      "asset_id": null,
+      "texture_directory": "sand",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.95,
+      "metallic": 0,
+      "height_scale": 0.018,
+      "uv_scale": 1,
+      "color": [
+        207,
+        203,
+        167
+      ],
+      "physics": {
+        "density": 1.602,
+        "friction": 0.5,
+        "restitution": 0.05
+      }
+    },
+    {
+      "name": "Water",
+      "native_id": 9,
+      "roblox_value": 2048,
+      "asset_id": null,
+      "texture_directory": "water",
+      "source": "existing",
+      "kind": "WATER",
+      "roughness": 0.08,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 1,
+        "friction": 0.5,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "debug",
+      "native_id": 10,
+      "roblox_value": null,
+      "asset_id": null,
+      "texture_directory": "debug",
+      "source": "existing",
+      "kind": "DEFAULT",
+      "roughness": 0.55,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 1,
+        "friction": 0.5,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "Air",
+      "native_id": 11,
+      "roblox_value": 1792,
+      "asset_id": null,
+      "texture_directory": null,
+      "source": "shader",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 1,
+        "friction": 0.5,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "Plastic",
+      "native_id": 12,
+      "roblox_value": 256,
+      "asset_id": "Plastic015A",
+      "texture_directory": "plastic",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.3,
+      "metallic": 0,
+      "height_scale": 0,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 0.7,
+        "friction": 0.3,
+        "restitution": 0.5
+      }
+    },
+    {
+      "name": "WoodPlanks",
+      "native_id": 13,
+      "roblox_value": 528,
+      "asset_id": "WoodFloor044",
+      "texture_directory": "woodplanks",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.8,
+      "metallic": 0,
+      "height_scale": 0.025,
+      "uv_scale": 1,
+      "color": [
+        172,
+        148,
+        108
+      ],
+      "physics": {
+        "density": 0.35,
+        "friction": 0.48,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Marble",
+      "native_id": 14,
+      "roblox_value": 784,
+      "asset_id": "Marble003",
+      "texture_directory": "marble",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.3,
+      "metallic": 0,
+      "height_scale": 0,
+      "uv_scale": 1,
+      "color": [
+        122,
+        122,
+        122
+      ],
+      "physics": {
+        "density": 2.563,
+        "friction": 0.2,
+        "restitution": 0.17
+      }
+    },
+    {
+      "name": "Basalt",
+      "native_id": 15,
+      "roblox_value": 788,
+      "asset_id": "Rock001",
+      "texture_directory": "basalt",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        75,
+        74,
+        74
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.7,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "CrackedLava",
+      "native_id": 16,
+      "roblox_value": 804,
+      "asset_id": "Lava002",
+      "texture_directory": "crackedlava",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.045,
+      "uv_scale": 1,
+      "color": [
+        255,
+        24,
+        67
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.65,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "Limestone",
+      "native_id": 17,
+      "roblox_value": 820,
+      "asset_id": "Tiles142",
+      "texture_directory": "limestone",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        255,
+        243,
+        192
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.5,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "Granite",
+      "native_id": 18,
+      "roblox_value": 832,
+      "asset_id": "Granite001A",
+      "texture_directory": "granite",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.45,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        149,
+        146,
+        139
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.4,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Pavement",
+      "native_id": 19,
+      "roblox_value": 836,
+      "asset_id": "PavingStones092",
+      "texture_directory": "pavement",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.045,
+      "uv_scale": 1,
+      "color": [
+        143,
+        144,
+        135
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.5,
+        "restitution": 0.17
+      }
+    },
+    {
+      "name": "Pebble",
+      "native_id": 20,
+      "roblox_value": 864,
+      "asset_id": "Gravel008",
+      "texture_directory": "pebble",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.04,
+      "uv_scale": 1,
+      "color": [
+        122,
+        122,
+        118
+      ],
+      "physics": {
+        "density": 2.403,
+        "friction": 0.4,
+        "restitution": 0.17
+      }
+    },
+    {
+      "name": "Cobblestone",
+      "native_id": 21,
+      "roblox_value": 880,
+      "asset_id": "PavingStones046",
+      "texture_directory": "cobblestone",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.065,
+      "uv_scale": 1,
+      "color": [
+        134,
+        134,
+        118
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.5,
+        "restitution": 0.17
+      }
+    },
+    {
+      "name": "Rock",
+      "native_id": 22,
+      "roblox_value": 896,
+      "asset_id": "Rock030",
+      "texture_directory": "rock",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        99,
+        100,
+        102
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.5,
+        "restitution": 0.17
+      }
+    },
+    {
+      "name": "Sandstone",
+      "native_id": 23,
+      "roblox_value": 912,
+      "asset_id": "Rock029",
+      "texture_directory": "sandstone",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        148,
+        124,
+        95
+      ],
+      "physics": {
+        "density": 2.691,
+        "friction": 0.5,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "CorrodedMetal",
+      "native_id": 24,
+      "roblox_value": 1040,
+      "asset_id": "Rust003",
+      "texture_directory": "corrodedmetal",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.85,
+      "metallic": 1,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        104,
+        140,
+        173
+      ],
+      "physics": {
+        "density": 7.85,
+        "friction": 0.7,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "DiamondPlate",
+      "native_id": 25,
+      "roblox_value": 1056,
+      "asset_id": "DiamondPlate008A",
+      "texture_directory": "diamondplate",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.5,
+      "metallic": 1,
+      "height_scale": 0.035,
+      "uv_scale": 1,
+      "color": [
+        168,
+        175,
+        176
+      ],
+      "physics": {
+        "density": 7.85,
+        "friction": 0.35,
+        "restitution": 0.25
+      }
+    },
+    {
+      "name": "Foil",
+      "native_id": 26,
+      "roblox_value": 1072,
+      "asset_id": "Foil001",
+      "texture_directory": "foil",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.35,
+      "metallic": 1,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        168,
+        175,
+        176
+      ],
+      "physics": {
+        "density": 2.7,
+        "friction": 0.4,
+        "restitution": 0.25
+      }
+    },
+    {
+      "name": "Metal",
+      "native_id": 27,
+      "roblox_value": 1088,
+      "asset_id": "Metal012",
+      "texture_directory": "metal",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.3,
+      "metallic": 1,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        168,
+        175,
+        176
+      ],
+      "physics": {
+        "density": 7.85,
+        "friction": 0.4,
+        "restitution": 0.25
+      }
+    },
+    {
+      "name": "LeafyGrass",
+      "native_id": 28,
+      "roblox_value": 1284,
+      "asset_id": "Grass007",
+      "texture_directory": "leafygrass",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        106,
+        134,
+        64
+      ],
+      "physics": {
+        "density": 0.9,
+        "friction": 0.4,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "Fabric",
+      "native_id": 29,
+      "roblox_value": 1312,
+      "asset_id": "Fabric061",
+      "texture_directory": "fabric",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 1,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        194,
+        193,
+        168
+      ],
+      "physics": {
+        "density": 0.7,
+        "friction": 0.35,
+        "restitution": 0.05
+      }
+    },
+    {
+      "name": "Snow",
+      "native_id": 30,
+      "roblox_value": 1328,
+      "asset_id": "Snow003",
+      "texture_directory": "snow",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        235,
+        253,
+        255
+      ],
+      "physics": {
+        "density": 0.9,
+        "friction": 0.3,
+        "restitution": 0.03
+      }
+    },
+    {
+      "name": "Mud",
+      "native_id": 31,
+      "roblox_value": 1344,
+      "asset_id": "Ground012",
+      "texture_directory": "mud",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        121,
+        112,
+        98
+      ],
+      "physics": {
+        "density": 0.9,
+        "friction": 0.3,
+        "restitution": 0.07
+      }
+    },
+    {
+      "name": "Ground",
+      "native_id": 32,
+      "roblox_value": 1360,
+      "asset_id": "Ground037",
+      "texture_directory": "ground",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        140,
+        130,
+        104
+      ],
+      "physics": {
+        "density": 0.9,
+        "friction": 0.45,
+        "restitution": 0.1
+      }
+    },
+    {
+      "name": "Asphalt",
+      "native_id": 33,
+      "roblox_value": 1376,
+      "asset_id": "Asphalt012",
+      "texture_directory": "asphalt",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        80,
+        84,
+        84
+      ],
+      "physics": {
+        "density": 2.36,
+        "friction": 0.8,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Salt",
+      "native_id": 34,
+      "roblox_value": 1392,
+      "asset_id": "Snow005",
+      "texture_directory": "salt",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        255,
+        255,
+        254
+      ],
+      "physics": {
+        "density": 2.165,
+        "friction": 0.5,
+        "restitution": 0.05
+      }
+    },
+    {
+      "name": "Ice",
+      "native_id": 35,
+      "roblox_value": 1536,
+      "asset_id": "Ice001",
+      "texture_directory": "ice",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.2,
+      "metallic": 0,
+      "height_scale": 0.01,
+      "uv_scale": 1,
+      "color": [
+        204,
+        210,
+        223
+      ],
+      "physics": {
+        "density": 0.919,
+        "friction": 0.02,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "Glacier",
+      "native_id": 36,
+      "roblox_value": 1552,
+      "asset_id": "Ice004",
+      "texture_directory": "glacier",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.45,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        221,
+        228,
+        229
+      ],
+      "physics": {
+        "density": 0.919,
+        "friction": 0.05,
+        "restitution": 0.15
+      }
+    },
+    {
+      "name": "ForceField",
+      "native_id": 37,
+      "roblox_value": 1584,
+      "asset_id": null,
+      "texture_directory": null,
+      "source": "shader",
+      "kind": "FORCEFIELD",
+      "roughness": 0.08,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 2.403,
+        "friction": 0.25,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Cardboard",
+      "native_id": 38,
+      "roblox_value": 2304,
+      "asset_id": "Cardboard003",
+      "texture_directory": "cardboard",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.012,
+      "uv_scale": 1,
+      "color": [
+        255,
+        206,
+        152
+      ],
+      "physics": {
+        "density": 0.7,
+        "friction": 0.5,
+        "restitution": 0.05
+      }
+    },
+    {
+      "name": "Carpet",
+      "native_id": 39,
+      "roblox_value": 2305,
+      "asset_id": "Carpet014",
+      "texture_directory": "carpet",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 1,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        163,
+        162,
+        165
+      ],
+      "physics": {
+        "density": 1.1,
+        "friction": 0.4,
+        "restitution": 0.25
+      }
+    },
+    {
+      "name": "CeramicTiles",
+      "native_id": 40,
+      "roblox_value": 2306,
+      "asset_id": "Tiles001",
+      "texture_directory": "ceramictiles",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.4,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        181,
+        173,
+        156
+      ],
+      "physics": {
+        "density": 2.4,
+        "friction": 0.51,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "ClayRoofTiles",
+      "native_id": 41,
+      "roblox_value": 2307,
+      "asset_id": "RoofingTiles006",
+      "texture_directory": "clayrooftiles",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.07,
+      "uv_scale": 1,
+      "color": [
+        255,
+        142,
+        87
+      ],
+      "physics": {
+        "density": 2,
+        "friction": 0.51,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "RoofShingles",
+      "native_id": 42,
+      "roblox_value": 2308,
+      "asset_id": "RoofingTiles003",
+      "texture_directory": "roofshingles",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.025,
+      "uv_scale": 1,
+      "color": [
+        66,
+        66,
+        66
+      ],
+      "physics": {
+        "density": 2.36,
+        "friction": 0.8,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Leather",
+      "native_id": 43,
+      "roblox_value": 2309,
+      "asset_id": "Leather030",
+      "texture_directory": "leather",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.65,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        110,
+        73,
+        53
+      ],
+      "physics": {
+        "density": 0.86,
+        "friction": 0.35,
+        "restitution": 0.25
+      }
+    },
+    {
+      "name": "Plaster",
+      "native_id": 44,
+      "roblox_value": 2310,
+      "asset_id": "Plaster001",
+      "texture_directory": "plaster",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.9,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        204,
+        142,
+        105
+      ],
+      "physics": {
+        "density": 0.75,
+        "friction": 0.6,
+        "restitution": 0.2
+      }
+    },
+    {
+      "name": "Rubber",
+      "native_id": 45,
+      "roblox_value": 2311,
+      "asset_id": "Rubber004",
+      "texture_directory": "rubber",
+      "source": "ambientCG",
+      "kind": "DEFAULT",
+      "roughness": 0.95,
+      "metallic": 0,
+      "height_scale": 0.02,
+      "uv_scale": 1,
+      "color": [
+        32,
+        32,
+        32
+      ],
+      "physics": {
+        "density": 1.3,
+        "friction": 1.5,
+        "restitution": 0.95
+      }
+    }
+  ]
+}

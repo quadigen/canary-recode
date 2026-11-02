@@ -14,14 +14,13 @@ endif()
 
 set(KINE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(KINE_WITH_FILAMENT ON CACHE BOOL "" FORCE)
-set(KINE_WITH_ASSIMP OFF CACHE BOOL "" FORCE)
-set(KINE_FILAMENT_BACKEND VULKAN CACHE STRING "" FORCE)
+set(KINE_WITH_ASSIMP ON CACHE BOOL "" FORCE)
+set(KINE_FILAMENT_BACKEND OPENGL CACHE STRING "" FORCE)
 set(KINE_FILAMENT_VULKAN_READBACK OFF CACHE BOOL "" FORCE)
-set(FILAMENT_LIB_ARCH arm64-v8a CACHE STRING "" FORCE)
-
+set(FILAMENT_LIB_ARCH arm64-v8a CACHE STRING "")
 set(KINE_SKIA_AUTO_DOWNLOAD OFF CACHE BOOL "" FORCE)
-set(KINE_SKIA_BACKEND VULKAN CACHE STRING "" FORCE)
-set(KINE_SKIA_BUILD_NAME KinemiumAndroid CACHE STRING "" FORCE)
+set(KINE_SKIA_BACKEND OPENGL CACHE STRING "" FORCE)
+set(KINE_SKIA_BUILD_NAME KinemiumAndroid CACHE STRING "")
 set(KINE_SKIA_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskia.a" CACHE FILEPATH "" FORCE)
 set(KINE_SKIA_SVG_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libsvg.a" CACHE FILEPATH "" FORCE)
 set(KINE_SKIA_SKSHAPER_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskshaper.a" CACHE FILEPATH "" FORCE)
@@ -35,8 +34,8 @@ set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_render_shim" kine_render_shim)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_skia" kine_skia)
-add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_vulkan_compositor" kine_vulkan_compositor)
-target_link_libraries(kine_filament_shim PUBLIC kine_vulkan_compositor)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_gl_compositor" kine_gl_compositor)
+target_link_libraries(kine_filament_shim PUBLIC kine_gl_compositor)
 
 set(LUAU_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(LUAU_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -61,7 +60,7 @@ add_library(KinemiumLibs STATIC "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c")
 target_link_libraries(KinemiumLibs PUBLIC libzstd_static miniz yaml)
 set_target_properties(KinemiumLibs PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-set_target_properties(kine_render_shim kine_filament_shim kine_skia kine_vulkan_compositor
+set_target_properties(kine_render_shim kine_filament_shim kine_skia kine_gl_compositor
     kine_luau JoltWrapper Jolt RecastWrapper PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
@@ -85,7 +84,7 @@ if(KINE_ODIN_OBJECTS)
 
     set(KINE_ANDROID_LINK_LIBS
         kine_filament_shim
-        kine_vulkan_compositor
+        kine_gl_compositor
         kine_skia
         JoltWrapper
         Jolt
@@ -122,6 +121,7 @@ if(KINE_ODIN_OBJECTS)
         ${KINE_ODIN_OBJECTS}
         "${CMAKE_CURRENT_LIST_DIR}/android_jni.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/bionic_pthread_cancel.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/bionic_errno_shim.c"
     )
     set_target_properties(kinemium_android PROPERTIES
         OUTPUT_NAME main

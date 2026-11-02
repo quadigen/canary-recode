@@ -1,36 +1,65 @@
 package classes
 
+import audio "../audio"
 import datatypes "../datatypes"
-import "core:strings"
 import enums "../enum"
-import vm "../vm"
 import guilib "../gui"
+import vm "../vm"
+import fmt "core:fmt"
+import "core:strings"
 
-Sound_Class := Class_Info{
-    name   = "Sound",
-    parent = &Instance_Class,
+Sound_Class := Class_Info {
+	name   = "Sound",
+	parent = &Instance_Class,
 }
 
 Sound :: struct {
-    using object: Object,
-
-    bottom_left_radius: datatypes.UDim,
-    bottom_right_radius: datatypes.UDim,
-    top_left_radius: datatypes.UDim,
-    top_right_radius: datatypes.UDim,
-    corner_radius: datatypes.UDim,
+	using object:             Object,
+	sound_path:               string,
+	content:                  datatypes.Content,
+	is_loaded:                bool,
+	is_playing:               bool,
+	is_paused:                bool,
+	playing:                  bool,
+	looped:                   bool,
+	loopregion:               datatypes.NumberRange,
+	playback_region:          datatypes.NumberRange,
+	playback_regions_enabled: bool,
+	playback_speed:           f64,
+	playback_loudness:        f64,
+	play_on_remove:           bool,
+	roll_off_max_dist:        f64,
+	roll_off_min_dist:        f64,
+	roll_off_mode:            enums.RollOffMode,
+	volume:                   f64,
+	time_position:            f64,
+	length:                   f64,
+	sound:                    audio.Sound,
 }
 
 Sound_Init :: proc() -> Sound {
-    return Sound{
-        object = Object_Init(&Sound_Class),
-
-        bottom_left_radius = datatypes.UDim{0, 0},
-        bottom_right_radius = datatypes.UDim{0, 0},
-        top_right_radius = datatypes.UDim{0, 0},
-        top_left_radius = datatypes.UDim{0, 0},
-        corner_radius = datatypes.UDim{0, 15},
-    }
+	return Sound {
+		object = Object_Init(&Sound_Class),
+		sound_path = "",
+		content = {},
+		is_loaded = false,
+		is_playing = false,
+		is_paused = true,
+		playing = false,
+		looped = false,
+		loopregion = {},
+		playback_region = {},
+		playback_regions_enabled = false,
+		playback_speed = 1.0,
+		playback_loudness = 0,
+		play_on_remove = false,
+		roll_off_max_dist = 10000,
+		roll_off_min_dist = 10,
+		roll_off_mode = .Inverse,
+		volume = 0.5,
+		time_position = 0,
+		length = 0,
+	}
 }
 
 Sound_get :: proc(
@@ -40,28 +69,85 @@ Sound_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
-	corner := cast(^Sound)object
+	sound := cast(^Sound)object
 
 	switch key {
-	case "BottomLeftRadius":
-		datatypes.Push_UDim(L, datatype_registry, corner.bottom_left_radius)
+	case "AudioContent":
+		datatypes.Push_Content(L, datatype_registry, sound.content)
 		return true
-	case "BottomRightRadius":
-		datatypes.Push_UDim(L, datatype_registry, corner.bottom_right_radius)
+
+	case "SoundId":
+		vm.PushString(L, sound.sound_path)
 		return true
-    case "TopLeftRadius":
-		datatypes.Push_UDim(L, datatype_registry, corner.top_left_radius)
+
+	case "IsLoaded":
+		vm.PushBoolean(L, audio.is_loaded(&sound.sound))
 		return true
-    case "TopRightRadius":
-		datatypes.Push_UDim(L, datatype_registry, corner.top_right_radius)
+
+	case "IsPaused":
+		vm.PushBoolean(L, sound.is_paused)
 		return true
-    case "CornerRadius":
-		datatypes.Push_UDim(L, datatype_registry, corner.corner_radius)
+
+	case "IsPlaying", "isPlaying":
+		vm.PushBoolean(L, audio.is_loaded(&sound.sound) && audio.is_playing(&sound.sound))
+		return true
+
+	case "Playing":
+		vm.PushBoolean(L, sound.playing)
+		return true
+
+	case "Looped":
+		vm.PushBoolean(L, sound.looped)
+		return true
+
+	case "LoopRegion":
+		datatypes.Push_NumberRange(L, datatype_registry, sound.loopregion)
+		return true
+
+	case "PlaybackRegion":
+		datatypes.Push_NumberRange(L, datatype_registry, sound.playback_region)
+		return true
+
+	case "PlaybackRegionsEnabled":
+		vm.PushBoolean(L, sound.playback_regions_enabled)
+		return true
+
+	case "PlaybackSpeed":
+		vm.PushNumber(L, sound.playback_speed)
+		return true
+
+	case "PlaybackLoudness":
+		vm.PushNumber(L, sound.playback_loudness)
+		return true
+
+	case "PlayOnRemove":
+		vm.PushBoolean(L, sound.play_on_remove)
+		return true
+
+	case "RollOffMaxDistance":
+		vm.PushNumber(L, sound.roll_off_max_dist)
+		return true
+
+	case "RollOffMinDistance":
+		vm.PushNumber(L, sound.roll_off_min_dist)
+		return true
+
+	case "Volume":
+		vm.PushNumber(L, sound.volume)
+		return true
+
+	case "TimePosition":
+		vm.PushNumber(L, sound.time_position)
+		return true
+
+	case "TimeLength":
+		vm.PushNumber(L, sound.length)
 		return true
 	}
 
 	return false
 }
+
 
 Sound_set :: proc(
 	L: ^vm.State,
@@ -71,59 +157,226 @@ Sound_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	corner := cast(^Sound)object
+	sound := cast(^Sound)object
 
 	switch key {
-	case "BottomLeftRadius":
-		corner.bottom_left_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+	case "SoundId":
+		path := vm.ArgString(L, value_index)
+
+		if sound.sound_path == path && audio.is_loaded(&sound.sound) {
+			return true
+		}
+
+		if audio.is_loaded(&sound.sound) {
+			audio.unload_sound(&sound.sound)
+		}
+
+		sound.sound_path = path
+		sound.is_loaded = false
+		sound.is_playing = false
+		sound.is_paused = true
+		sound.playing = false
+		sound.time_position = 0
+		sound.length = 0
+
+		if path == "" {
+			return true
+		}
+
+		if !audio.load_sound(&sound.sound, path) {
+			fmt.println("Failed to load sound:", path)
+			return true
+		}
+
+		sound.is_loaded = true
+		audio.set_volume(&sound.sound, f32(sound.volume))
+		audio.set_pitch(&sound.sound, f32(sound.playback_speed))
+		audio.set_looping(&sound.sound, b32(sound.looped))
+
 		return true
-	case "BottomRightRadius":
-		corner.bottom_right_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+
+	case "AudioContent":
+		sound.content = datatypes.Arg_Content(L, value_index, datatype_registry)
 		return true
-    case "TopLeftRadius":
-		corner.top_left_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+
+	case "Looped":
+		sound.looped = vm.ArgBoolean(L, value_index)
+
+		if audio.is_loaded(&sound.sound) {
+			audio.set_looping(&sound.sound, b32(sound.looped))
+		}
 		return true
-    case "TopRightRadius":
-		corner.top_right_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+
+	case "LoopRegion":
+		sound.loopregion = datatypes.Arg_NumberRange(L, value_index, datatype_registry)
 		return true
-    case "CornerRadius":
-		corner.corner_radius = datatypes.Arg_UDim(L, value_index, datatype_registry)
+
+	case "PlaybackRegion":
+		sound.playback_region = datatypes.Arg_NumberRange(L, value_index, datatype_registry)
+		return true
+
+	case "PlaybackRegionsEnabled":
+		sound.playback_regions_enabled = vm.ArgBoolean(L, value_index)
+		return true
+
+	case "PlaybackSpeed":
+		speed := vm.ArgNumber(L, value_index)
+		if speed <= 0 {
+			return true
+		}
+
+		sound.playback_speed = speed
+
+		if audio.is_loaded(&sound.sound) {
+			audio.set_pitch(&sound.sound, f32(speed))
+		}
+		return true
+
+	case "PlayOnRemove":
+		sound.play_on_remove = vm.ArgBoolean(L, value_index)
+		return true
+
+	case "RollOffMaxDistance":
+		sound.roll_off_max_dist = max(0.0, vm.ArgNumber(L, value_index))
+		return true
+
+	case "RollOffMinDistance":
+		sound.roll_off_min_dist = max(0.0, vm.ArgNumber(L, value_index))
+		return true
+
+	case "Volume":
+		sound.volume = max(0.0, vm.ArgNumber(L, value_index))
+
+		if audio.is_loaded(&sound.sound) {
+			audio.set_volume(&sound.sound, f32(sound.volume))
+		}
+		return true
+
+	case "TimePosition":
+		sound.time_position = max(0.0, vm.ArgNumber(L, value_index))
+
+		return true
+
+	case "Playing":
+		sound.playing = vm.ArgBoolean(L, value_index)
+
+		if sound.playing {
+			if !audio.is_loaded(&sound.sound) {
+				if sound.sound_path == "" || !audio.load_sound(&sound.sound, sound.sound_path) {
+					sound.is_loaded = false
+					sound.is_playing = false
+					return true
+				}
+
+				sound.is_loaded = true
+				audio.set_volume(&sound.sound, f32(sound.volume))
+				audio.set_pitch(&sound.sound, f32(sound.playback_speed))
+				audio.set_looping(&sound.sound, b32(sound.looped))
+			}
+
+			if !audio.is_playing(&sound.sound) {
+				if audio.play(&sound.sound) {
+					sound.is_playing = true
+					sound.is_paused = false
+				}
+			}
+		} else {
+			if audio.is_loaded(&sound.sound) {
+				audio.stop_sound(&sound.sound)
+			}
+
+			sound.is_playing = false
+			sound.is_paused = true
+		}
+
 		return true
 	}
 
 	return false
 }
 
-Sound_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
-    corner := new(Sound)
-    corner^ = Sound_Init()
-    corner.name = "Sound"
 
-    return &corner.object
+Sound_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
+	sound := new(Sound)
+	sound^ = Sound_Init()
+	sound.name = "Sound"
+	sound.sound = {}
+
+	return &sound.object
 }
 
 Sound_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
-    Object_Destroy(object)
-    free(cast(^Sound)object)
+	sound := cast(^Sound)object
+
+	if audio.is_loaded(&sound.sound) {
+		audio.unload_sound(&sound.sound)
+	}
+
+	Object_Destroy(object)
+	free(sound)
 }
 
 Sound_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^Sound)source
 	dst := cast(^Sound)destination
 
-	dst.bottom_left_radius  = src.bottom_left_radius
-	dst.bottom_right_radius = src.bottom_right_radius
-	dst.top_left_radius     = src.top_left_radius
-	dst.top_right_radius    = src.top_right_radius
-	dst.corner_radius       = src.corner_radius
+	dst.sound_path = src.sound_path
+	dst.content = src.content
+
+	dst.is_loaded = src.is_loaded
+	dst.is_playing = src.is_playing
+	dst.is_paused = src.is_paused
+	dst.playing = src.playing
+
+	dst.looped = src.looped
+	dst.loopregion = src.loopregion
+	dst.playback_region = src.playback_region
+	dst.playback_regions_enabled = src.playback_regions_enabled
+	dst.playback_speed = src.playback_speed
+
+	dst.playback_loudness = src.playback_loudness
+	dst.play_on_remove = src.play_on_remove
+
+	dst.roll_off_max_dist = src.roll_off_max_dist
+	dst.roll_off_min_dist = src.roll_off_min_dist
+	dst.roll_off_mode = src.roll_off_mode
+
+	dst.volume = src.volume
+	dst.time_position = src.time_position
+	dst.length = src.length
 }
 
 Register_Sound :: proc(registry: ^Registry) {
-    Register_Class(
-        registry,
-        &Sound_Class,
-        Sound_construct,
-        Sound_destroy,
-        clone = Sound_clone,
-    )
+	Register_Class(
+		registry,
+		&Sound_Class,
+		Sound_construct,
+		Sound_destroy,
+		clone = Sound_clone,
+		get = Sound_get,
+		set = Sound_set,
+		properties = []string {
+			"AudioContent",
+			"SoundId",
+			"IsLoaded",
+			"IsPaused",
+			"IsPlaying",
+			"Playing",
+			"Looped",
+			"LoopRegion",
+			"PlaybackRegion",
+			"PlaybackRegionsEnabled",
+			"PlaybackSpeed",
+			"PlaybackLoudness",
+			"PlayOnRemove",
+			"RollOffMaxDistance",
+			"RollOffMinDistance",
+			"RollOffMode",
+			"Volume",
+			"TimePosition",
+			"TimeLength",
+		},
+		methods = []string{"Play", "Pause", "Resume", "Stop"},
+		events = []string{"DidLoop", "Ended", "Loaded", "Paused", "Played", "Resumed", "Stopped"},
+	)
 }

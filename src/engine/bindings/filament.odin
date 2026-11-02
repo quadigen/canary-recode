@@ -5,7 +5,7 @@ import sdl3 "../platform"
 when ODIN_OS == .JS {
 	foreign import kine_filament "kinemium_filament"
 } else when ODIN_OS == .Windows {
-	foreign import kine_filament {"../../../vendor/build/lib/kine_sdl3.lib", "../../../vendor/build/lib/kine_filament.lib", "../../../vendor/build/lib/kine_filament_matp.lib", "../../../vendor/build/lib/kine_filament_filamat.lib", "../../../vendor/build/lib/kine_filament_filament.lib", "../../../vendor/build/lib/kine_filament_backend.lib", "../../../vendor/build/lib/kine_filament_bluegl.lib", "../../../vendor/build/lib/kine_filament_bluevk.lib", "../../../vendor/build/lib/kine_filament_filabridge.lib", "../../../vendor/build/lib/kine_filament_filaflat.lib", "../../../vendor/build/lib/kine_filament_utils.lib", "../../../vendor/build/lib/kine_filament_geometry.lib", "../../../vendor/build/lib/kine_filament_smol-v.lib", "../../../vendor/build/lib/kine_filament_zstd.lib", "../../../vendor/build/lib/kine_filament_uberarchive.lib", "../../../vendor/build/lib/kine_filament_shaders.lib", "../../../vendor/build/lib/kine_assimp.lib", "../../../vendor/build/lib/kine_zlib.lib", "../../../vendor/build/lib/kine_vk.lib", "../../../vendor/build/lib/kine_skia.lib", "../../../vendor/build/lib/kine_skia_skiacore.lib", "../../../vendor/build/lib/kine_skia_svg.lib", "../../../vendor/build/lib/kine_skia_skshaper.lib", "../../../vendor/build/lib/kine_skia_skunicode_core.lib", "../../../vendor/build/lib/kine_skia_skunicode_icu.lib", "../../../vendor/build/lib/kine_vulkan_loader.lib", "system:advapi32.lib", "system:d2d1.lib", "system:delayimp.lib", "system:dwrite.lib", "system:dxgi.lib", "system:gdi32.lib", "system:imm32.lib", "system:ole32.lib", "system:oleaut32.lib", "system:opengl32.lib", "system:setupapi.lib", "system:shell32.lib", "system:shlwapi.lib", "system:user32.lib", "system:version.lib", "system:winmm.lib"}
+	foreign import kine_filament {"../../../vendor/build/lib/kine_sdl3.lib", "../../../vendor/build/lib/kine_filament.lib", "../../../vendor/build/lib/kine_filament_filament-iblprefilter.lib", "../../../vendor/build/lib/kine_filament_matp.lib", "../../../vendor/build/lib/kine_filament_filamat.lib", "../../../vendor/build/lib/kine_filament_filament.lib", "../../../vendor/build/lib/kine_filament_backend.lib", "../../../vendor/build/lib/kine_filament_bluegl.lib", "../../../vendor/build/lib/kine_filament_bluevk.lib", "../../../vendor/build/lib/kine_filament_filabridge.lib", "../../../vendor/build/lib/kine_filament_filaflat.lib", "../../../vendor/build/lib/kine_filament_utils.lib", "../../../vendor/build/lib/kine_filament_geometry.lib", "../../../vendor/build/lib/kine_filament_smol-v.lib", "../../../vendor/build/lib/kine_filament_zstd.lib", "../../../vendor/build/lib/kine_filament_uberarchive.lib", "../../../vendor/build/lib/kine_filament_shaders.lib", "../../../vendor/build/lib/kine_assimp.lib", "../../../vendor/build/lib/kine_zlib.lib", "../../../vendor/build/lib/kine_ray.lib", "../../../vendor/build/lib/kine_vk.lib", "../../../vendor/build/lib/kine_skia.lib", "../../../vendor/build/lib/kine_skia_skiacore.lib", "../../../vendor/build/lib/kine_skia_svg.lib", "../../../vendor/build/lib/kine_skia_skshaper.lib", "../../../vendor/build/lib/kine_skia_skunicode_core.lib", "../../../vendor/build/lib/kine_skia_skunicode_icu.lib", "../../../vendor/build/lib/kine_vulkan_loader.lib", "system:advapi32.lib", "system:d2d1.lib", "system:delayimp.lib", "system:dwrite.lib", "system:dxgi.lib", "system:gdi32.lib", "system:imm32.lib", "system:ole32.lib", "system:oleaut32.lib", "system:opengl32.lib", "system:setupapi.lib", "system:shell32.lib", "system:shlwapi.lib", "system:user32.lib", "system:version.lib", "system:winmm.lib"}
 } else when #config(KINE_ANDROID, false) {
 	foreign import kine_filament "../../../build/android-native/lib/libkine_filament_shim.a"
 } else when ODIN_OS == .Darwin {
@@ -13,6 +13,9 @@ when ODIN_OS == .JS {
 } else {
 	foreign import kine_filament {"../../../vendor/build/lib/KinemiumLibs.a", "system:vulkan", "system:c++", "system:GL", "system:X11", "system:dl", "system:pthread", "system:m"}
 }
+
+KINE_RENDER_MODE_FILAMENT :: 1
+KINE_RENDER_MODE_RAY :: 2
 
 KineFilamentContext :: struct {}
 KineFilamentMesh :: struct {}
@@ -23,22 +26,24 @@ KineFilamentShader :: struct {}
 
 @(default_calling_convention = "c")
 foreign kine_filament {
-	Kine_Filament_Shader_Destroy :: proc(shader: ^KineFilamentShader) -> i32 ---
-	Kine_Filament_Shader_SetUniform :: proc(shader: ^KineFilamentShader, name: cstring, values: ^f32, valueCount: i32) -> i32 ---
-	Kine_Filament_SetGlobalShader :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> i32 ---
+	Kine_Filament_Shader_Destroy :: proc(shader: ^KineFilamentShader) ---
+	Kine_Filament_Shader_SetUniform :: proc(shader: ^KineFilamentShader, name: cstring, values: ^f32, valueCount: i32) -> bool ---
+	Kine_Filament_Shader_SetTextureFromPixels :: proc(shader: ^KineFilamentShader, name: cstring, width, height, rowBytes: i32, pixelsRGBA8: rawptr, srgb: bool) -> bool ---
+	Kine_Filament_Shader_SetGeometryOptions :: proc(shader: ^KineFilamentShader, subdivisions: i32, boundsPadding: f32) -> bool ---
+	Kine_Filament_Shader_TransferTextures :: proc(source, destination: ^KineFilamentShader) ---
+	Kine_Filament_Shader_HasTexture :: proc(shader: ^KineFilamentShader, name: cstring) -> bool ---
+	Kine_Filament_SetGlobalShader :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> bool ---
 
-	/* Applies a surface-domain Filamat material as a fullscreen pass. The material
-	must declare a sampler2d parameter named inputTexture. */
-	Kine_Filament_SetPostProcessShader :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> i32 ---
-	Kine_Filament_Shader_GetLastError :: proc() -> ^i32 ---
+
+	Kine_Filament_SetPostProcessShader :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> bool ---
+	Kine_Filament_Shader_GetLastError :: proc() -> cstring ---
 }
 
 KINE_FILAMENT_DRAW_CAST_SHADOWS :: (1 << 0)
 KINE_FILAMENT_DRAW_RECEIVE_SHADOWS :: (1 << 1)
 KINE_FILAMENT_DRAW_CULLING :: (1 << 2)
 
-/* Packed frame-submission item used by Kine_Filament_DrawMeshList.
-Keep this layout in sync with filament/structs.luau. */
+
 KineFilamentDrawItem :: struct {
 	mesh:         ^KineFilamentMesh,
 	tex:          ^KineFilamentTex,
@@ -54,6 +59,34 @@ KineFilamentDrawItem :: struct {
 	flags:        u32,
 	reserved:     u32,
 	shader:       ^KineFilamentShader,
+}
+
+
+KineRayProperties :: struct {
+	maxTotalDepth:      i32,
+	maxDiffuseDepth:    i32,
+	maxSpecularDepth:   i32,
+	maxRefractionDepth: i32,
+	samplesPerFrame:    i32,
+	minSamples:         i32,
+	varianceThreshold:  f32,
+	exposure:           f32,
+	clampDirect:        f32,
+	clampIndirect:      f32,
+}
+
+KineFilamentWaterParams :: struct {
+	speed:              f32,
+	strength:           f32,
+	octaves:            f32,
+	height:             f32,
+	waveScale:          f32,
+	foamAmount:         f32,
+	absorptionR:        f32,
+	absorptionG:        f32,
+	absorptionB:        f32,
+	clearCoat:          f32,
+	clearCoatRoughness: f32,
 }
 
 KineFilamentParticleItem :: struct {
@@ -73,20 +106,16 @@ KineGLTextureInfo :: struct {
 }
 
 KineFilamentVulkanBackend :: struct {
-	instance:                 rawptr, /* VkInstance */
-	physicalDevice:           rawptr, /* VkPhysicalDevice */
-	device:                   rawptr, /* VkDevice */
-	queue:                    rawptr, /* VkQueue */
+	instance:                 rawptr,
+	physicalDevice:           rawptr,
+	device:                   rawptr,
+	queue:                    rawptr,
 	graphicsQueueFamilyIndex: u32,
-	maxApiVersion:            u32, /* 0 = let Skia infer/default */
-	getInstanceProcAddr:      rawptr, /* PFN_vkGetInstanceProcAddr */
-	getDeviceProcAddr:        rawptr, /* PFN_vkGetDeviceProcAddr */
+	maxApiVersion:            u32,
+	getInstanceProcAddr:      rawptr,
+	getDeviceProcAddr:        rawptr,
 }
 
-// ---------------------------------------------------------------------------
-// Material kinds for Kine_Filament_DrawMeshEx's materialKind parameter.
-// Keep in sync with the KineMaterialKind enum in kine_filament_shim.cpp.
-// ---------------------------------------------------------------------------
 KINE_MAT_DEFAULT :: 0
 KINE_MAT_GLASS :: 1
 KINE_MAT_NEON :: 2
@@ -96,32 +125,24 @@ KINE_MAT_GIZMO :: 5
 KINE_MAT_PARTICLE :: 6
 KINE_MAT_TERRAIN :: 7
 
-// Highlight fill and outline, each in a depth-tested and an AlwaysOnTop
-// variant because Filament bakes depthCulling into the material.
+
 KINE_MAT_HIGHLIGHT_OUTLINE :: 8
 KINE_MAT_HIGHLIGHT_FILL :: 9
 KINE_MAT_HIGHLIGHT_OUTLINE_TOP :: 10
 KINE_MAT_HIGHLIGHT_FILL_TOP :: 11
 
-// Selected geometry for the screen-space Highlight outline. Mask draws are
-// routed to a private offscreen target instead of the main scene; a fullscreen
-// composite pass dilates that mask into the visible ring. param1 carries
-// maskValue (1.0 = selected), param2 the outline width in screen pixels, and
-// the outline color/alpha ride in the per-instance color (alpha in w, like
-// particles).
-KINE_MAT_OUTLINE_MASK :: 12
 
-// Which arm/handle of a gizmo is being interacted with.
+KINE_MAT_OUTLINE_MASK :: 12
+KINE_MAT_FORCEFIELD :: 13
+
+
 KINE_GIZMO_AXIS_NONE :: 0
 KINE_GIZMO_AXIS_X :: 1
 KINE_GIZMO_AXIS_Y :: 2
 KINE_GIZMO_AXIS_Z :: 3
 KINE_GIZMO_AXIS_CENTER :: 4
 
-// Plane handles. An axis arrow foreshortens into an unusable dot once the camera
-// looks down it, so the plane perpendicular to that axis takes over. Each one is
-// named for the two axes it drags, and is colored with the color of the axis it
-// replaces.
+
 KINE_GIZMO_AXIS_XY :: 5
 KINE_GIZMO_AXIS_YZ :: 6
 KINE_GIZMO_AXIS_XZ :: 7
@@ -132,10 +153,10 @@ KINE_MESH_PYRAMID :: 3
 KINE_MESH_PARTICLE_QUAD :: 4
 KINE_MESH_DISPLACED_CUBE :: 5
 KINE_MESH_CYLINDER :: 6
-// Dense subdivided top-face grid for the vertex-displaced water material.
+
 KINE_MESH_WATER_GRID :: 7
 
-// Gizmo type, matches the existing shape codes used by Kine_Filament_CreateMesh.
+
 KINE_GIZMO_MOVE :: 10
 KINE_GIZMO_ROTATE :: 11
 KINE_GIZMO_SCALE :: 12
@@ -152,15 +173,26 @@ foreign kine_filament {
 	Kine_Filament_GetColorTextureId :: proc(ctx: ^KineFilamentContext) -> i32 ---
 	Kine_Filament_GetVulkanBackend :: proc(ctx: ^KineFilamentContext, outBackend: ^KineFilamentVulkanBackend) -> i32 ---
 	Kine_Filament_Destroy :: proc(ctx: ^KineFilamentContext) ---
-	Kine_Filament_CreateMesh :: proc(ctx: ^KineFilamentContext, shape: i32) -> ^KineFilamentMesh ---
 
-	// deltaTime (seconds) drives ctx->time, used to animate the water material.
+
+	Kine_Filament_NewRay :: proc(ctx: ^KineFilamentContext, width: i32, height: i32) -> bool ---
+	Kine_Filament_DestroyRay :: proc(ctx: ^KineFilamentContext) ---
+	Kine_Filament_SetRenderMode :: proc(ctx: ^KineFilamentContext, mode: i32) -> bool ---
+	Kine_Filament_GetRenderMode :: proc(ctx: ^KineFilamentContext) -> i32 ---
+	Kine_Filament_HasRay :: proc(ctx: ^KineFilamentContext) -> bool ---
+	Kine_Filament_GetRayError :: proc() -> cstring ---
+
+
+	Kine_Ray_SetProperties :: proc(ctx: ^KineFilamentContext, properties: ^KineRayProperties) -> bool ---
+	Kine_Ray_GetProperties :: proc(ctx: ^KineFilamentContext, out: ^KineRayProperties) -> bool ---
+	Kine_Filament_CreateMesh :: proc(ctx: ^KineFilamentContext, shape: i32) -> ^KineFilamentMesh ---
+	Kine_Filament_SetWaterParams :: proc(ctx: ^KineFilamentContext, params: ^KineFilamentWaterParams) ---
+	Kine_Filament_SetWaterTime :: proc(ctx: ^KineFilamentContext, time: f32) ---
+	Kine_Filament_GetWaterParams :: proc(ctx: ^KineFilamentContext, out: ^KineFilamentWaterParams) -> bool ---
 	Kine_Filament_RenderFrame :: proc(ctx: ^KineFilamentContext, deltaTime: f32) ---
 	Kine_Filament_Resize :: proc(ctx: ^KineFilamentContext, width: i32, height: i32) ---
 	Kine_Filament_SetViewport :: proc(ctx: ^KineFilamentContext, x: i32, y: i32, width: i32, height: i32) ---
-
 	Kine_Filament_Shader_Create :: proc(ctx: ^KineFilamentContext, materialSource: cstring) -> ^KineFilamentShader ---
-
 	Kine_Filament_SetDecalColor :: proc(ctx: ^KineFilamentContext, decal: i32, r: f32, g: f32, b: f32, a: f32) -> i32 ---
 	Kine_Filament_CreateMeshFromMemory :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateMeshFromPath :: proc(ctx: ^KineFilamentContext, path: cstring) -> ^KineFilamentMesh ---
@@ -191,17 +223,22 @@ foreign kine_filament {
 	Kine_Filament_SetCameraLookAt :: proc(ctx: ^KineFilamentContext, eyeX: f32, eyeY: f32, eyeZ: f32, targetX: f32, targetY: f32, targetZ: f32, upX: f32, upY: f32, upZ: f32) ---
 	Kine_Filament_BlitToScreen :: proc(ctx: ^KineFilamentContext, dstX: i32, dstY: i32, dstWidth: i32, dstHeight: i32) -> i32 ---
 	Kine_Filament_SetCameraPerspective :: proc(ctx: ^KineFilamentContext, fovYDegrees: f64, aspect: f64, nearPlane: f64, farPlane: f64) ---
+	Kine_Filament_SetAdvancedEffect :: proc(ctx: ^KineFilamentContext, effect: i32, enabled: bool, values: ^f32, count: i32) ---
+	Kine_Filament_GetAdvancedEffect :: proc(ctx: ^KineFilamentContext, effect: i32, enabled: ^bool, values: ^f32, capacity: i32) -> bool ---
+	Kine_Filament_GetReflectionProbeRegion :: proc(ctx: ^KineFilamentContext, center, radius: ^f32) -> bool ---
+	Kine_Filament_GetReflectionProbeCaptureCount :: proc(ctx: ^KineFilamentContext) -> u64 ---
+	Kine_Filament_SetClouds :: proc(ctx: ^KineFilamentContext, enabled: bool, cover: f32, density: f32, height: f32, thickness: f32, r: f32, g: f32, b: f32) ---
 	Kine_Filament_SetCameraPosition :: proc(ctx: ^KineFilamentContext, x: f32, y: f32, z: f32) ---
 	Kine_Filament_SetCameraDirection :: proc(ctx: ^KineFilamentContext, dx: f32, dy: f32, dz: f32) ---
 	Kine_Filament_DestroyMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh) -> i32 ---
 	Kine_Filament_CreateTex :: proc(ctx: ^KineFilamentContext, tex: ^KineGLTextureInfo) -> i32 ---
 	Kine_Filament_CreateTexFromPixels :: proc(ctx: ^KineFilamentContext, width: i32, height: i32, rowBytes: i32, pixelsRGBA8: rawptr) -> ^KineFilamentTex ---
 	Kine_Filament_CreatePbrTexFromPixels :: proc(ctx: ^KineFilamentContext, width: i32, height: i32, albedoRowBytes: i32, albedoRGBA8: rawptr, normalWidth: i32, normalHeight: i32, normalRowBytes: i32, normalRGBA8: rawptr, ormWidth: i32, ormHeight: i32, ormRowBytes: i32, ormRGBA8: rawptr, heightWidth: i32, heightHeight: i32, heightRowBytes: i32, heightRGBA8: rawptr, heightScale: f32) -> ^KineFilamentTex ---
-
-	/* Imported skeletal data. Bind transforms and caller-provided bone transforms
-	are row-major affine float[16] matrices in mesh-local space. Bone transforms
-	are converted to final skin matrices with the imported inverse bind pose. */
 	Kine_Filament_GetMeshBoneCount :: proc(mesh: ^KineFilamentMesh) -> i32 ---
+	Kine_Filament_GetMeshBounds :: proc(mesh: ^KineFilamentMesh, center, halfExtent: ^f32) -> bool ---
+	Kine_Filament_SetUseImportedMaterials :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, enabled: bool) ---
+	Kine_Filament_GetMeshMaterialCount :: proc(mesh: ^KineFilamentMesh) -> i32 ---
+	Kine_Filament_GetMeshMaterialTexture :: proc(mesh: ^KineFilamentMesh, index: i32) -> ^KineFilamentTex ---
 	Kine_Filament_GetMeshBoneName :: proc(mesh: ^KineFilamentMesh, boneIndex: i32) -> ^i32 ---
 	Kine_Filament_GetMeshBoneParent :: proc(mesh: ^KineFilamentMesh, boneIndex: i32) -> i32 ---
 	Kine_Filament_CopyMeshBoneBindTransform :: proc(mesh: ^KineFilamentMesh, boneIndex: i32, outTransform16: ^f32) -> i32 ---
@@ -222,9 +259,6 @@ foreign kine_filament {
 	Kine_Filament_UpdateCustomMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, vertexData: ^f32, vertexCount: i32) -> i32 ---
 	Kine_Filament_DrawMeshEx :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, materialKind: i32, r: f32, g: f32, b: f32, param1: f32, param2: f32, param3: f32, transmission: f32, mat4: ^f32, castShadows: bool, receiveShadows: bool, culling: bool, tex: ^KineFilamentTex) -> i32 ---
 	Kine_Filament_DrawMeshList :: proc(ctx: ^KineFilamentContext, items: ^KineFilamentDrawItem, itemCount: u32) -> i32 ---
-
-	/* Retained draw stream. Reusing the same streamId/version keeps the existing
-	GPU instance buffers without resubmitting the item array. */
 	Kine_Filament_DrawMeshListVersioned :: proc(ctx: ^KineFilamentContext, items: ^KineFilamentDrawItem, itemCount: u32, streamId: u64, version: u64) -> i32 ---
 	Kine_Filament_DestroyInstanceBatch :: proc(batch: ^KineFilamentInstanceBatch) -> i32 ---
 	Kine_Filament_UpdateInstanceTransforms :: proc(batch: ^KineFilamentInstanceBatch, indices: ^u32, transforms: ^f32, dirtyCount: u32) -> i32 ---
@@ -233,56 +267,34 @@ foreign kine_filament {
 	Kine_Filament_DrawGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) ---
 	Kine_Filament_PickGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, screenX: f32, screenY: f32) -> i32 ---
 	Kine_Filament_GetGizmoDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
-	// Solves a plane-handle drag. Returns true and writes one delta per axis the
-	// plane spans (XY writes X then Y, YZ writes Y then Z, XZ writes X then Z), in
-	// the same local units a single-axis drag reports. Returns false for any other
-	// axis.
+	Kine_Filament_DrawGizmoLine :: proc(ctx: ^KineFilamentContext, ax: f32, ay: f32, az: f32, bx: f32, by: f32, bz: f32, r: f32, g: f32, b: f32, thickness: f32) ---
+	Kine_Filament_DrawGizmoLines :: proc(ctx: ^KineFilamentContext, points: ^f32, segmentCount: u32, r: f32, g: f32, b: f32, thickness: f32) ---
+	Kine_Filament_DrawGizmoCube :: proc(ctx: ^KineFilamentContext, mat4: ^f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32) ---
+	Kine_Filament_DrawGizmoSphere :: proc(ctx: ^KineFilamentContext, cx: f32, cy: f32, cz: f32, radius: f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
+	Kine_Filament_DrawGizmoCylinder :: proc(ctx: ^KineFilamentContext, mat4: ^f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
+	Kine_Filament_DrawGizmoMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f32, r: f32, g: f32, b: f32) ---
+	Kine_Filament_DrawGizmoWireMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f32, r: f32, g: f32, b: f32, thickness: f32, featureAngleDeg: f32) ---
 	Kine_Filament_GetGizmoPlaneDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32, outFirst: ^f32, outSecond: ^f32) -> i32 ---
 	Kine_Filament_CreateCustomMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
+	Kine_Filament_CreateCustomMesh32 :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, vertexCount: i32, indices: ^u32, indexCount: i32) -> ^KineFilamentMesh ---
+	Kine_Filament_CreateCustomMeshEx :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, colorData: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
+	Kine_Filament_CreateCustomMeshEx32 :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, colorData: ^f32, vertexCount: i32, indices: ^u32, indexCount: i32) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateTerrainMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, materialWeights: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
-
 	Kine_Filament_CreateTerrainTextureSet :: proc(ctx: ^KineFilamentContext, layer0: ^KineFilamentTex, layer1: ^KineFilamentTex, layer2: ^KineFilamentTex, layer3: ^KineFilamentTex, layer4: ^KineFilamentTex, layer5: ^KineFilamentTex) -> ^KineFilamentTex ---
-
-	// OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
-	// keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a
-	// per-frame GPU readback is a debugging path, not the high-performance compositor path.
 	Kine_Filament_ReadPixels :: proc(ctx: ^KineFilamentContext, outPixels: rawptr) -> i32 ---
 	Kine_Filament_GetWidth :: proc(ctx: ^KineFilamentContext) -> i32 ---
 	Kine_Filament_GetHeight :: proc(ctx: ^KineFilamentContext) -> i32 ---
 
-	// ---------------------------------------------------------------------------
-	// Atmospheric sky.
-	//
-	// Drives the procedural sky appearance each frame.  All colour components are
-	// linear [0..1].
-	//
-	//   sunDirX/Y/Z   : normalised world-space direction *toward* the sun.
-	//                   Y > 0 = above horizon, Y < 0 = below horizon.
-	//   skyR/G/B      : zenith (overhead) sky colour.
-	//   horizonR/G/B  : horizon band colour (blended in at low sun elevation).
-	//   groundR/G/B   : ground-fill colour visible when sun is below horizon.
-	//   sunIntensity  : sun light intensity in lux (e.g. 100 000 for full day,
-	//                   0 for night).  Controls both the sun-light entity and
-	//                   the brightness of the blended clear colour.
-	// ---------------------------------------------------------------------------
+
 	Kine_Filament_SetSkyAtmosphere :: proc(ctx: ^KineFilamentContext, sunDirX: f32, sunDirY: f32, sunDirZ: f32, skyR: f32, skyG: f32, skyB: f32, horizonR: f32, horizonG: f32, horizonB: f32, groundR: f32, groundG: f32, groundB: f32, sunIntensity: f32) -> i32 ---
 
-	// ---------------------------------------------------------------------------
-	// Custom Texture Cubemap Skybox
-	// Takes 6 OpenGL texture descriptors and builds a cubemap skybox from them.
-	// Faces must all be square and have identical dimensions.
-	// ---------------------------------------------------------------------------
+
 	Kine_Filament_CreateSkyboxCubemap :: proc(ctx: ^KineFilamentContext, texPosX: ^KineGLTextureInfo, texNegX: ^KineGLTextureInfo, texPosY: ^KineGLTextureInfo, texNegY: ^KineGLTextureInfo, texPosZ: ^KineGLTextureInfo, texNegZ: ^KineGLTextureInfo) -> i32 ---
 
-	// ---------------------------------------------------------------------------
-	// Set the built-in sun light direction and intensity independently of the sky.
-	// ---------------------------------------------------------------------------
+
 	Kine_Filament_SetSun :: proc(ctx: ^KineFilamentContext, sunDirX: f32, sunDirY: f32, sunDirZ: f32, sunIntensity: f32) -> i32 ---
 
-	// ---------------------------------------------------------------------------
-	// Point / spot light management.
-	// Returns an opaque integer light ID, or -1 on failure.
-	// ---------------------------------------------------------------------------
+
 	Kine_Filament_CreateLight :: proc(ctx: ^KineFilamentContext, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32) -> i32 ---
 	Kine_Filament_CreateLightEx :: proc(ctx: ^KineFilamentContext, lightType: i32, px: f32, py: f32, pz: f32, dx: f32, dy: f32, dz: f32, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32, innerConeRadians: f32, outerConeRadians: f32, castShadows: bool, enabled: bool) -> i32 ---
 	Kine_Filament_SetColorLight :: proc(ctx: ^KineFilamentContext, light: i32, r: f32, g: f32, b: f32) -> i32 ---
@@ -295,13 +307,44 @@ foreign kine_filament {
 	Kine_Filament_SetEnabledLight :: proc(ctx: ^KineFilamentContext, light: i32, enabled: bool) -> i32 ---
 	Kine_Filament_RemoveLight :: proc(ctx: ^KineFilamentContext, light: i32) -> i32 ---
 
-	// ---------------------------------------------------------------------------
-	// Screen-space decal management.
-	// Returns an opaque integer decal ID, or -1 on failure.
-	// ---------------------------------------------------------------------------
+
 	Kine_Filament_CreateDecal :: proc(ctx: ^KineFilamentContext, width: f32, height: f32, texture: ^KineFilamentTex, offsetStudsU: f32, offsetStudsV: f32, studsPerTileU: f32, studsPerTileV: f32, culling: bool, castShadows: bool, receiveShadows: bool) -> i32 ---
 	Kine_Filament_SetDecalTiling :: proc(ctx: ^KineFilamentContext, decal: i32, width: f32, height: f32, offsetStudsU: f32, offsetStudsV: f32, studsPerTileU: f32, studsPerTileV: f32) -> i32 ---
 	Kine_Filament_RemoveDecal :: proc(ctx: ^KineFilamentContext, decal: i32) -> i32 ---
 	Kine_Filament_SetDecalTransform :: proc(ctx: ^KineFilamentContext, decal: i32, mat4: ^f32) -> i32 ---
 	Kine_Filament_EditDecal :: proc(ctx: ^KineFilamentContext, decal: i32, width: f32, height: f32, culling: bool, castShadows: bool, receiveShadows: bool) -> i32 ---
+}
+
+
+KineFilamentViewport :: struct {}
+KineViewportSettings :: struct {
+	camera:                              [16]f32,
+	ambient, lightColor, lightDirection: [3]f32,
+	fieldOfView:                         f32,
+	width, height:                       i32,
+	shadows, postProcessing:             i32,
+	effectMask:                          u32,
+	bloom:                               [5]f32,
+	ao:                                  [7]f32,
+	dof:                                 [6]f32,
+	color:                               [7]f32,
+	vignette:                            [8]f32,
+	reflections:                         [5]f32,
+	antialiasing:                        [4]f32,
+	dithering, quality:                  i32,
+}
+@(default_calling_convention = "c")
+foreign kine_filament {
+	Kine_Filament_Viewport_Create :: proc(ctx: ^KineFilamentContext) -> ^KineFilamentViewport ---
+	Kine_Filament_Viewport_Destroy :: proc(viewport: ^KineFilamentViewport) ---
+	Kine_Filament_Viewport_Begin :: proc(ctx: ^KineFilamentContext) ---
+	Kine_Filament_Viewport_IsValid :: proc(viewport: ^KineFilamentViewport, ctx: ^KineFilamentContext) -> bool ---
+	Kine_Filament_Viewport_Touch :: proc(viewport: ^KineFilamentViewport) ---
+	Kine_Filament_Viewport_Update :: proc(viewport: ^KineFilamentViewport, settings: ^KineViewportSettings, items: ^KineFilamentDrawItem, count: u32, version: u64) -> bool ---
+	Kine_Filament_Viewport_Draw :: proc(viewport: ^KineFilamentViewport, surface: ^KineSkiaSurface, x, y, width, height, r, g, b, opacity: f32) ---
+	Kine_Filament_Viewport_HasWork :: proc(ctx: ^KineFilamentContext) -> bool ---
+	Kine_Filament_Viewport_RenderFrame :: proc(ctx: ^KineFilamentContext, dt: f32, renderWorld: bool) ---
+	Kine_Filament_Viewport_Primitive :: proc(ctx: ^KineFilamentContext, shape: i32) -> ^KineFilamentMesh ---
+	Kine_Filament_Viewport_Mesh :: proc(ctx: ^KineFilamentContext, key: u64, data: rawptr, size: uintptr, hint: cstring) -> ^KineFilamentMesh ---
+	Kine_Filament_Viewport_Stats :: proc(ctx: ^KineFilamentContext, handles, pages: ^u32, renders: ^u64) ---
 }
