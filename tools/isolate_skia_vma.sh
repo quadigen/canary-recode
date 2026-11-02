@@ -8,6 +8,12 @@ for tool in nm objcopy ranlib; do
   command -v "$tool" >/dev/null || { echo "Missing $tool" >&2; exit 1; }
 done
 
+if nm -g --defined-only "$archive" |
+    awk '$NF ~ /^kine_skia_.*VmaAllocator/ { found = 1 } END { exit !found }'; then
+  echo "Skia VMA symbols are already isolated in $archive"
+  exit 0
+fi
+
 map_file="$(mktemp)"
 isolated_archive="$(mktemp "${archive}.isolated.XXXXXX")"
 trap 'rm -f "$map_file" "$isolated_archive"' EXIT
@@ -27,6 +33,10 @@ nm -A -g --defined-only "$archive" |
   }' > "$map_file"
 
 grep -q 'VmaAllocator' "$map_file" || {
+  if [[ "${2:-}" == '--optional' && ! -s "$map_file" ]]; then
+    echo "No Skia VMA implementation in $archive"
+    exit 0
+  fi
   echo "Could not find Skia's VMA implementation in $archive" >&2
   exit 1
 }

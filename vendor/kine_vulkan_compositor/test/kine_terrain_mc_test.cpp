@@ -48,12 +48,12 @@ struct Device {
 };
 
 static int create_device(Device& out) {
-    VkApplicationInfo app = {0};
+    VkApplicationInfo app = {};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "kine_terrain_mc_test";
     app.apiVersion = VK_API_VERSION_1_2;
 
-    VkInstanceCreateInfo ci = {0};
+    VkInstanceCreateInfo ci = {};
     ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ci.pApplicationInfo = &app;
     if (vkCreateInstance(&ci, NULL, &out.instance) != VK_SUCCESS) {
@@ -96,13 +96,13 @@ static int create_device(Device& out) {
     std::printf("device: %s\n", props.deviceName);
 
     float priority = 1.0f;
-    VkDeviceQueueCreateInfo qci = {0};
+    VkDeviceQueueCreateInfo qci = {};
     qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     qci.queueFamilyIndex = out.queue_family;
     qci.queueCount = 1;
     qci.pQueuePriorities = &priority;
 
-    VkDeviceCreateInfo dci = {0};
+    VkDeviceCreateInfo dci = {};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
@@ -182,7 +182,7 @@ int main() {
         return 1;
     }
 
-    char err[512] = {0};
+    char err[512] = {};
     KineTerrainMc* mc = Kine_TerrainMc_Create(
         dev.instance, dev.physical, dev.device, dev.queue, dev.queue_family, err, sizeof(err));
     CHECK(mc != NULL, "mesher create: %s", err);

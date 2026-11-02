@@ -35,7 +35,7 @@ main :: proc() {
 		system.object_pair_filter,
 		physics.OBJECT_LAYER_MOVING,
 		physics.OBJECT_LAYER_MOVING,
-	) == 0)
+	) == 1)
 	assert(kineffi.JPH_ObjectVsBroadPhaseLayerFilterTable_ShouldCollide(
 		system.object_vs_broad_filter,
 		physics.OBJECT_LAYER_NON_MOVING,

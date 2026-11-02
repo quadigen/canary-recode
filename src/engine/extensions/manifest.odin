@@ -2,8 +2,6 @@ package extensions
 
 
 import "core:encoding/json"
-import "core:fmt"
-import "core:os"
 import "core:strings"
 
 MANIFEST_FILE :: "extension.json"
@@ -133,60 +131,7 @@ manifest_id_is_valid :: proc(id: string) -> bool {
 }
 
 
-Manifest_Load :: proc(directory: string) -> (manifest: Manifest, err: string) {
-	path := platform_join(directory, MANIFEST_FILE)
 
-	data, read_err := os.read_entire_file(path, context.allocator)
-	if read_err != nil {
-		return {}, fmt.aprintf("cannot read %s", path)
-	}
-	defer delete(data, context.allocator)
-
-	value, parse_err := json.parse_string(
-		string(data),
-		parse_integers = false,
-		allocator = context.allocator,
-	)
-	if parse_err != nil {
-		return {}, fmt.aprintf("%s: malformed JSON (%v)", path, parse_err)
-	}
-	defer json.destroy_value(value)
-
-	obj, is_object := value.(json.Object)
-	if !is_object {
-		return {}, fmt.aprintf("%s: the manifest root must be a JSON object", path)
-	}
-
-	manifest = Manifest {
-		id            = field_string(obj, "id"),
-		name          = field_string(obj, "name"),
-		version       = field_string(obj, "version", "0.0.0"),
-		author        = field_string(obj, "author"),
-		description   = field_string(obj, "description"),
-		api_major     = field_u32(obj, "api", KNE_ABI_MAJOR),
-		api_minor     = field_u32(obj, "api_minor", KNE_ABI_MINOR),
-		library       = field_string(obj, "library"),
-		entry         = field_string(obj, "entry", KNE_ENTRY_SYMBOL),
-		enabled       = field_bool(obj, "enabled", true),
-		dependencies  = field_string_list(obj, "dependencies"),
-		capabilities  = field_string_list(obj, "capabilities"),
-		directory     = strings.clone(directory),
-		manifest_path = strings.clone(path),
-	}
-
-	if !manifest_id_is_valid(manifest.id) {
-		Manifest_Destroy(&manifest)
-		return {}, fmt.aprintf("%s: \"id\" is missing or contains unsupported characters", path)
-	}
-	if len(manifest.name) == 0 {
-		manifest.name = strings.clone(manifest.id)
-	}
-	if len(manifest.entry) == 0 {
-		manifest.entry = strings.clone(KNE_ENTRY_SYMBOL)
-	}
-
-	return manifest, ""
-}
 
 manifest_has_capability :: proc(manifest: ^Manifest, capability: string) -> bool {
 	if manifest == nil {

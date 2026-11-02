@@ -231,7 +231,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Players_Class(registry.classes)
 	Register_PlayerScripts_Class(registry.classes)
 	when ODIN_OS != .JS { Register_PlaytestService_Class(registry.classes) }
-	Register_Plugin_Class(registry.classes)
+	when ODIN_OS != .JS { Register_Plugin_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
 	Register_ProfilerService_Class(registry.classes)
 	when ODIN_OS != .JS { Register_Project_Class(registry.classes) }
@@ -266,7 +266,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_UserInputService_Class(registry.classes)
 	Register_WebviewService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
-	Register_ZipService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_ZipService_Class(registry.classes) }
 	// wire:end service-classes
 	// wire:begin services
 	when ODIN_OS != .JS { Register_Service(registry, "AccountService", "AccountService", "accountService") }
@@ -300,7 +300,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "PhysicsService", "PhysicsService")
 	Register_Service(registry, "Players", "Players")
 	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService") }
-	Register_Service(registry, "Plugin", "Plugin", "plugin")
+	when ODIN_OS != .JS { Register_Service(registry, "Plugin", "Plugin", "plugin") }
 	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace", "PluginMarketplace") }
 	Register_Service(registry, "ProfilerService", "ProfilerService")
 	when ODIN_OS != .JS { Register_Service(registry, "Project", "Project") }
@@ -332,7 +332,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "WebviewService", "WebviewService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
-	Register_Service(registry, "ZipService", "ZipService")
+	when ODIN_OS != .JS { Register_Service(registry, "ZipService", "ZipService") }
 	// wire:end services
 	// Web registers browser stand-ins for the desktop-only services the embedded
 	// editor UI needs (see web_services.odin). They live outside the wire region

@@ -2,7 +2,6 @@ package extensions
 
 
 import "core:dynlib"
-import "core:os"
 import "core:strings"
 
 
@@ -44,38 +43,7 @@ platform_is_library_name :: proc(name: string) -> bool {
 }
 
 
-platform_library_candidates :: proc(directory: string) -> []string {
-	entries, read_err := os.read_all_directory_by_path(directory, context.temp_allocator)
-	if read_err != nil {
-		return nil
-	}
 
-	result := make([dynamic]string)
-	for entry in entries {
-		if !platform_is_library_name(entry.name) {
-			continue
-		}
-		path := platform_join(directory, entry.name)
-		if !os.is_file(path) {
-			delete(path)
-			continue
-		}
-		append(&result, path)
-	}
-
-
-	for index in 1 ..< len(result) {
-		current := result[index]
-		probe := index - 1
-		for probe >= 0 && result[probe] > current {
-			result[probe + 1] = result[probe]
-			probe -= 1
-		}
-		result[probe + 1] = current
-	}
-
-	return result[:]
-}
 
 platform_join :: proc(directory, name: string) -> string {
 	if len(directory) == 0 {

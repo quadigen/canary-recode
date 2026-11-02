@@ -1,3 +1,5 @@
+#+build !js
+
 package services
 // wire:service global="plugin"
 

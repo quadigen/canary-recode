@@ -9,7 +9,6 @@ import services "../services"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
-import "core:os"
 import "core:strings"
 
 
@@ -207,146 +206,7 @@ free_record :: proc(record: ^Extension_Record) {
 }
 
 
-Discover :: proc(context_state: ^Context, directory: string) -> (loaded: int, err: string) {
-	if context_state == nil || context_state.host == nil {
-		return 0, strings.clone("the extension system is not initialized")
-	}
-	if len(directory) == 0 {
-		return 0, strings.clone("no extension directory was given")
-	}
-	if !os.is_directory(directory) {
-		return 0, ""
-	}
 
-	delete(context_state.directory)
-	context_state.directory = strings.clone(directory)
-
-	directories := make([dynamic]string)
-	defer {
-		for entry in directories {
-			delete(entry)
-		}
-		delete(directories)
-	}
-
-	if os.exists(platform_join(directory, MANIFEST_FILE)) {
-		append(&directories, strings.clone(directory))
-	} else {
-		entries, read_err := os.read_all_directory_by_path(directory, context.temp_allocator)
-		if read_err != nil {
-			return 0, fmt.aprintf("cannot read the extension directory %s", directory)
-		}
-		for entry in entries {
-			child := platform_join(directory, entry.name)
-			if !os.is_directory(child) {
-				delete(child)
-				continue
-			}
-			if !os.exists(platform_join(child, MANIFEST_FILE)) {
-				delete(child)
-				continue
-			}
-			append(&directories, child)
-		}
-	}
-
-	Pending :: struct {
-		manifest: Manifest,
-		done:     bool,
-		failed:   bool,
-		reason:   string,
-	}
-
-	pending := make([dynamic]Pending, 0, len(directories))
-	defer {
-		for &entry in pending {
-			Manifest_Destroy(&entry.manifest)
-			delete(entry.reason)
-		}
-		delete(pending)
-	}
-
-	for extension_directory in directories {
-		manifest, manifest_err := Manifest_Load(extension_directory)
-		if manifest_err != "" {
-			if len(err) == 0 {
-				err = manifest_err
-			} else {
-				debuglog.Log(fmt.tprintf("KNE: %s", manifest_err))
-				delete(manifest_err)
-			}
-			continue
-		}
-		if !manifest.enabled {
-			debuglog.Log(fmt.tprintf("KNE: %s is disabled", manifest.id))
-			Manifest_Destroy(&manifest)
-			continue
-		}
-		append(&pending, Pending{manifest = manifest})
-	}
-
-	remaining := len(pending)
-	progress := true
-	for remaining > 0 && progress {
-		progress = false
-		for &entry in pending {
-			if entry.done || entry.failed {
-				continue
-			}
-
-			resolved := true
-			for dependency in entry.manifest.dependencies {
-				if Find(context_state, dependency) == nil {
-					resolved = false
-					break
-				}
-			}
-			if !resolved {
-				continue
-			}
-
-			_, load_err := load_record(context_state, &entry.manifest)
-			if load_err != "" {
-				entry.failed = true
-				entry.reason = strings.clone(load_err)
-				remaining -= 1
-				if len(err) == 0 {
-					err = load_err
-				} else {
-					delete(load_err)
-				}
-				continue
-			}
-
-			entry.done = true
-			remaining -= 1
-			loaded += 1
-			progress = true
-		}
-	}
-
-	if remaining > 0 {
-		for &entry in pending {
-			if entry.done || entry.failed {
-				continue
-			}
-			reason := fmt.aprintf(
-				"%s: unresolved dependencies (%s)",
-				entry.manifest.id,
-				strings.join(entry.manifest.dependencies, ", "),
-			)
-			dbg_message := fmt.tprintf("KNE: %s", reason)
-			debuglog.Log(dbg_message)
-			if len(err) == 0 {
-				err = reason
-			} else {
-				delete(reason)
-			}
-		}
-	}
-
-	return loaded, err
-}
 
 
 Discover_Default :: proc(context_state: ^Context) -> (loaded: int, err: string) {
@@ -503,45 +363,7 @@ load_record :: proc(
 	return record, ""
 }
 
-@(private)
-resolve_library_path :: proc(manifest: ^Manifest) -> (string, string) {
-	if len(manifest.library) > 0 {
-		path := platform_join(manifest.directory, manifest.library)
-		if !os.is_file(path) {
-			delete(path)
-			return "", fmt.aprintf("%s: library %q is missing", manifest.id, manifest.library)
-		}
-		return path, ""
-	}
 
-	candidates := platform_library_candidates(manifest.directory)
-	defer {
-		for candidate in candidates {
-			delete(candidate)
-		}
-		delete(candidates)
-	}
-
-	if len(candidates) == 0 {
-		return "", fmt.aprintf(
-			"%s: no dynamic library (%s) in %s",
-			manifest.id,
-			LIBRARY_FILENAME_SUFFIX,
-			manifest.directory,
-		)
-	}
-	if len(candidates) > 1 {
-		debuglog.Log(
-			fmt.tprintf(
-				"KNE: %s has %d libraries, using %s; set \"library\" in the manifest to be explicit",
-				manifest.id,
-				len(candidates),
-				candidates[0],
-			),
-		)
-	}
-	return strings.clone(candidates[0]), ""
-}
 
 
 Find :: proc(context_state: ^Context, id: string) -> ^Extension_Record {

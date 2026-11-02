@@ -4,6 +4,8 @@ project(kine_skia VERSION 0.1.0 LANGUAGES CXX)
 
 include(ExternalProject)
 
+option(KINE_SKIA_PREBUILT "Use downloaded Skia release libraries and their feature definitions" OFF)
+
 # -----------------------------------------------------------------------------
 # Options
 # -----------------------------------------------------------------------------
@@ -319,6 +321,13 @@ endif()
 # -----------------------------------------------------------------------------
 # Imported Skia libraries
 # -----------------------------------------------------------------------------
+
+if(KINE_SKIA_PREBUILT)
+    if(NOT KINE_SKIA_PREBUILT_LIBRARY_PROVIDED)
+        message(FATAL_ERROR "A Skia prebuilt requires KINE_SKIA_LIBRARY; run tools/fetch_skia.py")
+    endif()
+    target_compile_definitions(kine_skia PRIVATE ${KINE_SKIA_PREBUILT_DEFINITIONS})
+endif()
 
 function(kine_skia_import_library target_name library_path)
     add_library(
@@ -730,6 +739,9 @@ endif()
 # -----------------------------------------------------------------------------
 
 if(WIN32)
+    if(KINE_SKIA_PREBUILT)
+        target_link_libraries(kine_skia PRIVATE d3d12 d3dcompiler)
+    endif()
     target_link_libraries(
         kine_skia
 

@@ -21,11 +21,11 @@ set(FILAMENT_LIB_ARCH arm64-v8a CACHE STRING "")
 set(KINE_SKIA_AUTO_DOWNLOAD OFF CACHE BOOL "" FORCE)
 set(KINE_SKIA_BACKEND OPENGL CACHE STRING "" FORCE)
 set(KINE_SKIA_BUILD_NAME KinemiumAndroid CACHE STRING "")
-set(KINE_SKIA_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskia.a" CACHE FILEPATH "" FORCE)
-set(KINE_SKIA_SVG_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libsvg.a" CACHE FILEPATH "" FORCE)
-set(KINE_SKIA_SKSHAPER_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskshaper.a" CACHE FILEPATH "" FORCE)
-set(KINE_SKIA_SKUNICODE_CORE_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskunicode_core.a" CACHE FILEPATH "" FORCE)
-set(KINE_SKIA_SKUNICODE_ICU_LIBRARY "${KINE_SKIA_DIR}/out/KinemiumAndroid/libskunicode_icu.a" CACHE FILEPATH "" FORCE)
+set(KINE_SKIA_LIBRARY "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/libskia.a" CACHE FILEPATH "" FORCE)
+set(KINE_SKIA_SVG_LIBRARY "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/libsvg.a" CACHE FILEPATH "" FORCE)
+set(KINE_SKIA_SKSHAPER_LIBRARY "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/libskshaper.a" CACHE FILEPATH "" FORCE)
+set(KINE_SKIA_SKUNICODE_CORE_LIBRARY "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/libskunicode_core.a" CACHE FILEPATH "" FORCE)
+set(KINE_SKIA_SKUNICODE_ICU_LIBRARY "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/libskunicode_icu.a" CACHE FILEPATH "" FORCE)
 
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
@@ -54,6 +54,7 @@ set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/zstd" zstd)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/miniz" miniz)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../vendor/libyaml" libyaml)
+include("${CMAKE_CURRENT_LIST_DIR}/../rocksdb.cmake")
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c" "void kinemium_libs_anchor(void) {}\n")
 add_library(KinemiumLibs STATIC "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c")
@@ -78,9 +79,14 @@ set(KINE_ANDROID_VCPKG_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/vcpkg-installe
 file(GLOB KINE_ODIN_OBJECTS CONFIGURE_DEPENDS "${KINE_ODIN_OBJECT_DIR}/kinemium-*.o")
 if(KINE_ODIN_OBJECTS)
     set_source_files_properties(${KINE_ODIN_OBJECTS} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
-    file(GLOB KINE_SKIA_ANDROID_ARCHIVES "${KINE_SKIA_DIR}/out/KinemiumAndroid/*.a")
-    list(FILTER KINE_SKIA_ANDROID_ARCHIVES EXCLUDE REGEX "/liballocator_shim\\.a$")
-    list(FILTER KINE_SKIA_ANDROID_ARCHIVES EXCLUDE REGEX "/libwebp_sse41\\.a$")
+    if(KINE_SKIA_PREBUILT)
+        set(KINE_SKIA_ANDROID_ARCHIVES kine_skia_skiacore kine_skia_svg
+            kine_skia_skshaper kine_skia_skunicode_core kine_skia_skunicode_icu)
+    else()
+        file(GLOB KINE_SKIA_ANDROID_ARCHIVES "${KINE_SKIA_DIR}/out/${KINE_SKIA_BUILD_NAME}/*.a")
+        list(FILTER KINE_SKIA_ANDROID_ARCHIVES EXCLUDE REGEX "/liballocator_shim\\.a$")
+        list(FILTER KINE_SKIA_ANDROID_ARCHIVES EXCLUDE REGEX "/libwebp_sse41\\.a$")
+    endif()
 
     set(KINE_ANDROID_LINK_LIBS
         kine_filament_shim
@@ -101,6 +107,7 @@ if(KINE_ODIN_OBJECTS)
         Luau.Bytecode
         Luau.Common
         KinemiumLibs
+        rocksdb
         libzstd_static
         miniz
         yaml

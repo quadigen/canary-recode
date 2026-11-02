@@ -4,8 +4,10 @@ package rocksdb
 
 when ODIN_OS == .Windows {
 	foreign import rocksdb_lib {"../../../vendor/build/lib/kine_rocksdb.lib", "system:shlwapi.lib", "system:rpcrt4.lib"}
+} else when #config(KINE_ANDROID, false) {
+	foreign import rocksdb_lib "../../../build/android-native/lib/librocksdb.a"
 } else {
-	foreign import rocksdb_lib "system:rocksdb"
+	foreign import rocksdb_lib "../../../vendor/build/lib/KinemiumLibs.a"
 }
 
 rocksdb_t :: struct {}

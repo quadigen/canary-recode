@@ -267,7 +267,14 @@ if(KINE_WITH_FILAMENT)
         set(RAY_ENABLE_DX_IMPL OFF CACHE BOOL "" FORCE)
         set(RAY_ENABLE_ASM_CONV OFF CACHE BOOL "" FORCE)
 
-        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../Ray ${CMAKE_BINARY_DIR}/ray)
+        block()
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+                # Ray uses this variable to suppress x86-only compiler flags,
+                # including with Ninja where CMAKE_GENERATOR_PLATFORM is empty.
+                set(CMAKE_APPLE_SILICON_PROCESSOR arm64)
+            endif()
+            add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../Ray ${CMAKE_BINARY_DIR}/ray)
+        endblock()
 
         # Ray ships its own Vulkan platform headers but takes vulkan_core.h from
         # the SDK, same as this project.

@@ -5,6 +5,7 @@ import "core:c"
 import "core:c/libc"
 import "core:fmt"
 import "core:strings"
+import "core:sys/posix"
 
 foreign import clib "system:c"
 
@@ -12,8 +13,6 @@ foreign import clib "system:c"
 AF_UNIX :: 1
 @(private = "file")
 SOCK_STREAM :: 1
-@(private = "file")
-POLLIN :: 0x001
 @(private = "file")
 EINTR :: 4
 
@@ -38,13 +37,6 @@ when ODIN_OS == .Linux {
 }
 
 @(private = "file")
-Pollfd :: struct {
-	fd:      c.int,
-	events:  c.short,
-	revents: c.short,
-}
-
-@(private = "file")
 @(default_calling_convention = "c")
 foreign clib {
 	@(link_name = "socket")
@@ -59,8 +51,6 @@ foreign clib {
 	c_read :: proc(fd: c.int, buf: rawptr, n: uint) -> int ---
 	@(link_name = "close")
 	c_close :: proc(fd: c.int) -> c.int ---
-	@(link_name = "poll")
-	c_poll :: proc(fds: ^Pollfd, nfds: c.ulong, timeout: c.int) -> c.int ---
 	@(link_name = "getpid")
 	c_getpid :: proc() -> c.int ---
 	@(link_name = "getenv")
@@ -160,11 +150,15 @@ transport_write :: proc(t: ^Transport, data: []byte) -> bool {
 	}
 	sent := 0
 	for sent < len(data) {
-		n := c_send(t.fd, &data[sent], uint(len(data) - sent), MSG_NOSIGNAL)
+		remaining := len(data) - sent
+		n := c_send(t.fd, &data[sent], uint(remaining), MSG_NOSIGNAL)
 		if n < 0 {
 			if libc.errno()^ == EINTR {
 				continue
 			}
+			return false
+		}
+		if n == 0 {
 			return false
 		}
 		sent += n
@@ -178,12 +172,12 @@ transport_read :: proc(t: ^Transport, buf: []byte, timeout_ms: int) -> (n: int, 
 	if !t.open {
 		return 0, .Closed
 	}
-	pfd := Pollfd {
-		fd     = t.fd,
-		events = POLLIN,
+	pfd := posix.pollfd {
+		fd     = posix.FD(t.fd),
+		events = {.IN},
 	}
 	for {
-		r := c_poll(&pfd, 1, c.int(timeout_ms))
+		r := posix.poll(&pfd, 1, c.int(timeout_ms))
 		if r < 0 {
 			if libc.errno()^ == EINTR {
 				continue

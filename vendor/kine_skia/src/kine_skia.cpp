@@ -26,7 +26,11 @@
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
 #include "include/effects/SkColorMatrix.h"
+#if __has_include("include/effects/SkGradient.h")
 #include "include/effects/SkGradient.h"
+#else
+#include "include/effects/SkGradientShader.h"
+#endif
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkRuntimeEffect.h"
 #include "include/android/SkAnimatedImage.h"
@@ -36,6 +40,8 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include <type_traits>
+#include <optional>
 
 #if defined(_WIN32)
 #include "include/ports/SkTypeface_win.h"
@@ -523,8 +529,17 @@ KINE_SKIA_API KineSkiaVulkanContext *Kine_Skia_Vulkan_CreateContext(
 		return proc;
 	};
 
-	vkContext.fMemoryAllocator =
-		skgpu::VulkanMemoryAllocators::Make(vkContext, skgpu::ThreadSafe::kYes);
+	// Released Skia builds may expose the allocator's optional block-size
+	// argument while newer source builds provide the two-argument overload.
+	vkContext.fMemoryAllocator = []<typename Factory>(
+		Factory factory, const skgpu::VulkanBackendContext& context) {
+		if constexpr (std::is_invocable_v<Factory,
+			const skgpu::VulkanBackendContext&, skgpu::ThreadSafe>) {
+			return factory(context, skgpu::ThreadSafe::kYes);
+		} else {
+			return factory(context, skgpu::ThreadSafe::kYes, std::nullopt);
+		}
+	}(skgpu::VulkanMemoryAllocators::Make, vkContext);
 	if (!vkContext.fMemoryAllocator) {
 		fprintf(stderr, "kine_skia: failed to create Skia Vulkan memory allocator\n");
 		delete wrapper;
@@ -1018,14 +1033,19 @@ KINE_SKIA_API void Kine_Skia_Surface_EndEdgeFade(
 		const SkColor4f colors[2] = {SkColor4f::FromColor(from),
 									  SkColor4f::FromColor(to)};
 
+		SkPaint paint;
+		paint.setBlendMode(SkBlendMode::kDstIn);
+#if __has_include("include/effects/SkGradient.h")
 		const SkGradient grad(
 			SkGradient::Colors(SkSpan<const SkColor4f>(colors, 2),
 							   SkSpan<const float>(), SkTileMode::kClamp),
 			SkGradient::Interpolation{});
 
-		SkPaint paint;
-		paint.setBlendMode(SkBlendMode::kDstIn);
 		paint.setShader(SkShaders::LinearGradient(pts, grad, nullptr));
+#else
+		paint.setShader(SkGradientShader::MakeLinear(
+			pts, colors, nullptr, nullptr, 2, SkTileMode::kClamp));
+#endif
 		canvas->drawRect(rect, paint);
 	};
 

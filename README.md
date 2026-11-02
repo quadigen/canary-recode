@@ -175,6 +175,20 @@ Ki-nem-yum!!
 - Box2D
 - Jolt Physics
 
+## CI native dependencies
+
+Desktop and Android CI download the latest matching Skia release from
+[HumbleUI/SkiaBuild](https://github.com/HumbleUI/SkiaBuild/releases) with `curl`,
+verify GitHub's SHA-256 digest, and use the headers shipped with those binaries.
+Skia is never compiled in these CI jobs. The shader compiler symbols are
+isolated from Filament's copy before linking.
+
+The remaining desktop native libraries are cached by platform, architecture,
+Skia binary digest, and native source/configuration hashes. Changes confined to
+the Odin engine reuse these libraries; native changes rebuild the cache.
+Android uses prebuilt Skia for both ABIs and caches its downloaded SDK packages
+and vcpkg binary packages. Engine-specific wrappers still compile when needed.
+
 ## WebAssembly build
 
 The browser runtime is the engine's Odin `js_wasm32` target, not a separate web

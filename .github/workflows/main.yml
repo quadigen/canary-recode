@@ -25,36 +25,31 @@ jobs:
             template_os: windows
             template_arch: x86_64
             template_ext: .exe
-          - name: Windows arm64
-            os: windows-latest
-            folder: windows_arm64
-            executable: kinemium.exe
-            template_os: windows
-            template_arch: arm64
-            template_ext: .exe
+          # Windows ARM64 requires native Filament/Odin dependency libraries.
+          # Do not publish the x64 build under an ARM64 artifact name.
           - name: Linux x86-64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             folder: linux_x86-64
             executable: kinemium
             template_os: linux
             template_arch: x86_64
             template_ext: ""
           - name: Linux arm64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             folder: linux_arm64
             executable: kinemium
             template_os: linux
             template_arch: arm64
             template_ext: ""
           - name: macOS arm64
-            os: macos-latest
+            os: macos-15
             folder: macos_arm64
             executable: kinemium
             template_os: macos
             template_arch: arm64
             template_ext: ""
           - name: macOS x86-64
-            os: macos-latest
+            os: macos-15-intel
             folder: macos_x86-64
             executable: kinemium
             template_os: macos
@@ -86,6 +81,58 @@ jobs:
       - name: Show Odin version
         run: odin version
 
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          case '${{ matrix.template_arch }}:${{ runner.arch }}' in
+            x86_64:X64|arm64:ARM64) ;;
+            *) echo 'Runner architecture does not match the artifact target' >&2; exit 1 ;;
+          esac
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Test Skia binary downloader
+        if: runner.os == 'Windows'
+        run: python -m unittest discover -s tests -p test_fetch_skia.py
+
+      - name: Resolve latest Skia binary
+        id: skia
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          arch='${{ matrix.template_arch }}'
+          if [[ "$arch" == x86_64 ]]; then arch=x64; fi
+          python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch" --resolve-only
+
+      - name: Cache Skia release binary
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.skia.outputs.path }}
+          key: ${{ steps.skia.outputs.cache-key }}
+
+      - name: Download Skia binary with curl
+        shell: bash
+        run: |
+          arch='${{ matrix.template_arch }}'
+          if [[ "$arch" == x86_64 ]]; then arch=x64; fi
+          python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch"
+
+      - name: Cache remaining native libraries
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/build/**/*.a
+            vendor/build/**/*.lib
+            vendor/build/**/*.so*
+            vendor/build/**/*.dylib
+            vendor/build/lib/*.anchor
+          key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.cache-key }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'vendor/**', 'tools/fetch_skia.py', 'tools/isolate_skia_symbols.py', '.github/workflows/main.yml') }}
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
@@ -96,6 +143,8 @@ jobs:
             clang \
             cmake \
             git \
+            glslc \
+            llvm \
             libegl1-mesa-dev \
             libenet-dev \
             libfontconfig1-dev \
@@ -103,6 +152,7 @@ jobs:
             libglu1-mesa-dev \
             libgtk-3-dev \
             libibus-1.0-dev \
+            libvulkan-dev \
             libc++-dev \
             libc++abi-dev \
             libwayland-dev \
@@ -124,9 +174,10 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install cmake enet ninja
+        run: brew install cmake enet ninja llvm
 
       - name: Install Vulkan SDK
+        if: runner.os != 'Linux'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           vulkan_version: 1.4.304.1
@@ -134,8 +185,12 @@ jobs:
           cache: true
           stripdown: false
 
+      - name: Isolate Skia shader compiler symbols
+        shell: bash
+        run: python tools/isolate_skia_symbols.py '${{ steps.skia.outputs.path }}'
+
       - name: Configure and build native dependencies (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -145,11 +200,13 @@ jobs:
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
 
-          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -C '${{ steps.skia.outputs.cmake }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build vendor/build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure and build native dependencies (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           cmake_platform_args=()
@@ -168,6 +225,7 @@ jobs:
             -S . \
             -B vendor/build \
             -G Ninja \
+            -C '${{ steps.skia.outputs.cmake }}' \
             -DCMAKE_BUILD_TYPE=Release \
             "${cmake_platform_args[@]}"
           for attempt in 1 2 3; do
@@ -190,6 +248,7 @@ jobs:
             'vendor/build/lib/kine_skia.lib',
             'vendor/build/lib/kine_vk.lib',
             'vendor/build/lib/kine_jolt.lib',
+            'vendor/build/lib/kine_jolt_core.lib',
             'vendor/build/lib/kine_luau.lib',
             'vendor/build/vendor/luau/Luau.Compiler.lib',
             'vendor/build/vendor/luau/Luau.VM.lib'
@@ -203,7 +262,12 @@ jobs:
       - name: Isolate Skia Vulkan allocator (Linux)
         if: runner.os == 'Linux'
         shell: bash
-        run: bash tools/isolate_skia_vma.sh vendor/build/vendor/kine_skia/skia-src/out/Kinemium/libskia.a
+        run: |
+          skia_lib_dir="$(dirname '${{ steps.skia.outputs.library }}')"
+          bash tools/isolate_skia_vma.sh "$skia_lib_dir/libskia.a"
+          for module in svg skshaper skunicode_core skunicode_icu; do
+            bash tools/isolate_skia_vma.sh "$skia_lib_dir/lib${module}.a" --optional
+          done
 
       - name: Verify native libraries (Unix)
         if: runner.os != 'Windows'
@@ -293,6 +357,7 @@ jobs:
             -define:RUNTIME_GIT_ENABLED=true `
             -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
             -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $odinRoot = "$(odin root)".TrimEnd()
           $sdl3Dll = Join-Path $odinRoot 'vendor/sdl3/SDL3.dll'
@@ -331,11 +396,9 @@ jobs:
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* "dist/${{ matrix.folder }}/"
-          cp -a /usr/lib/x86_64-linux-gnu/libenet.so* "dist/${{ matrix.folder }}/"
-          cp -a "${VULKAN_SDK}"/lib/libvulkan.so* "dist/${{ matrix.folder }}/"
-          for soname in libc++.so.1 libc++abi.so.1 libunwind.so.1; do
+          for soname in libenet.so.7 libvulkan.so.1 libc++.so.1 libc++abi.so.1 libunwind.so.1; do
             source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
             test -n "$source_path" && test -f "$source_path" || {
               echo "Missing Linux runtime library: $soname" >&2
@@ -354,7 +417,7 @@ jobs:
               -define:RUNTIME_GIT_ENABLED=true \
               -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
               -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig"
+              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL"
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
           chmod +x "dist/${{ matrix.folder }}/kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
@@ -483,7 +546,8 @@ jobs:
           $archive = Join-Path $toolDir 'filament-v1.74.0-windows.tgz'
           New-Item -ItemType Directory -Force $toolDir | Out-Null
           if (!(Test-Path -LiteralPath $archive)) {
-            Invoke-WebRequest 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz' -OutFile $archive
+            curl.exe --fail --location --retry 4 --output $archive 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           tar -xzf $archive -C $toolDir
           $matc = Join-Path $toolDir 'bin/matc.exe'
@@ -512,7 +576,7 @@ jobs:
           if-no-files-found: error
 
   android:
-    name: Android arm64
+    name: Android (arm64 + x86-64)
     runs-on: windows-latest
     timeout-minutes: 180
 
@@ -533,8 +597,55 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Resolve latest Android Skia binaries
+        id: skia_android
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/fetch_skia.py --platform android --arch arm64 --resolve-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fetch_skia.py --platform android --arch x64 --resolve-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $arm = Get-Content .cache/skia/android-arm64-release.json -Raw | ConvertFrom-Json
+          $x64 = Get-Content .cache/skia/android-x64-release.json -Raw | ConvertFrom-Json
+          "cache-key=skia-android-$($arm.digest.Substring(7))-$($x64.digest.Substring(7))" >> $env:GITHUB_OUTPUT
+
+      - name: Cache Android Skia binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/skia/android-arm64
+            .cache/skia/android-x64
+          key: ${{ steps.skia_android.outputs.cache-key }}
+
+      - name: Download Android Skia binaries with curl
+        shell: pwsh
+        run: |
+          python tools/fetch_skia.py --platform android --arch arm64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/fetch_skia.py --platform android --arch x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/isolate_skia_symbols.py .cache/skia/android-arm64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/isolate_skia_symbols.py .cache/skia/android-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Cache Android dependency downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/android
+            build/vcpkg-binary-cache
+          key: android-deps-v1-${{ runner.os }}-${{ hashFiles('tools/build_android.ps1') }}
+
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -564,24 +675,14 @@ jobs:
             throw 'Android NDK 30.0.16248370 was not installed'
           }
 
-      - name: Configure and build native dependencies (Windows)
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
-
-          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
-          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-
-          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build vendor/build --config Release --parallel
-
       - name: Build Kinemium Android (APK)
         shell: pwsh
         run: |
           try {
-            & './tools/build_android.ps1'
+            $binaryCache = Join-Path $PWD 'build/vcpkg-binary-cache'
+            New-Item -ItemType Directory -Force $binaryCache | Out-Null
+            $env:VCPKG_BINARY_SOURCES = "clear;files,$binaryCache,readwrite"
+            & './tools/build_android.ps1' -UsePrebuiltSkia
             if ($LASTEXITCODE -ne 0) { throw "build_android.ps1 exited with code $LASTEXITCODE" }
           } catch {
             Write-Error $_
@@ -601,7 +702,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, web, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -617,12 +718,6 @@ jobs:
         with:
           name: windows_x86-64
           path: release/windows_x86-64
-
-      - name: Download Windows arm64 artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: windows_arm64
-          path: release/windows_arm64
 
       - name: Download Linux x86-64 artifact
         uses: actions/download-artifact@v6
@@ -667,11 +762,10 @@ jobs:
 
           platforms=(
             "windows_x86-64 windows x86_64 .exe"
-            "windows_arm64 windows arm64 .exe"
-            "linux_x86-64 linux x86_64 ''"
-            "linux_arm64 linux arm64 ''"
-            "macos_arm64 macos arm64 ''"
-            "macos_x86-64 macos x86_64 ''"
+            "linux_x86-64 linux x86_64"
+            "linux_arm64 linux arm64"
+            "macos_arm64 macos arm64"
+            "macos_x86-64 macos x86_64"
           )
 
           for spec in "${platforms[@]}"; do

@@ -86,7 +86,7 @@ static int terrain_mc_find_memory(VkPhysicalDevice pd, uint32_t type_bits, VkMem
 
 static VkResult terrain_mc_make_buffer(
     KineTerrainMc* mc, VkDeviceSize size, VkBuffer* buf, VkDeviceMemory* mem, void** map) {
-    VkBufferCreateInfo bi = {0};
+    VkBufferCreateInfo bi = {};
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = size;
     bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -107,7 +107,7 @@ static VkResult terrain_mc_make_buffer(
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
 
-    VkMemoryAllocateInfo ai = {0};
+    VkMemoryAllocateInfo ai = {};
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = type_index;
@@ -133,7 +133,7 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
 
-    VkDescriptorSetLayoutCreateInfo sl = {0};
+    VkDescriptorSetLayoutCreateInfo sl = {};
     sl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     sl.bindingCount = 7;
     sl.pBindings = bindings;
@@ -141,12 +141,12 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         return terrain_mc_error(err, err_cap, "descriptor set layout creation failed");
     }
 
-    VkPushConstantRange push = {0};
+    VkPushConstantRange push = {};
     push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push.offset = 0;
     push.size = 32; // ivec4 origin_pass + vec4 params
 
-    VkPipelineLayoutCreateInfo pl = {0};
+    VkPipelineLayoutCreateInfo pl = {};
     pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pl.setLayoutCount = 1;
     pl.pSetLayouts = &mc->set_layout;
@@ -156,7 +156,7 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         return terrain_mc_error(err, err_cap, "pipeline layout creation failed");
     }
 
-    VkShaderModuleCreateInfo smi = {0};
+    VkShaderModuleCreateInfo smi = {};
     smi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     smi.codeSize = sizeof(kine_terrain_mc_spv);
     smi.pCode = kine_terrain_mc_spv;
@@ -165,13 +165,13 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         return terrain_mc_error(err, err_cap, "shader module creation failed");
     }
 
-    VkPipelineShaderStageCreateInfo stage = {0};
+    VkPipelineShaderStageCreateInfo stage = {};
     stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     stage.module = module;
     stage.pName = "main";
 
-    VkComputePipelineCreateInfo cp = {0};
+    VkComputePipelineCreateInfo cp = {};
     cp.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     cp.stage = stage;
     cp.layout = mc->pipeline_layout;
@@ -182,11 +182,11 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         return terrain_mc_error(err, err_cap, "compute pipeline creation failed");
     }
 
-    VkDescriptorPoolSize pool_size = {0};
+    VkDescriptorPoolSize pool_size = {};
     pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_size.descriptorCount = 7;
 
-    VkDescriptorPoolCreateInfo dp = {0};
+    VkDescriptorPoolCreateInfo dp = {};
     dp.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dp.maxSets = 1;
     dp.poolSizeCount = 1;
@@ -195,7 +195,7 @@ static int terrain_mc_build_pipeline(KineTerrainMc* mc, char* err, uint32_t err_
         return terrain_mc_error(err, err_cap, "descriptor pool creation failed");
     }
 
-    VkDescriptorSetAllocateInfo ai = {0};
+    VkDescriptorSetAllocateInfo ai = {};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = mc->descriptor_pool;
     ai.descriptorSetCount = 1;
@@ -252,7 +252,7 @@ KineTerrainMc* Kine_TerrainMc_Create(
     mc->queue = (VkQueue)queue;
     mc->queue_family = queue_family_index;
 
-    VkCommandPoolCreateInfo cp = {0};
+    VkCommandPoolCreateInfo cp = {};
     cp.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     cp.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cp.queueFamilyIndex = queue_family_index;
@@ -262,7 +262,7 @@ KineTerrainMc* Kine_TerrainMc_Create(
         return NULL;
     }
 
-    VkCommandBufferAllocateInfo cb = {0};
+    VkCommandBufferAllocateInfo cb = {};
     cb.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cb.commandPool = mc->command_pool;
     cb.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -273,7 +273,7 @@ KineTerrainMc* Kine_TerrainMc_Create(
         return NULL;
     }
 
-    VkFenceCreateInfo fi = {0};
+    VkFenceCreateInfo fi = {};
     fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     if (vkCreateFence(mc->device, &fi, NULL, &mc->fence) != VK_SUCCESS) {
         terrain_mc_error(err, err_cap, "fence creation failed");
@@ -370,7 +370,7 @@ int Kine_TerrainMc_Mesh(
 
     vkResetCommandBuffer(mc->command_buffer, 0);
 
-    VkCommandBufferBeginInfo bi = {0};
+    VkCommandBufferBeginInfo bi = {};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkBeginCommandBuffer(mc->command_buffer, &bi) != VK_SUCCESS) {
@@ -401,7 +401,7 @@ int Kine_TerrainMc_Mesh(
     vkCmdPushConstants(cb, mc->pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(cb, terrain_mc_groups(KINE_TERRAIN_MC_EDGE_COUNT), 1, 1);
 
-    VkMemoryBarrier barrier = {0};
+    VkMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -418,7 +418,7 @@ int Kine_TerrainMc_Mesh(
 
     vkResetFences(mc->device, 1, &mc->fence);
 
-    VkSubmitInfo si = {0};
+    VkSubmitInfo si = {};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cb;

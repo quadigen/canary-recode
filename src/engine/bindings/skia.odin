@@ -3,7 +3,7 @@ package kineffi
 when ODIN_OS == .JS {
 	foreign import kine_skia "kinemium_skia"
 } else when ODIN_OS == .Windows {
-	foreign import kine_skia {"../../../vendor/build/lib/kine_skia.lib", "../../../vendor/build/lib/kine_skia_skiacore.lib", "../../../vendor/build/lib/kine_skia_svg.lib", "../../../vendor/build/lib/kine_skia_skshaper.lib", "../../../vendor/build/lib/kine_skia_skunicode_core.lib", "../../../vendor/build/lib/kine_skia_skunicode_icu.lib", "../../../vendor/build/lib/kine_vulkan_loader.lib", "system:advapi32.lib", "system:d2d1.lib", "system:dwrite.lib", "system:dxgi.lib", "system:gdi32.lib", "system:ole32.lib", "system:user32.lib"}
+	foreign import kine_skia {"../../../vendor/build/lib/kine_skia.lib", "../../../vendor/build/lib/kine_skia_skiacore.lib", "../../../vendor/build/lib/kine_skia_svg.lib", "../../../vendor/build/lib/kine_skia_skshaper.lib", "../../../vendor/build/lib/kine_skia_skunicode_core.lib", "../../../vendor/build/lib/kine_skia_skunicode_icu.lib", "../../../vendor/build/lib/kine_vulkan_loader.lib", "system:advapi32.lib", "system:d2d1.lib", "system:d3d12.lib", "system:d3dcompiler.lib", "system:dwrite.lib", "system:dxgi.lib", "system:gdi32.lib", "system:ole32.lib", "system:user32.lib"}
 } else when #config(KINE_ANDROID, false) {
 	foreign import kine_skia "../../../build/android-native/lib/kine_skia_component.a"
 } else {
