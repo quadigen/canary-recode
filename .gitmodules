@@ -28,3 +28,6 @@
 [submodule "vendor/Ray"]
 	path = vendor/Ray
 	url = https://github.com/sergcpp/Ray.git
+[submodule "vendor/rocksdb"]
+	path = vendor/rocksdb
+	url = https://github.com/meta/rocksdb
