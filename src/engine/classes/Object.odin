@@ -1097,7 +1097,14 @@ Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Ob
 
 	Clone_Class_State(registry, source.class, source, destination)
 
+	clone_object_children(L, registry, source, destination)
+	if Is_A_Class(source, &ViewportFrame_Class) {
+		ViewportFrame_Remap_Cloned_Camera(source, destination)
+	}
+	return destination, true
+}
 
+clone_object_children :: proc(L: ^vm.State, registry: ^Registry, source, destination: ^Object) {
 	for child in source.children {
 		if child == nil || !child.archivable {
 			continue
@@ -1114,12 +1121,6 @@ Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Ob
 
 		vm.Pop(L)
 	}
-
-	if Is_A_Class(
-		source,
-		&ViewportFrame_Class,
-	) {ViewportFrame_Remap_Cloned_Camera(source, destination)}
-	return destination, true
 }
 
 append_class_properties :: proc(

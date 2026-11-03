@@ -111,7 +111,9 @@ CharacterController_Build :: proc(registry: ^Registry, L: ^vm.State, model: ^Cha
 	_ = Add_Child(registry, L, controller, "RotationController")
 	_ = Add_Child(registry, L, controller, "StateMachine")
 	_ = Add_Child(registry, L, controller, "CollisionController")
-	_ = Add_Child(registry, L, &model.object, "Humanoid")
+	if Find_Child(&model.object, "Humanoid") == nil {
+		_ = Add_Child(registry, L, &model.object, "Humanoid")
+	}
 	motor := Add_Child(registry, L, &model.object, "CharacterMotor")
 	_ = motor
 }

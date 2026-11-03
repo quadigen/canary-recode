@@ -235,7 +235,7 @@ physics_load_mesh_data :: proc(
 	}
 	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
-	data := kineffi.Kine_Filament_LoadMeshDataFromPath(c_path)
+	data := kineffi.Kine_Filament_LoadMeshDataFromPathIndexed(c_path, mesh_part.mesh_index)
 	if data == nil {
 		return nil, nil, false
 	}
@@ -377,6 +377,7 @@ physics_mesh_pcd_shape :: proc(
 	}
 	key := Physics_Shape_Cache_Key {
 		mesh_id               = strings.clone(mesh_part.mesh_id),
+		mesh_index            = mesh_part.mesh_index,
 		editable_mesh_id      = mesh_part.editable_mesh_id,
 		editable_mesh_version = version,
 		size                  = mesh_part.size,
@@ -632,10 +633,12 @@ physics_create_body :: proc(
 	}
 
 	mesh_id := ""
+	mesh_index := u32(0)
 	editable_mesh_id := u32(0)
 
 	if mesh != nil {
 		mesh_id = strings.clone(mesh.mesh_id)
+		mesh_index = mesh.mesh_index
 		editable_mesh_id = mesh.editable_mesh_id
 	}
 
@@ -648,6 +651,7 @@ physics_create_body :: proc(
 			remote,
 			part.cframe,
 			mesh_id,
+			mesh_index,
 			editable_mesh_id,
 			physics_mesh_part_version(mesh),
 			mesh_part_collision_fidelity(mesh),
@@ -1067,10 +1071,12 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		body := &service.bodies[body_index]
 
 		mesh_id := ""
+		mesh_index := u32(0)
 		editable_mesh_id := u32(0)
 
 		if mesh_part != nil {
 			mesh_id = mesh_part.mesh_id
+			mesh_index = mesh_part.mesh_index
 			editable_mesh_id = mesh_part.editable_mesh_id
 		}
 
@@ -1083,6 +1089,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		   body.anchored != part.anchored ||
 		   body.remote != remote ||
 		   body.mesh_id != mesh_id ||
+		   body.mesh_index != mesh_index ||
 		   body.editable_mesh_id != editable_mesh_id ||
 		   body.editable_mesh_version != mesh_version ||
 		   body.collision_fidelity != collision_fidelity {

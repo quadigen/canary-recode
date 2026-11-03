@@ -5,6 +5,8 @@ package services
 // wire:service global="ExportService"
 
 import "core:fmt"
+import "core:path/filepath"
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -117,7 +119,7 @@ export_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "ExportToFile", "Export":
+	case "ExportToFile", "Export", "ImportFile":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -176,6 +178,22 @@ service := cast(^ExportService)object
 		   model.registry.classes == nil {
 			return vm.RaiseError(L, "ExportService:ImportFile has no DataModel"), true
 		}
+		extension := filepath.ext(path)
+		switch {
+		case strings.equal_fold(extension, ".fbx"),
+		     strings.equal_fold(extension, ".obj"),
+		     strings.equal_fold(extension, ".glb"),
+		     strings.equal_fold(extension, ".gltf"),
+		     strings.equal_fold(extension, ".dae"),
+		     strings.equal_fold(extension, ".blend"),
+		     strings.equal_fold(extension, ".3mf"),
+		     strings.equal_fold(extension, ".ply"),
+		     strings.equal_fold(extension, ".stl"):
+			if message := export_import_mesh_file(L, model.registry.classes, path); message != "" {
+				return vm.RaiseError(L, message), true
+			}
+			return 1, true
+		}
 		imported, err := serializer.Deserialize_From_File(
 			model.registry.classes,
 			L,
@@ -190,6 +208,49 @@ service := cast(^ExportService)object
 		return 1, true
 	}
 	return 0, false
+}
+
+export_import_mesh_file :: proc(L: ^vm.State, registry: ^classes.Registry, path: string) -> string {
+	absolute, path_err := filepath.abs(path)
+	if path_err != nil {
+		return "ExportService:ImportFile could not resolve the model path"
+	}
+	defer delete(absolute)
+	c_path := strings.clone_to_cstring(absolute)
+	defer delete(c_path)
+	meshes := kineffi.Kine_Filament_ListMeshes(c_path)
+	if meshes == nil {
+		return "ExportService:ImportFile could not read any triangle meshes"
+	}
+	defer kineffi.Kine_Filament_DestroyMeshList(meshes)
+
+	model, ok := classes.Push_New(registry, &vm.VM{L = L}, "Model", false)
+	if !ok || model == nil {
+		return "ExportService:ImportFile could not create a Model"
+	}
+	name := filepath.base(path)
+	classes.Set_Name(model, name[:len(name) - len(filepath.ext(name))])
+	count := kineffi.Kine_Filament_GetMeshListCount(meshes)
+	for index in 1 ..= count {
+		object, part_ok := classes.Push_New(registry, &vm.VM{L = L}, "MeshPart", false)
+		if !part_ok || object == nil {
+			classes.Destroy_Hierarchy(model)
+			return "ExportService:ImportFile could not create a MeshPart"
+		}
+		vm.Pop(L)
+		part := cast(^classes.MeshPart)object
+		part.mesh_id = strings.clone(absolute)
+		part.mesh_index = u32(index)
+		// MeshPart renders with Size / 2 as its scale.
+		part.size = datatypes.Vector3{2, 2, 2}
+		mesh_name := string(kineffi.Kine_Filament_GetMeshListName(meshes, u32(index)))
+		if mesh_name == "" {
+			mesh_name = fmt.tprintf("MeshPart %d", index)
+		}
+		classes.Set_Name(object, mesh_name)
+		classes.Set_Parent(object, model)
+	}
+	return ""
 }
 
 Register_ExportService_Class :: proc(registry: ^classes.Registry) {

@@ -22,6 +22,7 @@ Physics_Body :: struct {
 	remote:                bool,
 	last_cframe:           datatypes.CFrame,
 	mesh_id:               string,
+	mesh_index:            u32,
 	editable_mesh_id:      u32,
 	editable_mesh_version: u64,
 	collision_fidelity:    enums.CollisionFidelity,
@@ -58,6 +59,7 @@ MAX_COLLISION_SUBSTEPS :: 8
 
 Physics_Shape_Cache_Key :: struct {
 	mesh_id:               string,
+	mesh_index:            u32,
 	editable_mesh_id:      u32,
 	editable_mesh_version: u64,
 	size:                  datatypes.Vector3,

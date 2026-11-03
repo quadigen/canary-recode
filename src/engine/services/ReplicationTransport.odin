@@ -1433,18 +1433,21 @@ replication_receive :: proc(
 		reader.offset += 4
 		if reader.valid {
 			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+			character := object.parent
+			for character != nil && !classes.Is_A(character, "CharacterModel") {
+				character = character.parent
+			}
 			local_character :=
 				players != nil &&
 				players.local_player != nil &&
-				object.parent != nil &&
-				classes.Is_A(object.parent, "CharacterModel") &&
-				(cast(^classes.CharacterModel)object.parent).owner_user_id ==
+				character != nil &&
+				(cast(^classes.CharacterModel)character).owner_user_id ==
 					players.local_player.user_id
 			owned :=
 				players != nil &&
 				players.local_player != nil &&
 				entity.owner_id == players.local_player.user_id
-			local_root := local_character && object.name == "HumanoidRootPart"
+			local_root := local_character && object.parent == character && object.name == "HumanoidRootPart"
 			if local_root {
 
 
@@ -1457,18 +1460,7 @@ replication_receive :: proc(
 					"CharacterService",
 				)
 				if entity.force_correction {
-					dx := frame.x - part.cframe.x
-					dy := frame.y - part.cframe.y
-					dz := frame.z - part.cframe.z
-					part.cframe = frame
-					part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
-					character_translate_followers(
-						cast(^classes.CharacterModel)object.parent,
-						part,
-						dx,
-						dy,
-						dz,
-					)
+					character_set_root_frame(part, frame)
 					entity.force_correction = false
 				}
 				if characters != nil && !characters.authoritative_received {
@@ -1777,17 +1769,7 @@ replication_receive :: proc(
 			return
 		}
 		entity.owned_updates_window += 1
-		part.cframe = frame
-		part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
-		if part.parent != nil && classes.Is_A(part.parent, "CharacterModel") {
-			character_translate_followers(
-				cast(^classes.CharacterModel)part.parent,
-				part,
-				dx,
-				dy,
-				dz,
-			)
-		}
+		character_set_root_frame(part, frame)
 		entity.owned_linear_velocity = linear
 		entity.owned_angular_velocity = angular
 		service.owned_states_accepted += 1

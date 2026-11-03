@@ -1307,6 +1307,10 @@ static void kine_restore_host_context(KineFilamentContext *ctx) {
 }
 #endif
 
+struct KineFilamentMeshList {
+	std::vector<std::string> names;
+};
+
 namespace {
 
 #if !KINE_FILAMENT_USE_VULKAN
@@ -2362,18 +2366,28 @@ static bool kine_append_assimp_node(
 	const aiScene *scene,
 	aiNode *node,
 	const aiMatrix4x4 &parentGlobal,
-	const std::unordered_map<std::string, int> &boneIndices) {
-	if (!out || !scene || !node)
+	const std::unordered_map<std::string, int> &boneIndices,
+	uint32_t meshIndex, uint32_t &ordinal, KineFilamentMeshList *list = nullptr) {
+	if (!scene || !node)
 		return false;
 	const aiMatrix4x4 global = parentGlobal * node->mTransformation;
-	const bool skinnedModel = !out->bones.empty();
+	const bool skinnedModel = out && !out->bones.empty();
 
 	for (unsigned int nodeMeshIndex = 0; nodeMeshIndex < node->mNumMeshes; ++nodeMeshIndex) {
 		const unsigned int sceneMeshIndex = node->mMeshes[nodeMeshIndex];
 		if (sceneMeshIndex >= scene->mNumMeshes)
 			continue;
 		const aiMesh *src = scene->mMeshes[sceneMeshIndex];
-		if (!src || src->mNumVertices == 0 || src->mNumFaces == 0)
+		if (!src || !src->HasPositions() || !src->HasFaces() ||
+			!(src->mPrimitiveTypes & aiPrimitiveType_TRIANGLE))
+			continue;
+		++ordinal;
+		if (list) {
+			const aiString &name = src->mName;
+			list->names.emplace_back(name.length ? name.C_Str() : node->mName.C_Str());
+			continue;
+		}
+		if (meshIndex != 0 && meshIndex != ordinal)
 			continue;
 		if (uint64_t(out->vertices.size()) + src->mNumVertices > INT32_MAX ||
 			uint64_t(out->indices.size()) + uint64_t(src->mNumFaces) * 3 > INT32_MAX)
@@ -2449,7 +2463,7 @@ static bool kine_append_assimp_node(
 	}
 
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
-		if (!kine_append_assimp_node(out, scene, node->mChildren[i], global, boneIndices))
+		if (!kine_append_assimp_node(out, scene, node->mChildren[i], global, boneIndices, meshIndex, ordinal, list))
 			return false;
 	}
 	return true;
@@ -2546,7 +2560,7 @@ static bool kine_load_assimp_texture(
 static KineMesh *buildMeshFromAssimpScene(
 	const aiScene *scene,
 	const char *sourceName,
-	const std::string &baseDir = "", bool loadMaterials = true) {
+	const std::string &baseDir, bool loadMaterials, uint32_t meshIndex) {
 	if (!scene || !scene->HasMeshes()) {
 		return nullptr;
 	}
@@ -2680,12 +2694,13 @@ static KineMesh *buildMeshFromAssimpScene(
 			kine_from_assimp(local);
 	}
 
+	uint32_t ordinal = 0;
 	if (!kine_append_assimp_node(
 			m,
 			scene,
 			scene->mRootNode,
 			aiMatrix4x4(),
-			boneIndices)) {
+			boneIndices, meshIndex, ordinal)) {
 		fprintf(
 			stderr,
 			"[Kine] Assimp mesh '%s' exceeds supported mesh counts\n",
@@ -2825,6 +2840,8 @@ static KineMesh *buildMeshFromAssimpScene(
 	if (loadMaterials) {
 		m->materials.resize(scene->mNumMaterials);
 		for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
+			if (meshIndex != 0 && i != m->primitives.front().material)
+				continue;
 			const auto *src = scene->mMaterials[i];
 			auto &dst = m->materials[i];
 			aiColor4D color(1,1,1,1);
@@ -2849,7 +2866,7 @@ static KineMesh *buildMeshFromAssimpScene(
 	return m;
 }
 
-static KineMesh *loadMeshWithAssimp(const char *path, bool loadMaterials = true) {
+static KineMesh *loadMeshWithAssimp(const char *path, bool loadMaterials, uint32_t meshIndex) {
 	Assimp::Importer importer;
 
 	const aiScene *scene = importer.ReadFile(
@@ -2868,13 +2885,13 @@ static KineMesh *loadMeshWithAssimp(const char *path, bool loadMaterials = true)
 	std::string baseDir = path;
 	const size_t slash = baseDir.find_last_of("/\\");
 	baseDir = (slash == std::string::npos) ? "" : baseDir.substr(0, slash + 1);
-	return buildMeshFromAssimpScene(scene, path, baseDir, loadMaterials);
+	return buildMeshFromAssimpScene(scene, path, baseDir, loadMaterials, meshIndex);
 }
 
 static KineMesh *loadMeshWithAssimpMemory(
 	const void *data,
 	size_t dataSize,
-	const char *formatHint) {
+	const char *formatHint, uint32_t meshIndex) {
 	if (!data || dataSize == 0) {
 		return nullptr;
 	}
@@ -2902,7 +2919,7 @@ static KineMesh *loadMeshWithAssimpMemory(
 
 	return buildMeshFromAssimpScene(
 		scene,
-		hint ? hint : "<memory>");
+		hint ? hint : "<memory>", "", true, meshIndex);
 }
 #endif
 
@@ -7582,12 +7599,60 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, in
 	return (KineFilamentMesh *)m;
 }
 
+KINE_API KineFilamentMeshList *Kine_Filament_ListMeshes(const char *path) {
+#if KINE_WITH_ASSIMP
+	if (!path || !*path)
+		return nullptr;
+	Assimp::Importer importer;
+	const aiScene *scene = importer.ReadFile(path, KINE_ASSIMP_FLAGS);
+	if (!scene || !scene->HasMeshes() || !scene->mRootNode)
+		return nullptr;
+	auto *list = new KineFilamentMeshList();
+	uint32_t ordinal = 0;
+	kine_append_assimp_node(nullptr, scene, scene->mRootNode, aiMatrix4x4(), {}, 0, ordinal, list);
+	if (list->names.empty() || list->names.size() > INT32_MAX) {
+		delete list;
+		return nullptr;
+	}
+	return list;
+#else
+	return nullptr;
+#endif
+}
+
+KINE_API int Kine_Filament_GetMeshListCount(const KineFilamentMeshList *list) {
+#if KINE_WITH_ASSIMP
+	return list ? int(list->names.size()) : 0;
+#else
+	return 0;
+#endif
+}
+
+KINE_API const char *Kine_Filament_GetMeshListName(const KineFilamentMeshList *list, uint32_t meshIndex) {
+#if KINE_WITH_ASSIMP
+	if (list && meshIndex > 0 && meshIndex <= list->names.size())
+		return list->names[meshIndex - 1].c_str();
+#endif
+	return nullptr;
+}
+
+KINE_API void Kine_Filament_DestroyMeshList(KineFilamentMeshList *list) {
+#if KINE_WITH_ASSIMP
+	delete list;
+#endif
+}
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPath(KineFilamentContext *ctx, const char *path) {
+	return Kine_Filament_CreateMeshFromPathIndexed(ctx, path, 0);
+}
+
+KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPathIndexed(
+	KineFilamentContext *ctx, const char *path, uint32_t meshIndex) {
 	if (!ctx || !ctx->engine || !path || path[0] == '\0')
 		return nullptr;
 
 #if KINE_WITH_ASSIMP
-	KineMesh *m = loadMeshWithAssimp(path);
+	KineMesh *m = loadMeshWithAssimp(path, true, meshIndex);
 	if (!m)
 		return nullptr;
 	uploadMesh(m, ctx->engine);
@@ -7604,6 +7669,12 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemory(
 	const void *data,
 	size_t dataSize,
 	const char *formatHint) {
+	return Kine_Filament_CreateMeshFromMemoryIndexed(ctx, data, dataSize, formatHint, 0);
+}
+
+KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemoryIndexed(
+	KineFilamentContext *ctx, const void *data, size_t dataSize,
+	const char *formatHint, uint32_t meshIndex) {
 	if (!ctx || !ctx->engine || !data || dataSize == 0) {
 		return nullptr;
 	}
@@ -7612,7 +7683,8 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemory(
 	KineMesh *m = loadMeshWithAssimpMemory(
 		data,
 		dataSize,
-		formatHint);
+		formatHint,
+		meshIndex);
 
 	if (!m) {
 		return nullptr;
@@ -7772,11 +7844,15 @@ KINE_API bool Kine_Filament_ApplyMeshAnimation(
 }
 
 KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPath(const char *path) {
+	return Kine_Filament_LoadMeshDataFromPathIndexed(path, 0);
+}
+
+KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const char *path, uint32_t meshIndex) {
 	if (!path || path[0] == '\0')
 		return nullptr;
 
 #if KINE_WITH_ASSIMP
-	KineMesh *source = loadMeshWithAssimp(path,false);
+	KineMesh *source = loadMeshWithAssimp(path, false, meshIndex);
 	if (!source)
 		return nullptr;
 

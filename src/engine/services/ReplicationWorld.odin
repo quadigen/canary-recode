@@ -232,7 +232,7 @@ replication_builtin_property :: proc(object: ^classes.Object, property: string) 
 	return(
 		object != nil &&
 		classes.Is_A(object, "MeshPart") &&
-		(property == "MeshId" || property == "TextureId") \
+		(property == "MeshId" || property == "MeshIndex" || property == "TextureId") \
 	)
 }
 
@@ -1509,6 +1509,7 @@ replication_send_extra_properties :: proc(
 	defer delete(sendable)
 	if replication_builtin_property(item.object, "MeshId") {
 		append(&sendable, "MeshId")
+		append(&sendable, "MeshIndex")
 		append(&sendable, "TextureId")
 	}
 	if schema := replication_schema(service, classes.Get_Class_Name(item.object)); schema != nil {

@@ -176,6 +176,48 @@ jobs:
         shell: bash
         run: brew install cmake enet ninja llvm
 
+      # The upstream macOS release only contains ARM64 tools and libraries.
+      - name: Restore Filament SDK (macOS Intel)
+        if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
+        id: filament-intel
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/filament-mac-x64
+          key: filament-v1.74.0-macos-x64-v1
+
+      - name: Build Filament SDK (macOS Intel)
+        if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          sdk="$GITHUB_WORKSPACE/.cache/filament-mac-x64"
+          source_dir="$RUNNER_TEMP/filament-v1.74.0"
+          git clone --depth 1 --branch v1.74.0 https://github.com/google/filament.git "$source_dir"
+          (
+            cd "$source_dir"
+            export CC="$(xcrun --find clang)"
+            export CXX="$(xcrun --find clang++)"
+            export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+            bash ./build.sh -i release
+          )
+          mkdir -p "$(dirname "$sdk")"
+          mv "$source_dir/out/release/filament" "$sdk"
+
+      - name: Verify Filament SDK (macOS Intel)
+        if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          sdk="$GITHUB_WORKSPACE/.cache/filament-mac-x64"
+          xcrun lipo -verify_arch x86_64 "$sdk/bin/matc"
+          xcrun lipo -verify_arch x86_64 "$sdk/bin/resgen"
+          xcrun lipo -verify_arch x86_64 "$sdk/lib/x86_64/libfilament.a"
+
+      - name: Save Filament SDK (macOS Intel)
+        if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/filament-mac-x64
+          key: ${{ steps.filament-intel.outputs.cache-primary-key }}
+
       - name: Install Vulkan SDK
         if: runner.os != 'Linux'
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -222,6 +264,9 @@ jobs:
             cmake_env=(CC="$(xcrun --find clang)" CXX="$(xcrun --find clang++)")
             cmake_env+=(OBJC="$(xcrun --find clang)" OBJCXX="$(xcrun --find clang++)")
             cmake_platform_args+=(-DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)")
+            if [[ "${{ runner.arch }}" == 'X64' ]]; then
+              cmake_platform_args+=(-DFILAMENT_DIR="$GITHUB_WORKSPACE/.cache/filament-mac-x64")
+            fi
           fi
           env "${cmake_env[@]}" cmake \
             -S . \

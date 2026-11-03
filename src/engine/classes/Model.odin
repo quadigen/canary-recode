@@ -87,20 +87,21 @@ Model_Transform_Children :: proc(
 	object: ^Object,
 	delta: datatypes.CFrame,
 	changed: ^[dynamic]^Object,
+	excluded: ^Object = nil,
 ) {
 	for child in object.children {
 		if child == nil || child.destroyed {continue}
-		if Is_A(child, "Part") {
+		if child != excluded && Is_A(child, "Part") {
 			part := cast(^Part)child
 			part.cframe = datatypes.CFrame_Mul_CFrame(delta, part.cframe)
 			part.position = {part.cframe.x, part.cframe.y, part.cframe.z}
-			append(changed, child)
+			if changed != nil {append(changed, child)}
 		} else if Is_A(child, "Model") {
 			model := cast(^Model)child
 			model.pivot = datatypes.CFrame_Mul_CFrame(delta, Model_Get_Pivot(model))
 			model.pivot_set = true
 		}
-		Model_Transform_Children(child, delta, changed)
+		Model_Transform_Children(child, delta, changed, excluded)
 	}
 }
 

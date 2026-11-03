@@ -154,12 +154,7 @@ CharacterService_Update_Ragdoll :: proc(
 	physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
 	cf, ok := Physics_Get_Character_Capsule_CFrame(physics, collision)
 	if !ok {return}
-	delta := datatypes.Vector3{cf.x - root.cframe.x, cf.y - root.cframe.y, cf.z - root.cframe.z}
-	root.cframe = cf
-	root.position = datatypes.Vector3{cf.x, cf.y, cf.z}
-	if delta.x != 0 || delta.y != 0 || delta.z != 0 {
-		character_translate_followers(model, root, delta.x, delta.y, delta.z)
-	}
+	character_set_root_frame(root, cf)
 }
 
 CharacterService_Update_Death :: proc(
@@ -196,6 +191,14 @@ CharacterService_Update_Death :: proc(
 	_ = CharacterService_Load(service, player)
 }
 
+character_service_is_template :: proc(object: ^classes.Object) -> bool {
+	return object != nil &&
+	       object.name == "StarterCharacter" &&
+	       classes.Is_A(object, "Model") &&
+	       object.parent != nil &&
+	       classes.Is_A(object.parent, "StarterPlayer")
+}
+
 CharacterService_Load :: proc(
 	service: ^CharacterService,
 	player: ^Player,
@@ -228,35 +231,50 @@ CharacterService_Load :: proc(
 	if !ok || object == nil {return nil}
 	model := cast(^classes.CharacterModel)object
 	model.owner_user_id = player.user_id
-	classes.Set_Name(object, player.name)
 	spawn := CharacterService_Spawn_Position(service.data_model)
-	white := datatypes.Color3 {
-		R = 1,
-		G = 1,
-		B = 1,
+	starter := DataModel_Get_Service(service.data_model, "StarterPlayer")
+	template := classes.Find_First_Child(starter, "StarterCharacter")
+	if character_service_is_template(template) && template.archivable {
+		root := classes.Find_First_Child(template, "HumanoidRootPart")
+		if root != nil && root.archivable && classes.Is_A(root, "Part") {
+			registry := service.data_model.registry
+			classes.CharacterModel_Copy_Template(registry.vm_state.L, registry.classes, model, template)
+		}
 	}
+	classes.Set_Name(object, player.name)
+	if root := classes.CharacterModel_Root(model); root != nil {
+		frame := root.cframe
+		frame.x, frame.y, frame.z = spawn.x, spawn.y, spawn.z
+		classes.Model_Pivot_To(&model.model, frame)
+	} else {
+		white := datatypes.Color3 {
+			R = 1,
+			G = 1,
+			B = 1,
+		}
 
-	_ = character_service_part(
-		service,
-		model,
-		"HumanoidRootPart",
-		datatypes.Vector3{3, 5, 3},
-		spawn,
-		white,
-		false,
-		.Block,
-	)
+		_ = character_service_part(
+			service,
+			model,
+			"HumanoidRootPart",
+			datatypes.Vector3{3, 5, 3},
+			spawn,
+			white,
+			false,
+			.Block,
+		)
 
-	_ = character_service_part(
-		service,
-		model,
-		"CharacterCollider",
-		datatypes.Vector3{3, 3, 3},
-		spawn,
-		white,
-		true,
-		.Capsule,
-	)
+		_ = character_service_part(
+			service,
+			model,
+			"CharacterCollider",
+			datatypes.Vector3{3, 3, 3},
+			spawn,
+			white,
+			true,
+			.Capsule,
+		)
+	}
 
 	classes.Set_Parent(object, workspace)
 	vm.Pop(service.data_model.registry.vm_state.L)

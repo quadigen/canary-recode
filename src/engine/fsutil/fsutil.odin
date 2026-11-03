@@ -4,10 +4,20 @@ import "core:os"
 import "core:strings"
 
 Make_Directory_All :: proc(path: string) -> os.Error {
+	if path == "" {
+		return .Invalid_Path
+	}
+	if os.is_directory(path) {
+		return nil
+	}
 	when #config(KINE_ANDROID, false) {
 		return mkdir_all_direct(path)
 	} else {
-		return os.make_directory_all(path)
+		err := os.make_directory_all(path)
+		if err == .Exist && os.is_directory(path) {
+			err = nil
+		}
+		return err
 	}
 }
 

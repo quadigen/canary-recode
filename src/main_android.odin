@@ -17,7 +17,7 @@ foreign _ {
 	odin_startup_runtime :: proc "odin" () ---
 }
 
-@(export, link_name = "SDL_main")
+@(export, link_name = "Kine_AndroidMain")
 android_main :: proc "c" (argc: i32, argv: ^^u8) -> i32 {
 	context = runtime.default_context()
 	odin_startup_runtime()

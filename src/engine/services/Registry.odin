@@ -198,6 +198,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_AccountService_Class(registry.classes) }
 	Register_ChangeHistoryService_Class(registry.classes)
 	Register_CharacterService_Class(registry.classes)
+	when ODIN_OS != .JS { Register_CollaborationService_Class(registry.classes) }
 	Register_CollectionService_Class(registry.classes)
 	when ODIN_OS != .JS { Register_ContentProvider_Class(registry.classes) }
 	when ODIN_OS != .JS { Register_DataStoreService_Class(registry.classes) }
@@ -272,6 +273,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS { Register_Service(registry, "AccountService", "AccountService", "accountService") }
 	Register_Service(registry, "ChangeHistoryService", "ChangeHistoryService")
 	Register_Service(registry, "CharacterService", "CharacterService")
+	when ODIN_OS != .JS { Register_Service(registry, "CollaborationService", "CollaborationService") }
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
 	when ODIN_OS != .JS { Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider") }
 	when ODIN_OS != .JS { Register_Service(registry, "DataStoreService", "DataStoreService") }

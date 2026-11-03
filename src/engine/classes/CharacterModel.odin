@@ -27,6 +27,18 @@ CharacterModel_Root :: proc(model: ^CharacterModel) -> ^Part {
 	return nil
 }
 
+// Copies an authored Model into a newly constructed CharacterModel.
+CharacterModel_Copy_Template :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	model: ^CharacterModel,
+	template: ^Object,
+) {
+	clone_base_state(L, template, &model.object)
+	Model_clone(template, &model.object)
+	clone_object_children(L, registry, template, &model.object)
+}
+
 character_model_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	model := new(CharacterModel)
 	model.model = Model_Init()

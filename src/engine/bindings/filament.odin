@@ -20,6 +20,7 @@ KINE_RENDER_MODE_RAY :: 2
 KineFilamentContext :: struct {}
 KineFilamentMesh :: struct {}
 KineFilamentMeshData :: struct {}
+KineFilamentMeshList :: struct {}
 KineFilamentTex :: struct {}
 KineFilamentInstanceBatch :: struct {}
 KineFilamentShader :: struct {}
@@ -197,6 +198,13 @@ foreign kine_filament {
 	Kine_Filament_CreateMeshFromMemory :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateMeshFromPath :: proc(ctx: ^KineFilamentContext, path: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_GetMeshTexture :: proc(mesh: ^KineFilamentMesh) -> ^KineFilamentTex ---
+	Kine_Filament_ListMeshes :: proc(path: cstring) -> ^KineFilamentMeshList ---
+	Kine_Filament_GetMeshListCount :: proc(list: ^KineFilamentMeshList) -> i32 ---
+	Kine_Filament_GetMeshListName :: proc(list: ^KineFilamentMeshList, mesh_index: u32) -> cstring ---
+	Kine_Filament_DestroyMeshList :: proc(list: ^KineFilamentMeshList) ---
+	Kine_Filament_CreateMeshFromPathIndexed :: proc(ctx: ^KineFilamentContext, path: cstring, mesh_index: u32) -> ^KineFilamentMesh ---
+	Kine_Filament_CreateMeshFromMemoryIndexed :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring, mesh_index: u32) -> ^KineFilamentMesh ---
+	Kine_Filament_LoadMeshDataFromPathIndexed :: proc(path: cstring, mesh_index: u32) -> ^KineFilamentMeshData ---
 	Kine_Filament_LoadMeshDataFromPath :: proc(path: cstring) -> ^KineFilamentMeshData ---
 	Kine_Filament_CreateSky :: proc(ctx: ^KineFilamentContext, r: f32, g: f32, b: f32, a: f32) ---
 	Kine_Filament_SetPostProcessing :: proc(ctx: ^KineFilamentContext, enabled: bool) -> i32 ---

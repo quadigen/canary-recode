@@ -433,6 +433,18 @@ KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext *ctx, float d
 // shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad, 6 = cylinder,
 //        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, int shape);
+// Mesh indices follow scene traversal order. Zero loads the complete model.
+typedef struct KineFilamentMeshList KineFilamentMeshList;
+KINE_API KineFilamentMeshList *Kine_Filament_ListMeshes(const char *path);
+KINE_API int Kine_Filament_GetMeshListCount(const KineFilamentMeshList *list);
+KINE_API const char *Kine_Filament_GetMeshListName(const KineFilamentMeshList *list, uint32_t meshIndex);
+KINE_API void Kine_Filament_DestroyMeshList(KineFilamentMeshList *list);
+KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPathIndexed(
+	KineFilamentContext *ctx, const char *path, uint32_t meshIndex);
+KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemoryIndexed(
+	KineFilamentContext *ctx, const void *data, size_t dataSize, const char *formatHint, uint32_t meshIndex);
+KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const char *path, uint32_t meshIndex);
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPath(KineFilamentContext *ctx, const char *path);
 KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemory(
 	KineFilamentContext *ctx,

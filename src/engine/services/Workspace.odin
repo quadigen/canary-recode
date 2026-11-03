@@ -245,7 +245,8 @@ workspace_meshpart_mesh :: proc(
 	if part.native_mesh != nil &&
 	   part.native_context == ctx &&
 	   !part.native_is_editable &&
-	   part.native_mesh_id == part.mesh_id {
+	   part.native_mesh_id == part.mesh_id &&
+	   part.native_mesh_index == part.mesh_index {
 		return part.native_mesh
 	}
 	if part.native_mesh != nil && part.native_context != nil {
@@ -255,16 +256,18 @@ workspace_meshpart_mesh :: proc(
 	}
 	delete(part.native_mesh_id)
 	part.native_mesh_id = strings.clone(part.mesh_id)
+	part.native_mesh_index = part.mesh_index
 	if data, found := assetstore.Resolve_Bytes(part.mesh_id); found && len(data) > 0 {
 		hint := assetstore.Format_Hint(part.mesh_id)
 		defer delete(hint)
 		c_hint := hint == "" ? "glb" : strings.clone_to_cstring(hint)
 		defer delete(c_hint)
-		part.native_mesh = kineffi.Kine_Filament_CreateMeshFromMemory(
+		part.native_mesh = kineffi.Kine_Filament_CreateMeshFromMemoryIndexed(
 			ctx,
 			raw_data(data),
 			uintptr(len(data)),
 			c_hint,
+			part.mesh_index,
 		)
 		if part.native_mesh != nil {
 			part.native_context = ctx
@@ -280,7 +283,7 @@ workspace_meshpart_mesh :: proc(
 	defer delete(resolved)
 	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
-	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPath(ctx, c_path)
+	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPathIndexed(ctx, c_path, part.mesh_index)
 	if part.native_mesh != nil {
 		part.native_context = ctx
 		part.native_is_editable = false

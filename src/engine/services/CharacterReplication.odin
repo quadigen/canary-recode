@@ -9,34 +9,20 @@ import "core:math"
 
 character_translate :: proc(model: ^classes.CharacterModel, dx, dy, dz: f32) {
 	if model == nil || model.destroyed {return}
-	for part_object in model.children {
-		if part_object == nil ||
-		   part_object.destroyed ||
-		   !classes.Is_A(part_object, "Part") {continue}
-		part := cast(^classes.Part)part_object
-		part.cframe.x += dx
-		part.cframe.y += dy
-		part.cframe.z += dz
-		part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
-	}
+	delta := datatypes.CFrame_New_Position({dx, dy, dz})
+	classes.Model_Transform_Children(&model.object, delta, nil)
 }
 
-character_translate_followers :: proc(
-	model: ^classes.CharacterModel,
-	root: ^classes.Part,
-	dx, dy, dz: f32,
-) {
-	if model == nil || model.destroyed || root == nil {return}
-	for part_object in model.children {
-		if part_object == nil ||
-		   part_object.destroyed ||
-		   part_object == &root.object ||
-		   !classes.Is_A(part_object, "Part") {continue}
-		part := cast(^classes.Part)part_object
-		part.cframe.x += dx
-		part.cframe.y += dy
-		part.cframe.z += dz
-		part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
+character_set_root_frame :: proc(root: ^classes.Part, frame: datatypes.CFrame) {
+	previous := root.cframe
+	root.cframe = frame
+	root.position = datatypes.CFrame_Position(frame)
+	if frame != previous &&
+	   root.name == "HumanoidRootPart" &&
+	   root.parent != nil &&
+	   classes.Is_A(root.parent, "CharacterModel") {
+		delta := datatypes.CFrame_Mul_CFrame(frame, datatypes.CFrame_Inverse(previous))
+		classes.Model_Transform_Children(root.parent, delta, nil, &root.object)
 	}
 }
 
@@ -422,7 +408,6 @@ CharacterController_Tick :: proc(
 	}
 	move_dir, jump := classes.MovementController_Step(movement, dt)
 	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
-	previous_position := position
 	if collision != nil {
 		Physics_Ensure_Character_Capsule(physics, collision, root, position)
 	}
@@ -572,27 +557,7 @@ CharacterController_Tick :: proc(
 	cf.x = position.x
 	cf.y = position.y
 	cf.z = position.z
-	root.cframe = cf
-	root.position = datatypes.Vector3{position.x, position.y, position.z}
-
-
-	delta := datatypes.Vector3 {
-		position.x - previous_position.x,
-		position.y - previous_position.y,
-		position.z - previous_position.z,
-	}
-	if delta.x != 0 || delta.y != 0 || delta.z != 0 {
-		if cc.object.parent != nil && classes.Is_A(cc.object.parent, "CharacterModel") {
-			character_translate_followers(
-				cast(^classes.CharacterModel)cc.object.parent,
-				root,
-				delta.x,
-				delta.y,
-				delta.z,
-			)
-		}
-	}
-
+	character_set_root_frame(root, cf)
 
 	knockback_damping := math.exp(-classes.CHARACTER_KNOCKBACK_DAMPING * dt)
 	cc.knockback.x *= knockback_damping

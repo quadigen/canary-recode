@@ -14,11 +14,13 @@ MeshPart_Class := Class_Info {
 MeshPart :: struct {
 	using part:            Part,
 	mesh_id:               string,
+	mesh_index:            u32,
 	texture_id:            string,
 	collision_fidelity:    enums.CollisionFidelity,
 	native_mesh:           ^kineffi.KineFilamentMesh,
 	native_context:        ^kineffi.KineFilamentContext,
 	native_mesh_id:        string,
+	native_mesh_index:     u32,
 	mesh_content:          datatypes.Content,
 	editable_mesh_id:      u32,
 	editable_mesh_version: u64,
@@ -83,6 +85,9 @@ mesh_part_get :: proc(
 	case "MeshId":
 		vm.PushString(L, mesh_part.mesh_id)
 
+	case "MeshIndex":
+		vm.PushNumber(L, f64(mesh_part.mesh_index))
+
 	case "MeshContent":
 		datatypes.Push_Content(L, datatype_registry, mesh_part.mesh_content)
 
@@ -123,6 +128,12 @@ mesh_part_set :: proc(
 		mesh_part.mesh_content = datatypes.Content{}
 		mesh_part.editable_mesh_id = 0
 		mesh_part.editable_mesh_version = 0
+
+	case "MeshIndex":
+		index := vm.ArgNumber(L, value_index)
+		if index >= 0 && index <= f64(max(u32)) {
+			mesh_part.mesh_index = u32(index)
+		}
 
 	case "MeshContent":
 		content := datatypes.Arg_Content(L, value_index, datatype_registry)
@@ -196,6 +207,7 @@ mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
 	delete(dst.mesh_content.uri)
 
 	dst.mesh_id = strings.clone(src.mesh_id)
+	dst.mesh_index = src.mesh_index
 	dst.texture_id = strings.clone(src.texture_id)
 	dst.collision_fidelity = src.collision_fidelity
 	dst.mesh_content = datatypes.Content {
@@ -218,7 +230,7 @@ Register_MeshPart :: proc(registry: ^Registry) {
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 		clone = mesh_part_clone,
-		properties = []string{"CollisionFidelity", "TextureId", "MeshId", "MeshContent"},
+		properties = []string{"CollisionFidelity", "TextureId", "MeshId", "MeshIndex", "MeshContent"},
 		methods = []string{"ApplyImpulse", "GetMeshContent", "SetMeshContent"},
 	)
 }

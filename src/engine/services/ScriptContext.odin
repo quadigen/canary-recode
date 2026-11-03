@@ -197,7 +197,7 @@ script_context_is_active :: proc(object: ^classes.Object) -> bool {
 		if classes.Is_A(ancestor, "DataModel") {
 			return true
 		}
-		if ancestor.destroyed {
+		if ancestor.destroyed || character_service_is_template(ancestor) {
 			return false
 		}
 		ancestor = ancestor.parent
