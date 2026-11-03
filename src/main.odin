@@ -152,9 +152,17 @@ run_desktop :: proc(options: Startup_Options) {
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
 
 	if options.standalone {
-		sandbox.init_runtime(&script_vm, &environment, &renderer_object)
+		sandbox.init_runtime(
+			cast(^vm.VM)uintptr(&script_vm),
+			cast(^engine_runtime.Environment)uintptr(&environment),
+			cast(^renderer.RendererObject)uintptr(&renderer_object),
+		)
 	} else {
-		sandbox.init(&script_vm, &environment, &renderer_object)
+		sandbox.init(
+			cast(^vm.VM)uintptr(&script_vm),
+			cast(^engine_runtime.Environment)uintptr(&environment),
+			cast(^renderer.RendererObject)uintptr(&renderer_object),
+		)
 	}
 
 	if options.standalone {

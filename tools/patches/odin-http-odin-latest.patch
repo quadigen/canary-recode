@@ -1,0 +1,26 @@
+diff --git a/client/client.odin b/client/client.odin
+index 8341cec..9eb93b3 100644
+--- a/client/client.odin
++++ b/client/client.odin
+@@ -44,7 +44,7 @@ with_json :: proc(r: ^Request, v: any, opt: json.Marshal_Options = {}) -> json.M
+ 
+ 	stream := bytes.buffer_to_stream(&r.body)
+ 	opt := opt
+-	json.marshal_to_writer(io.to_writer(stream), v, &opt) or_return
++	json.marshal_to_writer(io.to_writer(stream), v, opt) or_return
+ 	return nil
+ }
+ 
+diff --git a/responses.odin b/responses.odin
+index ec357dc..9c0022c 100644
+--- a/responses.odin
++++ b/responses.odin
+@@ -148,7 +148,7 @@ respond_json :: proc(r: ^Response, v: any, status: Status = .OK, opt: json.Marsh
+ 	// Ends the body and sends the response.
+ 	defer io.close(rw.w)
+ 
+-	if err = json.marshal_to_writer(rw.w, v, &opt); err != nil {
++	if err = json.marshal_to_writer(rw.w, v, opt); err != nil {
+ 		headers_set_close(&r.headers)
+ 		response_status(r, .Internal_Server_Error)
+ 	}

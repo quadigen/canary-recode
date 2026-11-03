@@ -15,7 +15,11 @@ run_server :: proc(options: Startup_Options) {
 	environment: engine_runtime.Environment
 	target.set_playtest(options.playtest)
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
-	sandbox.init_runtime(&script_vm, &environment, nil)
+	sandbox.init_runtime(
+		cast(^vm.VM)uintptr(&script_vm),
+		cast(^engine_runtime.Environment)uintptr(&environment),
+		nil,
+	)
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
 	if !load_game_map(&environment, &script_vm, options) {return}

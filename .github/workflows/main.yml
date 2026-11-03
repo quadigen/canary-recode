@@ -72,6 +72,10 @@ jobs:
         shell: bash
         run: git submodule status --recursive
 
+      - name: Patch odin-http for current Odin
+        shell: bash
+        run: git -C src/engine/util/odin-http apply "$GITHUB_WORKSPACE/tools/patches/odin-http-odin-latest.patch"
+
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
@@ -207,9 +211,9 @@ jobs:
         shell: bash
         run: |
           sdk="$GITHUB_WORKSPACE/.cache/filament-mac-x64"
-          xcrun lipo -verify_arch x86_64 "$sdk/bin/matc"
-          xcrun lipo -verify_arch x86_64 "$sdk/bin/resgen"
-          xcrun lipo -verify_arch x86_64 "$sdk/lib/x86_64/libfilament.a"
+          xcrun lipo "$sdk/bin/matc" -verify_arch x86_64
+          xcrun lipo "$sdk/bin/resgen" -verify_arch x86_64
+          xcrun lipo "$sdk/lib/x86_64/libfilament.a" -verify_arch x86_64
 
       - name: Save Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
@@ -657,6 +661,13 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
+
+      - name: Patch odin-http for current Odin
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'tools/patches/odin-http-odin-latest.patch'
+          git -C src/engine/util/odin-http apply $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Setup Odin
         uses: laytan/setup-odin@v2

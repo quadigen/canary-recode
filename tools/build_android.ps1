@@ -242,7 +242,7 @@ foreach ($abi in $Abis) {
     if ($LASTEXITCODE -ne 0) { throw "miniaudio Android $abi compilation failed" }
     & $ar rcs (Join-Path $vendorOut "miniaudio.a") (Join-Path $vendorOut "miniaudio.o")
     if ($LASTEXITCODE -ne 0) { throw "miniaudio Android $abi archive failed" }
-    foreach ($name in @("stb_image", "stb_image_resize", "stb_image_write")) {
+    foreach ($name in @("stb_image", "stb_image_resize2", "stb_image_write")) {
         & $clang -O3 -fPIC -c (Join-Path $odinRoot "vendor\stb\src\$name.c") -o (Join-Path $vendorOut "$name.o")
         if ($LASTEXITCODE -ne 0) { throw "$name Android $abi compilation failed" }
         & $ar rcs (Join-Path $vendorOut "$name.a") (Join-Path $vendorOut "$name.o")
@@ -253,7 +253,7 @@ foreach ($abi in $Abis) {
     New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\box2d\lib\$abi") | Out-Null
     Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\$abi\miniaudio.a") -Force
     Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\miniaudio.a") -Force
-    foreach ($name in @("stb_image", "stb_image_resize", "stb_image_write")) {
+    foreach ($name in @("stb_image", "stb_image_resize2", "stb_image_write")) {
         Copy-Item (Join-Path $vendorOut "$name.a") (Join-Path $odinRoot "vendor\stb\lib\$abi\$name.a") -Force
         Copy-Item (Join-Path $vendorOut "$name.a") (Join-Path $odinRoot "vendor\stb\lib\$name.a") -Force
     }

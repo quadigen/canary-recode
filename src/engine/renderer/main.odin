@@ -245,6 +245,7 @@ when !KINE_RENDERER_GL {
 						renderer.OnEvent(renderer.UserData, event)
 					}
 					renderer.CurrentEvent = &event
+					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
 						running = false

@@ -115,7 +115,7 @@ if(KINE_ODIN_OBJECTS)
         SDL3::SDL3-shared
         "${KINE_ANDROID_VENDOR_DIR}/miniaudio.a"
         "${KINE_ANDROID_VENDOR_DIR}/stb_image.a"
-        "${KINE_ANDROID_VENDOR_DIR}/stb_image_resize.a"
+        "${KINE_ANDROID_VENDOR_DIR}/stb_image_resize2.a"
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_write.a"
         "${KINE_ANDROID_BOX2D_LIBRARY}"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libenet.a"
