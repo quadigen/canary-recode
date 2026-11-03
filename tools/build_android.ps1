@@ -248,9 +248,11 @@ foreach ($abi in $Abis) {
         & $ar rcs (Join-Path $vendorOut "$name.a") (Join-Path $vendorOut "$name.o")
         if ($LASTEXITCODE -ne 0) { throw "$name Android $abi archive failed" }
     }
+    New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\miniaudio\lib\android\$abi") | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\miniaudio\lib\$abi") | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\stb\lib\$abi") | Out-Null
     New-Item -ItemType Directory -Force (Join-Path $odinRoot "vendor\box2d\lib\$abi") | Out-Null
+    Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\android\$abi\miniaudio.a") -Force
     Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\$abi\miniaudio.a") -Force
     Copy-Item (Join-Path $vendorOut "miniaudio.a") (Join-Path $odinRoot "vendor\miniaudio\lib\miniaudio.a") -Force
     foreach ($name in @("stb_image", "stb_image_resize2", "stb_image_write")) {
@@ -260,6 +262,7 @@ foreach ($abi in $Abis) {
     Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\$abi\box2d_other.a") -Force
     Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\box2d_other.a") -Force
     if ($abi -eq "x86_64") {
+        Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\box2d_other_amd64.a") -Force
         Copy-Item (Join-Path $boxBuild "src\libbox2d.a") (Join-Path $odinRoot "vendor\box2d\lib\box2d_other_amd64_sse2.a") -Force
     }
 

@@ -25,7 +25,7 @@ android_main :: proc "c" (argc: i32, argv: ^^u8) -> i32 {
 	redirect_stdio_to_logcat()
 	setup_android_home_dirs()
 	context.assertion_failure_proc = android_assert_failure_proc
-	main()
+	intrinsics.__entry_point()
 	return 0
 }
 

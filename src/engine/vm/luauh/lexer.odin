@@ -5,6 +5,9 @@ when ODIN_OS == .JS {
 } else when ODIN_OS == .Windows {
 	foreign import lib {
 		"../../../../vendor/build/lib/kine_luau.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Analysis.lib",
+		"../../../../vendor/build/vendor/luau/Luau.Config.lib",
+		"../../../../vendor/build/vendor/luau/Luau.CodeGen.lib",
 		"../../../../vendor/build/vendor/luau/Luau.Compiler.lib",
 		"../../../../vendor/build/vendor/luau/Luau.VM.lib",
 		"../../../../vendor/build/vendor/luau/Luau.Ast.lib",
@@ -14,6 +17,7 @@ when ODIN_OS == .JS {
 } else when #config(KINE_ANDROID, false) {
 	foreign import lib {
 		"../../../../build/android-native/lib/libkine_luau.a",
+		"../../../../build/android-native/luau/libLuau.CodeGen.a",
 		"../../../../build/android-native/luau/libLuau.Compiler.a",
 		"../../../../build/android-native/luau/libLuau.VM.a",
 		"../../../../build/android-native/luau/libLuau.Ast.a",
@@ -23,6 +27,9 @@ when ODIN_OS == .JS {
 } else {
 	foreign import lib {
 		"../../../../vendor/build/lib/kine_luau.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Analysis.a",
+		"../../../../vendor/build/vendor/luau/libLuau.Config.a",
+		"../../../../vendor/build/vendor/luau/libLuau.CodeGen.a",
 		"../../../../vendor/build/vendor/luau/libLuau.Compiler.a",
 		"../../../../vendor/build/vendor/luau/libLuau.VM.a",
 		"../../../../vendor/build/vendor/luau/libLuau.Ast.a",
