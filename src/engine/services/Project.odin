@@ -161,9 +161,7 @@ Project_Create :: proc(
 	}
 
 	if Project_Get_Active(service) != nil {Project_Clear_Map(service, L)}
-	if active_ok := Project_Set_Active(service, project_path); !active_ok {
-		fmt.eprintf("[Project] create succeeded but failed to set active\n")
-	}
+	Project_Activate(service, len(service.projects) - 1)
 	fmt.eprintf("[Project] created project at %q\n", project_path)
 	return true
 }
@@ -221,13 +219,17 @@ Project_Set_Active :: proc(service: ^ProjectService, path: string) -> bool {
 		return false
 	}
 
+	Project_Activate(service, index)
+	return true
+}
+
+Project_Activate :: proc(service: ^ProjectService, index: int) {
 	if len(service.active_project_path) > 0 {
 		delete(service.active_project_path)
 	}
 
 	service.active_project_path = strings.clone(service.projects[index].path)
-
-	return true
+	service.autosave_elapsed = 0
 }
 
 Project_Normalize_Path :: proc(path: string) -> (string, bool) {
@@ -236,11 +238,27 @@ Project_Normalize_Path :: proc(path: string) -> (string, bool) {
 	}
 
 	absolute, err := filepath.abs(path)
-	if err != nil {
-		return "", false
+	if err == nil && absolute != "" {
+		return absolute, true
 	}
+	delete(absolute)
 
-	return absolute, true
+	// On Linux filepath.abs opens the target. A project base may not exist yet.
+	when ODIN_OS == .Linux {
+		if err == nil || err == .Not_Exist {
+			if filepath.is_abs(path) {
+				cleaned, clean_err := filepath.clean(path)
+				return cleaned, clean_err == nil
+			}
+			cwd, cwd_err := os.get_working_directory(context.allocator)
+			if cwd_err == nil {
+				defer delete(cwd)
+				joined, join_err := os.join_path({cwd, path}, context.allocator)
+				return joined, join_err == nil
+			}
+		}
+	}
+	return "", false
 }
 
 Project_Default_Projects_Dir :: proc(allocator := context.allocator) -> (string, bool) {
@@ -266,8 +284,16 @@ Project_Find_By_Path :: proc(service: ^ProjectService, path: string) -> (int, bo
 	defer delete(normalized)
 
 	for project, index in service.projects {
-		if os.are_paths_identical(project.path, normalized) {
+		if os.are_paths_identical(project.path, path) ||
+		   os.are_paths_identical(project.path, normalized) {
 			return index, true
+		}
+		// Older registries can contain a symlink spelling of the project path.
+		if stored, valid := Project_Normalize_Path(project.path); valid {
+			defer delete(stored)
+			if os.are_paths_identical(stored, normalized) {
+				return index, true
+			}
 		}
 	}
 
@@ -614,12 +640,23 @@ project_write_atomic :: proc(path, data: string) -> bool {
 	directory, ok := Project_Entry_Parent(path)
 	if !ok {return false}
 	staging, staging_err := os.make_directory_temp(directory, ".project-save-*", context.allocator)
-	if staging_err != nil {return false}
+	if staging_err != nil {
+		fmt.eprintf("[Project] could not stage a write to %q: %v\n", path, staging_err)
+		return false
+	}
 	defer delete(staging)
 	defer os.remove(staging)
 	pending := fmt.tprintf("%s/pending", staging)
 	defer os.remove(pending)
-	return os.write_entire_file(pending, data) == nil && os.rename(pending, path) == nil
+	if write_err := os.write_entire_file(pending, data); write_err != nil {
+		fmt.eprintf("[Project] could not write %q: %v\n", pending, write_err)
+		return false
+	}
+	if rename_err := os.rename(pending, path); rename_err != nil {
+		fmt.eprintf("[Project] could not replace %q: %v\n", path, rename_err)
+		return false
+	}
+	return true
 }
 
 Project_Add :: proc(service: ^ProjectService, project: KinemiumProject) -> bool {
@@ -954,16 +991,35 @@ Project_Clear_Map :: proc(service: ^ProjectService, L: ^vm.State) {
 
 Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bool {
 	normalized, valid := Project_Normalize_Path(path)
-	if !valid {return false}
+	if !valid {
+		fmt.eprintf("[Project] open failed: could not resolve %q\n", path)
+		return false
+	}
 	defer delete(normalized)
-	index, found := Project_Find_By_Path(service, normalized)
-	if !found || !os.is_directory(normalized) {return false}
+	index, found := Project_Find_By_Path(service, path)
+	if !found {
+		fmt.eprintf("[Project] open failed: %q is not registered\n", normalized)
+		return false
+	}
+	info, stat_err := os.stat(normalized, context.allocator)
+	if stat_err != nil {
+		fmt.eprintf("[Project] open failed: checking %q: %v\n", normalized, stat_err)
+		return false
+	}
+	defer os.file_info_delete(info, context.allocator)
+	if info.type != .Directory {
+		fmt.eprintf("[Project] open failed: %q is not a directory\n", normalized)
+		return false
+	}
 	if service.active_project_path == service.projects[index].path {return true}
 
 	snapshot := fmt.tprintf("%s/autosave.kine", normalized)
 	if os.exists(snapshot) {
 		data, read_err := os.read_entire_file(snapshot, context.allocator)
-		if read_err != nil {return false}
+		if read_err != nil {
+			fmt.eprintf("[Project] open failed: reading %q: %v\n", snapshot, read_err)
+			return false
+		}
 		defer delete(data)
 		if !Restore_Map(service.data_model.registry, L, data, snapshot, clear_assets = false) {
 			return false
@@ -971,7 +1027,8 @@ Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bo
 	} else {
 		Project_Clear_Map(service, L)
 	}
-	return Project_Set_Active(service, normalized)
+	Project_Activate(service, index)
+	return true
 }
 
 Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
@@ -979,7 +1036,10 @@ Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
 	if current == nil {return false}
 	exporter := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
 	staging, staging_err := os.make_directory_temp(current.path, ".project-save-*", context.allocator)
-	if staging_err != nil {return false}
+	if staging_err != nil {
+		fmt.eprintf("[Project] save failed: staging in %q: %v\n", current.path, staging_err)
+		return false
+	}
 	defer delete(staging)
 	defer os.remove(staging)
 	pending := fmt.tprintf("%s/autosave.kine", staging)
@@ -993,9 +1053,18 @@ Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
 	}
 	snapshot := fmt.tprintf("%s/autosave.kine", current.path)
 	backed_up, unchanged := project_backup_previous(current.path, snapshot, pending)
-	if !backed_up {return false}
+	if !backed_up {
+		fmt.eprintf("[Project] save failed: could not back up %q\n", snapshot)
+		return false
+	}
+	if !unchanged {
+		if rename_err := os.rename(pending, snapshot); rename_err != nil {
+			fmt.eprintf("[Project] save failed: replacing %q: %v\n", snapshot, rename_err)
+			return false
+		}
+	}
 	service.autosave_elapsed = 0
-	return unchanged || os.rename(pending, snapshot) == nil
+	return true
 }
 
 Register_Project_Class :: proc(registry: ^classes.Registry) {
