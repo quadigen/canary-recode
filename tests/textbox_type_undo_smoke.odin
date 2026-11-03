@@ -110,6 +110,27 @@ _G.box = box
 		assert_text(&environment, &script_vm, box, "abc", iter, "after second undo")
 	}
 
+	run_script(&script_vm, `
+_G.box.Position = UDim2.fromOffset(50, 50)
+_G.box.Size = UDim2.fromOffset(300, 120)
+_G.box.Text = "alpha\nbeta_name! gamma"
+`, "textbox_click_setup")
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	last_glyph_left := classes.text_box_measure_range(box, 6, 14)
+	last_glyph_right := classes.text_box_measure_range(box, 6, 15)
+	event: sdl3.Event
+	event.type = .MOUSE_BUTTON_DOWN
+	event.button.button = sdl3.BUTTON_LEFT
+	event.button.clicks = 2
+	event.button.x = 56 + classes.text_box_gutter_width(box) + last_glyph_left +
+		(last_glyph_right - last_glyph_left) * 0.75
+	event.button.y = 57 + classes.text_box_line_height(box)
+	classes.TextBox_Handle_Event(&environment.classes, script_vm.L, event)
+	run_script(&script_vm, `assert(_G.box.SelectedText == "beta_name", _G.box.SelectedText)`, "textbox_word_selection")
+	event.button.clicks = 3
+	classes.TextBox_Handle_Event(&environment.classes, script_vm.L, event)
+	run_script(&script_vm, `assert(_G.box.SelectedText == "beta_name! gamma")`, "textbox_line_selection")
+
 	// Teardown mirrors gui_component_smoke: close the Lua state first so the
 	// GC destroys the still-alive userdata, then free the environment.
 	vm.Close(&script_vm)

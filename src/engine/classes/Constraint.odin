@@ -22,6 +22,7 @@ Constraint_Step :: proc(
 	object: ^Object,
 	system: kineffi.JPH_PhysicsSystemRef,
 	body_ids: []kineffi.JPH_BodyID,
+	delta_time: f32,
 )
 
 Constraint_Step_Entry :: struct {

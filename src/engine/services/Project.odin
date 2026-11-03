@@ -10,6 +10,7 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import fsutil "../fsutil"
+import serializer "../serializer"
 import vm "../vm"
 import "core:fmt"
 import "core:os"
@@ -27,6 +28,7 @@ ProjectService :: struct {
 	projects:            [dynamic]KinemiumProject,
 	registry_path:       string,
 	active_project_path: string,
+	autosave_elapsed:    f32,
 }
 
 KinemiumProject :: struct {
@@ -89,6 +91,7 @@ Project_CreateFolders :: proc(project: KinemiumProject) {
 
 Project_Create :: proc(
 	service: ^ProjectService,
+	L: ^vm.State,
 	name: string,
 	folder_path: string,
 	description: string = "",
@@ -157,6 +160,7 @@ Project_Create :: proc(
 		return false
 	}
 
+	if Project_Get_Active(service) != nil {Project_Clear_Map(service, L)}
 	if active_ok := Project_Set_Active(service, project_path); !active_ok {
 		fmt.eprintf("[Project] create succeeded but failed to set active\n")
 	}
@@ -603,7 +607,19 @@ Project_Save :: proc(service: ^ProjectService) -> bool {
 
 	data := strings.to_string(builder)
 
-	return os.write_entire_file(service.registry_path, data) == nil
+	return project_write_atomic(service.registry_path, data)
+}
+
+project_write_atomic :: proc(path, data: string) -> bool {
+	directory, ok := Project_Entry_Parent(path)
+	if !ok {return false}
+	staging, staging_err := os.make_directory_temp(directory, ".project-save-*", context.allocator)
+	if staging_err != nil {return false}
+	defer delete(staging)
+	defer os.remove(staging)
+	pending := fmt.tprintf("%s/pending", staging)
+	defer os.remove(pending)
+	return os.write_entire_file(pending, data) == nil && os.rename(pending, path) == nil
 }
 
 Project_Add :: proc(service: ^ProjectService, project: KinemiumProject) -> bool {
@@ -703,6 +719,10 @@ Project_get :: proc(
 	     "GetActiveProject",
 	     "SetActiveProject",
 	     "CreateProject",
+	     "UpdateProject",
+	     "OpenProject",
+	     "RegisterProject",
+	     "SaveProject", "GetProjectBackups", "RestoreProjectBackup", "ExitEditor", "KeepEditorSceneHelper",
 	     "GetProjectEntries",
 	     "PathExists",
 	     "IsDirectory":
@@ -729,6 +749,49 @@ Project_namecall :: proc(
 ) {
 	service := cast(^ProjectService)object
 	switch method {
+	case "UpdateProject", "OpenProject", "RegisterProject", "SaveProject", "GetProjectBackups", "RestoreProjectBackup", "ExitEditor", "KeepEditorSceneHelper":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Project editing requires Internals capability"), true
+		}
+		ok: bool
+		switch method {
+		case "UpdateProject":
+			ok = Project_Update(service, vm.ArgString(L, 2), vm.ArgString(L, 3),
+				vm.ArgOptionalString(L, 4, ""), vm.ArgOptionalString(L, 5, ""))
+		case "OpenProject":
+			ok = Project_Open(service, L, vm.ArgString(L, 2))
+		case "RegisterProject":
+			path := vm.ArgString(L, 2)
+			name := vm.ArgString(L, 3)
+			ok = Project_Name_Is_Valid(name) && os.is_file(fmt.tprintf("%s/default.project.json", path)) &&
+				Project_Add(service, KinemiumProject{
+					name = name, engine_version = PROJECT_ENGINE_VERSION, path = path,
+				})
+		case "SaveProject":
+			ok = Project_Save_To_File(service, L)
+		case "GetProjectBackups":
+			project_push_backups(service, L)
+			return 1, true
+		case "RestoreProjectBackup":
+			ok = project_restore_backup(service, L, vm.ArgString(L, 2))
+		case "KeepEditorSceneHelper":
+			if service.data_model.registry.mode != .Editor {return 0, true}
+			helper := classes.Object_From_Argument(L, 2)
+			if helper != nil && !helper.destroyed && !classes.Is_A(helper, "Service") {
+				helper.editor_scene_helper = true
+				helper.archivable = false
+				classes.Set_Can_Replicate(helper, false)
+				ok = true
+			}
+		case "ExitEditor":
+			if service.data_model.registry.mode != .Editor {return 0, true}
+			event: sdl3.Event
+			event.type = .QUIT
+			ok = sdl3.PushEvent(&event)
+		}
+		vm.PushBoolean(L, ok)
+		return 1, true
+
 	case "GetProjects":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return vm.RaiseError(L, "Project:GetProjects() requires Internals capability"), true
@@ -757,7 +820,7 @@ Project_namecall :: proc(
 		description := vm.ArgOptionalString(L, 4, "")
 		icon := vm.ArgOptionalString(L, 5, "")
 
-		if !Project_Create(service, name, folder_path, description, icon) {
+		if !Project_Create(service, L, name, folder_path, description, icon) {
 			vm.PushBoolean(L, false)
 			return 1, true
 		}
@@ -838,14 +901,101 @@ Project_namecall :: proc(
 	return 0, false
 }
 
-Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) {
-	current := Project_Get_Active(service)
-	ExportService := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
-	Path := current.path
-	File := "/autosave.kine"
-	final := strings.concatenate({Path, File})
+Project_Update :: proc(service: ^ProjectService, path, name, description, icon: string) -> bool {
+	if !Project_Name_Is_Valid(name) {return false}
+	normalized, valid := Project_Normalize_Path(path)
+	if !valid {return false}
+	defer delete(normalized)
+	index, found := Project_Find_By_Path(service, normalized)
+	if !found {return false}
 
-	export_datamodel_to_file(ExportService, L, final)
+	project := &service.projects[index]
+	previous := project^
+	project.name = strings.clone(name)
+	project.description = strings.clone(description)
+	project.icon = strings.clone(icon)
+	if !Project_Save(service) {
+		delete(project.name)
+		delete(project.description)
+		delete(project.icon)
+		project^ = previous
+		return false
+	}
+	delete(previous.name)
+	delete(previous.description)
+	delete(previous.icon)
+	return true
+}
+
+Project_Clear_Map :: proc(service: ^ProjectService, L: ^vm.State) {
+	clear_editor_selection(service.data_model.registry, L)
+	for name in MAP_CONTENT_SERVICES {
+		target := Service_Get_Service(&service.service, name)
+		if target == nil {continue}
+		for i := len(target.children) - 1; i >= 0; i -= 1 {
+			child := target.children[i]
+			if map_keep_child(target, child) {continue}
+			if name == "StarterPlayer" && (child.name == "StarterPlayerScripts" ||
+				child.name == "StarterCharacterScripts") {
+				for len(child.children) > 0 {
+					classes.Destroy_Hierarchy(child.children[len(child.children) - 1])
+				}
+				continue
+			}
+			classes.Destroy_Hierarchy(child)
+		}
+	}
+	if object := Service_Get_Service(&service.service, "Terrain"); object != nil {
+		terrain := cast(^Terrain)object
+		empty: serializer.Kine_Terrain
+		Terrain_Read_Kine_Table(terrain, terrain.renderer, &empty)
+	}
+}
+
+Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bool {
+	normalized, valid := Project_Normalize_Path(path)
+	if !valid {return false}
+	defer delete(normalized)
+	index, found := Project_Find_By_Path(service, normalized)
+	if !found || !os.is_directory(normalized) {return false}
+	if service.active_project_path == service.projects[index].path {return true}
+
+	snapshot := fmt.tprintf("%s/autosave.kine", normalized)
+	if os.exists(snapshot) {
+		data, read_err := os.read_entire_file(snapshot, context.allocator)
+		if read_err != nil {return false}
+		defer delete(data)
+		if !Restore_Map(service.data_model.registry, L, data, snapshot, clear_assets = false) {
+			return false
+		}
+	} else {
+		Project_Clear_Map(service, L)
+	}
+	return Project_Set_Active(service, normalized)
+}
+
+Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
+	current := Project_Get_Active(service)
+	if current == nil {return false}
+	exporter := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
+	staging, staging_err := os.make_directory_temp(current.path, ".project-save-*", context.allocator)
+	if staging_err != nil {return false}
+	defer delete(staging)
+	defer os.remove(staging)
+	pending := fmt.tprintf("%s/autosave.kine", staging)
+	defer os.remove(pending)
+
+	err := export_datamodel_to_file(exporter, L, pending)
+	defer serializer.Error_Delete(&err)
+	if !serializer.Error_Is_None(err) {
+		serializer.Error_Print(err, "Could not save project: ")
+		return false
+	}
+	snapshot := fmt.tprintf("%s/autosave.kine", current.path)
+	backed_up, unchanged := project_backup_previous(current.path, snapshot, pending)
+	if !backed_up {return false}
+	service.autosave_elapsed = 0
+	return unchanged || os.rename(pending, snapshot) == nil
 }
 
 Register_Project_Class :: proc(registry: ^classes.Registry) {

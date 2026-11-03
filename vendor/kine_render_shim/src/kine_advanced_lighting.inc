@@ -10,6 +10,7 @@ struct KineReflectionProbeState {
     std::unique_ptr<IBLPrefilterContext::SpecularFilter> filter;
     int resolution=0;
     float nextCapture=0;
+    float lastCapture=0;
     math::float3 lastPosition{1e10f};
     uint64_t captures=0;
 };
@@ -94,7 +95,12 @@ static void kine_capture_reflection_probe(KineFilamentContext *ctx) {
     auto *p=ctx->reflectionProbe;
     const math::float3 position=kine_probe_position(ctx);
     const bool moved=length(position-p->lastPosition)>std::max(1.0f,v[8]*0.02f);
-    if(p->light && ctx->time<p->nextCapture && !moved && !ctx->reflectionDirty){ctx->scene->setIndirectLight(p->light);return;}
+    // Sky animation or camera movement can dirty the probe every frame.
+    // Even an early refresh needs a budget for the six cloud-bearing faces.
+    const bool throttled=ctx->time-p->lastCapture<0.1f;
+    const bool unchanged=ctx->time<p->nextCapture && !moved && !ctx->reflectionDirty;
+    if(p->light && (throttled || unchanged)){ctx->scene->setIndirectLight(p->light);return;}
+    p->lastCapture=ctx->time;
     p->nextCapture=ctx->time+std::max(v[5],0.1f);p->lastPosition=position;
     // Capture against the sky IBL, never our previous capture (which would
     // feed reflected energy back into itself on every update).

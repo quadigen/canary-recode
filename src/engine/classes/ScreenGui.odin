@@ -88,34 +88,32 @@ ScreenGui_get :: proc(
 }
 
 ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
-	rotated := false
-	if Is_A(child, "GuiObject") {
-		rotated = GuiObject_push_rotation(cast(^GuiObject)child, ctx)
-	}
+	if !Is_A_Class(child, &GuiObject_Class) {return}
+	rotated := GuiObject_push_rotation(cast(^GuiObject)child, ctx)
 
 	switch {
-	case Is_A(child, "ScrollingFrame"):
+	case Is_A_Class(child, &ScrollingFrame_Class):
 		ScrollingFrame_render(child, ctx)
 
-	case Is_A(child, "TextBox"):
+	case Is_A_Class(child, &TextBox_Class):
 		TextBox_render(child, ctx)
 
-	case Is_A(child, "TextLabel"):
+	case Is_A_Class(child, &TextLabel_Class):
 		TextLabel_render(child, ctx)
 
-	case Is_A(child, "TextButton"):
+	case Is_A_Class(child, &TextButton_Class):
 		TextButton_render(child, ctx)
 
-	case Is_A(child, "ImageButton"):
+	case Is_A_Class(child, &ImageButton_Class):
 		ImageButton_render(child, ctx)
 
-	case Is_A(child, "Frame"):
+	case Is_A_Class(child, &Frame_Class):
 		Frame_render(child, ctx)
 
-	case Is_A(child, "ImageLabel"):
+	case Is_A_Class(child, &ImageLabel_Class):
 		ImageLabel_render(child, ctx)
 
-	case Is_A(child, "GuiObject"):
+	case:
 		GuiObject_render(child, ctx)
 	}
 
@@ -125,6 +123,7 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 }
 
 ScreenGui_RenderChildren :: proc(object: ^Object, ctx: ^Class_Step_Context) {
+	if len(object.children) == 0 {return}
 	tracy.ZoneNC("Render ScreenGui", 0x61AFEF)
 	for child in object.children {
 		ScreenGui_RenderChild(child, ctx)
@@ -137,7 +136,7 @@ ScreenGui_RenderChildren_Visible :: proc(
 	viewport: guilib.Rect,
 ) {
 	for child in object.children {
-		if !Is_A(child, "GuiObject") {
+		if !Is_A_Class(child, &GuiObject_Class) {
 			continue
 		}
 

@@ -384,6 +384,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
+	when ODIN_OS != .JS {Project_Autosave(registry, L, delta_time)}
 	if workspace := Find_Service(registry, "Workspace");
 	   workspace != nil && workspace.object != nil {
 		(cast(^Workspace)workspace.object).water_time += f64(max(delta_time, 0))
@@ -623,6 +624,18 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 		return
 	}
 	registry := cast(^Registry)ctx
+	if object.class == &classes.Attachment_Class {
+		if descriptor := classes.Find_Class(registry.classes, "HingeConstraint"); descriptor != nil {
+			for instance in descriptor.instances {
+				if instance == nil {continue}
+				hinge := cast(^classes.HingeConstraint)instance
+				referenced := hinge.attachment0 == object || hinge.attachment1 == object
+				if hinge.attachment0 == object {hinge.attachment0 = nil}
+				if hinge.attachment1 == object {hinge.attachment1 = nil}
+				if referenced {classes.HingeConstraint_release(hinge)}
+			}
+		}
+	}
 	for &descriptor in registry.services {
 		if descriptor.object == object {descriptor.object = nil; break}
 	}

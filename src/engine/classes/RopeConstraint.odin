@@ -72,6 +72,7 @@ RopeConstraint_step :: proc(
 	object: ^Object,
 	system: kineffi.JPH_PhysicsSystemRef,
 	body_ids: []kineffi.JPH_BodyID,
+	delta_time: f32,
 ) {
 	rope := cast(^RopeConstraint)object
 	if rope == nil {return}

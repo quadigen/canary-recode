@@ -8,20 +8,20 @@ import tracy "../util/odin-tracy"
 
 DEFAULT_COLLISION_SUBSTEPS :: 1
 
-Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics) {
+Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics, delta_time: f32) {
 	for child in object.children {
 		if child == nil || child.destroyed {continue}
 
 		matched := false
 		for entry in classes.Constraint_Steps {
 			if classes.Is_A_Class(child, entry.class) {
-				entry.step(child, service.system.handle, service.body_ids[:])
+				entry.step(child, service.system.handle, service.body_ids[:], delta_time)
 				matched = true
 				break
 			}
 		}
 		if !matched {
-			Physics_StepConstraints(child, service)
+			Physics_StepConstraints(child, service, delta_time)
 		}
 	}
 }
@@ -34,11 +34,18 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 
 	if !workspace.simulate_physics {return}
 
-	tracy.ZoneNC("Step Constraints", 0xE06C75)
-	Physics_StepConstraints(workspace, service)
-
 	tracy.ZoneNC("Jolt Synchronize", 0xE06C75)
 	Physics_Synchronize(service, workspace)
+
+	tracy.ZoneNC("Step Constraints", 0xE06C75)
+	if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint"); descriptor != nil {
+		for object in descriptor.instances {
+			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
+				classes.HingeConstraint_release(cast(^classes.HingeConstraint)object)
+			}
+		}
+	}
+	Physics_StepConstraints(workspace, service, clamp(delta_time, 0, 0.1))
 	Physics_Apply_Water(service, min(delta_time, 0.1))
 
 	tracy.ZoneNC("Jolt Step", 0xE06C75)

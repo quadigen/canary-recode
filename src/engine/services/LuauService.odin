@@ -201,7 +201,7 @@ luau_service_get :: proc(
 	_ = enum_registry
 
 	switch key {
-	case "Tokenize":
+	case "Tokenize", "TypeCheck", "GetExportedTypes", "GetLintRules":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -227,6 +227,28 @@ luau_service_namecall :: proc(
 	_ = enum_registry
 
 	switch method {
+	case "TypeCheck", "GetExportedTypes":
+		when luauh.TYPECHECK_AVAILABLE {
+			source := vm.ArgString(L, 2)
+			c_source := strings.clone_to_cstring(source)
+			defer delete(c_source)
+			count := method == "TypeCheck" ? luauh.luau_typecheck(L, c_source, uintptr(len(source)), 3) :
+				luauh.luau_exported_types(L, c_source, uintptr(len(source)))
+			if count == 1 {
+				return 1, true
+			}
+		}
+		vm.PushNil(L)
+		return 1, true
+
+	case "GetLintRules":
+		when luauh.TYPECHECK_AVAILABLE {
+			return luauh.luau_lint_rules(L), true
+		} else {
+			vm.PushNil(L)
+			return 1, true
+		}
+
 	case "Diagnose":
 		source := vm.ArgString(L, 2)
 

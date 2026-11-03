@@ -21,7 +21,7 @@ when !KINE_RENDERER_GL {
 		KeyDown:           proc(scancode: sdl3.Scancode),
 		KeyUp:             proc(scancode: sdl3.Scancode),
 		MouseClick:        proc(button: sdl3.MouseButtonEvent),
-		OnClose:           proc(),
+		OnClose:           proc(user_data: rawptr),
 		Step:              proc(user_data: rawptr, delta_time: f32),
 		UserData:          rawptr,
 		Draw3D:            proc(
@@ -432,12 +432,12 @@ when !KINE_RENDERER_GL {
 		}
 
 		if renderer.OnClose != nil {
-			renderer.OnClose()
+			renderer.OnClose(renderer.UserData)
 		}
 	}
 
 	close :: proc(renderer: RendererObject, running: ^bool) {
-		renderer.OnClose()
+		renderer.OnClose(renderer.UserData)
 		running^ = false
 	}
 

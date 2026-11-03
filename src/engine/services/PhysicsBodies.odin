@@ -573,6 +573,7 @@ physics_create_body :: proc(
 	kineffi.JPH_BodyCreationSettings_SetFriction(settings, properties.friction)
 
 	kineffi.JPH_BodyCreationSettings_SetRestitution(settings, properties.restitution)
+	kineffi.JPH_BodyCreationSettings_SetIsSensor(settings, part.can_collide ? 0 : 1)
 
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
 
@@ -648,6 +649,7 @@ physics_create_body :: proc(
 			part.size,
 			part.shape,
 			part.anchored,
+			part.can_collide,
 			remote,
 			part.cframe,
 			mesh_id,
@@ -881,6 +883,36 @@ physics_refresh_part :: proc(service: ^Physics, part: ^classes.Part) {
 
 physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_index := true) {
 	if service.system.body_interface != nil && body.body_id != kineffi.JPH_BODY_ID_INVALID {
+		if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint"); descriptor != nil {
+			for object in descriptor.instances {
+				if object == nil {continue}
+				hinge := cast(^classes.HingeConstraint)object
+				if hinge.joint != nil && hinge.system == service.system.handle &&
+				   (hinge.frames[0].body == body.body_id || hinge.frames[1].body == body.body_id) {
+					classes.HingeConstraint_release(hinge)
+				}
+			}
+		}
+		if descriptor := classes.Find_Class(service.signal_registry, "WeldConstraint"); descriptor != nil {
+			for object in descriptor.instances {
+				if object == nil {continue}
+				weld := cast(^classes.WeldConstraint)object
+				if weld.jolt_constraint != nil && weld.jolt_system == service.system.handle &&
+				   (weld.jolt_body0 == body.body_id || weld.jolt_body1 == body.body_id) {
+					classes.WeldConstraint_release(weld)
+				}
+			}
+		}
+		if descriptor := classes.Find_Class(service.signal_registry, "RopeConstraint"); descriptor != nil {
+			for object in descriptor.instances {
+				if object == nil {continue}
+				rope := cast(^classes.RopeConstraint)object
+				if rope.jolt_constraint != nil && rope.jolt_system == service.system.handle &&
+				   (rope.jolt_body0 == body.body_id || rope.jolt_body1 == body.body_id) {
+					classes.RopeConstraint_release(rope)
+				}
+			}
+		}
 		kineffi.JPH_BodyInterface_RemoveAndDestroyBody(service.system.body_interface, body.body_id)
 	}
 	delete_key(&service.body_to_part, body.body_id)
@@ -1110,6 +1142,16 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 
 			topology_changed = true
 			continue
+		}
+
+		if body.can_collide != part.can_collide {
+			kineffi.JPH_PhysicsSystem_SetBodyIsSensor(
+				service.system.handle, body.body_id, part.can_collide ? 0 : 1,
+			)
+			body.can_collide = part.can_collide
+			if !part.anchored && !remote {
+				kineffi.JPH_BodyInterface_ActivateBody(service.system.body_interface, body.body_id)
+			}
 		}
 
 		if body.last_cframe != part.cframe {

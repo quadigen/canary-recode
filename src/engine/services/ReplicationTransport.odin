@@ -13,7 +13,7 @@ import "core:sort"
 import "core:strings"
 
 
-Replication_Protocol_Version: u32 = 10
+Replication_Protocol_Version: u32 = 11
 
 
 Replication_Max_Frame_Payload: u32 = 1048576
@@ -1655,6 +1655,10 @@ replication_receive :: proc(
 		if changed {
 			ownership_fire_changed(service, replication_entity_by_id(service, id), owner_id)
 		}
+	case 21:
+		if service.mode == .Client && peer == service.remote {
+			replication_receive_group_ownership(service, &reader)
+		}
 	case 11:
 		if service.mode != .Server {return}
 		id := replication_read_u32(&reader)
@@ -1940,9 +1944,14 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 							service.data_model,
 							"Players",
 						)
-						if item.player != nil {Players_Remove(players, L, item.player)}
+						owner_id: u32
+						if item.player != nil {
+							owner_id = item.player.user_id
+							Players_Remove(players, L, item.player)
+						}
 						Replication_Peer_Dispose(&item)
 						ordered_remove(&service.peers, index)
+						replication_reclaim_disconnected_owner(service, owner_id)
 						break
 					}
 				}

@@ -85,6 +85,7 @@ WeldConstraint_step :: proc(
 	object: ^Object,
 	system: kineffi.JPH_PhysicsSystemRef,
 	body_ids: []kineffi.JPH_BodyID,
+	delta_time: f32,
 ) {
 	weld := cast(^WeldConstraint)object
 	if weld == nil {return}

@@ -19,6 +19,7 @@ Physics_Body :: struct {
 	size:                  datatypes.Vector3,
 	shape:                 enums.PartType,
 	anchored:              bool,
+	can_collide:           bool,
 	remote:                bool,
 	last_cframe:           datatypes.CFrame,
 	mesh_id:               string,

@@ -19,3 +19,8 @@ target_include_directories(kine_luau PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/../luau/Common/include
 )
 target_link_libraries(kine_luau PUBLIC Luau.Compiler Luau.VM Luau.Ast)
+
+if(NOT ANDROID AND NOT EMSCRIPTEN)
+	target_sources(kine_luau PRIVATE src/kine_luau_analysis.cpp)
+	target_link_libraries(kine_luau PUBLIC Luau.Analysis)
+endif()

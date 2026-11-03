@@ -51,7 +51,7 @@ Filesystem_get :: proc(
 	     "MovePath",
 	     "CopyPath",
 	     "ReadFile",
-	     "WriteFile":
+	     "WriteFile", "WriteFileAtomic", "DeleteFile":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return false
 		}
@@ -282,6 +282,23 @@ Filesystem_namecall :: proc(
 		defer delete(data, context.allocator)
 
 		vm.PushBytes(L, data)
+		return 1, true
+	case "WriteFileAtomic", "DeleteFile":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Filesystem mutation requires Internals capability"), true
+		}
+		path := vm.ArgString(L, 2)
+		ok: bool
+		if method == "DeleteFile" {
+			info, err := os.lstat(path, context.allocator)
+			if err == nil {
+				defer os.file_info_delete(info, context.allocator)
+				ok = info.type == .Regular && os.remove(path) == nil
+			}
+		} else {
+			ok = project_write_atomic(path, vm.ArgString(L, 3))
+		}
+		vm.PushBoolean(L, ok)
 		return 1, true
 	case "WriteFile":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {

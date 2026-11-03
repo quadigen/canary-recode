@@ -54,6 +54,7 @@ VectorForce_step :: proc(
 	object: ^Object,
 	system: kineffi.JPH_PhysicsSystemRef,
 	body_ids: []kineffi.JPH_BodyID,
+	delta_time: f32,
 ) {
 	vf := cast(^VectorForce)object
 	if vf == nil || system == nil {return}

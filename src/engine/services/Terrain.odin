@@ -9,6 +9,7 @@ import enums "../enum"
 import materials "../material"
 import serializer "../serializer"
 import marching_cubes "../util/marching_cubes"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:math"
 import "core:strings"
@@ -31,7 +32,9 @@ TERRAIN_GPU_MAX_VERTICES :: 3 * TERRAIN_GPU_LATT * TERRAIN_GPU_LATT * TERRAIN_GP
 TERRAIN_GPU_MAX_INDICES :: TERRAIN_CHUNK_VOXELS * 5 * 3
 
 
-TERRAIN_GPU_MESHING :: #config(KINE_TERRAIN_GPU_MESHING, ODIN_OS != .JS)
+// GPU meshing submits to the graphics queue and waits for readback per chunk.
+// Use parallel CPU meshing by default to keep those waits off the frame thread.
+TERRAIN_GPU_MESHING :: #config(KINE_TERRAIN_GPU_MESHING, false)
 
 TERRAIN_DEFAULT_VOXEL_SIZE :: f32(4)
 TERRAIN_DEFAULT_ISO_LEVEL :: f32(0.5)
@@ -1220,77 +1223,82 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 	meshed: bool,
 	gpu_ok: bool,
 ) {
-	if service == nil || compositor == nil {
+	when #config(KINE_RENDERER_GL, false) {
+		// The OpenGL renderer uses the CPU terrain mesher.
 		return false, false
-	}
+	} else {
+		if service == nil || compositor == nil {
+			return false, false
+		}
 
-	cache: Terrain_Density_Cache
-	if !terrain_fill_cache(service, &cache, key) {
-		return false, true
-	}
+		cache: Terrain_Density_Cache
+		if !terrain_fill_cache(service, &cache, key) {
+			return false, true
+		}
 
-	cells := TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM
-	occ := &service.gpu_occ
-	mat := &service.gpu_mat
-	verts := &service.gpu_verts
-	weights := &service.gpu_weights
-	out := &service.gpu_indices
-	if len(occ) != cells {
-		_ = resize(occ, cells)
-		_ = resize(mat, cells)
-		_ = resize(verts, TERRAIN_GPU_MAX_VERTICES * 8)
-		_ = resize(weights, TERRAIN_GPU_MAX_VERTICES * 8)
-		_ = resize(out, TERRAIN_GPU_MAX_INDICES)
-	}
+		cells := TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM
+		occ := &service.gpu_occ
+		mat := &service.gpu_mat
+		verts := &service.gpu_verts
+		weights := &service.gpu_weights
+		out := &service.gpu_indices
+		if len(occ) != cells {
+			_ = resize(occ, cells)
+			_ = resize(mat, cells)
+			_ = resize(verts, TERRAIN_GPU_MAX_VERTICES * 8)
+			_ = resize(weights, TERRAIN_GPU_MAX_VERTICES * 8)
+			_ = resize(out, TERRAIN_GPU_MAX_INDICES)
+		}
 
 
-	for x in 0 ..< TERRAIN_CACHE_DIM {
-		wx := cache.ox + x
-		for y in 0 ..< TERRAIN_CACHE_DIM {
-			wy := cache.oy + y
-			for z in 0 ..< TERRAIN_CACHE_DIM {
-				idx := (x * TERRAIN_CACHE_DIM + y) * TERRAIN_CACHE_DIM + z
-				occ[idx] = cache.data[idx]
-				layer: u32
-				if cell, ok := terrain_get_cell(service, wx, wy, cache.oz + z); ok {
-					layer = u32(terrain_material_layer(cell.material))
+		for x in 0 ..< TERRAIN_CACHE_DIM {
+			wx := cache.ox + x
+			for y in 0 ..< TERRAIN_CACHE_DIM {
+				wy := cache.oy + y
+				for z in 0 ..< TERRAIN_CACHE_DIM {
+					idx := (x * TERRAIN_CACHE_DIM + y) * TERRAIN_CACHE_DIM + z
+					occ[idx] = cache.data[idx]
+					layer: u32
+					if cell, ok := terrain_get_cell(service, wx, wy, cache.oz + z); ok {
+						layer = u32(terrain_material_layer(cell.material))
+					}
+					mat[idx] = layer
 				}
-				mat[idx] = layer
 			}
 		}
-	}
 
-	vertex_count, index_count: u32
-	ok := kineffi.Kine_VulkanCompositor_MeshTerrainChunk(
-		compositor,
-		raw_data(occ[:]),
-		raw_data(mat[:]),
-		i32(key.x * TERRAIN_CHUNK_SIZE),
-		i32(key.y * TERRAIN_CHUNK_SIZE),
-		i32(key.z * TERRAIN_CHUNK_SIZE),
-		service.voxel_size,
-		service.iso_level,
-		raw_data(verts[:]),
-		raw_data(weights[:]),
-		raw_data(out[:]),
-		TERRAIN_GPU_MAX_VERTICES,
-		TERRAIN_GPU_MAX_INDICES,
-		&vertex_count,
-		&index_count,
-	)
-	if ok == 0 {
-		return false, false
-	}
-	if vertex_count == 0 || index_count == 0 {
-		return false, true
-	}
+		vertex_count, index_count: u32
+		ok := kineffi.Kine_VulkanCompositor_MeshTerrainChunk(
+			compositor,
+			raw_data(occ[:]),
+			raw_data(mat[:]),
+			i32(key.x * TERRAIN_CHUNK_SIZE),
+			i32(key.y * TERRAIN_CHUNK_SIZE),
+			i32(key.z * TERRAIN_CHUNK_SIZE),
+			service.voxel_size,
+			service.iso_level,
+			raw_data(verts[:]),
+			raw_data(weights[:]),
+			raw_data(out[:]),
+			TERRAIN_GPU_MAX_VERTICES,
+			TERRAIN_GPU_MAX_INDICES,
+			&vertex_count,
+			&index_count,
+		)
+		if ok == 0 {
+			return false, false
+		}
+		if vertex_count == 0 || index_count == 0 {
+			return false, true
+		}
 
-	append(vertex_data, ..verts[:int(vertex_count) * 8])
-	append(material_weights, ..weights[:int(vertex_count) * 8])
-	for i in 0 ..< int(index_count) {
-		append(indices, u16(out[i]))
+		append(vertex_data, ..verts[:int(vertex_count) * 8])
+		append(material_weights, ..weights[:int(vertex_count) * 8])
+		for i in 0 ..< int(index_count) {
+			append(indices, u16(out[i]))
+		}
+		return true, true
 	}
-	return true, true
 }
 
 
@@ -1635,6 +1643,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 	if service.preparing {
 		return
 	}
+	tracy.ZoneNC("Terrain Prepare 3D", 0xC678DD)
 	service.preparing = true
 	defer service.preparing = false
 
@@ -1663,6 +1672,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 
 
 		if TERRAIN_GPU_MESHING && renderer.Compositor != nil {
+			tracy.ZoneNC("Terrain Mesh GPU Readback", 0xC678DD)
 			for i in 0 ..< job_count {
 				job := &jobs[i]
 				meshed, gpu_ok := Terrain_Build_Chunk_Mesh_GPU(
@@ -1686,8 +1696,10 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 				}
 			}
 		} else {
+			tracy.ZoneNC("Terrain Mesh CPU", 0xC678DD)
 			terrain_build_jobs_parallel(jobs[:job_count])
 		}
+		tracy.ZoneNC("Terrain Mesh Upload", 0xB48EAD)
 		for i in 0 ..< job_count {
 			terrain_commit_job(service, &jobs[i], renderer)
 		}

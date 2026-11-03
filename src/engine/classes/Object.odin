@@ -125,6 +125,7 @@ Object :: struct {
 	lua_ref:              i32,
 	destroyed:            bool,
 	archivable:           bool,
+	editor_scene_helper:  bool,
 	can_replicate:        bool,
 	replication_mode:     enums.ReplicationMode,
 	replication_group:    string,

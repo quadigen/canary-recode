@@ -40,13 +40,12 @@ material {
 }
 
 fragment {
-    #define CLOUD_MAX_STEPS 48
-    #define CLOUD_LIGHT_STEPS 2
+    #define CLOUD_MAX_STEPS 32
     // Geometric march: fine steps near the eye, coarse far away, so an
     // unbounded layer still resolves detail overhead and stays cheap at the
     // horizon.
     #define CLOUD_STEP_BASE 6.0
-    #define CLOUD_STEP_GROWTH 1.07
+    #define CLOUD_STEP_GROWTH 1.12
     #define CLOUD_MAX_DISTANCE 9000.0
 
     float cloudHash(vec3 p) {
@@ -73,6 +72,10 @@ fragment {
 
     // 0..1 density at a camera-relative world position.
     float slabDensity(vec3 p) {
+        // Reject samples outside the slab before evaluating the noise octaves.
+        float local = abs(p.y - materialParams.slabCentre.y) / max(materialParams.halfThickness, 0.001);
+        if (local >= 1.0) return 0.0;
+        float vertical = 1.0 - smoothstep(0.88, 1.0, local);
         float scale = max(materialParams.noiseScale, 1.0);
         float t = materialParams.time * max(materialParams.windSpeed, 0.0);
 
@@ -94,12 +97,6 @@ fragment {
         // is wide: a hard threshold reads as a flat cut-out instead of a volume.
         float threshold = mix(0.70, 0.26, clamp(materialParams.cover, 0.0, 1.0));
         float d = smoothstep(threshold, threshold + 0.32, f);
-
-        // Evaporate towards the two slab faces so the layer has soft edges
-        // instead of two flat ceilings.
-        float local = (p.y - materialParams.slabCentre.y) /
-                      max(materialParams.halfThickness, 0.001);
-        float vertical = smoothstep(-1.0, -0.88, local) * smoothstep(1.0, 0.88, local);
 
         return d * vertical;
     }
@@ -165,13 +162,8 @@ fragment {
             vec3 p = rayOrigin + rayDir * t;
             float localDensity = slabDensity(p);
             if (localDensity > 0.0) {
-                // Single scattering towards the sun over a short secondary march.
-                float opticalDepth = 0.0;
-                vec3 lp = p;
-                for (int j = 0; j < CLOUD_LIGHT_STEPS; j++) {
-                    lp += sun * lightStep;
-                    opticalDepth += slabDensity(lp) * lightStep;
-                }
+                // Midpoint sample over the short sunward segment.
+                float opticalDepth = slabDensity(p + sun * lightStep) * (2.0 * lightStep);
                 float sunTransmit = exp(-opticalDepth * sigmaScale * materialParams.absorption);
                 float powder = 1.0 - exp(-opticalDepth * sigmaScale * 2.0);
 

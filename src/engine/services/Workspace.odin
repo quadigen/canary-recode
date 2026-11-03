@@ -110,9 +110,9 @@ workspace_ensure_meshes :: proc(
 	}
 
 	if workspace.cylinder_mesh == nil {
-		workspace.cylinder_mesh = load_mesh(
+		workspace.cylinder_mesh = kineffi.Kine_Filament_CreateMesh(
 			renderer.Filament,
-			#load("../assets/shapes/Cylinder.glb"),
+			kineffi.KINE_MESH_CYLINDER,
 		)
 	}
 
@@ -254,6 +254,7 @@ workspace_meshpart_mesh :: proc(
 		part.native_mesh = nil
 		part.native_context = nil
 	}
+	tracy.ZoneNC("Workspace Load MeshPart", 0xB48EAD)
 	delete(part.native_mesh_id)
 	part.native_mesh_id = strings.clone(part.mesh_id)
 	part.native_mesh_index = part.mesh_index
@@ -580,6 +581,10 @@ workspace_append_draw_items :: proc(
 			cframe := part.cframe
 			size := part.size
 			render_size := datatypes.Vector3{size.x * 0.5, size.y * 0.5, size.z * 0.5}
+			if mesh != nil && mesh == workspace.cylinder_mesh {
+				// The procedural cylinder has unit diameter and unit height on local Y.
+				render_size = size
+			}
 
 			render_material, material_params := materials.Lookup(part.material)
 			material_kind := material_params.kind

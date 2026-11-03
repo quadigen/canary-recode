@@ -140,7 +140,9 @@ run_desktop :: proc(options: Startup_Options) {
 		},
 		MouseClick = proc(button: sdl3.MouseButtonEvent) {
 		},
-		OnClose = proc() {
+		OnClose = proc(user_data: rawptr) {
+			render_context := cast(^Runtime_Render_Context)user_data
+			services.Project_Autosave(&render_context.environment.services, render_context.vm_state.L, closing = true)
 		},
 		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,

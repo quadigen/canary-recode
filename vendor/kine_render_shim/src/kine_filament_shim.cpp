@@ -5436,6 +5436,25 @@ KINE_API void Kine_Filament_SetSunRays(
 	ctx->view->setFogOptions(options);
 }
 
+static void kine_destroy_sky_resources(KineFilamentContext *ctx) {
+	// The scene's skybox and indirect light both sample the sky cubemap.
+	ctx->scene->setSkybox(nullptr);
+	ctx->scene->setIndirectLight(nullptr);
+	if (ctx->skybox) {
+		ctx->engine->destroy(ctx->skybox);
+		ctx->skybox = nullptr;
+	}
+	if (ctx->indirectLight) {
+		ctx->engine->destroy(ctx->indirectLight);
+		ctx->indirectLight = nullptr;
+	}
+	if (ctx->skyTexture) {
+		ctx->engine->destroy(ctx->skyTexture);
+		ctx->skyTexture = nullptr;
+	}
+	ctx->skyInputsValid = false;
+}
+
 KINE_API void Kine_Filament_SetSkyAtmosphere(
 	KineFilamentContext *ctx,
 	float sunDirX, float sunDirY, float sunDirZ,
@@ -5447,7 +5466,7 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 		return;
 	const float inputs[]={sunDirX,sunDirY,sunDirZ,skyR,skyG,skyB,horizonR,horizonG,horizonB,groundR,groundG,groundB,sunIntensity};
 	if(ctx->skyInputsValid && ctx->skyTexture && std::equal(std::begin(inputs),std::end(inputs),ctx->skyInputs))return;
-	std::copy(std::begin(inputs),std::end(inputs),ctx->skyInputs);ctx->skyInputsValid=true;ctx->reflectionDirty=true;
+	const bool reuseCubemap = ctx->skyInputsValid && ctx->skyTexture;
 
 	float len = sqrtf(sunDirX * sunDirX + sunDirY * sunDirY + sunDirZ * sunDirZ);
 	if (len < 1e-6f) {
@@ -5589,23 +5608,19 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 		}
 	}
 
-	if (ctx->skybox) {
-		ctx->scene->setSkybox(nullptr);
-		ctx->engine->destroy(ctx->skybox);
-		ctx->skybox = nullptr;
+	if (!reuseCubemap) {
+		kine_destroy_sky_resources(ctx);
+		ctx->skyTexture = Texture::Builder()
+			.width(faceSize)
+			.height(faceSize)
+			.levels(1)
+			.sampler(Texture::Sampler::SAMPLER_CUBEMAP)
+			.format(Texture::InternalFormat::SRGB8_A8)
+			.build(*ctx->engine);
 	}
-
-	if (ctx->skyTexture) {
-		ctx->engine->destroy(ctx->skyTexture);
-	}
-
-	ctx->skyTexture = Texture::Builder()
-						  .width(faceSize)
-						  .height(faceSize)
-						  .levels(1)
-						  .sampler(Texture::Sampler::SAMPLER_CUBEMAP)
-						  .format(Texture::InternalFormat::SRGB8_A8)
-						  .build(*ctx->engine);
+	std::copy(std::begin(inputs), std::end(inputs), ctx->skyInputs);
+	ctx->skyInputsValid = true;
+	ctx->reflectionDirty = true;
 
 	Texture::PixelBufferDescriptor pb(
 		pixels, totalBytes,
@@ -5614,18 +5629,14 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 
 	ctx->skyTexture->setImage(*ctx->engine, 0, 0, 0, 0, faceSize, faceSize, 6, std::move(pb));
 
-	if (ctx->skybox) {
-		ctx->engine->destroy(ctx->skybox);
-		ctx->skybox = nullptr;
+	if (!ctx->skybox) {
+		ctx->skybox = Skybox::Builder()
+			.environment(ctx->skyTexture)
+			.intensity(15000.0f)
+			.showSun(true)
+			.build(*ctx->engine);
+		ctx->scene->setSkybox(ctx->skybox);
 	}
-
-	ctx->skybox = Skybox::Builder()
-					  .environment(ctx->skyTexture)
-					  .intensity(15000.0f)
-					  .showSun(true)
-					  .build(*ctx->engine);
-
-	ctx->scene->setSkybox(ctx->skybox);
 
 	if (ctx->indirectLight) {
 		ctx->scene->setIndirectLight(nullptr);
@@ -5702,10 +5713,8 @@ KINE_API void Kine_Filament_CreateSkyboxCubemap(
 	}
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	if (ctx->skyTexture) {
-		ctx->engine->destroy(ctx->skyTexture);
-	}
-
+	kine_destroy_sky_resources(ctx);
+	ctx->reflectionDirty = true;
 	ctx->skyTexture = Texture::Builder()
 						  .width(width)
 						  .height(height)
@@ -5720,10 +5729,6 @@ KINE_API void Kine_Filament_CreateSkyboxCubemap(
 		[](void *buffer, size_t size, void *user) { free(buffer); });
 
 	ctx->skyTexture->setImage(*ctx->engine, 0, 0, 0, 0, width, height, 6, std::move(pb));
-
-	if (ctx->skybox) {
-		ctx->engine->destroy(ctx->skybox);
-	}
 
 	ctx->skybox = Skybox::Builder()
 					  .environment(ctx->skyTexture)

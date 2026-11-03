@@ -7,6 +7,7 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import renderer_pkg "../renderer"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
 import "core:strings"
@@ -66,6 +67,7 @@ Raytracer_attach :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object
 	}
 
 	if !kineffi.Kine_Filament_HasRay(renderer.Filament) {
+		tracy.ZoneNC("Raytracer Initialize", 0xC678DD)
 		if !kineffi.Kine_Filament_NewRay(renderer.Filament, width, height) {
 			report := string(kineffi.Kine_Filament_GetRayError())
 			if report == "" {

@@ -1425,6 +1425,7 @@ update_service_finish_restart :: proc(L: ^vm.State, service: ^UpdateService) -> 
 	if len(pending_dir) > 0 {
 		delete(pending_dir)
 	}
+	Project_Autosave(service.data_model.registry, L, closing = true)
 	os.exit(0)
 }
 

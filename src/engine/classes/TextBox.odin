@@ -552,6 +552,7 @@ text_box_cursor_on_line_from_x :: proc(
 	start: int,
 	finish: int,
 	target_x: f32,
+	hit_glyph := false,
 ) -> int {
 	if start >= finish {
 		return start
@@ -571,9 +572,9 @@ text_box_cursor_on_line_from_x :: proc(
 
 		width := text_box_measure_range(box, start, next)
 
-		midpoint := (previous_width + width) * 0.5
+		edge := hit_glyph ? width : (previous_width + width) * 0.5
 
-		if target < midpoint {
+		if target < edge {
 			return previous_index
 		}
 
@@ -582,10 +583,10 @@ text_box_cursor_on_line_from_x :: proc(
 		index = next
 	}
 
-	return finish
+	return hit_glyph ? text_box_utf8_prev_boundary(box.text, finish) : finish
 }
 
-text_box_cursor_from_point :: proc(box: ^TextBox, mouse_x: f32, mouse_y: f32) -> int {
+text_box_cursor_from_point :: proc(box: ^TextBox, mouse_x: f32, mouse_y: f32, hit_glyph := false) -> int {
 	if box == nil {
 		return 0
 	}
@@ -613,7 +614,7 @@ text_box_cursor_from_point :: proc(box: ^TextBox, mouse_x: f32, mouse_y: f32) ->
 
 	x := (mouse_x - box.absolute_position.X - padding - text_box_gutter_width(box) + box.scroll_x)
 
-	return text_box_cursor_on_line_from_x(box, chunk.start, chunk.finish, x)
+	return text_box_cursor_on_line_from_x(box, chunk.start, chunk.finish, x, hit_glyph)
 }
 
 text_box_set_cursor :: proc(box: ^TextBox, position: int, shift: bool) {
@@ -1008,6 +1009,21 @@ text_box_render_code_editor :: proc(
 	}
 
 	selection_start, selection_finish, selected := text_box_selection_bounds(box)
+	selected_word: string
+	if selected && box.focused && !text_box_is_word_at(box.text, selection_start - 1) &&
+	   !text_box_is_word_at(box.text, selection_finish) {
+		word := box.text[selection_start:selection_finish]
+		// Restrict occurrence highlights to short, whole identifiers.
+		if len(word) <= 128 {
+			selected_word = word
+			for i in 0..<len(word) {
+				if !text_box_is_word_byte(word[i]) {
+					selected_word = ""
+					break
+				}
+			}
+		}
+	}
 
 	bracket_first := -1
 	bracket_second := -1
@@ -1075,39 +1091,19 @@ text_box_render_code_editor :: proc(
 
 			draw_bracket(box, surface, content_x, y, line_height, line, bracket_second, false)
 
-			if selected {
-				a := max(selection_start, line.start)
-
-				b := min(selection_finish, line.finish)
-
-				has_newline := line.finish < len(box.text) && box.text[line.finish] == '\n'
-
-				newline_selected :=
-					has_newline && selection_start <= line.finish && selection_finish > line.finish
-
-				if a < b || newline_selected {
-					x1 := text_box_measure_range(box, line.start, a)
-
-					x2 := text_box_measure_range(box, line.start, b)
-
-					width := x2 - x1
-
-					if newline_selected {
-						width = max(width + 5, f32(5))
-					}
-
-					guilib.drawRect(
-						surface,
-						guilib.Rect {
-							x = content_x + x1 - box.scroll_x,
-							y = y + 1,
-							width = width,
-							height = line_height - 2,
-							color = box.selection_color3,
-							bgTransparency = box.selection_transparency,
-						},
-					)
-				}
+			if selected && (selected_word != "" ||
+			   (selection_start <= line.finish && selection_finish > line.start)) {
+				guilib.save(surface)
+				guilib.clipRect(surface, {
+					x = content_x, y = y,
+					width = max(rect.x + rect.width - minimap_width - content_x, 0),
+					height = line_height,
+				})
+				text_box_draw_code_selection(
+					box, surface, line, content_x - box.scroll_x, y, line_height,
+					selection_start, selection_finish, selected_word,
+				)
+				guilib.restore(surface)
 			}
 
 			if highlight != nil {
@@ -1224,6 +1220,58 @@ text_box_render_code_editor :: proc(
 			map_line += 1
 		}
 	}
+}
+
+text_box_draw_code_selection :: proc(
+	box: ^TextBox,
+	surface: ^kineffi.KineSkiaSurface,
+	line: Visual_Line,
+	x, y, line_height: f32,
+	selection_start, selection_finish: int,
+	word: string,
+) {
+	height := max(line_height - 2, 0)
+	if height == 0 {return}
+
+	if word != "" {
+		for offset := line.start; offset + len(word) <= line.finish; {
+			match := strings.index(box.text[offset:line.finish], word)
+			if match < 0 {break}
+			start := offset + match
+			finish := start + len(word)
+			offset = finish
+			if start == selection_start || text_box_is_word_at(box.text, start - 1) ||
+			   text_box_is_word_at(box.text, finish) {continue}
+
+			left := text_box_measure_range(box, line.start, start)
+			right := text_box_measure_range(box, line.start, finish)
+			width := right - left
+			if width <= 0 {continue}
+			guilib.drawRoundedRectStroke(surface, {
+				x = x + left, y = y + 1,
+				width = width, height = height,
+				color = box.selection_color3,
+				bgTransparency = 1 - (1 - box.selection_transparency) * 0.7,
+			}, min(3, width * 0.5, height * 0.5), 1)
+		}
+	}
+
+	start := max(selection_start, line.start)
+	finish := min(selection_finish, line.finish)
+	newline_selected := line.finish < len(box.text) && box.text[line.finish] == '\n' &&
+	                    selection_start <= line.finish && selection_finish > line.finish
+	if start >= finish && !newline_selected {return}
+
+	left := text_box_measure_range(box, line.start, start)
+	right := text_box_measure_range(box, line.start, finish)
+	width := max(right - left, 0) + (newline_selected ? f32(5) : 0)
+	if width == 0 {return}
+	guilib.drawRoundedRect(surface, {
+		x = x + left, y = y + 1,
+		width = width, height = height,
+		color = box.selection_color3,
+		bgTransparency = box.selection_transparency,
+	}, min(3, width * 0.5, height * 0.5))
 }
 
 draw_bracket :: proc(
@@ -1433,12 +1481,14 @@ text_box_select_word_at :: proc(box: ^TextBox, position: int) {
 	i := clamp(position, 0, len(box.text))
 
 	if i == len(box.text) {
-		i = text_box_utf8_prev_boundary(box.text, i)
+		text_box_set_cursor(box, i, false)
+		return
 	}
 
 	if !text_box_is_word_byte(box.text[i]) {
 		box.selection_anchor = i
-		box.cursor_byte = text_box_utf8_next_boundary(box.text, i)
+		box.cursor_byte = box.text[i] == '\n' ? i : text_box_utf8_next_boundary(box.text, i)
+		text_box_restart_caret(box)
 
 		return
 	}
@@ -3848,7 +3898,17 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 
 		if event.button.clicks >= 2 {
-			text_box_select_all(clicked)
+			if clicked.code_editor {
+				word_click := event.button.clicks == 2
+				cursor := text_box_cursor_from_point(clicked, point_x, point_y, word_click)
+				if word_click {
+					text_box_select_word_at(clicked, cursor)
+				} else {
+					text_box_select_line_at(clicked, cursor)
+				}
+			} else {
+				text_box_select_all(clicked)
+			}
 
 			clicked.drag_selecting = false
 

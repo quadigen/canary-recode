@@ -2026,8 +2026,9 @@ gui_render_children :: proc(
 	rect: guilib.Rect,
 	shape: Gui_Shape,
 ) {
+	if len(object.children) == 0 {return}
 	scrolling_frame_virtualized := false
-	if Is_A(object, "ScrollingFrame") {
+	if Is_A_Class(object, &ScrollingFrame_Class) {
 		scrolling_frame_virtualized = (cast(^ScrollingFrame)object).virtualized_scrolling
 	}
 

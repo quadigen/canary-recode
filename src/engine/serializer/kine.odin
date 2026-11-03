@@ -35,6 +35,8 @@ import "core:strings"
 //     per property:
 //       string   property key
 //       value    tagged value record
+//                Instance references (version 8+) hold a u32 preorder index.
+//                Index 1 is the root and index 0 is nil.
 //     u32      attribute count
 //     per attribute:
 //       string   attribute name
@@ -88,7 +90,9 @@ import "core:strings"
 KINE_MAGIC :: "KINE"
 
 // KINE_VERSION is the version written by this build.
-KINE_VERSION :: 7
+KINE_VERSION :: 8
+KINE_REFERENCE_VERSION :: 8
+KINE_MATERIAL_VARIANT_VERSION :: 7
 
 // Version 7 adds the terrain material variant; version 6 introduced extension
 // datatypes and remains readable without the new terrain setting.
@@ -136,6 +140,7 @@ Value_Tag :: enum u8 {
 	Userdata,
 	EnumItem,
 	ExtensionDatatype = 18,
+	InstanceReference = 19,
 }
 
 // Stable ids for every serializable userdata datatype. New types are appended
@@ -251,6 +256,20 @@ Writer :: struct {
 	// is what makes an incomplete map report itself rather than load as a
 	// mysteriously missing property.
 	warn:          string,
+	instance_indices: map[^classes.Object]u32,
+	instance_patches: [dynamic]Instance_Reference_Patch,
+}
+
+Instance_Reference_Patch :: struct {
+	offset: int,
+	target: ^classes.Object,
+}
+
+Pending_Instance_Reference :: struct {
+	object: ^classes.Object,
+	descriptor: ^classes.Class_Descriptor,
+	key: string,
+	index: u32,
 }
 
 Reader :: struct {
@@ -264,6 +283,8 @@ Reader :: struct {
 	// writer is not a tree, so the first failure is recorded here with the byte
 	// offset that produced it and returned to the caller.
 	err:     Error,
+	instances: [dynamic]^classes.Object,
+	instance_references: [dynamic]Pending_Instance_Reference,
 }
 
 // ---------------------------------------------------------------------------
@@ -1434,6 +1455,8 @@ value_tag_name :: proc(tag_byte: u8) -> string {
 		return "EnumItem"
 	case .ExtensionDatatype:
 		return "extension datatype"
+	case .InstanceReference:
+		return "instance reference"
 	}
 	return fmt.tprintf("unknown tag %d", int(tag_byte))
 }
@@ -1543,6 +1566,8 @@ read_value_record :: proc(
 		_ = enums.Push_Item_By_Value(L, registry.enums, enum_name, value)
 		delete(enum_name)
 		return true
+	case .InstanceReference:
+		return reader_fail(r, .Unknown_Value_Tag, "instance references are only supported on reference properties")
 	case:
 		return reader_fail(
 			r,
@@ -1619,6 +1644,15 @@ read_class_property :: proc(
 	}
 	offset := len(w.data)
 	write_string(w, property)
+	if w.version >= KINE_REFERENCE_VERSION && property_is_instance_reference(object, property) {
+		if target := classes.Object_From_Argument(L, base + 1); target != nil {
+			write_u8(w, u8(Value_Tag.InstanceReference))
+			append(&w.instance_patches, Instance_Reference_Patch{len(w.data), target})
+			write_u32(w, 0)
+			vm.SetStackTop(L, base)
+			return true
+		}
+	}
 	if !write_value(w, L, registry, base + 1) {
 		resize(&w.data, offset)
 		vm.SetStackTop(L, base)
@@ -1631,6 +1665,11 @@ read_class_property :: proc(
 // ---------------------------------------------------------------------------
 // Instance records
 // ---------------------------------------------------------------------------
+
+property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
+	return object.class == &classes.HingeConstraint_Class &&
+	       (property == "Attachment0" || property == "Attachment1")
+}
 
 property_is_saveable :: proc(property: string) -> bool {
 	for read_only in READ_ONLY_PROPERTIES {
@@ -1694,6 +1733,9 @@ write_instance :: proc(
 		return writer_skip(w, "class %q is not registered", object.class.name)
 	}
 
+	if w.version >= KINE_REFERENCE_VERSION {
+		w.instance_indices[object] = u32(len(w.instance_indices)) + 1
+	}
 	write_string(w, object.class.name)
 	write_string(w, object.name)
 	write_u8(w, object.archivable ? 1 : 0)
@@ -1710,6 +1752,9 @@ write_instance :: proc(
 	property_count: u32 = 0
 	for property in properties {
 		if !property_is_saveable(property) {
+			continue
+		}
+		if object.class == &classes.HingeConstraint_Class && (property == "Active" || property == "CurrentAngle") {
 			continue
 		}
 		if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {
@@ -1898,9 +1943,19 @@ read_instance :: proc(
 			class_name,
 		)
 	}
+	// These service constructors create templates for a new place. A saved
+	// service already includes its authored children, including those templates.
+	if class_name == "Lighting" || class_name == "StarterPlayer" {
+		for len(object.children) > 0 {
+			classes.Destroy_Hierarchy(object.children[len(object.children) - 1])
+		}
+	}
 	// Push_New leaves userdata on the stack; the object stays alive through
 	// the retained lua_ref, so we keep the native stack flat.
 	vm.Pop(L)
+	if r.version >= KINE_REFERENCE_VERSION {
+		append(&r.instances, object)
+	}
 
 	if parent != nil {
 		classes.Set_Parent(object, parent)
@@ -1959,6 +2014,19 @@ read_instance :: proc(
 		if !ok {
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading property %d name of %s", i, label)
+		}
+		if r.version >= KINE_REFERENCE_VERSION && property_is_instance_reference(object, key) &&
+		   r.pos < len(r.data) &&
+		   r.data[r.pos] == u8(Value_Tag.InstanceReference) {
+			r.pos += 1
+			index, index_ok := read_u32(r)
+			if !index_ok {
+				delete(key)
+				classes.Destroy_Hierarchy(object)
+				return nil, reader_context(r, "while reading an instance reference of %s", label)
+			}
+			append(&r.instance_references, Pending_Instance_Reference{object, descriptor, key, index})
+			continue
 		}
 		if !read_value(r, L, registry) {
 			delete(key)
@@ -2605,9 +2673,14 @@ serialize :: proc(
 	defer delete(tree.used_ids)
 	defer delete(tree.used_seen)
 	defer delete(tree.warn)
+	defer delete(tree.instance_indices)
+	defer delete(tree.instance_patches)
 
 	if !write_instance(&tree, L, registry, object) {
 		return nil, writer_error(&tree, .Internal, "could not write the root instance record")
+	}
+	for patch in tree.instance_patches {
+		patch_u32(&tree, patch.offset, tree.instance_indices[patch.target])
 	}
 
 	writer := Writer {
@@ -2727,6 +2800,7 @@ Deserialize :: proc(
 	// voxel grid to restore. Version 4 also decodes, but its Font records carry
 	// no face bytes, so a font that only existed in memory does not survive it.
 	if version != KINE_VERSION &&
+	   version != KINE_MATERIAL_VARIANT_VERSION &&
 	   version != KINE_EXTENSION_VERSION &&
 	   version != KINE_FONT_VERSION &&
 	   version != KINE_TERRAIN_VERSION &&
@@ -2736,14 +2810,10 @@ Deserialize :: proc(
 			&reader.err,
 			.Unsupported_Version,
 			5,
-			"the file is version %d; this build reads %d, %d, %d, %d, %d, and %d",
+			"the file is version %d; this build reads %d through %d",
 			version,
-			KINE_VERSION,
-			KINE_EXTENSION_VERSION,
-			KINE_FONT_VERSION,
-			KINE_TERRAIN_VERSION,
-			KINE_ASSET_VERSION,
 			KINE_LEGACY_VERSION,
+			KINE_VERSION,
 		)
 		return nil, reader_take(&reader)
 	}
@@ -2754,6 +2824,11 @@ Deserialize :: proc(
 		return nil, reader_take(&reader)
 	}
 
+	defer delete(reader.instances)
+	defer {
+		for reference in reader.instance_references {delete(reference.key)}
+		delete(reader.instance_references)
+	}
 	object, root_ok := read_instance(&reader, L, registry, parent)
 	if !root_ok {
 		return nil, reader_take(&reader)
@@ -2776,5 +2851,24 @@ Deserialize :: proc(
 		return nil, reader_take(&reader)
 	}
 
+	// Restore links after the whole tree exists so forward references work.
+	for reference in reader.instance_references {
+		if reference.index > u32(len(reader.instances)) {
+			classes.Destroy_Hierarchy(object)
+			return nil, Error_Make(.Invalid_Argument, reader.pos, "instance reference is outside the saved tree")
+		}
+	}
+	for reference in reader.instance_references {
+		target := reference.index == 0 ? nil : reader.instances[reference.index - 1]
+		classes.Push_Object(L, target)
+		applied, apply_err := apply_property(
+			L, registry, reference.object, reference.descriptor, reference.key, vm.StackTop(L),
+		)
+		if !applied {
+			fmt.eprintf("[kine] skipped instance reference %s on %s: %s\n",
+				reference.key, reference.object.name, apply_err)
+		}
+		delete(apply_err)
+	}
 	return object, Error_None
 }

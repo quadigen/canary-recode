@@ -174,7 +174,7 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install cmake enet ninja llvm
+        run: brew install cmake enet ninja llvm openssl@3
 
       # The upstream macOS release only contains ARM64 tools and libraries.
       - name: Restore Filament SDK (macOS Intel)
@@ -381,13 +381,20 @@ jobs:
 
           bash "$odin_root/vendor/box2d/build_box2d.sh"
 
-      - name: Stage static ENet library (macOS)
+      - name: Stage static ENet and OpenSSL libraries (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           enet_archive="$(brew --prefix enet)/lib/libenet.a"
           test -s "$enet_archive"
           cp "$enet_archive" vendor/build/lib/libenet.a
+          openssl_lib="$(brew --prefix openssl@3)/lib"
+          # odin-http links -lssl.3 and -lcrypto.3 on macOS.
+          for library in ssl crypto; do
+            archive="$openssl_lib/lib$library.a"
+            test -s "$archive"
+            cp "$archive" "vendor/build/lib/lib$library.3.a"
+          done
 
       - name: Check Odin source
         run: odin check src

@@ -135,6 +135,9 @@ replication_schema :: proc(
 	schema: Replication_Schema
 	schema.class_name = strings.clone(class_name)
 	for property in properties {
+		if class_name == "HingeConstraint" && (property == "Active" || property == "CurrentAngle") {
+			continue
+		}
 		switch property {
 		case "Parent",
 		     "Name",
