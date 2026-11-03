@@ -82,13 +82,22 @@ set(TRACY_ON_DEMAND ON CACHE BOOL "Only profile while Tracy is connected" FORCE)
 set(TRACY_STATIC ON CACHE BOOL "Build Tracy statically" FORCE)
 set(TRACY_LTO OFF CACHE BOOL "" FORCE)
 
-FetchContent_Declare(
-    tracy
-    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG v0.14.1
-    GIT_SHALLOW TRUE
-    GIT_PROGRESS TRUE
-)
+# Prefer the vendored submodule so builds do not depend on a network fetch and
+# the Odin bindings link the exact same Tracy sources as the rest of the engine.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tracy/CMakeLists.txt")
+    FetchContent_Declare(
+        tracy
+        SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tracy"
+    )
+else()
+    FetchContent_Declare(
+        tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.14.1
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS TRUE
+    )
+endif()
 
 FetchContent_MakeAvailable(tracy)
 

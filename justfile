@@ -11,12 +11,15 @@ default:
     @just --list
 
 build:
+    @Get-Process kinemium -ErrorAction SilentlyContinue | Stop-Process -Force
     odin build src -o:speed -out:build/kinemium.exe
 
 debug:
+    @Get-Process kinemium-debug -ErrorAction SilentlyContinue | Stop-Process -Force
     odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099" -define:TRACY_ENABLE=true
 
 release:
+    @Get-Process kinemium -ErrorAction SilentlyContinue | Stop-Process -Force
     odin build src -o:speed -out:build/kinemium.exe -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}}
 
 wasm:

@@ -15,9 +15,20 @@ TRACY_FIBERS          :: #config(TRACY_FIBERS, false)
 // call stack the moment a connected profiler starts emitting real zones.
 TRACY_ON_DEMAND :: #config(TRACY_ON_DEMAND, true)
 
-when ODIN_OS == .Darwin  do foreign import tracy "tracy.dylib"
+// Link the static Tracy client built from vendor/tracy by the native CMake
+// build. No Tracy runtime DLL/SO/DYLIB is required next to the executable.
+when ODIN_OS == .Darwin do foreign import tracy {
+	"../../../../vendor/build/_deps/tracy-build/libTracyClient.a",
+	"system:c++",
+}
+when ODIN_OS == .Linux do foreign import tracy {
+	"../../../../vendor/build/_deps/tracy-build/libTracyClient.a",
+	"system:c++",
+	"system:dl",
+	"system:m",
+	"system:pthread",
+}
 when ODIN_OS == .Windows do foreign import tracy "../../../../vendor/build/_deps/tracy-build/TracyClient.lib"
-when ODIN_OS == .Linux   do foreign import tracy "tracy.so"
 
 // NOTE(oskar): Opaque
 __tracy_lockable_context_data        :: struct {}

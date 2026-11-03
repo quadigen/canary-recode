@@ -302,7 +302,8 @@ jobs:
             'vendor/build/lib/kine_jolt_core.lib',
             'vendor/build/lib/kine_luau.lib',
             'vendor/build/vendor/luau/Luau.Compiler.lib',
-            'vendor/build/vendor/luau/Luau.VM.lib'
+            'vendor/build/vendor/luau/Luau.VM.lib',
+            'vendor/build/_deps/tracy-build/TracyClient.lib'
           )
           foreach ($library in $required) {
             if (!(Test-Path -LiteralPath $library)) {
@@ -329,6 +330,7 @@ jobs:
             vendor/build/lib/kine_luau.a
             vendor/build/vendor/luau/libLuau.Compiler.a
             vendor/build/vendor/luau/libLuau.VM.a
+            vendor/build/_deps/tracy-build/libTracyClient.a
           )
           for library in "${required[@]}"; do
             test -f "$library" || { echo "Missing native library: $library"; exit 1; }
