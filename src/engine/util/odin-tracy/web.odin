@@ -14,6 +14,9 @@ package tracy
 // used as a value" / "'ZoneValue' is not declared by 'tracy'". Keep these in
 // step with wrapper.odin.
 
+// Keep profiling-only branches out of browser builds.
+TRACY_ENABLE :: false
+
 // Stands in for ___tracy_c_zone_context, which only exists on native.
 ZoneCtx :: struct {}
 

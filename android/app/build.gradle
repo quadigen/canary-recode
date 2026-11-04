@@ -13,9 +13,10 @@ android {
         versionCode 1
         versionName "0.1.0"
         ndk {
-            abiFilters project.hasProperty('androidAbiFilters')
+            def requestedAbis = project.hasProperty('androidAbiFilters')
                 ? project.androidAbiFilters.split(',')*.trim()
                 : ['arm64-v8a', 'x86_64']
+            abiFilters.addAll(requestedAbis)
         }
     }
 
