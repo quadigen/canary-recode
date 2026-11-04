@@ -11,11 +11,9 @@ default:
     @just --list
 
 build:
-    @Get-Process kinemium -ErrorAction SilentlyContinue | Stop-Process -Force
     odin build src -o:speed -out:build/kinemium.exe
 
 debug:
-    @Get-Process kinemium-debug -ErrorAction SilentlyContinue | Stop-Process -Force
     odin build src -debug -out:build/kinemium-debug.exe -extra-linker-flags:"/LTCG /IGNORE:4099" -define:TRACY_ENABLE=true
 
 release:

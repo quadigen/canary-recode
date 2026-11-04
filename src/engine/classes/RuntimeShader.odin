@@ -1,6 +1,7 @@
 package classes
 
 import kineffi "../bindings"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
 import "core:strings"
@@ -17,11 +18,24 @@ Runtime_Shader :: struct {
 	source:          string,
 	last_error:      string,
 	filament_shader: ^kineffi.KineFilamentShader,
+	compile_job:     ^kineffi.KineFilamentShaderCompile,
 	dirty:           bool,
 	source_failed:   bool,
 	uniforms_dirty:  bool,
 	uniforms:        [dynamic]Runtime_Shader_Uniform,
 	revision:        u64,
+}
+
+RUNTIME_SHADER_ASYNC ::
+	ODIN_OS != .JS && !#config(KINE_ANDROID, false) && #config(KINE_ASYNC_RUNTIME_SHADERS, true)
+
+runtime_shader_release_compile :: proc(shader: ^Runtime_Shader) {
+	when RUNTIME_SHADER_ASYNC {
+		if shader.compile_job != nil {
+			kineffi.Kine_Filament_Shader_CompileRelease(shader.compile_job)
+			shader.compile_job = nil
+		}
+	}
 }
 
 Runtime_Shader_Error :: proc(shader: ^Runtime_Shader, message: string) {
@@ -31,6 +45,7 @@ Runtime_Shader_Error :: proc(shader: ^Runtime_Shader, message: string) {
 }
 
 Runtime_Shader_Set_Source :: proc(shader: ^Runtime_Shader, source: string) {
+	runtime_shader_release_compile(shader)
 	copy := strings.clone(source)
 	delete(shader.source)
 	shader.source = copy
@@ -40,6 +55,7 @@ Runtime_Shader_Set_Source :: proc(shader: ^Runtime_Shader, source: string) {
 }
 
 Runtime_Shader_Destroy :: proc(shader: ^Runtime_Shader) {
+	runtime_shader_release_compile(shader)
 	if shader.filament_shader != nil {kineffi.Kine_Filament_Shader_Destroy(shader.filament_shader)}
 	delete(shader.source)
 	delete(shader.last_error)
@@ -67,15 +83,40 @@ Runtime_Shader_Prepare :: proc(
 ) -> bool {
 	if filament == nil {return false}
 	changed := false
-	if shader.dirty {
-		shader.dirty = false
+	if shader.dirty || shader.compile_job != nil {
 		compiled: ^kineffi.KineFilamentShader
+		if shader.dirty {
+			shader.dirty = false
+			runtime_shader_release_compile(shader)
+			if len(shader.source) > 0 {
+				source := strings.clone_to_cstring(
+					len(source_override) > 0 ? source_override : shader.source,
+				)
+				defer delete(source)
+				when RUNTIME_SHADER_ASYNC {
+					shader.compile_job = kineffi.Kine_Filament_Shader_CompileStart(source)
+					if shader.compile_job != nil {return false}
+					delete(source)
+				} else {
+					tracy.ZoneNC("Runtime Shader Compile", 0xB48EAD)
+					compiled = kineffi.Kine_Filament_Shader_Create(filament, source)
+					delete(source)
+				}
+			}
+		} else {
+			when RUNTIME_SHADER_ASYNC {
+				tracy.ZoneNC("Runtime Shader Publish", 0xB48EAD)
+				if !kineffi.Kine_Filament_Shader_CompilePoll(
+					filament,
+					shader.compile_job,
+					&compiled,
+				) {
+					return false
+				}
+				runtime_shader_release_compile(shader)
+			}
+		}
 		if len(shader.source) > 0 {
-			source := strings.clone_to_cstring(
-				len(source_override) > 0 ? source_override : shader.source,
-			)
-			defer delete(source)
-			compiled = kineffi.Kine_Filament_Shader_Create(filament, source)
 			if compiled == nil {
 				shader.source_failed = true
 				Runtime_Shader_Error(shader, string(kineffi.Kine_Filament_Shader_GetLastError()))

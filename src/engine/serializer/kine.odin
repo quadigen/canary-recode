@@ -4,6 +4,7 @@ import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "base:runtime"
 import "core:fmt"
@@ -119,6 +120,7 @@ KINE_MAX_FONT_BYTES :: 32 * 1024 * 1024
 KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
 
 READ_ONLY_PROPERTIES := [?]string {
+	"Parent", // The tree already records parentage.
 	"LastError",
 	"Compiled",
 	"AbsolutePosition",
@@ -244,6 +246,7 @@ Writer :: struct {
 	// already-loaded map do not leak into the file being written.
 	used_ids:      [dynamic]string,
 	used_seen:     map[string]bool,
+	class_properties: map[^classes.Class_Info][dynamic]string,
 	// embed_assets is false for a version 2 stream, where asset properties keep
 	// the author's bare paths and no table is written.
 	embed_assets:  bool,
@@ -547,6 +550,10 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		if property == "Texture" {
 			return .Texture, true
 		}
+	case "Sound":
+		if property == "SoundId" {
+			return .Audio, true
+		}
 	case "MaterialVariant":
 		switch property {
 		case "ColorMap",
@@ -562,19 +569,6 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		}
 	}
 	return .Unknown, false
-}
-
-// is_embeddable_path rejects values that are not the author's own files: an
-// already-embedded reference, an empty slot, or any other scheme such as
-// builtin://, memory:// or a remote URL.
-is_embeddable_path :: proc(path: string) -> bool {
-	if path == "" {
-		return false
-	}
-	if assetstore.Is_Uri(path) {
-		return false
-	}
-	return !strings.contains(path, "://")
 }
 
 // note_asset records that this stream referenced an asset, so the asset table
@@ -596,14 +590,27 @@ note_asset :: proc(w: ^Writer, id: string) {
 // degrades to the current broken-in-the-editor behaviour rather than to nothing.
 // The result is owned by the caller.
 embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) -> string {
-	if !w.embed_assets || !is_embeddable_path(authored) {
+	if !w.embed_assets || authored == "" {
 		return strings.clone(authored)
 	}
 
-	data, ok := assetstore.Read_Asset_File(authored)
-	if !ok {
+	if id, embedded := assetstore.Parse_Uri(authored); embedded {
+		if _, found := assetstore.Find(id); found {
+			note_asset(w, id)
+		}
 		return strings.clone(authored)
 	}
+
+	data: []u8
+	if (kind == .Texture || kind == .Data) && strings.has_prefix(authored, classes.RUNTIME_IMAGE_PREFIX) {
+		if image, found := classes.ImageLabel_Find_Runtime_Image(authored);
+		   found && len(image) <= assetstore.MAX_ASSET_BYTES {
+			data = slice.clone(transmute([]u8)image)
+		}
+	} else if !strings.contains(authored, "://") || strings.has_prefix(authored, "file://") {
+		data, _ = assetstore.Read_Asset_File(authored)
+	}
+	if data == nil {return strings.clone(authored)}
 
 	// Register consumes the bytes, so `data` must not be freed here.
 	id := assetstore.Register(data, authored, kind)
@@ -623,15 +630,13 @@ replace_stack_asset :: proc(
 	value_index: int,
 	kind: assetstore.Asset_Kind,
 ) -> bool {
-	if vm.TypeOf(L, value_index) != .String {
+	if !w.embed_assets || vm.TypeOf(L, value_index) != .String {
 		return false
 	}
 	authored := vm.ArgString(L, value_index)
-	if !is_embeddable_path(authored) {
-		return false
-	}
 	uri := embed_path(w, authored, kind)
 	defer delete(uri)
+	if uri == authored {return false}
 	vm.SetStackTop(L, value_index - 1)
 	vm.PushString(L, uri)
 	return true
@@ -767,7 +772,13 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_u8(w, value.Back ? 1 : 0)
 	case .Font:
 		value := cast(^datatypes.Font)ptr
-		write_string(w, value.Family)
+		has_face_bytes := datatypes.Font_Has_Memory(value^)
+		family := value.Family
+		if !has_face_bytes {
+			family = embed_path(w, family, .Data)
+		}
+		defer if !has_face_bytes {delete(family)}
+		write_string(w, family)
 		write_i64(w, i64(value.Weight))
 		write_i64(w, i64(value.Style))
 		// A face built from downloaded bytes has no file or installed family to
@@ -775,7 +786,6 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		// the font is gone on reload. Older readers stop after Style, so this is
 		// only written by the layout that carries it.
 		if w.version >= KINE_FONT_VERSION {
-			has_face_bytes := datatypes.Font_Has_Memory(value^)
 			write_u8(w, has_face_bytes ? 1 : 0)
 			if has_face_bytes {
 				write_var_u32(w, u32(len(value.Data)))
@@ -1104,6 +1114,7 @@ read_datatype_value_record :: proc(
 			object_id, id_ok := read_u32(r)
 			object_kind, kind_ok := read_u8(r)
 			if !id_ok || !kind_ok {
+				delete(uri)
 				return false
 			}
 			content.object_id = object_id
@@ -1712,7 +1723,9 @@ report_skip :: proc(w: ^Writer, object: ^classes.Object, format: string, args: .
 	// fmt.tprintf memory must not be handed to delete.
 	what := strings.clone(fmt.tprintf(format, ..args))
 	defer delete(what)
-	fmt.eprintf("[kine] skipped %s of %s: %s\n", what, instance_label(object), warning)
+	label := instance_label(object)
+	defer delete(label)
+	fmt.eprintf("[kine] skipped %s of %s: %s\n", what, label, warning)
 }
 
 write_instance :: proc(
@@ -1743,8 +1756,11 @@ write_instance :: proc(
 	write_u32(w, object.unique_id.Time)
 	write_u32(w, object.unique_id.Index)
 
-	properties := classes.Get_Properties(registry, object)
-	defer delete(properties)
+	properties, cached := w.class_properties[object.class]
+	if !cached {
+		properties = classes.Get_Properties(registry, object)
+		w.class_properties[object.class] = properties
+	}
 
 	// Property count is patched in once all decodable properties are written.
 	write_u32(w, 0)
@@ -2665,6 +2681,11 @@ serialize :: proc(
 		exclude_child = exclude_child,
 		embed_assets  = version >= KINE_ASSET_VERSION,
 		version       = version,
+		class_properties = make(map[^classes.Class_Info][dynamic]string),
+	}
+	defer {
+		for _, properties in tree.class_properties {delete(properties)}
+		delete(tree.class_properties)
 	}
 	defer delete(tree.data)
 	defer for id in tree.used_ids {
@@ -2676,8 +2697,11 @@ serialize :: proc(
 	defer delete(tree.instance_indices)
 	defer delete(tree.instance_patches)
 
-	if !write_instance(&tree, L, registry, object) {
-		return nil, writer_error(&tree, .Internal, "could not write the root instance record")
+	{
+		tracy.ZoneNC("KINE Encode Instance Tree", 0xD19A66)
+		if !write_instance(&tree, L, registry, object) {
+			return nil, writer_error(&tree, .Internal, "could not write the root instance record")
+		}
 	}
 	for patch in tree.instance_patches {
 		patch_u32(&tree, patch.offset, tree.instance_indices[patch.target])
@@ -2703,8 +2727,11 @@ serialize :: proc(
 	tree.used_seen = nil
 
 	append(&writer.data, u8('K'), u8('I'), u8('N'), u8('E'), version)
-	if version >= KINE_ASSET_VERSION && !write_asset_table(&writer) {
-		return nil, writer_error(&writer, .Internal, "could not write the asset table")
+	if version >= KINE_ASSET_VERSION {
+		tracy.ZoneNC("KINE Encode Asset Table", 0xD19A66)
+		if !write_asset_table(&writer) {
+			return nil, writer_error(&writer, .Internal, "could not write the asset table")
+		}
 	}
 	// Copy the tree in one shot rather than element by element.
 	tree_start := len(writer.data)
@@ -2714,8 +2741,11 @@ serialize :: proc(
 	// The terrain table trails the tree so a reader that only cares about
 	// instances can stop after the tree it already understands. Only the
 	// current layout carries one; the older layouts have no section to write.
-	if version >= KINE_TERRAIN_VERSION && !write_terrain_table(&writer, terrain) {
-		return nil, writer_error(&writer, .Internal, "could not write the terrain table")
+	if version >= KINE_TERRAIN_VERSION {
+		tracy.ZoneNC("KINE Encode Terrain Table", 0xD19A66)
+		if !write_terrain_table(&writer, terrain) {
+			return nil, writer_error(&writer, .Internal, "could not write the terrain table")
+		}
 	}
 
 	return slice.clone(writer.data[:]), Error_None

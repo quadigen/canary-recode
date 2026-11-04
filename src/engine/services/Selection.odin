@@ -5,6 +5,7 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 
 Selection_Class := classes.Class_Info{
@@ -145,6 +146,7 @@ selection_fire_changed :: proc(L: ^vm.State, selection: ^Selection) {
 	}
 
 	vm.PushValue(L, signal_index)
+	tracy.ZoneNC("SelectionChanged Listeners", 0x61AFEF)
 	ok, err := vm.ProtectedCall(L, 1, 0)
 	if !ok && err != "" {
 		delete(err)

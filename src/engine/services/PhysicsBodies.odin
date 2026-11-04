@@ -197,7 +197,7 @@ physics_meshpart_shape :: proc(
 	scale: datatypes.Vector3,
 ) -> kineffi.JPH_ShapeRef {
 	if classes.Is_A(&mesh_part.object, "MeshPart") &&
-	   (mesh_part.mesh_id != "" || mesh_part.editable_mesh_id != 0) {
+	   (classes.MeshPart_Source_Path(mesh_part) != "" || mesh_part.editable_mesh_id != 0) {
 		#partial switch mesh_part.collision_fidelity {
 		case .Box:
 			half := datatypes.Vector3 {
@@ -225,12 +225,12 @@ physics_load_mesh_data :: proc(
 ) {
 
 
-	resolved := assetstore.Resolve_Path(mesh_part.mesh_id)
+	resolved := assetstore.Resolve_Path(classes.MeshPart_Source_Path(mesh_part))
 	defer delete(resolved)
 	if resolved == "" {
 
 
-		assetstore.Report_Missing_Asset(mesh_part.mesh_id, "Physics collision mesh")
+		assetstore.Report_Missing_Asset(classes.MeshPart_Source_Path(mesh_part), "Physics collision mesh")
 		return nil, nil, false
 	}
 	c_path := strings.clone_to_cstring(resolved)
@@ -376,7 +376,7 @@ physics_mesh_pcd_shape :: proc(
 		}
 	}
 	key := Physics_Shape_Cache_Key {
-		mesh_id               = strings.clone(mesh_part.mesh_id),
+		mesh_id               = strings.clone(classes.MeshPart_Source_Path(mesh_part)),
 		mesh_index            = mesh_part.mesh_index,
 		editable_mesh_id      = mesh_part.editable_mesh_id,
 		editable_mesh_version = version,
@@ -638,7 +638,7 @@ physics_create_body :: proc(
 	editable_mesh_id := u32(0)
 
 	if mesh != nil {
-		mesh_id = strings.clone(mesh.mesh_id)
+		mesh_id = strings.clone(classes.MeshPart_Source_Path(mesh))
 		mesh_index = mesh.mesh_index
 		editable_mesh_id = mesh.editable_mesh_id
 	}
@@ -1107,7 +1107,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		editable_mesh_id := u32(0)
 
 		if mesh_part != nil {
-			mesh_id = mesh_part.mesh_id
+			mesh_id = classes.MeshPart_Source_Path(mesh_part)
 			mesh_index = mesh_part.mesh_index
 			editable_mesh_id = mesh_part.editable_mesh_id
 		}

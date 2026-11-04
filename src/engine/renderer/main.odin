@@ -1,18 +1,41 @@
 #+build !js
 package renderer
 
+import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
 import kineffi "../bindings"
 import sdl3 "../platform"
 import profiling "../profiling"
+import target "../target"
 import tracy "../util/odin-tracy"
 
 
 KINE_RENDERER_GL :: #config(KINE_RENDERER_GL, false)
 
 when !KINE_RENDERER_GL {
+	poll_sdl_event :: proc(event: ^sdl3.Event) -> bool {
+		tracy.ZoneNC("SDL PollEvent", 0x61AFEF)
+		return sdl3.PollEvent(event)
+	}
+
+	Filament_Profile_State :: struct {
+		zones: [8]tracy.ZoneCtx,
+		depth: int,
+	}
+
+	filament_profile_callback :: proc "c" (user: rawptr, phase: cstring, begin: bool) {
+		context = runtime.default_context()
+		state := cast(^Filament_Profile_State)user
+		if begin {
+			state.zones[state.depth] = tracy.ZoneBegin(true, 0, string(phase), 0xC678DD)
+			state.depth += 1
+		} else {
+			state.depth -= 1
+			tracy.ZoneEnd(state.zones[state.depth])
+		}
+	}
 
 	Filament_Context :: kineffi.KineFilamentContext
 	Skia_Surface :: kineffi.KineSkiaSurface
@@ -238,14 +261,32 @@ when !KINE_RENDERER_GL {
 			{
 				tracy.ZoneNC("Polling Events", 0x61AFEF)
 				z := profiling.Begin("Polling Events", 0x61AFEF)
-				event: sdl3.Event
-
-				for sdl3.PollEvent(&event) {
+				event, next: sdl3.Event
+				has_event := poll_sdl_event(&event)
+				for has_event {
+					has_event = false
+					coalesce_motion := event.type == .MOUSE_MOTION && target.is_editor()
+					if coalesce_motion {
+						// Preserve total relative motion and stop at intervening input.
+						for poll_sdl_event(&next) {
+							if next.type != .MOUSE_MOTION ||
+							   next.motion.windowID != event.motion.windowID ||
+							   next.motion.which != event.motion.which ||
+							   next.motion.state != event.motion.state {
+								has_event = true
+								break
+							}
+							next.motion.xrel += event.motion.xrel
+							next.motion.yrel += event.motion.yrel
+							event = next
+						}
+					}
+					event_zone := tracy.ZoneNC("Dispatch SDL Event", 0x61AFEF)
+					tracy.ZoneValue(event_zone, u64(event.type))
 					if renderer.OnEvent != nil {
 						renderer.OnEvent(renderer.UserData, event)
 					}
 					renderer.CurrentEvent = &event
-					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
 						running = false
@@ -269,6 +310,12 @@ when !KINE_RENDERER_GL {
 						drawable = true
 					case .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED:
 						drawable = true
+					}
+					renderer.CurrentEvent = nil
+					if has_event {
+						event = next
+					} else if !coalesce_motion {
+						has_event = poll_sdl_event(&event)
 					}
 				}
 			}
@@ -380,7 +427,14 @@ when !KINE_RENDERER_GL {
 			if rendered_3d {
 				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
 				z := profiling.Begin("Filament RenderFrame", 0xC678DD)
-				kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+				when tracy.TRACY_ENABLE {
+					frame_profile: Filament_Profile_State
+					kineffi.Kine_Filament_SetFrameProfileCallback(filament, filament_profile_callback, &frame_profile)
+					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+					kineffi.Kine_Filament_SetFrameProfileCallback(filament, nil, nil)
+				} else {
+					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+				}
 
 
 				base_skia_surface = nil
@@ -390,7 +444,11 @@ when !KINE_RENDERER_GL {
 				tracy.ZoneNC("Overlay", 0xE06C75)
 				z := profiling.Begin("Overlay", 0xE06C75)
 
-				overlay_surface := kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
+				overlay_surface: rawptr
+				{
+					tracy.ZoneNC("Vulkan Overlay Acquire", 0x56B6C2)
+					overlay_surface = kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
+				}
 				if overlay_surface != nil {
 
 
@@ -419,10 +477,13 @@ when !KINE_RENDERER_GL {
 				}
 			}
 
-			if kineffi.Kine_VulkanCompositor_EndFrame(compositor) == 0 {
-				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
+			present_ok: bool
+			{
 				tracy.ZoneNC("Vulkan Present", 0xD19A66)
-				z := profiling.Begin("Vulkan Present", 0xD19A66)
+				present_ok = kineffi.Kine_VulkanCompositor_EndFrame(compositor) != 0
+			}
+			if !present_ok {
+				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 				fmt.eprintf("Vulkan presentation failed: %s\n", error)
 				break
 			}

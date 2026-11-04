@@ -11,6 +11,7 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import serializer "../serializer"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import strings "core:strings"
 
@@ -38,12 +39,24 @@ export_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rende
 }
 
 export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: string) -> serializer.Error {
-	if service == nil || L == nil || path == "" {
+	if path == "" {
 		return serializer.Error_Make(.Invalid_Argument, -1, "the service, VM, or destination path is missing")
+	}
+	data, err := export_datamodel_snapshot(service, L)
+	if !serializer.Error_Is_None(err) {return err}
+	defer delete(data)
+	tracy.ZoneNC("KINE Compress and Write", 0xD19A66)
+	return serializer.Write_File_Data(path, data)
+}
+
+export_datamodel_snapshot :: proc(service: ^ExportService, L: ^vm.State) -> ([]u8, serializer.Error) {
+	tracy.ZoneNC("KINE Scene Snapshot", 0xD19A66)
+	if service == nil || L == nil {
+		return nil, serializer.Error_Make(.Invalid_Argument, -1, "the service or VM is missing")
 	}
 	model := service.data_model
 	if model == nil || model.registry == nil || model.registry.classes == nil {
-		return serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
+		return nil, serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
 	}
 
 	// Terrain is a singleton service rather than an Instance, so the tree walk
@@ -53,14 +66,14 @@ export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: st
 	defer serializer.Kine_Terrain_Destroy(&terrain_table)
 	terrain_object := DataModel_Get_Service(model, "Terrain")
 	if terrain_object != nil {
+		tracy.ZoneNC("KINE Collect Terrain Cells", 0xD19A66)
 		Terrain_Write_Kine_Table(cast(^Terrain)terrain_object, &terrain_table)
 	}
 
-	return serializer.Serialize_To_File(
+	return serializer.Serialize(
 		model.registry.classes,
 		L,
 		&model.object,
-		path,
 		export_content_service_filter,
 		&terrain_table,
 	)

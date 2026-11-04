@@ -277,7 +277,7 @@ pathfinding_hash_part :: proc(hash: ^Pathfinding_Hash, part: ^classes.Part) {
 
 	if classes.Is_A(&part.object, "MeshPart") {
 		mesh_part := cast(^classes.MeshPart)part
-		pathfinding_hash_string(hash, mesh_part.mesh_id)
+		pathfinding_hash_string(hash, classes.MeshPart_Source_Path(mesh_part))
 		pathfinding_hash_raw(hash, &mesh_part.mesh_index)
 		pathfinding_hash_raw(hash, &mesh_part.collision_fidelity)
 	}

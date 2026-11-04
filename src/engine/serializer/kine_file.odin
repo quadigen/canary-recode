@@ -110,12 +110,15 @@ Serialize_To_File :: proc(
 		return Error_Take(&err)
 	}
 	defer delete(data)
+	return Write_File_Data(path, data)
+}
 
-
+// Write a complete snapshot without accessing the VM or the live asset store.
+Write_File_Data :: proc(path: string, data: []u8) -> Error {
 	compressed, compress_err := compress_kine(data)
 	defer Error_Delete(&compress_err)
+	defer delete(compressed)
 	if Error_Is_None(compress_err) && len(compressed) < len(data) {
-		defer delete(compressed)
 		write_err := os.write_entire_file(path, compressed)
 		if write_err != nil {
 			return Error_Make(

@@ -317,6 +317,14 @@ ImageLabel_Find_Runtime_Image :: proc(id: string) -> (string, bool) {
 	return "", false
 }
 
+Texture_Resolve_Bytes :: proc(path: string) -> ([]u8, bool) {
+	if strings.has_prefix(path, RUNTIME_IMAGE_PREFIX) {
+		data, found := ImageLabel_Find_Runtime_Image(path)
+		return transmute([]u8)data, found
+	}
+	return assetstore.Resolve_Bytes(path)
+}
+
 //
 // Properties
 //

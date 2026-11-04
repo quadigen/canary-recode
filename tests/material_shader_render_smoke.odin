@@ -7,11 +7,23 @@ import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
+import "core:time"
 import sdl "vendor:sdl3"
 
 run :: proc(script_vm: ^vm.VM, source: string) {
 	ok, err := vm.Run(script_vm, source, "material_shader_render_smoke")
 	assert(ok, err)
+}
+
+render_assets_pending :: proc(env: ^engine_runtime.Environment) -> bool {
+	for object in classes.Find_Class(&env.classes, "MaterialVariant").instances {
+		if !object.destroyed && (cast(^classes.MaterialVariant)object).compile_job != nil {return true}
+	}
+	for object in classes.Find_Class(&env.classes, "PostProcess").instances {
+		if !object.destroyed && (cast(^classes.PostProcess)object).compile_job != nil {return true}
+	}
+	terrain := cast(^services.Terrain)services.Ensure_Service(&env.services, "Terrain")
+	return terrain.mesh_batch != nil || len(terrain.dirty_queue) != 0
 }
 
 capture :: proc(
@@ -23,7 +35,7 @@ capture :: proc(
 	filament := env.renderer.Filament
 	compositor := cast(^k.KineVulkanCompositor)k.Kine_Filament_GetVulkanCompositor(filament)
 	result: [4]u8
-	for _ in 0 ..< 3 {
+	for frame in 0 ..< 600 {
 		services.Prepare_3D(&env.services, env.renderer)
 		base := cast(^k.KineSkiaSurface)k.Kine_VulkanCompositor_BeginFrame(compositor)
 		assert(base != nil)
@@ -36,9 +48,13 @@ capture :: proc(
 		engine_runtime.Environment_Render_Overlay(env, script_vm, overlay, 320, 240, 1.0 / 60.0)
 		k.Kine_Skia_Surface_GetPixel(overlay, x, y, &result[0], &result[1], &result[2], &result[3])
 		assert(k.Kine_VulkanCompositor_EndFrame(compositor) != 0)
+		if frame >= 2 && !render_assets_pending(env) {
+			fmt.println("Shader pixel:", result)
+			return result
+		}
+		time.sleep(time.Millisecond)
 	}
-	fmt.println("Shader pixel:", result)
-	return result
+	panic("Timed out waiting for material or terrain preparation")
 }
 
 main :: proc() {
@@ -87,7 +103,12 @@ preview.CurrentCamera = camera
 `,
 	)
 
-	shader, _ := classes.MaterialVariant_Resolve(&env.classes, "Shared", filament)
+	shader: ^k.KineFilamentShader
+	for _ in 0 ..< 5000 {
+		shader, _ = classes.MaterialVariant_Resolve(&env.classes, "Shared", filament)
+		if shader != nil {break}
+		time.sleep(time.Millisecond)
+	}
 	assert(shader != nil, "default MaterialVariant shader did not compile")
 	values := [4]f32{1, 1, 1, 1}
 	assert(

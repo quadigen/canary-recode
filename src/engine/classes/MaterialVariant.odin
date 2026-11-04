@@ -331,6 +331,7 @@ MaterialVariant_Prepare :: proc(
 	if variant.dirty &&
 	   len(variant.source) > 0 &&
 	   (len(variant.vertex_source) > 0 || len(variant.fragment_source) > 0) {
+		runtime_shader_release_compile(&variant.shader_state)
 		generated, ok := MaterialVariant_Hooked_Source(variant)
 		if ok {override = generated}
 	}
@@ -358,11 +359,15 @@ MaterialVariant_Prepare :: proc(
 		loaded := false
 		if len(path) > 0 {
 			when ODIN_OS != .JS {
-				resolved := assetstore.Resolve_C_Path(path)
-				defer delete(resolved)
 				width, height, channels: i32
 				pixels: [^]u8
-				if resolved != nil {pixels = image.load(resolved, &width, &height, &channels, 4)}
+				if data, found := Texture_Resolve_Bytes(path); found && len(data) > 0 {
+					pixels = image.load_from_memory(raw_data(data), i32(len(data)), &width, &height, &channels, 4)
+				} else {
+					resolved := assetstore.Resolve_C_Path(path)
+					defer delete(resolved)
+					if resolved != nil {pixels = image.load(resolved, &width, &height, &channels, 4)}
+				}
 				if pixels != nil {
 					defer image.image_free(pixels)
 					loaded = kineffi.Kine_Filament_Shader_SetTextureFromPixels(

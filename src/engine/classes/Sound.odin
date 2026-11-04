@@ -1,5 +1,6 @@
 package classes
 
+import assetstore "../assetstore"
 import audio "../audio"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -73,7 +74,7 @@ Sound_get :: proc(
 
 	switch key {
 	case "AudioContent":
-		datatypes.Push_Content(L, datatype_registry, sound.content)
+		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(sound.content))
 		return true
 
 	case "SoundId":
@@ -149,6 +150,40 @@ Sound_get :: proc(
 }
 
 
+Sound_Load_Source :: proc(sound: ^Sound) -> bool {
+	path := sound.sound_path
+	if path == "" {path = sound.content.uri}
+	if path == "" {return false}
+	resolved := assetstore.Resolve_Path(path)
+	defer delete(resolved)
+	if resolved == "" {
+		assetstore.Report_Missing_Asset(path, "Sound")
+		return false
+	}
+	if !audio.load_sound(&sound.sound, resolved) {
+		fmt.println("Failed to load sound:", path)
+		return false
+	}
+	sound.is_loaded = true
+	audio.set_volume(&sound.sound, f32(sound.volume))
+	audio.set_pitch(&sound.sound, f32(sound.playback_speed))
+	audio.set_looping(&sound.sound, b32(sound.looped))
+	return true
+}
+
+Sound_Reload :: proc(sound: ^Sound) {
+	if audio.is_loaded(&sound.sound) {
+		audio.unload_sound(&sound.sound)
+	}
+	sound.is_loaded = false
+	sound.is_playing = false
+	sound.is_paused = true
+	sound.playing = false
+	sound.time_position = 0
+	sound.length = 0
+	_ = Sound_Load_Source(sound)
+}
+
 Sound_set :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -167,36 +202,18 @@ Sound_set :: proc(
 			return true
 		}
 
-		if audio.is_loaded(&sound.sound) {
-			audio.unload_sound(&sound.sound)
-		}
-
-		sound.sound_path = path
-		sound.is_loaded = false
-		sound.is_playing = false
-		sound.is_paused = true
-		sound.playing = false
-		sound.time_position = 0
-		sound.length = 0
-
-		if path == "" {
-			return true
-		}
-
-		if !audio.load_sound(&sound.sound, path) {
-			fmt.println("Failed to load sound:", path)
-			return true
-		}
-
-		sound.is_loaded = true
-		audio.set_volume(&sound.sound, f32(sound.volume))
-		audio.set_pitch(&sound.sound, f32(sound.playback_speed))
-		audio.set_looping(&sound.sound, b32(sound.looped))
-
+		delete(sound.sound_path)
+		sound.sound_path = strings.clone(path)
+		Sound_Reload(sound)
 		return true
 
 	case "AudioContent":
-		sound.content = datatypes.Arg_Content(L, value_index, datatype_registry)
+		content := datatypes.Content_Clone(datatypes.Arg_Content(L, value_index, datatype_registry))
+		delete(sound.content.uri)
+		sound.content = content
+		if sound.sound_path == "" {
+			Sound_Reload(sound)
+		}
 		return true
 
 	case "Looped":
@@ -262,16 +279,11 @@ Sound_set :: proc(
 
 		if sound.playing {
 			if !audio.is_loaded(&sound.sound) {
-				if sound.sound_path == "" || !audio.load_sound(&sound.sound, sound.sound_path) {
+				if !Sound_Load_Source(sound) {
 					sound.is_loaded = false
 					sound.is_playing = false
 					return true
 				}
-
-				sound.is_loaded = true
-				audio.set_volume(&sound.sound, f32(sound.volume))
-				audio.set_pitch(&sound.sound, f32(sound.playback_speed))
-				audio.set_looping(&sound.sound, b32(sound.looped))
 			}
 
 			if !audio.is_playing(&sound.sound) {
@@ -312,6 +324,8 @@ Sound_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 		audio.unload_sound(&sound.sound)
 	}
 
+	delete(sound.sound_path)
+	delete(sound.content.uri)
 	Object_Destroy(object)
 	free(sound)
 }
@@ -320,8 +334,8 @@ Sound_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^Sound)source
 	dst := cast(^Sound)destination
 
-	dst.sound_path = src.sound_path
-	dst.content = src.content
+	dst.sound_path = strings.clone(src.sound_path)
+	dst.content = datatypes.Content_Clone(src.content)
 
 	dst.is_loaded = src.is_loaded
 	dst.is_playing = src.is_playing

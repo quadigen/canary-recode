@@ -1956,10 +1956,8 @@ plugin_dock_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	fmt.println("[dock_set] key =", key)
 	dock := cast(^DockWidgetPluginGui)object
 	studio := plugin_studio(dock.plugin)
-	fmt.println("[dock_set] studio nil?", studio == nil, "plugin nil?", dock.plugin == nil)
 
 	switch key {
 	case "Title":

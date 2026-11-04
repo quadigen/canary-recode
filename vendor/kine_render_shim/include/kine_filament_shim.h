@@ -19,6 +19,7 @@ typedef struct KineFilamentMeshData KineFilamentMeshData;
 typedef struct KineFilamentTex KineFilamentTex;
 typedef struct KineFilamentInstanceBatch KineFilamentInstanceBatch;
 typedef struct KineFilamentShader KineFilamentShader;
+typedef struct KineFilamentShaderCompile KineFilamentShaderCompile;
 
 typedef struct KineFilamentWaterParams {
     float speed;
@@ -38,6 +39,9 @@ KINE_API bool Kine_Filament_GetWaterParams(KineFilamentContext *ctx, KineFilamen
 
 /* Runtime Filamat surface materials. Source is a complete .mat material definition. */
 KINE_API KineFilamentShader *Kine_Filament_Shader_Create(KineFilamentContext *ctx, const char *materialSource);
+KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source);
+KINE_API bool Kine_Filament_Shader_CompilePoll(KineFilamentContext *ctx, KineFilamentShaderCompile *job, KineFilamentShader **shader);
+KINE_API void Kine_Filament_Shader_CompileRelease(KineFilamentShaderCompile *job);
 KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader);
 KINE_API bool Kine_Filament_Shader_SetUniform(
 	KineFilamentShader *shader, const char *name, const float *values, int valueCount);
@@ -245,6 +249,8 @@ KINE_API void Kine_Filament_Viewport_Draw(KineFilamentViewport *viewport, KineSk
     float x, float y, float width, float height, float r, float g, float b, float opacity);
 KINE_API bool Kine_Filament_Viewport_HasWork(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_Viewport_RenderFrame(KineFilamentContext *ctx, float dt, bool renderWorld);
+typedef void (*KineFrameProfileCallback)(void *user, const char *phase, bool begin);
+KINE_API void Kine_Filament_SetFrameProfileCallback(KineFilamentContext *ctx, KineFrameProfileCallback callback, void *user);
 // Diagnostics for stress / resource-lifetime tests, not a script property.
 KINE_API void Kine_Filament_Viewport_Stats(KineFilamentContext *ctx,
     uint32_t *handles, uint32_t *pages, uint64_t *renders);

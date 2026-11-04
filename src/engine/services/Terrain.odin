@@ -23,6 +23,7 @@ TERRAIN_CHUNK_DATA_DIM :: TERRAIN_CHUNK_SIZE + 2 * TERRAIN_CACHE_PAD
 TERRAIN_CHUNK_VOXELS :: TERRAIN_CHUNK_SIZE * TERRAIN_CHUNK_SIZE * TERRAIN_CHUNK_SIZE
 
 TERRAIN_REBUILDS_PER_FRAME :: 8
+TERRAIN_UPLOADS_PER_FRAME :: 2
 TERRAIN_MAX_VERTICES_PER_MESH :: 65532
 TERRAIN_STREAM_ID :: u64(0x5445525241494E)
 
@@ -33,7 +34,7 @@ TERRAIN_GPU_MAX_INDICES :: TERRAIN_CHUNK_VOXELS * 5 * 3
 
 
 // GPU meshing submits to the graphics queue and waits for readback per chunk.
-// Use parallel CPU meshing by default to keep those waits off the frame thread.
+// Use background CPU meshing by default to keep those waits off the frame thread.
 TERRAIN_GPU_MESHING :: #config(KINE_TERRAIN_GPU_MESHING, false)
 
 TERRAIN_DEFAULT_VOXEL_SIZE :: f32(4)
@@ -208,6 +209,8 @@ Terrain :: struct {
 	dirty_queue:        [dynamic]Terrain_Chunk_Key,
 	dirty_head:         int,
 	preparing:          bool,
+	mesh_batch:         ^Terrain_Mesh_Batch,
+	mesh_worker:        ^thread.Thread,
 	voxel_size:         f32,
 	iso_level:          f32,
 	replication_dirty:  map[Terrain_Voxel_Key]Terrain_Dirty_Cell,
@@ -1303,7 +1306,6 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 
 
 Terrain_Mesh_Job :: struct {
-	service:          ^Terrain,
 	key:              Terrain_Chunk_Key,
 	has_surface:      bool,
 	vertex_data:      [dynamic]f32,
@@ -1311,51 +1313,100 @@ Terrain_Mesh_Job :: struct {
 	indices:          [dynamic]u16,
 }
 
-terrain_mesh_job_run :: proc(t: ^thread.Thread) {
-	job := cast(^Terrain_Mesh_Job)t.data
-	if job == nil {
-		return
-	}
-	job.has_surface = Terrain_Build_Chunk_Mesh(
-		job.service,
-		job.key,
-		&job.vertex_data,
-		&job.material_weights,
-		&job.indices,
-	)
+Terrain_Mesh_Batch :: struct {
+	snapshot:           Terrain,
+	jobs:               [TERRAIN_REBUILDS_PER_FRAME]Terrain_Mesh_Job,
+	count, next_upload: int,
 }
 
-
-terrain_build_jobs_parallel :: proc(jobs: []Terrain_Mesh_Job) {
-	if len(jobs) == 0 {
-		return
+terrain_mesh_batch_run :: proc(t: ^thread.Thread) {
+	tracy.ZoneNC("Terrain Mesh Worker", 0xC678DD)
+	batch := cast(^Terrain_Mesh_Batch)t.data
+	for &job in batch.jobs[:batch.count] {
+		terrain_build_job(&batch.snapshot, &job)
 	}
+}
 
-	if len(jobs) == 1 {
-		terrain_build_job(jobs[0].service, &jobs[0])
-		return
-	}
+terrain_start_mesh_batch :: proc(service: ^Terrain, jobs: []Terrain_Mesh_Job) -> bool {
+	worker := thread.create(terrain_mesh_batch_run)
+	if worker == nil {return false}
+	batch := new(Terrain_Mesh_Batch)
+	batch.count = len(jobs)
+	copy(batch.jobs[:], jobs)
+	batch.snapshot.voxel_size = service.voxel_size
+	batch.snapshot.iso_level = service.iso_level
+	batch.snapshot.chunks = make(map[Terrain_Chunk_Key]^Terrain_Chunk)
 
-	threads: [TERRAIN_REBUILDS_PER_FRAME]^thread.Thread
-	started := 0
-	for &job in jobs {
-		t := thread.create(terrain_mesh_job_run)
-		if t == nil {
-
-
-			terrain_build_job(job.service, &job)
-			continue
+	// The mesher reads neighboring occupancy and materials. Copy only the
+	// neighborhoods it needs so live edits never race the worker.
+	for job in jobs {
+		service.chunks[job.key].dirty = false
+		for dx in -1 ..= 1 {
+			for dy in -1 ..= 1 {
+				for dz in -1 ..= 1 {
+					key := Terrain_Chunk_Key{job.key.x + dx, job.key.y + dy, job.key.z + dz}
+					if key in batch.snapshot.chunks {continue}
+					source := service.chunks[key]
+					if source == nil || source.data == nil {continue}
+					chunk := new(Terrain_Chunk)
+					chunk.data = new(Terrain_Chunk_Data)
+					chunk.data^ = source.data^
+					batch.snapshot.chunks[key] = chunk
+				}
+			}
 		}
-		t.data = &job
-		thread.start(t)
-		threads[started] = t
-		started += 1
+	}
+	service.mesh_batch = batch
+	service.mesh_worker = worker
+	worker.data = batch
+	thread.start(worker)
+	return true
+}
+
+terrain_release_mesh_batch :: proc(service: ^Terrain) {
+	if worker := service.mesh_worker; worker != nil {
+		thread.join(worker)
+		thread.destroy(worker)
+		service.mesh_worker = nil
+	}
+	batch := service.mesh_batch
+	if batch == nil {return}
+	for _, chunk in batch.snapshot.chunks {
+		free(chunk.data)
+		free(chunk)
+	}
+	delete(batch.snapshot.chunks)
+	for job in batch.jobs[:batch.count] {
+		delete(job.vertex_data)
+		delete(job.material_weights)
+		delete(job.indices)
+	}
+	free(batch)
+	service.mesh_batch = nil
+}
+
+terrain_poll_mesh_batch :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) -> bool {
+	batch := service.mesh_batch
+	if batch == nil {return false}
+	if worker := service.mesh_worker; worker != nil {
+		if !thread.is_done(worker) {return true}
+		thread.join(worker)
+		thread.destroy(worker)
+		service.mesh_worker = nil
 	}
 
-	for i in 0 ..< started {
-		thread.join(threads[i])
-		thread.destroy(threads[i])
+	tracy.ZoneNC("Terrain Mesh Upload", 0xB48EAD)
+	// Keep uploads spread across frames and skip results invalidated by edits.
+	end := min(batch.next_upload + TERRAIN_UPLOADS_PER_FRAME, batch.count)
+	for index in batch.next_upload ..< end {
+		job := &batch.jobs[index]
+		if chunk := service.chunks[job.key]; chunk != nil && !chunk.dirty {
+			terrain_commit_job(service, job, renderer)
+		}
 	}
+	batch.next_upload = end
+	if end == batch.count {terrain_release_mesh_batch(service)}
+	return true
 }
 
 terrain_build_job :: proc(service: ^Terrain, job: ^Terrain_Mesh_Job) {
@@ -1377,6 +1428,7 @@ terrain_commit_job :: proc(
 	if chunk, ok := service.chunks[job.key]; ok && chunk != nil {
 		terrain_destroy_chunk_meshes(chunk, renderer)
 		if job.has_surface {
+			terrain_ensure_texture_set(service, renderer)
 			terrain_upload_chunk_meshes(
 				chunk,
 				renderer,
@@ -1405,6 +1457,7 @@ terrain_ensure_texture_set :: proc(service: ^Terrain, renderer: ^classes.Rendere
 	if service.texture_set != nil && service.texture_context == renderer.Filament {
 		return
 	}
+	tracy.ZoneNC("Terrain Texture Setup", 0xB48EAD)
 
 	if service.texture_set != nil && service.texture_context != nil {
 		_ = kineffi.Kine_Filament_DestroyTex(service.texture_context, service.texture_set)
@@ -1418,6 +1471,10 @@ terrain_ensure_texture_set :: proc(service: ^Terrain, renderer: ^classes.Rendere
 	concrete := materials.Get(enums.Material.Concrete)
 	smooth := materials.Get(enums.Material.SmoothPlastic)
 	wood := materials.Get(enums.Material.Wood)
+	service.texture_context = renderer.Filament
+	if !(grass.loaded && sand.loaded && slate.loaded && concrete.loaded && smooth.loaded && wood.loaded) {
+		return
+	}
 
 	service.texture_set = kineffi.Kine_Filament_CreateTerrainTextureSet(
 		renderer.Filament,
@@ -1648,20 +1705,31 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 	defer service.preparing = false
 
 	service.renderer = renderer
-	terrain_ensure_texture_set(service, renderer)
+	if service.texture_set == nil && service.texture_context == renderer.Filament {
+		terrain_ensure_texture_set(service, renderer)
+	}
+	if terrain_poll_mesh_batch(service, renderer) {return}
 
 
 	jobs: [TERRAIN_REBUILDS_PER_FRAME]Terrain_Mesh_Job
 	job_count := 0
+	processed := 0
 	queue_len := len(service.dirty_queue)
-	for service.dirty_head < queue_len && job_count < TERRAIN_REBUILDS_PER_FRAME {
+	for service.dirty_head < queue_len && processed < TERRAIN_REBUILDS_PER_FRAME {
 		key := service.dirty_queue[service.dirty_head]
 		service.dirty_head += 1
 		delete_key(&service.dirty_lookup, key)
 
 		if chunk, ok := service.chunks[key]; ok && chunk != nil && chunk.dirty {
+			processed += 1
+			if !terrain_cache_neighborhood_has_solids(service, key) {
+				empty := Terrain_Mesh_Job {
+					key = key,
+				}
+				terrain_commit_job(service, &empty, renderer)
+				continue
+			}
 			jobs[job_count] = Terrain_Mesh_Job {
-				service = service,
 				key     = key,
 			}
 			job_count += 1
@@ -1697,7 +1765,11 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 			}
 		} else {
 			tracy.ZoneNC("Terrain Mesh CPU", 0xC678DD)
-			terrain_build_jobs_parallel(jobs[:job_count])
+			if terrain_start_mesh_batch(service, jobs[:job_count]) {
+				if service.dirty_head >= len(service.dirty_queue) {terrain_reset_queue(service)}
+				return
+			}
+			for &job in jobs[:job_count] {terrain_build_job(service, &job)}
 		}
 		tracy.ZoneNC("Terrain Mesh Upload", 0xB48EAD)
 		for i in 0 ..< job_count {
@@ -2631,6 +2703,7 @@ terrain_service_construct :: proc(
 terrain_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^Terrain)object
 	delete(service.material_variant)
+	terrain_release_mesh_batch(service)
 	terrain_clear(service, renderer)
 
 	delete(service.chunks)

@@ -24,6 +24,7 @@ KineFilamentMeshList :: struct {}
 KineFilamentTex :: struct {}
 KineFilamentInstanceBatch :: struct {}
 KineFilamentShader :: struct {}
+KineFilamentShaderCompile :: struct {}
 
 @(default_calling_convention = "c")
 foreign kine_filament {
@@ -194,6 +195,9 @@ foreign kine_filament {
 	Kine_Filament_Resize :: proc(ctx: ^KineFilamentContext, width: i32, height: i32) ---
 	Kine_Filament_SetViewport :: proc(ctx: ^KineFilamentContext, x: i32, y: i32, width: i32, height: i32) ---
 	Kine_Filament_Shader_Create :: proc(ctx: ^KineFilamentContext, materialSource: cstring) -> ^KineFilamentShader ---
+	Kine_Filament_Shader_CompileStart :: proc(source: cstring) -> ^KineFilamentShaderCompile ---
+	Kine_Filament_Shader_CompilePoll :: proc(ctx: ^KineFilamentContext, job: ^KineFilamentShaderCompile, shader: ^^KineFilamentShader) -> bool ---
+	Kine_Filament_Shader_CompileRelease :: proc(job: ^KineFilamentShaderCompile) ---
 	Kine_Filament_SetDecalColor :: proc(ctx: ^KineFilamentContext, decal: i32, r: f32, g: f32, b: f32, a: f32) -> i32 ---
 	Kine_Filament_CreateMeshFromMemory :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateMeshFromPath :: proc(ctx: ^KineFilamentContext, path: cstring) -> ^KineFilamentMesh ---
@@ -352,6 +356,7 @@ foreign kine_filament {
 	Kine_Filament_Viewport_Draw :: proc(viewport: ^KineFilamentViewport, surface: ^KineSkiaSurface, x, y, width, height, r, g, b, opacity: f32) ---
 	Kine_Filament_Viewport_HasWork :: proc(ctx: ^KineFilamentContext) -> bool ---
 	Kine_Filament_Viewport_RenderFrame :: proc(ctx: ^KineFilamentContext, dt: f32, renderWorld: bool) ---
+	Kine_Filament_SetFrameProfileCallback :: proc(ctx: ^KineFilamentContext, callback: proc "c" (user: rawptr, phase: cstring, begin: bool), user: rawptr) ---
 	Kine_Filament_Viewport_Primitive :: proc(ctx: ^KineFilamentContext, shape: i32) -> ^KineFilamentMesh ---
 	Kine_Filament_Viewport_Mesh :: proc(ctx: ^KineFilamentContext, key: u64, data: rawptr, size: uintptr, hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_Viewport_Stats :: proc(ctx: ^KineFilamentContext, handles, pages: ^u32, renders: ^u64) ---

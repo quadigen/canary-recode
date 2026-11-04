@@ -6,6 +6,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import profiling "../profiling"
 import target "../target"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "base:runtime"
 import "core:fmt"
@@ -280,6 +281,7 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 	scheduler.tasks = pending
 
 	for task in ready {
+		tracy.ZoneNC("Scheduled Task Resume", 0xD19A66)
 		argument_count := int(task.argument_count)
 		if task.resume_with_elapsed {
 			vm.PushNumber(task.thread, scheduler.elapsed - task.wait_started_at)

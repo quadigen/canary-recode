@@ -2,6 +2,7 @@ package classes
 
 import "core:strings"
 
+import assetstore "../assetstore"
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -91,7 +92,15 @@ TextLabel_Load_Typeface_From_Family :: proc(family: string) -> ^kineffi.KineSkia
 		return kineffi.Kine_Skia_Typeface_LoadFromMemory(&data[0], uintptr(len(data)))
 	}
 
-	cpath := strings.clone_to_cstring(resolved_family)
+	if data, found := assetstore.Resolve_Bytes(resolved_family); found && len(data) > 0 {
+		return kineffi.Kine_Skia_Typeface_LoadFromMemory(raw_data(data), uintptr(len(data)))
+	}
+	if assetstore.Is_Uri(resolved_family) {
+		assetstore.Report_Missing_Asset(resolved_family, "Font")
+		return nil
+	}
+
+	cpath := assetstore.Resolve_C_Path(resolved_family)
 	defer delete(cpath)
 
 	return kineffi.Kine_Skia_Typeface_LoadFromFile(cpath)

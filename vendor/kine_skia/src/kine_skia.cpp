@@ -1299,7 +1299,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 	float zoom,
 	uint8_t alpha,
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA) {
-	if (!surface || !surface->surface || !surface->backdrop ||
+	if (!surface || !surface->surface ||
 		width <= 0.0f || height <= 0.0f || (alpha == 0 && tintA == 0)) {
 		return;
 	}
@@ -1341,7 +1341,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 			kine_skia_color_matrix(brightness, contrast, saturation, hueShift));
 	}
 
-	if (pixelate > 0.0f) {
+	if (alpha > 0 && surface->backdrop && pixelate > 0.0f) {
 		const int pw = std::max(1, static_cast<int>(std::ceil(width / pixelate)));
 		const int ph = std::max(1, static_cast<int>(std::ceil(height / pixelate)));
 
@@ -1378,7 +1378,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 				&upPaint,
 				SkCanvas::kFast_SrcRectConstraint);
 		}
-	} else {
+	} else if (alpha > 0 && surface->backdrop) {
 		sk_sp<SkImageFilter> filter;
 
 		if (morphology > 0.0f) {

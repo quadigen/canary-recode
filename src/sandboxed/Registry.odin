@@ -190,6 +190,12 @@ init :: proc(
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
 
+	when HAS_EDITOR_MODULES {
+		if editor_available() {
+			init_scripts()
+			return
+		}
+	}
 
 	when ODIN_OS != .JS {
 		if editor_available() {

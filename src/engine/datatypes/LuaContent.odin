@@ -29,8 +29,8 @@ content_from_uri :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 content_object_resolver: proc(object: rawptr) -> (u32, u8)
-content_object_of_id:    proc(id: u32, kind: u8) -> rawptr
-content_push_object:     proc(L: ^vm.State, object: rawptr) -> bool
+content_object_of_id: proc(id: u32, kind: u8) -> rawptr
+content_push_object: proc(L: ^vm.State, object: rawptr) -> bool
 
 Set_Content_Object_Resolver :: proc(
 	resolver: proc(object: rawptr) -> (u32, u8),
@@ -103,12 +103,12 @@ content_destroy :: proc(value, ctx: rawptr) {
 }
 
 Content_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "Content",
-		get     = content_get,
-		string  = content_string,
+	return vm.Userdata_Binding {
+		name = "Content",
+		get = content_get,
+		string = content_string,
 		destroy = content_destroy,
-		equal   = content_equal,
+		equal = content_equal,
 	}
 }
 

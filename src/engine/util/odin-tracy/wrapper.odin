@@ -41,7 +41,12 @@ ZoneBegin :: proc(active: bool, depth: i32, name: string = "", color: u32 = 0, l
 }
 
 // NOTE: scoped Zone*() procs also exists, no need of calling this directly.
-@(disabled=!TRACY_ENABLE) ZoneEnd :: #force_inline proc(ctx: ZoneCtx) { ___tracy_emit_zone_end(ctx) }
+@(disabled=!TRACY_ENABLE) ZoneEnd :: #force_inline proc(ctx: ZoneCtx) {
+	// deferred_out can emit this procedure even when it is disabled.
+	when TRACY_ENABLE {
+		___tracy_emit_zone_end(ctx)
+	}
+}
 
 // Memory profiling
 // (See allocator.odin for an implementation of an Odin custom allocator using memory profiling.)

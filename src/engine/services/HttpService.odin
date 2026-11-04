@@ -14,6 +14,7 @@ import assetstore "../assetstore"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import json "core:encoding/json"
 
@@ -250,6 +251,7 @@ http_service_send :: proc(
 	return_response_table: bool = false,
 	require_success: bool = true,
 ) -> i32 {
+	tracy.ZoneNC("HTTP Request", 0xD19A66)
 	req: http_client.Request
 
 	http_client.request_init(&req, method)

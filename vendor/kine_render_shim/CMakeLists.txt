@@ -206,7 +206,7 @@ if(KINE_WITH_FILAMENT)
         add_custom_command(
             OUTPUT  ${_bin}
             COMMAND ${MATC_EXE} -a ${KINE_MATC_BACKEND} -p ${KINE_MATC_PLATFORM} -o ${_bin} ${_src}
-            DEPENDS ${_src}
+            DEPENDS ${_src} ${ARGN}
             COMMENT "Compiling Filament material: ${NAME}.mat"
         )
 
@@ -224,7 +224,7 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_default)
     kine_add_material(kine_glass)
     kine_add_material(kine_neon)
-    kine_add_material(kine_water)
+    kine_add_material(kine_water "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_water_waves.glsl")
     kine_add_material(kine_forcefield)
     kine_add_material(kine_cloud)
     kine_add_material(kine_ssgi)

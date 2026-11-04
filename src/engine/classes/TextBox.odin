@@ -471,6 +471,7 @@ TextBox_Measure_Content :: proc(box: ^TextBox, available_width: f32) -> datatype
 			max_width = max(max_width, width)
 			line_count += 1
 			start = index + 1
+			delete(cstrin)
 		}
 
 		index += 1
@@ -586,7 +587,12 @@ text_box_cursor_on_line_from_x :: proc(
 	return hit_glyph ? text_box_utf8_prev_boundary(box.text, finish) : finish
 }
 
-text_box_cursor_from_point :: proc(box: ^TextBox, mouse_x: f32, mouse_y: f32, hit_glyph := false) -> int {
+text_box_cursor_from_point :: proc(
+	box: ^TextBox,
+	mouse_x: f32,
+	mouse_y: f32,
+	hit_glyph := false,
+) -> int {
 	if box == nil {
 		return 0
 	}
@@ -1010,13 +1016,15 @@ text_box_render_code_editor :: proc(
 
 	selection_start, selection_finish, selected := text_box_selection_bounds(box)
 	selected_word: string
-	if selected && box.focused && !text_box_is_word_at(box.text, selection_start - 1) &&
+	if selected &&
+	   box.focused &&
+	   !text_box_is_word_at(box.text, selection_start - 1) &&
 	   !text_box_is_word_at(box.text, selection_finish) {
 		word := box.text[selection_start:selection_finish]
 		// Restrict occurrence highlights to short, whole identifiers.
 		if len(word) <= 128 {
 			selected_word = word
-			for i in 0..<len(word) {
+			for i in 0 ..< len(word) {
 				if !text_box_is_word_byte(word[i]) {
 					selected_word = ""
 					break
@@ -1091,17 +1099,29 @@ text_box_render_code_editor :: proc(
 
 			draw_bracket(box, surface, content_x, y, line_height, line, bracket_second, false)
 
-			if selected && (selected_word != "" ||
-			   (selection_start <= line.finish && selection_finish > line.start)) {
+			if selected &&
+			   (selected_word != "" ||
+					   (selection_start <= line.finish && selection_finish > line.start)) {
 				guilib.save(surface)
-				guilib.clipRect(surface, {
-					x = content_x, y = y,
-					width = max(rect.x + rect.width - minimap_width - content_x, 0),
-					height = line_height,
-				})
+				guilib.clipRect(
+					surface,
+					{
+						x = content_x,
+						y = y,
+						width = max(rect.x + rect.width - minimap_width - content_x, 0),
+						height = line_height,
+					},
+				)
 				text_box_draw_code_selection(
-					box, surface, line, content_x - box.scroll_x, y, line_height,
-					selection_start, selection_finish, selected_word,
+					box,
+					surface,
+					line,
+					content_x - box.scroll_x,
+					y,
+					line_height,
+					selection_start,
+					selection_finish,
+					selected_word,
 				)
 				guilib.restore(surface)
 			}
@@ -1240,38 +1260,55 @@ text_box_draw_code_selection :: proc(
 			start := offset + match
 			finish := start + len(word)
 			offset = finish
-			if start == selection_start || text_box_is_word_at(box.text, start - 1) ||
+			if start == selection_start ||
+			   text_box_is_word_at(box.text, start - 1) ||
 			   text_box_is_word_at(box.text, finish) {continue}
 
 			left := text_box_measure_range(box, line.start, start)
 			right := text_box_measure_range(box, line.start, finish)
 			width := right - left
 			if width <= 0 {continue}
-			guilib.drawRoundedRectStroke(surface, {
-				x = x + left, y = y + 1,
-				width = width, height = height,
-				color = box.selection_color3,
-				bgTransparency = 1 - (1 - box.selection_transparency) * 0.7,
-			}, min(3, width * 0.5, height * 0.5), 1)
+			guilib.drawRoundedRectStroke(
+				surface,
+				{
+					x = x + left,
+					y = y + 1,
+					width = width,
+					height = height,
+					color = box.selection_color3,
+					bgTransparency = 1 - (1 - box.selection_transparency) * 0.7,
+				},
+				min(3, width * 0.5, height * 0.5),
+				1,
+			)
 		}
 	}
 
 	start := max(selection_start, line.start)
 	finish := min(selection_finish, line.finish)
-	newline_selected := line.finish < len(box.text) && box.text[line.finish] == '\n' &&
-	                    selection_start <= line.finish && selection_finish > line.finish
+	newline_selected :=
+		line.finish < len(box.text) &&
+		box.text[line.finish] == '\n' &&
+		selection_start <= line.finish &&
+		selection_finish > line.finish
 	if start >= finish && !newline_selected {return}
 
 	left := text_box_measure_range(box, line.start, start)
 	right := text_box_measure_range(box, line.start, finish)
 	width := max(right - left, 0) + (newline_selected ? f32(5) : 0)
 	if width == 0 {return}
-	guilib.drawRoundedRect(surface, {
-		x = x + left, y = y + 1,
-		width = width, height = height,
-		color = box.selection_color3,
-		bgTransparency = box.selection_transparency,
-	}, min(3, width * 0.5, height * 0.5))
+	guilib.drawRoundedRect(
+		surface,
+		{
+			x = x + left,
+			y = y + 1,
+			width = width,
+			height = height,
+			color = box.selection_color3,
+			bgTransparency = box.selection_transparency,
+		},
+		min(3, width * 0.5, height * 0.5),
+	)
 }
 
 draw_bracket :: proc(
@@ -4300,6 +4337,7 @@ Register_TextBox :: proc(registry: ^Registry) {
 		properties = []string {
 			"Text",
 			"Font",
+			"FontFace",
 			"PlaceholderText",
 			"TextSize",
 			"TextColor3",

@@ -3,7 +3,9 @@ import kineffi "../bindings"
 import sdl3 "../platform"
 import renderer "../renderer"
 import target "../target"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import luauh "../vm/luauh"
 import base_runtime "base:runtime"
 import "core:fmt"
 import "core:strings"
@@ -28,6 +30,7 @@ Draw_Callback :: struct {
 	reference: i32,
 	priority:  i32,
 	phase:     Pool_Phase,
+	source:    cstring,
 }
 Hook_Kind :: enum {
 	Before3D,
@@ -168,6 +171,8 @@ invoke_hook_kind :: proc(registry: ^Registry, kind: Hook_Kind) {
 invoke_pool_phase :: proc(registry: ^Registry, phase: Pool_Phase) {
 	for callback in registry.callbacks {
 		if callback.phase == phase {
+			zone := tracy.ZoneNC("Renderer Pool Callback", 0x61AFEF)
+			if callback.source != nil {tracy.ZoneText(zone, string(callback.source))}
 			invoke_callback(registry, callback.reference)
 		}
 	}
@@ -489,6 +494,12 @@ pool_new :: proc "c" (L: ^vm.State) -> i32 {
 		reference = reference,
 		priority  = priority,
 		phase     = phase,
+	}
+	when tracy.TRACY_ENABLE {
+		info: luauh.lua_Debug
+		if luauh.lua_getinfo(L, i32(callback_index - vm.StackTop(L) - 1), "s", &info) != 0 {
+			entry.source = info.source
+		}
 	}
 	append(&registry.callbacks, entry)
 

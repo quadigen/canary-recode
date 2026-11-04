@@ -129,6 +129,10 @@ struct VkQueue_T;
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -692,6 +696,8 @@ struct KineFilamentContext {
 	bool outlineQueued = false;
 	float time = 0.0f;
 	float waterTime = 0.0f;
+	KineFrameProfileCallback frameProfile = nullptr;
+	void *frameProfileUser = nullptr;
 	bool explicitWaterTime = false;
 
 	void *hostCtx = nullptr;
@@ -6378,6 +6384,24 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 }
 #endif
 
+KINE_API void Kine_Filament_SetFrameProfileCallback(
+	KineFilamentContext *ctx, KineFrameProfileCallback callback, void *user) {
+	if (!ctx) return;
+	ctx->frameProfile = callback;
+	ctx->frameProfileUser = user;
+}
+
+struct KineFrameProfileScope {
+	KineFilamentContext *ctx;
+	const char *phase;
+	KineFrameProfileScope(KineFilamentContext *context, const char *name) : ctx(context), phase(name) {
+		if (ctx->frameProfile) ctx->frameProfile(ctx->frameProfileUser, phase, true);
+	}
+	~KineFrameProfileScope() {
+		if (ctx->frameProfile) ctx->frameProfile(ctx->frameProfileUser, phase, false);
+	}
+};
+
 KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTime) {
 	if (!ctx || !ctx->engine)
 		return;
@@ -6404,6 +6428,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 
 #if KINE_FILAMENT_USE_VULKAN
 	if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
+		KineFrameProfileScope profile(ctx, "Filament Compositor Handoff");
 		if (!Kine_VulkanCompositor_PrepareFilament(
 				static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor))) {
 			const char *error = Kine_VulkanCompositor_GetLastError(
@@ -6416,11 +6441,26 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 	}
 #endif
 
-	kine_update_batches(ctx);
-    kine_capture_reflection_probe(ctx);
-    kine_prepare_ssgi(ctx);
+	{
+		KineFrameProfileScope profile(ctx, "Filament Update Batches");
+		kine_update_batches(ctx);
+	}
+	{
+		KineFrameProfileScope profile(ctx, "Filament Reflection Probe");
+		kine_capture_reflection_probe(ctx);
+	}
+	{
+		KineFrameProfileScope profile(ctx, "Filament Prepare SSGI");
+		kine_prepare_ssgi(ctx);
+	}
 
-	if (ctx->renderer->beginFrame(ctx->swapChain)) {
+	bool beganFrame;
+	{
+		KineFrameProfileScope profile(ctx, "Filament Begin Frame");
+		beganFrame = ctx->renderer->beginFrame(ctx->swapChain);
+	}
+	if (beganFrame) {
+		KineFrameProfileScope frameProfile(ctx, "Filament Draw and Submit");
 		if (!ctx->loggedFirstFrame) {
 			fprintf(stderr, "[Kine] Filament beginFrame OK (%s swapchain, %dx%d)\n",
 					ctx->renderToSwapChain ? "native" : "headless",
@@ -6523,7 +6563,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 		ctx->renderer->endFrame();
 #if KINE_FILAMENT_USE_VULKAN
 		if (ctx->useFilamentOwnedCompositor) {
-
+			KineFrameProfileScope profile(ctx, "Filament GPU Flush and Wait");
 			ctx->engine->flushAndWait();
 		}
 #endif
@@ -9471,20 +9511,10 @@ KINE_API int Kine_Filament_GetHeight(KineFilamentContext *ctx) {
 
 static thread_local std::string kine_filament_shader_error;
 
-KINE_API KineFilamentShader *Kine_Filament_Shader_Create(
-	KineFilamentContext *ctx, const char *materialSource) {
-#if defined(__ANDROID__)
-	(void)ctx;
-	(void)materialSource;
-	kine_filament_shader_error = "Runtime material compilation is unavailable on Android";
-	return nullptr;
-#else
-	kine_filament_shader_error.clear();
-	if (!ctx || !ctx->engine || !materialSource || !*materialSource) {
-		kine_filament_shader_error = "Filament material source is empty or no rendering context is available";
-		return nullptr;
-	}
-
+#if !defined(__ANDROID__)
+extern "C++" {
+static filamat::Package kine_compile_shader(
+	utils::JobSystem &jobs, const char *materialSource, std::string &error) {
 	static std::once_flag filamatInit;
 	std::call_once(filamatInit, [] { filamat::MaterialBuilder::init(); });
 
@@ -9508,18 +9538,22 @@ KINE_API KineFilamentShader *Kine_Filament_Shader_Create(
 	utils::Status parseStatus = parser.parse(builder, parserConfig, parserLength, parserSource);
 	if (!parseStatus.isOk()) {
 		const std::string_view message = parseStatus.getMessage();
-		kine_filament_shader_error = message.empty()
+		error = message.empty()
 										 ? "Filamat could not parse the material source"
 										 : std::string(message);
-		return nullptr;
+		return filamat::Package::invalidPackage();
 	}
 
-	filamat::Package package = builder.build(ctx->engine->getJobSystem());
+	filamat::Package package = builder.build(jobs);
 	if (!package.isValid()) {
-		kine_filament_shader_error = "Filamat failed to compile the material source";
-		return nullptr;
+		error = "Filamat failed to compile the material source";
+		return filamat::Package::invalidPackage();
 	}
+	return package;
+}
 
+static KineFilamentShader *kine_publish_shader(
+	KineFilamentContext *ctx, const filamat::Package &package) {
 	Material *material = Material::Builder()
 							 .package(package.getData(), package.getSize())
 							 .build(*ctx->engine);
@@ -9533,6 +9567,150 @@ KINE_API KineFilamentShader *Kine_Filament_Shader_Create(
 	shader->material = material;
 	ctx->runtimeShaders.insert(shader);
 	return shader;
+}
+
+struct KineShaderCompileState {
+	filamat::Package package = filamat::Package::invalidPackage();
+	std::string error;
+	std::atomic<bool> ready{false};
+};
+
+struct KineFilamentShaderCompile {
+	std::shared_ptr<KineShaderCompileState> state;
+};
+
+class KineShaderCompiler {
+	struct Request {
+		std::weak_ptr<KineShaderCompileState> state;
+		std::string source;
+	};
+	std::mutex mutex;
+	std::condition_variable wake;
+	std::deque<Request> requests;
+	bool stopping = false;
+	std::thread worker{[this] { run(); }};
+
+	void run() {
+		Engine *compiler = nullptr;
+		for (;;) {
+			Request request;
+			{
+				std::unique_lock lock(mutex);
+				wake.wait(lock, [this] { return stopping || !requests.empty(); });
+				if (stopping) break;
+				request = std::move(requests.front());
+				requests.pop_front();
+			}
+			auto state = request.state.lock();
+			if (!state) continue;
+			try {
+				if (!compiler) {
+					// No render context or GPU resources are shared with the frame thread.
+					Engine::Config config{};
+					config.jobSystemThreadCount = 2;
+					compiler = Engine::create(backend::Backend::NOOP, nullptr, nullptr, &config);
+				}
+				if (compiler) {
+					state->package = kine_compile_shader(
+						compiler->getJobSystem(), request.source.c_str(), state->error);
+				} else {
+					state->error = "Could not start the material compiler";
+				}
+			} catch (...) {
+				state->error = "Material compilation failed";
+			}
+			state->ready.store(true, std::memory_order_release);
+		}
+		if (compiler) Engine::destroy(&compiler);
+	}
+
+public:
+	~KineShaderCompiler() {
+		{
+			std::lock_guard lock(mutex);
+			stopping = true;
+		}
+		wake.notify_one();
+		worker.join();
+	}
+
+	void enqueue(const std::shared_ptr<KineShaderCompileState> &state, const char *source) {
+		{
+			std::lock_guard lock(mutex);
+			std::erase_if(requests, [](const Request &request) { return request.state.expired(); });
+			requests.push_back({state, source});
+		}
+		wake.notify_one();
+	}
+};
+}
+#endif
+
+KINE_API KineFilamentShader *Kine_Filament_Shader_Create(
+	KineFilamentContext *ctx, const char *materialSource) {
+#if defined(__ANDROID__)
+	(void)ctx;
+	(void)materialSource;
+	kine_filament_shader_error = "Runtime material compilation is unavailable on Android";
+	return nullptr;
+#else
+	kine_filament_shader_error.clear();
+	if (!ctx || !ctx->engine || !materialSource || !*materialSource) {
+		kine_filament_shader_error = "Filament material source is empty or no rendering context is available";
+		return nullptr;
+	}
+	auto package = kine_compile_shader(ctx->engine->getJobSystem(), materialSource, kine_filament_shader_error);
+	return package.isValid() ? kine_publish_shader(ctx, package) : nullptr;
+#endif
+}
+
+KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source) {
+#if defined(__ANDROID__)
+	(void)source;
+	return nullptr;
+#else
+	if (!source || !*source) {
+		kine_filament_shader_error = "Filament material source is empty";
+		return nullptr;
+	}
+	try {
+		auto job = std::make_unique<KineFilamentShaderCompile>();
+		job->state = std::make_shared<KineShaderCompileState>();
+		static KineShaderCompiler compiler;
+		compiler.enqueue(job->state, source);
+		return job.release();
+	} catch (...) {
+		kine_filament_shader_error = "Could not start the material compiler thread";
+		return nullptr;
+	}
+#endif
+}
+
+KINE_API bool Kine_Filament_Shader_CompilePoll(
+	KineFilamentContext *ctx, KineFilamentShaderCompile *job, KineFilamentShader **shader) {
+	if (!shader) return true;
+	*shader = nullptr;
+#if defined(__ANDROID__)
+	(void)ctx;
+	(void)job;
+	return true;
+#else
+	if (!ctx || !ctx->engine || !job) {
+		kine_filament_shader_error = "No render context or material compilation job is available";
+		return true;
+	}
+	if (!job->state->ready.load(std::memory_order_acquire)) return false;
+	kine_filament_shader_error = job->state->error;
+	*shader = job->state->package.isValid() ? kine_publish_shader(ctx, job->state->package) : nullptr;
+	return true;
+#endif
+}
+
+KINE_API void Kine_Filament_Shader_CompileRelease(KineFilamentShaderCompile *job) {
+#if defined(__ANDROID__)
+	(void)job;
+#else
+	delete job;
 #endif
 }
 

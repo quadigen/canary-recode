@@ -15,13 +15,19 @@ Read_Asset_File :: proc(authored: string) -> ([]u8, bool) {
 	defer delete(path)
 
 	status, stat_err := os.stat(path, context.allocator)
-	if stat_err != nil || status.type != .Regular || status.size < 0 ||
+	if stat_err != nil {return nil, false}
+	defer os.file_info_delete(status, context.allocator)
+	if status.type != .Regular || status.size < 0 ||
 	   status.size > i64(MAX_ASSET_BYTES) {
 		return nil, false
 	}
 
 	data, read_err := os.read_entire_file(path, context.allocator)
 	if read_err != nil {
+		return nil, false
+	}
+	if len(data) > MAX_ASSET_BYTES {
+		delete(data)
 		return nil, false
 	}
 	return data, true

@@ -16,6 +16,10 @@ import "core:strings"
 MESH_BODY :: "mesh bytes that are not really an fbx but are definitely bytes"
 TEXTURE_BODY :: "texture bytes that are not really a png but are definitely bytes"
 DECAL_BODY :: "decal bytes, also not a real image, also definitely bytes"
+FONT_BODY := #load("../src/engine/assets/fonts/Montserrat-Regular.ttf")
+RUNTIME_IMAGE :: "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
+RUNTIME_IMAGE_URI :: "memory://asset-portability-smoke"
+AUDIO_BODY :: "test bytes for an audio asset"
 MISSING_PATH :: "does/not/exist.fbx"
 
 run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
@@ -112,35 +116,67 @@ main :: proc() {
 	mesh_path := write_asset(scratch, "hero.fbx", MESH_BODY)
 	texture_path := write_asset(scratch, "hero_diffuse.png", TEXTURE_BODY)
 	decal_path := write_asset(scratch, "scorch.png", DECAL_BODY)
+	font_path := write_asset(scratch, "custom.ttf", string(FONT_BODY))
+	sound_path := write_asset(scratch, "custom.wav", AUDIO_BODY)
+	classes.ImageLabel_Register_Runtime_Image(RUNTIME_IMAGE_URI, RUNTIME_IMAGE)
 
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
+	for input in ([]struct{name, value: string}{
+		{"MeshPath", mesh_path},
+		{"TexturePath", texture_path},
+		{"TextureUri", fmt.tprintf("file://%s", texture_path)},
+		{"DecalPath", decal_path},
+		{"FontPath", font_path},
+		{"SoundPath", sound_path},
+		{"RuntimeImage", RUNTIME_IMAGE_URI},
+	}) {
+		vm.PushString(script_vm.L, input.value)
+		vm.SetGlobalFromStack(&script_vm, input.name)
+	}
+
 	// Build a map the way an author would: real classes pointing at real files.
 	run_script_or_fail(
 		&script_vm,
-		fmt.tprintf(
-			`
+		`
 local model = Instance.new("Model")
 model.Name = "Rig"
 
 local mesh = Instance.new("MeshPart", model)
 mesh.Name = "Body"
-mesh.MeshId = %q
-mesh.TextureId = %q
+mesh.MeshId = MeshPath
+mesh.TextureId = TexturePath
 
 local decal = Instance.new("Decal", model)
 decal.Name = "Scorch"
-decal.Texture = %q
+decal.Texture = DecalPath
+
+local gui = Instance.new("ScreenGui", model)
+local label = Instance.new("ImageLabel", gui)
+label.Image = RuntimeImage
+local button = Instance.new("ImageButton", gui)
+button.Image = TextureUri
+for _, class in ipairs({"TextLabel", "TextButton", "TextBox"}) do
+	local text = Instance.new(class, gui)
+	text.FontFace = Font.new(FontPath, Enum.FontWeight.Bold, Enum.FontStyle.Italic)
+end
+local material = Instance.new("MaterialVariant", model)
+material.ColorMap = TexturePath
+material.NormalMap = DecalPath
+local sound = Instance.new("Sound", model)
+sound.SoundId = SoundPath
+local contentSound = Instance.new("Sound", model)
+contentSound.Name = "ContentSound"
+contentSound.AudioContent = Content.fromUri(SoundPath)
+local contentMesh = Instance.new("MeshPart", model)
+contentMesh.Name = "ContentMesh"
+contentMesh.MeshContent = Content.fromUri(MeshPath)
 
 model.Parent = game.Workspace
 KineRoot = model
 `,
-			mesh_path,
-			texture_path,
-			decal_path,
-		),
 		"asset_build",
 	)
 
@@ -176,7 +212,7 @@ KineRoot = model
 
 	// Deleting the sources is the whole point: if anything still reads from disk
 	// the checks below fail instead of quietly passing.
-	for path in ([]string{mesh_path, texture_path, decal_path}) {
+	for path in ([]string{mesh_path, texture_path, decal_path, font_path, sound_path}) {
 		if os.remove(path) != nil {
 			panic(fmt.tprintf("could not delete %s", path))
 		}
@@ -231,6 +267,48 @@ KineDecalValue = decal.Texture
 	expect_bytes("MeshId", mesh_value, MESH_BODY)
 	expect_bytes("TextureId", texture_value, TEXTURE_BODY)
 	expect_bytes("Decal.Texture", decal_value, DECAL_BODY)
+
+	reexport_path := fmt.tprintf("%s/reexport.kine", scratch)
+	reexport_err := serializer.Serialize_To_File(&environment.classes, script_vm.L, loaded, reexport_path)
+	assert(serializer.Error_Is_None(reexport_err), serializer.Error_String(reexport_err))
+	serializer.Error_Delete(&reexport_err)
+	assetstore.Clear()
+	reloaded, reload_err := serializer.Deserialize_From_File(&environment.classes, script_vm.L, parent, reexport_path)
+	assert(serializer.Error_Is_None(reload_err) && reloaded != nil, serializer.Error_String(reload_err))
+	serializer.Error_Delete(&reload_err)
+	vm.PushRegistryReference(script_vm.L, reloaded.lua_ref)
+	vm.SetGlobalFromStack(&script_vm, "ReexportRoot")
+	run_script_or_fail(&script_vm, `
+local gui = ReexportRoot.ScreenGui
+for _, class in ipairs({"TextLabel", "TextButton", "TextBox"}) do
+	local face = gui[class].FontFace
+	assert(face.Weight == Enum.FontWeight.Bold and face.Style == Enum.FontStyle.Italic)
+	assert(face.Family == gui.TextLabel.FontFace.Family)
+	assert(game:GetService("TextService"):GetTextSize("Embedded", 16, face, Vector2.new(1000, 100)).X > 0)
+end
+ReexportFont = gui.TextLabel.FontFace.Family
+ReexportImage = gui.ImageLabel.Image
+ReexportImageButton = gui.ImageButton.Image
+ReexportColor = ReexportRoot.MaterialVariant.ColorMap
+ReexportNormal = ReexportRoot.MaterialVariant.NormalMap
+ReexportSound = ReexportRoot.Sound.SoundId
+ReexportContentSound = ReexportRoot.ContentSound.AudioContent.Uri
+ReexportContentMesh = ReexportRoot.ContentMesh.MeshContent.Uri
+`, "asset_reexport_verify")
+	for check in ([]struct{global, body: string}{
+		{"ReexportFont", string(FONT_BODY)},
+		{"ReexportImage", RUNTIME_IMAGE},
+		{"ReexportImageButton", TEXTURE_BODY},
+		{"ReexportColor", TEXTURE_BODY},
+		{"ReexportNormal", DECAL_BODY},
+		{"ReexportSound", AUDIO_BODY},
+		{"ReexportContentSound", AUDIO_BODY},
+		{"ReexportContentMesh", MESH_BODY},
+	}) {
+		value := read_global_string(&script_vm, check.global)
+		defer delete(value)
+		expect_bytes(check.global, value, check.body)
+	}
 
 	// A path that was never there keeps its original value rather than silently
 	// becoming an empty reference.

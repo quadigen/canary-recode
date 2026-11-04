@@ -11,11 +11,13 @@ import datatypes "../datatypes"
 import enums "../enum"
 import fsutil "../fsutil"
 import serializer "../serializer"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:thread"
 
 Project_Class := classes.Class_Info {
 	name   = "Project",
@@ -29,6 +31,7 @@ ProjectService :: struct {
 	registry_path:       string,
 	active_project_path: string,
 	autosave_elapsed:    f32,
+	autosave_worker:     ^thread.Thread,
 }
 
 KinemiumProject :: struct {
@@ -700,6 +703,7 @@ Project_Add :: proc(service: ^ProjectService, project: KinemiumProject) -> bool 
 
 Project_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^ProjectService)object
+	_ = project_finish_autosave(service, true)
 
 	Project_Clear(service)
 
@@ -1012,6 +1016,12 @@ Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bo
 		return false
 	}
 	if service.active_project_path == service.projects[index].path {return true}
+	if worker := service.autosave_worker; worker != nil {
+		job := cast(^Project_Autosave_Job)worker.data
+		if os.are_paths_identical(job.path, service.projects[index].path) {
+			_ = project_finish_autosave(service, true)
+		}
+	}
 
 	snapshot := fmt.tprintf("%s/autosave.kine", normalized)
 	if os.exists(snapshot) {
@@ -1032,12 +1042,34 @@ Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bo
 }
 
 Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
+	tracy.ZoneNC("Project Save", 0xD19A66)
 	current := Project_Get_Active(service)
 	if current == nil {return false}
+	_ = project_finish_autosave(service, true)
+	data, ok := project_snapshot(service, L)
+	if !ok {return false}
+	defer delete(data)
+	if !project_write_snapshot(current.path, data) {return false}
+	service.autosave_elapsed = 0
+	return true
+}
+
+project_snapshot :: proc(service: ^ProjectService, L: ^vm.State) -> ([]u8, bool) {
 	exporter := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
-	staging, staging_err := os.make_directory_temp(current.path, ".project-save-*", context.allocator)
+	data, err := export_datamodel_snapshot(exporter, L)
+	defer serializer.Error_Delete(&err)
+	if !serializer.Error_Is_None(err) {
+		serializer.Error_Print(err, "Could not save project: ")
+		return nil, false
+	}
+	return data, true
+}
+
+project_write_snapshot :: proc(path: string, data: []u8) -> bool {
+	tracy.ZoneNC("Project Snapshot Write", 0xD19A66)
+	staging, staging_err := os.make_directory_temp(path, ".project-save-*", context.allocator)
 	if staging_err != nil {
-		fmt.eprintf("[Project] save failed: staging in %q: %v\n", current.path, staging_err)
+		fmt.eprintf("[Project] save failed: staging in %q: %v\n", path, staging_err)
 		return false
 	}
 	defer delete(staging)
@@ -1045,14 +1077,14 @@ Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
 	pending := fmt.tprintf("%s/autosave.kine", staging)
 	defer os.remove(pending)
 
-	err := export_datamodel_to_file(exporter, L, pending)
+	err := serializer.Write_File_Data(pending, data)
 	defer serializer.Error_Delete(&err)
 	if !serializer.Error_Is_None(err) {
 		serializer.Error_Print(err, "Could not save project: ")
 		return false
 	}
-	snapshot := fmt.tprintf("%s/autosave.kine", current.path)
-	backed_up, unchanged := project_backup_previous(current.path, snapshot, pending)
+	snapshot := fmt.tprintf("%s/autosave.kine", path)
+	backed_up, unchanged := project_backup_previous(path, snapshot, pending)
 	if !backed_up {
 		fmt.eprintf("[Project] save failed: could not back up %q\n", snapshot)
 		return false
@@ -1063,7 +1095,6 @@ Project_Save_To_File :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
 			return false
 		}
 	}
-	service.autosave_elapsed = 0
 	return true
 }
 

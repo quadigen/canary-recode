@@ -72,6 +72,11 @@ mesh_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(mesh_part)
 }
 
+MeshPart_Source_Path :: proc(part: ^MeshPart) -> string {
+	if part.mesh_content.uri != "" {return part.mesh_content.uri}
+	return part.mesh_id
+}
+
 mesh_part_get :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -89,7 +94,7 @@ mesh_part_get :: proc(
 		vm.PushNumber(L, f64(mesh_part.mesh_index))
 
 	case "MeshContent":
-		datatypes.Push_Content(L, datatype_registry, mesh_part.mesh_content)
+		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(mesh_part.mesh_content))
 
 	case "TextureId":
 		vm.PushString(L, mesh_part.texture_id)
@@ -136,7 +141,7 @@ mesh_part_set :: proc(
 		}
 
 	case "MeshContent":
-		content := datatypes.Arg_Content(L, value_index, datatype_registry)
+		content := datatypes.Content_Clone(datatypes.Arg_Content(L, value_index, datatype_registry))
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = content
 		if content.object_kind == 1 {
@@ -179,10 +184,10 @@ mesh_part_namecall :: proc(
 
 	switch method {
 	case "GetMeshContent":
-		datatypes.Push_Content(L, datatype_registry, mesh_part.mesh_content)
+		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(mesh_part.mesh_content))
 		return 1, true
 	case "SetMeshContent":
-		content := datatypes.Arg_Content(L, 2, datatype_registry)
+		content := datatypes.Content_Clone(datatypes.Arg_Content(L, 2, datatype_registry))
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = content
 		if content.object_kind == 1 {

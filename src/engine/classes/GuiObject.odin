@@ -1068,7 +1068,6 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 	if !UIScaleDetector_Handle_Event(registry, L, event) {
 		UIDragDetector_Handle_Event(registry, L, event)
 	}
-	UIDragDetector_Handle_Event(registry, L, event)
 
 	#partial switch event.type {
 	case .MOUSE_MOTION:
@@ -1078,8 +1077,9 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 		chain := result.chain
 
 		for descriptor in registry.classes {
+			if !Is_Class_A(descriptor.info, &GuiObject_Class) {continue}
 			for object in descriptor.instances {
-				if object == nil || object.destroyed || !Is_A(object, "GuiObject") {
+				if object == nil || object.destroyed {
 					continue
 				}
 
@@ -2155,9 +2155,12 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 			backdrop.morphology != 0 ||
 			backdrop.displacement > 0 ||
 			backdrop.pixelate > 0 ||
-			backdrop.zoom != 1
+			backdrop.zoom != 1 ||
+			backdrop.offset != (datatypes.UDim2{}) ||
+			backdrop.parallax != (datatypes.Vector2{})
 
-		if backdrop.enabled && (has_effect || backdrop.tint_transparency < 0.999) {
+		if backdrop.enabled &&
+		   ((has_effect && backdrop.transparency < 1) || backdrop.tint_transparency < 0.999) {
 			backdrop_rect := rect
 			backdrop_rect.color = backdrop.tint_color
 			backdrop_rect.bgTransparency = f32(backdrop.tint_transparency)
@@ -2183,6 +2186,7 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 			}
 
 			params := guilib.BackdropParams {
+				transparency  = f32(backdrop.transparency) if has_effect else 1,
 				cornerRadiusX = corner_radius,
 				cornerRadiusY = corner_radius,
 				exponent      = f32(backdrop.exponent),

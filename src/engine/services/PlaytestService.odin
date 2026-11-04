@@ -2,6 +2,8 @@
 // wire:service
 package services
 
+import tracy "../util/odin-tracy"
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -406,6 +408,7 @@ playtest_resolve_map :: proc(
 	if map_path != "" {
 		return map_path, false, true
 	}
+	tracy.ZoneNC("Playtest Map Export", 0xD19A66)
 
 	export_service := cast(^ExportService)Service_Get_Service(&service.service, "ExportService")
 	if export_service == nil {

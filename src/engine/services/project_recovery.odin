@@ -7,10 +7,37 @@ import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:time"
+import "core:thread"
 import vm "../vm"
 
 PROJECT_BACKUP_LIMIT :: 5
 PROJECT_AUTOSAVE_SECONDS :: 60
+
+Project_Autosave_Job :: struct {
+	path: string,
+	data: []u8,
+}
+
+project_autosave_worker :: proc(worker: ^thread.Thread) {
+	job := cast(^Project_Autosave_Job)worker.data
+	if !project_write_snapshot(job.path, job.data) {
+		fmt.eprintln("[Project] Automatic save failed")
+	}
+}
+
+project_finish_autosave :: proc(service: ^ProjectService, wait: bool) -> bool {
+	worker := service.autosave_worker
+	if worker == nil {return true}
+	if !wait && !thread.is_done(worker) {return false}
+	thread.join(worker)
+	job := cast(^Project_Autosave_Job)worker.data
+	delete(job.path)
+	delete(job.data)
+	free(job)
+	thread.destroy(worker)
+	service.autosave_worker = nil
+	return true
+}
 
 project_backup_name_valid :: proc(name: string) -> bool {
 	if len(name) != 24 || !strings.has_suffix(name, ".kine") {return false}
@@ -121,14 +148,29 @@ Project_Autosave :: proc(registry: ^Registry, L: ^vm.State, dt: f32 = 0, closing
 	descriptor := Find_Service(registry, "Project")
 	if descriptor == nil || descriptor.object == nil {return}
 	service := cast(^ProjectService)descriptor.object
-	if Project_Get_Active(service) == nil {return}
+	ready := project_finish_autosave(service, closing)
+	project := Project_Get_Active(service)
+	if project == nil {return}
 	service.autosave_elapsed += max(dt, 0)
-	if !closing && service.autosave_elapsed < PROJECT_AUTOSAVE_SECONDS {return}
+	if !closing && (!ready || service.autosave_elapsed < PROJECT_AUTOSAVE_SECONDS) {return}
 	service.autosave_elapsed = 0
 	previous := vm.GetThreadSecurityCapabilities(L)
 	vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
 	defer vm.SetThreadSecurityCapabilities(L, previous)
-	if !Project_Save_To_File(service, L) {
-		fmt.eprintln("[Project] Automatic save failed")
+	if closing {
+		if !Project_Save_To_File(service, L) {fmt.eprintln("[Project] Automatic save failed")}
+		return
 	}
+	data, ok := project_snapshot(service, L)
+	if !ok {return}
+	if worker := thread.create(project_autosave_worker); worker != nil {
+		job := new(Project_Autosave_Job)
+		job^ = {path = strings.clone(project.path), data = data}
+		worker.data = job
+		service.autosave_worker = worker
+		thread.start(worker)
+		return
+	}
+	defer delete(data)
+	if !project_write_snapshot(project.path, data) {fmt.eprintln("[Project] Automatic save failed")}
 }

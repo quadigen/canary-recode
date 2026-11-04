@@ -13,6 +13,7 @@ UIBackdrop :: struct {
 	using object:      Object,
 	enabled:           bool,
 	blur_radius:       f64,
+	transparency:      f64,
 	exponent:          f64,
 	tint_color:        datatypes.Color3,
 	tint_transparency: f64,
@@ -75,6 +76,8 @@ UIBackdrop_get :: proc(
 		vm.PushBoolean(L, backdrop.enabled)
 	case "BlurRadius":
 		vm.PushNumber(L, backdrop.blur_radius)
+	case "Transparency":
+		vm.PushNumber(L, backdrop.transparency)
 	case "Exponent":
 		vm.PushNumber(L, backdrop.exponent)
 	case "TintColor3":
@@ -125,6 +128,8 @@ UIBackdrop_set :: proc(
 		backdrop.enabled = vm.ArgBoolean(L, value_index)
 	case "BlurRadius":
 		backdrop.blur_radius = max(0.0, vm.ArgNumber(L, value_index))
+	case "Transparency":
+		backdrop.transparency = clamp(vm.ArgNumber(L, value_index), 0.0, 1.0)
 	case "Exponent":
 		backdrop.exponent = max(2.0, vm.ArgNumber(L, value_index))
 	case "TintColor3":
@@ -166,6 +171,7 @@ UIBackdrop_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst.enabled = src.enabled
 	dst.blur_radius = src.blur_radius
+	dst.transparency = src.transparency
 	dst.exponent = src.exponent
 	dst.tint_color = src.tint_color
 	dst.tint_transparency = src.tint_transparency
@@ -193,6 +199,7 @@ Register_UIBackdrop :: proc(registry: ^Registry) {
 		properties = []string {
 			"TintColor3",
 			"BlurRadius",
+			"Transparency",
 			"Exponent",
 			"Enabled",
 			"TintTransparency",

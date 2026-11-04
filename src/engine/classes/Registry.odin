@@ -6,6 +6,7 @@ import enums "../enum"
 import renderer "../renderer"
 import signals "../signals"
 import target "../target"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import luauh "../vm/luauh"
 import "base:runtime"
@@ -887,10 +888,11 @@ Push_New :: proc(
 // still holds a pointer (guand by the destroyed flag) never reads freed
 // memory.
 Flush_Pending_Destroy :: proc(registry: ^Registry) {
-	if registry == nil {
+	if registry == nil || len(registry.pending_destroy) == 0 {
 		return
 	}
 
+	tracy.ZoneNC("Flush Pending Instance Destruction", 0xD08770)
 	pending := registry.pending_destroy
 	registry.pending_destroy = nil
 
@@ -1005,6 +1007,14 @@ Step :: proc(
 
 	for target in targets {
 		if target.object != nil && !target.object.destroyed {
+			when tracy.TRACY_ENABLE {
+				if phase == .Render_3D {
+					zone := tracy.ZoneNC("Render 3D Class Instance", 0xD08770)
+					tracy.ZoneText(zone, target.object.class.name)
+					target._step(target.object, &step_context)
+					continue
+				}
+			}
 			target._step(target.object, &step_context)
 		}
 	}

@@ -10,6 +10,7 @@ import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
 import "core:os"
+import "core:time"
 import sdl "vendor:sdl3"
 
 run :: proc(script_vm: ^vm.VM, source: string) {
@@ -54,7 +55,7 @@ capture :: proc(env: ^engine_runtime.Environment, script_vm: ^vm.VM) -> Capture 
 	filament := env.renderer.Filament
 	compositor := cast(^k.KineVulkanCompositor)k.Kine_Filament_GetVulkanCompositor(filament)
 	result: Capture
-	for iteration in 0 ..< 3 {
+	for iteration in 0 ..< 600 {
 		services.Prepare_3D(&env.services, env.renderer)
 		base := cast(^k.KineSkiaSurface)k.Kine_VulkanCompositor_BeginFrame(compositor)
 		assert(base != nil)
@@ -66,7 +67,16 @@ capture :: proc(env: ^engine_runtime.Environment, script_vm: ^vm.VM) -> Capture 
 		overlay := cast(^k.KineSkiaSurface)k.Kine_VulkanCompositor_BeginOverlay(compositor)
 		assert(overlay != nil)
 		engine_runtime.Environment_Render_Overlay(env, script_vm, overlay, 320, 240, 1.0 / 60.0)
-		if iteration == 2 {
+		pending := false
+		for object in classes.Find_Class(&env.classes, "MaterialVariant").instances {
+			if !object.destroyed && (cast(^classes.MaterialVariant)object).compile_job != nil {
+				pending = true
+				break
+			}
+		}
+		terrain := cast(^services.Terrain)services.Ensure_Service(&env.services, "Terrain")
+		ready := iteration >= 2 && !pending && terrain.mesh_batch == nil && len(terrain.dirty_queue) == 0
+		if ready {
 			result.world = pixel(overlay, 160, 120)
 			result.preview = pixel(overlay, 50, 50)
 			result.signature = 14695981039346656037
@@ -77,9 +87,13 @@ capture :: proc(env: ^engine_runtime.Environment, script_vm: ^vm.VM) -> Capture 
 				}}
 		}
 		assert(k.Kine_VulkanCompositor_EndFrame(compositor) != 0)
+		if ready {
+			fmt.println("Texture capture:", result.world, result.preview, result.signature)
+			return result
+		}
+		time.sleep(time.Millisecond)
 	}
-	fmt.println("Texture capture:", result.world, result.preview, result.signature)
-	return result
+	panic("Timed out waiting for material or terrain preparation")
 }
 
 main :: proc() {
@@ -215,7 +229,7 @@ root:Destroy()
 root = loaded
 root.Parent = workspace
 variant = root:FindFirstChild("Mapped")
-assert(string.sub(variant.ColorMap,1,12) == "kineasset:
+assert(string.sub(variant.ColorMap, 1, 12) == "kineasset://")
 part = root:FindFirstChild("Part")
 `,
 	)

@@ -4,6 +4,7 @@ package classes
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:math"
 
@@ -11,6 +12,9 @@ Highlight_Class := Class_Info {
 	name   = "Highlight",
 	parent = &Instance_Class,
 }
+
+// Workspace owns the primitive meshes it shares with Highlights.
+Highlight_Part_Mesh_Provider: proc(data_model: rawptr, ctx: ^kineffi.KineFilamentContext, shape: enums.PartType) -> ^kineffi.KineFilamentMesh
 
 Highlight :: struct {
 	using object:         Object,
@@ -90,6 +94,7 @@ highlight_shape_mesh :: proc(
 		return highlight.meshes[slot]
 	}
 
+	tracy.ZoneNC("Highlight Primitive Mesh Load", 0xB48EAD)
 	data, ok := highlight_shape_glb(shape)
 	if !ok {
 		highlight.meshes[slot] = kineffi.Kine_Filament_CreateMesh(ctx, kineffi.KINE_MESH_CUBE)
@@ -276,6 +281,7 @@ highlight_part_mesh :: proc(
 	highlight: ^Highlight,
 	part: ^Part,
 	ctx: ^kineffi.KineFilamentContext,
+	data_model: rawptr,
 ) -> ^kineffi.KineFilamentMesh {
 	if Is_A(&part.object, "MeshPart") {
 
@@ -283,6 +289,12 @@ highlight_part_mesh :: proc(
 		mesh_part := cast(^MeshPart)part
 		if mesh_part.native_mesh != nil && mesh_part.native_context == ctx {
 			return mesh_part.native_mesh
+		}
+	}
+	// Cylinders use different geometry for the scene and highlight.
+	if part.shape != .Cylinder && Highlight_Part_Mesh_Provider != nil {
+		if mesh := Highlight_Part_Mesh_Provider(data_model, ctx, part.shape); mesh != nil {
+			return mesh
 		}
 	}
 	return highlight_shape_mesh(highlight, ctx, part.shape)
@@ -395,7 +407,7 @@ highlight_append_part :: proc(
 
 	if Is_A(root, "Part") {
 		part := cast(^Part)root
-		mesh := highlight_part_mesh(highlight, part, ctx.renderer.Filament)
+		mesh := highlight_part_mesh(highlight, part, ctx.renderer.Filament, ctx.data_model)
 		if mesh != nil {
 			highlight_append_part_items(
 				highlight,
@@ -438,6 +450,7 @@ highlight_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 
+	tracy.ZoneNC("Render Highlight", 0xB48EAD)
 	camera_position, have_camera := highlight_camera_position(ctx)
 
 

@@ -103,7 +103,7 @@ screen.Name = "Hud"
 local label = Instance.new("TextLabel", screen)
 label.Name = "Caption"
 label.Text = "saved"
-label.Font = Enum.Font.Code
+label.FontFace = Font.fromMemory(FontBytes)
 
 screen.Parent = game.Workspace
 SavedRoot = screen

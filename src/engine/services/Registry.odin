@@ -384,7 +384,10 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
-	when ODIN_OS != .JS {Project_Autosave(registry, L, delta_time)}
+	when ODIN_OS != .JS {
+		tracy.ZoneNC("Project Autosave", 0xD19A66)
+		Project_Autosave(registry, L, delta_time)
+	}
 	if workspace := Find_Service(registry, "Workspace");
 	   workspace != nil && workspace.object != nil {
 		(cast(^Workspace)workspace.object).water_time += f64(max(delta_time, 0))
@@ -479,9 +482,12 @@ Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 	if workspace_service == nil || workspace_service.object == nil {return}
 	if terrain_service == nil || terrain_service.object == nil {return}
 	workspace_prepare_3d(cast(^Workspace)workspace_service.object, renderer)
-	water_params := Water_Parameters(registry.data_model)
-	kineffi.Kine_Filament_SetWaterTime(renderer.Filament, Water_Time(registry.data_model))
-	kineffi.Kine_Filament_SetWaterParams(renderer.Filament, &water_params)
+	{
+		tracy.ZoneNC("Water Prepare 3D", 0xC678DD)
+		water_params := Water_Parameters(registry.data_model)
+		kineffi.Kine_Filament_SetWaterTime(renderer.Filament, Water_Time(registry.data_model))
+		kineffi.Kine_Filament_SetWaterParams(renderer.Filament, &water_params)
+	}
 	Terrain_Prepare_3D(cast(^Terrain)terrain_service.object, renderer)
 }
 

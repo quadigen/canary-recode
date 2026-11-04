@@ -86,142 +86,55 @@ workspace_construct :: proc(
 	return &workspace.object
 }
 
-workspace_ensure_meshes :: proc(
-	workspace: ^Workspace,
-	renderer: ^classes.Renderer_Object,
-) -> bool {
-	if workspace == nil || renderer == nil || renderer.Filament == nil {
-		return false
-	}
-
-	if workspace.cube_mesh == nil {
-		workspace.cube_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Block.glb"))
-	}
-
-	if workspace.water_grid_mesh == nil {
-		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
-			renderer.Filament,
-			kineffi.KINE_MESH_WATER_GRID,
-		)
-	}
-
-	if workspace.sphere_mesh == nil {
-		workspace.sphere_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Ball.glb"))
-	}
-
-	if workspace.cylinder_mesh == nil {
-		workspace.cylinder_mesh = kineffi.Kine_Filament_CreateMesh(
-			renderer.Filament,
-			kineffi.KINE_MESH_CYLINDER,
-		)
-	}
-
-	if workspace.cone_mesh == nil {
-		workspace.cone_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Cone.glb"))
-	}
-
-	if workspace.torus_mesh == nil {
-		workspace.torus_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Torus.glb"))
-	}
-
-	if workspace.pyramid_mesh == nil {
-		workspace.pyramid_mesh = load_mesh(
-			renderer.Filament,
-			#load("../assets/shapes/Pyramid.glb"),
-		)
-	}
-
-	if workspace.truss_mesh == nil {
-		workspace.truss_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Truss.glb"))
-	}
-
-	if workspace.wedge_mesh == nil {
-		workspace.wedge_mesh = load_mesh(renderer.Filament, #load("../assets/shapes/Wedge.glb"))
-	}
-
-	if workspace.triangle_wedge_mesh == nil {
-		workspace.triangle_wedge_mesh = load_mesh(
-			renderer.Filament,
-			#load("../assets/shapes/Triangle Wedge.glb"),
-		)
-	}
-
-	if workspace.corner_wedge_mesh == nil {
-		workspace.corner_wedge_mesh = load_mesh(
-			renderer.Filament,
-			#load("../assets/shapes/Corner Wedge.glb"),
-		)
-	}
-
-	if workspace.capsule_mesh == nil {
-		workspace.capsule_mesh = load_mesh(
-			renderer.Filament,
-			#load("../assets/shapes/Capsule.glb"),
-		)
-	}
-
-	return(
-		workspace.cube_mesh != nil &&
-		workspace.sphere_mesh != nil &&
-		workspace.cylinder_mesh != nil &&
-		workspace.cone_mesh != nil &&
-		workspace.torus_mesh != nil &&
-		workspace.pyramid_mesh != nil &&
-		workspace.truss_mesh != nil &&
-		workspace.wedge_mesh != nil &&
-		workspace.triangle_wedge_mesh != nil &&
-		workspace.corner_wedge_mesh != nil &&
-		workspace.capsule_mesh != nil \
-	)
-}
-
 workspace_part_mesh :: proc(
 	workspace: ^Workspace,
+	filament: ^kineffi.KineFilamentContext,
 	shape: enums.PartType,
 ) -> ^kineffi.KineFilamentMesh {
+	slot := &workspace.cube_mesh
+	data := #load("../assets/shapes/Block.glb")
+	primitive: i32
 	switch shape {
-	case .Ball:
-		return workspace.sphere_mesh
-
 	case .Block:
-		return workspace.cube_mesh
-
+	case .Ball:
+		slot, data = &workspace.sphere_mesh, #load("../assets/shapes/Ball.glb")
 	case .Cylinder:
-		return workspace.cylinder_mesh
-
+		slot, primitive = &workspace.cylinder_mesh, kineffi.KINE_MESH_CYLINDER
 	case .Wedge:
-		return workspace.wedge_mesh
-
+		slot, data = &workspace.wedge_mesh, #load("../assets/shapes/Wedge.glb")
 	case .CornerWedge:
-		return workspace.corner_wedge_mesh
-
+		slot, data = &workspace.corner_wedge_mesh, #load("../assets/shapes/Corner Wedge.glb")
 	case .Cone:
-		return workspace.cone_mesh
-
+		slot, data = &workspace.cone_mesh, #load("../assets/shapes/Cone.glb")
 	case .Pyramid:
-		return workspace.pyramid_mesh
-
+		slot, data = &workspace.pyramid_mesh, #load("../assets/shapes/Pyramid.glb")
 	case .Truss:
-		return workspace.truss_mesh
-
+		slot, data = &workspace.truss_mesh, #load("../assets/shapes/Truss.glb")
 	case .Torus:
-		return workspace.torus_mesh
-
+		slot, data = &workspace.torus_mesh, #load("../assets/shapes/Torus.glb")
 	case .TriangleWedge:
-		return workspace.triangle_wedge_mesh
-
+		slot, data = &workspace.triangle_wedge_mesh, #load("../assets/shapes/Triangle Wedge.glb")
 	case .Capsule:
-		return workspace.capsule_mesh
+		slot, data = &workspace.capsule_mesh, #load("../assets/shapes/Capsule.glb")
 	}
-
-	return workspace.cube_mesh
+	if slot^ == nil {
+		tracy.ZoneNC("Workspace Primitive Mesh Load", 0xB48EAD)
+		if primitive != 0 {
+			slot^ = kineffi.Kine_Filament_CreateMesh(filament, primitive)
+		} else {
+			slot^ = load_mesh(filament, string(data))
+		}
+	}
+	return slot^
 }
 
-workspace_water_mesh :: proc(workspace: ^Workspace) -> ^kineffi.KineFilamentMesh {
-	if workspace.water_grid_mesh != nil {
-		return workspace.water_grid_mesh
+workspace_water_mesh :: proc(workspace: ^Workspace, filament: ^kineffi.KineFilamentContext) -> ^kineffi.KineFilamentMesh {
+	if workspace.water_grid_mesh == nil {
+		tracy.ZoneNC("Workspace Water Mesh Load", 0xB48EAD)
+		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(filament, kineffi.KINE_MESH_WATER_GRID)
 	}
-	return workspace.cube_mesh
+	if workspace.water_grid_mesh == nil {return workspace_part_mesh(workspace, filament, .Block)}
+	return workspace.water_grid_mesh
 }
 
 workspace_meshpart_mesh :: proc(
@@ -234,7 +147,8 @@ workspace_meshpart_mesh :: proc(
 	if part.editable_mesh_id != 0 {
 		return workspace_editable_meshpart_mesh(part, ctx)
 	}
-	if part.mesh_id == "" {
+	mesh_path := classes.MeshPart_Source_Path(part)
+	if mesh_path == "" {
 		if part.native_mesh != nil && part.native_context != nil {
 			_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
 			part.native_mesh = nil
@@ -245,7 +159,7 @@ workspace_meshpart_mesh :: proc(
 	if part.native_mesh != nil &&
 	   part.native_context == ctx &&
 	   !part.native_is_editable &&
-	   part.native_mesh_id == part.mesh_id &&
+	   part.native_mesh_id == mesh_path &&
 	   part.native_mesh_index == part.mesh_index {
 		return part.native_mesh
 	}
@@ -256,10 +170,10 @@ workspace_meshpart_mesh :: proc(
 	}
 	tracy.ZoneNC("Workspace Load MeshPart", 0xB48EAD)
 	delete(part.native_mesh_id)
-	part.native_mesh_id = strings.clone(part.mesh_id)
+	part.native_mesh_id = strings.clone(mesh_path)
 	part.native_mesh_index = part.mesh_index
-	if data, found := assetstore.Resolve_Bytes(part.mesh_id); found && len(data) > 0 {
-		hint := assetstore.Format_Hint(part.mesh_id)
+	if data, found := assetstore.Resolve_Bytes(mesh_path); found && len(data) > 0 {
+		hint := assetstore.Format_Hint(mesh_path)
 		defer delete(hint)
 		c_hint := hint == "" ? "glb" : strings.clone_to_cstring(hint)
 		defer delete(c_hint)
@@ -277,10 +191,10 @@ workspace_meshpart_mesh :: proc(
 		return part.native_mesh
 	}
 
-	if assetstore.Is_Uri(part.mesh_id) {
-		assetstore.Report_Missing_Asset(part.mesh_id, "Part mesh")
+	if assetstore.Is_Uri(mesh_path) {
+		assetstore.Report_Missing_Asset(mesh_path, "Part mesh")
 	}
-	resolved := assetstore.Resolve_Path(part.mesh_id)
+	resolved := assetstore.Resolve_Path(mesh_path)
 	defer delete(resolved)
 	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
@@ -394,7 +308,7 @@ workspace_prepare_3d :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_
 	tracy.ZoneNC("Workspace Prepare 3D", 0xB48EAD)
 	z := profiling.Begin("Workspace Prepare 3D", 0xB48EAD)
 	if workspace == nil || !workspace_has_parts(&workspace.object) {return}
-	if !workspace_ensure_meshes(workspace, renderer) {return}
+	if renderer == nil || renderer.Filament == nil {return}
 
 	materials.init(renderer)
 
@@ -565,7 +479,7 @@ workspace_append_draw_items :: proc(
 
 		if classes.Is_A_Class(child, &classes.Part_Class) {
 			part := cast(^classes.Part)child
-			mesh := workspace_part_mesh(workspace, part.shape)
+			mesh: ^kineffi.KineFilamentMesh
 			is_meshpart := classes.Is_A_Class(child, &classes.MeshPart_Class)
 			if part.transparency >= 1.0 {
 				workspace_append_draw_items(workspace, child, renderer, items, params)
@@ -574,17 +488,10 @@ workspace_append_draw_items :: proc(
 
 			if is_meshpart {
 				mesh = workspace_meshpart_mesh(cast(^classes.MeshPart)child, renderer.Filament)
-				if mesh == nil {
-					mesh = workspace_part_mesh(workspace, part.shape)
-				}
 			}
 			cframe := part.cframe
 			size := part.size
 			render_size := datatypes.Vector3{size.x * 0.5, size.y * 0.5, size.z * 0.5}
-			if mesh != nil && mesh == workspace.cylinder_mesh {
-				// The procedural cylinder has unit diameter and unit height on local Y.
-				render_size = size
-			}
 
 			render_material, material_params := materials.Lookup(part.material)
 			material_kind := material_params.kind
@@ -598,7 +505,7 @@ workspace_append_draw_items :: proc(
 			}
 
 			if material_kind == kineffi.KINE_MAT_WATER {
-				mesh = workspace_water_mesh(workspace)
+				mesh = workspace_water_mesh(workspace, renderer.Filament)
 				render_size.x = size.x
 				render_size.y = size.y
 				render_size.z = size.z
@@ -661,7 +568,11 @@ workspace_append_draw_items :: proc(
 			}
 
 			if visible {
-
+				if mesh == nil && material_kind != kineffi.KINE_MAT_WATER {
+					mesh = workspace_part_mesh(workspace, renderer.Filament, part.shape)
+					// The procedural cylinder has unit diameter and height.
+					if part.shape == .Cylinder && mesh != nil {render_size = size}
+				}
 
 				if params != nil &&
 				   params.lod_mesh != nil &&
@@ -780,7 +691,6 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 	{
 		tracy.ZoneNC("WS Mesh Setup", 0x9CDCFE)
 		setup := profiling.Begin("WS Mesh Setup", 0x9CDCFE)
-		if !workspace_ensure_meshes(workspace, ctx.renderer) {return}
 		materials.init(ctx.renderer)
 	}
 
@@ -812,7 +722,7 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 
 			if workspace.lod_distance > 0 {
 				params.lod_distance_sq = workspace.lod_distance * workspace.lod_distance
-				params.lod_mesh = workspace.cube_mesh
+				params.lod_mesh = workspace_part_mesh(workspace, ctx.renderer.Filament, .Block)
 			}
 
 			if workspace.max_draw_distance > 0 {
@@ -1041,12 +951,15 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 	materials.shutdown(renderer)
 
 	if renderer != nil && renderer.Filament != nil {
-		if workspace.cube_mesh !=
-		   nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.cube_mesh)}
-		if workspace.sphere_mesh !=
-		   nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.sphere_mesh)}
-		if workspace.cylinder_mesh !=
-		   nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, workspace.cylinder_mesh)}
+		meshes := [?]^kineffi.KineFilamentMesh{
+			workspace.cube_mesh, workspace.sphere_mesh, workspace.cylinder_mesh,
+			workspace.cone_mesh, workspace.torus_mesh, workspace.pyramid_mesh, workspace.truss_mesh,
+			workspace.wedge_mesh, workspace.triangle_wedge_mesh, workspace.corner_wedge_mesh,
+			workspace.capsule_mesh, workspace.water_grid_mesh,
+		}
+		for mesh in meshes {
+			if mesh != nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, mesh)}
+		}
 	}
 	delete(workspace.draw_items)
 	classes.Object_Destroy(object)
@@ -1055,6 +968,11 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 
 Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 	classes.ViewportFrame_MeshPart_Provider = workspace_meshpart_mesh
+	classes.Highlight_Part_Mesh_Provider = proc(data_model: rawptr, ctx: ^kineffi.KineFilamentContext, shape: enums.PartType) -> ^kineffi.KineFilamentMesh {
+		workspace := cast(^Workspace)DataModel_Get_Service(cast(^DataModel)data_model, "Workspace")
+		if workspace == nil {return nil}
+		return workspace_part_mesh(workspace, ctx, shape)
+	}
 	classes.Register_Class(
 		registry,
 		&Workspace_Class,

@@ -1,5 +1,7 @@
 package classes
 
+import tracy "../util/odin-tracy"
+
 import sdl3 "../platform"
 
 import datatypes "../datatypes"
@@ -414,6 +416,8 @@ GuiButton_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 		if button == nil {
 			return
 		}
+		release_zone := tracy.ZoneNC("GUI Button Release", 0x61AFEF)
+		tracy.ZoneText(release_zone, button.name)
 
 		x, y, point_ok := GuiObject_pointer_point(
 			registry,

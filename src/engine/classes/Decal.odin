@@ -111,20 +111,19 @@ decal_reload_texture :: proc(decal: ^Decal, renderer: ^Renderer_Object) -> bool 
 	} else {
 
 
-		resolved := assetstore.Resolve_Path(decal.texture)
-		defer delete(resolved)
-		if resolved == "" {
-
-
-			assetstore.Report_Missing_Asset(decal.texture, "Decal texture")
-			return false
-		}
-		path := strings.clone_to_cstring(resolved)
-		defer delete(path)
-
 		width, height, channels: c.int
-
-		pixels := image.load(path, &width, &height, &channels, 4)
+		pixels: [^]u8
+		if data, found := Texture_Resolve_Bytes(decal.texture); found && len(data) > 0 {
+			pixels = image.load_from_memory(raw_data(data), c.int(len(data)), &width, &height, &channels, 4)
+		} else {
+			path := assetstore.Resolve_C_Path(decal.texture)
+			defer delete(path)
+			if path == nil {
+				assetstore.Report_Missing_Asset(decal.texture, "Decal texture")
+				return false
+			}
+			pixels = image.load(path, &width, &height, &channels, 4)
+		}
 
 		if pixels == nil {
 			return false

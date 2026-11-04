@@ -2,6 +2,7 @@ package materialmanager
 
 import kineffi "../bindings"
 import enums "../enum"
+import "base:runtime"
 
 
 builtin_material_configs := [enums.MATERIAL_COUNT]Material_Config {
@@ -335,257 +336,90 @@ builtin_material_configs := [enums.MATERIAL_COUNT]Material_Config {
 		height_scale = 0.02,
 	},
 }
-builtin_material_texture :: proc(
-	material: enums.Material,
-	height_scale: f32,
-) -> ^kineffi.KineFilamentTex {
+builtin_material_files :: proc(material: enums.Material) -> []runtime.Load_Directory_File {
 	#partial switch material {
 	case .SmoothPlastic:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/smoothplastic"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/smoothplastic")
 	case .Wood:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/wood"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/wood")
 	case .Brick:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/brick"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/brick")
 	case .Grass:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/grass"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/grass")
 	case .Concrete:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/concrete"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/concrete")
 	case .Slate:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/slate"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/slate")
 	case .Sand:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/sand"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/sand")
 	case .debug:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/debug"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/debug")
 	case .Plastic:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/plastic"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/plastic")
 	case .WoodPlanks:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/woodplanks"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/woodplanks")
 	case .Marble:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/marble"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/marble")
 	case .Basalt:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/basalt"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/basalt")
 	case .CrackedLava:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/crackedlava"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/crackedlava")
 	case .Limestone:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/limestone"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/limestone")
 	case .Granite:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/granite"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/granite")
 	case .Pavement:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/pavement"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/pavement")
 	case .Pebble:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/pebble"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/pebble")
 	case .Cobblestone:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/cobblestone"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/cobblestone")
 	case .Rock:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/rock"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/rock")
 	case .Sandstone:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/sandstone"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/sandstone")
 	case .CorrodedMetal:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/corrodedmetal"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/corrodedmetal")
 	case .DiamondPlate:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/diamondplate"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/diamondplate")
 	case .Foil:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/foil"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/foil")
 	case .Metal:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/metal"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/metal")
 	case .LeafyGrass:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/leafygrass"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/leafygrass")
 	case .Fabric:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/fabric"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/fabric")
 	case .Snow:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/snow"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/snow")
 	case .Mud:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/mud"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/mud")
 	case .Ground:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/ground"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/ground")
 	case .Asphalt:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/asphalt"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/asphalt")
 	case .Salt:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/salt"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/salt")
 	case .Ice:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/ice"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/ice")
 	case .Glacier:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/glacier"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/glacier")
 	case .Cardboard:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/cardboard"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/cardboard")
 	case .Carpet:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/carpet"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/carpet")
 	case .CeramicTiles:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/ceramictiles"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/ceramictiles")
 	case .ClayRoofTiles:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/clayrooftiles"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/clayrooftiles")
 	case .RoofShingles:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/roofshingles"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/roofshingles")
 	case .Leather:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/leather"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/leather")
 	case .Plaster:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/plaster"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/plaster")
 	case .Rubber:
-		return create_pbr_texture(
-			#load_directory("../assets/materials/compressed/rubber"),
-			active_renderer,
-			height_scale,
-		)
+		return #load_directory("../assets/materials/compressed/rubber")
 	}
 	return nil
 }

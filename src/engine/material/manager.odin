@@ -3,7 +3,9 @@ package materialmanager
 import kineffi "../bindings"
 import enums "../enum"
 import renderer "../renderer"
+import tracy "../util/odin-tracy"
 import "base:runtime"
+import "core:thread"
 import "vendor:stb/image"
 
 MATERIAL_COUNT :: enums.MATERIAL_COUNT
@@ -14,9 +16,15 @@ Decoded_Image :: struct {
 	pixels: [^]u8,
 }
 
+Texture_Decode :: struct {
+	files: []runtime.Load_Directory_File,
+	albedo, normal, orm, height: Decoded_Image,
+}
+
 Material :: struct {
 	texture:            ^kineffi.KineFilamentTex,
 	loaded:             bool,
+	decode_worker:      ^thread.Thread,
 	material_kind:      i32,
 	roughness:          f32,
 	metallic:           f32,
@@ -43,6 +51,8 @@ Material_Config :: struct {
 materials: [MATERIAL_COUNT]Material
 active_renderer: ^renderer.RendererObject
 initialized: bool
+texture_workers: int
+MAX_TEXTURE_WORKERS :: 3
 
 decode_image :: proc(data: []u8) -> Decoded_Image {
 	if len(data) == 0 {
@@ -81,66 +91,62 @@ material_from_config :: proc(config: Material_Config) -> Material {
 	}
 }
 
-create_pbr_texture :: proc(
-	loaded: []runtime.Load_Directory_File,
-	renderer_object: ^renderer.RendererObject,
-	height_scale: f32,
-) -> ^kineffi.KineFilamentTex {
-	if renderer_object == nil || renderer_object.Filament == nil {
-		return nil
-	}
-
-	albedo: Decoded_Image
-	normal: Decoded_Image
-	orm: Decoded_Image
-	height: Decoded_Image
-
-	for file in loaded {
+decode_pbr_texture :: proc(result: ^Texture_Decode) {
+	tracy.ZoneNC("Builtin Material Texture Decode", 0xB48EAD)
+	for file in result.files {
 		switch file.name {
 		case "albedo.png", "albedo.jpg", "albedo.jpeg":
-			destroy_decoded_image(&albedo)
-			albedo = decode_image(file.data)
+			destroy_decoded_image(&result.albedo)
+			result.albedo = decode_image(file.data)
 		case "normal.png", "normal.jpg", "normal.jpeg":
-			destroy_decoded_image(&normal)
-			normal = decode_image(file.data)
+			destroy_decoded_image(&result.normal)
+			result.normal = decode_image(file.data)
 		case "orm.png", "orm.jpg", "orm.jpeg":
-			destroy_decoded_image(&orm)
-			orm = decode_image(file.data)
+			destroy_decoded_image(&result.orm)
+			result.orm = decode_image(file.data)
 		case "height.png", "height.jpg", "height.jpeg":
-			destroy_decoded_image(&height)
-			height = decode_image(file.data)
+			destroy_decoded_image(&result.height)
+			result.height = decode_image(file.data)
 		}
 	}
+}
 
-	defer destroy_decoded_image(&albedo)
-	defer destroy_decoded_image(&normal)
-	defer destroy_decoded_image(&orm)
-	defer destroy_decoded_image(&height)
+texture_decode_worker :: proc(worker: ^thread.Thread) {
+	decode_pbr_texture(cast(^Texture_Decode)worker.data)
+}
 
-	if albedo.pixels == nil {
-		return nil
-	}
+destroy_texture_decode :: proc(result: ^Texture_Decode) {
+	destroy_decoded_image(&result.albedo)
+	destroy_decoded_image(&result.normal)
+	destroy_decoded_image(&result.orm)
+	destroy_decoded_image(&result.height)
+	free(result)
+}
 
-	return kineffi.Kine_Filament_CreatePbrTexFromPixels(
-		renderer_object.Filament,
-		albedo.width,
-		albedo.height,
-		albedo.width * 4,
-		albedo.pixels,
-		normal.width,
-		normal.height,
-		normal.width * 4,
-		normal.pixels,
-		orm.width,
-		orm.height,
-		orm.width * 4,
-		orm.pixels,
-		height.width,
-		height.height,
-		height.width * 4,
-		height.pixels,
-		height_scale,
+publish_pbr_texture :: proc(entry: ^Material, result: ^Texture_Decode) {
+	tracy.ZoneNC("Builtin Material Texture Upload", 0xB48EAD)
+	entry.loaded = true
+	defer destroy_texture_decode(result)
+	if active_renderer == nil || active_renderer.Filament == nil || result.albedo.pixels == nil {return}
+
+	entry.texture = kineffi.Kine_Filament_CreatePbrTexFromPixels(
+		active_renderer.Filament,
+		result.albedo.width, result.albedo.height, result.albedo.width * 4, result.albedo.pixels,
+		result.normal.width, result.normal.height, result.normal.width * 4, result.normal.pixels,
+		result.orm.width, result.orm.height, result.orm.width * 4, result.orm.pixels,
+		result.height.width, result.height.height, result.height.width * 4, result.height.pixels,
+		entry.height_scale,
 	)
+}
+
+take_texture_decode :: proc(entry: ^Material) -> ^Texture_Decode {
+	worker := entry.decode_worker
+	thread.join(worker)
+	result := cast(^Texture_Decode)worker.data
+	thread.destroy(worker)
+	entry.decode_worker = nil
+	texture_workers -= 1
+	return result
 }
 
 set_material :: proc(material: enums.Material, config: Material_Config) {
@@ -153,13 +159,22 @@ set_material :: proc(material: enums.Material, config: Material_Config) {
 }
 
 load_texture :: proc(material: enums.Material, entry: ^Material) {
-	if entry == nil || entry.loaded {
+	if entry.loaded || entry.decode_worker != nil || active_renderer == nil {return}
+	files := builtin_material_files(material)
+	if len(files) == 0 {entry.loaded = true; return}
+	if texture_workers >= MAX_TEXTURE_WORKERS {return}
+
+	result := new(Texture_Decode)
+	result.files = files
+	if worker := thread.create(texture_decode_worker); worker != nil {
+		entry.decode_worker = worker
+		texture_workers += 1
+		worker.data = result
+		thread.start(worker)
 		return
 	}
-
-	entry.texture = builtin_material_texture(material, entry.height_scale)
-
-	entry.loaded = true
+	decode_pbr_texture(result)
+	publish_pbr_texture(entry, result)
 }
 
 Get :: proc(material: enums.Material) -> ^Material {
@@ -222,8 +237,8 @@ Lookup :: proc(material: enums.Material) -> (^Material, Draw_Params) {
 		index = int(enums.Material.SmoothPlastic)
 	}
 
+	entry := Get(enums.Material(index))
 	if !draw_params_valid[index] {
-		entry := Get(enums.Material(index))
 		kind, param1, param2, param3, transmission := Draw_Parameters(entry)
 		draw_params_cache[index] = Draw_Params{kind, param1, param2, param3, transmission}
 		draw_params_valid[index] = true
@@ -239,6 +254,12 @@ init :: proc(renderer_object: ^renderer.RendererObject) {
 
 	active_renderer = renderer_object
 	if initialized {
+		for &entry in materials {
+			if entry.decode_worker != nil && thread.is_done(entry.decode_worker) {
+				publish_pbr_texture(&entry, take_texture_decode(&entry))
+				break
+			}
+		}
 		return
 	}
 
@@ -250,6 +271,10 @@ init :: proc(renderer_object: ^renderer.RendererObject) {
 shutdown :: proc(renderer_object: ^renderer.RendererObject) {
 	if !initialized {
 		return
+	}
+
+	for &entry in materials {
+		if entry.decode_worker != nil {destroy_texture_decode(take_texture_decode(&entry))}
 	}
 
 	if renderer_object != nil && renderer_object.Filament != nil {

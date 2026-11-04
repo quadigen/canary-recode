@@ -1,5 +1,6 @@
 package classes
 
+import "core:c"
 import "core:strings"
 
 import datatypes "../datatypes"
@@ -40,27 +41,24 @@ Syntax_Rule :: struct {
 }
 
 SyntaxHighlighter :: struct {
-	using object: Object,
-
-	enabled: bool,
-	language:  Syntax_Highlighting_Language,
-
-	rules:         [dynamic]Syntax_Rule,
-	rules_version: int,
-
-	cached_text:           string,
-	cached_rules_version:  int,
-	spans:                 [dynamic]Syntax_Span,
-	spans_valid:           bool,
+	using object:         Object,
+	enabled:              bool,
+	language:             Syntax_Highlighting_Language,
+	rules:                [dynamic]Syntax_Rule,
+	rules_version:        int,
+	cached_text:          string,
+	cached_rules_version: int,
+	spans:                [dynamic]Syntax_Span,
+	spans_valid:          bool,
 }
 
 SyntaxHighlighter_Init :: proc() -> SyntaxHighlighter {
 	return SyntaxHighlighter {
-		object              = Object_Init(&SyntaxHighlighter_Class, "SyntaxHighlighter"),
-		enabled             = true,
-		language            = .Luau,
+		object = Object_Init(&SyntaxHighlighter_Class, "SyntaxHighlighter"),
+		enabled = true,
+		language = .Luau,
 		cached_rules_version = -1,
-		spans_valid         = false,
+		spans_valid = false,
 	}
 }
 
@@ -198,11 +196,7 @@ syntax_highlighter_add_keyword :: proc(
 
 	append(
 		&highlighter.rules,
-		Syntax_Rule {
-			kind   = .Keyword,
-			head   = strings.clone(word),
-			color3 = color3,
-		},
+		Syntax_Rule{kind = .Keyword, head = strings.clone(word), color3 = color3},
 	)
 
 	highlighter.rules_version += 1
@@ -220,11 +214,7 @@ syntax_highlighter_add_regex :: proc(
 
 	append(
 		&highlighter.rules,
-		Syntax_Rule {
-			kind   = .Regex,
-			head   = strings.clone(pattern),
-			color3 = color3,
-		},
+		Syntax_Rule{kind = .Regex, head = strings.clone(pattern), color3 = color3},
 	)
 
 	highlighter.rules_version += 1
@@ -345,7 +335,10 @@ SyntaxHighlighter_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	highlighter := cast(^SyntaxHighlighter)object
 
 	switch method {
@@ -363,13 +356,7 @@ SyntaxHighlighter_namecall :: proc(
 			tail = vm.ArgString(L, 5)
 		}
 
-		syntax_highlighter_add_rule(
-			highlighter,
-			kind_name,
-			color3,
-			pattern,
-			tail,
-		)
+		syntax_highlighter_add_rule(highlighter, kind_name, color3, pattern, tail)
 
 		return 0, true
 
@@ -382,11 +369,7 @@ SyntaxHighlighter_namecall :: proc(
 		top := vm.StackTop(L)
 
 		for index in 3 ..= top {
-			syntax_highlighter_add_keyword(
-				highlighter,
-				vm.ArgString(L, index),
-				color3,
-			)
+			syntax_highlighter_add_keyword(highlighter, vm.ArgString(L, index), color3)
 		}
 
 		return 0, true
@@ -399,11 +382,7 @@ SyntaxHighlighter_namecall :: proc(
 		color3 := datatypes.Arg_Color3(L, 2, datatype_registry)
 		pattern := vm.ArgString(L, 3)
 
-		syntax_highlighter_add_regex(
-			highlighter,
-			color3,
-			pattern,
-		)
+		syntax_highlighter_add_regex(highlighter, color3, pattern)
 
 		return 0, true
 
@@ -419,36 +398,14 @@ Register_SyntaxHighlighter :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
 		&SyntaxHighlighter_Class,
-
 		SyntaxHighlighter_construct,
 		SyntaxHighlighter_destroy,
-
-		get =
-			SyntaxHighlighter_get,
-
-		set =
-			SyntaxHighlighter_set,
-
-		namecall =
-			SyntaxHighlighter_namecall,
-
-		clone =
-			SyntaxHighlighter_clone,
-
-		properties = []string{
-			"Enabled",
-			"Language",
-			"Rules",
-			"RuleCount",
-
-		},
-
-		methods = []string{
-			"AddRule",
-			"AddKeyword",
-			"AddRegex",
-			"ClearRules",
-		},
+		get = SyntaxHighlighter_get,
+		set = SyntaxHighlighter_set,
+		namecall = SyntaxHighlighter_namecall,
+		clone = SyntaxHighlighter_clone,
+		properties = []string{"Enabled", "Language", "Rules", "RuleCount"},
+		methods = []string{"AddRule", "AddKeyword", "AddRegex", "ClearRules"},
 	)
 }
 
@@ -457,10 +414,7 @@ syntax_highlighter_for_box :: proc(box: ^TextBox) -> ^SyntaxHighlighter {
 		return nil
 	}
 
-	child := Find_First_Child_Of_Class(
-		cast(^Object)box,
-		"SyntaxHighlighter",
-	)
+	child := Find_First_Child_Of_Class(cast(^Object)box, "SyntaxHighlighter")
 
 	if child == nil {
 		return nil
@@ -470,18 +424,15 @@ syntax_highlighter_for_box :: proc(box: ^TextBox) -> ^SyntaxHighlighter {
 }
 
 syntax_is_word_byte :: proc(value: u8) -> bool {
-	return (value >= 'a' && value <= 'z') ||
-	       (value >= 'A' && value <= 'Z') ||
-	       (value >= '0' && value <= '9') ||
-	       value == '_'
+	return(
+		(value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') ||
+		value == '_' \
+	)
 }
 
-syntax_rule_match :: proc(
-	rule: ^Syntax_Rule,
-	text: string,
-	position: int,
-	line_end: int,
-) -> int {
+syntax_rule_match :: proc(rule: ^Syntax_Rule, text: string, position: int, line_end: int) -> int {
 	if rule == nil {
 		return -1
 	}
@@ -492,8 +443,7 @@ syntax_rule_match :: proc(
 			return -1
 		}
 
-		if position > 0 &&
-		   syntax_is_word_byte(text[position - 1]) {
+		if position > 0 && syntax_is_word_byte(text[position - 1]) {
 			return -1
 		}
 
@@ -507,8 +457,7 @@ syntax_rule_match :: proc(
 			return -1
 		}
 
-		if end < len(text) &&
-		   syntax_is_word_byte(text[end]) {
+		if end < len(text) && syntax_is_word_byte(text[end]) {
 			return -1
 		}
 
@@ -555,12 +504,7 @@ syntax_rule_match :: proc(
 			return -1
 		}
 
-		end := regex_match_program(
-			rule.program,
-			text,
-			position,
-			line_end,
-		)
+		end := regex_match_program(rule.program, text, position, line_end)
 
 		if end < position {
 			return -1
@@ -581,10 +525,7 @@ syntax_rule_ensure_program :: proc(rule: ^Syntax_Rule) {
 	rule.program_loaded = true
 }
 
-syntax_highlighter_ensure :: proc(
-	highlighter: ^SyntaxHighlighter,
-	text: string,
-) {
+syntax_highlighter_ensure :: proc(highlighter: ^SyntaxHighlighter, text: string) {
 	if highlighter == nil {
 		return
 	}
@@ -625,10 +566,7 @@ syntax_highlighter_ensure :: proc(
 	highlighter.cached_rules_version = highlighter.rules_version
 }
 
-syntax_highlighter_rule_spans :: proc(
-	highlighter: ^SyntaxHighlighter,
-	text: string,
-) {
+syntax_highlighter_rule_spans :: proc(highlighter: ^SyntaxHighlighter, text: string) {
 	if highlighter == nil {
 		return
 	}
@@ -642,29 +580,19 @@ syntax_highlighter_rule_spans :: proc(
 	for position < len(text) {
 		line_end := position
 
-		for line_end < len(text) &&
-		      text[line_end] != '\n' {
+		for line_end < len(text) && text[line_end] != '\n' {
 			line_end += 1
 		}
 
 		matched := false
 
 		for &rule in highlighter.rules {
-			end := syntax_rule_match(
-				&rule,
-				text,
-				position,
-				line_end,
-			)
+			end := syntax_rule_match(&rule, text, position, line_end)
 
 			if end > position {
 				append(
 					&highlighter.spans,
-					Syntax_Span {
-						start  = position,
-						finish = end,
-						color3 = rule.color3,
-					},
+					Syntax_Span{start = position, finish = end, color3 = rule.color3},
 				)
 
 				position = end
@@ -707,10 +635,7 @@ syntax_luau_span_color :: proc(type: i32) -> (datatypes.Color3, bool) {
 	return {}, false
 }
 
-syntax_highlighter_luau_spans :: proc(
-	highlighter: ^SyntaxHighlighter,
-	text: string,
-) {
+syntax_highlighter_luau_spans :: proc(highlighter: ^SyntaxHighlighter, text: string) {
 	if highlighter == nil || len(text) == 0 {
 		return
 	}
@@ -719,6 +644,7 @@ syntax_highlighter_luau_spans :: proc(
 	defer delete(c_text)
 
 	handle := luauh.luau_lexer_create(c_text, uintptr(len(text)))
+	delete(c_text)
 
 	if handle == nil {
 		return
@@ -746,14 +672,7 @@ syntax_highlighter_luau_spans :: proc(
 			continue
 		}
 
-		append(
-			&highlighter.spans,
-			Syntax_Span {
-				start  = start,
-				finish = finish,
-				color3 = color,
-			},
-		)
+		append(&highlighter.spans, Syntax_Span{start = start, finish = finish, color3 = color})
 	}
 }
 
@@ -864,7 +783,7 @@ regex_program_destroy :: proc(program: ^Regex_Program) {
 
 regex_compile_class :: proc(pattern: string, pos: ^int) -> (Regex_Node, bool) {
 	node := Regex_Node {
-		op = .Class,
+		op  = .Class,
 		min = 1,
 		max = 1,
 	}
@@ -923,9 +842,7 @@ regex_compile_class :: proc(pattern: string, pos: ^int) -> (Regex_Node, bool) {
 			continue
 		}
 
-		if pos^ + 2 < len(pattern) &&
-		   pattern[pos^ + 1] == '-' &&
-		   pattern[pos^ + 2] != ']' {
+		if pos^ + 2 < len(pattern) && pattern[pos^ + 1] == '-' && pattern[pos^ + 2] != ']' {
 			lo := value
 			hi := pattern[pos^ + 2]
 
@@ -970,11 +887,7 @@ regex_compile_unit :: proc(pattern: string, pos: ^int) -> (Regex_Node, bool) {
 	case '(':
 		pos^ += 1
 
-		branches, branch_ok := regex_compile_alternation(
-			pattern,
-			pos,
-			')',
-		)
+		branches, branch_ok := regex_compile_alternation(pattern, pos, ')')
 
 		if !branch_ok {
 			return {}, false
@@ -1018,51 +931,51 @@ regex_compile_unit :: proc(pattern: string, pos: ^int) -> (Regex_Node, bool) {
 		switch escaped {
 		case 'd':
 			node = Regex_Node {
-				op         = .Class,
-				min        = 1,
-				max        = 1,
+				op  = .Class,
+				min = 1,
+				max = 1,
 			}
 			regex_fill_digits(&node.class_bits)
 		case 'D':
 			node = Regex_Node {
-				op         = .Class,
-				negate     = true,
-				min        = 1,
-				max        = 1,
+				op     = .Class,
+				negate = true,
+				min    = 1,
+				max    = 1,
 			}
 			regex_fill_digits(&node.class_bits)
 		case 'w':
 			node = Regex_Node {
-				op         = .Class,
-				min        = 1,
-				max        = 1,
+				op  = .Class,
+				min = 1,
+				max = 1,
 			}
 			regex_fill_letters(&node.class_bits)
 			regex_fill_digits(&node.class_bits)
 			regex_class_add(&node.class_bits, '_')
 		case 'W':
 			node = Regex_Node {
-				op         = .Class,
-				negate     = true,
-				min        = 1,
-				max        = 1,
+				op     = .Class,
+				negate = true,
+				min    = 1,
+				max    = 1,
 			}
 			regex_fill_letters(&node.class_bits)
 			regex_fill_digits(&node.class_bits)
 			regex_class_add(&node.class_bits, '_')
 		case 's':
 			node = Regex_Node {
-				op         = .Class,
-				min        = 1,
-				max        = 1,
+				op  = .Class,
+				min = 1,
+				max = 1,
 			}
 			regex_fill_whitespace(&node.class_bits)
 		case 'S':
 			node = Regex_Node {
-				op         = .Class,
-				negate     = true,
-				min        = 1,
-				max        = 1,
+				op     = .Class,
+				negate = true,
+				min    = 1,
+				max    = 1,
 			}
 			regex_fill_whitespace(&node.class_bits)
 		case 'n':
@@ -1155,7 +1068,10 @@ regex_compile_alternation :: proc(
 	pattern: string,
 	pos: ^int,
 	stop: u8,
-) -> ([dynamic][dynamic]Regex_Node, bool) {
+) -> (
+	[dynamic][dynamic]Regex_Node,
+	bool,
+) {
 	current: [dynamic]Regex_Node
 	branches: [dynamic][dynamic]Regex_Node
 
@@ -1221,36 +1137,24 @@ regex_compile :: proc(pattern: string) -> ^Regex_Program {
 	} else if len(branches) > 1 {
 		append(
 			&program.nodes,
-			Regex_Node {
-				op       = .Alternation,
-				min      = 1,
-				max      = 1,
-				branches = branches,
-			},
+			Regex_Node{op = .Alternation, min = 1, max = 1, branches = branches},
 		)
 	}
 
 	return program
 }
 
-regex_match_once :: proc(
-	node: Regex_Node,
-	text: string,
-	position: int,
-	bound: int,
-) -> int {
+regex_match_once :: proc(node: Regex_Node, text: string, position: int, bound: int) -> int {
 	switch node.op {
 	case .Char:
-		if position < bound &&
-		   text[position] == node.ch {
+		if position < bound && text[position] == node.ch {
 			return position + 1
 		}
 
 		return -1
 
 	case .Any:
-		if position < bound &&
-		   text[position] != '\n' {
+		if position < bound && text[position] != '\n' {
 			return position + 1
 		}
 
@@ -1271,21 +1175,11 @@ regex_match_once :: proc(
 		return -1
 
 	case .Group:
-		return regex_match_seq(
-			node.values[:],
-			text,
-			position,
-			bound,
-		)
+		return regex_match_seq(node.values[:], text, position, bound)
 
 	case .Alternation:
 		for branch in node.branches {
-			end := regex_match_seq(
-				branch[:],
-				text,
-				position,
-				bound,
-			)
+			end := regex_match_seq(branch[:], text, position, bound)
 
 			if end >= 0 {
 				return end
@@ -1318,22 +1212,15 @@ regex_node_ends :: proc(
 	repetitions := 0
 
 	for repetitions <= bound - position {
-		if repetitions >= node.min &&
-		   (node.max < 0 || repetitions <= node.max) {
+		if repetitions >= node.min && (node.max < 0 || repetitions <= node.max) {
 			append(&ends, current)
 		}
 
-		if node.max >= 0 &&
-		   repetitions >= node.max {
+		if node.max >= 0 && repetitions >= node.max {
 			break
 		}
 
-		next := regex_match_once(
-			node,
-			text,
-			current,
-			bound,
-		)
+		next := regex_match_once(node, text, current, bound)
 
 		if next < 0 {
 			break
@@ -1370,13 +1257,7 @@ regex_match_suffix :: proc(
 	defer delete(ends)
 
 	for end_index := len(ends) - 1; end_index >= 0; end_index -= 1 {
-		result := regex_match_suffix(
-			nodes,
-			index + 1,
-			text,
-			ends[end_index],
-			bound,
-		)
+		result := regex_match_suffix(nodes, index + 1, text, ends[end_index], bound)
 
 		if result >= 0 {
 			return result
@@ -1386,23 +1267,12 @@ regex_match_suffix :: proc(
 	return -1
 }
 
-regex_match_seq :: proc(
-	nodes: []Regex_Node,
-	text: string,
-	position: int,
-	bound: int,
-) -> int {
+regex_match_seq :: proc(nodes: []Regex_Node, text: string, position: int, bound: int) -> int {
 	if len(nodes) == 0 {
 		return position
 	}
 
-	return regex_match_suffix(
-		nodes,
-		0,
-		text,
-		position,
-		bound,
-	)
+	return regex_match_suffix(nodes, 0, text, position, bound)
 }
 
 regex_match_program :: proc(
@@ -1415,10 +1285,5 @@ regex_match_program :: proc(
 		return -1
 	}
 
-	return regex_match_seq(
-		program.nodes[:],
-		text,
-		position,
-		bound,
-	)
+	return regex_match_seq(program.nodes[:], text, position, bound)
 }

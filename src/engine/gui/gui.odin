@@ -34,6 +34,7 @@ ShadowParams :: struct {
 }
 
 BackdropParams :: struct {
+	transparency:  f32,
 	cornerRadiusX: f32,
 	cornerRadiusY: f32,
 	exponent:      f32,
@@ -421,7 +422,7 @@ drawBackdrop :: proc(surface: ^kineffi.KineSkiaSurface, rect: Rect, params: Back
 		params.displacement,
 		params.pixelate,
 		params.zoom,
-		255,
+		alphaToU8(params.transparency),
 		r,
 		g,
 		b,
