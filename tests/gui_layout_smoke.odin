@@ -157,6 +157,36 @@ b.Size = UDim2.fromOffset(50, 20)
 	run_script(
 		&script_vm,
 		`
+local frame = Instance.new("Frame")
+function refreshLayoutProperties(x)
+	frame.Position = UDim2.fromOffset(x, 20)
+	frame.Size = UDim2.fromOffset(100, 40)
+	frame.ZIndex = 3
+	frame.Visible = true
+end
+function refreshLayoutAppearance()
+	frame.BackgroundTransparency = 0.5
+end
+refreshLayoutProperties(10)
+`,
+		"gui_layout_property_refresh_setup",
+	)
+	revision := classes.gui_render_revision
+	run_script(&script_vm, "refreshLayoutProperties(10)", "gui_layout_property_refresh_same")
+	assert(classes.gui_render_revision == revision, "unchanged properties invalidated GUI layout")
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	assert(!classes.gui_layout_dirty, "layout did not settle before appearance update")
+	revision = classes.gui_render_revision
+	run_script(&script_vm, "refreshLayoutAppearance()", "gui_layout_property_refresh_appearance")
+	assert(!classes.gui_layout_dirty, "appearance update invalidated GUI layout")
+	assert(classes.gui_render_revision > revision, "appearance update did not invalidate rendering")
+	revision = classes.gui_render_revision
+	run_script(&script_vm, "refreshLayoutProperties(11)", "gui_layout_property_refresh_changed")
+	assert(classes.gui_render_revision > revision, "changed position did not invalidate GUI layout")
+
+	run_script(
+		&script_vm,
+		`
 local screen = Instance.new("ScreenGui")
 screen.Name = "ClampScreen"
 

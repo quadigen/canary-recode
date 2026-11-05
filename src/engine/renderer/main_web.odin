@@ -174,11 +174,22 @@ frame :: proc(delta_time: f64) -> bool {
 	renderer.SkiaSurface = web_state.base_surface
 	if renderer.Draw2D !=
 	   nil {renderer.Draw2D(renderer.UserData, web_state.base_surface, width, height, dt)}
-	kineffi.Kine_Skia_Surface_Flush(web_state.base_surface)
 	renderer.SkiaSurface = nil
 
 	if renderer.Draw3D != nil {renderer.Draw3D(renderer.UserData, renderer.Filament, dt)}
 	apply_viewport_rect(renderer)
+	// Clear the final viewport once, before publishing the base canvas.
+	if renderer.HasViewportRect {
+		rect := renderer.ViewportRect
+		surface := web_state.base_surface
+		kineffi.Kine_Skia_Surface_Save(surface)
+		kineffi.Kine_Skia_Surface_ClipRect(
+			surface, f32(rect[0]), f32(rect[1]), f32(rect[2]), f32(rect[3]),
+		)
+		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
+		kineffi.Kine_Skia_Surface_Restore(surface)
+	}
+	kineffi.Kine_Skia_Surface_Flush(web_state.base_surface)
 	kineffi.Kine_Filament_Viewport_RenderFrame(renderer.Filament, dt, true)
 
 	kineffi.Kine_Skia_Surface_Clear(web_state.overlay_surface, 0, 0, 0, 0)

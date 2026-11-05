@@ -86,6 +86,16 @@ KINE_SKIA_API void Kine_Skia_GL_ResetContext(KineSkiaGLContext *context);
 /* ---------------- Surface lifecycle ---------------- */
 
 KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_Create(int width, int height);
+
+/* Display lists: BeginPicture routes later draw calls into a recorded list
+   instead of the surface, EndPicture returns it, DrawPicture replays it. */
+typedef struct KineSkiaPicture KineSkiaPicture;
+KINE_SKIA_API int Kine_Skia_Surface_BeginPicture(KineSkiaSurface *surface);
+KINE_SKIA_API KineSkiaPicture *Kine_Skia_Surface_EndPicture(KineSkiaSurface *surface);
+KINE_SKIA_API void Kine_Skia_Picture_Destroy(KineSkiaPicture *picture);
+KINE_SKIA_API void Kine_Skia_Surface_DrawPicture(
+	KineSkiaSurface *surface,
+	KineSkiaPicture *picture);
 KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_CreateVulkanRenderTarget(
 	KineSkiaVulkanContext *context,
 	int width,

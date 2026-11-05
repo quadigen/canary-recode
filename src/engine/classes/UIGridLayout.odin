@@ -1,5 +1,7 @@
 package classes
 
+import "base:runtime"
+
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
@@ -158,7 +160,7 @@ ui_grid_layout_collect_items :: proc(
 			if object == nil ||
 			   object.destroyed ||
 			   object.parent != layout.object.parent ||
-			   !Is_A(object, "GuiObject") {
+			   !Is_A_Class(object, &GuiObject_Class) {
 				continue
 			}
 
@@ -207,7 +209,7 @@ UIGridLayout_Apply :: proc(layout: ^UIGridLayout, registry: ^Registry, ctx: ^Cla
 	if !layout.enabled ||
 	   layout.destroyed ||
 	   layout.object.parent == nil ||
-	   !Is_A(layout.object.parent, "GuiObject") {
+	   !Is_A_Class(layout.object.parent, &GuiObject_Class) {
 		if abs(old_cell_count.X) > 0.01 ||
 		   abs(old_cell_count.Y) > 0.01 ||
 		   abs(old_cell_size.X) > 0.01 ||
@@ -256,7 +258,11 @@ UIGridLayout_Apply :: proc(layout: ^UIGridLayout, registry: ^Registry, ctx: ^Cla
 		gui_layout_changed = true
 	}
 
-	items := make([dynamic]UIGridLayout_Item, 0, 16)
+	// Grid items are only needed for this pass.
+	scratch := runtime.default_temp_allocator_temp_begin()
+	defer runtime.default_temp_allocator_temp_end(scratch)
+	allocator := context.temp_allocator if scratch.arena != nil else context.allocator
+	items := make([dynamic]UIGridLayout_Item, 0, len(parent.object.children), allocator)
 	defer delete(items)
 
 	ui_grid_layout_collect_items(layout, registry, &items)

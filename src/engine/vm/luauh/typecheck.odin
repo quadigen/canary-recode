@@ -4,17 +4,9 @@ TYPECHECK_AVAILABLE :: ODIN_OS != .JS && !#config(KINE_ANDROID, false)
 
 when TYPECHECK_AVAILABLE {
 	when ODIN_OS == .Windows {
-		foreign import analysis {
-			"../../../../vendor/build/lib/kine_luau.lib",
-			"../../../../vendor/build/vendor/luau/Luau.Analysis.lib",
-			"../../../../vendor/build/vendor/luau/Luau.Config.lib",
-		}
+		foreign import analysis {"../../../../vendor/build/lib/kine_luau.lib", "../../../../vendor/build/vendor/luau/Luau.Analysis.lib", "../../../../vendor/build/vendor/luau/Luau.Config.lib"}
 	} else {
-		foreign import analysis {
-			"../../../../vendor/build/lib/kine_luau.a",
-			"../../../../vendor/build/vendor/luau/libLuau.Analysis.a",
-			"../../../../vendor/build/vendor/luau/libLuau.Config.a",
-		}
+		foreign import analysis {"../../../../vendor/build/lib/kine_luau.a", "../../../../vendor/build/vendor/luau/libLuau.Analysis.a", "../../../../vendor/build/vendor/luau/libLuau.Config.a", "system:stdc++", "system:m"}
 	}
 
 	foreign analysis {

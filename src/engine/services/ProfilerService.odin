@@ -37,26 +37,11 @@ frame_time_ms :: proc() -> f64 {
 FPS_WINDOW :: 30
 
 fps_value :: proc() -> f64 {
-	frames := profiling.history_frames()
-	n := min(FPS_WINDOW, len(frames))
-	if n == 0 {
+	avg_ns := profiling.average_frame_delta_ns(FPS_WINDOW)
+	if avg_ns == 0 {
 		return 0
 	}
-
-	total_ns: u64
-	counted := 0
-	for i := len(frames) - n; i < len(frames); i += 1 {
-		if frames[i].delta_ns == 0 {
-			continue
-		}
-		total_ns += frames[i].delta_ns
-		counted += 1
-	}
-	if counted == 0 {
-		return 0
-	}
-
-	avg_ms := f64(total_ns) * 1e-6 / f64(counted)
+	avg_ms := f64(avg_ns) * 1e-6
 	return 1000.0 / avg_ms
 }
 
@@ -75,6 +60,7 @@ profiler_service_get :: proc(
 	case "Paused":
 		vm.PushBoolean(L, profiling.is_capture_paused())
 	case "FrameCount":
+		profiling.set_collection_enabled(true)
 		vm.PushNumber(L, f64(profiling.frame_count()))
 	case "FrameTime":
 		vm.PushNumber(L, frame_time_ms())
@@ -112,6 +98,7 @@ profiler_service_namecall :: proc(
 		classes.Push_Object(L, Service_Get_Service(&service.service, vm.ArgString(L, 2)))
 		return 1, true
 	case "GetFrameStats":
+		profiling.set_collection_enabled(true)
 		push_frame_stats(L)
 		return 1, true
 	case "SetPaused":
@@ -121,15 +108,18 @@ profiler_service_namecall :: proc(
 		profiling.set_capture_paused(true)
 		return 0, true
 	case "GetFrameTimes":
+		profiling.set_collection_enabled(true)
 		push_frame_times(L, i64(vm.ArgNumber(L, 2)))
 		return 1, true
 	case "GetZoneHistory":
+		profiling.set_collection_enabled(true)
 		push_zone_history(L, vm.ArgString(L, 2), i64(vm.ArgNumber(L, 3)))
 		return 1, true
 	case "Resume":
 		profiling.set_capture_paused(false)
 		return 0, true
 	case "GetFrameRecord":
+		profiling.set_collection_enabled(true)
 		push_frame_record(L, i64(vm.ArgInteger(L, 2)))
 		return 1, true
 	case "GetThreads":
@@ -139,6 +129,7 @@ profiler_service_namecall :: proc(
 		push_thread_stats(L)
 		return 1, true
 	case "GetThreadHistory":
+		profiling.set_collection_enabled(true)
 		push_thread_history(L, i64(vm.ArgNumber(L, 2)))
 		return 1, true
 	case "GetScripts":

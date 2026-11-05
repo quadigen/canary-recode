@@ -40,6 +40,7 @@ TextButton :: struct {
 	text_padding: f32,
 
 	text_bounds: datatypes.Vector2,
+	render_layout: Text_Render_Layout,
 }
 
 TextButton_Init :: proc() -> TextButton {
@@ -221,6 +222,7 @@ TextButton_destroy :: proc(
 
 	label := TextButton_to_text_label(button)
 
+	text_render_layout_clear(&button.render_layout)
 	TextLabel_Destroy_Typeface(
 		&label,
 	)
@@ -292,6 +294,10 @@ TextButton_set :: proc(
 	if TextButton_is_text_property(key) {
 		label := TextButton_to_text_label(button)
 
+		if key == "Font" || key == "FontFace" ||
+		   (key == "Text" && vm.ArgString(L, value_index) != button.text) {
+			text_render_layout_clear(&button.render_layout)
+		}
 		result := TextLabel_set(
 			L,
 			&label.object,
@@ -367,10 +373,7 @@ TextButton_render :: proc(
 		}
 	}
 
-	TextLabel_render(
-		&label.object,
-		ctx,
-	)
+	text_label_render(&label, ctx, &button.render_layout)
 
 	button.text_bounds =
 		label.text_bounds
@@ -398,6 +401,7 @@ TextButton_clone :: proc(
 			dst,
 		)
 
+	text_render_layout_clear(&dst.render_layout)
 	TextLabel_clone(
 		&src_label.object,
 		&dst_label.object,

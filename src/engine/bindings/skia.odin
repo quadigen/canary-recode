@@ -7,10 +7,11 @@ when ODIN_OS == .JS {
 } else when #config(KINE_ANDROID, false) {
 	foreign import kine_skia "../../../build/android-native/lib/kine_skia_component.a"
 } else {
-	foreign import kine_skia "../../../vendor/build/lib/KinemiumLibs.a"
+	foreign import kine_skia {"../../../vendor/build/lib/KinemiumLibs.a", "system:fontconfig", "system:freetype", "system:stdc++"}
 }
 
 KineSkiaSurface :: struct {}
+KineSkiaPicture :: struct {}
 KineSkiaImage :: struct {}
 KineSkiaVulkanContext :: struct {}
 KineSkiaGLContext :: struct {}
@@ -68,6 +69,10 @@ foreign kine_skia {
 
 
 	Kine_Skia_Surface_Create :: proc(width: i32, height: i32) -> ^KineSkiaSurface ---
+	Kine_Skia_Surface_BeginPicture :: proc(surface: ^KineSkiaSurface) -> i32 ---
+	Kine_Skia_Surface_EndPicture :: proc(surface: ^KineSkiaSurface) -> ^KineSkiaPicture ---
+	Kine_Skia_Picture_Destroy :: proc(picture: ^KineSkiaPicture) ---
+	Kine_Skia_Surface_DrawPicture :: proc(surface: ^KineSkiaSurface, picture: ^KineSkiaPicture) ---
 	Kine_Skia_Surface_CreateVulkanRenderTarget :: proc(_context: ^KineSkiaVulkanContext, width: i32, height: i32, imageInfo: ^KineSkiaVulkanImageInfo) -> ^KineSkiaSurface ---
 	Kine_Skia_Surface_CreateGLRenderTarget :: proc(_context: ^KineSkiaGLContext, width: i32, height: i32, imageInfo: ^KineSkiaGLImageInfo) -> ^KineSkiaSurface ---
 	Kine_Skia_Surface_Destroy :: proc(surface: ^KineSkiaSurface) ---

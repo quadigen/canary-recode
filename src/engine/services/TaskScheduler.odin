@@ -266,6 +266,9 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 	scheduler.elapsed += f64(max(delta_time, 0))
 	current_frame := scheduler.frame
 	scheduler.frame += 1
+	if len(scheduler.tasks) == 0 {
+		return
+	}
 
 	ready: [dynamic]Scheduled_Task
 	pending: [dynamic]Scheduled_Task

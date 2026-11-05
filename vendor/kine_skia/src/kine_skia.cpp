@@ -19,6 +19,8 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathBuilder.h"
+#include "include/core/SkPicture.h"
+#include "include/core/SkPictureRecorder.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
@@ -38,6 +40,8 @@
 #include "include/android/SkAnimatedImage.h"
 #include "include/codec/SkAndroidCodec.h"
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -110,9 +114,16 @@
 #include <vector>
 
 
+struct KineSkiaSurface;
+
+/* Defined below; draw calls target the recording canvas while one is open. */
+static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface);
+
 struct KineSkiaSurface {
 	sk_sp<SkSurface> surface;
 	sk_sp<SkImage> backdrop;
+	/* When set, draw calls are recorded into this display list instead. */
+	std::unique_ptr<SkPictureRecorder> recorder;
 
 	/* Cached lens normal map for the liquid-glass backdrop displacement. */
 	sk_sp<SkImage> displacementMap;
@@ -132,10 +143,14 @@ struct KineSkiaSurface {
 #endif
 };
 
+struct KineSkiaPicture {
+	sk_sp<SkPicture> picture;
+};
+
 struct KineSkiaImage {
     bool strictSourceRect = false;
 	sk_sp<SkImage> image;
-	sk_sp<SkSVGDOM> svg;
+	sk_sp<SkPicture> svg;
 	sk_sp<SkAnimatedImage> animated;
 
 	float width = 0.0f;
@@ -250,7 +265,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
 	SkPaint paint;
 	paint.setAntiAlias(true);
 	paint.setShader(shader->builder->makeShader());
-	surface->surface->getCanvas()->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
+	kine_skia_canvas(surface)->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
 }
 
 KINE_SKIA_API const char *Kine_Skia_RuntimeShader_GetLastError(void) {
@@ -295,7 +310,7 @@ static void kine_skia_bind_ui_shader(
 		sk_sp<SkShader> backdrop;
 		SkMatrix deviceToLocal;
 		if (image &&
-			surface->surface->getCanvas()->getTotalMatrix().invert(&deviceToLocal)) {
+			kine_skia_canvas(surface)->getTotalMatrix().invert(&deviceToLocal)) {
 			backdrop = image->makeShader(SkSamplingOptions(SkFilterMode::kLinear), deviceToLocal);
 		}
 		shader->builder->child("backdrop") =
@@ -309,7 +324,7 @@ KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShader(
 	if (!surface || !surface->surface || !shader || !(width > 0 && height > 0)) {
 		return false;
 	}
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	SkAutoCanvasRestore restore(canvas, true);
 	canvas->translate(x, y);
 	kine_skia_bind_ui_shader(surface, shader, width, height, backgroundColor);
@@ -334,7 +349,7 @@ KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShader(
 	if (!surface || !surface->surface || !shader || !(width > 0 && height > 0)) {
 		return false;
 	}
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	canvas->save();
 	canvas->translate(x, y);
 	kine_skia_bind_ui_shader(surface, shader, width, height, backgroundColor);
@@ -366,6 +381,26 @@ static SkPath kine_skia_squircle_path_corners(
 	const float br = std::clamp(radiusBR, 0.0f, cap);
 	const float bl = std::clamp(radiusBL, 0.0f, cap);
 
+	const float n = exponent > 0.0f ? std::max(2.0f, exponent) : 4.0f;
+	using SquircleKey = std::array<float, 9>;
+	struct CachedSquircle {
+		SquircleKey key{};
+		SkPath path;
+		bool valid = false;
+	};
+	// Fills, clips, and shadows repeatedly use the same geometry. A bounded
+	// cache keeps the path reusable even when paint or opacity changes.
+	static thread_local std::array<CachedSquircle, 512> cache;
+	const SquircleKey key{x, y, w, h, tl, tr, br, bl, n};
+	uint32_t hash = 0;
+	for (float value : key) {
+		hash ^= std::bit_cast<uint32_t>(value) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+	}
+	auto &cached = cache[hash % cache.size()];
+	if (cached.valid && cached.key == key) {
+		return cached.path;
+	}
+
 	if (tl <= 0.0f && tr <= 0.0f && br <= 0.0f && bl <= 0.0f) {
 		SkPathBuilder rectBuilder;
 		rectBuilder.moveTo(x, y);
@@ -373,10 +408,10 @@ static SkPath kine_skia_squircle_path_corners(
 		rectBuilder.lineTo(x + w, y + h);
 		rectBuilder.lineTo(x, y + h);
 		rectBuilder.close();
-		return rectBuilder.detach();
+		cached = {key, rectBuilder.detach(), true};
+		return cached.path;
 	}
 
-	const float n = exponent > 0.0f ? std::max(2.0f, exponent) : 4.0f;
 	const float power = 2.0f / n;
 
 	SkPathBuilder builder;
@@ -407,7 +442,8 @@ static SkPath kine_skia_squircle_path_corners(
 	builder.lineTo(x, y + tl);
 	cornerTo(x + tl, y + tl, tl, 2.0f * kHalfPi, 3.0f * kHalfPi);
 	builder.close();
-	return builder.detach();
+	cached = {key, builder.detach(), true};
+	return cached.path;
 }
 
 static SkPath kine_skia_squircle_path(
@@ -481,7 +517,7 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char *fontPath) {
 	return tf;
 }
 
-static sk_sp<SkSVGDOM> kine_skia_decode_svg(
+static sk_sp<SkPicture> kine_skia_decode_svg(
 	const sk_sp<SkData> &data,
 	float *outWidth,
 	float *outHeight) {
@@ -518,7 +554,11 @@ static sk_sp<SkSVGDOM> kine_skia_decode_svg(
 		*outHeight = height;
 	}
 
-	return svg;
+	// Replay the vector drawing at the destination scale without walking the DOM again.
+	svg->setContainerSize(SkSize::Make(width, height));
+	SkPictureRecorder recorder;
+	svg->render(recorder.beginRecording(SkRect::MakeWH(width, height)));
+	return recorder.finishRecordingAsPicture();
 }
 
 static void kine_skia_draw_svg(
@@ -557,10 +597,6 @@ static void kine_skia_draw_svg(
 	// so explicitly scale the original SVG coordinate space.
 	canvas->scale(scaleX, scaleY);
 
-	// Keep the DOM at its original/intrinsic size.
-	image->svg->setContainerSize(
-		SkSize::Make(sourceWidth, sourceHeight));
-
 	if (alpha < 255) {
 		SkPaint alphaPaint;
 		alphaPaint.setAlphaf(alpha / 255.0f);
@@ -569,10 +605,10 @@ static void kine_skia_draw_svg(
 			SkRect::MakeWH(sourceWidth, sourceHeight);
 
 		canvas->saveLayer(&bounds, &alphaPaint);
-		image->svg->render(canvas);
+		canvas->drawPicture(image->svg);
 		canvas->restore();
 	} else {
-		image->svg->render(canvas);
+		canvas->drawPicture(image->svg);
 	}
 }
 
@@ -746,6 +782,57 @@ KINE_SKIA_API void Kine_Skia_GL_ResetContext(KineSkiaGLContext *context) {
 }
 
 /* ---------------- Surface lifecycle ---------------- */
+
+/* Draw calls target the recording canvas while a display list is open. */
+static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface) {
+	if (!surface) {
+		return nullptr;
+	}
+	if (surface->recorder) {
+		return surface->recorder->getRecordingCanvas();
+	}
+	return surface->surface ? surface->surface->getCanvas() : nullptr;
+}
+
+KINE_SKIA_API int Kine_Skia_Surface_BeginPicture(KineSkiaSurface *surface) {
+	if (!surface || !surface->surface || surface->recorder) {
+		return 0;
+	}
+	surface->recorder = std::make_unique<SkPictureRecorder>();
+	surface->recorder->beginRecording(SkRect::MakeWH(
+		static_cast<SkScalar>(surface->surface->width()),
+		static_cast<SkScalar>(surface->surface->height())));
+	return surface->recorder->getRecordingCanvas() ? 1 : 0;
+}
+
+KINE_SKIA_API KineSkiaPicture *Kine_Skia_Surface_EndPicture(KineSkiaSurface *surface) {
+	if (!surface || !surface->recorder) {
+		return nullptr;
+	}
+	sk_sp<SkPicture> picture = surface->recorder->finishRecordingAsPicture();
+	surface->recorder.reset();
+	if (!picture) {
+		return nullptr;
+	}
+	auto *wrapper = new KineSkiaPicture();
+	wrapper->picture = std::move(picture);
+	return wrapper;
+}
+
+KINE_SKIA_API void Kine_Skia_Picture_Destroy(KineSkiaPicture *picture) {
+	delete picture;
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawPicture(
+	KineSkiaSurface *surface,
+	KineSkiaPicture *picture) {
+	if (!surface || !surface->surface || !picture || !picture->picture) {
+		return;
+	}
+	if (SkCanvas *canvas = kine_skia_canvas(surface)) {
+		canvas->drawPicture(picture->picture);
+	}
+}
 
 KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_Create(int width, int height) {
 	if (width <= 0 || height <= 0) {
@@ -984,13 +1071,15 @@ KINE_SKIA_API void *Kine_Skia_Surface_GetPixels(KineSkiaSurface *surface) {
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface *surface) {
-	if (!surface || !surface->surface) {
+	if (!surface || !surface->surface || surface->recorder) {
 		return;
 	}
 #if KINE_SKIA_BUILD_VULKAN
 	if (surface->vulkanContext) {
+		// FlushAndSubmit already flushes the context and submits its pending
+		// work; a second GrDirectContext::flushAndSubmit only adds an empty
+		// queue submission and fence per frame.
 		skgpu::ganesh::FlushAndSubmit(surface->surface.get());
-		surface->vulkanContext->flushAndSubmit();
 	}
 #endif
 #if KINE_SKIA_BUILD_GL
@@ -1077,7 +1166,7 @@ KINE_SKIA_API void Kine_Skia_Surface_Clear(
 	if (!surface || !surface->surface) {
 		return;
 	}
-	surface->surface->getCanvas()->clear(SkColorSetARGB(a, r, g, b));
+	kine_skia_canvas(surface)->clear(SkColorSetARGB(a, r, g, b));
 }
 
 /* ---------------- Shapes ---------------- */
@@ -1092,7 +1181,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRect(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
+	kine_skia_canvas(surface)->drawRect(SkRect::MakeXYWH(x, y, width, height), paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawRotatedRect(
@@ -1104,7 +1193,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRotatedRect(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	SkAutoCanvasRestore restore(canvas, true);
 	canvas->rotate(rotationDegrees, centerX, centerY);
 	canvas->drawRect(
@@ -1118,7 +1207,7 @@ KINE_SKIA_API void Kine_Skia_Surface_BeginEdgeFade(
 	if (!surface || !surface->surface || width <= 0.0f || height <= 0.0f)
 		return;
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	const SkRect bounds = SkRect::MakeXYWH(x, y, width, height);
 
 	canvas->save();
@@ -1133,7 +1222,7 @@ KINE_SKIA_API void Kine_Skia_Surface_EndEdgeFade(
 	if (!surface || !surface->surface || width <= 0.0f || height <= 0.0f)
 		return;
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 
 	auto applyMask = [&](SkRect rect, SkPoint p0, SkPoint p1, SkColor from, SkColor to) {
 		const SkPoint pts[2] = {p0, p1};
@@ -1195,7 +1284,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRoundRect(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawRRect(
+	kine_skia_canvas(surface)->drawRRect(
 		SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, width, height), radiusX, radiusY),
 		paint);
 }
@@ -1211,7 +1300,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawSquircle(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawPath(
+	kine_skia_canvas(surface)->drawPath(
 		kine_skia_squircle_path(x, y, width, height, radius, exponent),
 		paint);
 }
@@ -1228,7 +1317,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawSquircleCorners(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawPath(
+	kine_skia_canvas(surface)->drawPath(
 		kine_skia_squircle_path_corners(
 			x, y, width, height, radiusTL, radiusTR, radiusBR, radiusBL, exponent),
 		paint);
@@ -1259,15 +1348,15 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawUIShadow(
 	const float sh = height + spread * 2.0f;
 	const float sr = std::max(0.0f, radius + spread);
 	if (exponent > 2.0f && sr > 0.0f) {
-		surface->surface->getCanvas()->drawPath(
+		kine_skia_canvas(surface)->drawPath(
 			kine_skia_squircle_path(sx, sy, sw, sh, sr, exponent),
 			paint);
 	} else if (sr > 0.0f) {
-		surface->surface->getCanvas()->drawRRect(
+		kine_skia_canvas(surface)->drawRRect(
 			SkRRect::MakeRectXY(SkRect::MakeXYWH(sx, sy, sw, sh), sr, sr),
 			paint);
 	} else {
-		surface->surface->getCanvas()->drawRect(SkRect::MakeXYWH(sx, sy, sw, sh), paint);
+		kine_skia_canvas(surface)->drawRect(SkRect::MakeXYWH(sx, sy, sw, sh), paint);
 	}
 }
 
@@ -1411,7 +1500,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	const SkRect rect = SkRect::MakeXYWH(x, y, width, height);
 
 	SkRect src = rect;
@@ -1561,7 +1650,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawMagnifierRect(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	const SkRect rect = SkRect::MakeXYWH(x, y, width, height);
 	const SkSamplingOptions sampling(SkFilterMode::kLinear);
 	const SkRect backdropBounds = SkRect::Make(surface->backdrop->bounds());
@@ -1594,7 +1683,7 @@ KINE_SKIA_API void Kine_Skia_Surface_BeginMotionBlur(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	canvas->save();
 	surface->motionBlurSaves = 1;
 
@@ -1663,7 +1752,7 @@ KINE_SKIA_API void Kine_Skia_Surface_EndMotionBlur(KineSkiaSurface *surface) {
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	for (int i = 0; i < surface->motionBlurSaves; ++i) {
 		canvas->restore();
 	}
@@ -1682,7 +1771,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurRect(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	SkRect rect = SkRect::MakeXYWH(x, y, width, height);
 	canvas->save();
 	if (radiusX > 0.0f || radiusY > 0.0f) {
@@ -1727,7 +1816,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurSquircle(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	SkRect rect = SkRect::MakeXYWH(x, y, width, height);
 	canvas->save();
 	canvas->clipPath(kine_skia_squircle_path(x, y, width, height, radius, exponent), true);
@@ -1766,7 +1855,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawCircle(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawCircle(cx, cy, radius, paint);
+	kine_skia_canvas(surface)->drawCircle(cx, cy, radius, paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawOval(
@@ -1779,7 +1868,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawOval(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawOval(SkRect::MakeXYWH(x, y, width, height), paint);
+	kine_skia_canvas(surface)->drawOval(SkRect::MakeXYWH(x, y, width, height), paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawArc(
@@ -1793,7 +1882,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawArc(
 	}
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawArc(
+	kine_skia_canvas(surface)->drawArc(
 		SkRect::MakeXYWH(x, y, width, height),
 		startAngle, sweepAngle, useCenter != 0, paint);
 }
@@ -1813,7 +1902,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawLine(
 	paint.setStyle(SkPaint::kStroke_Style);
 	paint.setStrokeWidth(strokeWidth);
 
-	surface->surface->getCanvas()->drawLine(x0, y0, x1, y1, paint);
+	kine_skia_canvas(surface)->drawLine(x0, y0, x1, y1, paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawPolygon(
@@ -1837,7 +1926,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawPolygon(
 	SkPath path = builder.detach();
 
 	SkPaint paint = kine_skia_paint(r, g, b, a, strokeWidth);
-	surface->surface->getCanvas()->drawPath(path, paint);
+	kine_skia_canvas(surface)->drawPath(path, paint);
 }
 
 /* ---------------- Transform stack ---------------- */
@@ -1845,31 +1934,31 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawPolygon(
 KINE_SKIA_API void Kine_Skia_Surface_Save(KineSkiaSurface *surface) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->save();
+	kine_skia_canvas(surface)->save();
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Restore(KineSkiaSurface *surface) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->restore();
+	kine_skia_canvas(surface)->restore();
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Translate(KineSkiaSurface *surface, float dx, float dy) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->translate(dx, dy);
+	kine_skia_canvas(surface)->translate(dx, dy);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Rotate(KineSkiaSurface *surface, float degrees) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->rotate(degrees);
+	kine_skia_canvas(surface)->rotate(degrees);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Scale(KineSkiaSurface *surface, float sx, float sy) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->scale(sx, sy);
+	kine_skia_canvas(surface)->scale(sx, sy);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_ClipRect(
@@ -1877,7 +1966,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipRect(
 	float x, float y, float width, float height) {
 	if (!surface || !surface->surface)
 		return;
-	surface->surface->getCanvas()->clipRect(SkRect::MakeXYWH(x, y, width, height));
+	kine_skia_canvas(surface)->clipRect(SkRect::MakeXYWH(x, y, width, height));
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_ClipRoundRect(
@@ -1890,7 +1979,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipRoundRect(
 	SkRRect rrect = SkRRect::MakeRectXY(
 		SkRect::MakeXYWH(x, y, width, height), radiusX, radiusY);
 
-	surface->surface->getCanvas()->clipRRect(rrect, /*doAntiAlias=*/true);
+	kine_skia_canvas(surface)->clipRRect(rrect, /*doAntiAlias=*/true);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
@@ -1900,7 +1989,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
 	if (!surface || !surface->surface || width <= 0.0f || height <= 0.0f)
 		return;
 
-	surface->surface->getCanvas()->clipPath(
+	kine_skia_canvas(surface)->clipPath(
 		kine_skia_squircle_path(x, y, width, height, radius, exponent),
 		/*doAntiAlias=*/true);
 }
@@ -1913,7 +2002,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipSquircleCorners(
 	if (!surface || !surface->surface || width <= 0.0f || height <= 0.0f)
 		return;
 
-	surface->surface->getCanvas()->clipPath(
+	kine_skia_canvas(surface)->clipPath(
 		kine_skia_squircle_path_corners(
 			x, y, width, height, radiusTL, radiusTR, radiusBR, radiusBL, exponent),
 		/*doAntiAlias=*/true);
@@ -1950,7 +2039,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawText(
 	paint.setAntiAlias(true);
 	paint.setColor(SkColorSetARGB(a, r, g, b));
 
-	surface->surface->getCanvas()->drawTextBlob(blob, x, y, paint);
+	kine_skia_canvas(surface)->drawTextBlob(blob, x, y, paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
@@ -2017,7 +2106,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
 				blurSigma));
 	}
 
-	surface->surface->getCanvas()->drawTextBlob(
+	kine_skia_canvas(surface)->drawTextBlob(
 		blob,
 		x + offsetX,
 		y + offsetY,
@@ -2486,7 +2575,7 @@ KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_LoadFromFile(const char *path) {
 	float width = 0.0f;
 	float height = 0.0f;
 
-	sk_sp<SkSVGDOM> svg = kine_skia_decode_svg(
+	sk_sp<SkPicture> svg = kine_skia_decode_svg(
 		data,
 		&width,
 		&height);
@@ -2538,7 +2627,7 @@ KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_LoadFromMemory(
 	float width = 0.0f;
 	float height = 0.0f;
 
-	sk_sp<SkSVGDOM> svg = kine_skia_decode_svg(
+	sk_sp<SkPicture> svg = kine_skia_decode_svg(
 		skData,
 		&width,
 		&height);
@@ -2635,7 +2724,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImage(
 
 	if (image->svg) {
 		kine_skia_draw_svg(
-			surface->surface->getCanvas(),
+			kine_skia_canvas(surface),
 			image,
 			x,
 			y,
@@ -2657,7 +2746,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImage(
 		paint.setAlphaf(alpha / 255.0f);
 	}
 
-	surface->surface->getCanvas()->drawImage(
+	kine_skia_canvas(surface)->drawImage(
 		image->image,
 		x,
 		y,
@@ -2685,7 +2774,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
 
 	if (image->svg) {
 		kine_skia_draw_svg(
-			surface->surface->getCanvas(),
+			kine_skia_canvas(surface),
 			image,
 			x,
 			y,
@@ -2710,7 +2799,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageSized(
 	const SkRect dst =
 		SkRect::MakeXYWH(x, y, width, height);
 
-	surface->surface->getCanvas()->drawImageRect(
+	kine_skia_canvas(surface)->drawImageRect(
 		image->image,
 		dst,
 		SkSamplingOptions(SkFilterMode::kLinear),
@@ -2747,7 +2836,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawPixels(
 	if (alpha < 255)
 		paint.setAlphaf(alpha / 255.0f);
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	canvas->save();
 	if (flipY) {
 		canvas->translate(x, y + height);
@@ -2785,7 +2874,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageOutlineSized(
 	SkRect dst = SkRect::MakeXYWH(x, y, width, height);
 	SkRect layerBounds = dst;
 	layerBounds.outset(thickness, thickness);
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 
 	SkPaint outlinePaint;
 	outlinePaint.setAntiAlias(true);
@@ -2837,7 +2926,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageShadow(
 		return;
 	}
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 
 	const SkRect srcRect =
 		SkRect::MakeXYWH(x, y, width, height);
@@ -3072,7 +3161,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageBlurredSized(
 	}
 
 	SkCanvas *canvas =
-		surface->surface->getCanvas();
+		kine_skia_canvas(surface);
 
 	const SkRect dst =
 		SkRect::MakeXYWH(
@@ -3159,7 +3248,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageRect(
 	SkRect src = SkRect::MakeXYWH(srcX, srcY, srcWidth, srcHeight);
 	SkRect dst = SkRect::MakeXYWH(dstX, dstY, dstWidth, dstHeight);
 
-	surface->surface->getCanvas()->drawImageRect(
+	kine_skia_canvas(surface)->drawImageRect(
 		image->image, src, dst,
 		SkSamplingOptions(SkFilterMode::kLinear),
 		&paint,
@@ -3183,7 +3272,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageScaled(
 
 	kine_skia_image_advance_animation(image);
 
-	SkCanvas *canvas = surface->surface->getCanvas();
+	SkCanvas *canvas = kine_skia_canvas(surface);
 	const SkRect dst = SkRect::MakeXYWH(dstX, dstY, dstWidth, dstHeight);
 
 	const bool hasTint = colorA > 0 && !(r == 255 && g == 255 && b == 255);

@@ -16,6 +16,86 @@ import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 
+// A recorded Skia display list for one GUI pass. Replaying it skips the whole
+// class traversal when nothing that feeds the pass has changed.
+Gui_Display_List :: struct {
+	environment:    ^Environment,
+	picture:        ^kineffi.KineSkiaPicture,
+	revision:       u64,
+	scene_revision: u64,
+	// State seen on the previous miss. Recording only starts when the same
+	// state shows up twice in a row, so a GUI that changes every frame never
+	// pays for building a display list it cannot reuse.
+	last_revision:       u64,
+	last_scene_revision: u64,
+	probed:              bool,
+	surface:        ^renderer.Skia_Surface,
+	width:          i32,
+	height:         i32,
+	valid:          bool,
+}
+
+@(private)
+gui_step_display_list: Gui_Display_List
+@(private)
+gui_overlay_display_list: Gui_Display_List
+
+
+gui_display_list_stable :: proc(
+	cache: ^Gui_Display_List,
+	revision, scene_revision: u64,
+) -> bool {
+	stable :=
+		cache.probed &&
+		cache.last_revision == revision &&
+		cache.last_scene_revision == scene_revision
+	cache.probed = true
+	cache.last_revision = revision
+	cache.last_scene_revision = scene_revision
+	return stable
+}
+
+
+gui_display_list_matches :: proc(
+	cache: ^Gui_Display_List,
+	environment: ^Environment,
+	surface: ^renderer.Skia_Surface,
+	width, height: i32,
+	revision, scene_revision: u64,
+) -> bool {
+	return cache.valid &&
+		cache.environment == environment &&
+		cache.surface == surface &&
+		cache.width == width &&
+		cache.height == height &&
+		cache.revision == revision &&
+		cache.scene_revision == scene_revision &&
+		cache.picture != nil
+}
+
+
+gui_display_list_store :: proc(
+	cache: ^Gui_Display_List,
+	environment: ^Environment,
+	surface: ^renderer.Skia_Surface,
+	width, height: i32,
+	revision, scene_revision: u64,
+	picture: ^kineffi.KineSkiaPicture,
+) {
+	if cache.picture != nil {kineffi.Kine_Skia_Picture_Destroy(cache.picture)}
+	cache^ = {
+		environment    = environment,
+		picture        = picture,
+		revision       = revision,
+		scene_revision = scene_revision,
+		surface        = surface,
+		width          = width,
+		height         = height,
+		valid          = picture != nil,
+	}
+}
+
+
 Environment :: struct {
 	classes:    classes.Registry,
 	datatypes:  datatypes.Registry,
@@ -28,6 +108,33 @@ Environment :: struct {
 	packages:   packages.Registry,
 	extensions: extensions.Context,
 	mode:       target.Mode,
+
+	// 3D idle tracking: the renderer only asks Filament to render when one of
+	// these differs from the revision captured after the last rendered frame.
+	render_3d_revision_drawn: u64,
+	render_3d_drawn:          bool,
+	render_3d_viewport:       [4]i32,
+}
+
+
+// True when the 3D scene changed since the last time the renderer drew it.
+Environment_3D_Dirty :: proc(environment: ^Environment) -> bool {
+	if environment == nil {return true}
+	revision := classes.Render_3D_Revision()
+	viewport := [4]i32{}
+	if environment.renderer != nil {
+		viewport = environment.renderer.ViewportRect
+	}
+	changed :=
+		!environment.render_3d_drawn ||
+		revision != environment.render_3d_revision_drawn ||
+		viewport != environment.render_3d_viewport
+	if changed {
+		environment.render_3d_drawn = true
+		environment.render_3d_revision_drawn = revision
+		environment.render_3d_viewport = viewport
+	}
+	return changed
 }
 
 install_classes :: proc(vm_state: ^vm.VM, ctx: rawptr) {
@@ -263,6 +370,10 @@ Environment_SetEvent :: proc(environment: ^Environment, vm_state: ^vm.VM, event:
 		scale_event_coords(&event)
 	}
 
+	// Hover / focus / cursor state can change what the GUI draws without a
+	// property write, so any event invalidates the cached 2D display list.
+	classes.Gui_Render_Mark_Dirty()
+
 	packages.Set_Event(&environment.packages, event)
 
 	classes.GuiObject_Handle_Event(&environment.classes, vm_state.L, event)
@@ -385,15 +496,69 @@ Environment_Render_2D :: proc(
 	}
 
 	{
+		tracy.ZoneNC("Classes Step .Render2D", 0xD08770)
+		z := profiling.Begin("Classes Step .Render2D", 0xD08770)
 		classes.ViewportFrame_Prepare_All(
 			&environment.classes,
 			virtual_width,
 			virtual_height,
 			delta_time,
 		)
-		tracy.ZoneNC("Classes Step .Render2D", 0xD08770)
-		z := profiling.Begin("Classes Step .Render2D", 0xD08770)
-		classes.Step(&environment.classes, vm_state.L, delta_time, virtual_width, virtual_height)
+
+		skia := cast(^kineffi.KineSkiaSurface)surface
+		cache := &gui_step_display_list
+		revision := classes.Gui_Render_Revision()
+		scene_revision := classes.Render_3D_Revision()
+		animated := classes.Gui_Render_Consume_Animated()
+		if environment.renderer.Cache2D &&
+		   !animated &&
+		   gui_display_list_matches(
+			cache,
+			environment,
+			surface,
+			width,
+			height,
+			revision,
+			scene_revision,
+		) {
+			kineffi.Kine_Skia_Surface_DrawPicture(skia, cache.picture)
+		} else {
+			recording :=
+			environment.renderer.Cache2D &&
+			!animated &&
+			gui_display_list_stable(cache, revision, scene_revision) &&
+			kineffi.Kine_Skia_Surface_BeginPicture(skia) != 0
+			classes.Step(
+				&environment.classes,
+				vm_state.L,
+				delta_time,
+				virtual_width,
+				virtual_height,
+			)
+			if recording {
+				picture := kineffi.Kine_Skia_Surface_EndPicture(skia)
+				// The recording frame never touched the real surface, so replay the
+				// fresh display list once to draw what this frame should show.
+				if picture != nil {kineffi.Kine_Skia_Surface_DrawPicture(skia, picture)}
+				if picture != nil &&
+				   classes.Gui_Render_Revision() == revision &&
+				   classes.Render_3D_Revision() == scene_revision {
+					gui_display_list_store(
+						cache,
+						environment,
+						surface,
+						width,
+						height,
+						revision,
+						scene_revision,
+						picture,
+					)
+				} else {
+					if picture != nil {kineffi.Kine_Skia_Picture_Destroy(picture)}
+					cache.valid = false
+				}
+			}
+		}
 	}
 
 	{
@@ -426,6 +591,31 @@ Environment_Render_Overlay :: proc(
 	ui_scaled := ui_scale_begin(surface, scale, inset_x, inset_y)
 	defer ui_scale_end(surface, ui_scaled)
 
+	skia := cast(^kineffi.KineSkiaSurface)surface
+	cache := &gui_overlay_display_list
+	revision := classes.Gui_Render_Revision()
+	scene_revision := classes.Render_3D_Revision()
+	animated := classes.Gui_Render_Is_Animated()
+	if environment.renderer.Cache2D &&
+	   !animated &&
+	   gui_display_list_matches(
+		cache,
+		environment,
+		surface,
+		width,
+		height,
+		revision,
+		scene_revision,
+	) {
+		kineffi.Kine_Skia_Surface_DrawPicture(skia, cache.picture)
+		return
+	}
+
+	recording :=
+		environment.renderer.Cache2D &&
+		!animated &&
+		gui_display_list_stable(cache, revision, scene_revision) &&
+		kineffi.Kine_Skia_Surface_BeginPicture(skia) != 0
 	{
 		tracy.ZoneNC("Classes Step .Overlay", 0xD08770)
 		z := profiling.Begin("Classes Step .Overlay", 0xD08770)
@@ -437,5 +627,26 @@ Environment_Render_Overlay :: proc(
 			virtual_height,
 			gui_overlay = true,
 		)
+	}
+	if recording {
+		picture := kineffi.Kine_Skia_Surface_EndPicture(skia)
+		if picture != nil {kineffi.Kine_Skia_Surface_DrawPicture(skia, picture)}
+		if picture != nil &&
+		   classes.Gui_Render_Revision() == revision &&
+		   classes.Render_3D_Revision() == scene_revision {
+			gui_display_list_store(
+				cache,
+				environment,
+				surface,
+				width,
+				height,
+				revision,
+				scene_revision,
+				picture,
+			)
+		} else {
+			if picture != nil {kineffi.Kine_Skia_Picture_Destroy(picture)}
+			cache.valid = false
+		}
 	}
 }

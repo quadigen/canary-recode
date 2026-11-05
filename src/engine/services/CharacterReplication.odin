@@ -50,6 +50,7 @@ character_send_input :: proc(service: ^ReplicatorService) -> bool {
 	}
 	bytes: [dynamic]u8
 	defer delete(bytes)
+
 	replication_put_u32(&bytes, characters.input_sequence)
 	replication_put_f32(&bytes, direction.x)
 	replication_put_f32(&bytes, direction.z)

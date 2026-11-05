@@ -3,6 +3,7 @@
 #include "kine_vulkan_compositor.h"
 #include <SDL3/SDL.h>
 #include <filament/Engine.h>
+#include <math/mat4.h>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -192,6 +193,30 @@ int main() {
     Kine_Filament_Viewport_Stats(ctx,&alive,&pages,&renders);check(pages==pageHighWater,"empty atlas pages are recycled across size buckets");
     Kine_Filament_Viewport_Destroy(resized);
     Kine_Filament_DestroyMesh(ctx,mesh);
+
+    // Submit without pixel readbacks so previous frames can still be in flight.
+    for (int i = 0; i < 12; ++i) {
+        auto *surface = static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
+        check(surface, "begin in-flight frame");
+        Kine_Skia_Surface_Clear(surface, 20, 30, 40, 255);
+        if (i % 2 == 0) {
+            Kine_Filament_Viewport_Begin(ctx);
+            Kine_Filament_Viewport_RenderFrame(ctx, 1.0f / 60.0f, true);
+        }
+        if (i % 3 == 0) {
+            check(Kine_VulkanCompositor_BeginOverlay(compositor), "begin in-flight overlay");
+        }
+        check(Kine_VulkanCompositor_EndFrame(compositor), "present in-flight frame");
+    }
+    check(SDL_SetWindowSize(window, 640, 320), "resize in-flight window");
+    SDL_SyncWindow(window);
+    Kine_Filament_Resize(ctx, 640, 320);
+    compositor = static_cast<KineVulkanCompositor *>(Kine_Filament_GetVulkanCompositor(ctx));
+    auto *resizedSurface = static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
+    check(resizedSurface, "begin frame after swapchain resize");
+    Kine_Skia_Surface_Clear(resizedSurface, 20, 30, 40, 255);
+    check(Kine_VulkanCompositor_EndFrame(compositor), "present after swapchain resize");
+
     double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     std::printf("VIEWPORT_GPU_SMOKE_PASSED 1000 handles, 128 visible, one page; setup+checks %.2f ms\n",ms);
     Kine_Filament_Destroy(ctx);SDL_DestroyWindow(window);SDL_Quit();return 0;

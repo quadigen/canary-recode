@@ -83,6 +83,11 @@ Class_Step_Phase :: enum {
 	Render_2D,
 }
 
+Gui_Render_Transform :: struct {
+	object: ^Object,
+	x, y, width, height: f32,
+}
+
 Class_Step_Context :: struct {
 	L:               ^vm.State,
 	delta_time:      f32,
@@ -91,6 +96,7 @@ Class_Step_Context :: struct {
 	viewport_width:  i32,
 	viewport_height: i32,
 	gui_overlay:     bool,
+	gui_transform:   Gui_Render_Transform,
 }
 
 Class_Step :: proc(object: ^Object, ctx: ^Class_Step_Context)
@@ -394,6 +400,7 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		// Funnelling here means every class gets change signals for free,
 		// without each setter having to remember to fire its own.
 		surfacegui_mark_dirty_for(object)
+		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
 		Object_Fire_Property_Changed(object, key)
 		return true
@@ -401,6 +408,7 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 
 	if Object_Set_Property(L, value, ctx, key, value_index) {
 		surfacegui_mark_dirty_for(object)
+		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
 		Object_Fire_Property_Changed(object, key)
 		return true

@@ -539,7 +539,10 @@
     Kine_Filament_DrawMeshListVersioned: (cid, ptr, count) => filament.Kine_Filament_DrawMeshList(cid, ptr, count),
     Kine_Filament_RenderFrame: cid => { const c = filamentContexts.get(cid); if (c) { const t = performance.now(); stats.frames++; for (const mesh of filamentMeshes.values()) { for (let i = mesh.used; i < mesh.nodes.length; i++) { const nd = mesh.nodes[i]; if (nd && nd.inScene) { c.scene.remove(nd.entity); nd.inScene = false; } } mesh.used = 0; } c.renderer.render(c.swap, c.view); c.engine.execute(); stats.renderMs = performance.now() - t; } },
     Kine_Filament_Resize: (cid, w, h) => { const c = filamentContexts.get(cid); if (c) { filamentEl.width = w; filamentEl.height = h; c.view.setViewport([0, 0, w, h]); c.camera.setProjectionFov(60, w / h, .1, 1000, Filament.Camera$Fov.VERTICAL); } },
-    Kine_Filament_SetViewport: (cid, x, y, w, h) => { const c = filamentContexts.get(cid); if (c) c.view.setViewport([x, height() - y - h, w, h]); const s = [...surfaces.values()][0]; if (s) { s.canvas.save(); s.canvas.clipRect(rect(x, y, w, h), CanvasKit.ClipOp.Intersect, false); s.canvas.clear(CanvasKit.TRANSPARENT); s.canvas.restore(); s.surface.flush(); } },
+    Kine_Filament_SetViewport: (cid, x, y, w, h) => {
+      const c = filamentContexts.get(cid);
+      if (c) c.view.setViewport([x, height() - y - h, w, h]);
+    },
     Kine_Filament_SetCameraPerspective: (cid, fov, aspect, near, far) => filamentContexts.get(cid)?.camera.setProjectionFov(fov, aspect, near, far, Filament.Camera$Fov.VERTICAL),
     Kine_Filament_SetCameraLookAt: (cid, ex, ey, ez, tx, ty, tz, ux, uy, uz) => filamentContexts.get(cid)?.camera.lookAt([ex, ey, ez], [tx, ty, tz], [ux, uy, uz]),
     Kine_Filament_CreateSky: (cid, r, g, b, a) => { const c = filamentContexts.get(cid); if (c) setSkybox(c, r, g, b, a > 0 ? a : 1); },

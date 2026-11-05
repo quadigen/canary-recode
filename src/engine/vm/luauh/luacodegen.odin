@@ -7,14 +7,10 @@ when ODIN_OS == .Windows {
 } else when #config(KINE_ANDROID, false) {
 	foreign import lib "../../../../build/android-native/luau/libLuau.CodeGen.a"
 } else {
-	foreign import lib {
-		"../../../../vendor/build/vendor/luau/libLuau.CodeGen.a",
-		"../../../../vendor/build/vendor/luau/libLuau.VM.a",
-		"../../../../vendor/build/vendor/luau/libLuau.Common.a",
-	}
+	foreign import lib {"../../../../vendor/build/vendor/luau/libLuau.CodeGen.a", "../../../../vendor/build/vendor/luau/libLuau.VM.a", "../../../../vendor/build/vendor/luau/libLuau.Common.a", "system:stdc++", "system:m"}
 }
 
-@(default_calling_convention="c")
+@(default_calling_convention = "c")
 foreign lib {
 	// returns 1 if Luau code generator is supported, 0 otherwise
 	luau_codegen_supported :: proc() -> i32 ---
@@ -25,4 +21,3 @@ foreign lib {
 	// build target function and all inner functions
 	luau_codegen_compile :: proc(L: ^lua_State, idx: i32) ---
 }
-

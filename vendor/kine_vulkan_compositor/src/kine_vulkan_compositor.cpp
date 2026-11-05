@@ -18,6 +18,28 @@
 #include <string>
 #include <vector>
 
+struct KineVulkanFrameSlot {
+    // acquire: PRESENT -> COLOR_ATTACHMENT transition for one frame
+    // handoff: Skia -> Filament memory barrier
+    // present: COLOR_ATTACHMENT -> PRESENT transition and final submission
+    VkCommandBuffer acquire = VK_NULL_HANDLE;
+    VkCommandBuffer handoff = VK_NULL_HANDLE;
+    VkCommandBuffer present = VK_NULL_HANDLE;
+    VkFence finished = VK_NULL_HANDLE;
+    bool inFlight = false;
+};
+
+struct KineVulkanFrame {
+    // Two submission slots per swapchain image. While the GPU still executes a
+    // slot's commands, the CPU records the next frame into the other slot
+    // instead of blocking in BeginFrame.
+    static constexpr uint32_t SlotCount = 2;
+    KineVulkanFrameSlot slots[SlotCount];
+    uint32_t nextSlot = 0;
+    KineSkiaSurface* base = nullptr;
+    KineSkiaSurface* overlay = nullptr;
+};
+
 struct KineVulkanCompositor {
     PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     PFN_vkGetDeviceProcAddr getDeviceProcAddr = nullptr;
@@ -41,10 +63,9 @@ struct KineVulkanCompositor {
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence acquireFence = VK_NULL_HANDLE;
-    VkFence transitionFence = VK_NULL_HANDLE;
-    VkSemaphore filamentImageReadySemaphore = VK_NULL_HANDLE;
+    std::vector<KineVulkanFrame> frames;
+    KineVulkanFrameSlot* activeSlot = nullptr;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     uint32_t currentImageIndex = UINT32_MAX;
     KineSkiaSurface* currentSkiaSurface = nullptr;
@@ -587,13 +608,9 @@ static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
 {
     auto vkCreateCommandPool = kine_vk_device_proc<PFN_vkCreateCommandPool>(
         compositor, "vkCreateCommandPool");
-    auto vkAllocateCommandBuffers = kine_vk_device_proc<PFN_vkAllocateCommandBuffers>(
-        compositor, "vkAllocateCommandBuffers");
     auto vkCreateFence = kine_vk_device_proc<PFN_vkCreateFence>(
         compositor, "vkCreateFence");
-    auto vkCreateSemaphore = kine_vk_device_proc<PFN_vkCreateSemaphore>(
-        compositor, "vkCreateSemaphore");
-    if (!vkCreateCommandPool || !vkAllocateCommandBuffers || !vkCreateFence || !vkCreateSemaphore) {
+    if (!vkCreateCommandPool || !vkCreateFence) {
         kine_vk_set_error(compositor, "required frame-resource Vulkan procs unavailable");
         return false;
     }
@@ -607,16 +624,6 @@ static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
         return false;
     }
 
-    VkCommandBufferAllocateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    bufferInfo.commandPool = compositor->commandPool;
-    bufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    bufferInfo.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(compositor->device, &bufferInfo, &compositor->commandBuffer) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkAllocateCommandBuffers failed");
-        return false;
-    }
-
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     if (vkCreateFence(compositor->device, &fenceInfo, nullptr, &compositor->acquireFence) != VK_SUCCESS) {
@@ -624,26 +631,56 @@ static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
         return false;
     }
 
-    // Signaled initially so the first transition can reset and reuse it
-    // without an artificial wait.
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    if (vkCreateFence(compositor->device, &fenceInfo, nullptr, &compositor->transitionFence) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkCreateFence transition failed");
-        return false;
-    }
-
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    if (vkCreateSemaphore(
-            compositor->device,
-            &semaphoreInfo,
-            nullptr,
-            &compositor->filamentImageReadySemaphore) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkCreateSemaphore failed");
-        return false;
-    }
-
     return true;
+}
+
+static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
+{
+    auto vkAllocateCommandBuffers = kine_vk_device_proc<PFN_vkAllocateCommandBuffers>(
+        compositor, "vkAllocateCommandBuffers");
+    auto vkCreateFence = kine_vk_device_proc<PFN_vkCreateFence>(
+        compositor, "vkCreateFence");
+    if (!vkAllocateCommandBuffers || !vkCreateFence) {
+        kine_vk_set_error(compositor, "required image-frame Vulkan procs unavailable");
+        return false;
+    }
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    compositor->frames.clear();
+    compositor->frames.resize(compositor->swapchainImages.size());
+    for (auto& frame : compositor->frames) {
+        for (auto& slot : frame.slots) {
+            VkCommandBuffer buffers[3] = {};
+            VkCommandBufferAllocateInfo bufferInfo{};
+            bufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            bufferInfo.commandPool = compositor->commandPool;
+            bufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            bufferInfo.commandBufferCount = 3;
+            if (vkAllocateCommandBuffers(compositor->device, &bufferInfo, buffers) != VK_SUCCESS ||
+                vkCreateFence(compositor->device, &fenceInfo, nullptr, &slot.finished) != VK_SUCCESS) {
+                kine_vk_set_error(compositor, "failed creating swapchain image frame resources");
+                return false;
+            }
+            slot.acquire = buffers[0];
+            slot.handoff = buffers[1];
+            slot.present = buffers[2];
+        }
+    }
+    return true;
+}
+
+static void kine_vk_release_frame_surfaces(KineVulkanFrame& frame)
+{
+    if (frame.base) {
+        Kine_Skia_Surface_Destroy(frame.base);
+        frame.base = nullptr;
+    }
+    if (frame.overlay) {
+        Kine_Skia_Surface_Destroy(frame.overlay);
+        frame.overlay = nullptr;
+    }
 }
 
 static uint32_t kine_vk_find_memory_type(
@@ -1037,7 +1074,7 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
         compositor->swapchainImageViews.push_back(imageView);
     }
 
-    return true;
+    return kine_vk_create_image_frames(compositor);
 }
 
 static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* compositor)
@@ -1045,6 +1082,28 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     if (!compositor || !compositor->device) {
         return;
     }
+
+    auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(compositor, "vkDestroyFence");
+    auto vkFreeCommandBuffers = kine_vk_device_proc<PFN_vkFreeCommandBuffers>(
+        compositor, "vkFreeCommandBuffers");
+    for (auto& frame : compositor->frames) {
+        kine_vk_release_frame_surfaces(frame);
+        for (auto& slot : frame.slots) {
+            if (slot.finished && vkDestroyFence) {
+                vkDestroyFence(compositor->device, slot.finished, nullptr);
+                slot.finished = VK_NULL_HANDLE;
+            }
+            VkCommandBuffer buffers[3] = { slot.acquire, slot.handoff, slot.present };
+            if (buffers[0] && vkFreeCommandBuffers) {
+                vkFreeCommandBuffers(compositor->device, compositor->commandPool, 3, buffers);
+            }
+            slot.acquire = VK_NULL_HANDLE;
+            slot.handoff = VK_NULL_HANDLE;
+            slot.present = VK_NULL_HANDLE;
+        }
+    }
+    compositor->frames.clear();
+    compositor->activeSlot = nullptr;
 
     if (auto vkDestroyImageView = kine_vk_device_proc<PFN_vkDestroyImageView>(
             compositor, "vkDestroyImageView")) {
@@ -1100,6 +1159,7 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
 
 static bool kine_vk_transition_current_image(
     KineVulkanCompositor* compositor,
+    VkCommandBuffer commandBuffer,
     VkImageLayout oldLayout,
     VkImageLayout newLayout,
     VkSemaphore waitSemaphore = VK_NULL_HANDLE,
@@ -1119,7 +1179,7 @@ static bool kine_vk_transition_current_image(
             }
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
             if (waitSemaphore) {
                 submitInfo.waitSemaphoreCount = 1;
                 submitInfo.pWaitSemaphores = &waitSemaphore;
@@ -1149,17 +1209,20 @@ static bool kine_vk_transition_current_image(
         compositor, "vkQueueSubmit");
     if (!vkResetCommandBuffer || !vkBeginCommandBuffer || !vkCmdPipelineBarrier ||
         !vkEndCommandBuffer || !vkQueueSubmit ||
-        !compositor->commandBuffer || compositor->currentImageIndex >= compositor->swapchainImages.size()) {
+        !commandBuffer || compositor->currentImageIndex >= compositor->swapchainImages.size()) {
         kine_vk_set_error(compositor, "required image-transition Vulkan procs unavailable");
         return false;
     }
 
-    vkResetCommandBuffer(compositor->commandBuffer, 0);
+    if (vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS) {
+        kine_vk_set_error(compositor, "vkResetCommandBuffer failed");
+        return false;
+    }
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkBeginCommandBuffer(compositor->commandBuffer, &beginInfo) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         kine_vk_set_error(compositor, "vkBeginCommandBuffer failed");
         return false;
     }
@@ -1205,7 +1268,7 @@ static bool kine_vk_transition_current_image(
     }
 
     vkCmdPipelineBarrier(
-        compositor->commandBuffer,
+        commandBuffer,
         srcStage,
         dstStage,
         0,
@@ -1216,21 +1279,23 @@ static bool kine_vk_transition_current_image(
         1,
         &barrier);
 
-    if (vkEndCommandBuffer(compositor->commandBuffer) != VK_SUCCESS) {
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         kine_vk_set_error(compositor, "vkEndCommandBuffer failed");
         return false;
     }
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    // With no overlay pass, this also orders the next Skia pass after any
+    // Filament writes to textures shared between frames.
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     if (waitSemaphore) {
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = &waitSemaphore;
         submitInfo.pWaitDstStageMask = &waitStage;
     }
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &compositor->commandBuffer;
+    submitInfo.pCommandBuffers = &commandBuffer;
     if (signalSemaphore) {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &signalSemaphore;
@@ -1255,8 +1320,7 @@ static bool kine_vk_wait_for_filament(
     // Enqueue an empty submission whose only job is to wait for Filament.
     // Queue submissions execute in order, so every later Skia/transition
     // submission on this queue is automatically ordered after Filament's work.
-    // This avoids stalling the CPU with vkQueueWaitIdle (and avoids reusing the
-    // shared transition command buffer while it may still be in flight).
+    // This avoids stalling the CPU with vkQueueWaitIdle.
     auto vkQueueSubmit = kine_vk_device_proc<PFN_vkQueueSubmit>(
         compositor, "vkQueueSubmit");
     if (!vkQueueSubmit) {
@@ -1276,6 +1340,42 @@ static bool kine_vk_wait_for_filament(
         return false;
     }
     return true;
+}
+
+static bool kine_vk_submit_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
+{
+    auto reset = kine_vk_device_proc<PFN_vkResetCommandBuffer>(compositor, "vkResetCommandBuffer");
+    auto begin = kine_vk_device_proc<PFN_vkBeginCommandBuffer>(compositor, "vkBeginCommandBuffer");
+    auto barrier = kine_vk_device_proc<PFN_vkCmdPipelineBarrier>(compositor, "vkCmdPipelineBarrier");
+    auto end = kine_vk_device_proc<PFN_vkEndCommandBuffer>(compositor, "vkEndCommandBuffer");
+    auto submit = kine_vk_device_proc<PFN_vkQueueSubmit>(compositor, "vkQueueSubmit");
+    if (!reset || !begin || !barrier || !end || !submit) {
+        return false;
+    }
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (reset(command, 0) != VK_SUCCESS || begin(command, &beginInfo) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Skia and Filament submit to the same queue. Order the swapchain color,
+    // viewport atlas, and shared depth accesses across both renderers.
+    VkMemoryBarrier memory{};
+    memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    memory.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0, 1, &memory, 0, nullptr, 0, nullptr);
+    if (end(command) != VK_SUCCESS) {
+        return false;
+    }
+    VkSubmitInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    info.commandBufferCount = 1;
+    info.pCommandBuffers = &command;
+    return submit(compositor->graphicsQueue, 1, &info, VK_NULL_HANDLE) == VK_SUCCESS;
 }
 
 static KineSkiaSurface* kine_vk_create_current_skia_surface(KineVulkanCompositor* compositor)
@@ -1415,6 +1515,12 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         return;
     }
 
+    if (compositor->device) {
+        if (auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(compositor, "vkDeviceWaitIdle")) {
+            vkDeviceWaitIdle(compositor->device);
+        }
+    }
+
     if (compositor->currentSkiaSurface) {
         Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
         compositor->currentSkiaSurface = nullptr;
@@ -1423,15 +1529,8 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
         compositor->overlaySkiaSurface = nullptr;
     }
-    if (compositor->skiaContext) {
-        Kine_Skia_Vulkan_DestroyContext(compositor->skiaContext);
-        compositor->skiaContext = nullptr;
-    }
 
     if (compositor->device) {
-        if (auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(compositor, "vkDeviceWaitIdle")) {
-            vkDeviceWaitIdle(compositor->device);
-        }
         if (compositor->terrainMc) {
             Kine_TerrainMc_Destroy(compositor->terrainMc);
             compositor->terrainMc = nullptr;
@@ -1443,19 +1542,12 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
             }
             compositor->acquireFence = VK_NULL_HANDLE;
         }
-        if (compositor->transitionFence) {
-            if (auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(
-                    compositor, "vkDestroyFence")) {
-                vkDestroyFence(compositor->device, compositor->transitionFence, nullptr);
-            }
-            compositor->transitionFence = VK_NULL_HANDLE;
+        for (auto& frame : compositor->frames) {
+            kine_vk_release_frame_surfaces(frame);
         }
-        if (compositor->filamentImageReadySemaphore) {
-            if (auto vkDestroySemaphore = kine_vk_device_proc<PFN_vkDestroySemaphore>(
-                    compositor, "vkDestroySemaphore")) {
-                vkDestroySemaphore(compositor->device, compositor->filamentImageReadySemaphore, nullptr);
-            }
-            compositor->filamentImageReadySemaphore = VK_NULL_HANDLE;
+        if (compositor->skiaContext) {
+            Kine_Skia_Vulkan_DestroyContext(compositor->skiaContext);
+            compositor->skiaContext = nullptr;
         }
         kine_vk_destroy_swapchain_attachments(compositor);
         if (compositor->commandPool) {
@@ -1464,7 +1556,6 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
                 vkDestroyCommandPool(compositor->device, compositor->commandPool, nullptr);
             }
             compositor->commandPool = VK_NULL_HANDLE;
-            compositor->commandBuffer = VK_NULL_HANDLE;
         }
         if (compositor->ownsDevice) {
             if (auto vkDestroyDevice = kine_vk_device_proc<PFN_vkDestroyDevice>(compositor, "vkDestroyDevice")) {
@@ -1554,8 +1645,8 @@ Kine_VulkanCompositor_IsReady(const KineVulkanCompositor* compositor)
         compositor->physicalDevice && compositor->device &&
         compositor->graphicsQueue && compositor->swapchain &&
         !compositor->swapchainImages.empty() && compositor->commandPool &&
-        compositor->commandBuffer && compositor->acquireFence &&
-        compositor->filamentImageReadySemaphore && compositor->skiaContext &&
+        compositor->frames.size() == compositor->swapchainImages.size() &&
+        compositor->acquireFence && compositor->skiaContext &&
         compositor->lastError.empty();
 }
 
@@ -1719,6 +1810,17 @@ Kine_VulkanCompositor_GetDepthAttachment(
 }
 
 KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_WaitForQueueIdle(KineVulkanCompositor* compositor)
+{
+    if (!compositor) {
+        return 0;
+    }
+    auto vkQueueWaitIdle = kine_vk_device_proc<PFN_vkQueueWaitIdle>(
+        compositor, "vkQueueWaitIdle");
+    return vkQueueWaitIdle && vkQueueWaitIdle(compositor->graphicsQueue) == VK_SUCCESS;
+}
+
+KINE_VULKAN_COMPOSITOR_API int
 Kine_VulkanCompositor_PrepareFilament(KineVulkanCompositor* compositor)
 {
     if (!compositor) {
@@ -1740,24 +1842,18 @@ Kine_VulkanCompositor_PrepareFilament(KineVulkanCompositor* compositor)
     // thread before Filament dispatches acquire() to its backend thread.
     if (compositor->currentSkiaSurface) {
         Kine_Skia_Surface_Flush(compositor->currentSkiaSurface);
-        if (auto vkQueueWaitIdle = kine_vk_device_proc<PFN_vkQueueWaitIdle>(
-                compositor, "vkQueueWaitIdle")) {
-            if (vkQueueWaitIdle(compositor->graphicsQueue) != VK_SUCCESS) {
-                kine_vk_set_error(compositor, "Skia queue wait failed before Filament");
-                return 0;
-            }
-        } else {
-            kine_vk_set_error(compositor, "vkQueueWaitIdle unavailable before Filament");
+        if (!compositor->activeSlot ||
+            !kine_vk_submit_skia_handoff(compositor, compositor->activeSlot->handoff)) {
+            kine_vk_set_error(compositor, "failed submitting Skia-to-Filament synchronization");
             return 0;
         }
-        Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
+        // The frame retains ownership of the surface so it can be reused for
+        // the next frame on this swapchain image.
         compositor->currentSkiaSurface = nullptr;
     }
 
-    // BeginFrame CPU-waits the WSI acquire fence, and the queue wait above
-    // drains Skia. The image is therefore already available to Filament; a
-    // second ready semaphore is redundant and has proven unstable in Intel's
-    // Windows Vulkan driver.
+    // BeginFrame waits for WSI acquisition. The queued barrier orders the
+    // Skia writes before Filament's submissions without a second semaphore.
     {
         std::lock_guard<std::mutex> lock(compositor->filamentMutex);
         compositor->filamentPrepared = true;
@@ -1840,7 +1936,9 @@ Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
         compositor, "vkWaitForFences");
     auto vkResetFences = kine_vk_device_proc<PFN_vkResetFences>(
         compositor, "vkResetFences");
-    if (!vkAcquireNextImageKHR || !vkWaitForFences || !vkResetFences) {
+    auto vkGetFenceStatus = kine_vk_device_proc<PFN_vkGetFenceStatus>(
+        compositor, "vkGetFenceStatus");
+    if (!vkAcquireNextImageKHR || !vkWaitForFences || !vkResetFences || !vkGetFenceStatus) {
         kine_vk_set_error(compositor, "required acquire Vulkan procs unavailable");
         return nullptr;
     }
@@ -1873,49 +1971,45 @@ Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
     }
     vkResetFences(compositor->device, 1, &compositor->acquireFence);
 
-    // The shared transition command buffer may still be executing the
-    // previous frame's present barrier; wait for it before re-recording.
-    if (compositor->transitionFence) {
-        if (vkWaitForFences(
-                compositor->device,
-                1,
-                &compositor->transitionFence,
-                VK_TRUE,
-                UINT64_MAX) != VK_SUCCESS) {
-            kine_vk_set_error(compositor, "vkWaitForFences transition failed");
-            return nullptr;
-        }
-        vkResetFences(compositor->device, 1, &compositor->transitionFence);
-    }
-
-    // The previous frame's transition is now complete, so its Skia wrappers
-    // are no longer referenced by in-flight GPU work.
-    if (compositor->currentSkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
-        compositor->currentSkiaSurface = nullptr;
-    }
-    if (compositor->overlaySkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
-        compositor->overlaySkiaSurface = nullptr;
-    }
-
-    if (compositor->currentImageIndex >= compositor->swapchainImages.size()) {
+    if (compositor->currentImageIndex >= compositor->frames.size()) {
         kine_vk_set_error(compositor, "vkAcquireNextImageKHR returned an invalid image index");
         return nullptr;
     }
 
+    auto& frame = compositor->frames[compositor->currentImageIndex];
+    auto& slot = frame.slots[frame.nextSlot];
+    frame.nextSlot = (frame.nextSlot + 1) % KineVulkanFrame::SlotCount;
+    // The slot fence signals when the present transition of the earlier frame
+    // that used this slot completed. Waiting is only needed to recycle the
+    // slot's command buffers, never before drawing into the acquired image:
+    // submissions on this queue execute in order.
+    if (slot.inFlight) {
+        if (vkGetFenceStatus(compositor->device, slot.finished) == VK_NOT_READY &&
+            vkWaitForFences(compositor->device, 1, &slot.finished, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "vkWaitForFences image frame failed");
+            return nullptr;
+        }
+        slot.inFlight = false;
+    }
+    if (vkResetFences(compositor->device, 1, &slot.finished) != VK_SUCCESS) {
+        kine_vk_set_error(compositor, "vkResetFences image frame failed");
+        return nullptr;
+    }
+    compositor->activeSlot = &slot;
+
     VkImageLayout currentLayout = compositor->swapchainImageLayouts[compositor->currentImageIndex];
     if (!kine_vk_transition_current_image(
             compositor,
+            slot.acquire,
             currentLayout,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_NULL_HANDLE,
-            VK_NULL_HANDLE,
-            compositor->transitionFence)) {
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)) {
         return nullptr;
     }
 
-    compositor->currentSkiaSurface = kine_vk_create_current_skia_surface(compositor);
+    if (!frame.base) {
+        frame.base = kine_vk_create_current_skia_surface(compositor);
+    }
+    compositor->currentSkiaSurface = frame.base;
     if (!compositor->currentSkiaSurface) {
         kine_vk_set_error(compositor, "Kine_Skia_Surface_CreateVulkanRenderTarget failed");
         return nullptr;
@@ -1974,7 +2068,13 @@ Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
         return nullptr;
     }
 
-    compositor->overlaySkiaSurface = kine_vk_create_current_skia_surface(compositor);
+    if (compositor->currentImageIndex < compositor->frames.size()) {
+        auto& frame = compositor->frames[compositor->currentImageIndex];
+        if (!frame.overlay) {
+            frame.overlay = kine_vk_create_current_skia_surface(compositor);
+        }
+        compositor->overlaySkiaSurface = frame.overlay;
+    }
     // Do not snapshot this surface onto itself: it wraps the same swapchain
     // image that was just rendered to, so a backdrop snapshot would force a
     // copy-on-write of the image mid-frame and desynchronize Vulkan layouts.
@@ -2019,11 +2119,7 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
 
     auto vkQueuePresentKHR = kine_vk_device_proc<PFN_vkQueuePresentKHR>(
         compositor, "vkQueuePresentKHR");
-    auto vkWaitForFences = kine_vk_device_proc<PFN_vkWaitForFences>(
-        compositor, "vkWaitForFences");
-    auto vkResetFences = kine_vk_device_proc<PFN_vkResetFences>(
-        compositor, "vkResetFences");
-    if (!vkQueuePresentKHR || !vkWaitForFences || !vkResetFences) {
+    if (!vkQueuePresentKHR) {
         kine_vk_set_error(compositor, "vkQueuePresentKHR unavailable");
         return 0;
     }
@@ -2040,28 +2136,28 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
         renderFinished = compositor->renderFinishedSemaphores[compositor->currentImageIndex];
     }
 
-    if (compositor->transitionFence) {
-        if (vkWaitForFences(
-                compositor->device,
-                1,
-                &compositor->transitionFence,
-                VK_TRUE,
-                UINT64_MAX) != VK_SUCCESS) {
-            kine_vk_set_error(compositor, "vkWaitForFences transition failed");
-            return 0;
-        }
-        vkResetFences(compositor->device, 1, &compositor->transitionFence);
+    auto* slot = compositor->activeSlot;
+    if (!slot) {
+        kine_vk_set_error(compositor, "compositor frame is missing its submission slot");
+        return 0;
     }
 
+    // The slot fence was reset when this slot was claimed in BeginFrame.
     if (!kine_vk_transition_current_image(
             compositor,
+            slot->present,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             filamentFinished,
             renderFinished,
-            compositor->transitionFence)) {
+            slot->finished)) {
         return 0;
     }
+
+    slot->inFlight = true;
+    // Retained per-image Skia surfaces stay owned by the frame.
+    compositor->currentSkiaSurface = nullptr;
+    compositor->overlaySkiaSurface = nullptr;
 
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -2083,6 +2179,7 @@ Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
         compositor->filamentPresented = false;
         compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
         compositor->overlayActive = false;
+        compositor->activeSlot = nullptr;
     }
 
     if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) {

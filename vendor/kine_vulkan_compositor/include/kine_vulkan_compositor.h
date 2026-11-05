@@ -61,6 +61,9 @@ KINE_VULKAN_COMPOSITOR_API void
 Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor);
 
 KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_WaitForQueueIdle(KineVulkanCompositor* compositor);
+
+KINE_VULKAN_COMPOSITOR_API int
 Kine_VulkanCompositor_Resize(
     KineVulkanCompositor* compositor,
     int width,

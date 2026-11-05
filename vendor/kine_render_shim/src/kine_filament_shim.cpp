@@ -30,6 +30,7 @@
 #include <filament/Color.h>
 #include <filament/ColorGrading.h>
 #include <filament/Engine.h>
+#include <filament/Fence.h>
 #include <filament/IndexBuffer.h>
 #include <filament/IndirectLight.h>
 #include <filament/ToneMapper.h>
@@ -6107,6 +6108,14 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 		if (ctx->renderer)
 			ctx->engine->destroy(ctx->renderer);
 		if (ctx->swapChain) {
+#if KINE_FILAMENT_USE_VULKAN
+			if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
+				// The compositor may still be consuming Filament's present semaphore.
+				ctx->engine->flushAndWait();
+				Kine_VulkanCompositor_WaitForQueueIdle(
+					static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor));
+			}
+#endif
 			ctx->engine->destroy(ctx->swapChain);
 			ctx->swapChain = nullptr;
 		}
@@ -6587,6 +6596,12 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 		KineFrameProfileScope profile(ctx, "Filament Begin Frame");
 		beganFrame = ctx->renderer->beginFrame(ctx->swapChain);
 	}
+	if (!beganFrame && ctx->useFilamentOwnedCompositor) {
+		KineFrameProfileScope profile(ctx, "Filament Pacing Override");
+		// Skia already drew into the acquired image. Filament allows rendering
+		// past its pacing hint, so finish the 3D pass before presenting it.
+		beganFrame = true;
+	}
 	if (beganFrame) {
 		KineFrameProfileScope frameProfile(ctx, "Filament Draw and Submit");
 		if (!ctx->loggedFirstFrame) {
@@ -6691,23 +6706,18 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 		ctx->renderer->endFrame();
 #if KINE_FILAMENT_USE_VULKAN
 		if (ctx->useFilamentOwnedCompositor) {
-			KineFrameProfileScope profile(ctx, "Filament GPU Flush and Wait");
-			ctx->engine->flushAndWait();
+			KineFrameProfileScope profile(ctx, "Filament Backend Handoff");
+			// Wait for the backend thread to finish using the shared Vulkan queue.
+			// Skia's submission waits on the present semaphore for GPU completion.
+			if (Fence::waitAndDestroy(ctx->engine->createFence()) !=
+					Fence::FenceStatus::CONDITION_SATISFIED) {
+				ctx->engine->flushAndWait();
+			}
+			ctx->engine->pumpMessageQueues();
 		}
 #endif
 	} else {
 		fprintf(stderr, "[Kine] beginFrame FAILED this frame\n");
-#if KINE_FILAMENT_USE_VULKAN
-		if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
-
-			auto *compositor = static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor);
-			ctx->engine->flushAndWait();
-			uint32_t imageIndex = 0;
-			if (Kine_VulkanCompositor_FilamentAcquire(compositor, &imageIndex, nullptr) == VK_SUCCESS) {
-				Kine_VulkanCompositor_FilamentPresent(compositor, imageIndex, nullptr);
-			}
-		}
-#endif
 	}
 
 	kine_finish_batch_frame(ctx);
@@ -6749,6 +6759,12 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 
 	ctx->engine->flushAndWait();
 
+#if KINE_FILAMENT_USE_VULKAN
+	if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
+		Kine_VulkanCompositor_WaitForQueueIdle(
+			static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor));
+	}
+#endif
 	if (ctx->swapChain) {
 		ctx->engine->destroy(ctx->swapChain);
 		ctx->swapChain = nullptr;

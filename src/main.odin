@@ -51,6 +51,12 @@ runtime_resize :: proc(user_data: rawptr, width, height: i32) {
 last_ui_width: i32 = -1
 last_ui_height: i32 = -1
 
+runtime_render_3d_dirty :: proc(user_data: rawptr) -> bool {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil {return true}
+	return engine_runtime.Environment_3D_Dirty(ctx.environment)
+}
+
 runtime_render_2d :: proc(
 	user_data: rawptr,
 	surface: ^renderer.Skia_Surface,
@@ -134,6 +140,8 @@ run_desktop :: proc(options: Startup_Options) {
 		DrawOverlay = runtime_render_overlay,
 		UserData = &render_context,
 		RenderFilament = true,
+		Cache2D = true,
+		Render3DCheck = runtime_render_3d_dirty,
 		KeyDown = proc(scancode: sdl3.Scancode) {
 		},
 		KeyUp = proc(scancode: sdl3.Scancode) {
@@ -318,7 +326,9 @@ run_desktop :: proc(options: Startup_Options) {
 
 main :: proc() {
 	when tracy.TRACY_ENABLE {
-		context.allocator = tracy.InitDefaultAllocator(callstack_size = 5)
+		context.allocator = tracy.InitDefaultAllocator(
+			callstack_size = #config(TRACY_ALLOC_CALLSTACK, 0),
+		)
 	}
 	services.Update_Handle_Command_Line()
 	when ODIN_OS == .Windows {

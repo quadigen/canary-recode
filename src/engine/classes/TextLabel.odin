@@ -31,6 +31,24 @@ TextLabel_Class := Class_Info {
 Text_Line :: struct {
 	text:  string,
 	width: f32,
+	draw_text: cstring,
+}
+
+Text_Measure_Cache :: struct {
+	valid: bool,
+	width, font_size, line_height: f32,
+	bounds: datatypes.Vector2,
+}
+
+Text_Render_Layout :: struct {
+	measure: Text_Measure_Cache,
+	lines: [dynamic]Text_Line,
+	inputs: struct {
+		width, height, text_size, line_height: f32,
+		wrapped, scaled: bool,
+	},
+	font_size, line_height, ascent: f32,
+	bounds: datatypes.Vector2,
 }
 
 TextLabel :: struct {
@@ -53,6 +71,7 @@ TextLabel :: struct {
 	line_height:              f32,
 	text_padding:             f32,
 	text_bounds:              datatypes.Vector2,
+	render_layout:            Text_Render_Layout,
 	rich_text:                bool,
 	truncate_at_end:          bool,
 }
@@ -232,6 +251,7 @@ TextLabel_Destroy_Typeface :: proc(label: ^TextLabel) {
 		return
 	}
 
+	text_render_layout_clear(&label.render_layout)
 	if label.stored_typeface != nil {
 		kineffi.Kine_Skia_Typeface_Destroy(label.stored_typeface)
 
@@ -782,7 +802,11 @@ TextLabel_Get_Bounds :: proc(
 }
 
 
-TextLabel_Measure_Content :: proc(label: ^TextLabel, available_width: f32) -> datatypes.Vector2 {
+TextLabel_Measure_Content :: proc(
+	label: ^TextLabel,
+	available_width: f32,
+	measure: ^Text_Measure_Cache = nil,
+) -> datatypes.Vector2 {
 	if label == nil || label.stored_typeface == nil || len(label.text) == 0 {
 		return datatypes.Vector2_Zero
 	}
@@ -797,13 +821,21 @@ TextLabel_Measure_Content :: proc(label: ^TextLabel, available_width: f32) -> da
 		max_width = 0
 	}
 
-	wrapped := label.text_wrapped && max_width > 0
-
-	lines := TextLabel_Build_Lines(label, max_width, font_size, wrapped)
-
-	defer delete(lines)
-
-	bounds := TextLabel_Get_Bounds(label, lines[:], font_size)
+	cache := measure if measure != nil else &label.render_layout.measure
+	width := max_width if label.text_wrapped else 0
+	if !cache.valid || cache.width != width ||
+	   cache.font_size != font_size || cache.line_height != label.line_height {
+		lines := TextLabel_Build_Lines(label, width, font_size, width > 0)
+		defer delete(lines)
+		cache^ = {
+			valid = true,
+			width = width,
+			font_size = font_size,
+			line_height = label.line_height,
+			bounds = TextLabel_Get_Bounds(label, lines[:], font_size),
+		}
+	}
+	bounds := cache.bounds
 
 	return datatypes.Vector2{bounds.X + padding * 2, bounds.Y + padding * 2}
 }
@@ -1099,7 +1131,7 @@ TextLabel_set :: proc(
 	// Only the properties that feed measurement invalidate the layout; colour,
 	// transparency and alignment are render-only and are often tweened every
 	// frame, so dirtying on them would defeat the clean-layout skip.
-	if text_label_affects_layout(key) {
+	if key != "Text" && text_label_affects_layout(key) {
 		Gui_Layout_Mark_Dirty()
 	}
 
@@ -1107,6 +1139,9 @@ TextLabel_set :: proc(
 
 	case "Text":
 		value := vm.ArgString(L, value_index)
+		if label.owned_text == value {return true}
+		Gui_Layout_Mark_Dirty()
+		text_render_layout_clear(&label.render_layout)
 
 		copy := strings.clone(value)
 
@@ -1264,6 +1299,24 @@ TextLabel_set :: proc(
 
 
 TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
+	label := cast(^TextLabel)object
+	text_label_render(label, ctx, &label.render_layout)
+}
+
+text_render_layout_free_lines :: proc(layout: ^Text_Render_Layout) {
+	for line in layout.lines {
+		delete(line.draw_text, layout.lines.allocator)
+	}
+	delete(layout.lines)
+}
+
+text_render_layout_clear :: proc(layout: ^Text_Render_Layout) {
+	text_render_layout_free_lines(layout)
+	layout^ = {}
+}
+
+text_label_render :: proc(label: ^TextLabel, ctx: ^Class_Step_Context, layout: ^Text_Render_Layout) {
+	object := &label.object
 	rect, visible := GuiObject_get_rect(object, ctx)
 
 	if !visible {
@@ -1272,8 +1325,6 @@ TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 
 	GuiObject_render(object, ctx)
-
-	label := cast(^TextLabel)object
 
 	if label.stored_typeface == nil {
 		label.text_bounds = datatypes.Vector2_Zero
@@ -1299,19 +1350,26 @@ TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 
-	font_size := TextLabel_Get_Effective_Font_Size(label, content_width, content_height)
-
-
-	lines := TextLabel_Build_Lines(label, content_width, font_size, label.text_wrapped)
-
-	defer delete(lines)
-
-
-	label.text_bounds = TextLabel_Get_Bounds(label, lines[:], font_size)
-
-	line_height := TextLabel_Get_Base_Line_Height(label, font_size) * label.line_height
-
-	ascent := TextLabel_Get_Ascent(label, font_size)
+	inputs := layout.inputs
+	inputs.width = content_width if label.text_wrapped || label.text_scaled else 0
+	inputs.height = content_height if label.text_scaled else 0
+	inputs.text_size = label.text_size
+	inputs.line_height = label.line_height
+	inputs.wrapped = label.text_wrapped
+	inputs.scaled = label.text_scaled
+	if layout.lines == nil || layout.inputs != inputs {
+		text_render_layout_free_lines(layout)
+		layout.inputs = inputs
+		layout.font_size = TextLabel_Get_Effective_Font_Size(label, content_width, content_height)
+		layout.lines = TextLabel_Build_Lines(label, content_width, layout.font_size, label.text_wrapped)
+		for &line in layout.lines {
+			line.draw_text = strings.clone_to_cstring(line.text, layout.lines.allocator)
+		}
+		layout.bounds = TextLabel_Get_Bounds(label, layout.lines[:], layout.font_size)
+		layout.line_height = TextLabel_Get_Base_Line_Height(label, layout.font_size) * label.line_height
+		layout.ascent = TextLabel_Get_Ascent(label, layout.font_size)
+	}
+	label.text_bounds = layout.bounds
 
 	block_y := TextLabel_Get_Block_Y(label, content_y, content_height, label.text_bounds.Y)
 
@@ -1335,19 +1393,19 @@ TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 
-	for line, index in lines {
+	for line, index in layout.lines {
 		line_x := TextLabel_Get_Line_X(label, content_x, content_width, line.width)
 
-		line_top := block_y + f32(index) * line_height
+		line_top := block_y + f32(index) * layout.line_height
 
-		baseline := line_top + ascent
+		baseline := line_top + layout.ascent
 
-		ctext := strings.clone_to_cstring(line.text)
+		ctext := line.draw_text
 
 		text_params := guilib.TextParams {
 			x            = line_x,
 			y            = baseline,
-			TextSize     = font_size,
+			TextSize     = layout.font_size,
 			color        = label.text_color3,
 			transparency = label.text_transparency,
 			font         = nil,
@@ -1397,7 +1455,6 @@ TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 		guilib.drawText(ctx.renderer.SkiaSurface, ctext, text_params)
 
-		delete(ctext)
 	}
 }
 

@@ -384,9 +384,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
-	when ODIN_OS != .JS {
-		tracy.ZoneNC("Project Autosave", 0xD19A66)
-		Project_Autosave(registry, L, delta_time)
+	{
+		when ODIN_OS != .JS {
+			tracy.ZoneNC("Project Autosave", 0xD19A66)
+			Project_Autosave(registry, L, delta_time)
+		}
 	}
 	if workspace := Find_Service(registry, "Workspace");
 	   workspace != nil && workspace.object != nil {

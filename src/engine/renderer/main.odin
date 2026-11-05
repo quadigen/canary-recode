@@ -75,6 +75,8 @@ when !KINE_RENDERER_GL {
 		RenderFilament:    bool,
 		ViewportRect:      [4]i32,
 		ViewportRect_Host: bool,
+		Cache2D:           bool,
+		Render3DCheck:     proc(user_data: rawptr) -> bool,
 		MouseScale:        [2]f32,
 		CurrentEvent:      ^sdl3.Event,
 		Window:            ^sdl3.Window,
@@ -413,16 +415,17 @@ when !KINE_RENDERER_GL {
 				}
 			}
 
-			{
-				tracy.ZoneNC("Skia Flush", 0xE5C07B)
-				z := profiling.Begin("Skia Flush", 0xE5C07B)
-				kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
-			}
+			// The compositor submits Skia before handing off to Filament or presenting.
 			base_skia_surface := renderer.SkiaSurface
 			renderer.SkiaSurface = nil
 			apply_viewport_rect(renderer)
 
 			world_3d := renderer.RenderFilament && renderer.HasViewportRect
+			if world_3d &&
+			   renderer.Render3DCheck != nil &&
+			   !renderer.Render3DCheck(renderer.UserData) {
+				world_3d = false
+			}
 			rendered_3d := world_3d || kineffi.Kine_Filament_Viewport_HasWork(filament)
 			if rendered_3d {
 				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
@@ -481,10 +484,6 @@ when !KINE_RENDERER_GL {
 						delta_time,
 					)
 
-					tracy.ZoneNC("Skia Flush", 0xE5C07B)
-					z := profiling.Begin("Overlay Skia Flush", 0xE5C07B)
-
-					kineffi.Kine_Skia_Surface_Flush(renderer.SkiaSurface)
 					renderer.SkiaSurface = nil
 				}
 			}
@@ -492,6 +491,7 @@ when !KINE_RENDERER_GL {
 			present_ok: bool
 			{
 				tracy.ZoneNC("Vulkan Present", 0xD19A66)
+				z := profiling.Begin("Vulkan Present", 0xD19A66)
 				present_ok = kineffi.Kine_VulkanCompositor_EndFrame(compositor) != 0
 			}
 			if !present_ok {

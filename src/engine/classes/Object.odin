@@ -579,6 +579,7 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 	Object_Fire_Ancestry_Changed(self, new_parent)
 
 
+	Render_3D_Mark_Dirty()
 	Hierarchy_Touched()
 }
 
@@ -596,6 +597,7 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 	self.destroyed = true
 
 
+	Render_3D_Mark_Dirty()
 	Hierarchy_Touched()
 
 	registry := self.signal_registry
@@ -886,6 +888,15 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 	}
 	return true
 }
+
+// Bumped whenever anything that can change the rendered 3D scene changes, so
+// the renderer can skip Filament completely on frames where nothing moved.
+render_3d_revision: u64
+
+Render_3D_Mark_Dirty :: #force_inline proc "contextless" () {render_3d_revision += 1}
+
+Render_3D_Revision :: #force_inline proc "contextless" () -> u64 {return render_3d_revision}
+
 
 Object_Set_Property :: proc(
 	L: ^vm.State,

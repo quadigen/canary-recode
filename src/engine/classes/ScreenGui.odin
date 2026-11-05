@@ -90,7 +90,15 @@ ScreenGui_get :: proc(
 
 ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	if !Is_A_Class(child, &GuiObject_Class) {return}
-	rotated := GuiObject_push_rotation(cast(^GuiObject)child, ctx)
+	gui := cast(^GuiObject)child
+	previous_transform := ctx.gui_transform
+	// Descendants can reuse this geometry without walking to the screen root.
+	if gui.visible {
+		x, y, width, height := GuiObject_get_absolute_transform(child, ctx)
+		ctx.gui_transform = {child, x, y, width, height}
+	}
+	defer ctx.gui_transform = previous_transform
+	rotated := GuiObject_push_rotation(gui, ctx)
 	defer if rotated {GuiObject_pop_rotation(ctx)}
 
 	shader := UIShader_Find(child)
@@ -136,6 +144,12 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 ScreenGui_RenderChildren :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	if len(object.children) == 0 {return}
 	tracy.ZoneNC("Render ScreenGui", 0x61AFEF)
+	root := ctx.gui_transform.object == nil
+	if root {
+		x, y, width, height := GuiObject_get_absolute_transform(object, ctx)
+		ctx.gui_transform = {object, x, y, width, height}
+	}
+	defer if root {ctx.gui_transform = {}}
 	for child in object.children {
 		ScreenGui_RenderChild(child, ctx)
 	}

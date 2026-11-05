@@ -586,8 +586,6 @@ ScrollingFrame_set :: proc(
 ) -> bool {
 	frame := cast(^ScrollingFrame)object
 
-	Gui_Layout_Mark_Dirty()
-
 	switch key {
 	case "CanvasPosition":
 		if datatype_registry == nil {
@@ -596,14 +594,14 @@ ScrollingFrame_set :: proc(
 
 		position := datatypes.Arg_Vector2(L, value_index, datatype_registry)
 
+		position.X = clamp(position.X, f32(0), frame.max_scroll_x)
+		position.Y = clamp(position.Y, f32(0), frame.max_scroll_y)
+		if frame.canvas_position != position {
+			Gui_Layout_Mark_Dirty()
+		}
+
 		frame.canvas_position = position
 		frame.target_position = position
-
-		frame.canvas_position.X = clamp(frame.canvas_position.X, f32(0), frame.max_scroll_x)
-
-		frame.canvas_position.Y = clamp(frame.canvas_position.Y, f32(0), frame.max_scroll_y)
-
-		frame.target_position = frame.canvas_position
 
 		scrolling_frame_interact(frame)
 		return true
@@ -613,8 +611,11 @@ ScrollingFrame_set :: proc(
 			return false
 		}
 
-		frame.canvas_size = datatypes.Arg_UDim2(L, value_index, datatype_registry)
-		Gui_Layout_Mark_Dirty()
+		size := datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		if frame.canvas_size != size {
+			frame.canvas_size = size
+			Gui_Layout_Mark_Dirty()
+		}
 
 		return true
 
@@ -626,8 +627,11 @@ ScrollingFrame_set :: proc(
 		if item == nil {
 			return false
 		}
-		frame.automatic_canvas_size = enums.AutomaticSize(item.value)
-		Gui_Layout_Mark_Dirty()
+		size := enums.AutomaticSize(item.value)
+		if frame.automatic_canvas_size != size {
+			frame.automatic_canvas_size = size
+			Gui_Layout_Mark_Dirty()
+		}
 		return true
 
 	case "AbsoluteCanvasSize":
@@ -656,6 +660,7 @@ ScrollingFrame_set :: proc(
 		item := enums.Arg_Item(L, value_index, enum_registry, "ScrollingDirection")
 
 		frame.scrolling_direction = enums.ScrollingDirection(item.value)
+		Gui_Layout_Mark_Dirty()
 
 
 		if frame.scrolling_direction == .X {

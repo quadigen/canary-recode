@@ -974,6 +974,7 @@ text_box_render_code_editor :: proc(
 	max_scroll_y := max(total_height - content_height, f32(0))
 
 	if box.focused {
+		Gui_Render_Mark_Animated()
 		box.caret_timer += dt
 
 		for box.caret_timer >= 1.2 {
@@ -3622,8 +3623,10 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	focus_lerp := min(dt * 14, f32(1))
 
 	box.focus_animation += (focus_target - box.focus_animation) * focus_lerp
+	if box.focused || box.focus_animation > 0.001 {Gui_Render_Mark_Animated()}
 
 	if box.focused {
+		Gui_Render_Mark_Animated()
 		box.caret_timer += dt
 
 		for box.caret_timer >= 1.2 {

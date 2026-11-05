@@ -380,7 +380,10 @@ GuiObject_get_absolute_transform :: proc(
 	if object == nil {
 		return 0, 0, f32(ctx.viewport_width), f32(ctx.viewport_height)
 	}
-	if Is_A(object, "ScreenGui") {
+	if transform := ctx.gui_transform; transform.object == object {
+		return transform.x, transform.y, transform.width, transform.height
+	}
+	if Is_A_Class(object, &ScreenGui_Class) {
 		screen_gui := cast(^ScreenGui)object
 
 		width = screen_gui.size.X
@@ -397,7 +400,7 @@ GuiObject_get_absolute_transform :: proc(
 		return screen_gui.render_offset.X, screen_gui.render_offset.Y, width, height
 	}
 
-	if Is_A(object, "SurfaceGui") {
+	if Is_A_Class(object, &SurfaceGui_Class) {
 		surface_gui := cast(^SurfaceGui)object
 		part := surfacegui_target_part(surface_gui)
 
@@ -414,7 +417,7 @@ GuiObject_get_absolute_transform :: proc(
 		return 0, 0, width, height
 	}
 
-	if !Is_A(object, "GuiObject") {
+	if !Is_A_Class(object, &GuiObject_Class) {
 		return GuiObject_get_absolute_transform(object.parent, ctx)
 	}
 
@@ -444,7 +447,7 @@ GuiObject_get_absolute_transform :: proc(
 		padding_x: f32 = 0
 		padding_y: f32 = 0
 
-		if object.parent != nil && Is_A(object.parent, "GuiObject") {
+		if object.parent != nil && Is_A_Class(object.parent, &GuiObject_Class) {
 			parent_gui := cast(^GuiObject)object.parent
 
 			padding_x = parent_gui.content_offset.X
@@ -466,7 +469,7 @@ GuiObject_get_absolute_transform :: proc(
 			gui.anchorpoint.Y * height
 	}
 
-	if object.parent != nil && Is_A(object.parent, "ScrollingFrame") {
+	if object.parent != nil && Is_A_Class(object.parent, &ScrollingFrame_Class) {
 		scrolling := cast(^ScrollingFrame)object.parent
 		x -= scrolling.canvas_position.X
 		y -= scrolling.canvas_position.Y
@@ -1420,7 +1423,7 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 	case Is_A(&gui.object, "TextButton"):
 		button := cast(^TextButton)gui
 		label := TextButton_to_text_label(button)
-		text_content = TextLabel_Measure_Content(&label, basis_width)
+		text_content = TextLabel_Measure_Content(&label, basis_width, &button.render_layout.measure)
 		is_text = true
 	case Is_A(&gui.object, "TextBox"):
 		text_content = TextBox_Measure_Content(cast(^TextBox)gui, basis_width)
@@ -1546,6 +1549,24 @@ gui_layout_last_height: i32
 
 gui_render_revision: u64
 
+Gui_Render_Revision :: #force_inline proc "contextless" () -> u64 {return gui_render_revision}
+
+Gui_Render_Mark_Dirty :: #force_inline proc "contextless" () {gui_render_revision += 1}
+
+// Set by GUI elements that animate over time (focus fades, caret blink) so the
+// display-list cache stays off while their output changes every frame.
+gui_render_animated: bool
+
+Gui_Render_Mark_Animated :: #force_inline proc "contextless" () {gui_render_animated = true}
+
+Gui_Render_Is_Animated :: #force_inline proc "contextless" () -> bool {return gui_render_animated}
+
+Gui_Render_Consume_Animated :: #force_inline proc "contextless" () -> bool {
+	animated := gui_render_animated
+	gui_render_animated = false
+	return animated
+}
+
 Gui_Layout_Mark_Dirty :: #force_inline proc "contextless" () {
 	gui_layout_dirty = true
 	gui_render_revision += 1
@@ -1571,7 +1592,7 @@ gui_measure_base :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 	}
 
 	for child in gui.object.children {
-		if child == nil || child.destroyed || !Is_A(child, "GuiObject") {
+		if child == nil || child.destroyed || !Is_A_Class(child, &GuiObject_Class) {
 			continue
 		}
 
@@ -1588,7 +1609,7 @@ gui_measure_auto :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 	gui.auto_solved = true
 
 	for child in gui.object.children {
-		if child == nil || child.destroyed || !Is_A(child, "GuiObject") {
+		if child == nil || child.destroyed || !Is_A_Class(child, &GuiObject_Class) {
 			continue
 		}
 
@@ -1602,7 +1623,7 @@ gui_measure_auto :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 
 
 	needs_content := automatic != .None
-	if !needs_content && Is_A(&gui.object, "ScrollingFrame") {
+	if !needs_content && Is_A_Class(&gui.object, &ScrollingFrame_Class) {
 		needs_content = (cast(^ScrollingFrame)gui).automatic_canvas_size != .None
 	}
 
@@ -1659,7 +1680,7 @@ gui_measure_auto :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 gui_layout_root :: proc(gui: ^GuiObject) -> bool {
 	parent := gui.object.parent
 
-	return parent == nil || !Is_A(parent, "GuiObject")
+	return parent == nil || !Is_A_Class(parent, &GuiObject_Class)
 }
 
 
@@ -1715,7 +1736,7 @@ gui_apply_transforms :: proc(parent: ^GuiObject, px, py, pw, ph: f32) {
 	scroll_x: f32 = 0
 	scroll_y: f32 = 0
 
-	if Is_A(&parent.object, "ScrollingFrame") {
+	if Is_A_Class(&parent.object, &ScrollingFrame_Class) {
 		scrolling := cast(^ScrollingFrame)parent
 
 		scroll_x = scrolling.canvas_position.X
@@ -1723,7 +1744,7 @@ gui_apply_transforms :: proc(parent: ^GuiObject, px, py, pw, ph: f32) {
 	}
 
 	for child in parent.object.children {
-		if child == nil || child.destroyed || !Is_A(child, "GuiObject") {
+		if child == nil || child.destroyed || !Is_A_Class(child, &GuiObject_Class) {
 			continue
 		}
 
@@ -2319,9 +2340,6 @@ GuiObject_set :: proc(
 ) -> bool {
 	gui_object := cast(^GuiObject)object
 
-
-	Gui_Layout_Mark_Dirty()
-
 	switch key {
 	case "Active":
 		gui_object.active = vm.ArgBoolean(L, value_index)
@@ -2336,9 +2354,13 @@ GuiObject_set :: proc(
 	case "Selectable":
 		gui_object.selectable = vm.ArgBoolean(L, value_index)
 	case "Visible":
-		gui_object.visible = vm.ArgBoolean(L, value_index)
+		visible := vm.ArgBoolean(L, value_index)
+		if gui_object.visible == visible {return true}
+		gui_object.visible = visible
 	case "ZIndex":
-		gui_object.zindex = i32(vm.ArgNumber(L, value_index))
+		zindex := i32(vm.ArgNumber(L, value_index))
+		if gui_object.zindex == zindex {return true}
+		gui_object.zindex = zindex
 	case "BorderSizePixel":
 		gui_object.border_size_pixels = i32(vm.ArgNumber(L, value_index))
 	case "BorderColor3":
@@ -2361,10 +2383,14 @@ GuiObject_set :: proc(
 		gui_object.bg_color = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case "Position":
 		if datatype_registry == nil {return false}
-		gui_object.position = datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		position := datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		if gui_object.position == position {return true}
+		gui_object.position = position
 	case "Size":
 		if datatype_registry == nil {return false}
-		gui_object.size = datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		size := datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		if gui_object.size == size {return true}
+		gui_object.size = size
 	case "AutomaticSize":
 		if enum_registry == nil {return false}
 		auto_item := enums.Arg_Item(L, value_index, enum_registry, "AutomaticSize")
@@ -2380,9 +2406,19 @@ GuiObject_set :: proc(
 	case "AbsoluteSize":
 		_ = vm.RaiseError(L, "AbsoluteSize cannot be changed")
 	case:
+		// Inherited properties can affect layout, such as Name for sorted lists.
+		Gui_Layout_Mark_Dirty()
 		return false
 	}
 
+	// These properties affect drawing but leave measured sizes and transforms intact.
+	switch key {
+	case "BackgroundColor3", "BackgroundTransparency", "BorderColor3",
+	     "BorderMode", "BorderSizePixel", "ZIndex":
+		gui_render_revision += 1
+	case:
+		Gui_Layout_Mark_Dirty()
+	}
 	return true
 }
 

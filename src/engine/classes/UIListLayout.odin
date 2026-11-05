@@ -1,5 +1,7 @@
 package classes
 
+import "base:runtime"
+
 import "core:fmt"
 
 import datatypes "../datatypes"
@@ -225,7 +227,7 @@ ui_list_layout_collect_items :: proc(
 	sequence := 0
 
 	for object in parent.children {
-		if object == nil || object.destroyed || !Is_A(object, "GuiObject") {
+		if object == nil || object.destroyed || !Is_A_Class(object, &GuiObject_Class) {
 			continue
 		}
 
@@ -548,7 +550,7 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 	if !layout.enabled ||
 	   layout.destroyed ||
 	   layout.object.parent == nil ||
-	   !Is_A(layout.object.parent, "GuiObject") {
+	   !Is_A_Class(layout.object.parent, &GuiObject_Class) {
 		if abs(old_content_size.X) > 0.01 || abs(old_content_size.Y) > 0.01 {
 			gui_layout_changed = true
 		}
@@ -580,7 +582,11 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 	origin_x := uip_left + pad_left
 	origin_y := uip_top + pad_top
 
-	items := make([dynamic]UIListLayout_Item, 0, 16)
+	// Items and lines are local to this pass, including when Lua callbacks run.
+	scratch := runtime.default_temp_allocator_temp_begin()
+	defer runtime.default_temp_allocator_temp_end(scratch)
+	allocator := context.temp_allocator if scratch.arena != nil else context.allocator
+	items := make([dynamic]UIListLayout_Item, 0, len(parent.object.children), allocator)
 	defer delete(items)
 
 	ui_list_layout_collect_items(layout, registry, parent_width, parent_height, &items)
@@ -603,7 +609,7 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 
 	line_padding := ui_list_layout_resolve_udim(layout.line_padding, cross_basis)
 
-	lines := make([dynamic]UIListLayout_Line, 0, 4)
+	lines := make([dynamic]UIListLayout_Line, 0, 4, allocator)
 	defer delete(lines)
 
 	ui_list_layout_build_lines(layout, items[:], main_available, item_padding, &lines)

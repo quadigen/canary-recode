@@ -40,11 +40,40 @@ accum: [dynamic]Zone_Accum
 history: [dynamic]Frame_Data
 frame_delta_ns: u64
 capture_paused: bool
+// Recording zone/thread history costs work every frame, so it only runs once
+// something actually reads the history (the profiler overlay or ProfilerService).
+collecting: bool
+
+// FPS needs only the last few frame deltas, which is cheap enough to keep
+// always on so reading ProfilerService.FPS never forces full history capture.
+FPS_SAMPLES :: 64
+fps_deltas: [FPS_SAMPLES]u64
+fps_delta_count: int
+fps_delta_index: int
+
+average_frame_delta_ns :: proc(window: int) -> u64 {
+	n := min(window, fps_delta_count)
+	if n <= 0 {
+		return 0
+	}
+	total: u64
+	for i in 0 ..< n {
+		index := (fps_delta_index + 2 * FPS_SAMPLES - 1 - i) % FPS_SAMPLES
+		total += fps_deltas[index]
+	}
+	return total / u64(n)
+}
+
+
+/// Starts recording per-frame history. Consumers call this before reading it.
+set_collection_enabled :: proc(on: bool) {collecting = on}
+
+is_collection_enabled :: proc() -> bool {return collecting}
 
 
 @(deferred_out = End)
 Begin :: proc(name: string, color: u32) -> Zone {
-	return Zone{name, color, platform.GetTicksNS(), true}
+	return Zone{name, color, platform.GetTicksNS(), collecting && !capture_paused}
 }
 
 End :: proc(zone: Zone) {
@@ -86,10 +115,15 @@ frame_tick :: proc(delta_time: f32) {
 		return
 	}
 	frame_delta_ns = u64(max(f32(delta_time), 0.0) * 1_000_000_000.0)
+	fps_deltas[fps_delta_index] = frame_delta_ns
+	fps_delta_index = (fps_delta_index + 1) % FPS_SAMPLES
+	if fps_delta_count < FPS_SAMPLES {
+		fps_delta_count += 1
+	}
 }
 
 frame_flush :: proc() {
-	if capture_paused {
+	if capture_paused || !collecting {
 		clear(&frame_zones)
 		thread_frame_discard()
 		return
