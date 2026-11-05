@@ -57,6 +57,36 @@ just build # Build the engine normally (editor included)
 ```
 All of these flags are optional.
 
+## GPU selection
+The engine renders with Vulkan and picks a discrete GPU automatically when one is
+available. On hybrid laptops (for example Intel + NVIDIA Optimus), it presents
+frames through the display GPU while rendering on the discrete one.
+
+To force a specific Vulkan device, set one of these environment variables:
+
+```bash
+KINE_VULKAN_GPU=NVIDIA   # substring of the Vulkan device name
+KINE_VULKAN_GPU_INDEX=0  # index from vkEnumeratePhysicalDevices
+```
+
+`KINE_GPU` and `KINE_GPU_INDEX` are accepted as aliases. If no device matches,
+the engine falls back to the automatic discrete-GPU preference. If the discrete
+GPU is render-only, frames are still copied to the display GPU for presentation,
+so expect some overhead compared with a display-attached GPU.
+
+Presentation defaults to FIFO (vsync), which caps the frame rate to the display
+refresh rate and prevents tearing. To change it, set `KINE_VULKAN_PRESENT`:
+
+```bash
+KINE_VULKAN_PRESENT=fifo       # vsync; also accepts "vsync" or "on"
+KINE_VULKAN_PRESENT=mailbox    # triple buffering; also accepts "triple"
+KINE_VULKAN_PRESENT=immediate  # no vsync/tearing; also accepts "off" or "nosync"
+```
+
+`mailbox` is not available on every driver; if it is unsupported the engine logs
+a warning and falls back to FIFO. `immediate` can exceed the display refresh rate
+but may tear.
+
 ## Notice
 Kinemium is an independent project not affiliated with, endorsed by, or connected to Roblox Corporation. Roblox is a trademark of Roblox Corporation
 

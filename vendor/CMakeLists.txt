@@ -248,13 +248,11 @@ set(KINE_COMPONENT_TARGETS
     uberarchive
     shaders
 
-    # Skia / Vulkan
-    kine_skia
-    kine_skia_skiacore
-    kine_skia_svg
-    kine_skia_skshaper
-    kine_skia_skunicode_core
-    kine_skia_skunicode_icu
+    # Skia and Vulkan are appended after the Filament archives below. Skia
+    # bundles a newer VulkanMemoryAllocator than the Filament SDK, and the two
+    # implementations disagree on VmaVulkanFunctions. Link order decides which
+    # one wins, so Filament's VMA must appear first to match the Filament
+    # callers that initialize it.
     kine_vulkan_compositor
 
     # Physics / geometry
@@ -341,6 +339,25 @@ foreach(_filament_archive IN LISTS KINE_FILAMENT_ARCHIVE_NAMES)
     unset(_filament_archive_candidates)
     unset(_filament_archive_name)
 endforeach()
+
+# Link Skia only after Filament's archives. Both contain a VulkanMemoryAllocator
+# implementation; keeping Filament's first ensures vmaCreateAllocator resolves
+# to the VMA that Filament's VulkanDriver was compiled against. Skia's wrapper
+# only relies on the API surface both versions share.
+foreach(_skia_dep IN ITEMS
+        kine_skia
+        kine_skia_skiacore
+        kine_skia_svg
+        kine_skia_skshaper
+        kine_skia_skunicode_core
+        kine_skia_skunicode_icu)
+    if(TARGET ${_skia_dep})
+        target_link_libraries(KinemiumLibs PUBLIC ${_skia_dep})
+        list(APPEND KINE_COMPONENT_TARGET_FILES "$<TARGET_FILE:${_skia_dep}>")
+        list(APPEND KINE_COMPONENT_TARGET_DEPENDENCIES "${_skia_dep}")
+    endif()
+endforeach()
+
 if(WIN32 AND Vulkan_LIBRARY)
     list(APPEND KINE_COMPONENT_TARGET_FILES "${Vulkan_LIBRARY}")
     list(APPEND KINE_COMPONENT_TARGET_DEPENDENCIES "${Vulkan_LIBRARY}")

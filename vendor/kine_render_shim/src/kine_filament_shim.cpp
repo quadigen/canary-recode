@@ -126,6 +126,7 @@ struct VkQueue_T;
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -780,6 +781,66 @@ struct KineViewportExternalImage : backend::Platform::ExternalImage {
 
 using KineFilamentVulkanPlatformBase = backend::VulkanPlatform;
 
+// Optional GPU override, shared with the standalone compositor:
+//   KINE_VULKAN_GPU=<substring of VkPhysicalDeviceProperties.deviceName>
+//   KINE_VULKAN_GPU_INDEX=<index in vkEnumeratePhysicalDevices order>
+// KINE_GPU and KINE_GPU_INDEX are accepted as shorter aliases. With neither
+// variable set, Filament's built-in preference is used, which already ranks a
+// discrete GPU above an integrated one.
+static const char *kine_vulkan_gpu_preference_name() noexcept {
+	for (const char *variable : {"KINE_VULKAN_GPU", "KINE_GPU"}) {
+		const char *value = std::getenv(variable);
+		if (value && value[0] != '\0') {
+			return value;
+		}
+	}
+	return nullptr;
+}
+
+static int kine_vulkan_gpu_preference_index() noexcept {
+	for (const char *variable : {"KINE_VULKAN_GPU_INDEX", "KINE_GPU_INDEX"}) {
+		const char *value = std::getenv(variable);
+		if (!value || value[0] == '\0') {
+			continue;
+		}
+		char *end = nullptr;
+		const long parsed = std::strtol(value, &end, 10);
+		if (end != value && parsed >= 0 && parsed <= 127) {
+			return static_cast<int>(parsed);
+		}
+		fprintf(stderr,
+				"[Kine] ignoring invalid %s=%s (expected an index in 0..127)\n",
+				variable,
+				value);
+	}
+	return -1;
+}
+
+// Filament's device-name preference is not reliable across SDK builds, so
+// translate a name match into the device index that its selector does honor.
+static int kine_vulkan_gpu_match_index(VkInstance instance, const char *name) noexcept {
+	if (!instance || !name || name[0] == '\0' ||
+		!vkEnumeratePhysicalDevices || !vkGetPhysicalDeviceProperties) {
+		return -1;
+	}
+	uint32_t count = 0;
+	if (vkEnumeratePhysicalDevices(instance, &count, nullptr) != VK_SUCCESS || count == 0) {
+		return -1;
+	}
+	std::vector<VkPhysicalDevice> devices(count);
+	if (vkEnumeratePhysicalDevices(instance, &count, devices.data()) != VK_SUCCESS) {
+		return -1;
+	}
+	for (uint32_t index = 0; index < count; ++index) {
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(devices[index], &properties);
+		if (std::strstr(properties.deviceName, name) != nullptr) {
+			return static_cast<int>(index);
+		}
+	}
+	return -1;
+}
+
 // Queries the loader for instance extensions before the instance exists, which
 // is the only moment they can be added.
 static bool kine_instance_extension_available(const char *name) {
@@ -809,7 +870,15 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 	KineFilamentCompositorVulkanPlatform(void *sdlWindow, int width, int height)
 		: mSdlWindow(sdlWindow),
 		  mWidth(width),
-		  mHeight(height) {}
+		  mHeight(height) {
+		if (const char *name = kine_vulkan_gpu_preference_name()) {
+			fprintf(stderr, "[Kine] Vulkan GPU preference: device name contains '%s'\n", name);
+		} else if (const int index = kine_vulkan_gpu_preference_index(); index >= 0) {
+			fprintf(stderr, "[Kine] Vulkan GPU preference: device index %d\n", index);
+		} else {
+			fprintf(stderr, "[Kine] Vulkan GPU preference: automatic (discrete preferred)\n");
+		}
+	}
 
 	~KineFilamentCompositorVulkanPlatform() override {
 		this->destroyCompositor();
@@ -852,6 +921,26 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 	Customization getCustomization() const noexcept override {
 		Customization customization{};
 		customization.transitionSwapChainImageLayoutForPresent = false;
+		int index = -1;
+		if (const char *name = kine_vulkan_gpu_preference_name()) {
+			index = kine_vulkan_gpu_match_index(this->getInstance(), name);
+			if (index < 0) {
+				static bool warned = false;
+				if (!warned) {
+					fprintf(stderr,
+							"[Kine] no Vulkan device name contains '%s'; using the automatic "
+							"GPU preference\n",
+							name);
+					warned = true;
+				}
+			}
+		}
+		if (index < 0) {
+			index = kine_vulkan_gpu_preference_index();
+		}
+		if (index >= 0) {
+			customization.gpu.index = static_cast<int8_t>(index);
+		}
 		return customization;
 	}
 

@@ -456,7 +456,15 @@ when !KINE_RENDERER_GL {
 				if overlay_surface != nil {
 
 
-					if rendered_3d == false && base_skia_surface != nil {
+					// Snapshotting the base surface onto the overlay only makes
+					// sense when they are different surfaces. In the 2D path
+					// BeginOverlay reuses the base surface, and a self-snapshot
+					// forces Skia to copy-on-write the swapchain image in the
+					// middle of a frame, which loses the overlay and invalidates
+					// the image layout tracking.
+					if rendered_3d == false &&
+					   base_skia_surface != nil &&
+					   overlay_surface != base_skia_surface {
 						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
 							cast(^kineffi.KineSkiaSurface)overlay_surface,
 							cast(^kineffi.KineSkiaSurface)base_skia_surface,
