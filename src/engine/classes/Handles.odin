@@ -248,10 +248,35 @@ handles_cframe_matrix :: proc(cf: datatypes.CFrame) -> [16]f32 {
 }
 
 
+handles_set_adornee :: proc(handles: ^Handles, adornee: ^Object) {
+	if handles.Adornee == adornee {
+		return
+	}
+	handles.Adornee = adornee
+	handles.dragging = false
+	handles.selected_axis = kineffi.KINE_GIZMO_AXIS_NONE
+	handles.hovered_axis = kineffi.KINE_GIZMO_AXIS_NONE
+}
+
+handles_forget_adornee :: proc(object: ^Object) {
+	if descriptor := Find_Class(object.signal_registry, "Handles"); descriptor != nil {
+		for instance in descriptor.instances {
+			handles := cast(^Handles)instance
+			if handles.Adornee == object {
+				handles_set_adornee(handles, nil)
+			}
+		}
+	}
+}
+
 handles_selection :: struct {
-	part:  ^Part,
-	model: ^Object,
-	pivot: datatypes.CFrame,
+	part:              ^Part,
+	softbody:          ^SoftBody,
+	model:             ^Object,
+	attachment:        ^Attachment,
+	attachment_local:  datatypes.CFrame,
+	attachment_parent: datatypes.CFrame,
+	pivot:             datatypes.CFrame,
 }
 
 handles_resolve_selection :: proc(adornee: ^Object) -> (handles_selection, bool) {
@@ -261,6 +286,30 @@ handles_resolve_selection :: proc(adornee: ^Object) -> (handles_selection, bool)
 	if Is_A(adornee, "Part") {
 		part := cast(^Part)adornee
 		return handles_selection{part = part, pivot = part.cframe}, true
+	}
+	if Is_A_Class(adornee, &SoftBody_Class) {
+		body := cast(^SoftBody)adornee
+		return handles_selection{softbody = body, pivot = SoftBody_Current_CFrame(body)}, true
+	}
+	if Is_A_Class(adornee, &Attachment_Class) {
+		attachment := cast(^Attachment)adornee
+		rotation := datatypes.CFrame_FromOrientation(
+			math.to_radians(attachment.orientation.x),
+			math.to_radians(attachment.orientation.y),
+			math.to_radians(attachment.orientation.z),
+		)
+		local := datatypes.CFrame_Add_Vector3(rotation, attachment.position)
+		parent := datatypes.CFrame_Identity
+		if Is_A_Class(attachment.parent, &Part_Class) {
+			parent = (cast(^Part)attachment.parent).cframe
+		}
+		return handles_selection {
+				attachment = attachment,
+				attachment_local = local,
+				attachment_parent = parent,
+				pivot = datatypes.CFrame_Mul_CFrame(parent, local),
+			},
+			true
 	}
 	if Is_A(adornee, "Model") {
 		if pivot, ok := Handles_Model_Pivot(adornee); ok {
@@ -542,8 +591,24 @@ handles_selection_apply_axis :: proc(
 	delta: f32,
 	style: enums.HandlesStyle,
 ) {
+	if selection.attachment != nil && style == .Movement {
+		parent_axis := datatypes.CFrame_VectorToWorldSpace(
+			selection.attachment_local,
+			handles_axis_vector(axis),
+		)
+		selection.attachment.position = datatypes.Vec3_Add(
+			selection.attachment.position,
+			datatypes.Vec3_Multiply(parent_axis, delta),
+		)
+		return
+	}
 	if selection.part != nil {
 		handles_apply_axis_delta(selection.part, axis, delta, style)
+		return
+	}
+	if selection.softbody != nil {
+		centered := style == .Resize && handles_resize_centered()
+		Handles_Apply_SoftBody_Axis(selection.softbody, axis, delta, style, centered)
 		return
 	}
 	if selection.model != nil {
@@ -560,8 +625,19 @@ handles_selection_apply_plane :: proc(
 	second: f32,
 	style: enums.HandlesStyle,
 ) {
+	if selection.attachment != nil {
+		handles_selection_apply_axis(selection, pivot, first_axis, first, style)
+		handles_selection_apply_axis(selection, pivot, second_axis, second, style)
+		return
+	}
 	if selection.part != nil {
 		handles_apply_plane_delta(selection.part, first_axis, second_axis, first, second, style)
+		return
+	}
+	if selection.softbody != nil {
+		centered := style == .Resize && handles_resize_centered()
+		Handles_Apply_SoftBody_Axis(selection.softbody, first_axis, first, style, centered)
+		Handles_Apply_SoftBody_Axis(selection.softbody, second_axis, second, style, centered)
 		return
 	}
 	if selection.model != nil {
@@ -711,8 +787,7 @@ handles_apply_axis_delta :: proc(part: ^Part, axis: i32, delta: f32, style: enum
 		part.position.y = part.cframe.y
 		part.position.z = part.cframe.z
 	case .Resize:
-		keyboard := sdl3.GetKeyboardState(nil)
-		centered := keyboard[sdl3.Scancode.LCTRL] || keyboard[sdl3.Scancode.RCTRL]
+		centered := handles_resize_centered()
 		if !centered {
 			part.cframe.x += world_axis.x * delta * 0.5
 			part.cframe.y += world_axis.y * delta * 0.5
@@ -733,6 +808,11 @@ handles_apply_axis_delta :: proc(part: ^Part, axis: i32, delta: f32, style: enum
 		rotation := datatypes.CFrame_FromAxisAngle(local_axis, delta)
 		part.cframe = datatypes.CFrame_Mul_CFrame(part.cframe, rotation)
 	}
+}
+
+handles_resize_centered :: proc() -> bool {
+	keyboard := sdl3.GetKeyboardState(nil)
+	return keyboard != nil && (keyboard[sdl3.Scancode.LCTRL] || keyboard[sdl3.Scancode.RCTRL])
 }
 
 handles_apply_plane_delta :: proc(
@@ -781,12 +861,14 @@ handles_step_common :: proc(
 	}
 
 	selection, has_selection := handles_resolve_selection(adornee)
-	if !visible || !has_selection {
+	if !visible || !has_selection || (selection.attachment != nil && style != .Movement) {
 		handles_destroy_native(gizmo^, ctx^)
 		gizmo^ = nil
 		ctx^ = nil
 		native_type^ = 0
 		hovered_axis^ = kineffi.KINE_GIZMO_AXIS_NONE
+		selected_axis^ = kineffi.KINE_GIZMO_AXIS_NONE
+		dragging^ = false
 		return
 	}
 
@@ -904,6 +986,15 @@ handles_step_common :: proc(
 
 	draw_pivot := selection.pivot
 	if dragging^ && selection.model != nil {draw_pivot = drag_pivot^}
+	if selection.softbody != nil {draw_pivot = SoftBody_Current_CFrame(selection.softbody)}
+	if selection.attachment != nil {
+		offset := datatypes.Vec3_Subtract(
+			selection.attachment.position,
+			datatypes.CFrame_Position(selection.attachment_local),
+		)
+		offset = datatypes.CFrame_VectorToWorldSpace(selection.attachment_parent, offset)
+		draw_pivot = datatypes.CFrame_Add_Vector3(draw_pivot, offset)
+	}
 	draw_model := handles_cframe_matrix(draw_pivot)
 	kineffi.Kine_Filament_DrawGizmo(
 		renderer.Filament,
@@ -1066,15 +1157,15 @@ handles_set :: proc(
 	switch key {
 	case "Adornee":
 		if vm.IsNil(L, value_index) {
-			handles.Adornee = nil
+			handles_set_adornee(handles, nil)
 			return true
 		}
 		adornee := object_from_argument(L, value_index)
-		if adornee == nil || (!Is_A(adornee, "Part") && !Is_A(adornee, "Model")) {
-			_ = vm.RaiseError(L, "Adornee must be a BasePart, Model, or nil")
+		if !handles_valid_adornee(adornee, allow_attachment = true) {
+			_ = vm.RaiseError(L, "Adornee must be a BasePart, Model, SoftBody, Attachment, or nil")
 			return true
 		}
-		handles.Adornee = adornee
+		handles_set_adornee(handles, adornee)
 	case "Snap":
 		handles.snap = vm.ArgNumber(L, value_index)
 	case "Color3":
@@ -1162,8 +1253,8 @@ arc_handles_set :: proc(
 			return true
 		}
 		adornee := object_from_argument(L, value_index)
-		if adornee == nil || (!Is_A(adornee, "Part") && !Is_A(adornee, "Model")) {
-			_ = vm.RaiseError(L, "Adornee must be a BasePart, Model, or nil")
+		if !handles_valid_adornee(adornee) {
+			_ = vm.RaiseError(L, "Adornee must be a BasePart, Model, SoftBody, or nil")
 			return true
 		}
 		handles.Adornee = adornee

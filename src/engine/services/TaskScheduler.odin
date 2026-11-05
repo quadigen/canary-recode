@@ -8,7 +8,6 @@ import profiling "../profiling"
 import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 
 TaskScheduler_Class := classes.Class_Info {
@@ -180,17 +179,17 @@ queue_function :: proc(
 }
 
 task_spawn :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 1, 2, 0, false)
 }
 
 task_defer :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 1, 2, 0, true, "task.defer")
 }
 
 task_delay :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	delay := vm.ArgNumber(L, 1)
 	return queue_function(
 		cast(^TaskScheduler)vm.UpvaluePointer(L),
@@ -204,7 +203,7 @@ task_delay :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 task_wait :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
 	if scheduler == nil ||
 	   scheduler.destroyed {return vm.RaiseError(L, "TaskScheduler is unavailable")}
@@ -229,7 +228,7 @@ task_wait :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 task_cancel :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
 	thread := vm.ThreadFromArgument(L, 1)
 	if thread == nil {return vm.RaiseError(L, "task.cancel expects a thread")}

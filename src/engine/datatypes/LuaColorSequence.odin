@@ -1,22 +1,38 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_color_sequence_keypoint :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: ColorSequenceKeypoint) {
+push_color_sequence_keypoint :: proc(
+	L: ^vm.State,
+	binding: ^vm.Userdata_Binding,
+	value: ColorSequenceKeypoint,
+) {
 	push_value(L, binding, value)
 }
 
-Push_ColorSequenceKeypoint :: proc(L: ^vm.State, registry: ^Registry, value: ColorSequenceKeypoint) {
+Push_ColorSequenceKeypoint :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	value: ColorSequenceKeypoint,
+) {
 	push_color_sequence_keypoint(L, &registry.color_sequence_keypoint, value)
 }
 
-Arg_ColorSequenceKeypoint :: proc(L: ^vm.State, index: int, registry: ^Registry) -> ColorSequenceKeypoint {
+Arg_ColorSequenceKeypoint :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^Registry,
+) -> ColorSequenceKeypoint {
 	return require_color_sequence_keypoint(L, index, &registry.color_sequence_keypoint)^
 }
 
-require_color_sequence_keypoint :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^ColorSequenceKeypoint {
+require_color_sequence_keypoint :: proc(
+	L: ^vm.State,
+	index: int,
+	binding: ^vm.Userdata_Binding,
+) -> ^ColorSequenceKeypoint {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected ColorSequenceKeypoint")
 		return nil
@@ -25,7 +41,7 @@ require_color_sequence_keypoint :: proc(L: ^vm.State, index: int, binding: ^vm.U
 }
 
 color_sequence_keypoint_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
 	if registry == nil {
@@ -36,10 +52,7 @@ color_sequence_keypoint_new :: proc "c" (L: ^vm.State) -> i32 {
 		return vm.RaiseError(L, "ColorSequenceKeypoint time must be between 0 and 1")
 	}
 	color := require_color3(L, 2, &registry.color3)
-	push_color_sequence_keypoint(L, binding, ColorSequenceKeypoint_New(
-		time,
-		color^,
-	))
+	push_color_sequence_keypoint(L, binding, ColorSequenceKeypoint_New(time, color^))
 	return 1
 }
 
@@ -51,7 +64,7 @@ color_sequence_keypoint_get :: proc(L: ^vm.State, value, ctx: rawptr, key: strin
 	case "Time":
 		vm.PushNumber(L, f64(keypoint.Time))
 	case "Value":
-		if registry == nil { return false }
+		if registry == nil {return false}
 		push_color3(L, &registry.color3, keypoint.Value)
 	case:
 		return false
@@ -66,7 +79,13 @@ color_sequence_keypoint_equal :: proc(value, other, ctx: rawptr) -> bool {
 
 color_sequence_keypoint_string :: proc(value, ctx: rawptr) -> string {
 	keypoint := cast(^ColorSequenceKeypoint)value
-	return fmt.tprintf("%g, %g, %g, %g", keypoint.Time, keypoint.Value.R, keypoint.Value.G, keypoint.Value.B)
+	return fmt.tprintf(
+		"%g, %g, %g, %g",
+		keypoint.Time,
+		keypoint.Value.R,
+		keypoint.Value.G,
+		keypoint.Value.B,
+	)
 }
 
 color_sequence_keypoint_destroy :: proc(value, ctx: rawptr) {
@@ -74,12 +93,12 @@ color_sequence_keypoint_destroy :: proc(value, ctx: rawptr) {
 }
 
 ColorSequenceKeypoint_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "ColorSequenceKeypoint",
-		get     = color_sequence_keypoint_get,
-		string  = color_sequence_keypoint_string,
+	return vm.Userdata_Binding {
+		name = "ColorSequenceKeypoint",
+		get = color_sequence_keypoint_get,
+		string = color_sequence_keypoint_string,
 		destroy = color_sequence_keypoint_destroy,
-		equal   = color_sequence_keypoint_equal,
+		equal = color_sequence_keypoint_equal,
 	}
 }
 
@@ -99,7 +118,11 @@ Arg_ColorSequence :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Colo
 	return require_color_sequence(L, index, &registry.color_sequence)^
 }
 
-require_color_sequence :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^ColorSequence {
+require_color_sequence :: proc(
+	L: ^vm.State,
+	index: int,
+	binding: ^vm.Userdata_Binding,
+) -> ^ColorSequence {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected ColorSequence")
 		return nil
@@ -108,7 +131,7 @@ require_color_sequence :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_B
 }
 
 color_sequence_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
 	if registry == nil {
@@ -120,7 +143,11 @@ color_sequence_new :: proc "c" (L: ^vm.State) -> i32 {
 		keypoints := make([]ColorSequenceKeypoint, count)
 		for i in 0 ..< count {
 			_ = vm.RawGetIndex(L, 1, i + 1)
-			keypoints[i] = require_color_sequence_keypoint(L, -1, &registry.color_sequence_keypoint)^
+			keypoints[i] = require_color_sequence_keypoint(
+				L,
+				-1,
+				&registry.color_sequence_keypoint,
+			)^
 			vm.Pop(L, 1)
 		}
 
@@ -149,7 +176,7 @@ color_sequence_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> boo
 	registry := registry_from_binding(binding)
 	switch key {
 	case "Keypoints":
-		if registry == nil { return false }
+		if registry == nil {return false}
 		vm.NewTable(L, len(sequence.Keypoints), 0)
 		for keypoint, i in sequence.Keypoints {
 			push_color_sequence_keypoint(L, &registry.color_sequence_keypoint, keypoint)
@@ -171,7 +198,13 @@ color_sequence_string :: proc(value, ctx: rawptr) -> string {
 	sequence := cast(^ColorSequence)value
 	result := ""
 	for keypoint, i in sequence.Keypoints {
-		entry := fmt.tprintf("%g: %g, %g, %g", keypoint.Time, keypoint.Value.R, keypoint.Value.G, keypoint.Value.B)
+		entry := fmt.tprintf(
+			"%g: %g, %g, %g",
+			keypoint.Time,
+			keypoint.Value.R,
+			keypoint.Value.G,
+			keypoint.Value.B,
+		)
 		if i == 0 {
 			result = entry
 		} else {
@@ -188,16 +221,15 @@ color_sequence_destroy :: proc(value, ctx: rawptr) {
 }
 
 ColorSequence_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "ColorSequence",
-		get     = color_sequence_get,
-		string  = color_sequence_string,
+	return vm.Userdata_Binding {
+		name = "ColorSequence",
+		get = color_sequence_get,
+		string = color_sequence_string,
 		destroy = color_sequence_destroy,
-		equal   = color_sequence_equal,
+		equal = color_sequence_equal,
 	}
 }
 
 ColorSequence_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", color_sequence_new)
 }
-

@@ -311,10 +311,11 @@ user_input_service_namecall :: proc(
 
 user_input_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^UserInputService)object
-	if service.mouse != nil {
+	// lua_close owns Mouse finalization and may have already freed it.
+	if !vm.Is_Closing() && service.mouse != nil {
 		classes.Destroy_Hierarchy(&service.mouse.object)
-		service.mouse = nil
 	}
+	service.mouse = nil
 	classes.Object_Destroy(object)
 	delete(service.keys_down)
 	delete(service.touches)

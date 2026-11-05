@@ -1,6 +1,6 @@
 package datatypes
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import "core:fmt"
 
 import vm "../vm"
@@ -22,7 +22,7 @@ Arg_Content :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Content {
 }
 
 content_from_uri :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	push_content(L, binding, Content_From_URI(vm.ArgString(L, 1)))
 	return 1
@@ -43,7 +43,7 @@ Set_Content_Object_Resolver :: proc(
 }
 
 content_from_object :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	object := rawptr(nil)
 	argument := vm.UserdataBindingOf(L, 1)

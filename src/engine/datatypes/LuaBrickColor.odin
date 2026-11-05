@@ -1,6 +1,6 @@
 package datatypes
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import "core:fmt"
 
 import vm "../vm"
@@ -22,7 +22,7 @@ Arg_BrickColor :: proc(L: ^vm.State, index: int, registry: ^Registry) -> BrickCo
 }
 
 brick_color_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 
 	#partial switch vm.TypeOf(L, 1) {
@@ -48,7 +48,7 @@ brick_color_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	case "Name":
 		vm.PushString(L, brick_color.name)
 	case "Color":
-		if registry == nil { return false }
+		if registry == nil {return false}
 		Push_Color3(L, registry, brick_color.color)
 	case:
 		return false
@@ -69,12 +69,12 @@ brick_color_destroy :: proc(value, ctx: rawptr) {
 }
 
 BrickColor_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "BrickColor",
-		get     = brick_color_get,
-		string  = brick_color_string,
+	return vm.Userdata_Binding {
+		name = "BrickColor",
+		get = brick_color_get,
+		string = brick_color_string,
 		destroy = brick_color_destroy,
-		equal   = brick_color_equal,
+		equal = brick_color_equal,
 	}
 }
 

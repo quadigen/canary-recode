@@ -1,9 +1,9 @@
 #+build !js
 package services
 
+import tracy "../util/odin-tracy"
 // wire:service global="DialogService"
 
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 import "core:sync"
@@ -22,32 +22,23 @@ DialogService_Class := classes.Class_Info {
 }
 
 DialogService :: struct {
-	using service: Service,
-
-	renderer: ^classes.Renderer_Object,
-
-	mutex: sync.Mutex,
-
-	pending:   bool,
-	completed: bool,
-	cancelled: bool,
-	failed:    bool,
-
+	using service:    Service,
+	renderer:         ^classes.Renderer_Object,
+	mutex:            sync.Mutex,
+	pending:          bool,
+	completed:        bool,
+	cancelled:        bool,
+	failed:           bool,
 	result_path:      string,
 	default_location: cstring,
-
-	thread:     ^vm.State,
-	thread_ref: i32,
+	thread:           ^vm.State,
+	thread_ref:       i32,
 }
 
 // Shared by PickFolder and PickFile: both dialogs resolve to a single
 // optional path, and only one dialog can be open at a time.
-dialog_result_callback :: proc "c" (
-	userdata: rawptr,
-	filelist: [^]cstring,
-	filter: i32,
-) {
-	context = runtime.default_context()
+dialog_result_callback :: proc "c" (userdata: rawptr, filelist: [^]cstring, filter: i32) {
+	context = tracy.DefaultContext()
 
 	service := cast(^DialogService)userdata
 	if service == nil {
@@ -102,10 +93,7 @@ dialog_begin :: proc(
 	if !vm.IsYieldable(L) {
 		vm.RaiseError(
 			L,
-			fmt.tprintf(
-				"DialogService:%s() must be called from a yieldable thread",
-				method_name,
-			),
+			fmt.tprintf("DialogService:%s() must be called from a yieldable thread", method_name),
 		)
 		return nil, nil, false
 	}
@@ -115,10 +103,7 @@ dialog_begin :: proc(
 	if service.pending {
 		sync.mutex_unlock(&service.mutex)
 
-		vm.RaiseError(
-			L,
-			"DialogService already has an open dialog",
-		)
+		vm.RaiseError(L, "DialogService already has an open dialog")
 		return nil, nil, false
 	}
 
@@ -169,13 +154,7 @@ DialogService_PickFolder :: proc(
 		return 0
 	}
 
-	sdl3.ShowOpenFolderDialog(
-		dialog_result_callback,
-		service,
-		window,
-		location,
-		false,
-	)
+	sdl3.ShowOpenFolderDialog(dialog_result_callback, service, window, location, false)
 
 	return vm.YieldThread(L)
 }
@@ -190,23 +169,12 @@ DialogService_PickFile :: proc(
 		return 0
 	}
 
-	sdl3.ShowOpenFileDialog(
-		dialog_result_callback,
-		service,
-		window,
-		nil,
-		0,
-		location,
-		false,
-	)
+	sdl3.ShowOpenFileDialog(dialog_result_callback, service, window, nil, 0, location, false)
 
 	return vm.YieldThread(L)
 }
 
-dialog_service_step :: proc(
-	object: ^classes.Object,
-	ctx: ^classes.Class_Step_Context,
-) {
+dialog_service_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 	service := cast(^DialogService)object
 
 	if service == nil || ctx == nil || ctx.L == nil {
@@ -258,11 +226,7 @@ dialog_service_step :: proc(
 		vm.PushNil(thread)
 	}
 
-	_, _, err := vm.ResumeThread(
-		thread,
-		ctx.L,
-		1,
-	)
+	_, _, err := vm.ResumeThread(thread, ctx.L, 1)
 
 	if thread_ref > 0 {
 		vm.ReleaseValue(ctx.L, thread_ref)
@@ -273,10 +237,7 @@ dialog_service_step :: proc(
 	}
 
 	if err != "" {
-		fmt.eprintf(
-			"DialogService coroutine failed: %s\n",
-			err,
-		)
+		fmt.eprintf("DialogService coroutine failed: %s\n", err)
 
 		delete(err)
 	}
@@ -288,11 +249,7 @@ dialog_service_construct :: proc(
 ) -> ^classes.Object {
 	service := new(DialogService)
 
-	service.service = Service_Init(
-		&DialogService_Class,
-		"DialogService",
-		data_model,
-	)
+	service.service = Service_Init(&DialogService_Class, "DialogService", data_model)
 
 	service.renderer = renderer
 
@@ -308,10 +265,7 @@ dialog_service_get :: proc(
 ) -> bool {
 	switch key {
 	case "PickFolder", "PickFile":
-		if !vm.ThreadHasSecurityCapability(
-			L,
-			DIALOG_INTERNALS_CAPABILITY,
-		) {
+		if !vm.ThreadHasSecurityCapability(L, DIALOG_INTERNALS_CAPABILITY) {
 			return false
 		}
 
@@ -338,59 +292,29 @@ dialog_service_namecall :: proc(
 
 	switch method {
 	case "PickFolder":
-		if !vm.ThreadHasSecurityCapability(
-			L,
-			DIALOG_INTERNALS_CAPABILITY,
-		) {
-			return vm.RaiseError(
-				L,
-				"DialogService:PickFolder() requires Internals capability",
-			), true
+		if !vm.ThreadHasSecurityCapability(L, DIALOG_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "DialogService:PickFolder() requires Internals capability"),
+				true
 		}
 
-		default_location := vm.ArgOptionalString(
-			L,
-			2,
-			"",
-		)
+		default_location := vm.ArgOptionalString(L, 2, "")
 
-		return DialogService_PickFolder(
-			L,
-			service,
-			default_location,
-		), true
+		return DialogService_PickFolder(L, service, default_location), true
 
 	case "PickFile":
-		if !vm.ThreadHasSecurityCapability(
-			L,
-			DIALOG_INTERNALS_CAPABILITY,
-		) {
-			return vm.RaiseError(
-				L,
-				"DialogService:PickFile() requires Internals capability",
-			), true
+		if !vm.ThreadHasSecurityCapability(L, DIALOG_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "DialogService:PickFile() requires Internals capability"), true
 		}
 
-		default_location := vm.ArgOptionalString(
-			L,
-			2,
-			"",
-		)
+		default_location := vm.ArgOptionalString(L, 2, "")
 
-		return DialogService_PickFile(
-			L,
-			service,
-			default_location,
-		), true
+		return DialogService_PickFile(L, service, default_location), true
 	}
 
 	return 0, false
 }
 
-dialog_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+dialog_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^DialogService)object
 
 	sync.mutex_lock(&service.mutex)
@@ -411,9 +335,7 @@ dialog_service_destroy :: proc(
 	free(service)
 }
 
-Register_DialogService_Class :: proc(
-	registry: ^classes.Registry,
-) {
+Register_DialogService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
 		&DialogService_Class,

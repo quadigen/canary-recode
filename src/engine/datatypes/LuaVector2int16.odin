@@ -1,30 +1,18 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_vector2int16 :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: Vector2int16,
-) {
+push_vector2int16 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Vector2int16) {
 	push_value(L, binding, value)
 }
 
-Push_Vector2int16 :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: Vector2int16,
-) {
+Push_Vector2int16 :: proc(L: ^vm.State, registry: ^Registry, value: Vector2int16) {
 	push_vector2int16(L, &registry.vector2int16, value)
 }
 
-Arg_Vector2int16 :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> Vector2int16 {
+Arg_Vector2int16 :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Vector2int16 {
 	return require_vector2int16(L, index, &registry.vector2int16)^
 }
 
@@ -53,26 +41,18 @@ vector2int16_component :: proc(L: ^vm.State, index: int) -> i16 {
 }
 
 vector2int16_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	push_vector2int16(
 		L,
 		binding_from_upvalue(L),
-		Vector2int16_New(
-			vector2int16_component(L, 1),
-			vector2int16_component(L, 2),
-		),
+		Vector2int16_New(vector2int16_component(L, 1), vector2int16_component(L, 2)),
 	)
 
 	return 1
 }
 
-vector2int16_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+vector2int16_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	vector := cast(^Vector2int16)value
 
 	switch key {
@@ -87,28 +67,18 @@ vector2int16_get :: proc(
 	return true
 }
 
-vector2int16_add :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	self_index, other_index: int,
-) -> bool {
+vector2int16_add :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index: int) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
 	other := require_vector2int16(L, other_index, binding)
 
-	push_vector2int16(
-		L,
-		binding,
-		Vector2int16_Add((cast(^Vector2int16)value)^, other^),
-	)
+	push_vector2int16(L, binding, Vector2int16_Add((cast(^Vector2int16)value)^, other^))
 
 	return true
 }
 
 vector2int16_subtract :: proc(
 	L: ^vm.State,
-	value,
-	ctx: rawptr,
+	value, ctx: rawptr,
 	self_index, other_index: int,
 ) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
@@ -138,21 +108,18 @@ vector2int16_destroy :: proc(value, ctx: rawptr) {
 }
 
 Vector2int16_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Vector2int16",
-		get      = vector2int16_get,
-		string   = vector2int16_string,
-		destroy  = vector2int16_destroy,
-		add      = vector2int16_add,
+	return vm.Userdata_Binding {
+		name = "Vector2int16",
+		get = vector2int16_get,
+		string = vector2int16_string,
+		destroy = vector2int16_destroy,
+		add = vector2int16_add,
 		subtract = vector2int16_subtract,
-		equal    = vector2int16_equal,
+		equal = vector2int16_equal,
 	}
 }
 
-Vector2int16_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+Vector2int16_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", vector2int16_new)
 
 	push_vector2int16(L, binding, Vector2int16_Zero)

@@ -5,6 +5,8 @@
 #include "kine_filament_shim.h"
 
 #include "kine_default_package.h"
+#include "kine_default_fade_package.h"
+#include "kine_neon_fade_package.h"
 #include "kine_viewport_package.h"
 #include "kine_viewport_clear_package.h"
 #include "../../kine_skia/include/kine_skia.h"
@@ -396,10 +398,11 @@ struct KineMesh {
 	KineTexHandle *ownedTex = nullptr;
 	bool ownsTexture = true;
 	std::unordered_map<int, KineMesh *> refinedMeshes;
+	std::vector<math::uint2> refinementEdges;
 };
 
 struct KineCpuMeshData {
-	std::vector<math::float3> positions;
+	std::vector<KineVertex> vertices;
 	std::vector<uint32_t> indices;
 };
 
@@ -571,6 +574,11 @@ struct KineFilamentShader {
 	std::unordered_map<std::string, Texture *> textures;
 	int subdivisionLevel = 0;
 	float boundsPadding = 0.0f;
+	std::string source;
+	KineFilamentShader *fade = nullptr;
+	KineFilamentShader *opacitySource = nullptr;
+	KineFilamentShaderCompile *fadeJob = nullptr;
+	bool fadeRequested = false;
 };
 
 struct KineViewportPool;
@@ -628,6 +636,8 @@ struct KineFilamentContext {
 	Texture *whiteTex = nullptr;
 
 	Material *defaultMaterial = nullptr;
+	Material *defaultFadeMaterial = nullptr;
+	Material *neonFadeMaterial = nullptr;
 	Entity sunLight;
 
 	Material *neonMaterial = nullptr;
@@ -3121,14 +3131,16 @@ bool rebuildRenderTarget(KineFilamentContext *ctx, unsigned int textureId, int w
 }
 
 static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstance *mi, const KineBatchKey &key, bool inheritGlobalShader = true) {
-	KineFilamentShader *runtimeShader = key.shader ? key.shader : (inheritGlobalShader ? ctx->globalShader : nullptr);
+	const bool fade = key.materialKind == KINE_MAT_FADE || key.materialKind == KINE_MAT_NEON_FADE;
+	KineFilamentShader *runtimeShader = key.shader ? key.shader : (inheritGlobalShader && !fade ? ctx->globalShader : nullptr);
 	if (runtimeShader && runtimeShader->material) {
+		const auto *uniformSource = runtimeShader->opacitySource ? runtimeShader->opacitySource : runtimeShader;
 		TextureSampler sampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR, TextureSampler::MagFilter::LINEAR,
 			TextureSampler::WrapMode::REPEAT);
 		sampler.setAnisotropy(8.0f);
-		for (const auto &[name, texture] : runtimeShader->textures)
+		for (const auto &[name, texture] : uniformSource->textures)
 			mi->setParameter(name.c_str(), texture, sampler);
-		for (const auto &[name, values] : runtimeShader->uniforms) {
+		for (const auto &[name, values] : uniformSource->uniforms) {
 			switch (values.size()) {
 			case 1:
 				mi->setParameter(name.c_str(), values[0]);
@@ -3146,6 +3158,7 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 				break;
 			}
 		}
+		if (runtimeShader->opacitySource) mi->setParameter("kineSoftBodyOpacity", key.transmission);
 		return;
 	}
 	const float time = ctx->time;
@@ -3160,7 +3173,7 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 		mi->setParameter("time",time);
 		mi->setParameter("hasTexture",key.texture && key.texture->tex ? 1.0f : 0.0f);
 		mi->setParameter("baseColorMap",key.texture && key.texture->tex ? key.texture->tex : whiteTex,TextureSampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,TextureSampler::MagFilter::LINEAR,TextureSampler::WrapMode::REPEAT));
-	} else if (key.materialKind == KINE_MAT_NEON) {
+	} else if (key.materialKind == KINE_MAT_NEON || key.materialKind == KINE_MAT_NEON_FADE) {
 
 		mi->setParameter("intensity", key.param1);
 	} else if (key.materialKind == KINE_MAT_WATER) {
@@ -3232,8 +3245,9 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 		mi->setParameter("metallic", key.param2);
 		mi->setParameter("baseColorFactor", math::float4{1.0f});
 		mi->setParameter("alphaCutoff", 0.0f);
-		mi->setDoubleSided(false);
-		mi->setCullingMode(MaterialInstance::CullingMode::BACK);
+		mi->setDoubleSided(key.mesh->doubleSided);
+		mi->setCullingMode(key.mesh->doubleSided ?
+			MaterialInstance::CullingMode::NONE : MaterialInstance::CullingMode::BACK);
 		mi->setParameter("shadowStrength", 0.4f);
 
 		mi->setParameter("uvScale", math::float2{1.0f, 1.0f});
@@ -3331,13 +3345,17 @@ static bool kine_material_is_outline_mask(int materialKind) {
 // the Highlight kinds paint into a private mask instead of the scene.
 static bool kine_material_is_path_traced(int materialKind) {
 	return materialKind == KINE_MAT_DEFAULT ||
+		   materialKind == KINE_MAT_FADE ||
 		   materialKind == KINE_MAT_GLASS ||
 		   materialKind == KINE_MAT_NEON ||
+		   materialKind == KINE_MAT_NEON_FADE ||
 		   materialKind == KINE_MAT_TERRAIN;
 }
 
 static bool kine_material_uses_instance_alpha(int materialKind) {
 	return materialKind == KINE_MAT_PARTICLE ||
+		   materialKind == KINE_MAT_FADE ||
+		   materialKind == KINE_MAT_NEON_FADE ||
 		   materialKind == KINE_MAT_HIGHLIGHT_OUTLINE ||
 		   materialKind == KINE_MAT_HIGHLIGHT_FILL ||
 		   materialKind == KINE_MAT_HIGHLIGHT_OUTLINE_TOP ||
@@ -3345,16 +3363,27 @@ static bool kine_material_uses_instance_alpha(int materialKind) {
 		   materialKind == KINE_MAT_OUTLINE_MASK;
 }
 
+static float kine_draw_opacity(uint32_t reserved) {
+	float value = 1.0f;
+	if (reserved != 0) memcpy(&value, &reserved, sizeof(value));
+	return value > 0.0f && value < 1.0f ? value : 1.0f;
+}
+
 static Material *kine_select_material(
 	KineFilamentContext *ctx, int materialKind, KineFilamentShader *shader = nullptr, bool inheritGlobalShader = true) {
 	if (shader && shader->ctx == ctx && shader->material)
 		return shader->material;
-	if (inheritGlobalShader && ctx->globalShader && ctx->globalShader->material)
+	if (inheritGlobalShader && materialKind != KINE_MAT_FADE && materialKind != KINE_MAT_NEON_FADE &&
+		ctx->globalShader && ctx->globalShader->material)
 		return ctx->globalShader->material;
 	if (materialKind == KINE_MAT_GLASS)
 		return ctx->glassMaterial;
 	if (materialKind == KINE_MAT_NEON)
 		return ctx->neonMaterial;
+	if (materialKind == KINE_MAT_NEON_FADE)
+		return ctx->neonFadeMaterial;
+	if (materialKind == KINE_MAT_FADE)
+		return ctx->defaultFadeMaterial;
 	if (materialKind == KINE_MAT_WATER)
 		return ctx->waterMaterial;
 	if (materialKind == KINE_MAT_FORCEFIELD)
@@ -3390,7 +3419,7 @@ static KineBatchKey kine_draw_item_key(const KineFilamentDrawItem &item, uint64_
 	key.param1 = item.param1;
 	key.param2 = item.param2;
 
-	key.param3 = (item.materialKind == KINE_MAT_DEFAULT) ? 0.0f : item.param3;
+	key.param3 = (item.materialKind == KINE_MAT_DEFAULT || item.materialKind == KINE_MAT_FADE) ? 0.0f : item.param3;
 	key.transmission = item.transmission;
 	key.castShadow = (item.flags & KINE_FILAMENT_DRAW_CAST_SHADOWS) != 0;
 	key.receiveShadow = (item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0;
@@ -4889,6 +4918,12 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 	ctx->renderer->setClearOptions(clearOptions);
 
 	ctx->defaultMaterial = buildDefaultMaterial(ctx->engine);
+	ctx->defaultFadeMaterial = Material::Builder()
+		.package(KINE_DEFAULT_FADE_PACKAGE_KINE_DEFAULT_FADE_DATA, KINE_DEFAULT_FADE_PACKAGE_KINE_DEFAULT_FADE_SIZE)
+		.build(*ctx->engine);
+	ctx->neonFadeMaterial = Material::Builder()
+		.package(KINE_NEON_FADE_PACKAGE_KINE_NEON_FADE_DATA, KINE_NEON_FADE_PACKAGE_KINE_NEON_FADE_SIZE)
+		.build(*ctx->engine);
 	ctx->neonMaterial = buildNeonMaterial(ctx->engine);
 	ctx->glassMaterial = buildGlassMaterial(ctx->engine);
 	ctx->waterMaterial = buildWaterMaterial(ctx->engine);
@@ -5909,6 +5944,10 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 		}
 		if (ctx->defaultMaterial)
 			ctx->engine->destroy(ctx->defaultMaterial);
+		if (ctx->defaultFadeMaterial)
+			ctx->engine->destroy(ctx->defaultFadeMaterial);
+		if (ctx->neonFadeMaterial)
+			ctx->engine->destroy(ctx->neonFadeMaterial);
 		if (ctx->neonMaterial)
 			ctx->engine->destroy(ctx->neonMaterial);
 		if (ctx->glassMaterial)
@@ -6864,7 +6903,7 @@ KINE_API int Kine_Filament_CreateLightEx(
 	return static_cast<int>(entity.getId());
 }
 
-KINE_API int Kine_Filament_CreateDecal(
+static int kine_create_decal(
 	KineFilamentContext *ctx,
 	float width,
 	float height,
@@ -6875,9 +6914,10 @@ KINE_API int Kine_Filament_CreateDecal(
 	float studsPerTileV,
 	bool culling,
 	bool castShadows,
-	bool receiveShadows) {
+	bool receiveShadows,
+	KineMesh *surface) {
 	auto *texHandle = (KineTexHandle *)texture;
-	if (!ctx || !ctx->engine || !ctx->scene || !texHandle || !texHandle->tex ||
+	if (!ctx || !ctx->engine || !ctx->scene || !ctx->decalMaterial || !texHandle || !texHandle->tex ||
 		width <= 0.0f || height <= 0.0f)
 		return -1;
 
@@ -6908,12 +6948,17 @@ KINE_API int Kine_Filament_CreateDecal(
 	material->setParameter("uvScale", uvScale);
 	material->setParameter("uvOffset", uvOffset);
 
-	KineMesh *mesh = buildDecalQuad();
-	uploadMesh(mesh, ctx->engine);
+	KineMesh *mesh = surface ? surface : buildDecalQuad();
+	if (!surface) uploadMesh(mesh, ctx->engine);
+	if (surface) {
+		material->setDoubleSided(false);
+		material->setCullingMode(MaterialInstance::CullingMode::BACK);
+	}
 
-	RenderableManager::Builder(1)
-		.boundingBox({{-width * 0.5f, -height * 0.5f, -0.01f},
-					  {width * 0.5f, height * 0.5f, 0.01f}})
+	const Box bounds = surface ? surface->localBounds :
+		Box{{0.0f, 0.0f, 0.0f}, {width * 0.5f, height * 0.5f, 0.01f}};
+	if (RenderableManager::Builder(1)
+		.boundingBox(bounds)
 		.material(0, material)
 		.geometry(
 			0,
@@ -6925,12 +6970,51 @@ KINE_API int Kine_Filament_CreateDecal(
 		.culling(culling)
 		.castShadows(castShadows)
 		.receiveShadows(receiveShadows)
-		.build(*ctx->engine, entity);
+		.build(*ctx->engine, entity) != RenderableManager::Builder::Success) {
+		ctx->engine->destroy(material);
+		EntityManager::get().destroy(entity);
+		if (!surface) Kine_Filament_DestroyMesh(ctx, (KineFilamentMesh *)mesh);
+		return -1;
+	}
 
 	ctx->scene->addEntity(entity);
 	ctx->decals.push_back({entity, material, mesh});
 
 	return static_cast<int>(entity.getId());
+}
+
+KINE_API int Kine_Filament_CreateDecal(
+	KineFilamentContext *ctx, float width, float height, KineFilamentTex *texture,
+	float offsetStudsU, float offsetStudsV, float studsPerTileU, float studsPerTileV,
+	bool culling, bool castShadows, bool receiveShadows) {
+	return kine_create_decal(ctx, width, height, texture, offsetStudsU, offsetStudsV,
+		studsPerTileU, studsPerTileV, culling, castShadows, receiveShadows, nullptr);
+}
+
+KINE_API int Kine_Filament_CreateMeshDecal(
+	KineFilamentContext *ctx, KineFilamentMesh *mesh, KineFilamentTex *texture) {
+	auto *surface = (KineMesh *)mesh;
+	if (!surface || !surface->vb || !surface->ib) return -1;
+	return kine_create_decal(ctx, 1.0f, 1.0f, texture, 0.0f, 0.0f, 1.0f, 1.0f,
+		false, false, true, surface);
+}
+
+KINE_API bool Kine_Filament_EditMeshDecal(
+	KineFilamentContext *ctx, int decal, KineFilamentMesh *mesh,
+	bool culling, bool castShadows, bool receiveShadows) {
+	if (!ctx || !ctx->engine || !mesh) return false;
+	auto &rm = ctx->engine->getRenderableManager();
+	auto instance = rm.getInstance(Entity::import(decal));
+	if (!instance.isValid()) return false;
+	rm.setCastShadows(instance, castShadows);
+	rm.setReceiveShadows(instance, receiveShadows);
+	rm.setCulling(instance, culling);
+	rm.setAxisAlignedBoundingBox(instance, ((KineMesh *)mesh)->localBounds);
+	return true;
+}
+
+KINE_API void Kine_Filament_SetMeshDoubleSided(KineFilamentMesh *mesh) {
+	if (mesh) ((KineMesh *)mesh)->doubleSided = true;
 }
 
 static void kine_compute_decal_uv(
@@ -7466,19 +7550,7 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateTerrainMesh(
 	return (KineFilamentMesh *)m;
 }
 
-bool Kine_Filament_UpdateCustomMesh(
-	KineFilamentContext *ctx,
-	KineFilamentMesh *mesh,
-	const float *vertexData,
-	int vertexCount) {
-	auto *m = (KineMesh *)mesh;
-	if (!ctx || !ctx->engine || !m || !m->vb || !vertexData || vertexCount <= 0 ||
-		(size_t)vertexCount != m->vertices.size()) {
-		return false;
-	}
-
-	memcpy(m->vertices.data(), vertexData, m->vertices.size() * sizeof(KineVertex));
-
+static bool kine_upload_updated_vertices(KineFilamentContext *ctx, KineMesh *m) {
 	math::float3 boundsMin{
 		std::numeric_limits<float>::max(),
 		std::numeric_limits<float>::max(),
@@ -7537,6 +7609,36 @@ bool Kine_Filament_UpdateCustomMesh(
 	m->vb->setBufferAt(*ctx->engine, 1,
 					   VertexBuffer::BufferDescriptor(tangentCopy, tangentBytes, [](void *buffer, size_t, void *) { free(buffer); }, nullptr));
 
+	return true;
+}
+
+bool Kine_Filament_UpdateCustomMesh(
+	KineFilamentContext *ctx,
+	KineFilamentMesh *mesh,
+	const float *vertexData,
+	int vertexCount) {
+	auto *m = (KineMesh *)mesh;
+	if (!ctx || !ctx->engine || !m || !m->vb || !vertexData || vertexCount <= 0 ||
+		(size_t)vertexCount != m->vertices.size()) {
+		return false;
+	}
+
+	memcpy(m->vertices.data(), vertexData, m->vertices.size() * sizeof(KineVertex));
+	if (!kine_upload_updated_vertices(ctx, m)) return false;
+
+	// Material displacement can use a cached subdivision of this mesh. Replay
+	// its midpoint edges in creation order to keep the same buffers and topology.
+	for (auto &entry : m->refinedMeshes) {
+		KineMesh *refined = entry.second;
+		if (refined == m) continue;
+		std::copy(m->vertices.begin(), m->vertices.end(), refined->vertices.begin());
+		size_t vertex = m->vertices.size();
+		for (const math::uint2 &edge : refined->refinementEdges) {
+			refined->vertices[vertex++] = kine_material_midpoint(
+				refined->vertices[edge.x], refined->vertices[edge.y]);
+		}
+		if (!kine_upload_updated_vertices(ctx, refined)) return false;
+	}
 	return true;
 }
 
@@ -7902,14 +8004,8 @@ KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const c
 		return nullptr;
 
 	auto *result = new KineCpuMeshData();
-	result->positions.reserve(source->vertices.size());
-	result->indices.reserve(source->indices.size());
-	for (const KineVertex &vertex : source->vertices) {
-		result->positions.push_back({vertex.px, vertex.py, vertex.pz});
-	}
-	for (uint32_t index : source->indices) {
-		result->indices.push_back((uint32_t)index);
-	}
+	result->vertices = std::move(source->vertices);
+	result->indices = std::move(source->indices);
 	delete source;
 	return reinterpret_cast<KineFilamentMeshData *>(result);
 #else
@@ -7920,7 +8016,7 @@ KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const c
 
 KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData *meshData) {
 	const auto *data = reinterpret_cast<const KineCpuMeshData *>(meshData);
-	return data ? (int)data->positions.size() : 0;
+	return data ? (int)data->vertices.size() : 0;
 }
 
 KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData *meshData) {
@@ -7931,14 +8027,25 @@ KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData *mes
 KINE_API bool Kine_Filament_CopyMeshDataPositions(
 	const KineFilamentMeshData *meshData, float *outPositions, int positionFloatCapacity) {
 	const auto *data = reinterpret_cast<const KineCpuMeshData *>(meshData);
-	const size_t required = data ? data->positions.size() * 3u : 0u;
+	const size_t required = data ? data->vertices.size() * 3u : 0u;
 	if (!data || !outPositions || positionFloatCapacity < 0 || (size_t)positionFloatCapacity < required)
 		return false;
-	for (size_t i = 0; i < data->positions.size(); ++i) {
-		outPositions[i * 3u] = data->positions[i].x;
-		outPositions[i * 3u + 1u] = data->positions[i].y;
-		outPositions[i * 3u + 2u] = data->positions[i].z;
+	for (size_t i = 0; i < data->vertices.size(); ++i) {
+		outPositions[i * 3u] = data->vertices[i].px;
+		outPositions[i * 3u + 1u] = data->vertices[i].py;
+		outPositions[i * 3u + 2u] = data->vertices[i].pz;
 	}
+	return true;
+}
+
+KINE_API bool Kine_Filament_CopyMeshDataVertices(
+	const KineFilamentMeshData *meshData, float *outVertices, int floatCapacity) {
+	const auto *data = reinterpret_cast<const KineCpuMeshData *>(meshData);
+	const size_t required = data ? data->vertices.size() * 8u : 0u;
+	static_assert(sizeof(KineVertex) == 8 * sizeof(float));
+	if (!data || !outVertices || floatCapacity < 0 || (size_t)floatCapacity < required)
+		return false;
+	std::memcpy(outVertices, data->vertices.data(), required * sizeof(float));
 	return true;
 }
 
@@ -8154,7 +8261,8 @@ static void kine_queue_mesh(
 	KineFilamentShader *shader = nullptr,
 	uint64_t streamId = 0,
 	float particleUvOffsetY = 0.0f,
-	KineBatchKey *outKey = nullptr) {
+	KineBatchKey *outKey = nullptr,
+	float opacity = 1.0f) {
 	if (!ctx || !mesh || !mat4)
 		return;
 
@@ -8165,7 +8273,7 @@ static void kine_queue_mesh(
 			ctx->outlineWidthPixels = param2;
 	}
 
-	const bool perInstanceUv = (materialKind == KINE_MAT_DEFAULT);
+	const bool perInstanceUv = materialKind == KINE_MAT_DEFAULT || materialKind == KINE_MAT_FADE;
 
 	KineBatchKey key;
 	key.mesh = (KineMesh *)mesh;
@@ -8271,8 +8379,8 @@ static void kine_queue_mesh(
 		math::float4{mat4[3], mat4[7], mat4[11], mat4[15]});
 	pending.instanceTransformHashes.emplace_back(instanceTransformHash);
 
-	const math::float4 color{r, g, b,
-							 kine_material_uses_instance_alpha(materialKind) ? transmission : 1.0f};
+	const bool useAlpha = kine_material_uses_instance_alpha(materialKind) && !(key.shader && key.shader->opacitySource);
+	const math::float4 color{r, g, b, opacity * (useAlpha ? transmission : 1.0f)};
 	for (size_t offset = 0; offset < 4; ++offset) {
 		uint32_t bits = 0;
 		memcpy(&bits, &color[offset], sizeof(bits));
@@ -8342,7 +8450,7 @@ KINE_API void Kine_Filament_DrawMeshList(
 			(item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0,
 			(item.flags & KINE_FILAMENT_DRAW_CULLING) != 0,
 			item.tex,
-			item.shader);
+			item.shader, 0, 0.0f, nullptr, kine_draw_opacity(item.reserved));
 	}
 }
 
@@ -8446,7 +8554,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			item.shader,
 			streamId,
 			0.0f,
-			&key);
+			&key, kine_draw_opacity(item.reserved));
 		if (uniqueKeys.insert(key).second) {
 			state.keys.push_back(key);
 		}
@@ -9514,7 +9622,7 @@ static thread_local std::string kine_filament_shader_error;
 #if !defined(__ANDROID__)
 extern "C++" {
 static filamat::Package kine_compile_shader(
-	utils::JobSystem &jobs, const char *materialSource, std::string &error) {
+	utils::JobSystem &jobs, const char *materialSource, std::string &error, bool fade = false) {
 	static std::once_flag filamatInit;
 	std::call_once(filamatInit, [] { filamat::MaterialBuilder::init(); });
 
@@ -9542,6 +9650,10 @@ static filamat::Package kine_compile_shader(
 										 ? "Filamat could not parse the material source"
 										 : std::string(message);
 		return filamat::Package::invalidPackage();
+	}
+	if (fade) {
+		builder.blending(filamat::MaterialBuilder::BlendingMode::FADE)
+			.depthWrite(false).parameter("kineSoftBodyOpacity", filamat::MaterialBuilder::UniformType::FLOAT);
 	}
 
 	filamat::Package package = builder.build(jobs);
@@ -9577,12 +9689,14 @@ struct KineShaderCompileState {
 
 struct KineFilamentShaderCompile {
 	std::shared_ptr<KineShaderCompileState> state;
+	std::string source;
 };
 
 class KineShaderCompiler {
 	struct Request {
 		std::weak_ptr<KineShaderCompileState> state;
 		std::string source;
+		bool fade;
 	};
 	std::mutex mutex;
 	std::condition_variable wake;
@@ -9612,7 +9726,7 @@ class KineShaderCompiler {
 				}
 				if (compiler) {
 					state->package = kine_compile_shader(
-						compiler->getJobSystem(), request.source.c_str(), state->error);
+						compiler->getJobSystem(), request.source.c_str(), state->error, request.fade);
 				} else {
 					state->error = "Could not start the material compiler";
 				}
@@ -9634,11 +9748,11 @@ public:
 		worker.join();
 	}
 
-	void enqueue(const std::shared_ptr<KineShaderCompileState> &state, const char *source) {
+	void enqueue(const std::shared_ptr<KineShaderCompileState> &state, const char *source, bool fade) {
 		{
 			std::lock_guard lock(mutex);
 			std::erase_if(requests, [](const Request &request) { return request.state.expired(); });
-			requests.push_back({state, source});
+		requests.push_back({state, source, fade});
 		}
 		wake.notify_one();
 	}
@@ -9660,11 +9774,13 @@ KINE_API KineFilamentShader *Kine_Filament_Shader_Create(
 		return nullptr;
 	}
 	auto package = kine_compile_shader(ctx->engine->getJobSystem(), materialSource, kine_filament_shader_error);
-	return package.isValid() ? kine_publish_shader(ctx, package) : nullptr;
+	auto *shader = package.isValid() ? kine_publish_shader(ctx, package) : nullptr;
+	if (shader) shader->source = materialSource;
+	return shader;
 #endif
 }
 
-KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source) {
+static KineFilamentShaderCompile *kine_shader_compile_start(const char *source, bool fade) {
 #if defined(__ANDROID__)
 	(void)source;
 	return nullptr;
@@ -9677,13 +9793,18 @@ KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char
 		auto job = std::make_unique<KineFilamentShaderCompile>();
 		job->state = std::make_shared<KineShaderCompileState>();
 		static KineShaderCompiler compiler;
-		compiler.enqueue(job->state, source);
+		job->source = source;
+		compiler.enqueue(job->state, source, fade);
 		return job.release();
 	} catch (...) {
 		kine_filament_shader_error = "Could not start the material compiler thread";
 		return nullptr;
 	}
 #endif
+}
+
+KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source) {
+	return kine_shader_compile_start(source, false);
 }
 
 KINE_API bool Kine_Filament_Shader_CompilePoll(
@@ -9702,6 +9823,7 @@ KINE_API bool Kine_Filament_Shader_CompilePoll(
 	if (!job->state->ready.load(std::memory_order_acquire)) return false;
 	kine_filament_shader_error = job->state->error;
 	*shader = job->state->package.isValid() ? kine_publish_shader(ctx, job->state->package) : nullptr;
+	if (*shader) (*shader)->source = job->source;
 	return true;
 #endif
 }
@@ -9714,10 +9836,65 @@ KINE_API void Kine_Filament_Shader_CompileRelease(KineFilamentShaderCompile *job
 #endif
 }
 
+extern "C++" {
+// Wrap the fragment entry point so custom MaterialVariants retain their
+// original lighting and maps while receiving the SoftBody's opacity.
+static std::string kine_shader_fade_source(const std::string &source) {
+	size_t fragment = 0;
+	while ((fragment = source.find("fragment", fragment)) != std::string::npos) {
+		const size_t start = source.find_first_not_of(" \t\r\n", fragment + 8);
+		if (start == std::string::npos) break;
+		if (source[start] != '{') {fragment += 8; continue;}
+		size_t end = start + 1;
+		int depth = 1;
+		for (; end < source.size() && depth; ++end) {
+			if (source.compare(end, 2, "//") == 0) {
+				end = source.find('\n', end + 2);
+				if (end == std::string::npos) return {};
+			} else if (source.compare(end, 2, "/*") == 0) {
+				end = source.find("*/", end + 2);
+				if (end == std::string::npos) return {};
+				++end;
+			} else if (source[end] == '{') ++depth;
+			else if (source[end] == '}') --depth;
+		}
+		if (depth != 0) return {};
+		return source.substr(0, start + 1) + "\n#define material kineSoftBodyMaterial\n" +
+			source.substr(start + 1, end - start - 2) +
+			"\n#undef material\nvoid material(inout MaterialInputs material) {\n"
+			"    kineSoftBodyMaterial(material);\n"
+			"    material.baseColor.a *= materialParams.kineSoftBodyOpacity;\n}\n" +
+			source.substr(end - 1);
+	}
+	return {};
+}
+}
+
+KINE_API KineFilamentShader *Kine_Filament_Shader_ResolveFade(KineFilamentShader *shader) {
+	if (!shader || !shader->ctx) return nullptr;
+	if (!shader->fadeRequested) {
+		shader->fadeRequested = true;
+		const auto source = kine_shader_fade_source(shader->source);
+		if (!source.empty()) shader->fadeJob = kine_shader_compile_start(source.c_str(), true);
+	}
+	if (shader->fadeJob && Kine_Filament_Shader_CompilePoll(shader->ctx, shader->fadeJob, &shader->fade)) {
+		Kine_Filament_Shader_CompileRelease(shader->fadeJob);
+		shader->fadeJob = nullptr;
+		if (shader->fade) shader->fade->opacitySource = shader;
+	}
+	if (shader->fade) {
+		shader->fade->subdivisionLevel = shader->subdivisionLevel;
+		shader->fade->boundsPadding = shader->boundsPadding;
+	}
+	return shader->fade;
+}
+
 KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader) {
 	if (!shader)
 		return;
 	KineFilamentContext *ctx = shader->ctx;
+	if (shader->fadeJob) Kine_Filament_Shader_CompileRelease(shader->fadeJob);
+	if (shader->fade) Kine_Filament_Shader_Destroy(shader->fade);
 	if (ctx && ctx->engine) {
 		if (ctx->globalShader == shader) {
 			kine_switch_global_shader(ctx, nullptr);
@@ -9751,7 +9928,8 @@ static void kine_refresh_shader_instances(KineFilamentShader *shader) {
 	KineFilamentContext *ctx = shader->ctx;
 	if (ctx && ctx->engine) {
 		for (auto &[key, batch] : ctx->builtBatches) {
-			if (key.shader == shader || (!key.shader && ctx->globalShader == shader)) {
+			if (key.shader == shader || (key.shader && key.shader->opacitySource == shader) ||
+				(!key.shader && ctx->globalShader == shader)) {
 				for (KineBuiltBatch &chunk : batch.chunks) {
 					if (chunk.materialInstance) {
 						kine_apply_material_params(ctx, chunk.materialInstance, key);

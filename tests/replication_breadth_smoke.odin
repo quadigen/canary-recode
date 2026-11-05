@@ -84,6 +84,7 @@ floor.CFrame = CFrame.new(0, -0.5, 0)
 local lamp = Instance.new("Part", workspace)
 lamp.Name = "Lamp"
 lamp.Anchored = true
+lamp.CanTouch = false
 lamp.Size = vector.create(1, 2, 1)
 lamp.CFrame = CFrame.new(0, 20, 0)
 local lamp_light = Instance.new("PointLight", lamp)
@@ -153,6 +154,9 @@ assert(label.Font == Enum.Font.Arcade, "TextLabel Font enum")
 assert(label.TextScaled == true, "TextLabel TextScaled")
 local corner = frame:FindFirstChild("UICorner")
 assert(corner ~= nil and close(corner.CornerRadius.Offset, 8), "UICorner UDim")
+local playerHud = game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("Hud")
+assert(playerHud ~= nil and playerHud ~= hud, "the replicated template should be cloned into PlayerGui")
+assert(playerHud.Backdrop.Title.Text == "Hello Replication", "clone must include the complete snapshot")
 
 -- Lighting effects replicated.
 local nite = game:GetService("Lighting"):FindFirstChild("Nite")
@@ -165,6 +169,7 @@ assert(sky ~= nil and close(sky.Density, 0.3), "Atmosphere should replicate")
 -- PointLight property replication.
 local lamp = workspace:FindFirstChild("Lamp")
 assert(lamp ~= nil, "Lamp part replicates")
+assert(not lamp.CanTouch, "CanTouch should replicate")
 local lamp_light = lamp:FindFirstChild("LampLight")
 assert(lamp_light ~= nil and lamp_light:IsA("PointLight"), "PointLight should replicate")
 assert(close(lamp_light.Brightness, 2) and close(lamp_light.Range, 24), "PointLight numbers")

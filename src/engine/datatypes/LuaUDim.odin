@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_udim :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: UDim) {
 	push_value(L, binding, value)
@@ -25,11 +25,12 @@ require_udim :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) ->
 }
 
 udim_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_udim(L, binding_from_upvalue(L), UDim_New(
-		f32(vm.ArgOptionalNumber(L, 1)),
-		f32(vm.ArgOptionalNumber(L, 2)),
-	))
+	context = tracy.DefaultContext()
+	push_udim(
+		L,
+		binding_from_upvalue(L),
+		UDim_New(f32(vm.ArgOptionalNumber(L, 1)), f32(vm.ArgOptionalNumber(L, 2))),
+	)
 	return 1
 }
 
@@ -96,15 +97,15 @@ udim_destroy :: proc(value, ctx: rawptr) {
 }
 
 UDim_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "UDim",
-		get      = udim_get,
+	return vm.Userdata_Binding {
+		name = "UDim",
+		get = udim_get,
 		namecall = udim_namecall,
-		string   = udim_string,
-		destroy  = udim_destroy,
-		add      = udim_add,
+		string = udim_string,
+		destroy = udim_destroy,
+		add = udim_add,
 		subtract = udim_subtract,
-		equal    = udim_equal,
+		equal = udim_equal,
 	}
 }
 
@@ -113,4 +114,3 @@ UDim_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_udim(L, binding, UDim_Zero)
 	vm.SetField(L, -2, "zero")
 }
-

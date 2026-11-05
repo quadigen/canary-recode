@@ -23,7 +23,7 @@ is_zstd_frame :: proc(data: []u8) -> bool {
 	return data[0] == bytes[0] && data[1] == bytes[1] && data[2] == bytes[2] && data[3] == bytes[3]
 }
 
-compress_kine :: proc(data: []u8) -> ([]u8, Error) {
+compress_kine :: proc(data: []u8, level: c.int = KINE_ZSTD_LEVEL) -> ([]u8, Error) {
 	bound := kineffi.ZSTD_compressBound(c.size_t(len(data)))
 	compressed := make([]u8, int(bound))
 
@@ -32,7 +32,7 @@ compress_kine :: proc(data: []u8) -> ([]u8, Error) {
 		bound,
 		raw_data(data),
 		c.size_t(len(data)),
-		KINE_ZSTD_LEVEL,
+		level,
 	)
 	if kineffi.ZSTD_isError(written) != 0 {
 		delete(compressed)
@@ -49,7 +49,7 @@ compress_kine :: proc(data: []u8) -> ([]u8, Error) {
 }
 
 
-decompress_kine :: proc(data: []u8) -> ([]u8, Error) {
+decompress_kine :: proc(data: []u8, level: c.int = KINE_ZSTD_LEVEL) -> ([]u8, Error) {
 	content_size := kineffi.ZSTD_getFrameContentSize(raw_data(data), c.size_t(len(data)))
 	if content_size == ~u64(0) || content_size == ~u64(1) {
 
@@ -91,6 +91,30 @@ decompress_kine :: proc(data: []u8) -> ([]u8, Error) {
 	return decompressed[:int(written)], Error_None
 }
 
+
+Repack_File_Data :: proc(data: []u8, level: c.int) -> ([]u8, Error) {
+	raw: []u8
+	if is_zstd_frame(data) {
+		err: Error
+		raw, err = decompress_kine(data)
+		if !Error_Is_None(err) {
+			return nil, err
+		}
+	} else {
+		raw = make([]u8, len(data))
+		copy(raw, data)
+	}
+	if level == 0 {
+		return raw, Error_None
+	}
+	compressed, err := compress_kine(raw, level)
+	if Error_Is_None(err) && len(compressed) >= len(raw) {
+		delete(compressed)
+		return raw, Error_None
+	}
+	delete(raw)
+	return compressed, err
+}
 
 Serialize_To_File :: proc(
 	registry: ^classes.Registry,

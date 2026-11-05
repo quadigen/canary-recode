@@ -598,6 +598,7 @@ Register_Camera :: proc(registry: ^Registry) {
 			"CameraType",
 			"Pitch",
 			"Yaw",
+			"Sensitivity",
 		},
 	)
 }
@@ -614,6 +615,8 @@ Camera_Get :: proc(
 	switch key {
 	case "FieldOfView":
 		vm.PushNumber(L, f64(camera.field_of_view))
+	case "Sensitivity":
+		vm.PushNumber(L, f64(camera.mouse_sensitivity))
 	case "CFrame":
 		if types == nil {
 			return false
@@ -768,6 +771,8 @@ Camera_Set :: proc(
 		camera.CFrame = datatypes.Arg_CFrame(L, index, types)
 
 		Camera_Sync_Angles_From_CFrame(camera)
+	case "Sensitivity":
+		camera.mouse_sensitivity = f32(vm.ArgNumber(L, index))
 
 	case "Focus":
 		if types == nil {

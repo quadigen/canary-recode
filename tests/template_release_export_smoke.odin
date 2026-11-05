@@ -86,7 +86,8 @@ main :: proc() {
 	defer services.Template_Checkpoint_Destroy(&latest)
 	assert(len(latest.tag) > 0, "the release should carry a tag")
 	assert(
-		latest.server_asset.name == server_asset_name,
+		latest.server_asset.name == server_asset_name ||
+		latest.server_asset.name == fmt.tprintf("%s.zip", server_asset_name),
 		fmt.tprintf(
 			"the release should publish %s, found %s",
 			server_asset_name,
@@ -143,14 +144,14 @@ main :: proc() {
 	defer delete(cached_path)
 	version_file := strings.concatenate({cached_path, ".version"}, context.allocator)
 	defer delete(version_file)
-	assert(
-		template_path == cached_path,
-		fmt.tprintf(
-			"expected the release cache %s but the resolver returned %s",
-			cached_path,
-			template_path,
-		),
-	)
+	bundled := strings.has_suffix(latest.server_asset.name, ".zip")
+	assert(filepath.base(template_path) == server_asset_name)
+	if bundled {
+		assert(os.are_paths_identical(filepath.dir(filepath.dir(template_path)), cache_dir))
+	} else {
+		assert(template_path == cached_path ||
+		       os.are_paths_identical(filepath.dir(filepath.dir(template_path)), cache_dir))
+	}
 
 
 	version_bytes := read_file(version_file)
@@ -189,10 +190,14 @@ main :: proc() {
 
 	exe_bytes := read_file(EXE_PATH)
 	defer delete(exe_bytes)
-	assert(
-		i64(len(exe_bytes)) > latest.server_asset.size,
-		"the bundled executable should be larger than the bare template it was cut from",
-	)
+	template_file, open_err := os.open(template_path)
+	assert(open_err == nil)
+	template_size, size_err := os.file_size(template_file)
+	os.close(template_file)
+	assert(size_err == nil && i64(len(exe_bytes)) > template_size)
+	if bundled && p.os_name == "windows" {
+		assert(os.is_file(OUT_FOLDER + "/SDL3.dll"), "the export should include SDL3.dll")
+	}
 
 	payload, payload_ok := services.Payload_Read_Back(exe_bytes)
 	assert(payload_ok, "the bundled executable should carry a readable payload")

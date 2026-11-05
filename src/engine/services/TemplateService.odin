@@ -4,6 +4,7 @@
 package services
 
 
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -197,16 +198,20 @@ Template_Fetch_Latest :: proc(p: Target_Platform) -> (checkpoint: Template_Check
 	client_name := Template_Asset_Name(.Client, p)
 	defer delete(server_name)
 	defer delete(client_name)
+	server_archive := fmt.tprintf("%s%s", server_name, UPDATE_ARCHIVE_EXT)
+	client_archive := fmt.tprintf("%s%s", client_name, UPDATE_ARCHIVE_EXT)
 	checkpoint.tag = strings.clone(release.tag_name)
 	for asset in release.assets {
-		if asset.name == server_name {
+		if asset.name == server_archive ||
+		   (asset.name == server_name && checkpoint.server_asset.name != server_archive) {
 			checkpoint.server_asset = GitHub_Asset {
 				name                 = strings.clone(asset.name),
 				browser_download_url = strings.clone(asset.browser_download_url),
 				size                 = asset.size,
 			}
 		}
-		if asset.name == client_name {
+		if asset.name == client_archive ||
+		   (asset.name == client_name && checkpoint.client_asset.name != client_archive) {
 			checkpoint.client_asset = GitHub_Asset {
 				name                 = strings.clone(asset.name),
 				browser_download_url = strings.clone(asset.browser_download_url),
@@ -258,7 +263,10 @@ template_build_fallback :: proc(
 	return "", false
 }
 
-Template_Copy_Runtime_Siblings :: proc(from_dir, to_dir, exclude_name: string) {
+Template_Copy_Runtime_Siblings :: proc(
+	from_dir, to_dir, exclude_name: string,
+	libraries_only := false,
+) {
 	entries, err := os.read_directory_by_path(from_dir, 64, context.allocator)
 	if err != nil {
 		return
@@ -274,6 +282,13 @@ Template_Copy_Runtime_Siblings :: proc(from_dir, to_dir, exclude_name: string) {
 		   strings.has_prefix(entry.name, "kinemium-client-") {
 			continue
 		}
+		if libraries_only &&
+		   !strings.has_suffix(entry.name, ".dll") &&
+		   !strings.has_suffix(entry.name, ".dylib") &&
+		   !strings.has_suffix(entry.name, ".so") &&
+		   !strings.contains(entry.name, ".so.") {
+			continue
+		}
 		src, src_err := filepath.join([]string{from_dir, entry.name}, context.temp_allocator)
 		if src_err != nil {
 			continue
@@ -286,6 +301,75 @@ Template_Copy_Runtime_Siblings :: proc(from_dir, to_dir, exclude_name: string) {
 	}
 }
 
+template_bundle_dir :: proc(cached_path, tag: string) -> string {
+	safe_tag := update_sanitize_tag(tag)
+	defer delete(safe_tag)
+	return fmt.tprintf("%s.bundle-%s", cached_path, safe_tag)
+}
+
+template_bundle_path :: proc(bundle_dir, name: string) -> string {
+	path, _ := filepath.join([]string{bundle_dir, name}, context.temp_allocator)
+	return path
+}
+
+template_install_bundle :: proc(
+	asset: GitHub_Asset,
+	bundle_dir, asset_file_name: string,
+	format: Binary_Format,
+) -> bool {
+	data, ok := update_download_asset(asset.browser_download_url)
+	if !ok {
+		return false
+	}
+	defer delete(data)
+	if asset.size > 0 && i64(len(data)) != asset.size {
+		return false
+	}
+
+	stage, err := os.make_directory_temp(
+		filepath.dir(bundle_dir),
+		".template-*",
+		context.allocator,
+	)
+	if err != nil {
+		return false
+	}
+	defer {
+		_ = os.remove_all(stage)
+		delete(stage)
+	}
+	staged_bundle := template_bundle_path(stage, "runtime")
+	if fsutil.Make_Directory_All(staged_bundle) != nil {
+		return false
+	}
+	staged_exe := template_bundle_path(staged_bundle, asset_file_name)
+	if strings.has_suffix(asset.name, UPDATE_ARCHIVE_EXT) {
+		zip_path := template_bundle_path(stage, "template.zip")
+		if os.write_entire_file(zip_path, data) != nil {
+			return false
+		}
+		zip, opened := kineffi.Zip_Open(zip_path)
+		if !opened {
+			return false
+		}
+		extracted := kineffi.Zip_Extract_All(zip, staged_bundle)
+		_ = kineffi.Zip_Close(zip)
+		if !extracted {
+			return false
+		}
+	} else if os.write_entire_file(staged_exe, data) != nil {
+		return false
+	}
+	if !Template_Validate(staged_exe, format) {
+		return false
+	}
+	// Another export may have installed this release while we were downloading.
+	return(
+		os.rename(staged_bundle, bundle_dir) == nil ||
+		Template_Validate(template_bundle_path(bundle_dir, asset_file_name), format) \
+	)
+}
+
 Template_Resolve :: proc(
 	kind: Template_Kind,
 	p: Target_Platform,
@@ -296,7 +380,8 @@ Template_Resolve :: proc(
 	asset_file_name := Template_Asset_Name(kind, p)
 	defer delete(asset_file_name)
 
-	cache_dir, _ := TemplateService_Cache_Paths()
+	cache_dir, cache_version := TemplateService_Cache_Paths()
+	defer delete(cache_version)
 	if cache_dir == "" {
 		return "", "Could not locate a template cache directory"
 	}
@@ -312,31 +397,43 @@ Template_Resolve :: proc(
 	version_file := strings.concatenate({cached_path, ".version"}, context.allocator)
 	defer delete(version_file)
 
+	cached_tag, _ := template_version_read(version_file)
+	defer delete(cached_tag)
+
 	latest, latest_ok := Template_Fetch_Latest(p)
 	if latest_ok {
 		defer Template_Checkpoint_Destroy(&latest)
-		cached_valid := Template_Validate(cached_path, p.format)
-		cached_tag, cached_had := template_version_read(version_file)
-		if cached_had && len(cached_tag) > 0 {
-			tag_matches := cached_tag == latest.tag
-			delete(cached_tag)
-			if cached_valid && tag_matches {
-				return cached_path, ""
+		bundle_dir := template_bundle_dir(cached_path, latest.tag)
+		bundle_exe := template_bundle_path(bundle_dir, asset_file_name)
+		if Template_Validate(bundle_exe, p.format) {
+			if cached_tag != latest.tag {
+				template_version_write(version_file, latest.tag)
 			}
+			delete(cached_path)
+			return strings.clone(bundle_exe), ""
 		}
 		asset, asset_ok := template_kind_asset(&latest, kind)
-		if asset_ok {
-			body, download_ok := update_download_asset(asset.browser_download_url)
-			if download_ok {
-				_ = os.write_entire_file(cached_path, transmute([]u8)body)
-				template_version_write(version_file, latest.tag)
-				return cached_path, ""
-			}
-		}
-		if cached_valid {
+		if cached_tag == latest.tag &&
+		   asset.name == asset_file_name &&
+		   Template_Validate(cached_path, p.format) {
 			return cached_path, ""
 		}
-	} else if Template_Validate(cached_path, p.format) {
+		if asset_ok && template_install_bundle(asset, bundle_dir, asset_file_name, p.format) {
+			template_version_write(version_file, latest.tag)
+			delete(cached_path)
+			return strings.clone(bundle_exe), ""
+		}
+	}
+
+	if cached_tag != "" {
+		bundle_dir := template_bundle_dir(cached_path, cached_tag)
+		bundle_exe := template_bundle_path(bundle_dir, asset_file_name)
+		if Template_Validate(bundle_exe, p.format) {
+			delete(cached_path)
+			return strings.clone(bundle_exe), ""
+		}
+	}
+	if Template_Validate(cached_path, p.format) {
 		return cached_path, ""
 	}
 
@@ -353,6 +450,34 @@ Template_Resolve :: proc(
 	)
 }
 
+Export_Console :: enum {
+	Template,
+	Show,
+	Hide,
+}
+
+// Both PE32 and PE32+ put Subsystem at offset 68 of the optional header.
+export_set_windows_console :: proc(image: []u8, console: Export_Console) -> bool {
+	if len(image) < 64 || string(image[:2]) != "MZ" {
+		return false
+	}
+	pe := i64(payload_read_le_u32(image, 0x3c))
+	optional := pe + 24
+	if optional + 70 > i64(len(image)) ||
+	   string(image[pe:pe + 4]) != "PE\x00\x00" ||
+	   payload_read_le_u16(image, int(pe) + 20) < 70 {
+		return false
+	}
+	magic := payload_read_le_u16(image, int(optional))
+	if magic != 0x10b && magic != 0x20b {
+		return false
+	}
+	subsystem: u16 = 3 if console == .Show else 2
+	payload_write_le_u16(image, int(optional) + 68, subsystem)
+	payload_write_le_u32(image, int(optional) + 64, 0)
+	return true
+}
+
 ExportToExecutable :: proc(
 	kind: Template_Kind,
 	p: Target_Platform,
@@ -362,6 +487,8 @@ ExportToExecutable :: proc(
 	port: u16,
 	game_name: string,
 	map_bytes: []u8,
+	console: Export_Console = .Template,
+	icon_path: string = "",
 ) -> (
 	ok: bool,
 	message: string,
@@ -370,15 +497,81 @@ ExportToExecutable :: proc(
 		return false, "Cannot bake an editor template"
 	}
 	template_path, problem := Template_Resolve(kind, p)
-	if template_path == "" {
-		return false, problem
+	template: []u8
+	defer {
+		delete(template_path)
+		delete(template)
 	}
-	defer delete(template_path)
-	template, read_err := os.read_entire_file_from_path(template_path, context.allocator)
-	if read_err != nil {
+	if template_path != "" {
+		template, _ = os.read_entire_file_from_path(template_path, context.allocator)
+	}
+
+	using_editor := false
+	if mode == .Singleplayer &&
+	   !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
+		// Older releases can run single-player via flags but cannot read a
+		// single-player payload. The running editor supports it on the host.
+		host := Template_Host_Platform()
+		if p.os_name != host.os_name || p.arch_name != host.arch_name {
+			return false, "Single Player requires an updated template for this platform"
+		}
+		delete(template)
+		delete(template_path)
+		template_path, _ = template_build_fallback(.Client, p)
+		template, _ = os.read_entire_file_from_path(template_path, context.allocator)
+		if !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
+			delete(template)
+			delete(template_path)
+			template_path, _ = os.get_executable_path(context.allocator)
+			template, _ = os.read_entire_file_from_path(template_path, context.allocator)
+			if !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
+				return false, "Could not find a runtime that supports Single Player exports"
+			}
+		}
+		using_editor = true
+	}
+	if len(template) == 0 {
+		if template_path == "" {
+			return false, problem
+		}
 		return false, fmt.tprintf("Could not read template %s", template_path)
 	}
-	defer delete(template)
+	if icon_path != "" {
+		if p.format != .PE {
+			return false, "Executable icons require a Windows target"
+		}
+		when ODIN_OS == .Windows {
+			stage, err := os.make_directory_temp(
+				filepath.dir(destination),
+				".export-icon-*",
+				context.allocator,
+			)
+			if err != nil {
+				return false, "Could not stage the executable icon"
+			}
+			defer {
+				_ = os.remove_all(stage)
+				delete(stage)
+			}
+			staged := template_bundle_path(stage, "game.exe")
+			if os.write_entire_file(staged, template) != nil {
+				return false, "Could not stage the executable for the icon"
+			}
+			if icon_error := export_embed_windows_icon(staged, icon_path); icon_error != "" {
+				return false, icon_error
+			}
+			delete(template)
+			template, err = os.read_entire_file_from_path(staged, context.allocator)
+			if err != nil {
+				return false, "Could not read the executable after applying the icon"
+			}
+		} else {
+			return false, "Applying an executable icon requires running the Windows editor"
+		}
+	}
+	if p.format == .PE && console != .Template && !export_set_windows_console(template, console) {
+		return false, "Could not set the Windows executable's console subsystem"
+	}
 	full, append_ok := Payload_Append(
 		template,
 		Payload {
@@ -396,10 +589,20 @@ ExportToExecutable :: proc(
 	if os.write_entire_file(destination, full) != nil {
 		return false, fmt.tprintf("Could not write %s", destination)
 	}
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+		if p.format != .PE && os.chmod(destination, transmute(os.Permissions)u32(0o755)) != nil {
+			return false, fmt.tprintf("Could not make %s executable", destination)
+		}
+	}
 	template_dir := filepath.dir(template_path)
 	destination_dir := filepath.dir(destination)
 	if template_dir != destination_dir {
-		Template_Copy_Runtime_Siblings(template_dir, destination_dir, filepath.base(template_path))
+		Template_Copy_Runtime_Siblings(
+			template_dir,
+			destination_dir,
+			filepath.base(template_path),
+			using_editor,
+		)
 	}
 	return true, ""
 }

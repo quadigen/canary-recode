@@ -33,6 +33,11 @@ Decal :: struct {
 	receive_shadows:  bool,
 	native_texture:   ^kineffi.KineFilamentTex,
 	native_decal:     i32,
+	cloth_mesh:       ^kineffi.KineFilamentMesh,
+	cloth_parent:     ^Object,
+	cloth_revision:   u64,
+	cloth_face:       enums.NormalId,
+	cloth_z_offset:   f32,
 	texture_dirty:    bool,
 	color_dirty:      bool,
 }
@@ -78,6 +83,8 @@ decal_destroy_renderable :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 	}
 
 	decal.native_decal = -1
+	decal.cloth_mesh = nil
+	decal.cloth_parent = nil
 }
 
 decal_destroy_texture :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
@@ -114,7 +121,14 @@ decal_reload_texture :: proc(decal: ^Decal, renderer: ^Renderer_Object) -> bool 
 		width, height, channels: c.int
 		pixels: [^]u8
 		if data, found := Texture_Resolve_Bytes(decal.texture); found && len(data) > 0 {
-			pixels = image.load_from_memory(raw_data(data), c.int(len(data)), &width, &height, &channels, 4)
+			pixels = image.load_from_memory(
+				raw_data(data),
+				c.int(len(data)),
+				&width,
+				&height,
+				&channels,
+				4,
+			)
 		} else {
 			path := assetstore.Resolve_C_Path(decal.texture)
 			defer delete(path)
@@ -354,6 +368,12 @@ Decal_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 
+	if Is_A_Class(decal.parent, &Cloth_Class) {
+		decal_step_cloth(decal, renderer)
+		return
+	}
+	if decal.cloth_mesh != nil {decal_destroy_renderable(decal, renderer)}
+
 	part := decal_parent_part(decal)
 
 	if part == nil {
@@ -375,23 +395,7 @@ Decal_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	transform := decal_transform(info)
-
-	_ = kineffi.Kine_Filament_SetDecalTransform(
-		renderer.Filament,
-		decal.native_decal,
-		&transform[0],
-	)
-
-	_ = kineffi.Kine_Filament_SetDecalTiling(
-		renderer.Filament,
-		decal.native_decal,
-		info.width,
-		info.height,
-		decal.offset_studs_u,
-		decal.offset_studs_v,
-		decal.studs_per_tile_u,
-		decal.studs_per_tile_v,
-	)
+	decal_apply_style(decal, renderer, &transform, info.width, info.height)
 
 	_ = kineffi.Kine_Filament_EditDecal(
 		renderer.Filament,
@@ -401,6 +405,30 @@ Decal_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		decal.culling,
 		decal.cast_shadows,
 		decal.receive_shadows,
+	)
+}
+
+decal_apply_style :: proc(
+	decal: ^Decal,
+	renderer: ^Renderer_Object,
+	transform: ^[16]f32,
+	width, height: f32,
+) {
+	_ = kineffi.Kine_Filament_SetDecalTransform(
+		renderer.Filament,
+		decal.native_decal,
+		&transform[0],
+	)
+
+	_ = kineffi.Kine_Filament_SetDecalTiling(
+		renderer.Filament,
+		decal.native_decal,
+		width,
+		height,
+		decal.offset_studs_u,
+		decal.offset_studs_v,
+		decal.studs_per_tile_u,
+		decal.studs_per_tile_v,
 	)
 
 	if decal.color_dirty {

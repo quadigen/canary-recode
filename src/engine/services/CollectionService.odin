@@ -14,15 +14,14 @@ Collection_Tag :: struct {
 	objects: [dynamic]^classes.Object,
 }
 
-CollectionService_Class := classes.Class_Info{
+CollectionService_Class := classes.Class_Info {
 	name   = "CollectionService",
 	parent = &Service_Class,
 }
 
 CollectionService :: struct {
 	using service: Service,
-
-	tags: [dynamic]Collection_Tag,
+	tags:          [dynamic]Collection_Tag,
 }
 
 collection_service_construct :: proc(
@@ -30,18 +29,11 @@ collection_service_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(CollectionService)
-	service.service = Service_Init(
-		&CollectionService_Class,
-		"CollectionService",
-		data_model,
-	)
+	service.service = Service_Init(&CollectionService_Class, "CollectionService", data_model)
 	return &service.object
 }
 
-collection_object_from_argument :: proc(
-	L: ^vm.State,
-	index: int,
-) -> ^classes.Object {
+collection_object_from_argument :: proc(L: ^vm.State, index: int) -> ^classes.Object {
 	binding := vm.UserdataBindingOf(L, index)
 	if binding == nil || binding.name != "Instance" {
 		return nil
@@ -55,10 +47,7 @@ collection_object_from_argument :: proc(
 	return object
 }
 
-collection_find_tag :: proc(
-	service: ^CollectionService,
-	name: string,
-) -> int {
+collection_find_tag :: proc(service: ^CollectionService, name: string) -> int {
 	if service == nil {
 		return -1
 	}
@@ -72,10 +61,7 @@ collection_find_tag :: proc(
 	return -1
 }
 
-collection_contains_object :: proc(
-	objects: []^classes.Object,
-	object: ^classes.Object,
-) -> bool {
+collection_contains_object :: proc(objects: []^classes.Object, object: ^classes.Object) -> bool {
 	for item in objects {
 		if item == object {
 			return true
@@ -98,21 +84,12 @@ collection_validate_tag :: proc(L: ^vm.State, tag: string) -> bool {
 	return true
 }
 
-Collection_AddTag :: proc(
-	service: ^CollectionService,
-	object: ^classes.Object,
-	tag_name: string,
-) {
+Collection_AddTag :: proc(service: ^CollectionService, object: ^classes.Object, tag_name: string) {
 	index := collection_find_tag(service, tag_name)
 
 	if index < 0 {
-		append(
-			&service.tags,
-			Collection_Tag{
-				name = strings.clone(tag_name),
-			},
-		)
-		index = len(service.tags)-1
+		append(&service.tags, Collection_Tag{name = strings.clone(tag_name)})
+		index = len(service.tags) - 1
 	}
 
 	tag := &service.tags[index]
@@ -156,10 +133,7 @@ Collection_HasTag :: proc(
 		return false
 	}
 
-	return collection_contains_object(
-		service.tags[index].objects[:],
-		object,
-	)
+	return collection_contains_object(service.tags[index].objects[:], object)
 }
 
 collection_service_get :: proc(
@@ -170,12 +144,7 @@ collection_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "AddTag",
-	     "RemoveTag",
-	     "HasTag",
-	     "GetTags",
-	     "GetTagged",
-	     "GetAllTags":
+	case "AddTag", "RemoveTag", "HasTag", "GetTags", "GetTagged", "GetAllTags":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -191,7 +160,10 @@ collection_service_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^CollectionService)object
 
 	switch method {
@@ -234,10 +206,7 @@ collection_service_namecall :: proc(
 			return 0, true
 		}
 
-		vm.PushBoolean(
-			L,
-			Collection_HasTag(service, target, tag),
-		)
+		vm.PushBoolean(L, Collection_HasTag(service, target, tag))
 		return 1, true
 
 	case "GetTags":
@@ -282,9 +251,7 @@ collection_service_namecall :: proc(
 		count := 0
 
 		for item in tag.objects {
-			if item != nil &&
-			   !item.destroyed &&
-			   classes.Object_Is_Accessible(L, item) {
+			if item != nil && !item.destroyed && classes.Object_Is_Accessible(L, item) {
 				count += 1
 			}
 		}
@@ -293,9 +260,7 @@ collection_service_namecall :: proc(
 
 		output_index := 1
 		for item in tag.objects {
-			if item == nil ||
-			   item.destroyed ||
-			   !classes.Object_Is_Accessible(L, item) {
+			if item == nil || item.destroyed || !classes.Object_Is_Accessible(L, item) {
 				continue
 			}
 
@@ -311,7 +276,7 @@ collection_service_namecall :: proc(
 
 		for tag, index in service.tags {
 			vm.PushString(L, tag.name)
-			vm.SetArrayValue(L, -2, index+1)
+			vm.SetArrayValue(L, -2, index + 1)
 		}
 
 		return 1, true
@@ -320,10 +285,7 @@ collection_service_namecall :: proc(
 	return 0, false
 }
 
-collection_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+collection_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^CollectionService)object
 
 	for tag in service.tags {

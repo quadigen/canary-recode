@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_number_sequence_keypoint :: proc(
 	L: ^vm.State,
@@ -25,11 +25,7 @@ Arg_NumberSequenceKeypoint :: proc(
 	index: int,
 	registry: ^Registry,
 ) -> NumberSequenceKeypoint {
-	return require_number_sequence_keypoint(
-		L,
-		index,
-		&registry.number_sequence_keypoint,
-	)^
+	return require_number_sequence_keypoint(L, index, &registry.number_sequence_keypoint)^
 }
 
 require_number_sequence_keypoint :: proc(
@@ -46,7 +42,7 @@ require_number_sequence_keypoint :: proc(
 }
 
 number_sequence_keypoint_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	time := f32(vm.ArgNumber(L, 1))
 	value := f32(vm.ArgNumber(L, 2))
@@ -73,12 +69,7 @@ number_sequence_keypoint_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-number_sequence_keypoint_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+number_sequence_keypoint_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	keypoint := cast(^NumberSequenceKeypoint)value
 
 	switch key {
@@ -112,47 +103,28 @@ number_sequence_keypoint_destroy :: proc(value, ctx: rawptr) {
 }
 
 NumberSequenceKeypoint_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "NumberSequenceKeypoint",
-		get     = number_sequence_keypoint_get,
-		string  = number_sequence_keypoint_string,
+	return vm.Userdata_Binding {
+		name = "NumberSequenceKeypoint",
+		get = number_sequence_keypoint_get,
+		string = number_sequence_keypoint_string,
 		destroy = number_sequence_keypoint_destroy,
-		equal   = number_sequence_keypoint_equal,
+		equal = number_sequence_keypoint_equal,
 	}
 }
 
-NumberSequenceKeypoint_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+NumberSequenceKeypoint_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", number_sequence_keypoint_new)
 }
 
-push_number_sequence :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: NumberSequence,
-) {
+push_number_sequence :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: NumberSequence) {
 	push_value(L, binding, value)
 }
 
-Push_NumberSequence :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: NumberSequence,
-) {
-	push_number_sequence(
-		L,
-		&registry.number_sequence,
-		NumberSequence_Clone(value),
-	)
+Push_NumberSequence :: proc(L: ^vm.State, registry: ^Registry, value: NumberSequence) {
+	push_number_sequence(L, &registry.number_sequence, NumberSequence_Clone(value))
 }
 
-Arg_NumberSequence :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> NumberSequence {
+Arg_NumberSequence :: proc(L: ^vm.State, index: int, registry: ^Registry) -> NumberSequence {
 	return require_number_sequence(L, index, &registry.number_sequence)^
 }
 
@@ -170,7 +142,7 @@ require_number_sequence :: proc(
 }
 
 number_sequence_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -184,7 +156,7 @@ number_sequence_new :: proc "c" (L: ^vm.State) -> i32 {
 
 		keypoints := make([]NumberSequenceKeypoint, count)
 		for i in 0 ..< count {
-			_ = vm.RawGetIndex(L, 1, i+1)
+			_ = vm.RawGetIndex(L, 1, i + 1)
 			keypoints[i] = require_number_sequence_keypoint(
 				L,
 				-1,
@@ -216,12 +188,7 @@ number_sequence_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-number_sequence_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+number_sequence_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	sequence := cast(^NumberSequence)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
@@ -235,12 +202,8 @@ number_sequence_get :: proc(
 		vm.NewTable(L, len(sequence.Keypoints), 0)
 
 		for keypoint, i in sequence.Keypoints {
-			push_number_sequence_keypoint(
-				L,
-				&registry.number_sequence_keypoint,
-				keypoint,
-			)
-			vm.RawSetIndex(L, -2, i+1)
+			push_number_sequence_keypoint(L, &registry.number_sequence_keypoint, keypoint)
+			vm.RawSetIndex(L, -2, i + 1)
 		}
 
 		vm.SetReadOnly(L, -1)
@@ -253,10 +216,7 @@ number_sequence_get :: proc(
 }
 
 number_sequence_equal :: proc(value, other, ctx: rawptr) -> bool {
-	return NumberSequence_Equal(
-		(cast(^NumberSequence)value)^,
-		(cast(^NumberSequence)other)^,
-	)
+	return NumberSequence_Equal((cast(^NumberSequence)value)^, (cast(^NumberSequence)other)^)
 }
 
 number_sequence_string :: proc(value, ctx: rawptr) -> string {
@@ -264,12 +224,7 @@ number_sequence_string :: proc(value, ctx: rawptr) -> string {
 	result := ""
 
 	for keypoint, i in sequence.Keypoints {
-		entry := fmt.tprintf(
-			"%g: %g ± %g",
-			keypoint.Time,
-			keypoint.Value,
-			keypoint.Envelope,
-		)
+		entry := fmt.tprintf("%g: %g ± %g", keypoint.Time, keypoint.Value, keypoint.Envelope)
 
 		if i == 0 {
 			result = entry
@@ -288,18 +243,15 @@ number_sequence_destroy :: proc(value, ctx: rawptr) {
 }
 
 NumberSequence_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "NumberSequence",
-		get     = number_sequence_get,
-		string  = number_sequence_string,
+	return vm.Userdata_Binding {
+		name = "NumberSequence",
+		get = number_sequence_get,
+		string = number_sequence_string,
 		destroy = number_sequence_destroy,
-		equal   = number_sequence_equal,
+		equal = number_sequence_equal,
 	}
 }
 
-NumberSequence_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+NumberSequence_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", number_sequence_new)
 }

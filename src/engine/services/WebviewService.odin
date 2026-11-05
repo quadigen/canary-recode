@@ -1,7 +1,6 @@
 package services
 // wire:service
 
-import "base:runtime"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
@@ -14,6 +13,7 @@ import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 
 WebviewService_Class := classes.Class_Info {
@@ -135,6 +135,9 @@ webview_service_open :: proc(
 }
 
 webview_window_thread_main :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	window := cast(^WebviewWindow)t.data
 	if window == nil {return}
 
@@ -190,7 +193,7 @@ webview_window_thread_main :: proc(t: ^thread.Thread) {
 }
 
 webview_command_callback :: proc "c" (w: kineffi.Webview, arg: rawptr) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	req := cast(^Webview_Command_Request)arg
 	if req == nil {return}
@@ -430,7 +433,11 @@ WebviewService_namecall :: proc(
 		return 1, true
 	case "Open":
 		when #config(KINE_ANDROID, false) {
-			return vm.RaiseError(L, "WebviewService: desktop webview windows are unavailable on Android"), true
+			return vm.RaiseError(
+					L,
+					"WebviewService: desktop webview windows are unavailable on Android",
+				),
+				true
 		}
 		webview_service_reap(service)
 		url := vm.ArgString(L, 2)

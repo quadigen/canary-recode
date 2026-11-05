@@ -2,6 +2,7 @@ package main
 
 
 import classes "../src/engine/classes"
+import datatypes "../src/engine/datatypes"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
@@ -120,10 +121,20 @@ end
 			total,
 			at_origin,
 		)
+		run_script(&client_vm, `
+for _, part in workspace:GetPartBoundsInRadius(Vector3.zero, 1) do
+    assert(not string.match(part.Name, "^Debris"), "an uninitialized debris part was queryable at the origin")
+end
+`, "burst_no_ghost_overlap")
 	}
 	step_pair(&server, &server_vm, &client, &client_vm, 90)
 	at_origin, total := burst_part_counts(&client)
 	fmt.printf("settled  client debris total=%d  still at the origin=%d\n", total, at_origin)
+	assert(total == 700 && at_origin == 0, "every debris part must receive its initial transform")
+	run_script(&client_vm, `
+local debris = workspace:FindFirstChild("Debris1")
+assert(debris and table.find(workspace:GetPartBoundsInRadius(debris.Position, 0.25), debris))
+`, "burst_transformed_debris_is_queryable")
 
 	run_script(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "burst_server_stop")
 	run_script(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "burst_client_stop")
@@ -517,7 +528,45 @@ meteor.Position = vector.create(0, 250, 0)
 	engine_runtime.Environment_Destroy(&client)
 }
 
+smooth_prediction_recovery :: proc() {
+	dt :: f32(1.0 / 30.0)
+	part := classes.Part_Init()
+	entity := services.Replication_Entity{object = &part.object}
+	defer delete(entity.samples)
+	client := services.ReplicatorService{
+		mode = .Client,
+		snapshot_rate = 30,
+		time_offset_measured = true,
+		teleport_threshold = 12,
+		clock = 10 * dt,
+	}
+	defer delete(client.entity_list)
+	append(&client.entity_list, &entity)
+	append(&entity.samples,
+		services.Replication_Sample{tick = 9, frame = datatypes.CFrame_Identity},
+		services.Replication_Sample{tick = 10, frame = datatypes.CFrame_New_XYZ(1, 0, 0)},
+	)
+	services.replication_render_interpolated(&client, dt)
+	for _ in 0 ..< 2 {
+		client.clock += dt
+		services.replication_render_interpolated(&client, dt)
+	}
+	assert(part.position.x > 2.9, "the remote part should predict movement during the gap")
+
+	// The object stopped at X=1 while the client was predicting forward.
+	append(&entity.samples, services.Replication_Sample{tick = 12, frame = datatypes.CFrame_New_XYZ(1, 0, 0)})
+	services.replication_render_interpolated(&client, dt)
+	first := part.position.x
+	services.replication_render_interpolated(&client, dt)
+	assert(part.position.x > 1.5 && part.position.x < first, "the second recovery frame must continue blending")
+	for _ in 0 ..< 60 {
+		services.replication_render_interpolated(&client, dt)
+	}
+	assert(abs(part.position.x - 1) < 0.01, "recovery must converge on the authoritative position")
+}
+
 main :: proc() {
+	smooth_prediction_recovery()
 	dead_reckoning_first_pass()
 	falling_lag()
 	moving_parts_case()

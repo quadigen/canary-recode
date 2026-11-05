@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import classes "../src/engine/classes"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
@@ -105,6 +106,33 @@ assert(math.abs(x - 4) < 1, "legitimate move did not take effect, x=" .. tostrin
 		"authority_server_legit",
 	)
 
+	client_rep := cast(^services.ReplicatorService)services.Ensure_Service(&client.services, "ReplicatorService")
+	uploads_before := client_rep.diag_kind_counts[services.Replication_Kind_Owned_State]
+	settle(&server, &server_vm, &client, &client_vm, 120)
+	idle_uploads := client_rep.diag_kind_counts[services.Replication_Kind_Owned_State] - uploads_before
+	assert(idle_uploads > 0 && idle_uploads <= 12,
+		fmt.tprintf("expected periodic refreshes while idle, got %d owned uploads in two seconds", idle_uploads))
+
+	// A delayed owner upload must not overwrite a more recent pose.
+	client_workspace := services.Ensure_Service(&client.services, "Workspace")
+	owned := classes.Find_First_Child(client_workspace, "OwnedPart")
+	entity := services.replication_entity(client_rep, owned)
+	assert(entity != nil)
+	client_rep.tick += 2
+	run_script(&client_vm, `workspace.OwnedPart.CFrame = CFrame.new(6, 0, 0)`, "fresh_upload")
+	assert(services.replication_send_owned_state(client_rep, entity))
+	services.transport_host_flush(client_rep.host)
+	step_network(&server, &server_vm)
+	run_script(&server_vm, `assert(workspace.OwnedPart.CFrame.Position.X == 6)`, "fresh_applied")
+	client_rep.tick -= 1
+	run_script(&client_vm, `workspace.OwnedPart.CFrame = CFrame.new(5, 0, 0)`, "stale_upload")
+	assert(services.replication_send_owned_state(client_rep, entity))
+	services.transport_host_flush(client_rep.host)
+	step_network(&server, &server_vm)
+	run_script(&server_vm, `assert(workspace.OwnedPart.CFrame.Position.X == 6, "a stale owner upload rewound the server pose")`, "stale_rejected")
+	client_rep.tick += 1
+	run_script(&client_vm, `workspace.OwnedPart.CFrame = CFrame.new(6, 0, 0)`, "restore_fresh_upload")
+
 	// The accumulation attack: every single jump stays under the per-packet
 	// tolerance, so a validator that only looks at one packet at a time waves
 	// all of them through and the part ends up arbitrarily far away.
@@ -156,6 +184,14 @@ assert(x < 2000, "an oversized single jump was accepted, x=" .. tostring(x))
 assert(r:GetStats().ownedStatesRejected > 0)
 `,
 		"authority_server_wild",
+	)
+	run_script(
+		&client_vm,
+		`
+local part = workspace:FindFirstChild("OwnedPart")
+assert(part.CFrame.Position.X < 2000, "the owning client must recover from a rejected teleport")
+`,
+		"authority_client_corrected",
 	)
 
 	run_script(

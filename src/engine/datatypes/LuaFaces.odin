@@ -1,9 +1,9 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_faces :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Faces) {
 	push_value(L, binding, value)
@@ -17,11 +17,7 @@ Arg_Faces :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Faces {
 	return require_faces(L, index, &registry.faces)^
 }
 
-require_faces :: proc(
-	L: ^vm.State,
-	index: int,
-	binding: ^vm.Userdata_Binding,
-) -> ^Faces {
+require_faces :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^Faces {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected Faces")
 		return nil
@@ -30,7 +26,7 @@ require_faces :: proc(
 }
 
 faces_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -111,12 +107,12 @@ faces_destroy :: proc(value, ctx: rawptr) {
 }
 
 Faces_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "Faces",
-		get     = faces_get,
-		string  = faces_string,
+	return vm.Userdata_Binding {
+		name = "Faces",
+		get = faces_get,
+		string = faces_string,
 		destroy = faces_destroy,
-		equal   = faces_equal,
+		equal = faces_equal,
 	}
 }
 

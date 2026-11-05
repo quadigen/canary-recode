@@ -1,6 +1,8 @@
 #+build js
 package tracy
 
+import "base:runtime"
+
 // The Tracy client (wrapper.odin, bindings.odin, allocator.odin) is native
 // only, so this file exists purely to keep tracy call sites compiling in the
 // browser, where every one of them does nothing.
@@ -16,6 +18,7 @@ package tracy
 
 // Keep profiling-only branches out of browser builds.
 TRACY_ENABLE :: false
+DefaultContext :: runtime.default_context
 
 // Stands in for ___tracy_c_zone_context, which only exists on native.
 ZoneCtx :: struct {}

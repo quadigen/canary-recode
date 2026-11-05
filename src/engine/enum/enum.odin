@@ -1092,6 +1092,7 @@ CollisionFidelity :: enum {
 	Hull                       = 1,
 	Box                        = 2,
 	PreciseConvexDecomposition = 3,
+	TriangleMesh               = 4,
 }
 
 CommandPermission :: enum {

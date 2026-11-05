@@ -1,6 +1,6 @@
 package datatypes
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 
 push_unique_id :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: UniqueId) {
@@ -20,7 +20,7 @@ Arg_UniqueId :: proc(L: ^vm.State, index: int, registry: ^Registry) -> UniqueId 
 }
 
 unique_id_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_unique_id(L, binding_from_upvalue(L), UniqueId_New())
 	return 1
 }
@@ -28,10 +28,14 @@ unique_id_new :: proc "c" (L: ^vm.State) -> i32 {
 unique_id_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	id := cast(^UniqueId)value
 	switch key {
-	case "Random": vm.PushNumber(L, f64(id.Random))
-	case "Time": vm.PushNumber(L, f64(id.Time))
-	case "Index": vm.PushNumber(L, f64(id.Index))
-	case: return false
+	case "Random":
+		vm.PushNumber(L, f64(id.Random))
+	case "Time":
+		vm.PushNumber(L, f64(id.Time))
+	case "Index":
+		vm.PushNumber(L, f64(id.Index))
+	case:
+		return false
 	}
 	return true
 }
@@ -49,16 +53,15 @@ unique_id_destroy :: proc(value, ctx: rawptr) {
 }
 
 UniqueId_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "UniqueId",
-		get     = unique_id_get,
-		string  = unique_id_string,
+	return vm.Userdata_Binding {
+		name = "UniqueId",
+		get = unique_id_get,
+		string = unique_id_string,
 		destroy = unique_id_destroy,
-		equal   = unique_id_equal,
+		equal = unique_id_equal,
 	}
 }
 
 UniqueId_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", unique_id_new)
 }
-

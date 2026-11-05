@@ -36,6 +36,8 @@ Attachment_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> 
 }
 
 Attachment_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	Cloth_Forget_Attachment(object)
+	handles_forget_adornee(object)
 	Object_Destroy(object)
 	free(cast(^Attachment)object)
 }

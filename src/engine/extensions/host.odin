@@ -1,5 +1,6 @@
 package extensions
 
+import tracy "../util/odin-tracy"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -9,7 +10,6 @@ import globals "../global"
 import services "../services"
 import signals "../signals"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 import "core:mem"
 import "core:strings"
@@ -435,7 +435,7 @@ stack_kne_value :: proc(L: ^vm.State, registry: ^datatypes.Registry, index: int)
 
 
 kne_core_log :: proc "c" (ext: KNE_Extension, level: KNE_Log_Level, message: KNE_String) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	id := "kne"
 	if record != nil && len(record.manifest.id) > 0 {
@@ -458,7 +458,7 @@ kne_core_log :: proc "c" (ext: KNE_Extension, level: KNE_Log_Level, message: KNE
 }
 
 kne_core_allocate :: proc "c" (ext: KNE_Extension, size: uintptr) -> rawptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	if size == 0 {
 		return nil
@@ -474,7 +474,7 @@ kne_core_allocate :: proc "c" (ext: KNE_Extension, size: uintptr) -> rawptr {
 }
 
 kne_core_reallocate :: proc "c" (ext: KNE_Extension, ptr: rawptr, size: uintptr) -> rawptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if ptr == nil {
 		return kne_core_allocate(ext, size)
 	}
@@ -500,7 +500,7 @@ kne_core_reallocate :: proc "c" (ext: KNE_Extension, ptr: rawptr, size: uintptr)
 }
 
 kne_core_release :: proc "c" (ext: KNE_Extension, ptr: rawptr) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	if ptr == nil {
 		return
@@ -509,7 +509,7 @@ kne_core_release :: proc "c" (ext: KNE_Extension, ptr: rawptr) {
 }
 
 kne_core_last_error :: proc "c" (ext: KNE_Extension) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || len(record.last_error) == 0 {
 		return KNE_String{}
@@ -519,7 +519,7 @@ kne_core_last_error :: proc "c" (ext: KNE_Extension) -> KNE_String {
 
 
 kne_services_get :: proc "c" (ext: KNE_Extension, name: KNE_String) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || state.service_registry == nil || state.vm_state == nil {
 		return nil
@@ -529,7 +529,7 @@ kne_services_get :: proc "c" (ext: KNE_Extension, name: KNE_String) -> KNE_Insta
 }
 
 kne_services_exists :: proc "c" (ext: KNE_Extension, name: KNE_String) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || state.service_registry == nil {
 		return 0
@@ -538,7 +538,7 @@ kne_services_exists :: proc "c" (ext: KNE_Extension, name: KNE_String) -> i32 {
 }
 
 kne_services_count :: proc "c" (ext: KNE_Extension) -> uintptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || state.service_registry == nil {
 		return 0
@@ -547,7 +547,7 @@ kne_services_count :: proc "c" (ext: KNE_Extension) -> uintptr {
 }
 
 kne_services_name_at :: proc "c" (ext: KNE_Extension, index: uintptr) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || state.service_registry == nil {
 		return KNE_String{}
@@ -587,7 +587,7 @@ parse_member_list :: proc(value: KNE_String) -> [dynamic]string {
 
 @(private)
 register_class :: proc(record: ^Extension_Record, desc: ^KNE_Class_Desc) -> string {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	state := record.ctx
 	if state == nil || state.class_registry == nil {
@@ -682,7 +682,7 @@ register_class :: proc(record: ^Extension_Record, desc: ^KNE_Class_Desc) -> stri
 }
 
 kne_classes_register :: proc "c" (ext: KNE_Extension, desc: ^KNE_Class_Desc) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil {
 		return 0
@@ -697,7 +697,7 @@ kne_classes_register :: proc "c" (ext: KNE_Extension, desc: ^KNE_Class_Desc) -> 
 }
 
 kne_classes_is_registered :: proc "c" (ext: KNE_Extension, name: KNE_String) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || state.class_registry == nil {
 		return 0
@@ -721,7 +721,7 @@ native_construct :: proc(
 	renderer: ^classes.Renderer_Object,
 	data_model: rawptr,
 ) -> ^classes.Object {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registration := cast(^Class_Registration)ctx
 	if registration == nil || registration.info == nil {
 		return nil
@@ -739,7 +739,7 @@ native_construct :: proc(
 
 @(private)
 native_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if object == nil {
 		return
 	}
@@ -766,7 +766,7 @@ native_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registration := class_registrations[object.class]
 	if registration == nil || registration.desc.get == nil {
 		return false
@@ -796,7 +796,7 @@ native_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registration := class_registrations[object.class]
 	if registration == nil || registration.desc.set == nil {
 		return false
@@ -825,7 +825,7 @@ native_namecall :: proc(
 	i32,
 	bool,
 ) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registration := class_registrations[object.class]
 	if registration == nil || registration.desc.namecall == nil {
 		return 0, false
@@ -846,7 +846,7 @@ native_namecall :: proc(
 
 
 kne_instances_create :: proc "c" (ext: KNE_Extension, class_name: KNE_String) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil ||
 	   state.class_registry == nil ||
@@ -864,7 +864,7 @@ kne_instances_create :: proc "c" (ext: KNE_Extension, class_name: KNE_String) ->
 }
 
 kne_instances_destroy :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -874,7 +874,7 @@ kne_instances_destroy :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) {
 }
 
 kne_instances_get_name :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -884,7 +884,7 @@ kne_instances_get_name :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) 
 }
 
 kne_instances_set_name :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, name: KNE_String) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -894,7 +894,7 @@ kne_instances_set_name :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, 
 }
 
 kne_instances_get_parent :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -908,7 +908,7 @@ kne_instances_set_parent :: proc "c" (
 	instance: KNE_Instance,
 	parent: KNE_Instance,
 ) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -918,7 +918,7 @@ kne_instances_set_parent :: proc "c" (
 }
 
 kne_instances_child_count :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> uintptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -932,7 +932,7 @@ kne_instances_child_at :: proc "c" (
 	instance: KNE_Instance,
 	index: uintptr,
 ) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil || index >= uintptr(len(object.children)) {
@@ -946,7 +946,7 @@ kne_instances_find_child :: proc "c" (
 	instance: KNE_Instance,
 	name: KNE_String,
 ) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -960,7 +960,7 @@ kne_instances_is_a :: proc "c" (
 	instance: KNE_Instance,
 	class_name: KNE_String,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -970,7 +970,7 @@ kne_instances_is_a :: proc "c" (
 }
 
 kne_instances_class_name :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	object := cast(^classes.Object)instance
 	if object == nil {
@@ -985,7 +985,7 @@ kne_instances_get_property :: proc "c" (
 	key: KNE_String,
 	out: ^KNE_Value,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || instance == nil || out == nil {
 		return 0
@@ -1064,7 +1064,7 @@ kne_instances_set_property :: proc "c" (
 	key: KNE_String,
 	value: ^KNE_Value,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || instance == nil || value == nil {
 		return 0
@@ -1130,7 +1130,7 @@ kne_instances_set_property :: proc "c" (
 }
 
 kne_instances_get_user_data :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> rawptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || instance == nil {
 		return nil
@@ -1143,7 +1143,7 @@ kne_instances_set_user_data :: proc "c" (
 	instance: KNE_Instance,
 	data: rawptr,
 ) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := context_of(ext)
 	if state == nil || instance == nil {
 		return
@@ -1163,7 +1163,7 @@ state_of_vm :: proc(L: KNE_VM) -> ^vm.State {
 }
 
 kne_native_trampoline :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	closure := cast(^Native_Function_Closure)vm.UpvaluePointer(L)
 	if closure == nil || closure.record == nil {
 		return vm.RaiseError(L, "invalid KNE native function")
@@ -1191,7 +1191,7 @@ kne_vm_register_function :: proc "c" (
 	name: KNE_String,
 	function: KNE_VM_Native_Fn,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || record.ctx == nil || record.ctx.vm_state == nil {
 		return 0
@@ -1220,7 +1220,7 @@ kne_vm_register_library_function :: proc "c" (
 	name: KNE_String,
 	function: KNE_VM_Native_Fn,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || record.ctx == nil || record.ctx.vm_state == nil {
 		return 0
@@ -1260,7 +1260,7 @@ kne_vm_register_library_function :: proc "c" (
 }
 
 kne_vm_arg_count :: proc "c" (L: KNE_VM) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -1269,7 +1269,7 @@ kne_vm_arg_count :: proc "c" (L: KNE_VM) -> i32 {
 }
 
 kne_vm_kind :: proc "c" (L: KNE_VM, index: i32) -> KNE_Value_Kind {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return .Nil
@@ -1302,7 +1302,7 @@ kne_vm_kind :: proc "c" (L: KNE_VM, index: i32) -> KNE_Value_Kind {
 }
 
 kne_vm_get_number :: proc "c" (L: KNE_VM, index: i32) -> f64 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -1311,7 +1311,7 @@ kne_vm_get_number :: proc "c" (L: KNE_VM, index: i32) -> f64 {
 }
 
 kne_vm_get_integer :: proc "c" (L: KNE_VM, index: i32) -> i64 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -1320,7 +1320,7 @@ kne_vm_get_integer :: proc "c" (L: KNE_VM, index: i32) -> i64 {
 }
 
 kne_vm_get_boolean :: proc "c" (L: KNE_VM, index: i32) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -1329,7 +1329,7 @@ kne_vm_get_boolean :: proc "c" (L: KNE_VM, index: i32) -> i32 {
 }
 
 kne_vm_get_string :: proc "c" (L: KNE_VM, index: i32) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil || vm.TypeOf(state, int(index)) != .String {
 		return KNE_String{}
@@ -1342,7 +1342,7 @@ kne_vm_get_string :: proc "c" (L: KNE_VM, index: i32) -> KNE_String {
 }
 
 kne_vm_get_instance :: proc "c" (L: KNE_VM, index: i32) -> KNE_Instance {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return nil
@@ -1351,7 +1351,7 @@ kne_vm_get_instance :: proc "c" (L: KNE_VM, index: i32) -> KNE_Instance {
 }
 
 kne_vm_push_nil :: proc "c" (L: KNE_VM) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushNil(state)
@@ -1359,7 +1359,7 @@ kne_vm_push_nil :: proc "c" (L: KNE_VM) {
 }
 
 kne_vm_push_boolean :: proc "c" (L: KNE_VM, value: i32) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushBoolean(state, value != 0)
@@ -1367,7 +1367,7 @@ kne_vm_push_boolean :: proc "c" (L: KNE_VM, value: i32) {
 }
 
 kne_vm_push_number :: proc "c" (L: KNE_VM, value: f64) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushNumber(state, value)
@@ -1375,7 +1375,7 @@ kne_vm_push_number :: proc "c" (L: KNE_VM, value: f64) {
 }
 
 kne_vm_push_integer :: proc "c" (L: KNE_VM, value: i64) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushNumber(state, f64(value))
@@ -1383,7 +1383,7 @@ kne_vm_push_integer :: proc "c" (L: KNE_VM, value: i64) {
 }
 
 kne_vm_push_string :: proc "c" (L: KNE_VM, value: KNE_String) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushString(state, KNE_String_To(value))
@@ -1391,7 +1391,7 @@ kne_vm_push_string :: proc "c" (L: KNE_VM, value: KNE_String) {
 }
 
 kne_vm_push_instance :: proc "c" (L: KNE_VM, instance: KNE_Instance) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		classes.Push_Object(state, cast(^classes.Object)instance)
@@ -1399,7 +1399,7 @@ kne_vm_push_instance :: proc "c" (L: KNE_VM, instance: KNE_Instance) {
 }
 
 kne_vm_push_value :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: ^KNE_Value) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return
@@ -1413,7 +1413,7 @@ kne_vm_push_value :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: ^KNE_Value)
 }
 
 kne_vm_push_stack :: proc "c" (L: KNE_VM, index: i32) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.PushValue(state, int(index))
@@ -1421,7 +1421,7 @@ kne_vm_push_stack :: proc "c" (L: KNE_VM, index: i32) {
 }
 
 kne_vm_push_table :: proc "c" (L: KNE_VM) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.NewTable(state, 0, 0)
@@ -1429,7 +1429,7 @@ kne_vm_push_table :: proc "c" (L: KNE_VM) {
 }
 
 kne_vm_set_field :: proc "c" (L: KNE_VM, table_index: i32, key: KNE_String) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.SetField(state, int(table_index), KNE_String_To(key))
@@ -1437,7 +1437,7 @@ kne_vm_set_field :: proc "c" (L: KNE_VM, table_index: i32, key: KNE_String) {
 }
 
 kne_vm_set_global :: proc "c" (ext: KNE_Extension, L: KNE_VM, name: KNE_String) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	record := record_of(ext)
 	if state == nil || record == nil {
@@ -1449,7 +1449,7 @@ kne_vm_set_global :: proc "c" (ext: KNE_Extension, L: KNE_VM, name: KNE_String) 
 }
 
 kne_vm_remove :: proc "c" (L: KNE_VM, index: i32) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state != nil {
 		vm.Remove(state, int(index))
@@ -1457,7 +1457,7 @@ kne_vm_remove :: proc "c" (L: KNE_VM, index: i32) {
 }
 
 kne_vm_raise :: proc "c" (L: KNE_VM, message: KNE_String) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -1476,7 +1476,7 @@ datatype_registry_of :: proc(ext: KNE_Extension) -> ^datatypes.Registry {
 }
 
 kne_datatypes_push_vector2 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE_Vector2) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	registry := datatype_registry_of(ext)
 	if state == nil {
@@ -1490,7 +1490,7 @@ kne_datatypes_push_vector2 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KN
 }
 
 kne_datatypes_push_vector3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE_Vector3) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return
@@ -1499,7 +1499,7 @@ kne_datatypes_push_vector3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KN
 }
 
 kne_datatypes_push_cframe :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE_CFrame) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	registry := datatype_registry_of(ext)
 	if state == nil {
@@ -1513,7 +1513,7 @@ kne_datatypes_push_cframe :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE
 }
 
 kne_datatypes_push_color3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE_Color3) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	registry := datatype_registry_of(ext)
 	if state == nil {
@@ -1527,7 +1527,7 @@ kne_datatypes_push_color3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE
 }
 
 kne_datatypes_get_vector2 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Vector2 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return {}
@@ -1537,7 +1537,7 @@ kne_datatypes_get_vector2 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32
 }
 
 kne_datatypes_get_vector3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Vector3 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = ext
 	state := state_of_vm(L)
 	if state == nil {
@@ -1548,7 +1548,7 @@ kne_datatypes_get_vector3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32
 }
 
 kne_datatypes_get_cframe :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_CFrame {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	registry := datatype_registry_of(ext)
 	if state == nil || registry == nil {
@@ -1561,7 +1561,7 @@ kne_datatypes_get_cframe :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32)
 }
 
 kne_datatypes_get_color3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Color3 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	registry := datatype_registry_of(ext)
 	if state == nil || registry == nil {

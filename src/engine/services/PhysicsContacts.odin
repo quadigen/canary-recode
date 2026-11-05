@@ -1,9 +1,9 @@
 package services
 
-import "base:runtime"
 import kineffi "../bindings"
 import classes "../classes"
 import signals "../signals"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 
 Pending_Contact :: struct {
@@ -12,13 +12,24 @@ Pending_Contact :: struct {
 
 pending_contacts: [dynamic]Pending_Contact
 
-physics_on_contact_added :: proc "c" (body1: kineffi.JPH_BodyID, body2: kineffi.JPH_BodyID, manifold: ^kineffi.JPH_ContactManifoldData) {
-	context = runtime.default_context()
+physics_on_contact_added :: proc "c" (
+	body1: kineffi.JPH_BodyID,
+	body2: kineffi.JPH_BodyID,
+	manifold: ^kineffi.JPH_ContactManifoldData,
+) {
+	context = tracy.DefaultContext()
 	append(&pending_contacts, Pending_Contact{body1, body2})
 }
 
 part_touched :: proc(part, other: ^classes.Part, L: ^vm.State) {
-	if part == nil || other == nil || L == nil || part.touched == nil {return}
+	if part == nil ||
+	   other == nil ||
+	   L == nil ||
+	   part.touched == nil ||
+	   part.destroyed ||
+	   other.destroyed ||
+	   !part.can_touch ||
+	   !other.can_touch {return}
 	classes.Push_Object(L, &other.object)
 	signals.Fire(L, part.touched, 1)
 	vm.Pop(L)
@@ -26,7 +37,7 @@ part_touched :: proc(part, other: ^classes.Part, L: ^vm.State) {
 
 Physics_Drain_Contacts :: proc(service: ^Physics) {
 	if service == nil || service.contact_listener == nil {return}
-	procs := kineffi.JPH_ContactListener_Procs{
+	procs := kineffi.JPH_ContactListener_Procs {
 		OnContactAdded = physics_on_contact_added,
 	}
 	for {

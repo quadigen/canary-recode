@@ -462,16 +462,11 @@ TextBox_Measure_Content :: proc(box: ^TextBox, available_width: f32) -> datatype
 		at_end := index == len(text)
 
 		if at_end || text[index] == '\n' {
-			line := text[start:index]
-			cstrin := strings.clone_to_cstring(line)
-			defer delete(cstrin)
-
-			width := guilib.measureTextTypeface(box.stored_typeface, cstrin, box.text_size)
+			width := text_box_measure_range(box, start, index)
 
 			max_width = max(max_width, width)
 			line_count += 1
 			start = index + 1
-			delete(cstrin)
 		}
 
 		index += 1
@@ -506,6 +501,45 @@ text_box_gutter_width :: proc(box: ^TextBox) -> f32 {
 	return f32(digits) * box.text_size * 0.62 + 18
 }
 
+// Display controls without changing the original text or its byte offsets.
+// For syntax runs, start skips the prefix while retaining its tab column.
+text_box_display_cstring :: proc(text: string, tab_size: int, start := 0) -> cstring {
+	bytes := transmute([]u8)text
+	has_control := false
+	for value in bytes[start:] {
+		if value < ' ' || value == 0x7f {
+			has_control = true
+			break
+		}
+	}
+	if !has_control {
+		return strings.clone_to_cstring(text[start:])
+	}
+
+	spaces := "                "
+	size := clamp(tab_size, 1, len(spaces))
+	column := 0
+	display := strings.builder_make()
+	defer strings.builder_destroy(&display)
+	for value, index in bytes {
+		if value == '\t' {
+			width := size - column % size
+			if index >= start {
+				strings.write_string(&display, spaces[:width])
+			}
+			column += width
+		} else if value >= ' ' && value != 0x7f {
+			if index >= start {
+				strings.write_byte(&display, value)
+			}
+			if value & 0xc0 != 0x80 {
+				column += 1
+			}
+		}
+	}
+	return strings.clone_to_cstring(strings.to_string(display))
+}
+
 text_box_measure_range :: proc(box: ^TextBox, start: int, finish: int) -> f32 {
 	if box == nil {
 		return 0
@@ -518,7 +552,7 @@ text_box_measure_range :: proc(box: ^TextBox, start: int, finish: int) -> f32 {
 		return 0
 	}
 
-	value := strings.clone_to_cstring(box.text[a:b])
+	value := text_box_display_cstring(box.text[a:b], box.tab_size)
 	defer delete(value)
 
 	if box.stored_typeface != nil {
@@ -1137,20 +1171,15 @@ text_box_render_code_editor :: proc(
 					line.finish,
 				)
 			} else if line.finish > line.start {
-				chunk := strings.clone_to_cstring(box.text[line.start:line.finish])
-				defer delete(chunk)
-
-				guilib.drawText(
+				text_box_draw_segment(
+					box,
 					surface,
-					chunk,
-					guilib.TextParams {
-						x = content_x - box.scroll_x,
-						y = baseline,
-						TextSize = box.text_size,
-						color = box.text_color3,
-						transparency = box.text_transparency,
-						typeface = box.stored_typeface,
-					},
+					content_x,
+					baseline,
+					line.start,
+					line.start,
+					line.finish,
+					box.text_color3,
 				)
 			}
 
@@ -1351,7 +1380,7 @@ draw_bracket :: proc(
 	)
 }
 
-text_box_draw_syntax_segment :: proc(
+text_box_draw_segment :: proc(
 	box: ^TextBox,
 	surface: ^kineffi.KineSkiaSurface,
 	content_x: f32,
@@ -1365,9 +1394,11 @@ text_box_draw_syntax_segment :: proc(
 		return
 	}
 
-	segment := box.text[segment_start:segment_finish]
-
-	value := strings.clone_to_cstring(segment)
+	value := text_box_display_cstring(
+		box.text[line_start:segment_finish],
+		box.tab_size,
+		segment_start - line_start,
+	)
 	defer delete(value)
 
 	x := content_x + text_box_measure_range(box, line_start, segment_start) - box.scroll_x
@@ -1422,7 +1453,7 @@ text_box_draw_syntax_line :: proc(
 		}
 
 		if span_start > cursor {
-			text_box_draw_syntax_segment(
+			text_box_draw_segment(
 				box,
 				surface,
 				content_x,
@@ -1434,7 +1465,7 @@ text_box_draw_syntax_line :: proc(
 			)
 		}
 
-		text_box_draw_syntax_segment(
+		text_box_draw_segment(
 			box,
 			surface,
 			content_x,
@@ -1449,7 +1480,7 @@ text_box_draw_syntax_line :: proc(
 	}
 
 	if cursor < line_finish {
-		text_box_draw_syntax_segment(
+		text_box_draw_segment(
 			box,
 			surface,
 			content_x,
@@ -2314,9 +2345,10 @@ text_box_indent_selection :: proc(box: ^TextBox, unindent: bool) {
 
 		line_start := text_box_line_start(box.text, box.cursor_byte)
 
-		column := text_box_utf8_count(box.text[line_start:box.cursor_byte])
-
 		tab_size := max(box.tab_size, 1)
+		prefix := text_box_display_cstring(box.text[line_start:box.cursor_byte], tab_size)
+		column := text_box_utf8_count(string(prefix))
+		delete(prefix)
 
 		amount := tab_size - column % tab_size
 
@@ -2766,25 +2798,7 @@ text_box_effectively_visible :: proc(box: ^TextBox) -> bool {
 
 
 text_box_measure_prefix :: proc(box: ^TextBox, byte_index: int) -> f32 {
-	if box == nil || len(box.text) == 0 {
-		return 0
-	}
-
-	clamped_index := clamp(byte_index, 0, len(box.text))
-
-	if clamped_index == 0 {
-		return 0
-	}
-
-	text := strings.clone_to_cstring(box.text[:clamped_index])
-
-	defer delete(text)
-
-	if box.stored_typeface != nil {
-		return guilib.measureTextTypeface(box.stored_typeface, text, box.text_size)
-	}
-
-	return guilib.measureText(text, box.text_size, "")
+	return text_box_measure_range(box, 0, byte_index)
 }
 
 
@@ -3203,6 +3217,8 @@ TextBox_set :: proc(
 
 	case "TabSize":
 		box.tab_size = clamp(int(vm.ArgNumber(L, value_index)), 1, 16)
+		text_box_restart_caret(box)
+		Gui_Layout_Mark_Dirty()
 		return true
 
 	case "AutoIndent":
@@ -3711,13 +3727,13 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				box,
 				highlight,
 				surface,
-				rect.x + padding - box.scroll_x,
+				rect.x + padding,
 				baseline,
 				0,
 				len(box.text),
 			)
 		} else {
-			text := strings.clone_to_cstring(display_text)
+			text := text_box_display_cstring(display_text, box.tab_size)
 
 			defer delete(text)
 

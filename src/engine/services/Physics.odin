@@ -132,6 +132,7 @@ physics_construct :: proc(
 
 physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^Physics)object
+	physics_release_softbodies(service)
 
 	for body in service.bodies {physics_destroy_body(service, body, false)}
 

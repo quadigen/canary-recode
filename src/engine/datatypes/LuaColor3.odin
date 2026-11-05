@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_color3 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Color3) {
 	push_value(L, binding, value)
@@ -25,38 +25,42 @@ require_color3 :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) 
 }
 
 color3_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
-	push_color3(L, binding, New(
-		f32(vm.ArgOptionalNumber(L, 1)),
-		f32(vm.ArgOptionalNumber(L, 2)),
-		f32(vm.ArgOptionalNumber(L, 3)),
-	))
+	push_color3(
+		L,
+		binding,
+		New(
+			f32(vm.ArgOptionalNumber(L, 1)),
+			f32(vm.ArgOptionalNumber(L, 2)),
+			f32(vm.ArgOptionalNumber(L, 3)),
+		),
+	)
 	return 1
 }
 
 color3_from_rgb :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_color3(L, binding_from_upvalue(L), FromRGB(
-		f32(vm.ArgNumber(L, 1)),
-		f32(vm.ArgNumber(L, 2)),
-		f32(vm.ArgNumber(L, 3)),
-	))
+	context = tracy.DefaultContext()
+	push_color3(
+		L,
+		binding_from_upvalue(L),
+		FromRGB(f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3))),
+	)
 	return 1
 }
 
 color3_from_hsv :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_color3(L, binding_from_upvalue(L), FromHSV(
-		f32(vm.ArgNumber(L, 1)),
-		f32(vm.ArgNumber(L, 2)),
-		f32(vm.ArgNumber(L, 3)),
-	))
+	context = tracy.DefaultContext()
+	push_color3(
+		L,
+		binding_from_upvalue(L),
+		FromHSV(f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3))),
+	)
 	return 1
 }
 
 color3_from_hex :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value, ok := FromHex(vm.ArgString(L, 1))
 	if !ok {
 		return vm.RaiseError(L, "invalid Color3 hex string")
@@ -66,7 +70,7 @@ color3_from_hex :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 color3_to_hsv :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	color := require_color3(L, 1, binding_from_upvalue(L))
 	h, s, v := ToHSV(color^)
 	vm.PushNumber(L, f64(h))
@@ -76,7 +80,7 @@ color3_to_hsv :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 color3_to_rgb :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	color := require_color3(L, 1, binding_from_upvalue(L))
 	r, g, b := ToRGB(color^)
 	vm.PushNumber(L, f64(r))
@@ -86,7 +90,7 @@ color3_to_rgb :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 color3_to_hex :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	color := require_color3(L, 1, binding_from_upvalue(L))
 	vm.PushString(L, ToHex(color^))
 	return 1
@@ -101,7 +105,16 @@ color3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushNumber(L, f64(color.G))
 	case "B":
 		vm.PushNumber(L, f64(color.B))
-	case "Lerp", "ToHSV", "ToHex", "ToRGB", "lerp", "toHSV", "toHex", "toRGB", "fromHSV", "fromRGB":
+	case "Lerp",
+	     "ToHSV",
+	     "ToHex",
+	     "ToRGB",
+	     "lerp",
+	     "toHSV",
+	     "toHex",
+	     "toRGB",
+	     "fromHSV",
+	     "fromRGB":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -133,10 +146,18 @@ color3_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		vm.PushNumber(L, f64(b))
 		return 3, true
 	case "FromHSV", "fromHSV":
-		push_color3(L, binding, FromHSV(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))))
+		push_color3(
+			L,
+			binding,
+			FromHSV(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))),
+		)
 		return 1, true
 	case "FromRGB", "fromRGB":
-		push_color3(L, binding, FromRGB(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))))
+		push_color3(
+			L,
+			binding,
+			FromRGB(f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3)), f32(vm.ArgNumber(L, 4))),
+		)
 		return 1, true
 	}
 	return 0, false
@@ -146,7 +167,7 @@ color3_add :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index: in
 	binding := cast(^vm.Userdata_Binding)ctx
 	other := require_color3(L, other_index, binding)
 	a := cast(^Color3)value
-	push_color3(L, binding, Color3{a.R+other.R, a.G+other.G, a.B+other.B})
+	push_color3(L, binding, Color3{a.R + other.R, a.G + other.G, a.B + other.B})
 	return true
 }
 
@@ -154,7 +175,7 @@ color3_subtract :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_inde
 	binding := cast(^vm.Userdata_Binding)ctx
 	other := require_color3(L, other_index, binding)
 	a := cast(^Color3)value
-	push_color3(L, binding, Color3{a.R-other.R, a.G-other.G, a.B-other.B})
+	push_color3(L, binding, Color3{a.R - other.R, a.G - other.G, a.B - other.B})
 	return true
 }
 
@@ -163,11 +184,11 @@ color3_multiply :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_inde
 	a := cast(^Color3)value
 	if vm.IsNumber(L, other_index) {
 		scalar := f32(vm.ArgNumber(L, other_index))
-		push_color3(L, binding, Color3{a.R*scalar, a.G*scalar, a.B*scalar})
+		push_color3(L, binding, Color3{a.R * scalar, a.G * scalar, a.B * scalar})
 		return true
 	}
 	other := require_color3(L, other_index, binding)
-	push_color3(L, binding, Color3{a.R*other.R, a.G*other.G, a.B*other.B})
+	push_color3(L, binding, Color3{a.R * other.R, a.G * other.G, a.B * other.B})
 	return true
 }
 
@@ -177,14 +198,14 @@ color3_divide :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index:
 	if vm.IsNumber(L, other_index) {
 		scalar := f32(vm.ArgNumber(L, other_index))
 		if self_index == 1 {
-			push_color3(L, binding, Color3{a.R/scalar, a.G/scalar, a.B/scalar})
+			push_color3(L, binding, Color3{a.R / scalar, a.G / scalar, a.B / scalar})
 		} else {
-			push_color3(L, binding, Color3{scalar/a.R, scalar/a.G, scalar/a.B})
+			push_color3(L, binding, Color3{scalar / a.R, scalar / a.G, scalar / a.B})
 		}
 		return true
 	}
 	other := require_color3(L, other_index, binding)
-	push_color3(L, binding, Color3{a.R/other.R, a.G/other.G, a.B/other.B})
+	push_color3(L, binding, Color3{a.R / other.R, a.G / other.G, a.B / other.B})
 	return true
 }
 
@@ -209,18 +230,18 @@ color3_destroy :: proc(value, ctx: rawptr) {
 }
 
 Color3_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Color3",
-		get      = color3_get,
+	return vm.Userdata_Binding {
+		name = "Color3",
+		get = color3_get,
 		namecall = color3_namecall,
-		string   = color3_string,
-		destroy  = color3_destroy,
-		add      = color3_add,
+		string = color3_string,
+		destroy = color3_destroy,
+		add = color3_add,
 		subtract = color3_subtract,
 		multiply = color3_multiply,
-		divide   = color3_divide,
-		negate   = color3_negate,
-		equal    = color3_equal,
+		divide = color3_divide,
+		negate = color3_negate,
+		equal = color3_equal,
 	}
 }
 
@@ -237,4 +258,3 @@ Color3_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_color3(L, binding, Color3{})
 	vm.SetField(L, -2, "black")
 }
-

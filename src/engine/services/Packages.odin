@@ -1447,9 +1447,12 @@ Packages_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Ob
 	if service.marketplace_server != "" {
 		delete(service.marketplace_server)
 	}
-	for root in service.plugin_roots {
-		if root != nil && !root.destroyed {
-			classes.Destroy_Hierarchy(root)
+	// lua_close finalizes the plugin roots itself and may already have freed them.
+	if !vm.Is_Closing() {
+		for root in service.plugin_roots {
+			if root != nil && !root.destroyed {
+				classes.Destroy_Hierarchy(root)
+			}
 		}
 	}
 	delete(service.plugin_roots)

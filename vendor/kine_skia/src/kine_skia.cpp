@@ -15,12 +15,14 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkMaskFilter.h"
+#include "include/core/SkMatrix.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkShader.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkTextBlob.h"
 #include "include/core/SkTileMode.h"
@@ -221,8 +223,15 @@ KINE_SKIA_API bool Kine_Skia_RuntimeShader_SetUniform(
 	case UniformType::kInt2:
 	case UniformType::kInt3:
 	case UniformType::kInt4: {
+		if (valueCount > 4) {
+			return false;
+		}
 		int32_t integerValues[4] = {};
 		for (int index = 0; index < valueCount; ++index) {
+			const double value = values[index];
+			if (!(value >= INT32_MIN && value <= INT32_MAX)) {
+				return false;
+			}
 			integerValues[index] = static_cast<int32_t>(values[index]);
 		}
 		return shader->builder->uniform(name).set(integerValues, valueCount);
@@ -246,6 +255,104 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
 
 KINE_SKIA_API const char *Kine_Skia_RuntimeShader_GetLastError(void) {
 	return kine_skia_shader_error.c_str();
+}
+
+KINE_SKIA_API KineSkiaRuntimeShader *Kine_Skia_UIShader_Create(
+	const char *sksl, bool *samplesContent) {
+	*samplesContent = false;
+	std::unique_ptr<KineSkiaRuntimeShader> shader(Kine_Skia_RuntimeShader_Create(sksl));
+	if (!shader) {
+		return nullptr;
+	}
+	for (const auto& child : shader->effect->children()) {
+		if (child.type != SkRuntimeEffect::ChildType::kShader ||
+			(child.name != "content" && child.name != "backdrop")) {
+			kine_skia_shader_error = "UIShader supports only the content and backdrop shader inputs";
+			return nullptr;
+		}
+	}
+	using UniformType = SkRuntimeEffect::Uniform::Type;
+	const auto* size = shader->effect->findUniform("size");
+	const auto* color = shader->effect->findUniform("backgroundColor");
+	if ((size && (size->type != UniformType::kFloat2 || size->isArray())) ||
+		(color && (color->type != UniformType::kFloat4 || color->isArray()))) {
+		kine_skia_shader_error = "UIShader expects float2 size and float4 backgroundColor";
+		return nullptr;
+	}
+	*samplesContent = shader->effect->findChild("content") != nullptr;
+	return shader.release();
+}
+
+// The canvas has already been translated to the object's local origin.
+static void kine_skia_bind_ui_shader(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float width, float height, const float *backgroundColor) {
+	const float size[] = {width, height};
+	Kine_Skia_RuntimeShader_SetUniform(shader, "size", size, 2);
+	Kine_Skia_RuntimeShader_SetUniform(shader, "backgroundColor", backgroundColor, 4);
+	if (shader->effect->findChild("backdrop")) {
+		auto image = surface->backdrop ? surface->backdrop : surface->surface->makeImageSnapshot();
+		sk_sp<SkShader> backdrop;
+		SkMatrix deviceToLocal;
+		if (image &&
+			surface->surface->getCanvas()->getTotalMatrix().invert(&deviceToLocal)) {
+			backdrop = image->makeShader(SkSamplingOptions(SkFilterMode::kLinear), deviceToLocal);
+		}
+		shader->builder->child("backdrop") =
+			backdrop ? std::move(backdrop) : SkShaders::Color(SK_ColorTRANSPARENT);
+	}
+}
+
+KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShader(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor) {
+	if (!surface || !surface->surface || !shader || !(width > 0 && height > 0)) {
+		return false;
+	}
+	SkCanvas *canvas = surface->surface->getCanvas();
+	SkAutoCanvasRestore restore(canvas, true);
+	canvas->translate(x, y);
+	kine_skia_bind_ui_shader(surface, shader, width, height, backgroundColor);
+	auto paintShader = shader->builder->makeShader();
+	if (shader->effect->findChild("backdrop")) {
+		shader->builder->child("backdrop") = sk_sp<SkShader>();
+	}
+	if (!paintShader) {
+		return false;
+	}
+	SkPaint paint;
+	paint.setAntiAlias(true);
+	paint.setShader(std::move(paintShader));
+	canvas->drawRect(SkRect::MakeWH(width, height), paint);
+	return true;
+}
+
+KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShader(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor,
+	float sampleRadius) {
+	if (!surface || !surface->surface || !shader || !(width > 0 && height > 0)) {
+		return false;
+	}
+	SkCanvas *canvas = surface->surface->getCanvas();
+	canvas->save();
+	canvas->translate(x, y);
+	kine_skia_bind_ui_shader(surface, shader, width, height, backgroundColor);
+	auto filter = SkImageFilters::RuntimeShader(*shader->builder, sampleRadius, "content", nullptr);
+	if (shader->effect->findChild("backdrop")) {
+		shader->builder->child("backdrop") = sk_sp<SkShader>();
+	}
+	if (!filter) {
+		canvas->restore();
+		return false;
+	}
+	const SkRect bounds = SkRect::MakeWH(width, height);
+	canvas->clipRect(bounds);
+	SkPaint paint;
+	paint.setImageFilter(std::move(filter));
+	canvas->saveLayer(&bounds, &paint);
+	canvas->translate(-x, -y);
+	return true;
 }
 
 static SkPath kine_skia_squircle_path_corners(

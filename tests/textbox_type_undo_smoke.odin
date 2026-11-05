@@ -25,11 +25,11 @@ make_key_down :: proc(scancode: sdl3.Scancode, mod: sdl.Keymod) -> sdl3.Event {
 	return e
 }
 
-make_text_input :: proc(text: string) -> (sdl3.Event, string) {
-	buf := strings.clone(text)
+make_text_input :: proc(text: string) -> (sdl3.Event, cstring) {
+	buf := strings.clone_to_cstring(text)
 	e: sdl3.Event
 	e.type = .TEXT_INPUT
-	e.text.text = cstring(raw_data(buf))
+	e.text.text = buf
 	return e, buf
 }
 
@@ -75,6 +75,7 @@ box.Text = "abc"
 box.CodeEditor = true
 box.AutoClose = false
 box.MaxLength = -1
+Instance.new("SyntaxHighlighter", box)
 _G.box = box
 `, "textbox_setup")
 
@@ -83,6 +84,9 @@ _G.box = box
 		panic("expected exactly one TextBox instance")
 	}
 	box := cast(^classes.TextBox)descriptor.instances[0]
+	highlight_descriptor := classes.Find_Class(&environment.classes, "SyntaxHighlighter")
+	assert(highlight_descriptor != nil && len(highlight_descriptor.instances) == 1)
+	highlighter := cast(^classes.SyntaxHighlighter)highlight_descriptor.instances[0]
 
 	classes.TextBox_focus(box)
 	if !box.focused {
@@ -93,11 +97,14 @@ _G.box = box
 	//   Ctrl+A selects all, then consecutive TEXT_INPUT chars merge into the
 	//   same undo entry which also carries the erased text. Consecutive chars
 	//   after a replacement are the exact "typing in the textbox" crash path.
+	keys := []string{"X", "Y", "Z"}
 	for iter in 0 ..< 50 {
 		send_key(&environment, &script_vm, .A, sdl.KMOD_CTRL) // select all "abc"
-		send_text(&environment, &script_vm, "X")
-		send_text(&environment, &script_vm, "Y")
-		send_text(&environment, &script_vm, "Z")
+		for key in keys {
+			send_text(&environment, &script_vm, key)
+			classes.syntax_highlighter_ensure(highlighter, box.text)
+			assert(highlighter.spans_valid && highlighter.cached_text == box.text)
+		}
 		assert_text(&environment, &script_vm, box, "XYZ", iter, "after typing")
 
 		send_key(&environment, &script_vm, .Z, sdl.KMOD_CTRL) // undo replacement
@@ -109,6 +116,22 @@ _G.box = box
 		send_key(&environment, &script_vm, .Z, sdl.KMOD_CTRL) // undo again
 		assert_text(&environment, &script_vm, box, "abc", iter, "after second undo")
 	}
+
+	display := classes.text_box_display_cstring("\té\t\x01z\r", 4)
+	assert(string(display) == "    é   z")
+	delete(display)
+	segment := classes.text_box_display_cstring("\té\t\x01z\r", 4, len("\té"))
+	assert(string(segment) == "   z")
+	delete(segment)
+
+	run_script(&script_vm, `_G.box.Text = "a\tb"; _G.box.TabSize = 4`, "textbox_tab_measure")
+	width_with_tab := classes.text_box_measure_range(box, 0, len(box.text))
+	assert_text(&environment, &script_vm, box, "a\tb", 0, "preserve stored tab")
+	run_script(&script_vm, `_G.box.Text = "a   b"`, "textbox_spaces_measure")
+	assert(width_with_tab == classes.text_box_measure_range(box, 0, len(box.text)))
+	run_script(&script_vm, `_G.box.Text = "a\t"; _G.box.CursorPosition = 3`, "textbox_tab_indent")
+	send_key(&environment, &script_vm, .TAB, {})
+	assert_text(&environment, &script_vm, box, "a\t    ", 0, "indent after an existing tab")
 
 	run_script(&script_vm, `
 _G.box.Position = UDim2.fromOffset(50, 50)

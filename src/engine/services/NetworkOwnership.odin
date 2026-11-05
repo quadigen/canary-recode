@@ -6,8 +6,11 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
-replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Replication_Entity) {
-	if service == nil || entity == nil {return}
+replication_encode_ownership :: proc(
+	service: ^ReplicatorService,
+	entity: ^Replication_Entity,
+	bytes: ^[dynamic]u8,
+) {
 	linear := entity.pending_linear_velocity
 	angular := entity.pending_angular_velocity
 
@@ -19,17 +22,22 @@ replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Re
 			angular = classes.Part_Angular_Velocity(registry, &part.object)
 		}
 	}
+	replication_put_u32(bytes, entity.id)
+	replication_put_u32(bytes, entity.owner_id)
+	append(bytes, entity.owned_as_model ? u8(1) : u8(0))
+	replication_put_f32(bytes, linear.x)
+	replication_put_f32(bytes, linear.y)
+	replication_put_f32(bytes, linear.z)
+	replication_put_f32(bytes, angular.x)
+	replication_put_f32(bytes, angular.y)
+	replication_put_f32(bytes, angular.z)
+}
+
+replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Replication_Entity) {
+	if service == nil || entity == nil {return}
 	bytes: [dynamic]u8
 	defer delete(bytes)
-	replication_put_u32(&bytes, entity.id)
-	replication_put_u32(&bytes, entity.owner_id)
-	append(&bytes, entity.owned_as_model ? u8(1) : u8(0))
-	replication_put_f32(&bytes, linear.x)
-	replication_put_f32(&bytes, linear.y)
-	replication_put_f32(&bytes, linear.z)
-	replication_put_f32(&bytes, angular.x)
-	replication_put_f32(&bytes, angular.y)
-	replication_put_f32(&bytes, angular.z)
+	replication_encode_ownership(service, entity, &bytes)
 	for &connection in service.peers {
 		if connection.known[entity.id] != 0 {
 			_ = replication_send(service, connection.peer, 10, bytes[:])
@@ -115,7 +123,7 @@ REPLICATION_AUTO_OWNERSHIP_INTERVAL :: 0.1
 
 Ownership_Link :: struct {
 	joint, attachment0, attachment1: ^Replication_Entity,
-	first, second: int,
+	first, second:                   int,
 }
 
 ownership_root :: proc(roots: []int, index: int) -> int {
@@ -127,15 +135,25 @@ ownership_root :: proc(roots: []int, index: int) -> int {
 	return root
 }
 
-ownership_links :: proc(service: ^ReplicatorService, indices: map[^classes.Object]int) -> [dynamic]Ownership_Link {
+ownership_links :: proc(
+	service: ^ReplicatorService,
+	indices: map[^classes.Object]int,
+) -> [dynamic]Ownership_Link {
 	links: [dynamic]Ownership_Link
 	registry := service.signal_registry
-	constraint_names := [?]string{"HingeConstraint", "RopeConstraint", "WeldConstraint"}
+	constraint_names := [?]string {
+		"HingeConstraint",
+		"RopeConstraint",
+		"SpringConstraint",
+		"WeldConstraint",
+	}
 	for name in constraint_names {
 		descriptor := classes.Find_Class(registry, name)
 		if descriptor == nil {continue}
 		for object in descriptor.instances {
-			if object == nil || object.destroyed || !replication_in_scope(service, object) {continue}
+			if object == nil ||
+			   object.destroyed ||
+			   !replication_in_scope(service, object) {continue}
 			constraint := cast(^classes.Constraint)object
 			a, b: ^classes.Object
 			link: Ownership_Link
@@ -144,12 +162,18 @@ ownership_links :: proc(service: ^ReplicatorService, indices: map[^classes.Objec
 				weld := cast(^classes.WeldConstraint)object
 				a, b = weld.part0, weld.part1
 			} else {
-				if object.class == &classes.HingeConstraint_Class && !constraint.enabled {continue}
+				if !constraint.enabled &&
+				   (object.class == &classes.HingeConstraint_Class ||
+						   object.class == &classes.SpringConstraint_Class) {
+					continue
+				}
 				a0, a1 := constraint.attachment0, constraint.attachment1
 				link.attachment0 = replication_entity(service, a0)
 				link.attachment1 = replication_entity(service, a1)
-				if link.attachment0 == nil || link.attachment1 == nil ||
-				   link.attachment0.object.destroyed || link.attachment1.object.destroyed {continue}
+				if link.attachment0 == nil ||
+				   link.attachment1 == nil ||
+				   link.attachment0.object.destroyed ||
+				   link.attachment1.object.destroyed {continue}
 				a, b = link.attachment0.object.parent, link.attachment1.object.parent
 			}
 			first, first_ok := indices[a]
@@ -178,7 +202,11 @@ ownership_group_ready :: proc(
 	return true
 }
 
-replication_transfer_group :: proc(service: ^ReplicatorService, parts: []^Replication_Entity, owner_id: u32) {
+replication_transfer_group :: proc(
+	service: ^ReplicatorService,
+	parts: []^Replication_Entity,
+	owner_id: u32,
+) {
 	if len(parts) > (int(Replication_Max_Frame_Payload) - 4) / OWNERSHIP_RECORD_BYTES {return}
 	changed: [dynamic]^Replication_Entity
 	defer delete(changed)
@@ -193,6 +221,15 @@ replication_transfer_group :: proc(service: ^ReplicatorService, parts: []^Replic
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	for &peer in service.peers {
+		if (peer.client_capabilities & Replication_Capability_Group_Ownership) == 0 {
+			for entity in changed {
+				if peer.known[entity.id] == 0 {continue}
+				clear(&bytes)
+				replication_encode_ownership(service, entity, &bytes)
+				_ = replication_send(service, peer.peer, 10, bytes[:])
+			}
+			continue
+		}
 		clear(&bytes)
 		replication_put_u32(&bytes, owner_id)
 		for entity in changed {
@@ -202,16 +239,33 @@ replication_transfer_group :: proc(service: ^ReplicatorService, parts: []^Replic
 			linear, angular := entity.pending_linear_velocity, entity.pending_angular_velocity
 			replication_put_u32(&bytes, entity.id)
 			append(&bytes, entity.owned_as_model ? u8(1) : u8(0))
-			values := [18]f32{
-				frame.x, frame.y, frame.z, frame.r00, frame.r01, frame.r02,
-				frame.r10, frame.r11, frame.r12, frame.r20, frame.r21, frame.r22,
-				linear.x, linear.y, linear.z, angular.x, angular.y, angular.z,
+			values := [18]f32 {
+				frame.x,
+				frame.y,
+				frame.z,
+				frame.r00,
+				frame.r01,
+				frame.r02,
+				frame.r10,
+				frame.r11,
+				frame.r12,
+				frame.r20,
+				frame.r21,
+				frame.r22,
+				linear.x,
+				linear.y,
+				linear.z,
+				angular.x,
+				angular.y,
+				angular.z,
 			}
 			for value in values {
 				replication_put_f32(&bytes, value)
 			}
 		}
-		if len(bytes) > 4 {_ = replication_send(service, peer.peer, 21, bytes[:])}
+		if len(bytes) > 4 {
+			_ = replication_send(service, peer.peer, Replication_Kind_Group_Ownership, bytes[:])
+		}
 	}
 	for entity in changed {ownership_fire_changed(service, entity, owner_id)}
 }
@@ -221,7 +275,9 @@ replication_reclaim_disconnected_owner :: proc(service: ^ReplicatorService, owne
 	parts: [dynamic]^Replication_Entity
 	defer delete(parts)
 	for entity in service.entity_list {
-		if entity.owner_id != owner_id || entity.object == nil || entity.object.destroyed ||
+		if entity.owner_id != owner_id ||
+		   entity.object == nil ||
+		   entity.object.destroyed ||
 		   !classes.Is_A(entity.object, "Part") {continue}
 		entity.owner_locked = false
 		append(&parts, entity)
@@ -231,7 +287,10 @@ replication_reclaim_disconnected_owner :: proc(service: ^ReplicatorService, owne
 
 OWNERSHIP_RECORD_BYTES :: 4 + 1 + 18 * 4
 
-replication_receive_group_ownership :: proc(service: ^ReplicatorService, reader: ^Replication_Reader) {
+replication_receive_group_ownership :: proc(
+	service: ^ReplicatorService,
+	reader: ^Replication_Reader,
+) {
 	owner := replication_read_u32(reader)
 	if !reader.valid || (len(reader.data) - reader.offset) % OWNERSHIP_RECORD_BYTES != 0 {return}
 	local_owner := owner != 0 && owner == ownership_local_user_id(service)
@@ -240,21 +299,41 @@ replication_receive_group_ownership :: proc(service: ^ReplicatorService, reader:
 	for reader.offset < len(reader.data) {
 		entity := replication_entity_by_id(service, replication_read_u32(reader))
 		model := replication_read_u8(reader) != 0
-		frame := datatypes.CFrame{
-			x = replication_read_f32(reader), y = replication_read_f32(reader), z = replication_read_f32(reader),
-			r00 = replication_read_f32(reader), r01 = replication_read_f32(reader), r02 = replication_read_f32(reader),
-			r10 = replication_read_f32(reader), r11 = replication_read_f32(reader), r12 = replication_read_f32(reader),
-			r20 = replication_read_f32(reader), r21 = replication_read_f32(reader), r22 = replication_read_f32(reader),
+		frame := datatypes.CFrame {
+			x   = replication_read_f32(reader),
+			y   = replication_read_f32(reader),
+			z   = replication_read_f32(reader),
+			r00 = replication_read_f32(reader),
+			r01 = replication_read_f32(reader),
+			r02 = replication_read_f32(reader),
+			r10 = replication_read_f32(reader),
+			r11 = replication_read_f32(reader),
+			r12 = replication_read_f32(reader),
+			r20 = replication_read_f32(reader),
+			r21 = replication_read_f32(reader),
+			r22 = replication_read_f32(reader),
 		}
-		linear := datatypes.Vector3{replication_read_f32(reader), replication_read_f32(reader), replication_read_f32(reader)}
-		angular := datatypes.Vector3{replication_read_f32(reader), replication_read_f32(reader), replication_read_f32(reader)}
-		if entity == nil || entity.object == nil || entity.object.destroyed ||
+		linear := datatypes.Vector3 {
+			replication_read_f32(reader),
+			replication_read_f32(reader),
+			replication_read_f32(reader),
+		}
+		angular := datatypes.Vector3 {
+			replication_read_f32(reader),
+			replication_read_f32(reader),
+			replication_read_f32(reader),
+		}
+		if entity == nil ||
+		   entity.object == nil ||
+		   entity.object.destroyed ||
 		   !classes.Is_A(entity.object, "Part") {continue}
-		if !replication_frame_finite(frame) || !replication_vector3_finite(linear) ||
+		if !replication_frame_finite(frame) ||
+		   !replication_vector3_finite(linear) ||
 		   !replication_vector3_finite(angular) {continue}
 
 		if entity.owner_id != owner || entity.owned_request_pending {
 			append(&changed, entity)
+			entity.owned_rest_upload_tick = 0
 		}
 		entity.owner_id = owner
 		entity.owned_as_model = model
@@ -279,7 +358,9 @@ replication_receive_group_ownership :: proc(service: ^ReplicatorService, reader:
 }
 
 replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
-	if service == nil || service.data_model == nil || service.mode != .Server ||
+	if service == nil ||
+	   service.data_model == nil ||
+	   service.mode != .Server ||
 	   !service.auto_ownership_enabled {return}
 
 	parts: [dynamic]^Replication_Entity
@@ -289,8 +370,11 @@ replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
 	defer delete(indices)
 	defer delete(roots)
 	for entity in service.entity_list {
-		if entity == nil || entity.object == nil || entity.object.destroyed ||
-		   !classes.Is_A(entity.object, "Part") || !replication_in_scope(service, entity.object) {continue}
+		if entity == nil ||
+		   entity.object == nil ||
+		   entity.object.destroyed ||
+		   !classes.Is_A(entity.object, "Part") ||
+		   !replication_in_scope(service, entity.object) {continue}
 		indices[entity.object] = len(parts)
 		append(&roots, len(parts))
 		append(&parts, entity)
@@ -346,20 +430,26 @@ replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
 		current_found := false
 		if !anchored {
 			for &peer in service.peers {
-				if !peer.handshake_complete || peer.player == nil || peer.player.character == nil {continue}
+				if !peer.handshake_complete ||
+				   peer.player == nil ||
+				   peer.player.character == nil {continue}
 				focus := classes.CharacterModel_Root(peer.player.character)
 				if focus == nil {continue}
 				distance := replication_distance_sq(center.x, center.y, center.z, focus)
 				if peer.player.user_id == current {
 					current_found, current_sq = true, distance
 				}
-				if distance < nearest_sq && ownership_group_ready(&peer, group[:], group_links[index][:]) {
+				if distance < nearest_sq &&
+				   ownership_group_ready(&peer, group[:], group_links[index][:]) {
 					nearest_id, nearest_sq = peer.player.user_id, distance
 				}
 			}
 		}
 		target := current
-		if anchored || current == 0 || !current_found || current_sq > release_sq ||
+		if anchored ||
+		   current == 0 ||
+		   !current_found ||
+		   current_sq > release_sq ||
 		   (nearest_id != 0 && nearest_id != current && nearest_sq * 4 < current_sq) {
 			target = nearest_id
 		}

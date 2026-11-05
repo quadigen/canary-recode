@@ -1,6 +1,6 @@
 package luau
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import "core:strings"
 
 import luauh "luauh"
@@ -130,11 +130,21 @@ New :: proc(open_libraries := true) -> VM {
 	}
 }
 
+@(thread_local)
+closing: bool
+
+Is_Closing :: proc() -> bool {
+	return closing
+}
+
 Close :: proc(vm: ^VM) {
 	if vm == nil || vm.L == nil {
 		return
 	}
 
+	previously_closing := closing
+	closing = true
+	defer closing = previously_closing
 	luauh.lua_close(vm.L)
 	vm.L = nil
 }
@@ -842,6 +852,9 @@ RetainValue :: proc(L: ^State, index: int = -1) -> i32 {
 }
 
 ReleaseValue :: proc(L: ^State, reference: i32) {
+	if closing {
+		return
+	}
 	if reference > 0 {
 		_ = luauh.lua_unref(L, reference)
 	}
@@ -970,7 +983,7 @@ userdata_detached :: proc(L: ^State, header: ^Userdata_Header) -> bool {
 }
 
 userdata_index :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
@@ -989,7 +1002,7 @@ userdata_index :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_newindex :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
@@ -1008,7 +1021,7 @@ userdata_newindex :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_namecall :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
@@ -1040,7 +1053,7 @@ userdata_namecall :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_method :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil || header.binding.namecall == nil {
 		return RaiseError(L, "invalid native method receiver")
@@ -1077,7 +1090,7 @@ userdata_binary :: proc(L: ^State, operation: Userdata_Binary_Proc) -> i32 {
 }
 
 userdata_add :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil {
 		header = userdata_header(L, 2)
@@ -1086,7 +1099,7 @@ userdata_add :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_subtract :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil {
 		header = userdata_header(L, 2)
@@ -1095,7 +1108,7 @@ userdata_subtract :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_multiply :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil {
 		header = userdata_header(L, 2)
@@ -1104,7 +1117,7 @@ userdata_multiply :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_divide :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil {
 		header = userdata_header(L, 2)
@@ -1113,7 +1126,7 @@ userdata_divide :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_negate :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil ||
 	   header.binding.negate == nil ||
@@ -1124,7 +1137,7 @@ userdata_negate :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_equal :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	left := userdata_header(L, 1)
 	right := userdata_header(L, 2)
 	if left == nil || right == nil || left.binding != right.binding || left.binding.equal == nil {
@@ -1136,7 +1149,7 @@ userdata_equal :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_tostring :: proc "c" (L: ^State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := userdata_header(L, 1)
 	if header == nil || header.binding == nil {
 		PushString(L, "native instance")
@@ -1152,7 +1165,7 @@ userdata_tostring :: proc "c" (L: ^State) -> i32 {
 }
 
 userdata_destroy :: proc "c" (L: ^State, userdata: rawptr) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	header := cast(^Userdata_Header)userdata
 	if header != nil && header.binding != nil && header.binding.track_values {
 		for entry, index in header.binding.values {

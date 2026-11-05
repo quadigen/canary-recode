@@ -60,10 +60,13 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 		if self.port != 0 {
 			options.port = self.port
 		}
-		if self.mode == target.Mode.Server {
-			options.mode = target.Mode.Server
-		} else if self.mode == target.Mode.Client {
-			options.mode = target.Mode.Client
+		switch self.mode {
+		case .Server, .Client:
+			options.mode = self.mode
+		case .Singleplayer:
+			options.singleplayer = true
+			options.no_update = true
+		case .Editor, .Standalone:
 		}
 	}
 	for index := 1; index < len(args); index += 1 {
@@ -163,6 +166,7 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			}
 		}
 	}
+	_, _, has_embedded := embedded_map()
 	if options.singleplayer {
 		if role_given {
 			fmt.eprintln("--singleplayer is its own mode; drop --server/--client/--editor")
@@ -172,14 +176,14 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			fmt.eprintln("--singleplayer does not use the network; drop --address/--port")
 			return options, false
 		}
-		if options.map_path == "" {
+		if options.map_path == "" && !has_embedded {
 			fmt.eprintln("--singleplayer requires --map with a .kine file path")
 			return options, false
 		}
 		options.mode = target.Mode.Singleplayer
+		options.address = ""
 	}
 
-	_, _, has_embedded := embedded_map()
 	options.standalone =
 		options.mode == target.Mode.Client && options.address == "" && has_embedded
 	if options.standalone {

@@ -1,13 +1,13 @@
 package classes
 
-import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:strings"
 
-LocalScript_Class := Class_Info{
+LocalScript_Class := Class_Info {
 	name   = "LocalScript",
-	parent = &Instance_Class,
+	parent = &BaseScript_Class,
 }
 
 LocalScript :: struct {
@@ -17,15 +17,15 @@ LocalScript :: struct {
 
 LocalScript_Init :: proc(class: ^Class_Info = nil, name: string = "LocalScript") -> LocalScript {
 	resolved_class := class
-	if resolved_class == nil { resolved_class = &LocalScript_Class }
-	return LocalScript{
+	if resolved_class == nil {resolved_class = &LocalScript_Class}
+	return LocalScript {
 		object = Object_Init(resolved_class, name),
-		common = Script_Common{
-			enabled         = true,
-			module_state    = .Unloaded,
-			module_ref      = -1,
+		common = Script_Common {
+			enabled = true,
+			module_state = .Unloaded,
+			module_ref = -1,
 			execution_state = .NotStarted,
-			thread_ref      = -1,
+			thread_ref = -1,
 		},
 	}
 }
@@ -103,13 +103,13 @@ LocalScript_clone :: proc(source: ^Object, destination: ^Object) {
 	Script_Release_Thread(L, &dst.common)
 
 	delete(dst.source)
-	dst.source          = strings.clone(src.source)
-	dst.enabled         = src.enabled
-	dst.module_state      = .Unloaded
-	dst.module_ref        = -1
-	dst.thread            = nil
-	dst.thread_ref        = -1
-	dst.execution_state   = .NotStarted
+	dst.source = strings.clone(src.source)
+	dst.enabled = src.enabled
+	dst.module_state = .Unloaded
+	dst.module_ref = -1
+	dst.thread = nil
+	dst.thread_ref = -1
+	dst.execution_state = .NotStarted
 	dst.restart_requested = false
 }
 

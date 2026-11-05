@@ -1,38 +1,22 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_region3 :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: Region3,
-) {
+push_region3 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Region3) {
 	push_value(L, binding, value)
 }
 
-Push_Region3 :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: Region3,
-) {
+Push_Region3 :: proc(L: ^vm.State, registry: ^Registry, value: Region3) {
 	push_region3(L, &registry.region3, value)
 }
 
-Arg_Region3 :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> Region3 {
+Arg_Region3 :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Region3 {
 	return require_region3(L, index, &registry.region3)^
 }
 
-require_region3 :: proc(
-	L: ^vm.State,
-	index: int,
-	binding: ^vm.Userdata_Binding,
-) -> ^Region3 {
+require_region3 :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^Region3 {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected Region3")
 		return nil
@@ -42,7 +26,7 @@ require_region3 :: proc(
 }
 
 region3_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	min_x, min_y, min_z := vm.ArgVector3(L, 1)
 	max_x, max_y, max_z := vm.ArgVector3(L, 2)
@@ -50,21 +34,13 @@ region3_new :: proc "c" (L: ^vm.State) -> i32 {
 	push_region3(
 		L,
 		binding_from_upvalue(L),
-		Region3_New(
-			Vector3{min_x, min_y, min_z},
-			Vector3{max_x, max_y, max_z},
-		),
+		Region3_New(Vector3{min_x, min_y, min_z}, Vector3{max_x, max_y, max_z}),
 	)
 
 	return 1
 }
 
-region3_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+region3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	region := cast(^Region3)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
@@ -86,11 +62,7 @@ region3_get :: proc(
 		}
 
 		center := Region3_Center(region^)
-		push_cframe(
-			L,
-			&registry.c_frame,
-			CFrame_New_XYZ(center.x, center.y, center.z),
-		)
+		push_cframe(L, &registry.c_frame, CFrame_New_XYZ(center.x, center.y, center.z))
 
 	case "ExpandToGrid":
 		vm.PushUserdataMethod(L, key)
@@ -102,12 +74,7 @@ region3_get :: proc(
 	return true
 }
 
-region3_namecall :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	method: string,
-) -> (i32, bool) {
+region3_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	region := cast(^Region3)value
 	binding := cast(^vm.Userdata_Binding)ctx
 
@@ -150,19 +117,16 @@ region3_destroy :: proc(value, ctx: rawptr) {
 }
 
 Region3_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Region3",
-		get      = region3_get,
+	return vm.Userdata_Binding {
+		name = "Region3",
+		get = region3_get,
 		namecall = region3_namecall,
-		string   = region3_string,
-		destroy  = region3_destroy,
-		equal    = region3_equal,
+		string = region3_string,
+		destroy = region3_destroy,
+		equal = region3_equal,
 	}
 }
 
-Region3_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+Region3_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", region3_new)
 }

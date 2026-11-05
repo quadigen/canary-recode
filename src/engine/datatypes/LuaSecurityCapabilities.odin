@@ -1,10 +1,14 @@
 package datatypes
 
-import "base:runtime"
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 
-push_security_capabilities :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: SecurityCapabilities) {
+push_security_capabilities :: proc(
+	L: ^vm.State,
+	binding: ^vm.Userdata_Binding,
+	value: SecurityCapabilities,
+) {
 	push_value(L, binding, value)
 }
 
@@ -12,7 +16,11 @@ Push_SecurityCapabilities :: proc(L: ^vm.State, registry: ^Registry, value: Secu
 	push_security_capabilities(L, &registry.security_capabilities, value)
 }
 
-Arg_SecurityCapabilities :: proc(L: ^vm.State, index: int, registry: ^Registry) -> SecurityCapabilities {
+Arg_SecurityCapabilities :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^Registry,
+) -> SecurityCapabilities {
 	if registry == nil || !vm.IsUserdataType(L, index, &registry.security_capabilities) {
 		_ = vm.RaiseError(L, "expected SecurityCapabilities")
 		return {}
@@ -28,7 +36,10 @@ security_capabilities_arguments :: proc(
 	result: SecurityCapabilities
 	for index := start_index; index <= vm.StackTop(L); index += 1 {
 		if vm.IsUserdataType(L, index, &registry.security_capabilities) {
-			result = SecurityCapabilities_Add(result, (cast(^SecurityCapabilities)vm.UserdataValue(L, index))^)
+			result = SecurityCapabilities_Add(
+				result,
+				(cast(^SecurityCapabilities)vm.UserdataValue(L, index))^,
+			)
 			continue
 		}
 		item := engine_enums.Arg_Item(L, index, registry.enums, "SecurityCapability")
@@ -38,7 +49,7 @@ security_capabilities_arguments :: proc(
 }
 
 security_capabilities_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
 	if registry == nil || registry.enums == nil {
@@ -49,7 +60,7 @@ security_capabilities_new :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 security_capabilities_from_current :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_security_capabilities(
 		L,
 		binding_from_upvalue(L),
@@ -60,13 +71,22 @@ security_capabilities_from_current :: proc "c" (L: ^vm.State) -> i32 {
 
 security_capabilities_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	switch key {
-	case "Add", "Remove", "Contains": vm.PushUserdataMethod(L, key)
-	case: return false
+	case "Add", "Remove", "Contains":
+		vm.PushUserdataMethod(L, key)
+	case:
+		return false
 	}
 	return true
 }
 
-security_capabilities_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
+security_capabilities_namecall :: proc(
+	L: ^vm.State,
+	value, ctx: rawptr,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
 	if registry == nil || registry.enums == nil {
@@ -101,13 +121,13 @@ security_capabilities_destroy :: proc(value, ctx: rawptr) {
 }
 
 SecurityCapabilities_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "SecurityCapabilities",
-		get      = security_capabilities_get,
+	return vm.Userdata_Binding {
+		name = "SecurityCapabilities",
+		get = security_capabilities_get,
 		namecall = security_capabilities_namecall,
-		string   = security_capabilities_string,
-		destroy  = security_capabilities_destroy,
-		equal    = security_capabilities_equal,
+		string = security_capabilities_string,
+		destroy = security_capabilities_destroy,
+		equal = security_capabilities_equal,
 	}
 }
 

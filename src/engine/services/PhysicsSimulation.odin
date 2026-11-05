@@ -36,12 +36,23 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 
 	tracy.ZoneNC("Jolt Synchronize", 0xE06C75)
 	Physics_Synchronize(service, workspace)
+	step_time := min(delta_time, 0.1)
+	physics_prepare_softbodies(service, workspace, step_time)
 
 	tracy.ZoneNC("Step Constraints", 0xE06C75)
-	if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint"); descriptor != nil {
+	if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint");
+	   descriptor != nil {
 		for object in descriptor.instances {
 			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
 				classes.HingeConstraint_release(cast(^classes.HingeConstraint)object)
+			}
+		}
+	}
+	if descriptor := classes.Find_Class(service.signal_registry, "SpringConstraint");
+	   descriptor != nil {
+		for object in descriptor.instances {
+			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
+				classes.SpringConstraint_release(cast(^classes.SpringConstraint)object)
 			}
 		}
 	}
@@ -49,7 +60,8 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	Physics_Apply_Water(service, min(delta_time, 0.1))
 
 	tracy.ZoneNC("Jolt Step", 0xE06C75)
-	jolt.System_Step(&service.system, min(delta_time, 0.1), i32(service.collision_steps))
+	jolt.System_Step(&service.system, step_time, i32(service.collision_steps))
+	physics_read_softbodies(service)
 
 	tracy.ZoneNC("Jolt Drain", 0xE06C75)
 	Physics_Drain_Contacts(service)
@@ -105,6 +117,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	if transform_written {
 		Physics_Part_Transform_Applied()
 	}
+	Physics_Step_Cloth(service, workspace_service, delta_time)
 }
 
 Physics_Get_Num_Awake_Parts :: proc(service: ^Physics) -> int {

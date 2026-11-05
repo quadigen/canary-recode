@@ -111,9 +111,12 @@ foreign kine_skia {
 
 	Kine_Skia_RuntimeShader_Create :: proc(sksl: cstring) -> ^KineSkiaRuntimeShader ---
 	Kine_Skia_RuntimeShader_Destroy :: proc(shader: ^KineSkiaRuntimeShader) ---
-	Kine_Skia_RuntimeShader_SetUniform :: proc(shader: ^KineSkiaRuntimeShader, name: cstring, values: ^f32, valueCount: i32) -> i32 ---
+	Kine_Skia_RuntimeShader_SetUniform :: proc(shader: ^KineSkiaRuntimeShader, name: cstring, values: ^f32, valueCount: i32) -> bool ---
 	Kine_Skia_Surface_DrawRuntimeShaderRect :: proc(surface: ^KineSkiaSurface, shader: ^KineSkiaRuntimeShader, x: f32, y: f32, width: f32, height: f32) ---
 	Kine_Skia_RuntimeShader_GetLastError :: proc() -> cstring ---
+	Kine_Skia_UIShader_Create :: proc(sksl: cstring, samplesContent: ^bool) -> ^KineSkiaRuntimeShader ---
+	Kine_Skia_Surface_DrawUIShader :: proc(surface: ^KineSkiaSurface, shader: ^KineSkiaRuntimeShader, x, y, width, height: f32, backgroundColor: ^f32) -> bool ---
+	Kine_Skia_Surface_BeginUIShader :: proc(surface: ^KineSkiaSurface, shader: ^KineSkiaRuntimeShader, x, y, width, height: f32, backgroundColor: ^f32, sampleRadius: f32) -> bool ---
 
 
 	Kine_Skia_Surface_DrawRect :: proc(surface: ^KineSkiaSurface, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8, strokeWidth: f32) ---

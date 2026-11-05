@@ -6,8 +6,8 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import target "../target"
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -138,7 +138,7 @@ run_service_namecall :: proc(
 	i32,
 	bool,
 ) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	service := cast(^RunService)object
 	switch method {
 	case "BindToRenderStep":

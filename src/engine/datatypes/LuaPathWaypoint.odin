@@ -1,31 +1,19 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_path_waypoint :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: PathWaypoint,
-) {
+push_path_waypoint :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: PathWaypoint) {
 	push_value(L, binding, PathWaypoint_Clone(value))
 }
 
-Push_PathWaypoint :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: PathWaypoint,
-) {
+Push_PathWaypoint :: proc(L: ^vm.State, registry: ^Registry, value: PathWaypoint) {
 	push_path_waypoint(L, &registry.path_waypoint, value)
 }
 
-Arg_PathWaypoint :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> PathWaypoint {
+Arg_PathWaypoint :: proc(L: ^vm.State, index: int, registry: ^Registry) -> PathWaypoint {
 	return require_path_waypoint(L, index, &registry.path_waypoint)^
 }
 
@@ -42,7 +30,7 @@ require_path_waypoint :: proc(
 }
 
 path_waypoint_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -54,12 +42,7 @@ path_waypoint_new :: proc "c" (L: ^vm.State) -> i32 {
 	action := engine_enums.PathWaypointAction.Walk
 
 	if !vm.IsNoneOrNil(L, 2) {
-		item := engine_enums.Arg_Item(
-			L,
-			2,
-			registry.enums,
-			"PathWaypointAction",
-		)
+		item := engine_enums.Arg_Item(L, 2, registry.enums, "PathWaypointAction")
 		action = engine_enums.PathWaypointAction(item.value)
 	}
 
@@ -68,35 +51,21 @@ path_waypoint_new :: proc "c" (L: ^vm.State) -> i32 {
 		label = vm.ArgString(L, 3)
 	}
 
-	value := PathWaypoint_New(
-		Vector3{x, y, z},
-		action,
-		label,
-	)
+	value := PathWaypoint_New(Vector3{x, y, z}, action, label)
 	defer PathWaypoint_Destroy(&value)
 
 	push_path_waypoint(L, binding, value)
 	return 1
 }
 
-path_waypoint_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+path_waypoint_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	waypoint := cast(^PathWaypoint)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
 
 	switch key {
 	case "Position":
-		vm.PushVector3(
-			L,
-			waypoint.Position.x,
-			waypoint.Position.y,
-			waypoint.Position.z,
-		)
+		vm.PushVector3(L, waypoint.Position.x, waypoint.Position.y, waypoint.Position.z)
 
 	case "Action":
 		if registry == nil || registry.enums == nil {
@@ -123,9 +92,7 @@ path_waypoint_equal :: proc(value, other, ctx: rawptr) -> bool {
 	a := cast(^PathWaypoint)value
 	b := cast(^PathWaypoint)other
 
-	return a.Position == b.Position &&
-	       a.Action == b.Action &&
-	       a.Label == b.Label
+	return a.Position == b.Position && a.Action == b.Action && a.Label == b.Label
 }
 
 path_waypoint_string :: proc(value, ctx: rawptr) -> string {
@@ -146,18 +113,15 @@ path_waypoint_destroy :: proc(value, ctx: rawptr) {
 }
 
 PathWaypoint_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "PathWaypoint",
-		get     = path_waypoint_get,
-		string  = path_waypoint_string,
+	return vm.Userdata_Binding {
+		name = "PathWaypoint",
+		get = path_waypoint_get,
+		string = path_waypoint_string,
 		destroy = path_waypoint_destroy,
-		equal   = path_waypoint_equal,
+		equal = path_waypoint_equal,
 	}
 }
 
-PathWaypoint_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+PathWaypoint_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", path_waypoint_new)
 }

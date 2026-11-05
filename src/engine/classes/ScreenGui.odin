@@ -36,6 +36,7 @@ ScreenGui_Init :: proc() -> ScreenGui {
 		safe_area_compat = enums.SafeAreaCompatibility.None,
 		screen_insets = enums.ScreenInsets.None,
 		enabled = true,
+		reset_on_spawn = true,
 	}
 }
 
@@ -90,6 +91,20 @@ ScreenGui_get :: proc(
 ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	if !Is_A_Class(child, &GuiObject_Class) {return}
 	rotated := GuiObject_push_rotation(cast(^GuiObject)child, ctx)
+	defer if rotated {GuiObject_pop_rotation(ctx)}
+
+	shader := UIShader_Find(child)
+	shader_layer := false
+	if shader != nil {
+		rect, visible := GuiObject_get_rect(child, ctx)
+		if visible && UIShader_Prepare(shader) && shader.samples_content {
+			shader_layer = UIShader_Apply(shader, ctx, rect, true)
+		}
+	}
+	defer if shader_layer {
+		guilib.restore(ctx.renderer.SkiaSurface) // Composite the shaded layer.
+		guilib.restore(ctx.renderer.SkiaSurface) // Restore the parent's transform and clip.
+	}
 
 	switch {
 	case Is_A_Class(child, &ScrollingFrame_Class):
@@ -115,10 +130,6 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 
 	case:
 		GuiObject_render(child, ctx)
-	}
-
-	if rotated {
-		GuiObject_pop_rotation(ctx)
 	}
 }
 
@@ -171,15 +182,11 @@ ScreenGui_clip_rect :: proc(gui: ^ScreenGui) -> (guilib.Rect, bool) {
 ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	gui := cast(^ScreenGui)object
 
-	if !gui.enabled || ctx == nil {
+	if !ScreenGui_Is_Visible(gui) || ctx == nil {
 		return
 	}
 
-	wants_overlay := gui.render_on_top
-	if object.parent != nil && object.parent.name == "StarterGui" {
-		wants_overlay = true
-	}
-	if wants_overlay != ctx.gui_overlay {return}
+	if gui_object_is_overlay_pass(gui) != ctx.gui_overlay {return}
 
 	if ctx.renderer == nil || ctx.renderer.SkiaSurface == nil {return}
 
@@ -193,6 +200,16 @@ ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	ScreenGui_RenderChildren(object, ctx)
+}
+
+ScreenGui_Is_Visible :: proc(gui: ^ScreenGui) -> bool {
+	if gui == nil || gui.destroyed || !gui.enabled {return false}
+	registry := gui.signal_registry
+	return(
+		registry == nil ||
+		registry.screen_gui_can_display == nil ||
+		registry.screen_gui_can_display(&gui.object, registry.data_model) \
+	)
 }
 
 ScreenGui_set :: proc(
@@ -272,6 +289,9 @@ ScreenGui_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.screen_insets = src.screen_insets
 	dst.enabled = src.enabled
 	dst.render_on_top = src.render_on_top
+	dst.reset_on_spawn = src.reset_on_spawn
+	dst.auto_localize = src.auto_localize
+	dst.ignore_cursor_inset = src.ignore_cursor_inset
 	dst.render_offset = src.render_offset
 	dst.size = src.size
 }

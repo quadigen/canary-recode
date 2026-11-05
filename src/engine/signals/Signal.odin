@@ -1,8 +1,8 @@
 package signals
 
+import tracy "../util/odin-tracy"
 import datatypes "../datatypes"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 
 SIGNAL_TAG :: 49
@@ -206,7 +206,7 @@ signal_fire_arguments :: proc(
 	first_argument: int,
 	argument_count: int,
 ) {
-	if signal == nil || signal.destroyed || signal.registry == nil || signal.registry.L == nil {
+	if vm.Is_Closing() || signal == nil || signal.destroyed || signal.registry == nil || signal.registry.L == nil {
 		return
 	}
 	if argument_count < 0 {
@@ -301,7 +301,7 @@ Fire_Handler :: proc(
 	first_argument: int,
 	argument_count: int,
 ) {
-	if registry == nil || registry.L == nil {return}
+	if vm.Is_Closing() || registry == nil || registry.L == nil {return}
 	L := registry.L
 	vm.PushRegistryReference(L, callback_ref)
 	callback_index := vm.StackTop(L)
@@ -322,7 +322,7 @@ Fire_Handler :: proc(
 }
 
 signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	signal := cast(^Signal)value
 	switch method {
 	case "Connect":
@@ -411,7 +411,7 @@ signal_string :: proc(value, ctx: rawptr) -> string {
 }
 
 signal_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	signal := new(Signal)
 	signal.registry = registry

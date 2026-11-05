@@ -199,6 +199,21 @@ Runtime_Shader_Namecall :: proc(
 	i32,
 	bool,
 ) {
+	result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method)
+	if method == "SetUniform" {
+		shader.uniforms_dirty = true
+	}
+	return result, handled
+}
+
+Shader_Uniform_Namecall :: proc(
+	L: ^vm.State,
+	uniforms: ^[dynamic]Runtime_Shader_Uniform,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	switch method {
 	case "SetUniform":
 		name := vm.ArgString(L, 2)
@@ -218,22 +233,20 @@ Runtime_Shader_Namecall :: proc(
 			uniform.count = 1
 			uniform.values[0] = f32(vm.ArgNumber(L, 3))
 		}
-		for &entry in shader.uniforms {
+		for &entry in uniforms^ {
 			if entry.name == name {
 				entry.values = uniform.values
 				entry.count = uniform.count
 				entry.optional = false
-				shader.uniforms_dirty = true
 				return 0, true
 			}
 		}
 		uniform.name = strings.clone(name)
-		append(&shader.uniforms, uniform)
-		shader.uniforms_dirty = true
+		append(uniforms, uniform)
 		return 0, true
 	case "GetUniform":
 		name := vm.ArgString(L, 2)
-		for uniform in shader.uniforms {
+		for uniform in uniforms^ {
 			if uniform.name != name {continue}
 			if uniform.count == 1 {
 				vm.PushNumber(L, f64(uniform.values[0]))

@@ -1,7 +1,7 @@
 package globals
 
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:time"
 
 RUNTIME_NAME :: "kinemium"
@@ -156,13 +156,13 @@ runtime_install_luau_global :: proc(vm_state: ^vm.VM) {
 
 
 runtime_global_tick :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushNumber(L, f64(time.to_unix_nanoseconds(time.now())) / 1e9)
 	return 1
 }
 
 runtime_global_time :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushNumber(L, f64(time.to_unix_nanoseconds(time.now())) / 1e9)
 	return 1
 }
@@ -190,7 +190,7 @@ runtime_civil_from_days :: proc(days: i64) -> (year, month, day: i64) {
 }
 
 runtime_global_date :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	seconds := i64(time.to_unix_seconds(time.now()))
 	days := seconds / 86400
 	remainder := seconds % 86400
@@ -226,7 +226,7 @@ runtime_global_date :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 runtime_global_collectgarbage :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	option := "collect"
 	if vm.StackTop(L) >= 1 {
 		option = vm.ArgString(L, 1)
@@ -244,7 +244,7 @@ runtime_global_collectgarbage :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushGlobals(L)
 	if vm.GetField(L, -1, "Studio") == .Nil {
 		vm.Pop(L, 2)

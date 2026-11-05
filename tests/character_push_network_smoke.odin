@@ -1,6 +1,7 @@
 package main
 
 import engine_runtime "../src/engine/runtime"
+import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
 
@@ -26,13 +27,17 @@ push_step :: proc(
 	}
 }
 
-main :: proc() {
+push_case :: proc(group_ownership: bool) {
 	server_vm := vm.New()
 	client_vm := vm.New()
 	server: engine_runtime.Environment
 	client: engine_runtime.Environment
 	engine_runtime.Environment_Init(&server, &server_vm)
 	engine_runtime.Environment_Init(&client, &client_vm)
+	if !group_ownership {
+		replicator := cast(^services.ReplicatorService)services.Ensure_Service(&client.services, "ReplicatorService")
+		replicator.client_capabilities &= ~services.Replication_Capability_Group_Ownership
+	}
 
 
 	run_push_script(
@@ -131,5 +136,10 @@ assert(root.CFrame.Position.Y < 3.5, "character must not be lifted onto the crat
 	vm.Close(&server_vm)
 	engine_runtime.Environment_Destroy(&client)
 	engine_runtime.Environment_Destroy(&server)
+}
+
+main :: proc() {
+	push_case(true)
+	push_case(false)
 	fmt.println("CHARACTER_PUSH_NETWORK_SMOKE_PASSED")
 }

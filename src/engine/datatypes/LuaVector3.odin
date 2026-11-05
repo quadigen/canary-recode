@@ -1,6 +1,6 @@
 package datatypes
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import "core:fmt"
 
 import engine_enums "../enum"
@@ -21,18 +21,21 @@ Arg_Vector3 :: proc(L: ^vm.State, index: int) -> Vector3 {
 }
 
 vector3_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
-	push_vector3_native(L, Vector3{
-		f32(vm.ArgOptionalNumber(L, 1)),
-		f32(vm.ArgOptionalNumber(L, 2)),
-		f32(vm.ArgOptionalNumber(L, 3)),
-	})
+	push_vector3_native(
+		L,
+		Vector3 {
+			f32(vm.ArgOptionalNumber(L, 1)),
+			f32(vm.ArgOptionalNumber(L, 2)),
+			f32(vm.ArgOptionalNumber(L, 3)),
+		},
+	)
 	return 1
 }
 
 vector3_from_axis :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -55,7 +58,7 @@ vector3_from_axis :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 vector3_from_normal_id :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -78,40 +81,37 @@ vector3_from_normal_id :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 vector3_abs :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_vector3_native(L, Vec3_Abs(Arg_Vector3(L, 1)))
 	return 1
 }
 
 vector3_ceil :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_vector3_native(L, Vec3_Ceil(Arg_Vector3(L, 1)))
 	return 1
 }
 
 vector3_floor :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_vector3_native(L, Vec3_Floor(Arg_Vector3(L, 1)))
 	return 1
 }
 
 vector3_sign :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_vector3_native(L, Vec3_Sign(Arg_Vector3(L, 1)))
 	return 1
 }
 
 vector3_cross :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_vector3_native(L, Vec3_Cross(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-	))
+	context = tracy.DefaultContext()
+	push_vector3_native(L, Vec3_Cross(Arg_Vector3(L, 1), Arg_Vector3(L, 2)))
 	return 1
 }
 
 vector3_angle :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	self := Arg_Vector3(L, 1)
 	other := Arg_Vector3(L, 2)
@@ -127,51 +127,44 @@ vector3_angle :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 vector3_dot :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	vm.PushNumber(L, f64(Vec3_Dot(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-	)))
+	context = tracy.DefaultContext()
+	vm.PushNumber(L, f64(Vec3_Dot(Arg_Vector3(L, 1), Arg_Vector3(L, 2))))
 	return 1
 }
 
 vector3_fuzzy_eq :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
-	vm.PushBoolean(L, Vec3_FuzzyEq(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-		f32(vm.ArgOptionalNumber(L, 3, 1.0e-5)),
-	))
+	vm.PushBoolean(
+		L,
+		Vec3_FuzzyEq(
+			Arg_Vector3(L, 1),
+			Arg_Vector3(L, 2),
+			f32(vm.ArgOptionalNumber(L, 3, 1.0e-5)),
+		),
+	)
 	return 1
 }
 
 vector3_lerp :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
-	push_vector3_native(L, Vec3_Lerp(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-		f32(vm.ArgNumber(L, 3)),
-	))
+	push_vector3_native(
+		L,
+		Vec3_Lerp(Arg_Vector3(L, 1), Arg_Vector3(L, 2), f32(vm.ArgNumber(L, 3))),
+	)
 	return 1
 }
 
 vector3_max :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_vector3_native(L, Vec3_Max(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-	))
+	context = tracy.DefaultContext()
+	push_vector3_native(L, Vec3_Max(Arg_Vector3(L, 1), Arg_Vector3(L, 2)))
 	return 1
 }
 
 vector3_min :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_vector3_native(L, Vec3_Min(
-		Arg_Vector3(L, 1),
-		Arg_Vector3(L, 2),
-	))
+	context = tracy.DefaultContext()
+	push_vector3_native(L, Vec3_Min(Arg_Vector3(L, 1), Arg_Vector3(L, 2)))
 	return 1
 }
 
@@ -180,7 +173,7 @@ push_vector3_method :: proc(L: ^vm.State, name: string, function: vm.CFunction) 
 }
 
 vector3_index :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	value := Arg_Vector3(L, 1)
 	key := vm.ArgString(L, 2)
@@ -222,10 +215,7 @@ vector3_index :: proc "c" (L: ^vm.State) -> i32 {
 		push_vector3_method(L, "Vector3.Min", vector3_min)
 
 	case:
-		return vm.RaiseError(
-			L,
-			fmt.tprintf("attempt to index Vector3 with '%s'", key),
-		)
+		return vm.RaiseError(L, fmt.tprintf("attempt to index Vector3 with '%s'", key))
 	}
 
 	return 1
@@ -249,9 +239,7 @@ install_vector3_metatable :: proc(L: ^vm.State) {
 }
 
 Vector3_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name = "Vector3",
-	}
+	return vm.Userdata_Binding{name = "Vector3"}
 }
 
 Vector3_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {

@@ -1,6 +1,6 @@
 package luau
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
 import luauh "luauh"
 
 Thread_Security_Capabilities :: struct {
@@ -93,7 +93,7 @@ SetThreadSecurityCapabilities :: proc(L: ^State, capabilities: Thread_Security_C
 		// allocator. Allocating under the caller's context pairs the free
 		// with a foreign allocator whenever the caller runs on a tracking or
 		// arena allocator.
-		ctx := runtime.default_context()
+		ctx := tracy.DefaultContext()
 		security = new(Thread_Security_Capabilities, ctx.allocator)
 		luauh.lua_setthreaddata(L, security)
 	}
@@ -113,7 +113,7 @@ ThreadHasSecurityCapability :: proc(L: ^State, capability: i64) -> bool {
 }
 
 thread_security_userthread :: proc "c" (parent, thread: ^State) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if thread == nil {
 		return
 	}
@@ -122,7 +122,7 @@ thread_security_userthread :: proc "c" (parent, thread: ^State) {
 		security := thread_security_context(thread)
 		if security != nil {
 			luauh.lua_setthreaddata(thread, nil)
-			free(security, runtime.default_context().allocator)
+			free(security, tracy.DefaultContext().allocator)
 		}
 		return
 	}
@@ -147,7 +147,7 @@ ShutdownThreadSecurity :: proc(L: ^State) {
 		luauh.lua_setthreaddata(L, nil)
 		// Pinned to the default context: allocations in
 		// SetThreadSecurityCapabilities always use it.
-		free(security, runtime.default_context().allocator)
+		free(security, tracy.DefaultContext().allocator)
 	}
 }
 

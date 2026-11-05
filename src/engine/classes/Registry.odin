@@ -9,7 +9,6 @@ import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import luauh "../vm/luauh"
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -229,34 +228,35 @@ Part_Apply_Impulse :: proc(
 }
 
 Registry :: struct {
-	active_post_process:   ^Object,
-	classes:               [dynamic]^Class_Descriptor,
-	datatypes:             ^datatypes.Registry,
-	enums:                 ^enums.Registry,
-	renderer:              ^Renderer_Object,
-	data_model:            rawptr,
-	vm_state:              ^vm.VM,
-	signal_registry:       ^signals.Registry,
-	fallback_require_ref:  i32,
-	require_resolver:      Require_Resolver,
-	require_resolver_ctx:  rawptr,
-	require_frames:        map[^vm.State]^Require_Frame_Stack,
-	mode:                  target.Mode,
-	pending_destroy:       [dynamic]Pending_Destroy,
-	destroy_hook:          Destroy_Hook,
-	destroy_hook_ctx:      rawptr,
-	network_ownership:     Network_Ownership_Dispatch,
-	network_ownership_ctx: rawptr,
-	model_pivoted:         proc(ctx: rawptr, model: ^Model),
-	camera_obstruction:    proc(
+	active_post_process:    ^Object,
+	classes:                [dynamic]^Class_Descriptor,
+	datatypes:              ^datatypes.Registry,
+	enums:                  ^enums.Registry,
+	renderer:               ^Renderer_Object,
+	data_model:             rawptr,
+	vm_state:               ^vm.VM,
+	signal_registry:        ^signals.Registry,
+	fallback_require_ref:   i32,
+	require_resolver:       Require_Resolver,
+	require_resolver_ctx:   rawptr,
+	require_frames:         map[^vm.State]^Require_Frame_Stack,
+	mode:                   target.Mode,
+	screen_gui_can_display: proc(object: ^Object, data_model: rawptr) -> bool,
+	pending_destroy:        [dynamic]Pending_Destroy,
+	destroy_hook:           Destroy_Hook,
+	destroy_hook_ctx:       rawptr,
+	network_ownership:      Network_Ownership_Dispatch,
+	network_ownership_ctx:  rawptr,
+	model_pivoted:          proc(ctx: rawptr, model: ^Model),
+	camera_obstruction:     proc(
 		ctx: rawptr,
 		camera: ^Camera,
 		target, desired: datatypes.Vector3,
 	) -> datatypes.Vector3,
-	remote_call:           Remote_Call_Dispatch,
-	remote_call_ctx:       rawptr,
-	part_body:             Part_Body_Access,
-	part_body_ctx:         rawptr,
+	remote_call:            Remote_Call_Dispatch,
+	remote_call_ctx:        rawptr,
+	part_body:              Part_Body_Access,
+	part_body_ctx:          rawptr,
 }
 
 Registry_Init :: proc(
@@ -1023,12 +1023,12 @@ Step :: proc(
 }
 
 Object_From_Argument :: proc "c" (L: ^vm.State, index: int) -> ^Object {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return object_from_argument(L, index)
 }
 
 instance_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	class_name := vm.ArgString(L, 1)
 
@@ -1269,7 +1269,7 @@ REQUIRE_RESULT_COUNT_ERROR :: "Module code did not return exactly one value"
 // thread is resumed (the module yielded via task.wait and friends). It caches
 // the module result and produces require's return value.
 require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	object := object_from_argument(L, 1)
 	common := Script_Common_Of(object)
@@ -1306,7 +1306,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 }
 
 require_script :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 
 	// Engine-internal modules are addressed by string path ("@internal/...").
@@ -1442,7 +1442,10 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Advanced_Lighting_Effects(registry)
 	Register_ArcHandles(registry)
 	Register_Attachment(registry)
+	Register_Cloth(registry)
+	Register_SoftBody(registry)
 	Register_BasePart(registry)
+	Register_BaseScript(registry)
 	Register_BindableEvent(registry)
 	Register_BindableFunction(registry)
 	Register_BlurImageFilter(registry)
@@ -1507,6 +1510,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Sound(registry)
 	Register_SphereHandleAdornment(registry)
 	Register_SpotLight(registry)
+	Register_SpringConstraint(registry)
 	Register_StateMachine(registry)
 	Register_StringValue(registry)
 	Register_SurfaceGui(registry)
@@ -1525,6 +1529,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_UIMotionBlur(registry)
 	Register_UIPadding(registry)
 	Register_UIScaleDetector(registry)
+	Register_UIShader(registry)
 	Register_UIShadow(registry)
 	Register_UISquircle(registry)
 	Register_UIStroke(registry)

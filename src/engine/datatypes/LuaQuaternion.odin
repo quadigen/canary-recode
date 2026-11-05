@@ -1,30 +1,18 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_quaternion :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: Quaternion,
-) {
+push_quaternion :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Quaternion) {
 	push_value(L, binding, value)
 }
 
-Push_Quaternion :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: Quaternion,
-) {
+Push_Quaternion :: proc(L: ^vm.State, registry: ^Registry, value: Quaternion) {
 	push_quaternion(L, &registry.quaternion, value)
 }
 
-Arg_Quaternion :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> Quaternion {
+Arg_Quaternion :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Quaternion {
 	return require_quaternion(L, index, &registry.quaternion)^
 }
 
@@ -42,7 +30,7 @@ require_quaternion :: proc(
 }
 
 quaternion_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	push_quaternion(
 		L,
@@ -59,26 +47,17 @@ quaternion_new :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 quaternion_from_axis_angle :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	x, y, z := vm.ArgVector3(L, 1)
 	angle := f32(vm.ArgNumber(L, 2))
 
-	push_quaternion(
-		L,
-		binding_from_upvalue(L),
-		Quaternion_FromAxisAngle(Vector3{x, y, z}, angle),
-	)
+	push_quaternion(L, binding_from_upvalue(L), Quaternion_FromAxisAngle(Vector3{x, y, z}, angle))
 
 	return 1
 }
 
-quaternion_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+quaternion_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	q := cast(^Quaternion)value
 	binding := cast(^vm.Userdata_Binding)ctx
 
@@ -104,12 +83,7 @@ quaternion_get :: proc(
 	return true
 }
 
-quaternion_namecall :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	method: string,
-) -> (i32, bool) {
+quaternion_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	q := cast(^Quaternion)value
 	binding := cast(^vm.Userdata_Binding)ctx
 
@@ -151,8 +125,7 @@ quaternion_namecall :: proc(
 
 quaternion_multiply :: proc(
 	L: ^vm.State,
-	value,
-	ctx: rawptr,
+	value, ctx: rawptr,
 	self_index, other_index: int,
 ) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
@@ -182,21 +155,18 @@ quaternion_destroy :: proc(value, ctx: rawptr) {
 }
 
 Quaternion_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Quaternion",
-		get      = quaternion_get,
+	return vm.Userdata_Binding {
+		name = "Quaternion",
+		get = quaternion_get,
 		namecall = quaternion_namecall,
-		string   = quaternion_string,
-		destroy  = quaternion_destroy,
+		string = quaternion_string,
+		destroy = quaternion_destroy,
 		multiply = quaternion_multiply,
-		equal    = quaternion_equal,
+		equal = quaternion_equal,
 	}
 }
 
-Quaternion_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+Quaternion_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", quaternion_new)
 	add_library_function(L, binding, "fromAxisAngle", quaternion_from_axis_angle)
 

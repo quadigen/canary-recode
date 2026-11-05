@@ -2,7 +2,6 @@ package services
 // wire:service
 
 
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -11,6 +10,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import target "../target"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:bytes"
 import "core:time"
@@ -140,7 +140,7 @@ log_service_write :: proc(service: ^LogService, message: string, log_type: strin
 }
 
 log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	if registry == nil {
 		return 0
@@ -164,7 +164,7 @@ log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 log_service_luau_warn :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	if registry == nil {
 		return 0

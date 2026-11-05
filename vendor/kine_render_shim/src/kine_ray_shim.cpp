@@ -284,6 +284,13 @@ Ray::MaterialHandle kine_get_material(KineRayState *state, const KineRayDraw &dr
 		desc.normal_map.texture = normalMap;
 		desc.normal_map.value = normalMap != Ray::InvalidTextureHandle ? 1.0f : 0.0f;
 		desc.ior = 1.45f;
+		if (draw.materialKind == KINE_MAT_FADE || draw.materialKind == KINE_MAT_NEON_FADE)
+			desc.alpha.value = std::clamp(draw.transmission, 0.0f, 1.0f);
+		if (draw.materialKind == KINE_MAT_NEON_FADE) {
+			memcpy(desc.emission.color.color, draw.color, sizeof(desc.emission.color.color));
+			desc.emission.strength = draw.param1 > 0.0f ? draw.param1 : 1.0f;
+			desc.emission.importance_sample = true;
+		}
 		handle = state->scene->AddMaterial(desc);
 		break;
 	}

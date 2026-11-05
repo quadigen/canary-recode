@@ -1,8 +1,6 @@
 package services
 // wire:service global="workspace"
 
-import "base:runtime"
-
 
 import assetstore "../assetstore"
 import kineffi "../bindings"
@@ -12,6 +10,7 @@ import enums "../enum"
 import materials "../material"
 import platform "../platform"
 import profiling "../profiling"
+import renderer "../renderer"
 import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
@@ -45,6 +44,7 @@ Workspace :: struct {
 	fall_height_enabled:         bool,
 	distributed_game_time:       f64,
 	simulate_physics:            bool,
+	global_wind:                 datatypes.Vector3,
 	current_camera:              ^classes.Camera,
 	finished_replicating:        ^signals.Signal,
 	draw_items:                  [dynamic]kineffi.KineFilamentDrawItem,
@@ -128,10 +128,16 @@ workspace_part_mesh :: proc(
 	return slot^
 }
 
-workspace_water_mesh :: proc(workspace: ^Workspace, filament: ^kineffi.KineFilamentContext) -> ^kineffi.KineFilamentMesh {
+workspace_water_mesh :: proc(
+	workspace: ^Workspace,
+	filament: ^kineffi.KineFilamentContext,
+) -> ^kineffi.KineFilamentMesh {
 	if workspace.water_grid_mesh == nil {
 		tracy.ZoneNC("Workspace Water Mesh Load", 0xB48EAD)
-		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(filament, kineffi.KINE_MESH_WATER_GRID)
+		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
+			filament,
+			kineffi.KINE_MESH_WATER_GRID,
+		)
 	}
 	if workspace.water_grid_mesh == nil {return workspace_part_mesh(workspace, filament, .Block)}
 	return workspace.water_grid_mesh
@@ -198,7 +204,11 @@ workspace_meshpart_mesh :: proc(
 	defer delete(resolved)
 	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
-	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPathIndexed(ctx, c_path, part.mesh_index)
+	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPathIndexed(
+		ctx,
+		c_path,
+		part.mesh_index,
+	)
 	if part.native_mesh != nil {
 		part.native_context = ctx
 		part.native_is_editable = false
@@ -297,7 +307,10 @@ workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 		if child == nil ||
 		   child.destroyed ||
 		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
-		if classes.Is_A_Class(child, &classes.Part_Class) || workspace_has_parts(child) {
+		if classes.Is_A_Class(child, &classes.Part_Class) ||
+		   classes.Is_A_Class(child, &classes.Cloth_Class) ||
+		   classes.Is_A_Class(child, &classes.SoftBody_Class) ||
+		   workspace_has_parts(child) {
 			return true
 		}
 	}
@@ -440,6 +453,7 @@ Workspace_Frustum_Contains_Sphere :: proc(
 
 
 Workspace_Draw_Params :: struct {
+	replicator:        ^ReplicatorService,
 	reflection_center: datatypes.Vector3,
 	reflection_radius: f32,
 	frustum:           ^Workspace_Frustum,
@@ -477,11 +491,16 @@ workspace_append_draw_items :: proc(
 		   child.destroyed ||
 		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
 
-		if classes.Is_A_Class(child, &classes.Part_Class) {
+		if classes.Is_A_Class(child, &classes.Cloth_Class) {
+			workspace_append_cloth(workspace, cast(^classes.Cloth)child, renderer, items, params)
+		} else if classes.Is_A_Class(child, &classes.SoftBody_Class) {
+			workspace_append_softbody(cast(^classes.SoftBody)child, renderer, items, params)
+		} else if classes.Is_A_Class(child, &classes.Part_Class) {
 			part := cast(^classes.Part)child
 			mesh: ^kineffi.KineFilamentMesh
 			is_meshpart := classes.Is_A_Class(child, &classes.MeshPart_Class)
-			if part.transparency >= 1.0 {
+			if part.transparency >= 1.0 ||
+			   replication_part_awaiting_transform(params.replicator, part) {
 				workspace_append_draw_items(workspace, child, renderer, items, params)
 				continue
 			}
@@ -705,7 +724,11 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 		clear(items)
 
 		params := Workspace_Draw_Params {
-			hash = 1469598103934665603,
+			hash       = 1469598103934665603,
+			replicator = cast(^ReplicatorService)Service_Get_Service(
+				&workspace.service,
+				"ReplicatorService",
+			),
 		}
 		probe_center: [3]f32
 		if kineffi.Kine_Filament_GetReflectionProbeRegion(
@@ -814,6 +837,8 @@ workspace_get :: proc(
 		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
 		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
+	case "GlobalWind":
+		datatypes.Push_Vector3(L, workspace.global_wind)
 	case "FallenPartsDestroyHeight":
 		vm.PushNumber(L, f64(workspace.fallen_parts_destroy_height))
 	case "FallHeightEnabled":
@@ -834,6 +859,8 @@ workspace_get :: proc(
 	     "GetNumAwakeParts",
 	     "GetPhysicsThrottling",
 	     "GetRealPhysicsFPS",
+	     "Disable3D",
+	     "Enable3D",
 	     "PGSIsEnabled":
 		vm.PushUserdataMethod(L, key)
 	case:
@@ -866,6 +893,15 @@ workspace_set :: proc(
 		physics := workspace_physics(workspace)
 		if physics == nil {return false}
 		Physics_Set_Gravity(physics, f32(vm.ArgNumber(L, value_index)))
+	case "GlobalWind":
+		wind := datatypes.Arg_Vector3(L, value_index)
+		if !physics_finite_f32(wind.x) ||
+		   !physics_finite_f32(wind.y) ||
+		   !physics_finite_f32(wind.z) {
+			_ = vm.RaiseError(L, "Workspace.GlobalWind must be finite")
+			return true
+		}
+		workspace.global_wind = wind
 	case "FallenPartsDestroyHeight":
 		workspace.fallen_parts_destroy_height = clamp(
 			f32(vm.ArgNumber(L, value_index)),
@@ -887,7 +923,7 @@ workspace_set :: proc(
 }
 
 workspace_kne_raycast :: proc "contextless" (ctx: ^classes.Class_Export_Context) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	count, _ := workspace_namecall(ctx.L, ctx.object, ctx.datatypes, ctx.enums, "Raycast")
 	return count
 }
@@ -925,6 +961,43 @@ workspace_namecall :: proc(
 		)
 		if !hit {vm.PushNil(L)} else {datatypes.Push_RaycastResult(L, datatype_registry, result)}
 		return 1, true
+	case "GetPartBoundsInBox", "GetPartBoundsInRadius":
+		return workspace_get_part_bounds(
+				L,
+				object,
+				datatype_registry,
+				method == "GetPartBoundsInBox",
+			),
+			true
+	case "GetPartsInPart":
+		return workspace_get_parts_in_part(L, object, physics, datatype_registry), true
+	case "JoinToOutsiders", "UnjoinFromOutsiders":
+		return workspace_update_outsider_welds(
+				L,
+				object,
+				physics,
+				enum_registry,
+				method == "JoinToOutsiders",
+			),
+			true
+	case "Disable3D":
+		registry := cast(^DataModel)workspace.data_model
+		if registry != nil && registry.registry.classes.renderer != nil {
+			r := registry.registry.classes.renderer
+			xywh := []i32{0, 0, 0, 0}
+			renderer.set_viewport_rect(r, xywh[0], xywh[1], xywh[2], xywh[3], true)
+			renderer.apply_viewport_rect(r)
+		}
+		return 1, true
+	case "Enable3D":
+		registry := cast(^DataModel)workspace.data_model
+		if registry != nil && registry.registry.classes.renderer != nil {
+			r := registry.registry.classes.renderer
+			xywh := []i32{0, 0, window_width, window_height}
+			renderer.set_viewport_rect(r, xywh[0], xywh[1], xywh[2], xywh[3], true)
+			renderer.apply_viewport_rect(r)
+		}
+		return 1, true
 	case "GetNumAwakeParts":
 		vm.PushNumber(L, f64(Physics_Get_Num_Awake_Parts(physics)))
 		return 1, true
@@ -951,11 +1024,19 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 	materials.shutdown(renderer)
 
 	if renderer != nil && renderer.Filament != nil {
-		meshes := [?]^kineffi.KineFilamentMesh{
-			workspace.cube_mesh, workspace.sphere_mesh, workspace.cylinder_mesh,
-			workspace.cone_mesh, workspace.torus_mesh, workspace.pyramid_mesh, workspace.truss_mesh,
-			workspace.wedge_mesh, workspace.triangle_wedge_mesh, workspace.corner_wedge_mesh,
-			workspace.capsule_mesh, workspace.water_grid_mesh,
+		meshes := [?]^kineffi.KineFilamentMesh {
+			workspace.cube_mesh,
+			workspace.sphere_mesh,
+			workspace.cylinder_mesh,
+			workspace.cone_mesh,
+			workspace.torus_mesh,
+			workspace.pyramid_mesh,
+			workspace.truss_mesh,
+			workspace.wedge_mesh,
+			workspace.triangle_wedge_mesh,
+			workspace.corner_wedge_mesh,
+			workspace.capsule_mesh,
+			workspace.water_grid_mesh,
 		}
 		for mesh in meshes {
 			if mesh != nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, mesh)}
@@ -968,7 +1049,11 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 
 Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 	classes.ViewportFrame_MeshPart_Provider = workspace_meshpart_mesh
-	classes.Highlight_Part_Mesh_Provider = proc(data_model: rawptr, ctx: ^kineffi.KineFilamentContext, shape: enums.PartType) -> ^kineffi.KineFilamentMesh {
+	classes.Highlight_Part_Mesh_Provider = proc(
+		data_model: rawptr,
+		ctx: ^kineffi.KineFilamentContext,
+		shape: enums.PartType,
+	) -> ^kineffi.KineFilamentMesh {
 		workspace := cast(^Workspace)DataModel_Get_Service(cast(^DataModel)data_model, "Workspace")
 		if workspace == nil {return nil}
 		return workspace_part_mesh(workspace, ctx, shape)
@@ -986,6 +1071,7 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"CurrentCamera",
 			"SimulatePhysics",
 			"Gravity",
+			"GlobalWind",
 			"FallenPartsDestroyHeight",
 			"FallHeightEnabled",
 			"DistributedGameTime",
@@ -996,6 +1082,11 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		},
 		methods = []string {
 			"Raycast",
+			"GetPartBoundsInBox",
+			"GetPartBoundsInRadius",
+			"GetPartsInPart",
+			"JoinToOutsiders",
+			"UnjoinFromOutsiders",
 			"GetNumAwakeParts",
 			"GetPhysicsThrottling",
 			"GetRealPhysicsFPS",

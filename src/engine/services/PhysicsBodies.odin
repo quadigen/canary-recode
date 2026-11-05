@@ -211,9 +211,45 @@ physics_meshpart_shape :: proc(
 			return physics_mesh_hull_shape(mesh_part, scale)
 		case .PreciseConvexDecomposition:
 			return physics_mesh_pcd_shape(service, mesh_part, scale)
+		case .TriangleMesh:
+			if mesh_part.anchored {
+				return physics_static_triangle_mesh_shape(mesh_part, scale)
+			}
+			return physics_mesh_hull_shape(mesh_part, scale)
 		}
 	}
 	return nil
+}
+
+physics_static_triangle_mesh_shape :: proc(
+	mesh_part: ^classes.MeshPart,
+	scale: datatypes.Vector3,
+) -> kineffi.JPH_ShapeRef {
+	vertices: []kineffi.JPH_Vec3
+	indices: [dynamic]u32
+	ok: bool
+	if mesh_part.editable_mesh_id != 0 {
+		vertices, indices, ok = physics_editable_mesh_triangles(mesh_part)
+	} else {
+		vertices, indices, ok = physics_load_mesh_data(mesh_part)
+	}
+	if !ok {return nil}
+	defer delete(vertices)
+	defer delete(indices)
+	for &vertex in vertices {
+		vertex.x *= scale.x
+		vertex.y *= scale.y
+		vertex.z *= scale.z
+	}
+	triangles := make([]kineffi.JPH_Triangle, len(indices) / 3)
+	defer delete(triangles)
+	for &triangle, i in triangles {
+		offset := i * 3
+		triangle.v1 = vertices[indices[offset]]
+		triangle.v2 = vertices[indices[offset + 1]]
+		triangle.v3 = vertices[indices[offset + 2]]
+	}
+	return kineffi.JPH_MeshShape_Create(raw_data(triangles), u32(len(triangles)))
 }
 
 physics_load_mesh_data :: proc(
@@ -230,7 +266,10 @@ physics_load_mesh_data :: proc(
 	if resolved == "" {
 
 
-		assetstore.Report_Missing_Asset(classes.MeshPart_Source_Path(mesh_part), "Physics collision mesh")
+		assetstore.Report_Missing_Asset(
+			classes.MeshPart_Source_Path(mesh_part),
+			"Physics collision mesh",
+		)
 		return nil, nil, false
 	}
 	c_path := strings.clone_to_cstring(resolved)
@@ -496,24 +535,6 @@ physics_remote_owned :: proc(
 }
 
 
-physics_part_awaiting_transform :: proc(
-	service: ^Physics,
-	part: ^classes.Part,
-	ownership: Physics_Ownership_Context,
-) -> bool {
-	if service == nil || service.data_model == nil || part == nil {return false}
-
-
-	when ODIN_OS == .JS {
-		return false
-	} else {
-		replicator := ownership.replicator
-		if replicator == nil || replicator.mode != .Client {return false}
-		entity := replication_entity(replicator, &part.object)
-		return entity != nil && !entity.has_transform
-	}
-}
-
 physics_create_body :: proc(
 	service: ^Physics,
 	part: ^classes.Part,
@@ -528,7 +549,12 @@ physics_create_body :: proc(
 	if part_in_character_model(part) {return Physics_Body{}, false}
 
 
-	if physics_part_awaiting_transform(service, part, ownership) {return Physics_Body{}, false}
+	when ODIN_OS != .JS {
+		if replication_part_awaiting_transform(
+			ownership.replicator,
+			part,
+		) {return Physics_Body{}, false}
+	}
 
 	shape := physics_shape_for_part(service, part, mesh_part)
 	if shape == nil {
@@ -883,33 +909,51 @@ physics_refresh_part :: proc(service: ^Physics, part: ^classes.Part) {
 
 physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_index := true) {
 	if service.system.body_interface != nil && body.body_id != kineffi.JPH_BODY_ID_INVALID {
-		if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint"); descriptor != nil {
+		if descriptor := classes.Find_Class(service.signal_registry, "HingeConstraint");
+		   descriptor != nil {
 			for object in descriptor.instances {
 				if object == nil {continue}
 				hinge := cast(^classes.HingeConstraint)object
-				if hinge.joint != nil && hinge.system == service.system.handle &&
+				if hinge.joint != nil &&
+				   hinge.system == service.system.handle &&
 				   (hinge.frames[0].body == body.body_id || hinge.frames[1].body == body.body_id) {
 					classes.HingeConstraint_release(hinge)
 				}
 			}
 		}
-		if descriptor := classes.Find_Class(service.signal_registry, "WeldConstraint"); descriptor != nil {
+		if descriptor := classes.Find_Class(service.signal_registry, "WeldConstraint");
+		   descriptor != nil {
 			for object in descriptor.instances {
 				if object == nil {continue}
 				weld := cast(^classes.WeldConstraint)object
-				if weld.jolt_constraint != nil && weld.jolt_system == service.system.handle &&
+				if weld.jolt_constraint != nil &&
+				   weld.jolt_system == service.system.handle &&
 				   (weld.jolt_body0 == body.body_id || weld.jolt_body1 == body.body_id) {
 					classes.WeldConstraint_release(weld)
 				}
 			}
 		}
-		if descriptor := classes.Find_Class(service.signal_registry, "RopeConstraint"); descriptor != nil {
+		if descriptor := classes.Find_Class(service.signal_registry, "RopeConstraint");
+		   descriptor != nil {
 			for object in descriptor.instances {
 				if object == nil {continue}
 				rope := cast(^classes.RopeConstraint)object
-				if rope.jolt_constraint != nil && rope.jolt_system == service.system.handle &&
+				if rope.jolt_constraint != nil &&
+				   rope.jolt_system == service.system.handle &&
 				   (rope.jolt_body0 == body.body_id || rope.jolt_body1 == body.body_id) {
 					classes.RopeConstraint_release(rope)
+				}
+			}
+		}
+		if descriptor := classes.Find_Class(service.signal_registry, "SpringConstraint");
+		   descriptor != nil {
+			for object in descriptor.instances {
+				if object == nil {continue}
+				spring := cast(^classes.SpringConstraint)object
+				if spring.system == service.system.handle &&
+				   (spring.frames[0].body == body.body_id ||
+						   spring.frames[1].body == body.body_id) {
+					classes.SpringConstraint_release(spring)
 				}
 			}
 		}
@@ -924,6 +968,31 @@ physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_i
 		}
 	}
 	delete(body.mesh_id)
+}
+
+physics_forget_part :: proc(service: ^Physics, part: ^classes.Part) {
+	index := part.part_index
+	if index < 0 || index >= len(service.bodies) || service.bodies[index].object != &part.object {
+		index = physics_find_body_index(service, &part.object)
+	}
+	if index < 0 {
+		return
+	}
+	physics_destroy_body(service, service.bodies[index])
+	unordered_remove(&service.bodies, index)
+	if len(service.body_ids) > len(service.bodies) {
+		resize(&service.body_ids, len(service.bodies))
+	}
+	if index < len(service.bodies) {
+		moved := &service.bodies[index]
+		if moved_part := cast(^classes.Part)moved.object; moved_part != nil {
+			moved_part.part_index = index
+		}
+		if index < len(service.body_ids) {
+			service.body_ids[index] = moved.body_id
+		}
+	}
+	service.broadphase_dirty = true
 }
 
 physics_part_for_body :: proc(service: ^Physics, body_id: kineffi.JPH_BodyID) -> ^classes.Part {
@@ -1146,7 +1215,9 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 
 		if body.can_collide != part.can_collide {
 			kineffi.JPH_PhysicsSystem_SetBodyIsSensor(
-				service.system.handle, body.body_id, part.can_collide ? 0 : 1,
+				service.system.handle,
+				body.body_id,
+				part.can_collide ? 0 : 1,
 			)
 			body.can_collide = part.can_collide
 			if !part.anchored && !remote {

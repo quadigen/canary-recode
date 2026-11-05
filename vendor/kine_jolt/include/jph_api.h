@@ -398,6 +398,41 @@ JPH_API void JPH_PhysicsSystem_UpdateSingleThreaded(
 	JPH_PhysicsSystemRef system,
 	float deltaTime,
 	int32_t collisionSteps);
+typedef struct JPH_MeshSoftBodySettings {
+	float mass;
+	float springCompliance;
+	float bendCompliance;
+	float linearDamping;
+	float pressure;
+	float friction;
+	float gravityFactor;
+	float vertexRadius;
+	uint32_t iterations;
+} JPH_MeshSoftBodySettings;
+
+JPH_API JPH_BodyID JPH_MeshSoftBody_Create(
+	JPH_PhysicsSystemRef system, const JPH_Vec3 *vertices, uint32_t vertexCount,
+	const uint32_t *indices, uint32_t indexCount, const JPH_RVec3 *position,
+	const JPH_Quat *rotation, JPH_ObjectLayer layer, const JPH_MeshSoftBodySettings *settings);
+JPH_API int32_t JPH_MeshSoftBody_Configure(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, const JPH_MeshSoftBodySettings *settings);
+JPH_API void JPH_MeshSoftBody_Freeze(JPH_PhysicsSystemRef system, JPH_BodyID bodyID);
+JPH_API void JPH_MeshSoftBody_Destroy(JPH_PhysicsSystemRef system, JPH_BodyID bodyID);
+JPH_API int32_t JPH_MeshSoftBody_Read(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, JPH_Vec3 *vertices, uint32_t vertexCount,
+	JPH_RVec3 *position, JPH_Quat *rotation);
+JPH_API void JPH_MeshSoftBody_ApplyImpulse(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, const JPH_Vec3 *impulse);
+JPH_API void JPH_MeshSoftBody_RetainShape(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, float strength, float deltaTime);
+typedef struct JPH_SoftBodyCollider {
+	JPH_BodyID bodyID;
+	uint32_t closedSurface;
+} JPH_SoftBodyCollider;
+JPH_API void JPH_MeshSoftBody_Collide(
+	JPH_PhysicsSystemRef system, const JPH_SoftBodyCollider *bodies, uint32_t count,
+	const JPH_BodyID *rigidBodies, uint32_t rigidCount, float deltaTime);
+
 JPH_API void JPH_PhysicsSystem_OptimizeBroadPhase(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetContactListener(JPH_PhysicsSystemRef system, JPH_ContactListenerRef listener);
 
@@ -724,6 +759,19 @@ JPH_API uint32_t JPH_PhysicsSystem_OverlapShape(
 	JPH_ShapeRef shape,
 	const JPH_RVec3 *position,
 	const JPH_Quat *rotation,
+	const JPH_BodyID *bodyIDs,
+	uint32_t bodyIDCount,
+	JPH_RayFilterMode filterMode,
+	JPH_BodyID *outBodyIDs,
+	uint32_t maxResults);
+
+JPH_API uint32_t JPH_PhysicsSystem_OverlapShapeEx(
+	JPH_PhysicsSystemRef system,
+	JPH_ShapeRef shape,
+	const JPH_RVec3 *position,
+	const JPH_Quat *rotation,
+	float maxSeparationDistance,
+	int32_t planarOnly,
 	const JPH_BodyID *bodyIDs,
 	uint32_t bodyIDCount,
 	JPH_RayFilterMode filterMode,

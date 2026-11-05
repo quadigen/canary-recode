@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_udim2 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: UDim2) {
 	push_value(L, binding, value)
@@ -25,31 +25,37 @@ require_udim2 :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -
 }
 
 udim2_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_udim2(L, binding_from_upvalue(L), UDim2_New(
-		f32(vm.ArgOptionalNumber(L, 1)),
-		f32(vm.ArgOptionalNumber(L, 2)),
-		f32(vm.ArgOptionalNumber(L, 3)),
-		f32(vm.ArgOptionalNumber(L, 4)),
-	))
+	context = tracy.DefaultContext()
+	push_udim2(
+		L,
+		binding_from_upvalue(L),
+		UDim2_New(
+			f32(vm.ArgOptionalNumber(L, 1)),
+			f32(vm.ArgOptionalNumber(L, 2)),
+			f32(vm.ArgOptionalNumber(L, 3)),
+			f32(vm.ArgOptionalNumber(L, 4)),
+		),
+	)
 	return 1
 }
 
 udim2_from_scale :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_udim2(L, binding_from_upvalue(L), UDim2_FromScale(
-		f32(vm.ArgNumber(L, 1)),
-		f32(vm.ArgNumber(L, 2)),
-	))
+	context = tracy.DefaultContext()
+	push_udim2(
+		L,
+		binding_from_upvalue(L),
+		UDim2_FromScale(f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2))),
+	)
 	return 1
 }
 
 udim2_from_offset :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_udim2(L, binding_from_upvalue(L), UDim2_FromOffset(
-		f32(vm.ArgNumber(L, 1)),
-		f32(vm.ArgNumber(L, 2)),
-	))
+	context = tracy.DefaultContext()
+	push_udim2(
+		L,
+		binding_from_upvalue(L),
+		UDim2_FromOffset(f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2))),
+	)
 	return 1
 }
 
@@ -107,7 +113,11 @@ udim2_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32
 
 udim2_add :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index: int) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
-	push_udim2(L, binding, UDim2_Add((cast(^UDim2)value)^, require_udim2(L, other_index, binding)^))
+	push_udim2(
+		L,
+		binding,
+		UDim2_Add((cast(^UDim2)value)^, require_udim2(L, other_index, binding)^),
+	)
 	return true
 }
 
@@ -129,7 +139,13 @@ udim2_equal :: proc(value, other, ctx: rawptr) -> bool {
 
 udim2_string :: proc(value, ctx: rawptr) -> string {
 	udim := cast(^UDim2)value
-	return fmt.tprintf("{%g, %g}, {%g, %g}", udim.X_Scale, udim.X_Offset, udim.Y_Scale, udim.Y_Offset)
+	return fmt.tprintf(
+		"{%g, %g}, {%g, %g}",
+		udim.X_Scale,
+		udim.X_Offset,
+		udim.Y_Scale,
+		udim.Y_Offset,
+	)
 }
 
 udim2_destroy :: proc(value, ctx: rawptr) {
@@ -137,15 +153,15 @@ udim2_destroy :: proc(value, ctx: rawptr) {
 }
 
 UDim2_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "UDim2",
-		get      = udim2_get,
+	return vm.Userdata_Binding {
+		name = "UDim2",
+		get = udim2_get,
 		namecall = udim2_namecall,
-		string   = udim2_string,
-		destroy  = udim2_destroy,
-		add      = udim2_add,
+		string = udim2_string,
+		destroy = udim2_destroy,
+		add = udim2_add,
 		subtract = udim2_subtract,
-		equal    = udim2_equal,
+		equal = udim2_equal,
 	}
 }
 
@@ -156,4 +172,3 @@ UDim2_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_udim2(L, binding, UDim2_Zero)
 	vm.SetField(L, -2, "zero")
 }
-

@@ -110,12 +110,41 @@ assert(handles.Adornee == part, "a rejected Adornee must not replace the old one
 handles.Adornee = nil
 assert(handles.Adornee == nil, "Adornee must clear to nil")
 
+local attachment = Instance.new("Attachment")
+attachment.Parent = part
+handles.Style = Enum.HandlesStyle.Movement
+handles.Adornee = attachment
+assert(handles.Adornee == attachment, "Handles.Adornee must round-trip an Attachment")
+attachment:Destroy()
+
 local arc = Instance.new("ArcHandles")
 arc.Adornee = model
 assert(arc.Adornee == model, "ArcHandles.Adornee must round-trip a Model")
 `,
 		"handles_contract",
 	)
+
+	parent := classes.Part_Init()
+	parent.cframe = datatypes.CFrame_Add_Vector3(datatypes.CFrame_Angles(0, math.PI / 2, 0), {10, 20, 30})
+	attachment := classes.Attachment_Init()
+	attachment.parent = &parent.object
+	attachment.position = {1, 2, 3}
+	attachment.orientation = {0, 0, 90}
+	selection, selected := classes.handles_resolve_selection(&attachment.object)
+	assert(selected, "a parented Attachment must have a gizmo pivot")
+	expect_close(selection.pivot.x, 13, "attachment pivot world x")
+	expect_close(selection.pivot.y, 22, "attachment pivot world y")
+	expect_close(selection.pivot.z, 29, "attachment pivot world z")
+
+	x_axis :: kineffi.KINE_GIZMO_AXIS_X
+	y_axis :: kineffi.KINE_GIZMO_AXIS_Y
+	classes.handles_selection_apply_axis(selection, selection.pivot, x_axis, 2, .Movement)
+	expect_close(attachment.position.y, 4, "drag must follow the attachment's rotated X axis")
+	classes.handles_selection_apply_plane(selection, selection.pivot, x_axis, y_axis, -1, 3, .Movement)
+	expect_close(attachment.position.x, -2, "plane drag must update local X")
+	expect_close(attachment.position.y, 3, "plane drag must update local Y")
+	expect_close(attachment.position.z, 3, "plane drag must preserve local Z")
+	assert(parent.cframe.x == 10 && attachment.orientation.z == 90, "moving must preserve the parent and orientation")
 
 	// --- geometry ---------------------------------------------------------------
 	model, model_ok := classes.Push_New(&environment.classes, &script_vm, "Model")

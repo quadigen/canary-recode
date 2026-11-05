@@ -17,7 +17,7 @@ Decoded_Image :: struct {
 }
 
 Texture_Decode :: struct {
-	files: []runtime.Load_Directory_File,
+	files:                       []runtime.Load_Directory_File,
 	albedo, normal, orm, height: Decoded_Image,
 }
 
@@ -112,6 +112,9 @@ decode_pbr_texture :: proc(result: ^Texture_Decode) {
 }
 
 texture_decode_worker :: proc(worker: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	decode_pbr_texture(cast(^Texture_Decode)worker.data)
 }
 
@@ -127,14 +130,28 @@ publish_pbr_texture :: proc(entry: ^Material, result: ^Texture_Decode) {
 	tracy.ZoneNC("Builtin Material Texture Upload", 0xB48EAD)
 	entry.loaded = true
 	defer destroy_texture_decode(result)
-	if active_renderer == nil || active_renderer.Filament == nil || result.albedo.pixels == nil {return}
+	if active_renderer == nil ||
+	   active_renderer.Filament == nil ||
+	   result.albedo.pixels == nil {return}
 
 	entry.texture = kineffi.Kine_Filament_CreatePbrTexFromPixels(
 		active_renderer.Filament,
-		result.albedo.width, result.albedo.height, result.albedo.width * 4, result.albedo.pixels,
-		result.normal.width, result.normal.height, result.normal.width * 4, result.normal.pixels,
-		result.orm.width, result.orm.height, result.orm.width * 4, result.orm.pixels,
-		result.height.width, result.height.height, result.height.width * 4, result.height.pixels,
+		result.albedo.width,
+		result.albedo.height,
+		result.albedo.width * 4,
+		result.albedo.pixels,
+		result.normal.width,
+		result.normal.height,
+		result.normal.width * 4,
+		result.normal.pixels,
+		result.orm.width,
+		result.orm.height,
+		result.orm.width * 4,
+		result.orm.pixels,
+		result.height.width,
+		result.height.height,
+		result.height.width * 4,
+		result.height.pixels,
 		entry.height_scale,
 	)
 }

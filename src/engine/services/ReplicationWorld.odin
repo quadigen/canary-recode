@@ -33,6 +33,18 @@ replication_entity :: proc(
 	return service.entity_by_id[service.entity_ids[object]]
 }
 
+replication_part_awaiting_transform :: proc(
+	service: ^ReplicatorService,
+	part: ^classes.Part,
+) -> bool {
+	if service == nil ||
+	   service.mode != .Client ||
+	   part == nil ||
+	   part.network_id == 0 {return false}
+	entity := replication_entity(service, &part.object)
+	return entity != nil && !entity.has_transform
+}
+
 replication_entity_insert :: proc(service: ^ReplicatorService, entity: ^Replication_Entity) {
 	append(&service.entity_list, entity)
 	service.entity_by_id[entity.id] = entity
@@ -43,7 +55,7 @@ replication_entity_insert :: proc(service: ^ReplicatorService, entity: ^Replicat
 replication_forget_peer_entity :: proc(connection: ^Replication_Peer, id: u32) {
 	delete_key(&connection.known, id)
 	delete_key(&connection.initialized, id)
-	delete_key(&connection.state_hashes, id)
+	delete_key(&connection.part_states, id)
 	delete_key(&connection.property_hashes, id)
 	delete_key(&connection.extra_hashes, id)
 	delete_key(&connection.acked_state, id)
@@ -135,9 +147,15 @@ replication_schema :: proc(
 	schema: Replication_Schema
 	schema.class_name = strings.clone(class_name)
 	for property in properties {
-		if class_name == "HingeConstraint" && (property == "Active" || property == "CurrentAngle") {
+		if class_name == "HingeConstraint" &&
+		   (property == "Active" || property == "CurrentAngle") {
 			continue
 		}
+		if class_name == "SpringConstraint" &&
+		   (property == "Active" || property == "CurrentLength") {
+			continue
+		}
+		if class_name == "SoftBody" && property == "LastError" {continue}
 		switch property {
 		case "Parent",
 		     "Name",
@@ -234,8 +252,12 @@ character_subtree_class :: proc(class_name: string) -> bool {
 replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
 	return(
 		object != nil &&
-		classes.Is_A(object, "MeshPart") &&
-		(property == "MeshId" || property == "MeshIndex" || property == "TextureId") \
+		((classes.Is_A_Class(object, &classes.Part_Class) && property == "CanTouch") ||
+				(classes.Is_A(object, "MeshPart") &&
+						(property == "MeshId" ||
+								property == "MeshIndex" ||
+								property == "TextureId" ||
+								property == "CollisionFidelity"))) \
 	)
 }
 
@@ -451,10 +473,6 @@ replication_send_owned_state :: proc(
 	part := cast(^classes.Part)entity.object
 	if part.anchored &&
 	   (part.parent == nil || !classes.Is_A(part.parent, "CharacterModel")) {return false}
-	bytes: [dynamic]u8
-	defer delete(bytes)
-	replication_put_u32(&bytes, entity.id)
-	replication_put_u32(&bytes, service.tick)
 	linear := classes.Part_Linear_Velocity(service.signal_registry, &part.object)
 	angular := classes.Part_Angular_Velocity(service.signal_registry, &part.object)
 	values := [18]f32 {
@@ -477,18 +495,58 @@ replication_send_owned_state :: proc(
 		angular.y,
 		angular.z,
 	}
+	resting := linear == (datatypes.Vector3{}) && angular == (datatypes.Vector3{})
+	hash := u64(14695981039346656037)
+	if resting {
+		for value in values[:12] {
+			hash = (hash ~ u64(transmute(u32)value)) * 1099511628211
+		}
+		// Refresh unchanged resting poses twice a second in case an upload was lost.
+		if entity.owned_rest_upload_tick != 0 &&
+		   service.tick - entity.owned_rest_upload_tick < 15 &&
+		   entity.owned_rest_upload_hash == hash {return true}
+	} else {
+		entity.owned_rest_upload_tick = 0
+	}
+
+	bytes: [dynamic]u8
+	defer delete(bytes)
+	replication_put_u32(&bytes, entity.id)
+	replication_put_u32(&bytes, service.tick)
 	for value in values {replication_put_f32(&bytes, value)}
-	return replication_send(service, service.remote, 11, bytes[:], false)
+	if !replication_send(
+		service,
+		service.remote,
+		Replication_Kind_Owned_State,
+		bytes[:],
+		false,
+	) {return false}
+	if resting {
+		entity.owned_rest_upload_tick = service.tick
+		entity.owned_rest_upload_hash = hash
+	}
+	return true
 }
 
 
+replication_peer_snapshot_tick :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) -> u32 {
+	// Changing the send cadence must not change the clock used for packet ordering.
+	if connection.snapshot_clock_rate <= 0 {return service.tick}
+	return u32(f64(service.clock) * f64(connection.snapshot_clock_rate))
+}
+
 replication_send_part_state :: proc(
 	service: ^ReplicatorService,
-	peer: ^Replication_Transport_Peer,
+	connection: ^Replication_Peer,
 	part: ^classes.Part,
+	tick: u32,
 	suppress: bool = false,
 	confirmed_token: u32 = 0,
 	reliable: bool = false,
+	repeat_acknowledged: bool = false,
 ) -> (
 	bool,
 	u32,
@@ -498,20 +556,9 @@ replication_send_part_state :: proc(
 	defer delete(bytes)
 	append(&bytes, 1)
 	replication_put_u32(&bytes, replication_entity_id(service, &part.object))
-	replication_put_u32(&bytes, service.tick)
+	replication_put_u32(&bytes, tick)
 	replication_put_string(&bytes, part.name)
-	replication_put_f32(&bytes, part.cframe.x)
-	replication_put_f32(&bytes, part.cframe.y)
-	replication_put_f32(&bytes, part.cframe.z)
-	replication_put_f32(&bytes, part.cframe.r00)
-	replication_put_f32(&bytes, part.cframe.r01)
-	replication_put_f32(&bytes, part.cframe.r02)
-	replication_put_f32(&bytes, part.cframe.r10)
-	replication_put_f32(&bytes, part.cframe.r11)
-	replication_put_f32(&bytes, part.cframe.r12)
-	replication_put_f32(&bytes, part.cframe.r20)
-	replication_put_f32(&bytes, part.cframe.r21)
-	replication_put_f32(&bytes, part.cframe.r22)
+	replication_put_cframe(&bytes, part.cframe)
 	replication_put_f32(&bytes, part.size.x)
 	replication_put_f32(&bytes, part.size.y)
 	replication_put_f32(&bytes, part.size.z)
@@ -530,9 +577,12 @@ replication_send_part_state :: proc(
 		hash = (hash ~ u64(byte)) * 1099511628211
 	}
 	token := u32(hash & 0xFFFFFFFF)
-	if suppress && token == confirmed_token {return true, token, true}
+	repeating := suppress && token == confirmed_token
+	if repeating && !repeat_acknowledged {return true, token, true}
 	replication_put_u32(&bytes, token)
-	return replication_send(service, peer, 5, bytes[:], reliable), token, false
+	return replication_send(service, connection.peer, 5, bytes[:], reliable || repeating),
+		token,
+		false
 }
 
 
@@ -661,14 +711,14 @@ replication_encode_property :: proc(
 	object: ^classes.Object,
 	property: string,
 	bytes: ^[dynamic]u8,
-	connection: ^Replication_Peer = nil,
+	tick: u32,
 ) -> bool {
 	if service == nil || L == nil || object == nil || object.destroyed {return false}
 	append(bytes, 2)
 	replication_put_u32(bytes, replication_entity_id(service, object))
-	replication_put_u32(bytes, service.tick)
+	replication_put_u32(bytes, tick)
 	replication_put_string(bytes, property)
-	return replication_encode_property_value(L, object, property, bytes, connection)
+	return replication_encode_property_value(L, object, property, bytes)
 }
 
 
@@ -760,10 +810,11 @@ replication_send_property_batch :: proc(
 	defer delete(frames)
 	all_sent := true
 	total: int
+	tick := replication_peer_snapshot_tick(service, connection)
 	for name, index in names {
 		if !encodable[index] {continue}
 		bytes: [dynamic]u8
-		if !replication_encode_property(service, L, item.object, name, &bytes) {
+		if !replication_encode_property(service, L, item.object, name, &bytes, tick) {
 			delete(bytes)
 			all_sent = false
 			continue
@@ -996,16 +1047,24 @@ replication_initialise_entity :: proc(
 	if connection.initialized[item.id] {return true}
 	sent := false
 	if classes.Is_A(item.object, "Part") {
+		tick := replication_peer_snapshot_tick(service, connection)
 		state_sent, state_token, _ := replication_send_part_state(
 			service,
-			connection.peer,
+			connection,
 			cast(^classes.Part)item.object,
+			tick,
 			false,
 			0,
 			true,
 		)
 		sent = state_sent
-		if sent {connection.state_hashes[item.id] = state_token}
+		if sent {
+			connection.part_states[item.id] = {
+				token     = state_token,
+				tick      = tick,
+				rest_sent = true,
+			}
+		}
 	} else {
 		names := replication_builtin_property_names(item)
 		defer delete(names)
@@ -1022,8 +1081,10 @@ replication_initialise_entity :: proc(
 		sent = property_sent
 		connection.property_hashes[item.id] = property_token
 	}
+	// Queue every initial property reliably before announcing a complete scene.
+	extra_sent := replication_send_extra_properties(service, connection, item, true)
+	sent = sent && extra_sent
 	if sent {connection.initialized[item.id] = true}
-	replication_send_extra_properties(service, connection, item, sent)
 	replication_send_character_ack(service, connection, item.object)
 	return sent
 }
@@ -1062,7 +1123,7 @@ replication_peer_scene_complete :: proc(
 		   service.suppressed[item.object] {
 			continue
 		}
-		if connection.known[item.id] == 0 {return false}
+		if connection.known[item.id] == 0 || !connection.initialized[item.id] {return false}
 	}
 	return true
 }
@@ -1203,6 +1264,8 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	}
 
 
+	// A new owner must see the same gravity before it starts simulating.
+	replication_send_gravity_updates(service)
 	if service.auto_ownership_enabled &&
 	   service.clock - service.auto_ownership_clock >= REPLICATION_AUTO_OWNERSHIP_INTERVAL {
 		service.auto_ownership_clock = service.clock
@@ -1285,27 +1348,6 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		}
 
 
-		if !connection.finished_replicating_sent &&
-		   (connection.client_capabilities & Replication_Capability_Finished_Replicating) != 0 &&
-		   replication_peer_scene_complete(
-			   service,
-			   &connection,
-			   focus_x,
-			   focus_y,
-			   focus_z,
-			   has_focus,
-		   ) &&
-		   replication_terrain_complete(service, &connection) {
-			connection.finished_replicating_sent = replication_send(
-				service,
-				connection.peer,
-				Replication_Kind_Finished_Replicating,
-				nil,
-				true,
-			)
-		}
-
-
 		for item in service.entity_list {
 			if connection.known[item.id] == 0 {continue}
 
@@ -1341,43 +1383,28 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			   item.object.destroyed {continue}
 			if connection.initialized[item.id] {continue}
 
-			sent := false
-			if classes.Is_A(item.object, "Part") {
-				state_sent, state_token, _ := replication_send_part_state(
-					service,
-					connection.peer,
-					cast(^classes.Part)item.object,
-					false,
-					0,
-					true,
-				)
-				sent = state_sent
-				if sent {connection.state_hashes[item.id] = state_token}
-			} else {
-				names := replication_builtin_property_names(item)
-				defer delete(names)
-
-
-				property_sent, property_token := replication_send_property_batch(
-					service,
-					&connection,
-					item,
-					names[:],
-					replication_property_stream_builtin,
-					true,
-					false,
-					0,
-				)
-				sent = property_sent
-				connection.property_hashes[item.id] = property_token
-			}
-			if sent {connection.initialized[item.id] = true}
-
-
-			replication_send_extra_properties(service, &connection, item, sent)
-			replication_send_character_ack(service, &connection, item.object)
+			_ = replication_initialise_entity(service, &connection, item)
 		}
 
+		if !connection.finished_replicating_sent &&
+		   (connection.client_capabilities & Replication_Capability_Finished_Replicating) != 0 &&
+		   replication_peer_scene_complete(
+			   service,
+			   &connection,
+			   focus_x,
+			   focus_y,
+			   focus_z,
+			   has_focus,
+		   ) &&
+		   replication_terrain_complete(service, &connection) {
+			connection.finished_replicating_sent = replication_send(
+				service,
+				connection.peer,
+				Replication_Kind_Finished_Replicating,
+				nil,
+				true,
+			)
+		}
 
 		sorted: [dynamic]^Replication_Entity
 		defer delete(sorted)
@@ -1427,19 +1454,29 @@ replication_sync :: proc(service: ^ReplicatorService) {
 
 			if classes.Is_A(item.object, "Part") {
 				confirmed := connection.acked_state[item.id]
-				settled := connection.state_hashes[item.id] == confirmed
+				last := connection.part_states[item.id]
+				settled := last.token == confirmed
+				tick := replication_peer_snapshot_tick(service, &connection)
+				// A second sample of the final pose tells observers its inferred velocity is zero.
+				repeat_acknowledged := !last.rest_sent && tick != last.tick
 				state_sent, state_token, suppressed := replication_send_part_state(
 					service,
-					connection.peer,
+					&connection,
 					cast(^classes.Part)item.object,
+					tick,
 					settled,
 					confirmed,
 					false,
+					repeat_acknowledged,
 				)
 				if suppressed {
 					service.unchanged_states_skipped += 1
 				} else if state_sent {
-					connection.state_hashes[item.id] = state_token
+					connection.part_states[item.id] = {
+						token     = state_token,
+						tick      = tick,
+						rest_sent = settled && state_token == confirmed,
+					}
 				}
 			} else {
 				names := replication_builtin_property_names(item)
@@ -1505,15 +1542,19 @@ replication_send_extra_properties :: proc(
 	connection: ^Replication_Peer,
 	item: ^Replication_Entity,
 	reliable: bool = false,
-) {
-	if item == nil || item.object == nil || item.object.destroyed {return}
+) -> bool {
+	if item == nil || item.object == nil || item.object.destroyed {return false}
 
 	sendable: [dynamic]string
 	defer delete(sendable)
+	if replication_builtin_property(item.object, "CanTouch") {
+		append(&sendable, "CanTouch")
+	}
 	if replication_builtin_property(item.object, "MeshId") {
 		append(&sendable, "MeshId")
 		append(&sendable, "MeshIndex")
 		append(&sendable, "TextureId")
+		append(&sendable, "CollisionFidelity")
 	}
 	if schema := replication_schema(service, classes.Get_Class_Name(item.object)); schema != nil {
 		for property in schema.properties {
@@ -1523,7 +1564,7 @@ replication_send_extra_properties :: proc(
 			append(&sendable, property)
 		}
 	}
-	if len(sendable) == 0 {return}
+	if len(sendable) == 0 {return true}
 
 	confirmed := connection.acked_extra[item.id]
 	sent, token := replication_send_property_batch(
@@ -1541,4 +1582,5 @@ replication_send_extra_properties :: proc(
 	if sent {connection.extra_hashes[item.id] = token} else if connection.extra_hashes[item.id] == confirmed {
 		connection.extra_hashes[item.id] = 0
 	}
+	return sent
 }

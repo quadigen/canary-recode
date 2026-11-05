@@ -644,7 +644,6 @@ syntax_highlighter_luau_spans :: proc(highlighter: ^SyntaxHighlighter, text: str
 	defer delete(c_text)
 
 	handle := luauh.luau_lexer_create(c_text, uintptr(len(text)))
-	delete(c_text)
 
 	if handle == nil {
 		return

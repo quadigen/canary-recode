@@ -6,6 +6,9 @@
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Math/Matrix.h>
+#include <Jolt/Math/EigenValueSymmetric.h>
+#include <Jolt/Geometry/ClosestPoint.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
@@ -17,6 +20,7 @@
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionCollector.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -31,6 +35,7 @@
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/TriangleShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Constraints/Constraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
@@ -41,16 +46,20 @@
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/RegisterTypes.h>
 
 
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -1059,6 +1068,234 @@ void JPH_PhysicsSystem_UpdateSingleThreaded(
 		sJphTempAllocator,
 		&jobSystem);
 }
+
+JPH_BodyID JPH_MeshSoftBody_Create(
+	JPH_PhysicsSystemRef system, const JPH_Vec3 *vertices, uint32_t vertexCount,
+	const uint32_t *indices, uint32_t indexCount, const JPH_RVec3 *position,
+	const JPH_Quat *rotation, JPH_ObjectLayer layer, const JPH_MeshSoftBodySettings *settings) {
+	if (!system || !vertices || !indices || !position || !rotation || !settings ||
+		vertexCount < 3 || indexCount < 3 || indexCount % 3 != 0)
+		return JPH::BodyID().GetIndexAndSequenceNumber();
+
+	JPH::Ref<JPH::SoftBodySharedSettings> mesh = new JPH::SoftBodySharedSettings();
+	mesh->mVertices.reserve(vertexCount);
+	const float inverseMass = float(vertexCount) / settings->mass;
+	for (uint32_t i = 0; i < vertexCount; ++i) {
+		const auto &v = vertices[i];
+		mesh->mVertices.emplace_back(JPH::Float3(v.x, v.y, v.z), JPH::Float3(0, 0, 0), inverseMass);
+	}
+	mesh->mFaces.reserve(indexCount / 3);
+	for (uint32_t i = 0; i < indexCount; i += 3) {
+		const uint32_t a = indices[i], b = indices[i + 1], c = indices[i + 2];
+		if (a >= vertexCount || b >= vertexCount || c >= vertexCount || a == b || b == c || c == a)
+			return JPH::BodyID().GetIndexAndSequenceNumber();
+		mesh->mFaces.emplace_back(a, b, c);
+	}
+	// Distance bending avoids angular gradients on skinny imported triangles.
+	// Use distinct markers while Jolt builds and reorders the constraints.
+	constexpr float bendMarker = 1.0f;
+	const JPH::SoftBodySharedSettings::VertexAttributes springs(0.0f, 0.0f, bendMarker);
+	mesh->CreateConstraints(&springs, 1, JPH::SoftBodySharedSettings::EBendType::Distance);
+	mesh->Optimize();
+	auto bendEdges = std::make_unique<std::vector<uint32_t>>();
+	for (uint32_t i = 0; i < mesh->mEdgeConstraints.size(); ++i) {
+		auto &edge = mesh->mEdgeConstraints[i];
+		const bool bend = edge.mCompliance == bendMarker;
+		if (bend) bendEdges->push_back(i);
+		edge.mCompliance = bend ? settings->bendCompliance : settings->springCompliance;
+	}
+
+	JPH::SoftBodyCreationSettings creation(mesh, ToJPH(*position), ToJPH(*rotation), layer);
+	creation.mUserData = reinterpret_cast<uintptr_t>(bendEdges.get());
+	creation.mNumIterations = settings->iterations;
+	creation.mLinearDamping = settings->linearDamping;
+	creation.mPressure = settings->pressure;
+	creation.mFriction = settings->friction;
+	creation.mGravityFactor = settings->gravityFactor;
+	creation.mVertexRadius = settings->vertexRadius;
+	creation.mMakeRotationIdentity = false;
+	creation.mFacesDoubleSided = true;
+	const auto id = ToPhysicsSystem(system)->GetBodyInterface()
+		.CreateAndAddSoftBody(creation, JPH::EActivation::Activate);
+	if (!id.IsInvalid()) bendEdges.release();
+	return id.GetIndexAndSequenceNumber();
+}
+
+void JPH_MeshSoftBody_Destroy(JPH_PhysicsSystemRef system, JPH_BodyID bodyID) {
+	if (!system) return;
+	auto &interface = ToPhysicsSystem(system)->GetBodyInterface();
+	const auto id = ToBodyID(bodyID);
+	auto *bendEdges = reinterpret_cast<std::vector<uint32_t> *>(interface.GetUserData(id));
+	interface.RemoveBody(id);
+	interface.DestroyBody(id);
+	delete bendEdges;
+}
+
+int32_t JPH_MeshSoftBody_Configure(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, const JPH_MeshSoftBodySettings *settings) {
+	if (!system || !settings) return 0;
+	auto *physics = ToPhysicsSystem(system);
+	const auto id = ToBodyID(bodyID);
+	{
+		JPH::BodyLockWrite lock(physics->GetBodyLockInterface(), id);
+		if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return 0;
+		auto &body = lock.GetBody();
+		auto *motion = static_cast<JPH::SoftBodyMotionProperties *>(body.GetMotionProperties());
+		// Each body created above owns its own constraints. Compliance changes
+		// leave the optimized constraint order and rest geometry intact.
+		auto *mesh = const_cast<JPH::SoftBodySharedSettings *>(motion->GetSettings());
+		for (auto &edge : mesh->mEdgeConstraints) edge.mCompliance = settings->springCompliance;
+		const auto *bendEdges = reinterpret_cast<const std::vector<uint32_t> *>(body.GetUserData());
+		for (uint32_t index : *bendEdges) mesh->mEdgeConstraints[index].mCompliance = settings->bendCompliance;
+		const float inverseMass = float(motion->GetVertices().size()) / settings->mass;
+		if (motion->GetVertex(0).mInvMass != inverseMass) {
+			for (auto &vertex : motion->GetVertices()) vertex.mInvMass = inverseMass;
+			motion->CalculateMassAndInertia();
+		}
+		motion->SetNumIterations(settings->iterations);
+		motion->SetLinearDamping(settings->linearDamping);
+		motion->SetPressure(settings->pressure);
+		motion->SetGravityFactor(settings->gravityFactor);
+		motion->SetVertexRadius(settings->vertexRadius);
+		body.SetFriction(settings->friction);
+	}
+	physics->GetBodyInterface().ActivateBody(id);
+	return 1;
+}
+
+void JPH_MeshSoftBody_Freeze(JPH_PhysicsSystemRef system, JPH_BodyID bodyID) {
+	if (!system) return;
+	auto *physics = ToPhysicsSystem(system);
+	const auto id = ToBodyID(bodyID);
+	{
+		JPH::BodyLockWrite lock(physics->GetBodyLockInterface(), id);
+		if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return;
+		auto *motion = static_cast<JPH::SoftBodyMotionProperties *>(lock.GetBody().GetMotionProperties());
+		for (auto &vertex : motion->GetVertices()) vertex.mVelocity = JPH::Vec3::sZero();
+	}
+	physics->GetBodyInterface().DeactivateBody(id);
+}
+
+int32_t JPH_MeshSoftBody_Read(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, JPH_Vec3 *vertices, uint32_t vertexCount,
+	JPH_RVec3 *position, JPH_Quat *rotation) {
+	if (!system || !vertices || !position || !rotation) return 0;
+	JPH::BodyLockRead lock(ToPhysicsSystem(system)->GetBodyLockInterface(), ToBodyID(bodyID));
+	if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return 0;
+	const auto &body = lock.GetBody();
+	const auto *motion = static_cast<const JPH::SoftBodyMotionProperties *>(body.GetMotionProperties());
+	if (motion->GetVertices().size() != vertexCount) return 0;
+	for (uint32_t i = 0; i < vertexCount; ++i) vertices[i] = FromJPH(motion->GetVertex(i).mPosition);
+	*position = FromJPH(body.GetCenterOfMassPosition());
+	*rotation = FromJPH(body.GetRotation());
+	return 1;
+}
+
+void JPH_MeshSoftBody_ApplyImpulse(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, const JPH_Vec3 *impulse) {
+	if (!system || !impulse) return;
+	auto *physics = ToPhysicsSystem(system);
+	const auto id = ToBodyID(bodyID);
+	{
+		JPH::BodyLockWrite lock(physics->GetBodyLockInterface(), id);
+		if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return;
+		auto &body = lock.GetBody();
+		auto *motion = static_cast<JPH::SoftBodyMotionProperties *>(body.GetMotionProperties());
+		const auto velocity = body.GetRotation().Conjugated() * ToJPH(*impulse) * motion->GetInverseMass();
+		for (auto &vertex : motion->GetVertices()) vertex.mVelocity += velocity;
+	}
+	physics->GetBodyInterface().ActivateBody(id);
+}
+
+// The largest eigenvector of Davenport's symmetric matrix is the rotation
+// that best fits the centered rest vertices to the current vertices.
+static bool mesh_soft_body_fit_rotation(const JPH::Vec3 (&covariance)[3], JPH::Quat &rotation) {
+	const auto &x = covariance[0];
+	const auto &y = covariance[1];
+	const auto &z = covariance[2];
+	const float trace = x.GetX() + y.GetY() + z.GetZ();
+	JPH::Matrix<4, 4> matrix;
+	matrix(0, 0) = 2 * x.GetX() - trace;
+	matrix(1, 1) = 2 * y.GetY() - trace;
+	matrix(2, 2) = 2 * z.GetZ() - trace;
+	matrix(3, 3) = trace;
+	matrix(0, 1) = matrix(1, 0) = x.GetY() + y.GetX();
+	matrix(0, 2) = matrix(2, 0) = x.GetZ() + z.GetX();
+	matrix(1, 2) = matrix(2, 1) = y.GetZ() + z.GetY();
+	matrix(0, 3) = matrix(3, 0) = y.GetZ() - z.GetY();
+	matrix(1, 3) = matrix(3, 1) = z.GetX() - x.GetZ();
+	matrix(2, 3) = matrix(3, 2) = x.GetY() - y.GetX();
+
+	auto vectors = JPH::Matrix<4, 4>::sIdentity();
+	JPH::Vector<4> values;
+	if (!JPH::EigenValueSymmetric(matrix, vectors, values)) return false;
+	int largest = 3;
+	for (int i = 0; i < 3; ++i)
+		if (values[i] > values[largest]) largest = i;
+	const auto &q = vectors.GetColumn(largest);
+	rotation = JPH::Quat(q[0], q[1], q[2], q[3]).Normalized();
+	return true;
+}
+
+void JPH_MeshSoftBody_RetainShape(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, float strength, float deltaTime) {
+	if (!system || !(strength > 0.0f && strength <= 1.0f) || !(deltaTime > 0.0f)) return;
+	JPH::BodyLockWrite lock(ToPhysicsSystem(system)->GetBodyLockInterface(), ToBodyID(bodyID));
+	if (!lock.Succeeded() || !lock.GetBody().IsSoftBody() || !lock.GetBody().IsActive()) return;
+	auto *motion = static_cast<JPH::SoftBodyMotionProperties *>(lock.GetBody().GetMotionProperties());
+	auto &vertices = motion->GetVertices();
+	const auto &rest = motion->GetSettings()->mVertices;
+
+	JPH::Vec3 center = JPH::Vec3::sZero(), restCenter = center, meanVelocity = center;
+	const float inverseCount = 1.0f / float(vertices.size());
+	for (size_t i = 0; i < vertices.size(); ++i) {
+		center += vertices[i].mPosition;
+		meanVelocity += vertices[i].mVelocity;
+		restCenter += JPH::Vec3(rest[i].mPosition);
+	}
+	center *= inverseCount;
+	meanVelocity *= inverseCount;
+	restCenter *= inverseCount;
+
+	JPH::Vec3 covariance[3] = {JPH::Vec3::sZero(), JPH::Vec3::sZero(), JPH::Vec3::sZero()};
+	JPH::Mat44 secondMoment = JPH::Mat44::sZero();
+	JPH::Vec3 angularMomentum = JPH::Vec3::sZero();
+	float radiusSquared = 0.0f;
+	for (size_t i = 0; i < vertices.size(); ++i) {
+		const JPH::Vec3 point = vertices[i].mPosition - center;
+		const JPH::Vec3 restPoint = JPH::Vec3(rest[i].mPosition) - restCenter;
+		for (int axis = 0; axis < 3; ++axis) covariance[axis] += point * restPoint[axis];
+		secondMoment += JPH::Mat44::sOuterProduct(point, point);
+		angularMomentum += point.Cross(vertices[i].mVelocity - meanVelocity);
+		radiusSquared += point.LengthSq();
+	}
+	if (!std::isfinite(radiusSquared)) return;
+	JPH::Quat rotation;
+	if (!mesh_soft_body_fit_rotation(covariance, rotation)) return;
+
+	// Dampen deformation velocity while allowing the body to translate and spin.
+	JPH::Mat44 inverseInertia;
+	JPH::Vec3 angularVelocity = JPH::Vec3::sZero();
+	const auto inertia = JPH::Mat44::sScale(radiusSquared * 1.000001f) - secondMoment;
+	if (radiusSquared > 0 && inverseInertia.SetInversed3x3(inertia))
+		angularVelocity = inverseInertia.Multiply3x3(angularMomentum);
+
+	// An implicit spring step stays bounded at high strength or long frame times.
+	const float frequency = 75.0f * std::sqrt(strength);
+	const float step = frequency * deltaTime;
+	const float denominator = 1.0f + 1.3f * step + step * step;
+	const float spring = frequency * step / denominator;
+	const float damping = 1.0f - 1.0f / denominator;
+	for (size_t i = 0; i < vertices.size(); ++i) {
+		auto &vertex = vertices[i];
+		const JPH::Vec3 point = vertex.mPosition - center;
+		const JPH::Vec3 target = rotation * (JPH::Vec3(rest[i].mPosition) - restCenter);
+		const JPH::Vec3 deformationVelocity = vertex.mVelocity - meanVelocity - angularVelocity.Cross(point);
+		vertex.mVelocity += spring * (target - point) - damping * deformationVelocity;
+	}
+}
+
+#include "soft_body_contacts.inc"
 
 void JPH_PhysicsSystem_OptimizeBroadPhase(JPH_PhysicsSystemRef system) {
 	if (system == nullptr)
@@ -2448,6 +2685,30 @@ uint32_t JPH_PhysicsSystem_OverlapShape(
 	int32_t filterMode,
 	JPH_BodyID *outBodyIDs,
 	uint32_t maxResults) {
+	return JPH_PhysicsSystem_OverlapShapeEx(
+		system, shape, position, rotation, 0.0f, 0, bodyIDs, bodyIDCount, filterMode, outBodyIDs, maxResults);
+}
+
+static bool IsPlanarContactFace(const JPH::CollideShapeResult::Face &face, JPH::Vec3Arg axis) {
+	if (face.size() < 3)
+		return false;
+	const JPH::Vec3 normal = (face[1] - face[0]).Cross(face[2] - face[0]);
+	const float alignment = normal.Dot(axis);
+	return alignment * alignment > 0.999f * normal.LengthSq() * axis.LengthSq();
+}
+
+uint32_t JPH_PhysicsSystem_OverlapShapeEx(
+	JPH_PhysicsSystemRef system,
+	JPH_ShapeRef shape,
+	const JPH_RVec3 *position,
+	const JPH_Quat *rotation,
+	float maxSeparationDistance,
+	int32_t planarOnly,
+	const JPH_BodyID *bodyIDs,
+	uint32_t bodyIDCount,
+	int32_t filterMode,
+	JPH_BodyID *outBodyIDs,
+	uint32_t maxResults) {
 	if (system == nullptr || shape == nullptr || position == nullptr || rotation == nullptr || outBodyIDs == nullptr || maxResults == 0)
 		return 0;
 
@@ -2464,6 +2725,9 @@ uint32_t JPH_PhysicsSystem_OverlapShape(
 	const BodyIDFilter bodyFilter(filtering ? bodyIDs : nullptr, filtering ? bodyIDCount : 0, filterMode == 2);
 
 	JPH::CollideShapeSettings settings;
+	settings.mMaxSeparationDistance = maxSeparationDistance;
+	if (planarOnly)
+		settings.mCollectFacesMode = JPH::ECollectFacesMode::CollectFaces;
 	JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
 	physicsSystem->GetNarrowPhaseQuery().CollideShape(
 		jphShape,
@@ -2479,8 +2743,13 @@ uint32_t JPH_PhysicsSystem_OverlapShape(
 
 	std::vector<JPH_BodyID> ids;
 	ids.reserve(collector.mHits.size());
-	for (const JPH::CollideShapeResult &hit : collector.mHits)
+	for (const JPH::CollideShapeResult &hit : collector.mHits) {
+		if (planarOnly && (hit.mPenetrationDepth > maxSeparationDistance ||
+						  !IsPlanarContactFace(hit.mShape1Face, hit.mPenetrationAxis) ||
+						  !IsPlanarContactFace(hit.mShape2Face, hit.mPenetrationAxis)))
+			continue;
 		ids.push_back(hit.mBodyID2.GetIndexAndSequenceNumber());
+	}
 
 	std::sort(ids.begin(), ids.end());
 	ids.erase(std::unique(ids.begin(), ids.end()), ids.end());

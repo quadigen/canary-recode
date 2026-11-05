@@ -1,9 +1,9 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_axes :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Axes) {
 	push_value(L, binding, value)
@@ -17,11 +17,7 @@ Arg_Axes :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Axes {
 	return require_axes(L, index, &registry.axes)^
 }
 
-require_axes :: proc(
-	L: ^vm.State,
-	index: int,
-	binding: ^vm.Userdata_Binding,
-) -> ^Axes {
+require_axes :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^Axes {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected Axes")
 		return nil
@@ -30,7 +26,7 @@ require_axes :: proc(
 }
 
 axes_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -91,12 +87,12 @@ axes_destroy :: proc(value, ctx: rawptr) {
 }
 
 Axes_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "Axes",
-		get     = axes_get,
-		string  = axes_string,
+	return vm.Userdata_Binding {
+		name = "Axes",
+		get = axes_get,
+		string = axes_string,
 		destroy = axes_destroy,
-		equal   = axes_equal,
+		equal = axes_equal,
 	}
 }
 

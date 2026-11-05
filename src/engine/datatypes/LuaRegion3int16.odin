@@ -1,30 +1,18 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_region3int16 :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: Region3int16,
-) {
+push_region3int16 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Region3int16) {
 	push_value(L, binding, value)
 }
 
-Push_Region3int16 :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: Region3int16,
-) {
+Push_Region3int16 :: proc(L: ^vm.State, registry: ^Registry, value: Region3int16) {
 	push_region3int16(L, &registry.region3int16, value)
 }
 
-Arg_Region3int16 :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> Region3int16 {
+Arg_Region3int16 :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Region3int16 {
 	return require_region3int16(L, index, &registry.region3int16)^
 }
 
@@ -41,7 +29,7 @@ require_region3int16 :: proc(
 }
 
 region3int16_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -52,20 +40,11 @@ region3int16_new :: proc "c" (L: ^vm.State) -> i32 {
 	minimum := require_vector3int16(L, 1, &registry.vector3int16)
 	maximum := require_vector3int16(L, 2, &registry.vector3int16)
 
-	push_region3int16(
-		L,
-		binding,
-		Region3int16_New(minimum^, maximum^),
-	)
+	push_region3int16(L, binding, Region3int16_New(minimum^, maximum^))
 	return 1
 }
 
-region3int16_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+region3int16_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	region := cast(^Region3int16)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
@@ -79,11 +58,7 @@ region3int16_get :: proc(
 	case "Max":
 		push_vector3int16(L, &registry.vector3int16, region.Max)
 	case "Size":
-		push_vector3int16(
-			L,
-			&registry.vector3int16,
-			Region3int16_Size(region^),
-		)
+		push_vector3int16(L, &registry.vector3int16, Region3int16_Size(region^))
 	case:
 		return false
 	}
@@ -92,8 +67,7 @@ region3int16_get :: proc(
 }
 
 region3int16_equal :: proc(value, other, ctx: rawptr) -> bool {
-	return (cast(^Region3int16)value)^ ==
-	       (cast(^Region3int16)other)^
+	return (cast(^Region3int16)value)^ == (cast(^Region3int16)other)^
 }
 
 region3int16_string :: proc(value, ctx: rawptr) -> string {
@@ -114,18 +88,15 @@ region3int16_destroy :: proc(value, ctx: rawptr) {
 }
 
 Region3int16_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "Region3int16",
-		get     = region3int16_get,
-		string  = region3int16_string,
+	return vm.Userdata_Binding {
+		name = "Region3int16",
+		get = region3int16_get,
+		string = region3int16_string,
 		destroy = region3int16_destroy,
-		equal   = region3int16_equal,
+		equal = region3int16_equal,
 	}
 }
 
-Region3int16_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+Region3int16_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", region3int16_new)
 }

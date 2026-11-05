@@ -59,7 +59,7 @@ KineFilamentDrawItem :: struct {
 	transmission: f32,
 	materialKind: i32,
 	flags:        u32,
-	reserved:     u32,
+	reserved:     u32, // Optional opacity as float bits for Water and ForceField. Zero uses the default.
 	shader:       ^KineFilamentShader,
 }
 
@@ -136,6 +136,8 @@ KINE_MAT_HIGHLIGHT_FILL_TOP :: 11
 
 KINE_MAT_OUTLINE_MASK :: 12
 KINE_MAT_FORCEFIELD :: 13
+KINE_MAT_FADE :: 14
+KINE_MAT_NEON_FADE :: 15
 
 
 KINE_GIZMO_AXIS_NONE :: 0
@@ -198,6 +200,7 @@ foreign kine_filament {
 	Kine_Filament_Shader_CompileStart :: proc(source: cstring) -> ^KineFilamentShaderCompile ---
 	Kine_Filament_Shader_CompilePoll :: proc(ctx: ^KineFilamentContext, job: ^KineFilamentShaderCompile, shader: ^^KineFilamentShader) -> bool ---
 	Kine_Filament_Shader_CompileRelease :: proc(job: ^KineFilamentShaderCompile) ---
+	Kine_Filament_Shader_ResolveFade :: proc(shader: ^KineFilamentShader) -> ^KineFilamentShader ---
 	Kine_Filament_SetDecalColor :: proc(ctx: ^KineFilamentContext, decal: i32, r: f32, g: f32, b: f32, a: f32) -> i32 ---
 	Kine_Filament_CreateMeshFromMemory :: proc(ctx: ^KineFilamentContext, data: rawptr, data_size: uintptr, format_hint: cstring) -> ^KineFilamentMesh ---
 	Kine_Filament_CreateMeshFromPath :: proc(ctx: ^KineFilamentContext, path: cstring) -> ^KineFilamentMesh ---
@@ -263,12 +266,13 @@ foreign kine_filament {
 	Kine_Filament_GetMeshDataVertexCount :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_GetMeshDataIndexCount :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_CopyMeshDataPositions :: proc(meshData: ^KineFilamentMeshData, outPositions: ^f32, positionFloatCapacity: i32) -> i32 ---
+	Kine_Filament_CopyMeshDataVertices :: proc(meshData: ^KineFilamentMeshData, outVertices: ^f32, floatCapacity: i32) -> bool ---
 	Kine_Filament_CopyMeshDataIndices :: proc(meshData: ^KineFilamentMeshData, outIndices: ^u32, indexCapacity: i32) -> i32 ---
 	Kine_Filament_DestroyMeshData :: proc(meshData: ^KineFilamentMeshData) -> i32 ---
 	Kine_Filament_DebugPrintPixel :: proc(ctx: ^KineFilamentContext) -> i32 ---
 	Kine_Filament_DestroyGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo) ---
 	Kine_Filament_DestroyTex :: proc(ctx: ^KineFilamentContext, tex: ^KineFilamentTex) -> i32 ---
-	Kine_Filament_UpdateCustomMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, vertexData: ^f32, vertexCount: i32) -> i32 ---
+	Kine_Filament_UpdateCustomMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, vertexData: ^f32, vertexCount: i32) -> bool ---
 	Kine_Filament_DrawMeshEx :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, materialKind: i32, r: f32, g: f32, b: f32, param1: f32, param2: f32, param3: f32, transmission: f32, mat4: ^f32, castShadows: bool, receiveShadows: bool, culling: bool, tex: ^KineFilamentTex) -> i32 ---
 	Kine_Filament_DrawMeshList :: proc(ctx: ^KineFilamentContext, items: ^KineFilamentDrawItem, itemCount: u32) -> i32 ---
 	Kine_Filament_DrawMeshListVersioned :: proc(ctx: ^KineFilamentContext, items: ^KineFilamentDrawItem, itemCount: u32, streamId: u64, version: u64) -> i32 ---
@@ -321,6 +325,9 @@ foreign kine_filament {
 
 
 	Kine_Filament_CreateDecal :: proc(ctx: ^KineFilamentContext, width: f32, height: f32, texture: ^KineFilamentTex, offsetStudsU: f32, offsetStudsV: f32, studsPerTileU: f32, studsPerTileV: f32, culling: bool, castShadows: bool, receiveShadows: bool) -> i32 ---
+	Kine_Filament_CreateMeshDecal :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, texture: ^KineFilamentTex) -> i32 ---
+	Kine_Filament_EditMeshDecal :: proc(ctx: ^KineFilamentContext, decal: i32, mesh: ^KineFilamentMesh, culling: bool, castShadows: bool, receiveShadows: bool) -> bool ---
+	Kine_Filament_SetMeshDoubleSided :: proc(mesh: ^KineFilamentMesh) ---
 	Kine_Filament_SetDecalTiling :: proc(ctx: ^KineFilamentContext, decal: i32, width: f32, height: f32, offsetStudsU: f32, offsetStudsV: f32, studsPerTileU: f32, studsPerTileV: f32) -> i32 ---
 	Kine_Filament_RemoveDecal :: proc(ctx: ^KineFilamentContext, decal: i32) -> i32 ---
 	Kine_Filament_SetDecalTransform :: proc(ctx: ^KineFilamentContext, decal: i32, mat4: ^f32) -> i32 ---

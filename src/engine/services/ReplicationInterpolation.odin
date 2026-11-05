@@ -15,7 +15,7 @@ replication_render_interpolated :: proc(service: ^ReplicatorService, delta_time:
 	DR_MAX_STEP :: f32(8.0)
 
 
-	SNAP_BLEND_RATE :: f32(8.0)
+	CORRECTION_DECAY_RATE :: f32(8.0)
 
 	for entity in service.entity_list {
 		if entity.object == nil ||
@@ -43,30 +43,34 @@ replication_render_interpolated :: proc(service: ^ReplicatorService, delta_time:
 		if !entity.frame_seeded {
 			entity.last_frame = latest.frame
 			entity.last_velocity = datatypes.Vector3{0, 0, 0}
+			entity.dr_age = 0
+			entity.render_correction = {}
 			entity.frame_seeded = true
 		}
 
 
 		rate := f64(service.snapshot_rate)
 		if rate <= 0 {rate = 20}
+		clock_rate := f64(service.snapshot_clock_rate)
+		if clock_rate <= 0 {clock_rate = rate}
+		delay_ticks := f64(service.interpolation_delay_ticks) * clock_rate / rate
 		target: f64
 		if service.time_offset_measured {
-			target =
-				(f64(service.clock) + f64(service.time_offset)) * rate -
-				f64(service.interpolation_delay_ticks)
+			target = (f64(service.clock) + f64(service.time_offset)) * clock_rate - delay_ticks
 		} else {
-			target =
-				f64(latest.tick) -
-				f64(service.interpolation_delay_ticks) +
-				f64(entity.sample_age) * rate
+			target = f64(latest.tick) - delay_ticks + f64(entity.sample_age) * clock_rate
 		}
 
 
-		have_data := target <= f64(latest.tick) + 0.5
+		have_data := target <= f64(latest.tick) + 0.5 * clock_rate / rate
 		frame := datatypes.CFrame{}
 
 
-		was_extrapolating := entity.dr_age > 0
+		previous_dr_age := entity.dr_age
+		was_predicting :=
+			previous_dr_age > 0 &&
+			previous_dr_age <= DR_MAX_AGE &&
+			entity.last_velocity != (datatypes.Vector3{})
 
 		if have_data {
 			if target >= f64(latest.tick) {
@@ -102,7 +106,7 @@ replication_render_interpolated :: proc(service: ^ReplicatorService, delta_time:
 				if dx * dx + dy * dy + dz * dz > tele_sq {
 					entity.last_velocity = datatypes.Vector3{0, 0, 0}
 				} else if dt_ticks > 0 {
-					inv := f32(service.snapshot_rate) / dt_ticks
+					inv := f32(clock_rate) / dt_ticks
 					entity.last_velocity = datatypes.Vector3{dx * inv, dy * inv, dz * inv}
 				}
 			}
@@ -149,21 +153,24 @@ replication_render_interpolated :: proc(service: ^ReplicatorService, delta_time:
 		tele_sq := service.teleport_threshold * service.teleport_threshold
 
 
-		recovering := was_extrapolating && have_data
+		recovering := was_predicting && (have_data || entity.dr_age > DR_MAX_AGE)
 
 		if dist_sq > tele_sq {
-
-			part.cframe = frame
-		} else if recovering && dist_sq > 0.0001 {
-
-			blend := f32(clamp(f64(SNAP_BLEND_RATE) * f64(delta_time), 0, 1))
-			part.cframe = datatypes.CFrame_Lerp(part.cframe, frame, blend)
-		} else {
-
-
-			part.cframe = frame
+			entity.render_correction = {}
+		} else if recovering {
+			entity.render_correction = {-dx, -dy, -dz}
 		}
 
+		// Decay the prediction error independently of the moving target.
+		if entity.render_correction != (datatypes.Vector3{}) {
+			decay := math.exp(-CORRECTION_DECAY_RATE * delta_time)
+			entity.render_correction = datatypes.Vec3_Multiply(entity.render_correction, decay)
+			if datatypes.Vec3_Magnitude_Squared(entity.render_correction) < 1e-6 {
+				entity.render_correction = {}
+			}
+			frame = datatypes.CFrame_Add_Vector3(frame, entity.render_correction)
+		}
+		part.cframe = frame
 		part.position = datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
 	}
 }

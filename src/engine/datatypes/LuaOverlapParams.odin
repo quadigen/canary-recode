@@ -1,6 +1,7 @@
 package datatypes
 
-import "base:runtime"
+import tracy "../util/odin-tracy"
+import "core:math"
 import "core:strings"
 
 import engine_enums "../enum"
@@ -28,7 +29,7 @@ Arg_OverlapParams :: proc(L: ^vm.State, index: int, registry: ^Registry) -> ^Ove
 }
 
 overlap_params_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	value := OverlapParams_New()
 	value.CollisionGroup = strings.clone(value.CollisionGroup)
@@ -74,7 +75,7 @@ overlap_params_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> boo
 		)
 
 	case "MaxParts":
-		vm.PushInteger(L, i64(params.MaxParts))
+		vm.PushNumber(L, f64(params.MaxParts))
 
 	case "CollisionGroup":
 		vm.PushString(L, params.CollisionGroup)
@@ -136,10 +137,14 @@ overlap_params_set :: proc(
 		params.FilterType = engine_enums.RaycastFilterType(item.value)
 
 	case "MaxParts":
-		max_parts := vm.ArgInteger(L, value_index)
-
-		if max_parts < 0 {
-			_ = vm.RaiseError(L, "MaxParts must be greater than or equal to 0")
+		max_parts: f64
+		if vm.TypeOf(L, value_index) == .Integer {
+			max_parts = f64(vm.ArgInteger(L, value_index))
+		} else {
+			max_parts = vm.ArgNumber(L, value_index)
+		}
+		if max_parts < 0 || max_parts > 2_147_483_647 || math.floor(max_parts) != max_parts {
+			_ = vm.RaiseError(L, "MaxParts must be a nonnegative 32-bit integer")
 			return true
 		}
 

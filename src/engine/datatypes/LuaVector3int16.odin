@@ -1,30 +1,18 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_vector3int16 :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: Vector3int16,
-) {
+push_vector3int16 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Vector3int16) {
 	push_value(L, binding, value)
 }
 
-Push_Vector3int16 :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: Vector3int16,
-) {
+Push_Vector3int16 :: proc(L: ^vm.State, registry: ^Registry, value: Vector3int16) {
 	push_vector3int16(L, &registry.vector3int16, value)
 }
 
-Arg_Vector3int16 :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> Vector3int16 {
+Arg_Vector3int16 :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Vector3int16 {
 	return require_vector3int16(L, index, &registry.vector3int16)^
 }
 
@@ -53,7 +41,7 @@ vector3int16_component :: proc(L: ^vm.State, index: int) -> i16 {
 }
 
 vector3int16_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	push_vector3int16(
 		L,
@@ -68,12 +56,7 @@ vector3int16_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-vector3int16_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+vector3int16_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	vector := cast(^Vector3int16)value
 
 	switch key {
@@ -90,28 +73,18 @@ vector3int16_get :: proc(
 	return true
 }
 
-vector3int16_add :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	self_index, other_index: int,
-) -> bool {
+vector3int16_add :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index: int) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
 	other := require_vector3int16(L, other_index, binding)
 
-	push_vector3int16(
-		L,
-		binding,
-		Vector3int16_Add((cast(^Vector3int16)value)^, other^),
-	)
+	push_vector3int16(L, binding, Vector3int16_Add((cast(^Vector3int16)value)^, other^))
 
 	return true
 }
 
 vector3int16_subtract :: proc(
 	L: ^vm.State,
-	value,
-	ctx: rawptr,
+	value, ctx: rawptr,
 	self_index, other_index: int,
 ) -> bool {
 	binding := cast(^vm.Userdata_Binding)ctx
@@ -141,21 +114,18 @@ vector3int16_destroy :: proc(value, ctx: rawptr) {
 }
 
 Vector3int16_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Vector3int16",
-		get      = vector3int16_get,
-		string   = vector3int16_string,
-		destroy  = vector3int16_destroy,
-		add      = vector3int16_add,
+	return vm.Userdata_Binding {
+		name = "Vector3int16",
+		get = vector3int16_get,
+		string = vector3int16_string,
+		destroy = vector3int16_destroy,
+		add = vector3int16_add,
 		subtract = vector3int16_subtract,
-		equal    = vector3int16_equal,
+		equal = vector3int16_equal,
 	}
 }
 
-Vector3int16_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+Vector3int16_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", vector3int16_new)
 
 	push_vector3int16(L, binding, Vector3int16_Zero)

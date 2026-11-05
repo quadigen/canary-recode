@@ -3,6 +3,7 @@
 
 package services
 
+import tracy "../util/odin-tracy"
 
 import json "core:encoding/json"
 import "core:fmt"
@@ -1017,6 +1018,9 @@ Update_Service_Startup_Check :: proc(service: ^UpdateService, apply_now: bool) {
 }
 
 update_service_background_main :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	service := cast(^UpdateService)t.data
 	if service == nil {
 		return
@@ -1255,6 +1259,9 @@ update_apply_finish :: proc(service: ^UpdateService, asset_size: i64) {
 
 
 update_service_apply_thread_main :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	service := cast(^UpdateService)t.data
 	if service == nil {
 		return

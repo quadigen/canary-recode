@@ -352,7 +352,7 @@ GuiObject_effectively_visible :: proc(gui: ^GuiObject) -> bool {
 		if Is_A(current, "ScreenGui") {
 			screen_gui := cast(^ScreenGui)current
 
-			if !screen_gui.enabled {
+			if !ScreenGui_Is_Visible(screen_gui) {
 				return false
 			}
 		}
@@ -497,10 +497,6 @@ GuiObject_accepts_pointer :: proc(gui: ^GuiObject) -> bool {
 }
 
 
-
-
-
-
 GuiObject_paints :: proc(gui: ^GuiObject) -> bool {
 	if gui == nil {
 		return false
@@ -510,9 +506,11 @@ GuiObject_paints :: proc(gui: ^GuiObject) -> bool {
 		return true
 	}
 
-	
-	
-	
+	if shader := UIShader_Find(&gui.object); shader != nil && shader.compiled != nil {
+		return true
+	}
+
+
 	switch {
 	case Is_A_Class(&gui.object, &ViewportFrame_Class):
 		frame := cast(^ViewportFrame)gui
@@ -642,7 +640,10 @@ gui_object_is_overlay_pass :: proc(screen: ^ScreenGui) -> bool {
 		return true
 	}
 
-	return screen.object.parent != nil && screen.object.parent.name == "StarterGui"
+	for parent := screen.object.parent; parent != nil; parent = parent.parent {
+		if parent.name == "StarterGui" || Is_A(parent, "PlayerGui") {return true}
+	}
+	return false
 }
 
 gui_object_visit_painted_subtree :: proc(
@@ -753,9 +754,6 @@ GuiObject_find_topmost_in_surface :: proc(
 }
 
 
-
-
-
 GuiObject_find_topmost :: proc(
 	registry: ^Registry,
 	x, y: f32,
@@ -772,10 +770,7 @@ GuiObject_find_topmost :: proc(
 
 	screen_descriptor := Find_Class(registry, "ScreenGui")
 
-	
-	
-	
-	
+
 	if screen_descriptor != nil && !overlay_only {
 		for descriptor in registry.classes {
 			for object in descriptor.instances {
@@ -814,7 +809,9 @@ GuiObject_find_topmost :: proc(
 
 			screen := cast(^ScreenGui)object
 
-			if overlay_only || !screen.enabled || gui_object_is_overlay_pass(screen) {
+			if overlay_only ||
+			   !ScreenGui_Is_Visible(screen) ||
+			   gui_object_is_overlay_pass(screen) {
 				continue
 			}
 
@@ -837,7 +834,7 @@ GuiObject_find_topmost :: proc(
 
 			screen := cast(^ScreenGui)object
 
-			if !screen.enabled || !gui_object_is_overlay_pass(screen) {
+			if !ScreenGui_Is_Visible(screen) || !gui_object_is_overlay_pass(screen) {
 				continue
 			}
 
@@ -1526,8 +1523,6 @@ gui_layout_changed: bool
 gui_layout_animated: bool
 
 
-
-
 surfacegui_mark_dirty_for :: proc(object: ^Object) {
 	current := object
 
@@ -1605,9 +1600,7 @@ gui_measure_auto :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 
 	automatic := gui.automatic_size
 
-	
-	
-	
+
 	needs_content := automatic != .None
 	if !needs_content && Is_A(&gui.object, "ScrollingFrame") {
 		needs_content = (cast(^ScrollingFrame)gui).automatic_canvas_size != .None
@@ -1794,11 +1787,7 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	{
 		tracy.ZoneNC("Layout Gather", 0x98C379)
 
-		
-		
-		
-		
-		
+
 		for descriptor in registry.classes {
 			if descriptor == nil {
 				continue
@@ -1970,7 +1959,6 @@ Gui_Shape :: struct {
 	bl:       f32,
 	exponent: f32,
 }
-
 
 
 gui_corner_shape :: proc(object: ^Object, rect: guilib.Rect) -> Gui_Shape {
@@ -2207,7 +2195,15 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 		}
 	}
 
-	if gui.bg_transparency < 1 && !UIGradient_Draw_Background(gui, ctx, rect, shape) {
+	shader := UIShader_Find(object)
+	shaded_background :=
+		shader != nil &&
+		UIShader_Prepare(shader) &&
+		!shader.samples_content &&
+		UIShader_Apply(shader, ctx, rect, false)
+	if !shaded_background &&
+	   gui.bg_transparency < 1 &&
+	   !UIGradient_Draw_Background(gui, ctx, rect, shape) {
 		switch shape.kind {
 		case .Squircle:
 			guilib.drawSquircleCorners(

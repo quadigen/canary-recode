@@ -37,6 +37,7 @@ main :: proc() {
 local r = game:GetService("ReplicatorService")
 assert(r:RegisterSchema("Part", { "CanQuery" }))
 assert(r:StartServer("127.0.0.1", 39183))
+workspace.Gravity = 0
 local emulator = r:CreateNetworkEmulator({ latency = 0.5, loss = 1 })
 assert(emulator:Send("later", true, 10))
 assert(#emulator:Drain(10.49) == 0)
@@ -108,6 +109,9 @@ end)
 local r = game:GetService("ReplicatorService")
 assert(r:RegisterSchema("Part", { "CanQuery" }))
 assert(r:ConnectClient("127.0.0.1", 39183))
+workspace.FinishedReplicating:Connect(function()
+    gravityAtReady = workspace.Gravity
+end)
 r.EventReceived:Connect(function(name, data)
     if name == "server-test" then received = data end
     if name == "targeted" then targeted = data end
@@ -127,6 +131,7 @@ end)
 local r = game:GetService("ReplicatorService")
 assert(r.Connected, "client packets " .. tostring(r:GetStats().packetsReceived) .. " malformed " .. tostring(r:GetStats().malformedPackets) .. " player " .. tostring(game:GetService("Players").LocalPlayer))
 assert(game:GetService("Players").LocalPlayer)
+assert(gravityAtReady == 0 and workspace.Gravity == 0, "server gravity must arrive before the scene is ready")
 local part = game:GetService("Workspace"):FindFirstChild("ReplicatedPart")
 assert(part and part.ClassName == "Part")
 assert(game:GetService("Workspace"):FindFirstChild("ManualPart") == nil)
@@ -161,6 +166,15 @@ assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint
 `,
 		"replicator_client_verify",
 	)
+	run_script(&server_vm, `game:GetService("Physics").Gravity = 85`, "server_changes_gravity")
+	for _ in 0 ..< 8 {
+		step_network(&server, &server_vm)
+		step_network(&client, &client_vm)
+	}
+	run_script(&client_vm, `
+assert(workspace.Gravity == 85 and game:GetService("Physics").Gravity == 85,
+    "a running client must receive gravity changes")
+`, "client_applies_gravity")
 	run_script(
 		&server_vm,
 		`

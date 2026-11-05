@@ -217,7 +217,8 @@ script_context_should_run :: proc(
 	if common := classes.Script_Common_Of(object); common != nil && common.run_as_plugin {
 		return true
 	}
-	if kind == .LocalScript && ClientScripts_In_Template(object) {
+	if ClientScripts_In_Template(object) ||
+	   !PlayerGui_Can_Display(object, script_context.service.data_model) {
 		return false
 	}
 	switch mode {

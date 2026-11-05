@@ -25,6 +25,24 @@ replication_put_f32 :: proc(bytes: ^[dynamic]u8, value: f32) {
 	replication_put_u32(bytes, transmute(u32)value)
 }
 
+replication_put_cframe :: proc(bytes: ^[dynamic]u8, frame: datatypes.CFrame) {
+	values := [12]f32 {
+		frame.x,
+		frame.y,
+		frame.z,
+		frame.r00,
+		frame.r01,
+		frame.r02,
+		frame.r10,
+		frame.r11,
+		frame.r12,
+		frame.r20,
+		frame.r21,
+		frame.r22,
+	}
+	for value in values {replication_put_f32(bytes, value)}
+}
+
 Replication_Reader :: struct {
 	data:   []u8,
 	offset: int,
@@ -70,6 +88,23 @@ replication_read_string :: proc(reader: ^Replication_Reader) -> string {
 
 replication_read_f32 :: proc(reader: ^Replication_Reader) -> f32 {
 	return transmute(f32)replication_read_u32(reader)
+}
+
+replication_read_cframe :: proc(reader: ^Replication_Reader) -> datatypes.CFrame {
+	return {
+		x = replication_read_f32(reader),
+		y = replication_read_f32(reader),
+		z = replication_read_f32(reader),
+		r00 = replication_read_f32(reader),
+		r01 = replication_read_f32(reader),
+		r02 = replication_read_f32(reader),
+		r10 = replication_read_f32(reader),
+		r11 = replication_read_f32(reader),
+		r12 = replication_read_f32(reader),
+		r20 = replication_read_f32(reader),
+		r21 = replication_read_f32(reader),
+		r22 = replication_read_f32(reader),
+	}
 }
 
 Replication_Terrain_Subtype_Header: u8 = 0

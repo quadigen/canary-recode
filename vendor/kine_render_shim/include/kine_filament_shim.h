@@ -42,6 +42,7 @@ KINE_API KineFilamentShader *Kine_Filament_Shader_Create(KineFilamentContext *ct
 KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source);
 KINE_API bool Kine_Filament_Shader_CompilePoll(KineFilamentContext *ctx, KineFilamentShaderCompile *job, KineFilamentShader **shader);
 KINE_API void Kine_Filament_Shader_CompileRelease(KineFilamentShaderCompile *job);
+KINE_API KineFilamentShader *Kine_Filament_Shader_ResolveFade(KineFilamentShader *shader);
 KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader);
 KINE_API bool Kine_Filament_Shader_SetUniform(
 	KineFilamentShader *shader, const char *name, const float *values, int valueCount);
@@ -77,7 +78,7 @@ typedef struct KineFilamentDrawItem {
 	float transmission;
 	int32_t materialKind;
 	uint32_t flags;
-	uint32_t reserved;
+	uint32_t reserved; // Optional opacity encoded as float bits for Water and ForceField. Zero uses the default.
 	KineFilamentShader *shader;
 } KineFilamentDrawItem;
 
@@ -139,6 +140,8 @@ typedef struct KineFilamentVulkanBackend {
 // color/alpha (w) ride along as per-instance data like other instanced kinds.
 #define KINE_MAT_OUTLINE_MASK 12
 #define KINE_MAT_FORCEFIELD 13
+#define KINE_MAT_FADE 14
+#define KINE_MAT_NEON_FADE 15
 
 // Which arm/handle of a gizmo is being interacted with.
 #define KINE_GIZMO_AXIS_NONE 0
@@ -495,6 +498,8 @@ KINE_API bool Kine_Filament_ApplyMeshAnimation(
 KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPath(const char *path);
 KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData *meshData);
 KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData *meshData);
+KINE_API bool Kine_Filament_CopyMeshDataVertices(
+	const KineFilamentMeshData *meshData, float *outVertices, int floatCapacity);
 KINE_API bool Kine_Filament_CopyMeshDataPositions(
 	const KineFilamentMeshData *meshData, float *outPositions, int positionFloatCapacity);
 KINE_API bool Kine_Filament_CopyMeshDataIndices(
@@ -827,6 +832,14 @@ KINE_API int Kine_Filament_CreateDecal(
 	float offsetStudsU, float offsetStudsV,
 	float studsPerTileU, float studsPerTileV,
 	bool culling, bool castShadows, bool receiveShadows);
+
+// The decal owns the mesh after a successful creation.
+KINE_API int Kine_Filament_CreateMeshDecal(
+	KineFilamentContext *ctx, KineFilamentMesh *mesh, KineFilamentTex *texture);
+KINE_API bool Kine_Filament_EditMeshDecal(
+	KineFilamentContext *ctx, int decal, KineFilamentMesh *mesh,
+	bool culling, bool castShadows, bool receiveShadows);
+KINE_API void Kine_Filament_SetMeshDoubleSided(KineFilamentMesh *mesh);
 
 KINE_API bool Kine_Filament_SetDecalTiling(
 	KineFilamentContext *ctx, int decal,

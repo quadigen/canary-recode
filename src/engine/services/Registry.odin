@@ -195,35 +195,35 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:begin service-classes
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
-	when ODIN_OS != .JS { Register_AccountService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_AccountService_Class(registry.classes)}
 	Register_ChangeHistoryService_Class(registry.classes)
 	Register_CharacterService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_CollaborationService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_CollaborationService_Class(registry.classes)}
 	Register_CollectionService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ContentProvider_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_DataStoreService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ContentProvider_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_DataStoreService_Class(registry.classes)}
 	Register_Debris_Class(registry.classes)
-	when ODIN_OS != .JS { Register_DialogService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_DiscordRPC_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_EditorService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_DialogService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_DiscordRPC_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_EditorService_Class(registry.classes)}
 	Register_EncodingService_Class(registry.classes)
 	Register_ExampleService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ExporterService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_ExportService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_Filesystem_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_HttpService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_KinemiumService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ExporterService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_ExportService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_Filesystem_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_HttpService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_KinemiumService_Class(registry.classes)}
 	Register_Lighting_Class(registry.classes)
 	Register_LocalizationService_Class(registry.classes)
 	Register_LogService_Class(registry.classes)
 	Register_LuauService_Class(registry.classes)
 	Register_MarketplaceService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_MatrixService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_MatrixService_Class(registry.classes)}
 	Register_MemoryStoreService_Class(registry.classes)
 	Register_MessagingService_Class(registry.classes)
 	Register_Mouse_Class(registry.classes)
 	Register_NetworkEmulator_Class(registry.classes)
-	when ODIN_OS != .JS { Register_Packages_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_Packages_Class(registry.classes)}
 	Register_Path_Class(registry.classes)
 	Register_PathfindingService_Class(registry.classes)
 	Register_Physics_Class(registry.classes)
@@ -231,11 +231,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_PlayerGui_Class(registry.classes)
 	Register_Players_Class(registry.classes)
 	Register_PlayerScripts_Class(registry.classes)
-	when ODIN_OS != .JS { Register_PlaytestService_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_Plugin_Class(registry.classes) }
-	when ODIN_OS != .JS { Register_PluginMarketplace_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_PlaytestService_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_Plugin_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_PluginMarketplace_Class(registry.classes)}
 	Register_ProfilerService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_Project_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_Project_Class(registry.classes)}
 	Register_Raytracer_Class(registry.classes)
 	Register_ReflectionService_Class(registry.classes)
 	Register_ReplicatedFirst_Class(registry.classes)
@@ -247,65 +247,65 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_ServerScriptService_Class(registry.classes)
 	Register_ServerStorage_Class(registry.classes)
 	Register_SoundService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_SpaceService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_SpaceService_Class(registry.classes)}
 	Register_StarterCharacterScripts_Class(registry.classes)
 	Register_StarterGui_Class(registry.classes)
 	Register_StarterPack_Class(registry.classes)
 	Register_StarterPlayer_Class(registry.classes)
-	when ODIN_OS != .JS { Register_Studio_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_Studio_Class(registry.classes)}
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
 	Register_Team_Class(registry.classes)
 	Register_Teams_Class(registry.classes)
 	Register_TeleportService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_TemplateService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_TemplateService_Class(registry.classes)}
 	Register_Terrain_Class(registry.classes)
 	Register_TextService_Class(registry.classes)
 	Register_Tween_Class(registry.classes)
 	Register_TweenService_Class(registry.classes)
-	when ODIN_OS != .JS { Register_UpdateService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_UpdateService_Class(registry.classes)}
 	Register_UserInputService_Class(registry.classes)
 	Register_WebviewService_Class(registry.classes)
 	Register_Workspace_Class(registry.classes)
-	when ODIN_OS != .JS { Register_ZipService_Class(registry.classes) }
+	when ODIN_OS != .JS {Register_ZipService_Class(registry.classes)}
 	// wire:end service-classes
 	// wire:begin services
-	when ODIN_OS != .JS { Register_Service(registry, "AccountService", "AccountService", "accountService") }
+	when ODIN_OS != .JS {Register_Service(registry, "AccountService", "AccountService", "accountService")}
 	Register_Service(registry, "ChangeHistoryService", "ChangeHistoryService")
 	Register_Service(registry, "CharacterService", "CharacterService")
-	when ODIN_OS != .JS { Register_Service(registry, "CollaborationService", "CollaborationService") }
+	when ODIN_OS != .JS {Register_Service(registry, "CollaborationService", "CollaborationService")}
 	Register_Service(registry, "CollectionService", "CollectionService", "CollectionService")
-	when ODIN_OS != .JS { Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider") }
-	when ODIN_OS != .JS { Register_Service(registry, "DataStoreService", "DataStoreService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ContentProvider", "ContentProvider", "ContentProvider")}
+	when ODIN_OS != .JS {Register_Service(registry, "DataStoreService", "DataStoreService")}
 	Register_Service(registry, "Debris", "Debris", "debris")
-	when ODIN_OS != .JS { Register_Service(registry, "DialogService", "DialogService", "DialogService") }
-	when ODIN_OS != .JS { Register_Service(registry, "DiscordRPC", "DiscordRPC") }
-	when ODIN_OS != .JS { Register_Service(registry, "EditorService", "EditorService", "EditorService") }
+	when ODIN_OS != .JS {Register_Service(registry, "DialogService", "DialogService", "DialogService")}
+	when ODIN_OS != .JS {Register_Service(registry, "DiscordRPC", "DiscordRPC")}
+	when ODIN_OS != .JS {Register_Service(registry, "EditorService", "EditorService", "EditorService")}
 	Register_Service(registry, "EncodingService", "EncodingService", "EncodingService")
 	Register_Service(registry, "ExampleService", "ExampleService")
-	when ODIN_OS != .JS { Register_Service(registry, "ExporterService", "ExporterService", "ExporterService") }
-	when ODIN_OS != .JS { Register_Service(registry, "ExportService", "ExportService", "ExportService") }
-	when ODIN_OS != .JS { Register_Service(registry, "Filesystem", "Filesystem", "Filesystem") }
-	when ODIN_OS != .JS { Register_Service(registry, "HttpService", "HttpService") }
-	when ODIN_OS != .JS { Register_Service(registry, "KinemiumService", "KinemiumService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ExporterService", "ExporterService", "ExporterService")}
+	when ODIN_OS != .JS {Register_Service(registry, "ExportService", "ExportService", "ExportService")}
+	when ODIN_OS != .JS {Register_Service(registry, "Filesystem", "Filesystem", "Filesystem")}
+	when ODIN_OS != .JS {Register_Service(registry, "HttpService", "HttpService")}
+	when ODIN_OS != .JS {Register_Service(registry, "KinemiumService", "KinemiumService")}
 	Register_Service(registry, "Lighting", "Lighting")
 	Register_Service(registry, "LocalizationService", "LocalizationService", "LocalizationService")
 	Register_Service(registry, "LogService", "LogService")
 	Register_Service(registry, "LuauService", "LuauService")
 	Register_Service(registry, "MarketplaceService", "MarketplaceService", "marketplaceService")
-	when ODIN_OS != .JS { Register_Service(registry, "MatrixService", "MatrixService", "matrix") }
+	when ODIN_OS != .JS {Register_Service(registry, "MatrixService", "MatrixService", "matrix")}
 	Register_Service(registry, "MemoryStoreService", "MemoryStoreService", "memoryStoreService")
 	Register_Service(registry, "MessagingService", "MessagingService", "messagingService")
-	when ODIN_OS != .JS { Register_Service(registry, "Packages", "Packages") }
+	when ODIN_OS != .JS {Register_Service(registry, "Packages", "Packages")}
 	Register_Service(registry, "PathfindingService", "PathfindingService")
 	Register_Service(registry, "Physics", "Physics")
 	Register_Service(registry, "PhysicsService", "PhysicsService")
 	Register_Service(registry, "Players", "Players")
-	when ODIN_OS != .JS { Register_Service(registry, "PlaytestService", "PlaytestService") }
-	when ODIN_OS != .JS { Register_Service(registry, "Plugin", "Plugin", "plugin") }
-	when ODIN_OS != .JS { Register_Service(registry, "PluginMarketplace", "PluginMarketplace", "PluginMarketplace") }
+	when ODIN_OS != .JS {Register_Service(registry, "PlaytestService", "PlaytestService")}
+	when ODIN_OS != .JS {Register_Service(registry, "Plugin", "Plugin", "plugin")}
+	when ODIN_OS != .JS {Register_Service(registry, "PluginMarketplace", "PluginMarketplace", "PluginMarketplace")}
 	Register_Service(registry, "ProfilerService", "ProfilerService")
-	when ODIN_OS != .JS { Register_Service(registry, "Project", "Project") }
+	when ODIN_OS != .JS {Register_Service(registry, "Project", "Project")}
 	Register_Service(registry, "Raytracer", "Raytracer", "Raytracer")
 	Register_Service(registry, "ReflectionService", "ReflectionService", "ReflectionService")
 	Register_Service(registry, "ReplicatedFirst", "ReplicatedFirst", "ReplicatedFirst")
@@ -317,24 +317,24 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "ServerScriptService", "ServerScriptService", "ServerScriptService")
 	Register_Service(registry, "ServerStorage", "ServerStorage", "ServerStorage")
 	Register_Service(registry, "SoundService", "SoundService", "SoundService")
-	when ODIN_OS != .JS { Register_Service(registry, "SpaceService", "SpaceService") }
+	when ODIN_OS != .JS {Register_Service(registry, "SpaceService", "SpaceService")}
 	Register_Service(registry, "StarterGui", "StarterGui")
 	Register_Service(registry, "StarterPack", "StarterPack", "StarterPack")
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
-	when ODIN_OS != .JS { Register_Service(registry, "Studio", "Studio") }
+	when ODIN_OS != .JS {Register_Service(registry, "Studio", "Studio")}
 	Register_Service(registry, "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")
 	Register_Service(registry, "Teams", "Teams", "team")
 	Register_Service(registry, "TeleportService", "TeleportService", "teleportService")
-	when ODIN_OS != .JS { Register_Service(registry, "TemplateService", "TemplateService") }
+	when ODIN_OS != .JS {Register_Service(registry, "TemplateService", "TemplateService")}
 	Register_Service(registry, "Terrain", "Terrain")
 	Register_Service(registry, "TextService", "TextService")
 	Register_Service(registry, "TweenService", "TweenService", "TweenService")
-	when ODIN_OS != .JS { Register_Service(registry, "UpdateService", "UpdateService") }
+	when ODIN_OS != .JS {Register_Service(registry, "UpdateService", "UpdateService")}
 	Register_Service(registry, "UserInputService", "UserInputService")
 	Register_Service(registry, "WebviewService", "WebviewService")
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
-	when ODIN_OS != .JS { Register_Service(registry, "ZipService", "ZipService") }
+	when ODIN_OS != .JS {Register_Service(registry, "ZipService", "ZipService")}
 	// wire:end services
 	// Web registers browser stand-ins for the desktop-only services the embedded
 	// editor UI needs (see web_services.odin). They live outside the wire region
@@ -549,6 +549,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.vm_state = vm_state
 	registry.classes.destroy_hook = services_destroy_hook
 	registry.classes.destroy_hook_ctx = registry
+	registry.classes.screen_gui_can_display = PlayerGui_Can_Display
 	model_object, model_ok := classes.Push_New(registry.classes, vm_state, "DataModel", false)
 	assert(model_ok && model_object != nil)
 	registry.data_model = cast(^DataModel)model_object
@@ -630,8 +631,15 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 		return
 	}
 	registry := cast(^Registry)ctx
+	if classes.Is_A_Class(object, &classes.Part_Class) {
+		if descriptor := Find_Service(registry, "Physics");
+		   descriptor != nil && descriptor.object != nil {
+			physics_forget_part(cast(^Physics)descriptor.object, cast(^classes.Part)object)
+		}
+	}
 	if object.class == &classes.Attachment_Class {
-		if descriptor := classes.Find_Class(registry.classes, "HingeConstraint"); descriptor != nil {
+		if descriptor := classes.Find_Class(registry.classes, "HingeConstraint");
+		   descriptor != nil {
 			for instance in descriptor.instances {
 				if instance == nil {continue}
 				hinge := cast(^classes.HingeConstraint)instance
@@ -639,6 +647,17 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 				if hinge.attachment0 == object {hinge.attachment0 = nil}
 				if hinge.attachment1 == object {hinge.attachment1 = nil}
 				if referenced {classes.HingeConstraint_release(hinge)}
+			}
+		}
+		if descriptor := classes.Find_Class(registry.classes, "SpringConstraint");
+		   descriptor != nil {
+			for instance in descriptor.instances {
+				if instance == nil {continue}
+				spring := cast(^classes.SpringConstraint)instance
+				referenced := spring.attachment0 == object || spring.attachment1 == object
+				if spring.attachment0 == object {spring.attachment0 = nil}
+				if spring.attachment1 == object {spring.attachment1 = nil}
+				if referenced {classes.SpringConstraint_release(spring)}
 			}
 		}
 	}
@@ -660,9 +679,6 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 
 	// Player-owned client containers must not leave a dangling reference on the
 	// Player that owns them.
-	if classes.Is_A(object, "PlayerScripts") || classes.Is_A(object, "PlayerGui") {
-		Players_Forget_Client_Container(object)
-	}
 	{
 		replicator := Find_Service(registry, "ReplicatorService")
 		if replicator != nil && replicator.object != nil {

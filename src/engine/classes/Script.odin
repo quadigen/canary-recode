@@ -1,13 +1,13 @@
 package classes
 
-import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:strings"
 
-Script_Class := Class_Info{
+Script_Class := Class_Info {
 	name   = "Script",
-	parent = &Instance_Class,
+	parent = &BaseScript_Class,
 }
 
 Script :: struct {
@@ -17,15 +17,15 @@ Script :: struct {
 
 Script_Init :: proc(class: ^Class_Info = nil, name: string = "Script") -> Script {
 	resolved_class := class
-	if resolved_class == nil { resolved_class = &Script_Class }
-	return Script{
+	if resolved_class == nil {resolved_class = &Script_Class}
+	return Script {
 		object = Object_Init(resolved_class, name),
-		common = Script_Common{
-			enabled         = true,
-			module_state    = .Unloaded,
-			module_ref      = -1,
+		common = Script_Common {
+			enabled = true,
+			module_state = .Unloaded,
+			module_ref = -1,
 			execution_state = .NotStarted,
-			thread_ref      = -1,
+			thread_ref = -1,
 		},
 	}
 }
@@ -119,13 +119,13 @@ script_clone :: proc(source: ^Object, destination: ^Object) {
 	Script_Release_Thread(L, &dst.common)
 
 	delete(dst.source)
-	dst.source          = strings.clone(src.source)
-	dst.enabled         = src.enabled
-	dst.module_state      = .Unloaded
-	dst.module_ref        = -1
-	dst.thread            = nil
-	dst.thread_ref        = -1
-	dst.execution_state   = .NotStarted
+	dst.source = strings.clone(src.source)
+	dst.enabled = src.enabled
+	dst.module_state = .Unloaded
+	dst.module_ref = -1
+	dst.thread = nil
+	dst.thread_ref = -1
+	dst.execution_state = .NotStarted
 	dst.restart_requested = false
 }
 

@@ -1,9 +1,9 @@
 #+build !js
 package services
 
+import tracy "../util/odin-tracy"
 // wire:service global="matrix"
 
-import "base:runtime"
 import "core:bytes"
 import "core:encoding/json"
 import "core:fmt"
@@ -2009,7 +2009,7 @@ matrix_store_handler :: proc(L: ^vm.State, table_index: int, field: string, targ
 }
 
 matrix_sync_stop_function :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	service := cast(^MatrixService)vm.UpvaluePointer(L)
 	if service != nil {matrix_sync_disconnect(service)}
 	return 0

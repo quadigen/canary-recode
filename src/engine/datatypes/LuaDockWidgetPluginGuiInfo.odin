@@ -1,8 +1,8 @@
 package datatypes
 
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 
 push_dock_widget_plugin_gui_info :: proc(
@@ -34,7 +34,7 @@ Arg_DockWidgetPluginGuiInfo :: proc(
 }
 
 dock_widget_plugin_gui_info_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
 

@@ -1,6 +1,7 @@
 package services
 
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 
 import classes "../classes"
@@ -30,6 +31,8 @@ PlayerScripts :: struct {
 
 PlayerGui :: struct {
 	using object: classes.Object,
+	populated:    bool,
+	spawn:        u64,
 }
 
 StarterCharacterScripts :: struct {
@@ -122,6 +125,8 @@ ClientScripts_Is_Template :: proc(object: ^classes.Object) -> bool {
 		return false
 	}
 	switch classes.Get_Class_Name(object) {
+	case "StarterGui":
+		return object.name == "StarterGui"
 	case "StarterCharacterScripts":
 		return true
 	case "PlayerScripts":
@@ -159,9 +164,13 @@ client_scripts_ensure_child :: proc(
 		return nil
 	}
 
-	existing := classes.Find_First_Child(parent, name)
-	if existing != nil && !existing.destroyed {
-		return existing
+	for child in parent.children {
+		if child != nil &&
+		   !child.destroyed &&
+		   child.name == name &&
+		   classes.Is_A(child, class_name) {
+			return child
+		}
 	}
 
 	object, ok := classes.Push_New(registry, &vm.VM{L = L}, class_name, false)
@@ -179,7 +188,11 @@ client_scripts_copy_contents :: proc(
 	registry: ^classes.Registry,
 	source, destination: ^classes.Object,
 ) -> int {
-	if L == nil || registry == nil || source == nil || destination == nil {
+	if L == nil ||
+	   registry == nil ||
+	   source == nil ||
+	   destination == nil ||
+	   destination.destroyed {
 		return 0
 	}
 
@@ -205,7 +218,11 @@ client_scripts_sync_template :: proc(
 	registry: ^classes.Registry,
 	source, destination: ^classes.Object,
 ) -> int {
-	if L == nil || registry == nil || source == nil || destination == nil {
+	if L == nil ||
+	   registry == nil ||
+	   source == nil ||
+	   destination == nil ||
+	   destination.destroyed {
 		return 0
 	}
 
@@ -239,26 +256,78 @@ ClientScripts_Ensure_Player_Containers :: proc(
 		return nil, nil
 	}
 
-	if player.player_scripts == nil || player.player_scripts.destroyed {
-		player.player_scripts = client_scripts_ensure_child(
-			registry,
-			L,
-			&player.object,
-			"PlayerScripts",
-			"PlayerScripts",
-		)
-	}
-	if player.player_gui == nil || player.player_gui.destroyed {
-		player.player_gui = client_scripts_ensure_child(
-			registry,
-			L,
-			&player.object,
-			"PlayerGui",
-			"PlayerGui",
-		)
-	}
+	player_scripts = client_scripts_ensure_child(
+		registry,
+		L,
+		&player.object,
+		"PlayerScripts",
+		"PlayerScripts",
+	)
+	player_gui = client_scripts_ensure_child(registry, L, &player.object, "PlayerGui", "PlayerGui")
+	return
+}
 
-	return player.player_scripts, player.player_gui
+PlayerGui_Prepare :: proc(player: ^Player, L: ^vm.State) -> ^classes.Object {
+	if player == nil || player.destroyed || player.signal_registry == nil || L == nil {return nil}
+	registry := player.signal_registry
+	object := client_scripts_ensure_child(registry, L, &player.object, "PlayerGui", "PlayerGui")
+	if object == nil {return nil}
+	gui := cast(^PlayerGui)object
+	if gui.populated && gui.spawn == player.character_generation {return object}
+
+	model := cast(^DataModel)registry.data_model
+	if model == nil {return object}
+	if replicator := cast(^ReplicatorService)DataModel_Get_Service(model, "ReplicatorService");
+	   replicator != nil &&
+	   replicator.mode == .Client &&
+	   replicator.remote != nil &&
+	   !replicator.replication_finished {return object}
+	starter := DataModel_Get_Service(model, "StarterGui")
+	if starter == nil {return object}
+
+	if !gui.populated {
+		gui.populated = true
+		gui.spawn = player.character_generation
+		client_scripts_copy_contents(L, registry, starter, object)
+	} else {
+		previous_spawn := gui.spawn
+		gui.spawn = player.character_generation
+		if previous_spawn != 0 {
+			children := slice.clone(object.children[:])
+			defer delete(children)
+			for child in children {
+				if classes.Is_A_Class(child, &classes.ScreenGui_Class) &&
+				   !child.destroyed &&
+				   child.parent == object &&
+				   (cast(^classes.ScreenGui)child).reset_on_spawn {
+					classes.Destroy_Hierarchy(child)
+				}
+			}
+			client_scripts_sync_template(L, registry, starter, object)
+		}
+	}
+	return object
+}
+
+// Templates remain visible in the editor. A running player's view uses their
+// own PlayerGui once the initial scene has arrived.
+PlayerGui_Can_Display :: proc(object: ^classes.Object, data_model: rawptr) -> bool {
+	model := cast(^DataModel)data_model
+	if model == nil || model.registry == nil {return true}
+	for ancestor := object.parent; ancestor != nil; ancestor = ancestor.parent {
+		player_gui := ancestor.class == &PlayerGui_Class
+		starter_gui := ancestor.class == &StarterGui_Class && ClientScripts_Is_Template(ancestor)
+		if !player_gui && !starter_gui {continue}
+		players := cast(^Players)DataModel_Get_Service(model, "Players")
+		local_player := players.local_player if players != nil else nil
+		if player_gui {
+			return local_player != nil && ancestor.parent == &local_player.object
+		}
+		if model.registry.mode == .Editor || local_player == nil {return true}
+		gui := classes.Find_First_Child_Of_Class(&local_player.object, "PlayerGui")
+		return gui == nil || !(cast(^PlayerGui)gui).populated
+	}
+	return true
 }
 
 ClientScripts_Prepare_Local_Player :: proc(data_model: ^DataModel, player: ^Player) -> int {
@@ -266,10 +335,19 @@ ClientScripts_Prepare_Local_Player :: proc(data_model: ^DataModel, player: ^Play
 		return 0
 	}
 	registry := data_model.registry
+	if replicator := cast(^ReplicatorService)DataModel_Get_Service(
+		   data_model,
+		   "ReplicatorService",
+	   );
+	   replicator != nil &&
+	   replicator.mode == .Client &&
+	   replicator.remote != nil &&
+	   !replicator.replication_finished {return 0}
 	L := registry.vm_state.L
 	if L == nil {
 		return 0
 	}
+	PlayerGui_Prepare(player, L)
 
 	starter_player := cast(^StarterPlayer)Ensure_Service(registry, "StarterPlayer")
 	if starter_player == nil || starter_player.destroyed {

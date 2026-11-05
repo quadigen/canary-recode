@@ -1,14 +1,15 @@
 #+build !js
 package services
 
+import tracy "../util/odin-tracy"
+import vm "../vm"
 import "core:bytes"
 import "core:fmt"
 import "core:os"
 import "core:slice"
 import "core:strings"
-import "core:time"
 import "core:thread"
-import vm "../vm"
+import "core:time"
 
 PROJECT_BACKUP_LIMIT :: 5
 PROJECT_AUTOSAVE_SECONDS :: 60
@@ -19,6 +20,9 @@ Project_Autosave_Job :: struct {
 }
 
 project_autosave_worker :: proc(worker: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	job := cast(^Project_Autosave_Job)worker.data
 	if !project_write_snapshot(job.path, job.data) {
 		fmt.eprintln("[Project] Automatic save failed")
@@ -113,7 +117,10 @@ project_push_backups :: proc(service: ^ProjectService, L: ^vm.State) {
 		vm.NewTable(L, 0, 2)
 		vm.PushString(L, name)
 		vm.SetField(L, -2, "Id")
-		info, err := os.stat(fmt.tprintf("%s/%s", project_backup_directory(project.path), name), context.allocator)
+		info, err := os.stat(
+			fmt.tprintf("%s/%s", project_backup_directory(project.path), name),
+			context.allocator,
+		)
 		if err == nil {
 			vm.PushInteger(L, time.to_unix_seconds(info.modification_time))
 			vm.SetField(L, -2, "Timestamp")
@@ -139,7 +146,13 @@ project_restore_backup :: proc(service: ^ProjectService, L: ^vm.State, name: str
 
 	// Protect the current in-memory project before replacing the scene.
 	if !Project_Save_To_File(service, L) {return false}
-	if !Restore_Map(service.data_model.registry, L, data, path, clear_assets = false) {return false}
+	if !Restore_Map(
+		service.data_model.registry,
+		L,
+		data,
+		path,
+		clear_assets = false,
+	) {return false}
 	return Project_Save_To_File(service, L)
 }
 
@@ -165,12 +178,18 @@ Project_Autosave :: proc(registry: ^Registry, L: ^vm.State, dt: f32 = 0, closing
 	if !ok {return}
 	if worker := thread.create(project_autosave_worker); worker != nil {
 		job := new(Project_Autosave_Job)
-		job^ = {path = strings.clone(project.path), data = data}
+		job^ = {
+			path = strings.clone(project.path),
+			data = data,
+		}
 		worker.data = job
 		service.autosave_worker = worker
 		thread.start(worker)
 		return
 	}
 	defer delete(data)
-	if !project_write_snapshot(project.path, data) {fmt.eprintln("[Project] Automatic save failed")}
+	if !project_write_snapshot(
+		project.path,
+		data,
+	) {fmt.eprintln("[Project] Automatic save failed")}
 }

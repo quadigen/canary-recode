@@ -34,12 +34,30 @@ frame_time_ms :: proc() -> f64 {
 	return f64(last_ns) * 1e-6
 }
 
+FPS_WINDOW :: 30
+
 fps_value :: proc() -> f64 {
-	ms := frame_time_ms()
-	if ms == 0 {
+	frames := profiling.history_frames()
+	n := min(FPS_WINDOW, len(frames))
+	if n == 0 {
 		return 0
 	}
-	return 1000.0 / ms
+
+	total_ns: u64
+	counted := 0
+	for i := len(frames) - n; i < len(frames); i += 1 {
+		if frames[i].delta_ns == 0 {
+			continue
+		}
+		total_ns += frames[i].delta_ns
+		counted += 1
+	}
+	if counted == 0 {
+		return 0
+	}
+
+	avg_ms := f64(total_ns) * 1e-6 / f64(counted)
+	return 1000.0 / avg_ms
 }
 
 HISTORY_POINTS :: 30

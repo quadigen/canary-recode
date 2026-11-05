@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_physical_properties :: proc(
 	L: ^vm.State,
@@ -12,11 +12,7 @@ push_physical_properties :: proc(
 	push_value(L, binding, value)
 }
 
-Push_PhysicalProperties :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: PhysicalProperties,
-) {
+Push_PhysicalProperties :: proc(L: ^vm.State, registry: ^Registry, value: PhysicalProperties) {
 	push_physical_properties(L, &registry.physical_properties, value)
 }
 
@@ -25,11 +21,7 @@ Arg_PhysicalProperties :: proc(
 	index: int,
 	registry: ^Registry,
 ) -> PhysicalProperties {
-	return require_physical_properties(
-		L,
-		index,
-		&registry.physical_properties,
-	)^
+	return require_physical_properties(L, index, &registry.physical_properties)^
 }
 
 require_physical_properties :: proc(
@@ -46,7 +38,7 @@ require_physical_properties :: proc(
 }
 
 physical_properties_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	value := PhysicalProperties_New(
 		f32(vm.ArgNumber(L, 1)),
@@ -60,21 +52,12 @@ physical_properties_new :: proc "c" (L: ^vm.State) -> i32 {
 		return vm.RaiseError(L, "invalid PhysicalProperties values")
 	}
 
-	push_physical_properties(
-		L,
-		binding_from_upvalue(L),
-		value,
-	)
+	push_physical_properties(L, binding_from_upvalue(L), value)
 
 	return 1
 }
 
-physical_properties_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+physical_properties_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	properties := cast(^PhysicalProperties)value
 
 	switch key {
@@ -96,8 +79,7 @@ physical_properties_get :: proc(
 }
 
 physical_properties_equal :: proc(value, other, ctx: rawptr) -> bool {
-	return (cast(^PhysicalProperties)value)^ ==
-	       (cast(^PhysicalProperties)other)^
+	return (cast(^PhysicalProperties)value)^ == (cast(^PhysicalProperties)other)^
 }
 
 physical_properties_string :: proc(value, ctx: rawptr) -> string {
@@ -118,19 +100,16 @@ physical_properties_destroy :: proc(value, ctx: rawptr) {
 }
 
 PhysicalProperties_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "PhysicalProperties",
-		get     = physical_properties_get,
-		string  = physical_properties_string,
+	return vm.Userdata_Binding {
+		name = "PhysicalProperties",
+		get = physical_properties_get,
+		string = physical_properties_string,
 		destroy = physical_properties_destroy,
-		equal   = physical_properties_equal,
+		equal = physical_properties_equal,
 	}
 }
 
-PhysicalProperties_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+PhysicalProperties_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", physical_properties_new)
 
 	push_physical_properties(L, binding, PhysicalProperties_Default)

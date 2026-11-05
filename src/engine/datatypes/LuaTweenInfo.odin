@@ -1,39 +1,23 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
-push_tween_info :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-	value: TweenInfo,
-) {
+push_tween_info :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: TweenInfo) {
 	push_value(L, binding, value)
 }
 
-Push_TweenInfo :: proc(
-	L: ^vm.State,
-	registry: ^Registry,
-	value: TweenInfo,
-) {
+Push_TweenInfo :: proc(L: ^vm.State, registry: ^Registry, value: TweenInfo) {
 	push_tween_info(L, &registry.tween_info, value)
 }
 
-Arg_TweenInfo :: proc(
-	L: ^vm.State,
-	index: int,
-	registry: ^Registry,
-) -> TweenInfo {
+Arg_TweenInfo :: proc(L: ^vm.State, index: int, registry: ^Registry) -> TweenInfo {
 	return require_tween_info(L, index, &registry.tween_info)^
 }
 
-require_tween_info :: proc(
-	L: ^vm.State,
-	index: int,
-	binding: ^vm.Userdata_Binding,
-) -> ^TweenInfo {
+require_tween_info :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^TweenInfo {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected TweenInfo")
 		return nil
@@ -42,7 +26,7 @@ require_tween_info :: proc(
 }
 
 tween_info_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -54,23 +38,13 @@ tween_info_new :: proc "c" (L: ^vm.State) -> i32 {
 
 	easing_style := engine_enums.EasingStyle.Quad
 	if !vm.IsNoneOrNil(L, 2) {
-		item := engine_enums.Arg_Item(
-			L,
-			2,
-			registry.enums,
-			"EasingStyle",
-		)
+		item := engine_enums.Arg_Item(L, 2, registry.enums, "EasingStyle")
 		easing_style = engine_enums.EasingStyle(item.value)
 	}
 
 	easing_direction := engine_enums.EasingDirection.Out
 	if !vm.IsNoneOrNil(L, 3) {
-		item := engine_enums.Arg_Item(
-			L,
-			3,
-			registry.enums,
-			"EasingDirection",
-		)
+		item := engine_enums.Arg_Item(L, 3, registry.enums, "EasingDirection")
 		easing_direction = engine_enums.EasingDirection(item.value)
 	}
 
@@ -98,12 +72,7 @@ tween_info_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 
-tween_info_get :: proc(
-	L: ^vm.State,
-	value,
-	ctx: rawptr,
-	key: string,
-) -> bool {
+tween_info_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	info := cast(^TweenInfo)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	registry := registry_from_binding(binding)
@@ -170,19 +139,16 @@ tween_info_destroy :: proc(value, ctx: rawptr) {
 }
 
 TweenInfo_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "TweenInfo",
-		get     = tween_info_get,
-		string  = tween_info_string,
+	return vm.Userdata_Binding {
+		name = "TweenInfo",
+		get = tween_info_get,
+		string = tween_info_string,
 		destroy = tween_info_destroy,
-		equal   = tween_info_equal,
+		equal = tween_info_equal,
 	}
 }
 
-TweenInfo_Install_Fields :: proc(
-	L: ^vm.State,
-	binding: ^vm.Userdata_Binding,
-) {
+TweenInfo_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", tween_info_new)
 
 	push_tween_info(L, binding, TweenInfo_Default)

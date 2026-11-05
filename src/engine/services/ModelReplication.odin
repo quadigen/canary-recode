@@ -28,6 +28,7 @@ replication_pivot_barrier :: proc(
 		entity.owned_window_time = 0
 		entity.owned_rate_window_time = 0
 		entity.owned_updates_window = 0
+		entity.owned_rest_upload_tick = 0
 		clear(&entity.samples)
 		entity.frame_seeded = false
 	}

@@ -1,7 +1,7 @@
 package engine_enums
 
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:reflect"
 import "core:strings"
 
@@ -318,7 +318,7 @@ Item_Name :: proc(item: ^Enum_Item) -> string {
 }
 
 enum_item_from_name :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	if !vm.IsUserdataType(L, 1, &registry.enum_binding) {
 		return vm.RaiseError(L, "expected Enum")
@@ -329,7 +329,7 @@ enum_item_from_name :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 enum_item_from_value :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	if !vm.IsUserdataType(L, 1, &registry.enum_binding) {
 		return vm.RaiseError(L, "expected Enum")
@@ -350,7 +350,7 @@ find_item_by_public_value :: proc(enum_type: ^Enum_Type, value: i64) -> ^Enum_It
 }
 
 enum_table_get_enums :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	vm.NewTable(L, len(registry.types), 0)
 	for enum_type, index in registry.types {

@@ -6,7 +6,6 @@ import datatypes "../datatypes"
 import enums "../enum"
 import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 import "core:slice"
 import "core:sort"
@@ -234,31 +233,31 @@ Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 }
 
 Writer :: struct {
-	data:          [dynamic]u8,
+	data:             [dynamic]u8,
 	// Excludes a child during serialization. Called with the child and its
 	// immediate parent for every child that would otherwise be written; returning
 	// true skips that child and its subtree. The exporter uses it to strip
 	// editor-only services (CoreGui, EditorService, ...) from the DataModel root
 	// before writing a map file.
-	exclude_child: proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
+	exclude_child:    proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 	// Ids this stream actually referenced, in first-use order. Only these are
 	// written to the asset table, so assets left in the store by an
 	// already-loaded map do not leak into the file being written.
-	used_ids:      [dynamic]string,
-	used_seen:     map[string]bool,
+	used_ids:         [dynamic]string,
+	used_seen:        map[string]bool,
 	class_properties: map[^classes.Class_Info][dynamic]string,
 	// embed_assets is false for a version 2 stream, where asset properties keep
 	// the author's bare paths and no table is written.
-	embed_assets:  bool,
+	embed_assets:     bool,
 	// version is the layout being written. A few value records changed shape
 	// between versions, so a record can consult it rather than guessing.
-	version:       u8,
+	version:          u8,
 	// warn carries the reason a record was left out of the stream, owned by the
 	// Writer. Writing never fails the whole file over one bad record: the call
 	// site that skipped the record takes this detail and logs it instead, which
 	// is what makes an incomplete map report itself rather than load as a
 	// mysteriously missing property.
-	warn:          string,
+	warn:             string,
 	instance_indices: map[^classes.Object]u32,
 	instance_patches: [dynamic]Instance_Reference_Patch,
 }
@@ -269,24 +268,24 @@ Instance_Reference_Patch :: struct {
 }
 
 Pending_Instance_Reference :: struct {
-	object: ^classes.Object,
+	object:     ^classes.Object,
 	descriptor: ^classes.Class_Descriptor,
-	key: string,
-	index: u32,
+	key:        string,
+	index:      u32,
 }
 
 Reader :: struct {
-	data:    []u8,
-	pos:     int,
+	data:                []u8,
+	pos:                 int,
 	// version is the layout being read, so a record can tell which shape to
 	// expect instead of guessing.
-	version: u8,
+	version:             u8,
 	// err is the failure that ended the decode, owned by the Reader. Reading
 	// cannot recover from a bad record: a tree whose stream disagrees with its
 	// writer is not a tree, so the first failure is recorded here with the byte
 	// offset that produced it and returned to the caller.
-	err:     Error,
-	instances: [dynamic]^classes.Object,
+	err:                 Error,
+	instances:           [dynamic]^classes.Object,
 	instance_references: [dynamic]Pending_Instance_Reference,
 }
 
@@ -535,7 +534,7 @@ read_i16s :: proc(r: ^Reader, out: []i16) -> bool {
 // behaviour of storing a bare path.
 asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, bool) {
 	switch class_name {
-	case "MeshPart":
+	case "MeshPart", "SoftBody":
 		switch property {
 		case "MeshId", "MeshContent":
 			return .Mesh, true
@@ -602,7 +601,8 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 	}
 
 	data: []u8
-	if (kind == .Texture || kind == .Data) && strings.has_prefix(authored, classes.RUNTIME_IMAGE_PREFIX) {
+	if (kind == .Texture || kind == .Data) &&
+	   strings.has_prefix(authored, classes.RUNTIME_IMAGE_PREFIX) {
 		if image, found := classes.ImageLabel_Find_Runtime_Image(authored);
 		   found && len(image) <= assetstore.MAX_ASSET_BYTES {
 			data = slice.clone(transmute([]u8)image)
@@ -1578,7 +1578,11 @@ read_value_record :: proc(
 		delete(enum_name)
 		return true
 	case .InstanceReference:
-		return reader_fail(r, .Unknown_Value_Tag, "instance references are only supported on reference properties")
+		return reader_fail(
+			r,
+			.Unknown_Value_Tag,
+			"instance references are only supported on reference properties",
+		)
 	case:
 		return reader_fail(
 			r,
@@ -1603,7 +1607,7 @@ serialize_read_context :: struct {
 }
 
 serialize_read_property :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := cast(^serialize_read_context)vm.UpvaluePointer(L, 1)
 	if value == nil {
 		return 0
@@ -1678,8 +1682,12 @@ read_class_property :: proc(
 // ---------------------------------------------------------------------------
 
 property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
-	return object.class == &classes.HingeConstraint_Class &&
-	       (property == "Attachment0" || property == "Attachment1")
+	if object.class == &classes.Cloth_Class {return property == "Attachment0"}
+	return(
+		(object.class == &classes.HingeConstraint_Class ||
+			object.class == &classes.SpringConstraint_Class) &&
+		(property == "Attachment0" || property == "Attachment1") \
+	)
 }
 
 property_is_saveable :: proc(property: string) -> bool {
@@ -1770,7 +1778,12 @@ write_instance :: proc(
 		if !property_is_saveable(property) {
 			continue
 		}
-		if object.class == &classes.HingeConstraint_Class && (property == "Active" || property == "CurrentAngle") {
+		if object.class == &classes.HingeConstraint_Class &&
+		   (property == "Active" || property == "CurrentAngle") {
+			continue
+		}
+		if object.class == &classes.SpringConstraint_Class &&
+		   (property == "Active" || property == "CurrentLength") {
 			continue
 		}
 		if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {
@@ -1844,7 +1857,7 @@ deserialize_apply_context :: struct {
 }
 
 deserialize_apply_property :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := cast(^deserialize_apply_context)vm.UpvaluePointer(L, 1)
 	if value == nil {
 		return 0
@@ -1886,7 +1899,7 @@ apply_property :: proc(
 }
 
 deserialize_apply_attribute :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := cast(^deserialize_apply_context)vm.UpvaluePointer(L, 1)
 	if value == nil {
 		return 0
@@ -2031,7 +2044,8 @@ read_instance :: proc(
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading property %d name of %s", i, label)
 		}
-		if r.version >= KINE_REFERENCE_VERSION && property_is_instance_reference(object, key) &&
+		if r.version >= KINE_REFERENCE_VERSION &&
+		   property_is_instance_reference(object, key) &&
 		   r.pos < len(r.data) &&
 		   r.data[r.pos] == u8(Value_Tag.InstanceReference) {
 			r.pos += 1
@@ -2041,7 +2055,10 @@ read_instance :: proc(
 				classes.Destroy_Hierarchy(object)
 				return nil, reader_context(r, "while reading an instance reference of %s", label)
 			}
-			append(&r.instance_references, Pending_Instance_Reference{object, descriptor, key, index})
+			append(
+				&r.instance_references,
+				Pending_Instance_Reference{object, descriptor, key, index},
+			)
 			continue
 		}
 		if !read_value(r, L, registry) {
@@ -2677,10 +2694,10 @@ serialize :: proc(
 	// discovered while properties are read, and the asset table has to precede
 	// the tree in the output. The tree buffer is then copied in one step.
 	tree := Writer {
-		data          = make([dynamic]u8, 0, 4096),
-		exclude_child = exclude_child,
-		embed_assets  = version >= KINE_ASSET_VERSION,
-		version       = version,
+		data             = make([dynamic]u8, 0, 4096),
+		exclude_child    = exclude_child,
+		embed_assets     = version >= KINE_ASSET_VERSION,
+		version          = version,
 		class_properties = make(map[^classes.Class_Info][dynamic]string),
 	}
 	defer {
@@ -2760,6 +2777,66 @@ serialize :: proc(
 // A failure returns a nil object and an Error naming the section, instance, or
 // property that went wrong along with the byte offset it was found at, so a bad
 // map can be diagnosed without a hex editor.
+read_kine_header :: proc(reader: ^Reader) -> bool {
+	if len(reader.data) < 5 {
+		Error_Set(
+			&reader.err,
+			.Truncated,
+			0,
+			"a .kine stream needs at least a 4 byte magic and a version byte; this one is %d byte(s)",
+			len(reader.data),
+		)
+		return false
+	}
+
+	magic, ok := read_bytes(reader, 4)
+	if !ok {
+		return false
+	}
+	if string(magic) != KINE_MAGIC {
+		Error_Set(
+			&reader.err,
+			.Bad_Magic,
+			0,
+			"expected the magic %q but found %q; this is not a .kine file",
+			KINE_MAGIC,
+			string(magic),
+		)
+		return false
+	}
+
+	version, version_ok := read_u8(reader)
+	if !version_ok {
+		return false
+	}
+	// Now that the version is known and accepted, hand it to the reader so each
+	// value record knows which layout to expect.
+	reader.version = version
+	// Version 2 has no asset table and version 3 has no terrain table. Accepting
+	// both keeps older maps loadable; they simply have no embedded assets or no
+	// voxel grid to restore. Version 4 also decodes, but its Font records carry
+	// no face bytes, so a font that only existed in memory does not survive it.
+	if version != KINE_VERSION &&
+	   version != KINE_MATERIAL_VARIANT_VERSION &&
+	   version != KINE_EXTENSION_VERSION &&
+	   version != KINE_FONT_VERSION &&
+	   version != KINE_TERRAIN_VERSION &&
+	   version != KINE_ASSET_VERSION &&
+	   version != KINE_LEGACY_VERSION {
+		Error_Set(
+			&reader.err,
+			.Unsupported_Version,
+			5,
+			"the file is version %d; this build reads %d through %d",
+			version,
+			KINE_LEGACY_VERSION,
+			KINE_VERSION,
+		)
+		return false
+	}
+	return true
+}
+
 Deserialize :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
@@ -2791,62 +2868,8 @@ Deserialize :: proc(
 	}
 	defer Error_Delete(&reader.err)
 
-	if len(reader.data) < 5 {
-		Error_Set(
-			&reader.err,
-			.Truncated,
-			0,
-			"a .kine stream needs at least a 4 byte magic and a version byte; this one is %d byte(s)",
-			len(reader.data),
-		)
-		return nil, reader_take(&reader)
-	}
-
-	magic, ok := read_bytes(&reader, 4)
-	if !ok {
-		return nil, reader_take(&reader)
-	}
-	if string(magic) != KINE_MAGIC {
-		Error_Set(
-			&reader.err,
-			.Bad_Magic,
-			0,
-			"expected the magic %q but found %q; this is not a .kine file",
-			KINE_MAGIC,
-			string(magic),
-		)
-		return nil, reader_take(&reader)
-	}
-
-	version, version_ok := read_u8(&reader)
-	if !version_ok {
-		return nil, reader_take(&reader)
-	}
-	// Now that the version is known and accepted, hand it to the reader so each
-	// value record knows which layout to expect.
-	reader.version = version
-	// Version 2 has no asset table and version 3 has no terrain table. Accepting
-	// both keeps older maps loadable; they simply have no embedded assets or no
-	// voxel grid to restore. Version 4 also decodes, but its Font records carry
-	// no face bytes, so a font that only existed in memory does not survive it.
-	if version != KINE_VERSION &&
-	   version != KINE_MATERIAL_VARIANT_VERSION &&
-	   version != KINE_EXTENSION_VERSION &&
-	   version != KINE_FONT_VERSION &&
-	   version != KINE_TERRAIN_VERSION &&
-	   version != KINE_ASSET_VERSION &&
-	   version != KINE_LEGACY_VERSION {
-		Error_Set(
-			&reader.err,
-			.Unsupported_Version,
-			5,
-			"the file is version %d; this build reads %d through %d",
-			version,
-			KINE_LEGACY_VERSION,
-			KINE_VERSION,
-		)
-		return nil, reader_take(&reader)
-	}
+	if !read_kine_header(&reader) {return nil, reader_take(&reader)}
+	version := reader.version
 
 	// Publishing happens before the tree is walked so every property setter sees
 	// its bytes. A failure here means the file is unusable, not just degraded.
@@ -2885,18 +2908,31 @@ Deserialize :: proc(
 	for reference in reader.instance_references {
 		if reference.index > u32(len(reader.instances)) {
 			classes.Destroy_Hierarchy(object)
-			return nil, Error_Make(.Invalid_Argument, reader.pos, "instance reference is outside the saved tree")
+			return nil, Error_Make(
+				.Invalid_Argument,
+				reader.pos,
+				"instance reference is outside the saved tree",
+			)
 		}
 	}
 	for reference in reader.instance_references {
 		target := reference.index == 0 ? nil : reader.instances[reference.index - 1]
 		classes.Push_Object(L, target)
 		applied, apply_err := apply_property(
-			L, registry, reference.object, reference.descriptor, reference.key, vm.StackTop(L),
+			L,
+			registry,
+			reference.object,
+			reference.descriptor,
+			reference.key,
+			vm.StackTop(L),
 		)
 		if !applied {
-			fmt.eprintf("[kine] skipped instance reference %s on %s: %s\n",
-				reference.key, reference.object.name, apply_err)
+			fmt.eprintf(
+				"[kine] skipped instance reference %s on %s: %s\n",
+				reference.key,
+				reference.object.name,
+				apply_err,
+			)
 		}
 		delete(apply_err)
 	}

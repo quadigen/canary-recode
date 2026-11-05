@@ -84,7 +84,12 @@ HingeConstraint_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(hinge)
 }
 
-hinge_attachment_axes :: proc(attachment: ^Attachment) -> (axis, normal: [3]f32, valid: bool) {
+constraint_attachment_axes :: proc(
+	attachment: ^Attachment,
+) -> (
+	axis, normal: [3]f32,
+	valid: bool,
+) {
 	axis = {attachment.axis.x, attachment.axis.y, attachment.axis.z}
 	normal = {
 		attachment.secondary_axis.x,
@@ -126,7 +131,7 @@ hinge_frame :: proc(
 	Hinge_Frame,
 	bool,
 ) {
-	axis, normal, valid := hinge_attachment_axes(cast(^Attachment)object)
+	axis, normal, valid := constraint_attachment_axes(cast(^Attachment)object)
 	return Hinge_Frame{body, position, axis, normal}, valid
 }
 
@@ -153,7 +158,7 @@ hinge_gizmo_frame :: proc(
 	   !Is_A_Class(object.parent, &Part_Class) {return}
 
 	attachment := cast(^Attachment)object
-	local_axis, local_normal, ok := hinge_attachment_axes(attachment)
+	local_axis, local_normal, ok := constraint_attachment_axes(attachment)
 	if !ok {return}
 	cframe := (cast(^Part)object.parent).cframe
 	p := datatypes.CFrame_PointToWorldSpace(cframe, attachment.position)

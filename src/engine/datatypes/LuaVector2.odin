@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_vector2 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Vector2) {
 	push_value(L, binding, value)
@@ -25,11 +25,12 @@ require_vector2 :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding)
 }
 
 vector2_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
-	push_vector2(L, binding_from_upvalue(L), Vector2{
-		f32(vm.ArgOptionalNumber(L, 1)),
-		f32(vm.ArgOptionalNumber(L, 2)),
-	})
+	context = tracy.DefaultContext()
+	push_vector2(
+		L,
+		binding_from_upvalue(L),
+		Vector2{f32(vm.ArgOptionalNumber(L, 1)), f32(vm.ArgOptionalNumber(L, 2))},
+	)
 	return 1
 }
 
@@ -114,7 +115,7 @@ vector2_divide :: proc(L: ^vm.State, value, ctx: rawptr, self_index, other_index
 		if self_index == 1 {
 			push_vector2(L, binding, Vec2_Divide_Scalar(vector, scalar))
 		} else {
-			push_vector2(L, binding, Vector2{scalar/vector.X, scalar/vector.Y})
+			push_vector2(L, binding, Vector2{scalar / vector.X, scalar / vector.Y})
 		}
 		return true
 	}
@@ -146,18 +147,18 @@ vector2_destroy :: proc(value, ctx: rawptr) {
 }
 
 Vector2_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name     = "Vector2",
-		get      = vector2_get,
+	return vm.Userdata_Binding {
+		name = "Vector2",
+		get = vector2_get,
 		namecall = vector2_namecall,
-		string   = vector2_string,
-		destroy  = vector2_destroy,
-		add      = vector2_add,
+		string = vector2_string,
+		destroy = vector2_destroy,
+		add = vector2_add,
 		subtract = vector2_subtract,
 		multiply = vector2_multiply,
-		divide   = vector2_divide,
-		negate   = vector2_negate,
-		equal    = vector2_equal,
+		divide = vector2_divide,
+		negate = vector2_negate,
+		equal = vector2_equal,
 	}
 }
 
@@ -172,4 +173,3 @@ Vector2_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	push_vector2(L, binding, Vector2_YAxis)
 	vm.SetField(L, -2, "yAxis")
 }
-

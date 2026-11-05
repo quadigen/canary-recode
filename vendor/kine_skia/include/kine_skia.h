@@ -131,6 +131,16 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
 	float x, float y, float width, float height);
 KINE_SKIA_API const char *Kine_Skia_RuntimeShader_GetLastError(void);
 
+KINE_SKIA_API KineSkiaRuntimeShader *Kine_Skia_UIShader_Create(
+	const char *sksl, bool *samplesContent);
+KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShader(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor);
+KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShader(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor,
+	float sampleRadius);
+
 /* ---------------- Shapes ----------------
    strokeWidth == 0 -> filled. strokeWidth > 0 -> stroked with that width. */
 

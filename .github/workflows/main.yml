@@ -872,46 +872,50 @@ jobs:
           for spec in "${platforms[@]}"; do
             read -r folder os arch ext <<< "$spec"
             src="release/$folder"
+            stage="$(mktemp -d "release/.package-$folder.XXXXXX")"
+            trap 'rm -rf "$stage"' EXIT
 
             exe="kinemium"
             if [[ "$os" == "windows" ]]; then exe="kinemium.exe"; fi
-            mkdir -p "release/$folder/kinemium"
-            cp "$src/$exe" "release/$folder/kinemium/"
+            mkdir -p "$stage/kinemium"
+            cp "$src/$exe" "$stage/kinemium/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "release/$folder/kinemium/" ;;
+              windows) cp "$src/SDL3.dll" "$stage/kinemium/" ;;
               linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "release/$folder/kinemium/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium/" ;;
+                       "$stage/kinemium/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium/" ;;
             esac
-            (cd "release/$folder/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
-            rm -rf "release/$folder/kinemium"
+            if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium/$exe"; fi
+            (cd "$stage/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
 
             server="kinemium-server-${os}-${arch}${ext}"
-            mkdir -p "release/$folder/kinemium-server"
-            cp "$src/$server" "release/$folder/kinemium-server/"
+            mkdir -p "$stage/kinemium-server"
+            cp "$src/$server" "$stage/kinemium-server/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "release/$folder/kinemium-server/" ;;
+              windows) cp "$src/SDL3.dll" "$stage/kinemium-server/" ;;
               linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "release/$folder/kinemium-server/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium-server/" ;;
+                       "$stage/kinemium-server/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-server/" ;;
             esac
-            (cd "release/$folder/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
-            rm -rf "release/$folder/kinemium-server"
+            if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-server/$server"; fi
+            (cd "$stage/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
 
             client="kinemium-client-${os}-${arch}${ext}"
-            mkdir -p "release/$folder/kinemium-client"
-            cp "$src/$client" "release/$folder/kinemium-client/"
+            mkdir -p "$stage/kinemium-client"
+            cp "$src/$client" "$stage/kinemium-client/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "release/$folder/kinemium-client/" ;;
+              windows) cp "$src/SDL3.dll" "$stage/kinemium-client/" ;;
               linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "release/$folder/kinemium-client/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "release/$folder/kinemium-client/" ;;
+                       "$stage/kinemium-client/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-client/" ;;
             esac
-            (cd "release/$folder/kinemium-client" && zip -r "../../archives/kinemium-client-${os}-${arch}${ext}.zip" .)
-            rm -rf "release/$folder/kinemium-client"
+            if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-client/$client"; fi
+            (cd "$stage/kinemium-client" && zip -r "../../archives/kinemium-client-${os}-${arch}${ext}.zip" .)
+            rm -rf "$stage"
+            trap - EXIT
           done
 
           # Web (WASM)

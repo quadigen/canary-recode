@@ -1,8 +1,8 @@
 package datatypes
 
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 
 push_font :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Font) {
@@ -26,7 +26,7 @@ require_font :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) ->
 }
 
 font_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -56,7 +56,7 @@ font_new :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 font_from_enum :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -74,7 +74,7 @@ font_from_enum :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 font_from_name :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
@@ -94,7 +94,7 @@ font_from_name :: proc "c" (L: ^vm.State) -> i32 {
 
 
 font_from_memory :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 

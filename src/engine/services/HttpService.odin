@@ -625,7 +625,6 @@ http_service_namecall :: proc(
 				),
 				true
 		}
-		delete(cloned)
 		return 0, true
 	case "GetImageBytes":
 		if !service.http_enabled {

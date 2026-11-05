@@ -1,3 +1,10 @@
+static KineVertex kine_material_midpoint(const KineVertex &a, const KineVertex &b) {
+    math::float3 normal{a.nx + b.nx, a.ny + b.ny, a.nz + b.nz};
+    normal = length(normal) > 0.00001f ? normalize(normal) : math::float3{a.nx, a.ny, a.nz};
+    return {(a.px + b.px) * 0.5f, (a.py + b.py) * 0.5f, (a.pz + b.pz) * 0.5f,
+            normal.x, normal.y, normal.z, (a.u + b.u) * 0.5f, (a.v + b.v) * 0.5f};
+}
+
 // Cached render-only refinement. Never changes collision or the authored mesh.
 static KineMesh *kine_refine_material_mesh(KineFilamentContext *ctx, KineMesh *source, int levels) {
     if (!ctx || !source || levels <= 0 || !source->bones.empty() || source->indices.empty()) return source;
@@ -22,12 +29,9 @@ static KineMesh *kine_refine_material_mesh(KineFilamentContext *ctx, KineMesh *s
         auto midpoint = [&](uint32_t a, uint32_t b) {
             const uint64_t edge = (uint64_t(std::min(a,b)) << 32) | std::max(a,b);
             if (auto it = edges.find(edge); it != edges.end()) return it->second;
-            const auto va = refined->vertices[a], vb = refined->vertices[b];
-            math::float3 normal{va.nx + vb.nx, va.ny + vb.ny, va.nz + vb.nz};
-            normal = length(normal) > 0.00001f ? normalize(normal) : math::float3{va.nx,va.ny,va.nz};
             const uint32_t index = uint32_t(refined->vertices.size());
-            refined->vertices.push_back({(va.px+vb.px)*0.5f,(va.py+vb.py)*0.5f,(va.pz+vb.pz)*0.5f,
-                normal.x,normal.y,normal.z,(va.u+vb.u)*0.5f,(va.v+vb.v)*0.5f});
+            refined->vertices.push_back(kine_material_midpoint(refined->vertices[a], refined->vertices[b]));
+            refined->refinementEdges.push_back({a, b});
             if (colors) refined->vertexColors.push_back((refined->vertexColors[a]+refined->vertexColors[b])*0.5f);
             if (terrain) {
                 KineTerrainWeights weights{};

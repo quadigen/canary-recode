@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:strings"
+import classes "../src/engine/classes"
 import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
 import services "../src/engine/services"
@@ -564,6 +565,17 @@ assert(
 	view.MouseScale = {1, 1}
 	view.ViewportRect = {0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT}
 
+
+	// Destruction flushes before the next raycast can synchronize the scene.
+	run_script(&script_vm, "target:Destroy()", "mouse_remove_target")
+	classes.Flush_Pending_Destroy(&environment.classes)
+	physics_descriptor := services.Find_Service(&environment.services, "Physics")
+	assert(physics_descriptor != nil && physics_descriptor.object != nil)
+	physics := cast(^services.Physics)physics_descriptor.object
+	assert(len(physics.bodies) == 0, "freed instances must be removed from the native body array")
+	assert(len(physics.body_ids) == 0 && len(physics.body_to_part) == 0)
+	services.Mouse_Begin_Frame(mouse, script_vm.L, STEP_DT)
+	assert(mouse.target == nil)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

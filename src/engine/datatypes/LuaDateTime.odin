@@ -1,7 +1,7 @@
 package datatypes
 
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 import "core:time"
 
@@ -22,19 +22,19 @@ Arg_DateTime :: proc(L: ^vm.State, index: int, registry: ^Registry) -> DateTime 
 }
 
 date_time_now :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_date_time(L, binding_from_upvalue(L), DateTime_Now())
 	return 1
 }
 
 date_time_from_unix_timestamp :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_date_time(L, binding_from_upvalue(L), DateTime_FromUnixTimestamp(vm.ArgNumber(L, 1)))
 	return 1
 }
 
 date_time_from_unix_timestamp_millis :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	push_date_time(
 		L,
 		binding_from_upvalue(L),
@@ -44,7 +44,7 @@ date_time_from_unix_timestamp_millis :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 date_time_from_iso_date :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
 	value := Arg_DateTime(L, 1, registry_from_binding(binding))

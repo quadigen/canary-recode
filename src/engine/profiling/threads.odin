@@ -2,8 +2,8 @@
 package profiling
 
 import platform "../platform"
+import tracy "../util/odin-tracy"
 import luauh "../vm/luauh"
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -102,7 +102,7 @@ thread_record_touch :: #force_inline proc(record: ^Thread_Record) {
 
 
 tracking_userthread :: proc "c" (parent, thread: ^luauh.lua_State) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if thread != nil {
 		if parent == nil {
 
@@ -137,7 +137,7 @@ tracking_userthread :: proc "c" (parent, thread: ^luauh.lua_State) {
 }
 
 tracking_preresume :: proc "c" (L: ^luauh.lua_State) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record, ok := record_by_ptr[L]
 	if !ok {
 		return
@@ -151,7 +151,7 @@ tracking_preresume :: proc "c" (L: ^luauh.lua_State) {
 }
 
 tracking_postresume :: proc "c" (L: ^luauh.lua_State) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record, ok := record_by_ptr[L]
 	if !ok {
 		return
@@ -214,7 +214,7 @@ tracking_onallocate :: proc "c" (
 	}
 
 
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	if previous, ok := block_owner[block]; ok {
 		if previous.record != nil {
@@ -255,7 +255,7 @@ tracking_onfree :: proc "c" (L: ^luauh.lua_State, block: rawptr) {
 	}
 
 
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if previous.record != nil {
 		previous.record.live_bytes -= i64(previous.size)
 		previous.record.free_bytes += previous.size
@@ -270,7 +270,7 @@ install_thread_hooks :: proc(L: ^luauh.lua_State) {
 	if L == nil {
 		return
 	}
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if !thread_state_ready {
 		reset_thread_state()
 		thread_state_ready = true
@@ -297,7 +297,7 @@ shutdown_thread_state :: proc() {
 }
 
 reset_thread_state :: proc() {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	clear(&frame_dirty_records)
 	retired_pending = 0
 	for record in thread_records {
@@ -330,7 +330,7 @@ reset_thread_state :: proc() {
 
 
 thread_frame_flush :: proc() {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	thread_frame_serial += 1
 	frame := Thread_Frame_Data{}
 	for record in frame_dirty_records {
@@ -381,7 +381,7 @@ sweep_dead_thread_records :: proc() {
 	if retired_pending == 0 || len(thread_history) == 0 {
 		return
 	}
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	oldest := thread_frame_serial - u64(len(thread_history)) + 1
 	write := 0
 	for read in 0 ..< len(thread_records) {
@@ -414,7 +414,7 @@ sweep_dead_thread_records :: proc() {
 
 
 fold_into_script_totals :: proc(record: ^Thread_Record) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	name := script_identity(record)
 	total := find_script_total(record.root, name)
 	if total == nil {
@@ -459,7 +459,7 @@ find_thread_record :: proc(id: u64) -> ^Thread_Record {
 
 
 script_stats :: proc(root: ^luauh.lua_State) -> [dynamic]Script_Stat {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	result: [dynamic]Script_Stat
 	index := make(map[string]int)
 	defer delete(index)
@@ -557,7 +557,7 @@ set_thread_name :: proc(L: ^luauh.lua_State, name: string, script: string = "") 
 	if identity == "" {
 		identity = name
 	}
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if record.name != "" {
 		delete(record.name)
 	}
@@ -593,7 +593,7 @@ set_tracking_enabled :: proc(on: bool) {
 	}
 	thread_tracking_on = on
 	if !on {
-		context = runtime.default_context()
+		context = tracy.DefaultContext()
 		clear(&block_owner)
 		for record in thread_records {
 			record.live_bytes = 0

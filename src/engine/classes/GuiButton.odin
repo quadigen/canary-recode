@@ -9,6 +9,8 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
+BUTTON_IS_HOVERING := false
+
 GuiButton_Class := Class_Info {
 	name   = "GuiButton",
 	parent = &GuiObject_Class,
@@ -276,6 +278,8 @@ GuiButton_update :: proc(object: ^Object, ctx: ^Class_Step_Context) -> bool {
 	}
 
 	button := cast(^GuiButton)object
+
+	BUTTON_IS_HOVERING = button.hovered
 
 	if !GuiObject_effectively_visible(&button.gui_object) {
 		if button.gui_state != .Idle {

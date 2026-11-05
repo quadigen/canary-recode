@@ -122,7 +122,14 @@ JPH_AllowedDOF :: enum u32 {
 	RotationZ    = 5,
 }
 JPH_AllowedDOFs :: bit_set[JPH_AllowedDOF;u32]
-JPH_ALLOWED_DOFS_ALL :: JPH_AllowedDOFs{.TranslationX, .TranslationY, .TranslationZ, .RotationX, .RotationY, .RotationZ}
+JPH_ALLOWED_DOFS_ALL :: JPH_AllowedDOFs {
+	.TranslationX,
+	.TranslationY,
+	.TranslationZ,
+	.RotationX,
+	.RotationY,
+	.RotationZ,
+}
 
 JPH_SpringSettings :: struct {
 	mode:                 JPH_SpringMode,
@@ -226,6 +233,15 @@ JPH_RayCastResult :: struct {
 	fraction: f32,
 }
 
+JPH_MeshSoftBodySettings :: struct {
+	mass, spring_compliance, bend_compliance, linear_damping: f32,
+	pressure, friction, gravity_factor, vertex_radius:        f32,
+	iterations:                                               u32,
+}
+JPH_SoftBodyCollider :: struct {
+	body_id:        JPH_BodyID,
+	closed_surface: u32,
+}
 
 JPH_PhysicsSettings :: struct {
 	num_velocity_steps:             u32,
@@ -295,7 +311,7 @@ JPH_ContactListener_Procs :: struct {
 @(default_calling_convention = "c")
 foreign lib {
 
-	
+
 	JPH_Init :: proc() -> i32 ---
 	JPH_Shutdown :: proc() ---
 	JPH_Get_Num_Cores :: proc() -> u32 ---
@@ -304,7 +320,7 @@ foreign lib {
 	JPH_JobSystem_Get_Num_Threads :: proc(jobSystem: JPH_JobSystemRef) -> u32 ---
 	JPH_JobSystem_Get_Observed_Thread_Count :: proc(jobSystem: JPH_JobSystemRef) -> u32 ---
 
-	
+
 	JPH_BroadPhaseLayerInterfaceTable_Create :: proc(numObjectLayers: u32, numBroadPhaseLayers: u32) -> JPH_BroadPhaseLayerInterfaceRef ---
 	JPH_BroadPhaseLayerInterfaceTable_Destroy :: proc(bpInterface: JPH_BroadPhaseLayerInterfaceRef) ---
 	JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer :: proc(bpInterface: JPH_BroadPhaseLayerInterfaceRef, objectLayer: JPH_ObjectLayer, broadPhaseLayer: JPH_BroadPhaseLayer) ---
@@ -317,7 +333,7 @@ foreign lib {
 	JPH_ObjectVsBroadPhaseLayerFilterTable_Destroy :: proc(filter: JPH_ObjectVsBroadPhaseLayerFilterRef) ---
 	JPH_ObjectVsBroadPhaseLayerFilterTable_ShouldCollide :: proc(filter: JPH_ObjectVsBroadPhaseLayerFilterRef, objectLayer: JPH_ObjectLayer, broadPhaseLayer: JPH_BroadPhaseLayer) -> i32 ---
 
-	
+
 	JPH_BoxShape_Create :: proc(halfExtent: ^JPH_Vec3, convexRadius: f32) -> JPH_ShapeRef ---
 	JPH_SphereShape_Create :: proc(radius: f32) -> JPH_ShapeRef ---
 	JPH_CylinderShape_Create :: proc(halfHeight: f32, radius: f32, convexRadius: f32) -> JPH_ShapeRef ---
@@ -329,8 +345,7 @@ foreign lib {
 	JPH_Shape_Destroy :: proc(shape: JPH_ShapeRef) ---
 	JPH_Shape_CollectTriangles :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, outVertices: [^]JPH_Vec3, maxTriangles: i32, outTruncated: ^i32) -> i32 ---
 
-	
-	
+
 	JPH_ScaledShape_Create :: proc(shape: JPH_ShapeRef, scale: ^JPH_Vec3) -> JPH_ShapeRef ---
 	JPH_RotatedTranslatedShape_Create :: proc(shape: JPH_ShapeRef, position: ^JPH_Vec3, rotation: ^JPH_Quat) -> JPH_ShapeRef ---
 	JPH_OffsetCenterOfMassShape_Create :: proc(shape: JPH_ShapeRef, offset: ^JPH_Vec3) -> JPH_ShapeRef ---
@@ -340,10 +355,10 @@ foreign lib {
 	JPH_Shape_GetCenterOfMass :: proc(shape: JPH_ShapeRef, outCenterOfMass: ^JPH_Vec3) ---
 	JPH_Shape_GetVolume :: proc(shape: JPH_ShapeRef) -> f32 ---
 	JPH_Shape_GetInnerRadius :: proc(shape: JPH_ShapeRef) -> f32 ---
-	
+
 	JPH_Shape_GetType :: proc(shape: JPH_ShapeRef) -> i32 ---
 
-	
+
 	JPH_BodyCreationSettings_Create3 :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, motionType: JPH_MotionType, objectLayer: JPH_ObjectLayer) -> JPH_BodyCreationSettingsRef ---
 	JPH_BodyCreationSettings_Destroy :: proc(settings: JPH_BodyCreationSettingsRef) ---
 	JPH_BodyCreationSettings_SetAllowSleeping :: proc(settings: JPH_BodyCreationSettingsRef, allow: i32) ---
@@ -358,15 +373,15 @@ foreign lib {
 	JPH_BodyCreationSettings_SetMotionQuality :: proc(settings: JPH_BodyCreationSettingsRef, quality: JPH_MotionQuality) ---
 	JPH_BodyCreationSettings_SetMaxLinearVelocity :: proc(settings: JPH_BodyCreationSettingsRef, maxVelocity: f32) ---
 	JPH_BodyCreationSettings_SetMaxAngularVelocity :: proc(settings: JPH_BodyCreationSettingsRef, maxVelocity: f32) ---
-	
+
 	JPH_BodyCreationSettings_SetMass :: proc(settings: JPH_BodyCreationSettingsRef, mass: f32) ---
-	
+
 	JPH_BodyCreationSettings_SetAllowedDOFs :: proc(settings: JPH_BodyCreationSettingsRef, dofs: u32) ---
 	JPH_BodyCreationSettings_SetCollideKinematicVsNonDynamic :: proc(settings: JPH_BodyCreationSettingsRef, allow: i32) ---
 	JPH_BodyCreationSettings_SetUseManifoldReduction :: proc(settings: JPH_BodyCreationSettingsRef, use: i32) ---
 	JPH_BodyCreationSettings_SetEnhancedInternalEdgeRemoval :: proc(settings: JPH_BodyCreationSettingsRef, enable: i32) ---
 
-	
+
 	JPH_PhysicsSystem_Create :: proc(settings: ^JPH_PhysicsSystemSettings) -> JPH_PhysicsSystemRef ---
 	JPH_PhysicsSystem_Destroy :: proc(system: JPH_PhysicsSystemRef) ---
 	JPH_PhysicsSystem_SetPhysicsSettings :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_PhysicsSettings) ---
@@ -377,6 +392,14 @@ foreign lib {
 	JPH_PhysicsSystem_Update :: proc(system: JPH_PhysicsSystemRef, deltaTime: f32, collisionSteps: i32, jobSystem: JPH_JobSystemRef) ---
 	JPH_PhysicsSystem_UpdateSingleThreaded :: proc(system: JPH_PhysicsSystemRef, deltaTime: f32, collisionSteps: i32) ---
 	JPH_PhysicsSystem_OptimizeBroadPhase :: proc(system: JPH_PhysicsSystemRef) ---
+	JPH_MeshSoftBody_Create :: proc(system: JPH_PhysicsSystemRef, vertices: [^]JPH_Vec3, vertex_count: u32, indices: [^]u32, index_count: u32, position: ^JPH_RVec3, rotation: ^JPH_Quat, layer: JPH_ObjectLayer, settings: ^JPH_MeshSoftBodySettings) -> JPH_BodyID ---
+	JPH_MeshSoftBody_Configure :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, settings: ^JPH_MeshSoftBodySettings) -> i32 ---
+	JPH_MeshSoftBody_Freeze :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID) ---
+	JPH_MeshSoftBody_Destroy :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID) ---
+	JPH_MeshSoftBody_Read :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, vertices: [^]JPH_Vec3, vertex_count: u32, position: ^JPH_RVec3, rotation: ^JPH_Quat) -> i32 ---
+	JPH_MeshSoftBody_ApplyImpulse :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, impulse: ^JPH_Vec3) ---
+	JPH_MeshSoftBody_RetainShape :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, strength, delta_time: f32) ---
+	JPH_MeshSoftBody_Collide :: proc(system: JPH_PhysicsSystemRef, bodies: [^]JPH_SoftBodyCollider, count: u32, rigid_bodies: [^]JPH_BodyID, rigid_count: u32, delta_time: f32) ---
 	JPH_PhysicsSystem_SetContactListener :: proc(system: JPH_PhysicsSystemRef, listener: JPH_ContactListenerRef) ---
 	JPH_PhysicsSystem_GetMaxBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
 	JPH_PhysicsSystem_GetNumBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
@@ -384,41 +407,32 @@ foreign lib {
 	JPH_PhysicsSystem_SetBodyIsSensor :: proc(system: JPH_PhysicsSystemRef, bodyID: JPH_BodyID, isSensor: i32) ---
 	JPH_PhysicsSystem_IsBodySensor :: proc(system: JPH_PhysicsSystemRef, bodyID: JPH_BodyID) -> i32 ---
 
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
+
 	JPH_PhysicsSystem_AddConstraint :: proc(system: JPH_PhysicsSystemRef, constraint: JPH_ConstraintRef) ---
 	JPH_PhysicsSystem_RemoveConstraint :: proc(system: JPH_PhysicsSystemRef, constraint: JPH_ConstraintRef) ---
 	JPH_PhysicsSystem_AddConstraints :: proc(system: JPH_PhysicsSystemRef, constraints: [^]JPH_ConstraintRef, count: u32) ---
 	JPH_PhysicsSystem_RemoveConstraints :: proc(system: JPH_PhysicsSystemRef, constraints: [^]JPH_ConstraintRef, count: u32) ---
 	JPH_Constraint_AddRef :: proc(constraint: JPH_ConstraintRef) ---
 	JPH_Constraint_Destroy :: proc(constraint: JPH_ConstraintRef) ---
-	
-	
+
+
 	JPH_Constraint_ApplyBaseSettings :: proc(constraint: JPH_ConstraintRef, settings: ^JPH_ConstraintSettings) ---
 	JPH_Constraint_SetEnabled :: proc(constraint: JPH_ConstraintRef, enabled: i32) ---
 	JPH_Constraint_GetEnabled :: proc(constraint: JPH_ConstraintRef) -> i32 ---
 	JPH_Constraint_SetUserData :: proc(constraint: JPH_ConstraintRef, userData: u64) ---
 	JPH_Constraint_GetUserData :: proc(constraint: JPH_ConstraintRef) -> u64 ---
-	
+
 	JPH_Constraint_GetType :: proc(constraint: JPH_ConstraintRef) -> i32 ---
 	JPH_Constraint_GetSubType :: proc(constraint: JPH_ConstraintRef) -> i32 ---
-	
+
 	JPH_Constraint_GetBodyIDs :: proc(constraint: JPH_ConstraintRef, outBody1: ^JPH_BodyID, outBody2: ^JPH_BodyID) -> i32 ---
 
-	
+
 	JPH_FixedConstraintSettings_Init :: proc(settings: ^JPH_FixedConstraintSettings) ---
 	JPH_FixedConstraint_Create :: proc(settings: ^JPH_FixedConstraintSettings, body1: JPH_BodyRef, body2: JPH_BodyRef) -> JPH_ConstraintRef ---
 	JPH_FixedConstraint_CreateFromIDs :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_FixedConstraintSettings, bodyID1: JPH_BodyID, bodyID2: JPH_BodyID) -> JPH_ConstraintRef ---
 
-	
+
 	JPH_DistanceConstraintSettings_Init :: proc(settings: ^JPH_DistanceConstraintSettings) ---
 	JPH_DistanceConstraint_Create :: proc(settings: ^JPH_DistanceConstraintSettings, body1: JPH_BodyRef, body2: JPH_BodyRef) -> JPH_ConstraintRef ---
 	JPH_DistanceConstraint_CreateFromIDs :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_DistanceConstraintSettings, bodyID1: JPH_BodyID, bodyID2: JPH_BodyID) -> JPH_ConstraintRef ---
@@ -427,7 +441,7 @@ foreign lib {
 	JPH_DistanceConstraint_GetMinDistance :: proc(constraint: JPH_ConstraintRef) -> f32 ---
 	JPH_DistanceConstraint_GetMaxDistance :: proc(constraint: JPH_ConstraintRef) -> f32 ---
 
-	
+
 	JPH_HingeConstraintSettings_Init :: proc(settings: ^JPH_HingeConstraintSettings) ---
 	JPH_HingeConstraint_Create :: proc(settings: ^JPH_HingeConstraintSettings, body1: JPH_BodyRef, body2: JPH_BodyRef) -> JPH_ConstraintRef ---
 	JPH_HingeConstraint_CreateFromIDs :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_HingeConstraintSettings, bodyID1: JPH_BodyID, bodyID2: JPH_BodyID) -> JPH_ConstraintRef ---
@@ -445,7 +459,7 @@ foreign lib {
 	JPH_HingeConstraint_SetMaxFrictionTorque :: proc(constraint: JPH_ConstraintRef, torque: f32) ---
 	JPH_HingeConstraint_GetMaxFrictionTorque :: proc(constraint: JPH_ConstraintRef) -> f32 ---
 
-	
+
 	JPH_SliderConstraintSettings_Init :: proc(settings: ^JPH_SliderConstraintSettings) ---
 	JPH_SliderConstraint_Create :: proc(settings: ^JPH_SliderConstraintSettings, body1: JPH_BodyRef, body2: JPH_BodyRef) -> JPH_ConstraintRef ---
 	JPH_SliderConstraint_CreateFromIDs :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_SliderConstraintSettings, bodyID1: JPH_BodyID, bodyID2: JPH_BodyID) -> JPH_ConstraintRef ---
@@ -463,7 +477,7 @@ foreign lib {
 	JPH_SliderConstraint_SetMaxFrictionForce :: proc(constraint: JPH_ConstraintRef, force: f32) ---
 	JPH_SliderConstraint_GetMaxFrictionForce :: proc(constraint: JPH_ConstraintRef) -> f32 ---
 
-	
+
 	JPH_SixDOFConstraintSettings_Init :: proc(settings: ^JPH_SixDOFConstraintSettings) ---
 	JPH_SixDOFConstraintSettings_MakeFixedAxis :: proc(settings: ^JPH_SixDOFConstraintSettings, axis: JPH_SixDOFAxis) ---
 	JPH_SixDOFConstraintSettings_MakeFreeAxis :: proc(settings: ^JPH_SixDOFConstraintSettings, axis: JPH_SixDOFAxis) ---
@@ -481,22 +495,23 @@ foreign lib {
 	JPH_SixDOFConstraint_SetTargetPositionCS :: proc(constraint: JPH_ConstraintRef, position: ^JPH_Vec3) ---
 	JPH_SixDOFConstraint_SetTargetOrientationCS :: proc(constraint: JPH_ConstraintRef, orientation: ^JPH_Quat) ---
 
-	
+
 	JPH_PhysicsSystem_CastRay :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, direction: ^JPH_Vec3, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outResult: ^JPH_RayCastResult) -> i32 ---
-	
+
 	JPH_PhysicsSystem_CastRayAll :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, direction: ^JPH_Vec3, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outResults: [^]JPH_RayCastResult, maxResults: u32) -> u32 ---
 	JPH_PhysicsSystem_CastShape :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, displacement: ^JPH_Vec3, shape: JPH_ShapeRef, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, maxDistance: f32, outResult: ^JPH_RayCastResult) -> i32 ---
-	
-	JPH_PhysicsSystem_OverlapShape :: proc(system: JPH_PhysicsSystemRef, shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outBodyIDs: [^]JPH_BodyID, maxResults: u32) -> u32 ---
 
-	
+	JPH_PhysicsSystem_OverlapShape :: proc(system: JPH_PhysicsSystemRef, shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outBodyIDs: [^]JPH_BodyID, maxResults: u32) -> u32 ---
+	JPH_PhysicsSystem_OverlapShapeEx :: proc(system: JPH_PhysicsSystemRef, shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, maxSeparationDistance: f32, planarOnly: i32, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outBodyIDs: [^]JPH_BodyID, maxResults: u32) -> u32 ---
+
+
 	JPH_BodyInterface_CreateBody :: proc(bodyInterface: JPH_BodyInterfaceRef, settings: JPH_BodyCreationSettingsRef) -> JPH_BodyRef ---
 	JPH_BodyInterface_AddBody :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_RemoveBody :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) ---
 	JPH_BodyInterface_DestroyBody :: proc(bodyInterface: JPH_BodyInterfaceRef, body: JPH_BodyRef) ---
 	JPH_BodyInterface_RemoveAndDestroyBody :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) ---
 	JPH_BodyInterface_SetShape :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, shape: JPH_ShapeRef, updateMassProperties: i32, activationMode: JPH_ActivationMode) ---
-	
+
 	JPH_BodyInterface_GetShape :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) -> JPH_ShapeRef ---
 	JPH_BodyInterface_SetMotionType :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, motionType: JPH_MotionType, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_GetMotionType :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) -> JPH_MotionType ---
@@ -521,7 +536,7 @@ foreign lib {
 	JPH_BodyInterface_SetAngularVelocity :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, velocity: ^JPH_Vec3) ---
 	JPH_BodyInterface_SetLinearAndAngularVelocity :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, linear: ^JPH_Vec3, angular: ^JPH_Vec3) ---
 	JPH_BodyInterface_SetPositionRotationAndVelocity :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, position: ^JPH_RVec3, rotation: ^JPH_Quat, linearVelocity: ^JPH_Vec3, angularVelocity: ^JPH_Vec3) ---
-	
+
 	JPH_BodyInterface_MoveKinematic :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, targetPosition: ^JPH_RVec3, targetRotation: ^JPH_Quat, deltaTime: f32) ---
 	JPH_BodyInterface_GetPosition :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, outPosition: ^JPH_RVec3) ---
 	JPH_BodyInterface_GetCenterOfMassPosition :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, outPosition: ^JPH_RVec3) ---
@@ -536,7 +551,7 @@ foreign lib {
 	JPH_BodyInterface_AddForce2 :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, force: ^JPH_Vec3, position: ^JPH_RVec3) ---
 	JPH_BodyInterface_AddTorque :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, torque: ^JPH_Vec3) ---
 
-	
+
 	JPH_Body_GetID :: proc(body: JPH_BodyRef) -> JPH_BodyID ---
 	JPH_Body_GetMotionProperties :: proc(body: JPH_BodyRef) -> JPH_MotionPropertiesRef ---
 	JPH_Body_SetFriction :: proc(body: JPH_BodyRef, friction: f32) ---
@@ -548,7 +563,7 @@ foreign lib {
 	JPH_MotionProperties_SetMaxAngularVelocity :: proc(motionProperties: JPH_MotionPropertiesRef, maxVelocity: f32) ---
 	JPH_MotionProperties_GetInverseMass :: proc(motionProperties: JPH_MotionPropertiesRef) -> f32 ---
 
-	
+
 	JPH_ContactListener_Create :: proc() -> JPH_ContactListenerRef ---
 	JPH_ContactListener_Destroy :: proc(listener: JPH_ContactListenerRef) ---
 	JPH_ContactListener_PollEvents :: proc(listener: JPH_ContactListenerRef, procs: ^JPH_ContactListener_Procs, maxEvents: u32) -> u32 ---

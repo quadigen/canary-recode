@@ -5,15 +5,15 @@ import tracy "./engine/util/odin-tracy"
 import sandbox "./sandboxed"
 import "core:fmt"
 import "core:os"
+import audio "engine/audio"
+import extensions "engine/extensions"
 import sdl3 "engine/platform"
 import profiling "engine/profiling"
 import renderer "engine/renderer"
 import engine_runtime "engine/runtime"
-import extensions "engine/extensions"
 import services "engine/services"
 import target "engine/target"
 import vm "engine/vm"
-import audio "engine/audio"
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -117,9 +117,9 @@ run_desktop :: proc(options: Startup_Options) {
 	}
 	script_vm := vm.New()
 	if !audio.init() {
-        return
-    }
-    defer audio.shutdown()
+		return
+	}
+	defer audio.shutdown()
 
 	environment: engine_runtime.Environment
 	render_context := Runtime_Render_Context {
@@ -142,7 +142,11 @@ run_desktop :: proc(options: Startup_Options) {
 		},
 		OnClose = proc(user_data: rawptr) {
 			render_context := cast(^Runtime_Render_Context)user_data
-			services.Project_Autosave(&render_context.environment.services, render_context.vm_state.L, closing = true)
+			services.Project_Autosave(
+				&render_context.environment.services,
+				render_context.vm_state.L,
+				closing = true,
+			)
 		},
 		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,
@@ -214,14 +218,12 @@ run_desktop :: proc(options: Startup_Options) {
 				)
 			}
 			if players != nil && players.local_player != nil {
-				character_service := cast(^services.CharacterService)(
-					services.Ensure_Service(&environment.services, "CharacterService")
-				)
+				character_service := cast(^services.CharacterService)(services.Ensure_Service(
+						&environment.services,
+						"CharacterService",
+					))
 				if character_service != nil {
-					_ = services.CharacterService_Load(
-						character_service,
-						players.local_player,
-					)
+					_ = services.CharacterService_Load(character_service, players.local_player)
 				}
 			}
 		}
@@ -294,6 +296,12 @@ run_desktop :: proc(options: Startup_Options) {
 	}
 	if options.singleplayer {
 		title = "Kinemium Singleplayer"
+		if payload, ok := self_payload(); ok && payload.mode == .Singleplayer {
+			fmt.println(services.SINGLEPLAYER_EXPORT_MARKER)
+			if payload.name != "" {
+				title = payload.name
+			}
+		}
 	} else if target.is_server() {
 		title = "Kinemium Server"
 	} else if target.is_client() {
@@ -309,6 +317,9 @@ run_desktop :: proc(options: Startup_Options) {
 }
 
 main :: proc() {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.InitDefaultAllocator(callstack_size = 5)
+	}
 	services.Update_Handle_Command_Line()
 	when ODIN_OS == .Windows {
 		exe_path, err := os.get_executable_path(context.allocator)

@@ -199,6 +199,9 @@ if(KINE_WITH_FILAMENT)
 
     function(kine_add_material NAME)
         set(_src "${CMAKE_CURRENT_SOURCE_DIR}/src/${NAME}.mat")
+        if(EXISTS "${MAT_GEN_DIR}/${NAME}.mat")
+            set(_src "${MAT_GEN_DIR}/${NAME}.mat")
+        endif()
         set(_bin "${CMAKE_CURRENT_BINARY_DIR}/${NAME}.filamat")
         set(_cpp "${MAT_GEN_DIR}/${NAME}_package.c")
         set(_h   "${MAT_GEN_DIR}/${NAME}_package.h")
@@ -221,6 +224,16 @@ if(KINE_WITH_FILAMENT)
         set(${NAME}_GEN_H   ${_h}   PARENT_SCOPE)
     endfunction()
 
+    foreach(NAME kine_default kine_neon)
+        set(_source "${CMAKE_CURRENT_SOURCE_DIR}/src/${NAME}.mat")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
+        file(READ "${_source}" _opaque)
+        string(REPLACE "shadingModel :" "blending : fade,\n    depthWrite : false,\n    shadingModel :" _fade "${_opaque}")
+        string(REPLACE "    blending : opaque,\n" "" _fade "${_fade}")
+        string(REPLACE "    blending : add,\n" "" _fade "${_fade}")
+        file(CONFIGURE OUTPUT "${MAT_GEN_DIR}/${NAME}_fade.mat" CONTENT "${_fade}" @ONLY)
+        kine_add_material(${NAME}_fade)
+    endforeach()
     kine_add_material(kine_default)
     kine_add_material(kine_glass)
     kine_add_material(kine_neon)
@@ -346,6 +359,8 @@ if(KINE_WITH_FILAMENT)
     add_library(kine_filament_shim
         src/kine_filament_shim.cpp
         ${kine_default_GEN_CPP}
+        ${kine_default_fade_GEN_CPP}
+        ${kine_neon_fade_GEN_CPP}
         ${kine_glass_GEN_CPP}
         ${kine_neon_GEN_CPP}
         ${kine_water_GEN_CPP}

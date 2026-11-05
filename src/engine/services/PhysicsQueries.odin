@@ -18,10 +18,7 @@ physics_filter_matches :: proc(
 	return false
 }
 
-physics_is_raycast_candidate :: proc(
-	part: ^classes.Part,
-	params: ^datatypes.RaycastParams,
-) -> bool {
+physics_is_query_candidate :: proc(part: ^classes.Part, params: ^$Params) -> bool {
 	if params == nil {return part.can_query}
 	if !params.BruteForceAllSlow {
 		if params.RespectCanCollide {
@@ -80,7 +77,7 @@ Physics_Raycast :: proc(
 	}
 	for body in service.bodies {
 		part := cast(^classes.Part)body.object
-		if physics_is_raycast_candidate(part, params) {append(candidates, body.body_id)}
+		if physics_is_query_candidate(part, params) {append(candidates, body.body_id)}
 	}
 	if len(candidates^) == 0 {return}
 
@@ -128,4 +125,44 @@ Physics_Raycast :: proc(
 		ObjectRef   = part,
 	}
 	return result, true
+}
+
+physics_overlap_part :: proc(
+	service: ^Physics,
+	part: ^classes.Part,
+	candidates, results: []kineffi.JPH_BodyID,
+	tolerance: f32,
+	planar_only := false,
+) -> []kineffi.JPH_BodyID {
+	if len(candidates) == 0 {return nil}
+	index := part.part_index
+	if index < 0 || index >= len(service.bodies) || service.bodies[index].object != &part.object {
+		return nil
+	}
+	body_id := service.bodies[index].body_id
+	// The body owns this shape. It remains valid for the duration of the query.
+	shape := kineffi.JPH_BodyInterface_GetShape(service.system.body_interface, body_id)
+	if shape == nil {return nil}
+	position: kineffi.JPH_RVec3
+	rotation: kineffi.JPH_Quat
+	kineffi.JPH_BodyInterface_GetPositionAndRotation(
+		service.system.body_interface,
+		body_id,
+		&position,
+		&rotation,
+	)
+	count := kineffi.JPH_PhysicsSystem_OverlapShapeEx(
+		service.system.handle,
+		shape,
+		&position,
+		&rotation,
+		tolerance,
+		i32(planar_only),
+		raw_data(candidates),
+		u32(len(candidates)),
+		.Include,
+		raw_data(results),
+		u32(len(results)),
+	)
+	return results[:count]
 }

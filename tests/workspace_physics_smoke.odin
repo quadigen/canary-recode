@@ -74,7 +74,83 @@ params.BruteForceAllSlow = true
 assert(workspace:Raycast(vector.create(0, 0, -10), vector.create(0, 0, 20), params).Instance == part)
 
 part:Destroy()
+
+local queryModel = Instance.new("Model", workspace)
+local function makePart(position, size)
+	local p = Instance.new("Part", queryModel)
+	p.Anchored = true
+	p.Position = position
+	p.Size = size
+	return p
+end
+
+local sphere = makePart(vector.create(30, 0, 0), vector.create(4, 4, 4))
+sphere.Shape = Enum.PartType.Ball
+local probe = makePart(vector.create(31.8, 1.8, 0), vector.create(0.2, 0.2, 0.2))
+local overlap = OverlapParams.new()
+overlap.IncludeInstances = {queryModel}
+overlap.ExcludeInstances = {probe}
+assert(workspace:GetPartBoundsInBox(probe.CFrame, probe.Size, overlap)[1] == sphere)
+assert(#workspace:GetPartsInPart(probe, overlap) == 0)
+probe.Position = vector.create(31.9, 0, 0)
+assert(workspace:GetPartsInPart(probe)[1] == sphere)
+probe.Position = vector.create(32.12, 0, 0)
+assert(#workspace:GetPartsInPart(probe, overlap) == 0)
+overlap.Tolerance = 0.05
+assert(workspace:GetPartsInPart(probe, overlap)[1] == sphere)
+overlap.Tolerance = 0
+probe.Position = vector.create(31.9, 0, 0)
+sphere.Parent = nil
+assert(#workspace:GetPartsInPart(probe) == 0)
+sphere.Parent = queryModel
+
+sphere.CanQuery = false
+local sphereCenter = sphere.CFrame.Position
+assert(#workspace:GetPartBoundsInRadius(sphereCenter, 2, overlap) == 0)
+overlap.RespectCanCollide = true
+assert(workspace:GetPartBoundsInRadius(sphereCenter, 2, overlap)[1] == sphere)
+overlap.BruteForceAllSlow = true
+overlap.ExcludeInstances = nil
+overlap.MaxParts = 1
+assert(overlap.MaxParts == 1)
+assert(#workspace:GetPartBoundsInRadius(sphereCenter, 5, overlap) == 1)
+
+local beam = makePart(vector.create(50, 0, 0), vector.create(8, 1, 1))
+beam.CFrame = beam.CFrame * CFrame.Angles(0, 0, math.pi / 4)
+assert(#workspace:GetPartBoundsInRadius(vector.create(52.5, -2.5, 0), 0.1) == 0)
+assert(workspace:GetPartBoundsInRadius(vector.create(52.5, 2.5, 0), 0.1)[1] == beam)
+local marker = makePart(vector.create(62.5, 2.5, 0), vector.create(0.1, 0.1, 0.1))
+local rotatedBox = CFrame.new(60, 0, 0) * CFrame.Angles(0, 0, math.pi / 4)
+assert(workspace:GetPartBoundsInBox(rotatedBox, beam.Size)[1] == marker)
+assert(#workspace:GetPartBoundsInBox(CFrame.new(60, 0, 0), beam.Size) == 0)
+
+local size = vector.create(2, 2, 2)
+local selected = makePart(vector.create(100, 0, 0), size)
+local selectedNeighbor = makePart(vector.create(102, 0, 0), size)
+local outsider = makePart(vector.create(98, 0, 0), size)
+local roundNeighbor = makePart(vector.create(100, 2, 0), size)
+roundNeighbor.Shape = Enum.PartType.Ball
+local internalWeld = Instance.new("WeldConstraint", selectedNeighbor)
+internalWeld.Part0 = selected
+internalWeld.Part1 = selectedNeighbor
+local selection = {selected, selectedNeighbor, selected}
+
+workspace:JoinToOutsiders(selection, Enum.JointCreationMode.None)
+assert(#selected:GetChildren() == 0)
+assert(not pcall(function() workspace:JoinToOutsiders({selected, queryModel}) end))
+assert(#selected:GetChildren() == 0)
+workspace:JoinToOutsiders(selection, Enum.JointCreationMode.All)
+workspace:JoinToOutsiders(selection, Enum.JointCreationMode.Surface)
+local welds = selected:GetChildren()
+assert(#welds == 1 and welds[1]:IsA("WeldConstraint"))
+assert(welds[1].Part0 == selected and welds[1].Part1 == outsider)
+workspace:UnjoinFromOutsiders(selection)
+assert(#selected:GetChildren() == 0)
+assert(internalWeld.Parent == selectedNeighbor)
+queryModel:Destroy()
+
 falling = Instance.new("Part", workspace)
+falling.Anchored = false
 falling.Size = vector.create(2, 2, 2)
 falling.CFrame = CFrame.new(0, 10, 0)
 `, "workspace_physics")

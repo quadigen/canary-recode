@@ -2,14 +2,15 @@
 
 package services
 
-import "core:os"
 import target "../target"
+import "core:os"
 
-PAYLOAD_MAGIC      :: "KINEPAY1"
-PAYLOAD_VERSION    :: u8(1)
-PAYLOAD_TAIL_LEN    :: 8
-PAYLOAD_LEN_FIELD   :: 8
-PAYLOAD_TAIL_SIZE   :: PAYLOAD_LEN_FIELD + PAYLOAD_TAIL_LEN
+PAYLOAD_MAGIC :: "KINEPAY1"
+PAYLOAD_VERSION :: u8(1)
+SINGLEPLAYER_EXPORT_MARKER :: "Kinemium: starting embedded single-player game"
+PAYLOAD_TAIL_LEN :: 8
+PAYLOAD_LEN_FIELD :: 8
+PAYLOAD_TAIL_SIZE :: PAYLOAD_LEN_FIELD + PAYLOAD_TAIL_LEN
 
 Payload :: struct {
 	mode:      target.Mode,
@@ -27,7 +28,8 @@ Payload_Region :: proc(p: Payload) -> (region: []u8, ok: bool) {
 	if (len(address_bytes) + len(name_bytes)) > int(max(u16)) {
 		return nil, false
 	}
-	region = make([]u8,
+	region = make(
+		[]u8,
 		8 + 1 + 1 + 1 + 2 + 2 + len(address_bytes) + 2 + len(name_bytes) + 4 + len(p.map_bytes),
 	)
 	offset := 0
@@ -61,7 +63,7 @@ Payload_Parse_Region :: proc(region: []u8) -> (payload: Payload, ok: bool) {
 	mode_value := region[offset]
 	offset += 1
 	offset += 1
-	if mode_value > 2 {
+	if mode_value > u8(target.Mode.Server) && mode_value != u8(target.Mode.Singleplayer) {
 		return {}, false
 	}
 	payload.port = payload_read_le_u16(region, offset); offset += 2
@@ -107,10 +109,12 @@ payload_read_le_u16 :: proc(buf: []u8, offset: int) -> u16 {
 }
 
 payload_read_le_u32 :: proc(buf: []u8, offset: int) -> u32 {
-	return u32(buf[offset]) |
+	return(
+		u32(buf[offset]) |
 		u32(buf[offset + 1]) << 8 |
 		u32(buf[offset + 2]) << 16 |
-		u32(buf[offset + 3]) << 24
+		u32(buf[offset + 3]) << 24 \
+	)
 }
 
 payload_read_le_u64 :: proc(buf: []u8, offset: int) -> u64 {
@@ -182,7 +186,11 @@ Payload_Read_Self :: proc() -> (payload: Payload, ok: bool) {
 		return {}, false
 	}
 	payload_self_region = make([]u8, int(total))
-	read, read_error = os.read_at(handle, payload_self_region, size - PAYLOAD_TAIL_SIZE - i64(total))
+	read, read_error = os.read_at(
+		handle,
+		payload_self_region,
+		size - PAYLOAD_TAIL_SIZE - i64(total),
+	)
 	if read_error != os.ERROR_NONE || int(read) != int(total) {
 		payload_self_region = nil
 		return {}, false

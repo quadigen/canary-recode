@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_number_range :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: NumberRange) {
 	push_value(L, binding, value)
@@ -16,7 +16,11 @@ Arg_NumberRange :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Number
 	return require_number_range(L, index, &registry.number_range)^
 }
 
-require_number_range :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^NumberRange {
+require_number_range :: proc(
+	L: ^vm.State,
+	index: int,
+	binding: ^vm.Userdata_Binding,
+) -> ^NumberRange {
 	if !vm.IsUserdataType(L, index, binding) {
 		_ = vm.RaiseError(L, "expected NumberRange")
 		return nil
@@ -25,7 +29,7 @@ require_number_range :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Bin
 }
 
 number_range_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	minimum := f32(vm.ArgNumber(L, 1))
 	maximum := minimum
 	if !vm.IsNoneOrNil(L, 2) {
@@ -42,9 +46,12 @@ number_range_new :: proc "c" (L: ^vm.State) -> i32 {
 number_range_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	range := cast(^NumberRange)value
 	switch key {
-	case "Min": vm.PushNumber(L, f64(range.Min))
-	case "Max": vm.PushNumber(L, f64(range.Max))
-	case: return false
+	case "Min":
+		vm.PushNumber(L, f64(range.Min))
+	case "Max":
+		vm.PushNumber(L, f64(range.Max))
+	case:
+		return false
 	}
 	return true
 }
@@ -63,16 +70,15 @@ number_range_destroy :: proc(value, ctx: rawptr) {
 }
 
 NumberRange_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "NumberRange",
-		get     = number_range_get,
-		string  = number_range_string,
+	return vm.Userdata_Binding {
+		name = "NumberRange",
+		get = number_range_get,
+		string = number_range_string,
 		destroy = number_range_destroy,
-		equal   = number_range_equal,
+		equal = number_range_equal,
 	}
 }
 
 NumberRange_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", number_range_new)
 }
-

@@ -1,12 +1,12 @@
 package extensions
 
+import tracy "../util/odin-tracy"
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
-import "base:runtime"
 import "core:mem"
 import "core:strings"
 
@@ -431,7 +431,7 @@ ext_datatype_decode :: proc(
 
 @(private)
 kne_ext_datatype_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	dt := cast(^Extension_Datatype)vm.UpvaluePointer(L)
 	if dt == nil || dt.tag == 0 {
 		return 0
@@ -444,7 +444,7 @@ kne_ext_datatype_new :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_register_datatype :: proc "c" (ext: KNE_Extension, desc: ^KNE_Datatype_Desc) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil ||
 	   desc == nil ||
@@ -527,7 +527,7 @@ extension_datatype_release :: proc(record: ^Extension_Record, dt: ^Extension_Dat
 }
 
 kne_unregister_datatype :: proc "c" (ext: KNE_Extension, type_name: KNE_String) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil {
 		return 0
@@ -546,7 +546,7 @@ kne_unregister_datatype :: proc "c" (ext: KNE_Extension, type_name: KNE_String) 
 }
 
 kne_datatype_registered :: proc "c" (ext: KNE_Extension, type_name: KNE_String) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil {
 		return 0
@@ -562,7 +562,7 @@ kne_datatype_registered :: proc "c" (ext: KNE_Extension, type_name: KNE_String) 
 }
 
 kne_datatypes_push :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: ^KNE_Value) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	state := state_of_vm(L)
 	if record == nil || state == nil || value == nil {
@@ -573,7 +573,7 @@ kne_datatypes_push :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: ^KNE_Value
 }
 
 kne_datatypes_get :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32, out: ^KNE_Value) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	state := state_of_vm(L)
 	if record == nil || state == nil || out == nil {
@@ -629,7 +629,7 @@ kne_datatypes_construct :: proc "c" (
 	arg_count: i32,
 	out: ^KNE_Value,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := kne_value_nil()
 	result := kne_operation(
 		record_of(ext),
@@ -650,7 +650,7 @@ kne_datatypes_get_field :: proc "c" (
 	field: KNE_String,
 	out: ^KNE_Value,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	result := kne_operation(
 		record_of(ext),
 		"local v,k=...; return v[k]",
@@ -670,7 +670,7 @@ kne_datatypes_set_field :: proc "c" (
 	field: KNE_String,
 	input: ^KNE_Value,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	result := kne_operation(
 		record_of(ext),
 		"local v,k,x=...; v[k]=x; return true",
@@ -693,7 +693,7 @@ kne_datatypes_call :: proc "c" (
 	out: ^KNE_Value,
 	out_capacity: i32,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return kne_operation(
 		record_of(ext),
 		"local v,k=...; local a=table.pack(...); return v[k](v,table.unpack(a,3,a.n))",
@@ -708,7 +708,7 @@ kne_datatypes_call :: proc "c" (
 
 
 kne_vm_is_function :: proc "c" (L: KNE_VM, index: i32) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := state_of_vm(L)
 	if state == nil {
 		return 0
@@ -717,7 +717,7 @@ kne_vm_is_function :: proc "c" (L: KNE_VM, index: i32) -> i32 {
 }
 
 kne_vm_get_value :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32, out: ^KNE_Value) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	state := state_of_vm(L)
 	if record == nil || state == nil || out == nil {
@@ -732,7 +732,7 @@ kne_vm_register_global_datatype :: proc "c" (
 	L: KNE_VM,
 	library: KNE_String,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	state := state_of_vm(L)
 	if state == nil && record != nil && record.ctx != nil && record.ctx.vm_state != nil {
@@ -765,7 +765,7 @@ kne_instance_invoke :: proc "c" (
 	out: ^KNE_Value,
 	out_capacity: i32,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if instance == nil {return -1}
 	value := kne_value_nil()
 	value.kind = .Instance
@@ -840,7 +840,7 @@ call_retained_stack :: proc(callback: ^Retained_Callback, L: ^vm.State, first: i
 }
 
 kne_callbacks_retain :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Callback {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	state := state_of_vm(L)
 	if record == nil || state == nil || !vm.IsFunction(state, int(index)) {
@@ -861,7 +861,7 @@ kne_callbacks_retain :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> 
 }
 
 kne_callbacks_release :: proc "c" (ext: KNE_Extension, callback: KNE_Callback) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	target := cast(^Retained_Callback)callback
 	if record == nil || target == nil {
@@ -879,7 +879,7 @@ kne_callbacks_release :: proc "c" (ext: KNE_Extension, callback: KNE_Callback) {
 }
 
 kne_callbacks_valid :: proc "c" (ext: KNE_Extension, callback: KNE_Callback) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	target := cast(^Retained_Callback)callback
 	if record == nil || target == nil {
@@ -901,7 +901,7 @@ kne_callbacks_call :: proc "c" (
 	out: ^KNE_Value,
 	out_capacity: i32,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	if kne_callbacks_valid(ext, callback) == 0 {return -1}
 	return call_retained_values(
 		cast(^Retained_Callback)callback,
@@ -915,7 +915,7 @@ kne_callbacks_call :: proc "c" (
 
 @(private)
 signal_bridge_trampoline :: proc "c" (ctx: rawptr, L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	bridge := cast(^Signal_Bridge)ctx
 	if bridge == nil || bridge.record == nil || bridge.record.state == .Unloaded {
 		return 0
@@ -967,7 +967,7 @@ kne_signal_get :: proc "c" (
 	instance: KNE_Instance,
 	property: KNE_String,
 ) -> KNE_Signal {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := kne_value_nil()
 	if kne_instances_get_property(ext, instance, property, &value) == 0 {
 		return nil
@@ -983,7 +983,7 @@ kne_signal_connect_native :: proc "c" (
 	signal: KNE_Signal,
 	callback: KNE_Signal_Native_Fn,
 ) -> KNE_Connection {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return rawptr(
 		signal_connect(record_of(ext), cast(^signals.Signal)signal, callback, nil, false),
 	)
@@ -994,7 +994,7 @@ kne_signal_connect_callback :: proc "c" (
 	signal: KNE_Signal,
 	callback: KNE_Callback,
 ) -> KNE_Connection {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return rawptr(
 		signal_connect(
 			record_of(ext),
@@ -1011,7 +1011,7 @@ kne_signal_once_native :: proc "c" (
 	signal: KNE_Signal,
 	callback: KNE_Signal_Native_Fn,
 ) -> KNE_Connection {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return rawptr(signal_connect(record_of(ext), cast(^signals.Signal)signal, callback, nil, true))
 }
 
@@ -1020,7 +1020,7 @@ kne_signal_once_callback :: proc "c" (
 	signal: KNE_Signal,
 	callback: KNE_Callback,
 ) -> KNE_Connection {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	return rawptr(
 		signal_connect(
 			record_of(ext),
@@ -1033,13 +1033,13 @@ kne_signal_once_callback :: proc "c" (
 }
 
 kne_signal_disconnect :: proc "c" (ext: KNE_Extension, connection: KNE_Connection) {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = record_of(ext)
 	signals.Disconnect_Connection(cast(^signals.KinemiumConnection)connection)
 }
 
 kne_signal_connected :: proc "c" (ext: KNE_Extension, connection: KNE_Connection) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	_ = record_of(ext)
 	return signals.Connection_Connected(cast(^signals.KinemiumConnection)connection) ? 1 : 0
 }
@@ -1050,7 +1050,7 @@ kne_signal_fire :: proc "c" (
 	args: ^KNE_Value,
 	arg_count: i32,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	if record == nil || record.ctx == nil || record.ctx.vm_state == nil || signal == nil {
 		return 0
@@ -1088,13 +1088,13 @@ kne_export_exists :: proc "c" (
 	instance: KNE_Instance,
 	method: KNE_String,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	descriptor := export_descriptor(ext, instance)
 	return classes.Find_Export(descriptor, KNE_String_To(method)) != nil ? 1 : 0
 }
 
 kne_export_count :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> uintptr {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	descriptor := export_descriptor(ext, instance)
 	if descriptor == nil {
 		return 0
@@ -1107,7 +1107,7 @@ kne_export_name_at :: proc "c" (
 	instance: KNE_Instance,
 	index: uintptr,
 ) -> KNE_String {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	descriptor := export_descriptor(ext, instance)
 	if descriptor == nil || index >= uintptr(len(descriptor.exports)) {
 		return KNE_String{}
@@ -1122,7 +1122,7 @@ Export_Call :: struct {
 
 @(private)
 kne_export_trampoline :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	call := cast(^Export_Call)vm.UpvaluePointer(L)
 	call.ctx.L = L
 	return call.handler(&call.ctx)
@@ -1137,7 +1137,7 @@ kne_export_call :: proc "c" (
 	out: ^KNE_Value,
 	out_capacity: i32,
 ) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	record := record_of(ext)
 	descriptor := export_descriptor(ext, instance)
 	name := KNE_String_To(method)

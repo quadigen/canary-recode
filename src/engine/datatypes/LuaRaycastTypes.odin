@@ -1,8 +1,8 @@
 package datatypes
 
 import engine_enums "../enum"
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:strings"
 
 release_instance_references :: proc(
@@ -75,7 +75,7 @@ Arg_RaycastParams :: proc(L: ^vm.State, index: int, registry: ^Registry) -> ^Ray
 }
 
 raycast_params_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	value := RaycastParams_New()
 	value.CollisionGroup = strings.clone(value.CollisionGroup)
 	push_value(L, binding_from_upvalue(L), value)

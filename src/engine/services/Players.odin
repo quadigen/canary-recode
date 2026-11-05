@@ -18,24 +18,22 @@ Players_Class := classes.Class_Info {
 }
 
 Player :: struct {
-	using object:       classes.Object,
-	user_id:            u32,
-	character:          ^classes.CharacterModel,
-	character_added:    ^signals.Signal,
-	character_removing: ^signals.Signal,
-	player_scripts:     ^classes.Object,
-	player_gui:         ^classes.Object,
-	prepared_character: ^classes.CharacterModel,
-	move_direction:     datatypes.Vector3,
-	network_ping:       f64,
-	jump_queued:        bool,
-	input_sequence:     u32,
-	ground_y:           f32,
-	vertical_speed:     f32,
-	walk_speed:         f32,
-	jump_power:         f32,
-	ragdoll:            bool,
-	respawn_timer:      f32,
+	using object:         classes.Object,
+	user_id:              u32,
+	character:            ^classes.CharacterModel,
+	character_added:      ^signals.Signal,
+	character_removing:   ^signals.Signal,
+	character_generation: u64,
+	move_direction:       datatypes.Vector3,
+	network_ping:         f64,
+	jump_queued:          bool,
+	input_sequence:       u32,
+	ground_y:             f32,
+	vertical_speed:       f32,
+	walk_speed:           f32,
+	jump_power:           f32,
+	ragdoll:              bool,
+	respawn_timer:        f32,
 }
 
 Players :: struct {
@@ -73,6 +71,10 @@ Player_Set_Character :: proc(player: ^Player, L: ^vm.State, model: ^classes.Char
 		vm.Pop(L)
 	}
 	player.character = model
+	if model != nil && !model.destroyed {
+		player.character_generation += 1
+		PlayerGui_Prepare(player, L)
+	}
 	if model != nil && !model.destroyed && player.character_added != nil && L != nil {
 		classes.Push_Object(L, &model.object)
 		signals.Fire(L, player.character_added, 1)
@@ -101,17 +103,16 @@ player_get :: proc(
 		if player.character == nil ||
 		   player.character.destroyed {vm.PushNil(L)} else {classes.Push_Object(L, &player.character.object)}
 	case "PlayerScripts":
-		if player.player_scripts == nil || player.player_scripts.destroyed {
-			scripts, _ := ClientScripts_Ensure_Player_Containers(player.signal_registry, L, player)
-			if scripts == nil {vm.PushNil(L); break}
-		}
-		classes.Push_Object(L, player.player_scripts)
+		scripts := client_scripts_ensure_child(
+			player.signal_registry,
+			L,
+			object,
+			"PlayerScripts",
+			"PlayerScripts",
+		)
+		classes.Push_Object(L, scripts)
 	case "PlayerGui":
-		if player.player_gui == nil || player.player_gui.destroyed {
-			_, gui := ClientScripts_Ensure_Player_Containers(player.signal_registry, L, player)
-			if gui == nil {vm.PushNil(L); break}
-		}
-		classes.Push_Object(L, player.player_gui)
+		classes.Push_Object(L, PlayerGui_Prepare(player, L))
 	case "CharacterAdded":
 		if player.character_added ==
 		   nil {player.character_added = signals.Create(player.signal_registry.signal_registry)}
@@ -346,6 +347,7 @@ Players_Add :: proc(service: ^Players, L: ^vm.State, id: u32, name: string) -> ^
 	player := cast(^Player)object
 	player.user_id = id
 	classes.Set_Name(object, name)
+	PlayerGui_Prepare(player, L)
 	classes.Set_Parent(object, &service.object)
 	vm.Pop(L)
 	if service.player_added != nil {
@@ -354,19 +356,6 @@ Players_Add :: proc(service: ^Players, L: ^vm.State, id: u32, name: string) -> ^
 		vm.Pop(L)
 	}
 	return player
-}
-
-Players_Forget_Client_Container :: proc(object: ^classes.Object) {
-	if object == nil || object.parent == nil || !classes.Is_A(object.parent, "Player") {
-		return
-	}
-	player := cast(^Player)object.parent
-	if player.player_scripts == object {
-		player.player_scripts = nil
-	}
-	if player.player_gui == object {
-		player.player_gui = nil
-	}
 }
 
 Players_Remove :: proc(service: ^Players, L: ^vm.State, player: ^Player) {

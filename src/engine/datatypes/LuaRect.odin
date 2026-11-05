@@ -1,8 +1,8 @@
 package datatypes
 
-import "base:runtime"
-import "core:fmt"
+import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
 
 push_rect :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Rect) {
 	push_value(L, binding, value)
@@ -13,14 +13,14 @@ Push_Rect :: proc(L: ^vm.State, registry: ^Registry, value: Rect) {
 }
 
 rect_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
 	result: Rect
 	switch vm.StackTop(L) {
 	case 0:
 	case 2:
-		if registry == nil { return vm.RaiseError(L, "Rect registry is unavailable") }
+		if registry == nil {return vm.RaiseError(L, "Rect registry is unavailable")}
 		result.Min = require_vector2(L, 1, &registry.vector2)^
 		result.Max = require_vector2(L, 2, &registry.vector2)^
 	case 4:
@@ -38,14 +38,17 @@ rect_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	registry := registry_from_binding(cast(^vm.Userdata_Binding)ctx)
 	switch key {
 	case "Min":
-		if registry == nil { return false }
+		if registry == nil {return false}
 		push_vector2(L, &registry.vector2, rect.Min)
 	case "Max":
-		if registry == nil { return false }
+		if registry == nil {return false}
 		push_vector2(L, &registry.vector2, rect.Max)
-	case "Width": vm.PushNumber(L, f64(Rect_Width(rect^)))
-	case "Height": vm.PushNumber(L, f64(Rect_Height(rect^)))
-	case: return false
+	case "Width":
+		vm.PushNumber(L, f64(Rect_Width(rect^)))
+	case "Height":
+		vm.PushNumber(L, f64(Rect_Height(rect^)))
+	case:
+		return false
 	}
 	return true
 }
@@ -64,16 +67,15 @@ rect_destroy :: proc(value, ctx: rawptr) {
 }
 
 Rect_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding{
-		name    = "Rect",
-		get     = rect_get,
-		string  = rect_string,
+	return vm.Userdata_Binding {
+		name = "Rect",
+		get = rect_get,
+		string = rect_string,
 		destroy = rect_destroy,
-		equal   = rect_equal,
+		equal = rect_equal,
 	}
 }
 
 Rect_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", rect_new)
 }
-

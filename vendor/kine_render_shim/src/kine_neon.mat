@@ -13,6 +13,6 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         material.baseColor.rgb = materialParams.instanceColors[getInstanceIndex()].rgb * materialParams.intensity;
-        material.baseColor.a = 1.0;
+        material.baseColor.a = materialParams.instanceColors[getInstanceIndex()].a;
     }
 }

@@ -51,6 +51,10 @@ Replication_Entity :: struct {
 	owned_window_origin:      datatypes.Vector3,
 	owned_window_time:        f32,
 	owned_updates_window:     u32,
+	last_upload_owner:        u32,
+	last_upload_tick:         u32,
+	owned_rest_upload_tick:   u32,
+	owned_rest_upload_hash:   u64,
 	owned_rate_window_time:   f32,
 	force_correction:         bool,
 	pivot_revision:           u32,
@@ -73,8 +77,15 @@ Replication_Entity :: struct {
 	frame_seeded:             bool,
 	last_velocity:            datatypes.Vector3,
 	dr_age:                   f32,
+	render_correction:        datatypes.Vector3,
 	server_frame:             datatypes.CFrame,
 	server_frame_valid:       bool,
+}
+
+Replication_Part_Send_State :: struct {
+	token:     u32,
+	tick:      u32,
+	rest_sent: bool,
 }
 
 Replication_Peer :: struct {
@@ -82,7 +93,7 @@ Replication_Peer :: struct {
 	player:                    ^Player,
 	known:                     map[u32]u32,
 	initialized:               map[u32]bool,
-	state_hashes:              map[u32]u32,
+	part_states:               map[u32]Replication_Part_Send_State,
 	property_hashes:           map[u32]u32,
 	extra_hashes:              map[u32]u32,
 	acked_state:               map[u32]u32,
@@ -96,11 +107,14 @@ Replication_Peer :: struct {
 	terrain_deltas_sent:       u64,
 	scene_ready_sent:          bool,
 	finished_replicating_sent: bool,
+	gravity_sent:              bool,
+	last_gravity:              f32,
 	focus_x:                   f32,
 	focus_y:                   f32,
 	focus_z:                   f32,
 	focus_ok:                  bool,
 	client_capabilities:       u32,
+	snapshot_clock_rate:       f32,
 	client_nonce:              u32,
 	server_nonce:              u32,
 	bandwidth_cursor:          u32,
@@ -122,7 +136,7 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	if connection == nil {return}
 	delete(connection.known)
 	delete(connection.initialized)
-	delete(connection.state_hashes)
+	delete(connection.part_states)
 	delete(connection.property_hashes)
 	delete(connection.extra_hashes)
 	delete(connection.acked_state)
@@ -130,7 +144,7 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	delete(connection.acked_extra)
 	connection.known = nil
 	connection.initialized = nil
-	connection.state_hashes = nil
+	connection.part_states = nil
 	connection.property_hashes = nil
 	connection.extra_hashes = nil
 	connection.acked_state = nil
@@ -173,6 +187,7 @@ ReplicatorService :: struct {
 	elapsed:                       f32,
 	clock:                         f32,
 	snapshot_rate:                 f32,
+	snapshot_clock_rate:           f32,
 	interpolation_delay_ticks:     f32,
 	teleport_threshold:            f32,
 	relevancy_distance:            f32,
@@ -370,6 +385,8 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	service.remote = nil
 	service.mode = .Stopped
 	service.connected = false
+	service.scene_ready = false
+	service.replication_finished = false
 
 
 	service.handshake_complete = false
@@ -380,6 +397,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 
 	service.time_offset = 0
 	service.time_offset_measured = false
+	service.snapshot_clock_rate = 0
 	service.time_sync_sequence = 0
 	service.server_nonce = 0
 	if service.data_model != nil &&
@@ -501,8 +519,10 @@ replication_set :: proc(
 	service := cast(^ReplicatorService)object
 	if key == "SnapshotRate" {
 		rate := vm.ArgNumber(L, value_index)
-		if rate < 1 ||
-		   rate > 120 {_ = vm.RaiseError(L, "SnapshotRate must be between 1 and 120"); return true}
+		if !(rate >= 1 && rate <= 120) {
+			_ = vm.RaiseError(L, "SnapshotRate must be between 1 and 120")
+			return true
+		}
 		service.snapshot_rate = f32(rate)
 		service.base_snapshot_rate = f32(rate)
 		return true

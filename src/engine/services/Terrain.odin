@@ -33,8 +33,6 @@ TERRAIN_GPU_MAX_VERTICES :: 3 * TERRAIN_GPU_LATT * TERRAIN_GPU_LATT * TERRAIN_GP
 TERRAIN_GPU_MAX_INDICES :: TERRAIN_CHUNK_VOXELS * 5 * 3
 
 
-// GPU meshing submits to the graphics queue and waits for readback per chunk.
-// Use background CPU meshing by default to keep those waits off the frame thread.
 TERRAIN_GPU_MESHING :: #config(KINE_TERRAIN_GPU_MESHING, false)
 
 TERRAIN_DEFAULT_VOXEL_SIZE :: f32(4)
@@ -1320,6 +1318,9 @@ Terrain_Mesh_Batch :: struct {
 }
 
 terrain_mesh_batch_run :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
 	tracy.ZoneNC("Terrain Mesh Worker", 0xC678DD)
 	batch := cast(^Terrain_Mesh_Batch)t.data
 	for &job in batch.jobs[:batch.count] {
@@ -1472,7 +1473,12 @@ terrain_ensure_texture_set :: proc(service: ^Terrain, renderer: ^classes.Rendere
 	smooth := materials.Get(enums.Material.SmoothPlastic)
 	wood := materials.Get(enums.Material.Wood)
 	service.texture_context = renderer.Filament
-	if !(grass.loaded && sand.loaded && slate.loaded && concrete.loaded && smooth.loaded && wood.loaded) {
+	if !(grass.loaded &&
+		   sand.loaded &&
+		   slate.loaded &&
+		   concrete.loaded &&
+		   smooth.loaded &&
+		   wood.loaded) {
 		return
 	}
 
@@ -1730,7 +1736,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 				continue
 			}
 			jobs[job_count] = Terrain_Mesh_Job {
-				key     = key,
+				key = key,
 			}
 			job_count += 1
 		}
@@ -2717,7 +2723,10 @@ terrain_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rend
 	delete(service.gpu_weights)
 	delete(service.gpu_indices)
 
-	if service.texture_set != nil && service.texture_context != nil {
+	if service.texture_set != nil &&
+	   service.texture_context != nil &&
+	   renderer != nil &&
+	   renderer.Filament == service.texture_context {
 		_ = kineffi.Kine_Filament_DestroyTex(service.texture_context, service.texture_set)
 	}
 	service.texture_set = nil
@@ -2862,6 +2871,13 @@ terrain_service_namecall :: proc(
 	service := cast(^Terrain)object
 
 	switch method {
+	case "CreateHeightfield":
+		if err := terrain_create_heightfield(L, service, datatype_registry, enum_registry);
+		   err != "" {
+			return vm.RaiseOwnedError(L, &err), true
+		}
+		return 1, true
+
 	case "Clear":
 		terrain_clear(service, service.renderer)
 		return 0, true

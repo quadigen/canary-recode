@@ -6,7 +6,6 @@ import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import luauh "../vm/luauh"
-import base_runtime "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -471,7 +470,7 @@ Load_Internal_Modules_From_Blob :: proc(registry: ^Registry, archive_path: strin
 
 
 pool_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return vm.RaiseError(L, "renderer registry is unavailable")
@@ -513,7 +512,7 @@ pool_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 pool_remove :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return 0
@@ -536,7 +535,7 @@ pool_remove :: proc "c" (L: ^vm.State) -> i32 {
 
 
 hook_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return vm.RaiseError(L, "renderer registry is unavailable")
@@ -562,7 +561,7 @@ hook_new :: proc "c" (L: ^vm.State) -> i32 {
 set_3d_last_logged: [4]i32
 
 renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 
 	registry := registry_from_upvalue(L)
 	if registry == nil || registry.renderer == nil {
@@ -644,7 +643,7 @@ renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 renderer_has_clicked :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		vm.PushBoolean(L, false)
@@ -672,7 +671,7 @@ renderer_has_clicked :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 renderer_mouse_in_rect :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	offset := function_offset(L)
 	rect_index := 1 + offset
@@ -692,7 +691,7 @@ renderer_mouse_in_rect :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 renderer_get_mouse_position :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	x, y: f32
 	_ = sdl3.GetMouseState(&x, &y)
@@ -708,19 +707,19 @@ renderer_get_mouse_position :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 renderer_watch_key :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 
 
 	return 0
 }
 renderer_stop_watching_key :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	return 0
 }
 
 
 renderer_set_dimension :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	offset := function_offset(L)
 	dimension := vm.ArgString(L, 1 + offset)
@@ -739,7 +738,7 @@ renderer_set_dimension :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 renderer_get_active_camera :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil || registry.active_camera_ref <= 0 {
 		vm.PushNil(L)
@@ -749,7 +748,7 @@ renderer_get_active_camera :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 renderer_use_camera :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return 0
@@ -766,7 +765,7 @@ renderer_use_camera :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 renderer_set_profiler :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return 0
@@ -788,14 +787,14 @@ renderer_set_profiler :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 renderer_get_view_matrix :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 
 
 	vm.PushNil(L)
 	return 1
 }
 renderer_resize :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	offset := function_offset(L)
 	if registry != nil {
@@ -810,11 +809,11 @@ renderer_resize :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 renderer_sync_window_size :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	return 0
 }
 renderer_stop :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry != nil {
 		registry.running = false
@@ -824,21 +823,21 @@ renderer_stop :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 renderer_noop :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	return 0
 }
 renderer_return_nil :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushNil(L)
 	return 1
 }
 renderer_return_false :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushBoolean(L, false)
 	return 1
 }
 renderer_return_zero :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.PushNumber(L, 0)
 	return 1
 }
@@ -869,7 +868,7 @@ push_font_table :: proc(L: ^vm.State, font: ^Font_Entry) {
 	vm.SetField(L, -2, "size")
 }
 font_new :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		vm.PushNil(L)
@@ -891,7 +890,7 @@ font_new :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 font_get :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		vm.PushNil(L)
@@ -919,7 +918,7 @@ font_get :: proc "c" (L: ^vm.State) -> i32 {
 	return 1
 }
 font_remove :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return 0
@@ -935,7 +934,7 @@ font_remove :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 font_set_resolver :: proc "c" (L: ^vm.State) -> i32 {
-	context = base_runtime.default_context()
+	context = tracy.DefaultContext()
 	registry := registry_from_upvalue(L)
 	if registry == nil {
 		return 0

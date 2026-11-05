@@ -20,6 +20,7 @@ Part :: struct {
 	anchored:          bool,
 	can_collide:       bool,
 	can_query:         bool,
+	can_touch:         bool,
 	collision_group:   string,
 	shape:             enums.PartType,
 	material:          enums.Material,
@@ -40,6 +41,7 @@ Part_Init :: proc() -> Part {
 		anchored = true,
 		can_collide = true,
 		can_query = true,
+		can_touch = true,
 		collision_group = strings.clone("Default"),
 		transparency = 0,
 		shape = enums.PartType.Block,
@@ -92,6 +94,8 @@ part_get :: proc(
 		vm.PushBoolean(L, part.can_collide)
 	case "CanQuery":
 		vm.PushBoolean(L, part.can_query)
+	case "CanTouch":
+		vm.PushBoolean(L, part.can_touch)
 	case "CollisionGroup":
 		vm.PushString(L, part.collision_group)
 	case "MaterialVariant":
@@ -158,6 +162,8 @@ part_set :: proc(
 		part.can_collide = vm.ArgBoolean(L, value_index)
 	case "CanQuery":
 		part.can_query = vm.ArgBoolean(L, value_index)
+	case "CanTouch":
+		part.can_touch = vm.ArgBoolean(L, value_index)
 	case "CollisionGroup":
 		delete(part.collision_group)
 		part.collision_group = strings.clone(vm.ArgString(L, value_index))
@@ -249,6 +255,7 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.anchored = src.anchored
 	dst.can_collide = src.can_collide
 	dst.can_query = src.can_query
+	dst.can_touch = src.can_touch
 	dst.shape = src.shape
 	dst.material = src.material
 	delete(dst.material_variant)
@@ -280,6 +287,7 @@ Register_Part :: proc(registry: ^Registry) {
 			"Shape",
 			"CollisionGroup",
 			"CanQuery",
+			"CanTouch",
 			"Transparency",
 			"Size",
 			"Material",

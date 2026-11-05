@@ -1,7 +1,7 @@
 package extensions
 
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:strings"
 
 @(private)
@@ -37,7 +37,7 @@ push_extension_table :: proc(L: ^vm.State, record: ^Extension_Record) {
 }
 
 kne_lua_get_extensions :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	if state == nil {
 		vm.PushNil(L)
@@ -58,7 +58,7 @@ kne_lua_get_extensions :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_get_extension :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	if state == nil {
 		vm.PushNil(L)
@@ -76,7 +76,7 @@ kne_lua_get_extension :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_is_loaded :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	loaded := state != nil && Find(state, vm.ArgString(L, 1)) != nil
 	vm.PushBoolean(L, loaded)
@@ -84,7 +84,7 @@ kne_lua_is_loaded :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_load :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	if state == nil {
 		vm.PushBoolean(L, false)
@@ -105,7 +105,7 @@ kne_lua_load :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_unload :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	if state == nil {
 		vm.PushBoolean(L, false)
@@ -125,7 +125,7 @@ kne_lua_unload :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_reload :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	state := kne_api_context(L)
 	if state == nil {
 		vm.PushBoolean(L, false)
@@ -145,7 +145,7 @@ kne_lua_reload :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 kne_lua_api_version :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 	vm.NewTable(L, 0, 2)
 	vm.PushInteger(L, i64(KNE_ABI_MAJOR))
 	vm.SetField(L, -2, "major")

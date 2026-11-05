@@ -3,8 +3,8 @@ package classes
 import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
+import tracy "../util/odin-tracy"
 import vm "../vm"
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -241,6 +241,8 @@ Hierarchy_Signal_Kind :: enum {
 }
 
 Object_Hierarchy_Signal :: proc(self: ^Object, kind: Hierarchy_Signal_Kind) -> ^signals.Signal {
+	// lua_close runs destructors while the collector is tearing down the VM.
+	if vm.Is_Closing() {return nil}
 	if self == nil {
 		return nil
 	}
@@ -275,7 +277,7 @@ Object_Hierarchy_Signal :: proc(self: ^Object, kind: Hierarchy_Signal_Kind) -> ^
 }
 
 Object_Fire_Destroying :: proc(self: ^Object) {
-	if self == nil || self.destroying == nil {
+	if self == nil || self.destroying == nil || vm.Is_Closing() {
 		return
 	}
 	L := self.signal_registry.signal_registry.L
@@ -767,7 +769,7 @@ is_object_method :: proc(name: string) -> bool {
 }
 
 object_method :: proc "c" (L: ^vm.State) -> i32 {
-	context = runtime.default_context()
+	context = tracy.DefaultContext()
 
 	object := object_from_argument(L, 1)
 	if object == nil {

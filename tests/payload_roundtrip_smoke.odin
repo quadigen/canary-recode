@@ -82,6 +82,17 @@ main :: proc() {
 	assert(no_map_read.port == 1234)
 	delete(no_map)
 
+	singleplayer, singleplayer_ok := services.Payload_Append(template, services.Payload{
+		mode = .Singleplayer,
+		name = "Single Player",
+		map_bytes = map_bytes,
+	})
+	assert(singleplayer_ok)
+	defer delete(singleplayer)
+	game, game_ok := services.Payload_Read_Back(singleplayer)
+	assert(game_ok && game.mode == .Singleplayer)
+	assert(game.address == "" && game.port == 0 && len(game.map_bytes) == len(map_bytes))
+
 	plain, p_ok := services.Payload_Read_Back(template)
 	assert(!p_ok && len(template) > 0)
 

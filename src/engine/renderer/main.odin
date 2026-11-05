@@ -1,7 +1,6 @@
 #+build !js
 package renderer
 
-import "base:runtime"
 import "core:fmt"
 import "core:strings"
 
@@ -26,7 +25,7 @@ when !KINE_RENDERER_GL {
 	}
 
 	filament_profile_callback :: proc "c" (user: rawptr, phase: cstring, begin: bool) {
-		context = runtime.default_context()
+		context = tracy.DefaultContext()
 		state := cast(^Filament_Profile_State)user
 		if begin {
 			state.zones[state.depth] = tracy.ZoneBegin(true, 0, string(phase), 0xC678DD)
@@ -287,6 +286,7 @@ when !KINE_RENDERER_GL {
 						renderer.OnEvent(renderer.UserData, event)
 					}
 					renderer.CurrentEvent = &event
+					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
 						running = false
@@ -429,7 +429,11 @@ when !KINE_RENDERER_GL {
 				z := profiling.Begin("Filament RenderFrame", 0xC678DD)
 				when tracy.TRACY_ENABLE {
 					frame_profile: Filament_Profile_State
-					kineffi.Kine_Filament_SetFrameProfileCallback(filament, filament_profile_callback, &frame_profile)
+					kineffi.Kine_Filament_SetFrameProfileCallback(
+						filament,
+						filament_profile_callback,
+						&frame_profile,
+					)
 					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
 					kineffi.Kine_Filament_SetFrameProfileCallback(filament, nil, nil)
 				} else {
