@@ -92,7 +92,7 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	if !Is_A_Class(child, &GuiObject_Class) {return}
 	gui := cast(^GuiObject)child
 	previous_transform := ctx.gui_transform
-	// Descendants can reuse this geometry without walking to the screen root.
+
 	if gui.visible {
 		x, y, width, height := GuiObject_get_absolute_transform(child, ctx)
 		ctx.gui_transform = {child, x, y, width, height}

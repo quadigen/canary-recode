@@ -51,6 +51,7 @@ Workspace :: struct {
 	draw_version:                u64,
 	draw_hash:                   u64,
 	draw_hash_valid:             bool,
+	enable_3d:                   bool,
 	cull_parts:                  bool,
 	max_draw_distance:           f32,
 	lod_distance:                f32,
@@ -80,6 +81,7 @@ workspace_construct :: proc(
 	workspace.fallen_parts_destroy_height = -500
 	workspace.fall_height_enabled = true
 	workspace.simulate_physics = true
+	workspace.enable_3d = true
 	workspace.cull_parts = true
 	workspace.max_draw_distance = 0
 	workspace.lod_distance = 0
@@ -479,6 +481,14 @@ workspace_distance_squared :: proc(a, b: datatypes.Vector3) -> f32 {
 	return dx * dx + dy * dy + dz * dz
 }
 
+workspace_set_3d_state :: proc(state: bool, workspace: ^Workspace) {
+	registry := cast(^DataModel)workspace.data_model
+	if registry != nil && registry.registry.classes.renderer != nil {
+		r := registry.registry.classes.renderer
+		r.RenderFilament = state
+	}
+}
+
 workspace_append_draw_items :: proc(
 	workspace: ^Workspace,
 	object: ^classes.Object,
@@ -486,6 +496,8 @@ workspace_append_draw_items :: proc(
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
 	params: ^Workspace_Draw_Params,
 ) {
+	workspace_set_3d_state(workspace.enable_3d, workspace)
+
 	for child in object.children {
 		if child == nil ||
 		   child.destroyed ||
@@ -837,6 +849,8 @@ workspace_get :: proc(
 		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
 		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
+	case "Enable3dRendering":
+		vm.PushBoolean(L, workspace.enable_3d)
 	case "GlobalWind":
 		datatypes.Push_Vector3(L, workspace.global_wind)
 	case "FallenPartsDestroyHeight":
@@ -889,6 +903,8 @@ workspace_set :: proc(
 		}
 	case "SimulatePhysics":
 		workspace.simulate_physics = vm.ArgBoolean(L, value_index)
+	case "Enable3dRendering":
+		workspace.enable_3d = vm.ArgBoolean(L, value_index)
 	case "Gravity":
 		physics := workspace_physics(workspace)
 		if physics == nil {return false}
@@ -981,22 +997,10 @@ workspace_namecall :: proc(
 			),
 			true
 	case "Disable3D":
-		registry := cast(^DataModel)workspace.data_model
-		if registry != nil && registry.registry.classes.renderer != nil {
-			r := registry.registry.classes.renderer
-			xywh := []i32{0, 0, 0, 0}
-			renderer.set_viewport_rect(r, xywh[0], xywh[1], xywh[2], xywh[3], true)
-			renderer.apply_viewport_rect(r)
-		}
+		workspace.enable_3d = false
 		return 1, true
 	case "Enable3D":
-		registry := cast(^DataModel)workspace.data_model
-		if registry != nil && registry.registry.classes.renderer != nil {
-			r := registry.registry.classes.renderer
-			xywh := []i32{0, 0, window_width, window_height}
-			renderer.set_viewport_rect(r, xywh[0], xywh[1], xywh[2], xywh[3], true)
-			renderer.apply_viewport_rect(r)
-		}
+		workspace.enable_3d = true
 		return 1, true
 	case "GetNumAwakeParts":
 		vm.PushNumber(L, f64(Physics_Get_Num_Awake_Parts(physics)))
@@ -1077,6 +1081,7 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"DistributedGameTime",
 			"RenderCulling",
 			"MaxDrawDistance",
+			"Enable3dRendering",
 			"LODDistance",
 			"FinishedReplicating",
 		},
@@ -1089,6 +1094,8 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"UnjoinFromOutsiders",
 			"GetNumAwakeParts",
 			"GetPhysicsThrottling",
+			"Disable3D",
+			"Enable3D",
 			"GetRealPhysicsFPS",
 			"PGSIsEnabled",
 		},

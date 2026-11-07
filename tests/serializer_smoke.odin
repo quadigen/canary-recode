@@ -1,10 +1,11 @@
 package main
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
+import assetstore "../src/engine/assetstore"
 import classes "../src/engine/classes"
+import engine_runtime "../src/engine/runtime"
 import serializer "../src/engine/serializer"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -15,10 +16,7 @@ run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
 	}
 }
 
-// assert_no_error fails the run with the serializer's own diagnosis, so a broken
-// round trip reports which record was at fault rather than just that something
-// was. The error is consumed, so the caller must not report it again.
-@(private="file")
+@(private = "file")
 assert_no_error :: proc(err: ^serializer.Error, what: string) {
 	if serializer.Error_Is_None(err^) {
 		return
@@ -33,20 +31,14 @@ assert_no_error :: proc(err: ^serializer.Error, what: string) {
 // assert_kind fails unless the stream was rejected for exactly the expected
 // reason, which is the point of returning a structured error: a rejected file
 // has to say which rule caught it, and where.
-@(private="file")
+@(private = "file")
 assert_kind :: proc(err: ^serializer.Error, expected: serializer.Error_Kind, what: string) {
 	message := serializer.Error_String(err^)
 	actual := err.kind
 	offset := err.offset
 	serializer.Error_Delete(err)
 	if actual != expected {
-		detail := fmt.tprintf(
-			"%s: expected %v but got %v (%s)",
-			what,
-			expected,
-			actual,
-			message,
-		)
+		detail := fmt.tprintf("%s: expected %v but got %v (%s)", what, expected, actual, message)
 		delete(message)
 		panic(detail)
 	}
@@ -65,7 +57,9 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script_or_fail(&script_vm, `
+	run_script_or_fail(
+		&script_vm,
+		`
 local model = Instance.new("Model")
 model.Name = "Car"
 
@@ -98,7 +92,9 @@ text.Visible = true
 
 model.Parent = game.Workspace
 KineRoot = model
-`, "serializer_build")
+`,
+		"serializer_build",
+	)
 
 	vm.GetGlobal(script_vm.L, "KineRoot")
 	root := cast(^classes.Object)vm.UserdataValue(script_vm.L, -1)
@@ -106,6 +102,30 @@ KineRoot = model
 	if root == nil {
 		panic("KineRoot global missing")
 	}
+
+	// An asset reference makes the writer own a list of content ids. That list is
+	// handed from the tree writer to the output writer, and the ids have to be
+	// freed before the array that holds them. Regression: saving a map with
+	// embedded assets crashed with a use-after-free while the cleanup walked a
+	// list whose backing array had already been deleted.
+	asset_id := assetstore.Register([]u8{1, 2, 3, 4, 5, 6, 7, 8}, "smoke-texture.png", .Texture)
+	if asset_id == "" {
+		panic("could not register the test asset")
+	}
+	defer delete(asset_id)
+	asset_uri := assetstore.Make_Uri(asset_id)
+	defer delete(asset_uri)
+	vm.PushString(script_vm.L, asset_uri)
+	vm.SetGlobal(script_vm.L, "KineAssetUri")
+	run_script_or_fail(
+		&script_vm,
+		`
+local mesh = Instance.new("MeshPart", KineRoot)
+mesh.Name = "Textured"
+mesh.TextureId = KineAssetUri
+`,
+		"serializer_asset",
+	)
 
 	// In-memory round trip.
 	data, serialize_err := serializer.Serialize(&environment.classes, script_vm.L, root)
@@ -129,8 +149,13 @@ KineRoot = model
 	vm.Pop(script_vm.L)
 	attribute_count := len(root.attributes)
 	child_count := len(root.children)
-	append(&root.attributes, classes.Object_Attribute{name = "Skipped", value_ref = unsupported_ref})
-	invalid_child := classes.Object{archivable = true}
+	append(
+		&root.attributes,
+		classes.Object_Attribute{name = "Skipped", value_ref = unsupported_ref},
+	)
+	invalid_child := classes.Object {
+		archivable = true,
+	}
 	non_archivable_child := classes.Object{}
 	append(&root.children, &invalid_child, &non_archivable_child)
 	filtered, filtered_err := serializer.Serialize(&environment.classes, script_vm.L, root)
@@ -162,7 +187,9 @@ KineRoot = model
 	vm.PushRegistryReference(script_vm.L, loaded.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "LoadedRoot")
 
-	run_script_or_fail(&script_vm, `
+	run_script_or_fail(
+		&script_vm,
+		`
 local function cframeNearlyEqual(a, b)
     local ax, ay, az, a00, a01, a02, a10, a11, a12, a20, a21, a22 = a:GetComponents()
     local bx, by, bz, b00, b01, b02, b10, b11, b12, b20, b21, b22 = b:GetComponents()
@@ -218,13 +245,25 @@ assert(text.Visible == true)
 
 assert(part.Parent == LoadedRoot)
 assert(text:IsDescendantOf(LoadedRoot))
-`, "serializer_verify")
+`,
+		"serializer_verify",
+	)
 
 	// File round trip.
-	save_err := serializer.Serialize_To_File(&environment.classes, script_vm.L, root, "build/smoke.kine")
+	save_err := serializer.Serialize_To_File(
+		&environment.classes,
+		script_vm.L,
+		root,
+		"build/smoke.kine",
+	)
 	assert_no_error(&save_err, "saving a .kine file")
 
-	loaded_file, file_err := serializer.Deserialize_From_File(&environment.classes, script_vm.L, parent, "build/smoke.kine")
+	loaded_file, file_err := serializer.Deserialize_From_File(
+		&environment.classes,
+		script_vm.L,
+		parent,
+		"build/smoke.kine",
+	)
 	assert_no_error(&file_err, "loading a .kine file")
 	if loaded_file == nil {
 		panic("loading a .kine file reported success but produced no object")
@@ -251,7 +290,9 @@ assert(text:IsDescendantOf(LoadedRoot))
 	vm.PushRegistryReference(script_vm.L, loaded_file.lua_ref)
 	vm.SetGlobalFromStack(&script_vm, "LoadedFile")
 
-	run_script_or_fail(&script_vm, `
+	run_script_or_fail(
+		&script_vm,
+		`
 assert(LoadedFile.ClassName == "Model")
 assert(LoadedFile.Name == "Car")
 local part = LoadedFile:FindFirstChild("Block")
@@ -260,7 +301,9 @@ assert(part.Size == Vector3.new(3, 4, 5))
 assert(part.Material == Enum.Material.Neon)
 assert(part:GetAttribute("Health") == 100)
 assert(LoadedFile:FindFirstChild("Hud"):FindFirstChild("Label").Text == "hello")
-`, "serializer_file_verify")
+`,
+		"serializer_file_verify",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

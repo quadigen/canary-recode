@@ -375,7 +375,9 @@ when !KINE_RENDERER_GL {
 					if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {continue}
 					error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 					fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
-					break
+					previous_ticks = sdl3.GetTicksNS()
+					sdl3.Delay(10)
+					continue
 				}
 			}
 
@@ -497,7 +499,14 @@ when !KINE_RENDERER_GL {
 			if !present_ok {
 				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 				fmt.eprintf("Vulkan presentation failed: %s\n", error)
-				break
+				// Check if this is a resize request, otherwise delay and retry
+				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
+					continue
+				}
+				// Don't immediately exit - try to recover for transient errors
+				previous_ticks = sdl3.GetTicksNS()
+				sdl3.Delay(10)
+				continue
 			}
 			renderer.Ready = true
 			renderer.SkiaSurface = nil

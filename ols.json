@@ -3,5 +3,5 @@
     "enable_document_symbols": true,
     "enable_hover": true,
     "enable_snippets": true,
-    "odin_command": "C:\\Users\\devco\\AppData\\Local\\Programs\\Odin\\dev-2026-11\\dist\\odin.exe"
+    "odin_command": "/usr/bin/odin"
 }

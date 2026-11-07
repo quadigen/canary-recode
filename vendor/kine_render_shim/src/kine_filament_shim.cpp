@@ -648,6 +648,10 @@ struct KineFilamentContext {
 	Material *forceFieldMaterial = nullptr;
 	KineFilamentWaterParams water = kine_default_water_params();
 	Material *cloudMaterial = nullptr;
+	// Scratch storage reused across frames so per-frame submission does not
+	// allocate a fresh key set and batch list every frame.
+	std::vector<KineBatchKey> drawListKeys;
+	std::vector<std::pair<KineBatchKey, KinePendingBatch *>> pendingSortScratch;
 	// Sun direction in world space, kept for materials that light themselves
 	// (the cloud volume raymarches towards it instead of using scene lights).
 	math::float3 sunDirection{0.0f, 1.0f, 0.0f};
@@ -4090,18 +4094,23 @@ static void kine_destroy_persistent_batch(
 static void kine_update_batches(KineFilamentContext *ctx) {
 	size_t maxInstances = kine_max_chunk_instances(ctx);
 
-	std::vector<std::pair<KineBatchKey, KinePendingBatch *>> sortedBatches;
-	sortedBatches.reserve(ctx->pendingBatches.size());
+	std::vector<std::pair<KineBatchKey, KinePendingBatch *>> &sortedBatches =
+		ctx->pendingSortScratch;
+	sortedBatches.clear();
+	if (sortedBatches.capacity() < ctx->pendingBatches.size())
+		sortedBatches.reserve(ctx->pendingBatches.size());
 	for (auto &kv : ctx->pendingBatches) {
 		if (kv.second.lastQueuedFrame == ctx->batchFrame &&
 			!kv.second.transforms.empty() && kv.first.mesh) {
 			sortedBatches.push_back({kv.first, &kv.second});
 		}
 	}
-	std::sort(sortedBatches.begin(), sortedBatches.end(),
-			  [](const auto &a, const auto &b) {
-				  return a.first.materialKind < b.first.materialKind;
-			  });
+	if (sortedBatches.size() > 1) {
+		std::sort(sortedBatches.begin(), sortedBatches.end(),
+				  [](const auto &a, const auto &b) {
+					  return a.first.materialKind < b.first.materialKind;
+				  });
+	}
 
 	for (auto &[key, pending] : sortedBatches) {
 		KineMesh *m = key.mesh;
@@ -8643,7 +8652,8 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 	if (!items || itemCount == 0)
 		return;
 
-	std::unordered_set<KineBatchKey, KineBatchKeyHash> uniqueKeys;
+	std::vector<KineBatchKey> &uniqueKeys = ctx->drawListKeys;
+	uniqueKeys.clear();
 	for (uint32_t i = 0; i < itemCount; ++i) {
 		const KineFilamentDrawItem &item = items[i];
 		KineBatchKey key;
@@ -8660,7 +8670,20 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			streamId,
 			0.0f,
 			&key, kine_draw_opacity(item.reserved));
-		if (uniqueKeys.insert(key).second) {
+		// Draw lists arrive grouped by mesh and material, so the previous key
+		// almost always repeats. Checking it first turns the common case into
+		// one comparison instead of a hash insert and a heap allocation.
+		bool known = !uniqueKeys.empty() && uniqueKeys.back() == key;
+		if (!known) {
+			for (const KineBatchKey &existing : uniqueKeys) {
+				if (existing == key) {
+					known = true;
+					break;
+				}
+			}
+		}
+		if (!known) {
+			uniqueKeys.push_back(key);
 			state.keys.push_back(key);
 		}
 	}

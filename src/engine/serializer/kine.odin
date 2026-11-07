@@ -2700,19 +2700,22 @@ serialize :: proc(
 		version          = version,
 		class_properties = make(map[^classes.Class_Info][dynamic]string),
 	}
+	// Odin runs defers in reverse order, so every element cleanup has to be in
+	// the same block as the delete of the array that holds those elements.
+	// Separate defers would free the array first and then walk freed memory.
 	defer {
 		for _, properties in tree.class_properties {delete(properties)}
 		delete(tree.class_properties)
+		for id in tree.used_ids {
+			delete(id)
+		}
+		delete(tree.data)
+		delete(tree.used_ids)
+		delete(tree.used_seen)
+		delete(tree.warn)
+		delete(tree.instance_indices)
+		delete(tree.instance_patches)
 	}
-	defer delete(tree.data)
-	defer for id in tree.used_ids {
-		delete(id)
-	}
-	defer delete(tree.used_ids)
-	defer delete(tree.used_seen)
-	defer delete(tree.warn)
-	defer delete(tree.instance_indices)
-	defer delete(tree.instance_patches)
 
 	{
 		tracy.ZoneNC("KINE Encode Instance Tree", 0xD19A66)
@@ -2728,13 +2731,17 @@ serialize :: proc(
 		data    = make([dynamic]u8, 0, len(tree.data) + 1024),
 		version = version,
 	}
-	defer delete(writer.data)
-	defer for id in writer.used_ids {
-		delete(id)
+	// The strings are owned by this writer after the transfer below, so free
+	// them before the array that holds them.
+	defer {
+		for id in writer.used_ids {
+			delete(id)
+		}
+		delete(writer.data)
+		delete(writer.used_ids)
+		delete(writer.used_seen)
+		delete(writer.warn)
 	}
-	defer delete(writer.used_ids)
-	defer delete(writer.used_seen)
-	defer delete(writer.warn)
 
 	// The tree walk is what discovered the assets, so its list is the one the
 	// table describes. Hand ownership to the output writer before writing it.

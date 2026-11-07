@@ -11,6 +11,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import fsutil "../fsutil"
 import serializer "../serializer"
+import git "../util/git"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
@@ -40,6 +41,7 @@ KinemiumProject :: struct {
 	icon:           string,
 	path:           string,
 	description:    string,
+	dimension:      string,
 }
 
 KinemiumProjectList :: struct {
@@ -99,6 +101,8 @@ Project_Create :: proc(
 	folder_path: string,
 	description: string = "",
 	icon: string = "",
+	enable_git: bool,
+	dimension: f64,
 ) -> bool {
 	fmt.eprintf(
 		"[Project] CreateProject name=%q folder=%q desc=%q\n",
@@ -148,12 +152,24 @@ Project_Create :: proc(
 		return false
 	}
 
+	resolved_dimension := "1"
+
+	if dimension != 1 {
+		resolved_dimension = "2"
+		// this is so stupid
+	}
+
 	project := KinemiumProject {
 		name           = name,
 		engine_version = PROJECT_ENGINE_VERSION,
 		icon           = icon,
 		path           = project_path,
 		description    = description,
+		dimension      = resolved_dimension,
+	}
+
+	if enable_git {
+		git.init(project_path, initial_branch = "main")
 	}
 
 	Project_CreateFolders(project)
@@ -599,6 +615,50 @@ Project_Load :: proc(service: ^ProjectService) -> bool {
 	return true
 }
 
+Project_Delete :: proc(service: ^ProjectService, path: string) -> bool {
+	normalized, valid := Project_Normalize_Path(path)
+	if !valid {
+		return false
+	}
+	defer delete(normalized)
+
+	index, found := Project_Find_By_Path(service, normalized)
+	if !found {
+		return false
+	}
+
+	project_to_delete := service.projects[index]
+
+	if len(service.active_project_path) > 0 &&
+	   os.are_paths_identical(project_to_delete.path, service.active_project_path) {
+		delete(service.active_project_path)
+		service.active_project_path = ""
+	}
+
+	if err := os.remove_all(project_to_delete.path); err != nil {
+		fmt.eprintf(
+			"[Project] delete failed: could not remove directory %q: %v\n",
+			project_to_delete.path,
+			err,
+		)
+	}
+
+	delete(project_to_delete.name)
+	delete(project_to_delete.engine_version)
+	delete(project_to_delete.icon)
+	delete(project_to_delete.path)
+	delete(project_to_delete.description)
+
+	ordered_remove(&service.projects, index)
+
+	if !Project_Save(service) {
+		fmt.eprintf("[Project] delete warning: failed to update registry after removing project\n")
+		return false
+	}
+
+	return true
+}
+
 Project_Write_Field :: proc(
 	builder: ^strings.Builder,
 	name: string,
@@ -763,7 +823,12 @@ Project_get :: proc(
 	     "UpdateProject",
 	     "OpenProject",
 	     "RegisterProject",
-	     "SaveProject", "GetProjectBackups", "RestoreProjectBackup", "ExitEditor", "KeepEditorSceneHelper",
+	     "DeleteProject",
+	     "SaveProject",
+	     "GetProjectBackups",
+	     "RestoreProjectBackup",
+	     "ExitEditor",
+	     "KeepEditorSceneHelper",
 	     "GetProjectEntries",
 	     "PathExists",
 	     "IsDirectory":
@@ -790,28 +855,52 @@ Project_namecall :: proc(
 ) {
 	service := cast(^ProjectService)object
 	switch method {
-	case "UpdateProject", "OpenProject", "RegisterProject", "SaveProject", "GetProjectBackups", "RestoreProjectBackup", "ExitEditor", "KeepEditorSceneHelper":
+	case "UpdateProject",
+	     "OpenProject",
+	     "RegisterProject",
+	     "SaveProject",
+	     "GetProjectBackups",
+	     "RestoreProjectBackup",
+	     "DeleteProject",
+	     "ExitEditor",
+	     "KeepEditorSceneHelper":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return vm.RaiseError(L, "Project editing requires Internals capability"), true
 		}
 		ok: bool
 		switch method {
 		case "UpdateProject":
-			ok = Project_Update(service, vm.ArgString(L, 2), vm.ArgString(L, 3),
-				vm.ArgOptionalString(L, 4, ""), vm.ArgOptionalString(L, 5, ""))
+			ok = Project_Update(
+				service,
+				vm.ArgString(L, 2),
+				vm.ArgString(L, 3),
+				vm.ArgOptionalString(L, 4, ""),
+				vm.ArgOptionalString(L, 5, ""),
+			)
 		case "OpenProject":
 			ok = Project_Open(service, L, vm.ArgString(L, 2))
 		case "RegisterProject":
 			path := vm.ArgString(L, 2)
 			name := vm.ArgString(L, 3)
-			ok = Project_Name_Is_Valid(name) && os.is_file(fmt.tprintf("%s/default.project.json", path)) &&
-				Project_Add(service, KinemiumProject{
-					name = name, engine_version = PROJECT_ENGINE_VERSION, path = path,
-				})
+			ok =
+				Project_Name_Is_Valid(name) &&
+				os.is_file(fmt.tprintf("%s/default.project.json", path)) &&
+				Project_Add(
+					service,
+					KinemiumProject {
+						name = name,
+						engine_version = PROJECT_ENGINE_VERSION,
+						path = path,
+					},
+				)
 		case "SaveProject":
 			ok = Project_Save_To_File(service, L)
 		case "GetProjectBackups":
 			project_push_backups(service, L)
+			return 1, true
+		case "DeleteProject":
+			path := vm.ArgString(L, 2)
+			ok = Project_Delete(service, path)
 			return 1, true
 		case "RestoreProjectBackup":
 			ok = project_restore_backup(service, L, vm.ArgString(L, 2))
@@ -860,8 +949,29 @@ Project_namecall :: proc(
 		folder_path := vm.ArgString(L, 3)
 		description := vm.ArgOptionalString(L, 4, "")
 		icon := vm.ArgOptionalString(L, 5, "")
+		enable_git := vm.ArgOptionalBoolean(L, 6, true)
+		dimension := vm.ArgNumber(L, 7)
 
-		if !Project_Create(service, L, name, folder_path, description, icon) {
+		if dimension > 2 {
+			// only 2 dimensions
+			// 1 = 3D, 2 = 2D
+			// on default, is 1
+			fmt.println(
+				"Project:CreateProject only accepts 0-2 range dimensions (1 is 3D, 2 is 2D)",
+			)
+			return 1, true
+		}
+
+		if !Project_Create(
+			service,
+			L,
+			name,
+			folder_path,
+			description,
+			icon,
+			enable_git,
+			dimension,
+		) {
 			vm.PushBoolean(L, false)
 			return 1, true
 		}
@@ -976,8 +1086,8 @@ Project_Clear_Map :: proc(service: ^ProjectService, L: ^vm.State) {
 		for i := len(target.children) - 1; i >= 0; i -= 1 {
 			child := target.children[i]
 			if map_keep_child(target, child) {continue}
-			if name == "StarterPlayer" && (child.name == "StarterPlayerScripts" ||
-				child.name == "StarterCharacterScripts") {
+			if name == "StarterPlayer" &&
+			   (child.name == "StarterPlayerScripts" || child.name == "StarterCharacterScripts") {
 				for len(child.children) > 0 {
 					classes.Destroy_Hierarchy(child.children[len(child.children) - 1])
 				}

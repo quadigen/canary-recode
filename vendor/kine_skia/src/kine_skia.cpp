@@ -783,7 +783,7 @@ KINE_SKIA_API void Kine_Skia_GL_ResetContext(KineSkiaGLContext *context) {
 
 /* ---------------- Surface lifecycle ---------------- */
 
-/* Draw calls target the recording canvas while a display list is open. */
+extern "C++" {
 static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface) {
 	if (!surface) {
 		return nullptr;
@@ -792,6 +792,7 @@ static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface) {
 		return surface->recorder->getRecordingCanvas();
 	}
 	return surface->surface ? surface->surface->getCanvas() : nullptr;
+}
 }
 
 KINE_SKIA_API int Kine_Skia_Surface_BeginPicture(KineSkiaSurface *surface) {

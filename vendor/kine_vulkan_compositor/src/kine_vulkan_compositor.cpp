@@ -75,6 +75,7 @@ struct KineVulkanCompositor {
     bool filamentPrepared = false;
     bool filamentPresented = false;
     bool overlayActive = false;
+    bool device_lost = false;
     VkSemaphore filamentFinishedSemaphore = VK_NULL_HANDLE;
     std::mutex filamentMutex;
     std::condition_variable filamentCondition;
@@ -277,11 +278,24 @@ static VkPresentModeKHR kine_vk_requested_present_mode()
         std::strcmp(value, "nosync") == 0) {
         return VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
+    if (std::strcmp(value, "relaxed") == 0 || std::strcmp(value, "fifo-relaxed") == 0) {
+        return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    }
+    // "auto" picks the best supported vsync mode during swapchain creation.
+    if (std::strcmp(value, "auto") == 0) {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
     fprintf(stderr,
         "[Kine] ignoring invalid KINE_VULKAN_PRESENT='%s' "
-        "(expected fifo, mailbox, or immediate)\n",
+        "(expected fifo, mailbox, immediate, fifo-relaxed, or auto)\n",
         value);
     return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+static bool kine_vk_present_mode_auto()
+{
+    const char* value = std::getenv("KINE_VULKAN_PRESENT");
+    return value && std::strcmp(value, "auto") == 0;
 }
 
 static const char* kine_vk_present_mode_name(VkPresentModeKHR mode)
@@ -293,6 +307,8 @@ static const char* kine_vk_present_mode_name(VkPresentModeKHR mode)
             return "mailbox";
         case VK_PRESENT_MODE_IMMEDIATE_KHR:
             return "immediate";
+        case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+            return "fifo-relaxed";
         default:
             return "unknown";
     }
@@ -953,29 +969,44 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
     }
 
     VkPresentModeKHR presentMode = kine_vk_requested_present_mode();
-    if (presentMode != VK_PRESENT_MODE_FIFO_KHR) {
+    const bool autoPresent = kine_vk_present_mode_auto();
+    if (presentMode != VK_PRESENT_MODE_FIFO_KHR || autoPresent) {
         uint32_t presentModeCount = 0;
-        bool supported = false;
+        std::vector<VkPresentModeKHR> presentModes;
         if (vkGetPhysicalDeviceSurfacePresentModesKHR(
                 compositor->physicalDevice,
                 compositor->surface,
                 &presentModeCount,
                 nullptr) == VK_SUCCESS &&
             presentModeCount > 0) {
-            std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+            presentModes.resize(presentModeCount);
             if (vkGetPhysicalDeviceSurfacePresentModesKHR(
                     compositor->physicalDevice,
                     compositor->surface,
                     &presentModeCount,
-                    presentModes.data()) == VK_SUCCESS) {
-                supported = std::find(
-                    presentModes.begin(), presentModes.end(), presentMode) != presentModes.end();
+                    presentModes.data()) != VK_SUCCESS) {
+                presentModes.clear();
             }
         }
-        if (!supported) {
+        auto supported = [&presentModes](VkPresentModeKHR mode) {
+            return std::find(presentModes.begin(), presentModes.end(), mode) !=
+                presentModes.end();
+        };
+        if (autoPresent) {
+            // Keep vsync (no tearing) but prefer mailbox when the driver has
+            // it: mailbox removes the wait-for-vblank stall without tearing.
+            presentMode = supported(VK_PRESENT_MODE_MAILBOX_KHR)
+                ? VK_PRESENT_MODE_MAILBOX_KHR
+                : VK_PRESENT_MODE_FIFO_KHR;
+        } else if (!supported(presentMode)) {
             fprintf(stderr,
-                "[Kine] present mode '%s' is unavailable; falling back to fifo (vsync)\n",
+                "[Kine] present mode '%s' is unavailable; falling back to fifo (vsync). "
+                "Supported modes:",
                 kine_vk_present_mode_name(presentMode));
+            for (VkPresentModeKHR mode : presentModes) {
+                fprintf(stderr, " %s", kine_vk_present_mode_name(mode));
+            }
+            fprintf(stderr, "\n");
             presentMode = VK_PRESENT_MODE_FIFO_KHR;
         }
     }
@@ -1300,8 +1331,14 @@ static bool kine_vk_transition_current_image(
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &signalSemaphore;
     }
-    if (vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, fence) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkQueueSubmit failed");
+    VkResult submit_result = vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, fence);
+    if (submit_result != VK_SUCCESS) {
+        if (submit_result == VK_ERROR_DEVICE_LOST) {
+            compositor->device_lost = true;
+            kine_vk_set_error(compositor, "vkQueueSubmit failed: device lost");
+        } else {
+            kine_vk_set_error(compositor, "vkQueueSubmit failed");
+        }
         return false;
     }
 

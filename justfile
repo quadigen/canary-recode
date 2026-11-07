@@ -6,11 +6,7 @@ set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 git_commit := `git rev-parse --short HEAD`
 git_branch := `git rev-parse --abbrev-ref HEAD`
 
-version := "1.19.2"
-
-# ---------------------------------------------------------------------------
-# Platform helpers
-# ---------------------------------------------------------------------------
+version := "1.19.3"
 
 exe     := if os() == "windows" { ".exe" } else { "" }
 dll_ext := if os() == "windows" { "dll" } else { "so" }
@@ -22,10 +18,6 @@ debug_linker := if os() == "windows" { '-extra-linker-flags:"/LTCG /IGNORE:4099"
 
 default:
     @just --list
-
-# ---------------------------------------------------------------------------
-# Build
-# ---------------------------------------------------------------------------
 
 build:
     odin build src -o:speed -out:build/kinemium{{exe}}
@@ -43,11 +35,6 @@ _kill:
 
 release: _kill
     odin build src -o:speed -out:build/kinemium{{exe}} -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}}
-
-# ---------------------------------------------------------------------------
-# WASM / Android
-# (the tools/*.ps1 scripts run via PowerShell 7 `pwsh` on Linux)
-# ---------------------------------------------------------------------------
 
 [windows]
 wasm:
@@ -79,10 +66,6 @@ android:
 android:
     pwsh -NoProfile -File ./tools/build_android.ps1
 
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
-
 run: build
     ./build/kinemium{{exe}}
 
@@ -91,11 +74,6 @@ run-debug: debug
 
 run-sandbox script="src/sandboxed/internals/gui/mainframe.luau": debug
     ./build/kinemium-debug{{exe}} --script "{{script}}"
-
-# ---------------------------------------------------------------------------
-# Tests
-# Test lists are whitespace-separated so the same list feeds both runners.
-# ---------------------------------------------------------------------------
 
 tests_services := '''
     jolt_bindings_smoke
@@ -267,12 +245,12 @@ check:
 
 [windows]
 wire:
-    @powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./tools/wire_engine.ps1 -RootPath .
+    @python ./tools/wire_engine.py --root-path .
     @odin check src
 
 [unix]
 wire:
-    @pwsh -NoProfile -File ./tools/wire_engine.ps1 -RootPath .
+    @python ./tools/wire_engine.py --root-path .
     @odin check src
 
 [windows]
@@ -281,14 +259,10 @@ wire-check:
 
 [unix]
 wire-check:
-    @pwsh -NoProfile -File ./tools/wire_engine.ps1 -RootPath . -Check
+    @python ./tools/wire_engine.py --root-path .
 
 fmt:
     odinfmt -w src
-
-# ---------------------------------------------------------------------------
-# Editor / client / server targets
-# ---------------------------------------------------------------------------
 
 editor:
     odin build src -define:BUILD_TARGET=editor -out:build/kinemium-editor{{exe}}
@@ -335,10 +309,6 @@ run-player: run-client
 
 run-server:
     odin run src -define:BUILD_TARGET=server
-
-# ---------------------------------------------------------------------------
-# Clean / deps
-# ---------------------------------------------------------------------------
 
 [windows]
 clean:

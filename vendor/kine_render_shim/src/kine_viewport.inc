@@ -608,6 +608,7 @@ static void kine_viewport_render_queued(KineFilamentContext *ctx) {
 }
 KINE_API bool Kine_Filament_Viewport_HasWork(KineFilamentContext *ctx) {
     if (ctx && ctx->viewportPool) {
+        if (ctx->viewportPool->handles.empty()) return false;
         const auto hash=kine_vp_global_effects_hash(ctx);
         bool work=false;
         for (auto *vp : ctx->viewportPool->handles) {
