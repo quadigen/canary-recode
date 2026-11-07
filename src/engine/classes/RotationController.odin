@@ -1,7 +1,7 @@
 package classes
 
-import "core:math"
 import datatypes "../datatypes"
+import "core:math"
 
 RotationController_Class := Class_Info {
 	name   = "RotationController",
@@ -10,10 +10,9 @@ RotationController_Class := Class_Info {
 
 RotationController :: struct {
 	using object: Object,
-
-	yaw:       f32,
-	target_yaw: f32,
-	turn_rate: f32,
+	yaw:          f32,
+	target_yaw:   f32,
+	turn_rate:    f32,
 }
 
 rotation_controller_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -53,5 +52,10 @@ wrap_angle_180 :: proc(angle: f32) -> f32 {
 }
 
 Register_RotationController :: proc(registry: ^Registry) {
-	Register_Class(registry, &RotationController_Class, rotation_controller_construct, rotation_controller_destroy)
+	Register_Class(
+		registry,
+		&RotationController_Class,
+		rotation_controller_construct,
+		rotation_controller_destroy,
+	)
 }

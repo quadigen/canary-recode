@@ -149,6 +149,94 @@ Sound_get :: proc(
 	return false
 }
 
+Sound_Play :: proc(sound: ^Sound) -> bool {
+	if !audio.is_loaded(&sound.sound) {
+		if !Sound_Load_Source(sound) {
+			sound.is_loaded = false
+			sound.is_playing = false
+			sound.playing = false
+			return false
+		}
+	}
+
+	if !audio.is_playing(&sound.sound) {
+		if !audio.play(&sound.sound) {
+			return false
+		}
+	}
+
+	sound.is_playing = true
+	sound.is_paused = false
+	sound.playing = true
+	return true
+}
+
+Sound_Pause :: proc(sound: ^Sound) {
+	if !audio.is_loaded(&sound.sound) || !audio.is_playing(&sound.sound) {
+		return
+	}
+
+	audio.pause(&sound.sound)
+	sound.is_playing = false
+	sound.is_paused = true
+	sound.playing = false
+}
+
+Sound_Resume :: proc(sound: ^Sound) {
+	if !audio.is_loaded(&sound.sound) || !sound.is_paused {
+		return
+	}
+
+	audio.play(&sound.sound)
+	sound.is_playing = true
+	sound.is_paused = false
+	sound.playing = true
+}
+
+Sound_Stop :: proc(sound: ^Sound) {
+	if audio.is_loaded(&sound.sound) {
+		audio.stop_sound(&sound.sound)
+	}
+
+	sound.is_playing = false
+	sound.is_paused = true
+	sound.playing = false
+	sound.time_position = 0
+}
+
+Sound_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	sound := cast(^Sound)object
+
+	switch method {
+	case "Play":
+		_ = Sound_Play(sound)
+		return 0, true
+
+	case "Pause":
+		Sound_Pause(sound)
+		return 0, true
+
+	case "Resume":
+		Sound_Resume(sound)
+		return 0, true
+
+	case "Stop":
+		Sound_Stop(sound)
+		return 0, true
+	}
+
+	return 0, false
+}
+
 
 Sound_Load_Source :: proc(sound: ^Sound) -> bool {
 	path := sound.sound_path
@@ -208,7 +296,9 @@ Sound_set :: proc(
 		return true
 
 	case "AudioContent":
-		content := datatypes.Content_Clone(datatypes.Arg_Content(L, value_index, datatype_registry))
+		content := datatypes.Content_Clone(
+			datatypes.Arg_Content(L, value_index, datatype_registry),
+		)
 		delete(sound.content.uri)
 		sound.content = content
 		if sound.sound_path == "" {
@@ -390,6 +480,7 @@ Register_Sound :: proc(registry: ^Registry) {
 			"TimePosition",
 			"TimeLength",
 		},
+		namecall = Sound_namecall,
 		methods = []string{"Play", "Pause", "Resume", "Stop"},
 		events = []string{"DidLoop", "Ended", "Loaded", "Paused", "Played", "Resumed", "Stopped"},
 	)

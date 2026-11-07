@@ -251,14 +251,16 @@ CharacterController_Ground_Cast :: proc(
 ) -> (
 	rest_y: f32,
 	normal: datatypes.Vector3,
+	body_id: kineffi.JPH_BodyID,
 	hit: bool,
 ) {
 	rest_y = position.y
 	normal = datatypes.Vector3{0, 1, 0}
+	body_id = kineffi.JPH_BODY_ID_INVALID
 	if physics == nil || coll == nil || !coll.body_created || coll.shape == nil {return}
 	distance := max(snap_distance, 0) + classes.COLLISION_SKIN
 	origin := datatypes.Vector3{position.x, position.y + classes.COLLISION_SKIN, position.z}
-	contact, contact_normal, _, _, did_hit := physics_character_sweep(
+	contact, contact_normal, contact_body, _, did_hit := physics_character_sweep(
 		physics,
 		coll,
 		origin,
@@ -269,6 +271,7 @@ CharacterController_Ground_Cast :: proc(
 	if length <= 0.0001 {return}
 	normal = datatypes.Vec3_Divide(contact_normal, length)
 	rest_y = contact.y
+	body_id = contact_body
 	hit = true
 	return
 }
@@ -277,6 +280,7 @@ CharacterController_Ground_Cast :: proc(
 CharacterController_Sweep :: proc(
 	physics: ^Physics,
 	coll: ^classes.CollisionController,
+	root: ^classes.Part,
 	origin: datatypes.Vector3,
 	displacement: datatypes.Vector3,
 	max_slope_angle: f32,
@@ -300,6 +304,7 @@ CharacterController_Sweep :: proc(
 			position = datatypes.Vec3_Add(position, remaining)
 			break
 		}
+		Physics_Character_Report_Contact(physics, coll, root, body_id)
 		normal_length := datatypes.Vec3_Magnitude(contact_normal)
 		if normal_length <= 0.0001 {break}
 		normal := datatypes.Vec3_Divide(contact_normal, normal_length)
@@ -348,11 +353,13 @@ CharacterController_Ground_Probe :: proc(
 	grounded: bool,
 	rest_y: f32,
 	normal: datatypes.Vector3,
+	body_id: kineffi.JPH_BodyID,
 ) {
 	rest_y = position.y
 	normal = datatypes.Vector3{0, 1, 0}
+	body_id = kineffi.JPH_BODY_ID_INVALID
 	if gd == nil {return}
-	hit_rest, hit_normal, hit := CharacterController_Ground_Cast(
+	hit_rest, hit_normal, hit_body, hit := CharacterController_Ground_Cast(
 		physics,
 		coll,
 		gd.snap_distance,
@@ -360,6 +367,7 @@ CharacterController_Ground_Probe :: proc(
 	)
 	if hit {
 		gd.slope_angle = math.to_degrees(math.acos(clamp(hit_normal.y, -1, 1)))
+		body_id = hit_body
 	}
 	grounded = hit && hit_normal.y >= CharacterController_Walkable_Cos(max_slope_angle)
 	if grounded {
@@ -412,16 +420,25 @@ CharacterController_Tick :: proc(
 	if collision != nil {
 		Physics_Ensure_Character_Capsule(physics, collision, root, position)
 	}
+	tracking_contacts :=
+		collision != nil && collision.body_created && collision.shape != nil
+	if tracking_contacts {
+		Physics_Character_Touch_Begin(collision)
+	}
 	grounded := false
 	ground_normal := datatypes.Vector3{0, 1, 0}
 	if ground != nil {
-		grounded, _, ground_normal = CharacterController_Ground_Probe(
+		ground_body: kineffi.JPH_BodyID
+		grounded, _, ground_normal, ground_body = CharacterController_Ground_Probe(
 			physics,
 			ground,
 			collision,
 			position,
 			cc.max_slope_angle,
 		)
+		if tracking_contacts {
+			Physics_Character_Report_Contact(physics, collision, root, ground_body)
+		}
 	}
 	was_grounded := grounded || cc.coyote_time > 0
 	if grounded {
@@ -470,6 +487,7 @@ CharacterController_Tick :: proc(
 		applied := CharacterController_Sweep(
 			physics,
 			collision,
+			root,
 			cast_origin,
 			move,
 			cc.max_slope_angle,
@@ -488,6 +506,7 @@ CharacterController_Tick :: proc(
 				step := CharacterController_Sweep(
 					physics,
 					collision,
+					root,
 					elevated,
 					move,
 					cc.max_slope_angle,
@@ -501,9 +520,6 @@ CharacterController_Tick :: proc(
 			}
 		}
 		position = datatypes.Vec3_Add(position, applied)
-		if blocked != kineffi.JPH_BODY_ID_INVALID {
-			physics_fire_touched(physics, blocked, root)
-		}
 
 
 		if cc.vertical_speed != 0 {
@@ -511,6 +527,7 @@ CharacterController_Tick :: proc(
 			applied_vertical := CharacterController_Sweep(
 				physics,
 				collision,
+				root,
 				position,
 				vertical,
 				cc.max_slope_angle,
@@ -523,21 +540,27 @@ CharacterController_Tick :: proc(
 		}
 
 
-		settle_y, settle_normal, settle_hit := CharacterController_Ground_Cast(
+		settle_y, settle_normal, settle_body, settle_hit := CharacterController_Ground_Cast(
 			physics,
 			collision,
 			ground != nil ? ground.snap_distance : 0.6,
 			position,
 		)
-		if settle_hit &&
-		   settle_normal.y >= CharacterController_Walkable_Cos(cc.max_slope_angle) &&
-		   cc.vertical_speed <= 0 {
-			position.y = settle_y
-			cc.vertical_speed = 0
-			if ground != nil {
-				ground.grounded = true
-				ground.rest_y = settle_y
-				ground.slope_angle = math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1)))
+		if settle_hit {
+			if tracking_contacts {
+				Physics_Character_Report_Contact(physics, collision, root, settle_body)
+			}
+			if settle_normal.y >= CharacterController_Walkable_Cos(cc.max_slope_angle) &&
+			   cc.vertical_speed <= 0 {
+				position.y = settle_y
+				cc.vertical_speed = 0
+				if ground != nil {
+					ground.grounded = true
+					ground.rest_y = settle_y
+					ground.slope_angle = math.to_degrees(
+						math.acos(clamp(settle_normal.y, -1, 1)),
+					)
+				}
 			}
 		}
 	} else {
@@ -594,6 +617,9 @@ CharacterController_Tick :: proc(
 		}
 		classes.StateMachine_Set_State(sm, L, next)
 	}
+	if tracking_contacts {
+		Physics_Character_Touch_End(physics, collision, root)
+	}
 }
 
 CharacterMotor_Advance :: proc(
@@ -645,6 +671,31 @@ character_simulation_suspended :: proc(
 	entity := root != nil ? replication_entity(replicator, root) : nil
 	if entity == nil {return false}
 	return entity.owner_id == 0
+}
+
+// The server does not tick the controller for client-authoritative characters,
+// but it still replicates their root CFrame. Build the capsule shape without a
+// body and use an overlap query so server scripts receive Touched as well.
+CharacterService_Server_Touch :: proc(
+	service: ^CharacterService,
+	model: ^classes.CharacterModel,
+	physics: ^Physics,
+) {
+	if service == nil || model == nil || physics == nil {return}
+	controller := classes.CharacterController_From_Model(model)
+	if controller == nil {return}
+	collision := cast(^classes.CollisionController)classes.CharacterController_Find(
+		controller,
+		"CollisionController",
+	)
+	root := classes.CharacterModel_Root(model)
+	if collision == nil || root == nil || root.destroyed {return}
+	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+	Physics_Ensure_Character_Shape(physics, collision, root)
+	if collision.shape == nil {return}
+	Physics_Character_Touch_Begin(collision)
+	Physics_Character_Report_Overlaps(physics, collision, root, position)
+	Physics_Character_Touch_End(physics, collision, root)
 }
 
 CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
@@ -721,6 +772,10 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 		root := classes.CharacterModel_Root(player.character)
 		if root == nil {continue}
 		if server_side && character_client_authoritative(replicator, player.character) {
+			physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+			if physics != nil {
+				CharacterService_Server_Touch(service, player.character, physics)
+			}
 			continue
 		}
 		when !#config(FORCE_LEGACY_CHARACTERS, false) {

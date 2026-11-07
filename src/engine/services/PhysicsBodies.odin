@@ -1336,6 +1336,19 @@ physics_cframe_from_quaternion :: proc(q: kineffi.JPH_Quat) -> datatypes.CFrame 
 	}
 }
 
+Physics_Ensure_Character_Shape :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	root: ^classes.Part,
+) {
+	if service == nil || coll == nil || root == nil || !service.initialized {return}
+	if coll.shape != nil {return}
+	radius, half_height := physics_capsule_size_from_root(root)
+	coll.radius = radius
+	coll.half_height = half_height
+	coll.shape = kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
+}
+
 Physics_Ensure_Character_Capsule :: proc(
 	service: ^Physics,
 	coll: ^classes.CollisionController,
@@ -1344,10 +1357,13 @@ Physics_Ensure_Character_Capsule :: proc(
 ) {
 	if service == nil || coll == nil || root == nil || !service.initialized {return}
 	if coll.body_created {return}
-	radius, half_height := physics_capsule_size_from_root(root)
-	coll.radius = radius
-	coll.half_height = half_height
-	coll.shape = kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
+	if coll.touching_prev == nil {
+		coll.touching_prev = make(map[kineffi.JPH_BodyID]bool)
+	}
+	if coll.touching_now == nil {
+		coll.touching_now = make(map[kineffi.JPH_BodyID]bool)
+	}
+	Physics_Ensure_Character_Shape(service, coll, root)
 	if coll.shape == nil {return}
 	pos := kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)}
 	identity := kineffi.JPH_Quat{0, 0, 0, 1}
@@ -1601,6 +1617,14 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 		kineffi.JPH_Shape_Destroy(coll.shape)
 		coll.shape = nil
 	}
+	if coll.touching_prev != nil {
+		delete(coll.touching_prev)
+		coll.touching_prev = nil
+	}
+	if coll.touching_now != nil {
+		delete(coll.touching_now)
+		coll.touching_now = nil
+	}
 }
 
 
@@ -1627,6 +1651,82 @@ Physics_Fill_Candidate_Bodies :: proc(
 
 		if static_only && !body.anchored && !body.remote {continue}
 		append(out, body.body_id)
+	}
+}
+
+Physics_Character_Touch_Begin :: proc(coll: ^classes.CollisionController) {
+	if coll == nil {return}
+	if coll.touching_now == nil {
+		coll.touching_now = make(map[kineffi.JPH_BodyID]bool)
+	}
+	clear(&coll.touching_now)
+}
+
+Physics_Character_Report_Contact :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	root: ^classes.Part,
+	body_id: kineffi.JPH_BodyID,
+) {
+	if service == nil || coll == nil || root == nil {return}
+	if body_id == kineffi.JPH_BODY_ID_INVALID || body_id == coll.body_id {return}
+	if coll.touching_now == nil {
+		coll.touching_now = make(map[kineffi.JPH_BodyID]bool)
+	}
+	coll.touching_now[body_id] = true
+}
+
+CHARACTER_OVERLAP_RESULTS :: 64
+
+Physics_Character_Report_Overlaps :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	root: ^classes.Part,
+	position: datatypes.Vector3,
+) {
+	if service == nil || coll == nil || root == nil || !service.initialized {return}
+	if coll.shape == nil || service.system.handle == nil {return}
+	results: [CHARACTER_OVERLAP_RESULTS]kineffi.JPH_BodyID
+	count := jolt.System_Overlap_Shape(
+		&service.system,
+		coll.shape,
+		kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)},
+		kineffi.JPH_Quat{0, 0, 0, 1},
+		classes.COLLISION_SKIN,
+		results[:],
+	)
+	for i in 0 ..< count {
+		body_id := results[i]
+		if body_id == coll.body_id {continue}
+		part := physics_part_for_body(service, body_id)
+		if part == nil || part == root {continue}
+		Physics_Character_Report_Contact(service, coll, root, body_id)
+	}
+}
+
+Physics_Character_Touch_End :: proc(
+	service: ^Physics,
+	coll: ^classes.CollisionController,
+	root: ^classes.Part,
+) {
+	if service == nil || coll == nil || root == nil {return}
+	if coll.touching_prev == nil {
+		coll.touching_prev = make(map[kineffi.JPH_BodyID]bool)
+	}
+	if coll.touching_now == nil {return}
+	new_contacts := make([dynamic]kineffi.JPH_BodyID, 0, len(coll.touching_now))
+	defer delete(new_contacts)
+	for body_id in coll.touching_now {
+		if coll.touching_prev[body_id] {continue}
+		append(&new_contacts, body_id)
+	}
+	// Finish the set swap before running any script callbacks. Touched runs
+	// Lua, which may unload the character and delete these maps re-entrantly.
+	coll.touching_prev, coll.touching_now = coll.touching_now, coll.touching_prev
+	clear(&coll.touching_now)
+	for body_id in new_contacts {
+		if root.destroyed {break}
+		physics_fire_touched(service, body_id, root)
 	}
 }
 

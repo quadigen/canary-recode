@@ -1518,6 +1518,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_ScrollingFrame(registry)
 	Register_SoftBody(registry)
 	Register_Sound(registry)
+	Register_SpawnLocation(registry)
 	Register_SphereHandleAdornment(registry)
 	Register_SpotLight(registry)
 	Register_SpringConstraint(registry)

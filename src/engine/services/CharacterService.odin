@@ -6,6 +6,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import target "../target"
 import vm "../vm"
+import "core:math"
 
 CharacterService_Class := classes.Class_Info {
 	name   = "CharacterService",
@@ -91,19 +92,38 @@ character_service_singleplayer :: proc(data_model: ^DataModel) -> bool {
 	)
 }
 
-CharacterService_Spawn_Position :: proc(data_model: ^DataModel) -> datatypes.Vector3 {
-	position := datatypes.Vector3{0, 5, 0}
+character_service_is_spawn_candidate :: proc(object: ^classes.Object) -> bool {
+	if object == nil || object.destroyed {return false}
+	if classes.Is_A(object, "SpawnLocation") {return true}
+	return object.name == "Spawn" && classes.Is_A(object, "Part")
+}
+
+CharacterService_Spawn_Position :: proc(
+	data_model: ^DataModel,
+	origin: ^datatypes.Vector3 = nil,
+) -> datatypes.Vector3 {
+	position := datatypes.Vector3{0, 30, 0}
 	if data_model == nil {return position}
 	workspace := DataModel_Get_Service(data_model, "Workspace")
 	if workspace == nil {return position}
+
+	best_dist := f32(math.F32_MAX)
+	found := false
 	for child in workspace.children {
-		if child != nil &&
-		   !child.destroyed &&
-		   child.name == "Spawn" &&
-		   classes.Is_A(child, "Part") {
-			part := cast(^classes.Part)child
-			position = datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
-			break
+		if !character_service_is_spawn_candidate(child) {continue}
+		part := cast(^classes.Part)child
+		candidate := datatypes.Vector3{part.cframe.x, part.cframe.y + 4, part.cframe.z}
+		if origin == nil {
+			return candidate
+		}
+		dx := candidate.x - origin.x
+		dy := candidate.y - origin.y
+		dz := candidate.z - origin.z
+		dist := dx * dx + dy * dy + dz * dz
+		if !found || dist < best_dist {
+			found = true
+			best_dist = dist
+			position = candidate
 		}
 	}
 	return position
@@ -185,10 +205,21 @@ CharacterService_Update_Death :: proc(
 	player.respawn_timer += delta_time
 	if player.respawn_timer < service.respawn_time {return}
 
+	respawn_origin: datatypes.Vector3
+	has_origin := false
+	if root := classes.CharacterModel_Root(player.character); root != nil {
+		respawn_origin = datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
+		has_origin = true
+	}
+
 	player.ragdoll = false
 	player.respawn_timer = 0
 	CharacterService_Unload(service, player)
-	_ = CharacterService_Load(service, player)
+	if has_origin {
+		_ = CharacterService_Load(service, player, &respawn_origin)
+	} else {
+		_ = CharacterService_Load(service, player)
+	}
 }
 
 character_service_is_template :: proc(object: ^classes.Object) -> bool {
@@ -202,6 +233,7 @@ character_service_is_template :: proc(object: ^classes.Object) -> bool {
 CharacterService_Load :: proc(
 	service: ^CharacterService,
 	player: ^Player,
+	respawn_origin: ^datatypes.Vector3 = nil,
 ) -> ^classes.CharacterModel {
 	if service == nil ||
 	   player == nil ||
@@ -231,12 +263,15 @@ CharacterService_Load :: proc(
 	if !ok || object == nil {return nil}
 	model := cast(^classes.CharacterModel)object
 	model.owner_user_id = player.user_id
-	spawn := CharacterService_Spawn_Position(service.data_model)
+	spawn := CharacterService_Spawn_Position(service.data_model, respawn_origin)
 	starter := DataModel_Get_Service(service.data_model, "StarterPlayer")
 	template := classes.Find_First_Child(starter, "StarterCharacter")
+	template_provides_controller := false
 	if character_service_is_template(template) && template.archivable {
 		root := classes.Find_First_Child(template, "HumanoidRootPart")
 		if root != nil && root.archivable && classes.Is_A(root, "Part") {
+			template_provides_controller =
+				classes.Find_Child(template, "CharacterController") != nil
 			registry := service.data_model.registry
 			classes.CharacterModel_Copy_Template(registry.vm_state.L, registry.classes, model, template)
 		}
@@ -309,7 +344,9 @@ CharacterService_Load :: proc(
 			model,
 		)
 		controller := classes.CharacterController_From_Model(model)
-		StarterPlayer_Apply_Character(service.data_model, controller)
+		if !template_provides_controller {
+			StarterPlayer_Apply_Character(service.data_model, controller)
+		}
 	}
 	return model
 }

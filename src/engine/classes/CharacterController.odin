@@ -45,6 +45,20 @@ character_controller_destroy :: proc(object: ^Object, renderer: ^Renderer_Object
 	free(cast(^CharacterController)object)
 }
 
+character_controller_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^CharacterController)source
+	dst := cast(^CharacterController)destination
+	dst.walk_speed = src.walk_speed
+	dst.jump_height = src.jump_height
+	dst.auto_rotate = src.auto_rotate
+	dst.max_slope_angle = src.max_slope_angle
+	dst.vertical_speed = 0
+	dst.coyote_time = 0
+	dst.step_count = 0
+	dst.knockback = datatypes.Vector3{}
+	dst.ragdoll = false
+}
+
 CharacterController_Root :: proc(cc: ^CharacterController) -> ^Part {
 	if cc == nil || cc.destroyed || cc.object.parent == nil {return nil}
 	if !Is_A(cc.object.parent, "CharacterModel") {return nil}
@@ -101,21 +115,39 @@ Add_Child :: proc(registry: ^Registry, L: ^vm.State, parent: ^Object, class_name
 	return child
 }
 
+character_controller_ensure_child :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	parent: ^Object,
+	class_name: string,
+) -> ^Object {
+	if existing := Find_Child(parent, class_name); existing != nil {return existing}
+	return Add_Child(registry, L, parent, class_name)
+}
+
 CharacterController_Build :: proc(registry: ^Registry, L: ^vm.State, model: ^CharacterModel) {
 	if registry == nil || L == nil || model == nil || model.destroyed {return}
-	if CharacterController_From_Model(model) != nil {return}
-	controller := Add_Child(registry, L, &model.object, "CharacterController")
+	controller := CharacterController_From_Model(model)
+	if controller == nil {
+		controller = cast(^CharacterController)Add_Child(
+			registry,
+			L,
+			&model.object,
+			"CharacterController",
+		)
+	}
 	if controller == nil {return}
-	_ = Add_Child(registry, L, controller, "MovementController")
-	_ = Add_Child(registry, L, controller, "GroundDetector")
-	_ = Add_Child(registry, L, controller, "RotationController")
-	_ = Add_Child(registry, L, controller, "StateMachine")
-	_ = Add_Child(registry, L, controller, "CollisionController")
+	_ = character_controller_ensure_child(registry, L, &controller.object, "MovementController")
+	_ = character_controller_ensure_child(registry, L, &controller.object, "GroundDetector")
+	_ = character_controller_ensure_child(registry, L, &controller.object, "RotationController")
+	_ = character_controller_ensure_child(registry, L, &controller.object, "StateMachine")
+	_ = character_controller_ensure_child(registry, L, &controller.object, "CollisionController")
 	if Find_Child(&model.object, "Humanoid") == nil {
 		_ = Add_Child(registry, L, &model.object, "Humanoid")
 	}
-	motor := Add_Child(registry, L, &model.object, "CharacterMotor")
-	_ = motor
+	if Find_Child(&model.object, "CharacterMotor") == nil {
+		_ = Add_Child(registry, L, &model.object, "CharacterMotor")
+	}
 }
 
 character_controller_get :: proc(
@@ -194,6 +226,7 @@ Register_CharacterController :: proc(registry: ^Registry) {
 		&CharacterController_Class,
 		character_controller_construct,
 		character_controller_destroy,
+		clone = character_controller_clone,
 		get = character_controller_get,
 		set = character_controller_set,
 		namecall = character_controller_namecall,

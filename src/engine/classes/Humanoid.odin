@@ -43,6 +43,19 @@ humanoid_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(h)
 }
 
+humanoid_clone :: proc(source: ^Object, destination: ^Object) {
+	src := cast(^Humanoid)source
+	dst := cast(^Humanoid)destination
+	dst.health = src.health
+	dst.max_health = src.max_health
+	dst.walk_to_target = src.walk_to_target
+	dst.walk_to_active = false
+	dst.stuck_steps = 0
+	dst.walk_last_x = 0
+	dst.walk_last_z = 0
+	dst.health_changed = nil
+}
+
 Humanoid_Take_Damage :: proc(h: ^Humanoid, L: ^vm.State, amount: f32) {
 	if h == nil {return}
 	old := h.health
@@ -268,18 +281,12 @@ Register_Humanoid :: proc(registry: ^Registry) {
 		&Humanoid_Class,
 		humanoid_construct,
 		humanoid_destroy,
+		clone = humanoid_clone,
 		get = humanoid_get,
 		set = humanoid_set,
 		namecall = humanoid_namecall,
 		properties = []string{"Health", "MaxHealth"},
-		methods = []string{
-			"TakeDamage",
-			"Move",
-			"Jump",
-			"WalkTo",
-			"MoveTo",
-			"GetState",
-		},
+		methods = []string{"TakeDamage", "Move", "Jump", "WalkTo", "MoveTo", "GetState"},
 		events = []string{"HealthChanged", "StateChanged"},
 	)
 }

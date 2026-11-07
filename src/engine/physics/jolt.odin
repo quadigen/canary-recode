@@ -292,6 +292,36 @@ System_Cast_Shape :: proc(
 	return
 }
 
+System_Overlap_Shape :: proc(
+	system: ^System,
+	shape: kineffi.JPH_ShapeRef,
+	position: kineffi.JPH_RVec3,
+	rotation: kineffi.JPH_Quat,
+	max_separation: f32,
+	out_bodies: []kineffi.JPH_BodyID,
+	candidate_bodies: []kineffi.JPH_BodyID = nil,
+	filter_mode: kineffi.JPH_RayFilterMode = .None,
+) -> int {
+	if system == nil || system.handle == nil || shape == nil || len(out_bodies) == 0 {return 0}
+	native_position := position
+	native_rotation := rotation
+	ids: ^kineffi.JPH_BodyID
+	if len(candidate_bodies) > 0 {ids = raw_data(candidate_bodies)}
+	return int(kineffi.JPH_PhysicsSystem_OverlapShapeEx(
+		system.handle,
+		shape,
+		&native_position,
+		&native_rotation,
+		max_separation,
+		0,
+		ids,
+		u32(len(candidate_bodies)),
+		filter_mode,
+		raw_data(out_bodies),
+		u32(len(out_bodies)),
+	))
+}
+
 System_Create :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (System, bool) {
 	return System_Create_3D(config)
 }
