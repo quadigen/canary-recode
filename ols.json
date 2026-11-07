@@ -3,5 +3,5 @@
     "enable_document_symbols": true,
     "enable_hover": true,
     "enable_snippets": true,
-    "odin_command": "/usr/bin/odin"
+    "odin_command": "/home/devcell/odinlang-11a/odin"
 }

@@ -77,7 +77,7 @@ Workspace2D_Create_Body :: proc(service: ^classes.Object, child: ^classes.Object
 	shape_def.material.friction = 0.3
 
 	// Attach shape to body.
-	shapeId := box2d.CreatePolygonShape(body_id, shape_def, &polygon)
+	shapeId := box2d.CreatePolygonShape(body_id, shape_def, polygon)
 
 	// Store body reference.
 	workspace.body_map[part] = body_id
