@@ -15,14 +15,79 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:thread"
 
 ExporterService_Class := classes.Class_Info {
 	name   = "ExporterService",
 	parent = &Service_Class,
 }
 
+Export_Bake_Job :: struct {
+	folder:    string,
+	address:   string,
+	port:      u16,
+	game_name: string,
+	map_bytes: []u8,
+	kind:      Exporter_Kind,
+	platform:  Target_Platform,
+	options:   Exporter_Options,
+	message:   string,
+	progress:  f32,
+	ok:        bool,
+	done:      bool,
+}
+
 ExporterService :: struct {
 	using service: Service,
+	job:           ^Export_Bake_Job,
+	worker:        ^thread.Thread,
+	progress:      f32,
+	finished:      bool,
+	last_message:  string,
+	last_ok:       bool,
+}
+
+exporter_bake_run :: proc(t: ^thread.Thread) {
+	job := cast(^Export_Bake_Job)t.data
+	ok, message := Exporter_Bake(
+		job.folder,
+		job.address,
+		job.port,
+		job.game_name,
+		job.map_bytes,
+		job.kind,
+		job.platform,
+		job.options,
+		&job.progress,
+	)
+	job.ok = ok
+	job.message = strings.clone(message)
+	job.progress = 1
+	job.done = true
+}
+
+exporter_service_collect :: proc(service: ^ExporterService) {
+	worker := service.worker
+	if worker == nil {return}
+	if !thread.is_done(worker) {return}
+	thread.join(worker)
+	thread.destroy(worker)
+	service.worker = nil
+	job := service.job
+	service.job = nil
+	if job == nil {return}
+	service.progress = job.progress
+	service.last_ok = job.ok
+	delete(service.last_message)
+	service.last_message = job.message
+	delete(job.folder)
+	delete(job.address)
+	delete(job.game_name)
+	delete(job.map_bytes)
+	delete(job.options.output_name)
+	delete(job.options.icon_path)
+	free(job)
+	service.finished = true
 }
 
 Exporter_Kind :: enum {
@@ -113,6 +178,7 @@ Exporter_Bake :: proc(
 	kind: Exporter_Kind,
 	p: Target_Platform,
 	options: Exporter_Options = {},
+	progress: ^f32 = nil,
 ) -> (
 	ok: bool,
 	message: string,
@@ -141,7 +207,8 @@ Exporter_Bake :: proc(
 	}
 	written: [dynamic]string
 	defer delete(written)
-	for candidate in targets {
+	for candidate, index in targets {
+		if progress != nil {progress^ = 0.05 + 0.9 * f32(index) / f32(len(targets))}
 		template_kind := Template_Kind.Server if candidate == .Server else Template_Kind.Client
 		mode := target.Mode.Server if candidate == .Server else target.Mode.Client
 		if candidate == .Singleplayer {
@@ -173,6 +240,7 @@ Exporter_Bake :: proc(
 	if options.clean && !exporter_remove_previous(folder, written[:]) {
 		return false, "Could not remove a previous export"
 	}
+	if progress != nil {progress^ = 1}
 	return true, ""
 }
 
@@ -188,8 +256,26 @@ exporter_service_construct :: proc(
 }
 
 exporter_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	service := cast(^ExporterService)object
+	if worker := service.worker; worker != nil {
+		thread.join(worker)
+		thread.destroy(worker)
+		service.worker = nil
+	}
+	if job := service.job; job != nil {
+		delete(job.folder)
+		delete(job.address)
+		delete(job.game_name)
+		delete(job.map_bytes)
+		delete(job.options.output_name)
+		delete(job.options.icon_path)
+		delete(job.message)
+		free(job)
+		service.job = nil
+	}
+	delete(service.last_message)
 	classes.Object_Destroy(object)
-	free(cast(^ExporterService)object)
+	free(service)
 }
 
 exporter_service_get :: proc(
@@ -204,6 +290,8 @@ exporter_service_get :: proc(
 		if !vm.ThreadHasSecurityCapability(L, EXPORTER_INTERNALS_CAPABILITY) {
 			return false
 		}
+		vm.PushUserdataMethod(L, key)
+	case "GetExportProgress", "IsExporting", "GetExportError":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -242,7 +330,22 @@ exporter_service_namecall :: proc(
 	i32,
 	bool,
 ) {
+	service := cast(^ExporterService)object
 	switch method {
+	case "GetExportProgress":
+		exporter_service_collect(service)
+		progress := service.progress
+		if job := service.job; job != nil {progress = job.progress}
+		vm.PushNumber(L, f64(progress))
+		return 1, true
+	case "IsExporting":
+		exporter_service_collect(service)
+		vm.PushBoolean(L, service.worker != nil)
+		return 1, true
+	case "GetExportError":
+		exporter_service_collect(service)
+		vm.PushString(L, service.last_ok ? "" : service.last_message)
+		return 1, true
 	case "ExportExecutable":
 		if !vm.ThreadHasSecurityCapability(L, EXPORTER_INTERNALS_CAPABILITY) {
 			return vm.RaiseError(
@@ -327,24 +430,60 @@ exporter_service_namecall :: proc(
 				}
 			}
 		}
-		bake_ok, message := Exporter_Bake(
-			folder,
-			address,
-			u16(port),
-			game_name,
-			map_data,
-			kind,
-			platform,
-			options,
-		)
-		if !bake_ok {
-			return vm.RaiseError(
-					L,
-					fmt.tprintf("ExporterService:ExportExecutable failed: %s", message),
-				),
-				true
+		exporter_service_collect(service)
+		if service.worker != nil {
+			return vm.RaiseError(L, "ExporterService:ExportExecutable is already running"), true
 		}
-		vm.PushString(L, message)
+		job := new(Export_Bake_Job)
+		job.folder = strings.clone(folder)
+		job.address = strings.clone(address)
+		job.port = u16(port)
+		job.game_name = strings.clone(game_name)
+		job.map_bytes = make([]u8, len(map_data))
+		copy(job.map_bytes, map_data)
+		job.kind = kind
+		job.platform = platform
+		job.options = options
+		job.options.output_name = strings.clone(options.output_name)
+		job.options.icon_path = strings.clone(options.icon_path)
+		worker := thread.create(exporter_bake_run)
+		if worker == nil {
+			bake_ok, message := Exporter_Bake(
+				folder,
+				address,
+				u16(port),
+				game_name,
+				map_data,
+				kind,
+				platform,
+				options,
+			)
+			delete(job.folder)
+			delete(job.address)
+			delete(job.game_name)
+			delete(job.map_bytes)
+			delete(job.options.output_name)
+			delete(job.options.icon_path)
+			free(job)
+			if !bake_ok {
+				return vm.RaiseError(
+						L,
+						fmt.tprintf("ExporterService:ExportExecutable failed: %s", message),
+					),
+					true
+			}
+			vm.PushString(L, message)
+			return 1, true
+		}
+		worker.data = job
+		thread.start(worker)
+		service.job = job
+		service.worker = worker
+		service.progress = 0
+		service.finished = false
+		delete(service.last_message)
+		service.last_message = ""
+		vm.PushString(L, "Export started")
 		return 1, true
 	}
 	return 0, false

@@ -212,7 +212,7 @@ KineViewportPage *kine_vp_get_page(KineFilamentContext *ctx, int cell) {
         .import(p->glTexture).build(*ctx->engine);
 #endif
     p->depth = Texture::Builder().width(KINE_VP_ATLAS_SIZE).height(KINE_VP_ATLAS_SIZE).levels(1)
-        .format(Texture::InternalFormat::DEPTH24).usage(Texture::Usage::DEPTH_ATTACHMENT).build(*ctx->engine);
+        .format(Texture::InternalFormat::DEPTH32F).usage(Texture::Usage::DEPTH_ATTACHMENT).build(*ctx->engine);
     p->target = RenderTarget::Builder().texture(RenderTarget::AttachmentPoint::COLOR, p->color)
         .texture(RenderTarget::AttachmentPoint::DEPTH, p->depth).build(*ctx->engine);
     if (!p->target) {kine_vp_free_page(ctx, *p); return nullptr;}
@@ -224,7 +224,7 @@ KineViewportScratch *kine_vp_scratch(KineFilamentContext *ctx, int width, int he
     auto p = std::make_unique<KineViewportScratch>(); p->cell = std::max(width,height);p->width=width;p->height=height;
     p->color = Texture::Builder().width(width).height(height).levels(1).format(Texture::InternalFormat::RGBA8)
         .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE).build(*ctx->engine);
-    p->depth = Texture::Builder().width(width).height(height).levels(1).format(Texture::InternalFormat::DEPTH24)
+    p->depth = Texture::Builder().width(width).height(height).levels(1).format(Texture::InternalFormat::DEPTH32F)
         .usage(Texture::Usage::DEPTH_ATTACHMENT).build(*ctx->engine);
     p->target = RenderTarget::Builder().texture(RenderTarget::AttachmentPoint::COLOR,p->color)
         .texture(RenderTarget::AttachmentPoint::DEPTH,p->depth).build(*ctx->engine);

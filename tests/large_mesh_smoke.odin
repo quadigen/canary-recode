@@ -181,7 +181,7 @@ part.Color=Color3.new(1,1,1)
 	if len(os.args) > 1 {
 		saved, save_error := vm.RunInternal(
 			&v,
-			`assert(game:GetService("ExportService"):ExportToFile("build/sponza/Sponza.kine"))`,
+			`assert(game:GetService("ExportService"):ExportToFileSync("build/sponza/Sponza.kine"))`,
 			"save_sponza",
 		)
 		assert(saved, save_error)

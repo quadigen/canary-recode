@@ -47,23 +47,23 @@ Asset_Kind :: enum u8 {
 
 // Asset is one embedded blob. Bytes are owned by the store.
 Asset :: struct {
-	id:    string,
-	path:  string, // path as authored; kept so an editor round-trip can show it
-	kind:  Asset_Kind,
-	bytes: []u8,
+	id:     string,
+	path:   string, // path as authored; kept so an editor round-trip can show it
+	kind:   Asset_Kind,
+	bytes:  []u8,
 	// cached is the on-disk copy written by Materialize, so repeated loads of
 	// the same content do not re-extract it.
 	cached: string,
 }
 
-	assets: [dynamic]Asset
-	index:  map[string]int
-	// missing_reported deduplicates the "the map says this is embedded but it
-	// is not here" diagnostic, which would otherwise repeat per instance per frame.
-	missing_reported: map[string]bool
+assets: [dynamic]Asset
+index: map[string]int
+// missing_reported deduplicates the "the map says this is embedded but it
+// is not here" diagnostic, which would otherwise repeat per instance per frame.
+missing_reported: map[string]bool
 
 FNV_OFFSET: u64 : 14695981039346656037
-FNV_PRIME:  u64 : 1099511628211
+FNV_PRIME: u64 : 1099511628211
 
 // Content_Id derives the dedup key for a blob. FNV-1a is what the rest of the
 // engine uses for content hashing. It is an identity key rather than a
@@ -235,12 +235,7 @@ store :: proc(id, path: string, kind: Asset_Kind, data: []u8) {
 	// that frees its own id or path cannot leave a dangling key behind.
 	append(
 		&assets,
-		Asset{
-			id    = strings.clone(id),
-			path  = strings.clone(path),
-			kind  = kind,
-			bytes = data,
-		},
+		Asset{id = strings.clone(id), path = strings.clone(path), kind = kind, bytes = data},
 	)
 	position := len(assets) - 1
 	index[assets[position].id] = position
@@ -334,19 +329,30 @@ Resolve_C_Path :: proc(uri: string) -> cstring {
 	return strings.clone_to_cstring(path)
 }
 
-// Report_Missing_Asset notes that a "kineasset://" reference could not be
-// resolved to bytes.
-//
-// A plain path that fails to load is ordinary authoring, and consumers already
-// have a sensible answer for it. A missing embedded reference never is: the map
-// said those bytes were inside it, so the only outcomes are a server that never
-// sent its asset table, a client that skipped the map load, or a truncated
-// transfer. Left unreported, every one of those renders as a primitive box and
-// looks like a working scene.
-//
-// Reports are deduplicated per value because these lookups happen per instance
-// per part per frame, and a map with one bad reference would otherwise flood the
-// log with the same line.
+UGC_Assets_Enabled :: proc() -> bool {
+	return #config(BUILD_TARGET, "editor") != "editor"
+}
+
+Resolve_Ugc_Asset :: proc(value: string, kind: Asset_Kind) -> string {
+	if value == "" || !UGC_Assets_Enabled() {
+		return strings.clone(value)
+	}
+	if Is_Uri(value) || strings.contains(value, "://") || strings.has_prefix(value, "data:") {
+		return strings.clone(value)
+	}
+	data, found := Read_Asset_File(value)
+	if !found || len(data) == 0 {
+		if data != nil {delete(data)}
+		return strings.clone(value)
+	}
+	id := Register(data, value, kind)
+	defer delete(id)
+	if id == "" {
+		return strings.clone(value)
+	}
+	return Make_Uri(id)
+}
+
 Report_Missing_Asset :: proc(uri, subject: string) {
 	if !Is_Uri(uri) {return}
 	if missing_reported == nil {

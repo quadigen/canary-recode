@@ -61,6 +61,7 @@ replication_forget_peer_entity :: proc(connection: ^Replication_Peer, id: u32) {
 	delete_key(&connection.acked_state, id)
 	delete_key(&connection.acked_property, id)
 	delete_key(&connection.acked_extra, id)
+	delete_key(&connection.deformable, id)
 }
 
 replication_entity_new :: proc(
@@ -1282,6 +1283,9 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		if service.mode == .Server && service.terrain_sync_due {
 			replication_send_terrain_delta(service, &connection)
 		}
+		if service.mode == .Server {
+			replication_send_deformables(service, &connection)
+		}
 
 
 		focus_x, focus_y, focus_z, has_focus := replication_focus(service, &connection)
@@ -1536,6 +1540,59 @@ replication_velocity_desc :: proc(a: ^Replication_Entity, b: ^Replication_Entity
 	return 0
 }
 
+
+REPLICATION_MAX_DEFORMABLES_PER_TICK :: 8
+
+replication_send_deformables :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
+	if service == nil || connection == nil {return}
+	sent := 0
+	for item in service.entity_list {
+		if sent >= REPLICATION_MAX_DEFORMABLES_PER_TICK {break}
+		object := item.object
+		if object == nil || object.destroyed {continue}
+		if connection.known[item.id] == 0 || !connection.initialized[item.id] {continue}
+		if service.suppressed[object] {continue}
+		if classes.Is_A(object, "Cloth") {
+			cloth := cast(^classes.Cloth)object
+			if !cloth.enabled || !cloth.initialized {continue}
+			if connection.deformable[item.id] == cloth.revision {continue}
+			bytes: [dynamic]u8
+			replication_put_u32(&bytes, item.id)
+			append(&bytes, Replication_Deformable_Cloth)
+			for particle in cloth.particles {
+				replication_put_f32(&bytes, particle.position.x)
+				replication_put_f32(&bytes, particle.position.y)
+				replication_put_f32(&bytes, particle.position.z)
+			}
+			if replication_send(service, connection.peer, Replication_Kind_Deformable, bytes[:]) {
+				connection.deformable[item.id] = cloth.revision
+				sent += 1
+			}
+			delete(bytes)
+		} else if classes.Is_A(object, "SoftBody") {
+			body := cast(^classes.SoftBody)object
+			if !body.enabled || len(body.positions) == 0 {continue}
+			if len(body.positions) > int(Replication_Deformable_Max_Vertices) {continue}
+			if connection.deformable[item.id] == body.revision {continue}
+			frame := classes.SoftBody_Current_CFrame(body)
+			bytes: [dynamic]u8
+			replication_put_u32(&bytes, item.id)
+			append(&bytes, Replication_Deformable_SoftBody)
+			replication_put_cframe(&bytes, frame)
+			replication_put_u32(&bytes, u32(len(body.positions)))
+			for position in body.positions {
+				replication_put_f32(&bytes, position.x)
+				replication_put_f32(&bytes, position.y)
+				replication_put_f32(&bytes, position.z)
+			}
+			if replication_send(service, connection.peer, Replication_Kind_Deformable, bytes[:]) {
+				connection.deformable[item.id] = body.revision
+				sent += 1
+			}
+			delete(bytes)
+		}
+	}
+}
 
 replication_send_extra_properties :: proc(
 	service: ^ReplicatorService,

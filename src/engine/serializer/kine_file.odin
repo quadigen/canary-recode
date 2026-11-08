@@ -172,6 +172,42 @@ Write_File_Data :: proc(path: string, data: []u8) -> Error {
 }
 
 
+Write_File_Data_Progress :: proc(path: string, data: []u8, progress: ^f32) -> Error {
+	if progress != nil {progress^ = 0.1}
+	compressed, compress_err := compress_kine(data)
+	defer Error_Delete(&compress_err)
+	defer delete(compressed)
+	payload := data
+	if Error_Is_None(compress_err) && len(compressed) < len(data) {payload = compressed}
+	if progress != nil {progress^ = 0.55}
+
+	file, open_err := os.create(path)
+	if open_err != nil {
+		return Error_Make(.File_Write_Failed, -1, "could not create %s: %v", path, open_err)
+	}
+	defer os.close(file)
+
+	total := len(payload)
+	written := 0
+	for written < total {
+		chunk := min(1 << 20, total - written)
+		count, write_err := os.write(file, payload[written:written + chunk])
+		if write_err != nil || count <= 0 {
+			return Error_Make(
+				.File_Write_Failed,
+				-1,
+				"could not write %d bytes to %s",
+				total,
+				path,
+			)
+		}
+		written += count
+		if progress != nil {progress^ = 0.55 + 0.45 * f32(written) / f32(total)}
+	}
+	if progress != nil {progress^ = 1}
+	return Error_None
+}
+
 Deserialize_From_Data :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,

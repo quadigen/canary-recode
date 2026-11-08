@@ -284,14 +284,15 @@ Sound_set :: proc(
 
 	switch key {
 	case "SoundId":
-		path := vm.ArgString(L, value_index)
+		path := assetstore.Resolve_Ugc_Asset(vm.ArgString(L, value_index), .Audio)
 
 		if sound.sound_path == path && audio.is_loaded(&sound.sound) {
+			delete(path)
 			return true
 		}
 
 		delete(sound.sound_path)
-		sound.sound_path = strings.clone(path)
+		sound.sound_path = path
 		Sound_Reload(sound)
 		return true
 

@@ -134,7 +134,7 @@ sphere.Size=Vector3.new(1.6,1.6,1.6);sphere.Position=Vector3.new(2.5,2.4,0)
 		assert(k.Kine_Filament_GetReflectionProbeCaptureCount(ctx) > 0)
 		ok, err := vm.RunInternal(
 			&v,
-			`assert(game:GetService("ExportService"):ExportToFile("build/sponza/Sponza-lighting.kine"))`,
+			`assert(game:GetService("ExportService"):ExportToFileSync("build/sponza/Sponza-lighting.kine"))`,
 			"save_sponza_lighting",
 		)
 		assert(ok, err)

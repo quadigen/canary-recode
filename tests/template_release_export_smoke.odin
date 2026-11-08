@@ -48,7 +48,7 @@ part.Parent = model
 model.Parent = game:GetService("Workspace")
 
 assert(
-	game:GetService("ExportService"):ExportToFile("` +
+	game:GetService("ExportService"):ExportToFileSync("` +
 		KINE_PATH +
 		`"),
 	"ExportService:ExportToFile returned false"
@@ -149,8 +149,10 @@ main :: proc() {
 	if bundled {
 		assert(os.are_paths_identical(filepath.dir(filepath.dir(template_path)), cache_dir))
 	} else {
-		assert(template_path == cached_path ||
-		       os.are_paths_identical(filepath.dir(filepath.dir(template_path)), cache_dir))
+		assert(
+			template_path == cached_path ||
+			os.are_paths_identical(filepath.dir(filepath.dir(template_path)), cache_dir),
+		)
 	}
 
 

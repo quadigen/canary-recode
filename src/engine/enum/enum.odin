@@ -755,6 +755,11 @@ AvatarItemType :: enum {
 	Bundle = 2,
 }
 
+Dimension :: enum {
+	D3 = 1,
+	D2 = 2,
+}
+
 AvatarPromptResult :: enum {
 	Success          = 1,
 	PermissionDenied = 2,
@@ -4544,11 +4549,6 @@ KinemiumMouseCursor :: enum {
 	MOUSE_CURSOR_RESIZE_NESW   = 8,
 	MOUSE_CURSOR_RESIZE_ALL    = 9,
 	MOUSE_CURSOR_NOT_ALLOWED   = 10,
-}
-
-Dimension :: enum {
-	_2D = 1,
-	_3D = 2,
 }
 
 VerticalAlignment :: enum {

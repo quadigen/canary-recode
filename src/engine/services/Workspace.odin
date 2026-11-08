@@ -1,5 +1,6 @@
 package services
 // wire:service global="workspace"
+import "core:fmt"
 
 
 import assetstore "../assetstore"
@@ -44,6 +45,7 @@ Workspace :: struct {
 	fall_height_enabled:         bool,
 	distributed_game_time:       f64,
 	simulate_physics:            bool,
+	dimension:                   enums.Dimension,
 	global_wind:                 datatypes.Vector3,
 	current_camera:              ^classes.Camera,
 	finished_replicating:        ^signals.Signal,
@@ -83,6 +85,7 @@ workspace_construct :: proc(
 	workspace.simulate_physics = true
 	workspace.enable_3d = true
 	workspace.cull_parts = true
+	workspace.dimension = enums.Dimension.D3
 	workspace.max_draw_distance = 0
 	workspace.lod_distance = 0
 	return &workspace.object
@@ -712,10 +715,31 @@ workspace_append_draw_items :: proc(
 	}
 }
 
-workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+workspace_render_2d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	datamodel := cast(^DataModel)ctx.data_model
+	fmt.println("Casted datamodel")
+	workspace2d := DataModel_Get_Service(datamodel, "Workspace2D")
+	fmt.println("Got workspace 2d service")
+	Workspace2D_Render(workspace2d, ctx)
+	fmt.println("Rendered 2d")
+}
+
+workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	workspace := cast(^Workspace)object
+
+	if workspace.dimension == enums.Dimension.D2 {
+		fmt.println("Starting to render 2d")
+		workspace_render_2d(object, ctx)
+		fmt.println("Settin filament to false")
+		ctx.renderer.RenderFilament = false
+		fmt.println("Returning")
+		return
+	}
+
+	ctx.renderer.RenderFilament = true
+
 	tracy.ZoneNC("Workspace Render 3D", 0xB48EAD)
 	z := profiling.Begin("Workspace Render 3D", 0xB48EAD)
-	workspace := cast(^Workspace)object
 	if !workspace_has_parts(object) {return}
 	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
 
@@ -728,7 +752,6 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 	{
 		tc := tracy.ZoneNC("WS Collect Draw Items", 0xB48EAD)
 		collect := profiling.Begin("WS Collect Draw Items", 0xB48EAD)
-
 
 		platform.GetWindowSize(ctx.renderer.Window, &window_width, &window_height)
 
@@ -783,7 +806,6 @@ workspace_render_3d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Co
 			ts := tracy.ZoneNC("WS Filament Submit", 0xC678DD)
 			submit := profiling.Begin("WS Filament Submit", 0xC678DD)
 			tracy.ZoneValue(ts, u64(len(items^)))
-
 
 			hash := workspace_hash_u64(params.hash, u64(len(items^)))
 			if !workspace.draw_hash_valid || hash != workspace.draw_hash {
@@ -849,6 +871,9 @@ workspace_get :: proc(
 		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
 		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
+	case "Dimension":
+		if enum_registry == nil {return false}
+		_ = enums.Push_Item_By_Value(L, enum_registry, "Dimension", i64(workspace.dimension))
 	case "Enable3dRendering":
 		vm.PushBoolean(L, workspace.enable_3d)
 	case "GlobalWind":
@@ -909,6 +934,10 @@ workspace_set :: proc(
 		physics := workspace_physics(workspace)
 		if physics == nil {return false}
 		Physics_Set_Gravity(physics, f32(vm.ArgNumber(L, value_index)))
+	case "Dimension":
+		if enum_registry == nil {return false}
+		item := enums.Arg_Item(L, value_index, enum_registry, "Dimension")
+		workspace.dimension = enums.Dimension(item.value)
 	case "GlobalWind":
 		wind := datatypes.Arg_Vector3(L, value_index)
 		if !physics_finite_f32(wind.x) ||
@@ -1005,6 +1034,9 @@ workspace_namecall :: proc(
 	case "GetNumAwakeParts":
 		vm.PushNumber(L, f64(Physics_Get_Num_Awake_Parts(physics)))
 		return 1, true
+	case "Dimension":
+		if enum_registry == nil {return 0, false}
+		_ = enums.Push_Item_By_Value(L, enum_registry, "Dimension", i64(workspace.dimension))
 	case "GetPhysicsThrottling":
 		vm.PushNumber(L, 0)
 		return 1, true
@@ -1079,6 +1111,7 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"FallenPartsDestroyHeight",
 			"FallHeightEnabled",
 			"DistributedGameTime",
+			"Dimension",
 			"RenderCulling",
 			"MaxDrawDistance",
 			"Enable3dRendering",

@@ -195,6 +195,7 @@ when !KINE_RENDERER_GL {
 
 	init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
 		width, height := width, height
+		_ = sdl3.SetAppMetadata("Kinemium", "", "kinemium")
 		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
 			show_fatal_error("Failed to initialize SDL")
 			return
@@ -467,9 +468,15 @@ when !KINE_RENDERER_GL {
 					// forces Skia to copy-on-write the swapchain image in the
 					// middle of a frame, which loses the overlay and invalidates
 					// the image layout tracking.
-					if rendered_3d == false &&
-					   base_skia_surface != nil &&
-					   overlay_surface != base_skia_surface {
+					if rendered_3d {
+						// The overlay wraps the swapchain image after Filament has
+						// rendered the 3D scene. Snapshot it before UI draws so
+						// UIBackdrop effects can sample the scene behind them.
+						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
+							cast(^kineffi.KineSkiaSurface)overlay_surface,
+							cast(^kineffi.KineSkiaSurface)overlay_surface,
+						)
+					} else if base_skia_surface != nil && overlay_surface != base_skia_surface {
 						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
 							cast(^kineffi.KineSkiaSurface)overlay_surface,
 							cast(^kineffi.KineSkiaSurface)base_skia_surface,

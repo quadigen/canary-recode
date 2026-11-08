@@ -99,6 +99,7 @@ Replication_Peer :: struct {
 	acked_state:               map[u32]u32,
 	acked_property:            map[u32]u32,
 	acked_extra:               map[u32]u32,
+	deformable:                map[u32]u64,
 	bytes_this_tick:           u32,
 	handshake_complete:        bool,
 	terrain_initial_sent:      bool,
@@ -142,6 +143,7 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	delete(connection.acked_state)
 	delete(connection.acked_property)
 	delete(connection.acked_extra)
+	delete(connection.deformable)
 	connection.known = nil
 	connection.initialized = nil
 	connection.part_states = nil
@@ -150,6 +152,7 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	connection.acked_state = nil
 	connection.acked_property = nil
 	connection.acked_extra = nil
+	connection.deformable = nil
 }
 
 Replication_Schema :: struct {

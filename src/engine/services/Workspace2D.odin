@@ -142,7 +142,6 @@ Register_Workspace2D_Class :: proc(registry: ^classes.Registry) {
 		&Workspace2D_Class,
 		Workspace2D_construct,
 		Workspace2D_destroy,
-		_step = Workspace2D_Render,
 		creatable = false,
 	)
 }

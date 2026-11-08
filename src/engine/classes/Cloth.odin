@@ -23,7 +23,7 @@ Cloth_Particle :: struct {
 
 Cloth :: struct {
 	using object:            Object,
-	attachment:              ^Object,
+	attachment, attachment1: ^Object,
 	size:                    datatypes.Vector2,
 	color:                   datatypes.Color3,
 	material_variant:        string,
@@ -69,22 +69,71 @@ Cloth_Forget_Attachment :: proc(attachment: ^Object) {
 			cloth.initialized = false
 			cloth.impulse = {}
 		}
+		if cloth.attachment1 == attachment {
+			cloth.attachment1 = nil
+			cloth.initialized = false
+			cloth.impulse = {}
+		}
 	}
+}
+
+cloth_set_attachment :: proc(cloth: ^Cloth, value: ^Object, slot: int) {
+	if slot == 0 {
+		if cloth.attachment != value {
+			cloth.attachment = value
+			cloth.initialized = false
+			cloth.impulse = {}
+		}
+		return
+	}
+	if cloth.attachment1 != value {
+		cloth.attachment1 = value
+		cloth.initialized = false
+		cloth.impulse = {}
+	}
+}
+
+Cloth_Pin_Count :: proc(cloth: ^Cloth) -> int {
+	if cloth.attachment1 != nil && !cloth.attachment1.destroyed {return 2}
+	return 1
+}
+
+Cloth_Pin_Index :: proc(cloth: ^Cloth, slot: int) -> int {
+	if cloth.attachment1 != nil && !cloth.attachment1.destroyed {
+		return slot == 0 ? 0 : CLOTH_SEGMENTS
+	}
+	return CLOTH_PIN
+}
+
+Cloth_Pinned :: proc(cloth: ^Cloth, index: int) -> bool {
+	if cloth.attachment1 != nil && !cloth.attachment1.destroyed {
+		return index == 0 || index == CLOTH_SEGMENTS
+	}
+	return index == CLOTH_PIN
 }
 
 cloth_clone :: proc(source, destination: ^Object) {
 	src, dst := cast(^Cloth)source, cast(^Cloth)destination
-	dst.attachment = src.attachment
+	dst.attachment, dst.attachment1 = src.attachment, src.attachment1
 	dst.size, dst.color = src.size, src.color
 	dst.material_variant = strings.clone(src.material_variant)
 	dst.enabled, dst.can_collide = src.enabled, src.can_collide
 	dst.mass, dst.damping, dst.force = src.mass, src.damping, src.force
 }
 
-// The top center is pinned. Attachment rotation sets the initial sheet plane.
 Cloth_Anchor :: proc(cloth: ^Cloth, workspace: ^Object) -> (datatypes.CFrame, bool) {
-	if cloth.attachment == nil || cloth.attachment.destroyed {return {}, false}
-	attachment := cast(^Attachment)cloth.attachment
+	return Cloth_Anchor_At(cloth, workspace, 0)
+}
+
+// The top center is pinned, or both top corners when Attachment1 is present.
+Cloth_Anchor_At :: proc(
+	cloth: ^Cloth,
+	workspace: ^Object,
+	slot: int,
+) -> (datatypes.CFrame, bool) {
+	attachment_object := slot == 0 ? cloth.attachment : cloth.attachment1
+	if attachment_object == nil || attachment_object.destroyed {return {}, false}
+	attachment := cast(^Attachment)attachment_object
 	parent := attachment.parent
 	if !Is_A_Class(parent, &Part_Class) || !Is_Descendant_Of(parent, workspace) {return {}, false}
 	part := cast(^Part)parent
@@ -136,6 +185,8 @@ cloth_get :: proc(
 	switch key {
 	case "Attachment0":
 		Push_Object(L, cloth.attachment)
+	case "Attachment1":
+		Push_Object(L, cloth.attachment1)
 	case "Size":
 		datatypes.Push_Vector2(L, datatypes_registry, cloth.size)
 	case "Color":
@@ -170,17 +221,13 @@ cloth_set :: proc(
 ) -> bool {
 	cloth := cast(^Cloth)object
 	switch key {
-	case "Attachment0":
+	case "Attachment0", "Attachment1":
 		value := object_from_argument(L, index)
 		if !vm.IsNil(L, index) && !Is_A_Class(value, &Attachment_Class) {
-			_ = vm.RaiseError(L, "Attachment0 must be an Attachment or nil")
+			_ = vm.RaiseError(L, "Attachment0 and Attachment1 must be an Attachment or nil")
 			return true
 		}
-		if cloth.attachment != value {
-			cloth.attachment = value
-			cloth.initialized = false
-			cloth.impulse = {}
-		}
+		cloth_set_attachment(cloth, value, key == "Attachment1" ? 1 : 0)
 	case "Size":
 		size := datatypes.Arg_Vector2(L, index, datatypes_registry)
 		if !(size.X >= 0.1 && size.X <= 1024 && size.Y >= 0.1 && size.Y <= 1024) {
@@ -264,6 +311,7 @@ Register_Cloth :: proc(registry: ^Registry) {
 		clone = cloth_clone,
 		properties = []string {
 			"Attachment0",
+			"Attachment1",
 			"Size",
 			"Color",
 			"MaterialVariant",

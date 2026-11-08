@@ -239,7 +239,7 @@ ImageLabel_Set_Image :: proc(image_label: ^ImageLabel, path: string) {
 	// Copy property string.
 	//
 
-	copy := strings.clone(path)
+	copy := assetstore.Resolve_Ugc_Asset(path, .Texture)
 
 	delete(image_label.owned_image)
 

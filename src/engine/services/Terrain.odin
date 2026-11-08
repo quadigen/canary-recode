@@ -209,6 +209,9 @@ Terrain :: struct {
 	preparing:          bool,
 	mesh_batch:         ^Terrain_Mesh_Batch,
 	mesh_worker:        ^thread.Thread,
+	generation:         ^Terrain_Generation,
+	generation_worker:  ^thread.Thread,
+	generation_cursor:  int,
 	voxel_size:         f32,
 	iso_level:          f32,
 	replication_dirty:  map[Terrain_Voxel_Key]Terrain_Dirty_Cell,
@@ -1311,6 +1314,22 @@ Terrain_Mesh_Job :: struct {
 	indices:          [dynamic]u16,
 }
 
+Terrain_Generated_Cell :: struct {
+	x, y, z:   i32,
+	occupancy: f32,
+	material:  enums.Material,
+	erase:     bool,
+}
+
+Terrain_Generation :: struct {
+	pos_x, pos_y, pos_z: int,
+	width, height:       int,
+	options:             Terrain_Fill_Options,
+	cells:               [dynamic]Terrain_Generated_Cell,
+}
+
+TERRAIN_GENERATION_APPLY_PER_FRAME :: 32768
+
 Terrain_Mesh_Batch :: struct {
 	snapshot:           Terrain,
 	jobs:               [TERRAIN_REBUILDS_PER_FRAME]Terrain_Mesh_Job,
@@ -1714,6 +1733,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 	if service.texture_set == nil && service.texture_context == renderer.Filament {
 		terrain_ensure_texture_set(service, renderer)
 	}
+	if terrain_poll_generation(service) {return}
 	if terrain_poll_mesh_batch(service, renderer) {return}
 
 
@@ -2342,11 +2362,19 @@ terrain_read_fill_options :: proc(
 	return options
 }
 
-terrain_fill_generated :: proc(
-	service: ^Terrain,
-	pos_x, pos_y, pos_z, width, height: int,
-	options: Terrain_Fill_Options,
-) {
+terrain_generation_run :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
+	tracy.ZoneNC("Terrain Generation Worker", 0xC678DD)
+	job := cast(^Terrain_Generation)t.data
+	terrain_generate_cells(job, &job.cells)
+}
+
+terrain_generate_cells :: proc(job: ^Terrain_Generation, out: ^[dynamic]Terrain_Generated_Cell) {
+	options := job.options
+	pos_x, pos_y, pos_z := job.pos_x, job.pos_y, job.pos_z
+	width, height := job.width, job.height
 	if width < 1 || height < 1 {
 		return
 	}
@@ -2460,7 +2488,10 @@ terrain_fill_generated :: proc(
 				}
 
 				if density <= 0 {
-					terrain_erase_cell(service, x, y, z)
+					append(
+						out,
+						Terrain_Generated_Cell{x = i32(x), y = i32(y), z = i32(z), erase = true},
+					)
 					continue
 				}
 
@@ -2477,10 +2508,125 @@ terrain_fill_generated :: proc(
 					material = .Slate
 				}
 
-				terrain_set_cell(service, x, y, z, density, 0, material)
+				append(
+					out,
+					Terrain_Generated_Cell {
+						x = i32(x),
+						y = i32(y),
+						z = i32(z),
+						occupancy = density,
+						material = material,
+					},
+				)
 			}
 		}
 	}
+}
+
+terrain_apply_generated :: proc(
+	service: ^Terrain,
+	cells: []Terrain_Generated_Cell,
+	start, count: int,
+) -> int {
+	end := min(start + count, len(cells))
+	for index in start ..< end {
+		cell := cells[index]
+		if cell.erase {
+			terrain_erase_cell(service, int(cell.x), int(cell.y), int(cell.z))
+		} else {
+			terrain_set_cell(
+				service,
+				int(cell.x),
+				int(cell.y),
+				int(cell.z),
+				cell.occupancy,
+				0,
+				cell.material,
+			)
+		}
+	}
+	return end
+}
+
+terrain_release_generation :: proc(service: ^Terrain) {
+	if worker := service.generation_worker; worker != nil {
+		thread.join(worker)
+		thread.destroy(worker)
+		service.generation_worker = nil
+	}
+	if job := service.generation; job != nil {
+		delete(job.cells)
+		free(job)
+		service.generation = nil
+	}
+	service.generation_cursor = 0
+}
+
+terrain_start_generation :: proc(
+	service: ^Terrain,
+	pos_x, pos_y, pos_z, width, height: int,
+	options: Terrain_Fill_Options,
+) {
+	if width < 1 || height < 1 {return}
+	terrain_release_generation(service)
+	job := new(Terrain_Generation)
+	job.pos_x, job.pos_y, job.pos_z = pos_x, pos_y, pos_z
+	job.width, job.height = width, height
+	job.options = options
+	worker := thread.create(terrain_generation_run)
+	if worker == nil {
+		terrain_generate_cells(job, &job.cells)
+		_ = terrain_apply_generated(service, job.cells[:], 0, len(job.cells))
+		delete(job.cells)
+		free(job)
+		return
+	}
+	service.generation = job
+	service.generation_worker = worker
+	service.generation_cursor = 0
+	worker.data = job
+	thread.start(worker)
+}
+
+terrain_poll_generation :: proc(service: ^Terrain) -> bool {
+	job := service.generation
+	if job == nil {return false}
+	if worker := service.generation_worker; worker != nil {
+		if !thread.is_done(worker) {return true}
+		thread.join(worker)
+		thread.destroy(worker)
+		service.generation_worker = nil
+	}
+	service.generation_cursor = terrain_apply_generated(
+		service,
+		job.cells[:],
+		service.generation_cursor,
+		TERRAIN_GENERATION_APPLY_PER_FRAME,
+	)
+	if service.generation_cursor < len(job.cells) {return true}
+	delete(job.cells)
+	free(job)
+	service.generation = nil
+	service.generation_cursor = 0
+	return false
+}
+
+terrain_fill_generated :: proc(
+	service: ^Terrain,
+	pos_x, pos_y, pos_z, width, height: int,
+	options: Terrain_Fill_Options,
+) {
+	job := Terrain_Generation {
+		pos_x   = pos_x,
+		pos_y   = pos_y,
+		pos_z   = pos_z,
+		width   = width,
+		height  = height,
+		options = options,
+	}
+	terrain_generate_cells(&job, &job.cells)
+	_ = terrain_apply_generated(service, job.cells[:], 0, len(job.cells))
+	delete(job.cells)
 }
 
 
@@ -2557,6 +2703,7 @@ terrain_push_material_grid :: proc(
 
 
 terrain_clear :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) {
+	terrain_release_generation(service)
 	for _, chunk in service.chunks {
 		if chunk == nil {
 			continue
@@ -3370,7 +3517,7 @@ terrain_service_namecall :: proc(
 		if vm.IsTable(L, 7) {
 			options = terrain_read_fill_options(L, 7, enum_registry)
 		}
-		terrain_fill_generated(service, pos_x, pos_y, pos_z, width, height, options)
+		terrain_start_generation(service, pos_x, pos_y, pos_z, width, height, options)
 		return 0, true
 
 	case "GenerateMesh":

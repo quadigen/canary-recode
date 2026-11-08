@@ -4,8 +4,6 @@ package services
 
 // wire:service global="ExportService"
 
-import "core:fmt"
-import "core:path/filepath"
 import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
@@ -13,15 +11,74 @@ import enums "../enum"
 import serializer "../serializer"
 import tracy "../util/odin-tracy"
 import vm "../vm"
+import "core:fmt"
+import "core:path/filepath"
 import strings "core:strings"
+import "core:sync"
+import "core:thread"
 
 ExportService_Class := classes.Class_Info {
 	name   = "ExportService",
 	parent = &Service_Class,
 }
 
+Export_Job :: struct {
+	path:     string,
+	data:     []u8,
+	progress: f32,
+	done:     bool,
+	failed:   bool,
+	error:    serializer.Error,
+	mutex:    sync.Mutex,
+}
+
 ExportService :: struct {
 	using service: Service,
+	job:           ^Export_Job,
+	worker:        ^thread.Thread,
+	progress:      f32,
+	finished:      bool,
+	last_error:    string,
+}
+
+export_job_run :: proc(t: ^thread.Thread) {
+	when tracy.TRACY_ENABLE {
+		context.allocator = tracy.DefaultContext().allocator
+	}
+	job := cast(^Export_Job)t.data
+	value: f32
+	err := serializer.Write_File_Data_Progress(job.path, job.data, &value)
+	sync.mutex_lock(&job.mutex)
+	job.error = err
+	job.failed = !serializer.Error_Is_None(err)
+	job.progress = 1
+	job.done = true
+	sync.mutex_unlock(&job.mutex)
+}
+
+export_service_collect :: proc(service: ^ExportService) {
+	worker := service.worker
+	if worker == nil {return}
+	if !thread.is_done(worker) {return}
+	thread.join(worker)
+	thread.destroy(worker)
+	service.worker = nil
+	job := service.job
+	if job == nil {return}
+	service.job = nil
+	sync.mutex_lock(&job.mutex)
+	failed := job.failed
+	err := job.error
+	service.progress = job.progress
+	sync.mutex_unlock(&job.mutex)
+	delete(service.last_error)
+	service.last_error = ""
+	if failed {service.last_error = serializer.Error_String(err)}
+	serializer.Error_Delete(&err)
+	delete(job.path)
+	delete(job.data)
+	free(job)
+	service.finished = true
 }
 
 export_service_construct :: proc(
@@ -34,13 +91,39 @@ export_service_construct :: proc(
 }
 
 export_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	service := cast(^ExportService)object
+	if worker := service.worker; worker != nil {
+		thread.join(worker)
+		thread.destroy(worker)
+		service.worker = nil
+	}
+	if job := service.job; job != nil {
+		serializer.Error_Delete(&job.error)
+		delete(job.path)
+		delete(job.data)
+		free(job)
+		service.job = nil
+	}
+	delete(service.last_error)
 	classes.Object_Destroy(object)
-	free(cast(^ExportService)object)
+	free(service)
 }
 
-export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: string) -> serializer.Error {
+export_datamodel_to_file :: proc(
+	service: ^ExportService,
+	L: ^vm.State,
+	path: string,
+) -> serializer.Error {
 	if path == "" {
-		return serializer.Error_Make(.Invalid_Argument, -1, "the service, VM, or destination path is missing")
+		return serializer.Error_Make(
+			.Invalid_Argument,
+			-1,
+			"the service, VM, or destination path is missing",
+		)
+	}
+	export_service_collect(service)
+	if service.worker != nil {
+		return serializer.Error_Make(.Invalid_Argument, -1, "an export is already running")
 	}
 	data, err := export_datamodel_snapshot(service, L)
 	if !serializer.Error_Is_None(err) {return err}
@@ -49,14 +132,66 @@ export_datamodel_to_file :: proc(service: ^ExportService, L: ^vm.State, path: st
 	return serializer.Write_File_Data(path, data)
 }
 
-export_datamodel_snapshot :: proc(service: ^ExportService, L: ^vm.State) -> ([]u8, serializer.Error) {
+export_datamodel_to_file_async :: proc(
+	service: ^ExportService,
+	L: ^vm.State,
+	path: string,
+) -> serializer.Error {
+	if path == "" {
+		return serializer.Error_Make(
+			.Invalid_Argument,
+			-1,
+			"the service, VM, or destination path is missing",
+		)
+	}
+	export_service_collect(service)
+	if service.worker != nil {
+		return serializer.Error_Make(.Invalid_Argument, -1, "an export is already running")
+	}
+	data, err := export_datamodel_snapshot(service, L)
+	if !serializer.Error_Is_None(err) {return err}
+	job := new(Export_Job)
+	job.path = strings.clone(path)
+	job.data = data
+	worker := thread.create(export_job_run)
+	if worker == nil {
+		fallback := serializer.Write_File_Data(path, data)
+		delete(job.path)
+		delete(job.data)
+		free(job)
+		service.progress = 1
+		service.finished = true
+		return fallback
+	}
+	worker.data = job
+	thread.start(worker)
+	service.job = job
+	service.worker = worker
+	service.progress = 0
+	service.finished = false
+	delete(service.last_error)
+	service.last_error = ""
+	return serializer.Error_None
+}
+
+export_datamodel_snapshot :: proc(
+	service: ^ExportService,
+	L: ^vm.State,
+) -> (
+	[]u8,
+	serializer.Error,
+) {
 	tracy.ZoneNC("KINE Scene Snapshot", 0xD19A66)
 	if service == nil || L == nil {
 		return nil, serializer.Error_Make(.Invalid_Argument, -1, "the service or VM is missing")
 	}
 	model := service.data_model
 	if model == nil || model.registry == nil || model.registry.classes == nil {
-		return nil, serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
+		return nil, serializer.Error_Make(
+			.Invalid_Argument,
+			-1,
+			"the ExportService has no DataModel registry",
+		)
 	}
 
 	// Terrain is a singleton service rather than an Instance, so the tree walk
@@ -93,13 +228,26 @@ export_content_service_filter :: proc(parent: ^classes.Object, object: ^classes.
 	return !Map_Content_Service(object.name)
 }
 
-export_object_to_file :: proc(service: ^ExportService, L: ^vm.State, object: ^classes.Object, path: string) -> serializer.Error {
+export_object_to_file :: proc(
+	service: ^ExportService,
+	L: ^vm.State,
+	object: ^classes.Object,
+	path: string,
+) -> serializer.Error {
 	if service == nil || L == nil || object == nil || path == "" {
-		return serializer.Error_Make(.Invalid_Argument, -1, "the service, VM, instance, or destination path is missing")
+		return serializer.Error_Make(
+			.Invalid_Argument,
+			-1,
+			"the service, VM, instance, or destination path is missing",
+		)
 	}
 	model := service.data_model
 	if model == nil || model.registry == nil || model.registry.classes == nil {
-		return serializer.Error_Make(.Invalid_Argument, -1, "the ExportService has no DataModel registry")
+		return serializer.Error_Make(
+			.Invalid_Argument,
+			-1,
+			"the ExportService has no DataModel registry",
+		)
 	}
 	return serializer.Serialize_To_File(model.registry.classes, L, object, path)
 }
@@ -132,7 +280,13 @@ export_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "ExportToFile", "Export", "ImportFile":
+	case "ExportToFile",
+	     "ExportToFileSync",
+	     "Export",
+	     "ImportFile",
+	     "GetExportProgress",
+	     "IsExporting",
+	     "GetExportError":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -150,14 +304,46 @@ export_service_namecall :: proc(
 	i32,
 	bool,
 ) {
-service := cast(^ExportService)object
+	service := cast(^ExportService)object
 	switch method {
+	case "GetExportProgress":
+		export_service_collect(service)
+		progress := service.progress
+		if job := service.job; job != nil {
+			sync.mutex_lock(&job.mutex)
+			progress = job.progress
+			sync.mutex_unlock(&job.mutex)
+		} else if service.finished {
+			progress = 1
+		}
+		vm.PushNumber(L, f64(progress))
+		return 1, true
+	case "IsExporting":
+		export_service_collect(service)
+		vm.PushBoolean(L, service.worker != nil)
+		return 1, true
+	case "GetExportError":
+		export_service_collect(service)
+		vm.PushString(L, service.last_error)
+		return 1, true
+	case "ExportToFileSync":
+		path := vm.ArgString(L, 2)
+		if path == "" {
+			return vm.RaiseError(L, "ExportService:ExportToFileSync expects a file path"), true
+		}
+		err := export_datamodel_to_file(service, L, path)
+		if !serializer.Error_Is_None(err) {
+			return export_raise(L, method, &err)
+		}
+		serializer.Error_Delete(&err)
+		vm.PushBoolean(L, true)
+		return 1, true
 	case "ExportToFile":
 		path := vm.ArgString(L, 2)
 		if path == "" {
 			return vm.RaiseError(L, "ExportService:ExportToFile expects a file path"), true
 		}
-		err := export_datamodel_to_file(service, L, path)
+		err := export_datamodel_to_file_async(service, L, path)
 		if !serializer.Error_Is_None(err) {
 			return export_raise(L, method, &err)
 		}
@@ -186,9 +372,7 @@ service := cast(^ExportService)object
 			return vm.RaiseError(L, "ExportService:ImportFile expects a file path"), true
 		}
 		model := service.data_model
-		if model == nil ||
-		   model.registry == nil ||
-		   model.registry.classes == nil {
+		if model == nil || model.registry == nil || model.registry.classes == nil {
 			return vm.RaiseError(L, "ExportService:ImportFile has no DataModel"), true
 		}
 		extension := filepath.ext(path)
@@ -207,12 +391,7 @@ service := cast(^ExportService)object
 			}
 			return 1, true
 		}
-		imported, err := serializer.Deserialize_From_File(
-			model.registry.classes,
-			L,
-			service,
-			path,
-		)
+		imported, err := serializer.Deserialize_From_File(model.registry.classes, L, service, path)
 		if imported == nil || !serializer.Error_Is_None(err) {
 			return export_raise(L, method, &err)
 		}
@@ -223,7 +402,11 @@ service := cast(^ExportService)object
 	return 0, false
 }
 
-export_import_mesh_file :: proc(L: ^vm.State, registry: ^classes.Registry, path: string) -> string {
+export_import_mesh_file :: proc(
+	L: ^vm.State,
+	registry: ^classes.Registry,
+	path: string,
+) -> string {
 	absolute, path_err := filepath.abs(path)
 	if path_err != nil {
 		return "ExportService:ImportFile could not resolve the model path"

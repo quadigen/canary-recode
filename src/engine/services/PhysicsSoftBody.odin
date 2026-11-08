@@ -12,6 +12,13 @@ physics_prepare_softbodies :: proc(
 ) {
 	descriptor := classes.Find_Class(service.signal_registry, "SoftBody")
 	if descriptor == nil {return}
+	if physics_replication_client(service.data_model) {
+		for object in descriptor.instances {
+			body := cast(^classes.SoftBody)object
+			if body.system == service.system.handle {classes.SoftBody_Release_Physics(body)}
+		}
+		return
+	}
 	colliders: [dynamic]kineffi.JPH_SoftBodyCollider
 	defer delete(colliders)
 	anchors: [dynamic]kineffi.JPH_BodyID
@@ -210,6 +217,7 @@ physics_create_softbody_anchor :: proc(
 physics_read_softbodies :: proc(service: ^Physics) {
 	descriptor := classes.Find_Class(service.signal_registry, "SoftBody")
 	if descriptor == nil {return}
+	if physics_replication_client(service.data_model) {return}
 	for object in descriptor.instances {
 		body := cast(^classes.SoftBody)object
 		if body.destroyed || body.system != service.system.handle {continue}

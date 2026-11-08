@@ -36,6 +36,7 @@ GetError :: sdl.GetError
 ShowSimpleMessageBox :: sdl.ShowSimpleMessageBox
 
 Init :: sdl.Init
+SetAppMetadata :: sdl.SetAppMetadata
 Quit :: sdl.Quit
 CreateWindow :: sdl.CreateWindow
 DestroyWindow :: sdl.DestroyWindow

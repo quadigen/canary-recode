@@ -98,7 +98,7 @@ Terrain:SetWaterCell(3, 1, 3)
 Terrain:SetVoxel(4, 1, 4, 0.5, Enum.Material.Water)
 
 assert(
-	game:GetService("ExportService"):ExportToFile("` +
+	game:GetService("ExportService"):ExportToFileSync("` +
 		KINE_PATH +
 		`"),
 	"saving the map failed"

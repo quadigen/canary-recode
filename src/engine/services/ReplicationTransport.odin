@@ -79,6 +79,11 @@ Replication_Kind_Finished_Replicating :: u8(24)
 Replication_Kind_Model_Pivot :: u8(25)
 Replication_Kind_Group_Ownership :: u8(26)
 Replication_Kind_World_Gravity :: u8(27)
+Replication_Kind_Deformable :: u8(28)
+
+Replication_Deformable_Cloth :: u8(0)
+Replication_Deformable_SoftBody :: u8(1)
+Replication_Deformable_Max_Vertices :: u32(8192)
 
 replication_string_compare :: proc(a, b: string) -> int {
 	if a < b {return -1}
@@ -920,6 +925,55 @@ replication_send_terrain :: proc(service: ^ReplicatorService, connection: ^Repli
 }
 
 
+replication_receive_deformable :: proc(
+	service: ^ReplicatorService,
+	peer: ^Replication_Transport_Peer,
+	reader: ^Replication_Reader,
+) {
+	if service.mode != .Client || peer != service.remote {return}
+	id := replication_read_u32(reader)
+	kind := replication_read_u8(reader)
+	if !reader.valid || id == 0 {reader.valid = false; return}
+	entity := replication_entity_by_id(service, id)
+	if entity == nil || entity.object == nil || entity.object.destroyed {return}
+	object := entity.object
+	switch kind {
+	case Replication_Deformable_Cloth:
+		if !classes.Is_A(object, "Cloth") {reader.valid = false; return}
+		cloth := cast(^classes.Cloth)object
+		for &particle in cloth.particles {
+			particle.position.x = replication_read_f32(reader)
+			particle.position.y = replication_read_f32(reader)
+			particle.position.z = replication_read_f32(reader)
+			particle.velocity = {}
+		}
+		if !reader.valid {return}
+		cloth.force = {}
+		cloth.initialized = true
+		cloth.revision += 1
+	case Replication_Deformable_SoftBody:
+		if !classes.Is_A(object, "SoftBody") {reader.valid = false; return}
+		body := cast(^classes.SoftBody)object
+		frame := replication_read_cframe(reader)
+		count := replication_read_u32(reader)
+		if !reader.valid ||
+		   count > Replication_Deformable_Max_Vertices {reader.valid = false; return}
+		if int(count) > len(body.positions) {reader.valid = false; return}
+		for index in 0 ..< int(count) {
+			body.positions[index].x = replication_read_f32(reader)
+			body.positions[index].y = replication_read_f32(reader)
+			body.positions[index].z = replication_read_f32(reader)
+		}
+		if !reader.valid {return}
+		body.cframe = frame
+		body.simulation_cframe = frame
+		body.pose_dirty = false
+		body.revision += 1
+	case:
+		reader.valid = false
+	}
+}
+
 replication_receive_terrain :: proc(
 	service: ^ReplicatorService,
 	peer: ^Replication_Transport_Peer,
@@ -1347,6 +1401,8 @@ replication_receive :: proc(
 		replication_receive_asset(service, peer, &reader)
 	case Replication_Kind_Terrain:
 		replication_receive_terrain(service, peer, &reader)
+	case Replication_Kind_Deformable:
+		replication_receive_deformable(service, peer, &reader)
 	case Replication_Kind_Scene_Ready:
 		if service.mode != .Client || peer != service.remote {return}
 		if !service.scene_ready {
@@ -2054,6 +2110,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						acked_state = make(map[u32]u32),
 						acked_property = make(map[u32]u32),
 						acked_extra = make(map[u32]u32),
+						deformable = make(map[u32]u64),
 					},
 				)
 			} else if event.peer == service.remote {

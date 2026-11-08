@@ -83,7 +83,7 @@ static void kine_capture_reflection_probe(KineFilamentContext *ctx) {
         p->filtered=Texture::Builder().width(resolution).height(resolution).levels(5)
             .sampler(Texture::Sampler::SAMPLER_CUBEMAP).format(Texture::InternalFormat::RGBA16F)
             .usage(Texture::Usage::COLOR_ATTACHMENT|Texture::Usage::SAMPLEABLE).build(*ctx->engine);
-        p->depth=Texture::Builder().width(resolution).height(resolution).format(Texture::InternalFormat::DEPTH24)
+        p->depth=Texture::Builder().width(resolution).height(resolution).format(Texture::InternalFormat::DEPTH32F)
             .usage(Texture::Usage::DEPTH_ATTACHMENT).build(*ctx->engine);
         for(int face=0;face<6;++face)p->targets[face]=RenderTarget::Builder()
             .texture(RenderTarget::AttachmentPoint::COLOR,p->capture).face(RenderTarget::AttachmentPoint::COLOR,Texture::CubemapFace(face))

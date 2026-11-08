@@ -565,9 +565,11 @@ Decal_Set :: proc(
 
 	switch key {
 	case "Texture":
+		texture := assetstore.Resolve_Ugc_Asset(vm.ArgString(L, value_index), .Texture)
+
 		delete(decal.texture)
 
-		decal.texture = strings.clone(vm.ArgString(L, value_index))
+		decal.texture = texture
 
 		decal.texture_dirty = true
 

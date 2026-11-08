@@ -11,7 +11,14 @@ CLOTH_COLLISION_RADIUS :: 0.04
 CLOTH_SOLVER_ITERATIONS :: 8
 CLOTH_MAX_SUBSTEP :: f32(1.0 / 120.0)
 
+physics_replication_client :: proc(data_model: ^DataModel) -> bool {
+	if data_model == nil {return false}
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(data_model, "ReplicatorService")
+	return replicator != nil && replicator.mode == .Client
+}
+
 Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time: f32) {
+	if physics_replication_client(service.data_model) {return}
 	descriptor := classes.Find_Class(service.signal_registry, "Cloth")
 	if descriptor == nil || len(descriptor.instances) == 0 || !(delta_time > 0) {return}
 
@@ -29,6 +36,13 @@ Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time:
 			cloth.initialized = false
 			cloth.impulse = {}
 			continue
+		}
+		anchors := [2]datatypes.CFrame{anchor, {}}
+		pin_count := 1
+		if second, second_valid := classes.Cloth_Anchor_At(cloth, &workspace.object, 1);
+		   second_valid && classes.Cloth_Pin_Count(cloth) == 2 {
+			anchors[1] = second
+			pin_count = 2
 		}
 		if cloth.can_collide && !prepared_collisions {
 			prepared_collisions = true
@@ -64,7 +78,8 @@ Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time:
 		}
 		physics_step_cloth(
 			cloth,
-			anchor,
+			anchors,
+			pin_count,
 			service,
 			workspace.global_wind,
 			min(delta_time, 0.1),
@@ -76,20 +91,29 @@ Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time:
 
 physics_step_cloth :: proc(
 	cloth: ^classes.Cloth,
-	anchor: datatypes.CFrame,
+	anchors: [2]datatypes.CFrame,
+	pin_count: int,
 	service: ^Physics,
 	wind: datatypes.Vector3,
 	delta_time: f32,
 	sphere: kineffi.JPH_ShapeRef,
 	candidates: []kineffi.JPH_BodyID,
 ) {
-	pin := [3]f32{anchor.x, anchor.y, anchor.z}
+	pins: [2]int
+	pins[0] = classes.Cloth_Pin_Index(cloth, 0)
+	if pin_count > 1 {pins[1] = classes.Cloth_Pin_Index(cloth, 1)}
+	pin := [3]f32{anchors[0].x, anchors[0].y, anchors[0].z}
 	if !cloth.initialized ||
-	   linalg.length(pin - cloth.particles[classes.CLOTH_PIN].position) >
+	   linalg.length(pin - cloth.particles[pins[0]].position) >
 		   max(10, 2 * max(cloth.size.X, cloth.size.Y)) {
-		classes.Cloth_Initialize(cloth, anchor)
+		classes.Cloth_Initialize(cloth, anchors[0])
 	}
-	start_pin := cloth.particles[classes.CLOTH_PIN].position
+	start_pins: [2][3]f32
+	target_pins: [2][3]f32
+	for slot in 0 ..< pin_count {
+		start_pins[slot] = cloth.particles[pins[slot]].position
+		target_pins[slot] = {anchors[slot].x, anchors[slot].y, anchors[slot].z}
+	}
 	substeps := int(math.ceil(delta_time / CLOTH_MAX_SUBSTEP))
 	dt := delta_time / f32(substeps)
 	drag := math.exp(-cloth.damping * dt)
@@ -102,10 +126,16 @@ physics_step_cloth :: proc(
 		previous: [classes.CLOTH_VERTEX_COUNT][3]f32
 		for &particle, i in cloth.particles {
 			previous[i] = particle.position
-			if i == classes.CLOTH_PIN {
-				particle.position = start_pin + (pin - start_pin) * (f32(substep) / f32(substeps))
-				continue
+			pinned := false
+			for slot in 0 ..< pin_count {
+				if i != pins[slot] {continue}
+				particle.position =
+					start_pins[slot] +
+					(target_pins[slot] - start_pins[slot]) * (f32(substep) / f32(substeps))
+				pinned = true
+				break
 			}
+			if pinned {continue}
 			// Air drag drives the cloth toward the local wind velocity.
 			air := (wind_velocity - particle.velocity) * 0.5
 			for axis in 0 ..< 3 {
@@ -117,7 +147,7 @@ physics_step_cloth :: proc(
 		kick = {}
 		physics_solve_cloth_links(cloth)
 		for &particle, i in cloth.particles {
-			if i == classes.CLOTH_PIN {continue}
+			if classes.Cloth_Pinned(cloth, i) {continue}
 			particle.velocity = (particle.position - previous[i]) / dt
 			if sphere != nil {
 				physics_collide_cloth_particle(
@@ -160,8 +190,8 @@ physics_cloth_link :: proc(cloth: ^classes.Cloth, a, b: int, rest_length, stiffn
 	delta := cloth.particles[b].position - cloth.particles[a].position
 	length := linalg.length(delta)
 	if length < 0.000001 {return}
-	weight_a := a == classes.CLOTH_PIN ? f32(0) : 1
-	weight_b := b == classes.CLOTH_PIN ? f32(0) : 1
+	weight_a := classes.Cloth_Pinned(cloth, a) ? f32(0) : 1
+	weight_b := classes.Cloth_Pinned(cloth, b) ? f32(0) : 1
 	correction := delta * ((1 - rest_length / length) * stiffness / (weight_a + weight_b))
 	cloth.particles[a].position += correction * weight_a
 	cloth.particles[b].position -= correction * weight_b

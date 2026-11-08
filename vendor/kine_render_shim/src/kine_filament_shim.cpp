@@ -1501,7 +1501,7 @@ bool rebuildRenderTarget(KineFilamentContext *ctx, int width, int height) {
 						   .height(uint32_t(height))
 						   .levels(1)
 						   .usage(Texture::Usage::DEPTH_ATTACHMENT | Texture::Usage::SAMPLEABLE)
-						   .format(Texture::InternalFormat::DEPTH24)
+						   .format(Texture::InternalFormat::DEPTH32F)
 						   .build(*ctx->engine);
 	if (!ctx->depthTarget)
 		return false;
@@ -3253,6 +3253,13 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 			}
 		}
 		if (runtimeShader->opacitySource) mi->setParameter("kineSoftBodyOpacity", key.transmission);
+		if (key.mesh && key.mesh->doubleSided) {
+			mi->setDoubleSided(true);
+			mi->setCullingMode(MaterialInstance::CullingMode::NONE);
+		} else if (key.mesh) {
+			mi->setDoubleSided(false);
+			mi->setCullingMode(MaterialInstance::CullingMode::BACK);
+		}
 		return;
 	}
 	const float time = ctx->time;
@@ -3828,7 +3835,7 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 							  .height(uint32_t(viewportHeight))
 							  .levels(1)
 							  .usage(Texture::Usage::DEPTH_ATTACHMENT)
-							  .format(Texture::InternalFormat::DEPTH24)
+							  .format(Texture::InternalFormat::DEPTH32F)
 							  .build(*ctx->engine);
 	if (!ctx->postSceneColor || !ctx->postSceneDepth) {
 		kine_destroy_post_process_pipeline(ctx);
@@ -3983,7 +3990,7 @@ static bool kine_build_outline_pipeline(KineFilamentContext *ctx) {
 								.height(uint32_t(viewportHeight))
 								.levels(1)
 								.usage(Texture::Usage::DEPTH_ATTACHMENT)
-								.format(Texture::InternalFormat::DEPTH24)
+								.format(Texture::InternalFormat::DEPTH32F)
 								.build(*ctx->engine);
 	if (!ctx->outlineMaskColor || !ctx->outlineMaskDepth) {
 		kine_destroy_outline_pipeline(ctx);
