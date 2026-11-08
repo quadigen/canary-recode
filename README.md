@@ -9,6 +9,7 @@ Kinemium Engine is a performant game engine written in Odin with Luau scripting,
 
 ## Getting Started
 `NOTE: This repository is unstable, Expect bugs!`
+`Also, executables from the releases are also unstable, Expect bugs too!`
 
 You can download the engine using the [github artifacts](https://github.com/quadigen/canary-recode/actions), Simply download one of the ready artifacts (based on your OS) and run the executable.
 
