@@ -717,6 +717,17 @@ KINE_SKIA_API void Kine_Skia_Vulkan_DestroyContext(KineSkiaVulkanContext *contex
 	delete context;
 }
 
+KINE_SKIA_API void Kine_Skia_Vulkan_PurgeResources(KineSkiaVulkanContext *context) {
+#if KINE_SKIA_BUILD_VULKAN
+	if (context && context->context) {
+		context->context->checkAsyncWorkCompletion();
+		context->context->freeGpuResources();
+	}
+#else
+	(void)context;
+#endif
+}
+
 /* ---------------- OpenGL GPU context ---------------- */
 
 KINE_SKIA_API KineSkiaGLContext *Kine_Skia_GL_CreateContext(
@@ -1480,6 +1491,17 @@ static sk_sp<SkImage> kine_skia_surface_displacement_map(
 	return surface->displacementMap;
 }
 
+static void kine_skia_draw_liquid_glass(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float radiusX, float radiusY, float exponent,
+	bool squircle,
+	float blurSigma,
+	float brightness, float contrast, float saturation, float hueShift,
+	float distortion,
+	uint8_t alpha,
+	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
+
 } // extern "C++"
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
@@ -1498,6 +1520,17 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA) {
 	if (!surface || !surface->surface ||
 		width <= 0.0f || height <= 0.0f || (alpha == 0 && tintA == 0)) {
+		return;
+	}
+
+	const bool unmagnified = zoom <= 0.0f || std::fabs(zoom - 1.0f) < 1e-4f;
+	if (blurSigma > 0.0f && pixelate <= 0.0f && morphology == 0.0f &&
+		offsetX == 0.0f && offsetY == 0.0f && unmagnified) {
+		kine_skia_draw_liquid_glass(
+			surface, x, y, width, height, radiusX, radiusY,
+			exponent, exponent > 2.0f, blurSigma,
+			brightness, contrast, saturation, hueShift, displacement,
+			alpha, tintR, tintG, tintB, tintA);
 		return;
 	}
 
@@ -1760,11 +1793,124 @@ KINE_SKIA_API void Kine_Skia_Surface_EndMotionBlur(KineSkiaSurface *surface) {
 	surface->motionBlurSaves = 0;
 }
 
-KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurRect(
+extern "C++" {
+
+static sk_sp<SkShader> kine_skia_glass_gradient(
+	const SkPoint &from,
+	const SkPoint &to,
+	const SkColor4f *colors,
+	const float *positions,
+	int count) {
+	const SkPoint points[2] = {from, to};
+#if __has_include("include/effects/SkGradient.h")
+	const SkGradient gradient(
+		SkGradient::Colors(
+			SkSpan<const SkColor4f>(colors, count),
+			SkSpan<const float>(positions, count),
+			SkTileMode::kClamp),
+		SkGradient::Interpolation{});
+	return SkShaders::LinearGradient(points, gradient, nullptr);
+#else
+	return SkGradientShader::MakeLinear(
+		points, colors, positions, nullptr, count, SkTileMode::kClamp);
+#endif
+}
+
+static sk_sp<SkShader> kine_skia_liquid_refraction_shader(
+	const sk_sp<SkImage> &backdrop,
+	const SkRect &rect,
+	float radiusX,
+	float radiusY,
+	float exponent,
+	float displacement,
+	float opacity) {
+	static const sk_sp<SkRuntimeEffect> effect = []() -> sk_sp<SkRuntimeEffect> {
+		const char *source = R"SKSL(
+uniform shader backdrop;
+uniform float2 origin;
+uniform float2 dimensions;
+uniform float2 radii;
+uniform float curve;
+uniform float strength;
+uniform float opacity;
+
+float glassDistance(float2 p) {
+    float2 halfSize = dimensions * 0.5;
+    float2 r = max(min(radii, halfSize), float2(0.001));
+    float2 q = abs(p - origin - halfSize) - (halfSize - r);
+    float2 c = max(q, float2(0.0));
+    float n = max(curve, 2.0);
+    float outer = pow(pow(c.x / r.x, n) + pow(c.y / r.y, n), 1.0 / n);
+    return outer * min(r.x, r.y) + min(max(q.x, q.y), 0.0) - min(r.x, r.y);
+}
+
+half4 main(float2 xy) {
+    float distanceInside = max(-glassDistance(xy), 0.0);
+    float band = clamp(min(dimensions.x, dimensions.y) * 0.15, 5.0, 17.0);
+    float edge = 1.0 - smoothstep(0.0, band, distanceInside);
+    if (edge < 0.003) {
+        return half4(0.0);
+    }
+
+    float2 stepX = float2(0.8, 0.0);
+    float2 stepY = float2(0.0, 0.8);
+    float2 gradient = float2(
+        glassDistance(xy + stepX) - glassDistance(xy - stepX),
+        glassDistance(xy + stepY) - glassDistance(xy - stepY));
+    float2 normal = gradient * inversesqrt(max(dot(gradient, gradient), 0.0001));
+    float shift = strength * edge * edge;
+    float2 offset = normal * shift;
+
+    half4 center = backdrop.eval(xy + offset);
+    half4 red = backdrop.eval(xy + offset * 1.13);
+    half4 blue = backdrop.eval(xy + offset * 0.87);
+    half4 refracted = half4(red.r, center.g, blue.b, center.a);
+
+    half refractAlpha = half(opacity * 0.46 * edge);
+    half4 result = refracted * refractAlpha;
+    float lightAngle = clamp(0.56 - normal.y * 0.36 - normal.x * 0.19, 0.0, 1.0);
+    half shine = half(opacity * (0.035 + 0.12 * lightAngle) * edge * edge);
+    result.rgb += half3(0.92, 0.97, 1.0) * shine * (1.0 - result.a);
+    result.a += shine * (1.0 - result.a);
+    return result;
+}
+)SKSL";
+		auto compiled = SkRuntimeEffect::MakeForShader(SkString(source));
+		if (!compiled.effect) {
+			fprintf(stderr, "kine_skia: liquid glass shader compilation failed: %s\n",
+				compiled.errorText.c_str());
+		}
+		return std::move(compiled.effect);
+	}();
+
+	if (!effect || !backdrop) {
+		return nullptr;
+	}
+
+	SkRuntimeShaderBuilder builder(effect);
+	builder.child("backdrop") = backdrop->makeShader(
+		SkTileMode::kClamp, SkTileMode::kClamp,
+		SkSamplingOptions(SkFilterMode::kLinear));
+	const float origin[2] = {rect.left(), rect.top()};
+	const float dimensions[2] = {rect.width(), rect.height()};
+	const float radii[2] = {radiusX, radiusY};
+	builder.uniform("origin").set(origin, 2);
+	builder.uniform("dimensions").set(dimensions, 2);
+	builder.uniform("radii").set(radii, 2);
+	builder.uniform("curve").set(&exponent, 1);
+	builder.uniform("strength").set(&displacement, 1);
+	builder.uniform("opacity").set(&opacity, 1);
+	return builder.makeShader();
+}
+
+static void kine_skia_draw_liquid_glass(
 	KineSkiaSurface *surface,
 	float x, float y, float width, float height,
-	float radiusX, float radiusY,
+	float radiusX, float radiusY, float exponent,
+	bool squircle,
 	float blurSigma,
+	float brightness, float contrast, float saturation, float hueShift,
+	float distortion,
 	uint8_t alpha,
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA) {
 	if (!surface || !surface->surface || !surface->backdrop ||
@@ -1773,36 +1919,124 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurRect(
 	}
 
 	SkCanvas *canvas = kine_skia_canvas(surface);
-	SkRect rect = SkRect::MakeXYWH(x, y, width, height);
-	canvas->save();
-	if (radiusX > 0.0f || radiusY > 0.0f) {
-		canvas->clipRRect(SkRRect::MakeRectXY(rect, radiusX, radiusY), true);
+	const SkRect rect = SkRect::MakeXYWH(x, y, width, height);
+	const float maxRadius = std::min(width, height) * 0.5f;
+	radiusX = std::clamp(radiusX, 0.0f, maxRadius);
+	radiusY = std::clamp(radiusY, 0.0f, maxRadius);
+	const float shapeRadius = std::max(radiusX, radiusY);
+	const float curve = squircle ? std::max(2.0f, exponent) : 2.0f;
+	SkPath shapePath;
+	SkRRect roundRect;
+
+	SkAutoCanvasRestore restore(canvas, true);
+	if (squircle) {
+		shapePath = kine_skia_squircle_path(
+			x, y, width, height, shapeRadius, curve);
+		canvas->clipPath(shapePath, true);
+	} else if (radiusX > 0.0f || radiusY > 0.0f) {
+		roundRect = SkRRect::MakeRectXY(rect, radiusX, radiusY);
+		canvas->clipRRect(roundRect, true);
 	} else {
 		canvas->clipRect(rect, SkClipOp::kIntersect, true);
 	}
 
-	SkPaint paint;
-	paint.setAntiAlias(true);
-	paint.setAlphaf(alpha / 255.0f);
-	if (blurSigma > 0.0f) {
-		paint.setImageFilter(SkImageFilters::Blur(
-			blurSigma, blurSigma, SkTileMode::kClamp, nullptr));
+	const float opacity = alpha / 255.0f;
+	const float sigma = std::max(0.0f, blurSigma);
+	if (alpha > 0) {
+		SkPaint blurredPaint;
+		blurredPaint.setAntiAlias(true);
+		blurredPaint.setAlphaf(opacity);
+		blurredPaint.setShader(surface->backdrop->makeShader(
+			SkTileMode::kClamp, SkTileMode::kClamp,
+			SkSamplingOptions(SkFilterMode::kLinear)));
+
+		blurredPaint.setColorFilter(SkColorFilters::Matrix(
+			kine_skia_color_matrix(
+				brightness, contrast, saturation * 1.16f, hueShift)));
+		if (sigma > 0.0f) {
+			blurredPaint.setImageFilter(SkImageFilters::Blur(
+				sigma, sigma, SkTileMode::kClamp, nullptr));
+		}
+
+		SkRect sampleRect = rect;
+		const float padding = std::ceil(sigma * 3.5f + 2.0f);
+		sampleRect.outset(padding, padding);
+		canvas->drawRect(sampleRect, blurredPaint);
+
+		const float refractionRadiusX = squircle ? shapeRadius : radiusX;
+		const float refractionRadiusY = squircle ? shapeRadius : radiusY;
+		const float displacement = distortion > 0.0f
+			? std::clamp(distortion * 0.65f, 0.5f, 20.0f)
+			: std::clamp(3.0f + sigma * 0.21f, 3.0f, 9.0f);
+		SkPaint refractionPaint;
+		refractionPaint.setAntiAlias(true);
+		refractionPaint.setShader(kine_skia_liquid_refraction_shader(
+			surface->backdrop, rect, refractionRadiusX, refractionRadiusY,
+			curve, displacement, opacity));
+		if (refractionPaint.getShader()) {
+			canvas->drawRect(rect, refractionPaint);
+		}
 	}
-	canvas->drawImageRect(
-		surface->backdrop,
-		rect,
-		rect,
-		SkSamplingOptions(SkFilterMode::kLinear),
-		&paint,
-		SkCanvas::kStrict_SrcRectConstraint);
+
 	if (tintA > 0) {
 		SkPaint tintPaint;
 		tintPaint.setAntiAlias(true);
-		tintPaint.setStyle(SkPaint::kFill_Style);
 		tintPaint.setColor(SkColorSetARGB(tintA, tintR, tintG, tintB));
 		canvas->drawRect(rect, tintPaint);
 	}
-	canvas->restore();
+
+	if (alpha > 0) {
+		const SkColor4f sheenColors[] = {
+			{1.0f, 1.0f, 1.0f, 0.115f * opacity},
+			{1.0f, 1.0f, 1.0f, 0.025f * opacity},
+			{1.0f, 1.0f, 1.0f, 0.0f},
+			{1.0f, 1.0f, 1.0f, 0.026f * opacity}
+		};
+		const float sheenStops[] = {0.0f, 0.28f, 0.68f, 1.0f};
+		SkPaint sheenPaint;
+		sheenPaint.setAntiAlias(true);
+		sheenPaint.setShader(kine_skia_glass_gradient(
+			SkPoint::Make(x, y), SkPoint::Make(x, y + height),
+			sheenColors, sheenStops, 4));
+		canvas->drawRect(rect, sheenPaint);
+
+		const SkColor4f rimColors[] = {
+			{1.0f, 1.0f, 1.0f, 0.54f * opacity},
+			{1.0f, 1.0f, 1.0f, 0.27f * opacity},
+			{0.08f, 0.12f, 0.19f, 0.14f * opacity},
+			{1.0f, 1.0f, 1.0f, 0.23f * opacity}
+		};
+		const float rimStops[] = {0.0f, 0.32f, 0.74f, 1.0f};
+		SkPaint rimPaint;
+		rimPaint.setAntiAlias(true);
+		rimPaint.setStyle(SkPaint::kStroke_Style);
+		rimPaint.setStrokeWidth(1.5f);
+		rimPaint.setShader(kine_skia_glass_gradient(
+			SkPoint::Make(x, y), SkPoint::Make(x + width, y + height),
+			rimColors, rimStops, 4));
+		if (squircle) {
+			canvas->drawPath(shapePath, rimPaint);
+		} else if (radiusX > 0.0f || radiusY > 0.0f) {
+			canvas->drawRRect(roundRect, rimPaint);
+		} else {
+			canvas->drawRect(rect, rimPaint);
+		}
+	}
+}
+
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurRect(
+	KineSkiaSurface *surface,
+	float x, float y, float width, float height,
+	float radiusX, float radiusY,
+	float blurSigma,
+	uint8_t alpha,
+	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA) {
+	kine_skia_draw_liquid_glass(
+		surface, x, y, width, height, radiusX, radiusY, 2.0f, false,
+		blurSigma, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+		alpha, tintR, tintG, tintB, tintA);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurSquircle(
@@ -1812,38 +2046,10 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropBlurSquircle(
 	float blurSigma,
 	uint8_t alpha,
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA) {
-	if (!surface || !surface->surface || !surface->backdrop ||
-		width <= 0.0f || height <= 0.0f || (alpha == 0 && tintA == 0)) {
-		return;
-	}
-
-	SkCanvas *canvas = kine_skia_canvas(surface);
-	SkRect rect = SkRect::MakeXYWH(x, y, width, height);
-	canvas->save();
-	canvas->clipPath(kine_skia_squircle_path(x, y, width, height, radius, exponent), true);
-
-	SkPaint paint;
-	paint.setAntiAlias(true);
-	paint.setAlphaf(alpha / 255.0f);
-	if (blurSigma > 0.0f) {
-		paint.setImageFilter(SkImageFilters::Blur(
-			blurSigma, blurSigma, SkTileMode::kClamp, nullptr));
-	}
-	canvas->drawImageRect(
-		surface->backdrop,
-		rect,
-		rect,
-		SkSamplingOptions(SkFilterMode::kLinear),
-		&paint,
-		SkCanvas::kStrict_SrcRectConstraint);
-	if (tintA > 0) {
-		SkPaint tintPaint;
-		tintPaint.setAntiAlias(true);
-		tintPaint.setStyle(SkPaint::kFill_Style);
-		tintPaint.setColor(SkColorSetARGB(tintA, tintR, tintG, tintB));
-		canvas->drawRect(rect, tintPaint);
-	}
-	canvas->restore();
+	kine_skia_draw_liquid_glass(
+		surface, x, y, width, height, radius, radius, exponent, true,
+		blurSigma, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+		alpha, tintR, tintG, tintB, tintA);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawCircle(
@@ -1936,6 +2142,12 @@ KINE_SKIA_API void Kine_Skia_Surface_Save(KineSkiaSurface *surface) {
 	if (!surface || !surface->surface)
 		return;
 	kine_skia_canvas(surface)->save();
+}
+
+KINE_SKIA_API void Kine_Skia_Surface_SaveLayerAlpha(KineSkiaSurface *surface, float alpha) {
+	if (!surface || !surface->surface)
+		return;
+	kine_skia_canvas(surface)->saveLayerAlphaf(nullptr, alpha);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Restore(KineSkiaSurface *surface) {

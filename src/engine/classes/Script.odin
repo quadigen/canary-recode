@@ -13,6 +13,7 @@ Script_Class := Class_Info {
 Script :: struct {
 	using object: Object,
 	using common: Script_Common,
+	run_context:  enums.RunContext,
 }
 
 Script_Init :: proc(class: ^Class_Info = nil, name: string = "Script") -> Script {
@@ -73,6 +74,10 @@ script_get :: proc(
 		vm.PushString(L, script.source)
 	case "Enabled":
 		vm.PushBoolean(L, script.enabled)
+	case "Disabled":
+		vm.PushBoolean(L, !script.enabled)
+	case "RunContext":
+		return enums.Push_Item_By_Value(L, enum_registry, "RunContext", i64(script.run_context))
 	case:
 		return false
 	}
@@ -93,6 +98,14 @@ script_set :: proc(
 		Script_Set_Source(script, vm.ArgString(L, value_index))
 	case "Enabled":
 		Script_Set_Enabled(script, vm.ArgBoolean(L, value_index))
+	case "Disabled":
+		Script_Set_Enabled(script, !vm.ArgBoolean(L, value_index))
+	case "RunContext":
+		run_context := enums.RunContext(enums.Arg_Item(L, value_index, enum_registry, "RunContext").value)
+		if script.run_context != run_context {
+			script.run_context = run_context
+			script.restart_requested = true
+		}
 	case:
 		return false
 	}
@@ -102,6 +115,7 @@ script_set :: proc(
 script_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	script := cast(^Script)object
 	L := script_vm_state(object.signal_registry)
+	require_invalidate_object(&script.common, object)
 	Script_Release_Module(L, &script.common)
 	Script_Release_Thread(L, &script.common)
 	delete(script.source)
@@ -121,6 +135,7 @@ script_clone :: proc(source: ^Object, destination: ^Object) {
 	delete(dst.source)
 	dst.source = strings.clone(src.source)
 	dst.enabled = src.enabled
+	dst.run_context = src.run_context
 	dst.module_state = .Unloaded
 	dst.module_ref = -1
 	dst.thread = nil
@@ -138,6 +153,6 @@ Register_Script :: proc(registry: ^Registry) {
 		get = script_get,
 		set = script_set,
 		clone = script_clone,
-		properties = []string{"Source", "Enabled"},
+		properties = []string{"Source", "Enabled", "RunContext"},
 	)
 }

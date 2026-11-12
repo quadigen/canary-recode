@@ -160,7 +160,7 @@ hinge.Radius = 0.75
 		defer vm.SetThreadSecurityCapabilities(script_vm.L, previous)
 		run_script(
 			&script_vm,
-			`assert(game:GetService("ExportService"):ExportToFileSync("build/hinge_playtest.kine"))`,
+			`assert(game:GetService("ExportService"):ExportToFileSync("build/hinge_playtest.kine", ""))`,
 		)
 	}
 	defer _ = os.remove("build/hinge_playtest.kine")

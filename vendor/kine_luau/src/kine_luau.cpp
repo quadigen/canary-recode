@@ -197,6 +197,7 @@ void* kine_lua_tolightuserdata(lua_State* L, int index) { return lua_tolightuser
 void kine_lua_settop(lua_State* L, int index) { lua_settop(L, index); }
 int kine_lua_gettop(lua_State* L) { return lua_gettop(L); }
 int kine_lua_objlen(lua_State* L, int index) { return lua_objlen(L, index); }
+int kine_lua_checkstack(lua_State* L, int size) { return lua_checkstack(L, size); }
 void kine_lua_pushvalue(lua_State* L, int index) { lua_pushvalue(L, index); }
 void kine_lua_remove(lua_State* L, int index) { lua_remove(L, index); }
 lua_State* kine_lua_newthread(lua_State* L) { return lua_newthread(L); }
@@ -315,6 +316,28 @@ int kine_lua_pcall(lua_State* L, int arguments, int results, int errorFunction)
     return lua_pcall(L, arguments, results, errorFunction);
 }
 const char* kine_lua_tolstring(lua_State* L, int index, size_t* size) { return lua_tolstring(L, index, size); }
+
+void kine_luau_visit_string_literals(
+    const char* source, size_t size, void (*visit)(const char*, size_t, void*), void* userData)
+{
+    Kine_Luau_Lexer scan(source, size);
+    while (true)
+    {
+        const Luau::Lexeme& token = scan.lexer.next();
+        if (token.type == Luau::Lexeme::Eof)
+            break;
+        if (token.type != Luau::Lexeme::QuotedString && token.type != Luau::Lexeme::RawString &&
+            token.type != Luau::Lexeme::InterpStringSimple)
+            continue;
+
+        std::string value(token.data, token.getLength());
+        if (token.type == Luau::Lexeme::RawString)
+            Luau::Lexer::fixupMultilineString(value);
+        else if (!Luau::Lexer::fixupQuotedString(value))
+            continue;
+        visit(value.data(), value.size(), userData);
+    }
+}
 
 void* kine_luau_lexer_create(const char* text, size_t size)
 {

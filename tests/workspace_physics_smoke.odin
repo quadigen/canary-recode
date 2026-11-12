@@ -147,6 +147,15 @@ assert(welds[1].Part0 == selected and welds[1].Part1 == outsider)
 workspace:UnjoinFromOutsiders(selection)
 assert(#selected:GetChildren() == 0)
 assert(internalWeld.Parent == selectedNeighbor)
+
+local hinge = Instance.new("HingeConstraint", queryModel)
+hinge.Attachment0 = Instance.new("Attachment", selected)
+hinge.Attachment1 = Instance.new("Attachment", outsider)
+workspace:JoinToOutsiders(selection, Enum.JointCreationMode.Surface)
+assert(selected:FindFirstChildOfClass("WeldConstraint") == nil)
+hinge.Enabled = false
+workspace:JoinToOutsiders(selection, Enum.JointCreationMode.Surface)
+assert(selected:FindFirstChildOfClass("WeldConstraint").Part1 == outsider)
 queryModel:Destroy()
 
 falling = Instance.new("Part", workspace)
@@ -167,6 +176,26 @@ assert(workspace:PGSIsEnabled())
 `, "workspace_physics_after_step")
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
 	run_script(&script_vm, `assert(game:GetService("Physics").BodyCount == 0)`, "workspace_physics_cleanup")
+
+	run_script(&script_vm, `
+local root = Instance.new("Part", workspace)
+root.Anchored = true
+local hitbox = Instance.new("Part", workspace)
+hitbox.Anchored = true
+weld = Instance.new("WeldConstraint", root)
+weld.Part0 = root
+weld.Part1 = hitbox
+rope = Instance.new("RopeConstraint", root)
+rope.Attachment0 = Instance.new("Attachment", root)
+rope.Attachment1 = Instance.new("Attachment", hitbox)
+`, "launch constraints")
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
+	run_script(&script_vm, `weld.Part1:Destroy()`, "remove launch hitbox")
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
+	run_script(&script_vm, `
+assert(weld.Part0 == weld.Parent and weld.Part1 == nil)
+assert(rope.Attachment0.Parent == rope.Parent and rope.Attachment1 == nil)
+`, "constraints cleared before endpoint storage is freed")
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

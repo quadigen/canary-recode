@@ -26,7 +26,10 @@ RunService :: struct {
 	using service:      Service,
 	callbacks:          [dynamic]Render_Binding,
 	render_stepped_ref: i32,
+	stepped_ref:        i32,
+	post_simulation_ref: i32,
 	heartbeat_ref:      i32,
+	elapsed:            f64,
 }
 
 run_service_construct :: proc(
@@ -37,6 +40,8 @@ run_service_construct :: proc(
 	service.service = Service_Init(&RunService_Class, "RunService", data_model)
 
 	service.render_stepped_ref = -1
+	service.stepped_ref = -1
+	service.post_simulation_ref = -1
 	service.heartbeat_ref = -1
 
 	return &service.object
@@ -75,6 +80,11 @@ run_service_get :: proc(
 
 	case "RenderStepped":
 		run_service_push_signal(L, &service.render_stepped_ref)
+
+	case "Stepped":
+		run_service_push_signal(L, &service.stepped_ref)
+	case "PostSimulation":
+		run_service_push_signal(L, &service.post_simulation_ref)
 
 	case "Heartbeat":
 		run_service_push_signal(L, &service.heartbeat_ref)
@@ -125,7 +135,7 @@ run_service_is_singleplayer :: proc(service: ^RunService) -> bool {
 }
 
 run_service_is_studio :: proc(service: ^RunService) -> bool {
-	return run_service_mode(service) == .Editor
+	return run_service_mode(service) == .Editor || target.is_playtest()
 }
 
 run_service_namecall :: proc(
@@ -188,7 +198,7 @@ run_service_namecall :: proc(
 		vm.PushBoolean(L, run_service_is_studio(service))
 		return 1, true
 	case "IsEdit":
-		vm.PushBoolean(L, run_service_is_studio(service))
+		vm.PushBoolean(L, run_service_mode(service) == .Editor)
 		return 1, true
 	case "IsStandalone":
 		vm.PushBoolean(L, run_service_is_standalone(service))
@@ -238,7 +248,7 @@ Run_Service_Render_Step :: proc(service: ^RunService, L: ^vm.State, delta_time: 
 
 	delete(callback_refs)
 
-	run_service_fire_signal(L, &service.render_stepped_ref, delta_time)
+	run_service_fire_signal(L, &service.render_stepped_ref, f64(delta_time))
 }
 
 run_service_ensure_signal :: proc(L: ^vm.State, signal_ref: ^i32) -> bool {
@@ -277,7 +287,7 @@ run_service_push_signal :: proc(L: ^vm.State, signal_ref: ^i32) {
 	}
 }
 
-run_service_fire_signal :: proc(L: ^vm.State, signal_ref: ^i32, delta_time: f32) {
+run_service_fire_signal :: proc(L: ^vm.State, signal_ref: ^i32, values: ..f64) {
 	if !run_service_ensure_signal(L, signal_ref) {
 		return
 	}
@@ -292,8 +302,8 @@ run_service_fire_signal :: proc(L: ^vm.State, signal_ref: ^i32, delta_time: f32)
 		return
 	}
 
-	vm.PushNumber(L, f64(delta_time))
-	signals.Fire(L, signal, 1)
+	for value in values {vm.PushNumber(L, value)}
+	signals.Fire(L, signal, len(values))
 }
 
 run_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -323,9 +333,17 @@ run_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 		if service.heartbeat_ref > 0 {
 			vm.ReleaseValue(L, service.heartbeat_ref)
 		}
+		if service.stepped_ref > 0 {
+			vm.ReleaseValue(L, service.stepped_ref)
+		}
+		if service.post_simulation_ref > 0 {
+			vm.ReleaseValue(L, service.post_simulation_ref)
+		}
 	}
 
 	service.render_stepped_ref = -1
+	service.stepped_ref = -1
+	service.post_simulation_ref = -1
 	service.heartbeat_ref = -1
 
 	delete(service.callbacks)
@@ -339,7 +357,20 @@ Run_Service_Heartbeat :: proc(service: ^RunService, L: ^vm.State, delta_time: f3
 		return
 	}
 
-	run_service_fire_signal(L, &service.heartbeat_ref, delta_time)
+	run_service_fire_signal(L, &service.heartbeat_ref, f64(delta_time))
+}
+
+Run_Service_Stepped :: proc(service: ^RunService, L: ^vm.State, delta_time: f32) {
+	if service == nil || service.destroyed || L == nil {return}
+	service.elapsed += f64(delta_time)
+	if service.stepped_ref > 0 {
+		run_service_fire_signal(L, &service.stepped_ref, service.elapsed, f64(delta_time))
+	}
+}
+
+Run_Service_Post_Simulation :: proc(service: ^RunService, L: ^vm.State, delta_time: f32) {
+	if service == nil || service.destroyed || L == nil || service.post_simulation_ref <= 0 {return}
+	run_service_fire_signal(L, &service.post_simulation_ref, f64(delta_time))
 }
 
 Register_RunService_Class :: proc(registry: ^classes.Registry) {
@@ -351,5 +382,6 @@ Register_RunService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = run_service_get,
 		namecall = run_service_namecall,
+		events = []string{"PostSimulation"},
 	)
 }

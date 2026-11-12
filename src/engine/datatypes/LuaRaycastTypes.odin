@@ -16,36 +16,48 @@ release_instance_references :: proc(
 	references^ = nil
 }
 
+append_instance_references :: proc(
+	L: ^vm.State,
+	index: int,
+	references: ^[dynamic]Raycast_Instance_Reference,
+	depth: int,
+) -> bool {
+	if depth >= 64 || !vm.IsTable(L, index) || !vm.CheckStack(L, 1) {return false}
+	for i in 1 ..= vm.RawLen(L, index) {
+		_ = vm.RawGetIndex(L, index, i)
+		binding := vm.UserdataBindingOf(L, -1)
+		valid := true
+		if binding != nil && binding.name == "Instance" {
+			append(references, Raycast_Instance_Reference {
+				object = vm.UserdataValue(L, -1),
+				lua_ref = vm.RetainValue(L, -1),
+			})
+		} else {
+			valid = append_instance_references(L, vm.StackTop(L), references, depth + 1)
+		}
+		vm.Pop(L)
+		if !valid {return false}
+	}
+	return true
+}
+
 read_instance_references :: proc(
 	L: ^vm.State,
 	index: int,
 	references: ^[dynamic]Raycast_Instance_Reference,
 ) -> bool {
-	release_instance_references(L, references)
-	if vm.IsNoneOrNil(L, index) {return false}
-	if !vm.IsTable(L, index) {
-		_ = vm.RaiseError(L, "expected an array of Instances or nil")
+	if vm.IsNoneOrNil(L, index) {
+		release_instance_references(L, references)
 		return false
 	}
-
-	count := vm.RawLen(L, index)
-	for i in 0 ..< count {
-		_ = vm.RawGetIndex(L, index, i + 1)
-		binding := vm.UserdataBindingOf(L, -1)
-		if binding == nil || binding.name != "Instance" {
-			vm.Pop(L)
-			_ = vm.RaiseError(L, "raycast filters must contain Instances")
-			return false
-		}
-		append(
-			references,
-			Raycast_Instance_Reference {
-				object = vm.UserdataValue(L, -1),
-				lua_ref = vm.RetainValue(L, -1),
-			},
-		)
-		vm.Pop(L)
+	parsed: [dynamic]Raycast_Instance_Reference
+	if !append_instance_references(L, index, &parsed, 0) {
+		release_instance_references(L, &parsed)
+		_ = vm.RaiseError(L, "raycast filters must contain Instances or nested arrays of Instances")
+		return false
 	}
+	release_instance_references(L, references)
+	references^ = parsed
 	return true
 }
 

@@ -113,6 +113,7 @@ export_datamodel_to_file :: proc(
 	service: ^ExportService,
 	L: ^vm.State,
 	path: string,
+	output_directory := "",
 ) -> serializer.Error {
 	if path == "" {
 		return serializer.Error_Make(
@@ -125,7 +126,7 @@ export_datamodel_to_file :: proc(
 	if service.worker != nil {
 		return serializer.Error_Make(.Invalid_Argument, -1, "an export is already running")
 	}
-	data, err := export_datamodel_snapshot(service, L)
+	data, err := export_datamodel_snapshot(service, L, path, output_directory)
 	if !serializer.Error_Is_None(err) {return err}
 	defer delete(data)
 	tracy.ZoneNC("KINE Compress and Write", 0xD19A66)
@@ -136,6 +137,7 @@ export_datamodel_to_file_async :: proc(
 	service: ^ExportService,
 	L: ^vm.State,
 	path: string,
+	output_directory := "",
 ) -> serializer.Error {
 	if path == "" {
 		return serializer.Error_Make(
@@ -148,7 +150,7 @@ export_datamodel_to_file_async :: proc(
 	if service.worker != nil {
 		return serializer.Error_Make(.Invalid_Argument, -1, "an export is already running")
 	}
-	data, err := export_datamodel_snapshot(service, L)
+	data, err := export_datamodel_snapshot(service, L, path, output_directory)
 	if !serializer.Error_Is_None(err) {return err}
 	job := new(Export_Job)
 	job.path = strings.clone(path)
@@ -177,6 +179,8 @@ export_datamodel_to_file_async :: proc(
 export_datamodel_snapshot :: proc(
 	service: ^ExportService,
 	L: ^vm.State,
+	output_file := "",
+	output_directory := "",
 ) -> (
 	[]u8,
 	serializer.Error,
@@ -205,12 +209,20 @@ export_datamodel_snapshot :: proc(
 		Terrain_Write_Kine_Table(cast(^Terrain)terrain_object, &terrain_table)
 	}
 
+	project_path := ""
+	if project := cast(^ProjectService)DataModel_Get_Service(model, "Project"); project != nil {
+		if active := Project_Get_Active(project); active != nil {project_path = active.path}
+	}
+
 	return serializer.Serialize(
 		model.registry.classes,
 		L,
 		&model.object,
 		export_content_service_filter,
 		&terrain_table,
+		project_path,
+		output_file,
+		output_directory,
 	)
 }
 
@@ -331,7 +343,7 @@ export_service_namecall :: proc(
 		if path == "" {
 			return vm.RaiseError(L, "ExportService:ExportToFileSync expects a file path"), true
 		}
-		err := export_datamodel_to_file(service, L, path)
+		err := export_datamodel_to_file(service, L, path, vm.ArgString(L, 3))
 		if !serializer.Error_Is_None(err) {
 			return export_raise(L, method, &err)
 		}
@@ -343,7 +355,7 @@ export_service_namecall :: proc(
 		if path == "" {
 			return vm.RaiseError(L, "ExportService:ExportToFile expects a file path"), true
 		}
-		err := export_datamodel_to_file_async(service, L, path)
+		err := export_datamodel_to_file_async(service, L, path, vm.ArgString(L, 3))
 		if !serializer.Error_Is_None(err) {
 			return export_raise(L, method, &err)
 		}

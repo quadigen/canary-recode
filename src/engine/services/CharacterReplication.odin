@@ -420,8 +420,7 @@ CharacterController_Tick :: proc(
 	if collision != nil {
 		Physics_Ensure_Character_Capsule(physics, collision, root, position)
 	}
-	tracking_contacts :=
-		collision != nil && collision.body_created && collision.shape != nil
+	tracking_contacts := collision != nil && collision.body_created && collision.shape != nil
 	if tracking_contacts {
 		Physics_Character_Touch_Begin(collision)
 	}
@@ -557,9 +556,7 @@ CharacterController_Tick :: proc(
 				if ground != nil {
 					ground.grounded = true
 					ground.rest_y = settle_y
-					ground.slope_angle = math.to_degrees(
-						math.acos(clamp(settle_normal.y, -1, 1)),
-					)
+					ground.slope_angle = math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1)))
 				}
 			}
 		}
@@ -673,13 +670,11 @@ character_simulation_suspended :: proc(
 	return entity.owner_id == 0
 }
 
-// The server does not tick the controller for client-authoritative characters,
-// but it still replicates their root CFrame. Build the capsule shape without a
-// body and use an overlap query so server scripts receive Touched as well.
 CharacterService_Server_Touch :: proc(
 	service: ^CharacterService,
 	model: ^classes.CharacterModel,
 	physics: ^Physics,
+	dt: f32,
 ) {
 	if service == nil || model == nil || physics == nil {return}
 	controller := classes.CharacterController_From_Model(model)
@@ -691,7 +686,22 @@ CharacterService_Server_Touch :: proc(
 	root := classes.CharacterModel_Root(model)
 	if collision == nil || root == nil || root.destroyed {return}
 	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
-	Physics_Ensure_Character_Shape(physics, collision, root)
+	if physics_has_deformables(physics) {
+		previous, has_capsule := Physics_Get_Character_Capsule_CFrame(physics, collision)
+		Physics_Ensure_Character_Capsule(
+			physics,
+			collision,
+			root,
+			position,
+			deformable_only = true,
+		)
+		from := position
+		if has_capsule {from = datatypes.CFrame_Position(previous)}
+		Physics_Advance_Character_Capsule(physics, collision, from, position, 0, dt)
+	} else {
+		if collision.deformable_only {Physics_Destroy_Character_Capsule(physics, collision)}
+		Physics_Ensure_Character_Shape(physics, collision, root)
+	}
 	if collision.shape == nil {return}
 	Physics_Character_Touch_Begin(collision)
 	Physics_Character_Report_Overlaps(physics, collision, root, position)
@@ -774,7 +784,7 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 		if server_side && character_client_authoritative(replicator, player.character) {
 			physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
 			if physics != nil {
-				CharacterService_Server_Touch(service, player.character, physics)
+				CharacterService_Server_Touch(service, player.character, physics, dt)
 			}
 			continue
 		}

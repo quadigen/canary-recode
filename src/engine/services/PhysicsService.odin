@@ -16,6 +16,7 @@ PhysicsService_Class := classes.Class_Info {
 
 PhysicsService :: struct {
 	using service: Service,
+	collision_groups: [dynamic]string,
 }
 
 physics_service_construct :: proc(
@@ -24,7 +25,15 @@ physics_service_construct :: proc(
 ) -> ^classes.Object {
 	service := new(PhysicsService)
 	service.service = Service_Init(&PhysicsService_Class, "PhysicsService", data_model)
+	append(&service.collision_groups, strings.clone("Default"))
 	return &service.object
+}
+
+physics_service_has_group :: proc(service: ^PhysicsService, name: string) -> bool {
+	for group in service.collision_groups {
+		if group == name {return true}
+	}
+	return false
 }
 
 physics_service_get :: proc(
@@ -40,6 +49,9 @@ physics_service_get :: proc(
 	     "IsCollisionGroupNotCollide",
 	     "IsCollisionGroupNotCollideWith",
 	     "CollisionGroupExists",
+	     "IsCollisionGroupRegistered",
+	     "GetRegisteredCollisionGroups",
+	     "RegisterCollisionGroup",
 	     "Raycast",
 	     "RaycastParams",
 	     "OverlapParams":
@@ -59,16 +71,35 @@ physics_service_namecall :: proc(
 	i32,
 	bool,
 ) {
+	service := cast(^PhysicsService)object
 	switch method {
-	case "IsCollisionGroupDefault",
-	     "IsCollisionGroupDoesNotCollide",
+	case "IsCollisionGroupDefault":
+		vm.PushBoolean(L, vm.ArgString(L, 2) == "Default")
+		return 1, true
+	case "IsCollisionGroupDoesNotCollide",
 	     "IsCollisionGroupNotCollide",
 	     "IsCollisionGroupNotCollideWith":
 		vm.PushBoolean(L, false)
 		return 1, true
-	case "CollisionGroupExists":
-		vm.PushBoolean(L, false)
+	case "CollisionGroupExists", "IsCollisionGroupRegistered":
+		vm.PushBoolean(L, physics_service_has_group(service, vm.ArgString(L, 2)))
 		return 1, true
+	case "GetRegisteredCollisionGroups":
+		vm.NewTable(L, len(service.collision_groups))
+		for group, index in service.collision_groups {
+			vm.NewTable(L, 0, 1)
+			vm.PushString(L, group)
+			vm.SetField(L, -2, "name")
+			vm.SetArrayValue(L, -2, index + 1)
+		}
+		return 1, true
+	case "RegisterCollisionGroup":
+		name := vm.ArgString(L, 2)
+		if name == "" {return vm.RaiseError(L, "collision group name must not be empty"), true}
+		if !physics_service_has_group(service, name) {
+			append(&service.collision_groups, strings.clone(name))
+		}
+		return 0, true
 	case "Raycast", "RaycastParams", "OverlapParams":
 		vm.NewTable(L, 0, 0)
 		return 1, true
@@ -77,8 +108,11 @@ physics_service_namecall :: proc(
 }
 
 physics_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	service := cast(^PhysicsService)object
+	for group in service.collision_groups {delete(group)}
+	delete(service.collision_groups)
 	classes.Object_Destroy(object)
-	free(cast(^PhysicsService)object)
+	free(service)
 }
 
 Register_PhysicsService_Class :: proc(registry: ^classes.Registry) {
@@ -101,6 +135,6 @@ Register_PhysicsService_Class :: proc(registry: ^classes.Registry) {
 			"OverlapParams",
 		},
 		events = []string{},
-		methods = []string{},
+		methods = []string{"IsCollisionGroupRegistered", "GetRegisteredCollisionGroups", "RegisterCollisionGroup"},
 	)
 }

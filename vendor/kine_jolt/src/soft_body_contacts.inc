@@ -156,9 +156,7 @@ void soft_contact_solve(SoftContactBody &source, SoftContactBody &target, float 
 	}
 }
 
-// Jolt tests each soft vertex against rigid shapes. Sweep the faces too, so
-// a shape smaller than a triangle can hit its interior between vertices.
-bool soft_contact_rigid(SoftContactBody &soft, JPH::Body &rigid, const JPH::AABox &sweep, float dt) {
+bool soft_contact_rigid(SoftContactBody &soft, JPH::Body &rigid, const JPH::AABox &sweep, float dt, bool &contact) {
 	const auto *shape = rigid.GetShape();
 	const auto center = rigid.GetCenterOfMassPosition();
 	const auto origin = JPH::Vec3(center);
@@ -192,6 +190,7 @@ bool soft_contact_rigid(SoftContactBody &soft, JPH::Body &rigid, const JPH::AABo
 		if (hit.mFraction > bestTime || (hit.mFraction == bestTime && depth <= bestDepth)) continue;
 		const auto normal = hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero());
 		if (normal.IsNearZero()) continue;
+		contact = true;
 		const auto point = hit.mContactPointOn1 - hit.mFraction * direction;
 		float weights[3];
 		JPH::ClosestPoint::GetBaryCentricCoordinates(
@@ -240,7 +239,8 @@ bool soft_contact_rigid(SoftContactBody &soft, JPH::Body &rigid, const JPH::AABo
 
 void JPH_MeshSoftBody_Collide(
 	JPH_PhysicsSystemRef system, const JPH_SoftBodyCollider *bodies, uint32_t count,
-	const JPH_BodyID *rigidBodies, uint32_t rigidCount, float deltaTime) {
+	const JPH_BodyID *rigidBodies, uint32_t rigidCount, float deltaTime,
+	JPH_ObjectLayer deformableCapsuleLayer, JPH_SoftBodyContactCallback onContact, void *userData) {
 	if (!system || !bodies || count == 0 || !(deltaTime > 0)) return;
 	auto *physics = ToPhysicsSystem(system);
 	std::vector<JPH::BodyID> ids;
@@ -288,11 +288,14 @@ void JPH_MeshSoftBody_Collide(
 		moved.Translate(deltaTime * rigid->GetLinearVelocity());
 		sweep.Encapsulate(moved);
 		for (auto &soft : states) {
-			if (!soft.body || (!soft.body->IsActive() && !rigid->IsActive()) || !soft.bounds.Overlaps(sweep)
-				|| !physics->GetObjectLayerPairFilter().ShouldCollide(soft.body->GetObjectLayer(), rigid->GetObjectLayer())
+			if (!soft.body || (!soft.body->IsActive() && !rigid->IsActive() && !rigid->IsKinematic()) || !soft.bounds.Overlaps(sweep)
+				|| (rigid->GetObjectLayer() != deformableCapsuleLayer &&
+					!physics->GetObjectLayerPairFilter().ShouldCollide(soft.body->GetObjectLayer(), rigid->GetObjectLayer()))
 				|| !soft.body->GetCollisionGroup().CanCollide(rigid->GetCollisionGroup())) continue;
 			soft.prepare(deltaTime);
-			if (soft_contact_rigid(soft, *rigid, sweep, deltaTime) && !rigid->IsActive()) wake.push_back(ids[i]);
+			bool contact = false;
+			if (soft_contact_rigid(soft, *rigid, sweep, deltaTime, contact) && !rigid->IsActive()) wake.push_back(ids[i]);
+			if (contact && onContact) onContact(uint32_t(&soft - states.data()), JPH_BodyID(ids[i].GetIndexAndSequenceNumber()), userData);
 		}
 	}
 	for (auto &state : states) {

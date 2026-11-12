@@ -22,6 +22,7 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -487,6 +488,7 @@ class ManagedContactListener final : public JPH::ContactListener {
 };
 
 JPH::TempAllocator *sJphTempAllocator = nullptr;
+JPH::Ref<JPH::GroupFilterTable> sWeldGroupFilter;
 bool sJphInitialized = false;
 int32_t sJphUsers = 0;
 
@@ -504,6 +506,7 @@ int32_t JPH_Init(void) {
 	JPH::RegisterTypes();
 
 	sJphTempAllocator = new JPH::TempAllocatorImplWithMallocFallback(32 * 1024 * 1024);
+	sWeldGroupFilter = new JPH::GroupFilterTable(1);
 
 	sJphInitialized = true;
 	sJphUsers = 1;
@@ -521,6 +524,7 @@ void JPH_Shutdown(void) {
 	sJphUsers = 0;
 	delete sJphTempAllocator;
 	sJphTempAllocator = nullptr;
+	sWeldGroupFilter = nullptr;
 
 	JPH::UnregisterTypes();
 
@@ -1364,7 +1368,7 @@ extern "C" JPH_ShapeRef JPH_CapsuleShape_Create(float halfHeight, float radius, 
 	return new JPH::CapsuleShape(halfHeight, radius);
 }
 
-int32_t JPH_PhysicsSystem_CastShape(
+int32_t JPH_PhysicsSystem_CastShapeDetailed(
 	JPH_PhysicsSystemRef system,
 	const JPH_RVec3 *origin,
 	const JPH_Vec3 *displacement,
@@ -1373,7 +1377,7 @@ int32_t JPH_PhysicsSystem_CastShape(
 	uint32_t bodyIDCount,
 	int32_t filterMode,
 	float maxDistance,
-	JPH_RayCastResult *outResult) {
+	JPH_RayCastResult *outResult, float *outPenetrationDepth) {
 	if (system == nullptr || origin == nullptr || displacement == nullptr || shape == nullptr || outResult == nullptr)
 		return 0;
 
@@ -1382,7 +1386,10 @@ int32_t JPH_PhysicsSystem_CastShape(
 	JPH::Shape *shapePtr = static_cast<JPH::Shape *>(shape);
 	JPH::RShapeCast shapeCast(shapePtr, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(ToJPH(*origin)), ToJPH(*displacement));
 	JPH::ShapeCastSettings settings;
-	settings.mReturnDeepestPoint = false;
+	if (outPenetrationDepth != nullptr) {
+		settings.mReturnDeepestPoint = true;
+		settings.mBackFaceModeConvex = JPH::EBackFaceMode::CollideWithBackFaces;
+	}
 	JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
 
 	if (filterMode == 0) {
@@ -1406,7 +1413,24 @@ int32_t JPH_PhysicsSystem_CastShape(
 	outResult->bodyID = hit.mBodyID2.GetIndexAndSequenceNumber();
 	outResult->position = FromJPH(shapeCast.GetPointOnRay(hit.mFraction));
 	outResult->normal = FromJPH(hit.mPenetrationAxis);
+	if (outPenetrationDepth != nullptr)
+		*outPenetrationDepth = hit.mFraction <= 0.0f ? hit.mPenetrationDepth : 0.0f;
 	return 1;
+}
+
+int32_t JPH_PhysicsSystem_CastShape(
+	JPH_PhysicsSystemRef system,
+	const JPH_RVec3 *origin,
+	const JPH_Vec3 *displacement,
+	JPH_ShapeRef shape,
+	const JPH_BodyID *bodyIDs,
+	uint32_t bodyIDCount,
+	int32_t filterMode,
+	float maxDistance,
+	JPH_RayCastResult *outResult) {
+	return JPH_PhysicsSystem_CastShapeDetailed(
+		system, origin, displacement, shape, bodyIDs, bodyIDCount,
+		filterMode, maxDistance, outResult, nullptr);
 }
 
 JPH_BodyRef JPH_BodyInterface_CreateBody(JPH_BodyInterfaceRef bodyInterface, JPH_BodyCreationSettingsRef settings) {
@@ -1487,6 +1511,19 @@ int32_t JPH_BodyInterface_IsAdded(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID
 		return 0;
 
 	return ToBodyInterface(bodyInterface)->IsAdded(ToBodyID(bodyID)) ? 1 : 0;
+}
+
+void JPH_BodyInterface_SetWeldGroup(
+	JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, uint32_t groupID) {
+	if (bodyInterface == nullptr)
+		return;
+	auto *interface = ToBodyInterface(bodyInterface);
+	const JPH::BodyID id = ToBodyID(bodyID);
+	const JPH::CollisionGroup group = groupID == JPH::CollisionGroup::cInvalidGroup
+		? JPH::CollisionGroup()
+		: JPH::CollisionGroup(sWeldGroupFilter.GetPtr(), groupID, 0);
+	interface->SetCollisionGroup(id, group);
+	interface->InvalidateContactCache(id);
 }
 
 void JPH_BodyInterface_SetPosition(

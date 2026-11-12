@@ -1,20 +1,16 @@
 package classes
-
-import "core:c"
-import "core:fmt"
-import strings "core:strings"
-
 import assetstore "../assetstore"
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
 import vm "../vm"
+import "core:c"
+import "core:fmt"
+import strings "core:strings"
 
 IMAGE_LABEL_CLASS_ICONS := #load_directory("../assets/images/icons")
-
 IMAGE_LABEL_GLOBAL_ICONS := #load_directory("../assets/images/")
-
 
 BUILTIN_ICON_PREFIX :: "builtin://icons/"
 BUILTIN_GLOBAL_ICON_PREFIX :: "builtin://global-icons/"
@@ -31,8 +27,6 @@ ImageLabel_Class := Class_Info {
 	name   = "ImageLabel",
 	parent = &GuiObject_Class,
 }
-
-
 ImageLabel :: struct {
 	using gui_object:   GuiObject,
 	image:              string,
@@ -44,15 +38,13 @@ ImageLabel :: struct {
 	image_rect_size:    datatypes.Vector2,
 	resample_mode:      enums.ResampleMode,
 	scale_type:         enums.ScaleType,
+	slice_center:       datatypes.Rect,
+	slice_scale:        f32,
 	tile_size:          datatypes.UDim2,
 }
-
-
 ImageLabel_Init :: proc() -> ImageLabel {
 	gui := GuiObject_Init()
-
 	gui.object.class = &ImageLabel_Class
-
 	return ImageLabel {
 		gui_object = gui,
 		image = "",
@@ -64,70 +56,55 @@ ImageLabel_Init :: proc() -> ImageLabel {
 		image_rect_size = datatypes.Vector2{X = 0, Y = 0},
 		resample_mode = .Default,
 		scale_type = .Stretch,
-		tile_size = datatypes.UDim2{},
+		slice_center = datatypes.Rect{},
+		slice_scale = 1,
+		tile_size = datatypes.UDim2{X_Scale = 1, Y_Scale = 1},
 	}
 }
-
 ImageLabel_Find_Class_Icon :: proc(name: string) -> ([]u8, bool) {
 	for file in IMAGE_LABEL_CLASS_ICONS {
 		if file.name == name {
 			return file.data, true
 		}
 	}
-
 	return nil, false
 }
-
 ImageLabel_Find_Global_Icon :: proc(name: string) -> ([]u8, bool) {
 	for file in IMAGE_LABEL_GLOBAL_ICONS {
 		if file.name == name {
 			return file.data, true
 		}
 	}
-
 	return nil, false
 }
-
 ImageLabel_Resolve_Builtin_Image :: proc(path: string) -> ([]u8, bool) {
 	if strings.has_prefix(path, BUILTIN_ICON_PREFIX) {
 		name := path[len(BUILTIN_ICON_PREFIX):]
-
 		return ImageLabel_Find_Class_Icon(name)
 	}
-
 	if strings.has_prefix(path, BUILTIN_GLOBAL_ICON_PREFIX) {
 		name := path[len(BUILTIN_GLOBAL_ICON_PREFIX):]
-
 		return ImageLabel_Find_Global_Icon(name)
 	}
-
 	return nil, false
 }
-
 ImageLabel_Destroy_Stored_Image :: proc(image_label: ^ImageLabel) {
 	if image_label == nil {
 		return
 	}
-
 	if image_label.stored_image != nil {
 		kineffi.Kine_Skia_Image_Destroy(image_label.stored_image)
-
 		image_label.stored_image = nil
 	}
 }
-
-
 ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 	if image_label == nil {
 		return
 	}
-
 	ImageLabel_Destroy_Stored_Image(image_label)
-
 	if len(path) == 0 {
 		return
 	}
-
 	//
 	// Built-in image.
 	//
@@ -136,158 +113,111 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 	// builtin://icons/Part.svg
 	// builtin://global-icons/ArrowDown.svg
 	//
-
 	if strings.has_prefix(path, "builtin://") {
 		data, found := ImageLabel_Resolve_Builtin_Image(path)
-
 		if !found || len(data) == 0 {
 			return
 		}
-
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			&data[0],
 			uintptr(len(data)),
 		)
-
 		return
 	}
-
 	//
 	// Load from memory
 	//
-
 	if strings.has_prefix(path, RUNTIME_IMAGE_PREFIX) {
 		data, found := ImageLabel_Find_Runtime_Image(path)
-
 		if !found || len(data) == 0 {
 			return
 		}
-
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
 		)
-
 		return
 	}
-
 	//
 	// Embedded asset. A map that was saved with its textures inside carries
 	// "kineasset://" references, and those bytes travel in the .kine rather than
 	// on disk, so the image is decoded straight from memory.
 	//
-
 	DATA_SVG_PREFIX :: "data:image/svg+xml;utf8,"
-
 	if strings.has_prefix(path, DATA_SVG_PREFIX) {
 		data := path[len(DATA_SVG_PREFIX):]
 		if len(data) == 0 {return}
-
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
 		)
 		return
 	}
-
 	if data, found := assetstore.Resolve_Bytes(path); found {
 		if len(data) == 0 {
 			return
 		}
-
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
 		)
-
 		return
 	}
-
 	//
 	// Normal filesystem image.
 	//
-
 	// Falling through with an embedded reference means the bytes never arrived.
 	// Report it here, where the author will actually see it, rather than leaving
 	// the label silently blank.
 	if assetstore.Is_Uri(path) {
 		assetstore.Report_Missing_Asset(path, "ImageLabel image")
 	}
-
-	cpath := strings.clone_to_cstring(assetstore.Resolve_Path(path))
-
+	cpath := assetstore.Resolve_C_Path(path)
+	if cpath == nil {return}
 	image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromFile(cpath)
-
 	delete(cpath)
 }
-
-
 ImageLabel_Set_Image :: proc(image_label: ^ImageLabel, path: string) {
 	if image_label == nil {
 		return
 	}
-
 	//
 	// Don't reload the exact same image.
 	//
-
 	if image_label.image == path {
 		return
 	}
-
 	//
 	// Copy property string.
 	//
-
 	copy := assetstore.Resolve_Ugc_Asset(path, .Texture)
-
 	delete(image_label.owned_image)
-
 	image_label.owned_image = copy
-
 	image_label.image = image_label.owned_image
-
 	//
 	// Decode it.
 	//
-
 	ImageLabel_Load_Image(image_label, image_label.image)
 }
-
-
 //
 // Instance
 //
-
 ImageLabel_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	image_label := new(ImageLabel)
-
 	image_label^ = ImageLabel_Init()
-
 	image_label.name = "ImageLabel"
-
 	return &image_label.object
 }
-
-
 ImageLabel_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	image_label := cast(^ImageLabel)object
-
 	ImageLabel_Destroy_Stored_Image(image_label)
-
 	GuiObject_Free_Signals(cast(^GuiObject)object)
-
 	delete(image_label.owned_image)
-
 	image_label.owned_image = ""
-
 	image_label.image = ""
-
 	Object_Destroy(object)
-
 	free(image_label)
 }
-
 ImageLabel_Register_Runtime_Image :: proc(id: string, data: string) -> string {
 	for &asset in runtime_image_assets {
 		if asset.id == id {
@@ -296,27 +226,21 @@ ImageLabel_Register_Runtime_Image :: proc(id: string, data: string) -> string {
 			return asset.id
 		}
 	}
-
 	asset := Runtime_Image_Asset {
 		id   = strings.clone(id),
 		data = strings.clone(data),
 	}
-
 	append(&runtime_image_assets, asset)
-
 	return runtime_image_assets[len(runtime_image_assets) - 1].id
 }
-
 ImageLabel_Find_Runtime_Image :: proc(id: string) -> (string, bool) {
 	for &asset in runtime_image_assets {
 		if asset.id == id {
 			return asset.data, true
 		}
 	}
-
 	return "", false
 }
-
 Texture_Resolve_Bytes :: proc(path: string) -> ([]u8, bool) {
 	if strings.has_prefix(path, RUNTIME_IMAGE_PREFIX) {
 		data, found := ImageLabel_Find_Runtime_Image(path)
@@ -324,11 +248,9 @@ Texture_Resolve_Bytes :: proc(path: string) -> ([]u8, bool) {
 	}
 	return assetstore.Resolve_Bytes(path)
 }
-
 //
 // Properties
 //
-
 ImageLabel_get :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -337,34 +259,39 @@ ImageLabel_get :: proc(
 	key: string,
 ) -> bool {
 	image_label := cast(^ImageLabel)object
-
 	switch key {
-
 	case "Image":
 		vm.PushString(L, image_label.image)
 
+	case "ImageContent":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Content(L, datatype_registry, datatypes.Content_From_URI(image_label.image))
+
+	case "IsLoaded":
+		vm.PushBoolean(L, image_label.stored_image != nil)
 	case "ImageTransparency":
 		vm.PushNumber(L, f64(image_label.image_transparency))
-
 	case "ImageColor3":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, image_label.image_color3)
-
 	case "ImageRectOffset":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Vector2(L, datatype_registry, image_label.image_rect_offset)
-
 	case "ImageRectSize":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Vector2(L, datatype_registry, image_label.image_rect_size)
-
 	case "ResampleMode":
 		if enum_registry == nil {return false}
 		enums.Push_Item_By_Value(L, enum_registry, "ResampleMode", i64(image_label.resample_mode))
-
 	case "ScaleType":
 		if enum_registry == nil {return false}
 		enums.Push_Item_By_Value(L, enum_registry, "ScaleType", i64(image_label.scale_type))
+	case "SliceCenter":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Rect(L, datatype_registry, image_label.slice_center)
+
+	case "SliceScale":
+		vm.PushNumber(L, f64(image_label.slice_scale))
 
 	case "TileSize":
 		if datatype_registry == nil {return false}
@@ -373,11 +300,8 @@ ImageLabel_get :: proc(
 	case:
 		return GuiObject_get(L, object, datatype_registry, enum_registry, key)
 	}
-
 	return true
 }
-
-
 ImageLabel_set :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -387,9 +311,7 @@ ImageLabel_set :: proc(
 	value_index: int,
 ) -> bool {
 	image_label := cast(^ImageLabel)object
-
 	switch key {
-
 	case "Image":
 		if datatype_registry != nil &&
 		   vm.IsUserdataType(L, value_index, &datatype_registry.content) {
@@ -398,33 +320,50 @@ ImageLabel_set :: proc(
 		} else {
 			ImageLabel_Set_Image(image_label, vm.ArgString(L, value_index))
 		}
+	case "ImageContent":
+		if datatype_registry == nil {return false}
+		content := datatypes.Arg_Content(L, value_index, datatype_registry)
+		ImageLabel_Set_Image(image_label, content.uri)
+
+	case "IsLoaded":
+		_ = vm.RaiseError(L, "IsLoaded is read-only")
 
 	case "ImageTransparency":
 		image_label.image_transparency = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
-
 	case "ImageColor3":
 		if datatype_registry == nil {return false}
 		image_label.image_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
-
 	case "ImageRectOffset":
 		if datatype_registry == nil {return false}
 		image_label.image_rect_offset = datatypes.Arg_Vector2(L, value_index, datatype_registry)
-
 	case "ImageRectSize":
 		if datatype_registry == nil {return false}
 		image_label.image_rect_size = datatypes.Arg_Vector2(L, value_index, datatype_registry)
-
 	case "ResampleMode":
 		if enum_registry == nil {return false}
-		image_label.resample_mode = enums.ResampleMode(
-			enums.Arg_Item(L, value_index, enum_registry, "ResampleMode").value,
-		)
-
+		item := enums.Arg_Item(L, value_index, enum_registry)
+		switch item.enum_type.name {
+		case "ResampleMode":
+			image_label.resample_mode = enums.ResampleMode(item.value)
+		case "ResamplerMode":
+			image_label.resample_mode = .Default
+			if enums.ResamplerMode(item.value) == .Pixelated {
+				image_label.resample_mode = .Nearest
+			}
+		case:
+			_ = vm.RaiseError(L, "expected Enum.ResampleMode or Enum.ResamplerMode")
+		}
 	case "ScaleType":
 		if enum_registry == nil {return false}
 		image_label.scale_type = enums.ScaleType(
 			enums.Arg_Item(L, value_index, enum_registry, "ScaleType").value,
 		)
+	case "SliceCenter":
+		if datatype_registry == nil {return false}
+		image_label.slice_center = datatypes.Arg_Rect(L, value_index, datatype_registry)
+
+	case "SliceScale":
+		image_label.slice_scale = max(f32(0), f32(vm.ArgNumber(L, value_index)))
 
 	case "TileSize":
 		if datatype_registry == nil {return false}
@@ -433,44 +372,148 @@ ImageLabel_set :: proc(
 	case:
 		return GuiObject_set(L, object, datatype_registry, enum_registry, key, value_index)
 	}
+	return true
+}
+//
+// Rendering
+//
+ImageLabel_Draw_Image_Patch :: proc(
+	label: ^ImageLabel,
+	ctx: ^Class_Step_Context,
+	sx, sy, sw, sh: f32,
+	dx, dy, dw, dh: f32,
+) {
+	if sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 {return}
+
+	color := label.image_color3
+	has_color := color.R < 0.999 || color.G < 0.999 || color.B < 0.999
+
+	guilib.drawImageScaled(
+		ctx.renderer.SkiaSurface,
+		label.stored_image,
+		sx,
+		sy,
+		sw,
+		sh,
+		dx,
+		dy,
+		dw,
+		dh,
+		0,
+		0,
+		i32(enums.ScaleType.Stretch),
+		i32(label.resample_mode),
+		color,
+		has_color,
+		label.image_transparency,
+	)
+}
+
+ImageLabel_Draw_Sliced :: proc(
+	label: ^ImageLabel,
+	ctx: ^Class_Step_Context,
+	dest: guilib.Rect,
+) -> bool {
+	if label == nil || label.stored_image == nil {return false}
+
+	image_width := f32(kineffi.Kine_Skia_Image_GetWidth(label.stored_image))
+	image_height := f32(kineffi.Kine_Skia_Image_GetHeight(label.stored_image))
+
+	sx := clamp(f32(label.image_rect_offset.X), f32(0), image_width)
+	sy := clamp(f32(label.image_rect_offset.Y), f32(0), image_height)
+	sw := f32(label.image_rect_size.X)
+	sh := f32(label.image_rect_size.Y)
+
+	if sw <= 0 {sw = image_width - sx}
+	if sh <= 0 {sh = image_height - sy}
+	sw = min(sw, image_width - sx)
+	sh = min(sh, image_height - sy)
+
+	if sw <= 0 || sh <= 0 {return false}
+
+	left := clamp(f32(label.slice_center.Min.X), f32(0), sw)
+	top := clamp(f32(label.slice_center.Min.Y), f32(0), sh)
+	right := clamp(f32(label.slice_center.Max.X), left, sw)
+	bottom := clamp(f32(label.slice_center.Max.Y), top, sh)
+
+	if right <= left || bottom <= top {return false}
+
+	scale := max(f32(0), label.slice_scale)
+	dst_left := left * scale
+	dst_top := top * scale
+	dst_right := (sw - right) * scale
+	dst_bottom := (sh - bottom) * scale
+
+	border_w := dst_left + dst_right
+	if border_w > dest.width && border_w > 0 {
+		factor := dest.width / border_w
+		dst_left *= factor
+		dst_right *= factor
+	}
+
+	border_h := dst_top + dst_bottom
+	if border_h > dest.height && border_h > 0 {
+		factor := dest.height / border_h
+		dst_top *= factor
+		dst_bottom *= factor
+	}
+
+	src_x := [4]f32{sx, sx + left, sx + right, sx + sw}
+	src_y := [4]f32{sy, sy + top, sy + bottom, sy + sh}
+	dst_x := [4]f32 {
+		dest.x,
+		dest.x + dst_left,
+		dest.x + dest.width - dst_right,
+		dest.x + dest.width,
+	}
+	dst_y := [4]f32 {
+		dest.y,
+		dest.y + dst_top,
+		dest.y + dest.height - dst_bottom,
+		dest.y + dest.height,
+	}
+
+	for y in 0 ..< 3 {
+		for x in 0 ..< 3 {
+			ImageLabel_Draw_Image_Patch(
+				label,
+				ctx,
+				src_x[x],
+				src_y[y],
+				src_x[x + 1] - src_x[x],
+				src_y[y + 1] - src_y[y],
+				dst_x[x],
+				dst_y[y],
+				dst_x[x + 1] - dst_x[x],
+				dst_y[y + 1] - dst_y[y],
+			)
+		}
+	}
 
 	return true
 }
 
-
-//
-// Rendering
-//
-
 ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	rect, visible := GuiObject_get_rect(object, ctx)
-
 	if !visible {
 		return
 	}
-
 	image_label := cast(^ImageLabel)object
-
 	image_shadow := false
 	should_draw := true
 	blur_sigma: f32 = 0
 	has_blur := false
-
 	if image_label.stored_image != nil {
 		shadow_object := Find_First_Child_Of_Class(object, "UIShadow")
-
 		blur_filter := Find_First_Child_Of_Class(object, "BlurImageFilter")
-
 		if shadow_object != nil {
 			shadow := cast(^UIShadow)shadow_object
-
 			if shadow.enabled && shadow.showfortext != true {
 				short_edge := min(rect.width, rect.height)
 				offset_x := shadow.offset.X_Scale * rect.width + shadow.offset.X_Offset
 				offset_y := shadow.offset.Y_Scale * rect.height + shadow.offset.Y_Offset
 				spread_x := shadow.spread.X_Scale * rect.width + shadow.spread.X_Offset
 				spread_y := shadow.spread.Y_Scale * rect.height + shadow.spread.Y_Offset
-
 				params := guilib.ShadowParams {
 					offsetX   = offset_x,
 					offsetY   = offset_y,
@@ -479,44 +522,34 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 					color     = shadow.color,
 					alpha     = 1 - f32(shadow.transparency),
 				}
-
 				guilib.drawImageShadow(
 					ctx.renderer.SkiaSurface,
 					image_label.stored_image,
 					rect,
 					params,
 				)
-
 				image_shadow = true
 			}
 		}
-
 		if blur_filter != nil {
 			filter := cast(^BlurImageFilter)blur_filter
-
 			if filter.enabled {
 				blur_sigma = max(
 					f32(0),
 					gui_resolve_udim(filter.blur_radius, min(rect.width, rect.height)),
 				)
-
 				has_blur = true
 			}
 		}
 	}
-
 	GuiObject_render(object, ctx, image_shadow)
-
 	if image_label.stored_image != nil {
 		motion_blur_object := Find_First_Child_Of_Class(object, "UIMotionBlur")
 		motion_blur_active := false
-
 		if motion_blur_object != nil {
 			motion_blur := cast(^UIMotionBlur)motion_blur_object
-
 			if motion_blur.enabled {
 				length := gui_resolve_udim(motion_blur.length, min(rect.width, rect.height))
-
 				if length > 0 {
 					guilib.beginMotionBlur(
 						ctx.renderer.SkiaSurface,
@@ -524,14 +557,11 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 						f32(motion_blur.angle),
 						length,
 					)
-
 					motion_blur_active = true
 				}
 			}
 		}
-
 		rect.bgTransparency = image_label.image_transparency
-
 		if has_blur {
 			guilib.drawImageBlurred(
 				ctx.renderer.SkiaSurface,
@@ -539,13 +569,12 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				rect,
 				blur_sigma,
 			)
-		} else {
+		} else if image_label.scale_type != .Slice ||
+		   !ImageLabel_Draw_Sliced(image_label, ctx, rect) {
 			color := image_label.image_color3
 			has_color := color.R < 0.999 || color.G < 0.999 || color.B < 0.999
-
 			src_offset := image_label.image_rect_offset
 			src_size := image_label.image_rect_size
-
 			tile_x := gui_resolve_udim(
 				datatypes.UDim {
 					Scale = image_label.tile_size.X_Scale,
@@ -553,7 +582,6 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				},
 				rect.width,
 			)
-
 			tile_y := gui_resolve_udim(
 				datatypes.UDim {
 					Scale = image_label.tile_size.Y_Scale,
@@ -561,7 +589,6 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				},
 				rect.height,
 			)
-
 			guilib.drawImageScaled(
 				ctx.renderer.SkiaSurface,
 				image_label.stored_image,
@@ -575,54 +602,39 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				rect.height,
 				tile_x,
 				tile_y,
-				i32(image_label.scale_type),
+				i32(enums.ScaleType.Stretch) if image_label.scale_type == .Slice else i32(image_label.scale_type),
 				i32(image_label.resample_mode),
 				color,
 				has_color,
 				image_label.image_transparency,
 			)
 		}
-
 		if motion_blur_active {
 			guilib.endMotionBlur(ctx.renderer.SkiaSurface)
 		}
 	}
 }
-
-
 //
 // Cloning
 //
-
 ImageLabel_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^ImageLabel)source
-
 	dst := cast(^ImageLabel)destination
-
 	ImageLabel_Destroy_Stored_Image(dst)
-
 	delete(dst.owned_image)
-
 	dst.owned_image = strings.clone(src.image)
-
 	dst.image = dst.owned_image
-
 	dst.image_transparency = src.image_transparency
-
 	dst.image_color3 = src.image_color3
 	dst.image_rect_offset = src.image_rect_offset
 	dst.image_rect_size = src.image_rect_size
 	dst.resample_mode = src.resample_mode
 	dst.scale_type = src.scale_type
+	dst.slice_center = src.slice_center
+	dst.slice_scale = src.slice_scale
 	dst.tile_size = src.tile_size
-
 	ImageLabel_Load_Image(dst, dst.image)
 }
-
-
-//
-// Registration
-//
 
 Register_ImageLabel :: proc(registry: ^Registry) {
 	Register_Class(
@@ -635,12 +647,16 @@ Register_ImageLabel :: proc(registry: ^Registry) {
 		clone = ImageLabel_clone,
 		properties = []string {
 			"Image",
+			"ImageContent",
+			"IsLoaded",
 			"ImageTransparency",
 			"ImageColor3",
 			"ImageRectOffset",
 			"ImageRectSize",
 			"ResampleMode",
 			"ScaleType",
+			"SliceCenter",
+			"SliceScale",
 			"TileSize",
 		},
 	)

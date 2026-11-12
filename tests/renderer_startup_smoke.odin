@@ -45,18 +45,26 @@ main :: proc() {
 	for _ in 0..<8 {
 		render_compositor_frame(owned, compositor)
 	}
-	sizes := [][2]i32{{640, 360}, {480, 640}, {900, 500}, {320, 240}, {800, 600}}
-	for size in sizes {
+	// Render with temporal history and multisampled attachments at many distinct
+	// sizes so cached render targets from previous sizes cannot be reused.
+	_ = kineffi.Kine_Filament_SetAntiAliasing(owned, false, true, true, 4)
+	// The application keeps Ray attached even while rendering with Filament.
+	// On builds with Ray support, exercise that idle renderer during resizes.
+	_ = kineffi.Kine_Filament_NewRay(owned, 320, 240)
+	for step in 0..<96 {
+		size := [2]i32{896 + i32(step) * 5, 512 + i32(step % 19) * 7}
 		assert(sdl3.SetWindowSize(window, size[0], size[1]))
+		assert(sdl3.SyncWindow(window))
 		sdl3.PumpEvents()
 		width, height: i32
 		assert(sdl3.GetWindowSizeInPixels(window, &width, &height))
 		kineffi.Kine_Filament_Resize(owned, width, height)
+		assert(kineffi.Kine_VulkanCompositor_IsReady(compositor) != 0)
+		assert(kineffi.Kine_VulkanCompositor_NeedsResize(compositor) == 0)
 		info: kineffi.KineVulkanCompositorInfo
 		assert(kineffi.Kine_VulkanCompositor_GetInfo(compositor, &info) != 0)
 		assert(info.width == u32(width) && info.height == u32(height))
-		for _ in 0..<8 { render_compositor_frame(owned, compositor) }
-		fmt.printf("RESIZE_PASSED %dx%d\n", width, height)
+		render_compositor_frame(owned, compositor)
 	}
 	fmt.println("RENDERER_RESIZE_SMOKE_PASSED")
 }

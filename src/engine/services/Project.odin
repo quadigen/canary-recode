@@ -5,6 +5,7 @@ package services
 import "vendor:sdl3"
 
 
+import assetstore "../assetstore"
 import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
@@ -248,6 +249,7 @@ Project_Activate :: proc(service: ^ProjectService, index: int) {
 	}
 
 	service.active_project_path = strings.clone(service.projects[index].path)
+	assetstore.Set_Project_Root(service.active_project_path)
 	service.autosave_elapsed = 0
 }
 
@@ -633,6 +635,7 @@ Project_Delete :: proc(service: ^ProjectService, path: string) -> bool {
 	   os.are_paths_identical(project_to_delete.path, service.active_project_path) {
 		delete(service.active_project_path)
 		service.active_project_path = ""
+		assetstore.Set_Project_Root("")
 	}
 
 	if err := os.remove_all(project_to_delete.path); err != nil {
@@ -785,6 +788,7 @@ Project_Clear :: proc(service: ^ProjectService) {
 	if len(service.active_project_path) > 0 {
 		delete(service.active_project_path)
 		service.active_project_path = ""
+		assetstore.Set_Project_Root("")
 	}
 }
 
@@ -1141,7 +1145,9 @@ Project_Open :: proc(service: ^ProjectService, L: ^vm.State, path: string) -> bo
 			return false
 		}
 		defer delete(data)
+		assetstore.Set_Project_Root(normalized)
 		if !Restore_Map(service.data_model.registry, L, data, snapshot, clear_assets = false) {
+			assetstore.Set_Project_Root(service.active_project_path)
 			return false
 		}
 	} else {

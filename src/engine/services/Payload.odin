@@ -7,6 +7,7 @@ import "core:os"
 
 PAYLOAD_MAGIC :: "KINEPAY1"
 PAYLOAD_VERSION :: u8(1)
+PROJECT_ASSET_EXPORT_MARKER :: "Kinemium: embedded game with project asset support"
 SINGLEPLAYER_EXPORT_MARKER :: "Kinemium: starting embedded single-player game"
 PAYLOAD_TAIL_LEN :: 8
 PAYLOAD_LEN_FIELD :: 8

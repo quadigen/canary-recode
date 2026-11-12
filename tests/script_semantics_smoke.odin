@@ -304,6 +304,22 @@ expect(game:GetService("ReplicatedStorage"):FindFirstChild("ServerSidedLocal") ~
 local replicated = Instance.new("Script", workspace)
 replicated.Name = "ReplicatedServerScript"
 replicated.Source = "_G.client_ran_server_script = true"
+for _, name in {"ServerScriptService", "ServerStorage"} do
+	local container = game:GetService(name)
+	local localScript = Instance.new("LocalScript", container)
+	localScript.Source = "_G.client_ran_private_local_script = true"
+	local clientScript = Instance.new("Script", container)
+	clientScript.RunContext = Enum.RunContext.Client
+	clientScript.Source = "_G.client_ran_private_client_script = true"
+end
+local runService = game:GetService("RunService")
+_G.simulationOrder = {}
+runService.Stepped:Once(function() table.insert(_G.simulationOrder, "step") end)
+runService.PostSimulation:Once(function(dt)
+	assert(dt > 0)
+	table.insert(_G.simulationOrder, "post")
+end)
+runService.Heartbeat:Once(function() table.insert(_G.simulationOrder, "heartbeat") end)
 `,
 		"part11_setup",
 	)
@@ -314,6 +330,9 @@ replicated.Source = "_G.client_ran_server_script = true"
 		&client_a_vm,
 		`
 expect(_G.client_ran_server_script == nil, "a Script must not run on the client")
+expect(_G.client_ran_private_local_script == nil, "LocalScripts in server containers must stay inactive")
+expect(_G.client_ran_private_client_script == nil, "client-context Scripts in server containers must stay inactive")
+expect(table.concat(_G.simulationOrder, ",") == "step,post,heartbeat", "PostSimulation follows Stepped and precedes Heartbeat")
 `,
 		"part11_verify",
 	)
@@ -834,7 +853,7 @@ expect(_G.kind_instance == "Instance", "modules may return Instances")
 expect(_G.kind_number == "number", "modules may return numbers")
 expect(_G.kind_string == "string", "modules may return strings")
 expect(_G.kind_boolean == "boolean", "modules may return booleans")
-expect(_G.kind_nil == "nil", "modules may return nil")	expect(_G.kind_vector == "vector", "modules may return userdata")
+expect(_G.kind_nil == "nil", "modules may return nil")	expect(_G.kind_vector == "Vector3", "modules may return vectors")
 expect(_G.kind_color == "Color3", "modules may return datatype userdata")
 expect(_G.kind_cframe == "CFrame", "modules may return CFrame values")
 expect(_G.nil_cached == true, "a nil result is cached")

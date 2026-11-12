@@ -429,9 +429,11 @@ typedef struct JPH_SoftBodyCollider {
 	JPH_BodyID bodyID;
 	uint32_t closedSurface;
 } JPH_SoftBodyCollider;
+typedef void (*JPH_SoftBodyContactCallback)(uint32_t softIndex, JPH_BodyID rigidBody, void *userData);
 JPH_API void JPH_MeshSoftBody_Collide(
 	JPH_PhysicsSystemRef system, const JPH_SoftBodyCollider *bodies, uint32_t count,
-	const JPH_BodyID *rigidBodies, uint32_t rigidCount, float deltaTime);
+	const JPH_BodyID *rigidBodies, uint32_t rigidCount, float deltaTime,
+	JPH_ObjectLayer deformableCapsuleLayer, JPH_SoftBodyContactCallback onContact, void *userData);
 
 JPH_API void JPH_PhysicsSystem_OptimizeBroadPhase(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetContactListener(JPH_PhysicsSystemRef system, JPH_ContactListenerRef listener);
@@ -448,6 +450,18 @@ JPH_API int32_t JPH_PhysicsSystem_CastShape(
 	JPH_RayFilterMode filterMode,
 	float maxDistance,
 	JPH_RayCastResult *outResult);
+
+JPH_API int32_t JPH_PhysicsSystem_CastShapeDetailed(
+	JPH_PhysicsSystemRef system,
+	const JPH_RVec3 *origin,
+	const JPH_Vec3 *displacement,
+	JPH_ShapeRef shape,
+	const JPH_BodyID *bodyIDs,
+	uint32_t bodyIDCount,
+	JPH_RayFilterMode filterMode,
+	float maxDistance,
+	JPH_RayCastResult *outResult,
+	float *outPenetrationDepth);
 
 JPH_API void JPH_PhysicsSystem_AddConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint);
 JPH_API void JPH_PhysicsSystem_RemoveConstraint(JPH_PhysicsSystemRef system, JPH_ConstraintRef constraint);
@@ -528,6 +542,8 @@ JPH_API void JPH_BodyInterface_ActivateBody(JPH_BodyInterfaceRef bodyInterface, 
 JPH_API int32_t JPH_BodyInterface_IsActive(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
 JPH_API int32_t JPH_BodyInterface_IsAdded(JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID);
 
+JPH_API void JPH_BodyInterface_SetWeldGroup(
+	JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, uint32_t groupID);
 JPH_API void JPH_BodyInterface_SetPosition(
 	JPH_BodyInterfaceRef bodyInterface,
 	JPH_BodyID bodyID,

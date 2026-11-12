@@ -401,6 +401,8 @@ struct KineMesh {
 	bool ownsTexture = true;
 	std::unordered_map<int, KineMesh *> refinedMeshes;
 	std::vector<math::uint2> refinementEdges;
+	KineMesh *grassMesh = nullptr;
+	bool grassAttempted = false;
 };
 
 struct KineCpuMeshData {
@@ -549,10 +551,21 @@ struct KineFilamentInstanceBatch {
 	std::vector<KineBuiltBatch> chunks;
 };
 
+struct KineRetainedTerrainGrassDraw {
+    KineMesh *terrain = nullptr;
+    KineFilamentTex *texture = nullptr;
+    float transform[16] = {};
+    bool grassActive = false;
+    KineBatchKey grassKey;
+};
+
 struct KineRetainedListState {
 	uint64_t version = 0;
 	bool initialized = false;
 	std::vector<KineBatchKey> keys;
+    // Cache terrain transforms so camera-dependent grass can stream in and out
+    // even while the normal terrain draw list remains version-retained.
+    std::vector<KineRetainedTerrainGrassDraw> terrainGrassDraws;
 #if KINE_WITH_RAY
 	// Ray rebuilds its draw list from scratch on every frame, while a retained
 	// stream only re-queues when its version changes. Keeping the last queued
@@ -674,6 +687,14 @@ struct KineFilamentContext {
 	Material *gizmoMaterial = nullptr;
 	Material *particleMaterial = nullptr;
 	Material *terrainMaterial = nullptr;
+	KineFilamentShader *grassShader = nullptr;
+	std::unordered_set<KineMesh *> grassOwners;
+	bool grassEnabled = true;
+	float grassDensity = 2.0f;
+	float grassHeight = 0.65f;
+	float grassDistance = 90.0f;
+	float grassWind = 0.14f;
+	uint32_t grassLayerMask = 1u;
 	Material *hlOutlineMaterial = nullptr;
 	Material *hlOutlineTopMaterial = nullptr;
 	Material *hlFillMaterial = nullptr;
@@ -3001,7 +3022,7 @@ static KineMesh *loadMeshWithAssimp(const char *path, bool loadMaterials, uint32
 static KineMesh *loadMeshWithAssimpMemory(
 	const void *data,
 	size_t dataSize,
-	const char *formatHint, uint32_t meshIndex) {
+	const char *formatHint, uint32_t meshIndex, bool loadMaterials = true) {
 	if (!data || dataSize == 0) {
 		return nullptr;
 	}
@@ -3029,7 +3050,7 @@ static KineMesh *loadMeshWithAssimpMemory(
 
 	return buildMeshFromAssimpScene(
 		scene,
-		hint ? hint : "<memory>", "", true, meshIndex);
+		hint ? hint : "<memory>", "", loadMaterials, meshIndex);
 }
 #endif
 
@@ -3234,7 +3255,17 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 		sampler.setAnisotropy(8.0f);
 		for (const auto &[name, texture] : uniformSource->textures)
 			mi->setParameter(name.c_str(), texture, sampler);
-		for (const auto &[name, values] : uniformSource->uniforms) {
+        if (runtimeShader == ctx->grassShader) {
+            // Use the existing Terrain Grass material's albedo. No texture copies or
+            // changes in ownership: the terrain texture set keeps this layer alive.
+            Texture *grassAlbedo = key.texture ? key.texture->terrainLayers[0] : nullptr;
+            TextureSampler grassSampler(TextureSampler::MinFilter::LINEAR,
+                                        TextureSampler::MagFilter::LINEAR,
+                                        TextureSampler::WrapMode::REPEAT);
+            mi->setParameter("grassAlbedo", grassAlbedo ? grassAlbedo : ctx->whiteTex, grassSampler);
+            mi->setParameter("hasGrassAlbedo", grassAlbedo ? 1.0f : 0.0f);
+        }
+        for (const auto &[name, values] : uniformSource->uniforms) {
 			switch (values.size()) {
 			case 1:
 				mi->setParameter(name.c_str(), values[0]);
@@ -4374,6 +4405,15 @@ static void kine_invalidate_batches(
 	}
 	for (auto &[streamId, state] : ctx->retainedLists) {
 		(void)streamId;
+        if (mesh) {
+            const size_t oldCount = state.terrainGrassDraws.size();
+            state.terrainGrassDraws.erase(
+                std::remove_if(state.terrainGrassDraws.begin(), state.terrainGrassDraws.end(),
+                    [mesh](const KineRetainedTerrainGrassDraw &draw) { return draw.terrain == mesh; }),
+                state.terrainGrassDraws.end());
+            if (state.terrainGrassDraws.size() != oldCount)
+                state.initialized = false;
+        }
 #if KINE_WITH_RAY
 		if (mesh) {
 			state.rayDraws.erase(std::remove_if(state.rayDraws.begin(),state.rayDraws.end(),
@@ -4678,6 +4718,8 @@ static Material *buildTerrainMaterial(Engine *engine) {
 		.package(KINE_TERRAIN_PACKAGE_KINE_TERRAIN_DATA, KINE_TERRAIN_PACKAGE_KINE_TERRAIN_SIZE)
 		.build(*engine);
 }
+
+#include "kine_grass.inc"
 
 static Material *buildHighlightOutlineMaterial(Engine *engine) {
 	return Material::Builder()
@@ -5040,6 +5082,20 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 	ctx->gizmoMaterial = buildGizmoMaterial(ctx->engine);
 	ctx->particleMaterial = buildParticleMaterial(ctx->engine);
 	ctx->terrainMaterial = buildTerrainMaterial(ctx->engine);
+#if !defined(__ANDROID__)
+	ctx->grassShader = Kine_Filament_Shader_Create(ctx, KINE_GRASS_MATERIAL_SOURCE);
+	if (ctx->grassShader) {
+        if (kine_grass_debug_enabled())
+            fprintf(stderr, "[Kine Grass] Filament material compiled successfully\n");
+		ctx->grassShader->boundsPadding = 0.3f;
+		ctx->grassShader->uniforms["windStrength"] = {ctx->grassWind};
+		ctx->grassShader->uniforms["fadeStart"] = {ctx->grassDistance * 0.70f};
+		ctx->grassShader->uniforms["fadeEnd"] = {ctx->grassDistance};
+	} else {
+		fprintf(stderr, "[Kine] procedural grass material compilation failed: %s\n",
+			Kine_Filament_Shader_GetLastError());
+	}
+#endif
 	ctx->hlOutlineMaterial = buildHighlightOutlineMaterial(ctx->engine);
 	ctx->hlOutlineTopMaterial = buildHighlightOutlineTopMaterial(ctx->engine);
 	ctx->hlFillMaterial = buildHighlightFillMaterial(ctx->engine);
@@ -5951,6 +6007,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 		kine_destroy_post_process_pipeline(ctx);
 		ctx->postProcessShader = nullptr;
 		kine_destroy_outline_pipeline(ctx);
+		kine_grass_release_all(ctx);
 		kine_destroy_built_batches(ctx);
 		ctx->pendingBatches.clear();
 		for (KineFilamentInstanceBatch *batch : ctx->instanceBatches) {
@@ -5985,6 +6042,8 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 			shader->ctx = nullptr;
 		}
 		ctx->runtimeShaders.clear();
+		delete ctx->grassShader;
+		ctx->grassShader = nullptr;
 
 		if (!ctx->sunLight.isNull()) {
 			ctx->scene->remove(ctx->sunLight);
@@ -6764,7 +6823,7 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 	if (width <= 0 || height <= 0)
 		return;
 #if KINE_FILAMENT_USE_VULKAN
-	if (ctx->width == width && ctx->height == height &&
+	if (ctx->swapChain && ctx->width == width && ctx->height == height &&
 		(!ctx->useFilamentOwnedCompositor || !Kine_VulkanCompositor_NeedsResize(
 												 static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor))))
 		return;
@@ -6773,6 +6832,12 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 		return;
 #endif
 
+#if KINE_FILAMENT_USE_VULKAN
+	// Temporal history and transient render targets are tied to the previous
+	// viewport. Drain the texture cache before allocating at the new size.
+	ctx->view->clearFrameHistory(*ctx->engine);
+	ctx->renderer->skipFrame();
+#endif
 	ctx->engine->flushAndWait();
 
 #if KINE_FILAMENT_USE_VULKAN
@@ -6790,12 +6855,21 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 		fprintf(stderr, "[Kine] recreating Filament-owned compositor swapchain size=%dx%d\n",
 				width, height);
 		auto *platform = static_cast<KineFilamentCompositorVulkanPlatform *>(ctx->vulkanPlatform.get());
+		auto *compositor = platform->compositor();
+		// Release Filament's references to the old images before the compositor
+		// destroys them. Resize here so a temporary Vulkan failure can be retried
+		// instead of returning a null swapchain to Filament's backend.
+		ctx->engine->flushAndWait();
+		if (!Kine_VulkanCompositor_Resize(compositor, width, height)) {
+			return;
+		}
+		KineVulkanCompositorInfo info{};
+		Kine_VulkanCompositor_GetInfo(compositor, &info);
+		width = static_cast<int>(info.width);
+		height = static_cast<int>(info.height);
 		platform->setExtent(width, height);
 		ctx->swapChain = ctx->engine->createSwapChain(ctx->nativeWindow);
 		ctx->engine->flushAndWait();
-		if (ctx->vulkanPlatform) {
-			ctx->vulkanCompositor = platform->compositor();
-		}
 		useDefaultSwapChainRenderTarget(ctx, width, height);
 	} else
 #endif
@@ -6822,9 +6896,9 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 
 #if KINE_WITH_RAY
 	if (ctx->rayState) {
-		// The presentation quad is sized from the surface extent.
+		// Ray sizes its buffers when it renders. An idle Ray renderer cannot
+		// retire the old buffers, so resizing it here accumulates VRAM.
 		kine_ray_display_destroy(ctx);
-		kine_ray_resize((KineRayState *)ctx->rayState, width, height);
 	}
 #endif
 }
@@ -7644,6 +7718,40 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMeshEx32(
 	return (KineFilamentMesh *)m;
 }
 
+KINE_API void Kine_Filament_SetTerrainGrassOptions(
+	KineFilamentContext *ctx, bool enabled, float density, float height,
+	float visibleDistance, float windStrength, uint32_t materialLayerMask) {
+	if (!ctx || !ctx->engine || !std::isfinite(density) || !std::isfinite(height) ||
+		!std::isfinite(visibleDistance) || !std::isfinite(windStrength))
+		return;
+	density = std::clamp(density, 0.0f, 16.0f);
+	height = std::clamp(height, 0.05f, 4.0f);
+	visibleDistance = std::clamp(visibleDistance, 8.0f, 500.0f);
+	windStrength = std::clamp(windStrength, 0.0f, 0.6f);
+	materialLayerMask &= 0xffu;
+	if (ctx->grassEnabled == enabled && ctx->grassDensity == density &&
+		ctx->grassHeight == height && ctx->grassDistance == visibleDistance &&
+		ctx->grassWind == windStrength && ctx->grassLayerMask == materialLayerMask)
+		return;
+	ctx->grassEnabled = enabled;
+	ctx->grassDensity = density;
+	ctx->grassHeight = height;
+	ctx->grassDistance = visibleDistance;
+	ctx->grassWind = windStrength;
+	ctx->grassLayerMask = materialLayerMask;
+    if (kine_grass_debug_enabled())
+        fprintf(stderr, "[Kine Grass] options: enabled=%d density=%.2f height=%.2f distance=%.1f wind=%.2f layerMask=0x%02x\n",
+            int(enabled), density, height, visibleDistance, windStrength, unsigned(materialLayerMask));
+	// Release the cached geometry and invalidate its retained draw-list keys.
+	kine_grass_release_all(ctx);
+	if (ctx->grassShader) {
+		ctx->grassShader->boundsPadding = windStrength + 0.2f;
+		ctx->grassShader->uniforms["windStrength"] = {windStrength};
+		ctx->grassShader->uniforms["fadeStart"] = {visibleDistance * 0.70f};
+		ctx->grassShader->uniforms["fadeEnd"] = {visibleDistance};
+	}
+}
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateTerrainMesh(
 	KineFilamentContext *ctx,
 	const float *vertexData,
@@ -7744,6 +7852,7 @@ bool Kine_Filament_UpdateCustomMesh(
 		return false;
 	}
 
+	kine_grass_release(ctx, m);
 	memcpy(m->vertices.data(), vertexData, m->vertices.size() * sizeof(KineVertex));
 	if (!kine_upload_updated_vertices(ctx, m)) return false;
 
@@ -8111,6 +8220,18 @@ KINE_API bool Kine_Filament_ApplyMeshAnimation(
 	return true;
 }
 
+#if KINE_WITH_ASSIMP
+static KineFilamentMeshData *kine_take_cpu_mesh(KineMesh *source) {
+	if (!source)
+		return nullptr;
+	auto *result = new KineCpuMeshData();
+	result->vertices = std::move(source->vertices);
+	result->indices = std::move(source->indices);
+	delete source;
+	return reinterpret_cast<KineFilamentMeshData *>(result);
+}
+#endif
+
 KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPath(const char *path) {
 	return Kine_Filament_LoadMeshDataFromPathIndexed(path, 0);
 }
@@ -8120,17 +8241,18 @@ KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const c
 		return nullptr;
 
 #if KINE_WITH_ASSIMP
-	KineMesh *source = loadMeshWithAssimp(path, false, meshIndex);
-	if (!source)
-		return nullptr;
-
-	auto *result = new KineCpuMeshData();
-	result->vertices = std::move(source->vertices);
-	result->indices = std::move(source->indices);
-	delete source;
-	return reinterpret_cast<KineFilamentMeshData *>(result);
+	return kine_take_cpu_mesh(loadMeshWithAssimp(path, false, meshIndex));
 #else
 	fprintf(stderr, "[Kine] LoadMeshDataFromPath requires KINE_WITH_ASSIMP=ON and assimp::assimp at build time\n");
+	return nullptr;
+#endif
+}
+
+KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromMemoryIndexed(
+	const void *bytes, size_t length, const char *formatHint, uint32_t meshIndex) {
+#if KINE_WITH_ASSIMP
+	return kine_take_cpu_mesh(loadMeshWithAssimpMemory(bytes, length, formatHint, meshIndex, false));
+#else
 	return nullptr;
 #endif
 }
@@ -8299,6 +8421,7 @@ KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext *ctx, KineFilamentMe
 		return;
 	auto *m = (KineMesh *)mesh;
 
+	kine_grass_release(ctx, m);
 	kine_invalidate_batches(ctx, m, m->ownedTex ? m->ownedTex : nullptr);
 	if (m->vb)
 		ctx->engine->destroy(m->vb);
@@ -8422,7 +8545,7 @@ static void kine_queue_mesh(
 	// Record the draw for the path tracer while the transform is still ours to
 	// copy. Overlays (gizmos, highlights, decals, water, clouds, particles) have
 	// no Ray equivalent and stay out of the ray scene.
-	if (ctx->rayState && kine_material_is_path_traced(materialKind)) {
+	if (ctx->rayState && kine_material_is_path_traced(materialKind) && shader != ctx->grassShader) {
 		KineRayQueuedDraw queued;
 		queued.mesh = keyMesh;
 		queued.importedMaterials=kine_uses_imported_materials(ctx,key);
@@ -8520,6 +8643,22 @@ static void kine_queue_mesh(
 		pending.uvHash *= 1099511628211ULL;
 	}
 	pending.uvScales.emplace_back(uvScale);
+
+	if (materialKind == KINE_MAT_TERRAIN) {
+		KineMesh *grass = kine_grass_get(ctx, (KineMesh *)mesh, mat4);
+		if (grass) {
+			KineBatchKey grassKey;
+			kine_queue_mesh(ctx, (KineFilamentMesh *)grass, KINE_MAT_DEFAULT,
+				1.0f, 1.0f, 1.0f, 0.85f, 0.0f, 1.0f, 0.0f,
+				mat4, false, true, true, tex, ctx->grassShader, streamId,
+				0.0f, &grassKey);
+			if (streamId != 0) {
+				auto &keys = ctx->retainedLists[streamId].keys;
+				if (std::find(keys.begin(), keys.end(), grassKey) == keys.end())
+					keys.push_back(grassKey);
+			}
+		}
+	}
 }
 
 KINE_API void Kine_Filament_DrawMeshEx(
@@ -8624,6 +8763,37 @@ KINE_API void Kine_Filament_DrawParticles(
 	}
 }
 
+// A retained terrain stream must continue to react to camera movement.
+// Only grass batches are activated/deactivated here; terrain geometry stays cached.
+static void kine_update_retained_grass_stream(KineFilamentContext *ctx,
+                                               KineRetainedListState &state,
+                                               uint64_t streamId) {
+    for (KineRetainedTerrainGrassDraw &draw : state.terrainGrassDraws) {
+        if (!draw.terrain) continue;
+        KineMesh *grass = kine_grass_get(ctx, draw.terrain, draw.transform);
+        if (grass && (!draw.grassActive || draw.grassKey.mesh != grass)) {
+            if (draw.grassActive) {
+                const KineBatchKey previous = draw.grassKey;
+                state.keys.erase(std::remove(state.keys.begin(), state.keys.end(), previous), state.keys.end());
+                draw.grassActive = false;
+            }
+            KineBatchKey grassKey;
+            kine_queue_mesh(ctx, (KineFilamentMesh *)grass, KINE_MAT_DEFAULT,
+                1.0f, 1.0f, 1.0f, 0.85f, 0.0f, 1.0f, 0.0f,
+                draw.transform, false, true, true, draw.texture,
+                ctx->grassShader, streamId, 0.0f, &grassKey);
+            if (std::find(state.keys.begin(), state.keys.end(), grassKey) == state.keys.end())
+                state.keys.push_back(grassKey);
+            draw.grassKey = grassKey;
+            draw.grassActive = true;
+        } else if (!grass && draw.grassActive) {
+            const KineBatchKey previous = draw.grassKey;
+            state.keys.erase(std::remove(state.keys.begin(), state.keys.end(), previous), state.keys.end());
+            draw.grassActive = false;
+        }
+    }
+}
+
 KINE_API void Kine_Filament_DrawMeshListVersioned(
 	KineFilamentContext *ctx,
 	const KineFilamentDrawItem *items,
@@ -8635,6 +8805,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 
 	KineRetainedListState &state = ctx->retainedLists[streamId];
 	if (state.initialized && state.version == version) {
+        kine_update_retained_grass_stream(ctx, state, streamId);
 		for (const KineBatchKey &key : state.keys) {
 			auto built = ctx->builtBatches.find(key);
 			if (built != ctx->builtBatches.end()) {
@@ -8653,6 +8824,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 	state.initialized = true;
 	state.version = version;
 	state.keys.clear();
+    state.terrainGrassDraws.clear();
 #if KINE_WITH_RAY
 	state.rayDraws.clear();
 #endif
@@ -8677,6 +8849,23 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			streamId,
 			0.0f,
 			&key, kine_draw_opacity(item.reserved));
+        if (item.materialKind == KINE_MAT_TERRAIN && item.mesh) {
+            KineRetainedTerrainGrassDraw draw;
+            draw.terrain = (KineMesh *)item.mesh;
+            draw.texture = item.tex;
+            memcpy(draw.transform, item.transform, sizeof(draw.transform));
+            if (draw.terrain->grassMesh) {
+                for (const KineBatchKey &grassKey : state.keys) {
+                    if (grassKey.mesh == draw.terrain->grassMesh && grassKey.shader == ctx->grassShader &&
+                        grassKey.streamId == streamId) {
+                        draw.grassActive = true;
+                        draw.grassKey = grassKey;
+                        break;
+                    }
+                }
+            }
+            state.terrainGrassDraws.push_back(draw);
+        }
 		// Draw lists arrive grouped by mesh and material, so the previous key
 		// almost always repeats. Checking it first turns the common case into
 		// one comparison instead of a hash insert and a heap allocation.
@@ -9796,7 +9985,8 @@ static filamat::Package kine_compile_shader(
 		error = "Filamat failed to compile the material source";
 		return filamat::Package::invalidPackage();
 	}
-	return package;
+
+	return package;
 }
 
 static KineFilamentShader *kine_publish_shader(

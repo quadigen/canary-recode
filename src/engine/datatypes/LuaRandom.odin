@@ -81,8 +81,22 @@ random_clone :: proc(L: ^vm.State, random: ^Random, binding: ^vm.Userdata_Bindin
 }
 
 random_next_integer :: proc(L: ^vm.State, random: ^Random) -> i32 {
-	minimum := vm.ArgInteger(L, 2)
-	maximum := vm.ArgInteger(L, 3)
+	min_number := vm.ArgNumber(L, 2)
+	max_number := vm.ArgNumber(L, 3)
+
+	if math.floor(min_number) != min_number || math.floor(max_number) != max_number {
+		return vm.RaiseError(L, "NextInteger expects integer values")
+	}
+
+	if min_number < -RANDOM_MAX_SEED ||
+	   min_number > RANDOM_MAX_SEED ||
+	   max_number < -RANDOM_MAX_SEED ||
+	   max_number > RANDOM_MAX_SEED {
+		return vm.RaiseError(L, "NextInteger arguments are out of range")
+	}
+
+	minimum := i64(min_number)
+	maximum := i64(max_number)
 
 	if minimum > maximum {
 		return vm.RaiseError(L, "minimum cannot be greater than maximum")

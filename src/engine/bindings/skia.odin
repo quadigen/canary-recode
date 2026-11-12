@@ -146,6 +146,7 @@ foreign kine_skia {
 
 
 	Kine_Skia_Surface_Save :: proc(surface: ^KineSkiaSurface) ---
+	Kine_Skia_Surface_SaveLayerAlpha :: proc(surface: ^KineSkiaSurface, alpha: f32) ---
 	Kine_Skia_Surface_Restore :: proc(surface: ^KineSkiaSurface) ---
 	Kine_Skia_Surface_Translate :: proc(surface: ^KineSkiaSurface, dx: f32, dy: f32) ---
 	Kine_Skia_Surface_Rotate :: proc(surface: ^KineSkiaSurface, degrees: f32) ---

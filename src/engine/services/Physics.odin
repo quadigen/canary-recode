@@ -35,8 +35,11 @@ Physics :: struct {
 	bodies:                   [dynamic]Physics_Body,
 	body_to_part:             map[kineffi.JPH_BodyID]^classes.Part,
 	contact_listener:         kineffi.JPH_ContactListenerRef,
+	character_capsules:       map[kineffi.JPH_BodyID]^classes.Part,
+	deformable_contacts:      map[Deformable_Contact_Key]Deformable_Contact,
+	previous_deformable_contacts: map[Deformable_Contact_Key]Deformable_Contact,
 	gravity:                  f32,
-	pcd_cache:                map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
+	mesh_shape_cache:                map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
 	terrain_valid:            bool,
 	terrain_bodies:           map[Terrain_Chunk_Key]kineffi.JPH_BodyID,
 	terrain_chunk_triangles:  map[Terrain_Chunk_Key]int,
@@ -45,6 +48,8 @@ Physics :: struct {
 	terrain_triangles:        int,
 	collision_steps:          int,
 	broadphase_dirty:         bool,
+	weld_groups_dirty:        bool,
+	weld_groups:              map[kineffi.JPH_BodyID]kineffi.JPH_BodyID,
 	scratch_parts:            [dynamic]^classes.Part,
 	scratch_ray_candidates:   [dynamic]kineffi.JPH_BodyID,
 	scratch_sweep_candidates: [dynamic]kineffi.JPH_BodyID,
@@ -64,6 +69,7 @@ Physics_Shape_Cache_Key :: struct {
 	editable_mesh_id:      u32,
 	editable_mesh_version: u64,
 	size:                  datatypes.Vector3,
+	fidelity:              enums.CollisionFidelity,
 }
 
 Physics_Set_Gravity :: proc(service: ^Physics, gravity: f32) {
@@ -111,7 +117,7 @@ physics_construct :: proc(
 	service := new(Physics)
 	service.service = Service_Init(&Physics_Class, "Physics", data_model)
 	service.gravity = 196.2
-	service.pcd_cache = make(map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef)
+	service.mesh_shape_cache = make(map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef)
 	service.terrain_bodies = make(map[Terrain_Chunk_Key]kineffi.JPH_BodyID)
 	service.terrain_chunk_triangles = make(map[Terrain_Chunk_Key]int)
 	service.terrain_body_ids = make(map[kineffi.JPH_BodyID]bool)
@@ -141,15 +147,20 @@ physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obj
 	delete(service.terrain_chunk_triangles)
 	delete(service.terrain_body_ids)
 	delete(service.body_to_part)
+	delete(service.weld_groups)
+	delete(service.character_capsules)
+	delete(service.deformable_contacts)
+	delete(service.previous_deformable_contacts)
 	delete(service.bodies)
 
 	delete(service.scratch_parts)
 	delete(service.scratch_ray_candidates)
 	delete(service.scratch_sweep_candidates)
-	for _, shape in service.pcd_cache {
+	for key, shape in service.mesh_shape_cache {
+		delete(key.mesh_id)
 		kineffi.JPH_Shape_Destroy(shape)
 	}
-	delete(service.pcd_cache)
+	delete(service.mesh_shape_cache)
 	jolt.System_Destroy_3D(&service.system)
 	if service.contact_listener != nil {
 		kineffi.JPH_ContactListener_Destroy(service.contact_listener)

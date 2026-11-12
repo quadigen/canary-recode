@@ -169,6 +169,13 @@ Register_StarterPlayer_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = starter_player_get,
 		set = starter_player_set,
+		properties = []string{
+			"AutoJumpEnabled",
+			"CharacterWalkSpeed",
+			"CharacterJumpPower",
+			"CharacterMaxSlopeAngle",
+			"LoadCharacterAppearance",
+		},
 	)
 }
 

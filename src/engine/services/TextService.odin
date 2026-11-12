@@ -1,4 +1,6 @@
 package services
+
+import "core:reflect"
 // wire:service
 
 
@@ -347,8 +349,15 @@ text_service_namecall :: proc(
 			font := datatypes.Arg_Font(L, 4, datatype_registry)
 			family = font.Family
 			font_data = font.Data
-		} else {
+		} else if vm.IsString(L, 4) {
 			family = vm.ArgString(L, 4)
+			if font, ok := reflect.enum_from_name(enums.Font, family); ok {
+				family = classes.TextLabel_Font_Enum_To_Family(font)
+			}
+		} else {
+			item := enums.Arg_Item(L, 4, enum_registry, "Font")
+			if item == nil {return 0, true}
+			family = classes.TextLabel_Font_Enum_To_Family(enums.Font(item.value))
 		}
 
 		max_size := datatypes.Arg_Vector2(L, 5, datatype_registry)

@@ -7,6 +7,8 @@ import classes "../classes"
 import enums "../enum"
 import vm "../vm"
 
+WORKSPACE_WELD_SURFACE_TOLERANCE :: 0.01
+
 Workspace_Weld_Pair :: struct {
 	selected, outsider: ^classes.Object,
 }
@@ -25,6 +27,29 @@ workspace_has_weld :: proc(
 		weld := cast(^classes.WeldConstraint)object
 		if (weld.part0 == pair.selected && weld.part1 == pair.outsider) ||
 		   (weld.part1 == pair.selected && weld.part0 == pair.outsider) {
+			return true
+		}
+	}
+	return false
+}
+
+workspace_has_hinge :: proc(
+	workspace: ^classes.Object,
+	descriptor: ^classes.Class_Descriptor,
+	pair: Workspace_Weld_Pair,
+) -> bool {
+	if descriptor == nil {return false}
+	for object in descriptor.instances {
+		if !workspace_weld_is_live(object, workspace) {continue}
+		hinge := cast(^classes.HingeConstraint)object
+		if !hinge.enabled ||
+		   hinge.attachment0 == nil ||
+		   hinge.attachment1 == nil ||
+		   hinge.attachment0.destroyed ||
+		   hinge.attachment1.destroyed {continue}
+		a, b := hinge.attachment0.parent, hinge.attachment1.parent
+		if (a == pair.selected && b == pair.outsider) ||
+		   (b == pair.selected && a == pair.outsider) {
 			return true
 		}
 	}
@@ -117,7 +142,7 @@ workspace_update_outsider_welds :: proc(
 			cast(^classes.Part)part,
 			candidates[:],
 			results,
-			1.0e-4,
+			WORKSPACE_WELD_SURFACE_TOLERANCE,
 			planar_only = true,
 		)
 		for id in hits {
@@ -126,6 +151,7 @@ workspace_update_outsider_welds :: proc(
 			append(&pairs, Workspace_Weld_Pair{part, &other.object})
 		}
 	}
+	hinges := classes.Find_Class(registry, "HingeConstraint")
 	for pair in pairs {
 		if pair.selected.destroyed ||
 		   pair.outsider.destroyed ||
@@ -133,7 +159,8 @@ workspace_update_outsider_welds :: proc(
 		   !workspace_contains_physics_object(workspace, pair.outsider) {
 			continue
 		}
-		if workspace_has_weld(workspace, descriptor.instances[:], pair) {continue}
+		if workspace_has_weld(workspace, descriptor.instances[:], pair) ||
+		   workspace_has_hinge(workspace, hinges, pair) {continue}
 		object, ok := classes.Push_New(registry, &vm.VM{L = L}, "WeldConstraint")
 		if !ok {break}
 		weld := cast(^classes.WeldConstraint)object

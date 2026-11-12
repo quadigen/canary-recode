@@ -57,11 +57,22 @@ replication_forget_peer_entity :: proc(connection: ^Replication_Peer, id: u32) {
 	delete_key(&connection.initialized, id)
 	delete_key(&connection.part_states, id)
 	delete_key(&connection.property_hashes, id)
+	delete_key(&connection.reliable_join_properties, u64(id) << 1)
+	delete_key(&connection.reliable_join_properties, (u64(id) << 1) | 1)
 	delete_key(&connection.extra_hashes, id)
 	delete_key(&connection.acked_state, id)
 	delete_key(&connection.acked_property, id)
 	delete_key(&connection.acked_extra, id)
 	delete_key(&connection.deformable, id)
+	delete_key(&connection.script_sources, id)
+	if connection.script_send.id == id {replication_clear_script_send(&connection.script_send)}
+	delete_key(&connection.metadata_revisions, u64(id))
+	remote_player_key := REPLICATION_METADATA_REMOTE_PLAYER_BASE + u64(id)
+	delete_key(&connection.metadata_revisions, remote_player_key)
+	if connection.metadata_send.key == u64(id) ||
+	   connection.metadata_send.key == remote_player_key {
+		replication_clear_metadata_send(&connection.metadata_send)
+	}
 }
 
 replication_entity_new :: proc(
@@ -77,6 +88,7 @@ replication_entity_new :: proc(
 }
 
 replication_entity_remove :: proc(service: ^ReplicatorService, id: u32) -> bool {
+	if service.script_receive.id == id {replication_clear_script_receive(&service.script_receive)}
 	entity := service.entity_by_id[id]
 	if entity == nil {return false}
 	delete_key(&service.entity_by_id, id)
@@ -144,10 +156,15 @@ replication_schema :: proc(
 	if replication_builtin_class(class_name) {
 		return nil
 	}
-	properties := classes.Class_Property_List(service.data_model.registry.classes, class_name)
+	properties := classes.Class_Property_List(
+		service.data_model.registry.classes,
+		class_name,
+		include_imported = false,
+	)
 	schema: Replication_Schema
 	schema.class_name = strings.clone(class_name)
 	for property in properties {
+		if class_name == "Attachment" && property == "CFrame" {continue}
 		if class_name == "HingeConstraint" &&
 		   (property == "Active" || property == "CurrentAngle") {
 			continue
@@ -171,6 +188,7 @@ replication_schema :: proc(
 		     "AbsoluteCellSize",
 		     "AbsoluteContentSize",
 		     "PositionCallback",
+		     "IsLoaded",
 		     "ClassName",
 		     "NetworkId",
 		     "UniqueId",
@@ -205,6 +223,9 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 	return(
 		class_name == "Part" ||
 		class_name == "MeshPart" ||
+		class_name == "UnionOperation" ||
+		class_name == "NegateOperation" ||
+		class_name == "IntersectOperation" ||
 		class_name == "Model" ||
 		class_name == "CharacterModel" ||
 		class_name == "Folder" ||
@@ -254,6 +275,10 @@ replication_builtin_property :: proc(object: ^classes.Object, property: string) 
 	return(
 		object != nil &&
 		((classes.Is_A_Class(object, &classes.Part_Class) && property == "CanTouch") ||
+				(classes.Is_A_Class(object, &classes.PartOperation_Class) &&
+						(property == "UsePartColor" ||
+								property == "CanQuery" ||
+								property == "CastShadow")) ||
 				(classes.Is_A(object, "MeshPart") &&
 						(property == "MeshId" ||
 								property == "MeshIndex" ||
@@ -287,12 +312,54 @@ replication_group_contains :: proc(
 	return false
 }
 
+// PlayerGui containers are local to each runtime. Only their contents are
+// network entities, with the owning Player used as the visibility boundary.
+replication_player_gui_owner :: proc(
+	service: ^ReplicatorService,
+	object: ^classes.Object,
+) -> ^Player {
+	if service == nil ||
+	   service.data_model == nil ||
+	   object == nil ||
+	   object.destroyed ||
+	   object.class != &PlayerGui_Class {return nil}
+	player := object.parent
+	if player == nil || player.destroyed || player.class != &Player_Class {return nil}
+	players := player.parent
+	if players == nil ||
+	   players.destroyed ||
+	   players.class != &Players_Class ||
+	   players.parent != &service.data_model.object {return nil}
+	return cast(^Player)player
+}
+
+replication_uses_server_player_gui :: proc(service: ^ReplicatorService) -> bool {
+	return(
+		service != nil &&
+		service.mode == .Client &&
+		service.remote != nil &&
+		(service.client_capabilities &
+				service.server_capabilities &
+				Replication_Capability_Player_Gui) !=
+			0 \
+	)
+}
+
 replication_visible :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	object: ^classes.Object,
 ) -> bool {
-	if !replication_in_scope(service, object) || connection.player == nil {return false}
+	allowed, owner := replication_scope(service, object)
+	if !allowed || connection.player == nil {return false}
+	if owner != nil &&
+	   (owner != connection.player ||
+			   (service.server_capabilities &
+					   connection.client_capabilities &
+					   Replication_Capability_Player_Gui) ==
+				   0) {
+		return false
+	}
 	for current := object;
 	    current != nil && !classes.Is_A(current, "Service");
 	    current = current.parent {
@@ -301,8 +368,10 @@ replication_visible :: proc(
 		case .Never, .ServerOnly:
 			return false
 		case .OwnerOnly:
-			entity := replication_entity(service, current)
-			if entity == nil || entity.owner_id != connection.player.user_id {return false}
+			if current.class != &PlayerGui_Class {
+				entity := replication_entity(service, current)
+				if entity == nil || entity.owner_id != connection.player.user_id {return false}
+			}
 		case .Manual:
 			entity := replication_entity(service, current)
 			if entity == nil || !entity.recipients[connection.player.user_id] {return false}
@@ -401,14 +470,20 @@ replication_relevant_to :: proc(
 	fx, fy, fz: f32,
 	has_focus: bool,
 ) -> bool {
-	if object == nil || !has_focus {return false}
-
-
-	if !classes.Is_A(object, "Part") {return true}
-	return(
-		replication_distance_sq(fx, fy, fz, cast(^classes.Part)object) <=
-		service.relevancy_distance * service.relevancy_distance \
-	)
+	if object == nil {return false}
+	// Parts in an owned PlayerGui belong to its viewports.
+	if _, owner := replication_scope(service, object); owner != nil {return true}
+	if !has_focus {return false}
+	distance_sq := service.relevancy_distance * service.relevancy_distance
+	// An entity cannot arrive before its ancestors, including streamed-out parts.
+	for current := object;
+	    current != nil && !classes.Is_A(current, "Service");
+	    current = current.parent {
+		if classes.Is_A(current, "Part") &&
+		   replication_distance_sq(fx, fy, fz, cast(^classes.Part)current) >
+			   distance_sq {return false}
+	}
+	return true
 }
 
 
@@ -422,6 +497,11 @@ replication_visible_to :: proc(
 	if !replication_relevant_to(service, connection, object, fx, fy, fz, has_focus) {
 		return false
 	}
+	for current := object;
+	    current != nil && !classes.Is_A(current, "Service");
+	    current = current.parent {
+		if service.suppressed[current] {return false}
+	}
 	return replication_visible(service, connection, object)
 }
 
@@ -432,22 +512,29 @@ replication_send_spawn :: proc(
 ) -> bool {
 	id := replication_entity_id(service, object)
 	if id == 0 {return false}
-	parent_id := replication_entity_id(service, object.parent)
+	gui_owner := replication_player_gui_owner(service, object.parent)
+	parent_id := u32(0)
+	if gui_owner == nil {parent_id = replication_entity_id(service, object.parent)}
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	replication_put_u32(&bytes, id)
 	replication_put_u32(&bytes, parent_id)
 	replication_put_string(&bytes, classes.Get_Class_Name(object))
 	replication_put_string(&bytes, object.name)
-	replication_put_string(
-		&bytes,
-		parent_id == 0 && object.parent != nil ? object.parent.name : "",
-	)
+	root_name := ""
 	owner_user_id: u32
-	if classes.Is_A(
-		object,
-		"CharacterModel",
-	) {owner_user_id = (cast(^classes.CharacterModel)object).owner_user_id}
+	if parent_id == 0 && object.parent != nil {
+		if gui_owner != nil {
+			root_name = "PlayerGui"
+			owner_user_id = gui_owner.user_id
+		} else {
+			root_name = object.parent.name
+		}
+	}
+	replication_put_string(&bytes, root_name)
+	if classes.Is_A(object, "CharacterModel") && owner_user_id == 0 {
+		owner_user_id = (cast(^classes.CharacterModel)object).owner_user_id
+	}
 	replication_put_u32(&bytes, owner_user_id)
 
 
@@ -702,50 +789,28 @@ replication_encode_property_value :: proc(
 	defer vm.SetStackTop(L, top)
 	classes.Push_Object(L, object)
 	_ = vm.GetField(L, -1, property)
+	if object.class == &classes.ParticleEmitter_Class {
+		if binding := vm.UserdataBindingOf(L, -1);
+		   binding != nil && binding.name == "NumberRange" {
+			value := cast(^datatypes.NumberRange)vm.UserdataValue(L, -1)
+			append(bytes, 19)
+			replication_put_f32(bytes, value.Min)
+			replication_put_f32(bytes, value.Max)
+			return true
+		}
+	}
 	return replication_encode_value(L, -1, bytes, 0, connection)
 }
 
-
-replication_encode_property :: proc(
-	service: ^ReplicatorService,
-	L: ^vm.State,
-	object: ^classes.Object,
-	property: string,
-	bytes: ^[dynamic]u8,
-	tick: u32,
-) -> bool {
-	if service == nil || L == nil || object == nil || object.destroyed {return false}
-	append(bytes, 2)
-	replication_put_u32(bytes, replication_entity_id(service, object))
-	replication_put_u32(bytes, tick)
-	replication_put_string(bytes, property)
-	return replication_encode_property_value(L, object, property, bytes)
-}
-
-
-replication_send_property_frame :: proc(
-	service: ^ReplicatorService,
-	peer: ^Replication_Transport_Peer,
-	bytes: ^[dynamic]u8,
-	stream: u8,
-	batch_token: u32,
-	member_index: u8,
-	member_count: u8,
-	reliable: bool,
-) -> bool {
-
-
-	append(bytes, stream)
-	replication_put_u32(bytes, batch_token)
-	append(bytes, member_index, member_count)
-	return replication_send(service, peer, 5, bytes[:], reliable)
-}
 
 replication_property_stream_builtin: u8 = 0
 replication_property_stream_extra: u8 = 1
 
 
 replication_property_batch_limit: u8 = 63
+
+// A packet header, a script or metadata chunk header, and one payload byte.
+REPLICATION_MIN_INITIAL_FRAME_BYTES :: 5 + REPLICATION_SCRIPT_SOURCE_HEADER + 1
 
 
 replication_remaining_budget :: proc(
@@ -757,7 +822,10 @@ replication_remaining_budget :: proc(
 
 
 	if !replication_budgeted(service, kind) {return -1}
-	return int(service.bandwidth_budget) - int(connection.bytes_this_tick)
+	return(
+		int(replication_peer_bandwidth_budget(service, connection)) -
+		int(connection.bytes_this_tick) \
+	)
 }
 
 
@@ -780,95 +848,57 @@ replication_send_property_batch :: proc(
 	L := service.data_model.registry.vm_state.L
 	if L == nil {return false, 0}
 
-
-	scratch: [dynamic]u8
-	defer delete(scratch)
-	encodable: [dynamic]bool
-	defer delete(encodable)
-	for name in names {
-		mark := len(scratch)
-		if replication_encode_property_value(L, item.object, name, &scratch) {
-			append(&encodable, true)
-		} else {
-			resize(&scratch, mark)
-			append(&encodable, false)
-		}
-	}
-
+	packet: [dynamic]u8
+	defer delete(packet)
+	value: [dynamic]u8
+	defer delete(value)
+	ends: [dynamic]int
+	defer delete(ends)
 	hash: u64 = 14695981039346656037
-	for byte in scratch {hash = (hash ~ u64(byte)) * 1099511628211}
-	batch_token := u32(hash & 0xFFFFFFFF)
-
-	if skip_if_confirmed && batch_token == confirmed {return true, batch_token}
-
-
-	encodable_count := 0
-	for flag in encodable {if flag {encodable_count += 1}}
-	if encodable_count == 0 {return true, confirmed}
-
-
-	frames: [dynamic][dynamic]u8
-	defer delete(frames)
-	all_sent := true
-	total: int
 	tick := replication_peer_snapshot_tick(service, connection)
-	for name, index in names {
-		if !encodable[index] {continue}
-		bytes: [dynamic]u8
-		if !replication_encode_property(service, L, item.object, name, &bytes, tick) {
-			delete(bytes)
-			all_sent = false
-			continue
-		}
-
-
-		total += len(bytes) + 5
-		append(&frames, bytes)
+	for name in names {
+		clear(&value)
+		if !replication_encode_property_value(L, item.object, name, &value) {continue}
+		for byte in value {hash = (hash ~ u64(byte)) * 1099511628211}
+		append(&packet, 2)
+		replication_put_u32(&packet, item.id)
+		replication_put_u32(&packet, tick)
+		replication_put_string(&packet, name)
+		append(&packet, ..value[:])
+		append(&packet, stream, 0, 0, 0, 0, 0, 0)
+		append(&ends, len(packet))
 	}
-	if len(frames) == 0 {return all_sent, confirmed}
+	if len(ends) == 0 {return true, confirmed}
+	batch_token := u32(hash & 0xFFFFFFFF)
+	key := (u64(item.id) << 1) | u64(stream)
+	join_token, queued := connection.reliable_join_properties[key]
+	if queued && confirmed == join_token {delete_key(&connection.reliable_join_properties, key)}
+	if skip_if_confirmed && (batch_token == confirmed || (queued && batch_token == join_token)) {
+		return true, batch_token
+	}
 
-	wide := encodable_count > int(replication_property_batch_limit)
 	remaining := replication_remaining_budget(service, connection, 5)
-	if remaining >= 0 && total > remaining {
-		for frame in frames {delete(frame)}
-		return false, confirmed
-	}
+	if remaining >= 0 && len(packet) + 5 * len(ends) > remaining {return false, confirmed}
 
-
-	if wide {
-		for &frame in frames {
-			if !replication_send_property_frame(
-				service,
-				connection.peer,
-				&frame,
-				stream,
-				batch_token,
-				0,
-				1,
-				true,
-			) {
-				all_sent = false
-			}
-		}
-		return all_sent, confirmed
-	}
-	sent: u8 = 0
-	for &frame in frames {
-		if !replication_send_property_frame(
-			service,
-			connection.peer,
-			&frame,
-			stream,
-			batch_token,
-			sent,
-			u8(encodable_count),
-			reliable,
-		) {
+	wide := len(ends) > int(replication_property_batch_limit)
+	// A different update supersedes the reliably queued startup value.
+	if queued {delete_key(&connection.reliable_join_properties, key)}
+	all_sent := true
+	start := 0
+	for end, index in ends {
+		metadata := packet[end - 6:end]
+		for byte in 0 ..< 4 {metadata[byte] = u8(batch_token >> u32(byte * 8))}
+		metadata[4] = wide ? 0 : u8(index)
+		metadata[5] = wide ? 1 : u8(len(ends))
+		if !replication_send(service, connection.peer, 5, packet[start:end], reliable || wide) {
 			all_sent = false
 		}
-		sent += 1
+		start = end
 	}
-	return all_sent, batch_token
+	if all_sent && !wide && reliable && connection.join_batch_enabled {
+		connection.reliable_join_properties[key] = batch_token
+	}
+	return all_sent, wide ? confirmed : batch_token
 }
 
 
@@ -894,6 +924,7 @@ replication_root_service :: proc(service: ^ReplicatorService, object: ^classes.O
 replication_sync_tree :: proc(service: ^ReplicatorService, object: ^classes.Object) {
 	if object == nil || object.destroyed || object == &service.object {return}
 	if !replication_root_service(service, object) &&
+	   replication_player_gui_owner(service, object) == nil &&
 	   object != &service.data_model.object &&
 	   (replication_builtin_class(classes.Get_Class_Name(object)) ||
 			   replication_schema(service, classes.Get_Class_Name(object)) != nil) &&
@@ -903,15 +934,29 @@ replication_sync_tree :: proc(service: ^ReplicatorService, object: ^classes.Obje
 	for child in object.children {replication_sync_tree(service, child)}
 }
 
-replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Object) -> bool {
-	if object == nil || object.destroyed {return false}
+replication_scope :: proc(
+	service: ^ReplicatorService,
+	object: ^classes.Object,
+) -> (
+	bool,
+	^Player,
+) {
+	if object == nil || object.destroyed {return false, nil}
 	for current := object; current != nil; current = current.parent {
+		if owner := replication_player_gui_owner(service, current); owner != nil {
+			return current != object, owner
+		}
 		if current.parent == &service.data_model.object &&
 		   classes.Is_A(current, "Service") &&
-		   replication_root_allowed(current.name) {return true}
-		if current == &service.data_model.object {return false}
+		   replication_root_allowed(current.name) {return true, nil}
+		if current == &service.data_model.object {break}
 	}
-	return false
+	return false, nil
+}
+
+replication_in_scope :: proc(service: ^ReplicatorService, object: ^classes.Object) -> bool {
+	allowed, _ := replication_scope(service, object)
+	return allowed
 }
 
 
@@ -953,23 +998,27 @@ replication_spawn_entity :: proc(
 	}
 	item := replication_entity(service, object)
 	if item == nil {return false}
-	parent_id := replication_entity_id(service, object.parent)
-	if parent_id != 0 && connection.known[parent_id] == 0 {
-		return false
+	parent_key: u64
+	if replication_player_gui_owner(service, object.parent) != nil {
+		parent_key = u64(max(u32)) + 2
+	} else {
+		parent_id := replication_entity_id(service, object.parent)
+		if parent_id != 0 && connection.known[parent_id] == 0 {return false}
+		parent_key = u64(parent_id) + 1
 	}
-	if connection.known[item.id] == parent_id + 1 {return false}
+	if connection.known[item.id] == parent_key {return false}
 	if connection.known[item.id] != 0 {
 		bytes: [dynamic]u8
 		replication_put_u32(&bytes, item.id)
 		_ = replication_send(service, connection.peer, 8, bytes[:])
 		delete(bytes)
 	}
-	if !replication_send_spawn(service, connection.peer, object) {
+	if !replication_send_operation_mesh(service, connection, object) ||
+	   !replication_send_spawn(service, connection.peer, object) {
 		return false
 	}
-	connection.known[item.id] = parent_id + 1
 	replication_forget_peer_entity(connection, item.id)
-	connection.known[item.id] = parent_id + 1
+	connection.known[item.id] = parent_key
 	return true
 }
 
@@ -1046,6 +1095,16 @@ replication_initialise_entity :: proc(
 	   item.object.destroyed ||
 	   connection.known[item.id] == 0 {return false}
 	if connection.initialized[item.id] {return true}
+	if !replication_send_entity_metadata(service, connection, item, initial = true) {return false}
+	script := replication_peer_script(service, connection, item.object)
+	if script != nil {
+		if connection.script_send.id == item.id {
+			sent := replication_send_script_source(service, connection, item, script)
+			if sent {connection.initialized[item.id] = true}
+			return sent
+		}
+		if connection.script_send.id != 0 {return false}
+	}
 	sent := false
 	if classes.Is_A(item.object, "Part") {
 		tick := replication_peer_snapshot_tick(service, connection)
@@ -1085,6 +1144,9 @@ replication_initialise_entity :: proc(
 	// Queue every initial property reliably before announcing a complete scene.
 	extra_sent := replication_send_extra_properties(service, connection, item, true)
 	sent = sent && extra_sent
+	if sent && script != nil {
+		sent = replication_send_script_source(service, connection, item, script)
+	}
 	if sent {connection.initialized[item.id] = true}
 	replication_send_character_ack(service, connection, item.object)
 	return sent
@@ -1113,15 +1175,14 @@ replication_peer_scene_complete :: proc(
 	for item in service.entity_list {
 		if item == nil || item.object == nil || item.object.destroyed {continue}
 		if !replication_visible_to(
-			   service,
-			   connection,
-			   item.object,
-			   focus_x,
-			   focus_y,
-			   focus_z,
-			   has_focus,
-		   ) ||
-		   service.suppressed[item.object] {
+			service,
+			connection,
+			item.object,
+			focus_x,
+			focus_y,
+			focus_z,
+			has_focus,
+		) {
 			continue
 		}
 		if connection.known[item.id] == 0 || !connection.initialized[item.id] {return false}
@@ -1221,6 +1282,11 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	for root_name in REPLICATION_ROOT_NAMES {
 		replication_sync_tree(service, DataModel_Get_Service(service.data_model, root_name))
 	}
+	for &connection in service.peers {
+		if connection.player == nil || connection.player.destroyed {continue}
+		gui := classes.Find_First_Child_Of_Class(&connection.player.object, "PlayerGui")
+		replication_sync_tree(service, gui)
+	}
 
 
 	drops := service.drops_window
@@ -1278,7 +1344,15 @@ replication_sync :: proc(service: ^ReplicatorService) {
 
 
 		if !connection.handshake_complete {continue}
+		if !replication_flush_join_batch(service, &connection) {continue}
+		connection.join_batch_enabled =
+			replication_initial_snapshot_pending(&connection) &&
+			(connection.client_capabilities &
+					service.server_capabilities &
+					Replication_Capability_Join_Batch) !=
+				0
 
+		root_metadata_ready := replication_send_root_metadata(service, &connection)
 
 		if service.mode == .Server && service.terrain_sync_due {
 			replication_send_terrain_delta(service, &connection)
@@ -1380,8 +1454,28 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			init_start = int(connection.init_cursor % u32(entity_total))
 			connection.init_cursor += 1
 		}
+		fast_join :=
+			!service.bandwidth_budget_configured &&
+			replication_initial_snapshot_pending(&connection)
+		// Resume in-flight reliable chunks before other objects can use the budget.
+		if fast_join {
+			if item := replication_entity_by_id(service, u32(connection.metadata_send.key));
+			   item != nil && u64(item.id) == connection.metadata_send.key {
+				_ = replication_initialise_entity(service, &connection, item)
+			}
+			if item := replication_entity_by_id(service, connection.script_send.id); item != nil {
+				_ = replication_initialise_entity(service, &connection, item)
+			}
+		}
 		for offset in 0 ..< entity_total {
-			item := service.entity_list[(init_start + offset) % entity_total]
+			index := (init_start + offset) % entity_total
+			if fast_join &&
+			   replication_remaining_budget(service, &connection, 5) <
+				   REPLICATION_MIN_INITIAL_FRAME_BYTES {
+				connection.init_cursor = u32(index)
+				break
+			}
+			item := service.entity_list[index]
 			if connection.known[item.id] == 0 ||
 			   item.object == nil ||
 			   item.object.destroyed {continue}
@@ -1390,8 +1484,12 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			_ = replication_initialise_entity(service, &connection, item)
 		}
 
+		connection.join_batch_enabled = false
+		if !replication_flush_join_batch(service, &connection) {continue}
+
 		if !connection.finished_replicating_sent &&
 		   (connection.client_capabilities & Replication_Capability_Finished_Replicating) != 0 &&
+		   root_metadata_ready &&
 		   replication_peer_scene_complete(
 			   service,
 			   &connection,
@@ -1408,7 +1506,25 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				nil,
 				true,
 			)
+			if connection.finished_replicating_sent {
+				delete(connection.join_batch)
+				connection.join_batch = nil
+			}
 		}
+
+		if spawned > 0 && connection.player != nil {
+			fmt.printf(
+				"[Replication] sent initial snapshot to %s (%d instances)\n",
+				connection.player.name,
+				spawned,
+			)
+		}
+		// A full startup budget leaves no room for an update packet. Avoid
+		// rescanning every initialized object to attempt sends that cannot fit.
+		if fast_join &&
+		   replication_initial_snapshot_pending(&connection) &&
+		   replication_remaining_budget(service, &connection, 5) <
+			   REPLICATION_MIN_INITIAL_FRAME_BYTES {continue}
 
 		sorted: [dynamic]^Replication_Entity
 		defer delete(sorted)
@@ -1442,6 +1558,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		for offset in 0 ..< total {
 			item := sorted[(start + offset) % total]
 
+			_ = replication_send_entity_metadata(service, &connection, item)
 
 			if classes.Is_A(item.object, "Part") &&
 			   has_focus &&
@@ -1506,16 +1623,13 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				}
 			}
 			replication_send_extra_properties(service, &connection, item, false)
+			if script := replication_peer_script(service, &connection, item.object);
+			   script != nil {
+				_ = replication_send_script_source(service, &connection, item, script)
+			}
 			replication_send_character_ack(service, &connection, item.object)
 		}
 
-		if spawned > 0 && connection.player != nil {
-			fmt.printf(
-				"[Replication] sent initial snapshot to %s (%d instances)\n",
-				connection.player.name,
-				spawned,
-			)
-		}
 	}
 	if service.mode == .Server &&
 	   service.terrain_sync_due {replication_trim_terrain_history(service)}
@@ -1603,6 +1717,7 @@ replication_send_extra_properties :: proc(
 	if item == nil || item.object == nil || item.object.destroyed {return false}
 
 	sendable: [dynamic]string
+	script := replication_peer_script(service, connection, item.object)
 	defer delete(sendable)
 	if replication_builtin_property(item.object, "CanTouch") {
 		append(&sendable, "CanTouch")
@@ -1613,11 +1728,15 @@ replication_send_extra_properties :: proc(
 		append(&sendable, "TextureId")
 		append(&sendable, "CollisionFidelity")
 	}
+	if classes.Is_A_Class(item.object, &classes.PartOperation_Class) {
+		append(&sendable, "UsePartColor", "CanQuery", "CastShadow")
+	}
 	if schema := replication_schema(service, classes.Get_Class_Name(item.object)); schema != nil {
 		for property in schema.properties {
 
 
 			if property == "Name" || property == "Value" {continue}
+			if property == "Source" && script != nil {continue}
 			append(&sendable, property)
 		}
 	}

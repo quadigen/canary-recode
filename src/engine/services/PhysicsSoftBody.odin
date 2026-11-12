@@ -4,6 +4,7 @@ import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import jolt "../physics"
+import tracy "../util/odin-tracy"
 
 physics_prepare_softbodies :: proc(
 	service: ^Physics,
@@ -21,6 +22,8 @@ physics_prepare_softbodies :: proc(
 	}
 	colliders: [dynamic]kineffi.JPH_SoftBodyCollider
 	defer delete(colliders)
+	bodies: [dynamic]^classes.Object
+	defer delete(bodies)
 	anchors: [dynamic]kineffi.JPH_BodyID
 	defer delete(anchors)
 	for object in descriptor.instances {
@@ -105,6 +108,7 @@ physics_prepare_softbodies :: proc(
 			)
 		}
 		if delta_time > 0 {
+			append(&bodies, object)
 			append(
 				&colliders,
 				kineffi.JPH_SoftBodyCollider{body.body_id, body.closed_surface ? 1 : 0},
@@ -113,10 +117,12 @@ physics_prepare_softbodies :: proc(
 	}
 	if len(colliders) > 0 {
 		rigid_bodies := service.body_ids[:]
-		if len(anchors) > 0 {
+		if len(anchors) > 0 || len(service.character_capsules) > 0 {
+			for body_id in service.character_capsules {append(&anchors, body_id)}
 			append(&anchors, ..rigid_bodies)
 			rigid_bodies = anchors[:]
 		}
+		contacts := Softbody_Contacts{service, bodies[:]}
 		kineffi.JPH_MeshSoftBody_Collide(
 			service.system.handle,
 			raw_data(colliders[:]),
@@ -124,8 +130,35 @@ physics_prepare_softbodies :: proc(
 			raw_data(rigid_bodies),
 			u32(len(rigid_bodies)),
 			delta_time,
+			jolt.OBJECT_LAYER_DEFORMABLE_CAPSULE,
+			physics_softbody_contact,
+			&contacts,
 		)
 	}
+}
+
+Softbody_Contacts :: struct {
+	service: ^Physics,
+	bodies:  []^classes.Object,
+}
+
+physics_softbody_contact :: proc "c" (index: u32, rigid: kineffi.JPH_BodyID, user_data: rawptr) {
+	context = tracy.DefaultContext()
+	contacts := cast(^Softbody_Contacts)user_data
+	physics_report_deformable_contact(contacts.service, contacts.bodies[index], rigid)
+}
+
+physics_softbody_for_anchor :: proc(service: ^Physics, id: kineffi.JPH_BodyID) -> ^classes.Object {
+	if id == kineffi.JPH_BODY_ID_INVALID {return nil}
+	descriptor := classes.Find_Class(service.signal_registry, "SoftBody")
+	if descriptor == nil {return nil}
+	for object in descriptor.instances {
+		body := cast(^classes.SoftBody)object
+		if !body.destroyed && body.enabled && body.anchored && body.anchor_body_id == id {
+			return object
+		}
+	}
+	return nil
 }
 
 // A static mesh lets Jolt use the frozen, possibly deformed surface in its

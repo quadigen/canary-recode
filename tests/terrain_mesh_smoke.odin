@@ -103,5 +103,35 @@ assert(Terrain:CountCells() > 0, "the fill must create cells")
 		assert(used[index], "every vertex must be referenced by a triangle")
 	}
 
+	run_fill(&script_vm, `
+local terrain = game:GetService("Terrain")
+terrain:Clear()
+for x = -16, -1 do
+    for z = 16, 31 do
+        terrain:SetVoxel(x, 15, z, 0.5, Enum.Material.Water)
+    end
+end
+terrain:SetCell(-16, 16, 16, Enum.Material.Rock)
+`)
+	surfaces: [services.Terrain_Surface_Kind]services.Terrain_Surface_Geometry
+	defer {
+		for surface in surfaces {
+			delete(surface.vertices)
+			delete(surface.indices)
+		}
+	}
+	services.Terrain_Build_Chunk_Surfaces(terrain, {-1, 0, 1}, &surfaces)
+	water := surfaces[.Water]
+	exposed_cells :: 16 * 16 - 1
+	assert(len(water.indices) == exposed_cells * 4 * 4 * 6)
+	for i := 0; i < len(water.vertices); i += 8 {
+		x, y, z := water.vertices[i], water.vertices[i + 1], water.vertices[i + 2]
+		assert(x >= -64 && x <= 0 && z >= 64 && z <= 128 && y == 62)
+		assert(x >= -60 || z >= 68, "the solid in the chunk above must hide the water below")
+	}
+	for index in water.indices {
+		assert(int(index) < len(water.vertices) / 8)
+	}
+
 	fmt.println("TERRAIN_MESH_SMOKE_PASSED")
 }

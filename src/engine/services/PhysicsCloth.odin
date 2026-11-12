@@ -31,18 +31,11 @@ Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time:
 	for object in descriptor.instances {
 		if object.destroyed {continue}
 		cloth := cast(^classes.Cloth)object
-		anchor, valid := classes.Cloth_Anchor(cloth, &workspace.object)
-		if !valid || !cloth.enabled || !classes.Is_Descendant_Of(object, &workspace.object) {
+		anchors, pin_count := classes.Cloth_Anchors(cloth, &workspace.object)
+		if pin_count == 0 || !cloth.enabled || !classes.Is_Descendant_Of(object, &workspace.object) {
 			cloth.initialized = false
 			cloth.impulse = {}
 			continue
-		}
-		anchors := [2]datatypes.CFrame{anchor, {}}
-		pin_count := 1
-		if second, second_valid := classes.Cloth_Anchor_At(cloth, &workspace.object, 1);
-		   second_valid && classes.Cloth_Pin_Count(cloth) == 2 {
-			anchors[1] = second
-			pin_count = 2
 		}
 		if cloth.can_collide && !prepared_collisions {
 			prepared_collisions = true
@@ -59,20 +52,7 @@ Physics_Step_Cloth :: proc(service: ^Physics, workspace: ^Workspace, delta_time:
 					append(&candidates, body.body_id)
 				}
 			}
-			// Controllers own their capsule separately from ordinary Part bodies.
-			controllers := classes.Find_Class(service.signal_registry, "CollisionController")
-			if controllers != nil {
-				for instance in controllers.instances {
-					if instance == nil ||
-					   instance.destroyed ||
-					   !classes.Is_Descendant_Of(instance, &workspace.object) {continue}
-					controller := cast(^classes.CollisionController)instance
-					if controller.body_created &&
-					   controller.body_id != kineffi.JPH_BODY_ID_INVALID {
-						append(&candidates, controller.body_id)
-					}
-				}
-			}
+			for body_id in service.character_capsules {append(&candidates, body_id)}
 			if len(candidates) >
 			   0 {sphere = kineffi.JPH_SphereShape_Create(CLOTH_COLLISION_RADIUS)}
 		}
@@ -99,21 +79,20 @@ physics_step_cloth :: proc(
 	sphere: kineffi.JPH_ShapeRef,
 	candidates: []kineffi.JPH_BodyID,
 ) {
-	pins: [2]int
-	pins[0] = classes.Cloth_Pin_Index(cloth, 0)
-	if pin_count > 1 {pins[1] = classes.Cloth_Pin_Index(cloth, 1)}
-	pin := [3]f32{anchors[0].x, anchors[0].y, anchors[0].z}
-	if !cloth.initialized ||
-	   linalg.length(pin - cloth.particles[pins[0]].position) >
-		   max(10, 2 * max(cloth.size.X, cloth.size.Y)) {
-		classes.Cloth_Initialize(cloth, anchors[0])
+	pins := [2]int{classes.CLOTH_PIN, 0}
+	if pin_count == 2 {pins = {0, classes.CLOTH_SEGMENTS}}
+	start_pins, target_pins: [2][3]f32
+	reset := !cloth.initialized || cloth.pin_count != pin_count
+	for slot in 0 ..< pin_count {
+		target_pins[slot] = {anchors[slot].x, anchors[slot].y, anchors[slot].z}
+		if linalg.length(target_pins[slot] - cloth.particles[pins[slot]].position) >
+		   max(10, 2 * max(cloth.width, cloth.size.Y)) {reset = true}
 	}
-	start_pins: [2][3]f32
-	target_pins: [2][3]f32
+	if reset {classes.Cloth_Initialize(cloth, anchors, pin_count)}
 	for slot in 0 ..< pin_count {
 		start_pins[slot] = cloth.particles[pins[slot]].position
-		target_pins[slot] = {anchors[slot].x, anchors[slot].y, anchors[slot].z}
 	}
+	cloth.width = cloth.size.X
 	substeps := int(math.ceil(delta_time / CLOTH_MAX_SUBSTEP))
 	dt := delta_time / f32(substeps)
 	drag := math.exp(-cloth.damping * dt)
@@ -145,12 +124,15 @@ physics_step_cloth :: proc(
 			}
 		}
 		kick = {}
-		physics_solve_cloth_links(cloth)
+		if pin_count == 2 {
+			cloth.width = classes.Cloth_Width(cloth, cloth.particles[pins[1]].position - cloth.particles[pins[0]].position)
+		}
+		physics_solve_cloth_links(cloth, cloth.width)
 		for &particle, i in cloth.particles {
-			if classes.Cloth_Pinned(cloth, i) {continue}
+			if classes.Cloth_Pinned(cloth.pin_count, i) {continue}
 			particle.velocity = (particle.position - previous[i]) / dt
 			if sphere != nil {
-				physics_collide_cloth_particle(
+				hit := physics_collide_cloth_particle(
 					service,
 					sphere,
 					candidates,
@@ -158,16 +140,21 @@ physics_step_cloth :: proc(
 					&particle,
 					dt,
 				)
+				if hit != kineffi.JPH_BODY_ID_INVALID {
+					physics_report_deformable_contact(service, &cloth.object, hit)
+				}
 			}
 		}
 	}
+	cloth.pose_source = .Simulation
+	cloth.pose_anchors = anchors
 	cloth.revision += 1
 }
 
-physics_solve_cloth_links :: proc(cloth: ^classes.Cloth) {
+physics_solve_cloth_links :: proc(cloth: ^classes.Cloth, width: f32) {
 	n :: classes.CLOTH_SEGMENTS
 	stride :: classes.CLOTH_STRIDE
-	dx, dy := cloth.size.X / n, cloth.size.Y / n
+	dx, dy := width / n, cloth.size.Y / n
 	diagonal := math.sqrt(dx * dx + dy * dy)
 	for _ in 0 ..< CLOTH_SOLVER_ITERATIONS {
 		for row in 0 ..= n {
@@ -190,8 +177,8 @@ physics_cloth_link :: proc(cloth: ^classes.Cloth, a, b: int, rest_length, stiffn
 	delta := cloth.particles[b].position - cloth.particles[a].position
 	length := linalg.length(delta)
 	if length < 0.000001 {return}
-	weight_a := classes.Cloth_Pinned(cloth, a) ? f32(0) : 1
-	weight_b := classes.Cloth_Pinned(cloth, b) ? f32(0) : 1
+	weight_a := classes.Cloth_Pinned(cloth.pin_count, a) ? f32(0) : 1
+	weight_b := classes.Cloth_Pinned(cloth.pin_count, b) ? f32(0) : 1
 	correction := delta * ((1 - rest_length / length) * stiffness / (weight_a + weight_b))
 	cloth.particles[a].position += correction * weight_a
 	cloth.particles[b].position -= correction * weight_b
@@ -204,8 +191,9 @@ physics_collide_cloth_particle :: proc(
 	previous: [3]f32,
 	particle: ^classes.Cloth_Particle,
 	dt: f32,
-) {
+) -> kineffi.JPH_BodyID {
 	displacement := particle.position - previous
+	penetration_depth: f32
 	hit, collided := jolt.System_Cast_Shape(
 		&service.system,
 		{f64(previous.x), f64(previous.y), f64(previous.z)},
@@ -214,13 +202,14 @@ physics_collide_cloth_particle :: proc(
 		candidates,
 		.Include,
 		linalg.length(displacement) + CLOTH_COLLISION_RADIUS,
+		&penetration_depth,
 	)
-	if !collided {return}
+	if !collided {return kineffi.JPH_BODY_ID_INVALID}
 	normal := linalg.normalize([3]f32{hit.normal.x, hit.normal.y, hit.normal.z})
-	if !(linalg.dot(normal, normal) > 0) {return}
+	if !(linalg.dot(normal, normal) > 0) {return kineffi.JPH_BODY_ID_INVALID}
 
 	// A moving collider can already overlap the sphere when the cast starts.
-	skin := hit.fraction <= 0 ? f32(CLOTH_COLLISION_RADIUS) : 0.001
+	skin := max(penetration_depth, 0) + 0.001
 	particle.position = previous + displacement * clamp(hit.fraction, 0, 1) + normal * skin
 
 	linear, angular: kineffi.JPH_Vec3
@@ -237,4 +226,5 @@ physics_collide_cloth_particle :: proc(
 	speed := linalg.dot(relative, normal)
 	tangent := relative - normal * speed
 	particle.velocity = surface_velocity + normal * max(speed, 0) + tangent * math.exp(-10 * dt)
+	return hit.bodyID
 }

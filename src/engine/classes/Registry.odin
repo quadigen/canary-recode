@@ -153,6 +153,7 @@ Class_Descriptor :: struct {
 	registry:           ^Registry,
 	instances:          [dynamic]^Object,
 	properties:         [dynamic]string,
+	imported_properties: map[string]Imported_Property,
 	methods:            [dynamic]string,
 	events:             [dynamic]string,
 	member_security:    [dynamic]Member_Security,
@@ -246,9 +247,13 @@ Registry :: struct {
 	require_resolver:       Require_Resolver,
 	require_resolver_ctx:   rawptr,
 	require_frames:         map[^vm.State]^Require_Frame_Stack,
+	require_waiting:        map[^vm.State]^vm.State,
+	require_schedule_retry: proc(ctx: rawptr, L: ^vm.State),
+	require_retry_ctx:      rawptr,
 	mode:                   target.Mode,
 	screen_gui_can_display: proc(object: ^Object, data_model: rawptr) -> bool,
 	pending_destroy:        [dynamic]Pending_Destroy,
+	tagged_objects:        map[^Object]bool,
 	destroy_hook:           Destroy_Hook,
 	destroy_hook_ctx:       rawptr,
 	network_ownership:      Network_Ownership_Dispatch,
@@ -364,6 +369,7 @@ descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		return true
 	}
 
+	if imported_property_get(L, descriptor, object, key) {return true}
 	return Object_Get_Property(L, value, ctx, key)
 }
 
@@ -386,6 +392,13 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		return true
 	}
 
+	// A Changed listener may keep Visible in sync with another property.
+	// Reassigning the current value must not reenter that listener.
+	if key == "Visible" && Is_A_Class(object, &GuiObject_Class) &&
+	   (cast(^GuiObject)object).visible == vm.ArgBoolean(L, value_index) {
+		return true
+	}
+
 	if descriptor != nil &&
 	   descriptor.set != nil &&
 	   descriptor.set(
@@ -402,27 +415,28 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		surfacegui_mark_dirty_for(object)
 		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
-		Object_Fire_Property_Changed(object, key)
+		Object_Fire_Property_Changed(object, key, L)
 		return true
 	}
 
-	if Object_Set_Property(L, value, ctx, key, value_index) {
+	if imported_property_set(L, descriptor, object, key, value_index) ||
+	   Object_Set_Property(L, value, ctx, key, value_index) {
 		surfacegui_mark_dirty_for(object)
 		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
-		Object_Fire_Property_Changed(object, key)
+		Object_Fire_Property_Changed(object, key, L)
 		return true
 	}
 
 	return false
 }
 
-append_properties :: proc(registry: ^Registry, class: ^Class_Info, result: ^[dynamic]string) {
+append_properties :: proc(registry: ^Registry, class: ^Class_Info, result: ^[dynamic]string, include_imported := true) {
 	if registry == nil || class == nil {
 		return
 	}
 
-	append_properties(registry, class.parent, result)
+	append_properties(registry, class.parent, result, include_imported)
 
 	descriptor := Find_Class(registry, class.name)
 	if descriptor == nil {
@@ -430,6 +444,7 @@ append_properties :: proc(registry: ^Registry, class: ^Class_Info, result: ^[dyn
 	}
 
 	for property in descriptor.properties {
+		if !include_imported && property in descriptor.imported_properties {continue}
 		append(result, property)
 	}
 }
@@ -446,7 +461,7 @@ Get_Properties :: proc(registry: ^Registry, object: ^Object) -> [dynamic]string 
 	return result
 }
 
-Class_Property_List :: proc(registry: ^Registry, class_name: string) -> [dynamic]string {
+Class_Property_List :: proc(registry: ^Registry, class_name: string, include_imported := true) -> [dynamic]string {
 	result: [dynamic]string
 
 	if registry == nil {
@@ -458,7 +473,7 @@ Class_Property_List :: proc(registry: ^Registry, class_name: string) -> [dynamic
 		return result
 	}
 
-	append_properties(registry, descriptor.info, &result)
+	append_properties(registry, descriptor.info, &result, include_imported)
 
 	return result
 }
@@ -555,6 +570,12 @@ descriptor_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) ->
 	object := cast(^Object)value
 
 	if object == nil {
+		// A detached userdata still has its class descriptor. This lets
+		// callers finish iterating snapshots after destroying a subtree.
+		if method == "IsA" && descriptor != nil {
+			vm.PushBoolean(L, class_has_name(descriptor.info, vm.ArgString(L, 2)))
+			return 1, true
+		}
 		return vm.RaiseError(L, "attempt to access a destroyed Instance"), true
 	}
 
@@ -706,6 +727,8 @@ Register_Class :: proc(
 		append(&descriptor.properties, property)
 	}
 
+	register_imported_properties(descriptor)
+
 	for method in methods {
 		append(&descriptor.methods, method)
 	}
@@ -795,6 +818,7 @@ Unregister_Class :: proc(registry: ^Registry, descriptor: ^Class_Descriptor) {
 
 	delete(descriptor.instances)
 	delete(descriptor.properties)
+	delete(descriptor.imported_properties)
 	delete(descriptor.methods)
 	delete(descriptor.events)
 	delete(descriptor.member_security)
@@ -1067,9 +1091,9 @@ Script_Require_Context_Of :: proc(object: ^Object, mode: target.Mode) -> bool {
 	}
 	switch mode {
 	case .Server:
-		return kind != .LocalScript
+		return kind == .ModuleScript || !Script_Runs_On_Client(object, kind)
 	case .Client:
-		return kind != .Script
+		return kind == .ModuleScript || Script_Runs_On_Client(object, kind)
 	case .Standalone:
 		return true
 	case .Singleplayer:
@@ -1152,6 +1176,10 @@ Require_Frame_Pop_Stack :: proc(stack: ^Require_Frame_Stack) {
 		return
 	}
 	stack.depth -= 1
+	if common := Script_Common_Of(stack.items[stack.depth]); common != nil &&
+	   common.require_frame_stack == stack {
+		common.require_frame_stack = nil
+	}
 	stack.items[stack.depth] = nil
 }
 
@@ -1184,8 +1212,36 @@ Require_Current_Script :: proc(registry: ^Registry, L: ^vm.State) -> ^Object {
 	return stack.items[stack.depth - 1]
 }
 
+require_invalidate_object :: proc(common: ^Script_Common, object: ^Object) {
+	stack := common.require_frame_stack
+	if stack == nil {return}
+	for &entry in stack.items[:stack.depth] {
+		if entry == object {entry = nil}
+	}
+	common.require_frame_stack = nil
+}
+
+// Forget suspended requires when their owning task is cancelled.
+Require_Forget_Thread :: proc(registry: ^Registry, thread: ^vm.State) {
+	if registry == nil || thread == nil {return}
+	delete_key(&registry.require_waiting, thread)
+	stack := registry.require_frames[thread]
+	if stack == nil {return}
+	for stack.depth > 0 {
+		object := stack.items[stack.depth - 1]
+		if common := Script_Common_Of(object); common != nil && common.require_frame_stack == stack {
+			common.require_frame_stack = nil
+			if common.module_state == .Loading {common.module_state = .Unloaded}
+		}
+		Require_Frame_Pop_Stack(stack)
+	}
+	delete_key(&registry.require_frames, thread)
+	delete(stack.items)
+	free(stack)
+}
+
 // require_walk_children resolves `path` as a chain of child names below `root`.
-require_walk_children :: proc(root: ^Object, path: string) -> ^Object {
+require_walk_children :: proc(root: ^Object, path: string, relative := false) -> ^Object {
 	target := root
 	remaining := path
 	for remaining != "" && target != nil {
@@ -1197,10 +1253,12 @@ require_walk_children :: proc(root: ^Object, path: string) -> ^Object {
 		} else {
 			remaining = ""
 		}
-		if segment == "" {
-			continue
+		if segment == "" || (relative && segment == ".") {continue}
+		if relative && segment == ".." {
+			target = target.parent
+		} else {
+			target = Find_First_Child(target, segment)
 		}
-		target = Find_First_Child(target, segment)
 	}
 	return target
 }
@@ -1279,6 +1337,18 @@ REQUIRE_RESULT_COUNT_ERROR :: "Module code did not return exactly one value"
 require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 	context = tracy.DefaultContext()
 
+	registry := cast(^Registry)vm.UpvaluePointer(L)
+	if registry != nil && L in registry.require_waiting {
+		delete_key(&registry.require_waiting, L)
+		if status != 0 {return vm.Reraise(L)}
+		object := object_from_argument(L, 1)
+		common := Script_Common_Of(object)
+		if common == nil || common.module_state == .Unloaded {
+			return vm.RaiseError(L, "required module failed or was removed while loading")
+		}
+		return require_script_body(L, registry)
+	}
+
 	object := object_from_argument(L, 1)
 	common := Script_Common_Of(object)
 	if object == nil || common == nil || !Script_Is_Script(object) {
@@ -1320,6 +1390,16 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 	// Engine-internal modules are addressed by string path ("@internal/...").
 	if vm.IsString(L, 1) {
 		path := vm.ArgString(L, 1)
+		if strings.has_prefix(path, "./") || strings.has_prefix(path, "../") {
+			if caller := Require_Current_Script(registry, L); caller != nil {
+				module := require_walk_children(caller.parent, path, relative = true)
+				if module == nil {
+					return vm.RaiseError(L, fmt.tprintf("cannot resolve module %q relative to %s", path, Get_Full_Name(caller)))
+				}
+				require_replace_arg1(L, module)
+				return require_script_body(L, registry)
+			}
+		}
 		if require_resolve_alias(L, registry, path) {
 			return require_script_body(L, registry)
 		}
@@ -1382,11 +1462,22 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 		}
 		return 1
 	case .Loading:
-		describe := Get_Full_Name(object)
-		return vm.RaiseError(
-			L,
-			strings.concatenate({"cyclic require detected while loading ", describe}),
-		)
+		owner := common.require_frame_stack
+		if registry != nil && owner != nil {
+			dependency := owner.thread
+			for dependency != nil && dependency != L {
+				dependency = registry.require_waiting[dependency]
+			}
+			if dependency != L {
+				if registry.require_schedule_retry == nil || !vm.IsYieldable(L) {
+					return vm.RaiseError(L, "require cannot wait for a loading module on this thread")
+				}
+				registry.require_waiting[L] = owner.thread
+				registry.require_schedule_retry(registry.require_retry_ctx, L)
+				return vm.YieldThread(L)
+			}
+		}
+		return vm.RaiseError(L, fmt.tprintf("cyclic require detected while loading %s", Get_Full_Name(object)))
 	case .Unloaded:
 	}
 
@@ -1471,6 +1562,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Color3Value(registry)
 	Register_ColorSequenceValue(registry)
 	Register_ConeHandleAdornment(registry)
+	Register_Configuration(registry)
 	Register_Constraint(registry)
 	Register_CylinderHandleAdornment(registry)
 	Register_Decal(registry)
@@ -1504,7 +1596,9 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_NumberValue(registry)
 	Register_ObjectValue(registry)
 	Register_Part(registry)
+	Register_Part_Operations(registry)
 	Register_Part2D(registry)
+	Register_ParticleEmitter(registry)
 	Register_PointLight(registry)
 	Register_PostProcess(registry)
 	Register_RayValue(registry)
@@ -1542,6 +1636,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_UIScaleDetector(registry)
 	Register_UIShader(registry)
 	Register_UIShadow(registry)
+	Register_UISizeConstraint(registry)
 	Register_UISquircle(registry)
 	Register_UIStroke(registry)
 	Register_ValueBase(registry)
@@ -1562,11 +1657,14 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	for descriptor in registry.classes {
 		delete(descriptor.instances)
 		delete(descriptor.properties)
+		delete(descriptor.imported_properties)
 		delete(descriptor.member_security)
 		free(descriptor)
 	}
 
 	delete(registry.classes)
+	delete(registry.tagged_objects)
+	registry.tagged_objects = nil
 	registry.classes = nil
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil
@@ -1580,6 +1678,7 @@ Registry_Destroy :: proc(registry: ^Registry) {
 			free(stack)
 		}
 	}
+	delete(registry.require_waiting)
 	delete(registry.require_frames)
 	registry.require_frames = nil
 }

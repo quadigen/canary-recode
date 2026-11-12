@@ -92,6 +92,54 @@ decompress_kine :: proc(data: []u8, level: c.int = KINE_ZSTD_LEVEL) -> ([]u8, Er
 }
 
 
+Has_Path_Assets :: proc(data: []u8) -> bool {
+	raw := data
+	if is_zstd_frame(data) {
+		err: Error
+		raw, err = decompress_kine(data)
+		defer Error_Delete(&err)
+		if !Error_Is_None(err) {return false}
+	}
+	defer if raw_data(raw) != raw_data(data) {delete(raw)}
+	reader := Reader{data = raw}
+	defer Error_Delete(&reader.err)
+	if !read_kine_header(&reader) || reader.version < KINE_ASSET_VERSION {return false}
+	count, ok := read_u32(&reader)
+	if !ok || count > u32(assetstore.MAX_ASSET_COUNT) {return false}
+	for _ in 0 ..< count {
+		for _ in 0 ..< 2 {
+			length, length_ok := read_var_u32(&reader)
+			if !length_ok {return false}
+			if _, skipped := read_bytes(&reader, int(length)); !skipped {return false}
+		}
+		kind, kind_ok := read_u8(&reader)
+		if !kind_ok {return false}
+		if kind == u8(assetstore.Asset_Kind.Path_File) {return true}
+		length, length_ok := read_var_u32(&reader)
+		if !length_ok {return false}
+		if _, skipped := read_bytes(&reader, int(length)); !skipped {return false}
+	}
+	return false
+}
+
+// Network clients load the file bundle without instantiating the server's map.
+Load_Embedded_Assets :: proc(data: []u8) -> Error {
+	raw := data
+	if is_zstd_frame(data) {
+		err: Error
+		raw, err = decompress_kine(data)
+		if !Error_Is_None(err) {return err}
+	}
+	defer if raw_data(raw) != raw_data(data) {delete(raw)}
+	reader := Reader{data = raw}
+	defer Error_Delete(&reader.err)
+	if !read_kine_header(&reader) {return Error_Take(&reader.err)}
+	if reader.version >= KINE_ASSET_VERSION && !read_asset_table(&reader) {
+		return Error_Take(&reader.err)
+	}
+	return Error_None
+}
+
 Repack_File_Data :: proc(data: []u8, level: c.int) -> ([]u8, Error) {
 	raw: []u8
 	if is_zstd_frame(data) {
@@ -214,6 +262,7 @@ Deserialize_From_Data :: proc(
 	parent: ^classes.Object,
 	data: []u8,
 	terrain: ^Kine_Terrain = nil,
+	service_properties: ^Loaded_Service_Properties = nil,
 ) -> (
 	^classes.Object,
 	Error,
@@ -230,10 +279,10 @@ Deserialize_From_Data :: proc(
 		}
 		defer delete(decompressed)
 
-		return Deserialize(registry, L, parent, decompressed, terrain)
+		return Deserialize(registry, L, parent, decompressed, terrain, service_properties)
 	}
 
-	return Deserialize(registry, L, parent, data, terrain)
+	return Deserialize(registry, L, parent, data, terrain, service_properties)
 }
 
 

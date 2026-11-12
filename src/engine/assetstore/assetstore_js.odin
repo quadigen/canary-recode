@@ -13,3 +13,7 @@ Materialize :: proc(id: string) -> (string, bool) {
 Purge_Cache :: proc() -> bool {
 	return true
 }
+
+resolve_project_path :: proc(uri: string) -> string {
+	return ""
+}

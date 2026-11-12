@@ -93,7 +93,7 @@ WeldConstraint_step :: proc(
 	if weld.part0 != nil && weld.part0.destroyed {weld.part0 = nil}
 	if weld.part1 != nil && weld.part1.destroyed {weld.part1 = nil}
 
-	if system == nil {
+	if !weld.enabled || system == nil {
 		WeldConstraint_release(weld)
 		return
 	}
@@ -178,6 +178,14 @@ WeldConstraint_set :: proc(
 		}
 
 		WeldConstraint_release(weld)
+		Hierarchy_Touched()
+	case "Enabled":
+		enabled := vm.ArgBoolean(L, value_index)
+		if weld.enabled != enabled {
+			weld.enabled = enabled
+			WeldConstraint_release(weld)
+			Hierarchy_Touched()
+		}
 	case:
 		return Constraint_set(L, object, datatype_registry, enum_registry, key, value_index)
 	}

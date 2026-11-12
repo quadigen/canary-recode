@@ -231,6 +231,8 @@ install_vector3_metatable :: proc(L: ^vm.State) {
 
 	vm.SetReadOnly(L, -1, false)
 
+	vm.PushString(L, "Vector3")
+	vm.SetField(L, -2, "__type")
 	vm.PushFunction(L, "Vector3.__index", vector3_index)
 	vm.SetField(L, -2, "__index")
 

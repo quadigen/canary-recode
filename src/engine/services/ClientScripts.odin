@@ -277,11 +277,15 @@ PlayerGui_Prepare :: proc(player: ^Player, L: ^vm.State) -> ^classes.Object {
 
 	model := cast(^DataModel)registry.data_model
 	if model == nil {return object}
-	if replicator := cast(^ReplicatorService)DataModel_Get_Service(model, "ReplicatorService");
-	   replicator != nil &&
-	   replicator.mode == .Client &&
-	   replicator.remote != nil &&
-	   !replicator.replication_finished {return object}
+	replicator := cast(^ReplicatorService)DataModel_Get_Service(model, "ReplicatorService")
+	if replicator != nil && replicator.mode == .Client && replicator.remote != nil {
+		if !replicator.replication_finished {return object}
+		if replication_uses_server_player_gui(replicator) {
+			gui.populated = true
+			gui.spawn = player.character_generation
+			return object
+		}
+	}
 	starter := DataModel_Get_Service(model, "StarterGui")
 	if starter == nil {return object}
 

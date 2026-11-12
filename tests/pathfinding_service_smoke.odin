@@ -71,7 +71,7 @@ main :: proc() {
 	assert((waypoints[#waypoints].Position - Vector3.new(60, 8, 0)).Magnitude < 25)
 
 	for _, waypoint in ipairs(waypoints) do
-		assert(typeof(waypoint.Position) == "vector", "position not a vector")
+		assert(typeof(waypoint.Position) == "Vector3", "position not a vector")
 		assert(waypoint.Action == Enum.PathWaypointAction.Walk
 			or waypoint.Action == Enum.PathWaypointAction.Jump, "bad action")
 		assert(waypoint.Label == nil, "label not nil")
@@ -79,7 +79,7 @@ main :: proc() {
 
 	local points = path:GetPointCoordinates()
 	assert(#points == #waypoints, "point count mismatch")
-	assert(typeof(points[1]) == "vector", "point not a vector")
+	assert(typeof(points[1]) == "Vector3", "point not a vector")
 
 	local occ = path:CheckOcclusionAsync(1)
 	assert(occ == -1, "occlusion should be -1, got " .. tostring(occ))

@@ -36,9 +36,26 @@ remote_find_player_peer :: proc(
 	return nil, nil
 }
 
-remote_encode_args :: proc(L: ^vm.State, first: int, last: int, bytes: ^[dynamic]u8) -> bool {
+remote_common_capabilities :: proc(service: ^ReplicatorService, peer: ^Replication_Transport_Peer) -> u32 {
+	if service.mode == .Client {
+		return service.client_capabilities & service.server_capabilities
+	}
+	if peer != nil {
+		connection := replication_peer_of(service, peer)
+		return service.server_capabilities & connection.client_capabilities if connection != nil else 0
+	}
+	capabilities := service.server_capabilities
+	for connection in service.peers {
+		if connection.handshake_complete {capabilities &= connection.client_capabilities}
+	}
+	return capabilities
+}
+
+remote_encode_args :: proc(
+	L: ^vm.State, first, last: int, bytes: ^[dynamic]u8, capabilities: u32,
+) -> bool {
 	for index := first; index <= last; index += 1 {
-		if !replication_encode_value(L, index, bytes, 0) {
+		if !replication_encode_value(L, index, bytes, 0, remote_capabilities = capabilities) {
 			return false
 		}
 	}
@@ -157,7 +174,7 @@ remote_call_dispatch :: proc(
 			case .Client:
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, 2, top, &bytes) {
+				if !remote_encode_args(L, 2, top, &bytes, remote_common_capabilities(replicator, replicator.remote)) {
 					return 0, true
 				}
 				_ = remote_send_fire(
@@ -192,14 +209,14 @@ remote_call_dispatch :: proc(
 			}
 			switch replicator.mode {
 			case .Server:
+				peer, _ := remote_find_player_peer(replicator, target)
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, first_arg, top, &bytes) {
+				if !remote_encode_args(L, first_arg, top, &bytes, remote_common_capabilities(replicator, peer)) {
 					return 0, true
 				}
 				entity_id := replication_entity_id(replicator, instance)
 				if method == "FireClient" {
-					peer, _ := remote_find_player_peer(replicator, target)
 					if peer != nil {
 						_ = remote_send_fire(replicator, peer, entity_id, bytes[:])
 					}
@@ -225,7 +242,7 @@ remote_call_dispatch :: proc(
 			case .Client:
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, 2, top, &bytes) {
+				if !remote_encode_args(L, 2, top, &bytes, remote_common_capabilities(replicator, replicator.remote)) {
 					return 0, true
 				}
 				invoke_id := replicator.next_invoke_id
@@ -261,16 +278,16 @@ remote_call_dispatch :: proc(
 			}
 			switch replicator.mode {
 			case .Server:
+				peer, _ := remote_find_player_peer(replicator, target)
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, first_arg, top, &bytes) {
+				if !remote_encode_args(L, first_arg, top, &bytes, remote_common_capabilities(replicator, peer)) {
 					return 0, true
 				}
 				invoke_id := replicator.next_invoke_id
 				entity_id := replication_entity_id(replicator, instance)
 				sent := false
 				if method == "InvokeClient" {
-					peer, _ := remote_find_player_peer(replicator, target)
 					if peer != nil {
 						sent = remote_send_invoke_request(
 							replicator,
@@ -495,15 +512,12 @@ remote_run_invoke :: proc(
 		return
 	}
 	results: [dynamic]u8
-	for index := base + 1; index <= vm.StackTop(L); index += 1 {
-		if !replication_encode_value(L, index, &results, 0) {
-			delete(results)
-			_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, nil)
-			return
-		}
+	defer delete(results)
+	if !remote_encode_args(L, base + 1, vm.StackTop(L), &results, remote_common_capabilities(service, request_peer)) {
+		_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, nil)
+		return
 	}
 	_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, results[:])
-	delete(results)
 }
 
 remote_receive_invoke_response :: proc(

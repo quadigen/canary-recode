@@ -91,6 +91,7 @@ tests_services := '''
     character_controller_smoke
     character_cancollide_smoke
     cloth_collision_smoke
+    cloth_rigid_collision_smoke
     softbody_smoke
     softbody_collision_smoke
     terrain_character_ground_smoke
@@ -100,12 +101,14 @@ tests_services := '''
     highlight_smoke
     handles_smoke
     lighting_smoke
+    particle_emitter_smoke
     material_catalog_smoke
     water_buoyancy_camera_smoke
     terrain_service_smoke
     terrain_collision_smoke
     singleplayer_smoke
     playtest_launch_smoke
+    playtest_output_smoke
     webview_service_smoke
     template_platform_smoke
     platform_export_smoke
@@ -132,6 +135,7 @@ tests_gui := '''
 tests_serializer := '''
     serializer_smoke
     asset_portability_smoke
+    part_operation_smoke
     kine_map_smoke
     kine_terrain_smoke
 '''
@@ -231,6 +235,18 @@ test-gui: (_run-tests "gui" tests_gui)
 test-serializer: (_run-tests "serializer" tests_serializer)
 
 test-replication: (_run-tests "replication" tests_replication)
+
+# Requires the local tools/construct_rbxl.kine fixture.
+test-construct-rbxl:
+    odin run tests/construct_rbxl_smoke.odin -file -out:build/construct-rbxl-smoke{{exe}}
+
+# Requires a Construct import with KINE v8 constraint endpoints.
+test-construct-motor map="build/construct-with-motor.kine":
+    odin run tests/construct_motor_smoke.odin -file -out:build/construct-motor-smoke{{exe}} -- "{{map}}"
+
+# Requires a Construct save with the original block catalog welds.
+test-construct-block-welds map="build/construct-with-block-welds.kine":
+    odin run tests/construct_block_weld_smoke.odin -file -out:build/construct-block-weld-smoke{{exe}} -- "{{map}}"
 
 # Usage: just bench-surface-gui [elements] [frames]
 bench-surface-gui elements="1000" frames="120":

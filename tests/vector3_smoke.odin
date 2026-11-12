@@ -14,7 +14,7 @@ local function close(a, b, epsilon)
     return math.abs(a - b) <= (epsilon or 1e-5)
 end
 
-assert(typeof(Vector3.new()) == "vector")
+assert(typeof(Vector3.new()) == "Vector3")
 local v = Vector3.new(3, 4, 0)
 assert(v.X == 3 and v.Y == 4 and v.Z == 0)
 assert(close(v.Magnitude, 5))

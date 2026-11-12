@@ -153,7 +153,7 @@ assert(cell.X == 1 and cell.Y == 2 and cell.Z == 3)
 -- PreferSolid on an empty neighbourhood still returns a cell.
 local solid = Terrain:WorldToCellPreferSolid(Vector3.new(5, 9, 13))
 local empty = Terrain:WorldToCellPreferEmpty(Vector3.new(5, 9, 13))
-assert(typeof(solid) == "vector" and typeof(empty) == "vector")
+assert(typeof(solid) == "Vector3" and typeof(empty) == "Vector3")
 `,
 		"terrain_service_world_cell",
 	)

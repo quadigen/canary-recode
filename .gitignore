@@ -77,3 +77,6 @@ tools/rbx2kine.py
 
 docs
 tmp_3d_bench.bin
+tests/construct_block_weld_smoke.odin
+tests/construct_motor_smoke.odin
+tests/construct_rbxl_smoke.odin

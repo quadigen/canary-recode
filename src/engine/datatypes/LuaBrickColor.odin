@@ -2,6 +2,7 @@ package datatypes
 
 import tracy "../util/odin-tracy"
 import "core:fmt"
+import "core:math/rand"
 
 import vm "../vm"
 
@@ -35,6 +36,16 @@ brick_color_new :: proc "c" (L: ^vm.State) -> i32 {
 	case:
 		return vm.RaiseError(L, "BrickColor.new expects a number, name, or BrickColor")
 	}
+	return 1
+}
+
+brick_color_random :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	palette := [?]BrickColor{
+		BrickColor_White, BrickColor_Black, BrickColor_Red, BrickColor_Blue,
+		BrickColor_Green, BrickColor_Gray, BrickColor_Lemon_Metalic,
+	}
+	push_brick_color(L, binding_from_upvalue(L), palette[rand.int_max(len(palette))])
 	return 1
 }
 
@@ -80,6 +91,7 @@ BrickColor_Luau_Binding :: proc() -> vm.Userdata_Binding {
 
 BrickColor_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", brick_color_new)
+	add_library_function(L, binding, "random", brick_color_random)
 
 	push_brick_color(L, binding, BrickColor_White)
 	vm.SetField(L, -2, "White")

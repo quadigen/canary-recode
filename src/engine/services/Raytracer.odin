@@ -219,7 +219,7 @@ Raytracer_namecall :: proc(
 	bool,
 ) {
 	service := cast(^Raytracer)object
-	renderer := service.renderer.Filament
+	renderer := service.renderer.Filament if service.renderer != nil else nil
 
 	switch method {
 	case "Add":

@@ -91,7 +91,8 @@ Replication_Part_Send_State :: struct {
 Replication_Peer :: struct {
 	peer:                      ^Replication_Transport_Peer,
 	player:                    ^Player,
-	known:                     map[u32]u32,
+	known:                     map[u32]u64,
+	mesh_assets:               map[string]bool,
 	initialized:               map[u32]bool,
 	part_states:               map[u32]Replication_Part_Send_State,
 	property_hashes:           map[u32]u32,
@@ -101,6 +102,9 @@ Replication_Peer :: struct {
 	acked_extra:               map[u32]u32,
 	deformable:                map[u32]u64,
 	bytes_this_tick:           u32,
+	join_batch:                [dynamic]u8,
+	join_batch_enabled:        bool,
+	reliable_join_properties:  map[u64]u32,
 	handshake_complete:        bool,
 	terrain_initial_sent:      bool,
 	terrain_cursor:            u64,
@@ -121,6 +125,10 @@ Replication_Peer :: struct {
 	bandwidth_cursor:          u32,
 	init_cursor:               u32,
 	last_ack_sent:             u32,
+	script_sources:            map[u32]u64,
+	script_send:               Replication_Script_Send,
+	metadata_revisions:        map[u64]u64,
+	metadata_send:             Replication_Metadata_Send,
 }
 
 Replication_Event_Callback :: struct {
@@ -136,6 +144,16 @@ Replication_Group_Member :: struct {
 Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	if connection == nil {return}
 	delete(connection.known)
+	delete(connection.join_batch)
+	delete(connection.reliable_join_properties)
+	for id in connection.mesh_assets {delete(id)}
+	delete(connection.mesh_assets)
+	delete(connection.script_sources)
+	connection.script_sources = nil
+	replication_clear_script_send(&connection.script_send)
+	delete(connection.metadata_revisions)
+	connection.metadata_revisions = nil
+	replication_clear_metadata_send(&connection.metadata_send)
 	delete(connection.initialized)
 	delete(connection.part_states)
 	delete(connection.property_hashes)
@@ -201,6 +219,8 @@ ReplicatorService :: struct {
 	transport_initialized:         bool,
 	scene_ready:                   bool,
 	replication_finished:          bool,
+	script_receive:                Replication_Script_Receive,
+	metadata_receive:              Replication_Metadata_Receive,
 	event_signal:                  ^signals.Signal,
 	event_callbacks:               [dynamic]Replication_Event_Callback,
 	group_members:                 [dynamic]Replication_Group_Member,
@@ -257,6 +277,7 @@ ReplicatorService :: struct {
 	drop_pressure:                 f32,
 	adaptive_scale:                f32,
 	base_bandwidth_budget:         u32,
+	bandwidth_budget_configured:   bool,
 	base_snapshot_rate:            f32,
 	adaptive_min_scale:            f32,
 	owned_teleport_tolerance:      f32,
@@ -316,11 +337,13 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	service.terrain_table_complete = false
 	service.terrain_batches_received = 0
 	service.terrain_cells_received = 0
-	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	L: ^vm.State
-	if service.signal_registry != nil && service.signal_registry.vm_state != nil {
+	// A VM finalizer can run after Players or a replicated character is gone.
+	// During lua_close, release transport state and let the VM destroy its objects.
+	if !vm.Is_Closing() && service.signal_registry != nil && service.signal_registry.vm_state != nil {
 		L = service.signal_registry.vm_state.L
 	}
+	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players") if L != nil else nil
 	if service.host != nil {
 		if service.mode == .Client && service.remote != nil {
 			transport_peer_disconnect(service.remote)
@@ -339,8 +362,11 @@ replication_stop :: proc(service: ^ReplicatorService) {
 
 
 	replication_asset_pending_reset(service)
+	replication_clear_script_receive(&service.script_receive)
+	replication_clear_metadata_receive(&service.metadata_receive)
 	client_objects: [dynamic]^classes.Object
 	if service.mode == .Client && L != nil {
+		replication_clear_root_metadata(service, L)
 		for item in service.entity_list {
 			if item.object == nil || item.object.destroyed {continue}
 			if classes.Is_A(item.object, "CharacterModel") {
@@ -372,12 +398,8 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	delete(service.group_members)
 	service.group_members = nil
 	for pending in service.invoke_pending {
-		if pending.thread_ref != 0 &&
-		   service.data_model != nil &&
-		   service.data_model.registry != nil &&
-		   service.data_model.registry.vm_state != nil &&
-		   service.data_model.registry.vm_state.L != nil {
-			vm.ReleaseValue(service.data_model.registry.vm_state.L, pending.thread_ref)
+		if pending.thread_ref != 0 && L != nil {
+			vm.ReleaseValue(L, pending.thread_ref)
 		}
 	}
 	delete(service.invoke_pending)
@@ -403,12 +425,9 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	service.snapshot_clock_rate = 0
 	service.time_sync_sequence = 0
 	service.server_nonce = 0
-	if service.data_model != nil &&
-	   service.data_model.registry != nil &&
-	   service.data_model.registry.vm_state != nil &&
-	   service.data_model.registry.vm_state.L != nil {
-		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsServer", target.is_server())
-		vm.AddGlobal_Boolean(service.data_model.registry.vm_state, "IsClient", target.is_client())
+	if L != nil {
+		vm.AddGlobal_Boolean(service.signal_registry.vm_state, "IsServer", target.is_server())
+		vm.AddGlobal_Boolean(service.signal_registry.vm_state, "IsClient", target.is_client())
 	}
 	service.elapsed = 0
 	service.tick = 0
@@ -436,13 +455,13 @@ replication_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 	}
 	delete(service.schemas)
 	if service.event_signal != nil {signals.Destroy(service.event_signal)}
-	if service.signal_registry != nil &&
-	   service.signal_registry.vm_state != nil &&
-	   service.signal_registry.vm_state.L != nil {
-		for callback in service.event_callbacks {
+	for callback in service.event_callbacks {
+		if !vm.Is_Closing() && service.signal_registry != nil &&
+		   service.signal_registry.vm_state != nil &&
+		   service.signal_registry.vm_state.L != nil {
 			vm.ReleaseValue(service.signal_registry.vm_state.L, callback.reference)
-			delete(callback.name)
 		}
+		delete(callback.name)
 	}
 	delete(service.event_callbacks)
 
@@ -538,6 +557,7 @@ replication_set :: proc(
 		}
 		service.bandwidth_budget = u32(budget)
 		service.base_bandwidth_budget = u32(budget)
+		service.bandwidth_budget_configured = true
 		return true
 	}
 	if key == "InterpolationDelayTicks" {

@@ -415,6 +415,7 @@ replication_encode_value :: proc(
 	bytes: ^[dynamic]u8,
 	depth: int,
 	connection: ^Replication_Peer = nil,
+	remote_capabilities: u32 = 0,
 ) -> bool {
 	if depth > 8 || len(bytes^) > 1048576 {return false}
 	#partial switch vm.TypeOf(L, index) {
@@ -430,6 +431,13 @@ replication_encode_value :: proc(
 		append(bytes, 4)
 		value, _ := vm.ToString(L, index)
 		replication_put_string(bytes, value)
+	case .Buffer:
+		if (remote_capabilities & Replication_Capability_Buffer) == 0 {return false}
+		value, ok := vm.ToBuffer(L, index)
+		if !ok || len(value) > int(Replication_Max_Frame_Payload) - len(bytes^) - 5 {return false}
+		append(bytes, 21)
+		replication_put_u32(bytes, u32(len(value)))
+		append(bytes, ..value)
 	case .Table:
 		append(bytes, 5)
 		count_offset := len(bytes^)
@@ -446,8 +454,22 @@ replication_encode_value :: proc(
 				vm.Pop(L)
 				return false
 			}
-			if !replication_encode_value(L, -2, bytes, depth + 1, connection) ||
-			   !replication_encode_value(L, -1, bytes, depth + 1, connection) {
+			if !replication_encode_value(
+				   L,
+				   -2,
+				   bytes,
+				   depth + 1,
+				   connection,
+				   remote_capabilities,
+			   ) ||
+			   !replication_encode_value(
+					   L,
+					   -1,
+					   bytes,
+					   depth + 1,
+					   connection,
+					   remote_capabilities,
+				   ) {
 				vm.Pop(L)
 				vm.Pop(L)
 				return false
@@ -546,7 +568,14 @@ replication_encode_value :: proc(
 			replication_put_f32(bytes, f32(value.Style))
 		} else if binding.name == "Instance" {
 			object := cast(^classes.Object)vm.UserdataValue(L, index)
-			if object == nil || object.destroyed || object.network_id == 0 {return false}
+			if object == nil || object.destroyed {return false}
+			if (remote_capabilities & Replication_Capability_Player_Reference) != 0 &&
+			   object.class == &Player_Class {
+				append(bytes, 20)
+				replication_put_u32(bytes, (cast(^Player)object).user_id)
+				return true
+			}
+			if object.network_id == 0 {return false}
 			if connection != nil && connection.known[object.network_id] == 0 {return false}
 			append(bytes, 17)
 			replication_put_u32(bytes, object.network_id)
@@ -800,6 +829,36 @@ replication_decode_value :: proc(
 			)
 			vm.PushNil(L)
 		}
+	case 19:
+		minimum := replication_read_f32(reader)
+		maximum := replication_read_f32(reader)
+		value, ok := datatypes.NumberRange_New2(minimum, maximum)
+		if !reader.valid || !ok || datatype_registry == nil {
+			reader.valid = false
+			vm.PushNil(L)
+			return
+		}
+		datatypes.Push_NumberRange(L, datatype_registry, value)
+	case 20:
+		id := replication_read_u32(reader)
+		player: ^Player
+		if reader.valid && service != nil {
+			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+			player = Players_Find_By_User_Id(players, id)
+		}
+		classes.Push_Object(L, &player.object if player != nil else nil)
+	case 21:
+		size := replication_read_u32(reader)
+		if !reader.valid ||
+		   size > Replication_Max_Frame_Payload ||
+		   int(size) > len(reader.data) - reader.offset {
+			reader.valid = false
+			vm.PushNil(L)
+			return
+		}
+		end := reader.offset + int(size)
+		vm.PushBuffer(L, reader.data[reader.offset:end])
+		reader.offset = end
 	case:
 		reader.valid = false; vm.PushNil(L)
 	}

@@ -8,17 +8,21 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-DataModel_Class := classes.Class_Info{
-	name = "DataModel",
+DataModel_Class := classes.Class_Info {
+	name   = "DataModel",
 	parent = &classes.Instance_Class,
 }
 
 DataModel :: struct {
-	using object: classes.Object,
-	registry:     ^Registry,
+	using object:            classes.Object,
+	registry:                ^Registry,
+	bind_to_close_callbacks: [dynamic]i32,
 }
 
-data_model_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+data_model_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	model := new(DataModel)
 	model.object = classes.Object_Init(&DataModel_Class, "game")
 	return &model.object
@@ -32,7 +36,7 @@ data_model_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_
 }
 
 DataModel_Get_Service :: proc(model: ^DataModel, name: string) -> ^classes.Object {
-	if model == nil || model.destroyed || model.registry == nil { return nil }
+	if model == nil || model.destroyed || model.registry == nil {return nil}
 	return Ensure_Service(model.registry, name)
 }
 
@@ -57,18 +61,22 @@ data_model_get :: proc(
 		}
 	}
 	switch key {
-	case "GetService", "FindService": vm.PushUserdataMethod(L, key)
+	case "GetService", "FindService":
+		vm.PushUserdataMethod(L, key)
 	case "PlaceId":
-		vm.PushInteger(L, 0)
+		vm.PushNumber(L, 0)
 	case "PlaceVersion":
-		vm.PushInteger(L, 1)
+		vm.PushNumber(L, 1)
 	case "GameId":
-		vm.PushInteger(L, 0)
-	case "JobId":
+		vm.PushNumber(L, 0)
+	case "JobId", "PrivateServerId":
 		vm.PushString(L, "")
+	case "PrivateServerOwnerId":
+		vm.PushNumber(L, 0)
 	case "Name":
 		vm.PushString(L, "game")
-	case: return false
+	case:
+		return false
 	}
 	return true
 }
@@ -86,24 +94,48 @@ service_names :: proc(registry: ^Registry) -> string {
 	return joined
 }
 
+data_model_runclose :: proc(L: ^vm.State, object: ^classes.Object) {
+	model := cast(^DataModel)object
+	for callback_ref in model.bind_to_close_callbacks {
+		vm.PushRegistryReference(L, callback_ref)
+		ok, err := vm.ProtectedCall(L, 0, 0)
+
+		if !ok {
+			fmt.println("BindToClose callback failed:", err)
+		}
+
+		vm.ReleaseValue(L, callback_ref)
+	}
+
+	clear(&model.bind_to_close_callbacks)
+}
+
 data_model_namecall :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	model := cast(^DataModel)object
 	switch method {
 	case "GetService":
 		name := vm.ArgString(L, 2)
 		descriptor := Find_Service(model.registry, name)
 		if descriptor == nil {
-			fmt.eprintfln("[DataModel] unknown service %q (known: %s)", name, service_names(model.registry))
+			fmt.eprintfln(
+				"[DataModel] unknown service %q (known: %s)",
+				name,
+				service_names(model.registry),
+			)
 			return vm.RaiseError(L, "unknown service"), true
 		}
 		if !Service_Access_Allowed(L, descriptor) {
-			return vm.RaiseError(L, "insufficient security capabilities to access this service"), true
+			return vm.RaiseError(L, "insufficient security capabilities to access this service"),
+				true
 		}
 		service := Ensure_Service(model.registry, name)
 		if service == nil {
@@ -111,6 +143,17 @@ data_model_namecall :: proc(
 		}
 		classes.Push_Object(L, service)
 		return 1, true
+	case "BindToClose":
+		if !vm.IsFunction(L, 2) {
+			return vm.RaiseError(L, "BindToClose expects a function"), true
+		}
+
+		vm.PushValue(L, 2)
+		callback_ref := vm.RetainValue(L)
+
+		append(&model.bind_to_close_callbacks, callback_ref)
+
+		return 0, true
 	case "FindService":
 		name := vm.ArgString(L, 2)
 		descriptor := Find_Service(model.registry, name)

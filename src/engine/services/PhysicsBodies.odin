@@ -89,6 +89,11 @@ physics_shape_for_part :: proc(
 		mesh = physics_mesh_part_of(part)
 	}
 	if mesh != nil {
+		// Wait for the embedded solid geometry instead of colliding with a
+		// placeholder that fills cutouts while the asset is unavailable.
+		if physics_is_mesh_operation(mesh) {
+			return physics_meshpart_shape(service, mesh, scale)
+		}
 		if shape := physics_meshpart_shape(service, mesh, scale); shape != nil {
 			return shape
 		}
@@ -191,6 +196,11 @@ physics_capsule_shape :: proc(size: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 	return kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
 }
 
+physics_is_mesh_operation :: proc(mesh: ^classes.MeshPart) -> bool {
+	return classes.Is_A_Class(&mesh.object, &classes.PartOperation_Class) &&
+	       (classes.MeshPart_Source_Path(mesh) != "" || mesh.editable_mesh_id != 0)
+}
+
 physics_meshpart_shape :: proc(
 	service: ^Physics,
 	mesh_part: ^classes.MeshPart,
@@ -198,7 +208,13 @@ physics_meshpart_shape :: proc(
 ) -> kineffi.JPH_ShapeRef {
 	if classes.Is_A(&mesh_part.object, "MeshPart") &&
 	   (classes.MeshPart_Source_Path(mesh_part) != "" || mesh_part.editable_mesh_id != 0) {
-		#partial switch mesh_part.collision_fidelity {
+		fidelity := mesh_part.collision_fidelity
+		if physics_is_mesh_operation(mesh_part) && fidelity != .Box && fidelity != .Hull {
+			effective := enums.CollisionFidelity.PreciseConvexDecomposition
+			if mesh_part.anchored {effective = .TriangleMesh}
+			return physics_cached_mesh_shape(service, mesh_part, scale, effective)
+		}
+		#partial switch fidelity {
 		case .Box:
 			half := datatypes.Vector3 {
 				max(mesh_part.size.x * 0.5, 0.001),
@@ -210,7 +226,7 @@ physics_meshpart_shape :: proc(
 		case .Hull, .Default:
 			return physics_mesh_hull_shape(mesh_part, scale)
 		case .PreciseConvexDecomposition:
-			return physics_mesh_pcd_shape(service, mesh_part, scale)
+			return physics_cached_mesh_shape(service, mesh_part, scale, .PreciseConvexDecomposition)
 		case .TriangleMesh:
 			if mesh_part.anchored {
 				return physics_static_triangle_mesh_shape(mesh_part, scale)
@@ -260,21 +276,28 @@ physics_load_mesh_data :: proc(
 	bool,
 ) {
 
-
-	resolved := assetstore.Resolve_Path(classes.MeshPart_Source_Path(mesh_part))
-	defer delete(resolved)
-	if resolved == "" {
-
-
-		assetstore.Report_Missing_Asset(
-			classes.MeshPart_Source_Path(mesh_part),
-			"Physics collision mesh",
-		)
-		return nil, nil, false
+	uri := classes.MeshPart_Source_Path(mesh_part)
+	data: ^kineffi.KineFilamentMeshData
+	when ODIN_OS != .JS {
+		if bytes, found := assetstore.Resolve_Bytes(uri); found && len(bytes) > 0 {
+			hint := assetstore.Format_Hint(uri)
+			defer delete(hint)
+			c_hint := strings.clone_to_cstring(hint)
+			defer delete(c_hint)
+			data = kineffi.Kine_Filament_LoadMeshDataFromMemoryIndexed(
+				raw_data(bytes), uintptr(len(bytes)), c_hint, mesh_part.mesh_index,
+			)
+		}
 	}
-	c_path := strings.clone_to_cstring(resolved)
-	defer delete(c_path)
-	data := kineffi.Kine_Filament_LoadMeshDataFromPathIndexed(c_path, mesh_part.mesh_index)
+	if data == nil {
+		resolved := assetstore.Resolve_C_Path(uri)
+		if resolved == nil {
+			assetstore.Report_Missing_Asset(uri, "Physics collision mesh")
+			return nil, nil, false
+		}
+		defer delete(resolved)
+		data = kineffi.Kine_Filament_LoadMeshDataFromPathIndexed(resolved, mesh_part.mesh_index)
+	}
 	if data == nil {
 		return nil, nil, false
 	}
@@ -315,7 +338,9 @@ physics_mesh_hull_shape :: proc(
 	if mesh_part.editable_mesh_id != 0 {
 		verts, ok = physics_editable_mesh_vertices(mesh_part)
 	} else {
-		verts, _, ok = physics_load_mesh_data(mesh_part)
+		indices: [dynamic]u32
+		verts, indices, ok = physics_load_mesh_data(mesh_part)
+		delete(indices)
 	}
 	if !ok {
 		return nil
@@ -401,65 +426,63 @@ physics_editable_mesh_triangles :: proc(
 	return verts, idx, true
 }
 
-physics_mesh_pcd_shape :: proc(
+physics_cached_mesh_shape :: proc(
 	service: ^Physics,
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
+	fidelity: enums.CollisionFidelity,
 ) -> kineffi.JPH_ShapeRef {
-	editable := mesh_part.editable_mesh_id != 0
-	version := u64(0)
-	if editable {
-		mesh := classes.EditableMesh_Of_Handle(mesh_part.editable_mesh_id)
-		if mesh != nil {
-			version = mesh.version
-		}
-	}
 	key := Physics_Shape_Cache_Key {
-		mesh_id               = strings.clone(classes.MeshPart_Source_Path(mesh_part)),
+		mesh_id               = classes.MeshPart_Source_Path(mesh_part),
 		mesh_index            = mesh_part.mesh_index,
 		editable_mesh_id      = mesh_part.editable_mesh_id,
-		editable_mesh_version = version,
+		editable_mesh_version = physics_mesh_part_version(mesh_part),
 		size                  = mesh_part.size,
+		fidelity              = fidelity,
 	}
-	if service != nil && service.pcd_cache != nil {
-		if cached, ok := service.pcd_cache[key]; ok {
-			delete(key.mesh_id)
+	if service != nil {
+		if cached, ok := service.mesh_shape_cache[key]; ok {
 			kineffi.JPH_Shape_AddRef(cached)
 			return cached
 		}
 	}
+
+	shape: kineffi.JPH_ShapeRef
+	if fidelity == .TriangleMesh {
+		shape = physics_static_triangle_mesh_shape(mesh_part, scale)
+	} else {
+		shape = physics_mesh_pcd_shape(mesh_part, scale)
+	}
+	if shape != nil && service != nil && service.mesh_shape_cache != nil {
+		key.mesh_id = strings.clone(key.mesh_id)
+		service.mesh_shape_cache[key] = shape
+		kineffi.JPH_Shape_AddRef(shape)
+	}
+	return shape
+}
+
+physics_mesh_pcd_shape :: proc(
+	mesh_part: ^classes.MeshPart,
+	scale: datatypes.Vector3,
+) -> kineffi.JPH_ShapeRef {
 	verts: []kineffi.JPH_Vec3
 	idx: [dynamic]u32
 	ok := false
-	if editable {
+	if mesh_part.editable_mesh_id != 0 {
 		verts, idx, ok = physics_editable_mesh_triangles(mesh_part)
 	} else {
 		verts, idx, ok = physics_load_mesh_data(mesh_part)
 	}
-	if !ok {
-		delete(key.mesh_id)
-		return nil
-	}
+	if !ok {return nil}
 	defer delete(verts)
 	defer delete(idx)
-	shape := kineffi.JPH_VHACD_Compound_Create(
+	return kineffi.JPH_VHACD_Compound_Create(
 		raw_data(verts),
 		u32(len(verts)),
 		raw_data(idx),
 		u32(len(idx)),
 		&kineffi.JPH_Vec3{scale.x, scale.y, scale.z},
 	)
-	if shape == nil {
-		delete(key.mesh_id)
-		return nil
-	}
-	if service != nil && service.pcd_cache != nil {
-		service.pcd_cache[key] = shape
-		kineffi.JPH_Shape_AddRef(shape)
-		return shape
-	}
-	delete(key.mesh_id)
-	return shape
 }
 
 part_in_character_model :: proc(part: ^classes.Part) -> bool {
@@ -1104,6 +1127,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		return
 	}
 	sync_epoch := service.sync_epoch
+	service.weld_groups_dirty = true
 
 
 	tracy.ZoneNC("Physics Ownership", 0xE06C75)
@@ -1354,9 +1378,22 @@ Physics_Ensure_Character_Capsule :: proc(
 	coll: ^classes.CollisionController,
 	root: ^classes.Part,
 	position: datatypes.Vector3,
+	deformable_only := false,
 ) {
 	if service == nil || coll == nil || root == nil || !service.initialized {return}
-	if coll.body_created {return}
+	layer := jolt.OBJECT_LAYER_DEFORMABLE_CAPSULE if deformable_only else jolt.OBJECT_LAYER_MOVING
+	if coll.body_created {
+		if coll.deformable_only != deformable_only {
+			kineffi.JPH_BodyInterface_SetObjectLayer(service.system.body_interface, coll.body_id, layer)
+			coll.deformable_only = deformable_only
+			if deformable_only {
+				delete_key(&service.body_to_part, coll.body_id)
+			} else {
+				service.body_to_part[coll.body_id] = root
+			}
+		}
+		return
+	}
 	if coll.touching_prev == nil {
 		coll.touching_prev = make(map[kineffi.JPH_BodyID]bool)
 	}
@@ -1373,7 +1410,7 @@ Physics_Ensure_Character_Capsule :: proc(
 		&pos,
 		&identity,
 		motion,
-		jolt.OBJECT_LAYER_MOVING,
+		layer,
 	)
 	if settings == nil {return}
 	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
@@ -1387,7 +1424,8 @@ Physics_Ensure_Character_Capsule :: proc(
 	activation: kineffi.JPH_ActivationMode = coll.ragdoll ? .Activate : .DontActivate
 	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, activation)
 	coll.body_id = body_id
-	service.body_to_part[coll.body_id] = root
+	if !deformable_only {service.body_to_part[coll.body_id] = root}
+	coll.deformable_only = deformable_only
 	coll.body_created = true
 }
 
@@ -1495,7 +1533,7 @@ Physics_Advance_Character_Capsule :: proc(
 		resting_point = to
 	} else {
 		resting_point = from
-		if speed_squared > CHARACTER_MIN_WAKE_SPEED * CHARACTER_MIN_WAKE_SPEED {
+		if !coll.deformable_only && speed_squared > CHARACTER_MIN_WAKE_SPEED * CHARACTER_MIN_WAKE_SPEED {
 			Physics_Wake_Character_Neighbors(service, coll, from, to)
 		}
 	}
@@ -1611,6 +1649,7 @@ Physics_Destroy_Character_Capsule :: proc(service: ^Physics, coll: ^classes.Coll
 		}
 		delete_key(&service.body_to_part, coll.body_id)
 		coll.body_created = false
+		coll.deformable_only = false
 		coll.body_id = kineffi.JPH_BODY_ID_INVALID
 	}
 	if coll.shape != nil {
@@ -1651,6 +1690,15 @@ Physics_Fill_Candidate_Bodies :: proc(
 
 		if static_only && !body.anchored && !body.remote {continue}
 		append(out, body.body_id)
+	}
+	if softbodies := classes.Find_Class(service.signal_registry, "SoftBody"); softbodies != nil {
+		for object in softbodies.instances {
+			body := cast(^classes.SoftBody)object
+			if !body.destroyed && body.enabled && body.anchored &&
+			   body.anchor_body_id != kineffi.JPH_BODY_ID_INVALID {
+				append(out, body.anchor_body_id)
+			}
+		}
 	}
 }
 
@@ -1699,7 +1747,7 @@ Physics_Character_Report_Overlaps :: proc(
 		body_id := results[i]
 		if body_id == coll.body_id {continue}
 		part := physics_part_for_body(service, body_id)
-		if part == nil || part == root {continue}
+		if part == root || (part == nil && physics_softbody_for_anchor(service, body_id) == nil) {continue}
 		Physics_Character_Report_Contact(service, coll, root, body_id)
 	}
 }
@@ -1737,7 +1785,7 @@ physics_fire_touched :: proc(
 ) {
 	if service == nil || body_id == kineffi.JPH_BODY_ID_INVALID || owner == nil {return}
 	part := physics_part_for_body(service, body_id)
-	if part == nil || part == owner {return}
+	if part == owner {return}
 	L: ^vm.State
 	if service.data_model != nil &&
 	   service.data_model.registry != nil &&
@@ -1746,6 +1794,12 @@ physics_fire_touched :: proc(
 		L = service.data_model.registry.vm_state.L
 	}
 	if L == nil {return}
+	if part == nil {
+		if body := physics_softbody_for_anchor(service, body_id); body != nil {
+			physics_fire_deformable_touched(L, body, owner)
+		}
+		return
+	}
 	part_touched(part, owner, L)
 	part_touched(owner, part, L)
 }

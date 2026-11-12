@@ -399,7 +399,7 @@ foreign lib {
 	JPH_MeshSoftBody_Read :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, vertices: [^]JPH_Vec3, vertex_count: u32, position: ^JPH_RVec3, rotation: ^JPH_Quat) -> i32 ---
 	JPH_MeshSoftBody_ApplyImpulse :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, impulse: ^JPH_Vec3) ---
 	JPH_MeshSoftBody_RetainShape :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, strength, delta_time: f32) ---
-	JPH_MeshSoftBody_Collide :: proc(system: JPH_PhysicsSystemRef, bodies: [^]JPH_SoftBodyCollider, count: u32, rigid_bodies: [^]JPH_BodyID, rigid_count: u32, delta_time: f32) ---
+	JPH_MeshSoftBody_Collide :: proc(system: JPH_PhysicsSystemRef, bodies: [^]JPH_SoftBodyCollider, count: u32, rigid_bodies: [^]JPH_BodyID, rigid_count: u32, delta_time: f32, deformable_capsule_layer: JPH_ObjectLayer, on_contact: proc "c" (u32, JPH_BodyID, rawptr), user_data: rawptr) ---
 	JPH_PhysicsSystem_SetContactListener :: proc(system: JPH_PhysicsSystemRef, listener: JPH_ContactListenerRef) ---
 	JPH_PhysicsSystem_GetMaxBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
 	JPH_PhysicsSystem_GetNumBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
@@ -500,6 +500,7 @@ foreign lib {
 
 	JPH_PhysicsSystem_CastRayAll :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, direction: ^JPH_Vec3, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outResults: [^]JPH_RayCastResult, maxResults: u32) -> u32 ---
 	JPH_PhysicsSystem_CastShape :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, displacement: ^JPH_Vec3, shape: JPH_ShapeRef, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, maxDistance: f32, outResult: ^JPH_RayCastResult) -> i32 ---
+	JPH_PhysicsSystem_CastShapeDetailed :: proc(system: JPH_PhysicsSystemRef, origin: ^JPH_RVec3, displacement: ^JPH_Vec3, shape: JPH_ShapeRef, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, maxDistance: f32, outResult: ^JPH_RayCastResult, outPenetrationDepth: ^f32) -> i32 ---
 
 	JPH_PhysicsSystem_OverlapShape :: proc(system: JPH_PhysicsSystemRef, shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outBodyIDs: [^]JPH_BodyID, maxResults: u32) -> u32 ---
 	JPH_PhysicsSystem_OverlapShapeEx :: proc(system: JPH_PhysicsSystemRef, shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, maxSeparationDistance: f32, planarOnly: i32, bodyIDs: [^]JPH_BodyID, bodyIDCount: u32, filterMode: JPH_RayFilterMode, outBodyIDs: [^]JPH_BodyID, maxResults: u32) -> u32 ---
@@ -529,6 +530,7 @@ foreign lib {
 	JPH_BodyInterface_GetGravityFactor :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) -> f32 ---
 	JPH_BodyInterface_SetUserData :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, userData: u64) ---
 	JPH_BodyInterface_GetUserData :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID) -> u64 ---
+	JPH_BodyInterface_SetWeldGroup :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID, groupID: JPH_BodyID) ---
 	JPH_BodyInterface_SetPosition :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, position: ^JPH_RVec3, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_SetPositionAndRotation :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, position: ^JPH_RVec3, rotation: ^JPH_Quat, activationMode: JPH_ActivationMode) ---
 	JPH_BodyInterface_SetRotation :: proc(bodyInterface: JPH_BodyInterfaceRef, bodyID: JPH_BodyID, rotation: ^JPH_Quat, activationMode: JPH_ActivationMode) ---

@@ -25,6 +25,7 @@ MeshPart :: struct {
 	editable_mesh_id:      u32,
 	editable_mesh_version: u64,
 	native_is_editable:    bool,
+	use_part_color:        bool,
 }
 
 MeshPart_Init :: proc() -> MeshPart {
@@ -66,6 +67,7 @@ mesh_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	delete(mesh_part.native_mesh_id)
 	delete(mesh_part.texture_id)
 	delete(mesh_part.collision_group)
+	delete(mesh_part.material_variant)
 	delete(mesh_part.mesh_content.uri)
 
 	Object_Destroy(object)
@@ -87,6 +89,10 @@ mesh_part_get :: proc(
 	mesh_part := cast(^MeshPart)object
 
 	switch key {
+	case "UsePartColor":
+		if !Is_A_Class(object, &PartOperation_Class) {return false}
+		vm.PushBoolean(L, mesh_part.use_part_color)
+
 	case "MeshId":
 		vm.PushString(L, mesh_part.mesh_id)
 
@@ -96,7 +102,7 @@ mesh_part_get :: proc(
 	case "MeshContent":
 		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(mesh_part.mesh_content))
 
-	case "TextureId":
+	case "TextureId", "TextureID":
 		vm.PushString(L, mesh_part.texture_id)
 
 	case "CollisionFidelity":
@@ -126,6 +132,10 @@ mesh_part_set :: proc(
 	mesh_part := cast(^MeshPart)object
 
 	switch key {
+	case "UsePartColor":
+		if !Is_A_Class(object, &PartOperation_Class) {return false}
+		mesh_part.use_part_color = vm.ArgBoolean(L, value_index)
+
 	case "MeshId":
 		delete(mesh_part.mesh_id)
 		mesh_part.mesh_id = strings.clone(vm.ArgString(L, value_index))
@@ -133,11 +143,13 @@ mesh_part_set :: proc(
 		mesh_part.mesh_content = datatypes.Content{}
 		mesh_part.editable_mesh_id = 0
 		mesh_part.editable_mesh_version = 0
+		Hierarchy_Touched()
 
 	case "MeshIndex":
 		index := vm.ArgNumber(L, value_index)
-		if index >= 0 && index <= f64(max(u32)) {
+		if index >= 0 && index <= f64(max(u32)) && mesh_part.mesh_index != u32(index) {
 			mesh_part.mesh_index = u32(index)
+			Hierarchy_Touched()
 		}
 
 	case "MeshContent":
@@ -150,16 +162,18 @@ mesh_part_set :: proc(
 			mesh_part.editable_mesh_id = 0
 		}
 		mesh_part.editable_mesh_version = 0
+		Hierarchy_Touched()
 
-	case "TextureId":
+	case "TextureId", "TextureID":
 		delete(mesh_part.texture_id)
 		mesh_part.texture_id = strings.clone(vm.ArgString(L, value_index))
 
 	case "CollisionFidelity":
 		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "CollisionFidelity")
-		if item != nil {
+		if item != nil && mesh_part.collision_fidelity != enums.CollisionFidelity(item.value) {
 			mesh_part.collision_fidelity = enums.CollisionFidelity(item.value)
+			Hierarchy_Touched()
 		}
 
 	case:
@@ -196,6 +210,7 @@ mesh_part_namecall :: proc(
 			mesh_part.editable_mesh_id = 0
 		}
 		mesh_part.editable_mesh_version = 0
+		Hierarchy_Touched()
 		return 0, true
 	case:
 	}

@@ -1,13 +1,14 @@
 #+build !js
 package services
 
-import "core:fmt"
-import "core:strings"
-import "core:slice"
 import assetstore "../assetstore"
 import classes "../classes"
 import serializer "../serializer"
 import vm "../vm"
+import "core:fmt"
+import "core:slice"
+import "core:strings"
+
 map_instance_count :: proc(object: ^classes.Object) -> int {
 	if object == nil || object.destroyed {return 0}
 	count := 1
@@ -16,42 +17,53 @@ map_instance_count :: proc(object: ^classes.Object) -> int {
 }
 
 map_keep_child :: proc(parent, child: ^classes.Object) -> bool {
-	return child.editor_scene_helper || (classes.Is_A(parent, "Workspace") && classes.Is_A(child, "Camera"))
+	return(
+		child.editor_scene_helper ||
+		(classes.Is_A(parent, "Workspace") && classes.Is_A(child, "Camera")) \
+	)
 }
 
 clear_editor_selection :: proc(registry: ^Registry, L: ^vm.State) {
 	if registry.mode != .Editor {return}
-	if descriptor := Find_Service(registry, "Selection"); descriptor != nil && descriptor.object != nil {
+	if descriptor := Find_Service(registry, "Selection");
+	   descriptor != nil && descriptor.object != nil {
 		Selection_Set(cast(^Selection)descriptor.object, L, nil)
 	}
 }
 
 map_is_saved_editor_helper :: proc(kept: []^classes.Object, child: ^classes.Object) -> bool {
 	for live in kept {
-		if live.editor_scene_helper && live.name == child.name && live.class == child.class {return true}
+		if live.editor_scene_helper &&
+		   live.name == child.name &&
+		   live.class == child.class {return true}
 	}
 	return false
 }
 
-Restore_Map :: proc(registry: ^Registry, L: ^vm.State, data: []u8, name: string, clear_assets := true) -> bool {
-	// A new map brings its own assets, so the previous map's must not linger.
-	// Clearing first also keeps a stale entry from colliding with a new content
-	// id and making a perfectly good stream look corrupt.
+Restore_Map :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	data: []u8,
+	name: string,
+	clear_assets := true,
+) -> bool {
 	if clear_assets {assetstore.Clear()}
 
-	// The voxel grid rides in the format's own section rather than the tree,
-	// because Terrain is a singleton service and not an Instance.
 	terrain_table: serializer.Kine_Terrain
 	defer serializer.Kine_Terrain_Destroy(&terrain_table)
 
-	root, err := serializer.Deserialize_From_Data(registry.classes, L, nil, data, &terrain_table)
+	service_properties: serializer.Loaded_Service_Properties
+	defer serializer.Loaded_Service_Properties_Destroy(L, service_properties)
+	root, err := serializer.Deserialize_From_Data(
+		registry.classes,
+		L,
+		nil,
+		data,
+		&terrain_table,
+		&service_properties,
+	)
 	if root == nil || !serializer.Error_Is_None(err) {
-		// Leave nothing half-published behind from a stream that did not load.
 		if clear_assets {assetstore.Clear()}
-		// The serializer names the section, instance, or byte offset that broke,
-		// so a rejected map can be diagnosed without guessing which part of it is
-		// at fault. Cloned because fmt.tprintf allocates from the temp arena,
-		// whose memory must never be freed.
 		prefix := strings.clone(fmt.tprintf("Could not load .kine map %s: ", name))
 		defer delete(prefix)
 		serializer.Error_Print(err, prefix)
@@ -66,20 +78,41 @@ Restore_Map :: proc(registry: ^Registry, L: ^vm.State, data: []u8, name: string,
 	}
 
 	clear_editor_selection(registry, L)
+	classes.Object_Replace_Metadata(L, root, &registry.data_model.object)
+
+	// Services are singletons selected by class. Prefer the canonical name if
+	// a file contains both it and a renamed copy of the same service.
+	saved_services: map[string]^classes.Object
+	defer delete(saved_services)
+	for source in root.children {
+		class_name := classes.Get_Class_Name(source)
+		if !classes.Is_A(source, "Service") || !Map_Content_Service(class_name) {continue}
+		if class_name not_in saved_services || source.name == class_name {
+			saved_services[class_name] = source
+		}
+	}
 
 	service_count := 0
 	instance_count := 0
 	for len(root.children) > 0 {
 		source := root.children[len(root.children) - 1]
-		if !classes.Is_A(source, "Service") || !Map_Content_Service(source.name) {
+		class_name := classes.Get_Class_Name(source)
+		if saved_services[class_name] != source {
 			classes.Destroy_Hierarchy(source)
 			continue
 		}
-		target := Ensure_Service(registry, source.name)
-		if target == nil || classes.Get_Class_Name(target) != classes.Get_Class_Name(source) {
+		target := Ensure_Service(registry, class_name)
+		if target == nil || classes.Get_Class_Name(target) != class_name {
 			classes.Destroy_Hierarchy(source)
 			continue
 		}
+		serializer.Apply_Loaded_Service_Properties(
+			L,
+			registry.classes,
+			target,
+			service_properties[source][:],
+		)
+		classes.Object_Replace_Metadata(L, source, target)
 		for {
 			removed := false
 			for child in target.children {

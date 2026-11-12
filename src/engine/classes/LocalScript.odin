@@ -57,6 +57,8 @@ LocalScript_get :: proc(
 		vm.PushString(L, script.source)
 	case "Enabled":
 		vm.PushBoolean(L, script.enabled)
+	case "Disabled":
+		vm.PushBoolean(L, !script.enabled)
 	case:
 		return false
 	}
@@ -77,6 +79,8 @@ LocalScript_set :: proc(
 		LocalScript_Set_Source(script, vm.ArgString(L, value_index))
 	case "Enabled":
 		Script_Common_Set_Enabled(&script.common, vm.ArgBoolean(L, value_index))
+	case "Disabled":
+		Script_Common_Set_Enabled(&script.common, !vm.ArgBoolean(L, value_index))
 	case:
 		return false
 	}
@@ -86,6 +90,7 @@ LocalScript_set :: proc(
 LocalScript_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	script := cast(^LocalScript)object
 	L := script_vm_state(object.signal_registry)
+	require_invalidate_object(&script.common, object)
 	Script_Release_Module(L, &script.common)
 	Script_Release_Thread(L, &script.common)
 	delete(script.source)

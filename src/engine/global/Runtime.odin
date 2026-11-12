@@ -245,17 +245,15 @@ runtime_global_collectgarbage :: proc "c" (L: ^vm.State) -> i32 {
 
 runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
-	vm.PushGlobals(L)
-	if vm.GetField(L, -1, "Studio") == .Nil {
-		vm.Pop(L, 2)
-		vm.PushNil(L)
-		return 1
+	vm.NewTable(L, 0, 1)
+	if vm.GetGlobal(L, "Studio") != .Nil {
+		vm.SetField(L, -2, "Studio")
+	} else {
+		vm.Pop(L)
 	}
-	vm.Remove(L, -2)
 	return 1
 }
 
-settings_studio: bool
 
 runtime_install_time_global :: proc(vm_state: ^vm.VM) {
 	assert(vm_state != nil)
@@ -292,4 +290,12 @@ Install_Runtime_Globals :: proc(vm_state: ^vm.VM) {
 	runtime_install_runtime_global(vm_state)
 	runtime_install_luau_global(vm_state)
 	runtime_install_time_global(vm_state)
+	vm.PushFunction(vm_state.L, "version", runtime_global_version, 0)
+	vm.SetGlobalFromStack(vm_state, "version")
+}
+
+runtime_global_version :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	vm.PushString(L, RUNTIME_VERSION_DISPLAY)
+	return 1
 }

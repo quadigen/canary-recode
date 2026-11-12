@@ -73,6 +73,10 @@ ScreenGui_get :: proc(
 		vm.PushNumber(L, ScreenGui.displayorder)
 	case "ClipToDeviceSafeArea":
 		vm.PushBoolean(L, ScreenGui.clip_to_device_safe_area)
+	case "SafeAreaCompatibility":
+		_ = enums.Push_Item_By_Value(L, enum_registry, "SafeAreaCompatibility", i64(ScreenGui.safe_area_compat))
+	case "ScreenInsets":
+		_ = enums.Push_Item_By_Value(L, enum_registry, "ScreenInsets", i64(ScreenGui.screen_insets))
 	case "IgnoreGuiInset":
 		vm.PushBoolean(L, ScreenGui.ignore_gui_inset)
 	case "RenderOnTop":
@@ -129,6 +133,9 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 
 	case Is_A_Class(child, &ImageButton_Class):
 		ImageButton_render(child, ctx)
+
+	case Is_A_Class(child, &CanvasGroup_Class):
+		CanvasGroup_render(child, ctx)
 
 	case Is_A_Class(child, &Frame_Class):
 		Frame_render(child, ctx)
@@ -324,6 +331,9 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 			"ResetOnSpawn",
 			"DisplayOrder",
 			"ClipToDeviceSafeArea",
+			"SafeAreaCompatibility",
+			"ScreenInsets",
+			"AutoLocalize",
 			"Enabled",
 			"IgnoreGuiInset",
 			"RenderOnTop",

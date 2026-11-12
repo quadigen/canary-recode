@@ -205,6 +205,13 @@ script_context_is_active :: proc(object: ^classes.Object) -> bool {
 	return false
 }
 
+script_has_ancestor :: proc(object: ^classes.Object, class_name: string) -> bool {
+	for ancestor := object.parent; ancestor != nil; ancestor = ancestor.parent {
+		if classes.Is_A(ancestor, class_name) {return true}
+	}
+	return false
+}
+
 script_context_should_run :: proc(
 	script_context: ^ScriptContext,
 	mode: target.Mode,
@@ -221,23 +228,36 @@ script_context_should_run :: proc(
 	   !PlayerGui_Can_Display(object, script_context.service.data_model) {
 		return false
 	}
+	if kind == .Script {
+		switch (cast(^classes.Script)object).run_context {
+		case .Legacy:
+			if !script_has_ancestor(object, "Workspace") &&
+			   !script_has_ancestor(object, "ServerScriptService") {
+				return false
+			}
+		case .Plugin: return false
+		case .Client, .Server:
+			if script_has_ancestor(object, "ServerStorage") {return false}
+		}
+	}
+	runs_on_client := classes.Script_Runs_On_Client(object, kind)
+	if runs_on_client &&
+	   (script_has_ancestor(object, "ServerScriptService") ||
+	    script_has_ancestor(object, "ServerStorage")) {
+		return false
+	}
 	switch mode {
-	case .Server:
-		return kind == .Script
+	case .Server: return !runs_on_client
 	case .Client:
-		return kind == .LocalScript
-	case .Standalone:
-		return kind == .Script || kind == .LocalScript
+		if !runs_on_client {return false}
+		if script_has_ancestor(object, "ReplicatedFirst") {return true}
+		replicator := cast(^ReplicatorService)Service_Get_Service(&script_context.service, "ReplicatorService")
+		return !replication_uses_server_player_gui(replicator) || replicator.replication_finished
+	case .Standalone: return true
 	case .Singleplayer:
-		if kind == .Script {
-			return ScriptContext_Runs_Server_Scripts(script_context)
-		}
-		if kind == .LocalScript {
-			return ScriptContext_Runs_Client_Scripts(script_context)
-		}
-		return false
-	case .Editor:
-		return false
+		return runs_on_client ? ScriptContext_Runs_Client_Scripts(script_context) :
+		                       ScriptContext_Runs_Server_Scripts(script_context)
+	case .Editor: return false
 	}
 	return false
 }
@@ -633,6 +653,9 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 			}
 
 			if !script_context_should_run(script_context, mode, instance) {
+				if common.execution_state == .Started {
+					script_context_restart_script(script_context, instance, common)
+				}
 				continue
 			}
 

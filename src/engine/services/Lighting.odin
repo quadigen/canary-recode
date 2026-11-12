@@ -2,7 +2,9 @@ package services
 // wire:service
 
 
+import "core:fmt"
 import "core:math"
+import "core:strconv"
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -769,6 +771,10 @@ lighting_get :: proc(
 	case "ClockTime":
 		vm.PushNumber(L, service.clock_time)
 
+	case "TimeOfDay":
+		seconds := int(math.round(service.clock_time * 3600)) % 86400
+		vm.PushString(L, fmt.tprintf("%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60))
+
 	case "Brightness":
 		vm.PushNumber(L, service.brightness)
 
@@ -825,6 +831,22 @@ lighting_set :: proc(
 	switch key {
 	case "ClockTime":
 		service.clock_time = lighting_wrap_clock_time(vm.ArgNumber(L, value_index))
+
+	case "TimeOfDay":
+		time := vm.ArgString(L, value_index)
+		if len(time) != 8 || time[2] != ':' || time[5] != ':' {
+			_ = vm.RaiseError(L, "TimeOfDay must be in HH:MM:SS format")
+			return true
+		}
+		hour, hour_ok := strconv.parse_int(time[:2], 10)
+		minute, minute_ok := strconv.parse_int(time[3:5], 10)
+		second, second_ok := strconv.parse_int(time[6:], 10)
+		if !hour_ok || !minute_ok || !second_ok || hour < 0 || hour > 23 ||
+		   minute < 0 || minute > 59 || second < 0 || second > 59 {
+			_ = vm.RaiseError(L, "TimeOfDay must be in HH:MM:SS format")
+			return true
+		}
+		service.clock_time = f64(hour * 3600 + minute * 60 + second) / 3600
 
 	case "Brightness":
 		service.brightness = max(0.0, vm.ArgNumber(L, value_index))

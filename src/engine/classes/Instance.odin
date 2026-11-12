@@ -51,6 +51,11 @@ INSTANCE_PROPERTIES := []string{
 INSTANCE_METHODS := []string{
 	"Clone",
 	"Destroy",
+	"ClearAllChildren",
+	"AddTag",
+	"RemoveTag",
+	"HasTag",
+	"GetTags",
 	"FindFirstChild",
 	"FindFirstChildOfClass",
 	"GetChildren",

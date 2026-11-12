@@ -12,6 +12,20 @@ Push_Rect :: proc(L: ^vm.State, registry: ^Registry, value: Rect) {
 	push_rect(L, &registry.rect, value)
 }
 
+Arg_Rect :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Rect {
+	return require_rect(L, index, &registry.rect)^
+}
+
+require_rect :: proc(L: ^vm.State, index: int, binding: ^vm.Userdata_Binding) -> ^Rect {
+	if !vm.IsUserdataType(L, index, binding) {
+		_ = vm.RaiseError(L, "expected Rect")
+		return nil
+	}
+
+	return cast(^Rect)vm.UserdataValue(L, index)
+}
+
+
 rect_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)

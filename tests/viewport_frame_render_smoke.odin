@@ -5,6 +5,7 @@ import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import "core:fmt"
+import "core:time"
 import sdl3 "vendor:sdl3"
 
 pixel :: proc(surface: ^kineffi.KineSkiaSurface, x, y: i32) -> [4]u8 {
@@ -196,6 +197,8 @@ preview.CurrentCamera.CFrame=CFrame.lookAt(Vector3.new(4,3,6),Vector3.zero)
 		"debug",
 	}
 	wood_signature, brick_signature: u64
+	descriptor := classes.Find_Class(&env.classes, "ViewportFrame")
+	preview := cast(^classes.ViewportFrame)descriptor.instances[0]
 	for material in material_names {
 		command := fmt.tprintf(
 			"part.Shape=Enum.PartType.Ball;part.Material=Enum.Material.%s;part.Transparency=0",
@@ -203,16 +206,19 @@ preview.CurrentCamera.CFrame=CFrame.lookAt(Vector3.new(4,3,6),Vector3.zero)
 		)
 		ok, err = vm.Run(&script_vm, command, "preview_material"); assert(ok, err)
 		signature, coverage := capture_preview(&env, &script_vm, filament, compositor)
+		if material == "Wood" || material == "Brick" {
+			// Built-in textures are decoded on a worker and published during rendering.
+			started := time.tick_now()
+			for len(preview.items) == 1 && preview.items[0].tex == nil && time.tick_since(started) < 3 * time.Second {
+				signature, coverage = capture_preview(&env, &script_vm, filament, compositor)
+			}
+			assert(len(preview.items) == 1 && preview.items[0].tex != nil, "material texture was not submitted")
+		}
 		fmt.printf("MATERIAL %s coverage=%d\n", material, coverage)
 		assert(coverage > 0, "preview material did not render")
 		if material ==
 		   "Wood" {wood_signature = signature}; if material == "Brick" {brick_signature = signature}
-		descriptor := classes.Find_Class(&env.classes, "ViewportFrame")
-		preview := cast(^classes.ViewportFrame)descriptor.instances[0]
 		assert(len(preview.items) == 1 && preview.items[0].mesh != nil)
-		if material == "Wood" ||
-		   material ==
-			   "Brick" {assert(preview.items[0].tex != nil, "material texture was not submitted")}
 	}
 	assert(wood_signature != brick_signature, "Wood and Brick produced identical previews")
 	ok, err = vm.Run(&script_vm, "preview.Visible=false", "hide_preview")

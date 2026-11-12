@@ -12,8 +12,6 @@ import "core:strings"
 
 TERRAIN_HEIGHTFIELD_MAX_SEGMENTS :: 256
 
-// Bake a local height function to an embedded, indexed mesh. MeshPart assets
-// use local positions scaled by Size / 2 for both rendering and collision.
 terrain_bake_heightfield :: proc(
 	L: ^vm.State,
 	size: datatypes.Vector2,

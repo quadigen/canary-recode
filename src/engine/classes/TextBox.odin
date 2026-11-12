@@ -43,6 +43,8 @@ TextBox :: struct {
 	text:                   string,
 	placeholder_text:       string,
 	text_size:              f32,
+	text_x_alignment:       enums.TextXAlignment,
+	text_y_alignment:       enums.TextYAlignment,
 	text_color3:            datatypes.Color3,
 	placeholder_color3:     datatypes.Color3,
 	text_transparency:      f32,
@@ -109,6 +111,8 @@ TextBox_Init :: proc() -> TextBox {
 		text = strings.clone(""),
 		placeholder_text = strings.clone(""),
 		text_size = 16,
+		text_x_alignment = .Left,
+		text_y_alignment = .Center,
 		text_color3 = datatypes.Color3{0, 0, 0},
 		placeholder_color3 = datatypes.Color3{0.5, 0.5, 0.5},
 		text_transparency = 0,
@@ -552,7 +556,12 @@ text_box_measure_range :: proc(box: ^TextBox, start: int, finish: int) -> f32 {
 		return 0
 	}
 
-	value := text_box_display_cstring(box.text[a:b], box.tab_size)
+	return text_box_measure_text(box, box.text[a:b])
+}
+
+text_box_measure_text :: proc(box: ^TextBox, text: string) -> f32 {
+	if len(text) == 0 {return 0}
+	value := text_box_display_cstring(text, box.tab_size)
 	defer delete(value)
 
 	if box.stored_typeface != nil {
@@ -2803,6 +2812,16 @@ text_box_measure_prefix :: proc(box: ^TextBox, byte_index: int) -> f32 {
 }
 
 
+text_box_horizontal_offset :: proc(box: ^TextBox, width, text_width: f32) -> f32 {
+	spare := max(width - text_width, 0)
+	switch box.text_x_alignment {
+	case .Left: return 0
+	case .Center: return spare * 0.5
+	case .Right: return spare
+	}
+	return 0
+}
+
 text_box_cursor_from_x :: proc(box: ^TextBox, mouse_x: f32) -> int {
 	if box == nil || len(box.text) == 0 {
 		return 0
@@ -2810,7 +2829,11 @@ text_box_cursor_from_x :: proc(box: ^TextBox, mouse_x: f32) -> int {
 
 	padding: f32 = 6
 
-	target := mouse_x - box.absolute_position.X - padding + box.scroll_x
+	offset: f32
+	if box.text_x_alignment != .Left {
+		offset = text_box_horizontal_offset(box, box.absolute_size.X - 2 * padding, text_box_measure_prefix(box, len(box.text)))
+	}
+	target := mouse_x - box.absolute_position.X - padding - offset + box.scroll_x
 
 	target = max(target, f32(0))
 
@@ -2978,6 +3001,10 @@ TextBox_get :: proc(
 		vm.PushNumber(L, f64(text_box_utf8_index_at(box.text, finish) + 1))
 		return true
 
+	case "TextXAlignment":
+		return enums.Push_Item_By_Value(L, enum_registry, "TextXAlignment", i64(box.text_x_alignment))
+	case "TextYAlignment":
+		return enums.Push_Item_By_Value(L, enum_registry, "TextYAlignment", i64(box.text_y_alignment))
 	case "Text":
 		vm.PushString(L, box.text)
 		return true
@@ -3192,6 +3219,12 @@ TextBox_set :: proc(
 
 		return true
 
+	case "TextXAlignment":
+		box.text_x_alignment = enums.TextXAlignment(enums.Arg_Item(L, value_index, enum_registry, "TextXAlignment").value)
+		return true
+	case "TextYAlignment":
+		box.text_y_alignment = enums.TextYAlignment(enums.Arg_Item(L, value_index, enum_registry, "TextYAlignment").value)
+		return true
 	case "Text":
 		text_box_set_text(box, vm.ArgString(L, value_index))
 
@@ -3683,7 +3716,17 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	box.scroll_x += (box.scroll_target_x - box.scroll_x) * scroll_lerp
 
 
-	baseline := rect.y + (rect.height - box.text_size) * 0.5 + box.text_size
+	text_x := rect.x + padding
+	if box.text_x_alignment != .Left {
+		text_x += text_box_horizontal_offset(box, available_width, text_box_measure_text(box, display_text))
+	}
+	spare_height := max(rect.height - box.text_size, 0)
+	baseline := rect.y + box.text_size
+	switch box.text_y_alignment {
+	case .Top: baseline += min(padding, spare_height)
+	case .Center: baseline += (rect.height - box.text_size) * 0.5
+	case .Bottom: baseline += max(spare_height - padding, 0)
+	}
 
 	guilib.save(surface)
 	defer guilib.restore(surface)
@@ -3698,7 +3741,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 		end_width := text_box_measure_prefix(box, selection_finish)
 
-		selection_x := rect.x + padding + start_width - box.scroll_x
+		selection_x := text_x + start_width - box.scroll_x
 
 		selection_width := max(end_width - start_width, f32(0))
 
@@ -3730,7 +3773,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				box,
 				highlight,
 				surface,
-				rect.x + padding,
+				text_x,
 				baseline,
 				0,
 				len(box.text),
@@ -3744,7 +3787,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 				surface,
 				text,
 				guilib.TextParams {
-					x = rect.x + padding - box.scroll_x,
+					x = text_x - box.scroll_x,
 					y = baseline,
 					TextSize = box.text_size,
 					color = display_color,
@@ -3772,7 +3815,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 		caret_alpha = clamp(caret_alpha, f32(0), f32(1))
 
-		caret_x := rect.x + padding + caret_width - box.scroll_x
+		caret_x := text_x + caret_width - box.scroll_x
 
 		vertical_padding := min(f32(4), rect.height * 0.2)
 
@@ -3843,6 +3886,8 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 	TextBox_Load_Typeface(dst)
 
 	dst.text_size = src.text_size
+	dst.text_x_alignment = src.text_x_alignment
+	dst.text_y_alignment = src.text_y_alignment
 
 	dst.text_color3 = src.text_color3
 
@@ -4364,6 +4409,8 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"TextTransparency",
 			"ClearTextOnFocus",
 			"TextEditable",
+			"TextXAlignment",
+			"TextYAlignment",
 			"SelectAllOnFocus",
 			"MaxLength",
 			"CaretColor3",

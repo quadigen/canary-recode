@@ -41,6 +41,12 @@ Replication_Capability_Group_Ownership :: u32(1 << 8)
 Replication_Capability_World_Gravity :: u32(1 << 9)
 Replication_Capability_Snapshot_Clock :: u32(1 << 10)
 Replication_Capability_Owned_Correction :: u32(1 << 11)
+Replication_Capability_Player_Gui :: u32(1 << 12)
+Replication_Capability_Script_Source :: u32(1 << 13)
+Replication_Capability_Metadata :: u32(1 << 14)
+Replication_Capability_Player_Reference :: u32(1 << 15)
+Replication_Capability_Buffer :: u32(1 << 16)
+Replication_Capability_Join_Batch :: u32(1 << 17)
 REPLICATION_SNAPSHOT_CLOCK_RATE :: 120
 
 
@@ -56,7 +62,13 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Group_Ownership |
 	Replication_Capability_World_Gravity |
 	Replication_Capability_Snapshot_Clock |
-	Replication_Capability_Owned_Correction
+	Replication_Capability_Owned_Correction |
+	Replication_Capability_Player_Gui |
+	Replication_Capability_Script_Source |
+	Replication_Capability_Metadata |
+	Replication_Capability_Player_Reference |
+	Replication_Capability_Buffer |
+	Replication_Capability_Join_Batch
 
 Replication_Handshake_Ok: u8 = 0
 Replication_Handshake_Version_Mismatch: u8 = 1
@@ -80,6 +92,9 @@ Replication_Kind_Model_Pivot :: u8(25)
 Replication_Kind_Group_Ownership :: u8(26)
 Replication_Kind_World_Gravity :: u8(27)
 Replication_Kind_Deformable :: u8(28)
+Replication_Kind_Script_Source :: u8(29)
+Replication_Kind_Metadata :: u8(30)
+Replication_Kind_Join_Batch :: u8(31)
 
 Replication_Deformable_Cloth :: u8(0)
 Replication_Deformable_SoftBody :: u8(1)
@@ -130,7 +145,11 @@ replication_schema_hash :: proc(service: ^ReplicatorService) -> u64 {
 	for descriptor in registry.classes {
 		if descriptor == nil || descriptor.info == nil {continue}
 		if replication_builtin_class(descriptor.info.name) {continue}
-		properties := classes.Class_Property_List(registry, descriptor.info.name)
+		properties := classes.Class_Property_List(
+			registry,
+			descriptor.info.name,
+			include_imported = false,
+		)
 
 
 		filtered: [dynamic]string
@@ -398,7 +417,7 @@ replication_receive_hello :: proc(
 	fmt.printf("Network server accepted %s (user %d)\n", name, id)
 
 
-	replication_send_asset_table(service, peer, capabilities)
+	replication_send_asset_table(service, connection)
 	replication_send_terrain(service, connection)
 }
 
@@ -650,6 +669,27 @@ replication_budgeted :: proc(service: ^ReplicatorService, kind: u8) -> bool {
 	)
 }
 
+REPLICATION_DEFAULT_JOIN_BUDGET :: 192 * 1024
+
+replication_initial_snapshot_pending :: proc(connection: ^Replication_Peer) -> bool {
+	return(
+		(connection.client_capabilities & Replication_Capability_Finished_Replicating) != 0 &&
+		!connection.finished_replicating_sent \
+	)
+}
+
+replication_peer_bandwidth_budget :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+) -> u32 {
+	// A join is a queued snapshot. Deferring part of it to the next tick is expected.
+	if replication_initial_snapshot_pending(connection) {
+		if service.bandwidth_budget_configured {return service.base_bandwidth_budget}
+		return REPLICATION_DEFAULT_JOIN_BUDGET
+	}
+	return service.bandwidth_budget
+}
+
 replication_send :: proc(
 	service: ^ReplicatorService,
 	peer: ^Replication_Transport_Peer,
@@ -669,19 +709,40 @@ replication_send :: proc(
 			service.diag_subtype_counts[int(payload[0])][int(kind)] += 1
 		}
 	}
-	if replication_budgeted(service, kind) {
-		for &connection in service.peers {
-			if connection.peer != peer {continue}
-			if u64(connection.bytes_this_tick) + u64(len(payload)) + 5 >
-			   u64(service.bandwidth_budget) {
-				service.bandwidth_drops += 1
-				service.drops_window += 1
-				return false
-			}
-			break
+	connection: ^Replication_Peer
+	if service.mode == .Server {
+		for &candidate in service.peers {
+			if candidate.peer == peer {connection = &candidate; break}
 		}
 	}
-	bytes := make([dynamic]u8, 0, len(payload) + 5)
+	wire_size := len(payload) + 5
+	budgeted := connection != nil && replication_budgeted(service, kind)
+	if budgeted &&
+	   u64(connection.bytes_this_tick) + u64(wire_size) >
+		   u64(replication_peer_bandwidth_budget(service, connection)) {
+		service.bandwidth_drops += 1
+		if !replication_initial_snapshot_pending(connection) {service.drops_window += 1}
+		return false
+	}
+
+	if connection != nil {
+		batch := &connection.join_batch
+		if connection.join_batch_enabled &&
+		   reliable &&
+		   replication_join_batch_kind(kind) &&
+		   wire_size + 4 <= REPLICATION_JOIN_BATCH_MAX {
+			if len(batch^) + wire_size + 4 > REPLICATION_JOIN_BATCH_MAX &&
+			   !replication_flush_join_batch(service, connection) {return false}
+			replication_put_u32(batch, u32(wire_size))
+			append(batch, 'K', 'R', 'P', u8(Replication_Protocol_Version), kind)
+			append(batch, ..payload)
+			if budgeted {connection.bytes_this_tick += u32(wire_size)}
+			return true
+		}
+		if !replication_flush_join_batch(service, connection) {return false}
+	}
+
+	bytes := make([dynamic]u8, 0, wire_size)
 	defer delete(bytes)
 	append(&bytes, 'K', 'R', 'P', u8(Replication_Protocol_Version), kind)
 	append(&bytes, ..payload)
@@ -690,11 +751,7 @@ replication_send :: proc(
 	if !transport_peer_send(peer, channel, bytes[:], reliable) {return false}
 	service.packets_sent += 1
 	service.bytes_sent += u64(len(bytes))
-	if replication_budgeted(service, kind) {
-		for &connection in service.peers {
-			if connection.peer == peer {connection.bytes_this_tick += u32(len(bytes)); break}
-		}
-	}
+	if budgeted {connection.bytes_this_tick += u32(wire_size)}
 	return true
 }
 
@@ -783,12 +840,9 @@ replication_send_asset_entry :: proc(
 }
 
 
-replication_send_asset_table :: proc(
-	service: ^ReplicatorService,
-	peer: ^Replication_Transport_Peer,
-	client_capabilities: u32,
-) {
-	if (client_capabilities & Replication_Capability_Asset_Transfer) == 0 {return}
+replication_send_asset_table :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
+	if (connection.client_capabilities & Replication_Capability_Asset_Transfer) == 0 {return}
+	peer := connection.peer
 	total := assetstore.Count()
 
 	sent := 0
@@ -797,7 +851,11 @@ replication_send_asset_table :: proc(
 
 		entry, ok := assetstore.At(index)
 		if !ok || entry == nil {continue}
+		if entry.kind == .Path_File &&
+		   strings.has_prefix(entry.path, assetstore.PROJECT_ASSET_SCHEME) &&
+		   !strings.has_prefix(entry.path, "project://assets/replicated/") {continue}
 		if !replication_send_asset_entry(service, peer, entry) {return}
+		if entry.kind == .Mesh {connection.mesh_assets[strings.clone(entry.id)] = true}
 		sent += 1
 	}
 
@@ -812,6 +870,25 @@ replication_send_asset_table :: proc(
 	fmt.printf("Sent %d embedded assets to a client\n", sent)
 }
 
+
+replication_send_operation_mesh :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	object: ^classes.Object,
+) -> bool {
+	if !classes.Is_A_Class(object, &classes.PartOperation_Class) ||
+	   (connection.client_capabilities & Replication_Capability_Asset_Transfer) == 0 {
+		return true
+	}
+	uri := classes.MeshPart_Source_Path(cast(^classes.MeshPart)object)
+	id, embedded := assetstore.Parse_Uri(uri)
+	if !embedded || connection.mesh_assets[id] {return true}
+	entry, found := assetstore.Find(id)
+	if !found || !replication_send_asset_entry(service, connection.peer, entry) {return false}
+	connection.mesh_assets[strings.clone(id)] = true
+	service.assets_sent += 1
+	return true
+}
 
 replication_send_terrain :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
 	client_capabilities := connection.client_capabilities
@@ -949,6 +1026,17 @@ replication_receive_deformable :: proc(
 		}
 		if !reader.valid {return}
 		cloth.force = {}
+		cloth.width = cloth.size.X
+		if workspace := DataModel_Get_Service(service.data_model, "Workspace"); workspace != nil {
+			_, pin_count := classes.Cloth_Anchors(cloth, workspace)
+			if pin_count == 2 {
+				cloth.width = classes.Cloth_Width(
+					cloth,
+					cloth.particles[classes.CLOTH_SEGMENTS].position - cloth.particles[0].position,
+				)
+			}
+		}
+		cloth.pose_source = .Replication
 		cloth.initialized = true
 		cloth.revision += 1
 	case Replication_Deformable_SoftBody:
@@ -1387,6 +1475,8 @@ replication_receive :: proc(
 
 	rejected := false
 	switch data[4] {
+	case Replication_Kind_Join_Batch:
+		replication_receive_join_batch(service, L, peer, &reader)
 	case Replication_Kind_Model_Pivot:
 		replication_receive_model_pivot(service, peer, &reader)
 	case 1:
@@ -1403,6 +1493,10 @@ replication_receive :: proc(
 		replication_receive_terrain(service, peer, &reader)
 	case Replication_Kind_Deformable:
 		replication_receive_deformable(service, peer, &reader)
+	case Replication_Kind_Script_Source:
+		replication_receive_script_source(service, L, peer, &reader)
+	case Replication_Kind_Metadata:
+		replication_receive_metadata(service, L, peer, &reader)
 	case Replication_Kind_Scene_Ready:
 		if service.mode != .Client || peer != service.remote {return}
 		if !service.scene_ready {
@@ -1696,11 +1790,21 @@ replication_receive :: proc(
 		   id == 0 ||
 		   replication_entity_object(service, id) != nil ||
 		   service.data_model == nil {break}
-		if root_name != "" && !replication_root_allowed(root_name) {break}
 		if !replication_builtin_class(class_name) &&
 		   replication_schema(service, class_name) == nil {break}
-		parent :=
-			parent_id == 0 ? DataModel_Get_Service(service.data_model, root_name) : replication_entity_object(service, parent_id)
+		parent: ^classes.Object
+		if root_name == "PlayerGui" && parent_id == 0 {
+			if !replication_uses_server_player_gui(service) {break}
+			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+			if players == nil ||
+			   players.local_player == nil ||
+			   owner_user_id != players.local_player.user_id {break}
+			parent = PlayerGui_Prepare(players.local_player, L)
+		} else if parent_id == 0 && replication_root_allowed(root_name) {
+			parent = DataModel_Get_Service(service.data_model, root_name)
+		} else if parent_id != 0 && root_name == "" {
+			parent = replication_entity_object(service, parent_id)
+		}
 		if parent == nil || service.data_model.registry == nil {break}
 
 
@@ -1728,7 +1832,10 @@ replication_receive :: proc(
 			class_name,
 			require_creatable = class_name != "PlayerScripts" &&
 			class_name != "PlayerGui" &&
-			class_name != "StarterCharacterScripts",
+			class_name != "StarterCharacterScripts" &&
+			class_name != "UnionOperation" &&
+			class_name != "NegateOperation" &&
+			class_name != "IntersectOperation",
 		)
 		if !ok || object == nil {break}
 		classes.Set_Name(object, name)
@@ -2102,7 +2209,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 					&service.peers,
 					Replication_Peer {
 						peer = event.peer,
-						known = make(map[u32]u32),
+						known = make(map[u32]u64),
 						initialized = make(map[u32]bool),
 						part_states = make(map[u32]Replication_Part_Send_State),
 						property_hashes = make(map[u32]u32),

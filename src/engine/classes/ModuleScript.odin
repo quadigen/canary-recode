@@ -94,6 +94,7 @@ ModuleScript_set :: proc(
 ModuleScript_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	module := cast(^ModuleScript)object
 	L := script_vm_state(object.signal_registry)
+	require_invalidate_object(&module.common, object)
 	Script_Release_Module(L, &module.common)
 	Script_Release_Thread(L, &module.common)
 	delete(module.source)

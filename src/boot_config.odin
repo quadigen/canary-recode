@@ -1,6 +1,8 @@
 #+build !js
 package main
 
+import "core:fmt"
+import serializer "engine/serializer"
 import vm "engine/vm"
 import engine_runtime "engine/runtime"
 import services "engine/services"
@@ -22,6 +24,7 @@ self_payload :: proc() -> (services.Payload, bool) {
 	if !g_self_checked {
 		g_self_checked = true
 		g_self_payload, g_self_ok = services.Payload_Read_Self()
+		if g_self_ok {fmt.println(services.PROJECT_ASSET_EXPORT_MARKER)}
 	}
 	return g_self_payload, g_self_ok
 }
@@ -46,6 +49,17 @@ load_game_map :: proc(
 	}
 	if data, name, ok := embedded_map(); ok {
 		return engine_runtime.Load_Map_From_Data(environment, script_vm, data, name)
+	}
+	return true
+}
+load_client_asset_bundle :: proc() -> bool {
+	payload, ok := self_payload()
+	if !ok || len(payload.map_bytes) == 0 {return true}
+	err := serializer.Load_Embedded_Assets(payload.map_bytes)
+	defer serializer.Error_Delete(&err)
+	if !serializer.Error_Is_None(err) {
+		serializer.Error_Print(err, "Could not load the executable's embedded assets: ")
+		return false
 	}
 	return true
 }

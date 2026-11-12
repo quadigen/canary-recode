@@ -103,7 +103,6 @@ KineRayProperties kine_ray_sanitize_properties(const KineRayProperties &properti
 // Creates a Ray Vulkan renderer on the given (already existing) device.
 KineRayState *kine_ray_create(const KineRayDevice &device, int width, int height);
 void kine_ray_destroy(KineRayState *state);
-bool kine_ray_resize(KineRayState *state, int width, int height);
 
 // Applies path tracer settings; restarts accumulation and re-sends the camera so
 // depth/exposure changes take effect immediately.

@@ -867,7 +867,9 @@ workspace_get :: proc(
 	switch key {
 	case "CurrentCamera":
 		classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
-	case "SimulatePhysics":
+	case "Terrain":
+		classes.Push_Object(L, Service_Get_Service(&workspace.service, "Terrain"))
+	case "SimulatePhysics", "AutoSimulate":
 		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
 		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
@@ -926,8 +928,17 @@ workspace_set :: proc(
 		if registry != nil && registry.registry.classes.renderer != nil {
 			registry.registry.classes.renderer.ActiveCamera = camera
 		}
-	case "SimulatePhysics":
-		workspace.simulate_physics = vm.ArgBoolean(L, value_index)
+	case "SimulatePhysics", "AutoSimulate":
+		simulate := vm.ArgBoolean(L, value_index)
+		if workspace.simulate_physics && !simulate {
+			if descriptor := classes.Find_Class(workspace.signal_registry, "Cloth"); descriptor != nil {
+				for object in descriptor.instances {
+					cloth := cast(^classes.Cloth)object
+					if cloth.pose_source == .Simulation {cloth.pose_source = .Preview}
+				}
+			}
+		}
+		workspace.simulate_physics = simulate
 	case "Enable3dRendering":
 		workspace.enable_3d = vm.ArgBoolean(L, value_index)
 	case "Gravity":

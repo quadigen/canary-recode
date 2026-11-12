@@ -105,6 +105,76 @@ expect_kept_as_path :: proc(label, uri, want: string) {
 	}
 }
 
+check_project_bundle :: proc(script_vm: ^vm.VM, environment: ^engine_runtime.Environment, scratch: string) {
+	project := fmt.tprintf("%s/project", scratch)
+	assert(os.make_directory_all(fmt.tprintf("%s/assets/replicated", project)) == nil)
+	assert(os.make_directory_all(fmt.tprintf("%s/custom-output", project)) == nil)
+	svg_path := write_asset(fmt.tprintf("%s/assets/replicated", project), "shapes.svg", RUNTIME_IMAGE)
+	_ = write_asset(project, "manifest.example", "arbitrary file contents")
+	_ = write_asset(project, "autosave.kine", "generated save")
+	_ = write_asset(fmt.tprintf("%s/custom-output", project), "old-game", "previous export")
+	root, root_ok := classes.Push_New(&environment.classes, script_vm, "Folder", true)
+	assert(root_ok)
+	vm.SetGlobalFromStack(script_vm, "BundleRoot")
+	run_script_or_fail(script_vm, fmt.tprintf(`
+local code = Instance.new("ModuleScript", BundleRoot)
+code.Name = "Code"
+code.Source = [=[
+return function(name)
+	local image = Instance.new("ImageLabel")
+	image.Image = "project://assets/replicated/" .. name
+	local legacy = Instance.new("ImageLabel")
+	legacy.Image = %q
+	return image, legacy
+end
+]=]
+`, svg_path), "project_bundle_script")
+
+	assetstore.Set_Project_Root(project)
+	run_script_or_fail(script_vm, `
+local image = Instance.new("ImageLabel")
+image.Image = "project://assets/replicated/shapes.svg"
+EditorProjectImage = image
+`, "project_bundle_editor_image")
+	vm.GetGlobal(script_vm.L, "EditorProjectImage")
+	editor_image := cast(^classes.ImageLabel)classes.Object_From_Argument(script_vm.L, -1)
+	vm.Pop(script_vm.L)
+	assert(editor_image.stored_image != nil, "editor could not resolve project:// against the project root")
+
+	bundle, write_err := serializer.Serialize(
+		&environment.classes, script_vm.L, root,
+		script_asset_root = project,
+		project_output_file = fmt.tprintf("%s/custom-output/game.kine", project),
+		project_output_directory = fmt.tprintf("%s/custom-output", project),
+	)
+	assert(serializer.Error_Is_None(write_err), serializer.Error_String(write_err))
+	defer delete(bundle)
+	assert(serializer.Has_Path_Assets(bundle))
+
+	assetstore.Set_Project_Root("")
+	assert(os.remove_all(project) == nil)
+	assetstore.Clear()
+	loaded, load_err := serializer.Deserialize(&environment.classes, script_vm.L, nil, bundle)
+	assert(serializer.Error_Is_None(load_err), serializer.Error_String(load_err))
+	assert(loaded != nil)
+	manifest, found := assetstore.Resolve_Bytes("project://manifest.example")
+	assert(found && string(manifest) == "arbitrary file contents")
+	_, autosave := assetstore.Resolve_Bytes("project://autosave.kine")
+	_, prior_export := assetstore.Resolve_Bytes("project://custom-output/old-game")
+	assert(!autosave && !prior_export)
+	vm.PushRegistryReference(script_vm.L, loaded.lua_ref)
+	vm.SetGlobalFromStack(script_vm, "LoadedBundle")
+	run_script_or_fail(script_vm, `
+ProjectImage, LegacyProjectImage = require(LoadedBundle.Code)("shapes.svg")
+`, "project_bundle_exported_images")
+	for name in ([]string{"ProjectImage", "LegacyProjectImage"}) {
+		vm.GetGlobal(script_vm.L, name)
+		image := cast(^classes.ImageLabel)classes.Object_From_Argument(script_vm.L, -1)
+		vm.Pop(script_vm.L)
+		assert(image != nil && image.stored_image != nil, name)
+	}
+}
+
 main :: proc() {
 	// A clean store proves the file carries its own bytes rather than relying on
 	// whatever the serializing process happened to still hold in memory.
@@ -156,6 +226,7 @@ decal.Texture = DecalPath
 local gui = Instance.new("ScreenGui", model)
 local label = Instance.new("ImageLabel", gui)
 label.Image = RuntimeImage
+label.SliceCenter = Rect.new(8, 9, 20, 24)
 local button = Instance.new("ImageButton", gui)
 button.Image = TextureUri
 for _, class in ipairs({"TextLabel", "TextButton", "TextBox"}) do
@@ -280,6 +351,7 @@ KineDecalValue = decal.Texture
 	vm.SetGlobalFromStack(&script_vm, "ReexportRoot")
 	run_script_or_fail(&script_vm, `
 local gui = ReexportRoot.ScreenGui
+assert(gui.ImageLabel.SliceCenter == Rect.new(8, 9, 20, 24))
 for _, class in ipairs({"TextLabel", "TextButton", "TextBox"}) do
 	local face = gui[class].FontFace
 	assert(face.Weight == Enum.FontWeight.Bold and face.Style == Enum.FontStyle.Italic)
@@ -579,6 +651,8 @@ KineHandleRestoredId = HandleRoot:FindFirstChild("Piece").MeshContent.ObjectId
 			),
 		)
 	}
+
+	check_project_bundle(&script_vm, &environment, scratch)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

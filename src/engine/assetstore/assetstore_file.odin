@@ -33,6 +33,21 @@ Read_Asset_File :: proc(authored: string) -> ([]u8, bool) {
 	return data, true
 }
 
+resolve_project_path :: proc(uri: string) -> string {
+	path, valid := Project_Asset_Path(uri)
+	if project_root == "" || !valid {return ""}
+	current := project_root
+	pieces := path
+	for piece in strings.split_iterator(&pieces, "/") {
+		joined, join_err := filepath.join({current, piece}, context.temp_allocator)
+		if join_err != nil {return ""}
+		info, stat_err := os.lstat(joined, context.temp_allocator)
+		if stat_err != nil || info.type == .Symlink {return ""}
+		current = joined
+	}
+	return strings.clone(current)
+}
+
 Materialize :: proc(id: string) -> (string, bool) {
 	entry, found := Find(id)
 	if !found {
@@ -45,7 +60,7 @@ Materialize :: proc(id: string) -> (string, bool) {
 		delete(entry.cached)
 		entry.cached = ""
 	}
-	if len(entry.bytes) == 0 {
+	if len(entry.bytes) == 0 && entry.kind != .Path_File {
 		return "", false
 	}
 

@@ -2,6 +2,7 @@
 package main
 
 import engine_runtime "../src/engine/runtime"
+import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
 
@@ -112,6 +113,10 @@ end)
 	)
 
 	step_pair(&server, &server_vm, &client, &client_vm, 300)
+	server_replication := cast(^services.ReplicatorService)services.Ensure_Service(&server.services, "ReplicatorService")
+	client_replication := cast(^services.ReplicatorService)services.Ensure_Service(&client.services, "ReplicatorService")
+	join_batches := server_replication.diag_kind_counts[services.Replication_Kind_Join_Batch]
+	assert(join_batches > 0 && client_replication.malformed_packets == 0)
 
 	run_script(
 		&client_vm,
@@ -140,16 +145,30 @@ assert(fired_count == 1, "the signal re-fired after the scene settled: " .. tost
 		"finished_client_once",
 	)
 
+	run_script(&server_vm, `
+game:GetService("StarterGui").Hud.Panel1.BackgroundTransparency = 0.25
+`, "finished_server_update")
+	step_pair(&server, &server_vm, &client, &client_vm, 60)
+	run_script(&client_vm, `
+assert(game:GetService("StarterGui").Hud.Panel1.BackgroundTransparency == 0.25)
+`, "finished_client_update")
+	run_script(&server_vm, `
+game:GetService("StarterGui").Hud.Panel1.BackgroundTransparency = 0.5
+`, "finished_server_restore")
+	step_pair(&server, &server_vm, &client, &client_vm, 60)
+
 	run_script(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "finished_client_stop")
 	run_script(&client_vm, `
 local stats = game:GetService("ReplicatorService"):GetStats()
 assert(not stats.sceneReady and not stats.replicationFinished, "Stop must reset initial scene barriers")
 `, "finished_client_reset")
 	step_pair(&server, &server_vm, &client, &client_vm, 30)
+	client_replication.client_capabilities &= ~services.Replication_Capability_Join_Batch
 	run_script(&client_vm, `
 assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39229))
 `, "finished_client_reconnect")
 	step_pair(&server, &server_vm, &client, &client_vm, 300)
+	assert(server_replication.diag_kind_counts[services.Replication_Kind_Join_Batch] == join_batches)
 	run_script(&client_vm, `
 assert(fired_count == 2 and finished_gui_ok, "reconnecting must wait for complete GUI properties again")
 assert(_G.previewRuns == 2 and _G.playerRuns == 2,

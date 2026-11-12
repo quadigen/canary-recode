@@ -10,6 +10,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import fsutil "../fsutil"
 import globals "../global"
+import serializer "../serializer"
 import target "../target"
 import vm "../vm"
 import "core:fmt"
@@ -478,6 +479,12 @@ export_set_windows_console :: proc(image: []u8, console: Export_Console) -> bool
 	return true
 }
 
+template_supports_export :: proc(template: []u8, mode: target.Mode, path_assets: bool) -> bool {
+	image := transmute(string)template
+	return (mode != .Singleplayer || strings.contains(image, SINGLEPLAYER_EXPORT_MARKER)) &&
+	       (!path_assets || strings.contains(image, PROJECT_ASSET_EXPORT_MARKER))
+}
+
 ExportToExecutable :: proc(
 	kind: Template_Kind,
 	p: Target_Platform,
@@ -506,29 +513,27 @@ ExportToExecutable :: proc(
 		template, _ = os.read_entire_file_from_path(template_path, context.allocator)
 	}
 
-	using_editor := false
-	if mode == .Singleplayer &&
-	   !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
-		// Older releases can run single-player via flags but cannot read a
-		// single-player payload. The running editor supports it on the host.
+	libraries_only := false
+	path_assets := serializer.Has_Path_Assets(map_bytes)
+	if !template_supports_export(template, mode, path_assets) {
 		host := Template_Host_Platform()
 		if p.os_name != host.os_name || p.arch_name != host.arch_name {
-			return false, "Single Player requires an updated template for this platform"
+			return false, "This export requires an updated runtime template for the target platform"
 		}
+		libraries_only = true
 		delete(template)
 		delete(template_path)
-		template_path, _ = template_build_fallback(.Client, p)
+		template_path, _ = template_build_fallback(kind, p)
 		template, _ = os.read_entire_file_from_path(template_path, context.allocator)
-		if !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
+		if !template_supports_export(template, mode, path_assets) {
 			delete(template)
 			delete(template_path)
 			template_path, _ = os.get_executable_path(context.allocator)
 			template, _ = os.read_entire_file_from_path(template_path, context.allocator)
-			if !strings.contains(transmute(string)template, SINGLEPLAYER_EXPORT_MARKER) {
-				return false, "Could not find a runtime that supports Single Player exports"
+			if !template_supports_export(template, mode, path_assets) {
+				return false, "Could not find a runtime template that supports this export"
 			}
 		}
-		using_editor = true
 	}
 	if len(template) == 0 {
 		if template_path == "" {
@@ -601,7 +606,7 @@ ExportToExecutable :: proc(
 			template_dir,
 			destination_dir,
 			filepath.base(template_path),
-			using_editor,
+			libraries_only,
 		)
 	}
 	return true, ""

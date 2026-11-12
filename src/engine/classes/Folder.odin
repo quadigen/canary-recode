@@ -43,6 +43,5 @@ Register_Folder :: proc(registry: ^Registry) {
         Folder_construct,
         Folder_destroy,
         clone = Folder_clone,
-        properties = []string{"IconTint"}
     )
 }

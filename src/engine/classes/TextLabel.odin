@@ -29,26 +29,26 @@ TextLabel_Class := Class_Info {
 }
 
 Text_Line :: struct {
-	text:  string,
-	width: f32,
+	text:      string,
+	width:     f32,
 	draw_text: cstring,
 }
 
 Text_Measure_Cache :: struct {
-	valid: bool,
+	valid:                         bool,
 	width, font_size, line_height: f32,
-	bounds: datatypes.Vector2,
+	bounds:                        datatypes.Vector2,
 }
 
 Text_Render_Layout :: struct {
-	measure: Text_Measure_Cache,
-	lines: [dynamic]Text_Line,
-	inputs: struct {
+	measure:                        Text_Measure_Cache,
+	lines:                          [dynamic]Text_Line,
+	inputs:                         struct {
 		width, height, text_size, line_height: f32,
-		wrapped, scaled: bool,
+		wrapped, scaled:                       bool,
 	},
 	font_size, line_height, ascent: f32,
-	bounds: datatypes.Vector2,
+	bounds:                         datatypes.Vector2,
 }
 
 TextLabel :: struct {
@@ -83,6 +83,9 @@ TextLabel_Resolve_Font_Memory :: proc(family: string) -> (data: []u8, ok: bool) 
 		resolved_family = DEFAULT_FONT
 	}
 
+	if resolved_family == "rbxasset://fonts/families/RobotoMono.json" {
+		return TextLabel_Find_Builtin_Font("RobotoMono-Regular.ttf")
+	}
 	if !strings.has_prefix(resolved_family, BUILTIN_FONT_PREFIX) {
 		return nil, false
 	}
@@ -823,16 +826,18 @@ TextLabel_Measure_Content :: proc(
 
 	cache := measure if measure != nil else &label.render_layout.measure
 	width := max_width if label.text_wrapped else 0
-	if !cache.valid || cache.width != width ||
-	   cache.font_size != font_size || cache.line_height != label.line_height {
+	if !cache.valid ||
+	   cache.width != width ||
+	   cache.font_size != font_size ||
+	   cache.line_height != label.line_height {
 		lines := TextLabel_Build_Lines(label, width, font_size, width > 0)
 		defer delete(lines)
 		cache^ = {
-			valid = true,
-			width = width,
-			font_size = font_size,
+			valid       = true,
+			width       = width,
+			font_size   = font_size,
 			line_height = label.line_height,
-			bounds = TextLabel_Get_Bounds(label, lines[:], font_size),
+			bounds      = TextLabel_Get_Bounds(label, lines[:], font_size),
 		}
 	}
 	bounds := cache.bounds
@@ -1315,7 +1320,11 @@ text_render_layout_clear :: proc(layout: ^Text_Render_Layout) {
 	layout^ = {}
 }
 
-text_label_render :: proc(label: ^TextLabel, ctx: ^Class_Step_Context, layout: ^Text_Render_Layout) {
+text_label_render :: proc(
+	label: ^TextLabel,
+	ctx: ^Class_Step_Context,
+	layout: ^Text_Render_Layout,
+) {
 	object := &label.object
 	rect, visible := GuiObject_get_rect(object, ctx)
 
@@ -1361,12 +1370,18 @@ text_label_render :: proc(label: ^TextLabel, ctx: ^Class_Step_Context, layout: ^
 		text_render_layout_free_lines(layout)
 		layout.inputs = inputs
 		layout.font_size = TextLabel_Get_Effective_Font_Size(label, content_width, content_height)
-		layout.lines = TextLabel_Build_Lines(label, content_width, layout.font_size, label.text_wrapped)
+		layout.lines = TextLabel_Build_Lines(
+			label,
+			content_width,
+			layout.font_size,
+			label.text_wrapped,
+		)
 		for &line in layout.lines {
 			line.draw_text = strings.clone_to_cstring(line.text, layout.lines.allocator)
 		}
 		layout.bounds = TextLabel_Get_Bounds(label, layout.lines[:], layout.font_size)
-		layout.line_height = TextLabel_Get_Base_Line_Height(label, layout.font_size) * label.line_height
+		layout.line_height =
+			TextLabel_Get_Base_Line_Height(label, layout.font_size) * label.line_height
 		layout.ascent = TextLabel_Get_Ascent(label, layout.font_size)
 	}
 	label.text_bounds = layout.bounds
@@ -1374,14 +1389,15 @@ text_label_render :: proc(label: ^TextLabel, ctx: ^Class_Step_Context, layout: ^
 	block_y := TextLabel_Get_Block_Y(label, content_y, content_height, label.text_bounds.Y)
 
 
-	guilib.save(ctx.renderer.SkiaSurface)
-
-	defer guilib.restore(ctx.renderer.SkiaSurface)
-
-	guilib.clipRect(
-		ctx.renderer.SkiaSurface,
-		guilib.Rect{x = content_x, y = content_y, width = content_width, height = content_height},
-	)
+	clip_text := label.text_wrapped || label.text_scaled
+	if clip_text {
+		guilib.save(ctx.renderer.SkiaSurface)
+		guilib.clipRect(
+			ctx.renderer.SkiaSurface,
+			guilib.Rect{x = content_x, y = content_y, width = content_width, height = content_height},
+		)
+	}
+	defer if clip_text {guilib.restore(ctx.renderer.SkiaSurface)}
 
 
 	shadow_object := Find_First_Child_Of_Class(object, "UIShadow")

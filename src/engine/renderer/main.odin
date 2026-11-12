@@ -255,6 +255,7 @@ when !KINE_RENDERER_GL {
 		running := true
 		drawable := true
 		frame_width, frame_height := width, height
+		requested_width, requested_height := width, height
 		previous_ticks := sdl3.GetTicksNS()
 
 		tracy.SetThreadName("Main/Render")
@@ -332,14 +333,23 @@ when !KINE_RENDERER_GL {
 			pixel_width, pixel_height: i32
 			_ = sdl3.GetWindowSizeInPixels(window, &pixel_width, &pixel_height)
 			if pixel_width <= 0 || pixel_height <= 0 {sdl3.Delay(10); continue}
-			if pixel_width != frame_width ||
-			   pixel_height != frame_height ||
+			if pixel_width != requested_width ||
+			   pixel_height != requested_height ||
 			   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
-				size_changed := pixel_width != frame_width || pixel_height != frame_height
+				kineffi.Kine_Filament_Resize(filament, pixel_width, pixel_height)
+				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 ||
+				   kineffi.Kine_VulkanCompositor_IsReady(compositor) == 0 {
+					fmt.eprintf("Vulkan resize failed: %s\n", kineffi.Kine_VulkanCompositor_GetLastError(compositor))
+					previous_ticks = sdl3.GetTicksNS()
+					sdl3.Delay(10)
+					continue
+				}
 
-				frame_width, frame_height = pixel_width, pixel_height
-
-				kineffi.Kine_Filament_Resize(filament, frame_width, frame_height)
+				info: kineffi.KineVulkanCompositorInfo
+				_ = kineffi.Kine_VulkanCompositor_GetInfo(compositor, &info)
+				size_changed := i32(info.width) != frame_width || i32(info.height) != frame_height
+				frame_width, frame_height = i32(info.width), i32(info.height)
+				requested_width, requested_height = pixel_width, pixel_height
 
 				if size_changed && renderer.OnResize != nil {
 					renderer.OnResize(renderer.UserData, frame_width, frame_height)

@@ -6,6 +6,7 @@ import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 
 Class_Info :: struct {
@@ -117,6 +118,11 @@ Object :: struct {
 	children:             [dynamic]^Object,
 	signal_registry:      ^Registry,
 	attributes:           [dynamic]Object_Attribute,
+	tags:                 [dynamic]string,
+	metadata_revision:    u64,
+	server_attributes:    [dynamic]string,
+	server_tags:          [dynamic]string,
+	imported_values:      map[string]i32,
 	property_signals:     [dynamic]Object_Property_Signal,
 	unique_id:            datatypes.UniqueId,
 	capabilities:         datatypes.SecurityCapabilities,
@@ -212,11 +218,11 @@ Object_Changed_Signal :: proc(self: ^Object) -> ^signals.Signal {
 }
 
 
-Object_Fire_Property_Changed :: proc(self: ^Object, name: string) {
+Object_Fire_Property_Changed :: proc(self: ^Object, name: string, L: ^vm.State = nil) {
 	if self.signal_registry == nil || self.signal_registry.signal_registry == nil {
 		return
 	}
-	L := self.signal_registry.signal_registry.L
+	L := L if L != nil else self.signal_registry.signal_registry.L
 	if L == nil {
 		return
 	}
@@ -287,11 +293,11 @@ Object_Fire_Destroying :: proc(self: ^Object) {
 	signals.Fire(L, self.destroying, 0)
 }
 
-Object_Fire_Ancestry_Changed :: proc(self: ^Object, child: ^Object) {
+Object_Fire_Ancestry_Changed :: proc(self: ^Object, parent: ^Object) {
 	if self == nil {
 		return
 	}
-	signal := Object_Hierarchy_Signal(self, .Ancestry_Changed)
+	signal := self.ancestry_changed
 	if signal == nil {
 		return
 	}
@@ -299,9 +305,10 @@ Object_Fire_Ancestry_Changed :: proc(self: ^Object, child: ^Object) {
 	if L == nil {
 		return
 	}
-	Push_Object(L, child)
-	signals.Fire(L, signal, 1)
-	vm.Pop(L)
+	Push_Object(L, self)
+	Push_Object(L, parent)
+	signals.Fire(L, signal, 2)
+	vm.Pop(L, 2)
 }
 
 Object_Create_Hierarchy_Signal :: proc(self: ^Object) -> ^signals.Signal {
@@ -315,7 +322,7 @@ Object_Fire_Descendant_Added :: proc(self: ^Object, child: ^Object) {
 	if self == nil || child == nil {
 		return
 	}
-	signal := Object_Hierarchy_Signal(self, .Descendant_Added)
+	signal := self.descendant_added
 	if signal == nil {
 		return
 	}
@@ -332,7 +339,7 @@ Object_Fire_Descendant_Removing :: proc(self: ^Object, child: ^Object) {
 	if self == nil || child == nil {
 		return
 	}
-	signal := Object_Hierarchy_Signal(self, .Descendant_Removing)
+	signal := self.descendant_removing
 	if signal == nil {
 		return
 	}
@@ -349,7 +356,7 @@ Object_Fire_Child_Added :: proc(self: ^Object, child: ^Object) {
 	if self == nil || child == nil {
 		return
 	}
-	signal := Object_Hierarchy_Signal(self, .Child_Added)
+	signal := self.child_added
 	if signal == nil {
 		return
 	}
@@ -366,7 +373,7 @@ Object_Fire_Child_Removed :: proc(self: ^Object, child: ^Object) {
 	if self == nil || child == nil {
 		return
 	}
-	signal := Object_Hierarchy_Signal(self, .Child_Removed)
+	signal := self.child_removed
 	if signal == nil {
 		return
 	}
@@ -400,7 +407,7 @@ Object_Destroy :: proc(self: ^Object) {
 		return
 	}
 
-	Object_Fire_Destroying(self)
+	if !self.destroyed {Object_Fire_Destroying(self)}
 
 	for child in self.children {
 		if child != nil && child.parent == self {
@@ -419,6 +426,23 @@ Object_Destroy :: proc(self: ^Object) {
 	}
 	delete(self.attributes)
 	self.attributes = nil
+	if self.signal_registry != nil && len(self.tags) != 0 {
+		delete_key(&self.signal_registry.tagged_objects, self)
+	}
+	for tag in self.tags {delete(tag)}
+	delete(self.tags)
+	for name in self.server_attributes {delete(name)}
+	delete(self.server_attributes)
+	for name in self.server_tags {delete(name)}
+	delete(self.server_tags)
+	if self.signal_registry != nil && self.signal_registry.vm_state != nil {
+		L := self.signal_registry.vm_state.L
+		if L != nil {
+			for _, value_ref in self.imported_values {vm.ReleaseValue(L, value_ref)}
+		}
+	}
+	delete(self.imported_values)
+	self.imported_values = nil
 
 	Object_Free_Property_Signals(self)
 
@@ -496,20 +520,13 @@ Set_Can_Replicate :: proc(self: ^Object, value: bool) {
 }
 
 Is_A :: proc(self: ^Object, class_name: string) -> bool {
-	if self == nil {
-		return false
+	return self != nil && class_has_name(self.class, class_name)
+}
+
+class_has_name :: proc(class: ^Class_Info, class_name: string) -> bool {
+	for current := class; current != nil; current = current.parent {
+		if current.name == class_name {return true}
 	}
-
-	class := self.class
-
-	for class != nil {
-		if class.name == class_name {
-			return true
-		}
-
-		class = class.parent
-	}
-
 	return false
 }
 
@@ -526,7 +543,7 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 		return
 	}
 
-	if new_parent != nil && Is_Descendant_Of(new_parent, self) {
+	if new_parent != nil && (self.destroyed || new_parent.destroyed || Is_Descendant_Of(new_parent, self)) {
 		return
 	}
 
@@ -560,7 +577,7 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 
 	if previous != nil {
 		Object_Fire_Child_Removed(previous, self)
-		ancestor := previous.parent
+		ancestor := previous
 		for ancestor != nil {
 			Object_Fire_Descendant_Removing(ancestor, self)
 			ancestor = ancestor.parent
@@ -595,7 +612,8 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 	surfacegui_mark_dirty_for(self)
 
 	self.destroyed = true
-
+	// Listeners can unregister this exact userdata before it is detached.
+	Object_Fire_Destroying(self)
 
 	Render_3D_Mark_Dirty()
 	Hierarchy_Touched()
@@ -605,6 +623,15 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 	if registry != nil && registry.vm_state != nil {
 		L = registry.vm_state.L
 	}
+
+	for len(self.children) > 0 {
+		child := self.children[len(self.children) - 1]
+		Destroy_Hierarchy(child)
+		if child != nil && child.parent == self {
+			Set_Parent(child, nil)
+		}
+	}
+	Set_Parent(self, nil)
 
 	if self.lua_ref > 0 && L != nil {
 		vm.PushRegistryReference(L, self.lua_ref)
@@ -623,15 +650,6 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 			)
 		}
 	}
-
-	for len(self.children) > 0 {
-		child := self.children[len(self.children) - 1]
-		Destroy_Hierarchy(child)
-		if child != nil && child.parent == self {
-			Set_Parent(child, nil)
-		}
-	}
-	Set_Parent(self, nil)
 }
 
 Get_Children :: proc(self: ^Object) -> []^Object {
@@ -746,6 +764,7 @@ is_object_method :: proc(name: string) -> bool {
 	switch name {
 	case "Clone",
 	     "Destroy",
+	     "ClearAllChildren",
 	     "FindFirstChild",
 	     "FindFirstChildOfClass",
 	     "FindFirstAncestor",
@@ -761,6 +780,10 @@ is_object_method :: proc(name: string) -> bool {
 	     "GetAttribute",
 	     "GetAttributes",
 	     "SetAttribute",
+	     "AddTag",
+	     "RemoveTag",
+	     "HasTag",
+	     "GetTags",
 	     "WaitForChild",
 	     "WaitForChildOfClass",
 	     "GetPropertyChangedSignal":
@@ -773,15 +796,15 @@ is_object_method :: proc(name: string) -> bool {
 object_method :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 
+	method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
+	binding := vm.UserdataBindingOf(L, 1)
 	object := object_from_argument(L, 1)
 	if object == nil {
+		if method == "Destroy" && binding != nil && binding.name == "Instance" && vm.UserdataValue(L, 1) == nil {
+			return 0
+		}
 		return vm.RaiseError(L, "expected an Instance")
 	}
-
-	method := vm.ArgString(L, int(vm.UpvalueIndex(1)))
-	fmt.println("Object_Namecall method:", method)
-
-	binding := vm.UserdataBindingOf(L, 1)
 
 	method_ctx: rawptr = nil
 
@@ -989,7 +1012,7 @@ attribute_index :: proc(object: ^Object, name: string) -> int {
 	return -1
 }
 
-attribute_name_is_valid :: proc(name: string) -> bool {
+Attribute_Name_Is_Valid :: proc(name: string) -> bool {
 	if len(name) == 0 || len(name) > 100 {return false}
 	if len(name) >= 3 &&
 	   (name[0] == 'R' || name[0] == 'r') &&
@@ -1012,7 +1035,7 @@ attribute_name_is_valid :: proc(name: string) -> bool {
 	return true
 }
 
-attribute_value_is_supported :: proc(L: ^vm.State, index: int) -> bool {
+Attribute_Value_Is_Supported :: proc(L: ^vm.State, index: int) -> bool {
 	#partial switch vm.TypeOf(L, index) {
 	case .Nil, .Boolean, .Number, .Integer, .String, .Vector:
 		return true
@@ -1024,7 +1047,7 @@ attribute_value_is_supported :: proc(L: ^vm.State, index: int) -> bool {
 }
 
 Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: int) -> bool {
-	if !attribute_name_is_valid(name) {
+	if !Attribute_Name_Is_Valid(name) {
 		_ = vm.RaiseError(
 			L,
 			"attribute name must be 1-100 valid characters and cannot start with RBX",
@@ -1037,10 +1060,11 @@ Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: 
 			vm.ReleaseValue(L, object.attributes[index].value_ref)
 			delete(object.attributes[index].name)
 			ordered_remove(&object.attributes, index)
+			object.metadata_revision += 1
 		}
 		return true
 	}
-	if !attribute_value_is_supported(L, value_index) {
+	if !Attribute_Value_Is_Supported(L, value_index) {
 		_ = vm.RaiseError(L, "unsupported attribute value type")
 		return false
 	}
@@ -1056,7 +1080,68 @@ Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: 
 			Object_Attribute{name = strings.clone(name), value_ref = value_ref},
 		)
 	}
+	object.metadata_revision += 1
 	return true
+}
+
+Tag_Name_Is_Valid :: proc(tag: string) -> bool {
+	return len(tag) > 0 && len(tag) <= 100 && !strings.contains(tag, "\x00")
+}
+
+Object_Has_Tag :: proc(object: ^Object, tag: string) -> bool {
+	return slice.contains(object.tags[:], tag)
+}
+
+Object_Add_Tag :: proc(object: ^Object, tag: string) {
+	if Object_Has_Tag(object, tag) {return}
+	append(&object.tags, strings.clone(tag))
+	if object.signal_registry != nil && len(object.tags) == 1 {
+		object.signal_registry.tagged_objects[object] = true
+	}
+	object.metadata_revision += 1
+}
+
+Object_Remove_Tag :: proc(object: ^Object, tag: string) {
+	for name, index in object.tags {
+		if name != tag {continue}
+		delete(name)
+		ordered_remove(&object.tags, index)
+		if object.signal_registry != nil && len(object.tags) == 0 {
+			delete_key(&object.signal_registry.tagged_objects, object)
+		}
+		object.metadata_revision += 1
+		return
+	}
+}
+
+Object_Push_Tags :: proc(L: ^vm.State, object: ^Object) {
+	vm.NewTable(L, len(object.tags))
+	for tag, index in object.tags {
+		vm.PushString(L, tag)
+		vm.SetArrayValue(L, -2, index + 1)
+	}
+}
+
+Object_Copy_Metadata :: proc(L: ^vm.State, source, destination: ^Object) {
+	for attribute in source.attributes {
+		vm.PushRegistryReference(L, attribute.value_ref)
+		_ = Set_Attribute(L, destination, attribute.name, -1)
+		vm.Pop(L)
+	}
+	for tag in source.tags {Object_Add_Tag(destination, tag)}
+}
+
+Object_Replace_Metadata :: proc(L: ^vm.State, source, destination: ^Object) {
+	if source == destination {return}
+	vm.PushNil(L)
+	for len(destination.attributes) > 0 {
+		_ = Set_Attribute(L, destination, destination.attributes[len(destination.attributes) - 1].name, -1)
+	}
+	vm.Pop(L)
+	for len(destination.tags) > 0 {
+		Object_Remove_Tag(destination, destination.tags[len(destination.tags) - 1])
+	}
+	Object_Copy_Metadata(L, source, destination)
 }
 
 clone_base_state :: proc(L: ^vm.State, source: ^Object, destination: ^Object) {
@@ -1076,42 +1161,63 @@ clone_base_state :: proc(L: ^vm.State, source: ^Object, destination: ^Object) {
 	destination.replication_group = strings.clone(source.replication_group)
 
 
-	for attribute in source.attributes {
-		vm.PushRegistryReference(L, attribute.value_ref)
-
-		value_ref := vm.RetainValue(L)
-
+	Object_Copy_Metadata(L, source, destination)
+	for name, value_ref in source.imported_values {
+		vm.PushRegistryReference(L, value_ref)
+		destination.imported_values[name] = vm.RetainValue(L)
 		vm.Pop(L)
-
-		append(
-			&destination.attributes,
-			Object_Attribute{name = strings.clone(attribute.name), value_ref = value_ref},
-		)
 	}
 }
 
 Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Object, bool) {
-	if L == nil || registry == nil || source == nil {
-		return nil, false
+	if L == nil || registry == nil || source == nil {return nil, false}
+	clones: map[^Object]^Object
+	defer delete(clones)
+	destination, ok := clone_object_tree(L, registry, source, &clones)
+	if !ok {return nil, false}
+
+	remap_cloned_attachment_and_weld_refs(clones)
+	return destination, true
+}
+
+remap_cloned_attachment_and_weld_refs :: proc(clones: map[^Object]^Object) {
+	for original, copy in clones {
+		if Is_A_Class(original, &Cloth_Class) {
+			cloth := cast(^Cloth)copy
+			if endpoint := clones[cloth.attachment]; endpoint != nil {cloth.attachment = endpoint}
+			if endpoint := clones[cloth.attachment1]; endpoint != nil {cloth.attachment1 = endpoint}
+		}
+		if Is_A_Class(original, &Constraint_Class) {
+			constraint := cast(^Constraint)copy
+			if endpoint := clones[constraint.attachment0]; endpoint != nil {
+				constraint.attachment0 = endpoint
+			}
+			if endpoint := clones[constraint.attachment1]; endpoint != nil {
+				constraint.attachment1 = endpoint
+			}
+		}
+		if Is_A_Class(original, &WeldConstraint_Class) {
+			weld := cast(^WeldConstraint)copy
+			if endpoint := clones[weld.part0]; endpoint != nil {weld.part0 = endpoint}
+			if endpoint := clones[weld.part1]; endpoint != nil {weld.part1 = endpoint}
+		}
 	}
+}
 
-	if !source.archivable {
-		return nil, false
-	}
-
-
+clone_object_tree :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	source: ^Object,
+	clones: ^map[^Object]^Object,
+) -> (^Object, bool) {
+	if !source.archivable {return nil, false}
 	destination, ok := Push_New(registry, &vm.VM{L = L}, Get_Class_Name(source), false)
+	if !ok || destination == nil {return nil, false}
 
-	if !ok || destination == nil {
-		return nil, false
-	}
-
-
+	clones^[source] = destination
 	clone_base_state(L, source, destination)
-
 	Clone_Class_State(registry, source.class, source, destination)
-
-	clone_object_children(L, registry, source, destination)
+	clone_children_into(L, registry, source, destination, clones)
 	if Is_A_Class(source, &ViewportFrame_Class) {
 		ViewportFrame_Remap_Cloned_Camera(source, destination)
 	}
@@ -1119,21 +1225,26 @@ Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Ob
 }
 
 clone_object_children :: proc(L: ^vm.State, registry: ^Registry, source, destination: ^Object) {
+	clones: map[^Object]^Object
+	defer delete(clones)
+	clones[source] = destination
+	clone_children_into(L, registry, source, destination, &clones)
+	remap_cloned_attachment_and_weld_refs(clones)
+}
+
+clone_children_into :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	source, destination: ^Object,
+	clones: ^map[^Object]^Object,
+) {
 	for child in source.children {
-		if child == nil || !child.archivable {
-			continue
+		if child == nil {continue}
+		cloned_child, child_ok := clone_object_tree(L, registry, child, clones)
+		if child_ok {
+			Set_Parent(cloned_child, destination)
+			vm.Pop(L)
 		}
-
-		cloned_child, child_ok := Clone_Object(L, registry, child)
-
-		if !child_ok {
-			continue
-		}
-
-		Set_Parent(cloned_child, destination)
-
-
-		vm.Pop(L)
 	}
 }
 
@@ -1168,6 +1279,12 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	}
 
 	switch method {
+	case "ContainsPoint":
+		if !Is_A_Class(object, &GuiObject_Class) {return 0, false}
+		x := f32(vm.ArgNumber(L, 2))
+		y := f32(vm.ArgNumber(L, 3))
+		vm.PushBoolean(L, GuiObject_contains_point(cast(^GuiObject)object, x, y))
+		return 1, true
 	case "Clone":
 		if !object.archivable {
 			vm.PushNil(L)
@@ -1192,6 +1309,15 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		return 1, true
 	case "Destroy":
 		Destroy_Hierarchy(object)
+		return 0, true
+	case "ClearAllChildren":
+		children := slice.clone(object.children[:])
+		defer delete(children)
+		for child in children {
+			if child.parent == object && Object_Is_Accessible(L, child) {
+				Destroy_Hierarchy(child)
+			}
+		}
 		return 0, true
 	case "FindFirstChild":
 		name := vm.ArgString(L, 2)
@@ -1329,6 +1455,18 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	case "SetAttribute":
 		_ = Set_Attribute(L, object, vm.ArgString(L, 2), 3)
 		return 0, true
+	case "AddTag", "RemoveTag", "HasTag":
+		tag := vm.ArgString(L, 2)
+		if !Tag_Name_Is_Valid(tag) {return vm.RaiseError(L, "tag must be 1-100 characters"), true}
+		switch method {
+		case "AddTag": Object_Add_Tag(object, tag)
+		case "RemoveTag": Object_Remove_Tag(object, tag)
+		case "HasTag": vm.PushBoolean(L, Object_Has_Tag(object, tag)); return 1, true
+		}
+		return 0, true
+	case "GetTags":
+		Object_Push_Tags(L, object)
+		return 1, true
 	case "GetPropertyChangedSignal":
 		signal := Object_Get_Or_Create_Property_Signal(object, vm.ArgString(L, 2))
 		if signal == nil {

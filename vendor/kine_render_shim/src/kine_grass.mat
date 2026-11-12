@@ -1,0 +1,53 @@
+material {
+    name : "kine_grass",
+    shadingModel : lit,
+    blending : masked,
+    maskThreshold : 0.5,
+    alphaToCoverage : false,
+    doubleSided : true,
+    culling : none,
+    instanced : true,
+    flipUV : false,
+    requires : [uv0, color],
+    parameters : [
+        { type : float, name : windStrength },
+        { type : float, name : fadeStart },
+        { type : float, name : fadeEnd },
+        { type : float, name : hasGrassAlbedo },
+        { type : sampler2d, name : grassAlbedo }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        highp float h = clamp(material.uv0.y, 0.0, 1.0);
+        highp vec3 p = getPosition().xyz;
+        highp float t = getUserTime().x;
+        highp float phase = dot(p.xz, vec2(0.19, 0.31));
+        highp float gust = sin(t * 1.48 + phase) * 0.72
+                         + sin(t * 2.31 + phase * 1.93) * 0.20
+                         + sin(t * 0.61 + phase * 0.34) * 0.08;
+        highp float bend = h * h * materialParams.windStrength;
+        material.worldPosition.xz += bend * vec2(gust, sin(t * 1.22 + phase * 1.37) * 0.68);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float h = clamp(getUV0().y, 0.0, 1.0);
+        vec3 color = getColor().rgb;
+        vec3 worldPosition = getWorldPosition();
+        vec3 grassTextureColor = texture(materialParams_grassAlbedo, worldPosition.xz * 0.25).rgb;
+        color = mix(color, grassTextureColor * vec3(0.86, 1.0, 0.89),
+                    0.78 * materialParams.hasGrassAlbedo);
+        color *= mix(0.65, 1.14, smoothstep(0.0, 1.0, h));
+        float distanceToEye = length(worldPosition - getWorldCameraPosition());
+        float visible = 1.0 - smoothstep(materialParams.fadeStart, materialParams.fadeEnd, distanceToEye);
+        float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        material.baseColor = vec4(color, visible - dither + 0.5);
+        material.roughness = 0.87;
+        material.metallic = 0.0;
+        material.reflectance = 0.035;
+    }
+}

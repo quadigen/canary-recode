@@ -6,13 +6,9 @@ import "core:fmt"
 import "core:net"
 import "core:strings"
 
-
 WS_HANDSHAKE_MAGIC :: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
-
 WS_MAX_MESSAGE :: 4 * 1024 * 1024
 WS_MAX_HANDSHAKE :: 16 * 1024
-
 WS_OP_CONTINUATION :: 0x0
 WS_OP_TEXT :: 0x1
 WS_OP_BINARY :: 0x2

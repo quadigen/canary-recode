@@ -68,6 +68,7 @@ KINE_SKIA_API const char *Kine_Skia_GetVersion(void);
 KINE_SKIA_API KineSkiaVulkanContext *Kine_Skia_Vulkan_CreateContext(
 	const KineSkiaVulkanBackend *backend);
 KINE_SKIA_API void Kine_Skia_Vulkan_DestroyContext(KineSkiaVulkanContext *context);
+KINE_SKIA_API void Kine_Skia_Vulkan_PurgeResources(KineSkiaVulkanContext *context);
 
 /* ---------------- OpenGL GPU context ----------------
    These entry points are enabled when kine_skia is built with KINE_SKIA_BACKEND=OPENGL.
@@ -280,6 +281,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawPolygon(
 /* ---------------- Transform stack ---------------- */
 
 KINE_SKIA_API void Kine_Skia_Surface_Save(KineSkiaSurface *surface);
+KINE_SKIA_API void Kine_Skia_Surface_SaveLayerAlpha(KineSkiaSurface *surface, float alpha);
 KINE_SKIA_API void Kine_Skia_Surface_Restore(KineSkiaSurface *surface);
 KINE_SKIA_API void Kine_Skia_Surface_Translate(KineSkiaSurface *surface, float dx, float dy);
 KINE_SKIA_API void Kine_Skia_Surface_Rotate(KineSkiaSurface *surface, float degrees);

@@ -14,6 +14,7 @@ CylinderHandleAdornment :: struct {
 	using object: Object,
 	adornee:      ^Object,
 	color:        datatypes.Color3,
+	transparency: f32,
 	height:       f32,
 	radius:       f32,
 	inner_radius: f32,
@@ -59,6 +60,8 @@ CylinderHandleAdornment_get :: proc(
 		Push_Object(L, adornment.adornee)
 	case "Color3":
 		datatypes.Push_Color3(L, datatype_registry, adornment.color)
+	case "Transparency":
+		vm.PushNumber(L, f64(adornment.transparency))
 	case "Height":
 		vm.PushNumber(L, f64(adornment.height))
 	case "Radius":
@@ -87,6 +90,8 @@ CylinderHandleAdornment_set :: proc(
 		adornment.adornee = object_from_argument(L, value_index)
 	case "Color3":
 		adornment.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
+	case "Transparency":
+		adornment.transparency = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
 	case "Height":
 		adornment.height = f32(vm.ArgNumber(L, value_index))
 	case "Radius":
@@ -106,6 +111,7 @@ CylinderHandleAdornment_clone :: proc(source: ^Object, destination: ^Object) {
 	dst := cast(^CylinderHandleAdornment)destination
 	dst.adornee = src.adornee
 	dst.color = src.color
+	dst.transparency = src.transparency
 	dst.height = src.height
 	dst.radius = src.radius
 	dst.inner_radius = src.inner_radius
@@ -146,6 +152,7 @@ cylinder_adornment_matrix :: proc(
 CylinderHandleAdornment_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	adornment := cast(^CylinderHandleAdornment)object
 	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
+	if adornment.transparency >= 1 || adornment.radius <= 0 || adornment.height <= 0 {return}
 
 	target := adornment.adornee
 	if target == nil {target = adornment.parent}
@@ -196,6 +203,6 @@ Register_CylinderHandleAdornment :: proc(registry: ^Registry) {
 		clone = CylinderHandleAdornment_clone,
 		_step = CylinderHandleAdornment_step,
 		_step_phase = .Render_3D,
-		properties = []string{"Adornee", "Color3", "Height", "Radius", "InnerRadius", "CFrame"},
+		properties = []string{"Adornee", "Color3", "Transparency", "Height", "Radius", "InnerRadius", "CFrame"},
 	)
 }

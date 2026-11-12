@@ -3,6 +3,7 @@ package classes
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 import "core:math"
 import "core:strings"
@@ -14,6 +15,7 @@ SoftBody_Class := Class_Info {
 
 SoftBody :: struct {
 	using object:                           Object,
+	touched: ^signals.Signal,
 	mesh_id, material_variant:              string,
 	mesh_content:                           datatypes.Content,
 	mesh_index:                             u32,
@@ -120,6 +122,7 @@ softbody_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	delete(body.mesh_id)
 	delete(body.mesh_content.uri)
 	delete(body.material_variant)
+	signals.Destroy(body.touched)
 	Object_Destroy(object)
 	free(body)
 }
@@ -148,6 +151,8 @@ softbody_get :: proc(
 ) -> bool {
 	body := cast(^SoftBody)object
 	switch key {
+	case "Touched":
+		return deformable_touched_get(L, object, &body.touched)
 	case "MeshId":
 		vm.PushString(L, body.mesh_id)
 	case "MeshIndex":
@@ -366,6 +371,7 @@ Register_SoftBody :: proc(registry: ^Registry) {
 			"SolverIterations",
 			"LastError",
 		},
+		events = []string{"Touched"},
 		methods = []string{"ApplyImpulse", "GetSimulationCFrame"},
 	)
 }

@@ -37,6 +37,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	tracy.ZoneNC("Jolt Synchronize", 0xE06C75)
 	Physics_Synchronize(service, workspace)
 	step_time := min(delta_time, 0.1)
+	physics_collect_character_capsules(service, workspace)
 	physics_prepare_softbodies(service, workspace, step_time)
 
 	tracy.ZoneNC("Step Constraints", 0xE06C75)
@@ -57,6 +58,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		}
 	}
 	Physics_StepConstraints(workspace, service, clamp(delta_time, 0, 0.1))
+	physics_sync_weld_groups(service, &workspace.object)
 	Physics_Apply_Water(service, min(delta_time, 0.1))
 
 	tracy.ZoneNC("Jolt Step", 0xE06C75)
@@ -118,6 +120,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		Physics_Part_Transform_Applied()
 	}
 	Physics_Step_Cloth(service, workspace_service, delta_time)
+	physics_drain_deformable_contacts(service)
 }
 
 Physics_Get_Num_Awake_Parts :: proc(service: ^Physics) -> int {

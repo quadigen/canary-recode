@@ -7,7 +7,6 @@ import sdl3 "../platform"
 import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
-import "core:fmt"
 import "core:math"
 
 GuiObject_Class := Class_Info {
@@ -62,6 +61,15 @@ GuiObject :: struct {
 	auto_solved:                 bool,
 	hovered_gui:                 ^GuiObject,
 	hovered_button:              ^GuiButton,
+	hover_listener_registered:   bool,
+	hover_visit_epoch:           u64,
+	hover_chain_epoch:           u64,
+	hover_event_x:               f32,
+	hover_event_y:               f32,
+	rotation_cache_angle:        f64,
+	rotation_cache_sin:          f32,
+	rotation_cache_cos:          f32,
+	rotation_cache_valid:        bool,
 }
 
 GuiObject_Init :: proc() -> GuiObject {
@@ -87,53 +95,83 @@ GuiObject_Init :: proc() -> GuiObject {
 	}
 }
 
-GuiObject_ensure_signals :: proc(gui: ^GuiObject) {
+gui_hover_listeners: [dynamic]^GuiObject
+gui_hover_previous: [dynamic]^GuiObject
+gui_hover_next: [dynamic]^GuiObject
+gui_hover_epoch: u64
+
+gui_mouse_captured: [3][dynamic]^GuiObject
+gui_event_depth: int
+gui_event_invalidated: [dynamic]^GuiObject
+
+gui_object_event_invalid :: proc(gui: ^GuiObject) -> bool {
+	if gui == nil {return true}
+	if gui_event_depth == 0 || len(gui_event_invalidated) == 0 {return false}
+	for dead in gui_event_invalidated {
+		if dead == gui {return true}
+	}
+	return false
+}
+
+gui_object_remove_from_tracking :: proc(items: ^[dynamic]^GuiObject, gui: ^GuiObject) {
+	index := 0
+	for index < len(items^) {
+		if items^[index] != gui {
+			index += 1
+			continue
+		}
+		items^[index] = items^[len(items^) - 1]
+		_ = pop(items)
+	}
+}
+
+gui_object_untrack :: proc(gui: ^GuiObject) {
+	if gui == nil {return}
+	if gui_event_depth > 0 {append(&gui_event_invalidated, gui)}
+	if gui.hover_listener_registered {
+		gui_object_remove_from_tracking(&gui_hover_listeners, gui)
+		gui.hover_listener_registered = false
+	}
+	gui_object_remove_from_tracking(&gui_hover_previous, gui)
+	gui_object_remove_from_tracking(&gui_hover_next, gui)
+	for i in 0 ..< 3 {
+		gui_object_remove_from_tracking(&gui_mouse_captured[i], gui)
+		gui.mouse_input_down[i] = false
+	}
+}
+
+gui_object_ensure_signal :: proc(gui: ^GuiObject, signal: ^^signals.Signal, hover: bool = false) {
 	if gui == nil ||
 	   gui.object.signal_registry == nil ||
 	   gui.object.signal_registry.signal_registry == nil {
 		return
 	}
 
-	registry := gui.object.signal_registry.signal_registry
-
-	if gui.input_began == nil {
-		gui.input_began = signals.Create(registry)
+	if signal^ == nil {
+		signal^ = signals.Create(gui.object.signal_registry.signal_registry)
 	}
-
-	if gui.input_changed == nil {
-		gui.input_changed = signals.Create(registry)
+	if hover && !gui.hover_listener_registered && signal^ != nil {
+		append(&gui_hover_listeners, gui)
+		gui.hover_listener_registered = true
 	}
+}
 
-	if gui.input_ended == nil {
-		gui.input_ended = signals.Create(registry)
-	}
-
-	if gui.mouse_enter == nil {
-		gui.mouse_enter = signals.Create(registry)
-	}
-
-	if gui.mouse_leave == nil {
-		gui.mouse_leave = signals.Create(registry)
-	}
-
-	if gui.mouse_moved == nil {
-		gui.mouse_moved = signals.Create(registry)
-	}
-
-	if gui.mouse_wheel_forward == nil {
-		gui.mouse_wheel_forward = signals.Create(registry)
-	}
-
-	if gui.mouse_wheel_backward == nil {
-		gui.mouse_wheel_backward = signals.Create(registry)
-	}
+GuiObject_ensure_signals :: proc(gui: ^GuiObject) {
+	if gui == nil {return}
+	gui_object_ensure_signal(gui, &gui.input_began)
+	gui_object_ensure_signal(gui, &gui.input_changed)
+	gui_object_ensure_signal(gui, &gui.input_ended)
+	gui_object_ensure_signal(gui, &gui.mouse_enter, true)
+	gui_object_ensure_signal(gui, &gui.mouse_leave, true)
+	gui_object_ensure_signal(gui, &gui.mouse_moved, true)
+	gui_object_ensure_signal(gui, &gui.mouse_wheel_forward)
+	gui_object_ensure_signal(gui, &gui.mouse_wheel_backward)
 }
 
 GuiObject_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	gui_object := new(GuiObject)
 	gui_object^ = GuiObject_Init()
 	gui_object.name = "GuiObject"
-	Gui_Layout_Mark_Dirty()
 	return &gui_object.object
 }
 
@@ -145,11 +183,8 @@ GuiObject_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 }
 
 GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
-	if gui == nil {
-		return
-	}
-
-	Gui_Layout_Mark_Dirty()
+	if gui == nil {return}
+	gui_object_untrack(gui)
 
 	if gui.input_began != nil {
 		signals.Destroy(gui.input_began)
@@ -195,6 +230,8 @@ GuiObject_get :: proc(
 	gui := cast(^GuiObject)object
 
 	switch key {
+	case "ContainsPoint":
+		vm.PushUserdataMethod(L, key)
 	case "Active":
 		vm.PushBoolean(L, gui.active)
 
@@ -292,38 +329,49 @@ GuiObject_get :: proc(
 			return false
 		}
 
-		datatypes.Push_Vector2(L, datatype_registry, gui.absolute_size)
+		size := gui.absolute_size
+		if !gui.base_solved {
+			// Constructors can read geometry before the first retained layout
+			// pass, for example when fitting a camera to a new ViewportFrame.
+			ctx := Class_Step_Context {
+				viewport_width  = gui_layout_last_width,
+				viewport_height = gui_layout_last_height,
+			}
+			_, _, width, height := GuiObject_get_absolute_transform(object, &ctx)
+			size = {max(0, width), max(0, height)}
+		}
+		datatypes.Push_Vector2(L, datatype_registry, size)
 
 	case "InputBegan":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.input_began)
 		signals.Push(L, gui.input_began)
 
 	case "InputChanged":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.input_changed)
 		signals.Push(L, gui.input_changed)
 
 	case "InputEnded":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.input_ended)
 		signals.Push(L, gui.input_ended)
 
 	case "MouseEnter":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.mouse_enter, true)
 		signals.Push(L, gui.mouse_enter)
 
 	case "MouseLeave":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.mouse_leave, true)
 		signals.Push(L, gui.mouse_leave)
 
 	case "MouseMoved":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.mouse_moved, true)
 		signals.Push(L, gui.mouse_moved)
 
 	case "MouseWheelForward":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.mouse_wheel_forward)
 		signals.Push(L, gui.mouse_wheel_forward)
 
 	case "MouseWheelBackward":
-		GuiObject_ensure_signals(gui)
+		gui_object_ensure_signal(gui, &gui.mouse_wheel_backward)
 		signals.Push(L, gui.mouse_wheel_backward)
 
 	case:
@@ -421,6 +469,19 @@ GuiObject_get_absolute_transform :: proc(
 		return GuiObject_get_absolute_transform(object.parent, ctx)
 	}
 
+	gui_cached := cast(^GuiObject)object
+	if ctx.gui_transform.object == nil &&
+	   !gui_layout_dirty &&
+	   gui_cached.base_solved &&
+	   gui_cached.resolved_size_valid &&
+	   ctx.viewport_width == gui_layout_last_width &&
+	   ctx.viewport_height == gui_layout_last_height {
+		return gui_cached.absolute_position.X,
+			gui_cached.absolute_position.Y,
+			gui_cached.absolute_size.X,
+			gui_cached.absolute_size.Y
+	}
+
 	parent_x, parent_y, parent_width, parent_height := GuiObject_get_absolute_transform(
 		object.parent,
 		ctx,
@@ -438,6 +499,8 @@ GuiObject_get_absolute_transform :: proc(
 		width = gui.size.X_Scale * parent_width + gui.size.X_Offset
 		height = gui.size.Y_Scale * parent_height + gui.size.Y_Offset
 	}
+
+	width, height = GuiObject_Constrain_Size(gui, width, height)
 
 	if gui.layout_override_active {
 		x = parent_x + gui.layout_override_position.X
@@ -573,28 +636,27 @@ GuiObject_contains_point :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 
 GuiObject_screen_to_local :: proc(gui: ^GuiObject, x, y: f32) -> (f32, f32) {
 	px, py := x, y
+	if gui == nil {return px, py}
 
-	if gui == nil {
-		return px, py
-	}
-
-	if gui.object.parent != nil && Is_A(gui.object.parent, "GuiObject") {
+	if gui.object.parent != nil && Is_A_Class(gui.object.parent, &GuiObject_Class) {
 		px, py = GuiObject_screen_to_local(cast(^GuiObject)gui.object.parent, x, y)
 	}
 
 	if gui.rotation != 0 {
+		if !gui.rotation_cache_valid || gui.rotation_cache_angle != gui.rotation {
+			angle := math.to_radians(f32(-gui.rotation))
+			gui.rotation_cache_sin = math.sin(angle)
+			gui.rotation_cache_cos = math.cos(angle)
+			gui.rotation_cache_angle = gui.rotation
+			gui.rotation_cache_valid = true
+		}
 		center_x := gui.absolute_position.X + gui.absolute_size.X * 0.5
 		center_y := gui.absolute_position.Y + gui.absolute_size.Y * 0.5
-		radians := math.to_radians(f32(-gui.rotation))
-		sine := math.sin(radians)
-		cosine := math.cos(radians)
 		dx := px - center_x
 		dy := py - center_y
-
-		px = center_x + dx * cosine - dy * sine
-		py = center_y + dx * sine + dy * cosine
+		px = center_x + dx * gui.rotation_cache_cos - dy * gui.rotation_cache_sin
+		py = center_y + dx * gui.rotation_cache_sin + dy * gui.rotation_cache_cos
 	}
-
 	return px, py
 }
 
@@ -649,6 +711,8 @@ gui_object_is_overlay_pass :: proc(screen: ^ScreenGui) -> bool {
 	return false
 }
 
+// Compatibility entrypoints retained for other classes that may call them.
+// Hot-path hit testing uses gui_object_hit_subtree_reverse instead.
 gui_object_visit_painted_subtree :: proc(
 	object: ^Object,
 	screen: ^ScreenGui,
@@ -729,33 +793,71 @@ gui_object_visit_surface_subtree :: proc(
 	}
 }
 
+
+gui_object_point_in_own_rect :: proc(gui: ^GuiObject, x, y: f32) -> bool {
+	if gui == nil {return false}
+	px, py := GuiObject_screen_to_local(gui, x, y)
+	return GuiObject_point_in_rect(px, py, gui.absolute_position, gui.absolute_size)
+}
+
+// Children render after their parents; later siblings render above earlier siblings.
+// Reverse traversal returns the same last-painted winner without testing the whole tree.
+gui_object_hit_subtree_reverse :: proc(
+	object: ^Object,
+	x, y: f32,
+	require_paint: bool,
+) -> ^GuiObject {
+	if object == nil {return nil}
+
+	index := len(object.children)
+	for index > 0 {
+		index -= 1
+		child := object.children[index]
+		if child == nil || child.destroyed {continue}
+
+		// Screen/SurfaceGui roots are processed independently.
+		if Is_A_Class(child, &ScreenGui_Class) || Is_A_Class(child, &SurfaceGui_Class) {
+			continue
+		}
+
+		if Is_A_Class(child, &GuiObject_Class) {
+			gui := cast(^GuiObject)child
+			if !gui.visible {continue}
+
+			// Descendants cannot be hit outside an ancestor's clipping region.
+			inside := false
+			if gui.clips_descendants {
+				inside = gui_object_point_in_own_rect(gui, x, y)
+				if !inside {continue}
+			}
+
+			if descendant := gui_object_hit_subtree_reverse(child, x, y, require_paint);
+			   descendant != nil {
+				return descendant
+			}
+			if GuiObject_accepts_pointer(gui) && (!require_paint || GuiObject_paints(gui)) {
+				if gui.clips_descendants || gui_object_point_in_own_rect(gui, x, y) {
+					return gui
+				}
+			}
+		} else {
+			if descendant := gui_object_hit_subtree_reverse(child, x, y, require_paint);
+			   descendant != nil {
+				return descendant
+			}
+		}
+	}
+	return nil
+}
+
 GuiObject_find_topmost_in_surface :: proc(
 	surface: ^SurfaceGui,
 	x, y: f32,
 	require_paint: bool = false,
 ) -> ^GuiObject {
-	if surface == nil {
-		return nil
-	}
-
-	seq := 0
-	best: ^GuiObject
-	best_seq := -1
-
-	gui_object_visit_surface_subtree(
-		&surface.object,
-		surface,
-		x,
-		y,
-		&seq,
-		&best,
-		&best_seq,
-		require_paint,
-	)
-
-	return best
+	if surface == nil || !surface.enabled {return nil}
+	return gui_object_hit_subtree_reverse(&surface.object, x, y, require_paint)
 }
-
 
 GuiObject_find_topmost :: proc(
 	registry: ^Registry,
@@ -763,98 +865,61 @@ GuiObject_find_topmost :: proc(
 	require_paint: bool = false,
 	overlay_only: bool = false,
 ) -> ^GuiObject {
-	if registry == nil {
-		return nil
-	}
-
-	seq := 0
-	best: ^GuiObject
-	best_seq := -1
-
+	if registry == nil {return nil}
 	screen_descriptor := Find_Class(registry, "ScreenGui")
+	if screen_descriptor == nil {return nil}
 
+	// Overlays have the final rendering pass, so test them first.
+	index := len(screen_descriptor.instances)
+	for index > 0 {
+		index -= 1
+		object := screen_descriptor.instances[index]
+		if object == nil || object.destroyed {continue}
+		screen := cast(^ScreenGui)object
+		if !ScreenGui_Is_Visible(screen) || !gui_object_is_overlay_pass(screen) {continue}
+		if hit := gui_object_hit_subtree_reverse(&screen.object, x, y, require_paint); hit != nil {
+			return hit
+		}
+	}
 
-	if screen_descriptor != nil && !overlay_only {
-		for descriptor in registry.classes {
-			for object in descriptor.instances {
-				if object == nil || object.destroyed || !Is_A(object, "GuiObject") {
-					continue
-				}
+	if overlay_only {return nil}
 
-				gui := cast(^GuiObject)object
+	index = len(screen_descriptor.instances)
+	for index > 0 {
+		index -= 1
+		object := screen_descriptor.instances[index]
+		if object == nil || object.destroyed {continue}
+		screen := cast(^ScreenGui)object
+		if !ScreenGui_Is_Visible(screen) || gui_object_is_overlay_pass(screen) {continue}
+		if hit := gui_object_hit_subtree_reverse(&screen.object, x, y, require_paint); hit != nil {
+			return hit
+		}
+	}
 
-				if gui_object_containing_screen(gui) != nil ||
-				   gui_object_containing_surface(gui) != nil {
-					continue
-				}
-
-				if gui.visible &&
-				   GuiObject_effectively_visible(gui) &&
-				   GuiObject_accepts_pointer(gui) &&
-				   (!require_paint || GuiObject_paints(gui)) &&
-				   GuiObject_contains_point(gui, x, y) {
-					seq += 1
-
-					if seq > best_seq {
-						best = gui
-						best_seq = seq
-					}
-				}
+	// Rootless GUI objects belong to the background pass.
+	class_index := len(registry.classes)
+	for class_index > 0 {
+		class_index -= 1
+		descriptor := registry.classes[class_index]
+		if descriptor == nil || !Is_Class_A(descriptor.info, &GuiObject_Class) {continue}
+		object_index := len(descriptor.instances)
+		for object_index > 0 {
+			object_index -= 1
+			object := descriptor.instances[object_index]
+			if object == nil || object.destroyed {continue}
+			gui := cast(^GuiObject)object
+			if !gui.visible || !GuiObject_accepts_pointer(gui) {continue}
+			if gui_object_containing_screen(gui) != nil ||
+			   gui_object_containing_surface(gui) != nil {
+				continue
+			}
+			if (!require_paint || GuiObject_paints(gui)) && GuiObject_contains_point(gui, x, y) {
+				return gui
 			}
 		}
 	}
 
-	if screen_descriptor != nil {
-		for object in screen_descriptor.instances {
-			if object == nil || object.destroyed {
-				continue
-			}
-
-			screen := cast(^ScreenGui)object
-
-			if overlay_only ||
-			   !ScreenGui_Is_Visible(screen) ||
-			   gui_object_is_overlay_pass(screen) {
-				continue
-			}
-
-			gui_object_visit_painted_subtree(
-				&screen.object,
-				screen,
-				x,
-				y,
-				&seq,
-				&best,
-				&best_seq,
-				require_paint,
-			)
-		}
-
-		for object in screen_descriptor.instances {
-			if object == nil || object.destroyed {
-				continue
-			}
-
-			screen := cast(^ScreenGui)object
-
-			if !ScreenGui_Is_Visible(screen) || !gui_object_is_overlay_pass(screen) {
-				continue
-			}
-
-			gui_object_visit_painted_subtree(
-				&screen.object,
-				screen,
-				x,
-				y,
-				&seq,
-				&best,
-				&best_seq,
-				require_paint,
-			)
-		}
-	}
-
-	return best
+	return nil
 }
 
 GuiObject_Hit :: struct {
@@ -979,19 +1044,12 @@ GuiObject_surface_pointer_over :: proc(
 }
 
 GuiObject_in_hit_chain :: proc(registry: ^Registry, gui: ^GuiObject, x, y: f32) -> bool {
-	if registry == nil || gui == nil {
-		return false
+	if registry == nil || gui == nil {return false}
+	hit := GuiObject_hit_test(registry, x, y)
+	if hit.target == nil {return false}
+	for node: ^Object = &hit.target.object; node != nil; node = node.parent {
+		if node == &gui.object {return true}
 	}
-
-	chain := GuiObject_hit_chain(registry, x, y)
-	defer delete(chain)
-
-	for candidate in chain {
-		if candidate == gui {
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -1060,9 +1118,115 @@ gui_object_fire_input :: proc(
 	Destroy_Hierarchy(&input.object)
 }
 
+gui_object_hover_add :: proc(gui: ^GuiObject, epoch: u64, x, y: f32, in_chain: bool) {
+	if gui == nil || gui.destroyed {return}
+	if gui.hover_visit_epoch != epoch {
+		gui.hover_visit_epoch = epoch
+		append(&gui_hover_next, gui)
+	}
+	if in_chain {gui.hover_chain_epoch = epoch}
+	gui.hover_event_x = x
+	gui.hover_event_y = y
+}
+
+gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
+	screen_x, screen_y := f32(event.motion.x), f32(event.motion.y)
+	result := GuiObject_hit_chain_ex(registry, screen_x, screen_y)
+	defer delete(result.chain)
+
+	gui_hover_epoch += 1
+	if gui_hover_epoch == 0 {gui_hover_epoch = 1}
+	epoch := gui_hover_epoch
+	clear(&gui_hover_next)
+
+	// Every element in the target's ancestor chain receives hover/movement.
+	for gui in result.chain {
+		gui_object_hover_add(gui, epoch, result.x, result.y, true)
+	}
+
+	// Passive listeners do not consume clicks, but must still receive hover.
+	index := 0
+	for index < len(gui_hover_listeners) {
+		gui := gui_hover_listeners[index]
+		index += 1
+		if gui == nil ||
+		   gui.destroyed ||
+		   gui.hover_visit_epoch == epoch ||
+		   GuiObject_accepts_pointer(gui) {continue}
+		px, py, point_ok := GuiObject_pointer_point(registry, gui, screen_x, screen_y)
+		if point_ok &&
+		   gui.absolute_size.X > 0 &&
+		   gui.absolute_size.Y > 0 &&
+		   GuiObject_contains_point(gui, px, py) {
+			gui_object_hover_add(gui, epoch, px, py, false)
+		}
+	}
+
+	index = 0
+	for index < len(gui_hover_previous) {
+		gui := gui_hover_previous[index]
+		if gui == nil || gui.destroyed || gui.hover_visit_epoch == epoch {
+			index += 1
+			continue
+		}
+		gui.mouse_inside = false
+		px, py := result.x, result.y
+		if !GuiObject_accepts_pointer(gui) && gui.hover_listener_registered {
+			px, py, _ = GuiObject_pointer_point(registry, gui, screen_x, screen_y)
+		}
+		gui_object_fire_xy(L, gui.mouse_leave, px, py)
+		if index < len(gui_hover_previous) && gui_hover_previous[index] == gui {index += 1}
+	}
+
+	index = 0
+	for index < len(gui_hover_next) {
+		gui := gui_hover_next[index]
+		if gui == nil || gui.destroyed {index += 1; continue}
+		if !gui.mouse_inside {
+			gui.mouse_inside = true
+			gui_object_fire_xy(L, gui.mouse_enter, gui.hover_event_x, gui.hover_event_y)
+			if index >= len(gui_hover_next) || gui_hover_next[index] != gui {continue}
+		}
+		if gui.hover_chain_epoch != epoch {
+			gui_object_fire_xy(L, gui.mouse_moved, gui.hover_event_x, gui.hover_event_y)
+			if index >= len(gui_hover_next) || gui_hover_next[index] != gui {continue}
+		}
+		index += 1
+	}
+
+	// Reuse the dynamic-array allocations for subsequent motions.
+	clear(&gui_hover_previous)
+	for gui in gui_hover_next {append(&gui_hover_previous, gui)}
+
+	for target in result.chain {
+		if gui_object_event_invalid(target) {continue}
+		if target.destroyed {continue}
+		gui_object_fire_xy(L, target.mouse_moved, result.x, result.y)
+		if gui_object_event_invalid(target) {continue}
+		if target.active && target.input_changed != nil {
+			gui_object_fire_input(
+				L,
+				registry,
+				target.input_changed,
+				InputObject_Value {
+					UserInputType = .MouseMovement,
+					UserInputState = .Change,
+					Position = {result.x, result.y, 0},
+					Delta = {event.motion.xrel, event.motion.yrel, 0},
+				},
+			)
+		}
+	}
+}
+
 GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
-	if registry == nil || L == nil {
-		return
+	if registry == nil || L == nil {return}
+
+	if gui_event_depth == 0 {clear(&gui_event_invalidated)}
+	gui_event_depth += 1
+	defer {
+		gui_event_depth -= 1
+		if gui_event_depth == 0 {clear(&gui_event_invalidated)}
 	}
 
 	if !UIScaleDetector_Handle_Event(registry, L, event) {
@@ -1071,94 +1235,27 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 
 	#partial switch event.type {
 	case .MOUSE_MOTION:
-		result := GuiObject_hit_chain_ex(registry, f32(event.motion.x), f32(event.motion.y))
-		defer delete(result.chain)
-
-		chain := result.chain
-
-		for descriptor in registry.classes {
-			if !Is_Class_A(descriptor.info, &GuiObject_Class) {continue}
-			for object in descriptor.instances {
-				if object == nil || object.destroyed {
-					continue
-				}
-
-				gui := cast(^GuiObject)object
-
-				inside := false
-
-				for candidate in chain {
-					if candidate == gui {
-						inside = true
-						break
-					}
-				}
-
-				if inside != gui.mouse_inside {
-					gui.mouse_inside = inside
-
-					GuiObject_ensure_signals(gui)
-
-					if inside {
-						gui_object_fire_xy(L, gui.mouse_enter, result.x, result.y)
-					} else {
-						gui_object_fire_xy(L, gui.mouse_leave, result.x, result.y)
-					}
-				}
-			}
-		}
-
-		for target in chain {
-			if target.destroyed {
-				continue
-			}
-
-			GuiObject_ensure_signals(target)
-
-			gui_object_fire_xy(L, target.mouse_moved, result.x, result.y)
-
-			if target.active {
-				gui_object_fire_input(
-					L,
-					registry,
-					target.input_changed,
-					InputObject_Value {
-						UserInputType = .MouseMovement,
-						UserInputState = .Change,
-						Position = {result.x, result.y, 0},
-						Delta = {event.motion.xrel, event.motion.yrel, 0},
-					},
-				)
-			}
-		}
+		gui_object_dispatch_motion(registry, L, event)
 
 	case .MOUSE_BUTTON_DOWN:
 		index := gui_object_mouse_index(event.button.button)
-
-		if index < 0 {
-			return
-		}
-
-		input_type := gui_object_mouse_type(event.button.button)
+		if index < 0 {return}
 
 		hit := GuiObject_hit_test(registry, f32(event.button.x), f32(event.button.y))
-
-		if hit.target == nil {
-			return
-		}
+		if hit.target == nil {return}
 
 		gui := hit.target
-
-		gui.mouse_input_down[index] = true
-
-		GuiObject_ensure_signals(gui)
+		if !gui.mouse_input_down[index] {
+			gui.mouse_input_down[index] = true
+			append(&gui_mouse_captured[index], gui)
+		}
 
 		gui_object_fire_input(
 			L,
 			registry,
 			gui.input_began,
 			InputObject_Value {
-				UserInputType = input_type,
+				UserInputType = gui_object_mouse_type(event.button.button),
 				UserInputState = .Begin,
 				Position = {hit.x, hit.y, 0},
 			},
@@ -1166,60 +1263,36 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 
 	case .MOUSE_BUTTON_UP:
 		index := gui_object_mouse_index(event.button.button)
-
-		if index < 0 {
-			return
-		}
-
+		if index < 0 {return}
 		input_type := gui_object_mouse_type(event.button.button)
 
-		for descriptor in registry.classes {
-			for object in descriptor.instances {
-				if object == nil || object.destroyed || !Is_A(object, "GuiObject") {
-					continue
-				}
-
-				gui := cast(^GuiObject)object
-
-				if !gui.mouse_input_down[index] {
-					continue
-				}
-
-				gui.mouse_input_down[index] = false
-
-				GuiObject_ensure_signals(gui)
-
-				point_x, point_y, _ := GuiObject_pointer_point(
-					registry,
-					gui,
-					f32(event.button.x),
-					f32(event.button.y),
-				)
-
-				gui_object_fire_input(
-					L,
-					registry,
-					gui.input_ended,
-					InputObject_Value {
-						UserInputType = input_type,
-						UserInputState = .End,
-						Position = {point_x, point_y, 0},
-					},
-				)
-			}
+		// InputEnded goes to captured targets even if the cursor moved elsewhere.
+		for len(gui_mouse_captured[index]) > 0 {
+			gui := pop(&gui_mouse_captured[index])
+			if gui == nil || gui.destroyed || !gui.mouse_input_down[index] {continue}
+			gui.mouse_input_down[index] = false
+			px, py, _ := GuiObject_pointer_point(
+				registry,
+				gui,
+				f32(event.button.x),
+				f32(event.button.y),
+			)
+			gui_object_fire_input(
+				L,
+				registry,
+				gui.input_ended,
+				InputObject_Value {
+					UserInputType = input_type,
+					UserInputState = .End,
+					Position = {px, py, 0},
+				},
+			)
 		}
 
 	case .MOUSE_WHEEL:
 		hit := GuiObject_hit_test(registry, f32(event.wheel.mouse_x), f32(event.wheel.mouse_y))
-
-		if hit.target == nil {
-			return
-		}
-
+		if hit.target == nil {return}
 		gui := hit.target
-
-		GuiObject_ensure_signals(gui)
-
 		gui_object_fire_input(
 			L,
 			registry,
@@ -1231,15 +1304,11 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 				Delta = {event.wheel.x, 0, event.wheel.y},
 			},
 		)
-
+		if gui_object_event_invalid(gui) {return}
 		wheel_y := f32(event.wheel.y)
-
 		when ODIN_OS != .JS {
-			if event.wheel.direction == .FLIPPED {
-				wheel_y = -wheel_y
-			}
+			if event.wheel.direction == .FLIPPED {wheel_y = -wheel_y}
 		}
-
 		if wheel_y > 0 {
 			gui_object_fire_xy(L, gui.mouse_wheel_forward, hit.x, hit.y)
 		} else if wheel_y < 0 {
@@ -1289,20 +1358,20 @@ gui_effective_size :: proc(
 	}
 
 	if gui.layout_override_size_active {
-		return gui.layout_override_size.X, gui.layout_override_size.Y
+		width = gui.layout_override_size.X
+		height = gui.layout_override_size.Y
+	} else if gui.resolved_size_valid {
+		width = gui.resolved_size.X
+		height = gui.resolved_size.Y
+	} else if gui.base_solved {
+		width = gui.base_size.X
+		height = gui.base_size.Y
+	} else {
+		width = gui.size.X_Scale * parent_width + gui.size.X_Offset
+		height = gui.size.Y_Scale * parent_height + gui.size.Y_Offset
 	}
 
-	if gui.resolved_size_valid {
-		return gui.resolved_size.X, gui.resolved_size.Y
-	}
-
-	if gui.base_solved {
-		return gui.base_size.X, gui.base_size.Y
-	}
-
-	width = gui.size.X_Scale * parent_width + gui.size.X_Offset
-	height = gui.size.Y_Scale * parent_height + gui.size.Y_Offset
-	return
+	return GuiObject_Constrain_Size(gui, width, height)
 }
 
 gui_automatic_size_limits :: proc(
@@ -1349,20 +1418,6 @@ gui_automatic_size_limits :: proc(
 
 	return max(f32(0), parent_width), max(f32(0), parent_height), true, true
 }
-
-gui_automatic_size_allows_y :: proc(gui: ^GuiObject) -> bool {
-	switch {
-	case Is_A(&gui.object, "TextLabel"):
-		return (cast(^TextLabel)gui).text_wrapped
-	case Is_A(&gui.object, "TextButton"):
-		return (cast(^TextButton)gui).text_wrapped
-	case Is_A(&gui.object, "TextBox"):
-		return (cast(^TextBox)gui).wrap
-	}
-
-	return true
-}
-
 
 gui_resolve_uipadding :: proc(
 	gui: ^GuiObject,
@@ -1423,7 +1478,11 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 	case Is_A(&gui.object, "TextButton"):
 		button := cast(^TextButton)gui
 		label := TextButton_to_text_label(button)
-		text_content = TextLabel_Measure_Content(&label, basis_width, &button.render_layout.measure)
+		text_content = TextLabel_Measure_Content(
+			&label,
+			basis_width,
+			&button.render_layout.measure,
+		)
 		is_text = true
 	case Is_A(&gui.object, "TextBox"):
 		text_content = TextBox_Measure_Content(cast(^TextBox)gui, basis_width)
@@ -1544,6 +1603,7 @@ surfacegui_mark_dirty_for :: proc(object: ^Object) {
 GUI_LAYOUT_SKIP_WHEN_CLEAN :: true
 
 gui_layout_dirty: bool = true
+gui_layout_full_dirty: bool = true
 gui_layout_last_width: i32
 gui_layout_last_height: i32
 
@@ -1569,7 +1629,29 @@ Gui_Render_Consume_Animated :: #force_inline proc "contextless" () -> bool {
 
 Gui_Layout_Mark_Dirty :: #force_inline proc "contextless" () {
 	gui_layout_dirty = true
+	gui_layout_full_dirty = true
 	gui_render_revision += 1
+}
+
+// Moving an element normally changes only absolute transforms. Content-sized
+// ancestors are handled by the full layout path instead.
+Gui_Layout_Mark_Transform_Dirty :: #force_inline proc "contextless" () {
+	gui_layout_dirty = true
+	gui_render_revision += 1
+}
+
+gui_object_position_affects_content :: proc(gui: ^GuiObject) -> bool {
+	if gui == nil {return true}
+	for parent := gui.object.parent; parent != nil; parent = parent.parent {
+		if !Is_A_Class(parent, &GuiObject_Class) {continue}
+		parent_gui := cast(^GuiObject)parent
+		if parent_gui.automatic_size != .None {return true}
+		if Is_A_Class(parent, &ScrollingFrame_Class) &&
+		   (cast(^ScrollingFrame)parent).automatic_canvas_size != .None {
+			return true
+		}
+	}
+	return false
 }
 
 gui_layout_guis: [dynamic]^GuiObject
@@ -1586,10 +1668,10 @@ gui_measure_base :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 
 	parent_width, parent_height := gui_parent_basis_size(gui, ctx)
 
-	gui.base_size = {
-		gui.size.X_Scale * parent_width + gui.size.X_Offset,
-		gui.size.Y_Scale * parent_height + gui.size.Y_Offset,
-	}
+	base_width := gui.size.X_Scale * parent_width + gui.size.X_Offset
+	base_height := gui.size.Y_Scale * parent_height + gui.size.Y_Offset
+	base_width, base_height = GuiObject_Constrain_Size(gui, base_width, base_height)
+	gui.base_size = {base_width, base_height}
 
 	for child in gui.object.children {
 		if child == nil || child.destroyed || !Is_A_Class(child, &GuiObject_Class) {
@@ -1644,15 +1726,14 @@ gui_measure_auto :: proc(gui: ^GuiObject, registry: ^Registry, ctx: ^Class_Step_
 		}
 
 		if automatic == enums.AutomaticSize.Y || automatic == enums.AutomaticSize.XY {
-			if gui_automatic_size_allows_y(gui) {
-				height = max(height, content.Y)
-
-				if clamp_y {
-					height = min(height, max_y)
-				}
+			height = max(height, content.Y)
+			if clamp_y {
+				height = min(height, max_y)
 			}
 		}
 	}
+
+	width, height = GuiObject_Constrain_Size(gui, width, height)
 
 	old := gui.resolved_size
 
@@ -1702,6 +1783,8 @@ gui_compute_transform :: proc(
 		w = gui.size.X_Scale * parent_w + gui.size.X_Offset
 		h = gui.size.Y_Scale * parent_h + gui.size.Y_Offset
 	}
+
+	w, h = GuiObject_Constrain_Size(gui, w, h)
 
 	if gui.layout_override_active {
 		x = parent_x + gui.layout_override_position.X
@@ -1796,6 +1879,23 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		delta_time      = delta_time,
 		viewport_width  = width,
 		viewport_height = height,
+	}
+
+	// Retain all measurements and list/grid overrides for position-only edits.
+	if !gui_layout_full_dirty &&
+	   width == gui_layout_last_width &&
+	   height == gui_layout_last_height {
+		tracy.ZoneNC("GUI Transform-Only Layout", 0x56B6C2)
+		for root in gui_layout_roots {
+			if root == nil || root.object.destroyed {continue}
+			px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
+			x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
+			root.absolute_position = {x, y}
+			root.absolute_size = {w, h}
+			gui_apply_transforms(root, x, y, w, h)
+		}
+		gui_layout_dirty = false
+		return
 	}
 
 	gui_layout_animated = false
@@ -1921,6 +2021,7 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	gui_layout_last_width = width
 	gui_layout_last_height = height
 	gui_layout_dirty = gui_layout_changed || gui_layout_animated
+	gui_layout_full_dirty = gui_layout_dirty
 	if gui_layout_changed {
 		gui_render_revision += 1
 	}
@@ -1982,24 +2083,50 @@ Gui_Shape :: struct {
 }
 
 
-gui_corner_shape :: proc(object: ^Object, rect: guilib.Rect) -> Gui_Shape {
+GuiObject_Decorators :: struct {
+	shadow:      ^Object,
+	backdrop:    ^Object,
+	stroke:      ^Object,
+	magnifier:   ^Object,
+	motion_blur: ^Object,
+	squircle:    ^Object,
+	corner:      ^Object,
+}
+
+gui_object_decorators :: proc(object: ^Object) -> GuiObject_Decorators {
+	result: GuiObject_Decorators
+	if object == nil {return result}
+	for child in object.children {
+		if child == nil || child.destroyed {continue}
+		if result.shadow == nil && Is_A(child, "UIShadow") {result.shadow = child}
+		if result.backdrop == nil && Is_A(child, "UIBackdrop") {result.backdrop = child}
+		if result.stroke == nil && Is_A(child, "UIStroke") {result.stroke = child}
+		if result.magnifier == nil && Is_A(child, "UIMagnifier") {result.magnifier = child}
+		if result.motion_blur == nil && Is_A(child, "UIMotionBlur") {result.motion_blur = child}
+		if result.squircle == nil && Is_A(child, "UISquircle") {result.squircle = child}
+		if result.corner == nil && Is_A(child, "UICorner") {result.corner = child}
+	}
+	return result
+}
+
+gui_corner_shape_with_decorators :: proc(
+	decorators: GuiObject_Decorators,
+	rect: guilib.Rect,
+) -> Gui_Shape {
 	short_edge := min(rect.width, rect.height)
 	max_radius := short_edge * 0.5
 
-	if squircle_object := Find_First_Child_Of_Class(object, "UISquircle"); squircle_object != nil {
-		squircle := cast(^UISquircle)squircle_object
+	if decorators.squircle != nil {
+		squircle := cast(^UISquircle)decorators.squircle
 		base := clamp(gui_resolve_udim(squircle.radius, short_edge), f32(0), max_radius)
-
 		tl := gui_resolve_udim(squircle.top_left_radius, short_edge)
 		tr := gui_resolve_udim(squircle.top_right_radius, short_edge)
 		br := gui_resolve_udim(squircle.bottom_right_radius, short_edge)
 		bl := gui_resolve_udim(squircle.bottom_left_radius, short_edge)
-
 		if tl <= 0 {tl = base}
 		if tr <= 0 {tr = base}
 		if br <= 0 {br = base}
 		if bl <= 0 {bl = base}
-
 		return Gui_Shape {
 			kind = .Squircle,
 			radius = base,
@@ -2011,8 +2138,7 @@ gui_corner_shape :: proc(object: ^Object, rect: guilib.Rect) -> Gui_Shape {
 		}
 	}
 
-	corner_object := Find_First_Child_Of_Class(object, "UICorner")
-	radius := gui_corner_radius(corner_object, rect)
+	radius := gui_corner_radius(decorators.corner, rect)
 	if radius > 0 {
 		return Gui_Shape {
 			kind = .Round,
@@ -2024,8 +2150,11 @@ gui_corner_shape :: proc(object: ^Object, rect: guilib.Rect) -> Gui_Shape {
 			exponent = 2,
 		}
 	}
-
 	return Gui_Shape{kind = .None, exponent = 2}
+}
+
+gui_corner_shape :: proc(object: ^Object, rect: guilib.Rect) -> Gui_Shape {
+	return gui_corner_shape_with_decorators(gui_object_decorators(object), rect)
 }
 
 gui_render_children :: proc(
@@ -2113,13 +2242,14 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 	gui.absolute_position = datatypes.Vector2{rect.x, rect.y}
 	gui.absolute_size = datatypes.Vector2{rect.width, rect.height}
 
-	shadow_object := Find_First_Child_Of_Class(object, "UIShadow")
-	backdrop_object := Find_First_Child_Of_Class(object, "UIBackdrop")
-	stroke_object := Find_First_Child_Of_Class(object, "UIStroke")
-	magnifier_object := Find_First_Child_Of_Class(object, "UIMagnifier")
-	motion_blur_object := Find_First_Child_Of_Class(object, "UIMotionBlur")
+	decorators := gui_object_decorators(object)
+	shadow_object := decorators.shadow
+	backdrop_object := decorators.backdrop
+	stroke_object := decorators.stroke
+	magnifier_object := decorators.magnifier
+	motion_blur_object := decorators.motion_blur
 
-	shape := gui_corner_shape(object, rect)
+	shape := gui_corner_shape_with_decorators(decorators, rect)
 	corner_radius := shape.radius
 
 	if shadow_object != nil {
@@ -2338,86 +2468,136 @@ GuiObject_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	gui_object := cast(^GuiObject)object
+	gui := cast(^GuiObject)object
+	layout_dirty := false
+	transform_dirty := false
+	render_dirty := false
 
 	switch key {
 	case "Active":
-		gui_object.active = vm.ArgBoolean(L, value_index)
+		value := vm.ArgBoolean(L, value_index)
+		if gui.active == value {return true}
+		gui.active = value
+		render_dirty = true
 	case "LayoutOrder":
-		gui_object.layout_order = i32(vm.ArgNumber(L, value_index))
+		value := i32(vm.ArgNumber(L, value_index))
+		if gui.layout_order == value {return true}
+		gui.layout_order = value
+		layout_dirty = true
 	case "BackgroundTransparency":
-		gui_object.bg_transparency = clamp(vm.ArgNumber(L, value_index), 0.0, 1.0)
+		value := clamp(vm.ArgNumber(L, value_index), 0.0, 1.0)
+		if gui.bg_transparency == value {return true}
+		gui.bg_transparency = value
+		render_dirty = true
 	case "ClipsDescendants":
-		gui_object.clips_descendants = vm.ArgBoolean(L, value_index)
+		value := vm.ArgBoolean(L, value_index)
+		if gui.clips_descendants == value {return true}
+		gui.clips_descendants = value
+		render_dirty = true
 	case "InputSink":
-		gui_object.input_sink = vm.ArgBoolean(L, value_index)
+		value := vm.ArgBoolean(L, value_index)
+		if gui.input_sink == value {return true}
+		gui.input_sink = value
+		render_dirty = true
 	case "Selectable":
-		gui_object.selectable = vm.ArgBoolean(L, value_index)
+		value := vm.ArgBoolean(L, value_index)
+		if gui.selectable == value {return true}
+		gui.selectable = value
+		render_dirty = true
 	case "Visible":
-		visible := vm.ArgBoolean(L, value_index)
-		if gui_object.visible == visible {return true}
-		gui_object.visible = visible
+		value := vm.ArgBoolean(L, value_index)
+		if gui.visible == value {return true}
+		gui.visible = value
+		layout_dirty = true
 	case "ZIndex":
-		zindex := i32(vm.ArgNumber(L, value_index))
-		if gui_object.zindex == zindex {return true}
-		gui_object.zindex = zindex
+		value := i32(vm.ArgNumber(L, value_index))
+		if gui.zindex == value {return true}
+		gui.zindex = value
+		render_dirty = true
 	case "BorderSizePixel":
-		gui_object.border_size_pixels = i32(vm.ArgNumber(L, value_index))
+		value := i32(vm.ArgNumber(L, value_index))
+		if gui.border_size_pixels == value {return true}
+		gui.border_size_pixels = value
+		render_dirty = true
 	case "BorderColor3":
-		if datatype_registry == nil {
-			return false
-		}
-		gui_object.border_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		if datatype_registry == nil {return false}
+		value := datatypes.Arg_Color3(L, value_index, datatype_registry)
+		if gui.border_color3 == value {return true}
+		gui.border_color3 = value
+		render_dirty = true
 	case "BorderMode":
 		if enum_registry == nil {return false}
-		gui_object.border_mode = enums.BorderMode(
+		value := enums.BorderMode(
 			enums.Arg_Item(L, value_index, enum_registry, "BorderMode").value,
 		)
+		if gui.border_mode == value {return true}
+		gui.border_mode = value
+		render_dirty = true
 	case "GuiState":
 		if enum_registry == nil {return false}
-		gui_object.gui_state = enums.GuiState(
-			enums.Arg_Item(L, value_index, enum_registry, "GuiState").value,
-		)
+		value := enums.GuiState(enums.Arg_Item(L, value_index, enum_registry, "GuiState").value)
+		if gui.gui_state == value {return true}
+		gui.gui_state = value
+		render_dirty = true
 	case "BackgroundColor3":
 		if datatype_registry == nil {return false}
-		gui_object.bg_color = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		value := datatypes.Arg_Color3(L, value_index, datatype_registry)
+		if gui.bg_color == value {return true}
+		gui.bg_color = value
+		render_dirty = true
 	case "Position":
 		if datatype_registry == nil {return false}
-		position := datatypes.Arg_UDim2(L, value_index, datatype_registry)
-		if gui_object.position == position {return true}
-		gui_object.position = position
+		value := datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		if gui.position == value {return true}
+		gui.position = value
+		transform_dirty = true
 	case "Size":
 		if datatype_registry == nil {return false}
-		size := datatypes.Arg_UDim2(L, value_index, datatype_registry)
-		if gui_object.size == size {return true}
-		gui_object.size = size
+		value := datatypes.Arg_UDim2(L, value_index, datatype_registry)
+		if gui.size == value {return true}
+		gui.size = value
+		layout_dirty = true
 	case "AutomaticSize":
 		if enum_registry == nil {return false}
-		auto_item := enums.Arg_Item(L, value_index, enum_registry, "AutomaticSize")
-		if auto_item == nil {return false}
-		gui_object.automatic_size = enums.AutomaticSize(auto_item.value)
+		item := enums.Arg_Item(L, value_index, enum_registry, "AutomaticSize")
+		if item == nil {return false}
+		value := enums.AutomaticSize(item.value)
+		if gui.automatic_size == value {return true}
+		gui.automatic_size = value
+		layout_dirty = true
 	case "AnchorPoint":
 		if datatype_registry == nil {return false}
-		gui_object.anchorpoint = datatypes.Arg_Vector2(L, value_index, datatype_registry)
+		value := datatypes.Arg_Vector2(L, value_index, datatype_registry)
+		if gui.anchorpoint == value {return true}
+		gui.anchorpoint = value
+		transform_dirty = true
 	case "Rotation":
-		gui_object.rotation = vm.ArgNumber(L, value_index)
+		value := vm.ArgNumber(L, value_index)
+		if gui.rotation == value {return true}
+		gui.rotation = value
+		gui.rotation_cache_valid = false
+		render_dirty = true
 	case "AbsolutePosition":
 		_ = vm.RaiseError(L, "AbsolutePosition cannot be changed")
+		return true
 	case "AbsoluteSize":
 		_ = vm.RaiseError(L, "AbsoluteSize cannot be changed")
+		return true
 	case:
-		// Inherited properties can affect layout, such as Name for sorted lists.
+		// Keep inherited-property invalidation for name-based sorted layouts.
 		Gui_Layout_Mark_Dirty()
 		return false
 	}
 
-	// These properties affect drawing but leave measured sizes and transforms intact.
-	switch key {
-	case "BackgroundColor3", "BackgroundTransparency", "BorderColor3",
-	     "BorderMode", "BorderSizePixel", "ZIndex":
-		gui_render_revision += 1
-	case:
+	if transform_dirty && gui_object_position_affects_content(gui) {
+		layout_dirty = true
+	}
+	if layout_dirty {
 		Gui_Layout_Mark_Dirty()
+	} else if transform_dirty {
+		Gui_Layout_Mark_Transform_Dirty()
+	} else if render_dirty {
+		Gui_Render_Mark_Dirty()
 	}
 	return true
 }
@@ -2426,6 +2606,7 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	src := cast(^GuiObject)source
 	dst := cast(^GuiObject)destination
 
+	gui_object_untrack(dst)
 	Gui_Layout_Mark_Dirty()
 
 	dst.bg_transparency = src.bg_transparency
@@ -2460,6 +2641,16 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.auto_solved = false
 	dst.mouse_inside = false
 	dst.mouse_input_down = [3]bool{}
+	dst.hover_listener_registered = false
+	dst.hover_visit_epoch = 0
+	dst.hover_chain_epoch = 0
+	dst.hover_event_x = 0
+	dst.hover_event_y = 0
+	dst.rotation_cache_valid = false
+	if dst.mouse_enter != nil || dst.mouse_leave != nil || dst.mouse_moved != nil {
+		append(&gui_hover_listeners, dst)
+		dst.hover_listener_registered = true
+	}
 }
 
 Register_GuiObject :: proc(registry: ^Registry) {
@@ -2471,6 +2662,7 @@ Register_GuiObject :: proc(registry: ^Registry) {
 		get = GuiObject_get,
 		set = GuiObject_set,
 		clone = GuiObject_clone,
+		methods = []string{"ContainsPoint"},
 		properties = []string {
 			"BorderColor3",
 			"BorderSizePixel",

@@ -882,7 +882,7 @@ void kine_ray_destroy(KineRayState *state) {
 	delete state;
 }
 
-bool kine_ray_resize(KineRayState *state, int width, int height) {
+static bool kine_ray_resize(KineRayState *state, int width, int height) {
 	if (!state || !state->renderer || width <= 0 || height <= 0) {
 		return false;
 	}

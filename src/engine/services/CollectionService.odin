@@ -2,17 +2,10 @@ package services
 
 // wire:service global="CollectionService"
 
-import "core:strings"
-
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
-
-Collection_Tag :: struct {
-	name:    string,
-	objects: [dynamic]^classes.Object,
-}
 
 CollectionService_Class := classes.Class_Info {
 	name   = "CollectionService",
@@ -21,7 +14,6 @@ CollectionService_Class := classes.Class_Info {
 
 CollectionService :: struct {
 	using service: Service,
-	tags:          [dynamic]Collection_Tag,
 }
 
 collection_service_construct :: proc(
@@ -47,93 +39,12 @@ collection_object_from_argument :: proc(L: ^vm.State, index: int) -> ^classes.Ob
 	return object
 }
 
-collection_find_tag :: proc(service: ^CollectionService, name: string) -> int {
-	if service == nil {
-		return -1
-	}
-
-	for tag, index in service.tags {
-		if tag.name == name {
-			return index
-		}
-	}
-
-	return -1
-}
-
-collection_contains_object :: proc(objects: []^classes.Object, object: ^classes.Object) -> bool {
-	for item in objects {
-		if item == object {
-			return true
-		}
-	}
-	return false
-}
-
 collection_validate_tag :: proc(L: ^vm.State, tag: string) -> bool {
-	if len(tag) == 0 {
-		_ = vm.RaiseError(L, "tag must not be empty")
+	if !classes.Tag_Name_Is_Valid(tag) {
+		_ = vm.RaiseError(L, "tag must be 1-100 characters")
 		return false
 	}
-
-	if len(tag) > 100 {
-		_ = vm.RaiseError(L, "tag must be at most 100 characters")
-		return false
-	}
-
 	return true
-}
-
-Collection_AddTag :: proc(service: ^CollectionService, object: ^classes.Object, tag_name: string) {
-	index := collection_find_tag(service, tag_name)
-
-	if index < 0 {
-		append(&service.tags, Collection_Tag{name = strings.clone(tag_name)})
-		index = len(service.tags) - 1
-	}
-
-	tag := &service.tags[index]
-	if !collection_contains_object(tag.objects[:], object) {
-		append(&tag.objects, object)
-	}
-}
-
-Collection_RemoveTag :: proc(
-	service: ^CollectionService,
-	object: ^classes.Object,
-	tag_name: string,
-) {
-	index := collection_find_tag(service, tag_name)
-	if index < 0 {
-		return
-	}
-
-	tag := &service.tags[index]
-	for item, item_index in tag.objects {
-		if item == object {
-			ordered_remove(&tag.objects, item_index)
-			break
-		}
-	}
-
-	if len(tag.objects) == 0 {
-		delete(tag.objects)
-		delete(tag.name)
-		ordered_remove(&service.tags, index)
-	}
-}
-
-Collection_HasTag :: proc(
-	service: ^CollectionService,
-	object: ^classes.Object,
-	tag_name: string,
-) -> bool {
-	index := collection_find_tag(service, tag_name)
-	if index < 0 {
-		return false
-	}
-
-	return collection_contains_object(service.tags[index].objects[:], object)
 }
 
 collection_service_get :: proc(
@@ -167,118 +78,53 @@ collection_service_namecall :: proc(
 	service := cast(^CollectionService)object
 
 	switch method {
-	case "AddTag":
+	case "AddTag", "RemoveTag", "HasTag", "GetTags":
 		target := collection_object_from_argument(L, 2)
-		if target == nil {
-			return vm.RaiseError(L, "AddTag expects an Instance"), true
+		if target == nil || !classes.Object_Is_Accessible(L, target) {
+			return vm.RaiseError(L, "expected an accessible Instance"), true
 		}
-
-		tag := vm.ArgString(L, 3)
-		if !collection_validate_tag(L, tag) {
-			return 0, true
-		}
-
-		Collection_AddTag(service, target, tag)
-		return 0, true
-
-	case "RemoveTag":
-		target := collection_object_from_argument(L, 2)
-		if target == nil {
-			return vm.RaiseError(L, "RemoveTag expects an Instance"), true
-		}
-
-		tag := vm.ArgString(L, 3)
-		if !collection_validate_tag(L, tag) {
-			return 0, true
-		}
-
-		Collection_RemoveTag(service, target, tag)
-		return 0, true
-
-	case "HasTag":
-		target := collection_object_from_argument(L, 2)
-		if target == nil {
-			return vm.RaiseError(L, "HasTag expects an Instance"), true
-		}
-
-		tag := vm.ArgString(L, 3)
-		if !collection_validate_tag(L, tag) {
-			return 0, true
-		}
-
-		vm.PushBoolean(L, Collection_HasTag(service, target, tag))
-		return 1, true
-
-	case "GetTags":
-		target := collection_object_from_argument(L, 2)
-		if target == nil {
-			return vm.RaiseError(L, "GetTags expects an Instance"), true
-		}
-
-		count := 0
-		for tag in service.tags {
-			if collection_contains_object(tag.objects[:], target) {
-				count += 1
-			}
-		}
-
-		vm.NewTable(L, count)
-
-		output_index := 1
-		for tag in service.tags {
-			if collection_contains_object(tag.objects[:], target) {
-				vm.PushString(L, tag.name)
-				vm.SetArrayValue(L, -2, output_index)
-				output_index += 1
-			}
-		}
-
-		return 1, true
-
-	case "GetTagged":
-		tag_name := vm.ArgString(L, 2)
-		if !collection_validate_tag(L, tag_name) {
-			return 0, true
-		}
-
-		index := collection_find_tag(service, tag_name)
-		if index < 0 {
-			vm.NewTable(L, 0)
+		if method == "GetTags" {
+			classes.Object_Push_Tags(L, target)
 			return 1, true
 		}
-
-		tag := &service.tags[index]
-		count := 0
-
-		for item in tag.objects {
-			if item != nil && !item.destroyed && classes.Object_Is_Accessible(L, item) {
-				count += 1
-			}
+		tag := vm.ArgString(L, 3)
+		if !collection_validate_tag(L, tag) {return 0, true}
+		switch method {
+		case "AddTag": classes.Object_Add_Tag(target, tag)
+		case "RemoveTag": classes.Object_Remove_Tag(target, tag)
+		case "HasTag": vm.PushBoolean(L, classes.Object_Has_Tag(target, tag)); return 1, true
 		}
+		return 0, true
 
-		vm.NewTable(L, count)
-
-		output_index := 1
-		for item in tag.objects {
-			if item == nil || item.destroyed || !classes.Object_Is_Accessible(L, item) {
-				continue
-			}
-
+	case "GetTagged":
+		tag := vm.ArgString(L, 2)
+		if !collection_validate_tag(L, tag) {return 0, true}
+		vm.NewTable(L, 0)
+		index := 1
+		for item in service.signal_registry.tagged_objects {
+			if item.destroyed || !classes.Object_Is_Accessible(L, item) ||
+			   !classes.Object_Has_Tag(item, tag) {continue}
 			classes.Push_Object(L, item)
-			vm.SetArrayValue(L, -2, output_index)
-			output_index += 1
+			vm.SetArrayValue(L, -2, index)
+			index += 1
 		}
-
 		return 1, true
 
 	case "GetAllTags":
-		vm.NewTable(L, len(service.tags))
-
-		for tag, index in service.tags {
-			vm.PushString(L, tag.name)
-			vm.SetArrayValue(L, -2, index + 1)
+		seen: map[string]bool
+		defer delete(seen)
+		vm.NewTable(L, 0)
+		index := 1
+		for item in service.signal_registry.tagged_objects {
+			if item.destroyed || !classes.Object_Is_Accessible(L, item) {continue}
+			for tag in item.tags {
+				if seen[tag] {continue}
+				seen[tag] = true
+				vm.PushString(L, tag)
+				vm.SetArrayValue(L, -2, index)
+				index += 1
+			}
 		}
-
 		return 1, true
 	}
 
@@ -286,17 +132,8 @@ collection_service_namecall :: proc(
 }
 
 collection_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
-	service := cast(^CollectionService)object
-
-	for tag in service.tags {
-		delete(tag.objects)
-		delete(tag.name)
-	}
-
-	delete(service.tags)
-
 	classes.Object_Destroy(object)
-	free(service)
+	free(cast(^CollectionService)object)
 }
 
 Register_CollectionService_Class :: proc(registry: ^classes.Registry) {

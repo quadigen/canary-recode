@@ -13,6 +13,7 @@ import vm "../vm"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:time"
 
 PlaytestService_Class := classes.Class_Info {
 	name   = "PlaytestService",
@@ -22,6 +23,12 @@ PlaytestService_Class := classes.Class_Info {
 Playtest_Output :: struct {
 	read:    ^os.File,
 	pending: [dynamic]u8,
+	warnings: map[string]Playtest_Warning,
+}
+
+Playtest_Warning :: struct {
+	last_emitted: time.Tick,
+	suppressed: int,
 }
 
 PlaytestService :: struct {
@@ -30,6 +37,7 @@ PlaytestService :: struct {
 	client_process:  os.Process,
 	server_output:   Playtest_Output,
 	client_output:   Playtest_Output,
+	forwarding_output: bool,
 	running:         bool,
 	singleplayer:    bool,
 	android_session: bool,
@@ -42,6 +50,8 @@ PlaytestService :: struct {
 PLAYTEST_ADDRESS :: "127.0.0.1"
 PLAYTEST_PORT :: u16(1234)
 PLAYTEST_STDERR_CHUNK :: 4096
+PLAYTEST_WARNING_INTERVAL :: 5 * time.Second
+PLAYTEST_WARNING_LIMIT :: 128
 
 playtest_process_active :: proc(process: os.Process) -> bool {
 	return process.pid != 0
@@ -71,6 +81,9 @@ playtest_close_output :: proc(output: ^Playtest_Output) {
 		delete(output.pending)
 		output.pending = nil
 	}
+	for message in output.warnings {delete(message)}
+	delete(output.warnings)
+	output.warnings = nil
 }
 
 playtest_log_line :: proc(service: ^PlaytestService, source, message, kind: string) {
@@ -95,7 +108,37 @@ playtest_after_tag :: proc(line, tag: string) -> string {
 	return message
 }
 
-playtest_forward_line :: proc(service: ^PlaytestService, source: string, raw_line: string) {
+playtest_forward_warning :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output, message: string) {
+	now := time.tick_now()
+	if warning, seen := output.warnings[message]; seen {
+		if time.tick_diff(warning.last_emitted, now) < PLAYTEST_WARNING_INTERVAL {
+			warning.suppressed += 1
+			output.warnings[message] = warning
+			return
+		}
+		output.warnings[message] = {last_emitted = now}
+		if warning.suppressed > 0 {
+			message := fmt.tprintf("%s (%d repeats suppressed)", message, warning.suppressed)
+			playtest_log_line(service, source, message, "Warn")
+			return
+		}
+	} else if len(message) <= PLAYTEST_STDERR_CHUNK {
+		if len(output.warnings) == PLAYTEST_WARNING_LIMIT {
+			for tracked, warning in output.warnings {
+				if time.tick_diff(warning.last_emitted, now) < PLAYTEST_WARNING_INTERVAL {continue}
+				delete_key(&output.warnings, tracked)
+				delete(tracked)
+				break
+			}
+		}
+		if len(output.warnings) < PLAYTEST_WARNING_LIMIT {
+			output.warnings[strings.clone(message)] = {last_emitted = now}
+		}
+	}
+	playtest_log_line(service, source, message, "Warn")
+}
+
+playtest_forward_line :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output, raw_line: string) {
 	line := strings.trim_space(raw_line)
 	if line == "" {return}
 
@@ -107,8 +150,8 @@ playtest_forward_line :: proc(service: ^PlaytestService, source: string, raw_lin
 		message = playtest_after_tag(line, "[ERROR]")
 		kind = "Error"
 	case strings.has_prefix(line, "[WARN]"):
-		message = playtest_after_tag(line, "[WARN]")
-		kind = "Warn"
+		playtest_forward_warning(service, source, output, playtest_after_tag(line, "[WARN]"))
+		return
 	case strings.has_prefix(line, "[INFO]"):
 		message = playtest_after_tag(line, "[INFO]")
 		kind = "Info"
@@ -139,7 +182,7 @@ playtest_pump_output :: proc(service: ^PlaytestService, source: string, output: 
 	line_start := 0
 	for index in 0 ..< len(output.pending) {
 		if output.pending[index] != '\n' {continue}
-		playtest_forward_line(service, source, string(output.pending[line_start:index]))
+		playtest_forward_line(service, source, output, string(output.pending[line_start:index]))
 		line_start = index + 1
 	}
 
@@ -149,7 +192,10 @@ playtest_pump_output :: proc(service: ^PlaytestService, source: string, output: 
 }
 
 playtest_pump_outputs :: proc(service: ^PlaytestService) {
-	if service == nil {return}
+	if service == nil || service.forwarding_output || vm.Is_Closing() {return}
+	// LogService listeners run synchronously and may query or control the playtest.
+	service.forwarding_output = true
+	defer service.forwarding_output = false
 	playtest_pump_output(service, "server", &service.server_output)
 	playtest_pump_output(service, "client", &service.client_output)
 }
@@ -174,7 +220,7 @@ playtest_reap :: proc(process: os.Process) -> Playtest_Reap {
 }
 
 playtest_refresh :: proc(service: ^PlaytestService) {
-	if service == nil || !service.running {return}
+	if service == nil || !service.running || service.forwarding_output {return}
 
 	playtest_pump_outputs(service)
 
@@ -214,6 +260,10 @@ playtest_refresh :: proc(service: ^PlaytestService) {
 	playtest_pump_outputs(service)
 
 	service.last_exit_code = client_exit != 0 ? client_exit : server_exit
+	if service.last_exit_code != 0 {
+		source := "client" if client_exit != 0 else "server"
+		playtest_set_error(service, fmt.tprintf("Playtest %s exited with status %d", source, service.last_exit_code))
+	}
 	service.server_process = {}
 	service.client_process = {}
 	playtest_close_output(&service.server_output)
@@ -224,8 +274,9 @@ playtest_refresh :: proc(service: ^PlaytestService) {
 }
 
 playtest_stop :: proc(service: ^PlaytestService) -> bool {
+	if service == nil || service.forwarding_output {return false}
 	playtest_refresh(service)
-	if service == nil || !service.running {return false}
+	if !service.running {return false}
 
 
 	when #config(KINE_ANDROID, false) {
@@ -515,6 +566,10 @@ playtest_launch :: proc(
 	i32,
 	bool,
 ) {
+	if service.forwarding_output {
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
 	playtest_refresh(service)
 	if service.running {_ = playtest_stop(service)}
 

@@ -37,9 +37,9 @@ vector2_new :: proc "c" (L: ^vm.State) -> i32 {
 vector2_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	vector := cast(^Vector2)value
 	switch key {
-	case "X":
+	case "x", "X":
 		vm.PushNumber(L, f64(vector.X))
-	case "Y":
+	case "y", "Y":
 		vm.PushNumber(L, f64(vector.Y))
 	case "Magnitude":
 		vm.PushNumber(L, f64(Vec2_Magnitude(vector^)))

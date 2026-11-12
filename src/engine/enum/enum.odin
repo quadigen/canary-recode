@@ -4405,6 +4405,7 @@ KeyCode :: enum {
 	ButtonX      = 349,
 	VolumeUp     = 350,
 	VolumeDown   = 351,
+	ButtonSelect = 352,
 }
 
 GraphicsLevel :: enum {

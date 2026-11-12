@@ -18,6 +18,7 @@ import "core:strings"
 // KINE_ASSET_SCHEME marks a property value that points at bytes embedded in the
 // .kine stream rather than at a file on disk.
 KINE_ASSET_SCHEME :: "kineasset://"
+PROJECT_ASSET_SCHEME :: "project://"
 
 // ASSET_CACHE_SUBDIR keeps extracted blobs out of the user's home directory and
 // gives them a stable, wipeable home.
@@ -43,6 +44,7 @@ Asset_Kind :: enum u8 {
 	Texture = 2,
 	Audio   = 3,
 	Data    = 4,
+	Path_File = 5, // An embedded file addressable by its authored path.
 }
 
 // Asset is one embedded blob. Bytes are owned by the store.
@@ -58,6 +60,8 @@ Asset :: struct {
 
 assets: [dynamic]Asset
 index: map[string]int
+path_files: map[string]int
+project_root: string
 // missing_reported deduplicates the "the map says this is embedded but it
 // is not here" diagnostic, which would otherwise repeat per instance per frame.
 missing_reported: map[string]bool
@@ -69,9 +73,13 @@ FNV_PRIME: u64 : 1099511628211
 // engine uses for content hashing. It is an identity key rather than a
 // checksum: Register also compares the bytes it already holds under a key, so a
 // collision resolves to a distinct id instead of aliasing two assets.
-Content_Id :: proc(data: []u8) -> string {
+Content_Id :: proc(data: []u8, path := "") -> string {
 	hash := FNV_OFFSET
 	for byte in data {
+		hash ~= u64(byte)
+		hash *= FNV_PRIME
+	}
+	for byte in transmute([]u8)path {
 		hash ~= u64(byte)
 		hash *= FNV_PRIME
 	}
@@ -181,7 +189,7 @@ Id_Is_Valid :: proc(id: string) -> bool {
 // must not delete them afterwards. The returned key is an independent copy the
 // caller owns; the store keeps its own.
 Register :: proc(data: []u8, path: string, kind: Asset_Kind) -> string {
-	base := Content_Id(data)
+	base := Content_Id(data, kind == .Path_File ? path : "")
 	defer delete(base)
 
 	for attempt := 0; attempt <= 8; attempt += 1 {
@@ -191,7 +199,8 @@ Register :: proc(data: []u8, path: string, kind: Asset_Kind) -> string {
 			store(id, path, kind, data)
 			return id
 		}
-		same := bytes_equal(existing.bytes, data)
+		same := bytes_equal(existing.bytes, data) &&
+			(kind != .Path_File || (existing.kind == kind && existing.path == path))
 		if same {
 			delete(data)
 		}
@@ -221,9 +230,13 @@ Register_As :: proc(id: string, data: []u8, path: string, kind: Asset_Kind) -> b
 	if existing, found := Find(id); found {
 		same := bytes_equal(existing.bytes, data)
 		delete(data)
-		return same
+		if kind != .Path_File {return same}
+		if !same || existing.kind != kind || existing.path != path {return false}
+		path_files[existing.path] = index[existing.id]
+		return true
 	}
 	store(id, path, kind, data)
+	if kind == .Path_File {path_files[assets[index[id]].path] = index[id]}
 	return true
 }
 
@@ -257,6 +270,8 @@ Clear :: proc() {
 	assets = nil
 	delete(index)
 	index = nil
+	delete(path_files)
+	path_files = nil
 	// The next map's bad references have not been reported yet.
 	Clear_Missing_Asset_Reports()
 }
@@ -286,12 +301,44 @@ Is_Uri :: proc(uri: string) -> bool {
 	return found
 }
 
+Find_Path_File :: proc(path: string) -> (^Asset, bool) {
+	key := strings.trim_prefix(path, "file://")
+	position, found := path_files[key]
+	if !found {return nil, false}
+	return &assets[position], true
+}
+
+Set_Project_Root :: proc(path: string) {
+	replacement := strings.clone(path)
+	delete(project_root)
+	project_root = replacement
+}
+
+Project_Asset_Path :: proc(uri: string) -> (string, bool) {
+	if !strings.has_prefix(uri, PROJECT_ASSET_SCHEME) {return "", false}
+	path := uri[len(PROJECT_ASSET_SCHEME):]
+	if path == "" || strings.has_suffix(path, "/") ||
+	   strings.contains_any(path, "\\:\x00") {return "", false}
+	pieces := path
+	for piece in strings.split_iterator(&pieces, "/") {
+		if piece == "" || piece == "." || piece == ".." {return "", false}
+	}
+	return path, true
+}
+
+resolve_embedded_id :: proc(value: string) -> (string, bool) {
+	if id, embedded := Parse_Uri(value); embedded {return id, true}
+	if project_root != "" && strings.has_prefix(value, PROJECT_ASSET_SCHEME) {return "", false}
+	if file, found := Find_Path_File(value); found {return file.id, true}
+	return "", false
+}
+
 // Resolve_Bytes returns the embedded bytes for a "kineasset://" value. The slice
 // borrows from the store and stays valid for the process lifetime. Any other
 // value (a plain path, "builtin://", "memory://") reports false so callers fall
 // through to their normal handling.
 Resolve_Bytes :: proc(uri: string) -> (data: []u8, found: bool) {
-	id, embedded := Parse_Uri(uri)
+	id, embedded := resolve_embedded_id(uri)
 	if !embedded {
 		return nil, false
 	}
@@ -307,13 +354,14 @@ Resolve_Bytes :: proc(uri: string) -> (data: []u8, found: bool) {
 // the cache directory first. The result is owned by the caller, and an empty
 // string means the value could not be resolved.
 Resolve_Path :: proc(uri: string) -> string {
-	if id, embedded := Parse_Uri(uri); embedded {
+	if id, embedded := resolve_embedded_id(uri); embedded {
 		path, extracted := Materialize(id)
 		if !extracted {
 			return ""
 		}
 		return path
 	}
+	if strings.has_prefix(uri, PROJECT_ASSET_SCHEME) {return resolve_project_path(uri)}
 	return strip_file_scheme(uri)
 }
 
@@ -334,10 +382,11 @@ UGC_Assets_Enabled :: proc() -> bool {
 }
 
 Resolve_Ugc_Asset :: proc(value: string, kind: Asset_Kind) -> string {
+	if id, found := resolve_embedded_id(value); found {return Make_Uri(id)}
 	if value == "" || !UGC_Assets_Enabled() {
 		return strings.clone(value)
 	}
-	if Is_Uri(value) || strings.contains(value, "://") || strings.has_prefix(value, "data:") {
+	if (strings.contains(value, "://") && !strings.has_prefix(value, "file://")) || strings.has_prefix(value, "data:") {
 		return strings.clone(value)
 	}
 	data, found := Read_Asset_File(value)
@@ -384,7 +433,7 @@ Clear_Missing_Asset_Reports :: proc() {
 // caller.
 Format_Hint :: proc(uri: string) -> string {
 	path := uri
-	if id, embedded := Parse_Uri(uri); embedded {
+	if id, embedded := resolve_embedded_id(uri); embedded {
 		entry, published := Find(id)
 		if !published {
 			return ""
@@ -399,6 +448,21 @@ strip_file_scheme :: proc(path: string) -> string {
 		return strings.clone(path[len("file://"):])
 	}
 	return strings.clone(path)
+}
+
+Is_Ugc_File_Path :: proc(path: string) -> bool {
+	if strings.has_prefix(path, "data:") || strings.contains(path, "://") ||
+	   strings.contains(path, "\x00") || strings.contains(path, "\n") {return false}
+	ext := extension_of(path)
+	defer delete(ext)
+	switch ext {
+	case "png", "svg", "jpeg", "jpg", "webp", "gif", "bmp", "ico", "tga", "dds", "ktx", "ktx2",
+	     "glb", "gltf", "obj", "fbx", "dae", "stl", "ply", "3ds", "blend", "3mf",
+	     "wav", "mp3", "ogg", "flac", "opus", "aiff", "aif", "m4a",
+	     "ttf", "otf", "ttc", "woff", "woff2":
+		return true
+	}
+	return false
 }
 
 extension_of :: proc(path: string) -> string {

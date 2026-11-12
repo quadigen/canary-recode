@@ -18,6 +18,7 @@ CollisionController :: struct {
 	shape:        kineffi.JPH_ShapeRef,
 	body_id:      kineffi.JPH_BodyID,
 	body_created: bool,
+	deformable_only: bool,
 	// ragdoll flips the capsule between a kinematic body the character
 	// controller teleports each frame and a dynamic one the solver integrates.
 	// It is sticky so a body created after the character dies is still dynamic.

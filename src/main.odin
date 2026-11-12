@@ -150,11 +150,19 @@ run_desktop :: proc(options: Startup_Options) {
 		},
 		OnClose = proc(user_data: rawptr) {
 			render_context := cast(^Runtime_Render_Context)user_data
+			if render_context.vm_state.L == nil {return}
 			services.Project_Autosave(
 				&render_context.environment.services,
 				render_context.vm_state.L,
 				closing = true,
 			)
+			services.data_model_runclose(
+				render_context.vm_state.L,
+				render_context.environment.services.data_model,
+			)
+			// Lua finalizers release mesh resources through their Filament context.
+			// Run them before the renderer destroys that context.
+			vm.Close(render_context.vm_state)
 		},
 		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,
@@ -211,6 +219,8 @@ run_desktop :: proc(options: Startup_Options) {
 		if !load_game_map(&environment, &script_vm, options) {
 			return
 		}
+	} else if target.is_client() && !load_client_asset_bundle() {
+		return
 	}
 
 	if options.standalone || options.singleplayer {
@@ -325,24 +335,32 @@ run_desktop :: proc(options: Startup_Options) {
 }
 
 main :: proc() {
+	fmt.println("Hello World! Step 1")
 	when tracy.TRACY_ENABLE {
 		context.allocator = tracy.InitDefaultAllocator(
 			callstack_size = #config(TRACY_ALLOC_CALLSTACK, 0),
 		)
 	}
+	fmt.println("Hello World! Step 2")
 	services.Update_Handle_Command_Line()
+	fmt.println("Hello World! Step 3")
 	when ODIN_OS == .Windows {
 		exe_path, err := os.get_executable_path(context.allocator)
 		if err == nil {
 			sdl3.register_protocol(exe_path)
 		}
 	}
+	fmt.println("Hello World! Step 4")
 	options, options_ok := startup_options()
 	if !options_ok {return}
+	fmt.println("Hello World! Step 5")
 	target.set_mode(options.mode)
+	fmt.println("Hello World! Step 6")
 	if target.is_server() && !options.window {
+		fmt.println("Hello World! Step 7: Server")
 		run_server(options)
 	} else {
+		fmt.println("Hello World! Step 7: Desktop")
 		run_desktop(options)
 	}
 }

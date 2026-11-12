@@ -452,6 +452,8 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPathIndexed(
 	KineFilamentContext *ctx, const char *path, uint32_t meshIndex);
 KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromMemoryIndexed(
 	KineFilamentContext *ctx, const void *data, size_t dataSize, const char *formatHint, uint32_t meshIndex);
+KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromMemoryIndexed(
+	const void *bytes, size_t length, const char *formatHint, uint32_t meshIndex);
 KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPathIndexed(const char *path, uint32_t meshIndex);
 
 KINE_API KineFilamentMesh *Kine_Filament_CreateMeshFromPath(KineFilamentContext *ctx, const char *path);

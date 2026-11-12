@@ -115,6 +115,7 @@ user_input_service_get :: proc(
 	case "InputEnded":
 		signals.Push(L, service.input_ended)
 	case "GetMouseLocation",
+	     "GetImageForKeyCode",
 	     "GetMouseDelta",
 	     "GetLastInputType",
 	     "IsKeyDown",
@@ -204,6 +205,11 @@ user_input_service_namecall :: proc(
 ) {
 	service := cast(^UserInputService)object
 	switch method {
+	case "GetImageForKeyCode":
+		_ = enums.Arg_Item(L, 2, enum_registry, "KeyCode")
+		// This runtime ships no controller-specific key images.
+		vm.PushString(L, "")
+		return 1, true
 	case "GetFocusedTextBox":
 		focused := classes.TextBox_Focused()
 
@@ -347,6 +353,7 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 		namecall = user_input_service_namecall,
 		methods = []string {
 			"GetFocusedTextBox",
+			"GetImageForKeyCode",
 			"GetKeysPressed",
 			"GetLastInputType",
 			"GetMouse",

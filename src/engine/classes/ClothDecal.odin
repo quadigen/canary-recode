@@ -23,12 +23,10 @@ decal_step_cloth :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 		decal_destroy_renderable(decal, renderer)
 		return
 	}
-	anchor, valid := Cloth_Anchor(cloth, workspace)
-	if !valid {
+	if !Cloth_Prepare_Surface(cloth, workspace) {
 		decal_destroy_renderable(decal, renderer)
 		return
 	}
-	if !cloth.initialized {Cloth_Initialize(cloth, anchor)}
 
 	if decal.cloth_parent != &cloth.object || decal.cloth_face != decal.face {
 		decal_destroy_renderable(decal, renderer)
@@ -43,7 +41,7 @@ decal_step_cloth :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 	}
 
 	transform := Cloth_Surface_Transform(cloth)
-	decal_apply_style(decal, renderer, &transform, cloth.size.X, cloth.size.Y)
+	decal_apply_style(decal, renderer, &transform, cloth.width, cloth.size.Y)
 	_ = kineffi.Kine_Filament_EditMeshDecal(
 		renderer.Filament,
 		decal.native_decal,

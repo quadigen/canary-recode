@@ -106,7 +106,8 @@ user_input_fire :: proc(
 	if signal == nil || service.signal_registry == nil {return}
 	input := classes.Push_InputObject(L, service.signal_registry, value)
 	if input == nil {return}
-	vm.PushBoolean(L, user_input_pointer_over_gui(service, value))
+	processed := context_action_dispatch(L, service.data_model, value, vm.StackTop(L))
+	vm.PushBoolean(L, processed || user_input_pointer_over_gui(service, value))
 	signals.Fire(L, signal, 2)
 	vm.Pop(L, 2)
 

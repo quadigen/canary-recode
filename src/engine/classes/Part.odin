@@ -98,7 +98,7 @@ part_get :: proc(
 		vm.PushBoolean(L, part.can_touch)
 	case "CollisionGroup":
 		vm.PushString(L, part.collision_group)
-	case "MaterialVariant":
+	case "MaterialVariant", "MaterialVariantSerialized":
 		vm.PushString(L, part.material_variant)
 	case "Material":
 		if enum_registry == nil {return false}
@@ -120,9 +120,9 @@ part_get :: proc(
 		vm.PushBoolean(L, part.castshadow)
 	case "Position":
 		datatypes.push_vector3(L, part.position)
-	case "AssemblyLinearVelocity":
+	case "AssemblyLinearVelocity", "Velocity":
 		datatypes.push_vector3(L, Part_Linear_Velocity(part.object.signal_registry, object))
-	case "AssemblyAngularVelocity":
+	case "AssemblyAngularVelocity", "RotVelocity":
 		datatypes.push_vector3(L, Part_Angular_Velocity(part.object.signal_registry, object))
 	case "Touched":
 		if part.touched == nil &&
@@ -171,7 +171,7 @@ part_set :: proc(
 		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "Material")
 		part.material = enums.Material(item.value)
-	case "MaterialVariant":
+	case "MaterialVariant", "MaterialVariantSerialized":
 		copy := strings.clone(vm.ArgString(L, value_index))
 		delete(part.material_variant)
 		part.material_variant = copy
@@ -184,6 +184,7 @@ part_set :: proc(
 	case "CFrame":
 		if datatype_registry == nil {return false}
 		part.cframe = datatypes.Arg_CFrame(L, value_index, datatype_registry)
+		part.position = {part.cframe.x, part.cframe.y, part.cframe.z}
 	case "Color":
 		if datatype_registry == nil {return false}
 		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
@@ -200,16 +201,17 @@ part_set :: proc(
 		part.castshadow = vm.ArgBoolean(L, value_index)
 	case "Position":
 		v := datatypes.Arg_Vector3(L, value_index)
+		part.position = v
 		part.cframe.x = v.x
 		part.cframe.y = v.y
 		part.cframe.z = v.z
-	case "AssemblyLinearVelocity":
+	case "AssemblyLinearVelocity", "Velocity":
 		Part_Set_Linear_Velocity(
 			part.object.signal_registry,
 			object,
 			datatypes.Arg_Vector3(L, value_index),
 		)
-	case "AssemblyAngularVelocity":
+	case "AssemblyAngularVelocity", "RotVelocity":
 		Part_Set_Angular_Velocity(
 			part.object.signal_registry,
 			object,
@@ -236,6 +238,14 @@ part_namecall :: proc(
 ) {
 	part := cast(^Part)object
 	switch method {
+	case "UnionAsync":
+		return part_csg_namecall(L, object, .Union, enum_registry), true
+	case "SubtractAsync":
+		return part_csg_namecall(L, object, .Subtract, enum_registry), true
+	case "IntersectAsync":
+		return part_csg_namecall(L, object, .Intersect, enum_registry), true
+	case "Negate":
+		return part_csg_namecall(L, object, .Negate, enum_registry), true
 	case "ApplyImpulse":
 		impulse := datatypes.Arg_Vector3(L, 2)
 		_ = Part_Apply_Impulse(part.object.signal_registry, object, impulse)
@@ -295,7 +305,7 @@ Register_Part :: proc(registry: ^Registry) {
 			"AssemblyLinearVelocity",
 			"AssemblyAngularVelocity",
 		},
-		methods = []string{"ApplyImpulse"},
+		methods = []string{"ApplyImpulse", "UnionAsync", "SubtractAsync", "IntersectAsync", "Negate"},
 		events = []string{"Touched"},
 	)
 }

@@ -1,7 +1,7 @@
 package signals
 
-import tracy "../util/odin-tracy"
 import datatypes "../datatypes"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
 
@@ -192,7 +192,7 @@ fire_callback :: proc(
 	}
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L, 2)
-	_, _, err := vm.ResumeThread(thread, signal.registry.L, argument_count)
+	_, _, err := vm.ResumeThread(thread, L, argument_count)
 	vm.ReleaseValue(signal.registry.L, thread_ref)
 	if err != "" {
 		fmt.eprintf("Signal callback failed: %s\n", err)
@@ -206,7 +206,11 @@ signal_fire_arguments :: proc(
 	first_argument: int,
 	argument_count: int,
 ) {
-	if vm.Is_Closing() || signal == nil || signal.destroyed || signal.registry == nil || signal.registry.L == nil {
+	if vm.Is_Closing() ||
+	   signal == nil ||
+	   signal.destroyed ||
+	   signal.registry == nil ||
+	   signal.registry.L == nil {
 		return
 	}
 	if argument_count < 0 {
@@ -246,7 +250,7 @@ signal_fire_arguments :: proc(
 			vm.CopyValueToThread(L, waiter.thread, first_argument + offset)
 		}
 		vm.SetThreadSecurityCapabilities(waiter.thread, waiter.capabilities)
-		_, _, err := vm.ResumeThread(waiter.thread, signal.registry.L, argument_count)
+		_, _, err := vm.ResumeThread(waiter.thread, L, argument_count)
 		vm.ReleaseValue(signal.registry.L, waiter.thread_ref)
 		if err != "" {
 			fmt.eprintf("Signal waiter failed: %s\n", err)

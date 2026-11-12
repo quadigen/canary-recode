@@ -747,6 +747,25 @@ static bool kine_vk_choose_depth_format(KineVulkanCompositor* compositor, VkForm
     return false;
 }
 
+static void kine_vk_destroy_depth_attachment(KineVulkanCompositor* compositor)
+{
+    if (compositor->depthImage) {
+        if (auto vkDestroyImage = kine_vk_device_proc<PFN_vkDestroyImage>(
+                compositor, "vkDestroyImage")) {
+            vkDestroyImage(compositor->device, compositor->depthImage, nullptr);
+        }
+        compositor->depthImage = VK_NULL_HANDLE;
+    }
+    if (compositor->depthImageMemory) {
+        if (auto vkFreeMemory = kine_vk_device_proc<PFN_vkFreeMemory>(
+                compositor, "vkFreeMemory")) {
+            vkFreeMemory(compositor->device, compositor->depthImageMemory, nullptr);
+        }
+        compositor->depthImageMemory = VK_NULL_HANDLE;
+    }
+    compositor->depthFormat = VK_FORMAT_UNDEFINED;
+}
+
 static bool kine_vk_create_depth_attachment(KineVulkanCompositor* compositor)
 {
     auto vkCreateImage = kine_vk_device_proc<PFN_vkCreateImage>(
@@ -937,6 +956,11 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
             compositor->height,
             capabilities.minImageExtent.height,
             capabilities.maxImageExtent.height);
+    }
+
+    if (extent.width == 0 || extent.height == 0) {
+        kine_vk_set_error(compositor, "swapchain surface has no drawable extent");
+        return false;
     }
 
     uint32_t imageCount = capabilities.minImageCount + 1;
@@ -1135,6 +1159,7 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     }
     compositor->frames.clear();
     compositor->activeSlot = nullptr;
+    Kine_Skia_Vulkan_PurgeResources(compositor->skiaContext);
 
     if (auto vkDestroyImageView = kine_vk_device_proc<PFN_vkDestroyImageView>(
             compositor, "vkDestroyImageView")) {
@@ -1148,21 +1173,7 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     compositor->swapchainImages.clear();
     compositor->swapchainImageLayouts.clear();
 
-    if (compositor->depthImage) {
-        if (auto vkDestroyImage = kine_vk_device_proc<PFN_vkDestroyImage>(
-                compositor, "vkDestroyImage")) {
-            vkDestroyImage(compositor->device, compositor->depthImage, nullptr);
-        }
-        compositor->depthImage = VK_NULL_HANDLE;
-    }
-    if (compositor->depthImageMemory) {
-        if (auto vkFreeMemory = kine_vk_device_proc<PFN_vkFreeMemory>(
-                compositor, "vkFreeMemory")) {
-            vkFreeMemory(compositor->device, compositor->depthImageMemory, nullptr);
-        }
-        compositor->depthImageMemory = VK_NULL_HANDLE;
-    }
-    compositor->depthFormat = VK_FORMAT_UNDEFINED;
+    kine_vk_destroy_depth_attachment(compositor);
 
     if (!compositor->renderFinishedSemaphores.empty()) {
         if (auto vkDestroySemaphore = kine_vk_device_proc<PFN_vkDestroySemaphore>(
@@ -1466,9 +1477,7 @@ Kine_VulkanCompositor_CreateForSDLWindow(void* sdlWindow, int width, int height)
     if (!kine_vk_create_depth_attachment(compositor)) {
         fprintf(stderr, "kine_vulkan_compositor: depth attachment unavailable, continuing without swapchain depth: %s\n",
             compositor->lastError.c_str());
-        compositor->depthImage = VK_NULL_HANDLE;
-        compositor->depthImageMemory = VK_NULL_HANDLE;
-        compositor->depthFormat = VK_FORMAT_UNDEFINED;
+        kine_vk_destroy_depth_attachment(compositor);
         compositor->lastError.clear();
     }
 
@@ -1531,9 +1540,7 @@ Kine_VulkanCompositor_CreateForSDLWindowWithBackend(
     if (!kine_vk_create_depth_attachment(compositor)) {
         fprintf(stderr, "kine_vulkan_compositor: depth attachment unavailable, continuing without swapchain depth: %s\n",
             compositor->lastError.c_str());
-        compositor->depthImage = VK_NULL_HANDLE;
-        compositor->depthImageMemory = VK_NULL_HANDLE;
-        compositor->depthFormat = VK_FORMAT_UNDEFINED;
+        kine_vk_destroy_depth_attachment(compositor);
         compositor->lastError.clear();
     }
 
@@ -1558,14 +1565,9 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         }
     }
 
-    if (compositor->currentSkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
-        compositor->currentSkiaSurface = nullptr;
-    }
-    if (compositor->overlaySkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
-        compositor->overlaySkiaSurface = nullptr;
-    }
+    // These are aliases. The frames own their Skia surfaces.
+    compositor->currentSkiaSurface = nullptr;
+    compositor->overlaySkiaSurface = nullptr;
 
     if (compositor->device) {
         if (compositor->terrainMc) {
@@ -1636,6 +1638,7 @@ Kine_VulkanCompositor_Resize(
         return 1;
     }
 
+    compositor->needsResize = true;
     auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(
         compositor, "vkDeviceWaitIdle");
     if (!vkDeviceWaitIdle || vkDeviceWaitIdle(compositor->device) != VK_SUCCESS) {
@@ -1643,14 +1646,9 @@ Kine_VulkanCompositor_Resize(
         return 0;
     }
 
-    if (compositor->currentSkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->currentSkiaSurface);
-        compositor->currentSkiaSurface = nullptr;
-    }
-    if (compositor->overlaySkiaSurface) {
-        Kine_Skia_Surface_Destroy(compositor->overlaySkiaSurface);
-        compositor->overlaySkiaSurface = nullptr;
-    }
+    // These are aliases. The frames own their Skia surfaces.
+    compositor->currentSkiaSurface = nullptr;
+    compositor->overlaySkiaSurface = nullptr;
     compositor->frameActive = false;
     compositor->overlayActive = false;
     compositor->currentImageIndex = UINT32_MAX;
@@ -1659,15 +1657,14 @@ Kine_VulkanCompositor_Resize(
     compositor->width = static_cast<uint32_t>(width);
     compositor->height = static_cast<uint32_t>(height);
     if (!kine_vk_create_swapchain(compositor)) {
+        kine_vk_destroy_swapchain_attachments(compositor);
         return 0;
     }
     if (!kine_vk_create_depth_attachment(compositor)) {
         fprintf(stderr,
             "kine_vulkan_compositor: depth attachment unavailable after resize: %s\n",
             compositor->lastError.c_str());
-        compositor->depthImage = VK_NULL_HANDLE;
-        compositor->depthImageMemory = VK_NULL_HANDLE;
-        compositor->depthFormat = VK_FORMAT_UNDEFINED;
+        kine_vk_destroy_depth_attachment(compositor);
     }
 
     compositor->needsResize = false;

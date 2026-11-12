@@ -72,9 +72,7 @@ set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
 set(TRACY_MEMORY_USAGE OFF CACHE BOOL "" FORCE)
 set(MANIFOLD_FUZZ OFF CACHE BOOL "" FORCE)
 set(ASSIMP_ENABLE OFF CACHE BOOL "" FORCE)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/manifold")
-    add_subdirectory(manifold)
-endif()
+add_subdirectory(manifold)
 
 # Tracy
 set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
@@ -198,6 +196,11 @@ if(TARGET RecastWrapper)
     kine_add_odin_library_alias(kine_detour "$<TARGET_FILE:Detour>")
 endif()
 kine_add_odin_library_alias(kine_assimp "$<TARGET_FILE:assimp>")
+add_library(kine_csg STATIC kine_csg/csg.cpp)
+target_compile_features(kine_csg PRIVATE cxx_std_20)
+target_link_libraries(kine_csg PRIVATE manifold assimp)
+kine_add_odin_library_alias(kine_csg "$<TARGET_FILE:kine_csg>")
+kine_add_odin_library_alias(kine_manifold "$<TARGET_FILE:manifold>")
 if(TARGET Ray)
     kine_add_odin_library_alias(kine_ray "$<TARGET_FILE:Ray>")
 endif()
@@ -258,6 +261,8 @@ set(KINE_COMPONENT_TARGETS
     # Physics / geometry
     JoltWrapper
     Jolt
+    kine_csg
+    manifold
     assimp
     zlibstatic
 

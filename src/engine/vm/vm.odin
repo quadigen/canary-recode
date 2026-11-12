@@ -114,6 +114,7 @@ New :: proc(open_libraries := true) -> VM {
 	if open_libraries {
 
 		luauh.luaL_openlibs(L)
+		install_debug_compatibility(L)
 
 
 		luauh.lua_pushnil(L)
@@ -128,6 +129,48 @@ New :: proc(open_libraries := true) -> VM {
 			vector_precision = 1,
 		},
 	}
+}
+
+install_debug_compatibility :: proc(L: ^State) {
+	if GetGlobal(L, "debug") == .Table {
+		PushFunction(L, "setmemorycategory", debug_set_memory_category, 0)
+		SetField(L, -2, "setmemorycategory")
+		PushFunction(L, "resetmemorycategory", debug_reset_memory_category, 0)
+		SetField(L, -2, "resetmemorycategory")
+		PushFunction(L, "profilebegin", debug_profile_begin, 0)
+		SetField(L, -2, "profilebegin")
+		PushFunction(L, "profileend", debug_profile_end, 0)
+		SetField(L, -2, "profileend")
+	}
+	Pop(L)
+}
+
+debug_set_memory_category :: proc "c" (L: ^State) -> i32 {
+	context = tracy.DefaultContext()
+	name := ArgString(L, 1)
+	hash: u32 = 2166136261
+	for byte in transmute([]u8)name {
+		hash = (hash ~ u32(byte)) * 16777619
+	}
+	// Luau accounts for allocations by numeric category.
+	luauh.lua_setmemcat(L, i32(hash % 255) + 1)
+	return 0
+}
+
+debug_reset_memory_category :: proc "c" (L: ^State) -> i32 {
+	luauh.lua_setmemcat(L, 0)
+	return 0
+}
+
+// Script profiling hints are accepted independently of the native profiler.
+debug_profile_begin :: proc "c" (L: ^State) -> i32 {
+	context = tracy.DefaultContext()
+	_ = ArgString(L, 1)
+	return 0
+}
+
+debug_profile_end :: proc "c" (L: ^State) -> i32 {
+	return 0
 }
 
 @(thread_local)
@@ -406,6 +449,14 @@ AddStruct :: proc(vm: ^VM, name: string, fields: ..Struct_Field) {
 	}
 
 	set_global_from_stack(vm, name)
+}
+
+ClearYieldedValues :: proc(thread: ^State) {
+	luauh.lua_settop(thread, 0)
+}
+
+IsThread :: proc(L: ^State, index: int) -> bool {
+	return TypeOf(L, index) == .Thread
 }
 
 PushNumber :: proc(L: ^State, value: f64) {
@@ -732,13 +783,21 @@ ToBuffer :: proc(L: ^State, index: int) -> ([]u8, bool) {
 	}
 	size: uintptr
 	ptr := luauh.lua_tobuffer(L, i32(index), &size)
-	if ptr == nil || size == 0 {
+	if size == 0 {
+		return nil, true
+	}
+	if ptr == nil {
 		return nil, false
 	}
 
 
 	raw := ([^]u8)(ptr)
 	return raw[:int(size)], true
+}
+
+PushBuffer :: proc(L: ^State, data: []u8) {
+	buffer := cast([^]u8)luauh.lua_newbuffer(L, uintptr(len(data)))
+	copy(buffer[:len(data)], data)
 }
 
 ArgBuffer :: proc(L: ^State, index: int) -> []u8 {
@@ -825,6 +884,10 @@ SetReadOnly :: proc(L: ^State, index: int, read_only := true) {
 
 SetArrayValue :: proc(L: ^State, table_index, array_index: int) {
 	luauh.lua_rawseti(L, i32(table_index), i32(array_index))
+}
+
+CheckStack :: proc(L: ^State, extra: int) -> bool {
+	return luauh.lua_checkstack(L, i32(extra)) != 0
 }
 
 RawLen :: proc(L: ^State, index: int) -> int {
@@ -988,11 +1051,15 @@ userdata_index :: proc "c" (L: ^State) -> i32 {
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
 	}
+	key := ArgString(L, 2)
+	if header.value == nil && header.binding.name == "Instance" {
+		if key == "Parent" {PushNil(L); return 1}
+		if key == "Destroy" || key == "IsA" {PushUserdataMethod(L, key); return 1}
+	}
 	if userdata_detached(L, header) {
 		return 0
 	}
 
-	key := ArgString(L, 2)
 	if header.binding.get != nil && header.binding.get(L, header.value, header.binding.ctx, key) {
 		return 1
 	}
@@ -1026,16 +1093,18 @@ userdata_namecall :: proc "c" (L: ^State) -> i32 {
 	if header == nil || header.binding == nil {
 		return RaiseError(L, "invalid native instance")
 	}
-	if userdata_detached(L, header) {
-		return 0
-	}
-
 	atom: i32
 	method_value := luauh.lua_namecallatom(L, &atom)
 	if method_value == nil {
 		return RaiseError(L, "missing method name")
 	}
 	method := string(method_value)
+	if header.value == nil && header.binding.name == "Instance" {
+		if method == "Destroy" {return 0}
+		if method != "IsA" && userdata_detached(L, header) {return 0}
+	} else if userdata_detached(L, header) {
+		return 0
+	}
 
 	if header.binding.namecall != nil {
 		result_count, handled := header.binding.namecall(
@@ -1058,10 +1127,13 @@ userdata_method :: proc "c" (L: ^State) -> i32 {
 	if header == nil || header.binding == nil || header.binding.namecall == nil {
 		return RaiseError(L, "invalid native method receiver")
 	}
-	if userdata_detached(L, header) {
+	method := ArgString(L, int(UpvalueIndex(1)))
+	if header.value == nil && header.binding.name == "Instance" {
+		if method == "Destroy" {return 0}
+		if method != "IsA" && userdata_detached(L, header) {return 0}
+	} else if userdata_detached(L, header) {
 		return 0
 	}
-	method := ArgString(L, int(UpvalueIndex(1)))
 	result_count, handled := header.binding.namecall(L, header.value, header.binding.ctx, method)
 	if handled {
 		return result_count

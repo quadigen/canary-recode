@@ -129,8 +129,10 @@ Terrain_Chunk_Key :: struct {
 }
 
 Terrain_Density_Cache :: struct {
-	ox, oy, oz: int,
-	data:       [TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM]f32,
+	ox, oy, oz:      int,
+	data:            [TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM]f32,
+	// Low three bits hold the material layer; bit 7 marks decorative grass.
+	material_layers: [TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM * TERRAIN_CACHE_DIM]u8,
 }
 
 
@@ -155,6 +157,7 @@ Terrain_Chunk :: struct {
 	dirty:           bool,
 	collision_dirty: bool,
 	meshes:          [dynamic]^kineffi.KineFilamentMesh,
+	surface_meshes:  [Terrain_Surface_Kind]^kineffi.KineFilamentMesh,
 	data:            ^Terrain_Chunk_Data,
 }
 
@@ -201,46 +204,52 @@ Terrain_Dirty_Cell :: struct {
 TERRAIN_DIRTY_LIMIT: int = 262144
 
 Terrain :: struct {
-	using service:      Service,
-	chunks:             map[Terrain_Chunk_Key]^Terrain_Chunk,
-	dirty_lookup:       map[Terrain_Chunk_Key]bool,
-	dirty_queue:        [dynamic]Terrain_Chunk_Key,
-	dirty_head:         int,
-	preparing:          bool,
-	mesh_batch:         ^Terrain_Mesh_Batch,
-	mesh_worker:        ^thread.Thread,
-	generation:         ^Terrain_Generation,
-	generation_worker:  ^thread.Thread,
-	generation_cursor:  int,
-	voxel_size:         f32,
-	iso_level:          f32,
-	replication_dirty:  map[Terrain_Voxel_Key]Terrain_Dirty_Cell,
-	change_serial:      u64,
-	dirty_epoch:        u64,
-	dirty_tracking:     bool,
-	decoration:         bool,
-	grass_length:       f32,
-	water_color:        datatypes.Color3,
-	water_reflectance:  f32,
-	water_transparency: f32,
-	water_wave_size:    f32,
-	water_wave_speed:   f32,
-	material_colors:    map[enums.Material]datatypes.Color3,
-	material_variant:   string,
-	shader_revision:    u64,
-	texture_set:        ^kineffi.KineFilamentTex,
-	texture_context:    ^kineffi.KineFilamentContext,
-	draw_items:         [dynamic]kineffi.KineFilamentDrawItem,
-	draw_dirty:         bool,
-	draw_version:       u64,
-	geometry_version:   u64,
-	renderer:           ^classes.Renderer_Object,
-	surface_mesh:       ^kineffi.KineFilamentMesh,
-	gpu_occ:            [dynamic]f32,
-	gpu_mat:            [dynamic]u32,
-	gpu_verts:          [dynamic]f32,
-	gpu_weights:        [dynamic]f32,
-	gpu_indices:        [dynamic]u32,
+	using service:         Service,
+	chunks:                map[Terrain_Chunk_Key]^Terrain_Chunk,
+	dirty_lookup:          map[Terrain_Chunk_Key]bool,
+	dirty_queue:           [dynamic]Terrain_Chunk_Key,
+	dirty_head:            int,
+	preparing:             bool,
+	mesh_batch:            ^Terrain_Mesh_Batch,
+	mesh_worker:           ^thread.Thread,
+	generation:            ^Terrain_Generation,
+	generation_worker:     ^thread.Thread,
+	generation_cursor:     int,
+	chunk_gen:             ^Terrain_Chunk_Generation,
+	flat_shading:          bool,
+	voxel_size:            f32,
+	iso_level:             f32,
+	replication_dirty:     map[Terrain_Voxel_Key]Terrain_Dirty_Cell,
+	change_serial:         u64,
+	dirty_epoch:           u64,
+	dirty_tracking:        bool,
+	decoration:            bool,
+	grass_length:          f32,
+	grass_density:         f32,
+	grass_distance:        f32,
+	grass_options_dirty:   bool,
+	grass_options_context: ^kineffi.KineFilamentContext,
+	applied_shader:        ^kineffi.KineFilamentShader,
+	water_color:           datatypes.Color3,
+	water_reflectance:     f32,
+	water_transparency:    f32,
+	water_wave_size:       f32,
+	water_wave_speed:      f32,
+	material_colors:       map[enums.Material]datatypes.Color3,
+	material_variant:      string,
+	shader_revision:       u64,
+	texture_set:           ^kineffi.KineFilamentTex,
+	texture_context:       ^kineffi.KineFilamentContext,
+	draw_items:            [dynamic]kineffi.KineFilamentDrawItem,
+	draw_dirty:            bool,
+	draw_version:          u64,
+	geometry_version:      u64,
+	renderer:              ^classes.Renderer_Object,
+	gpu_occ:               [dynamic]f32,
+	gpu_mat:               [dynamic]u32,
+	gpu_verts:             [dynamic]f32,
+	gpu_weights:           [dynamic]f32,
+	gpu_indices:           [dynamic]u32,
 }
 
 terrain_material_names := enums.Material_Names
@@ -303,17 +312,35 @@ terrain_mark_voxel_dirty :: proc(service: ^Terrain, x, y, z: int) {
 	key := terrain_chunk_key_for_voxel(x, y, z)
 	terrain_mark_chunk_dirty(service, key)
 
-	lx := terrain_floor_mod(x, TERRAIN_CHUNK_SIZE)
-	ly := terrain_floor_mod(y, TERRAIN_CHUNK_SIZE)
-	lz := terrain_floor_mod(z, TERRAIN_CHUNK_SIZE)
+	lx := x - key.x * TERRAIN_CHUNK_SIZE
+	ly := y - key.y * TERRAIN_CHUNK_SIZE
+	lz := z - key.z * TERRAIN_CHUNK_SIZE
+	dx := lx == 0 ? -1 : (lx == TERRAIN_CHUNK_SIZE - 1 ? 1 : 0)
+	dy := ly == 0 ? -1 : (ly == TERRAIN_CHUNK_SIZE - 1 ? 1 : 0)
+	dz := lz == 0 ? -1 : (lz == TERRAIN_CHUNK_SIZE - 1 ? 1 : 0)
 
-
-	if lx == 0 {terrain_mark_chunk_dirty(service, {key.x - 1, key.y, key.z})}
-	if lx == TERRAIN_CHUNK_SIZE - 1 {terrain_mark_chunk_dirty(service, {key.x + 1, key.y, key.z})}
-	if ly == 0 {terrain_mark_chunk_dirty(service, {key.x, key.y - 1, key.z})}
-	if ly == TERRAIN_CHUNK_SIZE - 1 {terrain_mark_chunk_dirty(service, {key.x, key.y + 1, key.z})}
-	if lz == 0 {terrain_mark_chunk_dirty(service, {key.x, key.y, key.z - 1})}
-	if lz == TERRAIN_CHUNK_SIZE - 1 {terrain_mark_chunk_dirty(service, {key.x, key.y, key.z + 1})}
+	// Marching-cubes samples across edges and corners, not just the six faces.
+	// Do not allocate missing neighboring chunks merely to mark them dirty.
+	for ix in 0 ..< 2 {
+		if ix == 1 && dx == 0 {continue}
+		for iy in 0 ..< 2 {
+			if iy == 1 && dy == 0 {continue}
+			for iz in 0 ..< 2 {
+				if iz == 1 && dz == 0 {continue}
+				if ix == 0 && iy == 0 && iz == 0 {continue}
+				next := Terrain_Chunk_Key {
+					key.x + (ix == 1 ? dx : 0),
+					key.y + (iy == 1 ? dy : 0),
+					key.z + (iz == 1 ? dz : 0),
+				}
+				if neighbor, ok := service.chunks[next]; ok && neighbor != nil {
+					neighbor.dirty = true
+					neighbor.collision_dirty = true
+					terrain_queue_chunk_dirty(service, next)
+				}
+			}
+		}
+	}
 }
 
 terrain_mark_all_dirty :: proc(service: ^Terrain) {
@@ -322,6 +349,47 @@ terrain_mark_all_dirty :: proc(service: ^Terrain) {
 	}
 }
 
+
+Terrain_Dirty_Bounds :: struct {
+	changed:             bool,
+	min_x, min_y, min_z: int,
+	max_x, max_y, max_z: int,
+}
+
+terrain_dirty_bounds_add :: proc(bounds: ^Terrain_Dirty_Bounds, x, y, z: int) {
+	if !bounds.changed {
+		bounds^ = Terrain_Dirty_Bounds {
+			changed = true,
+			min_x   = x,
+			min_y   = y,
+			min_z   = z,
+			max_x   = x,
+			max_y   = y,
+			max_z   = z,
+		}
+		return
+	}
+	bounds.min_x = min(bounds.min_x, x)
+	bounds.min_y = min(bounds.min_y, y)
+	bounds.min_z = min(bounds.min_z, z)
+	bounds.max_x = max(bounds.max_x, x)
+	bounds.max_y = max(bounds.max_y, y)
+	bounds.max_z = max(bounds.max_z, z)
+}
+
+terrain_dirty_bounds_commit :: proc(service: ^Terrain, bounds: ^Terrain_Dirty_Bounds) {
+	if !bounds.changed {return}
+	service.geometry_version += 1
+	terrain_mark_voxel_region_dirty(
+		service,
+		bounds.min_x,
+		bounds.min_y,
+		bounds.min_z,
+		bounds.max_x,
+		bounds.max_y,
+		bounds.max_z,
+	)
+}
 
 terrain_mark_voxel_region_dirty :: proc(
 	service: ^Terrain,
@@ -333,6 +401,23 @@ terrain_mark_voxel_region_dirty :: proc(
 	max_cy := terrain_floor_div(max_y + 1, TERRAIN_CHUNK_SIZE)
 	min_cz := terrain_floor_div(min_z - 1, TERRAIN_CHUNK_SIZE)
 	max_cz := terrain_floor_div(max_z + 1, TERRAIN_CHUNK_SIZE)
+	// Sparse terrain: checking existing chunks is cheaper than walking a huge box.
+	span := (max_cx - min_cx + 1) * (max_cy - min_cy + 1) * (max_cz - min_cz + 1)
+	if span > len(service.chunks) * 4 {
+		for key, chunk in service.chunks {
+			if chunk == nil ||
+			   key.x < min_cx ||
+			   key.x > max_cx ||
+			   key.y < min_cy ||
+			   key.y > max_cy ||
+			   key.z < min_cz ||
+			   key.z > max_cz {continue}
+			chunk.dirty = true
+			chunk.collision_dirty = true
+			terrain_queue_chunk_dirty(service, key)
+		}
+		return
+	}
 	for cx in min_cx ..= max_cx {
 		for cy in min_cy ..= max_cy {
 			for cz in min_cz ..= max_cz {
@@ -379,17 +464,6 @@ terrain_cell_has_surface :: proc(water: f32, material: enums.Material) -> bool {
 	return water > 0 || material == .Neon
 }
 
-
-terrain_material_surface_kind :: proc(material: enums.Material) -> i32 {
-	#partial switch material {
-	case .Glass:
-		return kineffi.KINE_MAT_GLASS
-	case .Neon:
-		return kineffi.KINE_MAT_NEON
-	case:
-		return kineffi.KINE_MAT_WATER
-	}
-}
 
 terrain_default_material_color :: proc(material: enums.Material) -> datatypes.Color3 {
 	#partial switch material {
@@ -465,10 +539,10 @@ terrain_table_material :: proc(
 }
 
 
-terrain_chunk_local_index :: proc(x, y, z: int) -> int {
-	lx := terrain_floor_mod(x, TERRAIN_CHUNK_SIZE)
-	ly := terrain_floor_mod(y, TERRAIN_CHUNK_SIZE)
-	lz := terrain_floor_mod(z, TERRAIN_CHUNK_SIZE)
+terrain_chunk_local_index :: proc(x, y, z: int, key: Terrain_Chunk_Key) -> int {
+	lx := x - key.x * TERRAIN_CHUNK_SIZE
+	ly := y - key.y * TERRAIN_CHUNK_SIZE
+	lz := z - key.z * TERRAIN_CHUNK_SIZE
 	return (lx * TERRAIN_CHUNK_SIZE + ly) * TERRAIN_CHUNK_SIZE + lz
 }
 
@@ -495,9 +569,9 @@ terrain_chunk_data_at :: proc(
 			return nil, 0, false
 		}
 		chunk.data = new(Terrain_Chunk_Data)
-		return chunk.data, terrain_chunk_local_index(x, y, z), false
+		return chunk.data, terrain_chunk_local_index(x, y, z, key), false
 	}
-	return chunk.data, terrain_chunk_local_index(x, y, z), true
+	return chunk.data, terrain_chunk_local_index(x, y, z, key), true
 }
 
 terrain_get_cell :: proc(service: ^Terrain, x, y, z: int) -> (Terrain_Cell, bool) {
@@ -558,6 +632,7 @@ terrain_erase_cell_data :: proc(service: ^Terrain, x, y, z: int) -> bool {
 
 terrain_erase_cell :: proc(service: ^Terrain, x, y, z: int) {
 	if terrain_erase_cell_data(service, x, y, z) {
+		terrain_note_change(service, x, y, z, 0, 0, .Air)
 		terrain_mark_voxel_dirty(service, x, y, z)
 	}
 }
@@ -579,14 +654,20 @@ terrain_store_cell :: proc(
 	}
 
 	if occ <= 0 && wat <= 0 {
-
-
+		if !terrain_erase_cell_data(service, x, y, z) {
+			return false
+		}
 		terrain_note_change(service, x, y, z, 0, 0, material)
-		return terrain_erase_cell_data(service, x, y, z)
+		return true
 	}
 
 	data, index, _ := terrain_chunk_data_at(service, x, y, z, true)
 	if data == nil {
+		return false
+	}
+	if data.occupancy[index] == occ &&
+	   data.water[index] == wat &&
+	   data.material[index] == material {
 		return false
 	}
 
@@ -832,14 +913,22 @@ terrain_fill_cache :: proc(
 				}
 
 				v: f32
+				layer: u8
 				if cur_data != nil {
 					lz := wz - kz * TERRAIN_CHUNK_SIZE
 					idx := (lx * TERRAIN_CHUNK_SIZE + ly) * TERRAIN_CHUNK_SIZE + lz
-					if !terrain_material_is_liquid(cur_data.material[idx]) {
+					mat := cur_data.material[idx]
+					if !terrain_material_is_liquid(mat) {
 						v = cur_data.occupancy[idx]
+						if v > 0 {
+							layer = u8(terrain_material_layer(mat))
+							if mat == .Grass || mat == .LeafyGrass {layer |= 0x80}
+						}
 					}
 				}
-				c.data[(x * TERRAIN_CACHE_DIM + y) * TERRAIN_CACHE_DIM + z] = v
+				cache_index := (x * TERRAIN_CACHE_DIM + y) * TERRAIN_CACHE_DIM + z
+				c.data[cache_index] = v
+				c.material_layers[cache_index] = layer
 				lo = min(lo, v)
 				hi = max(hi, v)
 			}
@@ -904,12 +993,15 @@ terrain_normal_at_world :: proc(
 	return datatypes.Vec3_Divide(n, length)
 }
 
-terrain_material_weights_at_world :: proc(service: ^Terrain, world: datatypes.Vector3) -> [8]f32 {
+terrain_material_weights_at_world :: proc(
+	service: ^Terrain,
+	world: datatypes.Vector3,
+	cache: ^Terrain_Density_Cache = nil,
+) -> [8]f32 {
 	inv_voxel := 1.0 / service.voxel_size
 	vx := world.x * inv_voxel
 	vy := world.y * inv_voxel
 	vz := world.z * inv_voxel
-
 	x0 := int(math.floor(vx))
 	y0 := int(math.floor(vy))
 	z0 := int(math.floor(vz))
@@ -919,6 +1011,14 @@ terrain_material_weights_at_world :: proc(service: ^Terrain, world: datatypes.Ve
 
 	weights: [8]f32
 	total: f32
+	cached :=
+		cache != nil &&
+		x0 >= cache.ox &&
+		y0 >= cache.oy &&
+		z0 >= cache.oz &&
+		x0 + 1 < cache.ox + TERRAIN_CACHE_DIM &&
+		y0 + 1 < cache.oy + TERRAIN_CACHE_DIM &&
+		z0 + 1 < cache.oz + TERRAIN_CACHE_DIM
 
 	for dx in 0 ..< 2 {
 		wx := dx == 0 ? 1 - fx : fx
@@ -926,26 +1026,36 @@ terrain_material_weights_at_world :: proc(service: ^Terrain, world: datatypes.Ve
 			wy := dy == 0 ? 1 - fy : fy
 			for dz in 0 ..< 2 {
 				wz := dz == 0 ? 1 - fz : fz
-				if cell, ok := terrain_get_cell(service, x0 + dx, y0 + dy, z0 + dz);
-				   ok && cell.occupancy > 0 && !terrain_material_is_liquid(cell.material) {
-					weight := wx * wy * wz * cell.occupancy
-					weights[terrain_material_layer(cell.material)] += weight
-					total += weight
+				layer: u8
+				occupancy: f32
+				if cached {
+					ix := x0 + dx - cache.ox
+					iy := y0 + dy - cache.oy
+					iz := z0 + dz - cache.oz
+					index := (ix * TERRAIN_CACHE_DIM + iy) * TERRAIN_CACHE_DIM + iz
+					occupancy = cache.data[index]
+					layer = cache.material_layers[index]
+				} else if cell, ok := terrain_get_cell(service, x0 + dx, y0 + dy, z0 + dz);
+				   ok && !terrain_material_is_liquid(cell.material) {
+					occupancy = cell.occupancy
+					layer = u8(terrain_material_layer(cell.material))
+					if cell.material == .Grass || cell.material == .LeafyGrass {layer |= 0x80}
 				}
+				if occupancy <= 0 {continue}
+				weight := wx * wy * wz * occupancy
+				weights[int(layer & 7)] += weight
+				if (layer & 0x80) != 0 {weights[6] += weight}
+				total += weight
 			}
 		}
 	}
-
 	if total <= 1.0e-6 {
 		weights[0] = 1
 		return weights
 	}
-	for i in 0 ..< 6 {
-		weights[i] /= total
-	}
+	for i in 0 ..< 8 {weights[i] /= total}
 	return weights
 }
-
 
 Terrain_Edge_Key :: struct {
 	x, y, z: i32,
@@ -970,12 +1080,13 @@ terrain_append_vertex :: proc(
 	vertex_data: ^[dynamic]f32,
 	material_weights: ^[dynamic]f32,
 	position, normal: datatypes.Vector3,
+	cache: ^Terrain_Density_Cache = nil,
 ) {
 	append(vertex_data, position.x, position.y, position.z, normal.x, normal.y, normal.z, 0, 0)
 
 
 	if material_weights != nil {
-		weights := terrain_material_weights_at_world(service, position)
+		weights := terrain_material_weights_at_world(service, position, cache)
 		for weight in weights {
 			append(material_weights, weight)
 		}
@@ -1054,7 +1165,14 @@ terrain_edge_vertex :: proc(builder: ^Terrain_Mesh_Builder, key: Terrain_Edge_Ke
 	normal := terrain_normal_at_world(service, position, builder.cache)
 
 	index := builder.vertex_count
-	terrain_append_vertex(service, builder.vertex_data, builder.material_weights, position, normal)
+	terrain_append_vertex(
+		service,
+		builder.vertex_data,
+		builder.material_weights,
+		position,
+		normal,
+		builder.cache,
+	)
 	builder.vertex_count += 1
 	builder.edge_vertices[key] = index
 	return index
@@ -1092,7 +1210,47 @@ terrain_mc_emit :: proc(p0, p1, p2: marching_cubes.Vec3, e0, e1, e2: int, user_d
 
 	face := datatypes.Vec3_Cross(datatypes.Vec3_Subtract(v1, v0), datatypes.Vec3_Subtract(v2, v0))
 	avg_normal := datatypes.Vec3_Add(datatypes.Vec3_Add(n0, n1), n2)
-	if datatypes.Vec3_Dot(face, avg_normal) < 0 {
+	flip := datatypes.Vec3_Dot(face, avg_normal) < 0
+
+	if builder.service.flat_shading {
+		len := datatypes.Vec3_Magnitude(face)
+		if len < 1.0e-9 {return}
+		n := datatypes.Vec3_Divide(face, len)
+		if flip {n = datatypes.Vec3_Multiply(n, -1)}
+		base := builder.vertex_count
+		terrain_append_vertex(
+			builder.service,
+			builder.vertex_data,
+			builder.material_weights,
+			v0,
+			n,
+			builder.cache,
+		)
+		terrain_append_vertex(
+			builder.service,
+			builder.vertex_data,
+			builder.material_weights,
+			v1,
+			n,
+			builder.cache,
+		)
+		terrain_append_vertex(
+			builder.service,
+			builder.vertex_data,
+			builder.material_weights,
+			v2,
+			n,
+			builder.cache,
+		)
+		builder.vertex_count += 3
+		if flip {
+			append(builder.indices, u16(base), u16(base + 2), u16(base + 1))
+		} else {
+			append(builder.indices, u16(base), u16(base + 1), u16(base + 2))
+		}
+		return
+	}
+	if flip {
 		append(builder.indices, u16(i0), u16(i2), u16(i1))
 	} else {
 		append(builder.indices, u16(i0), u16(i1), u16(i2))
@@ -1131,9 +1289,13 @@ terrain_destroy_chunk_meshes :: proc(chunk: ^Terrain_Chunk, renderer: ^classes.R
 				_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, mesh)
 			}
 		}
+		for mesh in chunk.surface_meshes {
+			if mesh != nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, mesh)}
+		}
 	}
 	delete(chunk.meshes)
 	chunk.meshes = nil
+	chunk.surface_meshes = {}
 }
 
 terrain_upload_chunk_meshes :: proc(
@@ -1297,7 +1459,14 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 		}
 
 		append(vertex_data, ..verts[:int(vertex_count) * 8])
+		weights_start := len(material_weights)
 		append(material_weights, ..weights[:int(vertex_count) * 8])
+		for i in 0 ..< int(vertex_count) {
+			base := i * 8
+			world := datatypes.Vector3{verts[base], verts[base + 1], verts[base + 2]}
+			mask := terrain_material_weights_at_world(service, world, &cache)
+			material_weights[weights_start + base + 6] = mask[6]
+		}
 		for i in 0 ..< int(index_count) {
 			append(indices, u16(out[i]))
 		}
@@ -1312,6 +1481,7 @@ Terrain_Mesh_Job :: struct {
 	vertex_data:      [dynamic]f32,
 	material_weights: [dynamic]f32,
 	indices:          [dynamic]u16,
+	surfaces:         [Terrain_Surface_Kind]Terrain_Surface_Geometry,
 }
 
 Terrain_Generated_Cell :: struct {
@@ -1353,6 +1523,7 @@ terrain_start_mesh_batch :: proc(service: ^Terrain, jobs: []Terrain_Mesh_Job) ->
 	batch := new(Terrain_Mesh_Batch)
 	batch.count = len(jobs)
 	copy(batch.jobs[:], jobs)
+	batch.snapshot.flat_shading = service.flat_shading
 	batch.snapshot.voxel_size = service.voxel_size
 	batch.snapshot.iso_level = service.iso_level
 	batch.snapshot.chunks = make(map[Terrain_Chunk_Key]^Terrain_Chunk)
@@ -1400,6 +1571,10 @@ terrain_release_mesh_batch :: proc(service: ^Terrain) {
 		delete(job.vertex_data)
 		delete(job.material_weights)
 		delete(job.indices)
+		for surface in job.surfaces {
+			delete(surface.vertices)
+			delete(surface.indices)
+		}
 	}
 	free(batch)
 	service.mesh_batch = nil
@@ -1430,6 +1605,7 @@ terrain_poll_mesh_batch :: proc(service: ^Terrain, renderer: ^classes.Renderer_O
 }
 
 terrain_build_job :: proc(service: ^Terrain, job: ^Terrain_Mesh_Job) {
+	Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces)
 	job.has_surface = Terrain_Build_Chunk_Mesh(
 		service,
 		job.key,
@@ -1457,6 +1633,16 @@ terrain_commit_job :: proc(
 				job.indices[:],
 			)
 		}
+		for surface, kind in job.surfaces {
+			if len(surface.indices) == 0 {continue}
+			chunk.surface_meshes[kind] = kineffi.Kine_Filament_CreateCustomMesh32(
+				renderer.Filament,
+				raw_data(surface.vertices),
+				i32(len(surface.vertices) / 8),
+				raw_data(surface.indices),
+				i32(len(surface.indices)),
+			)
+		}
 		chunk.dirty = false
 	}
 	service.draw_dirty = true
@@ -1467,6 +1653,11 @@ terrain_commit_job :: proc(
 	job.vertex_data = nil
 	job.material_weights = nil
 	job.indices = nil
+	for &surface in job.surfaces {
+		delete(surface.vertices)
+		delete(surface.indices)
+		surface = {}
+	}
 }
 
 
@@ -1515,171 +1706,16 @@ terrain_ensure_texture_set :: proc(service: ^Terrain, renderer: ^classes.Rendere
 }
 
 
-terrain_destroy_surface_mesh :: proc(service: ^Terrain) {
-	if service == nil {
-		return
-	}
-	if service.surface_mesh != nil && service.renderer != nil && service.renderer.Filament != nil {
-		_ = kineffi.Kine_Filament_DestroyMesh(service.renderer.Filament, service.surface_mesh)
-	}
-	service.surface_mesh = nil
-}
-
-
-terrain_append_surface_item :: proc(
-	service: ^Terrain,
-	data: ^Terrain_Chunk_Data,
-	lx, ly, lz: int,
-	x, y, z: int,
-	water, occ: f32,
-	material: enums.Material,
-) {
-
-
-	above_water, above_occ := f32(0), f32(0)
-	if ly + 1 < TERRAIN_CHUNK_SIZE {
-		above_index := (lx * TERRAIN_CHUNK_SIZE + ly + 1) * TERRAIN_CHUNK_SIZE + lz
-		above_water = data.water[above_index]
-		above_occ = data.occupancy[above_index]
-	} else if above, has_above := terrain_get_cell(service, x, y + 1, z); has_above {
-		above_water = above.water
-		above_occ = above.occupancy
-	}
-	if above_water > 0 || above_occ > 0 {
-		return
-	}
-
-	vs := service.voxel_size
-	level := max(water, occ)
-	if level <= 0 {
-		return
-	}
-	surface_y := (f32(y) + level - 0.5) * vs
-
-	kind := terrain_material_surface_kind(material)
-	color := terrain_material_color(service, material)
-	transmission := clamp(1.0 - service.water_transparency, 0.2, 1.0)
-	param1: f32 = 0.08
-	param2: f32 = 1.33
-	param3: f32 = 0.5
-
-	#partial switch enums.Material(material) {
-	case .Glass:
-		transmission = 0.85
-		param1 = 0.05
-		param2 = 1.52
-		param3 = 0.35
-	case .Neon:
-		transmission = 0
-		param1 = 1.0
-	case:
-		surface_y -= 0.35
-	}
-
-
-	translate := [16]f32 {
-		vs,
-		0,
-		0,
-		0,
-		0,
-		1,
-		0,
-		0,
-		0,
-		0,
-		vs,
-		0,
-		(f32(x) + 0.5) * vs,
-		surface_y,
-		(f32(z) + 0.5) * vs,
-		1,
-	}
-
-	append(
-		&service.draw_items,
-		kineffi.KineFilamentDrawItem {
-			mesh = service.surface_mesh,
-			tex = nil,
-			transform = translate,
-			r = color.R,
-			g = color.G,
-			b = color.B,
-			param1 = param1,
-			param2 = param2,
-			param3 = param3,
-			transmission = transmission,
-			materialKind = kind,
-			flags = u32(kineffi.KINE_FILAMENT_DRAW_CULLING),
-		},
-	)
-}
-
-terrain_append_surface_draw_items :: proc(service: ^Terrain) {
-	if service.renderer == nil || service.renderer.Filament == nil {
-		return
-	}
-
-	if service.surface_mesh == nil {
-		service.surface_mesh = kineffi.Kine_Filament_CreateMesh(
-			service.renderer.Filament,
-			kineffi.KINE_MESH_WATER_GRID,
-		)
-		if service.surface_mesh == nil {
-			return
-		}
-	}
-
-
-	for key, chunk in service.chunks {
-		if chunk == nil || chunk.data == nil || chunk.data.surface == 0 {
-			continue
-		}
-		data := chunk.data
-		base_x := key.x * TERRAIN_CHUNK_SIZE
-		base_y := key.y * TERRAIN_CHUNK_SIZE
-		base_z := key.z * TERRAIN_CHUNK_SIZE
-		for lx in 0 ..< TERRAIN_CHUNK_SIZE {
-			for ly in 0 ..< TERRAIN_CHUNK_SIZE {
-				for lz in 0 ..< TERRAIN_CHUNK_SIZE {
-					index := (lx * TERRAIN_CHUNK_SIZE + ly) * TERRAIN_CHUNK_SIZE + lz
-					water := data.water[index]
-					occ := data.occupancy[index]
-					material := data.material[index]
-					if !terrain_cell_has_surface(water, material) {
-						continue
-					}
-					terrain_append_surface_item(
-						service,
-						data,
-						lx,
-						ly,
-						lz,
-						base_x + lx,
-						base_y + ly,
-						base_z + lz,
-						water,
-						occ,
-						material,
-					)
-				}
-			}
-		}
-	}
-}
-
 terrain_refresh_draw_items :: proc(service: ^Terrain) {
-	delete(service.draw_items)
-	service.draw_items = make([dynamic]kineffi.KineFilamentDrawItem, 0, 64)
+	clear(&service.draw_items)
 
 	identity := [16]f32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
-
-	terrain_append_surface_draw_items(service)
 
 	for _, chunk in service.chunks {
 		if chunk == nil {
 			continue
 		}
+		terrain_append_chunk_surfaces(service, chunk, identity)
 		for mesh in chunk.meshes {
 			if mesh == nil {
 				continue
@@ -1718,6 +1754,29 @@ terrain_reset_queue :: proc(service: ^Terrain) {
 	clear(&service.dirty_lookup)
 }
 
+terrain_sync_grass_options :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) {
+	if service == nil || renderer == nil || renderer.Filament == nil {return}
+	if !service.grass_options_dirty && service.grass_options_context == renderer.Filament {return}
+	// GrassLength is a Roblox-style 0..1 multiplier. The native API uses world units.
+	// 0.1 -> 0.65 world units, matching the native renderer's original default.
+	height := clamp(service.grass_length * 6.5, 0.05, 4.0)
+	enabled := service.decoration && service.grass_length > 0
+	kineffi.Kine_Filament_SetTerrainGrassOptions(
+		renderer.Filament,
+		enabled,
+		service.grass_density,
+		height,
+		service.grass_distance,
+		0.14,
+		u32(1 << 6),
+	)
+	service.grass_options_context = renderer.Filament
+	service.grass_options_dirty = false
+	// The Filament draw list is retained. Changing grass state must resubmit it.
+	service.draw_version += 1
+}
+
+
 Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) {
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return
@@ -1730,10 +1789,12 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 	defer service.preparing = false
 
 	service.renderer = renderer
+	terrain_sync_grass_options(service, renderer)
 	if service.texture_set == nil && service.texture_context == renderer.Filament {
 		terrain_ensure_texture_set(service, renderer)
 	}
 	if terrain_poll_generation(service) {return}
+	if terrain_poll_chunk_generation(service) {return}
 	if terrain_poll_mesh_batch(service, renderer) {return}
 
 
@@ -1748,7 +1809,8 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 
 		if chunk, ok := service.chunks[key]; ok && chunk != nil && chunk.dirty {
 			processed += 1
-			if !terrain_cache_neighborhood_has_solids(service, key) {
+			has_special_surface := chunk.data != nil && chunk.data.surface > 0
+			if !has_special_surface && !terrain_cache_neighborhood_has_solids(service, key) {
 				empty := Terrain_Mesh_Job {
 					key = key,
 				}
@@ -1769,6 +1831,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 			tracy.ZoneNC("Terrain Mesh GPU Readback", 0xC678DD)
 			for i in 0 ..< job_count {
 				job := &jobs[i]
+				Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces)
 				meshed, gpu_ok := Terrain_Build_Chunk_Mesh_GPU(
 					service,
 					job.key,
@@ -1812,24 +1875,21 @@ Terrain_Render_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object)
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return
 	}
-	if service.draw_dirty {
-		terrain_refresh_draw_items(service)
-	}
-	if len(service.draw_items) == 0 {
-		return
-	}
+	terrain_sync_grass_options(service, renderer)
+	refresh := service.draw_dirty
+	if refresh {terrain_refresh_draw_items(service)}
+	if len(service.draw_items) == 0 {return}
 	shader, revision := classes.MaterialVariant_Resolve(
 		service.signal_registry,
 		service.material_variant,
 		renderer.Filament,
 	)
-	changed := revision != service.shader_revision
-	for &item in service.draw_items {
-		if item.shader != shader {changed = true}
-		item.shader = shader
+	if refresh || revision != service.shader_revision || shader != service.applied_shader {
+		for &item in service.draw_items {item.shader = shader}
+		service.draw_version += 1
+		service.applied_shader = shader
+		service.shader_revision = revision
 	}
-	if changed {service.draw_version += 1}
-	service.shader_revision = revision
 
 	_ = kineffi.Kine_Filament_DrawMeshListVersioned(
 		renderer.Filament,
@@ -1923,13 +1983,19 @@ terrain_fill_region :: proc(
 	if !ok {
 		return
 	}
+	dirty: Terrain_Dirty_Bounds
 	for x in 0 ..< cells.count_x {
 		for y in 0 ..< cells.count_y {
 			for z in 0 ..< cells.count_z {
-				terrain_write_cell_at(service, cells, x, y, z, 1, 0, material)
+				center := terrain_region_cell_center(cells, x, y, z)
+				cx, cy, cz := terrain_cell_from_world(service, center)
+				if terrain_store_cell(service, cx, cy, cz, 1, 0, material) {
+					terrain_dirty_bounds_add(&dirty, cx, cy, cz)
+				}
 			}
 		}
 	}
+	terrain_dirty_bounds_commit(service, &dirty)
 }
 
 Terrain_Cell_Bounds :: struct {
@@ -2071,7 +2137,9 @@ terrain_sdf_apply :: proc(
 				new_occ := clamp(iso - d / vs, 0, 1)
 
 
-				if k <= 0 {
+				// Keep fractional occupancy for spheres so marching cubes can
+				// interpolate a smooth boundary instead of hard 0/1 voxel steps.
+				if k <= 0 && shape.kind != .Sphere {
 					if subtract {
 						new_occ = d_shape <= 0 ? f32(0) : existing_occ
 					} else {
@@ -2529,22 +2597,20 @@ terrain_apply_generated :: proc(
 	start, count: int,
 ) -> int {
 	end := min(start + count, len(cells))
+	dirty: Terrain_Dirty_Bounds
 	for index in start ..< end {
 		cell := cells[index]
+		x, y, z := int(cell.x), int(cell.y), int(cell.z)
 		if cell.erase {
-			terrain_erase_cell(service, int(cell.x), int(cell.y), int(cell.z))
-		} else {
-			terrain_set_cell(
-				service,
-				int(cell.x),
-				int(cell.y),
-				int(cell.z),
-				cell.occupancy,
-				0,
-				cell.material,
-			)
+			if terrain_erase_cell_data(service, x, y, z) {
+				terrain_note_change(service, x, y, z, 0, 0, .Air)
+				terrain_dirty_bounds_add(&dirty, x, y, z)
+			}
+		} else if terrain_store_cell(service, x, y, z, cell.occupancy, 0, cell.material) {
+			terrain_dirty_bounds_add(&dirty, x, y, z)
 		}
 	}
+	terrain_dirty_bounds_commit(service, &dirty)
 	return end
 }
 
@@ -2704,6 +2770,7 @@ terrain_push_material_grid :: proc(
 
 terrain_clear :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) {
 	terrain_release_generation(service)
+	terrain_release_chunk_generation(service)
 	for _, chunk in service.chunks {
 		if chunk == nil {
 			continue
@@ -2724,6 +2791,7 @@ terrain_clear :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object) {
 	service.dirty_head = 0
 	clear(&service.dirty_queue)
 	clear(&service.dirty_lookup)
+	service.grass_options_dirty = true
 
 	service.draw_dirty = true
 	service.draw_version += 1
@@ -2798,6 +2866,7 @@ Terrain_Read_Kine_Table :: proc(
 	service.iso_level = table.iso_level
 	service.decoration = table.decoration
 	service.grass_length = table.grass_length
+	service.grass_options_dirty = true
 	service.water_color = table.water_color
 	service.water_reflectance = table.water_reflectance
 	service.water_transparency = table.water_transparency
@@ -2810,17 +2879,22 @@ Terrain_Read_Kine_Table :: proc(
 		service.material_colors[enums.Material(material)] = colour
 	}
 
+	dirty: Terrain_Dirty_Bounds
 	for cell in table.cells {
-		terrain_set_cell(
+		x, y, z := int(cell.x), int(cell.y), int(cell.z)
+		if terrain_store_cell(
 			service,
-			int(cell.x),
-			int(cell.y),
-			int(cell.z),
+			x,
+			y,
+			z,
 			cell.occupancy,
 			cell.water,
 			enums.Material(cell.material),
-		)
+		) {
+			terrain_dirty_bounds_add(&dirty, x, y, z)
+		}
 	}
+	terrain_dirty_bounds_commit(service, &dirty)
 
 	service.draw_dirty = true
 	service.draw_version += 1
@@ -2842,6 +2916,10 @@ terrain_service_construct :: proc(
 	service.voxel_size = TERRAIN_DEFAULT_VOXEL_SIZE
 	service.iso_level = TERRAIN_DEFAULT_ISO_LEVEL
 	service.grass_length = 0.1
+	service.grass_density = 6.0
+	service.grass_distance = 140.0
+	service.decoration = true
+	service.grass_options_dirty = true
 	service.water_color = datatypes.Color3{0.05, 0.29, 0.55}
 	service.water_reflectance = 1
 	service.water_transparency = 0.3
@@ -2879,8 +2957,6 @@ terrain_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rend
 	service.texture_set = nil
 	service.texture_context = nil
 
-	terrain_destroy_surface_mesh(service)
-
 	classes.Object_Destroy(object)
 	free(service)
 }
@@ -2916,8 +2992,14 @@ terrain_service_get :: proc(
 		vm.PushString(L, service.material_variant)
 	case "Decoration":
 		vm.PushBoolean(L, service.decoration)
+	case "FlatShading":
+		vm.PushBoolean(L, service.flat_shading)
 	case "GrassLength":
 		vm.PushNumber(L, f64(service.grass_length))
+	case "GrassDensity":
+		vm.PushNumber(L, f64(service.grass_density))
+	case "GrassRenderDistance":
+		vm.PushNumber(L, f64(service.grass_distance))
 	case "IsSmooth":
 		vm.PushBoolean(L, true)
 	case "MaterialColors":
@@ -2970,19 +3052,47 @@ terrain_service_set :: proc(
 		copy := strings.clone(vm.ArgString(L, value_index))
 		delete(service.material_variant)
 		service.material_variant = copy
+	case "FlatShading":
+		value := vm.ArgBoolean(L, value_index)
+		if value != service.flat_shading {
+			service.flat_shading = value
+			terrain_mark_all_dirty(service)
+		}
 	case "Decoration":
-		service.decoration = vm.ArgBoolean(L, value_index)
+		value := vm.ArgBoolean(L, value_index)
+		if value != service.decoration {
+			service.decoration = value
+			service.grass_options_dirty = true
+		}
 	case "GrassLength":
-		service.grass_length = max(0, f32(vm.ArgNumber(L, value_index)))
+		value := clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
+		if value != service.grass_length {
+			service.grass_length = value
+			service.grass_options_dirty = true
+		}
+	case "GrassDensity":
+		value := clamp(f32(vm.ArgNumber(L, value_index)), 0, 24)
+		if value != service.grass_density {
+			service.grass_density = value
+			service.grass_options_dirty = true
+		}
+	case "GrassRenderDistance":
+		value := clamp(f32(vm.ArgNumber(L, value_index)), 10, 500)
+		if value != service.grass_distance {
+			service.grass_distance = value
+			service.grass_options_dirty = true
+		}
 	case "WaterColor":
 		if datatype_registry == nil {
 			return false
 		}
 		service.water_color = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		service.draw_dirty = true
 	case "WaterReflectance":
 		service.water_reflectance = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
 	case "WaterTransparency":
 		service.water_transparency = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
+		service.draw_dirty = true
 	case "WaterWaveSize":
 		service.water_wave_size = clamp(f32(vm.ArgNumber(L, value_index)), 0, 1)
 	case "WaterWaveSpeed":
@@ -2993,11 +3103,16 @@ terrain_service_set :: proc(
 			_ = vm.RaiseError(L, "Terrain.VoxelSize must be greater than zero")
 			return true
 		}
-		service.voxel_size = value
-		terrain_mark_all_dirty(service)
+		if value != service.voxel_size {
+			service.voxel_size = value
+			terrain_mark_all_dirty(service)
+		}
 	case "IsoLevel":
-		service.iso_level = clamp(f32(vm.ArgNumber(L, value_index)), 0.001, 0.999)
-		terrain_mark_all_dirty(service)
+		value := clamp(f32(vm.ArgNumber(L, value_index)), 0.001, 0.999)
+		if value != service.iso_level {
+			service.iso_level = value
+			terrain_mark_all_dirty(service)
+		}
 	case:
 		return false
 	}
@@ -3024,6 +3139,31 @@ terrain_service_namecall :: proc(
 			return vm.RaiseOwnedError(L, &err), true
 		}
 		return 1, true
+
+	case "GenerateArea":
+		x := f32(vm.ArgOptionalNumber(L, 2, 0))
+		z := f32(vm.ArgOptionalNumber(L, 3, 0))
+		radius := f32(vm.ArgOptionalNumber(L, 4, 256))
+		options := terrain_default_chunk_gen_options()
+		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5)}
+		Terrain_Generate_Area(service, x, z, radius, options)
+		return 0, true
+
+	case "GenerateChunk":
+		cx := int(math.floor(vm.ArgOptionalNumber(L, 2, 0)))
+		cz := int(math.floor(vm.ArgOptionalNumber(L, 3, 0)))
+		radius := clamp(int(math.floor(vm.ArgOptionalNumber(L, 4, 0))), 0, 32)
+		options := terrain_default_chunk_gen_options()
+		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5)}
+		Terrain_Generate_Chunks(
+			service,
+			cx - radius,
+			cz - radius,
+			cx + radius,
+			cz + radius,
+			options,
+		)
+		return 0, true
 
 	case "Clear":
 		terrain_clear(service, service.renderer)
@@ -3192,6 +3332,7 @@ terrain_service_namecall :: proc(
 		}
 
 		base := vm.StackTop(L)
+		dirty: Terrain_Dirty_Bounds
 		for x in 0 ..< cells.count_x {
 			for y in 0 ..< cells.count_y {
 				for z in 0 ..< cells.count_z {
@@ -3213,10 +3354,15 @@ terrain_service_namecall :: proc(
 					}
 					vm.SetStackTop(L, base)
 
-					terrain_write_cell_at(service, cells, x, y, z, occupancy, 0, material)
+					center := terrain_region_cell_center(cells, x, y, z)
+					cx, cy, cz := terrain_cell_from_world(service, center)
+					if terrain_store_cell(service, cx, cy, cz, occupancy, 0, material) {
+						terrain_dirty_bounds_add(&dirty, cx, cy, cz)
+					}
 				}
 			}
 		}
+		terrain_dirty_bounds_commit(service, &dirty)
 		vm.SetStackTop(L, base)
 		return 0, true
 
@@ -3281,6 +3427,7 @@ terrain_service_namecall :: proc(
 		if vm.IsTable(L, -1) {liquid_index = vm.StackTop(L)} else {vm.Pop(L)}
 		loop_base := vm.StackTop(L)
 
+		dirty: Terrain_Dirty_Bounds
 		for x in 0 ..< cells.count_x {
 			for y in 0 ..< cells.count_y {
 				for z in 0 ..< cells.count_z {
@@ -3318,10 +3465,13 @@ terrain_service_namecall :: proc(
 						}
 					}
 
-					terrain_set_cell(service, cx, cy, cz, occupancy, water, material)
+					if terrain_store_cell(service, cx, cy, cz, occupancy, water, material) {
+						terrain_dirty_bounds_add(&dirty, cx, cy, cz)
+					}
 				}
 			}
 		}
+		terrain_dirty_bounds_commit(service, &dirty)
 		vm.SetStackTop(L, base)
 		return 0, true
 
@@ -3373,6 +3523,7 @@ terrain_service_namecall :: proc(
 		nx := max(0, int(region.size.X))
 		ny := max(0, int(region.size.Y))
 		nz := max(0, int(region.size.Z))
+		dirty: Terrain_Dirty_Bounds
 		for x in 0 ..< nx {
 			for y in 0 ..< ny {
 				for z in 0 ..< nz {
@@ -3382,30 +3533,20 @@ terrain_service_namecall :: proc(
 					}
 					occupancy := region.occupancy[index]
 					material := enums.Material(region.materials[index])
+					cx, cy, cz := int(corner.X) + x, int(corner.Y) + y, int(corner.Z) + z
 					if occupancy <= 0 {
-						if !paste_empty {
-							continue
+						if !paste_empty {continue}
+						if terrain_erase_cell_data(service, cx, cy, cz) {
+							terrain_note_change(service, cx, cy, cz, 0, 0, .Air)
+							terrain_dirty_bounds_add(&dirty, cx, cy, cz)
 						}
-						terrain_erase_cell(
-							service,
-							int(corner.X) + x,
-							int(corner.Y) + y,
-							int(corner.Z) + z,
-						)
-						continue
+					} else if terrain_store_cell(service, cx, cy, cz, occupancy, 0, material) {
+						terrain_dirty_bounds_add(&dirty, cx, cy, cz)
 					}
-					terrain_set_cell(
-						service,
-						int(corner.X) + x,
-						int(corner.Y) + y,
-						int(corner.Z) + z,
-						occupancy,
-						0,
-						material,
-					)
 				}
 			}
 		}
+		terrain_dirty_bounds_commit(service, &dirty)
 		return 0, true
 
 
@@ -3537,16 +3678,20 @@ Register_Terrain_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = terrain_service_get,
 		set = terrain_service_set,
+		methods = []string{"GenerateChunk"},
 		namecall = terrain_service_namecall,
 		properties = []string {
 			"Decoration",
 			"GrassLength",
+			"GrassDensity",
+			"GrassRenderDistance",
 			"IsSmooth",
 			"MaterialColors",
 			"MaterialVariant",
 			"MaxExtents",
 			"WaterColor",
 			"WaterReflectance",
+			"FlatShading",
 			"WaterTransparency",
 			"WaterWaveSize",
 			"WaterWaveSpeed",

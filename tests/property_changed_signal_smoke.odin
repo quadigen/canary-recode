@@ -98,6 +98,19 @@ toggle.Value = false
 assert(toggleCount == 1, "BoolValue.Changed should fire")
 toggle.Value = true
 assert(toggleCount == 2, "BoolValue.Changed should fire on every write")
+
+-- A callback resumes on a new coroutine, but it still shares the firing
+-- coroutine's native stack budget.
+local recursive = Instance.new("Folder")
+local depth = 0
+recursive:GetPropertyChangedSignal("Name"):Connect(function()
+	depth += 1
+	if depth < 2000 then
+		recursive.Name = tostring(depth)
+	end
+end)
+recursive.Name = "start"
+assert(depth > 1 and depth < 2000, "nested notifications must be bounded by Luau")
 `,
 		"property_changed_signal_smoke",
 	)

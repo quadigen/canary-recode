@@ -170,7 +170,6 @@ foreign lib {
 	lua_newuserdatatagged :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr ---
 	lua_newuserdatataggedwithmetatable :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr ---
 	lua_newuserdatadtor :: proc(L: ^lua_State, sz: uintptr, dtor: proc "c" (_: rawptr)) -> rawptr ---
-	lua_newbuffer :: proc(L: ^lua_State, sz: uintptr) -> rawptr ---
 
 
 	lua_gettable :: proc(L: ^lua_State, idx: i32) -> i32 ---
@@ -235,6 +234,8 @@ lua_GCOp :: enum i32 {
 foreign lib {
 	lua_gc :: proc(L: ^lua_State, what: i32, data: i32) -> i32 ---
 	lua_next :: proc(L: ^lua_State, idx: i32) -> i32 ---
+	lua_setmemcat :: proc(L: ^lua_State, category: i32) ---
+	lua_newbuffer :: proc(L: ^lua_State, sz: uintptr) -> rawptr ---
 }
 
 lua_CategoryName :: proc "c" (L: ^lua_State, memcat: u8) -> cstring
@@ -246,7 +247,6 @@ foreign lib {
 	lua_memorydump :: proc(L: ^lua_State, file: rawptr, categoryName: lua_CategoryName) ---
 
 
-	lua_setmemcat :: proc(L: ^lua_State, category: i32) ---
 	lua_totalbytes :: proc(L: ^lua_State, category: i32) -> uintptr ---
 
 

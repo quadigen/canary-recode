@@ -53,8 +53,6 @@ HingeConstraint_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr
 	hinge.object.class = &HingeConstraint_Class
 	hinge.name = "HingeConstraint"
 	hinge.active = false
-	hinge.attachment0 = &hinge.object
-	hinge.attachment1 = &hinge.object
 	hinge.config = {
 		color                  = datatypes.BrickColor_Green,
 		angular_responsiveness = 45,

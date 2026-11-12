@@ -306,7 +306,7 @@ players_get :: proc(
 		if service.player_removing ==
 		   nil {service.player_removing = signals.Create(service.signal_registry.signal_registry)}
 		signals.Push(L, service.player_removing)
-	case "GetPlayers":
+	case "GetPlayers", "GetPlayerByUserId":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -325,6 +325,15 @@ players_namecall :: proc(
 	bool,
 ) {
 	service := cast(^Players)object
+	if method == "GetPlayerByUserId" {
+		id := vm.ArgNumber(L, 2)
+		player: ^Player
+		if id >= 0 && id <= f64(max(u32)) && id == f64(u32(id)) {
+			player = Players_Find_By_User_Id(service, u32(id))
+		}
+		classes.Push_Object(L, &player.object if player != nil else nil)
+		return 1, true
+	}
 	if method != "GetPlayers" {return 0, false}
 	vm.NewTable(L, len(service.children))
 	index := 1
@@ -335,6 +344,16 @@ players_namecall :: proc(
 		index += 1
 	}
 	return 1, true
+}
+
+Players_Find_By_User_Id :: proc(service: ^Players, id: u32) -> ^Player {
+	if service == nil {return nil}
+	for child in service.children {
+		if child == nil || child.destroyed || child.class != &Player_Class {continue}
+		player := cast(^Player)child
+		if player.user_id == id {return player}
+	}
+	return nil
 }
 
 Players_Add :: proc(service: ^Players, L: ^vm.State, id: u32, name: string) -> ^Player {
@@ -398,7 +417,7 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		get = players_get,
 		namecall = players_namecall,
 		events = []string{"PlayerAdded", "PlayerRemoving"},
-		methods = []string{"GetPlayers"},
+		methods = []string{"GetPlayers", "GetPlayerByUserId"},
 		properties = []string{"LocalPlayer"},
 	)
 }

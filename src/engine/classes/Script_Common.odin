@@ -20,6 +20,7 @@ Script_Module_State :: enum {
 
 Script_Common :: struct {
 	source:              string,
+	source_revision:     u64,
 	module_state:        Script_Module_State,
 	module_ref:          i32,
 	require_frame_stack: ^Require_Frame_Stack,
@@ -50,6 +51,10 @@ Script_Kind_Of :: proc(object: ^Object) -> (Script_Kind, bool) {
 		return .ModuleScript, true
 	}
 	return {}, false
+}
+
+Script_Runs_On_Client :: proc(object: ^Object, kind: Script_Kind) -> bool {
+	return kind == .LocalScript || (kind == .Script && (cast(^Script)object).run_context == .Client)
 }
 
 Script_Is_Script :: proc(object: ^Object) -> bool {
@@ -127,6 +132,7 @@ Script_Common_Set_Source :: proc(L: ^vm.State, common: ^Script_Common, source: s
 	Script_Reset(L, common)
 	delete(common.source)
 	common.source = strings.clone(source)
+	common.source_revision += 1
 }
 
 Script_Common_Set_Enabled :: proc(common: ^Script_Common, enabled: bool) -> bool {

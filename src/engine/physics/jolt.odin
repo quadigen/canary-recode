@@ -4,7 +4,8 @@ import kineffi "../bindings"
 
 OBJECT_LAYER_NON_MOVING :: kineffi.JPH_ObjectLayer(0)
 OBJECT_LAYER_MOVING :: kineffi.JPH_ObjectLayer(1)
-OBJECT_LAYER_COUNT :: u32(2)
+OBJECT_LAYER_DEFORMABLE_CAPSULE :: kineffi.JPH_ObjectLayer(2)
+OBJECT_LAYER_COUNT :: u32(3)
 
 BROAD_PHASE_LAYER_NON_MOVING :: kineffi.JPH_BroadPhaseLayer(0)
 BROAD_PHASE_LAYER_MOVING :: kineffi.JPH_BroadPhaseLayer(1)
@@ -99,6 +100,13 @@ System_Create_3D :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (result: System, 
 	kineffi.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
 		result.broad_phase_interface,
 		OBJECT_LAYER_MOVING,
+		BROAD_PHASE_LAYER_MOVING,
+	)
+
+	// Remote capsules participate in custom deformable queries only.
+	kineffi.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
+		result.broad_phase_interface,
+		OBJECT_LAYER_DEFORMABLE_CAPSULE,
 		BROAD_PHASE_LAYER_MOVING,
 	)
 
@@ -264,6 +272,7 @@ System_Cast_Shape :: proc(
 	candidate_bodies: []kineffi.JPH_BodyID = nil,
 	filter_mode: kineffi.JPH_RayFilterMode = .None,
 	max_distance: f32 = 1000,
+	penetration_depth: ^f32 = nil,
 ) -> (
 	result: kineffi.JPH_RayCastResult,
 	hit: bool,
@@ -274,7 +283,7 @@ System_Cast_Shape :: proc(
 	ids: ^kineffi.JPH_BodyID
 	if len(candidate_bodies) > 0 {ids = raw_data(candidate_bodies)}
 	hit =
-		kineffi.JPH_PhysicsSystem_CastShape(
+		kineffi.JPH_PhysicsSystem_CastShapeDetailed(
 			system.handle,
 			&native_origin,
 			&native_displacement,
@@ -284,6 +293,7 @@ System_Cast_Shape :: proc(
 			filter_mode,
 			max_distance,
 			&result,
+			penetration_depth,
 		) !=
 		0
 	if hit {

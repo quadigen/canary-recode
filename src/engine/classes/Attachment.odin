@@ -4,6 +4,7 @@ import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:math/linalg"
 
 Attachment_Class := Class_Info {
 	name   = "Attachment",
@@ -42,6 +43,16 @@ Attachment_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(cast(^Attachment)object)
 }
 
+Attachment_Local_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
+	axis, normal, valid := constraint_attachment_axes(attachment)
+	if !valid {return datatypes.CFrame_New_Position(attachment.position)}
+	back := linalg.cross(axis, normal)
+	return datatypes.CFrame_FromMatrix(
+		attachment.position, {axis.x, axis.y, axis.z}, {normal.x, normal.y, normal.z},
+		{back.x, back.y, back.z},
+	)
+}
+
 Attachment_get :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -52,6 +63,9 @@ Attachment_get :: proc(
 	attachment := cast(^Attachment)object
 
 	switch key {
+	case "CFrame":
+		if datatype_registry == nil {return false}
+		datatypes.Push_CFrame(L, datatype_registry, Attachment_Local_Frame(attachment))
 	case "Position":
 		datatypes.Push_Vector3(L, attachment.position)
 	case "Orientation":
@@ -78,6 +92,13 @@ Attachment_set :: proc(
 	attachment := cast(^Attachment)object
 
 	switch key {
+	case "CFrame":
+		if datatype_registry == nil {return false}
+		frame := datatypes.Arg_CFrame(L, value_index, datatype_registry)
+		attachment.position = {frame.x, frame.y, frame.z}
+		attachment.axis = {frame.r00, frame.r10, frame.r20}
+		attachment.secondary_axis = {frame.r01, frame.r11, frame.r21}
+		attachment.orientation = {}
 	case "Position":
 		attachment.position = datatypes.Arg_Vector3(L, value_index)
 	case "Orientation":
@@ -125,7 +146,7 @@ resolve_attachment :: proc(
 	world: kineffi.JPH_RVec3,
 	ok: bool,
 ) {
-	if object == nil || object.destroyed {return}
+	if object == nil || object.destroyed || !Is_A_Class(object, &Attachment_Class) {return}
 	attachment := cast(^Attachment)object
 
 	id, ok = Attachment_GetPhysicsBody(attachment, body_ids)
@@ -169,6 +190,6 @@ Register_Attachment :: proc(registry: ^Registry) {
 		get = Attachment_get,
 		set = Attachment_set,
 		clone = Attachment_clone,
-		properties = []string{"Position", "Orientation", "Axis", "SecondaryAxis"},
+		properties = []string{"Position", "Orientation", "Axis", "SecondaryAxis", "CFrame"},
 	)
 }

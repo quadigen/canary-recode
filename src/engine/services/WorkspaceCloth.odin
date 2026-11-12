@@ -10,10 +10,7 @@ workspace_append_cloth :: proc(
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
 	params: ^Workspace_Draw_Params,
 ) {
-	if !cloth.enabled {return}
-	anchor, valid := classes.Cloth_Anchor(cloth, &workspace.object)
-	if !valid {return}
-	if !cloth.initialized {classes.Cloth_Initialize(cloth, anchor)}
+	if !classes.Cloth_Prepare_Surface(cloth, &workspace.object) {return}
 
 	mesh := workspace_cloth_mesh(cloth, renderer.Filament)
 	if mesh == nil {return}
