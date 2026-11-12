@@ -1812,7 +1812,7 @@ static sk_sp<SkShader> kine_skia_glass_gradient(
 	return SkShaders::LinearGradient(points, gradient, nullptr);
 #else
 	return SkGradientShader::MakeLinear(
-		points, colors, positions, nullptr, count, SkTileMode::kClamp);
+		points, colors, nullptr, positions, count, SkTileMode::kClamp);
 #endif
 }
 
