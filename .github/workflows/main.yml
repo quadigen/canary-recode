@@ -1,19 +1,15 @@
 name: Build Kinemium Engine
-
 on:
   push:
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
-
     strategy:
       fail-fast: false
       matrix:
@@ -25,8 +21,6 @@ jobs:
             template_os: windows
             template_arch: x86_64
             template_ext: .exe
-          # Windows ARM64 requires native Filament/Odin dependency libraries.
-          # Do not publish the x64 build under an ARM64 artifact name.
           - name: Linux x86-64
             os: ubuntu-24.04
             folder: linux_x86-64
@@ -55,36 +49,29 @@ jobs:
             template_os: macos
             template_arch: x86_64
             template_ext: ""
-
     steps:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
         shell: pwsh
         run: git config --system core.longpaths true
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 1
-
       - name: Verify submodules
         shell: bash
         run: git submodule status --recursive
-
       - name: Patch odin-http for current Odin
         shell: bash
         run: git -C src/engine/util/odin-http apply "$GITHUB_WORKSPACE/tools/patches/odin-http-odin-latest.patch"
-
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
-
       - name: Show Odin version
         run: odin version
-
       - name: Verify runner architecture
         shell: bash
         run: |
@@ -92,16 +79,13 @@ jobs:
             x86_64:X64|arm64:ARM64) ;;
             *) echo 'Runner architecture does not match the artifact target' >&2; exit 1 ;;
           esac
-
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-
       - name: Test Skia binary downloader
         if: runner.os == 'Windows'
         run: python -m unittest discover -s tests -p test_fetch_skia.py
-
       - name: Resolve latest Skia binary
         id: skia
         shell: bash
@@ -111,20 +95,17 @@ jobs:
           arch='${{ matrix.template_arch }}'
           if [[ "$arch" == x86_64 ]]; then arch=x64; fi
           python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch" --resolve-only
-
       - name: Cache Skia release binary
         uses: actions/cache@v4
         with:
           path: ${{ steps.skia.outputs.path }}
           key: ${{ steps.skia.outputs.cache-key }}
-
       - name: Download Skia binary with curl
         shell: bash
         run: |
           arch='${{ matrix.template_arch }}'
           if [[ "$arch" == x86_64 ]]; then arch=x64; fi
           python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch"
-
       - name: Cache remaining native libraries
         id: native-cache
         uses: actions/cache/restore@v4
@@ -136,7 +117,6 @@ jobs:
             vendor/build/**/*.dylib
             vendor/build/lib/*.anchor
           key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.cache-key }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'vendor/**', 'tools/fetch_skia.py', 'tools/isolate_skia_symbols.py', '.github/workflows/main.yml') }}
-
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
@@ -174,13 +154,11 @@ jobs:
             libxxf86vm-dev \
             libwebkit2gtk-4.1-dev \
             ninja-build
-
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         shell: bash
         run: brew install cmake enet ninja llvm openssl@3
-
-      # The upstream macOS release only contains ARM64 tools and libraries.
+# The upstream macOS release only contains ARM64 tools and libraries
       - name: Restore Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
         id: filament-intel
@@ -188,7 +166,6 @@ jobs:
         with:
           path: .cache/filament-mac-x64
           key: filament-v1.74.0-macos-x64-v1
-
       - name: Build Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
         shell: bash
@@ -205,7 +182,6 @@ jobs:
           )
           mkdir -p "$(dirname "$sdk")"
           mv "$source_dir/out/release/filament" "$sdk"
-
       - name: Verify Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -214,14 +190,12 @@ jobs:
           xcrun lipo "$sdk/bin/matc" -verify_arch x86_64
           xcrun lipo "$sdk/bin/resgen" -verify_arch x86_64
           xcrun lipo "$sdk/lib/x86_64/libfilament.a" -verify_arch x86_64
-
       - name: Save Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .cache/filament-mac-x64
           key: ${{ steps.filament-intel.outputs.cache-primary-key }}
-
       - name: Install Vulkan SDK
         if: runner.os != 'Linux'
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -230,11 +204,9 @@ jobs:
           install_runtime: true
           cache: true
           stripdown: false
-
       - name: Isolate Skia shader compiler symbols
         shell: bash
         run: python tools/isolate_skia_symbols.py '${{ steps.skia.outputs.path }}'
-
       - name: Configure and build native dependencies (Windows)
         if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -242,15 +214,12 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
-
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-
-          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -C '${{ steps.skia.outputs.cmake }}'
+          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -C '${{ steps.skia.outputs.cmake }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build vendor/build --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Configure and build native dependencies (Unix)
         if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -278,6 +247,7 @@ jobs:
             -G Ninja \
             -C '${{ steps.skia.outputs.cmake }}' \
             -DCMAKE_BUILD_TYPE=Release \
+            -DPORTABLE=ON \
             "${cmake_platform_args[@]}"
           for attempt in 1 2 3; do
             if cmake --build vendor/build --config Release --parallel; then
@@ -288,7 +258,6 @@ jobs:
             fi
             sleep $((30 * attempt))
           done
-
       - name: Verify native libraries (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -310,7 +279,6 @@ jobs:
               throw "Missing native library: $library"
             }
           }
-
       - name: Isolate Skia Vulkan allocator (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -320,7 +288,6 @@ jobs:
           for module in svg skshaper skunicode_core skunicode_icu; do
             bash tools/isolate_skia_vma.sh "$skia_lib_dir/lib${module}.a" --optional
           done
-
       - name: Verify native libraries (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -345,7 +312,6 @@ jobs:
           find vendor/build/_deps/sdl3-build -maxdepth 1 -type f \
             \( -name 'libSDL3.so*' -o -name 'libSDL3*.dylib' \) -print -quit \
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
-
       - name: Save native libraries before Odin linking
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -357,13 +323,11 @@ jobs:
             vendor/build/**/*.dylib
             vendor/build/lib/*.anchor
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
-
       - name: Build Odin vendor libraries (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           odin_root="$(odin root)"
-
           build_odin_vendor_library() {
             local source_dir="$1"
             local script_name="$2"
@@ -373,20 +337,16 @@ jobs:
               make -C "$source_dir"
             fi
           }
-
           build_odin_vendor_library \
             "$odin_root/vendor/miniaudio/src" \
             build_miniaudio.sh
-
           if [[ "${{ runner.os }}" == 'macOS' ]]; then
             mkdir -p "$odin_root/vendor/stb/lib/darwin"
           fi
           build_odin_vendor_library \
             "$odin_root/vendor/stb/src" \
             build_stb.sh
-
           bash "$odin_root/vendor/box2d/build_box2d.sh"
-
       - name: Stage static ENet and OpenSSL libraries (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -401,10 +361,8 @@ jobs:
             test -s "$archive"
             cp "$archive" "vendor/build/lib/lib$library.3.a"
           done
-
       - name: Check Odin source
         run: odin check src
-
       - name: Build Kinemium (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -413,7 +371,6 @@ jobs:
           $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-
           New-Item -ItemType Directory -Force "dist/${{ matrix.folder }}" | Out-Null
           $versionDefine = @()
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
@@ -430,14 +387,12 @@ jobs:
             -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
             -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           $odinRoot = "$(odin root)".TrimEnd()
           $sdl3Dll = Join-Path $odinRoot 'vendor/sdl3/SDL3.dll'
           if (!(Test-Path -LiteralPath $sdl3Dll)) {
             throw "SDL3.dll was not found next to the Odin SDK: $sdl3Dll"
           }
           Copy-Item -LiteralPath $sdl3Dll -Destination "dist/${{ matrix.folder }}/SDL3.dll"
-
           $flavor_ext = "${{ matrix.template_ext }}"
           foreach ($flavor in @('server', 'client')) {
             & odin build src `
@@ -450,7 +405,34 @@ jobs:
               -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-
+      - name: Build Kinemium debug (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          New-Item -ItemType Directory -Force "dist-debug/${{ matrix.folder }}" | Out-Null
+          $versionDefine = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $v = $env:GITHUB_REF_NAME
+            if ($v.StartsWith('v')) { $v = $v.Substring(1) }
+            $versionDefine = @("-define:RUNTIME_VERSION_DISPLAY=$v")
+          }
+          & odin build src `
+            -debug `
+            -o:none `
+            -out:"dist-debug/${{ matrix.folder }}/${{ matrix.executable }}" `
+            @versionDefine `
+            -define:BUILD_TARGET=editor `
+            -define:RUNTIME_GIT_ENABLED=true `
+            -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
+            -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath "dist/${{ matrix.folder }}/SDL3.dll" -Destination "dist-debug/${{ matrix.folder }}/SDL3.dll"
+          Get-ChildItem -LiteralPath "dist-debug/${{ matrix.folder }}"
       - name: Build Kinemium (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -479,7 +461,6 @@ jobs:
             }
             cp -L "$source_path" "dist/${{ matrix.folder }}/$soname"
           done
-
           ext="${{ matrix.template_ext }}"
           for flavor in server client; do
             odin build src \
@@ -495,7 +476,31 @@ jobs:
           done
           chmod +x "dist/${{ matrix.folder }}/kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" \
                    "dist/${{ matrix.folder }}/kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"
-
+      - name: Build Kinemium debug (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist-debug/${{ matrix.folder }}"
+          webview_link_flags="$(pkg-config --libs gtk+-3.0 webkit2gtk-4.1)"
+          version_define=()
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
+          fi
+          odin build src \
+            -debug \
+            -o:none \
+            -out:"dist-debug/${{ matrix.folder }}/${{ matrix.executable }}" \
+            "${version_define[@]}" \
+            -define:BUILD_TARGET=editor \
+            -define:RUNTIME_GIT_ENABLED=true \
+            -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+            -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL $webview_link_flags"
+          cp -a "dist/${{ matrix.folder }}"/lib*.so* "dist-debug/${{ matrix.folder }}/"
+          chmod +x "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
+          file "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
+          readelf -W -S "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}" | grep -F '.debug_info'
       - name: Build Kinemium (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -516,7 +521,6 @@ jobs:
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib "dist/${{ matrix.folder }}/"
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib "dist/${{ matrix.folder }}/"
-
           ext="${{ matrix.template_ext }}"
           for flavor in server client; do
             odin build src \
@@ -530,7 +534,29 @@ jobs:
               -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
-
+      - name: Build Kinemium debug (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist-debug/${{ matrix.folder }}"
+          version_define=()
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
+          fi
+          odin build src \
+            -debug \
+            -o:none \
+            -out:"dist-debug/${{ matrix.folder }}/${{ matrix.executable }}" \
+            "${version_define[@]}" \
+            -define:BUILD_TARGET=editor \
+            -define:RUNTIME_GIT_ENABLED=true \
+            -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
+            -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+          cp -a "dist/${{ matrix.folder }}"/lib*.dylib "dist-debug/${{ matrix.folder }}/"
+          chmod +x "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
+          file "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
       - name: Strip Linux executables
         if: runner.os == 'Linux'
         shell: bash
@@ -542,7 +568,6 @@ jobs:
             strip --strip-unneeded "$f"
           done
           ls -lh kinemium "kinemium-server-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}" "kinemium-client-${{ matrix.template_os }}-${{ matrix.template_arch }}${ext}"
-
       - name: Inspect Linux executable
         if: runner.os == 'Linux'
         shell: bash
@@ -553,14 +578,12 @@ jobs:
           readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep GNU_STACK
           ! readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" \
             | grep GNU_STACK | grep -q RWE
-
       - name: Inspect macOS executable
         if: runner.os == 'macOS'
         shell: bash
         run: |
           file "dist/${{ matrix.folder }}/${{ matrix.executable }}"
           otool -L "dist/${{ matrix.folder }}/${{ matrix.executable }}"
-
       - name: Inspect Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
@@ -571,36 +594,36 @@ jobs:
           if (!(Test-Path -LiteralPath "dist/${{ matrix.folder }}/SDL3.dll")) {
             throw 'SDL3.dll was not copied next to the executable'
           }
-
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.folder }}
           path: dist/${{ matrix.folder }}
           if-no-files-found: error
-
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.folder }}-debug
+          path: dist-debug/${{ matrix.folder }}
+          if-no-files-found: error
   web:
     name: Web (WASM)
     runs-on: windows-latest
     timeout-minutes: 180
-
     steps:
       - name: Enable Windows long paths
         shell: pwsh
         run: git config --system core.longpaths true
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 1
-
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
-
       - name: Install Emscripten
         shell: pwsh
         run: |
@@ -611,7 +634,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & './.tools/emsdk/emsdk.bat' activate latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Install Filament material compiler (matc)
         shell: pwsh
         run: |
@@ -628,10 +650,8 @@ jobs:
             throw "matc was not found at $matc"
           }
           Write-Output "FILAMENT_MATC=$matc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Check Web Odin source
         run: odin check src -target:js_wasm32
-
       - name: Build Kinemium Web (WASM)
         shell: pwsh
         run: |
@@ -640,48 +660,40 @@ jobs:
           if (!(Test-Path -LiteralPath 'build/web/kinemium_engine.wasm')) {
             throw 'kinemium_engine.wasm was not built'
           }
-
       - name: Upload web artifact
         uses: actions/upload-artifact@v6
         with:
           name: web
           path: build/web
           if-no-files-found: error
-
   android:
     name: Android (arm64 + x86-64)
     runs-on: windows-latest
     timeout-minutes: 180
-
     steps:
       - name: Enable Windows long paths
         shell: pwsh
         run: git config --system core.longpaths true
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 1
-
       - name: Patch odin-http for current Odin
         shell: pwsh
         run: |
           $patch = Join-Path $env:GITHUB_WORKSPACE 'tools/patches/odin-http-odin-latest.patch'
           git -C src/engine/util/odin-http apply $patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
-
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-
       - name: Resolve latest Android Skia binaries
         id: skia_android
         shell: pwsh
@@ -695,7 +707,6 @@ jobs:
           $arm = Get-Content .cache/skia/android-arm64-release.json -Raw | ConvertFrom-Json
           $x64 = Get-Content .cache/skia/android-x64-release.json -Raw | ConvertFrom-Json
           "cache-key=skia-android-$($arm.digest.Substring(7))-$($x64.digest.Substring(7))" >> $env:GITHUB_OUTPUT
-
       - name: Cache Android Skia binaries
         uses: actions/cache@v4
         with:
@@ -703,7 +714,6 @@ jobs:
             .cache/skia/android-arm64
             .cache/skia/android-x64
           key: ${{ steps.skia_android.outputs.cache-key }}
-
       - name: Download Android Skia binaries with curl
         shell: pwsh
         run: |
@@ -715,7 +725,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/isolate_skia_symbols.py .cache/skia/android-x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Cache Android dependency downloads
         id: android-deps
         uses: actions/cache/restore@v4
@@ -725,13 +734,11 @@ jobs:
             build/vcpkg-binary-cache
             build/vcpkg-installed
           key: android-deps-v1-${{ runner.os }}-${{ hashFiles('tools/build_android.ps1') }}
-
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
@@ -739,7 +746,6 @@ jobs:
           install_runtime: true
           cache: true
           stripdown: false
-
       - name: Install Android SDK components
         shell: pwsh
         run: |
@@ -756,7 +762,6 @@ jobs:
           if (!(Test-Path -LiteralPath (Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370/build/cmake/android.toolchain.cmake'))) {
             throw 'Android NDK 30.0.16248370 was not installed'
           }
-
       - name: Prepare Android dependency packages
         shell: pwsh
         run: |
@@ -765,7 +770,6 @@ jobs:
           $env:VCPKG_BINARY_SOURCES = "clear;files,$binaryCache,readwrite"
           & './tools/build_android.ps1' -UsePrebuiltSkia -PrepareOnly
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Save Android packages before native compilation
         if: steps.android-deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -775,7 +779,6 @@ jobs:
             build/vcpkg-binary-cache
             build/vcpkg-installed
           key: ${{ steps.android-deps.outputs.cache-primary-key }}
-
       - name: Build Kinemium Android (APK)
         shell: pwsh
         run: |
@@ -792,14 +795,12 @@ jobs:
           if (!(Test-Path -LiteralPath 'android/app/build/outputs/apk/debug/app-debug.apk')) {
             throw 'app-debug.apk was not created'
           }
-
       - name: Upload Android artifact
         uses: actions/upload-artifact@v6
         with:
           name: android
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/')
@@ -807,60 +808,50 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-
       - name: Download Windows x86-64 artifact
         uses: actions/download-artifact@v6
         with:
           name: windows_x86-64
           path: release/windows_x86-64
-
       - name: Download Linux x86-64 artifact
         uses: actions/download-artifact@v6
         with:
           name: linux_x86-64
           path: release/linux_x86-64
-
       - name: Download Linux arm64 artifact
         uses: actions/download-artifact@v6
         with:
           name: linux_arm64
           path: release/linux_arm64
-
       - name: Download macOS arm64 artifact
         uses: actions/download-artifact@v6
         with:
           name: macos_arm64
           path: release/macos_arm64
-
       - name: Download macOS x86-64 artifact
         uses: actions/download-artifact@v6
         with:
           name: macos_x86-64
           path: release/macos_x86-64
-
       - name: Download web artifact
         uses: actions/download-artifact@v6
         with:
           name: web
           path: release/web
-
       - name: Download android artifact
         uses: actions/download-artifact@v6
         with:
           name: android
           path: release/android
-
       - name: Create executable archives
         shell: bash
         run: |
           mkdir -p release/archives
-
           platforms=(
             "windows_x86-64 windows x86_64 .exe"
             "linux_x86-64 linux x86_64"
@@ -868,13 +859,11 @@ jobs:
             "macos_arm64 macos arm64"
             "macos_x86-64 macos x86_64"
           )
-
           for spec in "${platforms[@]}"; do
             read -r folder os arch ext <<< "$spec"
             src="release/$folder"
             stage="$(mktemp -d "release/.package-$folder.XXXXXX")"
             trap 'rm -rf "$stage"' EXIT
-
             exe="kinemium"
             if [[ "$os" == "windows" ]]; then exe="kinemium.exe"; fi
             mkdir -p "$stage/kinemium"
@@ -888,7 +877,6 @@ jobs:
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium/$exe"; fi
             (cd "$stage/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
-
             server="kinemium-server-${os}-${arch}${ext}"
             mkdir -p "$stage/kinemium-server"
             cp "$src/$server" "$stage/kinemium-server/"
@@ -901,7 +889,6 @@ jobs:
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-server/$server"; fi
             (cd "$stage/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
-
             client="kinemium-client-${os}-${arch}${ext}"
             mkdir -p "$stage/kinemium-client"
             cp "$src/$client" "$stage/kinemium-client/"
@@ -917,17 +904,14 @@ jobs:
             rm -rf "$stage"
             trap - EXIT
           done
-
           # Web (WASM)
           if [[ -d release/web ]]; then
             (cd release/web && zip -r ../archives/kinemium-web.zip .)
           fi
-
           # Android APK
           if [[ -f release/android/app-debug.apk ]]; then
             cp release/android/app-debug.apk release/archives/kinemium-android.apk
           fi
-
       - name: Publish release
         shell: bash
         env:
