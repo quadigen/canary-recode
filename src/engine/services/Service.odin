@@ -2,6 +2,8 @@ package services
 
 import classes "../classes"
 
+PROJECT_INTERNALS_CAPABILITY :: i64(2)
+
 Service_Class := classes.Class_Info{
 	name   = "Service",
 	parent = &classes.Instance_Class,

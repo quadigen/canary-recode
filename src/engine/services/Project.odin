@@ -59,7 +59,6 @@ KinemiumProjectList :: struct {
 	projects: []KinemiumProject,
 }
 
-PROJECT_INTERNALS_CAPABILITY :: i64(2)
 PROJECT_ENGINE_VERSION :: "1.19.0-dev"
 
 // Call once from editor bootstrap with a stable, live VM state.

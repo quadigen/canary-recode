@@ -432,7 +432,7 @@ Environment_Render_2D :: proc(
 			delta_time,
 			virtual_width,
 			virtual_height,
-			cache_gui = environment.renderer.Cache2D,
+			cache_gui = gui_cache_enabled(environment.renderer),
 		)
 	}
 
@@ -475,6 +475,13 @@ Environment_Render_Overlay :: proc(
 		virtual_width,
 		virtual_height,
 		gui_overlay = true,
-		cache_gui = environment.renderer.Cache2D,
+		cache_gui = gui_cache_enabled(environment.renderer),
 	)
+}
+
+gui_cache_enabled :: proc(render: ^renderer.RendererObject) -> bool {
+	when ODIN_OS != .JS {
+		when !renderer.KINE_RENDERER_GL {return render.Cache2D}
+	}
+	return false
 }

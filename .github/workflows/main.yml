@@ -96,7 +96,7 @@ jobs:
           if [[ "$arch" == x86_64 ]]; then arch=x64; fi
           python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch" --resolve-only
       - name: Cache Skia release binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ steps.skia.outputs.path }}
           key: ${{ steps.skia.outputs.cache-key }}
@@ -108,7 +108,7 @@ jobs:
           python tools/fetch_skia.py --platform '${{ matrix.template_os }}' --arch "$arch"
       - name: Cache remaining native libraries
         id: native-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             vendor/build/**/*.a
@@ -162,7 +162,7 @@ jobs:
       - name: Restore Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
         id: filament-intel
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .cache/filament-mac-x64
           key: filament-v1.74.0-macos-x64-v1
@@ -192,7 +192,7 @@ jobs:
           xcrun lipo "$sdk/lib/x86_64/libfilament.a" -verify_arch x86_64
       - name: Save Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .cache/filament-mac-x64
           key: ${{ steps.filament-intel.outputs.cache-primary-key }}
@@ -314,7 +314,7 @@ jobs:
             | grep -q . || { echo 'Missing shared SDL3 library'; exit 1; }
       - name: Save native libraries before Odin linking
         if: steps.native-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             vendor/build/**/*.a
@@ -540,16 +540,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "dist-debug/${{ matrix.folder }}"
-          version_define=()
+          build_defines=(-define:BUILD_TARGET=editor)
           if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
-            version_define=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
+            build_defines+=("-define:RUNTIME_VERSION_DISPLAY=${GITHUB_REF_NAME#v}")
           fi
           odin build src \
             -debug \
             -o:none \
             -out:"dist-debug/${{ matrix.folder }}/${{ matrix.executable }}" \
-            "${version_define[@]}" \
-            -define:BUILD_TARGET=editor \
+            "${build_defines[@]}" \
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
@@ -708,7 +707,7 @@ jobs:
           $x64 = Get-Content .cache/skia/android-x64-release.json -Raw | ConvertFrom-Json
           "cache-key=skia-android-$($arm.digest.Substring(7))-$($x64.digest.Substring(7))" >> $env:GITHUB_OUTPUT
       - name: Cache Android Skia binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .cache/skia/android-arm64
@@ -727,7 +726,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Cache Android dependency downloads
         id: android-deps
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .cache/android
@@ -772,7 +771,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Save Android packages before native compilation
         if: steps.android-deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .cache/android

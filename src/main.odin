@@ -167,8 +167,6 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 		DrawOverlay = runtime_render_overlay,
 		UserData = &render_context,
 		RenderFilament = true,
-		Cache2D = true,
-		Render3DCheck = runtime_render_3d_dirty,
 		KeyDown = proc(scancode: sdl3.Scancode) {
 		},
 		KeyUp = proc(scancode: sdl3.Scancode) {
@@ -198,6 +196,8 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 		OnEvent = runtime_input_event,
 	}
 	when !renderer.KINE_RENDERER_GL {
+		renderer_object.Cache2D = true
+		renderer_object.Render3DCheck = runtime_render_3d_dirty
 		renderer_object.OverlayNeedsBackdrop = runtime_overlay_needs_backdrop
 	}
 

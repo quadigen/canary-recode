@@ -26,7 +26,6 @@ Replication_Transport_Host :: struct {
     client_peer:  Replication_Transport_Peer,
     connected:    bool,
     disconnected: bool,
-    pending:      [dynamic]Replication_Transport_Event,
 }
 
 Replication_Transport_Event :: struct {
@@ -132,8 +131,6 @@ transport_host_flush :: proc(host: ^Replication_Transport_Host) {}
 transport_host_destroy :: proc(host: ^Replication_Transport_Host) {
     if host == nil {return}
     if host.handle >= 0 {host_net_close(host.handle)}
-    for &event in host.pending {transport_event_dispose(&event)}
-    delete(host.pending)
     free(host)
 }
 

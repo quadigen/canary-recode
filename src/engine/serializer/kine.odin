@@ -9,8 +9,6 @@ import vm "../vm"
 import luauh "../vm/luauh"
 import "core:bytes"
 import "core:fmt"
-import "core:os"
-import "core:path/filepath"
 import "core:slice"
 import "core:sort"
 import "core:strings"
@@ -693,63 +691,6 @@ writer_find_asset :: proc(w: ^Writer, id: string) -> (assetstore.Asset, bool) {
 	return asset^, true
 }
 
-absolute_export_path :: proc(path: string) -> (string, bool) {
-	if filepath.is_abs(path) {
-		cleaned, err := filepath.clean(path, context.temp_allocator)
-		return cleaned, err == nil
-	}
-	cwd, cwd_err := os.get_working_directory(context.temp_allocator)
-	if cwd_err != nil {return "", false}
-	joined, err := filepath.join({cwd, path}, context.temp_allocator)
-	return joined, err == nil
-}
-
-// Collect regular project files before walking the tree so property and script
-// references can share the same bytes. The URI is independent of the host path.
-collect_project_files :: proc(
-	w: ^Writer, root, relative, output_file, output_directory: string, total: ^i64,
-) -> bool {
-	directory, join_err := filepath.join({root, relative}, context.allocator)
-	if join_err != nil {return writer_skip(w, "could not resolve project path %q", relative)}
-	defer delete(directory)
-	handle, open_err := os.open(directory)
-	if open_err != nil {return writer_skip(w, "could not open project directory %q: %v", directory, open_err)}
-	defer os.close(handle)
-	entries, read_err := os.read_dir(handle, -1, context.allocator)
-	if read_err != nil {return writer_skip(w, "could not list project directory %q: %v", directory, read_err)}
-	defer os.file_info_slice_delete(entries, context.allocator)
-	for entry in entries {
-		name := entry.name
-		if name == ".git" || name == ".kinemium-backups" || name == ".kinemium-sync.json" ||
-		   strings.has_prefix(name, ".project-save-") || strings.has_prefix(name, ".kinemium-write-") ||
-		   (relative == "" && (name == "build" || name == "autosave.kine")) {
-			continue
-		}
-		path := name if relative == "" else fmt.tprintf("%s/%s", relative, name)
-		full_path, err := filepath.join({root, path}, context.allocator)
-		if err != nil {return writer_skip(w, "could not resolve project file %q", path)}
-		defer delete(full_path)
-		if os.are_paths_identical(full_path, output_file) ||
-		   os.are_paths_identical(full_path, output_directory) {continue}
-		if entry.type == .Directory {
-			if !collect_project_files(w, root, path, output_file, output_directory, total) {return false}
-		} else if entry.type == .Regular {
-			if entry.size > i64(assetstore.MAX_ASSET_BYTES) ||
-			   total^ + entry.size > i64(assetstore.MAX_ASSET_TOTAL_BYTES) ||
-			   len(w.used_ids) >= assetstore.MAX_ASSET_COUNT {
-				return writer_skip(w, "project file %q exceeds the embedded asset limits", path)
-			}
-			data, ok := assetstore.Read_Asset_File(full_path)
-			if !ok {return writer_skip(w, "could not read project file %q", path)}
-			total^ += i64(len(data))
-			uri := fmt.tprintf("%s%s", assetstore.PROJECT_ASSET_SCHEME, path)
-			if !note_path_asset(w, uri, data) {return writer_skip(w, "could not embed project file %q", path)}
-			w.project_files[strings.clone(uri)] = true
-		}
-	}
-	return true
-}
-
 serialize_script_asset :: proc "c" (text: [^]u8, length: uintptr, user_data: rawptr) {
 	context = tracy.DefaultContext()
 	w := cast(^Writer)user_data
@@ -759,9 +700,8 @@ serialize_script_asset :: proc "c" (text: [^]u8, length: uintptr, user_data: raw
 	w.script_assets_seen[strings.clone(path)] = true
 
 	data: []u8
-	if w.script_asset_root != "" && !filepath.is_abs(path) {
-		resolved, err := filepath.join({w.script_asset_root, path}, context.temp_allocator)
-		if err == nil {data, _ = assetstore.Read_Asset_File(resolved)}
+	when ODIN_OS != .JS {
+		data = read_project_script_asset(w.script_asset_root, path)
 	}
 	if data == nil {data, _ = assetstore.Read_Asset_File(path)}
 	if data != nil {
@@ -3031,21 +2971,12 @@ serialize :: proc(
 	}
 
 	if script_asset_root != "" && project_output_file != "" {
-		root, root_err := filepath.abs(script_asset_root, context.temp_allocator)
-		output_file, output_ok := absolute_export_path(project_output_file)
-		if root_err != nil || !output_ok {
-			return nil, Error_Make(.Invalid_Argument, -1, "could not resolve the project or export path")
-		}
-		output_directory := ""
-		if project_output_directory != "" {
-			output_directory, output_ok = absolute_export_path(project_output_directory)
-			if !output_ok {
-				return nil, Error_Make(.Invalid_Argument, -1, "could not resolve the executable output directory")
+		when ODIN_OS == .JS {
+			return nil, Error_Make(.Invalid_Argument, -1, "bundling local project files is unavailable in the browser")
+		} else {
+			if err := bundle_project_files(&tree, script_asset_root, project_output_file, project_output_directory); !Error_Is_None(err) {
+				return nil, err
 			}
-		}
-		total: i64
-		if !collect_project_files(&tree, root, "", output_file, output_directory, &total) {
-			return nil, writer_error(&tree, .Internal, "could not bundle the project files")
 		}
 	}
 
