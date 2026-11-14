@@ -7,6 +7,7 @@ permissions:
   contents: read
 jobs:
   build:
+    if: github.ref != 'refs/heads/release'
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
@@ -606,6 +607,7 @@ jobs:
           path: dist-debug/${{ matrix.folder }}
           if-no-files-found: error
   web:
+    if: github.ref != 'refs/heads/release'
     name: Web (WASM)
     runs-on: windows-latest
     timeout-minutes: 180
@@ -666,6 +668,7 @@ jobs:
           path: build/web
           if-no-files-found: error
   android:
+    if: github.ref != 'refs/heads/release'
     name: Android (arm64 + x86-64)
     runs-on: windows-latest
     timeout-minutes: 180
@@ -802,51 +805,24 @@ jobs:
           if-no-files-found: error
   release:
     name: Release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: |
+      always() && !cancelled() && (
+        (github.ref == 'refs/heads/release' && github.event_name == 'push') ||
+        (startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' &&
+         needs.web.result == 'success' && needs.android.result == 'success')
+      )
     needs: [build, web, android]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-      - name: Download Windows x86-64 artifact
+      - name: Download build artifacts
         uses: actions/download-artifact@v6
         with:
-          name: windows_x86-64
-          path: release/windows_x86-64
-      - name: Download Linux x86-64 artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: linux_x86-64
-          path: release/linux_x86-64
-      - name: Download Linux arm64 artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: linux_arm64
-          path: release/linux_arm64
-      - name: Download macOS arm64 artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: macos_arm64
-          path: release/macos_arm64
-      - name: Download macOS x86-64 artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: macos_x86-64
-          path: release/macos_x86-64
-      - name: Download web artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: web
-          path: release/web
-      - name: Download android artifact
-        uses: actions/download-artifact@v6
-        with:
-          name: android
-          path: release/android
+          path: release
+          github-token: ${{ github.ref == 'refs/heads/release' && github.token || '' }}
+          run-id: ${{ github.ref == 'refs/heads/release' && '43608960449' || github.run_id }}
       - name: Create executable archives
         shell: bash
         run: |
@@ -903,21 +879,24 @@ jobs:
             rm -rf "$stage"
             trap - EXIT
           done
-          # Web (WASM)
-          if [[ -d release/web ]]; then
-            (cd release/web && zip -r ../archives/kinemium-web.zip .)
-          fi
-          # Android APK
-          if [[ -f release/android/app-debug.apk ]]; then
-            cp release/android/app-debug.apk release/archives/kinemium-android.apk
-          fi
+          test -f release/web/kinemium_engine.wasm
+          (cd release/web && zip -r ../archives/kinemium-web.zip .)
+          cp release/android/app-debug.apk release/archives/kinemium-android.apk
       - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          release_tag="$GITHUB_REF_NAME"
+          release_args=(--verify-tag)
+          if [[ "$GITHUB_REF" == 'refs/heads/release' ]]; then
+            release_tag=v1.19.4
+            # Tag the commit that produced the downloaded artifacts.
+            release_args=(--target 35e150cda4dba6279f7815338be0a4e7d570688b --title v1.19.4)
+          fi
+          gh release create "$release_tag" \
             --repo "$GITHUB_REPOSITORY" \
+            "${release_args[@]}" \
             release/archives/*.zip \
             release/archives/*.apk \
             --generate-notes
