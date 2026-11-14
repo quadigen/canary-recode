@@ -144,8 +144,7 @@ project_restore_backup :: proc(service: ^ProjectService, L: ^vm.State, name: str
 	if read_err != nil {return false}
 	defer delete(data)
 
-	// Protect the current in-memory project before replacing the scene.
-	if !Project_Save_To_File(service, L) {return false}
+	if !Project_Save_To_File(service) {return false}
 	if !Restore_Map(
 		service.data_model.registry,
 		L,
@@ -153,7 +152,7 @@ project_restore_backup :: proc(service: ^ProjectService, L: ^vm.State, name: str
 		path,
 		clear_assets = false,
 	) {return false}
-	return Project_Save_To_File(service, L)
+	return Project_Save_To_File(service)
 }
 
 Project_Autosave :: proc(registry: ^Registry, L: ^vm.State, dt: f32 = 0, closing := false) {
@@ -163,15 +162,39 @@ Project_Autosave :: proc(registry: ^Registry, L: ^vm.State, dt: f32 = 0, closing
 	service := cast(^ProjectService)descriptor.object
 	ready := project_finish_autosave(service, closing)
 	project := Project_Get_Active(service)
-	if project == nil {return}
+	if project == nil || (closing && service.skip_exit_save) {return}
+	studio := cast(^Studio)DataModel_Get_Service(service.data_model, "Studio")
+	interval: f32 = PROJECT_AUTOSAVE_SECONDS
+	if studio != nil {
+		if setting, found := studio.settings["autoSave"];
+		   found && setting.kind == .Boolean && !setting.boolean {
+			service.autosave_elapsed = 0
+			return
+		}
+		if setting, found := studio.settings["autoSaveInterval"];
+		   found && setting.kind == .String {
+			switch setting.string_val {
+			case "1 minute":
+				interval = 60
+			case "3 minutes":
+				interval = 180
+			case "5 minutes":
+				interval = 300
+			case "10 minutes":
+				interval = 600
+			case "15 minutes":
+				interval = 900
+			}
+		}
+	}
 	service.autosave_elapsed += max(dt, 0)
-	if !closing && (!ready || service.autosave_elapsed < PROJECT_AUTOSAVE_SECONDS) {return}
+	if !closing && (!ready || service.autosave_elapsed < interval) {return}
 	service.autosave_elapsed = 0
 	previous := vm.GetThreadSecurityCapabilities(L)
 	vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	if closing {
-		if !Project_Save_To_File(service, L) {fmt.eprintln("[Project] Automatic save failed")}
+		if !Project_Save_To_File(service) {fmt.eprintln("[Project] Automatic save failed")}
 		return
 	}
 	data, ok := project_snapshot(service, L)

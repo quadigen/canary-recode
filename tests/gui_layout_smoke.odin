@@ -184,6 +184,40 @@ refreshLayoutProperties(10)
 	run_script(&script_vm, "refreshLayoutProperties(11)", "gui_layout_property_refresh_changed")
 	assert(classes.gui_render_revision > revision, "changed position did not invalidate GUI layout")
 
+	run_script(&script_vm, `
+local screen = Instance.new("ScreenGui")
+screen.Size = Vector2.new(200, 100)
+layoutInput = Instance.new("TextBox", screen)
+layoutInput.Name = "LayoutInput"
+layoutInput.Position = UDim2.fromOffset(10, 20)
+layoutInput.Size = UDim2.fromScale(0.5, 0.5)
+layoutScreen = screen
+`, "gui_layout_text_box_setup")
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	input := find_gui(&environment, "LayoutInput")
+	expect_object("LayoutInput", input)
+	expect_close("text box width", input.absolute_size.X, 100)
+
+	revision = classes.Gui_Render_Revision()
+	run_script(&script_vm, `
+layoutInput.Position = UDim2.fromOffset(10, 20)
+layoutInput.Size = UDim2.fromScale(0.5, 0.5)
+layoutInput.Text = layoutInput.Text
+layoutScreen.Size = Vector2.new(200, 100)
+`, "gui_layout_text_box_unchanged")
+	assert(!classes.gui_layout_dirty && classes.Gui_Render_Revision() == revision)
+
+	run_script(&script_vm, `layoutInput.TextColor3 = Color3.new(1, 0, 0)`, "gui_layout_text_box_color")
+	assert(!classes.gui_layout_dirty && classes.Gui_Render_Revision() > revision)
+
+	run_script(&script_vm, `
+layoutScreen.Size = Vector2.new(300, 100)
+layoutScreen.RenderOffset = Vector2.new(5, 7)
+`, "gui_layout_screen_changed")
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	expect_close("resized screen text box width", input.absolute_size.X, 150)
+	expect_close("offset screen text box x", input.absolute_position.X, 15)
+
 	run_script(
 		&script_vm,
 		`

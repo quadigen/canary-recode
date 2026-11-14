@@ -6,8 +6,10 @@ import sandbox "./sandboxed"
 import "core:fmt"
 import "core:os"
 import audio "engine/audio"
+import classes "engine/classes"
 import extensions "engine/extensions"
 import sdl3 "engine/platform"
+import native_sdl "vendor:sdl3"
 import profiling "engine/profiling"
 import renderer "engine/renderer"
 import engine_runtime "engine/runtime"
@@ -25,7 +27,14 @@ runtime_update_step :: proc(user_data: rawptr, delta_time: f32) {
 	if ctx == nil {
 		return
 	}
-	engine_runtime.Environment_Update_Step(ctx.environment, ctx.vm_state, delta_time)
+	if !services.Log_Is_Playtest_Paused() {
+		engine_runtime.Environment_Update_Step(ctx.environment, ctx.vm_state, delta_time)
+		if extensions.Game_Exit_Requested(&ctx.environment.extensions) {
+			event := native_sdl.Event{}
+			event.type = .QUIT
+			_ = native_sdl.PushEvent(&event)
+		}
+	}
 }
 
 runtime_render_3d :: proc(
@@ -98,32 +107,50 @@ runtime_render_overlay :: proc(
 	)
 }
 
+runtime_overlay_needs_backdrop :: proc(user_data: rawptr) -> bool {
+	ctx := cast(^Runtime_Render_Context)user_data
+	return(
+		ctx != nil &&
+		ctx.environment != nil &&
+		classes.Gui_Overlay_Needs_Backdrop(&ctx.environment.classes) \
+	)
+}
+
 runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 	ctx := cast(^Runtime_Render_Context)user_data
 	if ctx == nil {return}
-	profiling.trigger_event(event)
+	if services.Log_Is_Playtest_Paused() {
+		if event.type == .KEY_DOWN && event.key.scancode == .F6 {
+			services.Log_Resume_Playtest()
+		}
+		return
+	}
+	if !target.is_editor() || services.Studio_Keyboard_Shortcuts(&ctx.environment.services) {
+		profiling.trigger_event(event)
+	}
 	engine_runtime.Environment_SetEvent(ctx.environment, ctx.vm_state, event)
 }
 
-run_desktop :: proc(options: Startup_Options) {
+run_desktop :: proc(options: Startup_Options) -> bool {
 	tracy.SetThreadName("Main")
 	if target.is_client() && !options.standalone {
 		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
 			fmt.eprintln(
 				"Network client needs a reachable server address; use 127.0.0.1 for a server on this computer",
 			)
-			return
+			return false
 		}
 		if options.map_path != "" && !options.playtest {
 			fmt.eprintln(
 				"Load the map on the server with --map; clients receive it through replication",
 			)
-			return
+			return false
 		}
 	}
 	script_vm := vm.New()
+	services.Log_Pause_On_Playtest_Error(options.playtest && options.pause_on_error)
 	if !audio.init() {
-		return
+		return false
 	}
 	defer audio.shutdown()
 
@@ -160,16 +187,23 @@ run_desktop :: proc(options: Startup_Options) {
 				render_context.vm_state.L,
 				render_context.environment.services.data_model,
 			)
-			// Lua finalizers release mesh resources through their Filament context.
-			// Run them before the renderer destroys that context.
+			extensions.Game_Unload(&render_context.environment.extensions)
 			vm.Close(render_context.vm_state)
+		},
+		CanClose = proc(user_data: rawptr) -> bool {
+			ctx := cast(^Runtime_Render_Context)user_data
+			return services.Project_Request_Window_Close(&ctx.environment.services, ctx.vm_state.L)
 		},
 		OnResize = runtime_resize,
 		OnEvent = runtime_input_event,
 	}
+	when !renderer.KINE_RENDERER_GL {
+		renderer_object.OverlayNeedsBackdrop = runtime_overlay_needs_backdrop
+	}
 
 	target.set_playtest(options.playtest)
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
+	vm.AddGlobal_String(&script_vm, "ProjectPath", options.project)
 
 	if options.standalone {
 		sandbox.init_runtime(
@@ -184,12 +218,12 @@ run_desktop :: proc(options: Startup_Options) {
 			cast(^renderer.RendererObject)uintptr(&renderer_object),
 		)
 	}
-
 	if options.standalone {
 		engine_runtime.Environment_Set_Mode(&environment, target.Mode.Standalone)
 		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
 		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
+	environment.services.fast_editor_viewport = options.fast_viewport
 
 	// Load KNE native extensions from ./extensions before any game code runs, so
 	// a script can use what they registered from its first line.
@@ -210,17 +244,18 @@ run_desktop :: proc(options: Startup_Options) {
 	}
 	defer sandbox.shutdown()
 	defer vm.Close(&script_vm)
+	defer extensions.Game_Unload(&environment.extensions)
 
 	if target.is_server() || options.singleplayer {
 		if !load_game_map(&environment, &script_vm, options) {
-			return
+			return false
 		}
 	} else if options.playtest || options.standalone {
 		if !load_game_map(&environment, &script_vm, options) {
-			return
+			return false
 		}
 	} else if target.is_client() && !load_client_asset_bundle() {
-		return
+		return false
 	}
 
 	if options.standalone || options.singleplayer {
@@ -246,6 +281,8 @@ run_desktop :: proc(options: Startup_Options) {
 			}
 		}
 	}
+
+	if !load_game_library(&environment, options) {return false}
 
 	if target.is_server() || options.singleplayer {
 		server_script_service := cast(^services.ServerScriptService)(services.Ensure_Service(
@@ -276,7 +313,7 @@ run_desktop :: proc(options: Startup_Options) {
 				   .Server,
 			   ) {
 			fmt.eprintf("Could not start the server on %s:%d\n", options.address, options.port)
-			return
+			return false
 		}
 		fmt.printf("Kinemium server listening on %s:%d\n", options.address, options.port)
 	} else if target.is_client() {
@@ -290,7 +327,7 @@ run_desktop :: proc(options: Startup_Options) {
 					   .Client,
 				   ) {
 				fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
-				return
+				return false
 			}
 			fmt.printf("Kinemium client connecting to %s:%d...\n", options.address, options.port)
 		}
@@ -327,11 +364,25 @@ run_desktop :: proc(options: Startup_Options) {
 	} else if !options.playtest && !options.standalone {
 		title = "Kinemium Engine"
 	}
+
+	if len(options.project) > 0 && options.mode == target.Mode.Editor {
+		datamodel := cast(^services.DataModel)environment.classes.data_model
+		project := cast(^services.ProjectService)services.DataModel_Get_Service(
+			datamodel,
+			"Project",
+		)
+		services.Project_Bind_State(project, script_vm.L)
+		if project == nil || !services.Project_Open(project, options.project) {
+			fmt.eprintf("Could not open project %q\n", options.project)
+			return false
+		}
+	}
 	renderer.init(title, 800, 600, &renderer_object)
 
 	if !options.playtest {
 		services.Update_Service_Shutdown()
 	}
+	return true
 }
 
 main :: proc() {
@@ -352,15 +403,17 @@ main :: proc() {
 	}
 	fmt.println("Hello World! Step 4")
 	options, options_ok := startup_options()
-	if !options_ok {return}
+	if !options_ok {os.exit(1)}
+
 	fmt.println("Hello World! Step 5")
 	target.set_mode(options.mode)
+
 	fmt.println("Hello World! Step 6")
-	if target.is_server() && !options.window {
+	if options.headless || (target.is_server() && !options.window) {
 		fmt.println("Hello World! Step 7: Server")
-		run_server(options)
+		if !run_headless(options) {os.exit(1)}
 	} else {
 		fmt.println("Hello World! Step 7: Desktop")
-		run_desktop(options)
+		if !run_desktop(options) {os.exit(1)}
 	}
 }

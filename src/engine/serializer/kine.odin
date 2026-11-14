@@ -2011,6 +2011,10 @@ write_instance :: proc(
 		   (property == "Active" || property == "CurrentLength") {
 			continue
 		}
+		if classes.Is_Attachment_Joint(object.class) &&
+		   (property == "Active" || property == "CurrentPosition") {
+			continue
+		}
 		if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {
 			property_count += 1
 			continue

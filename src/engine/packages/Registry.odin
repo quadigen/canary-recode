@@ -585,7 +585,7 @@ renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
 
 	scale := sdl3.UI_Scale
 	px, py, pw, ph := x, y, width, height
-	if scale > 1.0001 {
+	if abs(scale - 1) > 0.0001 {
 		px = i32(f32(x) * scale)
 		py = i32(f32(y) * scale)
 		pw = i32(f32(width) * scale)

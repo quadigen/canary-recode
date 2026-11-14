@@ -86,6 +86,9 @@ tests_services := '''
     workspace_physics_smoke
     hinge_constraint_smoke
     spring_constraint_smoke
+    attachment_joint_smoke
+    attachment_joint_weld_smoke
+    gpu_compute_smoke
     luau_typecheck_smoke
     constraint_car_turn_smoke
     character_controller_smoke

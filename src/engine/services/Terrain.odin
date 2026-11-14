@@ -53,7 +53,7 @@ terrain_sdf_bounds :: proc(
 	service: ^Terrain,
 	shape: Terrain_SDF_Shape,
 	pad_cells: int,
-) -> datatypes.Region3int16 {
+) -> (datatypes.Region3int16, bool) {
 	min_x: int
 	max_x: int
 	min_y: int
@@ -102,10 +102,17 @@ terrain_sdf_bounds :: proc(
 		max_z = int(math.floor(world_max.z / service.voxel_size))
 	}
 
+	// Check the full-width box bounds before converting them to cell coordinates.
+	if shape.kind == .Box &&
+	   (min_x < int(min(i16)) || max_x > int(max(i16)) ||
+	    min_y < int(min(i16)) || max_y > int(max(i16)) ||
+	    min_z < int(min(i16)) || max_z > int(max(i16))) {
+		return {}, false
+	}
 	return datatypes.Region3int16 {
 		Min = datatypes.Vector3int16{i16(min_x), i16(min_y), i16(min_z)},
 		Max = datatypes.Vector3int16{i16(max_x), i16(max_y), i16(max_z)},
-	}
+	}, true
 }
 
 
@@ -2044,7 +2051,11 @@ terrain_sdf_box :: proc(local, half: datatypes.Vector3) -> f32 {
 	return outside + inside
 }
 
-terrain_sdf_eval :: proc(shape: Terrain_SDF_Shape, world: datatypes.Vector3) -> f32 {
+terrain_sdf_eval :: proc(
+	shape: Terrain_SDF_Shape,
+	world_to_local: datatypes.CFrame,
+	world: datatypes.Vector3,
+) -> f32 {
 	if shape.kind == .Sphere {
 		return(
 			datatypes.Vec3_Magnitude(datatypes.Vec3_Subtract(world, shape.center)) -
@@ -2052,7 +2063,7 @@ terrain_sdf_eval :: proc(shape: Terrain_SDF_Shape, world: datatypes.Vector3) -> 
 		)
 	}
 
-	local := datatypes.CFrame_PointToObjectSpace(shape.cframe, world)
+	local := datatypes.CFrame_Mul_Vector3(world_to_local, world)
 	switch shape.kind {
 	case .Sphere:
 		return 0
@@ -2091,20 +2102,31 @@ terrain_sdf_apply :: proc(
 	shape: Terrain_SDF_Shape,
 	material: enums.Material,
 	blend: f32 = 0,
-) {
+) -> bool {
+	tracy.ZoneN("Terrain Apply Shape")
 	vs := service.voxel_size
 	iso := service.iso_level
 	k := max(blend, 0)
 	subtract := material == .Air
 
-	bounds := terrain_sdf_bounds(service, shape, int(math.ceil(k / vs)))
+	bounds, valid := terrain_sdf_bounds(service, shape, int(math.ceil(k / vs)))
+	if !valid {return false}
+	if shape.kind == .Box {
+		// FillBlock runs synchronously on the simulation thread. Bound the
+		// voxel scan by the maximum size of a terrain snapshot cell run.
+		width := max(i64(bounds.Max.X) - i64(bounds.Min.X) + 1, 0)
+		height := max(i64(bounds.Max.Y) - i64(bounds.Min.Y) + 1, 0)
+		depth := max(i64(bounds.Max.Z) - i64(bounds.Min.Z) + 1, 0)
+		if width * height * depth > serializer.KINE_TERRAIN_MAX_CELLS {return false}
+	}
+	world_to_local := datatypes.CFrame_Inverse(shape.cframe)
 
 	changed := false
 	for x in int(bounds.Min.X) ..= int(bounds.Max.X) {
 		for y in int(bounds.Min.Y) ..= int(bounds.Max.Y) {
 			for z in int(bounds.Min.Z) ..= int(bounds.Max.Z) {
 				center := terrain_cell_center_world(service, x, y, z)
-				d_shape := terrain_sdf_eval(shape, center)
+				d_shape := terrain_sdf_eval(shape, world_to_local, center)
 
 				if d_shape > vs + k {
 					continue
@@ -2177,6 +2199,7 @@ terrain_sdf_apply :: proc(
 			int(bounds.Max.Z),
 		)
 	}
+	return true
 }
 
 terrain_fill_ball :: proc(
@@ -2200,12 +2223,12 @@ terrain_fill_box :: proc(
 	cframe: datatypes.CFrame,
 	size: datatypes.Vector3,
 	material: enums.Material,
-) {
+) -> bool {
 	half := datatypes.Vec3_Multiply(size, 0.5)
 	if half.x <= 0 || half.y <= 0 || half.z <= 0 {
-		return
+		return true
 	}
-	terrain_sdf_apply(
+	return terrain_sdf_apply(
 		service,
 		Terrain_SDF_Shape{kind = .Box, cframe = cframe, half = half},
 		material,
@@ -3258,7 +3281,9 @@ terrain_service_namecall :: proc(
 		cframe := datatypes.Arg_CFrame(L, 2, datatype_registry)
 		size := datatypes.Arg_Vector3(L, 3)
 		material := terrain_arg_material(L, 4, enum_registry, .Grass)
-		terrain_fill_box(service, cframe, size, material)
+		if !terrain_fill_box(service, cframe, size, material) {
+			return vm.RaiseError(L, "Terrain:FillBlock exceeds terrain bounds or the voxel limit at the current VoxelSize"), true
+		}
 		return 0, true
 
 	case "FillWedge":

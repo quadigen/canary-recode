@@ -57,7 +57,7 @@ gui_service_namecall :: proc(
 ) {
 	switch method {
 	case "GetGuiInset":
-		scale := max(platform.UI_Scale, 1)
+		scale := platform.UI_Scale
 		datatypes.Push_Vector2(
 			L,
 			dt,

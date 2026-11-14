@@ -210,7 +210,8 @@ physics_meshpart_shape :: proc(
 	   (classes.MeshPart_Source_Path(mesh_part) != "" || mesh_part.editable_mesh_id != 0) {
 		fidelity := mesh_part.collision_fidelity
 		if physics_is_mesh_operation(mesh_part) && fidelity != .Box && fidelity != .Hull {
-			effective := enums.CollisionFidelity.PreciseConvexDecomposition
+			effective := enums.CollisionFidelity.Default
+			if fidelity != .Default {effective = .PreciseConvexDecomposition}
 			if mesh_part.anchored {effective = .TriangleMesh}
 			return physics_cached_mesh_shape(service, mesh_part, scale, effective)
 		}
@@ -224,14 +225,14 @@ physics_meshpart_shape :: proc(
 			value := kineffi.JPH_Vec3{half.x, half.y, half.z}
 			return kineffi.JPH_BoxShape_Create(&value, 0)
 		case .Hull, .Default:
-			return physics_mesh_hull_shape(mesh_part, scale)
+			return physics_cached_mesh_shape(service, mesh_part, scale, .Hull)
 		case .PreciseConvexDecomposition:
 			return physics_cached_mesh_shape(service, mesh_part, scale, .PreciseConvexDecomposition)
 		case .TriangleMesh:
 			if mesh_part.anchored {
-				return physics_static_triangle_mesh_shape(mesh_part, scale)
+				return physics_cached_mesh_shape(service, mesh_part, scale, .TriangleMesh)
 			}
-			return physics_mesh_hull_shape(mesh_part, scale)
+			return physics_cached_mesh_shape(service, mesh_part, scale, .Hull)
 		}
 	}
 	return nil
@@ -448,12 +449,18 @@ physics_cached_mesh_shape :: proc(
 	}
 
 	shape: kineffi.JPH_ShapeRef
-	if fidelity == .TriangleMesh {
+	#partial switch fidelity {
+	case .TriangleMesh:
 		shape = physics_static_triangle_mesh_shape(mesh_part, scale)
-	} else {
-		shape = physics_mesh_pcd_shape(mesh_part, scale)
+	case .Hull:
+		shape = physics_mesh_hull_shape(mesh_part, scale)
+	case .Default, .PreciseConvexDecomposition:
+		shape = physics_mesh_pcd_shape(mesh_part, scale, fidelity)
+		if shape == nil && fidelity == .Default {
+			shape = physics_mesh_hull_shape(mesh_part, scale)
+		}
 	}
-	if shape != nil && service != nil && service.mesh_shape_cache != nil {
+	if shape != nil && service != nil {
 		key.mesh_id = strings.clone(key.mesh_id)
 		service.mesh_shape_cache[key] = shape
 		kineffi.JPH_Shape_AddRef(shape)
@@ -464,6 +471,7 @@ physics_cached_mesh_shape :: proc(
 physics_mesh_pcd_shape :: proc(
 	mesh_part: ^classes.MeshPart,
 	scale: datatypes.Vector3,
+	fidelity: enums.CollisionFidelity,
 ) -> kineffi.JPH_ShapeRef {
 	verts: []kineffi.JPH_Vec3
 	idx: [dynamic]u32
@@ -476,7 +484,9 @@ physics_mesh_pcd_shape :: proc(
 	if !ok {return nil}
 	defer delete(verts)
 	defer delete(idx)
-	return kineffi.JPH_VHACD_Compound_Create(
+	decompose := kineffi.JPH_VHACD_Compound_Create
+	if fidelity == .Default {decompose = kineffi.JPH_VHACD_Compound_CreateDefault}
+	return decompose(
 		raw_data(verts),
 		u32(len(verts)),
 		raw_data(idx),
@@ -977,6 +987,18 @@ physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_i
 				   (spring.frames[0].body == body.body_id ||
 						   spring.frames[1].body == body.body_id) {
 					classes.SpringConstraint_release(spring)
+				}
+			}
+		}
+		for class in classes.Attachment_Joint_Classes {
+			descriptor := classes.Find_Class(service.signal_registry, class.name)
+			if descriptor == nil {continue}
+			for object in descriptor.instances {
+				if object == nil {continue}
+				joint := cast(^classes.Attachment_Joint)object
+				if joint.system == service.system.handle &&
+				   (joint.frames[0].body == body.body_id || joint.frames[1].body == body.body_id) {
+					classes.Attachment_Joint_release(joint)
 				}
 			}
 		}

@@ -7,6 +7,7 @@ import "core:path/filepath"
 import "core:strings"
 import "vendor:sdl3"
 
+import platform "../platform"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -179,14 +180,13 @@ Window_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
-	service := cast(^Window)object
 	switch key {
-	case "CallCount":
-
-	case:
-		return false
+	case "GetResolution", "SetResolution", "SetUIScale":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return false}
+		vm.PushUserdataMethod(L, key)
+		return true
 	}
-	return true
+	return false
 }
 
 Window_namecall :: proc(
@@ -195,16 +195,50 @@ Window_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (
-	i32,
-	bool,
-) {
+) -> (i32, bool) {
 	service := cast(^Window)object
-	switch method {
-	case "Add":
+	if method != "GetResolution" && method != "SetResolution" && method != "SetUIScale" {return 0, false}
 
+	if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return 0, false}
+	registry := service.data_model.registry
+	if registry == nil || registry.mode != .Editor || registry.classes.renderer == nil {
+		vm.PushBoolean(L, false)
+		return 1, true
 	}
-	return 0, false
+	window := registry.classes.renderer.Window
+	if window == nil {
+		vm.PushNil(L)
+		return 1, true
+	}
+
+	ok := false
+	switch method {
+	case "GetResolution":
+		width, height: i32
+		if !sdl3.GetWindowSize(window, &width, &height) {
+			vm.PushNil(L)
+		} else {
+			datatypes.Push_Vector2(L, datatype_registry, {f32(width), f32(height)})
+		}
+		return 1, true
+	case "SetResolution":
+		width, height := vm.ArgNumber(L, 2), vm.ArgNumber(L, 3)
+		if width >= 320 && width <= 7680 && height >= 240 && height <= 4320 {
+			if .MAXIMIZED in sdl3.GetWindowFlags(window) {
+				_ = sdl3.RestoreWindow(window)
+			}
+			ok = sdl3.SetWindowSize(window, i32(width), i32(height))
+		}
+	case "SetUIScale":
+		scale := vm.ArgNumber(L, 2)
+		if scale >= 0.75 && scale <= 2 {
+			platform.UI_Scale = f32(scale)
+			classes.Gui_Layout_Mark_Dirty()
+			ok = true
+		}
+	}
+	vm.PushBoolean(L, ok)
+	return 1, true
 }
 
 Window_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -222,5 +256,6 @@ Register_Window_Class :: proc(registry: ^classes.Registry) {
 		_step = Window_step,
 		get = Window_get,
 		namecall = Window_namecall,
+		methods = []string{"GetResolution", "SetResolution", "SetUIScale"},
 	)
 }

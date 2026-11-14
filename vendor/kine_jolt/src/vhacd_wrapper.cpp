@@ -32,12 +32,13 @@ using VHACDInterface = std::unique_ptr<VHACD::IVHACD, VHACDInterfaceDeleter>;
 
 } // namespace
 
-JPH_ShapeRef JPH_VHACD_Compound_Create(
+static JPH_ShapeRef CreateDecomposedShape(
     const JPH_Vec3* points,
     uint32_t pointCount,
     const uint32_t* triangles,
     uint32_t triangleCount,
-    const JPH_Vec3* scale)
+    const JPH_Vec3* scale,
+    bool precise)
 {
     if (points == nullptr || triangles == nullptr || pointCount == 0 || triangleCount == 0 || triangleCount % 3 != 0 || scale == nullptr)
         return nullptr;
@@ -51,9 +52,9 @@ JPH_ShapeRef JPH_VHACD_Compound_Create(
     parameters.m_logger = nullptr;
     parameters.m_taskRunner = nullptr;
     parameters.m_maxConvexHulls = 16;
-    parameters.m_resolution = 200000;
-    parameters.m_minimumVolumePercentErrorAllowed = 1.0;
-    parameters.m_maxRecursionDepth = 10;
+    parameters.m_resolution = precise ? 200000 : 5000;
+    parameters.m_minimumVolumePercentErrorAllowed = precise ? 1.0 : 4.0;
+    parameters.m_maxRecursionDepth = precise ? 10 : 4;
     parameters.m_shrinkWrap = true;
     parameters.m_fillMode = VHACD::FillMode::FLOOD_FILL;
     parameters.m_maxNumVerticesPerCH = 64;
@@ -96,4 +97,18 @@ JPH_ShapeRef JPH_VHACD_Compound_Create(
     JPH::Shape* shape = compoundResult.Get().GetPtr();
     shape->AddRef();
     return shape;
+}
+
+JPH_ShapeRef JPH_VHACD_Compound_Create(
+    const JPH_Vec3* points, uint32_t pointCount,
+    const uint32_t* triangles, uint32_t triangleCount, const JPH_Vec3* scale)
+{
+    return CreateDecomposedShape(points, pointCount, triangles, triangleCount, scale, true);
+}
+
+JPH_ShapeRef JPH_VHACD_Compound_CreateDefault(
+    const JPH_Vec3* points, uint32_t pointCount,
+    const uint32_t* triangles, uint32_t triangleCount, const JPH_Vec3* scale)
+{
+    return CreateDecomposedShape(points, pointCount, triangles, triangleCount, scale, false);
 }

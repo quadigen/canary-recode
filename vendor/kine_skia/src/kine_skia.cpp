@@ -811,10 +811,11 @@ KINE_SKIA_API int Kine_Skia_Surface_BeginPicture(KineSkiaSurface *surface) {
 		return 0;
 	}
 	surface->recorder = std::make_unique<SkPictureRecorder>();
-	surface->recorder->beginRecording(SkRect::MakeWH(
-		static_cast<SkScalar>(surface->surface->width()),
-		static_cast<SkScalar>(surface->surface->height())));
-	return surface->recorder->getRecordingCanvas() ? 1 : 0;
+	// The destination applies ancestor clips and transforms at replay. Local
+	// commands can extend outside the window before a parent rotates them.
+	constexpr SkScalar limit = 100000000;
+	surface->recorder->beginRecording(SkRect::MakeLTRB(-limit, -limit, limit, limit));
+	return 1;
 }
 
 KINE_SKIA_API KineSkiaPicture *Kine_Skia_Surface_EndPicture(KineSkiaSurface *surface) {
@@ -2463,13 +2464,11 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextTypeface(
 			g,
 			b));
 
-	surface->surface
-		->getCanvas()
-		->drawTextBlob(
-			blob,
-			x,
-			y,
-			paint);
+	kine_skia_canvas(surface)->drawTextBlob(
+		blob,
+		x,
+		y,
+		paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadowTypeface(
@@ -2546,13 +2545,11 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadowTypeface(
 				blurSigma));
 	}
 
-	surface->surface
-		->getCanvas()
-		->drawTextBlob(
-			blob,
-			x + offsetX,
-			y + offsetY,
-			paint);
+	kine_skia_canvas(surface)->drawTextBlob(
+		blob,
+		x + offsetX,
+		y + offsetY,
+		paint);
 }
 
 KINE_SKIA_API float Kine_Skia_Typeface_MeasureText(
@@ -2905,6 +2902,10 @@ KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapGL(KineSkiaSurface *surface,
 
 KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage *image) {
 	delete image;
+}
+
+KINE_SKIA_API int Kine_Skia_Image_IsAnimating(const KineSkiaImage *image) {
+	return image && image->animated && !image->animationFinished;
 }
 
 KINE_SKIA_API int Kine_Skia_Image_GetWidth(const KineSkiaImage *image) {
@@ -3272,13 +3273,11 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurred(
 				blurSigma));
 	}
 
-	surface->surface
-		->getCanvas()
-		->drawTextBlob(
-			blob,
-			x,
-			y,
-			paint);
+	kine_skia_canvas(surface)->drawTextBlob(
+		blob,
+		x,
+		y,
+		paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurredTypeface(
@@ -3328,13 +3327,11 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurredTypeface(
 				blurSigma));
 	}
 
-	surface->surface
-		->getCanvas()
-		->drawTextBlob(
-			blob,
-			x,
-			y,
-			paint);
+	kine_skia_canvas(surface)->drawTextBlob(
+		blob,
+		x,
+		y,
+		paint);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageBlurredSized(

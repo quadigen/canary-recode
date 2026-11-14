@@ -23,6 +23,7 @@ LogService_Class := classes.Class_Info {
 LogService :: struct {
 	using service: Service,
 	message_count: i64,
+	history_generation: i64,
 	info_count:    i64,
 	warning_count: i64,
 	error_count:   i64,
@@ -31,6 +32,14 @@ LogService :: struct {
 }
 
 LOG_HISTORY_LIMIT :: 1000
+
+playtest_pause_on_error: bool
+playtest_paused: bool
+
+Log_Pause_On_Playtest_Error :: proc(enabled: bool) {playtest_pause_on_error = enabled}
+Log_Is_Playtest_Paused :: proc() -> bool {return playtest_paused}
+Log_Resume_Playtest :: proc() {playtest_paused = false}
+
 
 LogEntry :: struct {
 	message:   []u8,
@@ -76,6 +85,10 @@ log_service_fire_message_out :: proc(service: ^LogService, message: string) {
 
 
 log_service_emit_tagged :: proc(tag, message: string) {
+	if tag == "ERROR" && playtest_pause_on_error && !playtest_paused {
+		playtest_paused = true
+		fmt.eprintln("[WARN] Paused on error. Press F6 in the playtest window to resume, or stop the playtest.")
+	}
 	line_start := 0
 	for index in 0 ..= len(message) {
 		if index < len(message) && message[index] != '\n' {
@@ -183,6 +196,11 @@ log_service_luau_warn :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
+Log_Game_Message :: proc(registry: ^Registry, message: string) {
+	service := cast(^LogService)Ensure_Service(registry, "LogService")
+	log_service_write(service, message, "Log")
+}
+
 Install_Log_Globals :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.PushLightUserdata(vm_state.L, registry)
 	vm.PushFunction(vm_state.L, "print", log_service_luau_print, 1)
@@ -229,6 +247,9 @@ log_service_get :: proc(
 	switch key {
 	case "MessageCount":
 		vm.PushNumber(L, f64(service.message_count))
+
+	case "HistoryGeneration":
+		vm.PushNumber(L, f64(service.history_generation))
 
 	case "InfoCount":
 		vm.PushNumber(L, f64(service.info_count))
@@ -289,6 +310,7 @@ log_service_namecall :: proc(
 		return 0, true
 
 	case "Clear":
+		service.history_generation += 1
 		service.message_count = 0
 		service.info_count = 0
 		service.warning_count = 0

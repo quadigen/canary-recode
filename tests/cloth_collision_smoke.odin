@@ -159,5 +159,26 @@ cloth.Parent = CurtainGroup
 	assert(curtain != nil && mount != nil)
 	assert(curtain.attachment == classes.Find_First_Child(mount, "Left"))
 	assert(curtain.attachment1 == classes.Find_First_Child(mount, "Right"))
+
+	// Place the character halfway between two particle columns on a wide curtain.
+	ok, err = vm.Run(&script_vm, `
+workspace.Gravity = 0
+CurtainGroup.Parent = workspace
+cloth.Attachment0.Position = Vector3.new(-11, 0, 0)
+cloth.Attachment1.Position = Vector3.new(11, 0, 0)
+cloth.Size = Vector2.new(22, 4)
+clothHits = 0
+`, "wide_curtain")
+	assert(ok, err)
+	characters := cast(^services.CharacterService)services.Ensure_Service(&env.services, "CharacterService")
+	for i in 0..<25 {
+		root.cframe.x = 1.1
+		root.cframe.y = 2.5
+		root.cframe.z = 2 - f32(i) * 0.16
+		services.CharacterService_Server_Touch(characters, character, physics, dt)
+		services.Physics_Step(physics, dt)
+	}
+	ok, err = vm.Run(&script_vm, `assert(clothHits > 0, "a capsule between particle columns must touch the cloth")`, "wide_curtain_contact")
+	assert(ok, err)
 	fmt.println("CLOTH_COLLISION_SMOKE_PASSED")
 }

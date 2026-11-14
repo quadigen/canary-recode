@@ -39,60 +39,131 @@ Undo_Entry :: struct {
 }
 
 TextBox :: struct {
-	using gui_object:       GuiObject,
-	text:                   string,
-	placeholder_text:       string,
-	text_size:              f32,
-	text_x_alignment:       enums.TextXAlignment,
-	text_y_alignment:       enums.TextYAlignment,
-	text_color3:            datatypes.Color3,
-	placeholder_color3:     datatypes.Color3,
-	text_transparency:      f32,
-	font_face:              datatypes.Font,
-	font_enum:              enums.Font,
-	stored_typeface:        ^kineffi.KineSkiaTypeface,
-	clear_text_on_focus:    bool,
-	text_editable:          bool,
-	select_all_on_focus:    bool,
-	code_editor:            bool,
-	show_line_numbers:      bool,
-	show_minimap:           bool,
-	tab_size:               int,
-	auto_indent:            bool,
-	max_length:             int,
-	focused:                bool,
-	cursor_byte:            int,
-	selection_anchor:       int,
-	drag_selecting:         bool,
-	key_handled:            bool,
-	key_down:               ^signals.Signal,
-	caret_color3:           datatypes.Color3,
-	selection_color3:       datatypes.Color3,
-	selection_transparency: f32,
-	focus_color3:           datatypes.Color3,
-	focus_lost:             ^signals.Signal,
-	text_changed:           ^signals.Signal,
-	focus_animation:        f32,
-	caret_timer:            f32,
-	scroll_x:               f32,
-	scroll_target_x:        f32,
-	scroll_y:               f32,
-	scroll_target_y:        f32,
-	preferred_x:            f32,
-	preferred_x_valid:      bool,
-	caret_needs_scroll:     bool,
-	caret_screen_position:  datatypes.Vector2,
-	auto_close:             bool,
-	wrap:                   bool,
-	diagnostics:            [dynamic]TextBox_Diagnostic,
-	undo_stack:             [dynamic]Undo_Entry,
-	redo_stack:             [dynamic]Undo_Entry,
-	suppress_undo:          bool,
-	undo_epoch:             int,
+	using gui_object:              GuiObject,
+	// The public string is a borrowed, zero-copy view of text_buffer.
+	// Never free text: the TextBox owns text_buffer for both editor modes.
+	text:                          string,
+	text_buffer:                   []u8,
+	line_starts:                   [dynamic]int,
+	line_index_ready:              bool,
+	line_widths:                   [dynamic]f32,
+	line_widths_valid:             bool,
+	bracket_cache_valid:           bool,
+	bracket_cache_cursor:          int,
+	bracket_cache_revision:        u64,
+	bracket_cache_first:           int,
+	bracket_cache_second:          int,
+	bracket_cache_has:             bool,
+	visual_lines:                  [dynamic]Visual_Line,
+	visual_dirty:                  bool,
+	visual_cached_width:           f32,
+	visual_cached_wrap:            bool,
+	visual_cached_text_size:       f32,
+	visual_cached_tab_size:        int,
+	visual_cached_typeface:        ^kineffi.KineSkiaTypeface,
+	text_revision:                 u64,
+	highlight_revision:            u64,
+	highlight_ref:                 ^SyntaxHighlighter,
+	syntax_highlight_max_bytes:    int,
+	max_undo_entries:              int,
+	single_full_width:             f32,
+	single_full_width_valid:       bool,
+	single_prefix_byte:            int,
+	single_prefix_width:           f32,
+	single_prefix_valid:           bool,
+	single_draw_start:             int,
+	single_draw_x:                 f32,
+	single_draw_valid:             bool,
+	content_measure_width:         f32,
+	content_measure_height:        f32,
+	content_measure_valid:         bool,
+	placeholder_text:              string,
+	text_size:                     f32,
+	text_x_alignment:              enums.TextXAlignment,
+	text_y_alignment:              enums.TextYAlignment,
+	text_color3:                   datatypes.Color3,
+	placeholder_color3:            datatypes.Color3,
+	text_transparency:             f32,
+	font_face:                     datatypes.Font,
+	font_enum:                     enums.Font,
+	stored_typeface:               ^kineffi.KineSkiaTypeface,
+	clear_text_on_focus:           bool,
+	text_editable:                 bool,
+	select_all_on_focus:           bool,
+	relative_line_numbers:         bool,
+	highlight_current_line:        bool,
+	bracket_matching:              bool,
+	tab_spaces:                    bool,
+	show_indent_guides:            bool,
+	highlight_active_indent_guide: bool,
+	show_whitespace:               bool,
+	show_scrollbar:                bool,
+	show_gutter_separator:         bool,
+	smooth_scrolling:              bool,
+	smart_home:                    bool,
+	smart_backspace:               bool,
+	auto_indent_brackets:          bool,
+	find_visible:                  bool,
+	find_cursor_byte:              int,
+	find_input_active:             bool,
+	find_query:                    string,
+	find_case_sensitive:           bool,
+	show_find_highlights:          bool,
+	find_match_color3:             datatypes.Color3,
+	line_number_color3:            datatypes.Color3,
+	current_line_color3:           datatypes.Color3,
+	indent_guide_color3:           datatypes.Color3,
+	bracket_match_color3:          datatypes.Color3,
+	gutter_color3:                 datatypes.Color3,
+	minimap_color3:                datatypes.Color3,
+	scrollbar_color3:              datatypes.Color3,
+	editor_padding:                f32,
+	editor_line_height:            f32,
+	minimap_width:                 f32,
+	scrollbar_width:               f32,
+	mouse_wheel_scroll_lines:      f32,
+	scrollbar_dragging:            bool,
+	scrollbar_drag_offset:         f32,
+	code_editor:                   bool,
+	show_line_numbers:             bool,
+	show_minimap:                  bool,
+	tab_size:                      int,
+	auto_indent:                   bool,
+	max_length:                    int,
+	focused:                       bool,
+	cursor_byte:                   int,
+	selection_anchor:              int,
+	drag_selecting:                bool,
+	key_handled:                   bool,
+	key_down:                      ^signals.Signal,
+	caret_color3:                  datatypes.Color3,
+	selection_color3:              datatypes.Color3,
+	selection_transparency:        f32,
+	focus_color3:                  datatypes.Color3,
+	focus_lost:                    ^signals.Signal,
+	text_changed:                  ^signals.Signal,
+	focus_animation:               f32,
+	caret_timer:                   f32,
+	scroll_x:                      f32,
+	scroll_target_x:               f32,
+	scroll_y:                      f32,
+	scroll_target_y:               f32,
+	preferred_x:                   f32,
+	preferred_x_valid:             bool,
+	caret_needs_scroll:            bool,
+	caret_screen_position:         datatypes.Vector2,
+	auto_close:                    bool,
+	wrap:                          bool,
+	diagnostics:                   [dynamic]TextBox_Diagnostic,
+	undo_stack:                    [dynamic]Undo_Entry,
+	redo_stack:                    [dynamic]Undo_Entry,
+	suppress_undo:                 bool,
+	undo_epoch:                    int,
 }
 
 
 text_box_focused: ^TextBox
+text_box_highlighter_last_box: ^TextBox
 
 
 TextBox_Focused :: proc() -> ^TextBox {
@@ -108,7 +179,12 @@ TextBox_Init :: proc() -> TextBox {
 
 	return TextBox {
 		gui_object = gui,
-		text = strings.clone(""),
+		text = "",
+		text_buffer = nil,
+		visual_dirty = true,
+		line_index_ready = false,
+		syntax_highlight_max_bytes = 2 * 1024 * 1024,
+		max_undo_entries = 1000,
 		placeholder_text = strings.clone(""),
 		text_size = 16,
 		text_x_alignment = .Left,
@@ -122,6 +198,38 @@ TextBox_Init :: proc() -> TextBox {
 		clear_text_on_focus = false,
 		text_editable = true,
 		select_all_on_focus = false,
+		relative_line_numbers = false,
+		highlight_current_line = true,
+		bracket_matching = true,
+		show_indent_guides = true,
+		highlight_active_indent_guide = true,
+		show_whitespace = false,
+		show_scrollbar = true,
+		show_gutter_separator = true,
+		smooth_scrolling = true,
+		smart_home = true,
+		smart_backspace = true,
+		auto_indent_brackets = true,
+		find_visible = false,
+		find_cursor_byte = 0,
+		find_input_active = false,
+		find_query = strings.clone(""),
+		find_case_sensitive = false,
+		show_find_highlights = true,
+		find_match_color3 = datatypes.Color3{0.92, 0.68, 0.25},
+		line_number_color3 = datatypes.Color3{0.54, 0.57, 0.63},
+		current_line_color3 = datatypes.Color3{0.30, 0.48, 0.73},
+		indent_guide_color3 = datatypes.Color3{0.47, 0.52, 0.61},
+		bracket_match_color3 = datatypes.Color3{0.45, 0.63, 0.95},
+		gutter_color3 = datatypes.Color3{0.93, 0.94, 0.96},
+		minimap_color3 = datatypes.Color3{0.93, 0.94, 0.96},
+		scrollbar_color3 = datatypes.Color3{0.54, 0.57, 0.64},
+		editor_padding = 8,
+		editor_line_height = 0,
+		minimap_width = 76,
+		scrollbar_width = 8,
+		mouse_wheel_scroll_lines = 3,
+		tab_spaces = true,
 		code_editor = false,
 		show_line_numbers = true,
 		show_minimap = false,
@@ -162,6 +270,11 @@ TextBox_Load_Typeface :: proc(box: ^TextBox) {
 	TextBox_Destroy_Typeface(box)
 
 	box.stored_typeface = TextLabel_Load_Typeface_From_Font(box.font_face)
+	box.visual_dirty = true
+	box.single_full_width_valid = false
+	box.single_prefix_valid = false
+	box.content_measure_valid = false
+	box.line_widths_valid = false
 }
 
 
@@ -283,6 +396,232 @@ text_box_replace_string :: proc(target: ^string, value: string) {
 }
 
 
+// Reusable capacity-backed UTF-8 storage. text is a read-only slice of this buffer.
+// The byte offsets used by the old API are unchanged; contents need no terminating NUL.
+text_box_buffer_reserve :: proc(box: ^TextBox, required: int) {
+	if required <= len(box.text_buffer) {return}
+	capacity := max(len(box.text_buffer), 256)
+	for capacity < required {capacity = max(capacity * 2, required)}
+	old_length := len(box.text)
+	next := make([]u8, capacity)
+	for i in 0 ..< old_length {next[i] = box.text_buffer[i]}
+	if len(box.text_buffer) > 0 {delete(box.text_buffer)}
+	box.text_buffer = next
+	box.text = ""
+	if old_length > 0 {box.text = transmute(string)box.text_buffer[:old_length]}
+}
+
+text_box_after_buffer_edit :: proc(box: ^TextBox) {
+	box.text_revision += 1
+	box.visual_dirty = true
+	box.single_full_width_valid = false
+	box.single_prefix_valid = false
+	box.single_draw_valid = false
+	box.content_measure_valid = false
+	box.caret_needs_scroll = true
+}
+
+// Binary search over physical line starts (0-based line index).
+text_box_line_upper_bound :: proc(starts: []int, position: int) -> int {
+	low, high := 0, len(starts)
+	for low < high {
+		mid := low + (high - low) / 2
+		if starts[mid] <= position {low = mid + 1} else {high = mid}
+	}
+	return low
+}
+
+text_box_line_index_ensure :: proc(box: ^TextBox) {
+	if box.line_index_ready {return}
+	clear(&box.line_starts)
+	append(&box.line_starts, 0)
+	for i in 0 ..< len(box.text) {
+		if box.text[i] == '\n' {append(&box.line_starts, i + 1)}
+	}
+	box.line_index_ready = true
+}
+
+text_box_line_index_replace :: proc(box: ^TextBox, start, finish: int, inserted: string) {
+	text_box_line_index_ensure(box)
+	first := text_box_line_upper_bound(box.line_starts[:], start)
+	after := text_box_line_upper_bound(box.line_starts[:], finish)
+	inserted_lines := 0
+	for c in transmute([]u8)inserted {if c == '\n' {inserted_lines += 1}}
+
+	old_count := len(box.line_starts)
+	tail := old_count - after
+	new_count := first + inserted_lines + tail
+	delta := len(inserted) - (finish - start)
+	target_tail := first + inserted_lines
+	if new_count > old_count {
+		resize(&box.line_starts, new_count)
+		for i := tail; i > 0; i -= 1 {
+			box.line_starts[target_tail + i - 1] = box.line_starts[after + i - 1] + delta
+		}
+	} else {
+		for i in 0 ..< tail {
+			box.line_starts[target_tail + i] = box.line_starts[after + i] + delta
+		}
+		resize(&box.line_starts, new_count)
+	}
+	output := first
+	for c, i in transmute([]u8)inserted {
+		if c == '\n' {
+			box.line_starts[output] = start + i + 1
+			output += 1
+		}
+	}
+}
+
+text_box_cached_line_number :: proc(box: ^TextBox, position: int) -> int {
+	text_box_line_index_ensure(box)
+	return max(text_box_line_upper_bound(box.line_starts[:], clamp(position, 0, len(box.text))), 1)
+}
+
+text_box_cached_line_start :: proc(box: ^TextBox, number: int) -> int {
+	text_box_line_index_ensure(box)
+	if number < 0 {return 0}
+	if number >= len(box.line_starts) {return len(box.text)}
+	return box.line_starts[number]
+}
+
+text_box_cached_line_count :: proc(box: ^TextBox) -> int {
+	text_box_line_index_ensure(box)
+	return len(box.line_starts)
+}
+
+// Recalculate widths for only the physical lines changed by an edit. Widths for
+// unaffected lines remain valid even when their byte offsets move.
+text_box_line_widths_replace :: proc(box: ^TextBox, old_first, old_last: int) {
+	if !box.line_widths_valid {return}
+	first := clamp(old_first, 0, len(box.line_widths))
+	last := clamp(old_last, first, max(len(box.line_widths) - 1, 0))
+	old_after := last + 1
+	new_count := len(box.line_starts)
+	tail := len(box.line_widths) - old_after
+	changed_count := new_count - first - tail
+	if changed_count < 1 {box.line_widths_valid = false; return}
+	new_tail := first + changed_count
+	if new_count > len(box.line_widths) {
+		resize(&box.line_widths, new_count)
+		for i := tail; i > 0; i -= 1 {
+			box.line_widths[new_tail + i - 1] = box.line_widths[old_after + i - 1]
+		}
+	} else {
+		for i in 0 ..< tail {
+			box.line_widths[new_tail + i] = box.line_widths[old_after + i]
+		}
+		resize(&box.line_widths, new_count)
+	}
+	for i := first; i < new_tail; i += 1 {
+		start := box.line_starts[i]
+		finish := len(box.text)
+		if i + 1 < len(box.line_starts) {finish = box.line_starts[i + 1] - 1}
+		box.line_widths[i] = text_box_measure_range(box, start, finish)
+	}
+}
+
+text_box_buffer_set :: proc(box: ^TextBox, value: string) {
+	// Clone first: callers can pass a substring of the old, owned buffer.
+	source := strings.clone(value)
+	defer {if len(source) > 0 {delete(source)}}
+	text_box_buffer_reserve(box, len(source))
+	for c, i in transmute([]u8)source {box.text_buffer[i] = c}
+	box.text = ""
+	if len(source) > 0 {box.text = transmute(string)box.text_buffer[:len(source)]}
+	box.line_index_ready = false
+	box.line_widths_valid = false
+	text_box_after_buffer_edit(box)
+}
+
+text_box_buffer_replace :: proc(box: ^TextBox, first, last: int, replacement: string) {
+	start := clamp(first, 0, len(box.text))
+	finish := clamp(last, start, len(box.text))
+	if finish == start && len(replacement) == 0 {return}
+	// Keep an owned copy so replacement may alias this buffer, including during growth.
+	inserted := strings.clone(replacement)
+	defer {if len(inserted) > 0 {delete(inserted)}}
+	old_length := len(box.text)
+	delta := len(inserted) - (finish - start)
+	new_length := old_length + delta
+	cached_full := box.single_full_width_valid
+	full_before := box.single_full_width
+	cached_prefix := box.single_prefix_valid
+	prefix_before := box.single_prefix_byte
+	prefix_width_before := box.single_prefix_width
+	cached_draw := box.single_draw_valid
+	draw_before := box.single_draw_start
+	draw_x_before := box.single_draw_x
+	change_width: f32 = 0
+	if !box.code_editor && (cached_full || cached_prefix || cached_draw || box.line_widths_valid) {
+		change_width =
+			text_box_measure_text(box, inserted) - text_box_measure_range(box, start, finish)
+	}
+	text_box_line_index_ensure(box)
+	old_first_line := text_box_line_upper_bound(box.line_starts[:], start) - 1
+	old_last_line := text_box_line_upper_bound(box.line_starts[:], finish) - 1
+	text_box_line_index_replace(box, start, finish, inserted)
+	text_box_buffer_reserve(box, new_length)
+	if delta > 0 {
+		for i := old_length; i > finish; i -= 1 {
+			box.text_buffer[i - 1 + delta] = box.text_buffer[i - 1]
+		}
+	} else if delta < 0 {
+		for i := finish; i < old_length; i += 1 {
+			box.text_buffer[i + delta] = box.text_buffer[i]
+		}
+	}
+	for c, i in transmute([]u8)inserted {box.text_buffer[start + i] = c}
+	box.text = ""
+	if new_length > 0 {box.text = transmute(string)box.text_buffer[:new_length]}
+	if !box.code_editor && len(box.line_starts) == 1 && box.line_widths_valid {
+		box.line_widths[0] = max(box.line_widths[0] + change_width, f32(0))
+	} else {
+		text_box_line_widths_replace(box, old_first_line, old_last_line)
+	}
+	text_box_after_buffer_edit(box)
+	if !box.code_editor {
+		if cached_full {
+			box.single_full_width = max(full_before + change_width, f32(0))
+			box.single_full_width_valid = true
+		}
+		if cached_prefix {
+			if finish <= prefix_before {
+				box.single_prefix_byte = prefix_before + delta
+				box.single_prefix_width = max(prefix_width_before + change_width, f32(0))
+				box.single_prefix_valid = true
+			} else if start > prefix_before {
+				box.single_prefix_byte = prefix_before
+				box.single_prefix_width = prefix_width_before
+				box.single_prefix_valid = true
+			}
+		}
+		if cached_draw {
+			if finish <= draw_before {
+				box.single_draw_start = draw_before + delta
+				box.single_draw_x = max(draw_x_before + change_width, f32(0))
+				box.single_draw_valid = true
+			} else if start >= draw_before {
+				box.single_draw_start = draw_before
+				box.single_draw_x = draw_x_before
+				box.single_draw_valid = true
+			}
+		}
+	}
+}
+
+text_box_undo_trim :: proc(box: ^TextBox) {
+	limit := max(box.max_undo_entries, 0)
+	if limit == 0 {undo_stack_clear(&box.undo_stack); return}
+	if len(box.undo_stack) <= limit {return}
+	remove_count := len(box.undo_stack) - limit
+	for i in 0 ..< remove_count {undo_entry_destroy(&box.undo_stack[i])}
+	for i := remove_count; i < len(box.undo_stack); i += 1 {
+		box.undo_stack[i - remove_count] = box.undo_stack[i]
+	}
+	resize(&box.undo_stack, limit)
+}
+
 text_box_restart_caret :: proc(box: ^TextBox) {
 	if box == nil {
 		return
@@ -290,6 +629,7 @@ text_box_restart_caret :: proc(box: ^TextBox) {
 
 	box.caret_timer = 0
 	box.caret_needs_scroll = true
+	gui_invalidate_draw(&box.object)
 }
 
 undo_entry_destroy :: proc(entry: ^Undo_Entry) {
@@ -323,6 +663,7 @@ text_box_fire_text_changed :: proc(box: ^TextBox) {
 		return
 	}
 
+	Gui_Layout_Mark_Dirty()
 
 	if box.text_changed == nil {
 		return
@@ -385,17 +726,12 @@ text_box_undo :: proc(box: ^TextBox) {
 	entry := box.undo_stack[len(box.undo_stack) - 1]
 	pop(&box.undo_stack)
 
-	old := box.text
-
-	next := strings.concatenate(
-		{old[:entry.start], entry.delete_text, old[entry.start + len(entry.insert_text):]},
+	text_box_buffer_replace(
+		box,
+		entry.start,
+		entry.start + len(entry.insert_text),
+		entry.delete_text,
 	)
-
-	box.text = next
-
-	if len(old) > 0 {
-		delete(old)
-	}
 
 	box.cursor_byte = entry.start + len(entry.delete_text)
 
@@ -418,17 +754,12 @@ text_box_redo :: proc(box: ^TextBox) {
 	entry := box.redo_stack[len(box.redo_stack) - 1]
 	pop(&box.redo_stack)
 
-	old := box.text
-
-	next := strings.concatenate(
-		{old[:entry.start], entry.insert_text, old[entry.start + len(entry.delete_text):]},
+	text_box_buffer_replace(
+		box,
+		entry.start,
+		entry.start + len(entry.delete_text),
+		entry.insert_text,
 	)
-
-	box.text = next
-
-	if len(old) > 0 {
-		delete(old)
-	}
 
 	box.cursor_byte = entry.start + len(entry.insert_text)
 
@@ -444,43 +775,48 @@ text_box_redo :: proc(box: ^TextBox) {
 }
 
 text_box_line_height :: proc(box: ^TextBox) -> f32 {
+	if box != nil && box.code_editor && box.editor_line_height > 0 {
+		return max(box.editor_line_height, box.text_size)
+	}
 	return max(box.text_size * 1.35, box.text_size + 4)
 }
 
+text_box_editor_minimap_width :: proc(box: ^TextBox, width: f32) -> f32 {
+	if box == nil || !box.code_editor || !box.show_minimap || width < 220 {return 0}
+	return min(box.minimap_width, width * 0.3)
+}
+
+text_box_editor_max_scroll_y :: proc(box: ^TextBox) -> f32 {
+	content_width := text_box_editor_content_width(box, box.absolute_size.X)
+	return max(
+		f32(text_box_visual_line_count(box, content_width)) * text_box_line_height(box) -
+		max(box.absolute_size.Y - box.editor_padding * 2, f32(0)),
+		f32(0),
+	)
+}
+
 TextBox_Measure_Content :: proc(box: ^TextBox, available_width: f32) -> datatypes.Vector2 {
-	if box == nil || box.stored_typeface == nil {
-		return datatypes.Vector2_Zero
+	if box == nil || box.stored_typeface == nil {return datatypes.Vector2_Zero}
+	if box.content_measure_valid {
+		return datatypes.Vector2{box.content_measure_width, box.content_measure_height}
 	}
-
-	text := box.text
-
-	line_height := text_box_line_height(box)
-
-	max_width: f32 = 0
-	line_count := 0
-
-	start := 0
-	index := 0
-
-	for index <= len(text) {
-		at_end := index == len(text)
-
-		if at_end || text[index] == '\n' {
-			width := text_box_measure_range(box, start, index)
-
-			max_width = max(max_width, width)
-			line_count += 1
-			start = index + 1
+	text_box_line_index_ensure(box)
+	if !box.line_widths_valid {
+		clear(&box.line_widths)
+		for i in 0 ..< len(box.line_starts) {
+			start := box.line_starts[i]
+			finish := len(box.text)
+			if i + 1 < len(box.line_starts) {finish = box.line_starts[i + 1] - 1}
+			append(&box.line_widths, text_box_measure_range(box, start, finish))
 		}
-
-		index += 1
+		box.line_widths_valid = true
 	}
-
-	if line_count == 0 {
-		line_count = 1
-	}
-
-	return datatypes.Vector2{max_width, f32(line_count) * line_height}
+	widest: f32 = 0
+	for width in box.line_widths {widest = max(widest, width)}
+	box.content_measure_width = widest
+	box.content_measure_height = f32(len(box.line_starts)) * text_box_line_height(box)
+	box.content_measure_valid = true
+	return datatypes.Vector2{widest, box.content_measure_height}
 }
 
 text_box_decimal_digits :: proc(value: int) -> int {
@@ -500,9 +836,9 @@ text_box_gutter_width :: proc(box: ^TextBox) -> f32 {
 		return 0
 	}
 
-	digits := text_box_decimal_digits(text_box_line_count(box.text))
+	digits := text_box_decimal_digits(text_box_cached_line_count(box))
 
-	return f32(digits) * box.text_size * 0.62 + 18
+	return f32(digits) * box.text_size * 0.62 + 24
 }
 
 // Display controls without changing the original text or its byte offsets.
@@ -598,38 +934,27 @@ text_box_cursor_on_line_from_x :: proc(
 	target_x: f32,
 	hit_glyph := false,
 ) -> int {
-	if start >= finish {
-		return start
-	}
-
+	if box == nil || start >= finish {return start}
 	target := max(target_x, f32(0))
-
-	previous_index := start
-	previous_width: f32 = 0
-
-	index := start
-
-	for index < finish {
-		next := text_box_utf8_next_boundary(box.text, index)
-
-		next = min(next, finish)
-
-		width := text_box_measure_range(box, start, next)
-
-		edge := hit_glyph ? width : (previous_width + width) * 0.5
-
-		if target < edge {
-			return previous_index
-		}
-
-		previous_index = next
-		previous_width = width
-		index = next
+	if target <= 0 {return start}
+	last_width := text_box_measure_range(box, start, finish)
+	if target >= last_width {
+		if hit_glyph {return text_box_utf8_prev_boundary(box.text, finish)}
+		return finish
 	}
-
-	return hit_glyph ? text_box_utf8_prev_boundary(box.text, finish) : finish
+	lo, hi := start, finish
+	for text_box_utf8_next_boundary(box.text, lo) < hi {
+		middle := lo + (hi - lo) / 2
+		for middle > lo && (box.text[middle] & 0xC0) == 0x80 {middle -= 1}
+		if middle <= lo {middle = text_box_utf8_next_boundary(box.text, lo)}
+		if text_box_measure_range(box, start, middle) < target {lo = middle} else {hi = middle}
+	}
+	if hit_glyph {return lo}
+	left := text_box_measure_range(box, start, lo)
+	right := text_box_measure_range(box, start, hi)
+	if target < (left + right) * 0.5 {return lo}
+	return hi
 }
-
 text_box_cursor_from_point :: proc(
 	box: ^TextBox,
 	mouse_x: f32,
@@ -644,7 +969,7 @@ text_box_cursor_from_point :: proc(
 		return text_box_cursor_from_x(box, mouse_x)
 	}
 
-	padding: f32 = 6
+	padding := box.editor_padding
 
 	line_height := text_box_line_height(box)
 
@@ -655,7 +980,6 @@ text_box_cursor_from_point :: proc(
 	content_width := text_box_editor_content_width(box, box.absolute_size.X)
 
 	lines := text_box_visual_lines(box, content_width)
-	defer delete(lines)
 
 	line = clamp(line, 0, max(len(lines) - 1, 0))
 
@@ -691,7 +1015,6 @@ text_box_move_vertical :: proc(box: ^TextBox, direction: int, shift: bool, amoun
 	content_width := text_box_editor_content_width(box, box.absolute_size.X)
 
 	lines := text_box_visual_lines(box, content_width)
-	defer delete(lines)
 
 	line_count := len(lines)
 
@@ -811,25 +1134,34 @@ text_box_bracket_pair :: proc(text: string, index: int) -> int {
 }
 
 text_box_bracket_highlight :: proc(box: ^TextBox) -> (first: int, second: int, has: bool) {
-	if box == nil || len(box.text) == 0 {
-		return -1, -1, false
+	if box == nil {return -1, -1, false}
+	if box.bracket_cache_valid &&
+	   box.bracket_cache_revision == box.text_revision &&
+	   box.bracket_cache_cursor == box.cursor_byte {
+		return box.bracket_cache_first, box.bracket_cache_second, box.bracket_cache_has
 	}
-
-	p := box.cursor_byte
-
-	if p < len(box.text) && text_box_is_bracket(box.text[p]) {
-		matched := text_box_bracket_pair(box.text, p)
-		return p, matched, true
+	first, second = -1, -1
+	has = false
+	if len(box.text) > 0 {
+		p := box.cursor_byte
+		if p < len(box.text) && text_box_is_bracket(box.text[p]) {
+			first = p
+		} else if p > 0 && text_box_is_bracket(box.text[p - 1]) {
+			first = p - 1
+		}
+		if first >= 0 {
+			second = text_box_bracket_pair(box.text, first)
+			has = true
+		}
 	}
-
-	if p > 0 && text_box_is_bracket(box.text[p - 1]) {
-		matched := text_box_bracket_pair(box.text, p - 1)
-		return p - 1, matched, true
-	}
-
-	return -1, -1, false
+	box.bracket_cache_cursor = box.cursor_byte
+	box.bracket_cache_revision = box.text_revision
+	box.bracket_cache_first = first
+	box.bracket_cache_second = second
+	box.bracket_cache_has = has
+	box.bracket_cache_valid = true
+	return first, second, has
 }
-
 text_box_auto_close :: proc(box: ^TextBox, c: u8) -> bool {
 	if box == nil {
 		return false
@@ -935,6 +1267,355 @@ text_box_handle_text :: proc(box: ^TextBox, value: string) {
 	text_box_insert(box, value)
 }
 
+
+// Only ASCII case folding is used; Luau identifiers and typical queries are ASCII.
+text_box_find_byte_equal :: proc(a, b: u8, case_sensitive: bool) -> bool {
+	if case_sensitive {
+		return a == b
+	}
+
+	ca := a
+	cb := b
+
+	if ca >= 'A' && ca <= 'Z' {ca += 32}
+	if cb >= 'A' && cb <= 'Z' {cb += 32}
+
+	return ca == cb
+}
+
+text_box_find_range :: proc(box: ^TextBox, from, to: int) -> int {
+	if box == nil || len(box.find_query) == 0 {return -1}
+	query := box.find_query
+	finish := min(to, len(box.text)) - len(query)
+	for p := max(from, 0); p <= finish; p += 1 {
+		match := true
+		for j in 0 ..< len(query) {
+			if !text_box_find_byte_equal(box.text[p + j], query[j], box.find_case_sensitive) {
+				match = false
+				break
+			}
+		}
+		if match {return p}
+	}
+	return -1
+}
+
+text_box_find_previous_range :: proc(box: ^TextBox, from, to: int) -> int {
+	if box == nil || len(box.find_query) == 0 {return -1}
+	query := box.find_query
+	finish := min(to, len(box.text) - len(query))
+	if finish < from {return -1}
+	for p := finish; p >= max(from, 0); p -= 1 {
+		match := true
+		for j in 0 ..< len(query) {
+			if !text_box_find_byte_equal(box.text[p + j], query[j], box.find_case_sensitive) {
+				match = false
+				break
+			}
+		}
+		if match {return p}
+	}
+	return -1
+}
+
+text_box_find_next :: proc(box: ^TextBox, backward := false) -> bool {
+	if box == nil || len(box.find_query) == 0 {return false}
+	start, finish, selected := text_box_selection_bounds(box)
+	_ = selected
+	found := -1
+	if backward {
+		found = text_box_find_previous_range(box, 0, start - 1)
+		if found < 0 {
+			found = text_box_find_previous_range(box, 0, len(box.text) - len(box.find_query))
+		}
+	} else {
+		found = text_box_find_range(box, finish, len(box.text))
+		if found < 0 {found = text_box_find_range(box, 0, len(box.text))}
+	}
+	if found < 0 {return false}
+	box.selection_anchor = found
+	box.cursor_byte = found + len(box.find_query)
+	box.preferred_x_valid = false
+	text_box_restart_caret(box)
+	return true
+}
+
+text_box_open_find :: proc(box: ^TextBox) {
+	if box == nil || !box.code_editor {return}
+	start, finish, selected := text_box_selection_bounds(box)
+	if selected && finish - start <= 128 && !strings.contains(box.text[start:finish], "\n") {
+		text_box_replace_string(&box.find_query, box.text[start:finish])
+	}
+	if !box.focused {TextBox_focus(box)}
+	box.find_visible = true
+	box.find_input_active = true
+	box.find_cursor_byte = len(box.find_query)
+	if !box.text_editable {
+		window := sdl3.GetKeyboardFocus()
+		if window != nil {
+			_ = sdl3.StartTextInput(window)
+			TEXTBOX_IS_USED = true
+		}
+	}
+	gui_invalidate_draw(&box.object)
+}
+
+text_box_close_find :: proc(box: ^TextBox) {
+	if box == nil {return}
+	box.find_visible = false
+	box.find_input_active = false
+	if !box.text_editable && box.focused {
+		window := sdl3.GetKeyboardFocus()
+		if window != nil {
+			_ = sdl3.StopTextInput(window)
+			TEXTBOX_IS_USED = false
+		}
+	}
+	gui_invalidate_draw(&box.object)
+}
+
+text_box_editor_scrollbar_thumb :: proc(box: ^TextBox) -> (y, height, max_scroll: f32) {
+	padding := box.editor_padding
+	available := max(box.absolute_size.Y - padding * 2, f32(1))
+	max_scroll = text_box_editor_max_scroll_y(box)
+	content_height := available + max_scroll
+	height = min(max(available * available / max(content_height, f32(1)), f32(22)), available)
+	y = box.absolute_position.Y + padding
+	if max_scroll > 0 {
+		y += (available - height) * clamp(box.scroll_target_y / max_scroll, f32(0), f32(1))
+	}
+	return
+}
+
+text_box_editor_scrollbar_to_mouse :: proc(box: ^TextBox, pointer_y: f32) {
+	thumb_y, thumb_height, max_scroll := text_box_editor_scrollbar_thumb(box)
+	_ = thumb_y
+	if max_scroll == 0 {return}
+	track_top := box.absolute_position.Y + box.editor_padding
+	track_height := max(box.absolute_size.Y - 2 * box.editor_padding - thumb_height, f32(1))
+	fraction := clamp(
+		(pointer_y - box.scrollbar_drag_offset - track_top) / track_height,
+		f32(0),
+		f32(1),
+	)
+	box.scroll_target_y = fraction * max_scroll
+	if !box.smooth_scrolling {box.scroll_y = box.scroll_target_y}
+	gui_invalidate_draw(&box.object)
+}
+
+text_box_editor_scroll_from_minimap :: proc(box: ^TextBox, pointer_y: f32) {
+	if box == nil {return}
+	max_scroll := text_box_editor_max_scroll_y(box)
+	fraction := clamp(
+		(pointer_y - box.absolute_position.Y) / max(box.absolute_size.Y, f32(1)),
+		f32(0),
+		f32(1),
+	)
+	box.scroll_target_y = fraction * max_scroll
+	if !box.smooth_scrolling {box.scroll_y = box.scroll_target_y}
+	gui_invalidate_draw(&box.object)
+}
+
+text_box_editor_find_hit :: proc(box: ^TextBox, x, y: f32) -> bool {
+	if box == nil || !box.code_editor || !box.find_visible {return false}
+	panel_width := min(f32(300), max(box.absolute_size.X - 20, f32(0)))
+	left := box.absolute_position.X + box.absolute_size.X - panel_width - 10
+	return(
+		x >= left &&
+		x < left + panel_width &&
+		y >= box.absolute_position.Y + 8 &&
+		y <= box.absolute_position.Y + 40 \
+	)
+}
+
+text_box_draw_editor_guide :: proc(
+	box: ^TextBox,
+	surface: ^kineffi.KineSkiaSurface,
+	line: Visual_Line,
+	y, content_x, line_height: f32,
+	active_indent: int,
+) {
+	if !box.show_indent_guides || line.start >= line.finish {return}
+	tab_size := max(box.tab_size, 1)
+	column := 0
+	offset := line.start
+	for offset < line.finish && (box.text[offset] == ' ' || box.text[offset] == '\t') {
+		if box.text[offset] == '\t' {
+			column += tab_size - column % tab_size
+		} else {
+			column += 1
+		}
+		offset += 1
+	}
+	if column < tab_size {return}
+	one_space := text_box_measure_text(box, " ")
+	for level := tab_size; level <= column; level += tab_size {
+		x := content_x + one_space * f32(level) - box.scroll_x
+		color := box.indent_guide_color3
+		transparency: f32 = 0.81
+		if box.highlight_active_indent_guide && level == active_indent {
+			color = box.bracket_match_color3
+			transparency = 0.37
+		}
+		guilib.drawLine(surface, x, y, x, y + line_height, 1, color, transparency)
+	}
+}
+
+text_box_draw_editor_whitespace :: proc(
+	box: ^TextBox,
+	surface: ^kineffi.KineSkiaSurface,
+	line: Visual_Line,
+	content_x, y, line_height: f32,
+) {
+	if !box.show_whitespace {return}
+	for i := line.start; i < line.finish; i += 1 {
+		if box.text[i] != ' ' && box.text[i] != '\t' {continue}
+		left := text_box_measure_range(box, line.start, i)
+		right := text_box_measure_range(box, line.start, i + 1)
+		x := content_x + (left + right) * 0.5 - box.scroll_x
+		cy := y + line_height * 0.56
+		if box.text[i] == ' ' {
+			guilib.drawRect(
+				surface,
+				guilib.Rect {
+					x = x,
+					y = cy,
+					width = 1.5,
+					height = 1.5,
+					color = box.line_number_color3,
+					bgTransparency = 0.34,
+				},
+			)
+		} else {
+			guilib.drawLine(surface, x - 3, cy, x + 3, cy, 1, box.line_number_color3, 0.42)
+		}
+	}
+}
+
+text_box_draw_editor_find :: proc(
+	box: ^TextBox,
+	surface: ^kineffi.KineSkiaSurface,
+	line: Visual_Line,
+	x, y, line_height: f32,
+) {
+	if !box.show_find_highlights || len(box.find_query) == 0 || len(box.find_query) > 128 {return}
+	offset := line.start
+	for offset < line.finish {
+		match := text_box_find_range(box, offset, line.finish)
+		if match < 0 {break}
+		left := text_box_measure_range(box, line.start, match)
+		right := text_box_measure_range(box, line.start, match + len(box.find_query))
+		guilib.drawRect(
+			surface,
+			guilib.Rect {
+				x = x + left,
+				y = y + 1,
+				width = max(right - left, f32(1)),
+				height = max(line_height - 2, f32(0)),
+				color = box.find_match_color3,
+				bgTransparency = 0.69,
+			},
+		)
+		offset = match + max(len(box.find_query), 1)
+	}
+}
+
+text_box_render_find_panel :: proc(
+	box: ^TextBox,
+	surface: ^kineffi.KineSkiaSurface,
+	rect: guilib.Rect,
+) {
+	if !box.find_visible || rect.width < 100 || rect.height < 48 {return}
+	width := min(f32(300), max(rect.width - 20, f32(0)))
+	left := rect.x + rect.width - width - 10
+	top := rect.y + 8
+	guilib.drawRoundedRect(
+		surface,
+		guilib.Rect {
+			x = left,
+			y = top,
+			width = width,
+			height = 32,
+			color = box.gutter_color3,
+			bgTransparency = 0.02,
+		},
+		4,
+	)
+	border_color := box.indent_guide_color3
+	border_transparency: f32 = 0.52
+	if box.find_input_active {
+		border_color = box.bracket_match_color3
+		border_transparency = 0.28
+	}
+	guilib.drawRoundedRectStroke(
+		surface,
+		guilib.Rect {
+			x = left,
+			y = top,
+			width = width,
+			height = 32,
+			color = border_color,
+			bgTransparency = border_transparency,
+		},
+		4,
+		1,
+	)
+	label := strings.clone_to_cstring("Find")
+	defer delete(label)
+	guilib.drawText(
+		surface,
+		label,
+		guilib.TextParams {
+			x = left + 9,
+			y = top + 22,
+			TextSize = box.text_size * 0.8,
+			color = box.line_number_color3,
+			typeface = box.stored_typeface,
+		},
+	)
+	query := box.find_query
+	skip := 0
+	if len(query) > 90 {
+		skip = len(query) - 90
+		for skip < len(query) && (query[skip] & 0xC0) == 0x80 {skip += 1}
+		query = query[skip:]
+	}
+	display := text_box_display_cstring(query, box.tab_size)
+	defer delete(display)
+	guilib.save(surface)
+	guilib.clipRect(
+		surface,
+		guilib.Rect{x = left + 46, y = top, width = max(width - 56, f32(0)), height = 32},
+	)
+	guilib.drawText(
+		surface,
+		display,
+		guilib.TextParams {
+			x = left + 47,
+			y = top + 22,
+			TextSize = box.text_size * 0.85,
+			color = box.text_color3,
+			typeface = box.stored_typeface,
+		},
+	)
+	if box.find_input_active && box.caret_timer < 0.6 {
+		end := clamp(box.find_cursor_byte - skip, 0, len(query))
+		prefix := text_box_display_cstring(query[:end], box.tab_size)
+		caret_width := guilib.measureText(prefix, box.text_size * 0.85, "")
+		if box.stored_typeface != nil {
+			caret_width = guilib.measureTextTypeface(
+				box.stored_typeface,
+				prefix,
+				box.text_size * 0.85,
+			)
+		}
+		delete(prefix)
+		x := left + 47 + caret_width
+		guilib.drawLine(surface, x, top + 7, x, top + 26, 1.5, box.caret_color3, 0)
+	}
+	guilib.restore(surface)
+}
+
 text_box_render_code_editor :: proc(
 	box: ^TextBox,
 	rect: guilib.Rect,
@@ -942,118 +1623,112 @@ text_box_render_code_editor :: proc(
 	dt: f32,
 ) {
 	surface := ctx.renderer.SkiaSurface
-
-	padding: f32 = 6
-
+	padding := box.editor_padding
 	line_height := text_box_line_height(box)
-
-	line_count := text_box_line_count(box.text)
-
 	gutter := text_box_gutter_width(box)
-
-	minimap_width: f32 = 0
-
-	if box.show_minimap && rect.width >= 250 {
-		minimap_width = 64
-	}
-
+	minimap_width := text_box_editor_minimap_width(box, rect.width)
+	scrollbar_width: f32 = 0
+	if box.show_scrollbar {scrollbar_width = box.scrollbar_width}
+	editor_right := rect.x + rect.width - minimap_width - scrollbar_width
 	content_x := rect.x + padding + gutter
-
 	content_width := text_box_editor_content_width(box, rect.width)
-
 	content_height := max(rect.height - padding * 2, f32(0))
-
 	lines := text_box_visual_lines(box, content_width)
-	defer delete(lines)
+	if len(lines) == 0 {return}
 
-	highlight := syntax_highlighter_for_box(box)
-
-	if highlight != nil {
-		syntax_highlighter_ensure(highlight, box.text)
+	highlight: ^SyntaxHighlighter
+	if box.syntax_highlight_max_bytes == 0 || len(box.text) <= box.syntax_highlight_max_bytes {
+		highlight = syntax_highlighter_for_box(box)
 	}
-
-	visual_line_count := len(lines)
+	if highlight != nil &&
+	   (box.highlight_ref != highlight ||
+			   box.highlight_revision != box.text_revision ||
+			   text_box_highlighter_last_box != box) {
+		syntax_highlighter_ensure(highlight, box.text)
+		box.highlight_ref = highlight
+		box.highlight_revision = box.text_revision
+		text_box_highlighter_last_box = box
+	}
 
 	caret_line := text_box_visual_index_at(lines[:], box.cursor_byte)
-
 	caret_x_local := text_box_measure_range(box, lines[caret_line].start, box.cursor_byte)
-
-	total_height := f32(visual_line_count) * line_height
-
+	total_height := f32(len(lines)) * line_height
 	max_scroll_y := max(total_height - content_height, f32(0))
-
 	if box.focused {
-		Gui_Render_Mark_Animated()
 		box.caret_timer += dt
-
-		for box.caret_timer >= 1.2 {
-			box.caret_timer -= 1.2
-		}
+		for box.caret_timer >= 1.2 {box.caret_timer -= 1.2}
 	}
-
 	if box.focused && box.caret_needs_scroll {
 		top := f32(caret_line) * line_height
-
 		bottom := top + line_height
-
 		if top < box.scroll_target_y {
 			box.scroll_target_y = top
 		} else if bottom > box.scroll_target_y + content_height {
 			box.scroll_target_y = bottom - content_height
 		}
-
-		visible_x := caret_x_local - box.scroll_target_x
-
-		if visible_x < 0 {
-			box.scroll_target_x = caret_x_local
-		} else if visible_x > content_width {
-			box.scroll_target_x = caret_x_local - content_width
+		if !box.wrap {
+			visible_x := caret_x_local - box.scroll_target_x
+			if visible_x < 0 {box.scroll_target_x = caret_x_local}
+			if visible_x > content_width {box.scroll_target_x = caret_x_local - content_width}
 		}
-
-		box.scroll_target_x = max(box.scroll_target_x, f32(0))
-
 		box.caret_needs_scroll = false
 	}
-
 	box.scroll_target_y = clamp(box.scroll_target_y, f32(0), max_scroll_y)
-
-	scroll_lerp := min(dt * 20, f32(1))
-
+	if box.wrap {box.scroll_target_x = 0}
+	box.scroll_target_x = max(box.scroll_target_x, f32(0))
+	scroll_lerp: f32 = 1
+	if box.smooth_scrolling {scroll_lerp = min(dt * 20, f32(1))}
 	box.scroll_x += (box.scroll_target_x - box.scroll_x) * scroll_lerp
-
 	box.scroll_y += (box.scroll_target_y - box.scroll_y) * scroll_lerp
-
-
 	box.caret_screen_position = datatypes.Vector2 {
 		content_x + caret_x_local - box.scroll_x,
 		rect.y + padding + f32(caret_line) * line_height - box.scroll_y,
 	}
+	ctx.gui_dynamic =
+		ctx.gui_dynamic ||
+		abs(box.scroll_x - box.scroll_target_x) > 0.05 ||
+		abs(box.scroll_y - box.scroll_target_y) > 0.05
 
 	guilib.save(surface)
 	defer guilib.restore(surface)
+	guilib.clipRect(surface, rect)
 
-	guilib.clipRect(
-		surface,
-		guilib.Rect {
-			x = rect.x,
-			y = rect.y,
-			width = rect.width - minimap_width,
-			height = rect.height,
-		},
-	)
-
-	if box.focused {
+	if gutter > 0 {
+		guilib.drawRect(
+			surface,
+			guilib.Rect {
+				x = rect.x,
+				y = rect.y,
+				width = gutter + padding,
+				height = rect.height,
+				color = box.gutter_color3,
+				bgTransparency = 0,
+			},
+		)
+		if box.show_gutter_separator {
+			guilib.drawLine(
+				surface,
+				rect.x + gutter + padding - 1,
+				rect.y,
+				rect.x + gutter + padding - 1,
+				rect.y + rect.height,
+				1,
+				box.line_number_color3,
+				0.80,
+			)
+		}
+	}
+	if box.highlight_current_line && box.focused {
 		current_y := rect.y + padding + f32(caret_line) * line_height - box.scroll_y
-
 		guilib.drawRect(
 			surface,
 			guilib.Rect {
 				x = rect.x,
 				y = current_y,
-				width = rect.width - minimap_width,
+				width = max(editor_right - rect.x, f32(0)),
 				height = line_height,
-				color = box.focus_color3,
-				bgTransparency = 0.94,
+				color = box.current_line_color3,
+				bgTransparency = 0.90,
 			},
 		)
 	}
@@ -1065,71 +1740,97 @@ text_box_render_code_editor :: proc(
 	   !text_box_is_word_at(box.text, selection_start - 1) &&
 	   !text_box_is_word_at(box.text, selection_finish) {
 		word := box.text[selection_start:selection_finish]
-		// Restrict occurrence highlights to short, whole identifiers.
 		if len(word) <= 128 {
 			selected_word = word
 			for i in 0 ..< len(word) {
-				if !text_box_is_word_byte(word[i]) {
-					selected_word = ""
-					break
-				}
+				if !text_box_is_word_byte(word[i]) {selected_word = ""; break}
 			}
 		}
 	}
-
-	bracket_first := -1
-	bracket_second := -1
-	bracket_found := false
-
-	if box.focused {
-		bracket_first, bracket_second, bracket_found = text_box_bracket_highlight(box)
+	bracket_first, bracket_second := -1, -1
+	if box.focused && box.bracket_matching {
+		bracket_first, bracket_second, _ = text_box_bracket_highlight(box)
 	}
 
-	for line, index in lines {
+	current_line_number := text_box_cached_line_number(box, box.cursor_byte)
+	first_visible := clamp(int(max(box.scroll_y / line_height, f32(0))), 0, len(lines) - 1)
+	last_visible := clamp(
+		int((box.scroll_y + rect.height) / line_height) + 2,
+		first_visible,
+		len(lines),
+	)
+	real_number := text_box_cached_line_number(box, lines[first_visible].start)
+	active_indent := 0
+	if box.highlight_active_indent_guide {
+		line_start := text_box_line_start(box.text, box.cursor_byte)
+		for i := line_start;
+		    i < len(box.text) && (box.text[i] == ' ' || box.text[i] == '\t');
+		    i += 1 {
+			if box.text[i] == '\t' {
+				active_indent += max(box.tab_size, 1) - active_indent % max(box.tab_size, 1)
+			} else {active_indent += 1}
+		}
+		active_indent = active_indent / max(box.tab_size, 1) * max(box.tab_size, 1)
+	}
+	// Only draw the viewport's lines, and clip text independently of the gutter.
+	for index := first_visible; index < last_visible; index += 1 {
+		line := lines[index]
 		y := rect.y + padding + f32(index) * line_height - box.scroll_y
-
-		if y + line_height >= rect.y && y <= rect.y + rect.height {
-			baseline := y + (line_height - box.text_size) * 0.5 + box.text_size
-
-			starts_text_line :=
-				line.start == 0 || (line.start > 0 && box.text[line.start - 1] == '\n')
-
-			if box.show_line_numbers && starts_text_line {
-				number_buffer: [32]u8
-
-				number := strconv.write_int(
-					number_buffer[:],
-					i64(text_box_line_number(box.text, line.start)),
-					10,
-				)
-
-				number_text := strings.clone_to_cstring(number)
-				defer delete(number_text)
-
-				number_width := guilib.measureTextTypeface(
-					box.stored_typeface,
-					number_text,
-					box.text_size * 0.8,
-				)
-
-				if box.stored_typeface == nil {
-					number_width = guilib.measureText(number_text, box.text_size * 0.8, "")
+		baseline := y + (line_height - box.text_size) * 0.5 + box.text_size
+		starts_text_line := line.start == 0 || (line.start > 0 && box.text[line.start - 1] == '\n')
+		if starts_text_line {
+			if index != first_visible {real_number += 1}
+			if box.show_line_numbers {
+				shown := real_number
+				if box.relative_line_numbers && shown != current_line_number {
+					shown = abs(shown - current_line_number)
 				}
-
+				number_buffer: [32]u8
+				number := strconv.write_int(number_buffer[:], i64(shown), 10)
+				number_text := strings.clone_to_cstring(number)
+				text_size := box.text_size * 0.8
+				number_width := guilib.measureText(number_text, text_size, "")
+				if box.stored_typeface != nil {
+					number_width = guilib.measureTextTypeface(
+						box.stored_typeface,
+						number_text,
+						text_size,
+					)
+				}
+				number_color := box.line_number_color3
+				number_transparency: f32 = 0.16
+				if real_number == current_line_number && box.focused {
+					number_color = box.text_color3
+					number_transparency = 0
+				}
 				guilib.drawText(
 					surface,
 					number_text,
 					guilib.TextParams {
-						x = rect.x + gutter - number_width - 7,
+						x = rect.x + padding + gutter - number_width - 12,
 						y = baseline,
-						TextSize = box.text_size * 0.8,
-						color = box.placeholder_color3,
-						transparency = 0.2,
+						TextSize = text_size,
+						color = number_color,
+						transparency = number_transparency,
 						typeface = box.stored_typeface,
 					},
 				)
+				delete(number_text)
 			}
-
+		}
+		guilib.save(surface)
+		guilib.clipRect(
+			surface,
+			guilib.Rect {
+				x = content_x,
+				y = y,
+				width = max(editor_right - content_x, f32(0)),
+				height = line_height + 3,
+			},
+		)
+		text_box_draw_editor_guide(box, surface, line, y, content_x, line_height, active_indent)
+		text_box_draw_editor_find(box, surface, line, content_x - box.scroll_x, y, line_height)
+		if box.focused && box.bracket_matching {
 			draw_bracket(
 				box,
 				surface,
@@ -1140,125 +1841,127 @@ text_box_render_code_editor :: proc(
 				bracket_first,
 				bracket_second < 0,
 			)
-
 			draw_bracket(box, surface, content_x, y, line_height, line, bracket_second, false)
-
-			if selected &&
-			   (selected_word != "" ||
-					   (selection_start <= line.finish && selection_finish > line.start)) {
-				guilib.save(surface)
-				guilib.clipRect(
-					surface,
-					{
-						x = content_x,
-						y = y,
-						width = max(rect.x + rect.width - minimap_width - content_x, 0),
-						height = line_height,
-					},
-				)
-				text_box_draw_code_selection(
-					box,
-					surface,
-					line,
-					content_x - box.scroll_x,
-					y,
-					line_height,
-					selection_start,
-					selection_finish,
-					selected_word,
-				)
-				guilib.restore(surface)
-			}
-
-			if highlight != nil {
-				text_box_draw_syntax_line(
-					box,
-					highlight,
-					surface,
-					content_x,
-					baseline,
-					line.start,
-					line.finish,
-				)
-			} else if line.finish > line.start {
-				text_box_draw_segment(
-					box,
-					surface,
-					content_x,
-					baseline,
-					line.start,
-					line.start,
-					line.finish,
-					box.text_color3,
-				)
-			}
-
-			if len(box.diagnostics) > 0 {
-				for diagnostic in box.diagnostics {
-					start, finish := text_box_diagnostic_span(box, diagnostic)
-
-					if start > line.finish || finish < line.start {
-						continue
-					}
-
-					if line.start == line.finish && start != line.start {
-						continue
-					}
-
-					a := max(start, line.start)
-					b := min(finish, line.finish)
-
-					x1 := text_box_measure_range(box, line.start, a)
-					x2 := text_box_measure_range(box, line.start, b)
-
-					text_box_draw_diagnostic_squiggle(
-						surface,
-						content_x + x1 - box.scroll_x,
-						content_x + x2 - box.scroll_x,
-						y + line_height + TEXTBOX_DIAGNOSTIC_SQUIGGLE_OFFSET,
-						TEXTBOX_ERROR_COLOR,
-					)
-				}
-			}
 		}
-	}
-
-	if box.focused {
-		caret_y := rect.y + padding + f32(caret_line) * line_height - box.scroll_y
-
-		caret_x := content_x + caret_x_local - box.scroll_x
-
-		visible := box.caret_timer < 0.6
-
-		if visible {
-			guilib.drawLine(
+		if selected {
+			text_box_draw_code_selection(
+				box,
 				surface,
-				caret_x,
-				caret_y + 2,
-				caret_x,
-				caret_y + line_height - 2,
-				1.5,
-				box.caret_color3,
-				box.text_transparency,
+				line,
+				content_x - box.scroll_x,
+				y,
+				line_height,
+				selection_start,
+				selection_finish,
+				selected_word,
 			)
 		}
+		if highlight != nil {
+			text_box_draw_syntax_line(
+				box,
+				highlight,
+				surface,
+				content_x,
+				baseline,
+				line.start,
+				line.finish,
+			)
+		} else if line.finish > line.start {
+			text_box_draw_segment(
+				box,
+				surface,
+				content_x,
+				baseline,
+				line.start,
+				line.start,
+				line.finish,
+				box.text_color3,
+			)
+		}
+		text_box_draw_editor_whitespace(box, surface, line, content_x, y, line_height)
+		if len(box.diagnostics) > 0 {
+			for diagnostic in box.diagnostics {
+				start, finish := text_box_diagnostic_span(box, diagnostic)
+				if start > line.finish || finish < line.start {continue}
+				if line.start == line.finish && start != line.start {continue}
+				a := max(start, line.start)
+				b := min(finish, line.finish)
+				x1 := text_box_measure_range(box, line.start, a)
+				x2 := text_box_measure_range(box, line.start, b)
+				text_box_draw_diagnostic_squiggle(
+					surface,
+					content_x + x1 - box.scroll_x,
+					content_x + x2 - box.scroll_x,
+					y + line_height + TEXTBOX_DIAGNOSTIC_SQUIGGLE_OFFSET,
+					TEXTBOX_ERROR_COLOR,
+				)
+			}
+		}
+		guilib.restore(surface)
 	}
-
+	if box.focused && box.caret_timer < 0.6 && !box.find_input_active {
+		caret_y := rect.y + padding + f32(caret_line) * line_height - box.scroll_y
+		caret_x := content_x + caret_x_local - box.scroll_x
+		guilib.save(surface)
+		guilib.clipRect(
+			surface,
+			guilib.Rect {
+				x = content_x,
+				y = rect.y,
+				width = max(editor_right - content_x, f32(0)),
+				height = rect.height,
+			},
+		)
+		guilib.drawLine(
+			surface,
+			caret_x,
+			caret_y + 2,
+			caret_x,
+			caret_y + line_height - 2,
+			1.5,
+			box.caret_color3,
+			box.text_transparency,
+		)
+		guilib.restore(surface)
+	}
+	if len(box.text) == 0 && len(box.placeholder_text) > 0 {
+		placeholder := strings.clone_to_cstring(box.placeholder_text)
+		guilib.drawText(
+			surface,
+			placeholder,
+			guilib.TextParams {
+				x = content_x,
+				y = rect.y + padding + line_height * 0.80,
+				TextSize = box.text_size,
+				color = box.placeholder_color3,
+				typeface = box.stored_typeface,
+			},
+		)
+		delete(placeholder)
+	}
 	if minimap_width > 0 {
 		map_x := rect.x + rect.width - minimap_width
-
-		position := 0
-		map_line := 0
-
-		for {
-			finish := text_box_line_end(box.text, position)
-
-			y := rect.y + (f32(map_line) / f32(max(line_count, 1))) * rect.height
-
-			length := finish - position
-
-			width := clamp(f32(length), f32(2), minimap_width - 8)
-
+		guilib.drawRect(
+			surface,
+			guilib.Rect {
+				x = map_x,
+				y = rect.y,
+				width = minimap_width,
+				height = rect.height,
+				color = box.minimap_color3,
+				bgTransparency = 0,
+			},
+		)
+		text_box_line_index_ensure(box)
+		physical_lines := len(box.line_starts)
+		// Sample directly from the line index: no O(document size) scan per frame.
+		row_step := max(int(f32(physical_lines) / max(rect.height * 0.7, f32(1))), 1)
+		for map_line := 0; map_line < physical_lines; map_line += row_step {
+			position := box.line_starts[map_line]
+			finish := len(box.text)
+			if map_line + 1 < physical_lines {finish = box.line_starts[map_line + 1] - 1}
+			y := rect.y + (f32(map_line) / f32(max(physical_lines, 1))) * rect.height
+			width := clamp(f32(finish - position) * 0.48, f32(2), max(minimap_width - 8, f32(2)))
 			guilib.drawRect(
 				surface,
 				guilib.Rect {
@@ -1267,18 +1970,48 @@ text_box_render_code_editor :: proc(
 					width = width,
 					height = 1,
 					color = box.text_color3,
-					bgTransparency = 0.72,
+					bgTransparency = 0.70,
 				},
 			)
-
-			if finish >= len(box.text) {
-				break
-			}
-
-			position = finish + 1
-			map_line += 1
 		}
+		viewport_height := min(
+			rect.height,
+			rect.height * content_height / max(total_height, f32(1)),
+		)
+		viewport_top := rect.y
+		if max_scroll_y > 0 {
+			viewport_top +=
+				(rect.height - viewport_height) *
+				clamp(box.scroll_y / max_scroll_y, f32(0), f32(1))
+		}
+		guilib.drawRect(
+			surface,
+			guilib.Rect {
+				x = map_x,
+				y = viewport_top,
+				width = minimap_width,
+				height = viewport_height,
+				color = box.line_number_color3,
+				bgTransparency = 0.88,
+			},
+		)
 	}
+	if box.show_scrollbar && box.scrollbar_width > 0 && max_scroll_y > 0 {
+		thumb_y, thumb_height, _ := text_box_editor_scrollbar_thumb(box)
+		guilib.drawRoundedRect(
+			surface,
+			guilib.Rect {
+				x = editor_right,
+				y = thumb_y,
+				width = box.scrollbar_width,
+				height = thumb_height,
+				color = box.scrollbar_color3,
+				bgTransparency = 0.39,
+			},
+			min(box.scrollbar_width * 0.5, f32(4)),
+		)
+	}
+	text_box_render_find_panel(box, surface, rect)
 }
 
 text_box_draw_code_selection :: proc(
@@ -1334,7 +2067,8 @@ text_box_draw_code_selection :: proc(
 
 	left := text_box_measure_range(box, line.start, start)
 	right := text_box_measure_range(box, line.start, finish)
-	width := max(right - left, 0) + (newline_selected ? f32(5) : 0)
+	width := max(right - left, f32(0))
+	if newline_selected {width += 5}
 	if width == 0 {return}
 	guilib.drawRoundedRect(
 		surface,
@@ -1368,7 +2102,7 @@ draw_bracket :: proc(
 
 	x_end := text_box_measure_range(box, line.start, bracket_index + 1)
 
-	color := datatypes.Color3{0.35, 0.6, 1.0}
+	color := box.bracket_match_color3
 
 	transparency: f32 = 0.45
 
@@ -1444,7 +2178,14 @@ text_box_draw_syntax_line :: proc(
 
 	cursor := line_start
 
-	for index in 0 ..< len(spans) {
+	lo := 0
+	hi := len(spans)
+	for lo < hi {
+		mid := lo + (hi - lo) / 2
+		if spans[mid].finish <= line_start {lo = mid + 1} else {hi = mid}
+	}
+
+	for index := lo; index < len(spans); index += 1 {
 		span := spans[index]
 
 		if span.finish <= cursor {
@@ -1565,7 +2306,10 @@ text_box_select_word_at :: proc(box: ^TextBox, position: int) {
 
 	if !text_box_is_word_byte(box.text[i]) {
 		box.selection_anchor = i
-		box.cursor_byte = box.text[i] == '\n' ? i : text_box_utf8_next_boundary(box.text, i)
+		box.cursor_byte = i
+		if box.text[i] != '\n' {
+			box.cursor_byte = text_box_utf8_next_boundary(box.text, i)
+		}
 		text_box_restart_caret(box)
 
 		return
@@ -1814,7 +2558,7 @@ text_box_set_text :: proc(box: ^TextBox, value: string) {
 		return
 	}
 
-	text_box_replace_string(&box.text, source)
+	text_box_buffer_set(box, source)
 
 	undo_stack_clear(&box.undo_stack)
 	undo_stack_clear(&box.redo_stack)
@@ -1886,13 +2630,8 @@ text_box_erase :: proc(box: ^TextBox, start: int, finish: int) {
 		}
 	}
 
-	next := strings.concatenate({box.text[:clamped_start], box.text[clamped_finish:]})
-
-	if len(box.text) > 0 {
-		delete(box.text)
-	}
-
-	box.text = next
+	text_box_buffer_replace(box, clamped_start, clamped_finish, "")
+	text_box_undo_trim(box)
 
 	box.cursor_byte = clamped_start
 
@@ -1986,15 +2725,8 @@ text_box_insert :: proc(box: ^TextBox, value: string) {
 		}
 	}
 
-	next := strings.concatenate(
-		{box.text[:box.cursor_byte], insert_value, box.text[box.cursor_byte:]},
-	)
-
-	if len(box.text) > 0 {
-		delete(box.text)
-	}
-
-	box.text = next
+	text_box_buffer_replace(box, box.cursor_byte, box.cursor_byte, insert_value)
+	text_box_undo_trim(box)
 
 	box.cursor_byte += len(insert_value)
 
@@ -2052,7 +2784,7 @@ text_box_diagnostic_span :: proc(
 		return 0, 0
 	}
 
-	line_start := text_box_line_start_by_index(box.text, diagnostic.line - 1)
+	line_start := text_box_cached_line_start(box, diagnostic.line - 1)
 
 	if line_start >= len(box.text) {
 		return len(box.text), len(box.text)
@@ -2133,8 +2865,12 @@ text_box_draw_diagnostic_squiggle :: proc(
 	for x < x1 {
 		next := min(x + STEP, x1)
 
-		y0 := y + (up ? -AMPLITUDE : AMPLITUDE)
-		y1 := y + (up ? AMPLITUDE : -AMPLITUDE)
+		y0 := y + AMPLITUDE
+		y1 := y - AMPLITUDE
+		if up {
+			y0 = y - AMPLITUDE
+			y1 = y + AMPLITUDE
+		}
 
 		guilib.drawLine(surface, x, y0, next, y1, 1.4, color, 0)
 
@@ -2189,113 +2925,86 @@ text_box_editor_content_width :: proc(box: ^TextBox, width: f32) -> f32 {
 		return 0
 	}
 
-	padding: f32 = 6
+	padding := box.editor_padding
 
 	content := max(width - padding * 2 - text_box_gutter_width(box), f32(0))
-
-	if box.show_minimap && width >= 250 {
-		content = max(content - 64, f32(0))
+	content = max(content - text_box_editor_minimap_width(box, width), f32(0))
+	if box.show_scrollbar {
+		content = max(content - box.scrollbar_width, f32(0))
 	}
 
 	return content
 }
 
-text_box_visual_lines :: proc(box: ^TextBox, content_width: f32) -> [dynamic]Visual_Line {
-	result := make([dynamic]Visual_Line)
-
-	text := box.text
-
-	if len(text) == 0 {
-		append(&result, Visual_Line{start = 0, finish = 0})
-		return result
+text_box_visual_lines :: proc(box: ^TextBox, content_width: f32) -> []Visual_Line {
+	if box == nil {return nil}
+	if !box.visual_dirty &&
+	   abs(box.visual_cached_width - content_width) < f32(0.5) &&
+	   box.visual_cached_wrap == box.wrap &&
+	   box.visual_cached_text_size == box.text_size &&
+	   box.visual_cached_tab_size == box.tab_size &&
+	   box.visual_cached_typeface == box.stored_typeface {
+		return box.visual_lines[:]
 	}
-
-	position := 0
-
-	for position <= len(text) {
-		line_end := text_box_line_end(text, position)
-
-		if !box.wrap || content_width <= f32(0) || line_end == position {
-			append(&result, Visual_Line{start = position, finish = line_end})
-
-			if line_end >= len(text) {
-				break
-			}
-
-			position = line_end + 1
+	text_box_line_index_ensure(box)
+	clear(&box.visual_lines)
+	text := box.text
+	for line_index in 0 ..< len(box.line_starts) {
+		start := box.line_starts[line_index]
+		finish := len(text)
+		if line_index + 1 < len(box.line_starts) {
+			finish = box.line_starts[line_index + 1] - 1
+		}
+		if !box.wrap ||
+		   content_width <= 0 ||
+		   start == finish ||
+		   text_box_measure_range(box, start, finish) <= content_width {
+			append(&box.visual_lines, Visual_Line{start, finish})
 			continue
 		}
-
-		chunk_start := position
-		last_fit := position
-		pos := position
-
-		for pos < line_end {
-			next := text_box_utf8_next_boundary(text, pos)
-			next = min(next, line_end)
-
-			if next == pos {
-				break
-			}
-
-			width := text_box_measure_range(box, chunk_start, next)
-
-			if width > content_width {
-				split := last_fit
-
-				if split == chunk_start {
-					split = next
+		chunk := start
+		for chunk < finish {
+			low, high := chunk + 1, finish
+			best := text_box_utf8_next_boundary(text, chunk)
+			for low <= high {
+				mid := low + (high - low) / 2
+				candidate := min(mid, finish)
+				for candidate < finish && (text[candidate] & 0xC0) == 0x80 {
+					candidate += 1
 				}
-
-				if split > chunk_start {
-					append(&result, Visual_Line{start = chunk_start, finish = split})
+				if candidate <= chunk {candidate = text_box_utf8_next_boundary(text, chunk)}
+				if text_box_measure_range(box, chunk, candidate) <= content_width {
+					best = candidate
+					low = candidate + 1
+				} else {
+					high = mid - 1
 				}
-
-				chunk_start = split
-				pos = split
-				last_fit = split
-			} else {
-				last_fit = next
-				pos = next
 			}
+			append(&box.visual_lines, Visual_Line{chunk, best})
+			chunk = best
 		}
-
-		append(&result, Visual_Line{start = chunk_start, finish = line_end})
-
-		if line_end >= len(text) {
-			break
-		}
-
-		position = line_end + 1
 	}
-
-	if len(result) == 0 {
-		append(&result, Visual_Line{start = 0, finish = 0})
-	}
-
-	return result
+	if len(box.visual_lines) == 0 {append(&box.visual_lines, Visual_Line{0, 0})}
+	box.visual_cached_width = content_width
+	box.visual_cached_wrap = box.wrap
+	box.visual_cached_text_size = box.text_size
+	box.visual_cached_tab_size = box.tab_size
+	box.visual_cached_typeface = box.stored_typeface
+	box.visual_dirty = false
+	return box.visual_lines[:]
 }
-
 text_box_visual_line_count :: proc(box: ^TextBox, content_width: f32) -> int {
-	lines := text_box_visual_lines(box, content_width)
-	defer delete(lines)
-	return len(lines)
+	return len(text_box_visual_lines(box, content_width))
 }
-
 text_box_visual_index_at :: proc(lines: []Visual_Line, offset: int) -> int {
-	if len(lines) == 0 {
-		return 0
+	if len(lines) == 0 {return 0}
+	low, high := 0, len(lines)
+	for low < high {
+		mid := low + (high - low) / 2
+		if lines[mid].finish < offset {low = mid + 1} else {high = mid}
 	}
-
-	for line, i in lines {
-		if offset >= line.start && offset <= line.finish {
-			return i
-		}
-	}
-
-	return len(lines) - 1
+	return clamp(low, 0, len(lines) - 1)
 }
-
 text_box_indent :: proc(text: string, index: int) -> string {
 	start := text_box_line_start(text, index)
 	i := start
@@ -2350,6 +3059,11 @@ text_box_indent_selection :: proc(box: ^TextBox, unindent: bool) {
 				box.selection_anchor = box.cursor_byte
 			}
 
+			return
+		}
+
+		if !box.tab_spaces {
+			text_box_insert(box, "\t")
 			return
 		}
 
@@ -2411,8 +3125,12 @@ text_box_indent_selection :: proc(box: ^TextBox, unindent: bool) {
 
 			_ = strings.write_string(&builder, box.text[position + remove:line_end])
 		} else {
-			for _ in 0 ..< max(box.tab_size, 1) {
-				_ = strings.write_byte(&builder, ' ')
+			if !box.tab_spaces {
+				_ = strings.write_byte(&builder, '\t')
+			} else {
+				for _ in 0 ..< max(box.tab_size, 1) {
+					_ = strings.write_byte(&builder, ' ')
+				}
 			}
 
 			_ = strings.write_string(&builder, box.text[position:line_end])
@@ -2568,13 +3286,14 @@ text_box_insert_newline :: proc(box: ^TextBox) {
 
 	if len(before) > 0 {
 		last := before[len(before) - 1]
+		highlighter := syntax_highlighter_for_box(box)
+		luau := highlighter == nil || highlighter.language == .Luau
 
 		increase_indent =
 			(last == '{' ||
 				last == '[' ||
 				last == '(' ||
-				strings.has_suffix(before, "then") ||
-				strings.has_suffix(before, "do"))
+				(luau && (strings.has_suffix(before, "then") || strings.has_suffix(before, "do"))))
 	}
 
 	builder := strings.builder_make()
@@ -2585,11 +3304,30 @@ text_box_insert_newline :: proc(box: ^TextBox) {
 	_ = strings.write_string(&builder, indentation)
 
 	if increase_indent {
-		for _ in 0 ..< max(box.tab_size, 1) {
-			_ = strings.write_byte(&builder, ' ')
+		if box.tab_spaces {
+			for _ in 0 ..< max(box.tab_size, 1) {
+				_ = strings.write_byte(&builder, ' ')
+			}
+		} else {
+			_ = strings.write_byte(&builder, '\t')
 		}
 	}
 
+	if box.auto_indent_brackets && increase_indent && box.cursor_byte < len(box.text) {
+		closer := box.text[box.cursor_byte]
+		last := before[len(before) - 1]
+		if (last == '{' && closer == '}') ||
+		   (last == '[' && closer == ']') ||
+		   (last == '(' && closer == ')') {
+			_ = strings.write_byte(&builder, '\n')
+			_ = strings.write_string(&builder, indentation)
+			text_box_insert(box, strings.to_string(builder))
+			box.cursor_byte -= len(indentation) + 1
+			box.selection_anchor = box.cursor_byte
+			text_box_restart_caret(box)
+			return
+		}
+	}
 	text_box_insert(box, strings.to_string(builder))
 }
 
@@ -2749,6 +3487,7 @@ TextBox_blur :: proc(box: ^TextBox, enter_pressed: bool = false) {
 
 	was_focused := box.focused
 	box.focused = false
+	gui_invalidate_draw(&box.object)
 	box.drag_selecting = false
 	box.caret_timer = 0
 	if was_focused &&
@@ -2808,60 +3547,81 @@ text_box_effectively_visible :: proc(box: ^TextBox) -> bool {
 
 
 text_box_measure_prefix :: proc(box: ^TextBox, byte_index: int) -> f32 {
-	return text_box_measure_range(box, 0, byte_index)
+	if box == nil {return 0}
+	position := clamp(byte_index, 0, len(box.text))
+	if position == 0 {return 0}
+	if position == len(box.text) && box.single_full_width_valid {
+		return box.single_full_width
+	}
+	width: f32
+	if !box.code_editor &&
+	   box.single_prefix_valid &&
+	   abs(position - box.single_prefix_byte) <= 4096 {
+		if position >= box.single_prefix_byte {
+			width =
+				box.single_prefix_width +
+				text_box_measure_range(box, box.single_prefix_byte, position)
+		} else {
+			width =
+				box.single_prefix_width -
+				text_box_measure_range(box, position, box.single_prefix_byte)
+		}
+		width = max(width, f32(0))
+	} else {
+		width = text_box_measure_range(box, 0, position)
+	}
+	if !box.code_editor {
+		box.single_prefix_byte = position
+		box.single_prefix_width = width
+		box.single_prefix_valid = true
+		if position == len(box.text) {
+			box.single_full_width = width
+			box.single_full_width_valid = true
+		}
+	}
+	return width
 }
-
 
 text_box_horizontal_offset :: proc(box: ^TextBox, width, text_width: f32) -> f32 {
 	spare := max(width - text_width, 0)
 	switch box.text_x_alignment {
-	case .Left: return 0
-	case .Center: return spare * 0.5
-	case .Right: return spare
+	case .Left:
+		return 0
+	case .Center:
+		return spare * 0.5
+	case .Right:
+		return spare
 	}
 	return 0
 }
 
 text_box_cursor_from_x :: proc(box: ^TextBox, mouse_x: f32) -> int {
-	if box == nil || len(box.text) == 0 {
-		return 0
-	}
-
+	if box == nil || len(box.text) == 0 {return 0}
 	padding: f32 = 6
-
 	offset: f32
 	if box.text_x_alignment != .Left {
-		offset = text_box_horizontal_offset(box, box.absolute_size.X - 2 * padding, text_box_measure_prefix(box, len(box.text)))
+		offset = text_box_horizontal_offset(
+			box,
+			box.absolute_size.X - 2 * padding,
+			text_box_measure_prefix(box, len(box.text)),
+		)
 	}
-	target := mouse_x - box.absolute_position.X - padding - offset + box.scroll_x
+	target := max(mouse_x - box.absolute_position.X - padding - offset + box.scroll_x, f32(0))
+	if target <= 0 {return 0}
+	if target >= text_box_measure_prefix(box, len(box.text)) {return len(box.text)}
 
-	target = max(target, f32(0))
-
-	previous_index := 0
-	previous_width: f32 = 0
-	index := 0
-
-	for index < len(box.text) {
-		next_index := text_box_utf8_next_boundary(box.text, index)
-
-		width := text_box_measure_prefix(box, next_index)
-
-		middle := (previous_width + width) * 0.5
-
-		if target < middle {
-			return previous_index
-		}
-
-		previous_index = next_index
-
-		previous_width = width
-
-		index = next_index
+	lo, hi := 0, len(box.text)
+	for text_box_utf8_next_boundary(box.text, lo) < hi {
+		middle := lo + (hi - lo) / 2
+		for middle > lo && (box.text[middle] & 0xC0) == 0x80 {middle -= 1}
+		if middle <= lo {middle = text_box_utf8_next_boundary(box.text, lo)}
+		if text_box_measure_prefix(box, middle) < target {lo = middle} else {hi = middle}
 	}
-
-	return len(box.text)
+	left := text_box_measure_prefix(box, lo)
+	right := text_box_measure_prefix(box, hi)
+	if target < (left + right) * 0.5 {return lo}
+	return hi
 }
-
 
 TextBox_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	box := new(TextBox)
@@ -2878,17 +3638,22 @@ TextBox_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Ob
 
 TextBox_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	box := cast(^TextBox)object
+	if text_box_highlighter_last_box == box {text_box_highlighter_last_box = nil}
 
 	if text_box_focused == box {
 		TextBox_blur(box)
 	}
 
-	if len(box.text) > 0 {
-		delete(box.text)
-	}
+	if len(box.text_buffer) > 0 {delete(box.text_buffer)}
+	delete(box.line_starts)
+	delete(box.line_widths)
+	delete(box.visual_lines)
 
 	if len(box.placeholder_text) > 0 {
 		delete(box.placeholder_text)
+	}
+	if len(box.find_query) > 0 {
+		delete(box.find_query)
 	}
 
 	text_box_clear_diagnostics(box)
@@ -3002,11 +3767,33 @@ TextBox_get :: proc(
 		return true
 
 	case "TextXAlignment":
-		return enums.Push_Item_By_Value(L, enum_registry, "TextXAlignment", i64(box.text_x_alignment))
+		return enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"TextXAlignment",
+			i64(box.text_x_alignment),
+		)
 	case "TextYAlignment":
-		return enums.Push_Item_By_Value(L, enum_registry, "TextYAlignment", i64(box.text_y_alignment))
+		return enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"TextYAlignment",
+			i64(box.text_y_alignment),
+		)
 	case "Text":
 		vm.PushString(L, box.text)
+		return true
+	case "TextBufferCapacity":
+		vm.PushNumber(L, f64(len(box.text_buffer)))
+		return true
+	case "TextByteLength":
+		vm.PushNumber(L, f64(len(box.text)))
+		return true
+	case "SyntaxHighlightMaxBytes":
+		vm.PushNumber(L, f64(box.syntax_highlight_max_bytes))
+		return true
+	case "MaxUndoEntries":
+		vm.PushNumber(L, f64(box.max_undo_entries))
 		return true
 
 	case "PlaceholderText":
@@ -3051,8 +3838,116 @@ TextBox_get :: proc(
 
 		return true
 
+	case "ShowIndentGuides":
+		vm.PushBoolean(L, box.show_indent_guides)
+		return true
+	case "HighlightActiveIndentGuide":
+		vm.PushBoolean(L, box.highlight_active_indent_guide)
+		return true
+	case "ShowWhitespace":
+		vm.PushBoolean(L, box.show_whitespace)
+		return true
+	case "ShowScrollbar":
+		vm.PushBoolean(L, box.show_scrollbar)
+		return true
+	case "ShowGutterSeparator":
+		vm.PushBoolean(L, box.show_gutter_separator)
+		return true
+	case "SmoothScrolling":
+		vm.PushBoolean(L, box.smooth_scrolling)
+		return true
+	case "SmartHome":
+		vm.PushBoolean(L, box.smart_home)
+		return true
+	case "SmartBackspace":
+		vm.PushBoolean(L, box.smart_backspace)
+		return true
+	case "AutoIndentBrackets":
+		vm.PushBoolean(L, box.auto_indent_brackets)
+		return true
+	case "FindVisible":
+		vm.PushBoolean(L, box.find_visible)
+		return true
+	case "FindQuery":
+		vm.PushString(L, box.find_query)
+		return true
+	case "FindCaseSensitive":
+		vm.PushBoolean(L, box.find_case_sensitive)
+		return true
+	case "ShowFindHighlights":
+		vm.PushBoolean(L, box.show_find_highlights)
+		return true
+	case "EditorPadding":
+		vm.PushNumber(L, f64(box.editor_padding))
+		return true
+	case "EditorLineHeight":
+		vm.PushNumber(L, f64(box.editor_line_height))
+		return true
+	case "MinimapWidth":
+		vm.PushNumber(L, f64(box.minimap_width))
+		return true
+	case "ScrollbarWidth":
+		vm.PushNumber(L, f64(box.scrollbar_width))
+		return true
+	case "MouseWheelScrollLines":
+		vm.PushNumber(L, f64(box.mouse_wheel_scroll_lines))
+		return true
+	case "ScrollX":
+		vm.PushNumber(L, f64(box.scroll_target_x))
+		return true
+	case "ScrollY":
+		vm.PushNumber(L, f64(box.scroll_target_y))
+		return true
+	case "FindMatchColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.find_match_color3)
+		return true
+	case "LineNumberColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.line_number_color3)
+		return true
+	case "CurrentLineColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.current_line_color3)
+		return true
+	case "IndentGuideColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.indent_guide_color3)
+		return true
+	case "BracketMatchColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.bracket_match_color3)
+		return true
+	case "GutterColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.gutter_color3)
+		return true
+	case "MinimapColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.minimap_color3)
+		return true
+	case "ScrollbarColor3":
+		if datatype_registry == nil {return false}
+		datatypes.Push_Color3(L, datatype_registry, box.scrollbar_color3)
+		return true
 	case "CodeEditor":
 		vm.PushBoolean(L, box.code_editor)
+		return true
+
+	case "RelativeLineNumbers":
+		vm.PushBoolean(L, box.relative_line_numbers)
+		return true
+
+	case "HighlightCurrentLine":
+		vm.PushBoolean(L, box.highlight_current_line)
+		return true
+
+	case "BracketMatching":
+		vm.PushBoolean(L, box.bracket_matching)
+		return true
+
+	case "TabSpaces":
+		vm.PushBoolean(L, box.tab_spaces)
 		return true
 
 	case "ShowLineNumbers":
@@ -3080,7 +3975,7 @@ TextBox_get :: proc(
 		return true
 
 	case "LineCount":
-		vm.PushNumber(L, f64(text_box_line_count(box.text)))
+		vm.PushNumber(L, f64(text_box_cached_line_count(box)))
 		return true
 
 	case "DiagnosticCount":
@@ -3159,7 +4054,13 @@ TextBox_get :: proc(
 
 		return true
 
-	case "CaptureFocus",
+	case "FindNext",
+	     "FindPrevious",
+	     "OpenFind",
+	     "CloseFind",
+	     "GoToLine",
+	     "PositionAtPoint",
+	     "CaptureFocus",
 	     "ReleaseFocus",
 	     "IsFocused",
 	     "SelectAll",
@@ -3186,8 +4087,8 @@ TextBox_set :: proc(
 ) -> bool {
 	box := cast(^TextBox)object
 
-	Gui_Layout_Mark_Dirty()
-
+	// Let inherited setters detect unchanged position and size before
+	// invalidating layout. Text metrics have their own invalidation below.
 	switch key {
 
 	case "KeyHandled":
@@ -3220,18 +4121,170 @@ TextBox_set :: proc(
 		return true
 
 	case "TextXAlignment":
-		box.text_x_alignment = enums.TextXAlignment(enums.Arg_Item(L, value_index, enum_registry, "TextXAlignment").value)
+		box.text_x_alignment = enums.TextXAlignment(
+			enums.Arg_Item(L, value_index, enum_registry, "TextXAlignment").value,
+		)
+		Gui_Render_Mark_Dirty()
 		return true
 	case "TextYAlignment":
-		box.text_y_alignment = enums.TextYAlignment(enums.Arg_Item(L, value_index, enum_registry, "TextYAlignment").value)
+		box.text_y_alignment = enums.TextYAlignment(
+			enums.Arg_Item(L, value_index, enum_registry, "TextYAlignment").value,
+		)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "TextBufferCapacity":
+		reserve := clamp(int(vm.ArgNumber(L, value_index)), 0, 256 * 1024 * 1024)
+		text_box_buffer_reserve(box, reserve)
+		return true
+	case "SyntaxHighlightMaxBytes":
+		box.syntax_highlight_max_bytes = clamp(
+			int(vm.ArgNumber(L, value_index)),
+			0,
+			128 * 1024 * 1024,
+		)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "MaxUndoEntries":
+		box.max_undo_entries = clamp(int(vm.ArgNumber(L, value_index)), 0, 100000)
+		text_box_undo_trim(box)
 		return true
 	case "Text":
 		text_box_set_text(box, vm.ArgString(L, value_index))
 
 		return true
 
+	case "ShowIndentGuides":
+		box.show_indent_guides = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "HighlightActiveIndentGuide":
+		box.highlight_active_indent_guide = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "ShowWhitespace":
+		box.show_whitespace = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "ShowScrollbar":
+		box.show_scrollbar = vm.ArgBoolean(L, value_index)
+		Gui_Layout_Mark_Dirty()
+		return true
+	case "ShowGutterSeparator":
+		box.show_gutter_separator = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "SmoothScrolling":
+		box.smooth_scrolling = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "SmartHome":
+		box.smart_home = vm.ArgBoolean(L, value_index)
+		return true
+	case "SmartBackspace":
+		box.smart_backspace = vm.ArgBoolean(L, value_index)
+		return true
+	case "AutoIndentBrackets":
+		box.auto_indent_brackets = vm.ArgBoolean(L, value_index)
+		return true
+	case "FindVisible":
+		if vm.ArgBoolean(L, value_index) {
+			box.find_visible = true
+			box.find_input_active = false
+			Gui_Render_Mark_Dirty()
+		} else {
+			text_box_close_find(box)
+		}
+		return true
+	case "FindQuery":
+		text_box_replace_string(&box.find_query, vm.ArgString(L, value_index))
+		box.find_cursor_byte = len(box.find_query)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "FindCaseSensitive":
+		box.find_case_sensitive = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "ShowFindHighlights":
+		box.show_find_highlights = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "EditorPadding":
+		box.editor_padding = clamp(f32(vm.ArgNumber(L, value_index)), f32(0), f32(48))
+		Gui_Layout_Mark_Dirty()
+		box.caret_needs_scroll = true
+		return true
+	case "EditorLineHeight":
+		box.editor_line_height = clamp(f32(vm.ArgNumber(L, value_index)), f32(0), f32(128))
+		box.content_measure_valid = false
+		Gui_Layout_Mark_Dirty()
+		box.caret_needs_scroll = true
+		return true
+	case "MinimapWidth":
+		box.minimap_width = clamp(f32(vm.ArgNumber(L, value_index)), f32(24), f32(200))
+		Gui_Layout_Mark_Dirty()
+		return true
+	case "ScrollbarWidth":
+		box.scrollbar_width = clamp(f32(vm.ArgNumber(L, value_index)), f32(2), f32(24))
+		Gui_Layout_Mark_Dirty()
+		return true
+	case "MouseWheelScrollLines":
+		box.mouse_wheel_scroll_lines = clamp(f32(vm.ArgNumber(L, value_index)), f32(0.1), f32(30))
+		return true
+	case "ScrollX":
+		box.scroll_target_x = max(f32(vm.ArgNumber(L, value_index)), f32(0))
+		Gui_Render_Mark_Dirty()
+		return true
+	case "ScrollY":
+		box.scroll_target_y = clamp(
+			f32(vm.ArgNumber(L, value_index)),
+			f32(0),
+			text_box_editor_max_scroll_y(box),
+		)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "FindMatchColor3":
+		if datatype_registry == nil {return false}
+		box.find_match_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "LineNumberColor3":
+		if datatype_registry == nil {return false}
+		box.line_number_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "CurrentLineColor3":
+		if datatype_registry == nil {return false}
+		box.current_line_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "IndentGuideColor3":
+		if datatype_registry == nil {return false}
+		box.indent_guide_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "BracketMatchColor3":
+		if datatype_registry == nil {return false}
+		box.bracket_match_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "GutterColor3":
+		if datatype_registry == nil {return false}
+		box.gutter_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "MinimapColor3":
+		if datatype_registry == nil {return false}
+		box.minimap_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "ScrollbarColor3":
+		if datatype_registry == nil {return false}
+		box.scrollbar_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
+		return true
 	case "CodeEditor":
 		box.code_editor = vm.ArgBoolean(L, value_index)
+		Gui_Layout_Mark_Dirty()
 
 		box.scroll_x = 0
 		box.scroll_target_x = 0
@@ -3241,16 +4294,44 @@ TextBox_set :: proc(
 
 		return true
 
+	case "RelativeLineNumbers":
+		box.relative_line_numbers = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+
+	case "HighlightCurrentLine":
+		box.highlight_current_line = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+
+	case "BracketMatching":
+		box.bracket_matching = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+
+	case "TabSpaces":
+		box.tab_spaces = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+
 	case "ShowLineNumbers":
 		box.show_line_numbers = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
 		return true
 
 	case "ShowMinimap":
 		box.show_minimap = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
 		return true
 
 	case "TabSize":
 		box.tab_size = clamp(int(vm.ArgNumber(L, value_index)), 1, 16)
+		box.visual_dirty = true
+		box.content_measure_valid = false
+		box.single_full_width_valid = false
+		box.single_prefix_valid = false
+		box.single_draw_valid = false
+		box.line_widths_valid = false
 		text_box_restart_caret(box)
 		Gui_Layout_Mark_Dirty()
 		return true
@@ -3265,8 +4346,11 @@ TextBox_set :: proc(
 
 	case "WordWrap":
 		box.wrap = vm.ArgBoolean(L, value_index)
+		Gui_Layout_Mark_Dirty()
 
 		if box.code_editor {
+			box.scroll_x = 0
+			box.scroll_target_x = 0
 			box.caret_needs_scroll = true
 		}
 
@@ -3274,6 +4358,7 @@ TextBox_set :: proc(
 
 	case "PlaceholderText":
 		text_box_replace_string(&box.placeholder_text, vm.ArgString(L, value_index))
+		Gui_Layout_Mark_Dirty()
 
 		return true
 
@@ -3294,6 +4379,7 @@ TextBox_set :: proc(
 			TextBox_Set_Font_Family(box, vm.ArgString(L, value_index))
 		}
 
+		Gui_Layout_Mark_Dirty()
 		return true
 
 	case "FontFace":
@@ -3302,11 +4388,22 @@ TextBox_set :: proc(
 		}
 
 		TextBox_Set_Font_Face(box, datatypes.Arg_Font(L, value_index, datatype_registry))
+		Gui_Layout_Mark_Dirty()
 
 		return true
 
 	case "TextSize":
-		box.text_size = max(f32(vm.ArgNumber(L, value_index)), f32(1))
+		size := max(f32(vm.ArgNumber(L, value_index)), f32(1))
+		if box.text_size != size {
+			box.text_size = size
+			box.visual_dirty = true
+			box.content_measure_valid = false
+			box.single_full_width_valid = false
+			box.single_prefix_valid = false
+			box.single_draw_valid = false
+			box.line_widths_valid = false
+			Gui_Layout_Mark_Dirty()
+		}
 
 		return true
 
@@ -3316,6 +4413,7 @@ TextBox_set :: proc(
 		}
 
 		box.text_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
 
 		return true
 
@@ -3325,11 +4423,13 @@ TextBox_set :: proc(
 		}
 
 		box.placeholder_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
 
 		return true
 
 	case "TextTransparency":
 		box.text_transparency = clamp(f32(vm.ArgNumber(L, value_index)), f32(0), f32(1))
+		Gui_Render_Mark_Dirty()
 
 		return true
 
@@ -3345,7 +4445,7 @@ TextBox_set :: proc(
 			window := sdl3.GetKeyboardFocus()
 
 			if window != nil {
-				if box.text_editable {
+				if box.text_editable || box.find_input_active {
 					_ = sdl3.StartTextInput(window)
 					TEXTBOX_IS_USED = true
 				} else {
@@ -3381,6 +4481,7 @@ TextBox_set :: proc(
 		}
 
 		box.caret_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
 
 		return true
 
@@ -3390,11 +4491,13 @@ TextBox_set :: proc(
 		}
 
 		box.selection_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
 
 		return true
 
 	case "SelectionTransparency":
 		box.selection_transparency = clamp(f32(vm.ArgNumber(L, value_index)), f32(0), f32(1))
+		Gui_Render_Mark_Dirty()
 
 		return true
 
@@ -3404,6 +4507,7 @@ TextBox_set :: proc(
 		}
 
 		box.focus_color3 = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		Gui_Render_Mark_Dirty()
 
 		return true
 	}
@@ -3426,6 +4530,22 @@ TextBox_namecall :: proc(
 
 	switch method {
 
+	case "FindNext":
+		vm.PushBoolean(L, text_box_find_next(box, false))
+		return 1, true
+	case "FindPrevious":
+		vm.PushBoolean(L, text_box_find_next(box, true))
+		return 1, true
+	case "OpenFind":
+		text_box_open_find(box)
+		return 0, true
+	case "CloseFind":
+		text_box_close_find(box)
+		return 0, true
+	case "GoToLine":
+		line := max(int(vm.ArgNumber(L, 2)), 1)
+		text_box_set_cursor(box, text_box_cached_line_start(box, line - 1), false)
+		return 0, true
 	case "CaptureFocus":
 		TextBox_focus(box)
 		return 0, true
@@ -3533,18 +4653,26 @@ TextBox_namecall :: proc(
 
 		return 1, true
 
+	case "PositionAtPoint":
+		x := box.absolute_position.X + f32(vm.ArgNumber(L, 2))
+		y := box.absolute_position.Y + f32(vm.ArgNumber(L, 3))
+		vm.PushNumber(
+			L,
+			f64(text_box_utf8_index_at(box.text, text_box_cursor_from_point(box, x, y, true)) + 1),
+		)
+		return 1, true
+
 	case "DiagnosticAtPoint":
 		x := f32(vm.ArgNumber(L, 2))
 		y := f32(vm.ArgNumber(L, 3))
 
 		line_height := text_box_line_height(box)
-		padding: f32 = 6
+		padding := box.editor_padding
 		gutter := text_box_gutter_width(box)
 
 		content_width := text_box_editor_content_width(box, box.absolute_size.X)
 
 		lines := text_box_visual_lines(box, content_width)
-		defer delete(lines)
 
 		index := int((y - padding + box.scroll_y) / line_height)
 
@@ -3606,7 +4734,7 @@ TextBox_namecall :: proc(
 
 		vm.NewTable(L, 2, 0)
 
-		vm.PushNumber(L, f64(text_box_line_number(box.text, box.cursor_byte)))
+		vm.PushNumber(L, f64(text_box_cached_line_number(box, box.cursor_byte)))
 		vm.SetField(L, -2, "line")
 
 		vm.PushNumber(L, f64(text_box_utf8_index_at(box.text, start) + 1))
@@ -3642,6 +4770,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 	dt := clamp(f32(ctx.delta_time), f32(0), f32(0.1))
 
+	ctx.gui_dynamic = ctx.gui_dynamic || box.focused || box.focus_animation > 0.001
 	if box.code_editor {
 		text_box_render_code_editor(box, rect, ctx, dt)
 		return
@@ -3656,10 +4785,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	focus_lerp := min(dt * 14, f32(1))
 
 	box.focus_animation += (focus_target - box.focus_animation) * focus_lerp
-	if box.focused || box.focus_animation > 0.001 {Gui_Render_Mark_Animated()}
-
 	if box.focused {
-		Gui_Render_Mark_Animated()
 		box.caret_timer += dt
 
 		for box.caret_timer >= 1.2 {
@@ -3714,18 +4840,24 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	scroll_lerp := min(dt * 20, f32(1))
 
 	box.scroll_x += (box.scroll_target_x - box.scroll_x) * scroll_lerp
+	ctx.gui_dynamic = ctx.gui_dynamic || abs(box.scroll_target_x - box.scroll_x) > 0.01
 
 
 	text_x := rect.x + padding
 	if box.text_x_alignment != .Left {
-		text_x += text_box_horizontal_offset(box, available_width, text_box_measure_text(box, display_text))
+		text_width := text_box_measure_text(box, display_text)
+		if len(box.text) > 0 {text_width = text_box_measure_prefix(box, len(box.text))}
+		text_x += text_box_horizontal_offset(box, available_width, text_width)
 	}
 	spare_height := max(rect.height - box.text_size, 0)
 	baseline := rect.y + box.text_size
 	switch box.text_y_alignment {
-	case .Top: baseline += min(padding, spare_height)
-	case .Center: baseline += (rect.height - box.text_size) * 0.5
-	case .Bottom: baseline += max(spare_height - padding, 0)
+	case .Top:
+		baseline += min(padding, spare_height)
+	case .Center:
+		baseline += (rect.height - box.text_size) * 0.5
+	case .Bottom:
+		baseline += max(spare_height - padding, 0)
 	}
 
 	guilib.save(surface)
@@ -3760,34 +4892,64 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 
 	if len(display_text) > 0 {
-		highlight: ^SyntaxHighlighter
+		draw_start := 0
+		draw_end := len(display_text)
+		draw_offset: f32 = 0
+		if len(box.text) > 8192 && len(display_text) == len(box.text) {
+			if box.focused {
+				if !box.single_draw_valid ||
+				   box.cursor_byte < box.single_draw_start + 1024 ||
+				   box.cursor_byte > box.single_draw_start + 6144 {
+					begin := max(box.cursor_byte - 4096, 0)
+					for begin > 0 && begin < len(box.text) && (box.text[begin] & 0xC0) == 0x80 {
+						begin -= 1
+					}
 
-		if len(box.text) > 0 {
+					box.single_draw_start = begin
+					box.single_draw_x = text_box_measure_prefix(box, begin)
+					box.single_draw_valid = true
+				}
+				draw_start = box.single_draw_start
+				draw_offset = box.single_draw_x
+			}
+			draw_end = min(draw_start + 8192, len(box.text))
+			for draw_end < len(box.text) && (box.text[draw_end] & 0xC0) == 0x80 {
+				draw_end -= 1
+			}
+		}
+		highlight: ^SyntaxHighlighter
+		if len(box.text) > 0 &&
+		   (box.syntax_highlight_max_bytes == 0 ||
+				   len(box.text) <= box.syntax_highlight_max_bytes) {
 			highlight = syntax_highlighter_for_box(box)
 		}
-
-		if highlight != nil {
+		if highlight != nil &&
+		   (box.highlight_ref != highlight ||
+				   box.highlight_revision != box.text_revision ||
+				   text_box_highlighter_last_box != box) {
 			syntax_highlighter_ensure(highlight, box.text)
-
+			box.highlight_ref = highlight
+			box.highlight_revision = box.text_revision
+			text_box_highlighter_last_box = box
+		}
+		if highlight != nil {
 			text_box_draw_syntax_line(
 				box,
 				highlight,
 				surface,
-				text_x,
+				text_x + draw_offset,
 				baseline,
-				0,
-				len(box.text),
+				draw_start,
+				draw_end,
 			)
 		} else {
-			text := text_box_display_cstring(display_text, box.tab_size)
-
+			text := text_box_display_cstring(display_text[draw_start:draw_end], box.tab_size)
 			defer delete(text)
-
 			guilib.drawText(
 				surface,
 				text,
 				guilib.TextParams {
-					x = text_x - box.scroll_x,
+					x = text_x + draw_offset - box.scroll_x,
 					y = baseline,
 					TextSize = box.text_size,
 					color = display_color,
@@ -3859,7 +5021,7 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst := cast(^TextBox)destination
 
-	text_box_replace_string(&dst.text, src.text)
+	text_box_buffer_set(dst, src.text)
 
 	text_box_replace_string(&dst.placeholder_text, src.placeholder_text)
 
@@ -3910,6 +5072,45 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.selection_transparency = src.selection_transparency
 
 	dst.focus_color3 = src.focus_color3
+	dst.code_editor = src.code_editor
+	dst.relative_line_numbers = src.relative_line_numbers
+	dst.highlight_current_line = src.highlight_current_line
+	dst.bracket_matching = src.bracket_matching
+	dst.tab_spaces = src.tab_spaces
+	dst.show_line_numbers = src.show_line_numbers
+	dst.show_minimap = src.show_minimap
+	dst.tab_size = src.tab_size
+	dst.auto_indent = src.auto_indent
+	dst.auto_close = src.auto_close
+	dst.wrap = src.wrap
+	dst.show_indent_guides = src.show_indent_guides
+	dst.highlight_active_indent_guide = src.highlight_active_indent_guide
+	dst.show_whitespace = src.show_whitespace
+	dst.show_scrollbar = src.show_scrollbar
+	dst.show_gutter_separator = src.show_gutter_separator
+	dst.smooth_scrolling = src.smooth_scrolling
+	dst.smart_home = src.smart_home
+	dst.smart_backspace = src.smart_backspace
+	dst.auto_indent_brackets = src.auto_indent_brackets
+	dst.find_visible = src.find_visible
+	dst.find_case_sensitive = src.find_case_sensitive
+	dst.show_find_highlights = src.show_find_highlights
+	text_box_replace_string(&dst.find_query, src.find_query)
+	dst.find_match_color3 = src.find_match_color3
+	dst.line_number_color3 = src.line_number_color3
+	dst.current_line_color3 = src.current_line_color3
+	dst.indent_guide_color3 = src.indent_guide_color3
+	dst.bracket_match_color3 = src.bracket_match_color3
+	dst.gutter_color3 = src.gutter_color3
+	dst.minimap_color3 = src.minimap_color3
+	dst.scrollbar_color3 = src.scrollbar_color3
+	dst.editor_padding = src.editor_padding
+	dst.editor_line_height = src.editor_line_height
+	dst.minimap_width = src.minimap_width
+	dst.scrollbar_width = src.scrollbar_width
+	dst.mouse_wheel_scroll_lines = src.mouse_wheel_scroll_lines
+	dst.syntax_highlight_max_bytes = src.syntax_highlight_max_bytes
+	dst.max_undo_entries = src.max_undo_entries
 
 	dst.focused = false
 
@@ -3926,6 +5127,11 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.scroll_x = 0
 
 	dst.scroll_target_x = 0
+	dst.scroll_y = 0
+	dst.scroll_target_y = 0
+	dst.find_input_active = false
+	dst.find_cursor_byte = len(dst.find_query)
+	dst.scrollbar_dragging = false
 }
 
 
@@ -4023,6 +5229,45 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 			return
 		}
 
+		if clicked.code_editor {
+			if text_box_editor_find_hit(clicked, point_x, point_y) {
+				clicked.find_input_active = true
+				clicked.find_cursor_byte = len(clicked.find_query)
+				if !clicked.text_editable {
+					window := sdl3.GetKeyboardFocus()
+					if window != nil {
+						_ = sdl3.StartTextInput(window)
+						TEXTBOX_IS_USED = true
+					}
+				}
+				gui_invalidate_draw(&clicked.object)
+				return
+			}
+			clicked.find_input_active = false
+			map_width := text_box_editor_minimap_width(clicked, clicked.absolute_size.X)
+			map_x := clicked.absolute_position.X + clicked.absolute_size.X - map_width
+			if map_width > 0 && point_x >= map_x {
+				text_box_editor_scroll_from_minimap(clicked, point_y)
+				return
+			}
+			if clicked.show_scrollbar &&
+			   text_box_editor_max_scroll_y(clicked) > 0 &&
+			   ((map_width > 0 && point_x >= map_x - clicked.scrollbar_width && point_x < map_x) ||
+					   (map_width == 0 &&
+							   point_x >=
+								   clicked.absolute_position.X +
+									   clicked.absolute_size.X -
+									   clicked.scrollbar_width)) {
+				thumb_y, thumb_height, _ := text_box_editor_scrollbar_thumb(clicked)
+				clicked.scrollbar_drag_offset = thumb_height * 0.5
+				if point_y >= thumb_y && point_y <= thumb_y + thumb_height {
+					clicked.scrollbar_drag_offset = point_y - thumb_y
+				}
+				clicked.scrollbar_dragging = true
+				text_box_editor_scrollbar_to_mouse(clicked, point_y)
+				return
+			}
+		}
 		cursor := text_box_cursor_from_point(clicked, point_x, point_y)
 
 		modifiers := sdl3.GetModState()
@@ -4043,9 +5288,12 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 	case .MOUSE_MOTION:
 		box := text_box_focused
 
-		if box == nil || !box.focused || !box.drag_selecting {
+		if box == nil || !box.focused {return}
+		if box.scrollbar_dragging {
+			text_box_editor_scrollbar_to_mouse(box, f32(event.motion.y))
 			return
 		}
+		if !box.drag_selecting {return}
 
 		point_x, point_y, _ := GuiObject_pointer_point(
 			registry,
@@ -4066,6 +5314,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 		if text_box_focused != nil {
 			text_box_focused.drag_selecting = false
+			text_box_focused.scrollbar_dragging = false
 		}
 
 
@@ -4082,7 +5331,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 		shift := .LSHIFT in modifiers || .RSHIFT in modifiers
 
-		padding: f32 = 6
+		padding := box.editor_padding
 
 		line_height := text_box_line_height(box)
 
@@ -4102,11 +5351,14 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 		}
 
 		if abs(delta_x) > 0.001 {
-			box.scroll_target_x = max(box.scroll_target_x - delta_x * box.text_size * 3, f32(0))
+			box.scroll_target_x = max(
+				box.scroll_target_x - delta_x * box.text_size * box.mouse_wheel_scroll_lines,
+				f32(0),
+			)
 		}
 
 		if abs(delta_y) > 0.001 {
-			box.scroll_target_y -= delta_y * line_height * 3
+			box.scroll_target_y -= delta_y * line_height * box.mouse_wheel_scroll_lines
 
 			max_scroll_y := max(
 				f32(text_box_visual_line_count(box, content_width)) * line_height - content_height,
@@ -4120,10 +5372,20 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 	case .TEXT_INPUT:
 		box := text_box_focused
 
-		if box == nil || !box.focused || !box.text_editable || event.text.text == nil {
+		if box == nil || !box.focused || event.text.text == nil {return}
+		if box.code_editor && box.find_input_active && box.find_visible {
+			input := string(event.text.text)
+			if len(box.find_query) + len(input) < 512 {
+				pos := clamp(box.find_cursor_byte, 0, len(box.find_query))
+				next := strings.concatenate({box.find_query[:pos], input, box.find_query[pos:]})
+				text_box_replace_string(&box.find_query, next)
+				box.find_cursor_byte = pos + len(input)
+				delete(next)
+				Gui_Render_Mark_Dirty()
+			}
 			return
 		}
-
+		if !box.text_editable {return}
 		text_box_handle_text(box, string(event.text.text))
 
 
@@ -4139,9 +5401,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 		text_box_fire_key_down(box, registry, event.key.scancode)
 
-		if box.key_handled {
-			return
-		}
+		if box.key_handled {return}
 
 		modifiers := event.key.mod
 
@@ -4152,8 +5412,69 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 			.LCTRL in modifiers || .RCTRL in modifiers || .LGUI in modifiers || .RGUI in modifiers
 
 
+		if box.code_editor && box.find_visible && box.find_input_active {
+			if event.key.scancode == .ESCAPE {
+				text_box_close_find(box)
+				return
+			}
+			if event.key.scancode == .RETURN || event.key.scancode == .KP_ENTER {
+				_ = text_box_find_next(box, shift)
+				return
+			}
+			if event.key.scancode == .BACKSPACE && box.find_cursor_byte > 0 {
+				last := text_box_utf8_prev_boundary(box.find_query, box.find_cursor_byte)
+				next := strings.concatenate(
+					{box.find_query[:last], box.find_query[box.find_cursor_byte:]},
+				)
+				text_box_replace_string(&box.find_query, next)
+				box.find_cursor_byte = last
+				delete(next)
+				Gui_Render_Mark_Dirty()
+				return
+			}
+			if event.key.scancode == .DELETE && box.find_cursor_byte < len(box.find_query) {
+				next_byte := text_box_utf8_next_boundary(box.find_query, box.find_cursor_byte)
+				next := strings.concatenate(
+					{box.find_query[:box.find_cursor_byte], box.find_query[next_byte:]},
+				)
+				text_box_replace_string(&box.find_query, next)
+				delete(next)
+				Gui_Render_Mark_Dirty()
+				return
+			}
+			#partial switch event.key.scancode {
+			case .LEFT:
+				box.find_cursor_byte = text_box_utf8_prev_boundary(
+					box.find_query,
+					box.find_cursor_byte,
+				)
+				Gui_Render_Mark_Dirty()
+				return
+			case .RIGHT:
+				box.find_cursor_byte = text_box_utf8_next_boundary(
+					box.find_query,
+					box.find_cursor_byte,
+				)
+				Gui_Render_Mark_Dirty()
+				return
+			case .HOME:
+				box.find_cursor_byte = 0
+				Gui_Render_Mark_Dirty()
+				return
+			case .END:
+				box.find_cursor_byte = len(box.find_query)
+				Gui_Render_Mark_Dirty()
+				return
+			case:
+			}
+			if !shortcut {return}
+		}
+
 		if shortcut {
 			#partial switch event.key.scancode {
+			case .F:
+				if box.code_editor {text_box_open_find(box)}
+				return
 
 			case .A:
 				text_box_select_all(box)
@@ -4219,6 +5540,18 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 		#partial switch event.key.scancode {
 
+		case .PAGEUP:
+			if box.code_editor {
+				amount := max(int(box.absolute_size.Y / text_box_line_height(box)) - 1, 1)
+				text_box_move_vertical(box, -1, shift, amount)
+			}
+
+		case .PAGEDOWN:
+			if box.code_editor {
+				amount := max(int(box.absolute_size.Y / text_box_line_height(box)) - 1, 1)
+				text_box_move_vertical(box, 1, shift, amount)
+			}
+
 		case .UP:
 			text_box_move_vertical(box, -1, shift)
 
@@ -4242,7 +5575,20 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 			if box.cursor_byte > 0 {
 				previous := text_box_utf8_prev_boundary(box.text, box.cursor_byte)
-
+				if shortcut && box.code_editor {
+					previous = text_box_word_left(box.text, box.cursor_byte)
+				} else if box.code_editor && box.smart_backspace && box.tab_spaces {
+					line_start := text_box_line_start(box.text, box.cursor_byte)
+					whitespace_only := true
+					for i := line_start; i < box.cursor_byte; i += 1 {
+						if box.text[i] != ' ' {whitespace_only = false; break}
+					}
+					if whitespace_only && box.cursor_byte - line_start > 0 {
+						column := box.cursor_byte - line_start
+						amount := (column - 1) % max(box.tab_size, 1) + 1
+						previous = box.cursor_byte - amount
+					}
+				}
 				text_box_erase(box, previous, box.cursor_byte)
 			}
 
@@ -4258,7 +5604,9 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 			if box.cursor_byte < len(box.text) {
 				next := text_box_utf8_next_boundary(box.text, box.cursor_byte)
-
+				if shortcut && box.code_editor {
+					next = text_box_word_right(box.text, box.cursor_byte)
+				}
 				text_box_erase(box, box.cursor_byte, next)
 			}
 
@@ -4330,6 +5678,15 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 			if !shortcut && box.code_editor {
 				target = text_box_line_start(box.text, old_cursor)
+				if box.smart_home {
+					end := text_box_line_end(box.text, old_cursor)
+					first_nonspace := target
+					for first_nonspace < end &&
+					    (box.text[first_nonspace] == ' ' || box.text[first_nonspace] == '\t') {
+						first_nonspace += 1
+					}
+					if old_cursor != first_nonspace {target = first_nonspace}
+				}
 			}
 
 			if shift {
@@ -4382,7 +5739,11 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 
 		case .ESCAPE:
-			TextBox_blur(box)
+			if box.find_visible {
+				text_box_close_find(box)
+			} else {
+				TextBox_blur(box)
+			}
 		}
 	}
 }
@@ -4400,6 +5761,10 @@ Register_TextBox :: proc(registry: ^Registry) {
 		clone = TextBox_clone,
 		properties = []string {
 			"Text",
+			"TextBufferCapacity",
+			"TextByteLength",
+			"MaxUndoEntries",
+			"SyntaxHighlightMaxBytes",
 			"Font",
 			"FontFace",
 			"PlaceholderText",
@@ -4418,12 +5783,44 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"SelectionTransparency",
 			"FocusColor3",
 			"CodeEditor",
+			"RelativeLineNumbers",
+			"HighlightCurrentLine",
+			"BracketMatching",
+			"TabSpaces",
 			"ShowLineNumbers",
 			"ShowMinimap",
 			"TabSize",
 			"AutoIndent",
 			"AutoClose",
 			"WordWrap",
+			"ShowIndentGuides",
+			"HighlightActiveIndentGuide",
+			"ShowWhitespace",
+			"ShowScrollbar",
+			"ShowGutterSeparator",
+			"SmoothScrolling",
+			"SmartHome",
+			"SmartBackspace",
+			"AutoIndentBrackets",
+			"FindVisible",
+			"FindQuery",
+			"FindCaseSensitive",
+			"ShowFindHighlights",
+			"EditorPadding",
+			"EditorLineHeight",
+			"MinimapWidth",
+			"ScrollbarWidth",
+			"MouseWheelScrollLines",
+			"ScrollX",
+			"ScrollY",
+			"FindMatchColor3",
+			"LineNumberColor3",
+			"CurrentLineColor3",
+			"IndentGuideColor3",
+			"BracketMatchColor3",
+			"GutterColor3",
+			"MinimapColor3",
+			"ScrollbarColor3",
 			"SelectedText",
 			"LineCount",
 			"DiagnosticCount",
@@ -4434,6 +5831,11 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"KeyHandled",
 		},
 		methods = []string {
+			"FindNext",
+			"FindPrevious",
+			"OpenFind",
+			"CloseFind",
+			"GoToLine",
 			"CaptureFocus",
 			"ReleaseFocus",
 			"IsFocused",
@@ -4449,6 +5851,7 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"SetDiagnostics",
 			"ClearDiagnostics",
 			"DiagnosticAtCursor",
+			"PositionAtPoint",
 			"DiagnosticAtPoint",
 		},
 		events = []string{"FocusLost", "TextChanged", "KeyDown"},

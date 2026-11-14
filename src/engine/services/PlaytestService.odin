@@ -12,6 +12,7 @@ import serializer "../serializer"
 import vm "../vm"
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:time"
 
@@ -403,6 +404,8 @@ Playtest_Launch :: struct {
 	address:  string,
 	port:     u16,
 	headless: bool,
+	client_headless: bool,
+	pause_on_error: bool,
 }
 
 playtest_default_launch :: proc(mode: Playtest_Session_Mode) -> Playtest_Launch {
@@ -414,6 +417,17 @@ playtest_default_launch :: proc(mode: Playtest_Session_Mode) -> Playtest_Launch 
 	}
 }
 
+
+playtest_command :: proc(args: []string, launch: Playtest_Launch, client := true) -> []string {
+	command := args
+	if client && launch.client_headless {
+		command = slice.concatenate([][]string{command, {"--headless"}}, context.temp_allocator)
+	}
+	if launch.pause_on_error {
+		command = slice.concatenate([][]string{command, {"--pause-on-error"}}, context.temp_allocator)
+	}
+	return command
+}
 
 playtest_owns_map :: proc(mode: Playtest_Session_Mode) -> bool {
 	return mode != .Client_Only
@@ -605,8 +619,7 @@ playtest_launch :: proc(
 
 	switch launch.mode {
 	case .Singleplayer:
-		process, stderr_pipe, failure, failed := playtest_spawn(
-			[]string {
+		command := []string {
 				executable,
 				"--singleplayer",
 				"--playtest-host",
@@ -614,8 +627,8 @@ playtest_launch :: proc(
 				path,
 				"--username",
 				"SinglePlayer",
-			},
-		)
+		}
+		process, stderr_pipe, failure, failed := playtest_spawn(playtest_command(command, launch))
 		if failed {
 			playtest_abandon_map(service, path, map_owned)
 			playtest_set_error(service, failure)
@@ -652,7 +665,7 @@ playtest_launch :: proc(
 				port,
 			}
 		}
-		process, stderr_pipe, failure, failed := playtest_spawn(command)
+		process, stderr_pipe, failure, failed := playtest_spawn(playtest_command(command, launch, false))
 		if failed {
 			playtest_abandon_map(service, path, map_owned)
 			playtest_set_error(service, failure)
@@ -663,7 +676,7 @@ playtest_launch :: proc(
 
 	case .Client_Only:
 		process, stderr_pipe, failure, failed := playtest_spawn(
-			[]string {
+			playtest_command([]string {
 				executable,
 				"--client",
 				"--playtest-host",
@@ -671,7 +684,7 @@ playtest_launch :: proc(
 				launch.address,
 				"--port",
 				port,
-			},
+			}, launch),
 		)
 		if failed {
 			playtest_abandon_map(service, path, map_owned)
@@ -685,7 +698,6 @@ playtest_launch :: proc(
 		server_command := []string {
 			executable,
 			"--server",
-			"--window",
 			"--playtest-host",
 			"--map",
 			path,
@@ -694,8 +706,9 @@ playtest_launch :: proc(
 			"--port",
 			port,
 		}
+		if !launch.headless {server_command = slice.concatenate([][]string{server_command, {"--window"}}, context.temp_allocator)}
 		server_process, server_stderr, server_failure, server_failed := playtest_spawn(
-			server_command,
+			playtest_command(server_command, launch, false),
 		)
 		if server_failed {
 			playtest_abandon_map(service, path, map_owned)
@@ -706,7 +719,7 @@ playtest_launch :: proc(
 
 
 		client_process, client_stderr, client_failure, client_failed := playtest_spawn(
-			[]string {
+			playtest_command([]string {
 				executable,
 				"--client",
 				"--playtest-host",
@@ -714,7 +727,7 @@ playtest_launch :: proc(
 				launch.address,
 				"--port",
 				port,
-			},
+			}, launch),
 		)
 		if client_failed {
 
@@ -847,6 +860,9 @@ playtest_namecall :: proc(
 		if vm.ArgOptionalBoolean(L, 3, false) {
 			launch.mode = .Singleplayer
 		}
+		launch.headless = vm.ArgOptionalBoolean(L, 4, false)
+		launch.client_headless = vm.ArgOptionalBoolean(L, 5, false)
+		launch.pause_on_error = vm.ArgOptionalBoolean(L, 6, false)
 		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
 		return playtest_launch(L, service, launch)
 
@@ -854,6 +870,7 @@ playtest_namecall :: proc(
 		launch := playtest_default_launch(.Server_Only)
 		launch.map_path = vm.ArgOptionalString(L, 2)
 		launch.headless = vm.ArgOptionalBoolean(L, 3, true)
+		launch.pause_on_error = vm.ArgOptionalBoolean(L, 4, false)
 		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
 		return playtest_launch(L, service, launch)
 
@@ -869,11 +886,15 @@ playtest_namecall :: proc(
 				true
 		}
 		launch.port = u16(i64(port_number))
+		launch.client_headless = vm.ArgOptionalBoolean(L, 4, false)
+		launch.pause_on_error = vm.ArgOptionalBoolean(L, 5, false)
 		return playtest_launch(L, service, launch)
 
 	case "StartSinglePlayer":
 		launch := playtest_default_launch(.Singleplayer)
 		launch.map_path = vm.ArgOptionalString(L, 2)
+		launch.client_headless = vm.ArgOptionalBoolean(L, 3, false)
+		launch.pause_on_error = vm.ArgOptionalBoolean(L, 4, false)
 		if !playtest_check_map_path(L, method, launch.map_path) {return 1, true}
 		return playtest_launch(L, service, launch)
 

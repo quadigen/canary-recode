@@ -227,7 +227,8 @@ DEFAULT_ENUMS = {
 PROP_RENAMES = {"size": "Size", "Color3uint8": "Color"}
 REFERENCE_PROPERTIES = {
     **{cls: {"Attachment0": "Attachment0", "Attachment1": "Attachment1"}
-       for cls in ("HingeConstraint", "RopeConstraint", "SpringConstraint")},
+       for cls in ("BallSocketConstraint", "HingeConstraint", "PrismaticConstraint",
+                   "RodConstraint", "RopeConstraint", "SpringConstraint")},
     "WeldConstraint": {"Part0Internal": "Part0", "Part1Internal": "Part1",
                        "Part0": "Part0", "Part1": "Part1"},
 }
@@ -309,6 +310,7 @@ EditableMesh Folder Frame GroundDetector GuiButton GuiObject Handles Highlight H
 ImageButton ImageLabel InputObject IntConstrainedValue IntValue Light LocalScript
 MeshPart Model ModuleScript MovementController NumberRangeValue NumberSequenceValue
 UnionOperation NegateOperation IntersectOperation HingeConstraint WeldConstraint RopeConstraint SpringConstraint
+BallSocketConstraint PrismaticConstraint RodConstraint
 NumberValue ObjectValue Part PointLight PostProcessShader RayValue RemoteEvent
 RemoteFunction RotationController SSAOEffect ScreenGui Script ScrollingFrame Sound
 SpotLight StarterCharacterScripts StateMachine StringValue SunRaysEffect

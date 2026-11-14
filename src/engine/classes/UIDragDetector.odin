@@ -251,6 +251,7 @@ ui_drag_detector_update :: proc(d: ^UIDragDetector, gui: ^GuiObject, x, y: f32) 
 	}
 
 	Gui_Layout_Mark_Dirty()
+	gui_invalidate_draw(&gui.object)
 	surfacegui_mark_dirty_for(&gui.object)
 }
 

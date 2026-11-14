@@ -120,6 +120,9 @@ local function checkOpening()
 end
 
 checkOpening()
+ring.Anchored = false
+checkOpening()
+ring.Anchored = true
 ring.CollisionFidelity = Enum.CollisionFidelity.Hull
 assert(ray(30, 0).Instance == ring)
 ring.CollisionFidelity = Enum.CollisionFidelity.TriangleMesh

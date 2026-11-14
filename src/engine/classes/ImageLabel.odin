@@ -499,6 +499,9 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 	image_label := cast(^ImageLabel)object
+	if kineffi.Kine_Skia_Image_IsAnimating(image_label.stored_image) != 0 {
+		ctx.gui_dynamic = true
+	}
 	image_shadow := false
 	should_draw := true
 	blur_sigma: f32 = 0

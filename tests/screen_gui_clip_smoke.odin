@@ -1,6 +1,7 @@
 package main
 
 import kineffi "../src/engine/bindings"
+import classes "../src/engine/classes"
 import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
@@ -258,5 +259,170 @@ assert(button.TextBounds.X > 0 and button.TextBounds.X < buttonWidth)
 	expect_pixel(surface, 75, 20, true, true)
 	expect_pixel(surface, 50, 20, false, false)
 
+	verify_panel_cache(&environment, &script_vm, &renderer_object, surface)
+	verify_cached_text(&environment, &script_vm, &renderer_object, surface)
 	fmt.println("SCREEN_GUI_CLIP_SMOKE_PASSED")
+}
+
+verify_panel_cache :: proc(
+	environment: ^engine_runtime.Environment,
+	script_vm: ^vm.VM,
+	renderer_object: ^renderer.RendererObject,
+	surface: ^kineffi.KineSkiaSurface,
+) {
+	renderer_object.Cache2D = true
+	ok, err := vm.Run(script_vm, `
+local root = Instance.new("ScreenGui", game.StarterGui)
+root.DisplayOrder = 100000
+root.Size = Vector2.new(300, 300)
+root.RenderOffset = Vector2.new(20, 10)
+cachePanel = Instance.new("Frame", root)
+cachePanel.Name = "CachePanel"
+cachePanel.Position = UDim2.fromOffset(135, 25)
+cachePanel.Size = UDim2.fromOffset(60, 60)
+cachePanel.BackgroundColor3 = Color3.new(1, 0, 0)
+cacheButton = Instance.new("TextButton", cachePanel)
+cacheButton.Position = UDim2.fromOffset(4, 4)
+cacheButton.Size = UDim2.fromOffset(20, 20)
+cacheButton.Text = ""
+cacheButton.BackgroundColor3 = Color3.new(0.5, 0, 0)
+cacheScroll = Instance.new("ScrollingFrame", root)
+cacheScroll.Position = UDim2.fromOffset(100, 25)
+cacheScroll.Size = UDim2.fromOffset(40, 40)
+cacheScroll.CanvasSize = UDim2.fromOffset(40, 120)
+cacheScroll.ScrollBarThickness = 0
+cacheRow = Instance.new("Frame", cacheScroll)
+cacheRow.Position = UDim2.fromOffset(5, 55)
+cacheRow.Size = UDim2.fromOffset(20, 20)
+cacheRow.BackgroundColor3 = Color3.new(1, 0, 0)
+cacheLabel = Instance.new("TextLabel", root)
+cacheLabel.Position = UDim2.fromOffset(180, 25)
+cacheLabel.Text = "First"
+`, "panel_cache_setup")
+	assert(ok, err)
+
+	paint :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM, surface: ^kineffi.KineSkiaSurface) {
+		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
+		engine_runtime.Environment_Render_2D(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+		engine_runtime.Environment_Render_Overlay(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+	}
+	for _ in 0 ..< 4 {paint(environment, script_vm, surface)}
+
+	panel: ^classes.GuiObject
+	for object in classes.Find_Class(&environment.classes, "Frame").instances {
+		if object.name == "CachePanel" {panel = cast(^classes.GuiObject)object; break}
+	}
+	assert(panel != nil && panel.draw_picture != nil, "stable panel did not record")
+	picture := panel.draw_picture
+	ok, err = vm.Run(script_vm, `cacheLabel.Text = "Second"`, "panel_cache_unrelated_text")
+	assert(ok, err)
+	paint(environment, script_vm, surface)
+	assert(panel.draw_picture == picture, "unrelated text invalidated the panel")
+	expect_pixel(surface, 190, 80, true, true)
+
+	r, g, b, a: u8
+	kineffi.Kine_Skia_Surface_GetPixel(surface, 165, 45, &r, &g, &b, &a)
+	idle_red := r
+	event: sdl3.Event
+	event.type = .MOUSE_MOTION
+	event.motion.x, event.motion.y = 165, 45
+	engine_runtime.Environment_SetEvent(environment, script_vm, event)
+	paint(environment, script_vm, surface)
+	kineffi.Kine_Skia_Surface_GetPixel(surface, 165, 45, &r, &g, &b, &a)
+	assert(r > idle_red, "hover did not redraw the cached button")
+
+	expect_pixel(surface, 130, 54, false, true)
+	ok, err = vm.Run(script_vm, `
+cacheScroll.CanvasPosition = Vector2.new(0, 40)
+cachePanel.Position = UDim2.fromOffset(135, 120)
+cacheButton.BackgroundColor3 = Color3.new(1, 0, 0)
+`, "panel_cache_move_scroll_edit")
+	assert(ok, err)
+	paint(environment, script_vm, surface)
+	expect_pixel(surface, 130, 54, true, true)
+	expect_pixel(surface, 190, 80, false, false)
+	expect_pixel(surface, 190, 175, true, true)
+}
+
+verify_cached_text :: proc(
+	environment: ^engine_runtime.Environment,
+	script_vm: ^vm.VM,
+	renderer_object: ^renderer.RendererObject,
+	surface: ^kineffi.KineSkiaSurface,
+) {
+	ok, err := vm.Run(script_vm, `
+local screen = Instance.new("ScreenGui", game.StarterGui)
+screen.DisplayOrder = 100001
+screen.RenderOffset = Vector2.new(12, 228)
+screen.Size = Vector2.new(270, 65)
+local group = Instance.new("CanvasGroup", screen)
+group.Size = UDim2.fromScale(1, 1)
+group.BackgroundColor3 = Color3.new(0, 0, 0)
+group.GroupTransparency = 0.25
+recordedText = Instance.new("TextLabel", group)
+recordedText.Position = UDim2.fromOffset(5, 5)
+recordedText.Size = UDim2.fromOffset(75, 50)
+recordedText.BackgroundTransparency = 1
+recordedText.TextColor3 = Color3.new(1, 1, 1)
+recordedText.TextStrokeTransparency = 0
+recordedText.TextStrokeColor3 = Color3.new(0.3, 0.6, 1)
+recordedText.TextSize = 20
+recordedText.Text = "Record"
+recordedText.Rotation = 8
+local button = Instance.new("TextButton", group)
+button.Position = UDim2.fromOffset(88, 5)
+button.Size = UDim2.fromOffset(75, 50)
+button.BackgroundTransparency = 1
+button.TextColor3 = Color3.new(1, 1, 1)
+button.TextSize = 20
+button.Text = "Button"
+local box = Instance.new("TextBox", group)
+box.Position = UDim2.fromOffset(168, 5)
+box.Size = UDim2.fromOffset(100, 50)
+box.BackgroundTransparency = 1
+box.TextColor3 = Color3.new(1, 1, 1)
+box.TextSize = 20
+box.Text = "TextBox"
+`, "cached_text_setup")
+	assert(ok, err)
+
+	Text_Pixels :: [65][270][4]u8
+	capture :: proc(
+		environment: ^engine_runtime.Environment,
+		script_vm: ^vm.VM,
+		surface: ^kineffi.KineSkiaSurface,
+	) -> Text_Pixels {
+		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
+		engine_runtime.Environment_Render_2D(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+		engine_runtime.Environment_Render_Overlay(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+		pixels: Text_Pixels
+		for &row, y in pixels {
+			for &rgba, x in row {
+				kineffi.Kine_Skia_Surface_GetPixel(
+					surface, i32(x) + 12, i32(y) + 228, &rgba[0], &rgba[1], &rgba[2], &rgba[3],
+				)
+			}
+		}
+		return pixels
+	}
+
+	renderer_object.Cache2D = false
+	expected := capture(environment, script_vm, surface)
+	renderer_object.Cache2D = true
+	for frame in 0 ..< 4 {
+		assert(
+			capture(environment, script_vm, surface) == expected,
+			fmt.tprintf("cached text pixels changed on frame %d", frame),
+		)
+	}
+
+	ok, err = vm.Run(script_vm, `recordedText.Text = "Changed"`, "cached_text_update")
+	assert(ok, err)
+	renderer_object.Cache2D = false
+	updated := capture(environment, script_vm, surface)
+	assert(updated != expected, "text update did not affect pixels")
+	renderer_object.Cache2D = true
+	for _ in 0 ..< 4 {
+		assert(capture(environment, script_vm, surface) == updated, "cached text update did not persist")
+	}
 }

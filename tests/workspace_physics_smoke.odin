@@ -153,6 +153,11 @@ hinge.Attachment0 = Instance.new("Attachment", selected)
 hinge.Attachment1 = Instance.new("Attachment", outsider)
 workspace:JoinToOutsiders(selection, Enum.JointCreationMode.Surface)
 assert(selected:FindFirstChildOfClass("WeldConstraint") == nil)
+-- The hinge also separates the outsider from the parts welded to selected.
+outsider.Position = vector.create(104, 0, 0)
+workspace:JoinToOutsiders({selectedNeighbor}, Enum.JointCreationMode.Surface)
+assert(#selectedNeighbor:GetChildren() == 1, "a weld through the hinge's rigid side locks the hinge")
+outsider.Position = vector.create(98, 0, 0)
 hinge.Enabled = false
 workspace:JoinToOutsiders(selection, Enum.JointCreationMode.Surface)
 assert(selected:FindFirstChildOfClass("WeldConstraint").Part1 == outsider)

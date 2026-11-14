@@ -18,6 +18,7 @@ main :: proc() {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
+	profiling.set_collection_enabled(true)
 
 	run_script(
 		&script_vm,

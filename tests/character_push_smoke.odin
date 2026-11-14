@@ -76,6 +76,21 @@ main :: proc() {
 		datatypes.Vector3{8, 1.5, 0},
 		false,
 	)
+	extension := make_part(
+		registry,
+		&script_vm,
+		workspace,
+		"Extension",
+		datatypes.Vector3{2, 2, 2},
+		datatypes.Vector3{8, 1.5, 2},
+		false,
+	)
+	weld_object, weld_ok := classes.Push_New(registry, &script_vm, "WeldConstraint")
+	assert(weld_ok)
+	vm.Pop(script_vm.L)
+	weld := cast(^classes.WeldConstraint)weld_object
+	weld.part0, weld.part1 = &crate.object, &extension.object
+	classes.Set_Parent(weld_object, &crate.object)
 
 	// The character. The root part is sized so its capsule is 2 studs tall and
 	// stands on the floor at y = 1.5, and it starts at x = -8 walking towards
@@ -117,7 +132,13 @@ main :: proc() {
 	crate_start := crate.cframe.x
 
 	// Walk into the crate long enough to cover the gap and push it along.
-	step_world(&environment, &script_vm, motor, controller, physics, 180)
+	for _ in 0..<180 {
+		step_world(&environment, &script_vm, motor, controller, physics, 1)
+		relative := datatypes.CFrame_Mul_CFrame(datatypes.CFrame_Inverse(crate.cframe), extension.cframe)
+		drift := datatypes.Vec3_Magnitude(datatypes.Vector3{relative.x, relative.y, relative.z - 2})
+		assert(drift < 0.003, "character contact distorted the weld")
+		assert(min(relative.r00, relative.r11, relative.r22) > 0.999, "character contact rotated the weld")
+	}
 
 	pushed := crate.cframe.x - crate_start
 	travelled := root.cframe.x + 8

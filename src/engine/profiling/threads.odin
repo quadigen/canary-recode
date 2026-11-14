@@ -18,6 +18,7 @@ Thread_Row :: struct {
 }
 
 Thread_Frame_Data :: struct {
+	serial:            u64,
 	rows:              [dynamic]Thread_Row,
 	total_alloc_bytes: u64,
 }
@@ -29,7 +30,7 @@ Thread_Record :: struct {
 	alive:              bool,
 	name:               string,
 	script:             string,
-	death_serial:       u64,
+	last_sample_serial: u64,
 	cpu_ns:             u64,
 	total_cpu_ns:       u64,
 	resumes:            u64,
@@ -86,6 +87,7 @@ thread_history: [dynamic]Thread_Frame_Data
 script_totals: [dynamic]Script_Total
 thread_frame_serial: u64
 retired_pending: int
+last_retired_sweep: u64
 next_thread_id: u64 = 1
 thread_state_ready: bool
 thread_tracking_on: bool = true
@@ -110,7 +112,6 @@ tracking_userthread :: proc "c" (parent, thread: ^luauh.lua_State) {
 			if rec, ok := record_by_ptr[thread]; ok {
 				rec.alive = false
 				rec.L = nil
-				rec.death_serial = thread_frame_serial + 1
 				retired_pending += 1
 				delete_key(&record_by_ptr, thread)
 			}
@@ -324,6 +325,7 @@ reset_thread_state :: proc() {
 	}
 	clear(&script_totals)
 	thread_frame_serial = 0
+	last_retired_sweep = 0
 	next_thread_id = 1
 	thread_tracking_on = true
 }
@@ -332,8 +334,9 @@ reset_thread_state :: proc() {
 thread_frame_flush :: proc() {
 	context = tracy.DefaultContext()
 	thread_frame_serial += 1
-	frame := Thread_Frame_Data{}
+	frame := Thread_Frame_Data{serial = thread_frame_serial}
 	for record in frame_dirty_records {
+		record.last_sample_serial = frame.serial
 		append(
 			&frame.rows,
 			Thread_Row {
@@ -365,6 +368,7 @@ thread_frame_flush :: proc() {
 
 
 thread_frame_discard :: proc() {
+	thread_frame_serial += 1
 	for record in frame_dirty_records {
 		record.frame_cpu_ns = 0
 		record.frame_total_cpu_ns = 0
@@ -374,15 +378,22 @@ thread_frame_discard :: proc() {
 		record.frame_touched = false
 	}
 	clear(&frame_dirty_records)
+	sweep_dead_thread_records()
 }
 
 
 sweep_dead_thread_records :: proc() {
-	if retired_pending == 0 || len(thread_history) == 0 {
+	// Retire in batches. A busy editor creates short-lived signal threads
+	// every frame, and scanning their full history each time is expensive.
+	if retired_pending == 0 || thread_frame_serial - last_retired_sweep < 32 {
 		return
 	}
+	last_retired_sweep = thread_frame_serial
 	context = tracy.DefaultContext()
-	oldest := thread_frame_serial - u64(len(thread_history)) + 1
+	oldest := thread_frame_serial + 1
+	if len(thread_history) > 0 {
+		oldest = thread_history[0].serial
+	}
 	write := 0
 	for read in 0 ..< len(thread_records) {
 		record := thread_records[read]
@@ -390,8 +401,7 @@ sweep_dead_thread_records :: proc() {
 			!record.alive &&
 			record.start_ns == 0 &&
 			record.live_bytes == 0 &&
-			record.death_serial != 0 &&
-			record.death_serial < oldest
+			record.last_sample_serial < oldest
 		if retired {
 			fold_into_script_totals(record)
 			if record.name != "" {

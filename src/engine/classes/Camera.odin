@@ -24,6 +24,8 @@ Camera :: struct {
 	move_speed:        f32,
 	mouse_sensitivity: f32,
 	mouse_captured:    bool,
+	mouse_look_active: bool,
+	input_enabled:     bool,
 	scroll_step:       f32,
 	pending_scroll:    f32,
 	orbit_distance:    f32,
@@ -49,6 +51,8 @@ Camera_Init :: proc() -> Camera {
 		move_speed = 10,
 		mouse_sensitivity = 0.003,
 		mouse_captured = false,
+		mouse_look_active = false,
+		input_enabled = true,
 		scroll_step = 5,
 		pending_scroll = 0,
 		orbit_distance = 12,
@@ -112,7 +116,12 @@ Camera_Sync_Angles_From_CFrame :: proc(camera: ^Camera) {
 }
 
 Camera_Release_Mouse :: proc(camera: ^Camera) {
-	if camera == nil || !camera.mouse_captured {
+	if camera == nil {
+		return
+	}
+
+	camera.mouse_look_active = false
+	if !camera.mouse_captured {
 		return
 	}
 
@@ -131,13 +140,18 @@ Camera_Update_Mouse_Look :: proc(camera: ^Camera, focused: bool) -> bool {
 	rotating := focused && .RIGHT in mouse_buttons
 
 	if rotating {
-		if !camera.mouse_captured {
+		if !camera.mouse_look_active {
+			camera.mouse_look_active = true
+
+			// Relative mode only hides the cursor. Some window systems refuse
+			// the grab (for example Wayland without pointer constraints), and
+			// SDL still reports motion deltas without it, so keep rotating and
+			// treat the capture as best effort. Only the first frame of the
+			// drag is discarded to avoid a jump from the pointer warp.
 			window := sdl3.GetMouseFocus()
 
 			if window != nil {
-				if sdl3.SetWindowRelativeMouseMode(window, true) {
-					camera.mouse_captured = true
-				}
+				camera.mouse_captured = sdl3.SetWindowRelativeMouseMode(window, true)
 			}
 
 			mouse_dx = 0
@@ -440,12 +454,24 @@ Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object)
 	}
 }
 
+// Camera input moves the camera without going through the property setters,
+// so the renderer's idle check cannot notice it on its own. Tell the 3D scene
+// it changed, otherwise the viewport keeps presenting the previous image.
+camera_mark_moved :: proc(camera: ^Camera, previous: datatypes.CFrame) {
+	if camera != nil && camera.CFrame != previous {
+		Render_3D_Mark_Dirty()
+	}
+}
+
 Camera_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	camera := cast(^Camera)object
 
 	if camera == nil || ctx == nil || ctx.renderer == nil || ctx.renderer.ActiveCamera != object {
 		return
 	}
+
+	previous_cframe := camera.CFrame
+	defer camera_mark_moved(camera, previous_cframe)
 
 	Camera_Sync_Viewport(camera, ctx.renderer)
 
@@ -454,7 +480,7 @@ Camera_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 
-	if camera.CameraType == .Scriptable {
+	if camera.CameraType == .Scriptable || !camera.input_enabled {
 		Camera_Release_Mouse(camera)
 		camera.pending_scroll = 0
 
@@ -537,6 +563,8 @@ Camera_clone :: proc(source: ^Object, destination: ^Object) {
 
 
 	dst.mouse_captured = false
+	dst.mouse_look_active = false
+	dst.input_enabled = src.input_enabled
 }
 
 Camera_Namecall :: proc(
@@ -599,6 +627,7 @@ Register_Camera :: proc(registry: ^Registry) {
 			"Pitch",
 			"Yaw",
 			"Sensitivity",
+			"InputEnabled",
 		},
 	)
 }
@@ -615,6 +644,8 @@ Camera_Get :: proc(
 	switch key {
 	case "FieldOfView":
 		vm.PushNumber(L, f64(camera.field_of_view))
+	case "InputEnabled":
+		vm.PushBoolean(L, camera.input_enabled)
 	case "Sensitivity":
 		vm.PushNumber(L, f64(camera.mouse_sensitivity))
 	case "CFrame":
@@ -771,6 +802,8 @@ Camera_Set :: proc(
 		camera.CFrame = datatypes.Arg_CFrame(L, index, types)
 
 		Camera_Sync_Angles_From_CFrame(camera)
+	case "InputEnabled":
+		camera.input_enabled = vm.ArgBoolean(L, index)
 	case "Sensitivity":
 		camera.mouse_sensitivity = f32(vm.ArgNumber(L, index))
 

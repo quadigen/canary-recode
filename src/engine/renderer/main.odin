@@ -44,6 +44,7 @@ when !KINE_RENDERER_GL {
 		KeyUp:             proc(scancode: sdl3.Scancode),
 		MouseClick:        proc(button: sdl3.MouseButtonEvent),
 		OnClose:           proc(user_data: rawptr),
+		CanClose:          proc(user_data: rawptr) -> bool,
 		Step:              proc(user_data: rawptr, delta_time: f32),
 		UserData:          rawptr,
 		Draw3D:            proc(
@@ -77,6 +78,7 @@ when !KINE_RENDERER_GL {
 		ViewportRect_Host: bool,
 		Cache2D:           bool,
 		Render3DCheck:     proc(user_data: rawptr) -> bool,
+		OverlayNeedsBackdrop: proc(user_data: rawptr) -> bool,
 		MouseScale:        [2]f32,
 		CurrentEvent:      ^sdl3.Event,
 		Window:            ^sdl3.Window,
@@ -293,7 +295,7 @@ when !KINE_RENDERER_GL {
 					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
-						running = false
+						if renderer.CanClose == nil || renderer.CanClose(renderer.UserData) {running = false}
 					case .KEY_DOWN:
 						if renderer.KeyDown != nil {
 							renderer.KeyDown(event.key.scancode)
@@ -429,7 +431,6 @@ when !KINE_RENDERER_GL {
 			}
 
 			// The compositor submits Skia before handing off to Filament or presenting.
-			base_skia_surface := renderer.SkiaSurface
 			renderer.SkiaSurface = nil
 			apply_viewport_rect(renderer)
 
@@ -455,9 +456,6 @@ when !KINE_RENDERER_GL {
 				} else {
 					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
 				}
-
-
-				base_skia_surface = nil
 			}
 
 			if renderer.DrawOverlay != nil {
@@ -470,30 +468,21 @@ when !KINE_RENDERER_GL {
 					overlay_surface = kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
 				}
 				if overlay_surface != nil {
-
-
-					// Snapshotting the base surface onto the overlay only makes
-					// sense when they are different surfaces. In the 2D path
-					// BeginOverlay reuses the base surface, and a self-snapshot
-					// forces Skia to copy-on-write the swapchain image in the
-					// middle of a frame, which loses the overlay and invalidates
-					// the image layout tracking.
-					if rendered_3d {
+					skia_overlay := cast(^kineffi.KineSkiaSurface)overlay_surface
+					needs_backdrop := overlay_surface != base_surface &&
+						(renderer.OverlayNeedsBackdrop == nil ||
+						 renderer.OverlayNeedsBackdrop(renderer.UserData))
+					if needs_backdrop {
 						// The overlay wraps the swapchain image after Filament has
 						// rendered the 3D scene. Snapshot it before UI draws so
 						// UIBackdrop effects can sample the scene behind them.
 						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
-							cast(^kineffi.KineSkiaSurface)overlay_surface,
-							cast(^kineffi.KineSkiaSurface)overlay_surface,
-						)
-					} else if base_skia_surface != nil && overlay_surface != base_skia_surface {
-						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
-							cast(^kineffi.KineSkiaSurface)overlay_surface,
-							cast(^kineffi.KineSkiaSurface)base_skia_surface,
+							skia_overlay,
+							skia_overlay if rendered_3d else cast(^kineffi.KineSkiaSurface)base_surface,
 						)
 					}
 
-					renderer.SkiaSurface = cast(^kineffi.KineSkiaSurface)overlay_surface
+					renderer.SkiaSurface = skia_overlay
 
 					renderer.DrawOverlay(
 						renderer.UserData,
@@ -503,6 +492,7 @@ when !KINE_RENDERER_GL {
 						delta_time,
 					)
 
+					if needs_backdrop {kineffi.Kine_Skia_Surface_ClearBackdrop(skia_overlay)}
 					renderer.SkiaSurface = nil
 				}
 			}

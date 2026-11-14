@@ -123,6 +123,11 @@ WeldConstraint_step :: proc(
 	constraint := kineffi.JPH_FixedConstraint_CreateFromIDs(system, &settings, id0, id1)
 	if constraint == nil {return}
 
+	// A kinematic character can drive contacts on one member of the assembly.
+	// Give the fixed joints enough iterations to propagate that load.
+	settings.base.numVelocityStepsOverride = 24
+	settings.base.numPositionStepsOverride = 12
+	kineffi.JPH_Constraint_ApplyBaseSettings(constraint, &settings.base)
 	kineffi.JPH_Constraint_AddRef(constraint)
 	kineffi.JPH_PhysicsSystem_AddConstraint(system, constraint)
 

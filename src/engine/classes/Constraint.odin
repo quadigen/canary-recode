@@ -4,6 +4,8 @@ import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:math"
+import "core:math/linalg"
 
 Constraint_Class := Class_Info {
 	name   = "Constraint",
@@ -28,6 +30,70 @@ Constraint_Step :: proc(
 Constraint_Step_Entry :: struct {
 	class: ^Class_Info,
 	step:  Constraint_Step,
+}
+
+Constraint_Frame :: struct {
+	body:         kineffi.JPH_BodyID,
+	position:     kineffi.JPH_Vec3,
+	axis, normal: [3]f32,
+}
+
+constraint_attachment_axes :: proc(
+	attachment: ^Attachment,
+) -> (
+	axis, normal: [3]f32,
+	valid: bool,
+) {
+	axis = {attachment.axis.x, attachment.axis.y, attachment.axis.z}
+	normal = {
+		attachment.secondary_axis.x,
+		attachment.secondary_axis.y,
+		attachment.secondary_axis.z,
+	}
+	axis_length := linalg.length(axis)
+	if !(axis_length > 0) || math.is_inf(axis_length) {return {}, {}, false}
+	axis /= axis_length
+	normal -= linalg.dot(normal, axis) * axis
+	normal_length := linalg.length(normal)
+	if normal_length < 1e-6 {
+		// Attachment axes can be edited independently in this engine.
+		reference := abs(axis.z) < 0.9 ? [3]f32{0, 0, 1} : [3]f32{0, 1, 0}
+		normal = reference - linalg.dot(reference, axis) * axis
+		normal_length = linalg.length(normal)
+	}
+	if !(normal_length > 0) || math.is_inf(normal_length) {return {}, {}, false}
+	normal /= normal_length
+
+	o := attachment.orientation
+	if math.is_nan(o.x) || math.is_inf(o.x) ||
+	   math.is_nan(o.y) || math.is_inf(o.y) ||
+	   math.is_nan(o.z) || math.is_inf(o.z) {return {}, {}, false}
+	q := linalg.quaternion_from_euler_angles(
+		f32(linalg.to_radians(o.y)),
+		f32(linalg.to_radians(o.x)),
+		f32(linalg.to_radians(o.z)),
+		.YXZ,
+	)
+	rotation := kineffi.JPH_Quat{q.x, q.y, q.z, q.w}
+	a := rotate_by_quat(rotation, {axis.x, axis.y, axis.z})
+	n := rotate_by_quat(rotation, {normal.x, normal.y, normal.z})
+	return {a.x, a.y, a.z}, {n.x, n.y, n.z}, true
+}
+
+constraint_frame :: proc(
+	object: ^Object,
+	body: kineffi.JPH_BodyID,
+	position: kineffi.JPH_Vec3,
+) -> (
+	Constraint_Frame,
+	bool,
+) {
+	axis, normal, valid := constraint_attachment_axes(cast(^Attachment)object)
+	return Constraint_Frame{body, position, axis, normal}, valid
+}
+
+constraint_world_vector :: proc(rotation: kineffi.JPH_Quat, v: [3]f32) -> kineffi.JPH_Vec3 {
+	return rotate_by_quat(rotation, {v.x, v.y, v.z})
 }
 
 Constraint_Init :: proc() -> Constraint {

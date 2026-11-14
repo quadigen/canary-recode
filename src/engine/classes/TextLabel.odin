@@ -1137,7 +1137,7 @@ TextLabel_set :: proc(
 	// transparency and alignment are render-only and are often tweened every
 	// frame, so dirtying on them would defeat the clean-layout skip.
 	if key != "Text" && text_label_affects_layout(key) {
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 	}
 
 	switch key {
@@ -1145,7 +1145,12 @@ TextLabel_set :: proc(
 	case "Text":
 		value := vm.ArgString(L, value_index)
 		if label.owned_text == value {return true}
-		Gui_Layout_Mark_Dirty()
+		// Text only changes geometry when this label measures its own text.
+		if label.automatic_size != .None {
+			gui_mark_layout_for(object)
+		} else {
+			Gui_Render_Mark_Dirty()
+		}
 		text_render_layout_clear(&label.render_layout)
 
 		copy := strings.clone(value)

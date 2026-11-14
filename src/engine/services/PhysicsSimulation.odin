@@ -12,15 +12,13 @@ Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics, delt
 	for child in object.children {
 		if child == nil || child.destroyed {continue}
 
-		matched := false
 		for entry in classes.Constraint_Steps {
 			if classes.Is_A_Class(child, entry.class) {
 				entry.step(child, service.system.handle, service.body_ids[:], delta_time)
-				matched = true
 				break
 			}
 		}
-		if !matched {
+		if len(child.children) != 0 {
 			Physics_StepConstraints(child, service, delta_time)
 		}
 	}
@@ -54,6 +52,15 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		for object in descriptor.instances {
 			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
 				classes.SpringConstraint_release(cast(^classes.SpringConstraint)object)
+			}
+		}
+	}
+	for class in classes.Attachment_Joint_Classes {
+		descriptor := classes.Find_Class(service.signal_registry, class.name)
+		if descriptor == nil {continue}
+		for object in descriptor.instances {
+			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
+				classes.Attachment_Joint_release(cast(^classes.Attachment_Joint)object)
 			}
 		}
 	}

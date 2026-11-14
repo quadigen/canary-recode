@@ -11,14 +11,19 @@ Startup_Options :: struct {
 	address:      string,
 	port:         u16,
 	map_path:     string,
+	game_library: string,
 	playtest:     bool,
 	singleplayer: bool,
 	update_check: bool,
 	no_update:    bool,
 	window:       bool,
+	headless:     bool,
+	pause_on_error: bool,
 	mode:         target.Mode,
 	standalone:   bool,
 	username:     string,
+	project:      string,
+	fast_viewport: bool,
 }
 
 startup_options :: proc() -> (Startup_Options, bool) {
@@ -78,6 +83,11 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			index += 1
 			options.address = args[index]
 			address_given = true
+		case "--project":
+			if index + 1 >=
+			   len(args) {fmt.eprintln("--project requires a value"); return options, false}
+			index += 1
+			options.project = args[index]
 		case "--port":
 			if index + 1 >=
 			   len(args) {fmt.eprintln("--port requires a value"); return options, false}
@@ -89,6 +99,13 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 				   65535 {fmt.eprintln("--port must be between 1 and 65535"); return options, false}
 			options.port = u16(value)
 			port_given = true
+		case "--game-library":
+			if index + 1 >= len(args) || strings.has_prefix(args[index + 1], "--") {
+				fmt.eprintln("--game-library requires a shared library path")
+				return options, false
+			}
+			index += 1
+			options.game_library = args[index]
 		case "--map":
 			if index + 1 >=
 			   len(args) {fmt.eprintln("--map requires a .kine file path"); return options, false}
@@ -115,6 +132,8 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 		case "--editor":
 			options.mode = target.Mode.Editor
 			role_given = true
+		case "--fast-viewport":
+			options.fast_viewport = true
 		case "--script":
 			if index + 1 >=
 			   len(args) {fmt.eprintln("--script requires a file path"); return options, false}
@@ -123,6 +142,10 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			options.update_check = true
 		case "--no-update":
 			options.no_update = true
+		case "--pause-on-error":
+			options.pause_on_error = true
+		case "--headless":
+			options.headless = true
 		case "--window":
 			options.window = true
 		case "--username":
@@ -167,6 +190,14 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 		}
 	}
 	_, _, has_embedded := embedded_map()
+	if options.game_library != "" {
+		if !role_given {options.singleplayer = true}
+		if role_given && options.mode == .Editor {
+			fmt.eprintln("--game-library requires a game runtime")
+			return options, false
+		}
+		options.no_update = true
+	}
 	if options.singleplayer {
 		if role_given {
 			fmt.eprintln("--singleplayer is its own mode; drop --server/--client/--editor")
@@ -176,7 +207,7 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			fmt.eprintln("--singleplayer does not use the network; drop --address/--port")
 			return options, false
 		}
-		if options.map_path == "" && !has_embedded {
+		if options.map_path == "" && !has_embedded && options.game_library == "" {
 			fmt.eprintln("--singleplayer requires --map with a .kine file path")
 			return options, false
 		}
@@ -186,6 +217,10 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 
 	options.standalone =
 		options.mode == target.Mode.Client && options.address == "" && has_embedded
+	if options.fast_viewport && (options.mode != .Editor || options.playtest) {
+		fmt.eprintln("--fast-viewport requires the editor outside playtest")
+		return options, false
+	}
 	if options.standalone {
 		options.address = ""
 	}

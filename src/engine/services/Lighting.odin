@@ -462,7 +462,7 @@ lighting_collect_effects :: proc(service: ^Lighting) -> Lighting_Effect_Set {
 	return effects
 }
 
-Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
+Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object, fast_viewport := false) {
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return
 	}
@@ -472,7 +472,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	effects := lighting_collect_effects(service)
 
 
-	if clouds := effects.clouds; clouds != nil && clouds.enabled {
+	if clouds := effects.clouds; !fast_viewport && clouds != nil && clouds.enabled {
 		kineffi.Kine_Filament_SetClouds(
 			filament,
 			true,
@@ -501,6 +501,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 	fingerprint := lighting_effects_fingerprint(service, effects)
 	fingerprint = lighting_hash_mix(fingerprint, lighting_advanced_fingerprint(service))
+	fingerprint = lighting_hash_bool(fingerprint, fast_viewport)
 	if fingerprint == service.applied_fingerprint && service.applied_context == filament {
 		return
 	}
@@ -549,7 +550,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 	_ = kineffi.Kine_Filament_SetShadowOptions(
 		filament,
-		service.global_shadows,
+		service.global_shadows && !fast_viewport,
 		lighting_shadow_filter(service.shadow_softness),
 	)
 	_ = kineffi.Kine_Filament_SetSunShadowOptions(
@@ -577,7 +578,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	if bloom != nil {
 		_ = kineffi.Kine_Filament_SetBloom(
 			filament,
-			bloom.enabled,
+			bloom.enabled && !fast_viewport,
 			f32(max(0.0, bloom.intensity)),
 			i32(max(1.0, bloom.size)),
 			6,
@@ -589,7 +590,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 		_ = kineffi.Kine_Filament_SetBloom(
 			filament,
-			blur.enabled,
+			blur.enabled && !fast_viewport,
 			f32(blur.size / 100),
 			i32(max(1.0, blur.size)),
 			6,
@@ -603,7 +604,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	if ao != nil {
 		_ = kineffi.Kine_Filament_SetAmbientOcclusion(
 			filament,
-			ao.enabled,
+			ao.enabled && !fast_viewport,
 			f32(ao.radius),
 			f32(ao.power),
 			f32(ao.intensity),
@@ -618,7 +619,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 		options := classes.DepthOfFieldEffect_Render_Options(dof)
 		_ = kineffi.Kine_Filament_SetDepthOfField(
 			filament,
-			options[0] > 0,
+			options[0] > 0 && !fast_viewport,
 			options[1],
 			1,
 			options[2],
@@ -632,7 +633,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 
 
 	night_lift := (1.0 - f64(profile.daylight)) * 0.15
-	if color != nil && color.enabled {
+	if color != nil && color.enabled && !fast_viewport {
 		_ = kineffi.Kine_Filament_SetColorGrading(
 			filament,
 			f32(color.brightness + service.exposure_compensation + night_lift),
@@ -661,7 +662,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 		ray_intensity := f32(sun_rays.intensity) * profile.daylight
 		_ = kineffi.Kine_Filament_SetSunRays(
 			filament,
-			sun_rays.enabled && profile.daylight > 0.01,
+			sun_rays.enabled && profile.daylight > 0.01 && !fast_viewport,
 			0,
 			1000,
 			ray_intensity,
@@ -695,7 +696,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 
-	if antialiasing != nil && antialiasing.enabled {
+	if antialiasing != nil && antialiasing.enabled && !fast_viewport {
 		_ = kineffi.Kine_Filament_SetAntiAliasing(
 			filament,
 			antialiasing.fxaa,
@@ -708,7 +709,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 	if dithering != nil {
-		_ = kineffi.Kine_Filament_SetDithering(filament, dithering.enabled)
+		_ = kineffi.Kine_Filament_SetDithering(filament, dithering.enabled && !fast_viewport)
 	} else {
 		_ = kineffi.Kine_Filament_SetDithering(filament, false)
 	}
@@ -718,7 +719,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 
-	if reflections := effects.reflections; reflections != nil && reflections.enabled {
+	if reflections := effects.reflections; reflections != nil && reflections.enabled && !fast_viewport {
 		_ = kineffi.Kine_Filament_SetScreenSpaceReflections(
 			filament,
 			true,
@@ -731,7 +732,7 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 		_ = kineffi.Kine_Filament_SetScreenSpaceReflections(filament, false, 0.5, 0.05, 10.0, 0.5)
 	}
 
-	if vignette != nil && vignette.enabled {
+	if vignette != nil && vignette.enabled && !fast_viewport {
 		_ = kineffi.Kine_Filament_SetVignette(
 			filament,
 			true,
@@ -748,7 +749,10 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object) {
 	}
 
 	_ = kineffi.Kine_Filament_SetPostProcessing(filament, true)
-	lighting_apply_advanced(service, filament)
+	lighting_apply_advanced(service, filament, fast_viewport)
+	if fast_viewport {
+		kineffi.Kine_Filament_SetDynamicResolution(filament, true, 0.5, 0.5, 0, 0)
+	}
 
 
 	service.applied_fingerprint = fingerprint

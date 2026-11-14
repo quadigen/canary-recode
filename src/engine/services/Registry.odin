@@ -41,6 +41,7 @@ Registry :: struct {
 	// execution: a Server runtime runs Scripts, a Client runtime runs
 	// LocalScripts, and an Editor runtime hosts either side.
 	mode:            target.Mode,
+	fast_editor_viewport: bool,
 }
 
 Registry_Init :: proc(
@@ -497,8 +498,13 @@ Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 		tracy.ZoneNC("Lighting Apply", 0xC586C0)
 		z := profiling.Begin("Lighting Apply", 0xC586C0)
 		lighting := Find_Service(registry, "Lighting")
-		if lighting != nil &&
-		   lighting.object != nil {Lighting_Apply(cast(^Lighting)lighting.object, renderer)}
+		if lighting != nil && lighting.object != nil {
+			Lighting_Apply(
+				cast(^Lighting)lighting.object,
+				renderer,
+				registry.fast_editor_viewport && registry.mode == .Editor,
+			)
+		}
 	}
 	// Ray can only be created once Filament exists, which is after the services
 	// have been constructed, so the Raytracer service attaches itself here.
@@ -548,7 +554,7 @@ Resize :: proc(registry: ^Registry, datatype_registry: ^datatypes.Registry, widt
 		return
 	}
 
-	scale := sdl3.UI_Scale > 1.0001 ? sdl3.UI_Scale : 1
+	scale := sdl3.UI_Scale
 	safe_w := f32(width) - sdl3.UI_Safe_Left - sdl3.UI_Safe_Right
 	safe_h := f32(height) - sdl3.UI_Safe_Top - sdl3.UI_Safe_Bottom
 	layout_width := max(i32(safe_w / scale), 1)
@@ -692,6 +698,10 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 					classes.SpringConstraint_release(cast(^classes.SpringConstraint)instance)
 				case &classes.RopeConstraint_Class:
 					classes.RopeConstraint_release(cast(^classes.RopeConstraint)instance)
+				case:
+					if classes.Is_Attachment_Joint(instance.class) {
+						classes.Attachment_Joint_release(cast(^classes.Attachment_Joint)instance)
+					}
 				}
 			}
 		}

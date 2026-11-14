@@ -73,7 +73,8 @@ is_collection_enabled :: proc() -> bool {return collecting}
 
 @(deferred_out = End)
 Begin :: proc(name: string, color: u32) -> Zone {
-	return Zone{name, color, platform.GetTicksNS(), collecting && !capture_paused}
+	if !collecting || capture_paused {return {}}
+	return Zone{name, color, platform.GetTicksNS(), true}
 }
 
 End :: proc(zone: Zone) {

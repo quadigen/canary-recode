@@ -19,6 +19,7 @@ when KINE_RENDERER_GL {
 		KeyUp:             proc(scancode: sdl3.Scancode),
 		MouseClick:        proc(button: sdl3.MouseButtonEvent),
 		OnClose:           proc(user_data: rawptr),
+		CanClose:          proc(user_data: rawptr) -> bool,
 		Step:              proc(user_data: rawptr, delta_time: f32),
 		UserData:          rawptr,
 		Draw3D:            proc(
@@ -236,7 +237,7 @@ when KINE_RENDERER_GL {
 					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
-						running = false
+						if renderer.CanClose == nil || renderer.CanClose(renderer.UserData) {running = false}
 					case .KEY_DOWN:
 						if renderer.KeyDown != nil {
 							renderer.KeyDown(event.key.scancode)

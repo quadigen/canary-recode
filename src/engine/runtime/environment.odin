@@ -16,86 +16,6 @@ import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 
-// A recorded Skia display list for one GUI pass. Replaying it skips the whole
-// class traversal when nothing that feeds the pass has changed.
-Gui_Display_List :: struct {
-	environment:    ^Environment,
-	picture:        ^kineffi.KineSkiaPicture,
-	revision:       u64,
-	scene_revision: u64,
-	// State seen on the previous miss. Recording only starts when the same
-	// state shows up twice in a row, so a GUI that changes every frame never
-	// pays for building a display list it cannot reuse.
-	last_revision:       u64,
-	last_scene_revision: u64,
-	probed:              bool,
-	surface:        ^renderer.Skia_Surface,
-	width:          i32,
-	height:         i32,
-	valid:          bool,
-}
-
-@(private)
-gui_step_display_list: Gui_Display_List
-@(private)
-gui_overlay_display_list: Gui_Display_List
-
-
-gui_display_list_stable :: proc(
-	cache: ^Gui_Display_List,
-	revision, scene_revision: u64,
-) -> bool {
-	stable :=
-		cache.probed &&
-		cache.last_revision == revision &&
-		cache.last_scene_revision == scene_revision
-	cache.probed = true
-	cache.last_revision = revision
-	cache.last_scene_revision = scene_revision
-	return stable
-}
-
-
-gui_display_list_matches :: proc(
-	cache: ^Gui_Display_List,
-	environment: ^Environment,
-	surface: ^renderer.Skia_Surface,
-	width, height: i32,
-	revision, scene_revision: u64,
-) -> bool {
-	return cache.valid &&
-		cache.environment == environment &&
-		cache.surface == surface &&
-		cache.width == width &&
-		cache.height == height &&
-		cache.revision == revision &&
-		cache.scene_revision == scene_revision &&
-		cache.picture != nil
-}
-
-
-gui_display_list_store :: proc(
-	cache: ^Gui_Display_List,
-	environment: ^Environment,
-	surface: ^renderer.Skia_Surface,
-	width, height: i32,
-	revision, scene_revision: u64,
-	picture: ^kineffi.KineSkiaPicture,
-) {
-	if cache.picture != nil {kineffi.Kine_Skia_Picture_Destroy(cache.picture)}
-	cache^ = {
-		environment    = environment,
-		picture        = picture,
-		revision       = revision,
-		scene_revision = scene_revision,
-		surface        = surface,
-		width          = width,
-		height         = height,
-		valid          = picture != nil,
-	}
-}
-
-
 Environment :: struct {
 	classes:    classes.Registry,
 	datatypes:  datatypes.Registry,
@@ -254,7 +174,11 @@ Environment_Update_Step :: proc(environment: ^Environment, vm_state: ^vm.VM, del
 	}
 
 	profiling.frame_tick(delta_time)
-	profiling.frame_flush()
+	{
+		tracy.ZoneNC("Profiler Frame Flush", 0xD08770)
+		z := profiling.Begin("Profiler Frame Flush", 0xD08770)
+		profiling.frame_flush()
+	}
 
 	{
 		tracy.ZoneNC("Packages Update", 0x61AFEF)
@@ -266,6 +190,7 @@ Environment_Update_Step :: proc(environment: ^Environment, vm_state: ^vm.VM, del
 		tracy.ZoneNC("Extensions Step", 0xC792EA)
 		z := profiling.Begin("Extensions Step", 0xC792EA)
 		extensions.Step(&environment.extensions, delta_time)
+		extensions.Game_Update(&environment.extensions, f64(delta_time))
 	}
 
 	{
@@ -288,7 +213,7 @@ Environment_Update_Step :: proc(environment: ^Environment, vm_state: ^vm.VM, del
 }
 
 scale_event_coords :: proc(event: ^sdl3.Event) {
-	scale := sdl3.UI_Scale > 1.0001 ? sdl3.UI_Scale : 1
+	scale := sdl3.UI_Scale
 	inset_x := sdl3.UI_Safe_Left
 	inset_y := sdl3.UI_Safe_Top
 	#partial switch event.type {
@@ -308,7 +233,7 @@ scale_event_coords :: proc(event: ^sdl3.Event) {
 
 ui_needs_transform :: proc() -> bool {
 	return(
-		sdl3.UI_Scale > 1.0001 ||
+		abs(sdl3.UI_Scale - 1) > 0.0001 ||
 		sdl3.UI_Safe_Left > 0 ||
 		sdl3.UI_Safe_Top > 0 ||
 		sdl3.UI_Safe_Right > 0 ||
@@ -318,7 +243,7 @@ ui_needs_transform :: proc() -> bool {
 
 
 ui_metrics :: proc(width, height: i32) -> (scale: f32, inset_x, inset_y, vw, vh: i32) {
-	scale = sdl3.UI_Scale > 1.0001 ? sdl3.UI_Scale : 1
+	scale = sdl3.UI_Scale
 	inset_x = i32(sdl3.UI_Safe_Left)
 	inset_y = i32(sdl3.UI_Safe_Top)
 
@@ -339,7 +264,7 @@ ui_scale_begin :: proc(
 ) -> bool {
 	if surface == nil {return false}
 	translated := inset_x != 0 || inset_y != 0
-	scaled := scale > 1.0001
+	scaled := abs(scale - 1) > 0.0001
 	if !translated && !scaled {return false}
 
 	skia := cast(^kineffi.KineSkiaSurface)surface
@@ -369,10 +294,6 @@ Environment_SetEvent :: proc(environment: ^Environment, vm_state: ^vm.VM, event:
 	if ui_needs_transform() {
 		scale_event_coords(&event)
 	}
-
-	// Hover / focus / cursor state can change what the GUI draws without a
-	// property write, so any event invalidates the cached 2D display list.
-	classes.Gui_Render_Mark_Dirty()
 
 	packages.Set_Event(&environment.packages, event)
 
@@ -505,60 +426,14 @@ Environment_Render_2D :: proc(
 			delta_time,
 		)
 
-		skia := cast(^kineffi.KineSkiaSurface)surface
-		cache := &gui_step_display_list
-		revision := classes.Gui_Render_Revision()
-		scene_revision := classes.Render_3D_Revision()
-		animated := classes.Gui_Render_Consume_Animated()
-		if environment.renderer.Cache2D &&
-		   !animated &&
-		   gui_display_list_matches(
-			cache,
-			environment,
-			surface,
-			width,
-			height,
-			revision,
-			scene_revision,
-		) {
-			kineffi.Kine_Skia_Surface_DrawPicture(skia, cache.picture)
-		} else {
-			recording :=
-			environment.renderer.Cache2D &&
-			!animated &&
-			gui_display_list_stable(cache, revision, scene_revision) &&
-			kineffi.Kine_Skia_Surface_BeginPicture(skia) != 0
-			classes.Step(
-				&environment.classes,
-				vm_state.L,
-				delta_time,
-				virtual_width,
-				virtual_height,
-			)
-			if recording {
-				picture := kineffi.Kine_Skia_Surface_EndPicture(skia)
-				// The recording frame never touched the real surface, so replay the
-				// fresh display list once to draw what this frame should show.
-				if picture != nil {kineffi.Kine_Skia_Surface_DrawPicture(skia, picture)}
-				if picture != nil &&
-				   classes.Gui_Render_Revision() == revision &&
-				   classes.Render_3D_Revision() == scene_revision {
-					gui_display_list_store(
-						cache,
-						environment,
-						surface,
-						width,
-						height,
-						revision,
-						scene_revision,
-						picture,
-					)
-				} else {
-					if picture != nil {kineffi.Kine_Skia_Picture_Destroy(picture)}
-					cache.valid = false
-				}
-			}
-		}
+		classes.Step(
+			&environment.classes,
+			vm_state.L,
+			delta_time,
+			virtual_width,
+			virtual_height,
+			cache_gui = environment.renderer.Cache2D,
+		)
 	}
 
 	{
@@ -591,62 +466,15 @@ Environment_Render_Overlay :: proc(
 	ui_scaled := ui_scale_begin(surface, scale, inset_x, inset_y)
 	defer ui_scale_end(surface, ui_scaled)
 
-	skia := cast(^kineffi.KineSkiaSurface)surface
-	cache := &gui_overlay_display_list
-	revision := classes.Gui_Render_Revision()
-	scene_revision := classes.Render_3D_Revision()
-	animated := classes.Gui_Render_Is_Animated()
-	if environment.renderer.Cache2D &&
-	   !animated &&
-	   gui_display_list_matches(
-		cache,
-		environment,
-		surface,
-		width,
-		height,
-		revision,
-		scene_revision,
-	) {
-		kineffi.Kine_Skia_Surface_DrawPicture(skia, cache.picture)
-		return
-	}
-
-	recording :=
-		environment.renderer.Cache2D &&
-		!animated &&
-		gui_display_list_stable(cache, revision, scene_revision) &&
-		kineffi.Kine_Skia_Surface_BeginPicture(skia) != 0
-	{
-		tracy.ZoneNC("Classes Step .Overlay", 0xD08770)
-		z := profiling.Begin("Classes Step .Overlay", 0xD08770)
-		classes.Step(
-			&environment.classes,
-			vm_state.L,
-			delta_time,
-			virtual_width,
-			virtual_height,
-			gui_overlay = true,
-		)
-	}
-	if recording {
-		picture := kineffi.Kine_Skia_Surface_EndPicture(skia)
-		if picture != nil {kineffi.Kine_Skia_Surface_DrawPicture(skia, picture)}
-		if picture != nil &&
-		   classes.Gui_Render_Revision() == revision &&
-		   classes.Render_3D_Revision() == scene_revision {
-			gui_display_list_store(
-				cache,
-				environment,
-				surface,
-				width,
-				height,
-				revision,
-				scene_revision,
-				picture,
-			)
-		} else {
-			if picture != nil {kineffi.Kine_Skia_Picture_Destroy(picture)}
-			cache.valid = false
-		}
-	}
+	tracy.ZoneNC("Classes Step .Overlay", 0xD08770)
+	z := profiling.Begin("Classes Step .Overlay", 0xD08770)
+	classes.Step(
+		&environment.classes,
+		vm_state.L,
+		delta_time,
+		virtual_width,
+		virtual_height,
+		gui_overlay = true,
+		cache_gui = environment.renderer.Cache2D,
+	)
 }

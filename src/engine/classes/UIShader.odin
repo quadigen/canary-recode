@@ -14,23 +14,28 @@ UIShader_Class := Class_Info {
 	parent = &Instance_Class,
 }
 
+UI_SHADER_IDENTITY_TRANSFORM :: [4]f32{1, 1, 0, 0}
+
 UIShader :: struct {
 	using object:    Object,
 	enabled:         bool,
 	source:          string,
 	sample_radius:   f32,
+	full_content_sampling: bool,
 	last_error:      string,
 	compiled:        ^kineffi.KineSkiaRuntimeShader,
 	samples_content: bool,
 	source_dirty:    bool,
 	uniforms_dirty:  bool,
 	uniforms:        [dynamic]Runtime_Shader_Uniform,
+	gui_transform:   [4]f32,
 }
 
 UIShader_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	shader := new(UIShader)
 	shader.object = Object_Init(&UIShader_Class, "UIShader")
 	shader.enabled = true
+	shader.gui_transform = UI_SHADER_IDENTITY_TRANSFORM
 	return &shader.object
 }
 
@@ -62,6 +67,8 @@ UIShader_get :: proc(
 		vm.PushString(L, shader.source)
 	case "SampleRadius":
 		vm.PushNumber(L, f64(shader.sample_radius))
+	case "FullContentSampling":
+		vm.PushBoolean(L, shader.full_content_sampling)
 	case "Compiled":
 		vm.PushBoolean(L, shader.compiled != nil)
 	case "LastError":
@@ -108,6 +115,8 @@ UIShader_set :: proc(
 			return true
 		}
 		shader.sample_radius = f32(clamp(radius, 0, 128))
+	case "FullContentSampling":
+		shader.full_content_sampling = vm.ArgBoolean(L, value_index)
 	case "Compiled", "LastError":
 		_ = vm.RaiseError(L, "Shader status properties are read-only")
 	case:
@@ -127,6 +136,37 @@ UIShader_namecall :: proc(
 	bool,
 ) {
 	shader := cast(^UIShader)object
+	if (method == "SetUniform" || method == "GetUniform") && vm.ArgString(L, 2) == "guiTransform" {
+		if method == "GetUniform" {
+			vm.NewTable(L, 4, 0)
+			for value, i in shader.gui_transform {
+				vm.PushNumber(L, f64(value))
+				vm.RawSetIndex(L, -2, i + 1)
+			}
+			return 1, true
+		}
+		transform := UI_SHADER_IDENTITY_TRANSFORM
+		if !vm.IsNoneOrNil(L, 3) {
+			if !vm.IsTable(L, 3) || vm.RawLen(L, 3) != 4 {
+				return vm.RaiseError(L, "guiTransform requires {scaleX, scaleY, offsetX, offsetY}"), true
+			}
+			for &value, i in transform {
+				vm.RawGetIndex(L, 3, i + 1)
+				value = f32(vm.ArgNumber(L, -1))
+				vm.Pop(L)
+				if math.is_nan(value) || math.is_inf(value) {
+					return vm.RaiseError(L, "guiTransform values must be finite"), true
+				}
+			}
+		}
+		if transform != shader.gui_transform {
+			shader.gui_transform = transform
+			shader.uniforms_dirty = true
+			gui_invalidate_draw(object)
+			surfacegui_mark_dirty_for(object)
+		}
+		return 0, true
+	}
 	if method == "SetUniform" {
 		name := vm.ArgString(L, 2)
 		if name == "size" || name == "backgroundColor" || strings.contains(name, "\x00") {
@@ -145,6 +185,8 @@ UIShader_clone :: proc(source, destination: ^Object) {
 	dst.enabled = src.enabled
 	dst.source = strings.clone(src.source)
 	dst.sample_radius = src.sample_radius
+	dst.full_content_sampling = src.full_content_sampling
+	dst.gui_transform = src.gui_transform
 	dst.source_dirty = true
 	for uniform in src.uniforms {
 		copy := uniform
@@ -187,6 +229,10 @@ UIShader_Prepare :: proc(shader: ^UIShader) -> bool {
 		shader.uniforms_dirty = false
 		delete(shader.last_error)
 		shader.last_error = ""
+		// SkSL can also read the transform when the source declares it.
+		_ = kineffi.Kine_Skia_RuntimeShader_SetUniform(
+			shader.compiled, "guiTransform", &shader.gui_transform[0], 4,
+		)
 		for &uniform in shader.uniforms {
 			name := strings.clone_to_cstring(uniform.name)
 			ok := kineffi.Kine_Skia_RuntimeShader_SetUniform(
@@ -207,6 +253,17 @@ UIShader_Prepare :: proc(shader: ^UIShader) -> bool {
 	return true
 }
 
+// Compose in the parent's coordinate space, around the layout rectangle's origin.
+UIShader_Push_Transform :: proc(shader: ^UIShader, surface: ^kineffi.KineSkiaSurface, rect: guilib.Rect) -> bool {
+	if shader.gui_transform == UI_SHADER_IDENTITY_TRANSFORM {return false}
+	sx, sy, dx, dy := shader.gui_transform[0], shader.gui_transform[1], shader.gui_transform[2], shader.gui_transform[3]
+	guilib.save(surface)
+	guilib.translate(surface, rect.x + dx, rect.y + dy)
+	guilib.scale(surface, sx, sy)
+	guilib.translate(surface, -rect.x, -rect.y)
+	return true
+}
+
 UIShader_Apply :: proc(
 	shader: ^UIShader,
 	ctx: ^Class_Step_Context,
@@ -219,6 +276,12 @@ UIShader_Apply :: proc(
 		color := [4]f32{rect.color.R, rect.color.G, rect.color.B, 1 - rect.bgTransparency}
 		surface := ctx.renderer.SkiaSurface
 		if content_pass {
+			sample_radius := shader.sample_radius
+			if shader.full_content_sampling {
+				// The shader may sample any source pixel from any destination pixel.
+				sx, sy := abs(shader.gui_transform[0]), abs(shader.gui_transform[1])
+				sample_radius = max(sample_radius, rect.width, rect.height, rect.width * sx, rect.height * sy)
+			}
 			return kineffi.Kine_Skia_Surface_BeginUIShader(
 				surface,
 				shader.compiled,
@@ -227,7 +290,7 @@ UIShader_Apply :: proc(
 				rect.width,
 				rect.height,
 				&color[0],
-				shader.sample_radius,
+				sample_radius,
 			)
 		}
 		return kineffi.Kine_Skia_Surface_DrawUIShader(
@@ -252,7 +315,7 @@ Register_UIShader :: proc(registry: ^Registry) {
 		set = UIShader_set,
 		clone = UIShader_clone,
 		namecall = UIShader_namecall,
-		properties = []string{"Enabled", "Source", "SampleRadius", "Compiled", "LastError"},
+		properties = []string{"Enabled", "Source", "SampleRadius", "FullContentSampling", "Compiled", "LastError"},
 		methods = []string{"SetUniform", "GetUniform"},
 	)
 }

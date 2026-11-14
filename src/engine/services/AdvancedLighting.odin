@@ -85,7 +85,7 @@ lighting_advanced_fingerprint :: proc(service: ^Lighting) -> u64 {hash := u64(14
 			hash = lighting_hash_f64(hash, f64(value.tint))
 		}}
 	return hash}
-lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext) {
+lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext, fast_viewport: bool) {
 	{value: ^classes.ReflectionProbeEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
 			   ) ==
@@ -104,7 +104,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.near_plane),
 			f32(value.max_distance),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 0, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 0, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.SSGIEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -120,7 +120,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.sample_count),
 			f32(value.max_distance),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 1, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 1, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.FogEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -139,7 +139,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.color.G),
 			f32(value.color.B),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 2, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 2, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.ScreenSpaceConeTracingEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -157,7 +157,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.ray_count),
 			f32(value.bias),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 3, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 3, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.TemporalAntiAliasingEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -172,7 +172,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.sharpness),
 			f32(value.lod_bias),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 4, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 4, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.DynamicResolutionEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -187,7 +187,7 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.sharpness),
 			f32(value.quality),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 5, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 5, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 	{value: ^classes.ToneMappingEffect; for object in service.children {if classes.Get_Class_Name(
 				   object,
@@ -202,6 +202,6 @@ lighting_apply_advanced :: proc(service: ^Lighting, ctx: ^k.KineFilamentContext)
 			f32(value.temperature),
 			f32(value.tint),
 		}
-		k.Kine_Filament_SetAdvancedEffect(ctx, 6, value.enabled, &values[0], i32(len(values)))
+		k.Kine_Filament_SetAdvancedEffect(ctx, 6, value.enabled && !fast_viewport, &values[0], i32(len(values)))
 	}
 }

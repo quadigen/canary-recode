@@ -100,7 +100,8 @@ syntax_highlighter_clear_rules :: proc(highlighter: ^SyntaxHighlighter) {
 		syntax_rule_destroy(&rule)
 	}
 
-	clear(&highlighter.rules)
+	delete(highlighter.rules)
+	highlighter.rules = nil
 	highlighter.rules_version += 1
 	highlighter.cached_rules_version = -1
 	highlighter.spans_valid = false
@@ -174,7 +175,6 @@ syntax_highlighter_add_rule :: proc(
 		rule.kind = .Range
 	case "Regex":
 		rule.kind = .Regex
-		rule.head = strings.clone(pattern)
 	case:
 		syntax_rule_destroy(&rule)
 		return
@@ -310,6 +310,7 @@ SyntaxHighlighter_set :: proc(
 	case "Enabled":
 		highlighter.enabled = vm.ArgBoolean(L, value_index)
 		highlighter.spans_valid = false
+		Gui_Render_Mark_Dirty()
 		return true
 
 	case "Language":
@@ -323,6 +324,7 @@ SyntaxHighlighter_set :: proc(
 		}
 
 		highlighter.spans_valid = false
+		Gui_Render_Mark_Dirty()
 		return true
 	}
 
@@ -575,14 +577,14 @@ syntax_highlighter_rule_spans :: proc(highlighter: ^SyntaxHighlighter, text: str
 		return
 	}
 
-	position := 0
+	position, line_end := 0, 0
 
 	for position < len(text) {
-		line_end := position
-
-		for line_end < len(text) && text[line_end] != '\n' {
-			line_end += 1
+		if position >= line_end {
+			line_end = position
+			for line_end < len(text) && text[line_end] != '\n' {line_end += 1}
 		}
+
 
 		matched := false
 

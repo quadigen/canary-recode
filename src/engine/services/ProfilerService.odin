@@ -68,6 +68,9 @@ profiler_service_get :: proc(
 		vm.PushNumber(L, fps_value())
 	case "TrackingEnabled":
 		vm.PushBoolean(L, profiling.is_tracking_enabled())
+	case "SetEnabled":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return false}
+		vm.PushUserdataMethod(L, key)
 	case "GetService",
 	     "FindService",
 	     "GetThreads",
@@ -135,6 +138,10 @@ profiler_service_namecall :: proc(
 	case "GetScripts":
 		push_scripts(L)
 		return 1, true
+	case "SetEnabled":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return 0, false}
+		profiling.set_enabled(vm.ArgBoolean(L, 2))
+		return 0, true
 	case "SetTrackingEnabled":
 		profiling.set_tracking_enabled(vm.ArgBoolean(L, 2))
 		return 0, true
@@ -795,9 +802,14 @@ nextBtn.MouseButton1Click:Connect(function()
 end)
 
 local function update()
+	local enabled = profiler.Enabled
+	if screenGui.Enabled ~= enabled then
+		screenGui.Enabled = enabled
+	end
+	if not enabled then
+		return
+	end
 	local stats = profiler:GetFrameStats()
-
-	screenGui.Enabled = stats.enabled
 
 	local paused = profiler.Paused
 	pauseBtn.Text = paused and "Resume" or "Pause"

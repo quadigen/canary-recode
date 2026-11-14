@@ -33,25 +33,68 @@ workspace_has_weld :: proc(
 	return false
 }
 
-workspace_has_hinge :: proc(
+workspace_weld_root :: proc(
+	parents: ^map[^classes.Object]^classes.Object,
+	part: ^classes.Object,
+) -> ^classes.Object {
+	root := part
+	for parent := parents^[root]; parent != nil; parent = parents^[root] {
+		if grandparent := parents^[parent]; grandparent != nil {parents^[root] = grandparent}
+		root = parent
+	}
+	return root
+}
+
+workspace_collect_weld_components :: proc(
 	workspace: ^classes.Object,
-	descriptor: ^classes.Class_Descriptor,
-	pair: Workspace_Weld_Pair,
-) -> bool {
-	if descriptor == nil {return false}
-	for object in descriptor.instances {
+	instances: []^classes.Object,
+	parents: ^map[^classes.Object]^classes.Object,
+) {
+	for object in instances {
 		if !workspace_weld_is_live(object, workspace) {continue}
-		hinge := cast(^classes.HingeConstraint)object
-		if !hinge.enabled ||
-		   hinge.attachment0 == nil ||
-		   hinge.attachment1 == nil ||
-		   hinge.attachment0.destroyed ||
-		   hinge.attachment1.destroyed {continue}
-		a, b := hinge.attachment0.parent, hinge.attachment1.parent
-		if (a == pair.selected && b == pair.outsider) ||
-		   (b == pair.selected && a == pair.outsider) {
-			return true
+		weld := cast(^classes.WeldConstraint)object
+		if !weld.enabled ||
+		   !workspace_weld_is_live(weld.part0, workspace) ||
+		   !workspace_weld_is_live(weld.part1, workspace) {continue}
+		a := workspace_weld_root(parents, weld.part0)
+		b := workspace_weld_root(parents, weld.part1)
+		if a != b {parents^[a] = b}
+	}
+}
+
+workspace_collect_movable_joints :: proc(
+	workspace: ^classes.Object,
+	registry: ^classes.Registry,
+) -> [dynamic]Workspace_Weld_Pair {
+	pairs: [dynamic]Workspace_Weld_Pair
+	for descriptor in registry.classes {
+		if descriptor == nil ||
+		   (descriptor.info != &classes.HingeConstraint_Class &&
+		    !classes.Is_Attachment_Joint(descriptor.info)) {continue}
+		for object in descriptor.instances {
+			if !workspace_weld_is_live(object, workspace) {continue}
+			joint := cast(^classes.Constraint)object
+			if !joint.enabled ||
+			   !workspace_weld_is_live(joint.attachment0, workspace) ||
+			   !workspace_weld_is_live(joint.attachment1, workspace) {continue}
+			a, b := joint.attachment0.parent, joint.attachment1.parent
+			if !workspace_weld_is_live(a, workspace) || !workspace_weld_is_live(b, workspace) {continue}
+			append(&pairs, Workspace_Weld_Pair{a, b})
 		}
+	}
+	return pairs
+}
+
+workspace_weld_locks_joint :: proc(
+	parents: ^map[^classes.Object]^classes.Object,
+	joints: []Workspace_Weld_Pair,
+	a, b: ^classes.Object,
+) -> bool {
+	if a == b {return false}
+	for joint in joints {
+		first := workspace_weld_root(parents, joint.selected)
+		second := workspace_weld_root(parents, joint.outsider)
+		if (a == first && b == second) || (a == second && b == first) {return true}
 	}
 	return false
 }
@@ -151,7 +194,13 @@ workspace_update_outsider_welds :: proc(
 			append(&pairs, Workspace_Weld_Pair{part, &other.object})
 		}
 	}
-	hinges := classes.Find_Class(registry, "HingeConstraint")
+	joints := workspace_collect_movable_joints(workspace, registry)
+	defer delete(joints)
+	parents: map[^classes.Object]^classes.Object
+	defer delete(parents)
+	if len(joints) != 0 {
+		workspace_collect_weld_components(workspace, descriptor.instances[:], &parents)
+	}
 	for pair in pairs {
 		if pair.selected.destroyed ||
 		   pair.outsider.destroyed ||
@@ -159,14 +208,20 @@ workspace_update_outsider_welds :: proc(
 		   !workspace_contains_physics_object(workspace, pair.outsider) {
 			continue
 		}
-		if workspace_has_weld(workspace, descriptor.instances[:], pair) ||
-		   workspace_has_hinge(workspace, hinges, pair) {continue}
+		if workspace_has_weld(workspace, descriptor.instances[:], pair) {continue}
+		a, b: ^classes.Object
+		if len(joints) != 0 {
+			a = workspace_weld_root(&parents, pair.selected)
+			b = workspace_weld_root(&parents, pair.outsider)
+			if workspace_weld_locks_joint(&parents, joints[:], a, b) {continue}
+		}
 		object, ok := classes.Push_New(registry, &vm.VM{L = L}, "WeldConstraint")
 		if !ok {break}
 		weld := cast(^classes.WeldConstraint)object
 		weld.part0 = pair.selected
 		weld.part1 = pair.outsider
 		classes.Set_Parent(object, pair.selected)
+		if a != b {parents[a] = b}
 		vm.Pop(L)
 	}
 	return 0

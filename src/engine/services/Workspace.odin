@@ -18,8 +18,6 @@ import vm "../vm"
 import "core:math"
 import "core:strings"
 
-window_width: i32
-window_height: i32
 
 Workspace_Class := classes.Class_Info {
 	name   = "Workspace",
@@ -463,7 +461,7 @@ Workspace_Draw_Params :: struct {
 	reflection_radius: f32,
 	frustum:           ^Workspace_Frustum,
 	eye:               datatypes.Vector3,
-	max_distance_sq:   f32,
+	max_distance:      f32,
 	lod_distance_sq:   f32,
 	lod_mesh:          ^kineffi.KineFilamentMesh,
 	hash:              u64,
@@ -499,8 +497,6 @@ workspace_append_draw_items :: proc(
 	items: ^[dynamic]kineffi.KineFilamentDrawItem,
 	params: ^Workspace_Draw_Params,
 ) {
-	workspace_set_3d_state(workspace.enable_3d, workspace)
-
 	for child in object.children {
 		if child == nil ||
 		   child.destroyed ||
@@ -582,8 +578,8 @@ workspace_append_draw_items :: proc(
 			distance_sq: f32
 			if params != nil {
 				distance_sq = workspace_distance_squared(center, params.eye)
-				if params.max_distance_sq > 0 &&
-				   distance_sq > math.pow(math.sqrt(params.max_distance_sq) + radius, 2) {
+				draw_distance := params.max_distance + radius
+				if params.max_distance > 0 && distance_sq > draw_distance * draw_distance {
 					visible = false
 				}
 				if visible &&
@@ -753,8 +749,6 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 		tc := tracy.ZoneNC("WS Collect Draw Items", 0xB48EAD)
 		collect := profiling.Begin("WS Collect Draw Items", 0xB48EAD)
 
-		platform.GetWindowSize(ctx.renderer.Window, &window_width, &window_height)
-
 		items := &workspace.draw_items
 		clear(items)
 
@@ -783,9 +777,7 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 				params.lod_mesh = workspace_part_mesh(workspace, ctx.renderer.Filament, .Block)
 			}
 
-			if workspace.max_draw_distance > 0 {
-				params.max_distance_sq = workspace.max_draw_distance * workspace.max_draw_distance
-			}
+			params.max_distance = workspace.max_draw_distance
 
 			if workspace.cull_parts {
 				far := WORKSPACE_FRUSTUM_FAR
@@ -799,6 +791,7 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 			}
 		}
 
+		workspace_set_3d_state(workspace.enable_3d, workspace)
 		workspace_append_draw_items(workspace, object, ctx.renderer, items, &params)
 		tracy.ZoneValue(tc, u64(len(items^)))
 
@@ -1058,7 +1051,17 @@ workspace_namecall :: proc(
 		vm.PushBoolean(L, true)
 		return 1, true
 	case "GetWindowDimensions":
-		vec2 := datatypes.Vector2{f32(window_width), f32(window_height)}
+		width, height: i32
+		if workspace.data_model != nil && workspace.data_model.registry != nil {
+			r := workspace.data_model.registry.classes.renderer
+			if r != nil && r.Window != nil {
+				_ = platform.GetWindowSizeInPixels(r.Window, &width, &height)
+			}
+		}
+		vec2 := datatypes.Vector2 {
+			max(f32(width) - platform.UI_Safe_Left - platform.UI_Safe_Right, 0) / platform.UI_Scale,
+			max(f32(height) - platform.UI_Safe_Top - platform.UI_Safe_Bottom, 0) / platform.UI_Scale,
+		}
 		datatypes.Push_Vector2(L, datatype_registry, vec2)
 		return 1, true
 	}

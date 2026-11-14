@@ -58,7 +58,7 @@ user_input_point_in_viewport :: proc(service: ^UserInputService, x, y: f32) -> b
 		return false
 	}
 
-	scale := sdl3.UI_Scale > 1.0001 ? sdl3.UI_Scale : 1
+	scale := sdl3.UI_Scale
 	rect := renderer.ViewportRect
 	vx := (f32(rect[0]) - sdl3.UI_Safe_Left) / scale
 	vy := (f32(rect[1]) - sdl3.UI_Safe_Top) / scale
@@ -221,7 +221,7 @@ user_input_handle_finger :: proc(L: ^vm.State, service: ^UserInputService, event
 
 
 	{
-		tscale := sdl3.UI_Scale > 1.0001 ? sdl3.UI_Scale : 1
+		tscale := sdl3.UI_Scale
 		x -= sdl3.UI_Safe_Left / tscale
 		y -= sdl3.UI_Safe_Top / tscale
 	}
@@ -288,7 +288,7 @@ user_input_touch_size :: proc() -> [2]f32 {
 	if !sdl3.GetWindowSize(window, &w, &h) {return {}}
 	size := [2]f32{f32(w), f32(h)}
 	scale := sdl3.UI_Scale
-	if scale > 1.0001 {
+	if abs(scale - 1) > 0.0001 {
 		size.x /= scale
 		size.y /= scale
 	}

@@ -1722,6 +1722,9 @@ replication_receive :: proc(
 					part.cframe = frame
 					part.position = datatypes.Vector3{frame.x, frame.y, frame.z}
 				}
+			} else if owned && !entity.has_transform {
+				part.cframe = frame
+				part.position = datatypes.CFrame_Position(frame)
 			} else if entity.force_correction || !owned {
 				snap := entity.force_correction || len(entity.samples) == 0
 				if len(entity.samples) > 0 {
@@ -1754,24 +1757,26 @@ replication_receive :: proc(
 				}
 				entity.force_correction = false
 			}
+			body_changed := part.size != size || part.anchored != anchored ||
+			                part.can_collide != can_collide
 			part.size = size
 			part.color = color
 			part.transparency = f64(transparency)
 			part.anchored = anchored
 			part.can_collide = can_collide
 			if enums.Material_Is_Valid(int(material)) {
+				body_changed = body_changed || part.material != material
 				part.material = material
 			}
 			if int(shape) >= 0 && int(shape) <= int(enums.PartType.Capsule) {
+				body_changed = body_changed || part.shape != shape
 				part.shape = shape
 			}
 			classes.Set_Name(object, name)
 			entity.last_state_tick = tick
 
 
-			if !entity.has_transform {
-
-
+			if !entity.has_transform || body_changed {
 				entity.has_transform = true
 				Physics_Request_Sync_For_Data_Model(service.data_model)
 			}
@@ -2196,6 +2201,7 @@ replication_send_acks :: proc(service: ^ReplicatorService) {
 
 Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: f32) {
 	if service == nil || service.host == nil {return}
+	tracy.ZoneN("Replication Step")
 	remote_invoke_timeouts(service, L)
 	for {
 		event, has_event := transport_host_service(service.host)

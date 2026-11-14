@@ -2,6 +2,7 @@ package services
 
 import classes "../classes"
 import datatypes "../datatypes"
+import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
 import "core:sort"
@@ -163,6 +164,7 @@ replication_schema :: proc(
 	)
 	schema: Replication_Schema
 	schema.class_name = strings.clone(class_name)
+	descriptor := classes.Find_Class(service.data_model.registry.classes, class_name)
 	for property in properties {
 		if class_name == "Attachment" && property == "CFrame" {continue}
 		if class_name == "HingeConstraint" &&
@@ -171,6 +173,10 @@ replication_schema :: proc(
 		}
 		if class_name == "SpringConstraint" &&
 		   (property == "Active" || property == "CurrentLength") {
+			continue
+		}
+		if descriptor != nil && classes.Is_Attachment_Joint(descriptor.info) &&
+		   (property == "Active" || property == "CurrentPosition") {
 			continue
 		}
 		if class_name == "SoftBody" && property == "LastError" {continue}
@@ -788,7 +794,19 @@ replication_encode_property_value :: proc(
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, top)
 	classes.Push_Object(L, object)
+	return replication_encode_pushed_property(L, object, property, bytes, connection)
+}
+
+// The caller keeps the instance on top of the stack across property reads.
+replication_encode_pushed_property :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	property: string,
+	bytes: ^[dynamic]u8,
+	connection: ^Replication_Peer = nil,
+) -> bool {
 	_ = vm.GetField(L, -1, property)
+	defer vm.Pop(L)
 	if object.class == &classes.ParticleEmitter_Class {
 		if binding := vm.UserdataBindingOf(L, -1);
 		   binding != nil && binding.name == "NumberRange" {
@@ -856,17 +874,25 @@ replication_send_property_batch :: proc(
 	defer delete(ends)
 	hash: u64 = 14695981039346656037
 	tick := replication_peer_snapshot_tick(service, connection)
-	for name in names {
-		clear(&value)
-		if !replication_encode_property_value(L, item.object, name, &value) {continue}
-		for byte in value {hash = (hash ~ u64(byte)) * 1099511628211}
-		append(&packet, 2)
-		replication_put_u32(&packet, item.id)
-		replication_put_u32(&packet, tick)
-		replication_put_string(&packet, name)
-		append(&packet, ..value[:])
-		append(&packet, stream, 0, 0, 0, 0, 0, 0)
-		append(&ends, len(packet))
+	{
+		top := vm.StackTop(L)
+		previous := vm.GetThreadSecurityCapabilities(L)
+		vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
+		defer vm.SetThreadSecurityCapabilities(L, previous)
+		defer vm.SetStackTop(L, top)
+		classes.Push_Object(L, item.object)
+		for name in names {
+			clear(&value)
+			if !replication_encode_pushed_property(L, item.object, name, &value) {continue}
+			for byte in value {hash = (hash ~ u64(byte)) * 1099511628211}
+			append(&packet, 2)
+			replication_put_u32(&packet, item.id)
+			replication_put_u32(&packet, tick)
+			replication_put_string(&packet, name)
+			append(&packet, ..value[:])
+			append(&packet, stream, 0, 0, 0, 0, 0, 0)
+			append(&ends, len(packet))
+		}
 	}
 	if len(ends) == 0 {return true, confirmed}
 	batch_token := u32(hash & 0xFFFFFFFF)
@@ -1271,7 +1297,7 @@ replication_peer_spawn_ready :: proc(
 REPLICATION_DROP_PRESSURE_RECOVER_BELOW: f32 = 0.02
 
 replication_sync :: proc(service: ^ReplicatorService) {
-
+	tracy.ZoneN("Replication Snapshot")
 
 	service.terrain_sync_tick += 1
 	service.terrain_sync_due = service.terrain_sync_tick % 2 == 0

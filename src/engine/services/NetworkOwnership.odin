@@ -142,7 +142,10 @@ ownership_links :: proc(
 	links: [dynamic]Ownership_Link
 	registry := service.signal_registry
 	constraint_names := [?]string {
+		"BallSocketConstraint",
 		"HingeConstraint",
+		"PrismaticConstraint",
+		"RodConstraint",
 		"RopeConstraint",
 		"SpringConstraint",
 		"WeldConstraint",
@@ -163,7 +166,8 @@ ownership_links :: proc(
 				a, b = weld.part0, weld.part1
 			} else {
 				if !constraint.enabled &&
-				   (object.class == &classes.HingeConstraint_Class ||
+				   (classes.Is_Attachment_Joint(object.class) ||
+						   object.class == &classes.HingeConstraint_Class ||
 						   object.class == &classes.SpringConstraint_Class) {
 					continue
 				}

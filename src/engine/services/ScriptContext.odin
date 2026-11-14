@@ -224,6 +224,7 @@ script_context_should_run :: proc(
 	if common := classes.Script_Common_Of(object); common != nil && common.run_as_plugin {
 		return true
 	}
+	if mode == .Editor {return false}
 	if ClientScripts_In_Template(object) ||
 	   !PlayerGui_Can_Display(object, script_context.service.data_model) {
 		return false
@@ -633,7 +634,11 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 	}
 
 	for descriptor in script_context.object_registry.classes {
-		if descriptor == nil {
+		// Only executable script classes can change state here. Avoid testing
+		// every instance in the DataModel for script ancestry on every frame.
+		if descriptor == nil ||
+		   (!classes.Is_Class_A(descriptor.info, &classes.Script_Class) &&
+		    !classes.Is_Class_A(descriptor.info, &classes.LocalScript_Class)) {
 			continue
 		}
 
@@ -644,11 +649,6 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 
 			common := classes.Script_Common_Of(instance)
 			if common == nil {
-				continue
-			}
-
-			kind, _ := classes.Script_Kind_Of(instance)
-			if kind == .ModuleScript {
 				continue
 			}
 

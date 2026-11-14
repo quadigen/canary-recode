@@ -250,6 +250,7 @@ gui_button_apply_state :: proc(button: ^GuiButton) {
 	}
 
 	if button.gui_state != previous_state {
+		gui_invalidate_draw(&button.object)
 		surfacegui_mark_dirty_for(&button.gui_object.object)
 	}
 }
@@ -283,6 +284,7 @@ GuiButton_update :: proc(object: ^Object, ctx: ^Class_Step_Context) -> bool {
 
 	if !GuiObject_effectively_visible(&button.gui_object) {
 		if button.gui_state != .Idle {
+			gui_invalidate_draw(&button.object)
 			surfacegui_mark_dirty_for(&button.gui_object.object)
 		}
 

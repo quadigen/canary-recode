@@ -564,6 +564,10 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 		append(&new_parent.children, self)
 	}
 
+	gui_invalidate_draw(self)
+	if Is_A_Class(previous, &GuiObject_Class) {
+		gui_invalidate_draw(previous)
+	}
 
 	if Is_A(self, "GuiObject") || Is_A(previous, "GuiObject") || Is_A(new_parent, "GuiObject") {
 		Gui_Layout_Mark_Dirty()

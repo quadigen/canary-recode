@@ -1,0 +1,70 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, std430) readonly buffer Left { float left[]; };
+layout(set = 0, binding = 1, std430) readonly buffer Right { float right[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Result { float result[]; };
+layout(push_constant) uniform Parameters {
+    uint operation;
+    uint rows;
+    uint inner;
+    uint columns;
+} params;
+
+const uint ADD = 0u;
+const uint SUBTRACT = 1u;
+const uint MULTIPLY = 2u;
+const uint MATRIX_MULTIPLY = 3u;
+const uint DIVIDE = 4u;
+const uint MIN = 5u;
+const uint MAX = 6u;
+const uint ABS = 7u;
+const uint NEGATE = 8u;
+const uint SQRT = 9u;
+
+shared float leftTile[8][8];
+shared float rightTile[8][8];
+
+void main() {
+    if (params.operation != MATRIX_MULTIPLY) {
+        uint i = gl_WorkGroupID.x * 64u + gl_LocalInvocationIndex;
+        if (i >= params.rows) {
+            return;
+        }
+        float a = left[i];
+        switch (params.operation) {
+        case ADD:      result[i] = a + right[i]; break;
+        case SUBTRACT: result[i] = a - right[i]; break;
+        case MULTIPLY: result[i] = a * right[i]; break;
+        case DIVIDE:   result[i] = a / right[i]; break;
+        case MIN:      result[i] = min(a, right[i]); break;
+        case MAX:      result[i] = max(a, right[i]); break;
+        case ABS:      result[i] = abs(a); break;
+        case NEGATE:   result[i] = -a; break;
+        case SQRT:     result[i] = sqrt(a); break;
+        }
+        return;
+    }
+
+    uint x = gl_LocalInvocationID.x;
+    uint y = gl_LocalInvocationID.y;
+    uint row = gl_GlobalInvocationID.y;
+    uint column = gl_GlobalInvocationID.x;
+    float sum = 0.0;
+    for (uint start = 0u; start < params.inner; start += 8u) {
+        uint leftColumn = start + x;
+        uint rightRow = start + y;
+        leftTile[y][x] = row < params.rows && leftColumn < params.inner
+            ? left[row * params.inner + leftColumn] : 0.0;
+        rightTile[y][x] = rightRow < params.inner && column < params.columns
+            ? right[rightRow * params.columns + column] : 0.0;
+        barrier();
+        for (uint i = 0u; i < 8u; ++i) {
+            sum += leftTile[y][i] * rightTile[i][x];
+        }
+        barrier();
+    }
+    if (row < params.rows && column < params.columns) {
+        result[row * params.columns + column] = sum;
+    }
+}

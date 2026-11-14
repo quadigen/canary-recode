@@ -356,6 +356,12 @@ JPH_API JPH_ShapeRef JPH_VHACD_Compound_Create(
 	const uint32_t *triangles,
 	uint32_t triangleCount,
 	const JPH_Vec3 *scale);
+JPH_API JPH_ShapeRef JPH_VHACD_Compound_CreateDefault(
+	const JPH_Vec3 *points,
+	uint32_t pointCount,
+	const uint32_t *triangles,
+	uint32_t triangleCount,
+	const JPH_Vec3 *scale);
 JPH_API void JPH_Shape_AddRef(JPH_ShapeRef shape);
 JPH_API void JPH_Shape_Destroy(JPH_ShapeRef shape);
 

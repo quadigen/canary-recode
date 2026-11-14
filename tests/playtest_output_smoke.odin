@@ -70,5 +70,22 @@ assert(#received == 7)
 assert(received[7] == "[Playtest server] particle warning (1 repeats suppressed)")
 `, "playtest_output_warning_interval")
 	assert(ok, err)
+	ok, err = vm.RunInternal(&script_vm, `
+local log = game:GetService("LogService")
+local generation = log.HistoryGeneration
+log:Clear()
+assert(log.MessageCount == 0 and log.HistoryGeneration == generation + 1)
+assert(#log:GetLogHistory() == 0)
+`, "playtest_output_clear")
+	assert(ok, err)
+	_, write_error = os.write(writer, transmute([]u8)string("[LOG] first line after clear\n"))
+	assert(write_error == nil)
+	ok, err = vm.RunInternal(&script_vm, `
+assert(game:GetService("PlaytestService").IsRunning)
+local log = game:GetService("LogService")
+assert(log.MessageCount == 1)
+assert(log:GetLogHistory()[1].message == "[Playtest server] first line after clear")
+`, "playtest_output_after_clear")
+	assert(ok, err)
 	fmt.println("PLAYTEST_OUTPUT_SMOKE_PASSED")
 }

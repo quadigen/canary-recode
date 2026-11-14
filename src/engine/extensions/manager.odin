@@ -74,6 +74,7 @@ Extension_Record :: struct {
 }
 
 Context :: struct {
+	game: ^Game_Library,
 	class_registry:    ^classes.Registry,
 	service_registry:  ^services.Registry,
 	datatype_registry: ^datatypes.Registry,
@@ -110,6 +111,7 @@ Context_Destroy :: proc(context_state: ^Context) {
 		return
 	}
 
+	Game_Unload(context_state)
 	Unload_All(context_state)
 
 	if context_state.instance_data != nil {

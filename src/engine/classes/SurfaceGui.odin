@@ -203,7 +203,7 @@ surfacegui_texture_size :: proc(canvas_width, canvas_height: f32) -> SurfaceGui_
 	}
 }
 
-surfacegui_render_surface :: proc(
+SurfaceGui_Render_Surface :: proc(
 	gui: ^SurfaceGui,
 	ctx: ^Class_Step_Context,
 	size: SurfaceGui_Texture_Size,
@@ -224,12 +224,15 @@ surfacegui_render_surface :: proc(
 	kineffi.Kine_Skia_Surface_Clear(gui.surface, 0, 0, 0, 0)
 
 	previous_surface := ctx.renderer.SkiaSurface
-	previous_width := ctx.viewport_width
-	previous_height := ctx.viewport_height
+	defer ctx.renderer.SkiaSurface = previous_surface
 
 	ctx.renderer.SkiaSurface = gui.surface
-	ctx.viewport_width = i32(canvas_width)
-	ctx.viewport_height = i32(canvas_height)
+	canvas_ctx := ctx^
+	canvas_ctx.viewport_width = i32(canvas_width)
+	canvas_ctx.viewport_height = i32(canvas_height)
+	canvas_ctx.gui_transform = {}
+	canvas_ctx.cache_gui = false
+	canvas_ctx.gui_recording = false
 
 	guilib.save(gui.surface)
 
@@ -241,16 +244,37 @@ surfacegui_render_surface :: proc(
 		guilib.clipRect(gui.surface, guilib.Rect{width = canvas_width, height = canvas_height})
 	}
 
-	ScreenGui_RenderChildren(&gui.object, ctx)
+	surfacegui_draw_canvas(gui, &canvas_ctx, canvas_width, canvas_height)
 
 	guilib.restore(gui.surface)
 	kineffi.Kine_Skia_Surface_Flush(gui.surface)
 
-	ctx.renderer.SkiaSurface = previous_surface
-	ctx.viewport_width = previous_width
-	ctx.viewport_height = previous_height
-
 	return true
+}
+
+surfacegui_draw_canvas :: proc(gui: ^SurfaceGui, ctx: ^Class_Step_Context, width, height: f32) {
+	shader := UIShader_Find(&gui.object)
+	if shader == nil || !UIShader_Prepare(shader) {
+		ScreenGui_RenderChildren(&gui.object, ctx)
+		return
+	}
+	if shader.gui_transform[0] == 0 || shader.gui_transform[1] == 0 {return}
+
+	rect := guilib.Rect{width = width, height = height, bgTransparency = 1}
+	surface := ctx.renderer.SkiaSurface
+	transformed := UIShader_Push_Transform(shader, surface, rect)
+	defer if transformed {guilib.restore(surface)}
+	layer := false
+	if shader.samples_content {
+		layer = UIShader_Apply(shader, ctx, rect, true)
+	} else {
+		_ = UIShader_Apply(shader, ctx, rect, false)
+	}
+	defer if layer {
+		guilib.restore(surface)
+		guilib.restore(surface)
+	}
+	ScreenGui_RenderChildren(&gui.object, ctx)
 }
 
 surfacegui_unpremultiply :: proc(surface: ^kineffi.KineSkiaSurface) {
@@ -609,6 +633,13 @@ surfacegui_needs_animation :: proc(object: ^Object) -> bool {
 			continue
 		}
 
+		image: ^kineffi.KineSkiaImage
+		switch child.class {
+		case &ImageLabel_Class: image = (cast(^ImageLabel)child).stored_image
+		case &ImageButton_Class: image = (cast(^ImageButton)child).stored_image
+		}
+		if image != nil && kineffi.Kine_Skia_Image_IsAnimating(image) != 0 {return true}
+
 		if Is_A(child, "TextBox") {
 			box := cast(^TextBox)child
 			if box.focused || box.focus_animation > 0.001 {
@@ -695,7 +726,7 @@ SurfaceGui_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 			surfacegui_destroy_renderable(gui, renderer)
 		}
 
-		if !surfacegui_render_surface(gui, ctx, size, canvas_width, canvas_height) {
+		if !SurfaceGui_Render_Surface(gui, ctx, size, canvas_width, canvas_height) {
 			surfacegui_destroy_renderable(gui, renderer)
 			return
 		}

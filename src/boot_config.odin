@@ -2,6 +2,8 @@
 package main
 
 import "core:fmt"
+import "core:path/filepath"
+import extensions "engine/extensions"
 import serializer "engine/serializer"
 import vm "engine/vm"
 import engine_runtime "engine/runtime"
@@ -59,6 +61,22 @@ load_client_asset_bundle :: proc() -> bool {
 	defer serializer.Error_Delete(&err)
 	if !serializer.Error_Is_None(err) {
 		serializer.Error_Print(err, "Could not load the executable's embedded assets: ")
+		return false
+	}
+	return true
+}
+
+load_game_library :: proc(environment: ^engine_runtime.Environment, options: Startup_Options) -> bool {
+	if options.game_library == "" {return true}
+	path, path_err := filepath.abs(options.game_library)
+	if path_err != nil {
+		fmt.eprintf("Could not find game library %q: %v\n", options.game_library, path_err)
+		return false
+	}
+	defer delete(path)
+	if err := extensions.Game_Load(&environment.extensions, path, options.mode); err != "" {
+		fmt.eprintf("Could not start game library %q: %s\n", path, err)
+		delete(err)
 		return false
 	}
 	return true

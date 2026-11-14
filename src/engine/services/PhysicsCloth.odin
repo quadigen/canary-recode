@@ -8,6 +8,8 @@ import "core:math"
 import "core:math/linalg"
 
 CLOTH_COLLISION_RADIUS :: 0.04
+CLOTH_COLLISION_SAMPLE_SPACING :: 0.75
+CLOTH_COLLISION_MAX_LINK_SAMPLES :: 8
 CLOTH_SOLVER_ITERATIONS :: 8
 CLOTH_MAX_SUBSTEP :: f32(1.0 / 120.0)
 
@@ -145,10 +147,62 @@ physics_step_cloth :: proc(
 				}
 			}
 		}
+		if sphere != nil {
+			physics_collide_cloth_wide_links(cloth, service, sphere, candidates, &previous, dt)
+		}
 	}
 	cloth.pose_source = .Simulation
 	cloth.pose_anchors = anchors
 	cloth.revision += 1
+}
+
+// Wide cloth can have a gap between particle colliders large enough for a
+// character to pass through. Sample the links without changing the mesh or
+// its replicated particle layout.
+physics_collide_cloth_wide_links :: proc(
+	cloth: ^classes.Cloth,
+	service: ^Physics,
+	sphere: kineffi.JPH_ShapeRef,
+	candidates: []kineffi.JPH_BodyID,
+	previous: ^[classes.CLOTH_VERTEX_COUNT][3]f32,
+	dt: f32,
+) {
+	stride :: classes.CLOTH_STRIDE
+	segments :: classes.CLOTH_SEGMENTS
+	for axis in 0..<2 {
+		step := 1 if axis == 0 else stride
+		length := (cloth.width if axis == 0 else cloth.size.Y) / segments
+		samples := clamp(int(math.ceil(length / CLOTH_COLLISION_SAMPLE_SPACING)), 1, CLOTH_COLLISION_MAX_LINK_SAMPLES)
+		if samples == 1 {continue}
+		for a in 0..<classes.CLOTH_VERTEX_COUNT {
+			if (a % stride == segments && axis == 0) ||
+			   (a / stride == segments && axis == 1) {continue}
+			b := a + step
+			free_a := !classes.Cloth_Pinned(cloth.pin_count, a)
+			free_b := !classes.Cloth_Pinned(cloth.pin_count, b)
+			if !free_a && !free_b {continue}
+			for i in 1..<samples {
+				t := f32(i) / f32(samples)
+				s := 1 - t
+				old_position := previous[a] * s + previous[b] * t
+				position := cloth.particles[a].position * s + cloth.particles[b].position * t
+				velocity := cloth.particles[a].velocity * s + cloth.particles[b].velocity * t
+				sample := classes.Cloth_Particle{position, velocity}
+				hit := physics_collide_cloth_particle(service, sphere, candidates, old_position, &sample, dt)
+				if hit == kineffi.JPH_BODY_ID_INVALID {continue}
+				physics_report_deformable_contact(service, &cloth.object, hit)
+				weight_a := s if free_a else 0
+				weight_b := t if free_b else 0
+				total := weight_a * s + weight_b * t
+				correction := (sample.position - position) / total
+				kick := (sample.velocity - velocity) / total
+				cloth.particles[a].position += correction * weight_a
+				cloth.particles[b].position += correction * weight_b
+				cloth.particles[a].velocity += kick * weight_a
+				cloth.particles[b].velocity += kick * weight_b
+			}
+		}
+	}
 }
 
 physics_solve_cloth_links :: proc(cloth: ^classes.Cloth, width: f32) {

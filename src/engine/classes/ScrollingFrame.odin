@@ -97,6 +97,7 @@ scrolling_frame_interact :: proc(frame: ^ScrollingFrame) {
 	}
 
 	frame.idle_time = 0
+	gui_invalidate_draw(&frame.object)
 }
 
 
@@ -597,7 +598,7 @@ ScrollingFrame_set :: proc(
 		position.X = clamp(position.X, f32(0), frame.max_scroll_x)
 		position.Y = clamp(position.Y, f32(0), frame.max_scroll_y)
 		if frame.canvas_position != position {
-			Gui_Layout_Mark_Dirty()
+			gui_mark_layout_for(object, false)
 		}
 
 		frame.canvas_position = position
@@ -614,7 +615,7 @@ ScrollingFrame_set :: proc(
 		size := datatypes.Arg_UDim2(L, value_index, datatype_registry)
 		if frame.canvas_size != size {
 			frame.canvas_size = size
-			Gui_Layout_Mark_Dirty()
+			gui_mark_layout_for(object)
 		}
 
 		return true
@@ -630,7 +631,7 @@ ScrollingFrame_set :: proc(
 		size := enums.AutomaticSize(item.value)
 		if frame.automatic_canvas_size != size {
 			frame.automatic_canvas_size = size
-			Gui_Layout_Mark_Dirty()
+			gui_mark_layout_for(object)
 		}
 		return true
 
@@ -660,7 +661,7 @@ ScrollingFrame_set :: proc(
 		item := enums.Arg_Item(L, value_index, enum_registry, "ScrollingDirection")
 
 		frame.scrolling_direction = enums.ScrollingDirection(item.value)
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 
 
 		if frame.scrolling_direction == .X {
@@ -741,7 +742,15 @@ ScrollingFrame_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 
+	old_position := frame.canvas_position
 	ScrollingFrame_update_animation(frame, rect, ctx.delta_time)
+	if frame.canvas_position != old_position {
+		gui_apply_transforms(&frame.gui_object, rect.x, rect.y, rect.width, rect.height)
+	}
+	ctx.gui_dynamic = ctx.gui_dynamic ||
+		frame.target_position != frame.canvas_position ||
+		(frame.scrollbar_auto_hide && (frame.idle_time < frame.scrollbar_fade_delay ||
+			frame.scrollbar_alpha > 0.001))
 
 	fade_top, fade_bottom, fade_left, fade_right: f32
 

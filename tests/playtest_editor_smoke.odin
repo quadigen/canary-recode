@@ -55,6 +55,7 @@ run_case :: proc(label: string, mode: target.Mode, playtest: bool) -> bool {
 
 
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", playtest)
+	vm.AddGlobal_String(&script_vm, "ProjectPath", options.project)
 
 	archive_path := strings.concatenate({"build/editor-playtest-", label, ".zip"})
 	defer os.remove(archive_path)

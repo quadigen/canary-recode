@@ -72,6 +72,7 @@ foreign kine_skia {
 	Kine_Skia_Surface_BeginPicture :: proc(surface: ^KineSkiaSurface) -> i32 ---
 	Kine_Skia_Surface_EndPicture :: proc(surface: ^KineSkiaSurface) -> ^KineSkiaPicture ---
 	Kine_Skia_Picture_Destroy :: proc(picture: ^KineSkiaPicture) ---
+	Kine_Skia_Image_IsAnimating :: proc(image: ^KineSkiaImage) -> i32 ---
 	Kine_Skia_Surface_DrawPicture :: proc(surface: ^KineSkiaSurface, picture: ^KineSkiaPicture) ---
 	Kine_Skia_Surface_CreateVulkanRenderTarget :: proc(_context: ^KineSkiaVulkanContext, width: i32, height: i32, imageInfo: ^KineSkiaVulkanImageInfo) -> ^KineSkiaSurface ---
 	Kine_Skia_Surface_CreateGLRenderTarget :: proc(_context: ^KineSkiaGLContext, width: i32, height: i32, imageInfo: ^KineSkiaGLImageInfo) -> ^KineSkiaSurface ---

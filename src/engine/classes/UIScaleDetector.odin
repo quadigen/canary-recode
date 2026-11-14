@@ -307,6 +307,7 @@ ui_scale_detector_update :: proc(d: ^UIScaleDetector, gui: ^GuiObject, x, y: f32
 	d.last_size = {w, h}
 
 	Gui_Layout_Mark_Dirty()
+	gui_invalidate_draw(&gui.object)
 	surfacegui_mark_dirty_for(&gui.object)
 }
 

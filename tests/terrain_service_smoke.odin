@@ -171,6 +171,15 @@ local materials, occupancy = Terrain:ReadVoxels(Region3.new(Vector3.new(-4, -4, 
 assert(materials[1][1][1] == Enum.Material.Slate)
 assert(math.abs(occupancy[1][1][1] - 1) < 1e-6)
 
+-- Oversized synchronous fills fail before writing any terrain.
+Terrain.VoxelSize = 0.1
+local ok, message = pcall(function()
+	Terrain:FillBlock(CFrame.new(302, 22, -1167), Vector3.new(377, 8, 300), Enum.Material.Water)
+end)
+assert(not ok and string.find(message, "voxel limit", 1, true))
+assert(Terrain:CountCells() == 8)
+Terrain.VoxelSize = 4
+
 -- Material arguments must be Enum.Material, not strings.
 assert(not pcall(function()
 	Terrain:FillBlock(CFrame.new(0, 0, 0), Vector3.new(4, 4, 4), "Slate")

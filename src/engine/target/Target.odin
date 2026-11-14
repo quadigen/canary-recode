@@ -37,7 +37,6 @@ IS_EDITOR :: ACTIVE == Mode.Editor
 IS_CLIENT :: ACTIVE == Mode.Client
 IS_SERVER :: ACTIVE == Mode.Server
 
-
 current_mode := BUILD_DEFAULT
 
 

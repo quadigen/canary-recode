@@ -49,6 +49,7 @@ main :: proc() {
 	renderer_object: renderer.RendererObject
 
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", false)
+	vm.AddGlobal_String(&script_vm, "ProjectPath", options.project)
 
 	archive_path := "build/editor-package-upload-smoke.zip"
 	defer os.remove(archive_path)

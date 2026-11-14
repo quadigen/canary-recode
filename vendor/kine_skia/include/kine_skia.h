@@ -497,6 +497,7 @@ KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapGL(KineSkiaSurface *surface,
 KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage *image);
 
 KINE_SKIA_API int Kine_Skia_Image_GetWidth(const KineSkiaImage *image);
+KINE_SKIA_API int Kine_Skia_Image_IsAnimating(const KineSkiaImage *image);
 KINE_SKIA_API int Kine_Skia_Image_GetHeight(const KineSkiaImage *image);
 
 /* Draw image at native size, top-left at (x,y) */

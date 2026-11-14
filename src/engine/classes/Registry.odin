@@ -97,6 +97,9 @@ Class_Step_Context :: struct {
 	viewport_height: i32,
 	gui_overlay:     bool,
 	gui_transform:   Gui_Render_Transform,
+	cache_gui:       bool,
+	gui_dynamic:     bool,
+	gui_recording:   bool,
 }
 
 Class_Step :: proc(object: ^Object, ctx: ^Class_Step_Context)
@@ -399,6 +402,7 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		return true
 	}
 
+	gui_revision := Gui_Render_Revision()
 	if descriptor != nil &&
 	   descriptor.set != nil &&
 	   descriptor.set(
@@ -413,6 +417,21 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		// Funnelling here means every class gets change signals for free,
 		// without each setter having to remember to fire its own.
 		surfacegui_mark_dirty_for(object)
+		// These setters bump the revision only when the value changes.
+		switch key {
+		case "Position", "Size", "AnchorPoint", "Visible", "ZIndex", "Rotation",
+		     "BackgroundTransparency", "BackgroundColor3":
+			if Gui_Render_Revision() != gui_revision || !Is_A_Class(object, &GuiObject_Class) {
+				gui_invalidate_draw(object)
+			}
+		case "Text":
+			if Gui_Render_Revision() != gui_revision ||
+			   !(Is_A_Class(object, &TextLabel_Class) || Is_A_Class(object, &TextButton_Class)) {
+				gui_invalidate_draw(object)
+			}
+		case:
+			gui_invalidate_draw(object)
+		}
 		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
 		Object_Fire_Property_Changed(object, key, L)
@@ -422,6 +441,7 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 	if imported_property_set(L, descriptor, object, key, value_index) ||
 	   Object_Set_Property(L, value, ctx, key, value_index) {
 		surfacegui_mark_dirty_for(object)
+		gui_invalidate_draw(object)
 		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
 
 		Object_Fire_Property_Changed(object, key, L)
@@ -1006,6 +1026,7 @@ Step :: proc(
 	viewport_height: i32 = 0,
 	phase: Class_Step_Phase = .Render_2D,
 	gui_overlay: bool = false,
+	cache_gui: bool = false,
 ) {
 	if registry == nil || L == nil {return}
 
@@ -1035,6 +1056,7 @@ Step :: proc(
 		viewport_width  = viewport_width,
 		viewport_height = viewport_height,
 		gui_overlay     = gui_overlay,
+		cache_gui       = cache_gui,
 	}
 
 	for target in targets {
@@ -1541,6 +1563,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Advanced_Lighting_Effects(registry)
 	Register_ArcHandles(registry)
 	Register_Attachment(registry)
+	Register_BallSocketConstraint(registry)
 	Register_BasePart(registry)
 	Register_BaseScript(registry)
 	Register_BindableEvent(registry)
@@ -1570,6 +1593,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_EditableMesh(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
+	Register_GPUCompute(registry)
 	Register_GroundDetector(registry)
 	Register_GuiButton(registry)
 	Register_GuiObject(registry)
@@ -1601,10 +1625,12 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_ParticleEmitter(registry)
 	Register_PointLight(registry)
 	Register_PostProcess(registry)
+	Register_PrismaticConstraint(registry)
 	Register_RayValue(registry)
 	Register_RemoteEvent(registry)
 	Register_RemoteFunction(registry)
 	Register_RigidBody2D(registry)
+	Register_RodConstraint(registry)
 	Register_RopeConstraint(registry)
 	Register_RotationController(registry)
 	Register_ScreenGui(registry)
@@ -1652,6 +1678,10 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 Registry_Destroy :: proc(registry: ^Registry) {
 	if registry == nil {
 		return
+	}
+	if gui_layout_registry == registry {
+		gui_layout_registry = nil
+		Gui_Layout_Mark_Dirty()
 	}
 
 	for descriptor in registry.classes {

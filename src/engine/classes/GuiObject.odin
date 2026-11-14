@@ -1,5 +1,6 @@
 package classes
 
+import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
@@ -8,6 +9,7 @@ import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:math"
+import "core:strings"
 
 GuiObject_Class := Class_Info {
 	name   = "GuiObject",
@@ -70,6 +72,14 @@ GuiObject :: struct {
 	rotation_cache_sin:          f32,
 	rotation_cache_cos:          f32,
 	rotation_cache_valid:        bool,
+	draw_revision:               u64,
+	draw_picture:                ^kineffi.KineSkiaPicture,
+	draw_picture_revision:       u64,
+	draw_picture_rect:           [4]f32,
+	draw_observed_revision:      u64,
+	draw_observed:               bool,
+	draw_dynamic:                bool,
+	layout_dirty:                bool,
 }
 
 GuiObject_Init :: proc() -> GuiObject {
@@ -185,6 +195,7 @@ GuiObject_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
 	if gui == nil {return}
 	gui_object_untrack(gui)
+	gui_discard_picture(gui)
 
 	if gui.input_began != nil {
 		signals.Destroy(gui.input_began)
@@ -218,6 +229,45 @@ GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
 		signals.Destroy(gui.mouse_wheel_backward)
 		gui.mouse_wheel_backward = nil
 	}
+}
+
+gui_discard_picture :: proc(gui: ^GuiObject) {
+	if gui.draw_picture != nil {
+		kineffi.Kine_Skia_Picture_Destroy(gui.draw_picture)
+		gui.draw_picture = nil
+	}
+}
+
+gui_invalidate_draw :: proc(object: ^Object) {
+	object := object
+	if object != nil && !Is_A_Class(object, &GuiObject_Class) {object = object.parent}
+	for Is_A_Class(object, &GuiObject_Class) {
+		gui := cast(^GuiObject)object
+		gui.draw_revision += 1
+		object = object.parent
+	}
+}
+
+// Layout dependencies stay within a top-level GUI tree. Ancestors can measure
+// their descendants, and a list/grid can move siblings within that same tree.
+gui_mark_layout_for :: proc(object: ^Object, full := true) {
+	gui_layout_dirty = true
+	gui_render_revision += 1
+	root: ^GuiObject
+	for current := object; current != nil; current = current.parent {
+		if Is_A_Class(current, &GuiObject_Class) {
+			root = cast(^GuiObject)current
+		} else if root != nil {
+			break
+		}
+	}
+	gui_layout_full_dirty = gui_layout_full_dirty || full
+	if root == nil {
+		gui_layout_all_dirty = true
+		return
+	}
+	root.layout_dirty = true
+	gui_invalidate_draw(object)
 }
 
 GuiObject_get :: proc(
@@ -471,7 +521,7 @@ GuiObject_get_absolute_transform :: proc(
 
 	gui_cached := cast(^GuiObject)object
 	if ctx.gui_transform.object == nil &&
-	   !gui_layout_dirty &&
+	   !gui_layout_dirty && !gui_layout_solving &&
 	   gui_cached.base_solved &&
 	   gui_cached.resolved_size_valid &&
 	   ctx.viewport_width == gui_layout_last_width &&
@@ -707,6 +757,39 @@ gui_object_is_overlay_pass :: proc(screen: ^ScreenGui) -> bool {
 
 	for parent := screen.object.parent; parent != nil; parent = parent.parent {
 		if parent.name == "StarterGui" || Is_A(parent, "PlayerGui") {return true}
+	}
+	return false
+}
+
+Gui_Overlay_Needs_Backdrop :: proc(registry: ^Registry) -> bool {
+	backdrop_classes := [?]string{"UIBackdrop", "UIMagnifier", "UIShader"}
+	for class_name in backdrop_classes {
+		descriptor := Find_Class(registry, class_name)
+		if descriptor == nil {continue}
+		for object in descriptor.instances {
+			if object == nil || object.destroyed || !Is_A_Class(object.parent, &GuiObject_Class) {
+				continue
+			}
+			switch object.class {
+			case &UIBackdrop_Class:
+				if !(cast(^UIBackdrop)object).enabled {continue}
+			case &UIMagnifier_Class:
+				effect := cast(^UIMagnifier)object
+				if !effect.enabled || effect.zoom <= 1 || effect.transparency >= 1 {continue}
+			case &UIShader_Class:
+				effect := cast(^UIShader)object
+				// A backdrop child must have this identifier in its SkSL source.
+				if !effect.enabled || !strings.contains(effect.source, "backdrop") {continue}
+			}
+			gui := cast(^GuiObject)object.parent
+			if !GuiObject_effectively_visible(gui) {continue}
+			for parent := gui.object.parent; parent != nil; parent = parent.parent {
+				if Is_A_Class(parent, &ScreenGui_Class) {
+					if gui_object_is_overlay_pass(cast(^ScreenGui)parent) {return true}
+					break
+				}
+			}
+		}
 	}
 	return false
 }
@@ -1170,6 +1253,7 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 			continue
 		}
 		gui.mouse_inside = false
+		if Is_A_Class(&gui.object, &GuiButton_Class) {gui_invalidate_draw(&gui.object)}
 		px, py := result.x, result.y
 		if !GuiObject_accepts_pointer(gui) && gui.hover_listener_registered {
 			px, py, _ = GuiObject_pointer_point(registry, gui, screen_x, screen_y)
@@ -1184,6 +1268,7 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 		if gui == nil || gui.destroyed {index += 1; continue}
 		if !gui.mouse_inside {
 			gui.mouse_inside = true
+			if Is_A_Class(&gui.object, &GuiButton_Class) {gui_invalidate_draw(&gui.object)}
 			gui_object_fire_xy(L, gui.mouse_enter, gui.hover_event_x, gui.hover_event_y)
 			if index >= len(gui_hover_next) || gui_hover_next[index] != gui {continue}
 		}
@@ -1600,12 +1685,14 @@ surfacegui_mark_dirty_for :: proc(object: ^Object) {
 }
 
 
-GUI_LAYOUT_SKIP_WHEN_CLEAN :: true
 
 gui_layout_dirty: bool = true
 gui_layout_full_dirty: bool = true
+gui_layout_all_dirty: bool = true
+gui_layout_registry: ^Registry
 gui_layout_last_width: i32
 gui_layout_last_height: i32
+gui_layout_solving: bool
 
 gui_render_revision: u64
 
@@ -1613,23 +1700,10 @@ Gui_Render_Revision :: #force_inline proc "contextless" () -> u64 {return gui_re
 
 Gui_Render_Mark_Dirty :: #force_inline proc "contextless" () {gui_render_revision += 1}
 
-// Set by GUI elements that animate over time (focus fades, caret blink) so the
-// display-list cache stays off while their output changes every frame.
-gui_render_animated: bool
-
-Gui_Render_Mark_Animated :: #force_inline proc "contextless" () {gui_render_animated = true}
-
-Gui_Render_Is_Animated :: #force_inline proc "contextless" () -> bool {return gui_render_animated}
-
-Gui_Render_Consume_Animated :: #force_inline proc "contextless" () -> bool {
-	animated := gui_render_animated
-	gui_render_animated = false
-	return animated
-}
-
 Gui_Layout_Mark_Dirty :: #force_inline proc "contextless" () {
 	gui_layout_dirty = true
 	gui_layout_full_dirty = true
+	gui_layout_all_dirty = true
 	gui_render_revision += 1
 }
 
@@ -1637,6 +1711,7 @@ Gui_Layout_Mark_Dirty :: #force_inline proc "contextless" () {
 // ancestors are handled by the full layout path instead.
 Gui_Layout_Mark_Transform_Dirty :: #force_inline proc "contextless" () {
 	gui_layout_dirty = true
+	gui_layout_all_dirty = true
 	gui_render_revision += 1
 }
 
@@ -1656,6 +1731,7 @@ gui_object_position_affects_content :: proc(gui: ^GuiObject) -> bool {
 
 gui_layout_guis: [dynamic]^GuiObject
 gui_layout_roots: [dynamic]^GuiObject
+gui_layout_active_roots: [dynamic]^GuiObject
 gui_layout_layouts: [dynamic]^Object
 
 
@@ -1845,10 +1921,19 @@ gui_apply_transforms :: proc(parent: ^GuiObject, px, py, pw, ph: f32) {
 			scroll_y,
 		)
 
-		gui.absolute_position = {x, y}
-		gui.absolute_size = {w, h}
+		gui_set_layout_rect(gui, x, y, w, h)
 
 		gui_apply_transforms(gui, x, y, w, h)
+	}
+}
+
+gui_set_layout_rect :: proc(gui: ^GuiObject, x, y, w, h: f32) {
+	position := datatypes.Vector2{x, y}
+	size := datatypes.Vector2{w, h}
+	if gui.absolute_position != position || gui.absolute_size != size {
+		gui.absolute_position = position
+		gui.absolute_size = size
+		gui_invalidate_draw(&gui.object)
 	}
 }
 
@@ -1858,15 +1943,13 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	}
 
 
-	when GUI_LAYOUT_SKIP_WHEN_CLEAN {
-		if !gui_layout_dirty &&
-		   width == gui_layout_last_width &&
-		   height == gui_layout_last_height {
-			return
-		}
-	}
+	resized := registry != gui_layout_registry ||
+		width != gui_layout_last_width || height != gui_layout_last_height
+	if !resized && !gui_layout_dirty {return}
 
 	tracy.ZoneNC("Update_GUI_Layout", 0xE5C07B)
+	gui_layout_solving = true
+	defer gui_layout_solving = false
 
 	L: ^vm.State
 
@@ -1882,27 +1965,32 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	}
 
 	// Retain all measurements and list/grid overrides for position-only edits.
-	if !gui_layout_full_dirty &&
-	   width == gui_layout_last_width &&
-	   height == gui_layout_last_height {
+	if !resized && !gui_layout_full_dirty {
 		tracy.ZoneNC("GUI Transform-Only Layout", 0x56B6C2)
 		for root in gui_layout_roots {
-			if root == nil || root.object.destroyed {continue}
+			if root == nil || root.object.destroyed ||
+			   (!gui_layout_all_dirty && !root.layout_dirty) {continue}
 			px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
 			x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
-			root.absolute_position = {x, y}
-			root.absolute_size = {w, h}
+			gui_set_layout_rect(root, x, y, w, h)
 			gui_apply_transforms(root, x, y, w, h)
+			root.layout_dirty = false
 		}
 		gui_layout_dirty = false
+		gui_layout_all_dirty = false
 		return
 	}
 
 	gui_layout_animated = false
+	all_dirty := resized || gui_layout_all_dirty
+	gui_layout_dirty = false
+	gui_layout_full_dirty = false
+	gui_layout_all_dirty = false
 
 
 	clear(&gui_layout_guis)
 	clear(&gui_layout_roots)
+	clear(&gui_layout_active_roots)
 	clear(&gui_layout_layouts)
 
 	{
@@ -1930,19 +2018,24 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 
 				if is_gui {
 					gui := cast(^GuiObject)object
-
-					append(&gui_layout_guis, gui)
-
 					if gui_layout_root(gui) {
 						append(&gui_layout_roots, gui)
+						if all_dirty || gui.layout_dirty {
+							append(&gui_layout_active_roots, gui)
+						}
+					}
+					if all_dirty || gui_layout_tree_dirty(object) {
+						append(&gui_layout_guis, gui)
 					}
 				} else {
+					if !all_dirty && !gui_layout_tree_dirty(object.parent) {continue}
 					append(&gui_layout_layouts, object)
 				}
 			}
 		}
 	}
 
+	for root in gui_layout_active_roots {root.layout_dirty = false}
 	for _ in 0 ..< 8 {
 		for gui in gui_layout_guis {
 			gui.previous_size = gui.resolved_size
@@ -1964,7 +2057,7 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		{
 			tracy.ZoneNC("Layout Measure Base", 0x61AFEF)
 
-			for gui in gui_layout_roots {
+			for gui in gui_layout_active_roots {
 				gui_measure_base(gui, registry, &ctx)
 			}
 		}
@@ -1972,7 +2065,7 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		{
 			tracy.ZoneNC("Layout Measure Auto", 0xC678DD)
 
-			for gui in gui_layout_roots {
+			for gui in gui_layout_active_roots {
 				gui_measure_auto(gui, registry, &ctx)
 			}
 		}
@@ -1997,8 +2090,8 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		{
 			tracy.ZoneNC("Layout Transforms", 0xD19A66)
 
-			for root in gui_layout_roots {
-				if root == nil || root.object.destroyed {
+			for root in gui_layout_active_roots {
+				if root.object.destroyed {
 					continue
 				}
 
@@ -2006,8 +2099,7 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 
 				x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
 
-				root.absolute_position = {x, y}
-				root.absolute_size = {w, h}
+				gui_set_layout_rect(root, x, y, w, h)
 
 				gui_apply_transforms(root, x, y, w, h)
 			}
@@ -2020,11 +2112,23 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 
 	gui_layout_last_width = width
 	gui_layout_last_height = height
-	gui_layout_dirty = gui_layout_changed || gui_layout_animated
-	gui_layout_full_dirty = gui_layout_dirty
+	gui_layout_registry = registry
+	if gui_layout_changed || gui_layout_animated {
+		gui_layout_dirty = true
+		gui_layout_full_dirty = true
+		gui_layout_all_dirty = true
+	}
 	if gui_layout_changed {
 		gui_render_revision += 1
 	}
+}
+
+gui_layout_tree_dirty :: proc(object: ^Object) -> bool {
+	root: ^GuiObject
+	for current := object; Is_A_Class(current, &GuiObject_Class); current = current.parent {
+		root = cast(^GuiObject)current
+	}
+	return root != nil && root.layout_dirty
 }
 
 GuiObject_get_rect :: proc(object: ^Object, ctx: ^Class_Step_Context) -> (guilib.Rect, bool) {
@@ -2300,6 +2404,7 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 
 		if backdrop.enabled &&
 		   ((has_effect && backdrop.transparency < 1) || backdrop.tint_transparency < 0.999) {
+			ctx.gui_dynamic = true
 			backdrop_rect := rect
 			backdrop_rect.color = backdrop.tint_color
 			backdrop_rect.bgTransparency = f32(backdrop.tint_transparency)
@@ -2378,6 +2483,7 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 		magnifier := cast(^UIMagnifier)magnifier_object
 
 		if magnifier.enabled && magnifier.zoom > 1 && magnifier.transparency < 1 {
+			ctx.gui_dynamic = true
 			magnifier_rect := rect
 			magnifier_rect.color = datatypes.Color3 {
 				R = 1,
@@ -2419,6 +2525,7 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 	}
 
 	if Is_A_Class(object, &ViewportFrame_Class) {
+		ctx.gui_dynamic = true
 		ViewportFrame_Draw_Image(cast(^ViewportFrame)object, ctx, rect)
 	}
 	gui_render_children(gui, object, ctx, rect, shape)
@@ -2584,8 +2691,8 @@ GuiObject_set :: proc(
 		_ = vm.RaiseError(L, "AbsoluteSize cannot be changed")
 		return true
 	case:
-		// Keep inherited-property invalidation for name-based sorted layouts.
-		Gui_Layout_Mark_Dirty()
+		// Name is also used to sort children in list and grid layouts.
+		if key == "Name" {gui_mark_layout_for(object)}
 		return false
 	}
 
@@ -2593,9 +2700,9 @@ GuiObject_set :: proc(
 		layout_dirty = true
 	}
 	if layout_dirty {
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 	} else if transform_dirty {
-		Gui_Layout_Mark_Transform_Dirty()
+		gui_mark_layout_for(object, false)
 	} else if render_dirty {
 		Gui_Render_Mark_Dirty()
 	}
@@ -2607,6 +2714,8 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	dst := cast(^GuiObject)destination
 
 	gui_object_untrack(dst)
+	gui_discard_picture(dst)
+	gui_invalidate_draw(destination)
 	Gui_Layout_Mark_Dirty()
 
 	dst.bg_transparency = src.bg_transparency

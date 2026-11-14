@@ -341,6 +341,7 @@ foreign lib {
 	JPH_ConvexHullShape_Create :: proc(points: [^]JPH_Vec3, pointCount: u32, maxConvexRadius: f32) -> JPH_ShapeRef ---
 	JPH_MeshShape_Create :: proc(triangles: [^]JPH_Triangle, triangleCount: u32) -> JPH_ShapeRef ---
 	JPH_VHACD_Compound_Create :: proc(points: [^]JPH_Vec3, pointCount: u32, triangles: [^]u32, triangleCount: u32, scale: ^JPH_Vec3) -> JPH_ShapeRef ---
+	JPH_VHACD_Compound_CreateDefault :: proc(points: [^]JPH_Vec3, pointCount: u32, triangles: [^]u32, triangleCount: u32, scale: ^JPH_Vec3) -> JPH_ShapeRef ---
 	JPH_Shape_AddRef :: proc(shape: JPH_ShapeRef) ---
 	JPH_Shape_Destroy :: proc(shape: JPH_ShapeRef) ---
 	JPH_Shape_CollectTriangles :: proc(shape: JPH_ShapeRef, position: ^JPH_RVec3, rotation: ^JPH_Quat, outVertices: [^]JPH_Vec3, maxTriangles: i32, outTruncated: ^i32) -> i32 ---

@@ -585,3 +585,11 @@ Register_Studio_Class :: proc(registry: ^classes.Registry) {
 		namecall = studio_namecall,
 	)
 }
+
+
+Studio_Keyboard_Shortcuts :: proc(registry: ^Registry) -> bool {
+	studio := cast(^Studio)DataModel_Get_Service(registry.data_model, "Studio")
+	if studio == nil {return true}
+	setting, found := studio.settings["enableKeyboardShortcuts"]
+	return !found || setting.kind != .Boolean || setting.boolean
+}
