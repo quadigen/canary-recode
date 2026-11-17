@@ -1,0 +1,50 @@
+---
+title: VectorForce
+description: Apply a constant force to a part through an attachment.
+---
+
+`VectorForce` pushes the part under one of its attachments with a constant force. It's the usual way to build thrusters, lift, and custom gravity.
+
+## Getting started
+
+```lua
+local force = Instance.new("VectorForce")
+force.Attachment0 = thruster.Attachment
+force.Force = Vector3.new(0, 4000, 0)
+force.RelativeTo = Enum.ActuatorRelativeTo.Attachment0
+force.Parent = thruster
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | Attachment that anchors the force. |
+| `Force` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Force vector. |
+| `RelativeTo` | `Enum.ActuatorRelativeTo` | Read/write | `Attachment0` | Coordinate space for `Force`. |
+| `ApplyAtCenterOfMass` | `boolean` | Read/write | `true` | Apply at the center of mass instead of the attachment. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the force is applied. |
+| `Active` | `boolean` | Read-only | `true` | Whether the force is currently applying. |
+
+`RelativeTo` accepts `Attachment0`, `Attachment1`, or `World`. The force rotates with the attachment and the part's rotation when set to `Attachment0`. `Attachment1` currently behaves the same as `World`; there's no `Attachment1` property on this class.
+
+## How it behaves
+
+`ApplyAtCenterOfMass = true` pushes without generating torque. Setting it to `false` applies the force at the attachment, which can spin the part.
+
+The force is applied every physics step while `Enabled` is true. It's constant, not an impulse, so a large value accelerates the part continuously. Multiply by the step time yourself if you need a specific change in velocity.
+
+A `VectorForce` needs a valid attachment on a part in the workspace. Without one it does nothing.
+
+## Notes
+
+- Assigning a non-attachment to `Attachment0` is ignored.
+- Cloning copies the force, space, and center-of-mass flag.
+- The force doesn't wake a sleeping part by itself; the attachment's part must be simulated.
+- For a one-time push, apply an impulse through the physics API instead.
+
+## See also
+
+- `Attachment` for placing the force.
+- `Constraint` for the shared enabled and active properties.
+- `Part` for mass and physics behavior.

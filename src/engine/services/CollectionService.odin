@@ -5,6 +5,7 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 CollectionService_Class := classes.Class_Info {
@@ -55,7 +56,14 @@ collection_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "AddTag", "RemoveTag", "HasTag", "GetTags", "GetTagged", "GetAllTags":
+	case "AddTag",
+	     "RemoveTag",
+	     "HasTag",
+	     "GetTags",
+	     "GetTagged",
+	     "GetAllTags",
+	     "GetInstanceAddedSignal",
+	     "GetInstanceRemovedSignal":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -78,6 +86,17 @@ collection_service_namecall :: proc(
 	service := cast(^CollectionService)object
 
 	switch method {
+	case "GetInstanceAddedSignal", "GetInstanceRemovedSignal":
+		tag := vm.ArgString(L, 2)
+		if !collection_validate_tag(L, tag) {return 0, true}
+		signal := classes.Object_Tag_Signal(
+			service.signal_registry,
+			tag,
+			method == "GetInstanceAddedSignal",
+		)
+		signals.Push(L, signal)
+		return 1, true
+
 	case "AddTag", "RemoveTag", "HasTag", "GetTags":
 		target := collection_object_from_argument(L, 2)
 		if target == nil || !classes.Object_Is_Accessible(L, target) {

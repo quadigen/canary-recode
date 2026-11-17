@@ -43,17 +43,17 @@ typedef struct KineSkiaVulkanImageInfo {
 typedef void *(*KineSkiaGLGetProc)(void *context, const char *name);
 
 typedef struct KineSkiaGLBackend {
-	void *getProcAddr;	 /* KineSkiaGLGetProc loader, e.g. wglGetProcAddress + GetProcAddress */
-	void *getProcContext;	 /* opaque context passed to getProcAddr; may be NULL */
+	void *getProcAddr;	  /* KineSkiaGLGetProc loader, e.g. wglGetProcAddress + GetProcAddress */
+	void *getProcContext; /* opaque context passed to getProcAddr; may be NULL */
 } KineSkiaGLBackend;
 
 typedef struct KineSkiaGLImageInfo {
 	uint32_t framebufferId; /* GL FBO id owned by the engine */
-	uint32_t format;	 /* GL sized internal format: GL_RGBA8=0x8058, GL_BGRA8=0x93A1,
-				    GL_SRGB8_ALPHA8=0x8C43; 0 = GL_RGBA8 */
-	uint32_t stencilBits;	 /* 0, 8 or 16; 0 acceptable */
-	uint32_t sampleCount;	 /* MSAA samples, usually 1 */
-	uint32_t origin;	 /* 0 = bottom-left (GL native), 1 = top-left */
+	uint32_t format;		/* GL sized internal format: GL_RGBA8=0x8058, GL_BGRA8=0x93A1,
+					   GL_SRGB8_ALPHA8=0x8C43; 0 = GL_RGBA8 */
+	uint32_t stencilBits;	/* 0, 8 or 16; 0 acceptable */
+	uint32_t sampleCount;	/* MSAA samples, usually 1 */
+	uint32_t origin;		/* 0 = bottom-left (GL native), 1 = top-left */
 } KineSkiaGLImageInfo;
 
 /* ---------------- Version ---------------- */
@@ -142,6 +142,16 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawRuntimeShaderRect(
 	float x, float y, float width, float height);
 KINE_SKIA_API const char *Kine_Skia_RuntimeShader_GetLastError(void);
 
+KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShaderScaled(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor,
+	float sampleRadius, float resolutionScale);
+
+KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShaderScaled(
+	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+	float x, float y, float width, float height, const float *backgroundColor,
+	float resolutionScale);
+
 KINE_SKIA_API KineSkiaRuntimeShader *Kine_Skia_UIShader_Create(
 	const char *sksl, bool *samplesContent);
 KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShader(
@@ -229,8 +239,8 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
 
 /* Magnifier / loupe over the frozen frame.
-     zoomAmount : magnification factor (1 disables the refraction)
-     inset      : width of the fish-eye distortion band around the content */
+	 zoomAmount : magnification factor (1 disables the refraction)
+	 inset      : width of the fish-eye distortion band around the content */
 KINE_SKIA_API void Kine_Skia_Surface_DrawMagnifierRect(
 	KineSkiaSurface *surface,
 	float x, float y, float width, float height,
@@ -490,9 +500,9 @@ KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_LoadFromMemory(const uint8_t *data,
 
 // Wrap an engine-owned, shader-read-only atlas texture on the shared GPU.
 KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapVulkan(KineSkiaVulkanContext *context,
-    int width, int height, const KineSkiaVulkanImageInfo *info);
+														int width, int height, const KineSkiaVulkanImageInfo *info);
 KINE_SKIA_API KineSkiaImage *Kine_Skia_Image_WrapGL(KineSkiaSurface *surface,
-    uint32_t texture, int width, int height);
+													uint32_t texture, int width, int height);
 
 KINE_SKIA_API void Kine_Skia_Image_Destroy(KineSkiaImage *image);
 
@@ -516,13 +526,13 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageRect(
 	uint8_t alpha);
 
 /* Draw an image with the GUI-facing ImageLabel feature set.
-     srcX/srcY/srcWidth/srcHeight : sub-rect of the source, <= 0 falls back to the
-                                    full image / remaining extent
-     scaleType : 0 Stretch, 1 Slice, 2 Tile, 3 Fit, 4 Crop
-     resample  : 0 Default (linear), 1 Linear, 2 Nearest
-     tileSizeX/tileSizeY : resolved tile step in pixels for scaleType Tile
-     r/g/b/colorA : ImageColor3 tint; colorA == 0 means no tint
-     alpha : overall transparency, 0..255 */
+	 srcX/srcY/srcWidth/srcHeight : sub-rect of the source, <= 0 falls back to the
+									full image / remaining extent
+	 scaleType : 0 Stretch, 1 Slice, 2 Tile, 3 Fit, 4 Crop
+	 resample  : 0 Default (linear), 1 Linear, 2 Nearest
+	 tileSizeX/tileSizeY : resolved tile step in pixels for scaleType Tile
+	 r/g/b/colorA : ImageColor3 tint; colorA == 0 means no tint
+	 alpha : overall transparency, 0..255 */
 KINE_SKIA_API void Kine_Skia_Surface_DrawImageScaled(
 	KineSkiaSurface *surface,
 	KineSkiaImage *image,

@@ -31,6 +31,7 @@ guid_counter: u64 = 1
 HttpService :: struct {
 	using service: Service,
 	http_enabled:  bool,
+	web_streams:   [dynamic]^WebStreamClient,
 }
 
 http_service_construct :: proc(
@@ -375,6 +376,7 @@ http_service_get :: proc(
 	     "GetImageBytes",
 	     "PostAsync",
 	     "RequestAsync",
+	     "CreateWebStreamClient",
 	     "GenerateGUID",
 	     "JSONDecode",
 	     "JSONEncode",
@@ -664,6 +666,9 @@ http_service_namecall :: proc(
 
 		return http_service_send(L, .Post, url, body, content_type), true
 
+	case "CreateWebStreamClient":
+		return http_service_create_web_stream(service, L, enum_registry), true
+
 	case "RequestAsync":
 		if !service.http_enabled {
 			return vm.RaiseError(L, "HTTP requests are disabled"), true
@@ -775,6 +780,12 @@ http_service_namecall :: proc(
 
 http_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^HttpService)object
+	for client in service.web_streams {
+		client.service = nil
+		client.state = .Closed
+		web_stream_cleanup(client)
+	}
+	delete(service.web_streams)
 
 	classes.Object_Destroy(object)
 
@@ -782,6 +793,7 @@ http_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rendere
 }
 
 Register_HttpService_Class :: proc(registry: ^classes.Registry) {
+	register_web_stream_client(registry)
 	classes.Register_Class(
 		registry,
 		&HttpService_Class,
@@ -800,5 +812,6 @@ Register_HttpService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = http_service_get,
 		namecall = http_service_namecall,
+		methods = []string{"CreateWebStreamClient"},
 	)
 }

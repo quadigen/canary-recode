@@ -17,7 +17,7 @@ PlayerScripts_Class := classes.Class_Info {
 
 PlayerGui_Class := classes.Class_Info {
 	name   = "PlayerGui",
-	parent = &classes.Instance_Class,
+	parent = &classes.BasePlayerGui_Class,
 }
 
 StarterCharacterScripts_Class := classes.Class_Info {

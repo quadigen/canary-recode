@@ -1,0 +1,105 @@
+---
+title: RunService
+description: Query how the game is running and hook code into render and simulation steps.
+---
+
+`RunService` tells you which kind of runtime your script is in, editor, server, client, or one of the combined modes, and lets you run code at specific points in the frame.
+
+## Getting started
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    print("Frame took", deltaTime, "seconds")
+end)
+```
+
+`Heartbeat` fires once per frame after simulation. The delta time is in seconds and can vary from frame to frame, so multiply movement by it rather than assuming a fixed step.
+
+## Checking the runtime mode
+
+| Method | Returns `true` when |
+| --- | --- |
+| `IsRunning()` | The game is running rather than open in the editor. |
+| `IsEdit()` | The current runtime is the editor. |
+| `IsStudio()` | The game is open in the editor or running as a playtest. |
+| `IsServer()` | Running as a server, standalone, or singleplayer. |
+| `IsClient()` | Running as a client, standalone, or singleplayer. |
+| `IsStandalone()` | Running as a standalone game. |
+| `IsSingleplayer()` | Running as singleplayer. |
+
+```lua
+local RunService = game:GetService("RunService")
+
+if RunService:IsServer() then
+    print("Server-side logic")
+elseif RunService:IsClient() then
+    print("Client-side logic")
+end
+```
+
+Standalone and singleplayer count as both server and client, because one runtime is doing both jobs. That means an `IsServer()` check doesn't guarantee other clients exist.
+
+`IsRunningAsync()` currently always returns `false`. It isn't a way to detect an asynchronous runtime.
+
+## Step signals
+
+| Signal | Callback arguments | When it fires |
+| --- | --- | --- |
+| `RenderStepped` | `deltaTime: number` | Once per render step, after bound render callbacks run. |
+| `Stepped` | `elapsedTime: number, deltaTime: number` | On each simulation step. |
+| `PostSimulation` | `deltaTime: number` | After simulation finishes for the frame. |
+| `Heartbeat` | `deltaTime: number` | Once per frame, after simulation. |
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Stepped:Connect(function(elapsedTime, deltaTime)
+    -- elapsedTime is total simulation time, deltaTime is this step.
+    print(elapsedTime, deltaTime)
+end)
+```
+
+`elapsedTime` is accumulated simulation time, not wall-clock time. It only advances while the game is stepping.
+
+These signals come from the engine's `Signal` object, not a different event type, so `Connect()` and `Once()` behave the same way as on other engine events. If signal creation fails, accessing the property can return `nil`, so guard long-lived connections if you can't be sure the runtime is fully initialized.
+
+## Binding to the render step
+
+`BindToRenderStep()` runs a named callback during rendering, which is where you want camera and UI work that must follow the rendered frame.
+
+```lua
+RunService:BindToRenderStep(name: string, callback: function): ()
+RunService:BindToRenderStep(name: string, priority: number, callback: function): ()
+```
+
+The callback receives `deltaTime`. Lower priority numbers run first, and the overload without a priority uses `0`.
+
+```lua
+local RunService = game:GetService("RunService")
+
+local function updateCamera(deltaTime)
+    -- Move the camera here.
+end
+
+RunService:BindToRenderStep("CameraUpdate", 200, updateCamera)
+
+-- Later, or on teardown:
+RunService:UnbindFromRenderStep("CameraUpdate")
+```
+
+Binding a name that's already in use replaces that binding's callback and priority instead of adding a second one, so you can rebind safely. `UnbindFromRenderStep(name)` does nothing if no binding has that name. The callback must be a function; anything else raises an error.
+
+Bound callbacks and `RenderStepped` listeners run in the same render step, the named bindings first, then the signal, so a callback bound at a low priority runs before `RenderStepped` handlers regardless of connection order.
+
+## Notes
+
+- Work bound to the render step runs on the rendering path. Keep it short, and prefer `Heartbeat` or `PostSimulation` for game logic that doesn't need to match the frame.
+- `IsServer()` and `IsClient()` describe the runtime, not permissions. A client can still call a server-authoritative API locally; the server decides what's replicated.
+- The reflection metadata for this class only lists `PostSimulation`, but all four step signals and the state methods above are callable.
+
+## See also
+
+- `Players`, player and character events.
+- `TweenService`, time-based animation driven by the same frame loop.

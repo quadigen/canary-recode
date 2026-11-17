@@ -1,0 +1,29 @@
+---
+title: ValueBase
+description: Abstract parent of the single-value classes.
+---
+
+`ValueBase` is the shared parent of the value objects such as `StringValue`, `NumberValue`, and `BoolValue`. It adds no members of its own and can't be created.
+
+## Getting started
+
+```lua
+local value = Instance.new("StringValue")
+print(value:IsA("ValueBase")) -- true
+```
+
+## Members
+
+None. Each concrete value class adds its own `Value` property.
+
+## Notes
+
+- `ValueBase` isn't creatable with `Instance.new()`.
+- It's useful for type checks that should accept any value object.
+- Cloning a concrete value copies its stored value.
+- The adornment classes also descend from `ValueBase` in this engine, which is worth knowing when writing `IsA` checks.
+
+## See also
+
+- `StringValue`, `NumberValue`, and `BoolValue`.
+- `ObjectValue` for instance references.

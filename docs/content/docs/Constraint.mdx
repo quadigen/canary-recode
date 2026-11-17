@@ -1,0 +1,39 @@
+---
+title: Constraint
+description: Connect two attachments for physics simulation.
+---
+
+`Constraint` is the base class for objects that link two `Attachment` instances. It holds the shared attachment pair and an enabled flag. The specific constraint classes add their own limits and behavior.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("RopeConstraint")
+constraint.Attachment0 = attachmentA
+constraint.Attachment1 = attachmentB
+constraint.Length = 12
+constraint.Parent = model
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the constraint is simulated. |
+| `Active` | `boolean` | Read-only | `true` | Whether the constraint currently has both ends resolved. |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First attachment. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second attachment. |
+
+`Attachment0` and `Attachment1` accept only `Attachment` instances or `nil`. Assigning another instance type is ignored rather than stored. `Active` reflects the current simulation state and can't be forced from a script.
+
+## Notes
+
+- `Constraint` itself can be created, but it has no visible effect on its own; use a subclass.
+- Both attachments must resolve to moving or anchored parts in the same world for the constraint to become active.
+- The base class clones the attachment references, not the attachments.
+- `Constraint` is the parent of `RopeConstraint`, `SpringConstraint`, `WeldConstraint`, and `VectorForce`.
+
+## See also
+
+- `Attachment` for the anchor points.
+- `RopeConstraint`, `SpringConstraint`, `WeldConstraint`, and `VectorForce` for the concrete types.

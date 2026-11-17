@@ -1,0 +1,76 @@
+---
+title: ScrollingFrame
+description: A frame with a scrollable canvas and scroll bars.
+---
+
+`ScrollingFrame` is a `GuiObject` whose children are laid out on a larger canvas. The visible window stays fixed while the canvas moves, and scroll bars can appear automatically.
+
+## Getting started
+
+```lua
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.fromOffset(300, 400)
+list.CanvasSize = UDim2.fromOffset(0, 1200)
+list.ScrollBarThickness = 6
+list.Parent = screenGui
+
+for index = 1, 20 do
+    local row = Instance.new("TextLabel")
+    row.Size = UDim2.new(1, 0, 0, 50)
+    row.Position = UDim2.fromOffset(0, (index - 1) * 54)
+    row.Text = "Row " .. index
+    row.Parent = list
+end
+```
+
+## Canvas properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `CanvasPosition` | `Vector2` | Read/write | Current scroll offset. |
+| `CanvasSize` | `UDim2` | Read/write | Size of the scrollable area. |
+| `AutomaticCanvasSize` | `Enum.AutomaticSize` | Read/write | Expand the canvas to fit content. |
+| `AbsoluteWindowSize` | `Vector2` | Read-only | Visible window size in pixels. |
+| `AbsoluteCanvasSize` | `Vector2` | Read-only | Resolved canvas size in pixels. |
+
+## Scrolling properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `ScrollingEnabled` | `boolean` | Read/write | Allow user scrolling. |
+| `ScrollingDirection` | `Enum.ScrollingDirection` | Read/write | Axis the content scrolls along. |
+| `ScrollSpeed` | `number` | Read/write | Multiplier for wheel and drag scrolling. |
+| `SmoothScrollingEnabled` | `boolean` | Read/write | Ease scrolling instead of jumping. |
+| `ScrollSmoothness` | `number` | Read/write | Easing strength for smooth scrolling. |
+| `VirtualizedScrolling` | `boolean` | Read/write | Only lay out visible content. |
+
+## Scroll bar properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `ScrollBarThickness` | `number` | Read/write | Bar thickness in pixels. |
+| `ScrollBarImageColor3` | `Color3` | Read/write | Bar color. |
+| `ScrollBarImageTransparency` | `number` | Read/write | Bar transparency. |
+| `ScrollBarAutoHide` | `boolean` | Read/write | Hide bars when not scrolling. |
+| `ScrollBarFadeDelay` | `number` | Read/write | Delay before the bar fades. |
+| `ScrollBarFadeSpeed` | `number` | Read/write | Fade animation speed. |
+| `ScrollBarMinimumHandleSize` | `number` | Read/write | Smallest handle size. |
+| `VerticalScrollBarInset` | `Enum.ScrollBarInset` | Read/write | Vertical bar inset mode. |
+| `HorizontalScrollBarInset` | `Enum.ScrollBarInset` | Read/write | Horizontal bar inset mode. |
+| `TopImage` | `string` | Read/write | Image for the top scroll button. |
+| `MidImage` | `string` | Read/write | Image for the scroll track. |
+| `BottomImage` | `string` | Read/write | Image for the bottom scroll button. |
+
+## Notes
+
+- `CanvasPosition` is in pixels and is clamped to the scrollable range.
+- `CanvasSize` uses `UDim2`, so it can scale with the window or use fixed pixels.
+- `AutomaticCanvasSize` grows the canvas based on children; combine it with a layout for dynamic lists.
+- `AbsoluteWindowSize` and `AbsoluteCanvasSize` are resolved values for reading.
+- Inherits all `GuiObject` members, including `ClipsDescendants`.
+
+## See also
+
+- `GuiObject` for shared layout.
+- `UIListLayout` and `UIGridLayout` for arranging the contents.
+- `Frame` for a non-scrolling container.

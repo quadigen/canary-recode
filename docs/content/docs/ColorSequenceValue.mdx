@@ -1,0 +1,37 @@
+---
+title: ColorSequenceValue
+description: Store a ColorSequence in the object tree.
+---
+
+`ColorSequenceValue` holds a color sequence as an instance. Use it for gradients that effects or animated properties read as authored data.
+
+## Getting started
+
+```lua
+local gradient = Instance.new("ColorSequenceValue")
+gradient.Name = "FadeColors"
+gradient.Value = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 120, 40)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 40, 90)),
+})
+gradient.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `ColorSequence` | Read/write | Constant white | The stored sequence. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Assigning a sequence copies it into the value.
+- Cloning copies the stored sequence.
+- Keypoint times are normalized to the `0` to `1` range.
+- A single-keypoint sequence produces a constant color.
+
+## See also
+
+- `NumberSequenceValue` for numeric sequences.
+- `ParticleEmitter` and effects that consume sequences.

@@ -128,6 +128,8 @@ READ_ONLY_PROPERTIES := [?]string {
 	"AbsoluteSize",
 	"TextBounds",
 	"AbsoluteContentSize",
+	"AbsoluteCanvasSize",
+	"AbsoluteWindowSize",
 	"AbsoluteCellCount",
 	"AbsoluteCellSize",
 	"PositionCallback",
@@ -574,6 +576,10 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		}
 	case "ImageLabel", "ImageButton":
 		if property == "Image" {
+			return .Texture, true
+		}
+	case "ScrollingFrame":
+		if property == "TopImage" || property == "MidImage" || property == "BottomImage" {
 			return .Texture, true
 		}
 	case "Decal":
@@ -1831,6 +1837,9 @@ read_class_property :: proc(
 // ---------------------------------------------------------------------------
 
 property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
+	if property == "SelectionImageObject" && classes.Is_A_Class(object, &classes.GuiObject_Class) {
+		return true
+	}
 	if object.class == &classes.WeldConstraint_Class && (property == "Part0" || property == "Part1") {
 		return true
 	}
@@ -1951,6 +1960,7 @@ write_instance :: proc(
 		   (property == "Active" || property == "CurrentLength") {
 			continue
 		}
+		if object.class == &classes.RopeConstraint_Class && property == "Active" {continue}
 		if classes.Is_Attachment_Joint(object.class) &&
 		   (property == "Active" || property == "CurrentPosition") {
 			continue

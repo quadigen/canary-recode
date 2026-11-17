@@ -224,6 +224,7 @@ UIGridLayout_Apply :: proc(layout: ^UIGridLayout, registry: ^Registry, ctx: ^Cla
 	parent := cast(^GuiObject)layout.object.parent
 
 	_, _, parent_width, parent_height := GuiObject_get_absolute_transform(&parent.object, ctx)
+	parent_width, parent_height = scrolling_frame_content_size(&parent.object, parent_width, parent_height)
 
 	parent_width = max(f32(0), parent_width)
 	parent_height = max(f32(0), parent_height)

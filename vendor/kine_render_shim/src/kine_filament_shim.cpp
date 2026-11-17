@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include "kine_filament_shim.h"
+#include "kine_animation_track.h"
 
 #include "kine_default_package.h"
 #include "kine_default_fade_package.h"
@@ -321,7 +322,7 @@ static KineFilamentWaterParams kine_default_water_params() {
 	p.speed = 1.0f;
 	p.strength = 1.0f;
 	p.octaves = 6.0f;
-	p.height = 1.0f;
+	p.height = 1.75f;
 	p.waveScale = 1.0f;
 	p.foamAmount = 0.55f;
 	p.absorptionR = 0.35f;
@@ -331,6 +332,9 @@ static KineFilamentWaterParams kine_default_water_params() {
 	p.clearCoatRoughness = 0.04f;
 	return p;
 }
+
+// Power-of-two grid resolutions, from 2 to 256 subdivisions per axis.
+static constexpr int KINE_WATER_GRID_LEVELS = 8;
 
 struct KineBone {
 	std::string name;
@@ -349,10 +353,18 @@ struct KineAnimationChannel {
 	std::vector<KineVecKey> scales;
 };
 
+struct KineClipEvent {
+    float time = 0;
+    std::string name;
+    std::string parameter;
+    bool marker = false;
+};
+
 struct KineAnimation {
 	std::string name;
 	float duration = 0.0f;
 	std::vector<KineAnimationChannel> channels;
+    std::vector<KineClipEvent> events;
 };
 
 struct KineImage {
@@ -377,6 +389,7 @@ struct KineMeshPrimitive {
 };
 
 struct KineMesh {
+	KineFilamentAnimator *animator = nullptr;
 	VertexBuffer *vb = nullptr;
 	IndexBuffer *ib = nullptr;
 	uint32_t indexCount = 0;
@@ -395,6 +408,7 @@ struct KineMesh {
 	Box localBounds;
 
 	bool doubleSided = false;
+	bool waterGrid = false;
 
 	KineImage baseColorImage;
 	KineTexHandle *ownedTex = nullptr;
@@ -599,6 +613,14 @@ struct KineFilamentShader {
 struct KineViewportPool;
 struct KineReflectionProbeState;
 struct KineSsgiState;
+struct KineWaterContactDepth {
+	View *view = nullptr;
+	RenderTarget *target = nullptr;
+	Texture *depth = nullptr;
+	Texture *color = nullptr;
+};
+static Texture *kine_prepare_water_contact(KineFilamentContext *ctx, KineWaterContactDepth &contact);
+static void kine_set_water_contact(MaterialInstance *material, Texture *depth, Texture *fallback);
 struct KineAdvancedEffectState {bool enabled=false; float values[16]={};};
 static void kine_viewport_render_queued(KineFilamentContext *ctx);
 static void kine_viewport_shutdown(KineFilamentContext *ctx);
@@ -607,9 +629,12 @@ static void kine_viewport_update_shader_uniforms(KineFilamentContext *ctx, KineF
 static void kine_viewport_invalidate_batches(KineFilamentContext *ctx, const KineMesh *mesh, const KineTexHandle *texture);
 
 struct KineFilamentContext {
+	std::vector<KineFilamentAnimator *> animationAnimators;
+	bool animationAutoStep = true;
 	KineAdvancedEffectState advancedEffects[7];
 	KineReflectionProbeState *reflectionProbe=nullptr;
 	KineSsgiState *ssgi=nullptr;
+	KineWaterContactDepth waterContact;
 	float gradingInputs[6]={0,1,1,1,0,0};
 	int toneMappingMode=4;
 	float advancedExposure=0, advancedTemperature=0, advancedTint=0;
@@ -658,6 +683,7 @@ struct KineFilamentContext {
 	Material *neonMaterial = nullptr;
 	Material *glassMaterial = nullptr;
 	Material *waterMaterial = nullptr;
+	KineFilamentMesh *waterGrids[KINE_WATER_GRID_LEVELS][KINE_WATER_GRID_LEVELS]{};
 	Material *forceFieldMaterial = nullptr;
 	KineFilamentWaterParams water = kine_default_water_params();
 	Material *cloudMaterial = nullptr;
@@ -1749,18 +1775,19 @@ static KineMesh *buildDisplacedCube(int segments = 48) {
 	return m;
 }
 
-static KineMesh *buildWaterGrid(int segments = 32) {
+static KineMesh *buildWaterGrid(int segmentsX, int segmentsZ) {
 
 	auto *m = new KineMesh();
+	m->waterGrid = true;
 
-	const int row = segments + 1;
-	m->vertices.reserve((size_t)row * row);
-	m->indices.reserve((size_t)segments * segments * 6);
+	const int row = segmentsX + 1;
+	m->vertices.reserve((size_t)row * (segmentsZ + 1));
+	m->indices.reserve((size_t)segmentsX * segmentsZ * 6);
 
-	for (int z = 0; z <= segments; ++z) {
-		const float v = (float)z / (float)segments - 0.5f;
-		for (int x = 0; x <= segments; ++x) {
-			const float u = (float)x / (float)segments - 0.5f;
+	for (int z = 0; z <= segmentsZ; ++z) {
+		const float v = (float)z / (float)segmentsZ - 0.5f;
+		for (int x = 0; x <= segmentsX; ++x) {
+			const float u = (float)x / (float)segmentsX - 0.5f;
 			KineVertex vtx;
 			vtx.px = u;
 			vtx.py = 0.5f;
@@ -1774,8 +1801,8 @@ static KineMesh *buildWaterGrid(int segments = 32) {
 		}
 	}
 
-	for (int z = 0; z < segments; ++z) {
-		for (int x = 0; x < segments; ++x) {
+	for (int z = 0; z < segmentsZ; ++z) {
+		for (int x = 0; x < segmentsX; ++x) {
 			const uint32_t i0 = (uint32_t)(z * row + x);
 			const uint32_t i1 = i0 + 1;
 			const uint32_t i3 = (uint32_t)((z + 1) * row + x);
@@ -3321,6 +3348,15 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 		mi->setParameter("octaves", w.octaves);
 		mi->setParameter("height", w.height);
 		mi->setParameter("foamAmount", w.foamAmount);
+		Texture *depth = nullptr;
+		if (inheritGlobalShader && ctx->renderWorld && w.foamAmount > 0.0f) {
+			depth = kine_prepare_water_contact(ctx, ctx->waterContact);
+		}
+		kine_set_water_contact(mi, depth, whiteTex);
+		mi->setParameter("pinEdges", key.mesh && key.mesh->waterGrid);
+		mi->setParameter("skyTint", inheritGlobalShader
+			? Color::toLinear<ACCURATE>(ctx->skyColor.rgb)
+			: math::float3{0.22f, 0.34f, 0.50f});
 		mi->setParameter("absorption", math::float3{w.absorptionR, w.absorptionG, w.absorptionB});
 		mi->setParameter("clearCoat", w.clearCoat);
 		mi->setParameter("clearCoatRoughness", w.clearCoatRoughness);
@@ -4470,6 +4506,77 @@ static Material *buildWaterMaterial(Engine *engine) {
 	return Material::Builder()
 		.package(KINE_WATER_PACKAGE_KINE_WATER_DATA, KINE_WATER_PACKAGE_KINE_WATER_SIZE)
 		.build(*engine);
+}
+
+static void kine_destroy_water_contact(Engine *engine, KineWaterContactDepth &contact) {
+	if (contact.view) engine->destroy(contact.view);
+	if (contact.target) engine->destroy(contact.target);
+	if (contact.depth) engine->destroy(contact.depth);
+	if (contact.color) engine->destroy(contact.color);
+	contact = {};
+}
+
+static void kine_render_water_contact(KineFilamentContext *ctx, View *mainView, KineWaterContactDepth &contact) {
+	if (!contact.depth) return;
+	contact.view->setScene(mainView->getScene());
+	contact.view->setCamera(&mainView->getCamera());
+	Renderer::ClearOptions clear{};
+	clear.clear = true;
+	clear.discard = true;
+	ctx->renderer->setClearOptions(clear);
+	ctx->renderer->render(contact.view);
+}
+
+static Texture *kine_prepare_water_contact(KineFilamentContext *ctx, KineWaterContactDepth &contact) {
+	if (!contact.depth) {
+		// The same camera projection maps to normalized UVs at any resolution.
+		// Keep the texture stable so retained materials can share it across resizes.
+		constexpr uint32_t size = 768;
+		contact.depth = Texture::Builder().width(size).height(size).levels(1)
+			.format(Texture::InternalFormat::DEPTH32F)
+			.usage(Texture::Usage::DEPTH_ATTACHMENT | Texture::Usage::SAMPLEABLE).build(*ctx->engine);
+		contact.color = Texture::Builder().width(size).height(size).levels(1)
+			.format(Texture::InternalFormat::RGBA8).usage(Texture::Usage::COLOR_ATTACHMENT).build(*ctx->engine);
+		contact.target = RenderTarget::Builder().texture(RenderTarget::AttachmentPoint::DEPTH, contact.depth)
+			.texture(RenderTarget::AttachmentPoint::COLOR, contact.color).build(*ctx->engine);
+		contact.view = ctx->engine->createView();
+		if (!contact.depth || !contact.color || !contact.target || !contact.view) {
+			kine_destroy_water_contact(ctx->engine, contact);
+			return nullptr;
+		}
+		contact.view->setViewport({0, 0, size, size});
+		contact.view->setRenderTarget(contact.target);
+		contact.view->setPostProcessingEnabled(false);
+		contact.view->setShadowingEnabled(false);
+		contact.view->setVisibleLayers(0xff, KINE_WATER_CONTACT_LAYER);
+	}
+	return contact.depth;
+}
+
+static void kine_set_water_contact(MaterialInstance *material, Texture *depth, Texture *fallback) {
+	if (!material || !material->getMaterial()->hasParameter("contactDepth")) return;
+	TextureSampler sampler(TextureSampler::MinFilter::NEAREST, TextureSampler::MagFilter::NEAREST,
+		TextureSampler::WrapMode::CLAMP_TO_EDGE);
+	material->setParameter("contactDepth", depth ? depth : fallback, sampler);
+	material->setParameter("hasContactDepth", depth != nullptr);
+}
+
+static void kine_render_world_water_contact(KineFilamentContext *ctx) {
+	if (ctx->water.foamAmount <= 0.0f) return;
+	for (auto &[key, batch] : ctx->builtBatches) {
+		if (key.materialKind == KINE_MAT_WATER && !key.shader && !ctx->globalShader &&
+			batch.lastUsedFrame == ctx->batchFrame && !batch.chunks.empty()) {
+			kine_render_water_contact(ctx, ctx->view, ctx->waterContact);
+			return;
+		}
+	}
+	for (auto *batch : ctx->instanceBatches) {
+		if (batch->key.materialKind == KINE_MAT_WATER && !batch->key.shader && !ctx->globalShader &&
+			!batch->chunks.empty()) {
+			kine_render_water_contact(ctx, ctx->view, ctx->waterContact);
+			return;
+		}
+	}
 }
 
 static Material *buildCloudMaterial(Engine *engine) {
@@ -5978,9 +6085,12 @@ KINE_API void Kine_Filament_SetSun(
 #include "kine_advanced_lighting.inc"
 
 KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
-	if (ctx && ctx->engine) kine_viewport_shutdown(ctx);
 	if (!ctx)
 		return;
+	/* Destroy track handles before meshes or engine resources. */
+	while (!ctx->animationAnimators.empty())
+		Kine_Filament_AnimatorDestroy(ctx->animationAnimators.back());
+	if (ctx->engine) kine_viewport_shutdown(ctx);
 
 #if !KINE_FILAMENT_USE_VULKAN
 	kine_restore_host_context(ctx);
@@ -6017,6 +6127,11 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 			batch->ctx = nullptr;
 		}
 		ctx->instanceBatches.clear();
+		kine_destroy_water_contact(ctx->engine, ctx->waterContact);
+		for (auto &row : ctx->waterGrids) {
+			for (auto *mesh : row)
+				Kine_Filament_DestroyMesh(ctx, mesh);
+		}
 		for (auto &decal : ctx->decals) {
 			kine_destroy_decal(ctx, decal);
 		}
@@ -6617,6 +6732,8 @@ struct KineFrameProfileScope {
 KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTime) {
 	if (!ctx || !ctx->engine)
 		return;
+	if (ctx->animationAutoStep)
+		Kine_Filament_StepAnimations(ctx, deltaTime);
 #if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
 	if (!ctx->renderToSwapChain)
 		ctx->engine->pumpMessageQueues();
@@ -6688,6 +6805,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 
 		const bool outlineActive = ctx->renderWorld && ctx->outlineQueued && ctx->outlineMaskView && ctx->outlineView;
 		Renderer::ClearOptions clearOptions;
+		if (ctx->renderWorld) kine_render_world_water_contact(ctx);
 
 		if (outlineActive) {
 			clearOptions.clearColor = {0, 0, 0, 0};
@@ -7626,6 +7744,8 @@ static void kine_upload_skin_pose(KineFilamentContext *ctx, KineMesh *mesh) {
 }
 }
 
+#include "kine_animation_track_impl.inc"
+
 KineFilamentMesh *Kine_Filament_CreateCustomMesh(
 	KineFilamentContext *ctx,
 	const float *vertexData,
@@ -7966,7 +8086,7 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, in
 		m = buildPyramid();
 		break;
 	case 7:
-		m = buildWaterGrid();
+		m = buildWaterGrid(32, 32);
 		break;
 	default:
 		m = buildCube();
@@ -7974,6 +8094,29 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, in
 	}
 	uploadMesh(m, ctx->engine);
 	return (KineFilamentMesh *)m;
+}
+
+KINE_API KineFilamentMesh *Kine_Filament_GetWaterGrid(
+	KineFilamentContext *ctx, float width, float depth) {
+	if (!ctx || !ctx->engine)
+		return nullptr;
+
+	// Aim for one vertex per stud, matching terrain at its default resolution.
+	auto levelForExtent = [](float extent) {
+		int level = 0;
+		while (level + 1 < KINE_WATER_GRID_LEVELS && extent > (2 << level))
+			++level;
+		return level;
+	};
+	const int x = levelForExtent(width);
+	const int z = levelForExtent(depth);
+	auto &cached = ctx->waterGrids[x][z];
+	if (!cached) {
+		auto *mesh = buildWaterGrid(2 << x, 2 << z);
+		uploadMesh(mesh, ctx->engine);
+		cached = reinterpret_cast<KineFilamentMesh *>(mesh);
+	}
+	return cached;
 }
 
 KINE_API KineFilamentMeshList *Kine_Filament_ListMeshes(const char *path) {
@@ -8141,7 +8284,7 @@ KINE_API bool Kine_Filament_SetMeshBoneTransforms(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh,
 	const float *boneTransforms16, int boneCount) {
 	auto *m = reinterpret_cast<KineMesh *>(mesh);
-	if (!ctx || !m || !boneTransforms16 || boneCount != (int)m->bones.size() || boneCount <= 0)
+	if (!ctx || !m || m->animator || !boneTransforms16 || boneCount != (int)m->bones.size() || boneCount <= 0)
 		return false;
 	m->skinMatrices.resize((size_t)boneCount);
 	for (int i = 0; i < boneCount; ++i) {
@@ -8177,7 +8320,7 @@ KINE_API bool Kine_Filament_ApplyMeshAnimation(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh,
 	int animationIndex, float timeSeconds, bool loop) {
 	auto *m = reinterpret_cast<KineMesh *>(mesh);
-	if (!ctx || !m || m->bones.empty() || animationIndex < 0 ||
+	if (!ctx || !m || m->animator || m->bones.empty() || animationIndex < 0 ||
 		(size_t)animationIndex >= m->animations.size())
 		return false;
 	const KineAnimation &animation = m->animations[(size_t)animationIndex];
@@ -8420,6 +8563,8 @@ KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext *ctx, KineFilamentMe
 	if (!ctx || !mesh)
 		return;
 	auto *m = (KineMesh *)mesh;
+	if (m->animator)
+		Kine_Filament_AnimatorDestroy(m->animator);
 
 	kine_grass_release(ctx, m);
 	kine_invalidate_batches(ctx, m, m->ownedTex ? m->ownedTex : nullptr);

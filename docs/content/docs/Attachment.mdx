@@ -1,0 +1,81 @@
+---
+title: Attachment
+description: Define a local point and orientation on a part for constraints, cloth, and effects.
+---
+
+`Attachment` is a point in a part's local space with its own orientation. Constraints, cloth, and several effects use attachments to decide where they connect and which way they point.
+
+An attachment has no geometry and doesn't render. Its value is the frame it describes:
+
+```lua
+local attachment = Instance.new("Attachment")
+attachment.Position = Vector3.new(0, 2, 0)
+attachment.Parent = part
+```
+
+Parent the attachment to the part it belongs to. Moving or rotating the part moves the attachment with it, and the attachment's `CFrame` reports the resulting world-space frame.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Position` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Offset from the parent part's origin. |
+| `Orientation` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Stored orientation in degrees. |
+| `Axis` | `Vector3` | Read/write | `Vector3.new(1, 0, 0)` | Primary axis of the attachment frame. |
+| `SecondaryAxis` | `Vector3` | Read/write | `Vector3.new(0, 1, 0)` | Secondary axis, used with `Axis` to build the frame. |
+| `CFrame` | `CFrame` | Read/write | Identity | The attachment's world-space frame. |
+
+### CFrame
+
+`CFrame` combines the position and axes into one value. Assigning it updates `Position`, `Axis`, and `SecondaryAxis` to match, and clears `Orientation`.
+
+```lua
+attachment.CFrame = CFrame.new(0, 2, 0) * CFrame.Angles(0, math.rad(90), 0)
+```
+
+Reading `CFrame` builds the frame from `Position`, `Axis`, and `SecondaryAxis`. Because `Orientation` is stored separately and isn't folded into the frame, set `CFrame` or the axes when you need the orientation to affect the result.
+
+Keep the two axes non-parallel so they define a stable frame. A frame built from parallel axes has no usable rotation.
+
+## Working with attachments
+
+### Attaching constraints
+
+Constraints expect their attachments to be parented to the parts they connect:
+
+```lua
+local rope = Instance.new("RopeConstraint")
+rope.Attachment0 = attachmentA
+rope.Attachment1 = attachmentB
+rope.Length = 10
+rope.Parent = partA
+```
+
+Both attachments must be on parts in the world, and the constraint lives under one of those parts. Reparenting an attachment after the constraint is configured changes where the constraint connects.
+
+### Cloth anchors
+
+`Cloth` uses up to two attachments as anchors for its upper corners. The attachments need to be children of a `Part` in the Workspace hierarchy, and their positions define the cloth's width when they're far enough apart:
+
+```lua
+local cloth = Instance.new("Cloth")
+cloth.Attachment0 = leftAnchor
+cloth.Attachment1 = rightAnchor
+cloth.Parent = game:GetService("Workspace")
+```
+
+### Effects and adornments
+
+Beam-like effects, handles, and other objects that need a local point accept an attachment instead of a position. That way the point follows the part without extra bookkeeping.
+
+## Notes
+
+- Attachments inherit the part's transform. Their `CFrame` is always in world space, so use it when you need the actual position in the scene.
+- An attachment without a parent still stores its properties but has no meaningful world frame.
+- Cloning a part copies its attachments and their property values.
+- `Orientation` is kept as a separate stored value rather than being applied to the frame; use `Axis` and `SecondaryAxis` when the orientation matters.
+
+## See also
+
+- `Model`, moving and scaling groups that contain attachments.
+- `Cloth`, using attachments as fabric anchors.

@@ -1,0 +1,53 @@
+---
+title: GuiButton
+description: Base class for clickable GUI elements.
+---
+
+`GuiButton` adds button behavior to `GuiObject`. It tracks hover, press, and selection state and exposes the click events shared by `TextButton` and `ImageButton`.
+
+## Getting started
+
+```lua
+local button = Instance.new("TextButton")
+
+button.Activated:Connect(function()
+    print("clicked")
+end)
+
+button.MouseButton2Click:Connect(function()
+    print("right clicked")
+end)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `AutoButtonColor` | `boolean` | Read/write | `true` | Tint the button on hover and press. |
+| `Modal` | `boolean` | Read/write | `false` | Block input to elements behind it. |
+| `Selected` | `boolean` | Read/write | `false` | Whether the button is selected. |
+
+## Events
+
+| Event | Arguments | Description |
+| --- | --- | --- |
+| `Activated` | none | Primary click completed. |
+| `SecondaryActivated` | none | Secondary click completed. |
+| `MouseButton1Click` | none | Left click completed. |
+| `MouseButton1Down` | none | Left button pressed. |
+| `MouseButton1Up` | none | Left button released. |
+| `MouseButton2Click` | none | Right click completed. |
+| `MouseButton2Down` | none | Right button pressed. |
+| `MouseButton2Up` | none | Right button released. |
+
+## Notes
+
+- This is the base class; it has no text or image content of its own. Use `TextButton` or `ImageButton` for visuals.
+- `Activated` also fires for touch input.
+- Automatic button color is applied by the concrete button classes.
+- Inherits all `GuiObject` members.
+
+## See also
+
+- `TextButton` and `ImageButton`.
+- `GuiObject` for layout and input properties.

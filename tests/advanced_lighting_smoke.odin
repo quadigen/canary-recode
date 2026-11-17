@@ -81,7 +81,7 @@ main :: proc() {
 	fmt.println("ENV_INIT_OK")
 	view.Filament = ctx
 
-	ray := cast(^services.Raytracer)services.Ensure_Service(&env.services, "Raytracer")
+	ray := cast(^services.Pathtracer)services.Ensure_Service(&env.services, "Pathtracer")
 	ray.retry_wait = 1_000_000
 	defer {vm.Close(&v); engine_runtime.Environment_Destroy(&env)}
 	run(

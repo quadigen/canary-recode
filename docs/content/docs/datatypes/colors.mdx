@@ -1,0 +1,108 @@
+---
+title: Colors
+description: Color3, BrickColor, and the sequence types used by gradients and particle colors.
+---
+
+## Color3
+
+`Color3` stores red, green, and blue channels. Each channel is a number from `0` to `1`, so `Color3.new(1, 0, 0)` is red.
+
+```lua
+local red = Color3.new(1, 0, 0)
+local sky = Color3.fromRGB(120, 180, 255)
+local warm = Color3.fromHSV(0.08, 0.9, 1)
+
+print(red:ToHex())
+```
+
+| Constructor | Description |
+| --- | --- |
+| `Color3.new(r?, g?, b?)` | Channels from `0` to `1`. All default to `0`, which is black. |
+| `Color3.fromRGB(r, g, b)` | Channels from `0` to `255`. |
+| `Color3.fromHSV(h, s, v)` | Hue, saturation, and value. |
+| `Color3.fromHex(hex)` | Parses a hex color string. An invalid string raises an error. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `R` | `number` | Red channel. |
+| `G` | `number` | Green channel. |
+| `B` | `number` | Blue channel. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Lerp(goal, alpha)` | `Color3` | Interpolates toward `goal`. |
+| `ToHSV()` | `(number, number, number)` | Hue, saturation, and value. |
+| `ToRGB()` | `(number, number, number)` | Red, green, and blue from `0` to `255`. |
+| `ToHex()` | `string` | Hex representation. |
+
+The conversions are also available on the library: `Color3.toHSV(color)`, `Color3.toRGB(color)`, and `Color3.toHex(color)`.
+
+Constants:
+
+| Constant | Value |
+| --- | --- |
+| `Color3.white` | `(1, 1, 1)` |
+| `Color3.black` | `(0, 0, 0)` |
+
+Arithmetic supports `+`, `-`, unary `-`, and `==`. `*` and `/` work with a scalar or another `Color3`, applying the operation per channel.
+
+## BrickColor
+
+`BrickColor` is the named brick palette. It is separate from `Color3`, but exposes the equivalent color.
+
+```lua
+local brick = BrickColor.new("Bright red")
+print(brick.Number, brick.Color)
+```
+
+| Constructor | Description |
+| --- | --- |
+| `BrickColor.new(number)` | Looks up a palette entry by number. |
+| `BrickColor.new(name)` | Looks up a palette entry by name. |
+| `BrickColor.new(otherBrickColor)` | Copies an existing value. |
+| `BrickColor.random()` | Picks a color from a small built-in palette. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Number` | `number` | Palette number. |
+| `Name` | `string` | Palette name. |
+| `Color` | `Color3` | Equivalent RGB color. |
+
+Equality compares the palette number.
+
+## ColorSequence
+
+A color sequence describes colors over normalized time. Getters return the stops as an array of `ColorSequenceKeypoint`.
+
+```lua
+local fade = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+    ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1))
+})
+```
+
+| Constructor | Description |
+| --- | --- |
+| `ColorSequence.new(color)` | Constant color for the whole sequence. |
+| `ColorSequence.new(startColor, endColor)` | Two-stop gradient. |
+| `ColorSequence.new(keypoints)` | Sequence from an array of `ColorSequenceKeypoint`. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Keypoints` | `{ColorSequenceKeypoint}` | Read-only array of stops. |
+
+## ColorSequenceKeypoint
+
+`ColorSequenceKeypoint.new(time, color)` creates one stop. `time` must be between `0` and `1`; a value outside that range raises an error.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Time` | `number` | Position in the sequence, from `0` to `1`. |
+| `Value` | `Color3` | Color at this stop. |
+
+Equality compares both fields.
+
+## See also
+
+- [ParticleEmitter](/docs/ParticleEmitter) for color sequences in use.
+- [UIGradient](/docs/UIGradient) for UI color sequences.

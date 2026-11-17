@@ -1,10 +1,17 @@
-// Imported primitives share a vertex/index buffer but keep their material slots.
+static constexpr uint8_t KINE_WATER_CONTACT_LAYER = 4;
+
 static uint8_t kine_scene_geometry_layer(int kind) {
+    // Keep transparent water out of the depth capture while retaining its
+    // normal layer for the main view and reflection probes.
     const bool overlay=kind==KINE_MAT_GIZMO || kind==KINE_MAT_OUTLINE ||
         kind==KINE_MAT_OUTLINE_MASK || (kind>=KINE_MAT_HIGHLIGHT_OUTLINE && kind<=KINE_MAT_HIGHLIGHT_FILL_TOP);
-    return overlay?2:1;
+    if (overlay) return 2;
+    if (kind == KINE_MAT_WATER || kind == KINE_MAT_GLASS || kind == KINE_MAT_FORCEFIELD ||
+        kind == KINE_MAT_FADE || kind == KINE_MAT_NEON_FADE || kind == KINE_MAT_PARTICLE) return 1;
+    return 1 | KINE_WATER_CONTACT_LAYER;
 }
 
+// Imported primitives share a vertex/index buffer but keep their material slots.
 static bool kine_uses_imported_materials(KineFilamentContext *ctx, const KineBatchKey &key, bool inheritGlobalShader = true) {
     return key.mesh && key.mesh->useImportedMaterials && !key.mesh->primitives.empty() && !key.mesh->materials.empty() &&
         key.materialKind == KINE_MAT_DEFAULT && !key.shader && (!inheritGlobalShader || !ctx->globalShader) &&

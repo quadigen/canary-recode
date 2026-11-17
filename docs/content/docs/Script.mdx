@@ -1,0 +1,64 @@
+---
+title: Script
+description: Run server-side or client-side code from an instance in the hierarchy.
+---
+
+`Script` is an executable Luau chunk stored as an instance. It starts when it's parented into a runtime that accepts it, and it runs in that runtime's VM.
+
+`Script` inherits from `BaseScript`, which adds no members of its own. The interesting properties are `Source`, `Enabled`, and `RunContext`.
+
+## Getting started
+
+```lua
+local script = Instance.new("Script")
+script.Source = [[
+print("Server started")
+]]
+script.Parent = game:GetService("ServerScriptService")
+```
+
+Scripts are usually authored in the editor rather than created at runtime, but the source can be set from code. Setting `Source` invalidates any cached module result and stops a running thread, so edit source before the script starts.
+
+## Which side it runs on
+
+`RunContext` decides where a `Script` runs. `LocalScript` and `ModuleScript` use their own classes for that decision.
+
+```lua
+script.RunContext = Enum.RunContext.Client
+```
+
+Changing `RunContext` while the script is running requests a restart, so the script stops in the old context and starts in the new one. A `Script` with a client context runs like a local script.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Source` | `string` | Read/write | `""` | The Luau source. Assigning it invalidates cached state. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the script is allowed to run. |
+| `Disabled` | `boolean` | Read/write | `false` | Inverse of `Enabled`. |
+| `RunContext` | `Enum.RunContext` | Read/write | Runtime default | The runtime the script executes in. |
+
+`Enabled` and `Disabled` are two views of one setting, so writing either one updates the other.
+
+## Where scripts run
+
+| Parent | Behavior |
+| --- | --- |
+| `ServerScriptService` | Runs on the server. |
+| `Workspace` | Runs according to `RunContext`; a server context runs on the server. |
+| `StarterPlayer` script containers | Runs on the client. |
+
+Client-only scripts placed in `ServerScriptService` don't run, because there's no client runtime there. A `ModuleScript` never runs on its own no matter where it's parented.
+
+## Notes
+
+- A script starts when it's parented into a valid container, not when it's created. Parenting the same script again doesn't restart it unless it was stopped first.
+- Assigning `Source` clears the module cache and releases any running thread. Do it before startup, or expect the script to restart.
+- `RunContext` changes request a restart, which can interrupt work in progress.
+- Destroying a script stops it and releases its thread; there's no separate stop method.
+
+## See also
+
+- `LocalScript`, client-only scripts.
+- `ModuleScript`, reusable code that never runs on its own.
+- `ServerScriptService`, the server script container.

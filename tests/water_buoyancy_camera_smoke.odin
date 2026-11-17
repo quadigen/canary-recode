@@ -31,6 +31,12 @@ pool.Size = Vector3.new(80,20,80); pool.CFrame = CFrame.new(0,-6,0)
 floating = Instance.new("Part",workspace)
 floating.Anchored = false
 floating.Size = Vector3.new(2,2,2); floating.CFrame = CFrame.new(0,-1,0)
+wood = Instance.new("Part",workspace); wood.Material = Enum.Material.Wood
+wood.Anchored = false
+wood.Size = Vector3.new(2,2,2); wood.CFrame = CFrame.new(-5,-1,0)
+metal = Instance.new("Part",workspace); metal.Material = Enum.Material.Metal
+metal.Anchored = false
+metal.Size = Vector3.new(2,2,2); metal.CFrame = CFrame.new(5,-1,0)
 dry = Instance.new("Part",workspace)
 dry.Anchored = false
 dry.Size = Vector3.new(2,2,2); dry.CFrame = CFrame.new(100,20,0)
@@ -52,6 +58,8 @@ fixed = Instance.new("Part",workspace); fixed.Anchored = true; fixed.CFrame = CF
 		&v,
 		`
 assert(floating.Position.Y > 1 and floating.Position.Y < 6, "body did not rise and float: "..tostring(floating.Position.Y))
+assert(wood.Position.Y > floating.Position.Y, "wood did not float higher than plastic")
+assert(metal.Position.Y < -16, "metal did not sink through the water")
 assert(dry.Position.Y < 0,"dry body did not fall normally")
 assert(fixed.CFrame.Position.Y == -1,"anchored body moved")
 assert(pool.CFrame.Position.Y == -6,"water volume moved")
@@ -87,7 +95,7 @@ assert(pool.CFrame.Position.Y == -6,"water volume moved")
 	run(
 		&v,
 		`
-pool:Destroy(); floating:Destroy(); dry:Destroy(); fixed:Destroy()
+pool:Destroy(); floating:Destroy(); wood:Destroy(); metal:Destroy(); dry:Destroy(); fixed:Destroy()
 local terrain = game:GetService("Terrain")
 terrain:FillBlock(CFrame.new(0,6,8),Vector3.new(24,24,4),Enum.Material.Rock)
 `,

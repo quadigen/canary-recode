@@ -1,0 +1,50 @@
+---
+title: UIBackdrop
+description: Blur and tint the content behind a GUI element.
+---
+
+`UIBackdrop` samples what's already drawn behind its parent and applies a blur, tint, and color adjustments. It's the frosted-glass effect for panels and menus.
+
+## Getting started
+
+```lua
+local backdrop = Instance.new("UIBackdrop")
+backdrop.BlurRadius = 24
+backdrop.TintColor3 = Color3.fromRGB(20, 24, 36)
+backdrop.TintTransparency = 0.7
+backdrop.Parent = panel
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the effect renders. |
+| `BlurRadius` | `number` | Read/write | `18` | Blur strength. |
+| `Transparency` | `number` | Read/write | `0` | Effect transparency. |
+| `Exponent` | `number` | Read/write | `2` | Blur falloff curve. |
+| `TintColor3` | `Color3` | Read/write | White | Tint color. |
+| `TintTransparency` | `number` | Read/write | `0.85` | Tint transparency. |
+| `Brightness` | `number` | Read/write | `0` | Brightness adjustment. |
+| `Contrast` | `number` | Read/write | `1` | Contrast adjustment. |
+| `Saturation` | `number` | Read/write | `1` | Saturation adjustment. |
+| `HueShift` | `number` | Read/write | `0` | Hue rotation. |
+| `Morphology` | `number` | Read/write | `0` | Morphology amount. |
+| `Displacement` | `number` | Read/write | `0` | Distortion amount. |
+| `Pixelate` | `number` | Read/write | `0` | Pixelation amount. |
+| `Zoom` | `number` | Read/write | `1` | Sample zoom. |
+| `Offset` | `UDim2` | Read/write | `UDim2.new()` | Sample offset. |
+| `Parallax` | `Vector2` | Read/write | `(0, 0)` | Parallax shift. |
+
+## Notes
+
+- `BlurRadius` is in pixels and has a practical performance cost.
+- `Brightness` defaults to `0` because it's an additive adjustment, so neutral is zero.
+- `Contrast`, `Saturation`, and `Zoom` default to `1`.
+- The effect applies to the parent GUI object.
+- Cloning copies every effect setting.
+
+## See also
+
+- `UIShadow` for a shadow behind the element.
+- `UIMotionBlur` for directional blur.

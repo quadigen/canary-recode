@@ -1,0 +1,50 @@
+---
+title: Animator
+description: Own and blend animation tracks for a rigged MeshPart.
+---
+
+`Animator` is the object that actually loads and blends animation tracks. `Humanoid` and `AnimationController` create one and delegate to it.
+
+## Getting started
+
+```lua
+local animator = Instance.new("Animator")
+animator.MeshPart = rig
+animator.Parent = rig
+
+local track = animator:LoadAnimation(animation)
+track:Play(0.2, 1, 1)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `MeshPart` | `MeshPart?` | Read/write | Discovered from ancestry | Rig that receives the animations. |
+| `PreferLodEnabled` | `boolean` | Read/write | `true` | Prefer lower-detail animation evaluation when available. |
+| `EvaluationThrottled` | `boolean` | Read-only | `false` | Always reports `false`. |
+| `AnimationPlayed` | signal | Read-only | | Fires with each track when playback starts. |
+
+`MeshPart` accepts a `MeshPart` or `nil`. When it's `nil`, the animator looks for a rigged mesh in its ancestors. Assigning another instance type is ignored, and changing the mesh releases existing native tracks.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `LoadAnimation(animation: Animation): AnimationTrack` | Creates a track on the rig. |
+
+`LoadAnimation()` raises an error when there's no ready rigged mesh, the mesh is already controlled by another animator, the clip can't be found, or the source keyframe sequence is empty.
+
+## Notes
+
+- A rig can have only one animator controlling its mesh.
+- `EvaluationThrottled` is a compatibility property and doesn't reflect real state.
+- `PreferLodEnabled` is a hint, not a guarantee.
+- Destroying the animator destroys its tracks.
+- Cloning copies `PreferLodEnabled` and the mesh reference, not the tracks.
+
+## See also
+
+- `AnimationController` and `Humanoid` for the hosts that create animators.
+- `AnimationTrack` for playback control.
+- `Animation` for clip definitions.

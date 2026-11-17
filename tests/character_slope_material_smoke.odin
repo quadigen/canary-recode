@@ -177,12 +177,13 @@ assert(drift < 0.3, name .. " character slid while idle, drift=" .. tostring(dri
 	// meaningless. They are created here rather than up front so they have not
 	// already slid to the bottom by the time they are measured.
 	slope_run(&server_vm, `
+game:GetService("Physics").SleepThreshold = 0.2
 local function control_ramp(name, z, material)
     local ramp = Instance.new("Part", workspace)
     ramp.Name = name
     ramp.Anchored = true
     ramp.Size = vector.create(24, 1, 10)
-    ramp.CFrame = CFrame.new(13, 11, z) * CFrame.Angles(0, 0, math.rad(30))
+    ramp.CFrame = CFrame.new(13, 11, z) * CFrame.Angles(0, 0, math.rad(20))
     ramp.Material = material
     return ramp
 end
@@ -212,7 +213,7 @@ print("control boxes  dynamic=" .. tostring(not slick.Anchored and not grippy.An
 	slope_run(&server_vm, `
 local slick_moved = (workspace:FindFirstChild("SlickBox").CFrame.Position - control_hold.slick).Magnitude
 local grippy_moved = (workspace:FindFirstChild("GrippyBox").CFrame.Position - control_hold.grippy).Magnitude
-print("control box  glass(friction .30) slide=" .. string.format("%.3f", slick_moved) .. "  sand(friction .90) slide=" .. string.format("%.3f", grippy_moved))
+print("control box  glass(friction .25) slide=" .. string.format("%.3f", slick_moved) .. "  sand(friction .50) slide=" .. string.format("%.3f", grippy_moved))
 assert(slick_moved > 1.5, "low friction box should have slid, moved=" .. tostring(slick_moved))
 assert(grippy_moved < 2.0, "high friction box should have held, moved=" .. tostring(grippy_moved))
 `, "slope_material_control_assert")

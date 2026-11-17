@@ -1,0 +1,74 @@
+---
+title: Datatypes
+description: Constructors, members, and methods for every datatype Kinemium exposes to Luau.
+---
+
+Datatypes are value types. You create them with a constructor such as `Vector3.new()`, pass them to properties and methods, and compare them by value. Most are immutable: read a field, derive a new value, and assign it back.
+
+```lua
+local size = Vector3.new(4, 1, 2)
+local half = size / 2
+print(half) -- 2, 0.5, 1
+```
+
+The pages in this section group related types. Every datatype installed as a Luau global is listed below.
+
+## All datatypes
+
+| Type | Constructor | What it holds |
+| --- | --- | --- |
+| `Axes` | `Axes.new(Enum.Axis...)` | A set of enabled axes. |
+| `BrickColor` | `BrickColor.new(number or name)` | A named color from the brick palette. |
+| `CFrame` | `CFrame.new(...)` | A position and 3D rotation. |
+| `Color3` | `Color3.new(r, g, b)` | An RGB color with channels from 0 to 1. |
+| `ColorSequence` | `ColorSequence.new(...)` | Colors interpolated over time. |
+| `ColorSequenceKeypoint` | `ColorSequenceKeypoint.new(time, color)` | One stop in a color sequence. |
+| `Content` | `Content.fromUri(uri)` | A reference to an asset or object. |
+| `DateTime` | `DateTime.now()` | A point in time with Unix timestamp access. |
+| `DockWidgetPluginGuiInfo` | `DockWidgetPluginGuiInfo.new(...)` | Dock state and size hints for a plugin widget. |
+| `Faces` | `Faces.new(Enum.NormalId...)` | A set of enabled faces. |
+| `Font` | `Font.new(family, weight, style)` | A font family, weight, and style. |
+| `NumberRange` | `NumberRange.new(min, max)` | A minimum and maximum number. |
+| `NumberSequence` | `NumberSequence.new(...)` | Numbers interpolated over time. |
+| `NumberSequenceKeypoint` | `NumberSequenceKeypoint.new(time, value)` | One stop in a number sequence. |
+| `OverlapParams` | `OverlapParams.new()` | Filters for spatial overlap queries. |
+| `PathWaypoint` | `PathWaypoint.new(position, action, label)` | One point on a path. |
+| `PhysicalProperties` | `PhysicalProperties.new(...)` | Density, friction, and elasticity. |
+| `Quaternion` | `Quaternion.new(x, y, z, w)` | A rotation in quaternion form. |
+| `Random` | `Random.new(seed?)` | A seeded random number generator. |
+| `Ray` | `Ray.new(origin, direction)` | An origin and direction in 3D. |
+| `RaycastParams` | `RaycastParams.new()` | Filters for raycasts. |
+| `RaycastResult` | Not constructible | The hit returned by a raycast. |
+| `Rect` | `Rect.new(min, max)` | A 2D rectangle. |
+| `Region3` | `Region3.new(min, max)` | An axis-aligned 3D box. |
+| `Region3int16` | `Region3int16.new(min, max)` | A 3D box with 16-bit integer corners. |
+| `SecurityCapabilities` | `SecurityCapabilities.new(...)` | A set of security capabilities. |
+| `TerrainRegion` | Not constructible | A saved piece of terrain. |
+| `TweenInfo` | `TweenInfo.new(...)` | Timing and easing for a tween. |
+| `UDim` | `UDim.new(scale, offset)` | A scale and pixel offset pair. |
+| `UDim2` | `UDim2.new(xScale, xOffset, yScale, yOffset)` | Two `UDim` values, one per axis. |
+| `UniqueId` | `UniqueId.new()` | A generated unique identifier. |
+| `Vector2` | `Vector2.new(x, y)` | Two floating-point components. |
+| `Vector2int16` | `Vector2int16.new(x, y)` | Two 16-bit integer components. |
+| `Vector3` | `Vector3.new(x, y, z)` | Three floating-point components. |
+| `Vector3int16` | `Vector3int16.new(x, y, z)` | Three 16-bit integer components. |
+
+## Where to look
+
+| Page | Types |
+| --- | --- |
+| [Vectors and rotations](/docs/datatypes/vectors) | `Vector2`, `Vector3`, `Vector2int16`, `Vector3int16`, `Quaternion` |
+| [CFrame](/docs/datatypes/cframe) | `CFrame` |
+| [Colors](/docs/datatypes/colors) | `Color3`, `BrickColor`, `ColorSequence`, `ColorSequenceKeypoint` |
+| [Interface and timing](/docs/datatypes/ui) | `UDim`, `UDim2`, `Rect`, `TweenInfo`, `Font`, `DockWidgetPluginGuiInfo` |
+| [Sequences](/docs/datatypes/sequences) | `NumberRange`, `NumberSequence`, `NumberSequenceKeypoint` |
+| [Spatial queries](/docs/datatypes/spatial) | `Ray`, `Region3`, `Region3int16`, `PhysicalProperties`, `PathWaypoint`, `RaycastParams`, `RaycastResult`, `OverlapParams`, `TerrainRegion` |
+| [Miscellaneous](/docs/datatypes/misc) | `Axes`, `Faces`, `UniqueId`, `Content`, `DateTime`, `Random`, `SecurityCapabilities` |
+
+## Common behavior
+
+- Constructors reject arguments of the wrong type and raise an error instead of returning `nil`.
+- `==` compares values, not identity. Two separately constructed values with the same components are equal.
+- `tostring()` returns a readable form, which is useful in logs but not a serialization format.
+- Members marked read-only return a new value or a copy. Assigning to them raises an error.
+- Optional constructor arguments default to zero unless the type page says otherwise. `Quaternion` defaults `w` to `1`, and `TweenInfo` has its own defaults.

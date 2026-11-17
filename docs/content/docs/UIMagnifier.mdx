@@ -1,0 +1,36 @@
+---
+title: UIMagnifier
+description: Zoom the content behind a GUI element.
+---
+
+`UIMagnifier` renders a magnified view of the area behind its parent. It's useful for accessibility and inspection overlays.
+
+## Getting started
+
+```lua
+local magnifier = Instance.new("UIMagnifier")
+magnifier.Zoom = 2
+magnifier.Inset = 16
+magnifier.Parent = viewport
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the magnifier renders. |
+| `Zoom` | `number` | Read/write | `1.5` | Magnification, minimum `1`. |
+| `Inset` | `number` | Read/write | `12` | Inset in pixels, clamped to `0` or above. |
+| `Transparency` | `number` | Read/write | `0` | Transparency, clamped to `0` through `1`. |
+
+## Notes
+
+- `Zoom` below `1` is raised to `1`, so the effect never shrinks content.
+- `Inset` never goes negative.
+- The effect applies to the parent GUI object.
+- Cloning copies all four settings.
+
+## See also
+
+- `UIBackdrop` for blurring the background.
+- `UIMotionBlur` for directional blur.

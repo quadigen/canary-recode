@@ -19,6 +19,14 @@ main :: proc() {
 	engine_runtime.Environment_Init(&environment, &script_vm, nil, .Editor)
 
 	source := `
+local patchTime = DateTime.now():FormatLocalTime("LTS", "en-us")
+assert(patchTime:match("^%d%d?:%d%d:%d%d [AP]M$"), patchTime)
+
+local sound = Instance.new("Sound")
+local ended = sound.Ended:Connect(function() end)
+ended:Disconnect()
+sound:Destroy()
+
 local info = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Float,
 	true,

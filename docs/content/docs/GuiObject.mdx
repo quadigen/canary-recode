@@ -1,0 +1,202 @@
+---
+title: GuiObject
+description: Position, size, style, and interact with user interface elements in Luau.
+---
+
+`GuiObject` is the common base class for visual GUI elements. Whether you're making a panel, button, text label, or a more complex interface, `GuiObject` gives you the properties you need to control its layout, appearance, and input behavior.
+
+It inherits from `GuiBase2d`. This page covers the members defined by `GuiObject`, in addition to the shared object behavior described in the `Object` and `Instance` references.
+
+## Getting started
+
+The following example configures an existing GUI object inside your interface. It creates a centered panel that occupies half of the available width, with a fixed height.
+
+```lua
+local function stylePanel(panel)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    panel.Size = UDim2.new(0.5, 0, 0, 180)
+    panel.BackgroundColor3 = Color3.fromRGB(30, 32, 38)
+    panel.BackgroundTransparency = 0
+    panel.BorderSizePixel = 0
+    panel.Visible = true
+end
+```
+
+## Properties
+
+Defaults below refer to the base `GuiObject`; subclasses can choose different defaults.
+
+### Layout
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Position` | `UDim2` | Read/write | `UDim2.new(0, 0, 0, 0)` | Position relative to the parent. |
+| `Size` | `UDim2` | Read/write | `UDim2.new(0, 100, 0, 100)` | Requested width and height. |
+| `AnchorPoint` | `Vector2` | Read/write | `Vector2.new(0, 0)` | The point within the element placed at `Position`. |
+| `AbsolutePosition` | `Vector2` | Read-only | Initially `(0, 0)` | Resolved top-left position in GUI coordinates. |
+| `AbsoluteSize` | `Vector2` | Read-only | Resolved from layout | Actual width and height in GUI units. |
+| `AutomaticSize` | `Enum.AutomaticSize` | Read/write | `None` | Lets the element resize to fit its content on selected axes. |
+| `LayoutOrder` | `number` | Read/write | `0` | Integer order value for layout components. |
+| `Rotation` | `number` | Read/write | `0` | Rotation around the center of the element, in degrees. |
+
+### Appearance
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `BackgroundColor3` | `Color3` | Read/write | White | The background color. |
+| `BackgroundTransparency` | `number` | Read/write | `0` | Background transparency, clamped between `0` and `1`. |
+| `Transparency` | `number` | Read/write | `0` | Alias for `BackgroundTransparency` on the base class. |
+| `BorderColor3` | `Color3` | Read/write | Black | The border color. |
+| `BorderSizePixel` | `number` | Read/write | `0` | Border thickness in pixels, stored as an integer. |
+| `BorderMode` | `Enum.BorderMode` | Read/write | Default enum value | How the border is positioned relative to the object. |
+| `Visible` | `boolean` | Read/write | `true` | Whether the object is visible. Hidden ancestors can also hide it. |
+| `ClipsDescendants` | `boolean` | Read/write | `false` | Restricts descendants to the parent's clipping area. |
+| `ZIndex` | `number` | Read/write | `0` | Integer stacking order property. |
+
+`Transparency` is recognized as a base property alias but isn't listed in the registered property metadata. A value of `1` makes the background transparent, not necessarily the text, images, or children.
+
+`ZIndex` is exposed, but don't assume pointer hit testing sorts by `ZIndex`. The current hit traversal follows hierarchy and sibling order, testing later siblings and children first within a GUI tree.
+
+### Input
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Active` | `boolean` | Read/write | `false` | Makes the element eligible for pointer input and movement input notifications. |
+| `InputSink` | `boolean` | Read/write | `false` | Makes the object eligible to receive pointer input even if `Active` is false. |
+| `Selectable` | `boolean` | Read/write | `true` | Marks whether the element is selectable. |
+| `GuiState` | `Enum.GuiState` | Read/write | `Idle` | Current stored GUI state. |
+
+`GuiState` can be assigned from Luau. The base class does not establish automatic transitions for every input event. Likewise, `Selectable` is a stored setting; a complete selection-navigation API is not defined here.
+
+## Positioning and sizing
+
+`UDim2` combines a relative scale with a fixed offset on each axis. If a parent is 800 pixels wide, an X scale of `0.5` with an offset of `20` resolves to 420 pixels.
+
+```lua
+local function align(panel)
+    -- Full parent width, minus 24 pixels of space.
+    panel.Size = UDim2.new(1, -24, 0, 48)
+    panel.Position = UDim2.new(0, 12, 0, 12)
+end
+```
+
+### AnchorPoint
+
+An anchor of `(0, 0)` places the top-left corner at `Position`. An anchor of `(0.5, 0.5)` places the center there, and `(1, 1)` places the bottom-right corner there.
+
+```lua
+local function center(panel)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+end
+```
+
+### AutomaticSize
+
+Use `AutomaticSize` when an element should grow to accommodate its content. The requested `Size` still contributes to the base dimensions, and available parent space, padding, and constraints can limit the final size.
+
+| Value | Behavior |
+| --- | --- |
+| `Enum.AutomaticSize.None` | No automatic growth. |
+| `Enum.AutomaticSize.X` | Automatically sizes the width. |
+| `Enum.AutomaticSize.Y` | Automatically sizes the height. |
+| `Enum.AutomaticSize.XY` | Automatically sizes both axes. |
+
+```lua
+local function fitContent(panel)
+    panel.Size = UDim2.new(1, 0, 0, 0)
+    panel.AutomaticSize = Enum.AutomaticSize.Y
+end
+```
+
+### AbsolutePosition and AbsoluteSize
+
+Read these when you need the geometry that has actually been resolved by layout. Layout components, size constraints, padding, and scrolling can change the final geometry without changing the requested `Position` or `Size`.
+
+`AbsolutePosition` and `AbsoluteSize` cannot be assigned. Geometry may not yet reflect the latest changes before the next layout update; `AbsoluteSize` can calculate an initial size before the first layout pass.
+
+## Methods
+
+### ContainsPoint
+
+```lua
+ContainsPoint(x: number, y: number): boolean
+```
+
+Checks whether a point falls inside this GUI element. Pass screen-space GUI coordinates for screen interfaces, or canvas coordinates when testing elements on a surface interface. The method accounts for the object's rotation, ancestor rotations, effective visibility, and ancestor clipping.
+
+```lua
+local function isInside(panel, x, y)
+    return panel:ContainsPoint(x, y)
+end
+```
+
+This is a geometry check, not a guarantee that the element would receive a click. It does not require `Active` or `InputSink`, test whether another GUI covers it, or test the alpha of individual pixels.
+
+## Events
+
+`GuiObject` exposes input events and mouse events. Connect to them with `:Connect()`.
+
+| Event | Callback arguments | Description |
+| --- | --- | --- |
+| `InputBegan` | `input: InputObject` | A supported mouse button is pressed on the selected target. |
+| `InputChanged` | `input: InputObject` | Pointer movement for active elements in the hit chain, or a mouse wheel change on the selected target. |
+| `InputEnded` | `input: InputObject` | A mouse button is released after being pressed on the target. |
+| `MouseEnter` | `x: number, y: number` | The pointer enters the object's hover area. |
+| `MouseLeave` | `x: number, y: number` | The pointer leaves the object's hover area. |
+| `MouseMoved` | `x: number, y: number` | The pointer moves while hovering over the object. |
+| `MouseWheelForward` | `x: number, y: number` | The mouse wheel scrolls forward over the target. |
+| `MouseWheelBackward` | `x: number, y: number` | The mouse wheel scrolls backward over the target. |
+
+Mouse coordinates are in screen space for screen GUI elements and canvas space for surface GUI hits, rather than offsets relative to the receiving object. A surface pointer leaving the canvas may report its last valid position.
+
+### Hover effects
+
+You can listen to hover events even on a passive element that doesn't consume clicks.
+
+```lua
+local function addHoverEffect(panel)
+    local originalColor = panel.BackgroundColor3
+
+    panel.MouseEnter:Connect(function()
+        panel.BackgroundColor3 = Color3.fromRGB(65, 70, 85)
+    end)
+
+    panel.MouseLeave:Connect(function()
+        panel.BackgroundColor3 = originalColor
+    end)
+end
+```
+
+### Processing mouse input
+
+Set `Active` to true to make a regular GUI object eligible to receive pointer input. `InputSink` also makes it eligible, and text boxes are eligible independently of these settings. Transparent objects can still receive input.
+
+```lua
+local function listenForPress(panel)
+    panel.Active = true
+
+    panel.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            print("Pressed at", input.Position)
+        end
+    end)
+
+    panel.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            print("Released at", input.Position)
+        end
+    end)
+end
+```
+
+The release is delivered to the original pressed target even if the pointer has moved outside its bounds. This is useful for drag interactions. The input objects are temporary; read or copy the values you need inside the callback rather than retaining the input object for later use.
+
+The base GUI event dispatcher shown here handles mouse movement, mouse buttons, and mouse wheel input. Keyboard, touch, and gamepad delivery through these particular events are not established by this class. `InputBegan`, `InputChanged`, and `InputEnded` pass one argument, not a second processed-input flag.
+
+## See also
+
+- `Instance`, parent, children, cloning, attributes, tags, and property-change notifications.
+- `Object`, shared object behavior.
+- `UIShader`, custom visual effects for GUI elements.

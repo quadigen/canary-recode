@@ -1,0 +1,33 @@
+---
+title: CFrameValue
+description: Store a CFrame in the object tree.
+---
+
+`CFrameValue` holds a position and rotation as an instance. Use it for saved transforms, waypoints, and camera or spawn configurations.
+
+## Getting started
+
+```lua
+local point = Instance.new("CFrameValue")
+point.Name = "Waypoint"
+point.Value = CFrame.new(10, 2, -4)
+point.Parent = waypointFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `CFrame` | Read/write | Identity | The stored transform. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the transform.
+- Identity means position `(0, 0, 0)` with no rotation.
+- A `CFrame` stores rotation as a matrix; composing many of them can accumulate small errors.
+
+## See also
+
+- `Vector3Value` for positions without rotation.
+- `Model` and `Part` for the objects that use `CFrame`.

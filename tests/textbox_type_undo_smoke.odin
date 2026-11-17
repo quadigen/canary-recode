@@ -1,11 +1,11 @@
 package main
 
+import classes "../src/engine/classes"
+import sdl3 "../src/engine/platform"
+import engine_runtime "../src/engine/runtime"
+import vm "../src/engine/vm"
 import "core:fmt"
 import "core:strings"
-import engine_runtime "../src/engine/runtime"
-import classes "../src/engine/classes"
-import vm "../src/engine/vm"
-import sdl3 "../src/engine/platform"
 import sdl "vendor:sdl3"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
@@ -34,7 +34,12 @@ make_text_input :: proc(text: string) -> (sdl3.Event, cstring) {
 }
 
 // send_key / send_text wrap the exact engine event path used per frame.
-send_key :: proc(env: ^engine_runtime.Environment, vm_state: ^vm.VM, scancode: sdl3.Scancode, mod: sdl.Keymod) {
+send_key :: proc(
+	env: ^engine_runtime.Environment,
+	vm_state: ^vm.VM,
+	scancode: sdl3.Scancode,
+	mod: sdl.Keymod,
+) {
 	event := make_key_down(scancode, mod)
 	classes.TextBox_Handle_Event(&env.classes, vm_state.L, event)
 }
@@ -45,8 +50,21 @@ send_text :: proc(env: ^engine_runtime.Environment, vm_state: ^vm.VM, text: stri
 	classes.TextBox_Handle_Event(&env.classes, vm_state.L, event)
 }
 
-assert_text :: proc(env: ^engine_runtime.Environment, vm_state: ^vm.VM, box: ^classes.TextBox, expected: string, iteration: int, label: string) {
-	if !classes.TextBox_get(vm_state.L, cast(^classes.Object)box, &env.datatypes, &env.enums, "Text") {
+assert_text :: proc(
+	env: ^engine_runtime.Environment,
+	vm_state: ^vm.VM,
+	box: ^classes.TextBox,
+	expected: string,
+	iteration: int,
+	label: string,
+) {
+	if !classes.TextBox_get(
+		vm_state.L,
+		cast(^classes.Object)box,
+		&env.datatypes,
+		&env.enums,
+		"Text",
+	) {
 		panic("TextBox_get(Text) failed")
 	}
 	text, ok := vm.ToString(vm_state.L, -1)
@@ -68,7 +86,9 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local box = Instance.new("TextBox")
 box.Name = "StressBox"
 box.Text = "abc"
@@ -76,8 +96,17 @@ box.CodeEditor = true
 box.AutoClose = false
 box.MaxLength = -1
 Instance.new("SyntaxHighlighter", box)
+TEXT_CHANGES = {}
+box:GetPropertyChangedSignal("Text"):Connect(function()
+	table.insert(TEXT_CHANGES, box.Text)
+	box.Text = box.Text
+end)
+box.Text = "abc"
+assert(#TEXT_CHANGES == 0, "unchanged assignments must not fire Text signals")
 _G.box = box
-`, "textbox_setup")
+`,
+		"textbox_setup",
+	)
 
 	descriptor := classes.Find_Class(&environment.classes, "TextBox")
 	if descriptor == nil || len(descriptor.instances) != 1 {
@@ -106,6 +135,16 @@ _G.box = box
 			assert(highlighter.spans_valid && highlighter.cached_text == box.text)
 		}
 		assert_text(&environment, &script_vm, box, "XYZ", iter, "after typing")
+		if iter == 0 {
+			run_script(
+				&script_vm,
+				`
+assert(#TEXT_CHANGES == 4)
+assert(table.concat(TEXT_CHANGES, ",") == ",X,XY,XYZ")
+`,
+				"textbox_native_text_changes",
+			)
+		}
 
 		send_key(&environment, &script_vm, .Z, sdl.KMOD_CTRL) // undo replacement
 		assert_text(&environment, &script_vm, box, "abc", iter, "after undo")
@@ -133,11 +172,15 @@ _G.box = box
 	send_key(&environment, &script_vm, .TAB, {})
 	assert_text(&environment, &script_vm, box, "a\t    ", 0, "indent after an existing tab")
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 _G.box.Position = UDim2.fromOffset(50, 50)
 _G.box.Size = UDim2.fromOffset(300, 120)
 _G.box.Text = "alpha\nbeta_name! gamma"
-`, "textbox_click_setup")
+`,
+		"textbox_click_setup",
+	)
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
 	last_glyph_left := classes.text_box_measure_range(box, 6, 14)
 	last_glyph_right := classes.text_box_measure_range(box, 6, 15)
@@ -145,14 +188,68 @@ _G.box.Text = "alpha\nbeta_name! gamma"
 	event.type = .MOUSE_BUTTON_DOWN
 	event.button.button = sdl3.BUTTON_LEFT
 	event.button.clicks = 2
-	event.button.x = 56 + classes.text_box_gutter_width(box) + last_glyph_left +
+	event.button.x =
+		box.absolute_position.X +
+		box.editor_padding +
+		classes.text_box_gutter_width(box) +
+		last_glyph_left +
 		(last_glyph_right - last_glyph_left) * 0.75
-	event.button.y = 57 + classes.text_box_line_height(box)
+	event.button.y =
+		box.absolute_position.Y + box.editor_padding + 1.5 * classes.text_box_line_height(box)
 	classes.TextBox_Handle_Event(&environment.classes, script_vm.L, event)
-	run_script(&script_vm, `assert(_G.box.SelectedText == "beta_name", _G.box.SelectedText)`, "textbox_word_selection")
+	run_script(
+		&script_vm,
+		`assert(_G.box.SelectedText == "beta_name", _G.box.SelectedText)`,
+		"textbox_word_selection",
+	)
 	event.button.clicks = 3
 	classes.TextBox_Handle_Event(&environment.classes, script_vm.L, event)
-	run_script(&script_vm, `assert(_G.box.SelectedText == "beta_name! gamma")`, "textbox_line_selection")
+	run_script(
+		&script_vm,
+		`assert(_G.box.SelectedText == "beta_name! gamma")`,
+		"textbox_line_selection",
+	)
+
+	run_script(
+		&script_vm,
+		`
+box:ReleaseFocus()
+local input = Instance.new("TextBox")
+input.Name = "IrisTextBox"
+input.ClearTextOnFocus = false
+input.MultiLine = true
+input.TextWrapped = true
+input.RichText = true
+input.TextTruncate = Enum.TextTruncate.AtEnd
+assert(input.MultiLine and input.TextWrapped and input.WordWrap)
+assert(input.RichText and input.TextTruncate == Enum.TextTruncate.AtEnd)
+assert(not input.CodeEditor)
+_G.irisInput = input
+_G.irisFocusCount = 0
+input.Focused:Connect(function()
+	assert(input:IsFocused())
+	_G.irisFocusCount += 1
+end)
+input.Text = "first"
+input:CaptureFocus()
+input:CaptureFocus()
+assert(_G.irisFocusCount == 1)
+input.CursorPosition = 6
+`,
+		"textbox_iris_focus",
+	)
+	send_key(&environment, &script_vm, .RETURN, {})
+	send_text(&environment, &script_vm, "second")
+	run_script(
+		&script_vm,
+		`
+assert(_G.irisInput.Text == "first\nsecond" and _G.irisInput:IsFocused())
+_G.irisInput:ReleaseFocus()
+_G.irisInput:CaptureFocus()
+assert(_G.irisFocusCount == 2)
+`,
+		"textbox_iris_multiline",
+	)
 
 	// Teardown mirrors gui_component_smoke: close the Lua state first so the
 	// GC destroys the still-alive userdata, then free the environment.

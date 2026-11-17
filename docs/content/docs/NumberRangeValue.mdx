@@ -1,0 +1,33 @@
+---
+title: NumberRangeValue
+description: Store a NumberRange in the object tree.
+---
+
+`NumberRangeValue` holds a minimum and maximum pair as an instance. Use it for ranges that another system reads, such as random delays or effect scales.
+
+## Getting started
+
+```lua
+local delay = Instance.new("NumberRangeValue")
+delay.Name = "DelayRange"
+delay.Value = NumberRange.new(1, 3)
+delay.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `NumberRange` | Read/write | Zero range | The stored range. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies both bounds.
+- An unset value reads as a range with both bounds at `0`.
+- Ranges aren't normalized for you; if the caller expects `Min <= Max`, order them yourself.
+
+## See also
+
+- `NumberValue` for a single number.
+- `TweenService` and effects that consume ranges.

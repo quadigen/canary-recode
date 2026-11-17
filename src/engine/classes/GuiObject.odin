@@ -13,7 +13,7 @@ import "core:strings"
 
 GuiObject_Class := Class_Info {
 	name   = "GuiObject",
-	parent = &Instance_Class,
+	parent = &GuiBase2d_Class,
 }
 
 GuiObject :: struct {
@@ -288,7 +288,7 @@ GuiObject_get :: proc(
 	case "LayoutOrder":
 		vm.PushNumber(L, f64(gui.layout_order))
 
-	case "BackgroundTransparency":
+	case "BackgroundTransparency", "Transparency":
 		vm.PushNumber(L, gui.bg_transparency)
 
 	case "ClipsDescendants":
@@ -536,6 +536,7 @@ GuiObject_get_absolute_transform :: proc(
 		object.parent,
 		ctx,
 	)
+	parent_width, parent_height = scrolling_frame_content_size(object.parent, parent_width, parent_height)
 
 	gui := cast(^GuiObject)object
 
@@ -664,17 +665,8 @@ GuiObject_contains_point :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 		if Is_A(current, "GuiObject") {
 			parent_gui := cast(^GuiObject)current
 
-			if parent_gui.clips_descendants {
-				parent_x, parent_y := GuiObject_screen_to_local(parent_gui, x, y)
-
-				if !GuiObject_point_in_rect(
-					parent_x,
-					parent_y,
-					parent_gui.absolute_position,
-					parent_gui.absolute_size,
-				) {
-					return false
-				}
+			if parent_gui.clips_descendants && !gui_object_point_in_child_area(parent_gui, x, y) {
+				return false
 			}
 		}
 
@@ -883,6 +875,12 @@ gui_object_point_in_own_rect :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 	return GuiObject_point_in_rect(px, py, gui.absolute_position, gui.absolute_size)
 }
 
+gui_object_point_in_child_area :: proc(gui: ^GuiObject, x, y: f32) -> bool {
+	px, py := GuiObject_screen_to_local(gui, x, y)
+	width, height := scrolling_frame_content_size(&gui.object, gui.absolute_size.X, gui.absolute_size.Y)
+	return GuiObject_point_in_rect(px, py, gui.absolute_position, {width, height})
+}
+
 // Children render after their parents; later siblings render above earlier siblings.
 // Reverse traversal returns the same last-painted winner without testing the whole tree.
 gui_object_hit_subtree_reverse :: proc(
@@ -908,18 +906,17 @@ gui_object_hit_subtree_reverse :: proc(
 			if !gui.visible {continue}
 
 			// Descendants cannot be hit outside an ancestor's clipping region.
-			inside := false
-			if gui.clips_descendants {
-				inside = gui_object_point_in_own_rect(gui, x, y)
-				if !inside {continue}
-			}
-
-			if descendant := gui_object_hit_subtree_reverse(child, x, y, require_paint);
-			   descendant != nil {
-				return descendant
+			inside := gui_object_point_in_own_rect(gui, x, y) if gui.clips_descendants else false
+			if gui.clips_descendants && !inside {continue}
+			if !gui.clips_descendants || !Is_A_Class(child, &ScrollingFrame_Class) ||
+			   gui_object_point_in_child_area(gui, x, y) {
+				if descendant := gui_object_hit_subtree_reverse(child, x, y, require_paint);
+				   descendant != nil {
+					return descendant
+				}
 			}
 			if GuiObject_accepts_pointer(gui) && (!require_paint || GuiObject_paints(gui)) {
-				if gui.clips_descendants || gui_object_point_in_own_rect(gui, x, y) {
+				if inside || gui_object_point_in_own_rect(gui, x, y) {
 					return gui
 				}
 			}
@@ -1413,10 +1410,10 @@ gui_parent_basis_size :: proc(gui: ^GuiObject, ctx: ^Class_Step_Context) -> (wid
 		parent_gui := cast(^GuiObject)parent
 
 		if parent_gui.previous_size_valid {
-			return parent_gui.previous_size.X, parent_gui.previous_size.Y
+			return scrolling_frame_content_size(parent, parent_gui.previous_size.X, parent_gui.previous_size.Y)
 		}
 
-		return parent_gui.base_size.X, parent_gui.base_size.Y
+		return scrolling_frame_content_size(parent, parent_gui.base_size.X, parent_gui.base_size.Y)
 	}
 
 	_, _, width, height = GuiObject_get_absolute_transform(parent, ctx)
@@ -1550,16 +1547,11 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 		basis_height = gui.base_size.Y
 	}
 
-	width: f32 = 0
-	height: f32 = 0
-
-	is_text := false
 	text_content := datatypes.Vector2_Zero
 
 	switch {
 	case Is_A(&gui.object, "TextLabel"):
 		text_content = TextLabel_Measure_Content(cast(^TextLabel)gui, basis_width)
-		is_text = true
 	case Is_A(&gui.object, "TextButton"):
 		button := cast(^TextButton)gui
 		label := TextButton_to_text_label(button)
@@ -1568,87 +1560,82 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 			basis_width,
 			&button.render_layout.measure,
 		)
-		is_text = true
 	case Is_A(&gui.object, "TextBox"):
 		text_content = TextBox_Measure_Content(cast(^TextBox)gui, basis_width)
-		is_text = true
 	}
 
-	if is_text {
-		width = text_content.X
-		height = text_content.Y
-	} else {
-		layout_width: f32 = 0
-		layout_height: f32 = 0
-		has_layout := false
+	width, height := text_content.X, text_content.Y
 
-		min_x: f32 = 0
-		min_y: f32 = 0
-		max_x: f32 = 0
-		max_y: f32 = 0
+	layout_width: f32 = 0
+	layout_height: f32 = 0
+	has_layout := false
 
-		for object in gui.object.children {
-			if object == nil || object.destroyed {
+	min_x: f32 = 0
+	min_y: f32 = 0
+	max_x: f32 = 0
+	max_y: f32 = 0
+
+	for object in gui.object.children {
+		if object == nil || object.destroyed {
+			continue
+		}
+
+		if Is_A(object, "UIListLayout") {
+			layout := cast(^UIListLayout)object
+			if layout.enabled {
+				layout_width = layout.absolute_content_size.X
+				layout_height = layout.absolute_content_size.Y
+				has_layout = true
+			}
+		} else if Is_A(object, "UIGridLayout") {
+			layout := cast(^UIGridLayout)object
+			if layout.enabled {
+				layout_width = layout.absolute_content_size.X
+				layout_height = layout.absolute_content_size.Y
+				has_layout = true
+			}
+		} else if Is_A(object, "GuiObject") {
+			child := cast(^GuiObject)object
+
+			if !child.visible {
 				continue
 			}
 
-			if Is_A(object, "UIListLayout") {
-				layout := cast(^UIListLayout)object
-				if layout.enabled {
-					layout_width = layout.absolute_content_size.X
-					layout_height = layout.absolute_content_size.Y
-					has_layout = true
-				}
-			} else if Is_A(object, "UIGridLayout") {
-				layout := cast(^UIGridLayout)object
-				if layout.enabled {
-					layout_width = layout.absolute_content_size.X
-					layout_height = layout.absolute_content_size.Y
-					has_layout = true
-				}
-			} else if Is_A(object, "GuiObject") {
-				child := cast(^GuiObject)object
+			child_width, child_height := gui_effective_size(child, basis_width, basis_height)
 
-				if !child.visible {
-					continue
-				}
+			child_left: f32
+			child_top: f32
 
-				child_width, child_height := gui_effective_size(child, basis_width, basis_height)
+			if child.layout_override_active {
+				child_left = child.layout_override_position.X
+				child_top = child.layout_override_position.Y
+			} else {
+				x_udim := datatypes.UDim{child.position.X_Scale, child.position.X_Offset}
+				y_udim := datatypes.UDim{child.position.Y_Scale, child.position.Y_Offset}
 
-				child_left: f32
-				child_top: f32
-
-				if child.layout_override_active {
-					child_left = child.layout_override_position.X
-					child_top = child.layout_override_position.Y
-				} else {
-					x_udim := datatypes.UDim{child.position.X_Scale, child.position.X_Offset}
-					y_udim := datatypes.UDim{child.position.Y_Scale, child.position.Y_Offset}
-
-					child_left =
-						gui_resolve_udim(x_udim, basis_width) - child.anchorpoint.X * child_width
-					child_top =
-						gui_resolve_udim(y_udim, basis_height) - child.anchorpoint.Y * child_height
-				}
-
-				child_right := child_left + child_width
-				child_bottom := child_top + child_height
-
-				max_x = max(max_x, child_right)
-				max_y = max(max_y, child_bottom)
-
-				min_x = min(min_x, child_left)
-				min_y = min(min_y, child_top)
+				child_left =
+					gui_resolve_udim(x_udim, basis_width) - child.anchorpoint.X * child_width
+				child_top =
+					gui_resolve_udim(y_udim, basis_height) - child.anchorpoint.Y * child_height
 			}
-		}
 
-		if has_layout {
-			width = layout_width
-			height = layout_height
-		} else {
-			width = max_x - min_x
-			height = max_y - min_y
+			child_right := child_left + child_width
+			child_bottom := child_top + child_height
+
+			max_x = max(max_x, child_right)
+			max_y = max(max_y, child_bottom)
+
+			min_x = min(min_x, child_left)
+			min_y = min(min_y, child_top)
 		}
+	}
+
+	if has_layout {
+		width = max(width, layout_width)
+		height = max(height, layout_height)
+	} else {
+		width = max(width, max_x - min_x)
+		height = max(height, max_y - min_y)
 	}
 
 	left, right, top, bottom, found := gui_resolve_uipadding(
@@ -1888,9 +1875,29 @@ gui_compute_transform :: proc(
 }
 
 
-gui_apply_transforms :: proc(parent: ^GuiObject, px, py, pw, ph: f32) {
+Gui_Layout_Size_Changes :: map[^Object]datatypes.Vector2
+
+gui_track_size_change :: proc(
+	changes: ^Gui_Layout_Size_Changes,
+	object: ^Object,
+	property: string,
+	previous: datatypes.Vector2,
+) {
+	if changes == nil {return}
+	if object.changed == nil && Object_Find_Property_Signal(object, property) == nil {return}
+	if object in changes^ {return}
+	if changes^ == nil {changes^ = make(Gui_Layout_Size_Changes)}
+	changes^[object] = previous
+}
+
+gui_apply_transforms :: proc(
+	parent: ^GuiObject,
+	px, py, pw, ph: f32,
+	size_changes: ^Gui_Layout_Size_Changes = nil,
+) {
 	padding_x := parent.content_offset.X
 	padding_y := parent.content_offset.Y
+	content_width, content_height := scrolling_frame_content_size(&parent.object, pw, ph)
 
 	scroll_x: f32 = 0
 	scroll_y: f32 = 0
@@ -1913,24 +1920,31 @@ gui_apply_transforms :: proc(parent: ^GuiObject, px, py, pw, ph: f32) {
 			gui,
 			px,
 			py,
-			pw,
-			ph,
+			content_width,
+			content_height,
 			padding_x,
 			padding_y,
 			scroll_x,
 			scroll_y,
 		)
 
-		gui_set_layout_rect(gui, x, y, w, h)
+		gui_set_layout_rect(gui, x, y, w, h, size_changes)
 
-		gui_apply_transforms(gui, x, y, w, h)
+		gui_apply_transforms(gui, x, y, w, h, size_changes)
 	}
 }
 
-gui_set_layout_rect :: proc(gui: ^GuiObject, x, y, w, h: f32) {
+gui_set_layout_rect :: proc(
+	gui: ^GuiObject,
+	x, y, w, h: f32,
+	size_changes: ^Gui_Layout_Size_Changes,
+) {
 	position := datatypes.Vector2{x, y}
 	size := datatypes.Vector2{w, h}
 	if gui.absolute_position != position || gui.absolute_size != size {
+		if gui.absolute_size != size {
+			gui_track_size_change(size_changes, &gui.object, "AbsoluteSize", gui.absolute_size)
+		}
 		gui.absolute_position = position
 		gui.absolute_size = size
 		gui_invalidate_draw(&gui.object)
@@ -1948,13 +1962,29 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	if !resized && !gui_layout_dirty {return}
 
 	tracy.ZoneNC("Update_GUI_Layout", 0xE5C07B)
-	gui_layout_solving = true
-	defer gui_layout_solving = false
-
 	L: ^vm.State
 
 	if registry.vm_state != nil {
 		L = registry.vm_state.L
+	}
+
+	size_changes: Gui_Layout_Size_Changes
+	gui_layout_solving = true
+	defer {
+		gui_layout_solving = false
+		// Size listeners can invalidate layout. Run them after the solver has
+		// committed its results so those writes are picked up on the next pass.
+		for object, previous in size_changes {
+			if object.destroyed {continue}
+			if Is_A_Class(object, &UIListLayout_Class) {
+				if (cast(^UIListLayout)object).absolute_content_size != previous {
+					Object_Fire_Property_Changed(object, "AbsoluteContentSize", L)
+				}
+			} else if (cast(^GuiObject)object).absolute_size != previous {
+				Object_Fire_Property_Changed(object, "AbsoluteSize", L)
+			}
+		}
+		delete(size_changes)
 	}
 
 	ctx := Class_Step_Context {
@@ -1972,8 +2002,8 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 			   (!gui_layout_all_dirty && !root.layout_dirty) {continue}
 			px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
 			x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
-			gui_set_layout_rect(root, x, y, w, h)
-			gui_apply_transforms(root, x, y, w, h)
+			gui_set_layout_rect(root, x, y, w, h, &size_changes)
+			gui_apply_transforms(root, x, y, w, h, &size_changes)
 			root.layout_dirty = false
 		}
 		gui_layout_dirty = false
@@ -2080,7 +2110,12 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 				}
 
 				if Is_A_Class(object, &UIListLayout_Class) {
-					UIListLayout_Apply(cast(^UIListLayout)object, registry, &ctx)
+					layout := cast(^UIListLayout)object
+					previous := layout.absolute_content_size
+					UIListLayout_Apply(layout, registry, &ctx)
+					if layout.absolute_content_size != previous {
+						gui_track_size_change(&size_changes, object, "AbsoluteContentSize", previous)
+					}
 				} else if Is_A_Class(object, &UIGridLayout_Class) {
 					UIGridLayout_Apply(cast(^UIGridLayout)object, registry, &ctx)
 				}
@@ -2099,9 +2134,9 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 
 				x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
 
-				gui_set_layout_rect(root, x, y, w, h)
+				gui_set_layout_rect(root, x, y, w, h, &size_changes)
 
-				gui_apply_transforms(root, x, y, w, h)
+				gui_apply_transforms(root, x, y, w, h, &size_changes)
 			}
 		}
 
@@ -2269,14 +2304,17 @@ gui_render_children :: proc(
 	shape: Gui_Shape,
 ) {
 	if len(object.children) == 0 {return}
+	viewport := rect
 	scrolling_frame_virtualized := false
 	if Is_A_Class(object, &ScrollingFrame_Class) {
-		scrolling_frame_virtualized = (cast(^ScrollingFrame)object).virtualized_scrolling
+		frame := cast(^ScrollingFrame)object
+		scrolling_frame_virtualized = frame.virtualized_scrolling
+		viewport.width, viewport.height = scrolling_frame_window_size(frame, rect.width, rect.height)
 	}
 
 	if !gui.clips_descendants {
 		if scrolling_frame_virtualized {
-			ScreenGui_RenderChildren_Visible(object, ctx, rect)
+			ScreenGui_RenderChildren_Visible(object, ctx, viewport)
 		} else {
 			ScreenGui_RenderChildren(object, ctx)
 		}
@@ -2298,10 +2336,13 @@ gui_render_children :: proc(
 	case .Round:
 		guilib.clipRoundedRect(ctx.renderer.SkiaSurface, rect, shape.radius)
 	case .None:
-		guilib.clipRect(ctx.renderer.SkiaSurface, rect)
+		guilib.clipRect(ctx.renderer.SkiaSurface, viewport)
+	}
+	if shape.kind != .None && (viewport.width != rect.width || viewport.height != rect.height) {
+		guilib.clipRect(ctx.renderer.SkiaSurface, viewport)
 	}
 	if scrolling_frame_virtualized {
-		ScreenGui_RenderChildren_Visible(object, ctx, rect)
+		ScreenGui_RenderChildren_Visible(object, ctx, viewport)
 	} else {
 		ScreenGui_RenderChildren(object, ctx)
 	}
@@ -2591,7 +2632,7 @@ GuiObject_set :: proc(
 		if gui.layout_order == value {return true}
 		gui.layout_order = value
 		layout_dirty = true
-	case "BackgroundTransparency":
+	case "BackgroundTransparency", "Transparency":
 		value := clamp(vm.ArgNumber(L, value_index), 0.0, 1.0)
 		if gui.bg_transparency == value {return true}
 		gui.bg_transparency = value
@@ -2612,7 +2653,7 @@ GuiObject_set :: proc(
 		gui.selectable = value
 		render_dirty = true
 	case "Visible":
-		value := vm.ArgBoolean(L, value_index)
+		value := !vm.IsNil(L, value_index) && vm.ArgBoolean(L, value_index)
 		if gui.visible == value {return true}
 		gui.visible = value
 		layout_dirty = true

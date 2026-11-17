@@ -1,0 +1,62 @@
+---
+title: Sequences
+description: NumberRange, NumberSequence, and NumberSequenceKeypoint for interpolated values.
+---
+
+## NumberRange
+
+`NumberRange.new(min, max?)` stores a range of numbers. If `max` is omitted, it equals `min`. A minimum greater than the maximum raises an error.
+
+```lua
+local damage = NumberRange.new(10, 20)
+print(damage.Min, damage.Max)
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Min` | `number` | Lower bound. |
+| `Max` | `number` | Upper bound. |
+
+Equality compares both bounds.
+
+## NumberSequence
+
+A number sequence describes values over normalized time. Use it for particle sizes, transparency, and similar animated values.
+
+```lua
+local fade = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(1, 0)
+})
+```
+
+| Constructor | Description |
+| --- | --- |
+| `NumberSequence.new(value)` | Constant value. |
+| `NumberSequence.new(start, finish)` | Two-stop sequence. |
+| `NumberSequence.new(keypoints)` | Sequence from an array of `NumberSequenceKeypoint`. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Keypoints` | `{NumberSequenceKeypoint}` | Read-only array of stops. |
+
+## NumberSequenceKeypoint
+
+`NumberSequenceKeypoint.new(time, value, envelope?)` creates one stop.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `time` | Required | Position from `0` to `1`. Values outside the range raise an error. |
+| `value` | Required | Value at the stop. Must not be NaN. |
+| `envelope` | `0` | Random spread around the value. Must be `>= 0`. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Time` | `number` | Position in the sequence. |
+| `Value` | `number` | Value at the stop. |
+| `Envelope` | `number` | Random spread. |
+
+## See also
+
+- [ParticleEmitter](/docs/ParticleEmitter) for sequence properties.
+- [TweenService](/docs/services/TweenService) for tweened number values.

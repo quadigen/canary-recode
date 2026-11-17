@@ -1,0 +1,59 @@
+---
+title: GuiService
+description: Read platform UI details such as the screen inset and whether the build is Windows.
+---
+
+`GuiService` exposes the platform details that affect how GUI is laid out. It's small: a platform flag and the safe-area inset that the window adds around the drawable area.
+
+## Getting started
+
+```lua
+local GuiService = game:GetService("GuiService")
+
+local topLeft, bottomRight = GuiService:GetGuiInset()
+print(topLeft, bottomRight)
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `IsWindows` | `boolean` | Read-only | `true` when the game is running on Windows. |
+
+## Methods
+
+### GetGuiInset
+
+```lua
+GetGuiInset(): (Vector2, Vector2)
+```
+
+Returns the safe-area inset as two vectors, in UI units. The first is the offset from the top-left of the window, the second is the space reserved at the bottom-right.
+
+```lua
+local insetTopLeft, insetBottomRight = GuiService:GetGuiInset()
+
+frame.Position = UDim2.fromOffset(insetTopLeft.X, insetTopLeft.Y)
+frame.Size = UDim2.new(1, -(insetTopLeft.X + insetBottomRight.X), 1, -(insetTopLeft.Y + insetBottomRight.Y))
+```
+
+Use it when you need a full-screen element to fill the visible area rather than the raw window, for example on mobile where system bars take up space.
+
+### IsTenFootInterface
+
+```lua
+IsTenFootInterface(): boolean
+```
+
+Reports whether the game is running in a TV-style ten-foot interface. The current implementation always returns `false`.
+
+## Notes
+
+- The inset is measured in UI units, already divided by the interface scale.
+- Safe-area values update with the window, so read them again after a resize instead of caching them forever.
+- `GetGuiInset()` returns two values; assigning it to one variable gives you only the top-left inset.
+
+## See also
+
+- `GuiObject`, positioning and sizing GUI elements.
+- `ScreenGui`, the container that holds a screen interface.

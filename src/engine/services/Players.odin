@@ -121,7 +121,7 @@ player_get :: proc(
 		if player.character_removing ==
 		   nil {player.character_removing = signals.Create(player.signal_registry.signal_registry)}
 		signals.Push(L, player.character_removing)
-	case "LoadCharacter", "GetMouse", "GetNetworkPing":
+	case "LoadCharacter", "GetMouse", "GetNetworkPing", "DistanceFromCharacter":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -190,6 +190,25 @@ player_namecall :: proc(
 ) {
 	player := cast(^Player)object
 	switch method {
+	case "DistanceFromCharacter":
+		if player.character == nil || player.character.destroyed {
+			vm.PushNumber(L, 0)
+			return 1, true
+		}
+		root := classes.CharacterModel_Root(player.character)
+		if root == nil {
+			vm.PushNumber(L, 0)
+			return 1, true
+		}
+		point := datatypes.Arg_Vector3(L, 2)
+		delta := datatypes.Vector3{
+			x = point.x - root.position.x,
+			y = point.y - root.position.y,
+			z = point.z - root.position.z,
+		}
+		vm.PushNumber(L, f64(datatypes.Vec3_Magnitude(delta)))
+		return 1, true
+
 	case "LoadCharacter":
 		when ODIN_OS == .JS {
 			vm.PushNil(L)

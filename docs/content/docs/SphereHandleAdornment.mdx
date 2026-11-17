@@ -1,0 +1,36 @@
+---
+title: SphereHandleAdornment
+description: Draw a wireframe sphere at a part.
+---
+
+`SphereHandleAdornment` draws a sphere centered on its target part. Use it to mark a radius or a point of interest.
+
+## Getting started
+
+```lua
+local sphere = Instance.new("SphereHandleAdornment")
+sphere.Adornee = targetPart
+sphere.Radius = 6
+sphere.Color3 = Color3.fromRGB(80, 200, 255)
+sphere.Parent = targetPart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | `nil` | Part to center on. Falls back to the parent. |
+| `Color3` | `Color3` | Read/write | Green | Wire color. |
+| `Radius` | `number` | Read/write | `1` | Sphere radius in studs. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- The sphere is centered on the part's position, not on its bounding box.
+- If `Adornee` is `nil`, the parent is used, and the parent must be a `Part`.
+- Cloning copies the target, color, and radius.
+
+## See also
+
+- `BoxHandleAdornment` and `CylinderHandleAdornment` for other shapes.
+- `Attachment` for a visible point marker.

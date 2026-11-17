@@ -1,0 +1,123 @@
+---
+title: Vectors and rotations
+description: Vector2, Vector3, their 16-bit variants, and Quaternion.
+---
+
+Vectors store components and support the arithmetic you expect. The float versions are used for positions, sizes, directions, and UVs; the int16 versions are compact integer pairs and triples.
+
+## Vector3
+
+`Vector3.new(x?, y?, z?)` creates a vector. All three components default to `0`.
+
+```lua
+local a = Vector3.new(1, 2, 3)
+local b = Vector3.new(0, 1, 0)
+print(a:Dot(b)) -- 2
+print(a:Cross(b))
+print(a.Unit)
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `x`, `X` | `number` | X component. |
+| `y`, `Y` | `number` | Y component. |
+| `z`, `Z` | `number` | Z component. |
+| `Magnitude` | `number` | Length of the vector. |
+| `Unit` | `Vector3` | Vector scaled to length 1. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Abs()` | `Vector3` | Absolute value of each component. |
+| `Ceil()` | `Vector3` | Rounds each component up. |
+| `Floor()` | `Vector3` | Rounds each component down. |
+| `Sign()` | `Vector3` | Sign of each component. |
+| `Cross(other)` | `Vector3` | Cross product with `other`. |
+| `Angle(other, axis?)` | `number` | Angle in radians. Pass an axis to get a signed angle. |
+| `Dot(other)` | `number` | Dot product with `other`. |
+| `FuzzyEq(other, epsilon?)` | `boolean` | Component-wise comparison. `epsilon` defaults to `1e-5`. |
+| `Lerp(goal, alpha)` | `Vector3` | Interpolates toward `goal`. |
+| `Max(other)` | `Vector3` | Larger component from each vector. |
+| `Min(other)` | `Vector3` | Smaller component from each vector. |
+
+Static constructors:
+
+| Call | Result |
+| --- | --- |
+| `Vector3.FromNormalId(Enum.NormalId)` | Unit vector for a face direction. |
+| `Vector3.FromAxis(Enum.Axis)` | Unit vector for an axis. |
+
+Arithmetic supports `+`, `-`, unary `-`, `==`, and `*` and `/` for scaling by a number.
+
+## Vector2
+
+`Vector2.new(x?, y?)` creates a 2D vector. Both components default to `0`.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `x`, `X` | `number` | X component. |
+| `y`, `Y` | `number` | Y component. |
+| `Magnitude` | `number` | Length of the vector. |
+| `Unit` | `Vector2` | Vector scaled to length 1. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Cross(other)` | `number` | 2D cross product. |
+| `Dot(other)` | `number` | Dot product. |
+| `FuzzyEq(other, epsilon?)` | `boolean` | Component-wise comparison. `epsilon` defaults to `1e-5`. |
+| `Lerp(goal, alpha)` | `Vector2` | Interpolates toward `goal`. |
+
+Arithmetic supports `+`, `-`, unary `-`, `==`, and `*` and `/` for scaling by a number.
+
+## Vector3int16
+
+`Vector3int16.new(x?, y?, z?)` stores three signed 16-bit integers. Components default to `0` and must be between `-32768` and `32767`; anything outside that range raises an error.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `X` | `number` | X component. |
+| `Y` | `number` | Y component. |
+| `Z` | `number` | Z component. |
+
+Supports `+`, `-`, and `==`.
+
+## Vector2int16
+
+`Vector2int16.new(x?, y?)` stores two signed 16-bit integers with the same range and default rules as `Vector3int16`.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `X` | `number` | X component. |
+| `Y` | `number` | Y component. |
+
+Supports `+`, `-`, and `==`.
+
+## Quaternion
+
+`Quaternion.new(x?, y?, z?, w?)` creates a quaternion. `x`, `y`, and `z` default to `0`; `w` defaults to `1`, which is the identity rotation.
+
+```lua
+local turn = Quaternion.fromAxisAngle(Vector3.new(0, 1, 0), math.rad(90))
+print(turn:ToAxisAngle())
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `X`, `Y`, `Z`, `W` | `number` | Quaternion components. |
+| `Magnitude` | `number` | Length of the quaternion. |
+| `Unit` | `Quaternion` | Normalized quaternion. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Conjugate()` | `Quaternion` | Conjugate of the quaternion. |
+| `Inverse()` | `Quaternion` | Inverse rotation. |
+| `Dot(other)` | `number` | Dot product with another quaternion. |
+| `Lerp(other, alpha)` | `Quaternion` | Linear interpolation. `alpha` is clamped to `0` through `1`. |
+| `Slerp(other, alpha)` | `Quaternion` | Spherical interpolation. `alpha` is clamped to `0` through `1`. |
+| `ToAxisAngle()` | `(Vector3, number)` | Rotation axis and angle in radians. |
+
+`Quaternion.fromAxisAngle(axis, angle)` builds a rotation around `axis`. Multiplying two quaternions with `*` combines their rotations, and `==` compares components.
+
+## See also
+
+- [CFrame](/docs/datatypes/cframe) for position and rotation together.
+- [Spatial queries](/docs/datatypes/spatial) for rays and regions.

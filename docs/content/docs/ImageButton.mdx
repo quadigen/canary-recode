@@ -1,0 +1,55 @@
+---
+title: ImageButton
+description: A clickable button that displays an image.
+---
+
+`ImageButton` combines the image properties of `ImageLabel` with the button behavior of `GuiButton`. It supports the `Activated` event and automatic hover and press coloring.
+
+## Getting started
+
+```lua
+local button = Instance.new("ImageButton")
+button.Size = UDim2.fromOffset(72, 72)
+button.Image = "rbxassetid://1234567890"
+button.Parent = screenGui
+
+button.Activated:Connect(function()
+    print("icon clicked")
+end)
+```
+
+## Image properties
+
+`ImageButton` exposes the same image members as `ImageLabel`:
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Image` | `string` | Read/write | Image asset URI. |
+| `ImageTransparency` | `number` | Read/write | Transparency, clamped to `0` through `1`. |
+| `ImageColor3` | `Color3` | Read/write | Tint applied to the image. |
+| `ImageRectOffset` | `Vector2` | Read/write | Source rectangle offset. |
+| `ImageRectSize` | `Vector2` | Read/write | Source rectangle size. |
+| `ResampleMode` | `Enum.ResampleMode` | Read/write | Filtering when scaled. |
+| `ScaleType` | `Enum.ScaleType` | Read/write | Stretch, tile, or slice behavior. |
+| `SliceCenter` | `Rect` | Read/write | Nine-slice border rectangle. |
+| `SliceScale` | `number` | Read/write | Nine-slice border scale, minimum `0`. |
+| `TileSize` | `UDim2` | Read/write | Tile size for tiled scaling. |
+
+## Button behavior
+
+`ImageButton` inherits from `GuiButton`, so it has the button members, including `AutoButtonColor`, `Modal`, `Selected`, and the `Activated` event.
+
+With automatic button color enabled, the image tints brighter on hover and darker while pressed.
+
+## Notes
+
+- `IsLoaded` isn't part of the public property list on this class.
+- `Activated` fires on a completed click, including touch input.
+- The image properties are stored on the button itself; there's no child label instance.
+- Inherits all `GuiObject` members.
+
+## See also
+
+- `ImageLabel` for a non-clickable image.
+- `TextButton` for a text-based button.
+- `GuiObject` for shared GUI members.

@@ -1,0 +1,45 @@
+---
+title: Light
+description: Base class for lights that attach to a part.
+---
+
+`Light` holds the settings shared by `PointLight`, `SpotLight`, and `SurfaceLight`. A light only does something when it's parented to a `Part` inside the workspace.
+
+## Getting started
+
+```lua
+local light = Instance.new("PointLight")
+light.Brightness = 2
+light.Color = Color3.fromRGB(255, 210, 150)
+light.Range = 16
+light.Parent = part
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Brightness` | `number` | Read/write | `1` | Light strength, clamped to `0` or above. |
+| `Color` | `Color3` | Read/write | White | Light color. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the light is emitted. |
+| `Shadows` | `boolean` | Read/write | `false` | Whether the light casts shadows. |
+
+## Not creatable on its own
+
+`Light` is the shared base class. Create one of the subclasses instead:
+
+- `PointLight` for an omni-directional light.
+- `SpotLight` for a cone aimed along a part face.
+- `SurfaceLight` for a light anchored to a part surface.
+
+## Notes
+
+- The light must be a child of a `Part`, and that part must be inside the workspace, or nothing is rendered.
+- `Brightness` is scaled internally; keep values in a visible range instead of pushing very large numbers.
+- `Shadows` only has an effect on spot and surface lights.
+- Cloning a subclass copies the shared settings plus its own.
+
+## See also
+
+- `PointLight`, `SpotLight`, and `SurfaceLight`.
+- `Part` for the parent object.

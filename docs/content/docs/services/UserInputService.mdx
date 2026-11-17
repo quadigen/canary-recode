@@ -1,0 +1,129 @@
+---
+title: UserInputService
+description: Read keyboard, mouse, touch, and focus state, and listen for raw input events.
+---
+
+`UserInputService` gives you access to raw device input. It's where you check whether a key is held, where the pointer is, and what kind of input the player used last. For input targeted at a specific GUI element, use the events on `GuiObject` instead.
+
+## Getting started
+
+```lua
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.E then
+        print("Interact")
+    end
+end)
+```
+
+`gameProcessedEvent` is `true` when the input was already consumed, by the GUI or by another input handler. Checking it first is what keeps a keyboard shortcut from firing while a text box has focus.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `KeyboardEnabled` | `boolean` | Read-only | `true` | Whether a keyboard is considered available. |
+| `MouseEnabled` | `boolean` | Read-only | `true` | Whether a mouse is considered available. |
+| `TouchEnabled` | `boolean` | Read-only | `true` on Android and web | Whether touch input is available. `TouchScreenEnabled` is an alias. |
+| `GamepadEnabled` | `boolean` | Read-only | `false` | Whether a gamepad is considered connected. Stays `false` in this build. |
+| `AccelerometerEnabled` | `boolean` | Read-only | `false` | Whether an accelerometer is available. |
+| `GyroscopeEnabled` | `boolean` | Read-only | `false` | Currently always `false`. |
+| `VREnabled` | `boolean` | Read-only | `false` | Currently always `false`. |
+| `OnScreenKeyboardVisible` | `boolean` | Read-only | `false` | Currently always `false`. |
+| `MouseIconEnabled` | `boolean` | Read/write | `true` | Whether the system cursor is shown. |
+| `MouseDeltaSensitivity` | `number` | Read/write | `1` | Multiplier for mouse movement deltas, clamped between `0` and `10`. |
+| `MouseBehavior` | `Enum.MouseBehavior` | Read/write | `Enum.MouseBehavior.Default` | Mouse capture mode. Setting anything other than `Default` enables relative mouse mode. |
+| `InputBegan` | signal | Read-only | N/A | Fires when an input starts. |
+| `InputChanged` | signal | Read-only | N/A | Fires when an input changes, such as pointer movement or a wheel scroll. |
+| `InputEnded` | signal | Read-only | N/A | Fires when an input ends. |
+
+The availability properties describe the device, not your permission to read it. `GamepadEnabled` stays `false` because gamepad detection isn't implemented, and the three "always `false`" properties are placeholders.
+
+`MouseBehavior` is the standard way to lock the pointer for first-person controls. Set it back to `Default` to release the pointer:
+
+```lua
+UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+-- Later:
+UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+```
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `IsKeyDown(keyCode: Enum.KeyCode): boolean` | Whether the key is currently held. |
+| `IsMouseButtonPressed(button: Enum.UserInputType): boolean` | Whether a mouse button is held. Other input types return `false`. |
+| `GetLastInputType(): Enum.UserInputType` | The device type that produced the most recent input. |
+| `GetKeysPressed(): {InputObject}` | One input object per key currently down. |
+| `GetMouseButtonsPressed(): {InputObject}` | One input object per mouse button currently down. |
+| `GetMouseLocation(): Vector2` | Pointer position in screen space. |
+| `GetMouseDelta(): Vector2` | Accumulated pointer movement for the current frame. |
+| `GetTouches(): {InputObject}` | One input object per active touch. |
+| `GetFocusedTextBox(): TextBox?` | The text box with focus, or `nil`. |
+| `GetImageForKeyCode(keyCode: Enum.KeyCode): string` | Currently always an empty string; this runtime ships no key images. |
+| `GetPlatform(): Enum.Platform` | The platform the game is running on. |
+
+`GetPlatform()` is callable even though it isn't listed in the class's method metadata. Its value comes from the build target, not from runtime detection.
+
+`GetMouse()` also exists, but it requires internal studio access and can raise an insufficient-capabilities error from a normal script. Use `GetMouseLocation()` and `GetMouseDelta()` for pointer data instead.
+
+### Polling held keys
+
+```lua
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    local direction = Vector3.new(0, 0, 0)
+
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+        direction += Vector3.new(0, 0, -1)
+    end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+        direction += Vector3.new(0, 0, 1)
+    end
+
+    -- Apply direction somewhere.
+end)
+```
+
+Polling is the right approach for held keys; the events tell you when a key goes down or up, but not that it's still held on a later frame.
+
+## Events
+
+All three input events pass `(input: InputObject, gameProcessedEvent: boolean)`.
+
+| Event | When it fires |
+| --- | --- |
+| `InputBegan` | A key goes down, a mouse button is pressed, or a touch starts. |
+| `InputChanged` | The pointer moves, a wheel scrolls, or an active touch moves. |
+| `InputEnded` | A key is released, a mouse button is released, or a touch ends. |
+
+`InputObject` carries `UserInputType`, `UserInputState`, `KeyCode`, `Position`, and `Delta`. The objects are temporary: read the fields you need inside the callback instead of storing the object.
+
+```lua
+UserInputService.InputChanged:Connect(function(input, gameProcessedEvent)
+    if input.UserInputType == Enum.UserInputType.MouseWheel then
+        print("Scrolled", input.Position.Z)
+    end
+end)
+```
+
+Keyboard and mouse input arrives on desktop builds, touch on Android and web. On a platform without a device, the matching events simply don't fire.
+
+## Notes
+
+- Key repeat is filtered out for keyboard input, so holding a key fires `InputBegan` once.
+- The engine creates fresh input objects for each event and destroys them afterward.
+- Input that belongs to a GUI element is delivered there as well; `gameProcessedEvent` tells you whether it was consumed.
+
+## See also
+
+- `GuiObject`, input events scoped to a GUI element.
+- `RunService`, per-frame polling for held keys.
+- `ContextActionService`, binding actions instead of individual keys.

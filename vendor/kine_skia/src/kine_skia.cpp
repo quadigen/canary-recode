@@ -116,6 +116,15 @@
 
 struct KineSkiaSurface;
 
+struct KineSkiaUIShaderCapture {
+    std::unique_ptr<SkPictureRecorder> recorder;
+    SkCanvas *recordingCanvas = nullptr;
+    SkMatrix parentMatrix;
+    SkRect deviceBounds;
+    float resolutionScale = 1.0f;
+    int initialSaveCount = 1;
+};
+
 /* Defined below; draw calls target the recording canvas while one is open. */
 static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface);
 
@@ -124,6 +133,9 @@ struct KineSkiaSurface {
 	sk_sp<SkImage> backdrop;
 	/* When set, draw calls are recorded into this display list instead. */
 	std::unique_ptr<SkPictureRecorder> recorder;
+    // Nested UI shaders use the outer capture's picture and are supersampled
+    // when that outer picture is replayed. This also keeps save/restore intact.
+    std::vector<KineSkiaUIShaderCapture> uiShaderCaptures;
 
 	/* Cached lens normal map for the liquid-glass backdrop displacement. */
 	sk_sp<SkImage> displacementMap;
@@ -300,22 +312,27 @@ KINE_SKIA_API KineSkiaRuntimeShader *Kine_Skia_UIShader_Create(
 
 // The canvas has already been translated to the object's local origin.
 static void kine_skia_bind_ui_shader(
-	KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
-	float width, float height, const float *backgroundColor) {
-	const float size[] = {width, height};
-	Kine_Skia_RuntimeShader_SetUniform(shader, "size", size, 2);
-	Kine_Skia_RuntimeShader_SetUniform(shader, "backgroundColor", backgroundColor, 4);
-	if (shader->effect->findChild("backdrop")) {
-		auto image = surface->backdrop ? surface->backdrop : surface->surface->makeImageSnapshot();
-		sk_sp<SkShader> backdrop;
-		SkMatrix deviceToLocal;
-		if (image &&
-			kine_skia_canvas(surface)->getTotalMatrix().invert(&deviceToLocal)) {
-			backdrop = image->makeShader(SkSamplingOptions(SkFilterMode::kLinear), deviceToLocal);
-		}
-		shader->builder->child("backdrop") =
-			backdrop ? std::move(backdrop) : SkShaders::Color(SK_ColorTRANSPARENT);
-	}
+    KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+    float width, float height, const float *backgroundColor) {
+    const float size[] = {width, height};
+    Kine_Skia_RuntimeShader_SetUniform(shader, "size", size, 2);
+    Kine_Skia_RuntimeShader_SetUniform(shader, "backgroundColor", backgroundColor, 4);
+    if (shader->effect->findChild("backdrop")) {
+        auto image = surface->backdrop ? surface->backdrop : surface->surface->makeImageSnapshot();
+        sk_sp<SkShader> backdrop;
+        SkMatrix worldMatrix = kine_skia_canvas(surface)->getTotalMatrix();
+        if (!surface->uiShaderCaptures.empty()) {
+            // Commands in the capture use coordinates relative to its parent.
+            // Backdrop sampling must still address the actual framebuffer.
+            worldMatrix = SkMatrix::Concat(surface->uiShaderCaptures.back().parentMatrix, worldMatrix);
+        }
+        SkMatrix deviceToLocal;
+        if (image && worldMatrix.invert(&deviceToLocal)) {
+            backdrop = image->makeShader(SkSamplingOptions(SkFilterMode::kLinear), deviceToLocal);
+        }
+        shader->builder->child("backdrop") =
+            backdrop ? std::move(backdrop) : SkShaders::Color(SK_ColorTRANSPARENT);
+    }
 }
 
 KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShader(
@@ -368,6 +385,154 @@ KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShader(
 	canvas->saveLayer(&bounds, &paint);
 	canvas->translate(-x, -y);
 	return true;
+}
+
+// Supersampling is performed only when the destination is a real SkSurface.
+// A nested shader draws into its parent's SkPicture (which is supersampled
+// already). For regular SkPicture caches we preserve the original path.
+static bool kine_skia_can_supersample_ui_shader(
+    KineSkiaSurface *surface, float x, float y, float width, float height,
+    float requestedScale, KineSkiaUIShaderCapture *out) {
+    if (!surface || !surface->surface || !out || surface->recorder ||
+        !surface->uiShaderCaptures.empty() || !std::isfinite(requestedScale) ||
+        requestedScale <= 1.0f || !std::isfinite(x) || !std::isfinite(y) ||
+        !(width > 0.0f && height > 0.0f)) {
+        return false;
+    }
+    SkCanvas *parent = kine_skia_canvas(surface);
+    out->parentMatrix = parent->getTotalMatrix();
+    SkRect bounds;
+    out->parentMatrix.mapRect(&bounds, SkRect::MakeXYWH(x, y, width, height));
+    SkIRect deviceClip;
+    if (!parent->getDeviceClipBounds(&deviceClip) ||
+        !bounds.intersect(SkRect::Make(deviceClip))) {
+        return false;
+    }
+    if (!std::isfinite(bounds.left()) || !std::isfinite(bounds.top()) ||
+        !std::isfinite(bounds.right()) || !std::isfinite(bounds.bottom())) {
+        return false;
+    }
+    // Align to whole destination pixels so imageRect reconstruction does not
+    // shift the geometry by a fraction of a pixel.
+    bounds = SkRect::MakeLTRB(std::floor(bounds.left()), std::floor(bounds.top()),
+                              std::ceil(bounds.right()), std::ceil(bounds.bottom()));
+    const float scale = std::clamp(requestedScale, 1.0f, 4.0f);
+    const double pixelWidth = std::ceil(static_cast<double>(bounds.width()) * scale);
+    const double pixelHeight = std::ceil(static_cast<double>(bounds.height()) * scale);
+    // Cap per-shader VRAM usage; oversized effects gracefully use the old path.
+    if (pixelWidth < 1 || pixelHeight < 1 ||
+        pixelWidth > 8192 || pixelHeight > 8192 ||
+        pixelWidth * pixelHeight > 32000000.0) {
+        return false;
+    }
+    out->deviceBounds = bounds;
+    out->resolutionScale = scale;
+    return true;
+}
+
+static bool kine_skia_begin_ui_shader_capture(
+    KineSkiaSurface *surface, KineSkiaUIShaderCapture capture) {
+    capture.recorder = std::make_unique<SkPictureRecorder>();
+    constexpr SkScalar limit = 100000000;
+    capture.recordingCanvas = capture.recorder->beginRecording(
+        SkRect::MakeLTRB(-limit, -limit, limit, limit));
+    if (!capture.recordingCanvas) return false;
+    capture.initialSaveCount = capture.recordingCanvas->getSaveCount();
+    surface->uiShaderCaptures.push_back(std::move(capture));
+    return true;
+}
+
+// Finish only after the second regular Surface_Restore() in the content path.
+// This means no renderer-side EndUIShader API is required.
+static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
+    if (!surface || surface->uiShaderCaptures.empty()) return;
+    KineSkiaUIShaderCapture capture = std::move(surface->uiShaderCaptures.back());
+    surface->uiShaderCaptures.pop_back();
+    auto picture = capture.recorder->finishRecordingAsPicture();
+    if (!picture) return;
+
+    // With the capture popped, this is the original parent canvas.
+    SkCanvas *parent = kine_skia_canvas(surface);
+    if (!parent) return;
+    const auto fallback = [&]() { parent->drawPicture(picture); };
+    const int targetWidth = static_cast<int>(std::ceil(
+        static_cast<double>(capture.deviceBounds.width()) * capture.resolutionScale));
+    const int targetHeight = static_cast<int>(std::ceil(
+        static_cast<double>(capture.deviceBounds.height()) * capture.resolutionScale));
+    const SkImageInfo info = SkImageInfo::MakeN32Premul(targetWidth, targetHeight);
+    // makeSurface() retains Ganesh GPU acceleration for Vulkan/GL parent targets.
+    auto offscreen = surface->surface->makeSurface(info);
+    if (!offscreen) {
+        fallback();
+        return;
+    }
+    SkCanvas *target = offscreen->getCanvas();
+    target->clear(SK_ColorTRANSPARENT);
+    target->save();
+    target->scale(capture.resolutionScale, capture.resolutionScale);
+    target->translate(-capture.deviceBounds.left(), -capture.deviceBounds.top());
+    target->concat(capture.parentMatrix);
+    // The SkPicture contains the original saveLayer/runtime shader filter;
+    // replaying here evaluates the full effect at higher pixel density.
+    target->drawPicture(picture);
+    target->restore();
+    auto image = offscreen->makeImageSnapshot();
+    if (!image) {
+        fallback();
+        return;
+    }
+
+    // Composite exactly once at the original destination resolution. The
+    // parent clip remains in device space even with an identity matrix.
+    SkAutoCanvasRestore restore(parent, true);
+    parent->resetMatrix();
+    parent->drawImageRect(image,
+        SkRect::MakeWH(static_cast<float>(targetWidth), static_cast<float>(targetHeight)),
+        capture.deviceBounds,
+        SkSamplingOptions(SkFilterMode::kLinear), nullptr,
+        SkCanvas::kStrict_SrcRectConstraint);
+}
+
+// Keep the previous entrypoint for ABI compatibility. Call this new entrypoint
+// from Odin when ResolutionScale is available.
+KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShaderScaled(
+    KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+    float x, float y, float width, float height, const float *backgroundColor,
+    float sampleRadius, float resolutionScale) {
+    KineSkiaUIShaderCapture capture;
+    if (!kine_skia_can_supersample_ui_shader(
+            surface, x, y, width, height, resolutionScale, &capture) ||
+        !kine_skia_begin_ui_shader_capture(surface, std::move(capture))) {
+        return Kine_Skia_Surface_BeginUIShader(surface, shader,
+            x, y, width, height, backgroundColor, sampleRadius);
+    }
+    if (!Kine_Skia_Surface_BeginUIShader(surface, shader,
+            x, y, width, height, backgroundColor, sampleRadius)) {
+        // A failed Begin does not leave a recorder attached.
+        surface->uiShaderCaptures.pop_back();
+        return false;
+    }
+    return true;
+}
+
+KINE_SKIA_API bool Kine_Skia_Surface_DrawUIShaderScaled(
+    KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
+    float x, float y, float width, float height, const float *backgroundColor,
+    float resolutionScale) {
+    KineSkiaUIShaderCapture capture;
+    if (!kine_skia_can_supersample_ui_shader(
+            surface, x, y, width, height, resolutionScale, &capture) ||
+        !kine_skia_begin_ui_shader_capture(surface, std::move(capture))) {
+        return Kine_Skia_Surface_DrawUIShader(surface, shader,
+            x, y, width, height, backgroundColor);
+    }
+    if (!Kine_Skia_Surface_DrawUIShader(surface, shader,
+            x, y, width, height, backgroundColor)) {
+        surface->uiShaderCaptures.pop_back();
+        return false;
+    }
+    kine_skia_finish_ui_shader_capture(surface);
+    return true;
 }
 
 static SkPath kine_skia_squircle_path_corners(
@@ -799,9 +964,14 @@ static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface) {
 	if (!surface) {
 		return nullptr;
 	}
+    // A UIShader capture can contain ordinary cached pictures.
+    // Give an active BeginPicture recorder priority until EndPicture.
 	if (surface->recorder) {
 		return surface->recorder->getRecordingCanvas();
 	}
+    if (!surface->uiShaderCaptures.empty()) {
+        return surface->uiShaderCaptures.back().recordingCanvas;
+    }
 	return surface->surface ? surface->surface->getCanvas() : nullptr;
 }
 }
@@ -2152,9 +2322,17 @@ KINE_SKIA_API void Kine_Skia_Surface_SaveLayerAlpha(KineSkiaSurface *surface, fl
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Restore(KineSkiaSurface *surface) {
-	if (!surface || !surface->surface)
-		return;
-	kine_skia_canvas(surface)->restore();
+    if (!surface || !surface->surface) return;
+    SkCanvas *canvas = kine_skia_canvas(surface);
+    if (!canvas) return;
+    canvas->restore();
+    if (!surface->uiShaderCaptures.empty()) {
+        const auto &capture = surface->uiShaderCaptures.back();
+        if (canvas == capture.recordingCanvas &&
+            canvas->getSaveCount() == capture.initialSaveCount) {
+            kine_skia_finish_ui_shader_capture(surface);
+        }
+    }
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_Translate(KineSkiaSurface *surface, float dx, float dy) {

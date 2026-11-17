@@ -1,0 +1,65 @@
+---
+title: Debris
+description: Destroy instances automatically after a delay, without tracking timers yourself.
+---
+
+`Debris` destroys instances for you after a set amount of time. It's the simple way to clean up one-shot effects, a hit spark, a dropped item, a temporary highlight, so they don't pile up in the game.
+
+## Getting started
+
+```lua
+local Debris = game:GetService("Debris")
+
+local function spawnEffect(template, position)
+    local effect = template:Clone()
+    effect.Parent = game:GetService("Workspace")
+    effect.Position = position
+
+    Debris:AddItem(effect, 2)
+end
+```
+
+The effect stays alive and usable for two seconds, then `Debris` destroys it along with any descendants it has.
+
+## Methods
+
+### AddItem
+
+```lua
+AddItem(instance: Instance, lifetime: number?): ()
+```
+
+Schedules an instance for destruction. `lifetime` is in seconds and defaults to `10`; it's measured from the moment you call `AddItem()`, not from when the instance was created.
+
+```lua
+-- Give the player 5 seconds to pick it up.
+Debris:AddItem(droppedItem, 5)
+```
+
+The lifetime has to be a finite number. Passing `math.huge`, `math.nan`, or a value that isn't a number raises an error. A negative lifetime is treated as zero, which means the instance is destroyed on the next update, not inside `AddItem()`.
+
+Only an existing instance is scheduled. If the argument isn't an instance or the instance is already destroyed, the call does nothing, so you can pass optional references without checking first.
+
+`AddItem()` returns nothing. There's no handle to cancel a scheduled item, and calling it again with the same instance adds a second entry rather than extending the first.
+
+## How the timing works
+
+`Debris` accumulates time on each update step and destroys every item whose deadline has passed. Two consequences worth knowing:
+
+- Destruction happens during the update, not at an exact wall-clock moment. Expect up to a frame of slack.
+- `AddItem()` holds a reference to the instance until the deadline, so an unparented instance scheduled with `Debris` stays alive until it's destroyed.
+
+Because scheduling is per call, an instance can have more than one entry queued. If you destroy the instance yourself before the deadline, the entry stays in the queue but finds a destroyed instance and does nothing when it comes due.
+
+The destruction is the same as calling `Destroy()`: descendants go too, and the `Destroying` event fires.
+
+## When to use something else
+
+`Debris` only handles cleanup. If you need to run arbitrary code after a delay, or you need to cancel the timer, do the timing yourself. `Debris` has no pause, cancel, or reschedule API.
+
+For instance pools where the same object gets reused instead of destroyed, don't schedule it with `Debris`, manage the lifetime explicitly and just reparent it.
+
+## See also
+
+- `Instance`, `Destroy()`, `Parent`, and the `Destroying` event.
+- `RunService`, the frame loop, if you need timed behavior that `Debris` can't express.

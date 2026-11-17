@@ -1,0 +1,42 @@
+---
+title: IntConstrainedValue
+description: Store an integer clamped between a minimum and maximum.
+---
+
+`IntConstrainedValue` is an integer with bounds. Assigning a value outside the range stores the nearest bound, and `ConstrainedValue` returns the clamped result.
+
+## Getting started
+
+```lua
+local value = Instance.new("IntConstrainedValue")
+value.MinValue = 1
+value.MaxValue = 5
+value.Value = 9
+
+print(value.Value)            -- 5
+print(value.ConstrainedValue) -- 5
+value.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `number` | Read/write | `0` | The stored integer, clamped on assignment. |
+| `ConstrainedValue` | `number` | Read-only | `0` | The current value clamped to the range. |
+| `MinValue` | `number` | Read/write | Lowest 64-bit integer | Lower bound. |
+| `MaxValue` | `number` | Read/write | Highest 64-bit integer | Upper bound. |
+
+Fractional assignments are truncated to an integer before the clamp. `Value` keeps the stored value when the bounds change; `ConstrainedValue` applies the current bounds.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- The default bounds cover the full 64-bit integer range.
+- Min and max aren't ordered for you; keep `MinValue <= MaxValue`.
+- Cloning copies the value and both bounds.
+
+## See also
+
+- `IntValue` for an unconstrained integer.
+- `DoubleConstrainedValue` for the decimal version.

@@ -1,5 +1,6 @@
 package globals
 
+import classes "../classes"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:time"
@@ -282,10 +283,8 @@ runtime_install_time_global :: proc(vm_state: ^vm.VM) {
 
 	vm.PushFunction(L, "collectgarbage", runtime_global_collectgarbage, 0)
 	vm.SetGlobalFromStack(vm_state, "collectgarbage")
-
-	vm.PushFunction(L, "settings", runtime_global_settings, 0)
-	vm.SetGlobalFromStack(vm_state, "settings")
 }
+
 Install_Runtime_Globals :: proc(vm_state: ^vm.VM) {
 	runtime_install_runtime_global(vm_state)
 	runtime_install_luau_global(vm_state)

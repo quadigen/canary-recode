@@ -1,0 +1,62 @@
+---
+title: Physics
+description: Inspect and tune the simulation's gravity, substeps, and sleep behavior.
+---
+
+`Physics` is the simulation service behind every unanchored part. You don't create bodies through it; parts become bodies when they're parented to the world. What you tune here are the global settings that affect all of them.
+
+## Getting started
+
+```lua
+local Physics = game:GetService("Physics")
+
+print(Physics.Gravity, Physics.BodyCount)
+Physics.SleepThreshold = 0.1
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read-only | `true` when the system initialized | Whether the physics system is available. |
+| `Gravity` | `number` | Read/write | `196.2` | Downward acceleration. Negative values clamp to `0`. |
+| `BodyCount` | `number` | Read-only | `0` | Number of physics bodies currently tracked. |
+| `PhysicsThreadCount` | `number` | Read-only | Runtime dependent | Worker threads used by the solver. |
+| `CollisionSubsteps` | `number` | Read/write | Runtime default | Collision substeps per step, clamped between `1` and `8`. |
+| `SleepThreshold` | `number` | Read/write | Runtime default | Velocity below which bodies can sleep, clamped between `0` and `2`. |
+| `SleepDelay` | `number` | Read/write | Runtime default | Seconds a slow body waits before sleeping, clamped between `0` and `10`. |
+
+`Enabled` reports whether the solver was created successfully, not whether simulation is currently running. Toggle simulation with `Workspace.SimulatePhysics`; this service stays enabled either way.
+
+Fractional values for `CollisionSubsteps` are truncated to an integer. All of the clamped properties accept out-of-range values silently, so read them back after setting if the exact value matters.
+
+```lua
+Physics.Gravity = 100
+Physics.CollisionSubsteps = 4
+```
+
+Raising `CollisionSubsteps` improves collision accuracy for fast objects at the cost of frame time. Raising `SleepDelay` keeps idle bodies awake longer, which is useful when something will be pushed soon but wasteful otherwise.
+
+## Counting bodies
+
+`BodyCount` counts the bodies the simulation is tracking, including anchored parts. Parts that are parented to the world and support physics contribute to it; destroying or unparenting them removes them.
+
+```lua
+local function bodiesInWorld()
+    return game:GetService("Physics").BodyCount
+end
+```
+
+Because the count includes anchored parts, it isn't a measure of how much work the solver is doing. Use it to confirm cleanup, for example that a spawned assembly is fully gone after `Destroy()`.
+
+## Notes
+
+- Physics properties are global. Per-part behavior comes from the part's own properties such as `Anchored`, `CanCollide`, and `Massless`-style settings where available.
+- Changing `Gravity` affects bodies on their next step, not existing velocities immediately.
+- `Workspace.Gravity` reads and writes the same value, so the two stay in sync.
+- The service doesn't expose body-level APIs; use `Workspace:Raycast()` and the part properties for queries and configuration.
+
+## See also
+
+- `Workspace`, simulation toggle, gravity, and spatial queries.
+- `Part`, the bodies the simulation moves.

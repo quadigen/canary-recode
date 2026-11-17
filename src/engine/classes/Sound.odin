@@ -5,6 +5,7 @@ import audio "../audio"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
+import signals "../signals"
 import vm "../vm"
 import fmt "core:fmt"
 import "core:strings"
@@ -36,6 +37,7 @@ Sound :: struct {
 	time_position:            f64,
 	length:                   f64,
 	sound:                    audio.Sound,
+	ended:                    ^signals.Signal,
 }
 
 Sound_Init :: proc() -> Sound {
@@ -73,6 +75,11 @@ Sound_get :: proc(
 	sound := cast(^Sound)object
 
 	switch key {
+	case "Ended":
+		if sound.ended == nil {sound.ended = Object_Create_Hierarchy_Signal(object)}
+		signals.Push(L, sound.ended)
+		return true
+
 	case "AudioContent":
 		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(sound.content))
 		return true
@@ -147,6 +154,17 @@ Sound_get :: proc(
 	}
 
 	return false
+}
+
+Sound_update :: proc(object: ^Object, ctx: ^Class_Step_Context) {
+	when ODIN_OS != .JS {
+		sound := cast(^Sound)object
+		if sound.is_playing && !sound.looped && audio.at_end(&sound.sound) {
+			sound.is_playing = false
+			sound.playing = false
+			signals.Fire(ctx.L, sound.ended)
+		}
+	}
 }
 
 Sound_Play :: proc(sound: ^Sound) -> bool {
@@ -417,6 +435,7 @@ Sound_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 
 	delete(sound.sound_path)
 	delete(sound.content.uri)
+	if sound.ended != nil {signals.Destroy(sound.ended)}
 	Object_Destroy(object)
 	free(sound)
 }
@@ -457,6 +476,8 @@ Register_Sound :: proc(registry: ^Registry) {
 		&Sound_Class,
 		Sound_construct,
 		Sound_destroy,
+		_step = Sound_update,
+		_step_phase = .Update,
 		clone = Sound_clone,
 		get = Sound_get,
 		set = Sound_set,

@@ -1,0 +1,37 @@
+---
+title: GuiBase
+description: Abstract root of the GUI class hierarchy.
+---
+
+`GuiBase` is the abstract top of the GUI hierarchy. It has no members and can't be created. The engine also registers `GuiBase2d`, `LayerCollector`, and `BasePlayerGui` as abstract classes in the same family.
+
+## Getting started
+
+```lua
+local frame = Instance.new("Frame")
+
+print(frame:IsA("GuiBase2d")) -- true
+print(frame:IsA("GuiBase"))   -- true
+```
+
+## Hierarchy
+
+| Class | Purpose |
+| --- | --- |
+| `GuiBase` | Common root with no members. |
+| `GuiBase2d` | Base for 2D GUI objects. |
+| `LayerCollector` | Base for containers that own a GUI layer. |
+| `BasePlayerGui` | Base for player GUI containers. |
+
+## Notes
+
+- None of these classes are creatable with `Instance.new()`.
+- They carry no properties, methods, or events of their own.
+- Use them for `IsA()` checks when a function should accept any GUI object.
+- Concrete classes such as `Frame`, `TextLabel`, and `ScreenGui` supply the actual API.
+
+## See also
+
+- `GuiObject` for the common 2D GUI behavior.
+- `ScreenGui` for the screen container.
+- `SurfaceGui` for 3D surfaces.

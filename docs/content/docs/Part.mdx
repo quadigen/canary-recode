@@ -1,0 +1,107 @@
+---
+title: Part
+description: Create and configure the basic 3D building block, including size, shape, material, collision, and physics.
+---
+
+`Part` is the basic piece of 3D geometry. It has a size, a shape, a material, a position in the world, and a set of collision and physics flags. Most visible objects in a game are parts or models made of parts.
+
+`Part` inherits from `BasePart`, which adds no members of its own. All the properties below are available on every part.
+
+## Getting started
+
+```lua
+local part = Instance.new("Part")
+part.Size = Vector3.new(4, 1, 8)
+part.Position = Vector3.new(0, 5, 0)
+part.Color = Color3.fromRGB(120, 140, 170)
+part.Anchored = true
+part.Parent = game:GetService("Workspace")
+```
+
+Parts default to anchored, so they stay where you put them until you turn `Anchored` off. A part parented to Workspace participates in rendering and physics; a part kept outside it is just data.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Size` | `Vector3` | Read/write | `Vector3.new(4, 1, 2)` | Dimensions in studs. Every component must be greater than zero. |
+| `CFrame` | `CFrame` | Read/write | Identity | Position and rotation. |
+| `Position` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Position shorthand; writing it preserves the current rotation. |
+| `Color` | `Color3` | Read/write | White | The part's tint. |
+| `Transparency` | `number` | Read/write | `0` | `0` is opaque, `1` is invisible. |
+| `Shape` | `Enum.PartType` | Read/write | `Enum.PartType.Block` | Block, ball, cylinder, wedge, and other supported shapes. |
+| `Material` | `Enum.Material` | Read/write | `Enum.Material.SmoothPlastic` | Surface material. |
+| `MaterialVariant` | `string` | Read/write | `""` | Name of a material variant to use. |
+| `Anchored` | `boolean` | Read/write | `true` | Whether the part is fixed in place. |
+| `CanCollide` | `boolean` | Read/write | `true` | Whether the part collides with other bodies. |
+| `CanQuery` | `boolean` | Read/write | `true` | Whether spatial queries such as raycasts can hit it. |
+| `CanTouch` | `boolean` | Read/write | `true` | Whether the part can report contact through `Touched`. |
+| `CastShadow` | `boolean` | Read/write | `true` | Whether the part casts a shadow. |
+| `CollisionGroup` | `string` | Read/write | `"Default"` | Name of the collision group the part belongs to. |
+| `AssemblyLinearVelocity` | `Vector3` | Read/write | Zero | Linear velocity of the part's assembly. `Velocity` is an alias. |
+| `AssemblyAngularVelocity` | `Vector3` | Read/write | Zero | Angular velocity of the assembly. `RotVelocity` is an alias. |
+
+`Size` rejects non-positive components with an error. Set `Transparency` rather than scaling to zero when you want to hide a part, because a zero-sized part isn't valid.
+
+`Position` and `CFrame` describe the same transform. Writing `Position` keeps the rotation; writing `CFrame` replaces both. Reading `Position` after a physics step gives the simulated position.
+
+`Anchored` and `CanCollide` are independent. An anchored part can still collide with moving bodies, and an unanchored part with `CanCollide` off will fall through the world.
+
+## Methods
+
+### ApplyImpulse
+
+```lua
+ApplyImpulse(impulse: Vector3): ()
+```
+
+Applies a one-time impulse to the part's assembly. The part must be unanchored for the impulse to have an effect.
+
+```lua
+local function kick(part, direction)
+    part:ApplyImpulse(direction * 10)
+end
+```
+
+The impulse is in mass units, so a heavier part moves less for the same value.
+
+### Inertia and mass
+
+Mass comes from the part's size and material. To move a part directly, set its velocity or set `CFrame`; to nudge it through the simulation, use an impulse.
+
+### CSG operations
+
+The class also exposes `UnionAsync()`, `SubtractAsync()`, `IntersectAsync()`, and `Negate()` for constructive solid geometry. Their argument and result handling isn't covered by this reference yet.
+
+## Events
+
+### Touched
+
+Part contact notifications. Connect with `:Connect()`:
+
+```lua
+part.Touched:Connect(function(...)
+    print("Contact", ...)
+end)
+```
+
+The exact callback arguments aren't specified by the class definition, so treat this as a notification that contact happened and query the parts involved yourself if you need details.
+
+The part must have `CanTouch` enabled and participate in the simulation for contact to be reported. Anchored parts can still report contact with moving bodies.
+
+## Cloning
+
+A cloned part copies its size, shape, color, transparency, material, variant, collision settings, collision group, anchors, and transform. It does not copy its live velocity or its `Touched` connections. The clone starts with no parent, like any other cloned instance.
+
+## Notes
+
+- Physical behavior is global plus per-part: `Workspace.Gravity` and the `Physics` service set the rules, and these properties decide how this part follows them.
+- `CollisionGroup` only matters if collision groups are configured; the string itself doesn't create the group.
+- Changing `Size` or `Shape` rebuilds the part's collision geometry, so avoid doing it every frame.
+- Pivot-style movement of a whole assembly belongs on `Model`, not on individual parts.
+
+## See also
+
+- `Model`, grouping and moving several parts.
+- `Physics`, gravity and solver settings.
+- `Workspace`, raycasts and world settings.

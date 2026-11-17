@@ -125,6 +125,7 @@ TextBox :: struct {
 	scrollbar_dragging:            bool,
 	scrollbar_drag_offset:         f32,
 	code_editor:                   bool,
+	multi_line:                    bool,
 	show_line_numbers:             bool,
 	show_minimap:                  bool,
 	tab_size:                      int,
@@ -141,6 +142,7 @@ TextBox :: struct {
 	selection_transparency:        f32,
 	focus_color3:                  datatypes.Color3,
 	focus_lost:                    ^signals.Signal,
+	focus_gained:                  ^signals.Signal,
 	text_changed:                  ^signals.Signal,
 	focus_animation:               f32,
 	caret_timer:                   f32,
@@ -658,22 +660,25 @@ text_box_undo_last :: proc(box: ^TextBox) -> ^Undo_Entry {
 	return &box.undo_stack[len(box.undo_stack) - 1]
 }
 
-text_box_fire_text_changed :: proc(box: ^TextBox) {
+text_box_fire_text_changed :: proc(box: ^TextBox, L: ^vm.State = nil) {
 	if box == nil {
 		return
 	}
 
 	Gui_Layout_Mark_Dirty()
-
-	if box.text_changed == nil {
-		return
-	}
+	surfacegui_mark_dirty_for(&box.object)
 
 	if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
 		return
 	}
 
-	signals.Fire(box.object.signal_registry.signal_registry.L, box.text_changed, 0)
+	state := L if L != nil else box.object.signal_registry.signal_registry.L
+	if state == nil {return}
+
+	signals.Fire(state, box.text_changed, 0)
+	if !box.object.destroyed {
+		Object_Fire_Property_Changed(&box.object, "Text", state)
+	}
 }
 
 
@@ -965,7 +970,7 @@ text_box_cursor_from_point :: proc(
 		return 0
 	}
 
-	if !box.code_editor {
+	if !box.code_editor && !box.multi_line {
 		return text_box_cursor_from_x(box, mouse_x)
 	}
 
@@ -1007,8 +1012,81 @@ text_box_set_cursor :: proc(box: ^TextBox, position: int, shift: bool) {
 	text_box_restart_caret(box)
 }
 
+// Move to a 1-based physical line and UTF-8 character column, optionally
+// selecting a number of characters from that position. The caret and viewport
+// are updated even when this textbox is not the currently focused input.
+// Call TextBox_focus before this procedure when the caller requests focus:
+// TextBox_focus resets the caret position as part of its focus lifecycle.
+TextBox_Go_To_Line :: proc(
+	box: ^TextBox,
+	line_number: int,
+	column_number: int = 1,
+	selection_length: int = 0,
+) {
+	if box == nil {return}
+
+	text_box_line_index_ensure(box)
+	line_index := clamp(line_number - 1, 0, max(len(box.line_starts) - 1, 0))
+	start := box.line_starts[line_index]
+	finish := len(box.text)
+	if line_index + 1 < len(box.line_starts) {
+		finish = box.line_starts[line_index + 1] - 1
+	}
+	// Treat CRLF as a single line ending instead of navigating into the CR.
+	if finish > start && box.text[finish - 1] == '\r' {finish -= 1}
+
+	line_text := box.text[start:finish]
+	column_bytes := text_box_utf8_prefix_bytes(line_text, max(column_number - 1, 0))
+	position := start + column_bytes
+	selection_bytes := text_box_utf8_prefix_bytes(
+		box.text[position:finish],
+		max(selection_length, 0),
+	)
+
+	text_box_set_cursor(box, position + selection_bytes, false)
+	if selection_bytes > 0 {box.selection_anchor = position}
+
+	if box.code_editor || box.multi_line {
+		content_width := text_box_editor_content_width(box, box.absolute_size.X)
+		lines := text_box_visual_lines(box, content_width)
+		if len(lines) > 0 {
+			visual_index := text_box_visual_index_at(lines, box.cursor_byte)
+			line_height := text_box_line_height(box)
+			viewport_height := max(box.absolute_size.Y - box.editor_padding * 2, f32(0))
+			max_scroll := max(f32(len(lines)) * line_height - viewport_height, f32(0))
+
+			// Center the destination when space permits; otherwise clamp to the
+			// nearest valid position. Move both target and current offsets so a
+			// search-result click is immediate even with smooth scrolling enabled.
+			center_offset := max((viewport_height - line_height) * 0.5, f32(0))
+			box.scroll_target_y = clamp(
+				f32(visual_index) * line_height - center_offset,
+				f32(0),
+				max_scroll,
+			)
+			box.scroll_y = box.scroll_target_y
+
+			if box.wrap {
+				box.scroll_target_x = 0
+				box.scroll_x = 0
+			} else {
+				caret_x := text_box_measure_range(box, lines[visual_index].start, box.cursor_byte)
+				viewport_width := max(content_width, f32(0))
+				if caret_x < box.scroll_target_x ||
+				   caret_x > box.scroll_target_x + viewport_width {
+					box.scroll_target_x = max(caret_x - viewport_width * 0.25, f32(0))
+				}
+				box.scroll_x = box.scroll_target_x
+			}
+		}
+	}
+
+	box.caret_needs_scroll = false
+	gui_invalidate_draw(&box.object)
+}
+
 text_box_move_vertical :: proc(box: ^TextBox, direction: int, shift: bool, amount: int = 1) {
-	if box == nil || !box.code_editor || direction == 0 {
+	if box == nil || (!box.code_editor && !box.multi_line) || direction == 0 {
 		return
 	}
 
@@ -1637,7 +1715,8 @@ text_box_render_code_editor :: proc(
 	if len(lines) == 0 {return}
 
 	highlight: ^SyntaxHighlighter
-	if box.syntax_highlight_max_bytes == 0 || len(box.text) <= box.syntax_highlight_max_bytes {
+	if box.code_editor &&
+	   (box.syntax_highlight_max_bytes == 0 || len(box.text) <= box.syntax_highlight_max_bytes) {
 		highlight = syntax_highlighter_for_box(box)
 	}
 	if highlight != nil &&
@@ -1718,7 +1797,7 @@ text_box_render_code_editor :: proc(
 			)
 		}
 	}
-	if box.highlight_current_line && box.focused {
+	if box.code_editor && box.highlight_current_line && box.focused {
 		current_y := rect.y + padding + f32(caret_line) * line_height - box.scroll_y
 		guilib.drawRect(
 			surface,
@@ -1735,7 +1814,8 @@ text_box_render_code_editor :: proc(
 
 	selection_start, selection_finish, selected := text_box_selection_bounds(box)
 	selected_word: string
-	if selected &&
+	if box.code_editor &&
+	   selected &&
 	   box.focused &&
 	   !text_box_is_word_at(box.text, selection_start - 1) &&
 	   !text_box_is_word_at(box.text, selection_finish) {
@@ -1748,7 +1828,7 @@ text_box_render_code_editor :: proc(
 		}
 	}
 	bracket_first, bracket_second := -1, -1
-	if box.focused && box.bracket_matching {
+	if box.code_editor && box.focused && box.bracket_matching {
 		bracket_first, bracket_second, _ = text_box_bracket_highlight(box)
 	}
 
@@ -1761,7 +1841,7 @@ text_box_render_code_editor :: proc(
 	)
 	real_number := text_box_cached_line_number(box, lines[first_visible].start)
 	active_indent := 0
-	if box.highlight_active_indent_guide {
+	if box.code_editor && box.highlight_active_indent_guide {
 		line_start := text_box_line_start(box.text, box.cursor_byte)
 		for i := line_start;
 		    i < len(box.text) && (box.text[i] == ' ' || box.text[i] == '\t');
@@ -1780,7 +1860,7 @@ text_box_render_code_editor :: proc(
 		starts_text_line := line.start == 0 || (line.start > 0 && box.text[line.start - 1] == '\n')
 		if starts_text_line {
 			if index != first_visible {real_number += 1}
-			if box.show_line_numbers {
+			if gutter > 0 {
 				shown := real_number
 				if box.relative_line_numbers && shown != current_line_number {
 					shown = abs(shown - current_line_number)
@@ -1828,9 +1908,19 @@ text_box_render_code_editor :: proc(
 				height = line_height + 3,
 			},
 		)
-		text_box_draw_editor_guide(box, surface, line, y, content_x, line_height, active_indent)
-		text_box_draw_editor_find(box, surface, line, content_x - box.scroll_x, y, line_height)
-		if box.focused && box.bracket_matching {
+		if box.code_editor {
+			text_box_draw_editor_guide(
+				box,
+				surface,
+				line,
+				y,
+				content_x,
+				line_height,
+				active_indent,
+			)
+			text_box_draw_editor_find(box, surface, line, content_x - box.scroll_x, y, line_height)
+		}
+		if box.code_editor && box.focused && box.bracket_matching {
 			draw_bracket(
 				box,
 				surface,
@@ -1878,8 +1968,8 @@ text_box_render_code_editor :: proc(
 				box.text_color3,
 			)
 		}
-		text_box_draw_editor_whitespace(box, surface, line, content_x, y, line_height)
-		if len(box.diagnostics) > 0 {
+		if box.code_editor {text_box_draw_editor_whitespace(box, surface, line, content_x, y, line_height)}
+		if box.code_editor && len(box.diagnostics) > 0 {
 			for diagnostic in box.diagnostics {
 				start, finish := text_box_diagnostic_span(box, diagnostic)
 				if start > line.finish || finish < line.start {continue}
@@ -2011,7 +2101,7 @@ text_box_render_code_editor :: proc(
 			min(box.scrollbar_width * 0.5, f32(4)),
 		)
 	}
-	text_box_render_find_panel(box, surface, rect)
+	if box.code_editor {text_box_render_find_panel(box, surface, rect)}
 }
 
 text_box_draw_code_selection :: proc(
@@ -2540,7 +2630,7 @@ text_box_select_all :: proc(box: ^TextBox) {
 }
 
 
-text_box_set_text :: proc(box: ^TextBox, value: string) {
+text_box_set_text :: proc(box: ^TextBox, value: string, L: ^vm.State = nil) {
 	if box == nil {
 		return
 	}
@@ -2569,7 +2659,7 @@ text_box_set_text :: proc(box: ^TextBox, value: string) {
 
 	text_box_restart_caret(box)
 
-	text_box_fire_text_changed(box)
+	text_box_fire_text_changed(box, L)
 }
 
 
@@ -3436,7 +3526,15 @@ text_box_paste :: proc(box: ^TextBox) {
 }
 
 
-TextBox_focus :: proc(box: ^TextBox) {
+text_box_fire_focused :: proc(box: ^TextBox) {
+	if box.focus_gained != nil &&
+	   box.signal_registry != nil &&
+	   box.signal_registry.signal_registry != nil {
+		signals.Fire(box.signal_registry.signal_registry.L, box.focus_gained, 0)
+	}
+}
+
+TextBox_focus :: proc(box: ^TextBox, notify := true) {
 	if box == nil {
 		return
 	}
@@ -3477,6 +3575,7 @@ TextBox_focus :: proc(box: ^TextBox) {
 			TEXTBOX_IS_USED = true
 		}
 	}
+	if notify {text_box_fire_focused(box)}
 }
 
 
@@ -3671,6 +3770,7 @@ TextBox_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 		signals.Destroy(box.focus_lost)
 		box.focus_lost = nil
 	}
+	if box.focus_gained != nil {signals.Destroy(box.focus_gained)}
 	if box.text_changed != nil {
 		signals.Destroy(box.text_changed)
 		box.text_changed = nil
@@ -3697,6 +3797,12 @@ TextBox_get :: proc(
 	box := cast(^TextBox)object
 
 	switch key {
+	case "Focused":
+		if box.signal_registry == nil || box.signal_registry.signal_registry == nil {return false}
+		if box.focus_gained ==
+		   nil {box.focus_gained = signals.Create(box.signal_registry.signal_registry)}
+		signals.Push(L, box.focus_gained)
+		return true
 	case "FocusLost":
 		if box.object.signal_registry == nil || box.object.signal_registry.signal_registry == nil {
 			return false
@@ -3970,7 +4076,11 @@ TextBox_get :: proc(
 		vm.PushBoolean(L, box.auto_close)
 		return true
 
-	case "WordWrap":
+	case "MultiLine":
+		vm.PushBoolean(L, box.multi_line)
+		return true
+
+	case "WordWrap", "TextWrapped":
 		vm.PushBoolean(L, box.wrap)
 		return true
 
@@ -4149,7 +4259,7 @@ TextBox_set :: proc(
 		text_box_undo_trim(box)
 		return true
 	case "Text":
-		text_box_set_text(box, vm.ArgString(L, value_index))
+		text_box_set_text(box, vm.ArgString(L, value_index), L)
 
 		return true
 
@@ -4344,11 +4454,24 @@ TextBox_set :: proc(
 		box.auto_close = vm.ArgBoolean(L, value_index)
 		return true
 
-	case "WordWrap":
+	case "MultiLine":
+		value := vm.ArgBoolean(L, value_index)
+		if box.multi_line != value {
+			box.multi_line = value
+			box.visual_dirty = true
+			box.content_measure_valid = false
+			box.scroll_x, box.scroll_y = 0, 0
+			box.scroll_target_x, box.scroll_target_y = 0, 0
+			text_box_restart_caret(box)
+			Gui_Layout_Mark_Dirty()
+		}
+		return true
+
+	case "WordWrap", "TextWrapped":
 		box.wrap = vm.ArgBoolean(L, value_index)
 		Gui_Layout_Mark_Dirty()
 
-		if box.code_editor {
+		if box.code_editor || box.multi_line {
 			box.scroll_x = 0
 			box.scroll_target_x = 0
 			box.caret_needs_scroll = true
@@ -4470,7 +4593,7 @@ TextBox_set :: proc(
 		if box.max_length >= 0 && text_box_utf8_count(box.text) > box.max_length {
 			end := text_box_utf8_prefix_bytes(box.text, box.max_length)
 
-			text_box_set_text(box, box.text[:end])
+			text_box_set_text(box, box.text[:end], L)
 		}
 
 		return true
@@ -4543,8 +4666,21 @@ TextBox_namecall :: proc(
 		text_box_close_find(box)
 		return 0, true
 	case "GoToLine":
+		// GoToLine(line, column?, selectionLength?, focus?)
+		// line/column are 1-based, selectionLength counts UTF-8 characters.
 		line := max(int(vm.ArgNumber(L, 2)), 1)
-		text_box_set_cursor(box, text_box_cached_line_start(box, line - 1), false)
+		column := 1
+		selection_length := 0
+		focus := false
+		if vm.StackTop(L) >= 3 {
+			if number, ok := vm.ToNumber(L, 3); ok {column = max(int(number), 1)}
+		}
+		if vm.StackTop(L) >= 4 {
+			if number, ok := vm.ToNumber(L, 4); ok {selection_length = max(int(number), 0)}
+		}
+		if vm.StackTop(L) >= 5 {focus = vm.ArgBoolean(L, 5)}
+		if focus && !box.focused {TextBox_focus(box)}
+		TextBox_Go_To_Line(box, line, column, selection_length)
 		return 0, true
 	case "CaptureFocus":
 		TextBox_focus(box)
@@ -4771,7 +4907,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	dt := clamp(f32(ctx.delta_time), f32(0), f32(0.1))
 
 	ctx.gui_dynamic = ctx.gui_dynamic || box.focused || box.focus_animation > 0.001
-	if box.code_editor {
+	if box.code_editor || box.multi_line {
 		text_box_render_code_editor(box, rect, ctx, dt)
 		return
 	}
@@ -5111,6 +5247,7 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.mouse_wheel_scroll_lines = src.mouse_wheel_scroll_lines
 	dst.syntax_highlight_max_bytes = src.syntax_highlight_max_bytes
 	dst.max_undo_entries = src.max_undo_entries
+	dst.multi_line = src.multi_line
 
 	dst.focused = false
 
@@ -5197,7 +5334,10 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 			TextBox_blur(text_box_focused)
 		}
 
-		TextBox_focus(clicked)
+		TextBox_focus(clicked, notify = false)
+		defer if !was_focused &&
+		   clicked.focused &&
+		   !clicked.destroyed {text_box_fire_focused(clicked)}
 
 		if !clicked.focused {
 			return
@@ -5205,7 +5345,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 
 		if event.button.clicks >= 2 {
-			if clicked.code_editor {
+			if clicked.code_editor || clicked.multi_line {
 				word_click := event.button.clicks == 2
 				cursor := text_box_cursor_from_point(clicked, point_x, point_y, word_click)
 				if word_click {
@@ -5321,7 +5461,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 	case .MOUSE_WHEEL:
 		box := text_box_focused
 
-		if box == nil || !box.focused || !box.code_editor {
+		if box == nil || !box.focused || (!box.code_editor && !box.multi_line) {
 			return
 		}
 
@@ -5676,7 +5816,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 			target := 0
 
-			if !shortcut && box.code_editor {
+			if !shortcut && (box.code_editor || box.multi_line) {
 				target = text_box_line_start(box.text, old_cursor)
 				if box.smart_home {
 					end := text_box_line_end(box.text, old_cursor)
@@ -5710,7 +5850,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 			end := len(box.text)
 
-			if !shortcut && box.code_editor {
+			if !shortcut && (box.code_editor || box.multi_line) {
 				end = text_box_line_end(box.text, old_cursor)
 			}
 
@@ -5733,6 +5873,8 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 		case .RETURN, .KP_ENTER:
 			if box.code_editor {
 				text_box_insert_newline(box)
+			} else if box.multi_line {
+				if box.text_editable {text_box_insert(box, "\n")}
 			} else {
 				TextBox_blur(box, true)
 			}
@@ -5793,6 +5935,7 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"AutoIndent",
 			"AutoClose",
 			"WordWrap",
+			"MultiLine",
 			"ShowIndentGuides",
 			"HighlightActiveIndentGuide",
 			"ShowWhitespace",
@@ -5854,6 +5997,6 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"PositionAtPoint",
 			"DiagnosticAtPoint",
 		},
-		events = []string{"FocusLost", "TextChanged", "KeyDown"},
+		events = []string{"Focused", "FocusLost", "TextChanged", "KeyDown"},
 	)
 }

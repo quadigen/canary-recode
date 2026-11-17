@@ -1,0 +1,42 @@
+---
+title: PartOperation
+description: Base class for solid modeling results.
+---
+
+`PartOperation` is the parent class for the results of constructive solid geometry: unions, negations, and intersections. It behaves like a `MeshPart` and adds the `UsePartColor` flag.
+
+## Getting started
+
+```lua
+local union = workspace.Union
+union.UsePartColor = true
+union.Color = Color3.fromRGB(90, 140, 200)
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `UsePartColor` | `boolean` | Read/write | Use `Color` instead of the mesh's own colors. |
+
+Everything else is inherited from `MeshPart`, including `Size`, `CFrame`, `Anchored`, `CanCollide`, collision and query flags, and the mesh content methods.
+
+## Subclasses
+
+| Class | Meaning |
+| --- | --- |
+| `UnionOperation` | Combined solid. |
+| `NegateOperation` | A part used as a subtractive cutter. |
+| `IntersectOperation` | Overlap of the inputs. |
+
+## Notes
+
+- None of these classes are creatable with `Instance.new()`; they come from CSG operations or loaded content.
+- A `NegateOperation` defaults to non-colliding, non-queryable, non-touching, half transparent, and red so it reads as a cutter.
+- `PartOperation` itself is also not creatable.
+- Cloning copies the `UsePartColor` flag.
+
+## See also
+
+- `MeshPart` for the inherited mesh behavior.
+- `Part` for basic solids.

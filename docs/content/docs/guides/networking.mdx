@@ -1,0 +1,171 @@
+---
+title: Networking
+description: Build a server-authoritative game with remote events, remote functions, and validated client messages.
+---
+
+Kinemium games run as a server and one or more clients. The server owns the world state, and clients send requests and receive updates. The bridge between them is a pair of remote objects: `RemoteEvent` for one-way messages and `RemoteFunction` for calls that need an answer.
+
+This guide covers the pattern, the exact methods, and the mistakes that cause most networking bugs.
+
+## The shape of a networked game
+
+Keep these rules in mind and most designs fall into place:
+
+- The server decides what's true: health, scores, inventory, spawns, and anything another player could cheat at.
+- Clients ask for things and render what they're told. They don't decide outcomes.
+- Shared objects live in `ReplicatedStorage`, so both sides can find them by name.
+- Server-only code and secrets live in `ServerScriptService` or `ServerStorage`.
+
+A typical flow is: client sends an intent, server validates it, server changes the world, server tells clients what changed.
+
+## Setting up a remote event
+
+Create the remote once, on the server, and parent it to `ReplicatedStorage`:
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local requestSpawn = Instance.new("RemoteEvent")
+requestSpawn.Name = "RequestSpawn"
+requestSpawn.Parent = ReplicatedStorage
+
+requestSpawn.OnServerEvent:Connect(function(player, kind)
+    if kind ~= "crate" then
+        return
+    end
+
+    local crate = Instance.new("Part")
+    crate.Size = Vector3.new(2, 2, 2)
+    crate.Position = Vector3.new(0, 8, 0)
+    crate.Anchored = false
+    crate.Parent = workspace
+end)
+```
+
+On a client, wait for the remote and fire it:
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local requestSpawn = ReplicatedStorage:WaitForChild("RequestSpawn")
+
+requestSpawn:FireServer("crate")
+```
+
+`OnServerEvent` always receives the sending `Player` first. Everything after that is what the client passed to `FireServer()`.
+
+## Server to client
+
+The server can target one player or everyone:
+
+```lua
+-- One player.
+requestSpawn:FireClient(player, "spawned", 1)
+
+-- Every connected client.
+requestSpawn:FireAllClients("roundStarted", 3)
+```
+
+`FireClient()` raises an error if the first argument isn't a `Player`. On a client, `FireClient()` and `FireAllClients()` do nothing; on the server, `FireServer()` does nothing. Getting the direction wrong usually looks like a silent no-op, so check which side your script is on first.
+
+The receiving client listens on `OnClientEvent`:
+
+```lua
+local remote = game:GetService("ReplicatedStorage"):WaitForChild("RequestSpawn")
+
+remote.OnClientEvent:Connect(function(message, value)
+    print(message, value)
+end)
+```
+
+## Remote functions
+
+When the caller needs a result, use `RemoteFunction`. The server assigns `OnServerInvoke`:
+
+```lua
+local getBalance = Instance.new("RemoteFunction")
+getBalance.Name = "GetBalance"
+getBalance.Parent = game:GetService("ReplicatedStorage")
+
+getBalance.OnServerInvoke = function(player, itemId)
+    if type(itemId) ~= "string" then
+        return false, "invalid item"
+    end
+
+    return true, 120
+end
+```
+
+The client invokes it and yields until the handler returns:
+
+```lua
+local remote = game:GetService("ReplicatedStorage"):WaitForChild("GetBalance")
+local ok, value = remote:InvokeServer("sword")
+
+if not ok then
+    warn("lookup failed:", value)
+else
+    print("balance", value)
+end
+```
+
+The caller gets the handler's return values. If the handler errors, has no handler assigned, or doesn't answer within about 10 seconds, the call comes back as `nil` plus a message instead of raising. Always check the first return value.
+
+The server can also call a client with `InvokeClient(player, ...)` or `InvokeClients(...)`, and a client handles it with `OnClientInvoke`. Those calls only work from the server and also yield until the client responds.
+
+## Validate everything a client sends
+
+`OnServerEvent` arguments are whatever that client chose to send. Treat them as untrusted input:
+
+```lua
+requestSpawn.OnServerEvent:Connect(function(player, kind, amount)
+    if type(kind) ~= "string" or type(amount) ~= "number" then
+        return
+    end
+
+    if amount ~= math.floor(amount) or amount < 1 or amount > 5 then
+        return
+    end
+
+    if player.Character == nil then
+        return
+    end
+
+    -- Only now act on the request.
+end)
+```
+
+A practical checklist:
+
+- Check types before using a value. Luau is dynamically typed, and a client can send a table where you expected a number.
+- Clamp or reject ranges, including negative and fractional values.
+- Check that the player is allowed to do this now: alive, in range, holding the item, on cooldown.
+- Never trust a position, direction, or hit result from a client. Recompute it on the server when it matters.
+- Rate-limit expensive actions per player. A remote can be fired every frame.
+- Keep secrets out of `ReplicatedStorage`. Clients can read everything there.
+
+## Testing two sides
+
+The engine can run separate processes:
+
+```bash
+./kinemium --server --port 7777 --address 0.0.0.0 --map MyGame.KINE
+./kinemium --client --port 7777 --address 127.0.0.1 --username Tester
+```
+
+For quick iteration, a standalone session runs both sides in one process, and remotes loop back locally. That's useful for testing the handler logic, but it won't reproduce latency, disconnects, or a client seeing stale replicated content.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| Handler never runs | The remote wasn't replicated yet; use `WaitForChild()`. |
+| `FireClient` errors | First argument isn't a `Player`. |
+| Call returns `nil` and a message | No handler, handler error, or the 10 second timeout. |
+| Client can see server data it shouldn't | The object was parented to a replicated container. |
+| Event fires twice | The handler was connected twice, or both sides registered one. |
+
+## Next steps
+
+- `RemoteEvent` and `RemoteFunction` for the full member reference.
+- `ReplicatedStorage` and `ServerScriptService` for where content belongs.
+- [Physics](/docs/guides/physics) and [3D](/docs/guides/3d) for what the server is usually simulating.

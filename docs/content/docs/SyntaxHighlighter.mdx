@@ -1,0 +1,51 @@
+---
+title: SyntaxHighlighter
+description: Color text rules for a TextBox code editor.
+---
+
+`SyntaxHighlighter` holds highlight rules that a `TextBox` in code-editor mode applies to its text. Rules can be keywords, prefixes, ranges, or regular expressions.
+
+## Getting started
+
+```lua
+local highlighter = Instance.new("SyntaxHighlighter")
+highlighter.Language = "Luau"
+highlighter:AddKeyword(Color3.fromRGB(255, 120, 180), "local", "function", "return")
+highlighter:AddRegex(Color3.fromRGB(120, 200, 255), "%d+")
+highlighter.Parent = textBox
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether rules are applied. |
+| `Language` | `string` | Read/write | `"Luau"` | Preset language, `"Luau"` or `"None"`. |
+| `RuleCount` | `number` | Read-only | `0` | Number of stored rules. |
+| `Rules` | `{table}` | Read-only | Empty | Snapshot of the rules. |
+
+Each entry in `Rules` is a table with `Kind`, `Pattern`, `Color3`, and, for range rules, `EndPattern`. Kinds are `Keyword`, `Prefix`, `Range`, and `Regex`.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `AddRule(kind: string, color: Color3, pattern: string, endPattern?: string)` | Adds a rule of the given kind. |
+| `AddKeyword(color: Color3, ...: string)` | Adds one keyword rule per argument. |
+| `AddRegex(color: Color3, pattern: string)` | Adds a regular-expression rule. |
+| `ClearRules()` | Removes every rule. |
+
+`AddRule()` accepts the kind as a string. Range rules use the optional end pattern to close the span.
+
+## Notes
+
+- `Language` accepts `"Luau"` and `"None"`; other strings leave the current value unchanged.
+- Changing `Enabled` or the language invalidates cached spans.
+- Rules are stored on the highlighter, so one instance can serve several text boxes.
+- `Rules` is a copy for reading; editing the returned table doesn't change the highlighter.
+- Cloning copies the enabled state, language, and every rule.
+
+## See also
+
+- `TextBox` for the editor that consumes the rules.
+- `UIColor` values such as `Color3.fromRGB()`.

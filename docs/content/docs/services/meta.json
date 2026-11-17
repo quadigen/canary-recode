@@ -1,0 +1,24 @@
+{
+  "title": "Services",
+  "pages": [
+    "index",
+    "CollectionService",
+    "ContextActionService",
+    "Debris",
+    "GuiService",
+    "Lighting",
+    "LogService",
+    "Physics",
+    "Players",
+    "ReplicatedFirst",
+    "ReplicatedStorage",
+    "RunService",
+    "ServerScriptService",
+    "ServerStorage",
+    "StarterGui",
+    "TextService",
+    "TweenService",
+    "UserInputService",
+    "Workspace"
+  ]
+}

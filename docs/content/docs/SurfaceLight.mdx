@@ -1,0 +1,42 @@
+---
+title: SurfaceLight
+description: Light an area outward from one face of a part.
+---
+
+`SurfaceLight` emits from the surface of a part face rather than from a point. It's useful for glowing panels, screens, and ceiling fixtures.
+
+## Getting started
+
+```lua
+local light = Instance.new("SurfaceLight")
+light.Face = Enum.NormalId.Bottom
+light.Angle = 120
+light.Range = 24
+light.Brightness = 2
+light.Parent = ceilingPanel
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Brightness` | `number` | Read/write | `1` | Light strength, clamped to `0` or above. |
+| `Color` | `Color3` | Read/write | White | Light color. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the light is emitted. |
+| `Shadows` | `boolean` | Read/write | `false` | Whether the light casts shadows. |
+| `Angle` | `number` | Read/write | `90` | Spread angle in degrees, clamped to `0` through `180`. |
+| `Face` | `Enum.NormalId` | Read/write | `Front` | Face of the part the light emits from. |
+| `Range` | `number` | Read/write | `16` | Falloff distance in studs, clamped to `0` or above. |
+
+## Notes
+
+- The light origin sits on the chosen face, at the face's center offset by half the part size.
+- Unlike `SpotLight`, the emitter is placed on the surface, which suits panels and signs.
+- The parent must be a `Part` inside the workspace.
+- Cloning copies the angle, face, range, and shared light settings.
+
+## See also
+
+- `SpotLight` for a light pulled back to the part center.
+- `PointLight` for omni-directional light.
+- `Light` for the shared settings.

@@ -1,0 +1,186 @@
+---
+title: Scripting with Luau
+description: Work with instances, services, events, modules, and the frame loop in Kinemium's Luau environment.
+---
+
+Kinemium scripts are Luau. If you've written Luau before, the syntax is familiar; the differences are in the object model and in which APIs exist. This guide covers the patterns you'll use in almost every script.
+
+## Instances are the building blocks
+
+Every object in the tree is an `Instance`: parts, scripts, GUI elements, values, and the services themselves. You create one with `Instance.new()`, configure it, and parent it:
+
+```lua
+local Workspace = game:GetService("Workspace")
+
+local part = Instance.new("Part")
+part.Name = "Platform"
+part.Size = Vector3.new(12, 1, 12)
+part.Position = Vector3.new(0, 0, 0)
+part.Anchored = true
+part.Parent = Workspace
+```
+
+Until it has a parent, the object exists but isn't part of the world. Parenting is what makes a part render, simulate, or appear in a container.
+
+Common lifecycle members:
+
+| Member | Use |
+| --- | --- |
+| `Parent` | Move an object in the tree, or remove it with `nil`. |
+| `Name` | A label for lookup and debugging. Not unique. |
+| `FindFirstChild(name)` | Direct child lookup that returns `nil` when missing. |
+| `WaitForChild(name, timeout?)` | Wait until a child exists, for content that arrives late. |
+| `GetChildren()` | Direct children as an array. |
+| `Clone()` | Copy an object and its archivable descendants. |
+| `Destroy()` | Remove the object and its descendants for good. |
+
+`Destroy()` is the one to reach for during gameplay. Setting `Parent = nil` detaches the object but keeps it alive, which is useful when you plan to reuse it.
+
+## Services are long-lived
+
+Services are created by the engine and live for the session. Get them with `GetService()`:
+
+```lua
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+```
+
+Cache a service in a local at the top of a script instead of calling `GetService()` inside a loop. The call is cheap, but the local makes dependencies obvious.
+
+## Events and connections
+
+Signals use `Connect()`. The callback runs when the event fires, and it receives the arguments documented for that event:
+
+```lua
+local Players = game:GetService("Players")
+
+Players.PlayerAdded:Connect(function(player)
+    print(player.Name, "joined")
+end)
+```
+
+`Once()` works the same way but disconnects after the first call. For events that fire constantly, like a frame loop, `Connect()` is the normal choice and you keep the connection alive for as long as the system runs.
+
+Some events deliver temporary objects. Read the fields you need inside the callback instead of storing the object for later.
+
+## Modules share code
+
+A `ModuleScript` returns one value, usually a table. Other scripts load it with `require()`:
+
+```lua
+-- ModuleScript named "MathUtil" in ReplicatedStorage.
+local MathUtil = {}
+
+function MathUtil.clamp01(value)
+    if value < 0 then
+        return 0
+    elseif value > 1 then
+        return 1
+    end
+
+    return value
+end
+
+return MathUtil
+```
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MathUtil = require(ReplicatedStorage:WaitForChild("MathUtil"))
+
+print(MathUtil.clamp01(1.4))
+```
+
+A module is evaluated once per runtime and the result is cached. That makes it a good place for shared configuration and helper functions, and a bad place for state that should reset. The same module required on the server and on a client is two separate copies with separate state.
+
+## Same-runtime communication
+
+`BindableEvent` and `BindableFunction` connect code inside one runtime. They don't cross the client-server boundary.
+
+```lua
+local BindableEvent = Instance.new("BindableEvent")
+BindableEvent.Name = "RoundEnded"
+BindableEvent.Parent = script
+
+BindableEvent.Event:Connect(function(roundNumber)
+    print("round over", roundNumber)
+end)
+
+BindableEvent:Fire(4)
+```
+
+Use them to decouple systems that live on the same side. When the message needs to reach the other side, use a `RemoteEvent` or `RemoteFunction` instead.
+
+## Time and the frame loop
+
+`task.wait()` yields the current thread for at least the given number of seconds:
+
+```lua
+task.wait(0.5)
+```
+
+For per-frame work, use `RunService`:
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    -- deltaTime is the seconds since the previous frame.
+end)
+```
+
+`Heartbeat` is the general choice for game logic. `Stepped` runs on the simulation step and passes elapsed time plus delta. `RenderStepped` and `BindToRenderStep()` run on the render path, where camera and interface updates belong. Keep render work short.
+
+Always multiply rates by `deltaTime`. A speed written as studs per frame changes with the frame rate; a speed written as studs per second stays consistent.
+
+## Errors
+
+Runtime errors stop the current thread. Use `pcall` when a failure is expected and you want to keep going:
+
+```lua
+local ok, result = pcall(function()
+    return someRiskyOperation()
+end)
+
+if not ok then
+    warn("operation failed:", result)
+end
+```
+
+`warn()` writes a message without stopping the script. `print()` is for ordinary output. For structured logging and history, use `LogService`.
+
+## A small system
+
+Putting it together, a rotating platform with a cleanup timer:
+
+```lua
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local platform = Instance.new("Part")
+platform.Size = Vector3.new(8, 1, 8)
+platform.Position = Vector3.new(0, 4, 0)
+platform.Anchored = true
+platform.Parent = Workspace
+
+local angle = 0
+local connection = RunService.Heartbeat:Connect(function(deltaTime)
+    angle += math.rad(30) * deltaTime
+    platform.CFrame = CFrame.new(0, 4, 0) * CFrame.Angles(0, angle, 0)
+end)
+
+task.delay(10, function()
+    connection:Disconnect()
+    Debris:AddItem(platform, 0)
+end)
+```
+
+This uses a connection handle so the loop can stop cleanly, keeps the rotation frame-rate independent, and removes the part through the same cleanup path as everything else.
+
+## Next steps
+
+- [Networking](/docs/guides/networking) for communication between server and clients.
+- [Physics](/docs/guides/physics) for parts that move under simulation.
+- `ModuleScript`, `Script`, and `LocalScript` for the script classes themselves.

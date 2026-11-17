@@ -1,0 +1,40 @@
+---
+title: ConeHandleAdornment
+description: Draw a cone at a part with a custom transform.
+---
+
+`ConeHandleAdornment` draws a wireframe cone. Its position and orientation come from `CFrame`, while `Height` and `Radius` set the shape.
+
+## Getting started
+
+```lua
+local cone = Instance.new("ConeHandleAdornment")
+cone.Adornee = targetPart
+cone.CFrame = CFrame.new(0, 5, 0)
+cone.Height = 4
+cone.Radius = 2
+cone.Color3 = Color3.fromRGB(255, 180, 60)
+cone.Parent = targetPart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | `nil` | Part that provides the reference transform. |
+| `Color3` | `Color3` | Read/write | Green | Wire color. |
+| `Height` | `number` | Read/write | `1` | Cone height in studs. |
+| `Radius` | `number` | Read/write | `0.5` | Base radius in studs. |
+| `CFrame` | `CFrame` | Read/write | Identity | Placement relative to the target part. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- If `Adornee` is `nil`, the parent is used, and the parent must be a `Part`.
+- The cone origin follows the part transform combined with `CFrame`.
+- Cloning copies the target, color, dimensions, and transform.
+
+## See also
+
+- `CylinderHandleAdornment` for a tube or disc.
+- `SphereHandleAdornment` for a point marker.

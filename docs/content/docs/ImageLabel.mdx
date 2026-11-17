@@ -1,0 +1,63 @@
+---
+title: ImageLabel
+description: Display an image inside a user interface.
+---
+
+`ImageLabel` draws an image in a GUI layout. It supports tinting, transparency, sub-rectangles, nine-slice scaling, tiling, and resampling modes.
+
+## Getting started
+
+```lua
+local icon = Instance.new("ImageLabel")
+icon.Size = UDim2.fromOffset(64, 64)
+icon.BackgroundTransparency = 1
+icon.Image = "rbxassetid://1234567890"
+icon.ImageColor3 = Color3.fromRGB(255, 200, 80)
+icon.Parent = screenGui
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Image` | `string` | Read/write | Image asset URI. |
+| `ImageContent` | `Content` | Read/write | Typed content view of the image. |
+| `IsLoaded` | `boolean` | Read-only | Whether the image has been loaded. |
+| `ImageTransparency` | `number` | Read/write | Transparency, clamped to `0` through `1`. |
+| `ImageColor3` | `Color3` | Read/write | Tint applied to the image. |
+| `ImageRectOffset` | `Vector2` | Read/write | Top-left offset of the source rectangle. |
+| `ImageRectSize` | `Vector2` | Read/write | Size of the source rectangle. |
+| `ResampleMode` | `Enum.ResampleMode` | Read/write | Filtering when the image is scaled. |
+| `ScaleType` | `Enum.ScaleType` | Read/write | Stretch, tile, or slice behavior. |
+| `SliceCenter` | `Rect` | Read/write | Nine-slice border rectangle. |
+| `SliceScale` | `number` | Read/write | Scale of the nine-slice border, minimum `0`. |
+| `TileSize` | `UDim2` | Read/write | Tile size when `ScaleType` is `Tile`. |
+
+`Image` accepts either a string URI or a `Content` value. Reading it returns the stored URI string. `ImageContent` is the typed form.
+
+Assigning `IsLoaded` raises a read-only error.
+
+## Example: nine-slice panel
+
+```lua
+local panel = Instance.new("ImageLabel")
+panel.Image = "rbxassetid://1234567890"
+panel.ScaleType = Enum.ScaleType.Slice
+panel.SliceCenter = Rect.new(16, 16, 48, 48)
+panel.SliceScale = 1
+```
+
+## Notes
+
+- `ImageTransparency` is clamped rather than rejected.
+- `SliceScale` clamps negative values to `0`.
+- `SliceCenter` is only used when `ScaleType` is `Slice`.
+- `TileSize` is only used when `ScaleType` is `Tile`.
+- `ResampleMode` also accepts the older `ResamplerMode` enum; `Pixelated` maps to nearest-neighbor.
+- Inherits all `GuiObject` members.
+
+## See also
+
+- `ImageButton` for a clickable image.
+- `Decal` for images on 3D parts.
+- `GuiObject` for layout and appearance.

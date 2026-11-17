@@ -1,0 +1,53 @@
+---
+title: UIDragDetector
+description: Let a GUI element be dragged with the pointer.
+---
+
+`UIDragDetector` adds pointer dragging to its parent GUI object. Drag mode, response style, axis, translation bounds, and angle bounds control the result.
+
+## Getting started
+
+```lua
+local detector = Instance.new("UIDragDetector")
+detector.DragStyle = Enum.UIDragDetectorDragStyle.TranslatePlane
+detector.ResponseStyle = Enum.UIDragDetectorResponseStyle.Offset
+detector.Parent = panel
+
+detector.DragStart:Connect(function()
+    print("drag began")
+end)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether dragging is allowed. |
+| `DragStyle` | `Enum.UIDragDetectorDragStyle` | Read/write | `TranslatePlane` | Translation or rotation dragging. |
+| `ResponseStyle` | `Enum.UIDragDetectorResponseStyle` | Read/write | `Offset` | Whether the parent's position or another property changes. |
+| `DragAxis` | `Vector2` | Read/write | `(1, 0)` | Axis used by constrained dragging. |
+| `MinDragTranslation` | `UDim2` | Read/write | Zero | Minimum translation. |
+| `MaxDragTranslation` | `UDim2` | Read/write | Zero | Maximum translation. |
+| `MinDragAngle` | `number` | Read/write | `0` | Minimum rotation in degrees. |
+| `MaxDragAngle` | `number` | Read/write | `0` | Maximum rotation in degrees. |
+
+## Events
+
+| Event | Arguments | Description |
+| --- | --- | --- |
+| `DragStart` | pointer position | Fires when a drag begins. |
+| `DragContinue` | pointer position | Fires on each pointer move while dragging. |
+| `DragEnd` | pointer position | Fires when the drag ends. |
+
+## Notes
+
+- The parent must be a `GuiObject`; otherwise the detector is skipped.
+- Disabling the detector while dragging cancels the drag.
+- Translation limits only apply when at least one of the min or max values is non-zero.
+- Rotation limits apply when the drag style rotates the parent.
+- Cloning copies the configuration and clears any in-progress drag.
+
+## See also
+
+- `GuiObject` for the parent element.
+- `UIListLayout` and `UIGridLayout` if the parent is laid out automatically.

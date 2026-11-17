@@ -1,0 +1,61 @@
+---
+title: LocalScript
+description: Run client-side code from a script parented where a client runtime can start it.
+---
+
+`LocalScript` is a script that runs in a client runtime. Use it for input handling, camera work, local interface updates, and anything that should happen only on the player's machine.
+
+Like `Script`, it inherits from `BaseScript` and adds no members beyond its own properties.
+
+## Getting started
+
+```lua
+local player = game:GetService("Players").LocalPlayer
+
+local script = Instance.new("LocalScript")
+script.Source = [[
+print("Running on the client")
+]]
+script.Parent = player.PlayerScripts
+```
+
+## When it runs
+
+A `LocalScript` starts when it's parented into a place where a client runtime looks for scripts, such as `PlayerScripts` or a client-side container in `StarterPlayer`. Parented into `ServerScriptService`, it does nothing, because the server has no client runtime.
+
+A `LocalScript` always runs on the client, regardless of any context setting. That's the difference from `Script`, which can be configured with `RunContext`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Source` | `string` | Read/write | `""` | The Luau source. Assigning it clears cached state. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the script is allowed to run. |
+| `Disabled` | `boolean` | Read/write | `false` | Inverse of `Enabled`. |
+
+## Client and server boundaries
+
+The client can read replicated instances but can't see server-only containers. Writes it makes to its own objects don't reach the server unless replication is configured for them.
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    -- Client-side camera or interface update.
+end)
+```
+
+Things the client owns, such as its camera, input, and `PlayerGui` copies, are natural fits for a `LocalScript`.
+
+## Notes
+
+- A `LocalScript` parented under `ServerScriptService` or `ServerStorage` never runs.
+- Disabling a running local script stops it the same way as disabling a `Script`.
+- Assigning `Source` invalidates cached state, so set it before startup when you can.
+- Client scripts are subject to the same security checks as any other script; they can't reach internal services.
+
+## See also
+
+- `Script`, scripts with a configurable runtime.
+- `Players`, `PlayerScripts` and `PlayerGui`.
+- `UserInputService`, client input.

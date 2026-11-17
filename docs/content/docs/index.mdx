@@ -1,0 +1,30 @@
+---
+title: Kinemium documentation
+description: Learn Kinemium with practical guides, then look up exact class and service behavior in the reference.
+---
+
+Kinemium is a game engine with Luau scripting, a native editor, and support for standalone multiplayer games. This documentation has two halves: guides that walk you through building systems, and reference pages that describe every verified member of a class or service.
+
+## Start here
+
+| Guide | What you'll build |
+| --- | --- |
+| [Getting started](/docs/guides/getting-started) | Install the engine, run a session, and put your first part and script in the world. |
+| [Scripting with Luau](/docs/guides/scripting) | Instances, services, modules, events, and the frame loop. |
+| [Networking](/docs/guides/networking) | Remote events and functions with server-side validation. |
+| [Physics](/docs/guides/physics) | Gravity, impulses, raycasts, and constraints. |
+| [3D and rendering](/docs/guides/3d) | Parts, meshes, cameras, lighting, and surface detail. |
+| [Input and UI](/docs/guides/input-and-ui) | Screen interfaces, buttons, raw input, and tweens. |
+
+## Reference
+
+The reference is organized by the object tree:
+
+- **Classes** cover objects you create and parent, from `Part` and `Model` to `ScreenGui` and `ParticleEmitter`.
+- **Services** cover the long-lived engine objects you get from `game:GetService()`, such as `Workspace`, `Players`, and `RunService`.
+
+Each page documents the members that are actually exposed to Luau, including defaults, accepted types, and known placeholders. If a feature is incomplete, the page says so instead of describing behavior that isn't there.
+
+## Status
+
+The engine is under active development. Expect missing features and rough edges in both the engine and these docs. When an API matters to your game, check the reference page for its current limitations before you build around it.

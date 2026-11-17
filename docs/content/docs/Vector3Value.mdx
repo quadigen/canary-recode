@@ -1,0 +1,32 @@
+---
+title: Vector3Value
+description: Store a Vector3 in the object tree.
+---
+
+`Vector3Value` holds a three-component vector as an instance. It's handy for positions, directions, and offsets that scripts share through the hierarchy.
+
+## Getting started
+
+```lua
+local spawn = Instance.new("Vector3Value")
+spawn.Name = "SpawnOffset"
+spawn.Value = Vector3.new(0, 5, 0)
+spawn.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | The stored vector. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the vector.
+- Components are floats. Non-finite components are stored as given, so validate values that come from outside your code.
+
+## See also
+
+- `Vector2Value` for 2D vectors.
+- `Part` and `Model` for the objects that consume vectors.

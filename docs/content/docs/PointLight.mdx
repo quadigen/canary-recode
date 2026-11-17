@@ -1,0 +1,39 @@
+---
+title: PointLight
+description: Shine light in all directions from a part.
+---
+
+`PointLight` lights the area around its parent part in every direction. It's the usual choice for lamps, glowing props, and ambient accents.
+
+## Getting started
+
+```lua
+local light = Instance.new("PointLight")
+light.Brightness = 1.5
+light.Range = 20
+light.Color = Color3.fromRGB(120, 190, 255)
+light.Parent = lampPart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Brightness` | `number` | Read/write | `1` | Light strength, clamped to `0` or above. |
+| `Color` | `Color3` | Read/write | White | Light color. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the light is emitted. |
+| `Shadows` | `boolean` | Read/write | `false` | Stored but not used by this light type. |
+| `Range` | `number` | Read/write | `8` | Falloff distance in studs, clamped to `0` or above. |
+
+## Notes
+
+- The light is positioned at the parent part's center.
+- `Range` is a falloff distance, not a hard cutoff.
+- The parent must be a `Part` inside the workspace.
+- `Shadows` is accepted but has no effect on point lights.
+- Cloning copies the range and the shared light settings.
+
+## See also
+
+- `Light` for the shared settings.
+- `SpotLight` and `SurfaceLight` for directional lights.

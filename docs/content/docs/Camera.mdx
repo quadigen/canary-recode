@@ -1,0 +1,97 @@
+---
+title: Camera
+description: Control the view, field of view, and camera behavior for the 3D world.
+---
+
+`Camera` is the viewpoint used to render the 3D world. Assign one to `Workspace.CurrentCamera` and its transform becomes the view. The camera also converts between screen coordinates and world rays.
+
+## Getting started
+
+```lua
+local Workspace = game:GetService("Workspace")
+local camera = Workspace.CurrentCamera
+
+if camera then
+    camera.FieldOfView = 70
+    camera.CFrame = CFrame.new(0, 10, 20) * CFrame.Angles(0, math.rad(180), 0)
+end
+```
+
+The default camera uses free-cam movement while it has no subject. Set `CameraSubject` to give it something to follow.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `CFrame` | `CFrame` | Read/write | `CFrame.new(0, 4, 10)` | Position and orientation of the view. |
+| `Focus` | `CFrame` | Read/write | `CFrame.new(0, 4, 0)` | The point the camera is focused on. |
+| `FieldOfView` | `number` | Read/write | `60` | Vertical field of view in degrees, clamped between `1` and `120`. |
+| `DiagonalFieldOfView` | `number` | Read-only | Derived | Field of view across the screen diagonal. |
+| `CameraSubject` | `Instance?` | Read/write | `nil` | Object the camera follows. Assigning a non-instance raises an error. |
+| `CameraType` | `Enum.CameraType` | Read/write | `Custom` | How the camera positions itself relative to its subject. |
+| `InputEnabled` | `boolean` | Read/write | `true` | Whether built-in camera input is active. |
+| `Sensitivity` | `number` | Read/write | `0.003` | Mouse look sensitivity. |
+| `Pitch` | `number` | Read/write | `0` | Vertical look angle in radians, clamped to about ±89 degrees. |
+| `Yaw` | `number` | Read/write | `0` | Horizontal look angle in radians. |
+| `ViewportSize` | `Vector2` | Read-only | Current viewport | Width and height used for projection. |
+
+`FieldOfView` clamps instead of raising, so assigning `200` stores `120`. `Pitch` clamps to roughly ±1.553 radians, which keeps the camera from flipping over.
+
+Setting `CFrame` also updates `Pitch` and `Yaw` from the rotation. Reading `CFrame` returns the transform the renderer will use, so it's the authoritative position even when the camera is following a subject.
+
+## Camera types
+
+`CameraType` selects the built-in behavior:
+
+- `Custom` uses free-cam movement until a subject is assigned.
+- `Scriptable` leaves the camera entirely under script control and releases the pointer.
+- `FirstPerson`, `Shoulder`, `TopDown`, `Isometric`, `Orbital`, `ThirdPerson`, and `Follow` orbit the subject with different offsets and angles.
+
+```lua
+camera.CameraSubject = character
+camera.CameraType = Enum.CameraType.Shoulder
+```
+
+`InputEnabled = false` stops built-in mouse look and movement. That's the usual choice when you drive `CFrame` yourself each frame.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `ScreenPointToRay(x: number, y: number): Ray` | Builds a world ray from screen coordinates. |
+| `ViewportPointToRay(x: number, y: number): Ray` | Same as `ScreenPointToRay()`. |
+| `WorldToViewportPoint(world: Vector3): (Vector3, boolean)` | Projects a world point to screen space. |
+| `WorldToScreenPoint(world: Vector3): (Vector3, boolean)` | Alias of `WorldToViewportPoint()`. |
+
+```lua
+local ray = camera:ScreenPointToRay(400, 300)
+local result = workspace:Raycast(ray.Origin, ray.Direction * 100)
+```
+
+`WorldToViewportPoint()` returns the projected position and whether it's on screen. A point behind the camera returns a zero vector and `false`.
+
+The camera also exposes a few compatibility methods with fixed results:
+
+| Method | Current behavior |
+| --- | --- |
+| `ProjectLocalPosition()` | Returns a zero `Vector3`. |
+| `GetLargestCutoffDistance()` | Returns `0`. |
+| `FrustumExtentsSize()` | Returns the viewport size as a `Vector2`. |
+| `FrustumExtentsNearPlaneDistance()` | Returns `0`. |
+| `FrustumExtentsFarPlaneDistance()` | Returns `0`. |
+| `GetFocusedPart()` | Returns `nil`. |
+
+Don't build camera logic on those placeholders; use `CFrame`, the projection methods, and raycasts instead.
+
+## Notes
+
+- Only the camera assigned to `Workspace.CurrentCamera` is used for rendering. A camera instance elsewhere is just data.
+- `CameraSubject` must be an instance or `nil`. It isn't restricted to characters.
+- Cloning copies the view settings, type, subject, and input state, but not the pointer capture state.
+- `Scriptable` releases mouse capture, so switching to it while relying on built-in look will stop camera movement.
+
+## See also
+
+- `Workspace`, `CurrentCamera` and world queries.
+- `UserInputService`, mouse behavior and input state.
+- `RunService`, per-frame camera updates.

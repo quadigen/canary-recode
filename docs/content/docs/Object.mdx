@@ -1,0 +1,186 @@
+---
+title: Object
+description: The root class for engine objects, with shared identity, metadata, hierarchy, and lifecycle APIs.
+---
+
+`Object` is the root of Kinemium's class hierarchy. An `Instance` is an `Object`, but not every `Object` is necessarily an `Instance`. Classes that derive directly from `Object`, such as `EditableMesh`, do not have to inherit from `Instance`.
+
+The shared object API gives you a consistent way to identify objects, organize them, attach metadata, and manage their lifetime. You don't need to work with the engine's implementation to use it.
+
+## Working with objects
+
+When a function receives an engine object, you can inspect its class without knowing its exact type beforehand.
+
+```lua
+local function describe(object)
+    print(object.Name, object.ClassName)
+    print(object:GetFullName())
+
+    if object:IsA("Instance") then
+        print("This object inherits from Instance")
+    end
+end
+```
+
+These examples take an object you've already obtained. A standalone constructor for `Object` is not established by this API.
+
+## Properties
+
+### Identity and hierarchy
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Name` | `string` | Read/write | The object's name. The base default is `"Object"`; subclasses can supply their own. |
+| `ClassName` | `string` | Read-only | The object's actual class name, not its parent class. |
+| `Parent` | `Object?` | Read/write | The immediate parent, or `nil` when detached. |
+| `Archivable` | `boolean` | Read/write | Whether the object can be cloned. Defaults to `true`. |
+| `UniqueId` | `UniqueId` | Read-only | An identity assigned when the object is created. |
+
+### Replication and security
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `CanReplicate` | `boolean` | Read/write | Whether the object is marked as eligible for replication. Defaults to `true`. |
+| `ReplicationGroup` | `string` | Read/write | The object's replication group. Defaults to an empty string. |
+| `ReplicationMode` | `Enum.ReplicationMode` | Read/write | The replication mode. |
+| `NetworkId` | `number` | Read-only | The assigned numeric network ID. Initially `0`. |
+| `Capabilities` | `SecurityCapabilities` | Restricted write | The object's security capabilities. Only authorized internal scripts can change this. |
+| `Sandboxed` | `boolean` | Restricted write | Whether the object itself is marked as sandboxed. Defaults to `false`. Only authorized internal scripts can change this. |
+| `IsInSandbox` | `boolean` | Read-only | Whether the object or any of its ancestors is marked as sandboxed. |
+
+Replication settings do not by themselves promise that an object is sent to a client. The available replication modes and their network behavior are outside the scope of this reference.
+
+## Methods
+
+Signatures describe the shared Luau object API. A return type of `()` means the method doesn't return a value.
+
+### Identity and hierarchy
+
+| Signature | Description |
+| --- | --- |
+| `IsA(className: string): boolean` | Checks the object's class and its inherited classes. |
+| `IsAncestorOf(descendant: Object): boolean` | Checks whether the supplied object is below this object. |
+| `IsDescendantOf(ancestor: Object): boolean` | Checks whether the supplied object is above this object. |
+| `GetFullName(): string` | Returns the object's dot-separated name path. |
+| `GetChildren(): {Object}` | Returns the accessible direct children in a new array. |
+| `GetDescendants(): {Object}` | Returns the accessible descendants in a new array, in depth-first order. |
+| `GetProperties(): {string}` | Returns registered property names, including inherited properties, rather than their values. |
+
+An object isn't considered its own ancestor or descendant. `GetFullName()` is useful for debugging, but names need not be unique and the path can change when an object is renamed or reparented.
+
+### Finding objects
+
+| Signature | Description |
+| --- | --- |
+| `FindFirstChild(name: string, recursive: boolean?): Object?` | Finds a child by name. With `recursive` set to `true`, searches descendants if no direct child matches. |
+| `FindFirstChildOfClass(className: string): Object?` | Finds the first direct child whose class matches or inherits from the requested class. |
+| `FindFirstChildWhichIsA(className: string, recursive: boolean?): Object?` | Finds a child by class or inheritance, optionally searching descendants. |
+| `FindFirstAncestor(name: string): Object?` | Searches upward for the nearest ancestor with the given name. |
+| `FindFirstAncestorOfClass(className: string): Object?` | Searches upward for an ancestor whose class matches or inherits from the requested class. |
+| `FindFirstAncestorWhichIsA(className: string): Object?` | Searches upward for an ancestor with exactly the requested class name in the current implementation. |
+| `WaitForChild(name: string, timeout: number?): Object?` | Checks for a direct child by name. See the limitation below. |
+| `WaitForChildOfClass(className: string, timeout: number?): Object?` | Checks for a direct child by class or inheritance. See the limitation below. |
+
+Searches return `nil` when no matching accessible object can be returned. Recursive searches default to `false` and check direct children first. The current `OfClass` and `WhichIsA` behavior is not interchangeable for ancestor searches.
+
+Both `WaitForChild` methods default to a timeout of `10`, but currently poll without yielding or measuring real elapsed time. They can return immediately or consume CPU instead of waiting for future children. Don't rely on them to synchronize asynchronous creation; observe `ChildAdded` instead.
+
+### Lifecycle
+
+| Signature | Description |
+| --- | --- |
+| `Clone(): Object?` | Copies the object and its archivable descendants. Returns `nil` if the object isn't archivable or cloning fails. |
+| `Destroy(): ()` | Destroys the object and its descendants and detaches them from the hierarchy. |
+| `ClearAllChildren(): ()` | Destroys accessible direct children and their descendants while preserving this object. |
+
+A clone has its own identity and starts without a parent. Attributes and tags are copied; non-archivable descendants and their subtrees are skipped. Class-specific state depends on the class's supported cloning behavior.
+
+### Attributes
+
+Attributes let you store small pieces of custom data without creating extra child objects.
+
+| Signature | Description |
+| --- | --- |
+| `GetAttribute(name: string): any` | Returns the stored value, or `nil` if the attribute doesn't exist. |
+| `GetAttributes(): { [string]: any }` | Returns a new table containing all attribute names and values. |
+| `SetAttribute(name: string, value: any): ()` | Creates or replaces an attribute. Pass `nil` to remove it. |
+
+Attribute names must be 1–100 characters long and can contain ASCII letters, digits, underscores, hyphens, periods, and slashes. Names beginning with `RBX` (regardless of case) are reserved.
+
+Supported values include booleans, numbers, strings, vectors, and registered engine datatypes. Ordinary tables, functions, and engine object references are not supported. An invalid name or unsupported value raises an error.
+
+```lua
+local function configure(object)
+    object:SetAttribute("Health", 100)
+    object:SetAttribute("Team", "Blue")
+
+    local health = object:GetAttribute("Health")
+    print(health)
+
+    object:SetAttribute("Team", nil)
+end
+```
+
+Changing an attribute does not directly fire the shared property-change signals. Attributes aren't regular class properties.
+
+### Tags
+
+Tags are string labels you can attach to objects to identify a category or behavior.
+
+| Signature | Description |
+| --- | --- |
+| `AddTag(tag: string): ()` | Adds a tag if it isn't already present. |
+| `RemoveTag(tag: string): ()` | Removes a tag if present. |
+| `HasTag(tag: string): boolean` | Checks whether the tag is attached. |
+| `GetTags(): {string}` | Returns a new array of attached tags. |
+
+Tag names must be 1–100 characters long and cannot contain NUL bytes. Adding a duplicate or removing a missing tag has no effect.
+
+```lua
+local function markInteractable(object)
+    object:AddTag("Interactable")
+    print(object:HasTag("Interactable")) -- true
+end
+```
+
+### GetPropertyChangedSignal
+
+```lua
+GetPropertyChangedSignal(property: string): signal?
+```
+
+Returns a signal for the named property. Its callback receives no arguments, so read the property inside the callback. The signal can be `nil` if it cannot be created. The name isn't validated against the class's property list by this method.
+
+```lua
+local function watchName(object)
+    local signal = object:GetPropertyChangedSignal("Name")
+    if signal then
+        signal:Connect(function()
+            print(object.Name)
+        end)
+    end
+end
+```
+
+## Events
+
+Connect to these events to respond to changes without repeatedly searching the object tree.
+
+| Event | Callback arguments | When it fires |
+| --- | --- | --- |
+| `Changed` | `property: string` | A property-change notification is emitted. |
+| `ChildAdded` | `child: Object` | A direct child is attached. |
+| `ChildRemoved` | `child: Object` | A direct child is detached. |
+| `DescendantAdded` | `descendant: Object` | An object is attached beneath this object. |
+| `DescendantRemoving` | `descendant: Object` | An object is detached from beneath this object. |
+| `AncestryChanged` | `object: Object, parent: Object?` | This object's direct parent changes. |
+| `Destroying` | None | Destruction begins, before the object is detached. |
+
+Hierarchy events describe the current implementation: during a reparent operation the parent change has already been applied when removal notifications fire. Moving a whole subtree does not automatically emit a separate event for every nested descendant, and `AncestryChanged` is emitted for the moved object itself, not every descendant.
+
+`Changed` and property-specific signals describe notifications, not a guarantee that every runtime or metadata change emits one.
+
+## See also
+
+- `Instance`, organizing objects, managing children, and using common inherited members.
+- `GuiObject`, positioning and interacting with GUI elements.

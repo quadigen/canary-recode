@@ -171,10 +171,14 @@ assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)
 	}
-	run_script(&client_vm, `
+	run_script(
+		&client_vm,
+		`
 assert(workspace.Gravity == 85 and game:GetService("Physics").Gravity == 85,
     "a running client must receive gravity changes")
-`, "client_applies_gravity")
+`,
+		"client_applies_gravity",
+	)
 	run_script(
 		&server_vm,
 		`

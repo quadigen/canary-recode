@@ -1,0 +1,70 @@
+---
+title: ModuleScript
+description: Write reusable Luau that runs once when required and caches its return value.
+---
+
+`ModuleScript` holds reusable Luau. It never executes on its own; the first `require()` call runs it and caches whatever it returns. Later calls in the same runtime return the cached value without running the body again.
+
+That caching is what makes modules a good place for shared state and services: every requirer gets the same table.
+
+## Getting started
+
+```lua
+-- In a ModuleScript named "Config":
+local Config = {}
+
+Config.MaxPlayers = 8
+Config.MapName = "Harbor"
+
+return Config
+```
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Config = require(ReplicatedStorage:FindFirstChild("Config"))
+
+print(Config.MaxPlayers)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Source` | `string` | Read/write | `""` | The Luau source. Assigning it clears the cached module result. |
+
+`ModuleScript` has no `Enabled` or `RunContext` property, because it doesn't run on a schedule and doesn't belong to one side of the game by itself.
+
+## Requiring behavior
+
+- The module runs the first time it's required.
+- Its return value is cached on the instance, so subsequent requires return the same value.
+- `nil` is a valid return value and is cached like any other.
+- Each runtime has its own VM and instances, so a module required on the server and on a client runs separately and doesn't share state.
+- Assigning `Source` invalidates the cache and clears any running thread. The next require runs the new source.
+
+```lua
+local ok, result = pcall(require, module)
+if not ok then
+    warn("Module failed: " .. tostring(result))
+end
+```
+
+Wrap `require()` in `pcall()` when the module might fail, for example when it depends on content that may be missing.
+
+## Organizing modules
+
+- Put shared modules in `ReplicatedStorage` so both sides can require them.
+- Put server-only modules in `ServerStorage` or `ServerScriptService`.
+- Keep modules free of side effects at require time where possible; they run exactly once, which makes ordering bugs hard to see.
+
+## Notes
+
+- Requiring the same module from several scripts returns one shared value, so mutating it affects everyone.
+- A module that returns nothing caches `nil`; that's valid but easy to mistake for a failure.
+- Cloning a module copies its source but not its cached result or running thread, so the clone loads fresh.
+- Modules in a client runtime can't see server-only instances, since they don't exist there.
+
+## See also
+
+- `Script`, code that runs on its own.
+- `ReplicatedStorage`, where shared modules usually live.

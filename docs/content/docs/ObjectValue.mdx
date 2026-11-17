@@ -1,0 +1,39 @@
+---
+title: ObjectValue
+description: Store a reference to another instance in the object tree.
+---
+
+`ObjectValue` holds a reference to another instance. It's how you point at a target, a template, or a related object without relying on names.
+
+## Getting started
+
+```lua
+local target = Instance.new("ObjectValue")
+target.Name = "Target"
+target.Value = somePart
+target.Parent = turret
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `Instance?` | Read/write | `nil` | The referenced instance. |
+
+Assigning `nil` clears the reference. Assigning anything that isn't an instance raises an error rather than storing an invalid value.
+
+```lua
+target.Value = nil
+```
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- The reference doesn't keep a destroyed instance usable; check `Value` before using it.
+- Cloning copies the reference, not the referenced object.
+- Reading the property returns `nil` when the referenced object has been destroyed or is inaccessible.
+
+## See also
+
+- `Instance` for hierarchy and lifecycle behavior.
+- `ReplicatedStorage` for storing templates.

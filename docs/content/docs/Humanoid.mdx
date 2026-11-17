@@ -1,0 +1,88 @@
+---
+title: Humanoid
+description: Give a character health, movement, jumping, and simple walk-to behavior.
+---
+
+`Humanoid` is the character controller's interface. Put one inside a character model and you get health, walk speed, jumping, and a small state machine with a dead state.
+
+The humanoid doesn't move anything itself. It reads and writes the character controller that sits next to it in the character model, so its movement properties only have an effect when a controller exists.
+
+## Getting started
+
+```lua
+local character = player.Character
+local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+if humanoid then
+    print(humanoid.Health, humanoid.MaxHealth)
+    humanoid.WalkSpeed = 20
+end
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Health` | `number` | Read/write | `100` | Current health, clamped between `0` and `MaxHealth`. |
+| `MaxHealth` | `number` | Read/write | `100` | Upper bound for health. Negative values clamp to `0`. |
+| `WalkSpeed` | `number` | Read/write | Controller value | Movement speed. Reads `nil` when there's no character controller. |
+| `JumpHeight` | `number` | Read/write | Controller value | Jump height. Reads `nil` without a controller. |
+| `AutoRotate` | `boolean` | Read/write | Controller value | Whether the character turns toward its movement direction. |
+| `HumanoidStateType` | `string` | Read-only | Current state | The state machine's current state name, or `nil` when there's no controller. |
+
+Setting `Health` above `MaxHealth` is clamped, and dropping `MaxHealth` doesn't retroactively raise or lower health beyond the clamp. Health at `0` moves the character to the `Dead` state on the next update.
+
+```lua
+humanoid.MaxHealth = 250
+humanoid.Health = 250
+```
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `TakeDamage(amount: number): ()` | Subtracts health and fires `HealthChanged`. |
+| `Move(direction: Vector3): boolean` | Sets the character's movement direction. Returns `true` when a controller was found. |
+| `Jump(): boolean` | Queues a jump. Returns `true` when a controller was found. |
+| `WalkTo(position: Vector3): boolean` | Walks toward a world position until it arrives or gets stuck. |
+| `MoveTo(position: Vector3): boolean` | Alias of `WalkTo()`. |
+| `GetState(): string?` | Returns the current state name, or `nil` without a controller. |
+
+```lua
+humanoid:TakeDamage(25)
+humanoid:WalkTo(Vector3.new(10, 0, 10))
+```
+
+`TakeDamage()` only fires `HealthChanged` when the value actually changes, so hitting a dead humanoid doesn't produce a notification.
+
+`Move()` takes a direction, not a speed. Scale it if you want slower or faster movement than the controller's default.
+
+`WalkTo()` clears itself when the character gets within about 1.5 studs of the target, or after roughly two seconds without progress. It doesn't pathfind around obstacles, so use `PathfindingService` when the route isn't a straight line.
+
+## Events
+
+| Event | Callback arguments | When it fires |
+| --- | --- | --- |
+| `HealthChanged` | `health: number` | Health changed after damage or assignment. |
+| `StateChanged` | Not specified | The character's state changed. |
+
+`StateChanged` is forwarded from the character's state machine. The class doesn't guarantee a particular argument list, so inspect the value from a known state source instead of relying on the callback parameters.
+
+```lua
+humanoid.HealthChanged:Connect(function(health)
+    print("Health is now", health)
+end)
+```
+
+## Notes
+
+- Movement properties are proxies. Without a `CharacterController` child in the model, reading them gives `nil` and writing them does nothing.
+- `AutoRotate` is a controller setting, not a humanoid one; it disappears with the controller.
+- Health is stored on the humanoid, so it survives character model setup as long as the model is kept.
+- Cloning a humanoid copies health and max health, but not its live walk target or connections.
+
+## See also
+
+- `Players`, loading characters and responding to spawns.
+- `Model`, moving the character model as a unit.
+- `RunService`, per-frame movement logic.

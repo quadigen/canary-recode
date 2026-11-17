@@ -1,0 +1,35 @@
+---
+title: StringValue
+description: Store a single string in the object tree so scripts can share it.
+---
+
+`StringValue` holds one string as an instance. It's a convenient place for names, keys, and configuration text that other scripts look up through the hierarchy.
+
+## Getting started
+
+```lua
+local value = Instance.new("StringValue")
+value.Name = "MapName"
+value.Value = "Harbor"
+value.Parent = game:GetService("ReplicatedStorage")
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `string` | Read/write | `""` | The stored text. |
+
+`Value` is always a string. Assigning a number or another type isn't a supported conversion here; pass an actual string.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the current string.
+- The value is stored on the instance, so it replicates with the object.
+- There's no length validation on assignment.
+
+## See also
+
+- `NumberValue`, `BoolValue`, and `ObjectValue` for other single values.
+- `ReplicatedStorage` for sharing values between server and clients.

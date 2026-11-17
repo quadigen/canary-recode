@@ -53,7 +53,10 @@ terrain_sdf_bounds :: proc(
 	service: ^Terrain,
 	shape: Terrain_SDF_Shape,
 	pad_cells: int,
-) -> (datatypes.Region3int16, bool) {
+) -> (
+	datatypes.Region3int16,
+	bool,
+) {
 	min_x: int
 	max_x: int
 	min_y: int
@@ -104,15 +107,19 @@ terrain_sdf_bounds :: proc(
 
 	// Check the full-width box bounds before converting them to cell coordinates.
 	if shape.kind == .Box &&
-	   (min_x < int(min(i16)) || max_x > int(max(i16)) ||
-	    min_y < int(min(i16)) || max_y > int(max(i16)) ||
-	    min_z < int(min(i16)) || max_z > int(max(i16))) {
+	   (min_x < int(min(i16)) ||
+			   max_x > int(max(i16)) ||
+			   min_y < int(min(i16)) ||
+			   max_y > int(max(i16)) ||
+			   min_z < int(min(i16)) ||
+			   max_z > int(max(i16))) {
 		return {}, false
 	}
 	return datatypes.Region3int16 {
-		Min = datatypes.Vector3int16{i16(min_x), i16(min_y), i16(min_z)},
-		Max = datatypes.Vector3int16{i16(max_x), i16(max_y), i16(max_z)},
-	}, true
+			Min = datatypes.Vector3int16{i16(min_x), i16(min_y), i16(min_z)},
+			Max = datatypes.Vector3int16{i16(max_x), i16(max_y), i16(max_z)},
+		},
+		true
 }
 
 
@@ -3282,7 +3289,11 @@ terrain_service_namecall :: proc(
 		size := datatypes.Arg_Vector3(L, 3)
 		material := terrain_arg_material(L, 4, enum_registry, .Grass)
 		if !terrain_fill_box(service, cframe, size, material) {
-			return vm.RaiseError(L, "Terrain:FillBlock exceeds terrain bounds or the voxel limit at the current VoxelSize"), true
+			return vm.RaiseError(
+					L,
+					"Terrain:FillBlock exceeds terrain bounds or the voxel limit at the current VoxelSize",
+				),
+				true
 		}
 		return 0, true
 

@@ -1,0 +1,34 @@
+---
+title: BoolValue
+description: Store a single boolean in the object tree.
+---
+
+`BoolValue` holds one true or false flag as an instance. It's useful for feature toggles and per-object state that other scripts read from the hierarchy.
+
+## Getting started
+
+```lua
+local enabled = Instance.new("BoolValue")
+enabled.Name = "PvPEnabled"
+enabled.Value = false
+enabled.Parent = game:GetService("ReplicatedStorage")
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `boolean` | Read/write | `true` | The stored flag. |
+
+The default is `true`, so set it explicitly when the intended default is off.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the flag.
+- Assigning non-boolean values isn't a supported conversion; pass `true` or `false`.
+
+## See also
+
+- `StringValue` and `NumberValue` for other simple values.
+- `CollectionService` for label-style grouping with tags.

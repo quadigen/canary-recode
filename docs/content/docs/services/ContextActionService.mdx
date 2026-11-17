@@ -1,0 +1,110 @@
+---
+title: ContextActionService
+description: Bind named actions to keys, mouse buttons, or movement inputs and control which handler wins.
+---
+
+`ContextActionService` turns raw input into named actions. Instead of watching individual keys, you bind an action to one or more inputs and decide what happens when it fires. Priorities let one action override another without either one knowing about the other.
+
+## Getting started
+
+```lua
+local ContextActionService = game:GetService("ContextActionService")
+
+local function onJump(actionName, inputState, inputObject)
+    if inputState ~= Enum.UserInputState.Begin then
+        return Enum.ContextActionResult.Pass
+    end
+
+    print("Jump")
+    return Enum.ContextActionResult.Sink
+end
+
+ContextActionService:BindAction("Jump", onJump, false, Enum.KeyCode.Space)
+```
+
+The callback runs for each matching input event. Returning `Enum.ContextActionResult.Sink` consumes the input; returning `Enum.ContextActionResult.Pass` lets lower-priority actions and the GUI see it.
+
+## Methods
+
+### BindAction
+
+```lua
+BindAction(
+    actionName: string,
+    callback: function,
+    createTouchButton: boolean,
+    ...inputs: Enum.KeyCode | Enum.UserInputType | Enum.PlayerActions
+): ()
+```
+
+Binds an action at the default priority. `createTouchButton` is accepted for signature compatibility, but on-screen touch buttons aren't implemented: passing `true` raises an error. Pass `false`.
+
+```lua
+ContextActionService:BindAction(
+    "Interact",
+    onInteract,
+    false,
+    Enum.KeyCode.E,
+    Enum.UserInputType.MouseButton1
+)
+```
+
+### BindActionAtPriority
+
+```lua
+BindActionAtPriority(
+    actionName: string,
+    callback: function,
+    createTouchButton: boolean,
+    priority: number,
+    ...inputs: Enum.KeyCode | Enum.UserInputType | Enum.PlayerActions
+): ()
+```
+
+Same as `BindAction()`, but with an explicit priority. Higher numbers run first. When two actions match the same input, the higher-priority one runs and the other only runs if it returns `Pass`.
+
+```lua
+ContextActionService:BindActionAtPriority("Menu", onMenu, false, 10, Enum.KeyCode.Escape)
+```
+
+### UnbindAction
+
+```lua
+UnbindAction(actionName: string): ()
+```
+
+Removes a binding. Unbinding a name that doesn't exist does nothing. Bindings aren't cleaned up automatically, so unbind a tool's actions when the tool is unequipped or destroyed.
+
+## The callback
+
+The callback receives three arguments:
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `actionName` | `string` | The name you bound. |
+| `inputState` | `Enum.UserInputState` | `Begin`, `Change`, or `End`. |
+| `inputObject` | `InputObject` | The input that triggered the action. |
+
+Return `Enum.ContextActionResult.Sink` to consume the input or `Enum.ContextActionResult.Pass` to leave it for other handlers. A callback that errors is reported and stops dispatch for that input.
+
+## Inputs
+
+You can bind actions to three kinds of input:
+
+- `Enum.KeyCode` values, which match keyboard keys.
+- `Enum.UserInputType` values, which match device events such as mouse buttons or touch.
+- `Enum.PlayerActions` values, which map to the default movement keys: forward is `W` or `Up`, backward is `S` or `Down`, left is `A` or `Left`, right is `D` or `Right`, and jump is `Space`.
+
+Binding the same name again replaces the previous binding, including its priority and inputs. There's one binding per name.
+
+## Notes
+
+- Actions are matched against input events after the GUI has had its chance, so a focused text box can still swallow typing.
+- Returning `Sink` also marks the input as processed for `UserInputService` listeners, which arrive with `gameProcessedEvent` set.
+- Priorities order dispatch only within this service; they don't affect GUI input order.
+- The handler stack isn't sorted by bind time, so use explicit priorities instead of relying on registration order.
+
+## See also
+
+- `UserInputService`, device state and raw input events.
+- `GuiObject`, input events scoped to one element.

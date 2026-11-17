@@ -1,0 +1,69 @@
+---
+title: AnimationTrack
+description: Control one playing animation on a rig.
+---
+
+`AnimationTrack` is a live handle to one animation clip. It reports playback state, exposes events, and provides methods to play, stop, and blend the clip.
+
+## Getting started
+
+```lua
+local track = animator:LoadAnimation(animation)
+track.Looped = true
+track:Play(0.2, 1, 1)
+
+task.wait(2)
+track:Stop(0.2)
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Animation` | `Animation?` | Read-only | Clip this track came from. |
+| `IsPlaying` | `boolean` | Read-only | Whether the clip is currently playing. |
+| `Length` | `number` | Read-only | Clip length in seconds. |
+| `Looped` | `boolean` | Read/write | Restart when the clip ends. |
+| `Priority` | `Enum.AnimationPriority` | Read/write | Blending priority. |
+| `Speed` | `number` | Read-only | Current playback speed. Use `AdjustSpeed()`. |
+| `TimePosition` | `number` | Read/write | Current position in seconds. |
+| `WeightCurrent` | `number` | Read-only | Current blend weight. |
+| `WeightTarget` | `number` | Read-only | Target blend weight. |
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `Play(fadeTime?: number, weight?: number, speed?: number)` | Starts playback. Defaults are `0.1`, `1`, and `1`. |
+| `Stop(fadeTime?: number)` | Stops playback with an optional fade. |
+| `AdjustSpeed(speed?: number)` | Changes playback speed. |
+| `AdjustWeight(weight?: number, fadeTime?: number)` | Changes blend weight. |
+| `GetMarkerReachedSignal(name: string): signal` | Returns the signal for a named marker. |
+| `GetTimeOfKeyframe(name: string): number` | Returns the time of a named keyframe or raises an error. |
+| `GetParameter(name: string): any` | Reads a stored track parameter. |
+| `SetParameter(name: string, value: any)` | Stores a track parameter. Passing `nil` removes it. |
+| `GetParameterDefaults(): table` | Returns an empty table. |
+
+## Events
+
+| Event | Arguments | Description |
+| --- | --- | --- |
+| `Stopped` | none | Fires when playback stops. |
+| `Ended` | none | Fires when a non-looped clip reaches its end. |
+| `DidLoop` | none | Fires each time a looped clip restarts. |
+| `KeyframeReached` | `name` | Fires when a keyframe is reached. |
+
+`GetMarkerReachedSignal()` creates a signal the first time you ask for a marker and reuses it afterward.
+
+## Notes
+
+- A track becomes invalid when its animator is destroyed or the rig is released; calls then do nothing or raise an error.
+- `Priority` and `TimePosition` can be assigned directly.
+- `Speed` is read-only; use `AdjustSpeed()`.
+- Parameters are stored per track and accept any value.
+- `GetParameterDefaults()` currently returns an empty table, so don't rely on it for real defaults.
+
+## See also
+
+- `Animator` and `AnimationController` for creating tracks.
+- `Animation` for clip selection.

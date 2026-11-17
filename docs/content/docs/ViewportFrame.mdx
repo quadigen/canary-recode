@@ -1,0 +1,60 @@
+---
+title: ViewportFrame
+description: Render a 3D scene inside a GUI element.
+---
+
+`ViewportFrame` draws a small 3D world into a GUI rectangle. It has its own camera, lighting, and image tint, so it's the usual choice for character previews and item viewers.
+
+## Getting started
+
+```lua
+local viewport = Instance.new("ViewportFrame")
+viewport.Size = UDim2.fromOffset(320, 320)
+viewport.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+viewport.Parent = screenGui
+
+local model = character:Clone()
+model.Parent = viewport
+
+local camera = Instance.new("Camera")
+camera.CFrame = CFrame.new(0, 2, -8)
+viewport.CurrentCamera = camera
+camera.Parent = viewport
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `CurrentCamera` | `Camera?` | Read/write | `nil` | Camera used to render the scene. |
+| `Ambient` | `Color3` | Read/write | `(0.5, 0.5, 0.5)` | Ambient light color. |
+| `LightColor` | `Color3` | Read/write | White | Directional light color. |
+| `LightDirection` | `Vector3` | Read/write | `(-1, -1, -1)` | Direction of the light. |
+| `ImageColor3` | `Color3` | Read/write | White | Tint applied to the rendered image. |
+| `ImageTransparency` | `number` | Read/write | `0` | Transparency, clamped to `0` through `1`. |
+| `ResolutionScale` | `number` | Read/write | `1` | Render scale, clamped to `0.25` through `2`. |
+| `UpdateRate` | `number` | Read/write | `60` | Target updates per second, clamped to `0` through `240`. |
+| `AdaptiveQuality` | `boolean` | Read/write | `true` | Lower quality automatically when idle. |
+| `ContinuousUpdate` | `boolean` | Read/write | `false` | Render every frame instead of on change. |
+| `Shadows` | `boolean` | Read/write | `true` | Render shadows. |
+| `PostProcessing` | `boolean` | Read/write | `true` | Apply post-processing effects. |
+
+## Camera handling
+
+`CurrentCamera` must be a `Camera` or `nil`; assigning another instance type raises an error. The camera doesn't need to be parented inside the frame, but keeping it there makes the setup easy to clone.
+
+The camera's `FieldOfView`, `CFrame`, and projection settings apply exactly as they do in the main view.
+
+## Notes
+
+- `ImageColor3` and `ImageTransparency` tint the final image without re-rendering the 3D scene.
+- `ResolutionScale` below `1` renders fewer pixels and can improve performance.
+- `AdaptiveQuality` reduces work when the frame hasn't changed.
+- Children render in the frame's own world, not the workspace.
+- Inherits all `GuiObject` members.
+
+## See also
+
+- `Camera` for the view settings.
+- `ScreenGui` for the containing UI.
+- `SurfaceGui` for 3D surfaces instead of a GUI rectangle.

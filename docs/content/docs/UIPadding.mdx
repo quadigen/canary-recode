@@ -1,0 +1,40 @@
+---
+title: UIPadding
+description: Inset the content area of a GUI object.
+---
+
+`UIPadding` is a UI modifier that adds space between its parent's edges and the parent's children. It's the standard way to inset a list or grid from the frame border.
+
+## Getting started
+
+```lua
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 12)
+padding.PaddingBottom = UDim.new(0, 12)
+padding.PaddingLeft = UDim.new(0, 16)
+padding.PaddingRight = UDim.new(0, 16)
+padding.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `PaddingLeft` | `UDim` | Read/write | `0` | Left inset. |
+| `PaddingRight` | `UDim` | Read/write | `0` | Right inset. |
+| `PaddingTop` | `UDim` | Read/write | `0` | Top inset. |
+| `PaddingBottom` | `UDim` | Read/write | `0` | Bottom inset. |
+
+Each inset is a `UDim`, so it can be a fixed pixel amount or a fraction of the parent size.
+
+## Notes
+
+- Changing any inset marks the GUI layout dirty, so the change applies on the next layout pass.
+- Padding affects layout containers such as `UIListLayout` and `UIGridLayout`, not manual child positions.
+- Modifiers apply to the parent GUI object; the modifier itself has no visual output.
+- Cloning copies all four insets.
+
+## See also
+
+- `UIListLayout` and `UIGridLayout` for arranging the inset content.
+- `GuiObject` for the parent container.

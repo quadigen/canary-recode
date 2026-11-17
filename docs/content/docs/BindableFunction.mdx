@@ -1,0 +1,56 @@
+---
+title: BindableFunction
+description: An instance-backed call point for scripts in the same runtime.
+---
+
+`BindableFunction` looks like a function object: one script invokes it and another responds. In the current implementation it behaves like an event rather than a true function, because `Invoke()` doesn't return the handler's result.
+
+## Getting started
+
+```lua
+local request = Instance.new("BindableFunction")
+request.Name = "Rebuild"
+request.Parent = game:GetService("ReplicatedStorage")
+
+request.Event:Connect(function(reason)
+    print("Rebuild requested:", reason)
+end)
+
+request:Invoke("content changed")
+```
+
+## Members
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Event` | signal | Fires for each call to `Invoke()`. |
+| `Invoke(...)` | method | Sends arguments to `Event` listeners. Returns nothing. |
+| `OnInvoke` | `nil` | Placeholder property; always reads as `nil`. |
+| `Name` | `string` | An extra stored name alongside the instance name. |
+
+`Invoke()` passes every argument after the method receiver to the listeners and returns no values. It doesn't block waiting for a handler.
+
+```lua
+request:Invoke("wave", 4)
+```
+
+The `Name` property here isn't the instance name. It's a separate stored string that starts empty and is copied on clone.
+
+## Comparison with BindableEvent
+
+`BindableFunction` and `BindableEvent` have the same delivery model: same-runtime, fire and forget. The difference is naming and the extra `Name` field, not capability.
+
+If you need a return value, call a `ModuleScript` function or return data through a table the caller can read.
+
+## Notes
+
+- Cross-runtime calls aren't supported. A client invoking a server-side bindable function does nothing.
+- `OnInvoke` can't be assigned; it reads as `nil` and isn't used by dispatch.
+- Cloning copies `Name` but not connections.
+- Listeners run synchronously on the caller's thread, so long handlers delay the caller even though no value comes back.
+- Security capabilities are those of the invoking thread, not the thread that connected.
+
+## See also
+
+- `BindableEvent`, the event-shaped variant.
+- `RemoteFunction`, requests that cross the server/client boundary.

@@ -1,0 +1,35 @@
+---
+title: UIMotionBlur
+description: Apply directional blur to a GUI element.
+---
+
+`UIMotionBlur` blurs its parent along an angle. It's a stylistic effect for speed lines and transitions.
+
+## Getting started
+
+```lua
+local blur = Instance.new("UIMotionBlur")
+blur.Angle = 15
+blur.Length = UDim.new(0, 20)
+blur.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the blur renders. |
+| `Angle` | `number` | Read/write | `0` | Blur direction in degrees. |
+| `Length` | `UDim` | Read/write | `UDim.new(0, 12)` | Blur distance. |
+
+## Notes
+
+- `Length` uses `UDim`, so it can scale with the parent or use a fixed pixel amount.
+- `Angle` accepts any number and wraps visually.
+- The effect applies to the parent GUI object.
+- Cloning copies all three settings.
+
+## See also
+
+- `UIBackdrop` for blurring what's behind the element.
+- `UIMagnifier` for a zoomed view.

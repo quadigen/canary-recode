@@ -43,20 +43,21 @@ PluginButton_Kind :: enum {
 }
 
 PluginButton :: struct {
-	plugin:        ^Plugin,
-	id:            i64,
-	kind:          PluginButton_Kind,
-	toolbar:       ^PluginToolbar,
-	action_id:     string,
-	text:          string,
-	tooltip:       string,
-	status_tip:    string,
-	icon:          string,
-	enabled:       bool,
-	allow_binding: bool,
-	active:        bool,
-	triggered:     ^signals.Signal,
-	clicked:       ^signals.Signal,
+	plugin:                         ^Plugin,
+	id:                             i64,
+	kind:                           PluginButton_Kind,
+	toolbar:                        ^PluginToolbar,
+	action_id:                      string,
+	text:                           string,
+	tooltip:                        string,
+	status_tip:                     string,
+	icon:                           string,
+	enabled:                        bool,
+	allow_binding:                  bool,
+	active:                         bool,
+	clickable_when_viewport_hidden: bool,
+	triggered:                      ^signals.Signal,
+	clicked:                        ^signals.Signal,
 }
 
 PluginAction :: struct {
@@ -96,14 +97,15 @@ DockWidgetPluginGui_Class := classes.Class_Info {
 }
 
 DockWidgetPluginGui :: struct {
-	using frame:   classes.Frame,
-	plugin:        ^Plugin,
-	id:            i64,
-	title:         string,
-	title_bar:     bool,
-	bind_to_close: bool,
-	focused:       bool,
-	closed:        bool,
+	using frame:        classes.Frame,
+	plugin:             ^Plugin,
+	id:                 i64,
+	title:              string,
+	z_index_behavior:   i64,
+	title_bar:          bool,
+	close_callback_ref: i32,
+	focused:            bool,
+	closed:             bool,
 }
 
 PluginAction_Class := classes.Class_Info {
@@ -1274,7 +1276,7 @@ Plugin_Send_Dock_Visible :: proc(studio: ^Studio, L: ^vm.State, dock: ^DockWidge
 }
 
 Plugin_Send_Button_Added :: proc(studio: ^Studio, L: ^vm.State, button: ^PluginButton) {
-	vm.NewTable(L, 0, 7)
+	vm.NewTable(L, 0, 8)
 
 	vm.PushNumber(L, f64(button.id))
 	vm.SetField(L, -2, "Id")
@@ -1297,6 +1299,9 @@ Plugin_Send_Button_Added :: proc(studio: ^Studio, L: ^vm.State, button: ^PluginB
 	vm.PushBoolean(L, button.active)
 	vm.SetField(L, -2, "Active")
 
+	vm.PushBoolean(L, button.clickable_when_viewport_hidden)
+	vm.SetField(L, -2, "ClickableWhenViewportHidden")
+
 	ref := vm.RetainValue(L)
 	plugin_pipe_send(studio, L, "PluginToolbarButtonAdded", ref)
 }
@@ -1315,7 +1320,7 @@ Plugin_Send_Button_Updated :: proc(
 	button: ^PluginButton,
 	old_text: string,
 ) {
-	vm.NewTable(L, 0, 8)
+	vm.NewTable(L, 0, 9)
 
 	vm.PushNumber(L, f64(button.id))
 	vm.SetField(L, -2, "Id")
@@ -1340,6 +1345,9 @@ Plugin_Send_Button_Updated :: proc(
 
 	vm.PushBoolean(L, button.active)
 	vm.SetField(L, -2, "Active")
+
+	vm.PushBoolean(L, button.clickable_when_viewport_hidden)
+	vm.SetField(L, -2, "ClickableWhenViewportHidden")
 
 	ref := vm.RetainValue(L)
 	plugin_pipe_send(studio, L, "PluginToolbarButtonUpdated", ref)
@@ -1597,6 +1605,10 @@ plugin_toolbar_button_get :: proc(
 	key: string,
 ) -> bool {
 	button := cast(^PluginToolbarButton)object
+	if key == "ClickableWhenViewportHidden" {
+		vm.PushBoolean(L, button.button.clickable_when_viewport_hidden)
+		return true
+	}
 	return plugin_button_get(L, &button.button, key)
 }
 
@@ -1609,6 +1621,13 @@ plugin_toolbar_button_set :: proc(
 	value_index: int,
 ) -> bool {
 	button := cast(^PluginToolbarButton)object
+	if key == "ClickableWhenViewportHidden" {
+		button.button.clickable_when_viewport_hidden = vm.ArgBoolean(L, value_index)
+		if studio := plugin_studio(button.button.plugin); studio != nil {
+			Plugin_Send_Button_Updated(studio, L, &button.button, button.button.text)
+		}
+		return true
+	}
 	return plugin_button_set(L, &button.button, key, value_index)
 }
 
@@ -1887,8 +1906,10 @@ plugin_dock_construct :: proc(
 ) -> ^classes.Object {
 	dock := new(DockWidgetPluginGui)
 	dock^ = DockWidgetPluginGui {
-		frame     = classes.Frame_Init(),
-		title_bar = true,
+		frame              = classes.Frame_Init(),
+		title_bar          = true,
+		z_index_behavior   = 1,
+		close_callback_ref = -1,
 	}
 	dock.frame.object.class = &DockWidgetPluginGui_Class
 	dock.frame.object.name = "DockWidgetPluginGui"
@@ -1913,6 +1934,15 @@ plugin_dock_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 			}
 		}
 	}
+	if dock.close_callback_ref > 0 &&
+	   dock.plugin != nil &&
+	   dock.plugin.data_model != nil &&
+	   dock.plugin.data_model.registry != nil &&
+	   dock.plugin.data_model.registry.vm_state != nil &&
+	   dock.plugin.data_model.registry.vm_state.L != nil {
+		vm.ReleaseValue(dock.plugin.data_model.registry.vm_state.L, dock.close_callback_ref)
+		dock.close_callback_ref = -1
+	}
 	if len(dock.title) > 0 {
 		delete(dock.title)
 	}
@@ -1932,10 +1962,16 @@ plugin_dock_get :: proc(
 	switch key {
 	case "Title":
 		vm.PushString(L, dock.title)
+	case "ZIndexBehavior":
+		if enum_registry != nil {
+			_ = enums.Push_Item_By_Value(L, enum_registry, "ZIndexBehavior", dock.z_index_behavior)
+		} else {
+			vm.PushNil(L)
+		}
 	case "TitleBar":
 		vm.PushBoolean(L, dock.title_bar)
 	case "BindToClose":
-		vm.PushBoolean(L, dock.bind_to_close)
+		vm.PushUserdataMethod(L, key)
 	case "IsFocused":
 		vm.PushBoolean(L, dock.focused)
 	case "Enabled":
@@ -1960,6 +1996,27 @@ plugin_dock_set :: proc(
 	studio := plugin_studio(dock.plugin)
 
 	switch key {
+	case "Name":
+		classes.Set_Name(object, vm.ArgString(L, value_index))
+		return true
+	case "ZIndexBehavior":
+		if enum_registry == nil {
+			_ = vm.RaiseError(L, "ZIndexBehavior enum registry is unavailable")
+			return true
+		}
+		item := enums.Arg_Item(L, value_index, enum_registry, "ZIndexBehavior")
+		if item == nil {
+			return true
+		}
+		switch item.name {
+		case "Global":
+			dock.z_index_behavior = 0
+		case "Sibling":
+			dock.z_index_behavior = 1
+		case:
+			_ = vm.RaiseError(L, "unsupported ZIndexBehavior")
+		}
+		return true
 	case "Title":
 		if len(dock.title) > 0 {
 			delete(dock.title)
@@ -1971,9 +2028,6 @@ plugin_dock_set :: proc(
 		return true
 	case "TitleBar":
 		dock.title_bar = vm.ArgBoolean(L, value_index)
-		return true
-	case "BindToClose":
-		dock.bind_to_close = vm.ArgBoolean(L, value_index)
 		return true
 	case "Enabled":
 		dock.frame.gui_object.visible = vm.ArgBoolean(L, value_index)
@@ -1999,6 +2053,20 @@ plugin_dock_namecall :: proc(
 	dock := cast(^DockWidgetPluginGui)object
 
 	switch method {
+	case "BindToClose":
+		if !vm.IsNoneOrNil(L, 2) && vm.TypeOf(L, 2) != .Function {
+			return vm.RaiseError(L, "BindToClose expects a function or nil"), true
+		}
+		if dock.close_callback_ref > 0 {
+			vm.ReleaseValue(L, dock.close_callback_ref)
+			dock.close_callback_ref = -1
+		}
+		if !vm.IsNoneOrNil(L, 2) {
+			vm.PushValue(L, 2)
+			dock.close_callback_ref = vm.RetainValue(L)
+			vm.Pop(L)
+		}
+		return 0, true
 	case "Close":
 		dock.closed = true
 		dock.frame.gui_object.visible = false
@@ -2483,6 +2551,14 @@ Plugin_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obje
 	}
 	for dock in service.dock_widgets {
 		if dock != nil {
+			if dock.close_callback_ref > 0 &&
+			   service.data_model != nil &&
+			   service.data_model.registry != nil &&
+			   service.data_model.registry.vm_state != nil &&
+			   service.data_model.registry.vm_state.L != nil {
+				vm.ReleaseValue(service.data_model.registry.vm_state.L, dock.close_callback_ref)
+				dock.close_callback_ref = -1
+			}
 			dock.plugin = nil
 		}
 	}

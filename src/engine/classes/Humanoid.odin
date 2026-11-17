@@ -12,15 +12,16 @@ Humanoid_Class := Class_Info {
 }
 
 Humanoid :: struct {
-	using object:   Object,
-	health:         f32,
-	max_health:     f32,
-	health_changed: ^signals.Signal,
-	walk_to_target: datatypes.Vector3,
-	walk_to_active: bool,
-	stuck_steps:    u32,
-	walk_last_x:    f32,
-	walk_last_z:    f32,
+	using object:     Object,
+	health:           f32,
+	max_health:       f32,
+	health_changed:   ^signals.Signal,
+	walk_to_target:   datatypes.Vector3,
+	walk_to_active:   bool,
+	stuck_steps:      u32,
+	walk_last_x:      f32,
+	animation_played: ^signals.Signal,
+	walk_last_z:      f32,
 }
 
 humanoid_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -28,6 +29,7 @@ humanoid_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^O
 	h.object = Object_Init(&Humanoid_Class, "Humanoid")
 	h.health = 100
 	h.max_health = 100
+
 	return &h.object
 }
 

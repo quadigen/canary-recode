@@ -1,0 +1,132 @@
+---
+title: Miscellaneous
+description: Axes, Faces, UniqueId, Content, DateTime, Random, and SecurityCapabilities.
+---
+
+## Axes
+
+`Axes.new(...)` builds a set from up to three `Enum.Axis` values.
+
+```lua
+local flat = Axes.new(Enum.Axis.X, Enum.Axis.Z)
+print(flat.Y) -- false
+```
+
+| Constructor or constant | Description |
+| --- | --- |
+| `Axes.new(axis...)` | Enables the axes you pass. |
+| `Axes.none` | No axes. |
+| `Axes.all` | Every axis. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `X` | `boolean` | X axis enabled. |
+| `Y` | `boolean` | Y axis enabled. |
+| `Z` | `boolean` | Z axis enabled. |
+
+Equality compares all three flags.
+
+## Faces
+
+`Faces.new(...)` builds a set from up to six `Enum.NormalId` values.
+
+| Constructor or constant | Description |
+| --- | --- |
+| `Faces.new(normalId...)` | Enables the faces you pass. |
+| `Faces.none` | No faces. |
+| `Faces.all` | Every face. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Top`, `Bottom`, `Left`, `Right`, `Front`, `Back` | `boolean` | Whether that face is enabled. |
+
+## UniqueId
+
+`UniqueId.new()` generates an identifier.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Random` | `number` | Random component. |
+| `Time` | `number` | Time component. |
+| `Index` | `number` | Counter component. |
+
+Equality compares all components. `tostring()` returns the compact identifier.
+
+## Content
+
+`Content` points at an asset URI or an instance. Properties such as image and sound sources accept it.
+
+| Constructor | Description |
+| --- | --- |
+| `Content.fromUri(uri)` | Reference to an asset URI. |
+| `Content.fromObject(instance)` | Reference to an instance. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Uri` | `string` | URI when the content is URI-backed, otherwise an empty string. |
+| `IsObject` | `boolean` | Whether the content points at an object. |
+| `IsUri` | `boolean` | Whether the content is URI-backed. |
+| `ObjectId` | `number` | Object identifier when object-backed, otherwise `0`. |
+| `GetObject()` | `Instance?` | The referenced instance, or `nil`. |
+
+## DateTime
+
+`DateTime` stores a point in time.
+
+```lua
+local now = DateTime.now()
+print(now.UnixTimestamp)
+```
+
+| Constructor | Description |
+| --- | --- |
+| `DateTime.now()` | Current time. |
+| `DateTime.fromUnixTimestamp(seconds)` | From Unix seconds. |
+| `DateTime.fromUnixTimestampMillis(milliseconds)` | From Unix milliseconds. |
+| `DateTime.fromIsoDate(iso)` | Parses an ISO 8601 string. Returns `nil` when the whole string is not a valid date. |
+
+| Member or method | Type | Description |
+| --- | --- | --- |
+| `UnixTimestamp` | `number` | Seconds since the Unix epoch. |
+| `UnixTimestampMillis` | `number` | Milliseconds since the Unix epoch. |
+| `FormatLocalTime(format, locale)` | `string` | Formats the time in local time. Supports `format = "LTS"` with `locale = "en-US"`; other values raise an error. Available on native builds, not on the web target. |
+
+## Random
+
+`Random.new(seed?)` creates a random number generator. Without a seed it uses a system-generated one.
+
+```lua
+local rng = Random.new(1234)
+print(rng:NextInteger(1, 6))
+```
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Clone()` | `Random` | Copy with the same state. |
+| `NextInteger(min, max)` | `number` | Integer between `min` and `max`. |
+| `NextNumber()` | `number` | Number from `0` to `1`. |
+| `NextNumber(min, max)` | `number` | Number between `min` and `max`. |
+| `NextUnitVector()` | `Vector3` | Unit vector with a random direction. |
+| `Shuffle(table)` | | Shuffles the array part in place. |
+
+`NextNumber` accepts either no arguments or exactly two. `Shuffle` raises an error if the table contains `nil`.
+
+## SecurityCapabilities
+
+A set of capabilities used by the sandbox and extension APIs.
+
+| Constructor | Description |
+| --- | --- |
+| `SecurityCapabilities.new(capability...)` | Builds a set from `Enum.SecurityCapability` values or other sets. |
+| `SecurityCapabilities.fromCurrent()` | Copies the capabilities of the current thread. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Add(capability...)` | `SecurityCapabilities` | New set with the capabilities added. |
+| `Remove(capability...)` | `SecurityCapabilities` | New set with the capabilities removed. |
+| `Contains(capability...)` | `boolean` | Whether every given capability is present. |
+
+## See also
+
+- [Datatypes](/docs/datatypes) for the full list.
+- [Script environment](/docs/guides/script-environment) for the globals that expose these types.

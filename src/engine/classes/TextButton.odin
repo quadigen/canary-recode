@@ -35,6 +35,7 @@ TextButton :: struct {
 
 	text_wrapped: bool,
 	text_scaled:  bool,
+	rich_text:    bool,
 
 	line_height:  f32,
 	text_padding: f32,
@@ -126,6 +127,7 @@ TextButton_to_text_label :: proc(
 
 		text_wrapped = button.text_wrapped,
 		text_scaled  = button.text_scaled,
+		rich_text    = button.rich_text,
 
 		line_height  = button.line_height,
 		text_padding = button.text_padding,
@@ -158,6 +160,7 @@ TextButton_sync_text_label :: proc(
 
 	button.text_wrapped = label.text_wrapped
 	button.text_scaled = label.text_scaled
+	button.rich_text = label.rich_text
 
 	button.line_height = label.line_height
 	button.text_padding = label.text_padding
@@ -180,6 +183,7 @@ TextButton_is_text_property :: proc(
 	     "TextStrokeThickness",
 	     "TextWrapped",
 	     "TextScaled",
+	     "RichText",
 	     "TextXAlignment",
 	     "TextYAlignment",
 	     "LineHeight",
@@ -437,6 +441,7 @@ Register_TextButton :: proc(
 			"TextStrokeTransparency",
 			"TextStrokeThickness",
 			"TextWrapped",
+			"RichText",
 			"TextScaled",
 			"TextXAlignment",
 			"TextYAlignment",

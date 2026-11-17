@@ -1,0 +1,40 @@
+---
+title: LineHandleAdornment
+description: Draw a straight line from a part.
+---
+
+`LineHandleAdornment` draws a line starting at its target part, using `Length`, `Thickness`, and `CFrame` to control the segment.
+
+## Getting started
+
+```lua
+local line = Instance.new("LineHandleAdornment")
+line.Adornee = targetPart
+line.Length = 12
+line.Thickness = 0.1
+line.CFrame = CFrame.new(0, 2, 0)
+line.Color3 = Color3.fromRGB(255, 90, 90)
+line.Parent = targetPart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | `nil` | Part that provides the reference transform. |
+| `Color3` | `Color3` | Read/write | Green | Line color. |
+| `Length` | `number` | Read/write | `1` | Line length in studs. |
+| `Thickness` | `number` | Read/write | `0.05` | Line thickness in studs. |
+| `CFrame` | `CFrame` | Read/write | Identity | Placement and direction relative to the target part. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- If `Adornee` is `nil`, the parent is used, and the parent must be a `Part`.
+- The line starts at the transformed origin and extends along the transform's look direction.
+- Cloning copies the target, color, length, thickness, and transform.
+
+## See also
+
+- `CylinderHandleAdornment` for a thicker volume.
+- `Attachment` for a visible axis marker.

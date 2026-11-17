@@ -1,5 +1,4 @@
 package classes
-
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -8,37 +7,34 @@ import vm "../vm"
 import "core:fmt"
 import "core:math"
 import "core:strings"
-
 UIShader_Class := Class_Info {
 	name   = "UIShader",
 	parent = &Instance_Class,
 }
-
 UI_SHADER_IDENTITY_TRANSFORM :: [4]f32{1, 1, 0, 0}
-
 UIShader :: struct {
-	using object:    Object,
-	enabled:         bool,
-	source:          string,
-	sample_radius:   f32,
+	using object:          Object,
+	enabled:               bool,
+	source:                string,
+	sample_radius:         f32,
+	resolution_scale:      f32,
 	full_content_sampling: bool,
-	last_error:      string,
-	compiled:        ^kineffi.KineSkiaRuntimeShader,
-	samples_content: bool,
-	source_dirty:    bool,
-	uniforms_dirty:  bool,
-	uniforms:        [dynamic]Runtime_Shader_Uniform,
-	gui_transform:   [4]f32,
+	last_error:            string,
+	compiled:              ^kineffi.KineSkiaRuntimeShader,
+	samples_content:       bool,
+	source_dirty:          bool,
+	uniforms_dirty:        bool,
+	uniforms:              [dynamic]Runtime_Shader_Uniform,
+	gui_transform:         [4]f32,
 }
-
 UIShader_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	shader := new(UIShader)
 	shader.object = Object_Init(&UIShader_Class, "UIShader")
 	shader.enabled = true
+	shader.resolution_scale = 1.0
 	shader.gui_transform = UI_SHADER_IDENTITY_TRANSFORM
 	return &shader.object
 }
-
 UIShader_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	shader := cast(^UIShader)object
 	if shader.compiled != nil {
@@ -51,7 +47,6 @@ UIShader_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	Object_Destroy(object)
 	free(shader)
 }
-
 UIShader_get :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -67,6 +62,9 @@ UIShader_get :: proc(
 		vm.PushString(L, shader.source)
 	case "SampleRadius":
 		vm.PushNumber(L, f64(shader.sample_radius))
+	case "ResolutionScale":
+		vm.PushNumber(L, f64(shader.resolution_scale))
+
 	case "FullContentSampling":
 		vm.PushBoolean(L, shader.full_content_sampling)
 	case "Compiled":
@@ -78,7 +76,6 @@ UIShader_get :: proc(
 	}
 	return true
 }
-
 UIShader_set :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -115,6 +112,16 @@ UIShader_set :: proc(
 			return true
 		}
 		shader.sample_radius = f32(clamp(radius, 0, 128))
+	case "ResolutionScale":
+		scale := vm.ArgNumber(L, value_index)
+		if math.is_nan(scale) || math.is_inf(scale) {
+			_ = vm.RaiseError(L, "ResolutionScale must be a finite number between 1 and 4")
+			return true
+		}
+		shader.resolution_scale = f32(clamp(scale, 1.0, 4.0))
+		gui_invalidate_draw(object)
+		surfacegui_mark_dirty_for(object)
+
 	case "FullContentSampling":
 		shader.full_content_sampling = vm.ArgBoolean(L, value_index)
 	case "Compiled", "LastError":
@@ -124,7 +131,6 @@ UIShader_set :: proc(
 	}
 	return true
 }
-
 UIShader_namecall :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -148,7 +154,11 @@ UIShader_namecall :: proc(
 		transform := UI_SHADER_IDENTITY_TRANSFORM
 		if !vm.IsNoneOrNil(L, 3) {
 			if !vm.IsTable(L, 3) || vm.RawLen(L, 3) != 4 {
-				return vm.RaiseError(L, "guiTransform requires {scaleX, scaleY, offsetX, offsetY}"), true
+				return vm.RaiseError(
+						L,
+						"guiTransform requires {scaleX, scaleY, offsetX, offsetY}",
+					),
+					true
 			}
 			for &value, i in transform {
 				vm.RawGetIndex(L, 3, i + 1)
@@ -179,12 +189,12 @@ UIShader_namecall :: proc(
 	}
 	return Shader_Uniform_Namecall(L, &shader.uniforms, method)
 }
-
 UIShader_clone :: proc(source, destination: ^Object) {
 	src, dst := cast(^UIShader)source, cast(^UIShader)destination
 	dst.enabled = src.enabled
 	dst.source = strings.clone(src.source)
 	dst.sample_radius = src.sample_radius
+	dst.resolution_scale = src.resolution_scale
 	dst.full_content_sampling = src.full_content_sampling
 	dst.gui_transform = src.gui_transform
 	dst.source_dirty = true
@@ -194,7 +204,6 @@ UIShader_clone :: proc(source, destination: ^Object) {
 		append(&dst.uniforms, copy)
 	}
 }
-
 UIShader_Find :: proc(object: ^Object) -> ^UIShader {
 	for child in object.children {
 		if child != nil && !child.destroyed && child.class == &UIShader_Class {
@@ -206,7 +215,6 @@ UIShader_Find :: proc(object: ^Object) -> ^UIShader {
 	}
 	return nil
 }
-
 UIShader_Prepare :: proc(shader: ^UIShader) -> bool {
 	if shader.source_dirty {
 		shader.source_dirty = false
@@ -231,7 +239,10 @@ UIShader_Prepare :: proc(shader: ^UIShader) -> bool {
 		shader.last_error = ""
 		// SkSL can also read the transform when the source declares it.
 		_ = kineffi.Kine_Skia_RuntimeShader_SetUniform(
-			shader.compiled, "guiTransform", &shader.gui_transform[0], 4,
+			shader.compiled,
+			"guiTransform",
+			&shader.gui_transform[0],
+			4,
 		)
 		for &uniform in shader.uniforms {
 			name := strings.clone_to_cstring(uniform.name)
@@ -252,18 +263,24 @@ UIShader_Prepare :: proc(shader: ^UIShader) -> bool {
 	}
 	return true
 }
-
 // Compose in the parent's coordinate space, around the layout rectangle's origin.
-UIShader_Push_Transform :: proc(shader: ^UIShader, surface: ^kineffi.KineSkiaSurface, rect: guilib.Rect) -> bool {
+UIShader_Push_Transform :: proc(
+	shader: ^UIShader,
+	surface: ^kineffi.KineSkiaSurface,
+	rect: guilib.Rect,
+) -> bool {
 	if shader.gui_transform == UI_SHADER_IDENTITY_TRANSFORM {return false}
-	sx, sy, dx, dy := shader.gui_transform[0], shader.gui_transform[1], shader.gui_transform[2], shader.gui_transform[3]
+	sx, sy, dx, dy :=
+		shader.gui_transform[0],
+		shader.gui_transform[1],
+		shader.gui_transform[2],
+		shader.gui_transform[3]
 	guilib.save(surface)
 	guilib.translate(surface, rect.x + dx, rect.y + dy)
 	guilib.scale(surface, sx, sy)
 	guilib.translate(surface, -rect.x, -rect.y)
 	return true
 }
-
 UIShader_Apply :: proc(
 	shader: ^UIShader,
 	ctx: ^Class_Step_Context,
@@ -280,9 +297,15 @@ UIShader_Apply :: proc(
 			if shader.full_content_sampling {
 				// The shader may sample any source pixel from any destination pixel.
 				sx, sy := abs(shader.gui_transform[0]), abs(shader.gui_transform[1])
-				sample_radius = max(sample_radius, rect.width, rect.height, rect.width * sx, rect.height * sy)
+				sample_radius = max(
+					sample_radius,
+					rect.width,
+					rect.height,
+					rect.width * sx,
+					rect.height * sy,
+				)
 			}
-			return kineffi.Kine_Skia_Surface_BeginUIShader(
+			return kineffi.Kine_Skia_Surface_BeginUIShaderScaled(
 				surface,
 				shader.compiled,
 				rect.x,
@@ -291,9 +314,10 @@ UIShader_Apply :: proc(
 				rect.height,
 				&color[0],
 				sample_radius,
+				shader.resolution_scale,
 			)
 		}
-		return kineffi.Kine_Skia_Surface_DrawUIShader(
+		return kineffi.Kine_Skia_Surface_DrawUIShaderScaled(
 			surface,
 			shader.compiled,
 			rect.x,
@@ -301,10 +325,10 @@ UIShader_Apply :: proc(
 			rect.width,
 			rect.height,
 			&color[0],
+			shader.resolution_scale,
 		)
 	}
 }
-
 Register_UIShader :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -315,7 +339,15 @@ Register_UIShader :: proc(registry: ^Registry) {
 		set = UIShader_set,
 		clone = UIShader_clone,
 		namecall = UIShader_namecall,
-		properties = []string{"Enabled", "Source", "SampleRadius", "FullContentSampling", "Compiled", "LastError"},
+		properties = []string {
+			"Enabled",
+			"Source",
+			"SampleRadius",
+			"ResolutionScale",
+			"FullContentSampling",
+			"Compiled",
+			"LastError",
+		},
 		methods = []string{"SetUniform", "GetUniform"},
 	)
 }

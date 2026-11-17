@@ -1,0 +1,95 @@
+---
+title: RemoteFunction
+description: Call across the client-server boundary and wait for a result.
+---
+
+`RemoteFunction` is the request and response counterpart to `RemoteEvent`. A client can invoke the server, or the server can invoke a client, and the caller waits for the handler's return values.
+
+## Getting started
+
+```lua
+-- Server: create the remote and assign the handler.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local getScore = Instance.new("RemoteFunction")
+getScore.Name = "GetScore"
+getScore.Parent = ReplicatedStorage
+
+getScore.OnServerInvoke = function(player, round)
+    return round * 10
+end
+```
+
+```lua
+-- Client: call it and wait for the answer.
+local remote = game:GetService("ReplicatedStorage"):WaitForChild("GetScore")
+local score = remote:InvokeServer(4)
+print(score) -- 40
+```
+
+## Members
+
+| Member | Type | Access | Description |
+| --- | --- | --- | --- |
+| `OnServerInvoke` | `function?` | Read/write | Handler for calls arriving on the server. |
+| `OnClientInvoke` | `function?` | Read/write | Handler for calls arriving on a client. |
+| `InvokeServer(...)` | method | | Client calls the server and yields for the result. |
+| `InvokeClient(player, ...)` | method | | Server calls one client and yields for the result. |
+| `InvokeClients(...)` | method | | Server calls every client. |
+
+Reading an unassigned slot returns `nil`. Assigning `nil` clears the handler; assigning anything that isn't a function leaves the previous handler in place.
+
+## Handler arguments and returns
+
+On the server, `OnServerInvoke` receives the calling `Player` first, then the arguments the client sent. Whatever the handler returns is delivered back to the caller.
+
+```lua
+remote.OnServerInvoke = function(player, itemId, amount)
+    if type(itemId) ~= "string" or type(amount) ~= "number" then
+        return false, "invalid arguments"
+    end
+
+    return true, amount * 2
+end
+```
+
+On a client, `OnClientInvoke` receives only the arguments the server sent, with no player argument.
+
+## Errors and timeouts
+
+The caller yields until a result arrives. If the remote handler raises an error, the caller gets `nil` plus a message string instead of an exception. The same shape comes back when there's no handler on the target or when the call times out.
+
+```lua
+local ok, message = remote:InvokeServer()
+if ok == nil then
+    warn("call failed:", message)
+end
+```
+
+Calls time out after about 10 seconds. Build your protocol so a slow handler doesn't leave the caller hanging.
+
+## Which side can call
+
+| Call | Client runtime | Server runtime |
+| --- | --- | --- |
+| `InvokeServer(...)` | Sends and yields. | Raises an error. |
+| `InvokeClient(player, ...)` | Raises an error. | Sends and yields. |
+| `InvokeClients(...)` | Raises an error. | Sends to all clients and yields. |
+
+`InvokeClient()` expects a `Player` as its first argument and raises an error otherwise. `InvokeClients()` raises an error when no client is connected.
+
+When the game isn't running as a networked session, calls loop back into the local handler instead of crossing a connection.
+
+## Notes
+
+- Only one handler per slot. Assigning a second function replaces the first.
+- Assign handlers before any call can arrive, or early calls will find `nil`.
+- Treat arguments from clients as untrusted. Validate types and ranges before using them.
+- A yielding call blocks that thread. Don't call a remote from inside a hot loop every frame.
+- Cloning a remote function copies neither handler.
+
+## See also
+
+- `RemoteEvent` for one-way messages.
+- `BindableFunction` for same-runtime calls.
+- `ReplicatedStorage` for where shared remotes usually live.

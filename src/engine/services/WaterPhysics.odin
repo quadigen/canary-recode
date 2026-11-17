@@ -3,6 +3,7 @@ package services
 import k "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
+import jolt "../physics"
 import "core:math"
 
 Water_Parameters :: proc(model: ^DataModel) -> k.KineFilamentWaterParams {
@@ -152,11 +153,11 @@ Water_Submersion :: proc(
 }
 
 
-Water_Buoyant_Velocity :: proc(current, water_velocity, fraction, gravity, dt: f32) -> f32 {
+Water_Buoyant_Velocity :: proc(current, water_velocity, fraction, gravity, dt: f32, buoyancy: f32 = 1.6) -> f32 {
 	return(
 		water_velocity +
 		(current - water_velocity) * math.exp(-4 * fraction * dt) +
-		gravity * 1.6 * fraction * dt \
+		gravity * buoyancy * fraction * dt \
 	)
 }
 
@@ -164,6 +165,7 @@ Physics_Apply_Water :: proc(physics: ^Physics, dt: f32) {
 	water := Water_Context_Create(physics)
 	defer delete(water.parts)
 	if len(water.parts) == 0 && (water.terrain == nil || len(water.terrain.chunks) == 0) {return}
+	water_density := jolt.Material_Get_Properties(.Water).density
 	for body in physics.bodies {
 		part := cast(^classes.Part)body.object
 		if part == nil ||
@@ -200,7 +202,8 @@ Physics_Apply_Water :: proc(physics: ^Physics, dt: f32) {
 			body.body_id,
 			&velocity,
 		)
-		velocity.y = Water_Buoyant_Velocity(velocity.y, wave_speed, fraction, physics.gravity, dt)
+		buoyancy := water_density / jolt.Material_Get_Properties(body.material).density
+		velocity.y = Water_Buoyant_Velocity(velocity.y, wave_speed, fraction, physics.gravity, dt, buoyancy)
 		drag := math.exp(-0.8 * fraction * dt)
 		velocity.x *= drag; velocity.z *= drag
 		k.JPH_BodyInterface_ActivateBody(physics.system.body_interface, body.body_id)

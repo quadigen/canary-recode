@@ -1,0 +1,164 @@
+---
+title: Spatial queries
+description: Rays, regions, physical properties, path waypoints, and the parameter objects used by raycasts and overlaps.
+---
+
+## Ray
+
+`Ray.new(origin, direction)` describes a line in 3D. The direction does not have to be normalized.
+
+```lua
+local ray = Ray.new(Vector3.new(0, 5, 0), Vector3.new(0, -1, 0))
+print(ray:Distance(Vector3.new(3, 5, 0))) -- 3
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Origin` | `Vector3` | Starting point. |
+| `Direction` | `Vector3` | Direction and length. |
+| `Unit` | `Ray` | Ray with a unit-length direction. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `ClosestPoint(point)` | `Vector3` | Point on the ray closest to `point`. |
+| `Distance(point)` | `number` | Distance from the ray to `point`. |
+
+Equality compares origin and direction.
+
+## Region3
+
+`Region3.new(min, max)` is an axis-aligned box defined by two corners.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Min` | `Vector3` | Minimum corner. |
+| `Max` | `Vector3` | Maximum corner. |
+| `Size` | `Vector3` | Extent of the region. |
+| `CFrame` | `CFrame` | Frame at the center of the region. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `ExpandToGrid(resolution)` | `Region3` | Expands the region to a grid. `resolution` must be greater than zero. |
+
+## Region3int16
+
+`Region3int16.new(min, max)` uses `Vector3int16` corners for a compact integer region.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Min` | `Vector3int16` | Minimum corner. |
+| `Max` | `Vector3int16` | Maximum corner. |
+| `Size` | `Vector3int16` | Extent of the region. |
+
+## PhysicalProperties
+
+`PhysicalProperties.new(density, friction, elasticity, frictionWeight?, elasticityWeight?)` describes surface behavior for custom physical properties.
+
+```lua
+local rubber = PhysicalProperties.new(0.7, 0.9, 0.8, 1, 1)
+part.CustomPhysicalProperties = rubber
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `density` | Required | Mass per unit volume. |
+| `friction` | Required | Surface friction. |
+| `elasticity` | Required | Bounciness. |
+| `frictionWeight` | `100` | Weight of this surface's friction in a contact. |
+| `elasticityWeight` | `100` | Weight of this surface's elasticity in a contact. |
+
+Values outside the accepted range raise an error.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Density` | `number` | Density. |
+| `Friction` | `number` | Friction. |
+| `Elasticity` | `number` | Elasticity. |
+| `FrictionWeight` | `number` | Friction weight. |
+| `ElasticityWeight` | `number` | Elasticity weight. |
+
+## PathWaypoint
+
+`PathWaypoint.new(position, action?, label?)` is one point returned by pathfinding.
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `position` | Required | `Vector3` position. |
+| `action` | `Enum.PathWaypointAction.Walk` | What happens at this point. |
+| `label` | `""` | Optional label. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Position` | `Vector3` | Position. |
+| `Action` | `Enum.PathWaypointAction` | Action at this point. |
+| `Label` | `string` | Label. |
+
+## RaycastParams
+
+`RaycastParams.new()` creates a filter object for `Workspace:Raycast()`.
+
+```lua
+local params = RaycastParams.new()
+params.FilterDescendantsInstances = { character }
+params.FilterType = Enum.RaycastFilterType.Exclude
+```
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `FilterDescendantsInstances` | `{Instance}` | Instances excluded or included by the filter. |
+| `ExcludeInstances` | `{Instance}?` | Explicit exclusion list. `nil` when never set. |
+| `IncludeInstances` | `{Instance}?` | Explicit inclusion list. `nil` when never set. |
+| `FilterType` | `Enum.RaycastFilterType` | Whether the filter excludes or includes. |
+| `IgnoreWater` | `boolean` | Skip water. |
+| `RespectCanCollide` | `boolean` | Only hit parts where `CanCollide` is set. |
+| `BruteForceAllSlow` | `boolean` | Test every candidate instead of using the broad phase. |
+| `CollisionGroup` | `string` | Collision group to query. |
+
+| Method | Description |
+| --- | --- |
+| `AddToFilter(instanceOrArray)` | Adds an instance, or a nested array of instances, to the filter. |
+
+## RaycastResult
+
+A raycast result is returned by the engine. You do not construct it.
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Position` | `Vector3` | Hit position. |
+| `Normal` | `Vector3` | Surface normal at the hit. |
+| `Distance` | `number` | Distance from the origin. |
+| `Material` | `Enum.Material` | Material at the hit. |
+| `Instance` | `Instance` | Part that was hit. |
+
+## OverlapParams
+
+`OverlapParams.new()` creates a filter object for overlap queries.
+
+```lua
+local params = OverlapParams.new()
+params.FilterType = Enum.RaycastFilterType.Exclude
+params.MaxParts = 10
+```
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `FilterDescendantsInstances` | `{Instance}` | Instances excluded or included by the filter. |
+| `ExcludeInstances` | `{Instance}?` | Explicit exclusion list. |
+| `IncludeInstances` | `{Instance}?` | Explicit inclusion list. |
+| `FilterType` | `Enum.RaycastFilterType` | Whether the filter excludes or includes. |
+| `MaxParts` | `number` | Maximum results. Must be a nonnegative 32-bit integer. |
+| `CollisionGroup` | `string` | Collision group to query. |
+| `Tolerance` | `number` | Query tolerance, clamped to `0` through `0.05`. |
+| `RespectCanCollide` | `boolean` | Only include parts where `CanCollide` is set. |
+| `BruteForceAllSlow` | `boolean` | Test every candidate instead of using the broad phase. |
+
+`AddToFilter(instanceOrArray)` adds entries to `FilterDescendantsInstances`.
+
+## TerrainRegion
+
+`TerrainRegion` is not creatable from Luau. Terrain APIs return it when they save a region, and you pass it back to restore that region.
+
+## See also
+
+- [Workspace](/docs/services/Workspace) for raycasts and spatial queries.
+- [Physics](/docs/guides/physics) for practical query examples.

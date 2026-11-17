@@ -1,0 +1,154 @@
+---
+title: Script environment
+description: The globals a Kinemium script can use, from game and script to mode flags, service aliases, and the task library.
+---
+
+Every script runs with the same core environment. Some globals are always there, some depend on the runtime the script is in, and a few are shortcuts for services. This page lists what you can rely on and what changes between server, client, editor, and standalone sessions.
+
+## How the environment is put together
+
+A script runs in its own environment table. That table has `script` pointing at the script object, and an `__index` fallback to the shared globals. You can read every global directly, and you can shadow one locally without changing the others:
+
+```lua
+local Players = game:GetService("Players")
+print(script.Name)
+```
+
+Because `script` is per script, two copies of the same `ModuleScript` on the server and a client each see their own object. The globals behind the fallback are shared by every script in that runtime.
+
+## Core globals
+
+These are present in every Luau runtime, including the editor.
+
+| Global | Type | What it is |
+| --- | --- | --- |
+| `game` | `DataModel` | The root of the object tree. Use `game:GetService()` to reach services. |
+| `workspace` | `Workspace` | Shortcut for `game:GetService("Workspace")`. |
+| `script` | `Instance` | The script object that owns the running thread. |
+| `Instance` | table | Instance constructor. `Instance.new(className)` creates an object. |
+| `Enum` | table | Enum lookup, such as `Enum.Material.Plastic` or `Enum.KeyCode.E`. |
+| `EnumItem` | table | Enum item helpers. `EnumItem.fromValue()` resolves a numeric value. |
+| `require` | function | Loads a `ModuleScript` by object. Results are cached per runtime. |
+| `task` | table | Scheduling library, including `task.wait(seconds)`. |
+| `print` | function | Writes an ordinary log line. |
+| `warn` | function | Writes a warning without stopping the thread. |
+| `shared` | table | A table shared by scripts in the same runtime. |
+| `tick` | function | Returns the current time in seconds. |
+| `time` | function | Returns the engine runtime time in seconds. |
+| `version` | function | Returns the engine version string. |
+| `os` | table | Time helpers. `os.clock()`, `os.time()`, and `os.date()` are installed. |
+| `Signal` | table | Signal constructor. `KinemiumSignal` is an alias. |
+
+`tick()` and `time()` are engine globals, not the Luau standard library versions. Neither is tied to wall-clock time.
+
+## Runtime flags
+
+These tell a script where it is running. They are booleans except `BuildTarget` and `ProjectPath`.
+
+| Global | Type | Meaning |
+| --- | --- | --- |
+| `IsServer` | `boolean` | The runtime is running server code. |
+| `IsClient` | `boolean` | The runtime is running client code. |
+| `IsEditor` | `boolean` | The runtime is the editor. |
+| `BuildTarget` | `string` | Name of the current build target. |
+| `IsPlaytest` | `boolean` | The session was started as a playtest. |
+| `ProjectPath` | `string` | Project path passed at startup, or an empty string. |
+| `IsCustomStartup` | `boolean` | Custom startup modules are enabled for this build. |
+
+A standalone session runs both sides in one process, so `IsServer` and `IsClient` are both `true` there. Don't treat them as mutually exclusive:
+
+```lua
+if IsServer then
+    print("server logic runs here")
+end
+
+if IsClient then
+    print("client logic runs here too in a standalone session")
+end
+```
+
+`IsEditor` is separate. The editor can also run a playtest, so check `IsPlaytest` when behavior should differ between editing and testing.
+
+## Service aliases
+
+A few services are also exposed as globals. They point at the same object you would get from `game:GetService()`:
+
+```lua
+print(workspace == game:GetService("Workspace")) -- true
+```
+
+| Global | Service |
+| --- | --- |
+| `workspace` | `Workspace` |
+| `debris` | `Debris` |
+| `team` | `Teams` |
+| `teleportService` | `TeleportService` |
+| `marketplaceService` | `MarketplaceService` |
+| `memoryStoreService` | `MemoryStoreService` |
+| `messagingService` | `MessagingService` |
+| `accountService` | `AccountService` |
+| `CollectionService` | `CollectionService` |
+| `ContentProvider` | `ContentProvider` |
+| `DialogService` | `DialogService` |
+| `EditorService` | `EditorService` |
+| `EncodingService` | `EncodingService` |
+| `ExporterService` | `ExporterService` |
+| `ExportService` | `ExportService` |
+| `Filesystem` | `Filesystem` |
+| `LocalizationService` | `LocalizationService` |
+| `matrix` | `MatrixService` |
+| `plugin` | `Plugin` |
+| `PluginMarketplace` | `PluginMarketplace` |
+| `Pathtracer` | `Pathtracer` |
+| `ReflectionService` | `ReflectionService` |
+| `ReplicatedFirst` | `ReplicatedFirst` |
+| `ReplicatedStorage` | `ReplicatedStorage` |
+| `Selection` | `Selection` |
+| `ServerScriptService` | `ServerScriptService` |
+| `ServerStorage` | `ServerStorage` |
+| `SoundService` | `SoundService` |
+| `StarterPack` | `StarterPack` |
+| `StarterPlayer` | `StarterPlayer` |
+| `TweenService` | `TweenService` |
+
+Some of these exist only in native builds. `AccountService`, `ContentProvider`, `DialogService`, `EditorService`, `ExporterService`, `ExportService`, `Filesystem`, `matrix`, `plugin`, `PluginMarketplace`, and `Selection` are not registered on the web target. Reading a missing global returns `nil`, so check before using one in shared code.
+
+Other services, including `Players`, `RunService`, `Lighting`, `UserInputService`, and `DataStoreService`, have no global alias. Use `game:GetService()` for those.
+
+## Datatypes
+
+Every datatype constructor is a global too: `Vector3`, `CFrame`, `Color3`, `UDim2`, `RaycastParams`, and the rest. They behave like the reference pages describe:
+
+```lua
+local origin = Vector3.new(0, 5, 0)
+local direction = Vector3.new(0, -1, 0)
+local ray = Ray.new(origin, direction * 100)
+```
+
+See [Datatypes](/docs/datatypes) for the full list.
+
+## Things that are not globals
+
+Luau standard functions such as `pcall`, `pairs`, `ipairs`, `type`, `typeof`, and `table` are available as usual. `math`, `string`, and `coroutine` are the standard libraries, not engine services.
+
+The supported scheduler is `task`. Prefer `task.wait()` over a legacy `wait()` global, which is not part of the documented environment.
+
+`renderer`, `ishared`, `_RUNTIME`, and `_LUAU` exist but are engine internals. Don't build game code against them.
+
+## Checking what exists
+
+Because globals can be missing on a target, guard optional ones:
+
+```lua
+if teleportService then
+    print(teleportService.Name)
+end
+```
+
+For services without an alias, `game:GetService()` is the stable lookup. It raises on an unknown name, which catches typos early.
+
+## See also
+
+- [Scripting with Luau](/docs/guides/scripting) for instances, events, and modules.
+- [Datatypes](/docs/datatypes) for constructors and members.
+- [Services](/docs/services) for the service reference.

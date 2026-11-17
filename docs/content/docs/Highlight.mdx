@@ -1,0 +1,63 @@
+---
+title: Highlight
+description: Draw an outline or fill over a model or part to make it stand out.
+---
+
+`Highlight` draws a colored silhouette around an object: a fill, an outline, or both. Use it for selection, objectives, enemy markers, or any effect where you want a target to pop without changing its materials.
+
+## Getting started
+
+```lua
+local highlight = Instance.new("Highlight")
+highlight.Adornee = model
+highlight.FillColor = Color3.fromRGB(255, 190, 60)
+highlight.FillTransparency = 0.6
+highlight.OutlineColor = Color3.fromRGB(255, 220, 120)
+highlight.OutlineTransparency = 0
+highlight.Parent = model
+```
+
+Parenting the highlight under the object it decorates keeps it around when that object moves. `Adornee` is optional when the parent already points at the target.
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | The object to highlight. Assigning a non-instance raises an error. |
+| `DepthMode` | `Enum.HighlightDepthMode` | Read/write | How the highlight interacts with scene depth. |
+| `Enabled` | `boolean` | Read/write | Whether the highlight renders. |
+| `FillColor` | `Color3` | Read/write | Color of the filled silhouette. |
+| `FillTransparency` | `number` | Read/write | Transparency of the fill. |
+| `OutlineColor` | `Color3` | Read/write | Color of the outline. |
+| `OutlineTransparency` | `number` | Read/write | Transparency of the outline. |
+
+Set `FillTransparency` to `1` for an outline-only highlight, or `OutlineTransparency` to `1` for a fill-only highlight. Values outside the usual `0` to `1` range aren't clamped for you, so keep them in range.
+
+```lua
+highlight.FillTransparency = 1
+highlight.OutlineTransparency = 0
+```
+
+`Adornee` accepts `nil`, which clears the target. It doesn't accept arbitrary tables or numbers; those raise an error.
+
+### Depth mode
+
+`DepthMode` chooses whether the highlight is drawn over everything or respects the scene's depth. `AlwaysOnTop`-style behavior makes markers visible through walls, while depth-aware drawing looks like it belongs in the scene.
+
+```lua
+highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+```
+
+## Notes
+
+- Highlights are visual only; they don't affect collision, raycasts, or input.
+- A highlight on a model follows its parts as they move.
+- Very large models cost more to outline than small ones, because the silhouette has to be built from the target's geometry.
+- Destroying the target leaves the highlight with nothing to draw; clean up the highlight as well.
+- There's no per-part color control. One highlight uses one fill and one outline color for the whole target.
+
+## See also
+
+- `Model`, a common highlight target.
+- `Part`, highlighting a single part.
+- `PostProcess`, screen-wide visual effects.

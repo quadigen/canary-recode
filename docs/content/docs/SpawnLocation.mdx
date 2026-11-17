@@ -1,0 +1,46 @@
+---
+title: SpawnLocation
+description: Mark a position in the world as a spawn point and control whether it's active.
+---
+
+`SpawnLocation` is a `Part` that marks somewhere characters can spawn. It keeps the part behavior you already know and adds three settings that describe how the spawn point should be used.
+
+## Getting started
+
+```lua
+local spawn = Instance.new("SpawnLocation")
+spawn.Size = Vector3.new(12, 1, 12)
+spawn.Position = Vector3.new(0, 0, 0)
+spawn.Anchored = true
+spawn.Neutral = true
+spawn.Parent = game:GetService("Workspace")
+```
+
+Because it inherits from `Part`, everything in the `Part` reference applies: size, color, material, collision flags, velocities, and the `Touched` event.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether this spawn point is available for use. |
+| `Neutral` | `boolean` | Read/write | `true` | Whether the spawn point is neutral rather than tied to a team. |
+| `Duration` | `number` | Read/write | `0` | Stored duration value for the spawn point. |
+
+```lua
+spawn.Enabled = false
+```
+
+The class stores these values and exposes them to scripts. It doesn't add spawn-specific methods or events.
+
+## Notes
+
+- `SpawnLocation` is a part, so it collides and renders like one. Give it a sensible size and keep it anchored unless you want it to fall.
+- `Neutral` and `Duration` are stored settings. Their exact effect depends on the game systems that read them, not on this class.
+- Cloning a spawn location copies its part properties and these three settings.
+- Disabling a spawn point doesn't move or remove characters already there.
+
+## See also
+
+- `Part`, the geometry and physics properties this class inherits.
+- `Players`, character loading.
+- `Model`, grouping spawn areas.

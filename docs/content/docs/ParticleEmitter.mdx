@@ -1,0 +1,69 @@
+---
+title: ParticleEmitter
+description: Spawn and animate particles from a part.
+---
+
+`ParticleEmitter` emits particles from its parent part. Rate, lifetime, speed, size, color, transparency, rotation, and flipbook settings control how they look.
+
+## Getting started
+
+```lua
+local emitter = Instance.new("ParticleEmitter")
+emitter.Rate = 40
+emitter.Lifetime = NumberRange.new(0.5, 1.2)
+emitter.Speed = NumberRange.new(4, 8)
+emitter.SpreadAngle = Vector2.new(15, 15)
+emitter.Size = NumberSequence.new(0.4)
+emitter.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0),
+    NumberSequenceKeypoint.new(1, 1),
+})
+emitter.Parent = part
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | Whether new particles spawn. |
+| `Rate` | `number` | Read/write | Particles per second, clamped to `0` through `2048`. |
+| `Lifetime` | `NumberRange` | Read/write | Particle lifetime range, each bound clamped to `0` through `120`. |
+| `Speed` | `NumberRange` | Read/write | Initial speed range, each bound clamped to `-10000` through `10000`. |
+| `Rotation` | `NumberRange` | Read/write | Initial rotation range in degrees. |
+| `RotSpeed` | `NumberRange` | Read/write | Rotation speed range. |
+| `SpreadAngle` | `Vector2` | Read/write | Emission cone on each axis, clamped to `0` through `360`. |
+| `Acceleration` | `Vector3` | Read/write | Constant acceleration applied to particles. Must be finite. |
+| `Drag` | `number` | Read/write | Velocity damping, clamped to `0` through `1000`. |
+| `WindAffectsDrag` | `boolean` | Read/write | Whether wind influences drag. |
+| `Color` | `ColorSequence` | Read/write | Color over each particle's lifetime. |
+| `Size` | `NumberSequence` | Read/write | Size over each particle's lifetime. |
+| `Transparency` | `NumberSequence` | Read/write | Transparency over each particle's lifetime. |
+| `LightEmission` | `number` | Read/write | Emissive strength, clamped to `0` through `1`. |
+| `Brightness` | `number` | Read/write | Particle brightness, clamped to `0` through `100`. |
+| `ZOffset` | `number` | Read/write | Depth offset, clamped to `-10000` through `10000`. |
+| `Texture` | `string` | Read/write | Particle texture URI. |
+| `EmissionDirection` | `Enum.NormalId` | Read/write | Face the particles emit from. |
+| `FlipbookLayout` | `Enum.ParticleFlipbookLayout` | Read/write | Flipbook grid layout. |
+| `FlipbookMode` | `Enum.ParticleFlipbookMode` | Read/write | Flipbook playback mode. |
+| `FlipbookFramerate` | `NumberRange` | Read/write | Flipbook frame rate, each bound clamped to `0` through `120`. |
+| `VelocitySpread` | `number` | Read/write | Convenience setter for both `SpreadAngle` axes, clamped to `0` through `360`. |
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `Emit(count?: number)` | Spawns a burst of particles. |
+| `Clear()` | Removes all live particles. |
+
+## Notes
+
+- Out-of-range numbers clamp rather than raise, except `NaN` and non-finite vectors, which raise an error for the affected property.
+- `VelocitySpread` writes the same value to both `SpreadAngle` components.
+- The parent must be a `Part`; the emitter uses the part transform for emission.
+- Changing `Texture` releases the previously loaded texture.
+- Color, size, and transparency sequences are copied on assignment.
+
+## See also
+
+- `Part` for the emitter's parent.
+- `NumberSequenceValue` and `ColorSequenceValue` for reusable sequences.

@@ -134,16 +134,21 @@ workspace_part_mesh :: proc(
 workspace_water_mesh :: proc(
 	workspace: ^Workspace,
 	filament: ^kineffi.KineFilamentContext,
+	size: datatypes.Vector3,
 ) -> ^kineffi.KineFilamentMesh {
-	if workspace.water_grid_mesh == nil {
-		tracy.ZoneNC("Workspace Water Mesh Load", 0xB48EAD)
-		workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
-			filament,
-			kineffi.KINE_MESH_WATER_GRID,
-		)
+	mesh: ^kineffi.KineFilamentMesh
+	when ODIN_OS == .JS {
+		if workspace.water_grid_mesh == nil {
+			workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
+				filament, kineffi.KINE_MESH_WATER_GRID,
+			)
+		}
+		mesh = workspace.water_grid_mesh
+	} else {
+		mesh = kineffi.Kine_Filament_GetWaterGrid(filament, size.x, size.z)
 	}
-	if workspace.water_grid_mesh == nil {return workspace_part_mesh(workspace, filament, .Block)}
-	return workspace.water_grid_mesh
+	if mesh == nil {return workspace_part_mesh(workspace, filament, .Block)}
+	return mesh
 }
 
 workspace_meshpart_mesh :: proc(
@@ -313,6 +318,7 @@ workspace_has_parts :: proc(object: ^classes.Object) -> bool {
 		if classes.Is_A_Class(child, &classes.Part_Class) ||
 		   classes.Is_A_Class(child, &classes.Cloth_Class) ||
 		   classes.Is_A_Class(child, &classes.SoftBody_Class) ||
+		   classes.Is_A_Class(child, &classes.RopeConstraint_Class) ||
 		   workspace_has_parts(child) {
 			return true
 		}
@@ -506,6 +512,18 @@ workspace_append_draw_items :: proc(
 			workspace_append_cloth(workspace, cast(^classes.Cloth)child, renderer, items, params)
 		} else if classes.Is_A_Class(child, &classes.SoftBody_Class) {
 			workspace_append_softbody(cast(^classes.SoftBody)child, renderer, items, params)
+		} else if classes.Is_A_Class(child, &classes.RopeConstraint_Class) {
+			rope := cast(^classes.RopeConstraint)child
+			if item, ok := classes.RopeConstraint_Draw_Item(rope, &workspace.object, renderer.Filament); ok {
+				fabric, _ := materials.Lookup(.Fabric)
+				item.tex = fabric.texture
+				if params != nil {
+					params.hash = workspace_hash_u64(params.hash, u64(uintptr(item.mesh)))
+					params.hash = workspace_hash_u64(params.hash, u64(uintptr(item.tex)))
+					params.hash = workspace_hash_u64(params.hash, rope.mesh_revision)
+				}
+				append(items, item)
+			}
 		} else if classes.Is_A_Class(child, &classes.Part_Class) {
 			part := cast(^classes.Part)child
 			mesh: ^kineffi.KineFilamentMesh
@@ -535,7 +553,7 @@ workspace_append_draw_items :: proc(
 			}
 
 			if material_kind == kineffi.KINE_MAT_WATER {
-				mesh = workspace_water_mesh(workspace, renderer.Filament)
+				mesh = workspace_water_mesh(workspace, renderer.Filament, size)
 				render_size.x = size.x
 				render_size.y = size.y
 				render_size.z = size.z

@@ -141,11 +141,9 @@ foreign kine_skia {
 	Kine_Skia_Surface_DrawOval :: proc(surface: ^KineSkiaSurface, x: f32, y: f32, width: f32, height: f32, r: u8, g: u8, b: u8, a: u8, strokeWidth: f32) ---
 	Kine_Skia_Surface_DrawArc :: proc(surface: ^KineSkiaSurface, x: f32, y: f32, width: f32, height: f32, startAngle: f32, sweepAngle: f32, useCenter: i32, r: u8, g: u8, b: u8, a: u8, strokeWidth: f32) ---
 	Kine_Skia_Surface_DrawLine :: proc(surface: ^KineSkiaSurface, x0: f32, y0: f32, x1: f32, y1: f32, strokeWidth: f32, r: u8, g: u8, b: u8, a: u8) ---
-
-
+	Kine_Skia_Surface_BeginUIShaderScaled :: proc "c" (surface: ^KineSkiaSurface, shader: ^KineSkiaRuntimeShader, x, y, width, height: f32, background_color: ^f32, sample_radius, resolution_scale: f32) -> bool ---
+	Kine_Skia_Surface_DrawUIShaderScaled :: proc "c" (surface: ^KineSkiaSurface, shader: ^KineSkiaRuntimeShader, x, y, width, height: f32, background_color: ^f32, resolution_scale: f32) -> bool ---
 	Kine_Skia_Surface_DrawPolygon :: proc(surface: ^KineSkiaSurface, points: ^f32, pointCount: i32, closed: i32, r: u8, g: u8, b: u8, a: u8, strokeWidth: f32) ---
-
-
 	Kine_Skia_Surface_Save :: proc(surface: ^KineSkiaSurface) ---
 	Kine_Skia_Surface_SaveLayerAlpha :: proc(surface: ^KineSkiaSurface, alpha: f32) ---
 	Kine_Skia_Surface_Restore :: proc(surface: ^KineSkiaSurface) ---

@@ -628,10 +628,14 @@ physics_create_body :: proc(
 	defer kineffi.JPH_BodyCreationSettings_Destroy(settings)
 
 	properties := jolt.Material_Get_Properties(part.material)
-
-	kineffi.JPH_BodyCreationSettings_SetFriction(settings, properties.friction)
-
-	kineffi.JPH_BodyCreationSettings_SetRestitution(settings, properties.restitution)
+	kineffi.JPH_BodyCreationSettings_SetMaterialProperties(
+		settings,
+		properties.density,
+		properties.friction,
+		properties.restitution,
+		properties.friction_weight,
+		properties.restitution_weight,
+	)
 	kineffi.JPH_BodyCreationSettings_SetIsSensor(settings, part.can_collide ? 0 : 1)
 
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
@@ -703,21 +707,38 @@ physics_create_body :: proc(
 	}
 
 	return Physics_Body {
-			&part.object,
-			body_id,
-			part.size,
-			part.shape,
-			part.anchored,
-			part.can_collide,
-			remote,
-			part.cframe,
-			mesh_id,
-			mesh_index,
-			editable_mesh_id,
-			physics_mesh_part_version(mesh),
-			mesh_part_collision_fidelity(mesh),
+			object                = &part.object,
+			body_id               = body_id,
+			size                  = part.size,
+			shape                 = part.shape,
+			material              = part.material,
+			anchored              = part.anchored,
+			can_collide           = part.can_collide,
+			remote                = remote,
+			last_cframe           = part.cframe,
+			mesh_id               = mesh_id,
+			mesh_index            = mesh_index,
+			editable_mesh_id      = editable_mesh_id,
+			editable_mesh_version = physics_mesh_part_version(mesh),
+			collision_fidelity    = mesh_part_collision_fidelity(mesh),
 		},
 		true
+}
+
+
+physics_update_body_material :: proc(service: ^Physics, body: ^Physics_Body, material: enums.Material) {
+	if body.material == material {return}
+	properties := jolt.Material_Get_Properties(material)
+	kineffi.JPH_PhysicsSystem_SetBodyMaterialProperties(
+		service.system.handle,
+		body.body_id,
+		properties.density,
+		properties.friction,
+		properties.restitution,
+		properties.friction_weight,
+		properties.restitution_weight,
+	)
+	body.material = material
 }
 
 
@@ -971,8 +992,7 @@ physics_destroy_body :: proc(service: ^Physics, body: Physics_Body, clear_part_i
 			for object in descriptor.instances {
 				if object == nil {continue}
 				rope := cast(^classes.RopeConstraint)object
-				if rope.jolt_constraint != nil &&
-				   rope.jolt_system == service.system.handle &&
+				if rope.jolt_system == service.system.handle &&
 				   (rope.jolt_body0 == body.body_id || rope.jolt_body1 == body.body_id) {
 					classes.RopeConstraint_release(rope)
 				}
@@ -1259,6 +1279,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 			continue
 		}
 
+		physics_update_body_material(service, body, part.material)
 		if body.can_collide != part.can_collide {
 			kineffi.JPH_PhysicsSystem_SetBodyIsSensor(
 				service.system.handle,
@@ -1720,6 +1741,15 @@ Physics_Fill_Candidate_Bodies :: proc(
 			   body.anchor_body_id != kineffi.JPH_BODY_ID_INVALID {
 				append(out, body.anchor_body_id)
 			}
+		}
+	}
+	if ropes := classes.Find_Class(service.signal_registry, "RopeConstraint"); !static_only && ropes != nil {
+		for object in ropes.instances {
+			rope := cast(^classes.RopeConstraint)object
+			if rope == nil || rope.destroyed || !rope.enabled || !rope.can_collide || rope.jolt_rope == nil {continue}
+			ids: [kineffi.JPH_ROPE_MAX_POINTS - 1]kineffi.JPH_BodyID
+			count := int(kineffi.JPH_Rope_GetBodies(rope.jolt_rope, &ids[0], len(ids)))
+			append(out, ..ids[:count])
 		}
 	}
 }

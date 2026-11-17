@@ -1,0 +1,47 @@
+---
+title: Animation
+description: Describe a clip that an Animator can play on a rig.
+---
+
+`Animation` points at a clip, either by index or by name, and stores the playback defaults an `Animator` uses when loading it.
+
+## Getting started
+
+```lua
+local animation = Instance.new("Animation")
+animation.ClipName = "Run"
+animation.Looped = true
+animation.Priority = Enum.AnimationPriority.Movement
+animation.Parent = script
+
+local track = animator:LoadAnimation(animation)
+track:Play()
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `ClipIndex` | `number` | Read/write | Index of the clip in the rig's mesh. |
+| `ClipName` | `string` | Read/write | Name of the clip. Takes precedence when set. |
+| `Looped` | `boolean` | Read/write | Restart automatically when the clip ends. |
+| `Priority` | `Enum.AnimationPriority` | Read/write | Blending priority relative to other tracks. |
+| `Source` | `Instance?` | Read/write | Keyframe sequence used instead of a mesh clip. |
+
+## Clip selection
+
+When `ClipName` is not empty, the animator looks up the clip by name. Otherwise it uses `ClipIndex`. `ClipIndex` accepts values from `0` through `100000`; anything outside that range is ignored.
+
+Assigning `Source` replaces the clip lookup with a keyframe sequence instance. Setting it to `nil` clears the source and returns to index or name lookup. Assigning an instance that isn't a keyframe sequence is ignored.
+
+## Notes
+
+- `Source` holds a weak reference; if the sequence is destroyed, reading `Source` returns `nil`.
+- A missing clip raises an error when the animator tries to load the animation.
+- Cloning copies the clip selection and playback defaults.
+- The animation object doesn't play anything by itself.
+
+## See also
+
+- `Animator` for loading and tracking animations.
+- `AnimationTrack` for playback control.

@@ -1,0 +1,38 @@
+---
+title: UICorner
+description: Round the corners of a GUI element.
+---
+
+`UICorner` is a UI modifier that rounds the corners of its parent `GuiObject`. It can set one radius for all corners or each corner separately.
+
+## Getting started
+
+```lua
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `CornerRadius` | `UDim` | Read/write | Radius applied to every corner. |
+| `TopLeftRadius` | `UDim` | Read/write | Top-left corner radius. |
+| `TopRightRadius` | `UDim` | Read/write | Top-right corner radius. |
+| `BottomLeftRadius` | `UDim` | Read/write | Bottom-left corner radius. |
+| `BottomRightRadius` | `UDim` | Read/write | Bottom-right corner radius. |
+
+The per-corner properties override `CornerRadius` for that corner.
+
+## Notes
+
+- Uses `UDim`, so a radius can be a fixed pixel count or a fraction of the parent size.
+- Modifiers apply to the parent GUI object; the modifier itself has no visual output.
+- Multiple corner modifiers on one object aren't meaningful; keep one.
+- Cloning copies all radius values.
+
+## See also
+
+- `UIStroke` for an outline.
+- `GuiObject` for the object being modified.

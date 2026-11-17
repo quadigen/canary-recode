@@ -1,0 +1,50 @@
+---
+title: ServerStorage
+description: Keep server-only content out of the replicated world.
+---
+
+`ServerStorage` is a container for objects that only the server should see. It has no Luau members of its own; it's an `Instance` container, and everything you do with it goes through the shared object API.
+
+## Getting started
+
+```lua
+local ServerStorage = game:GetService("ServerStorage")
+
+local templates = Instance.new("Folder")
+templates.Name = "Templates"
+templates.Parent = ServerStorage
+```
+
+## What belongs here
+
+- Templates that only the server clones.
+- Server-only configuration and data.
+- Large assets that clients never need.
+
+```lua
+local function spawnFromStorage(name, parent)
+    local template = game:GetService("ServerStorage"):FindFirstChild(name)
+    if not template then
+        return nil
+    end
+
+    local copy = template:Clone()
+    copy.Parent = parent
+    return copy
+end
+```
+
+Cloning into `Workspace` makes the copy part of the world; until then it stays out of clients' reach.
+
+## Notes
+
+- The service exposes no methods, properties, or events beyond the shared `Instance` API.
+- Server-only means exactly that: a client that asks for this service won't see its children, so never reference its contents from client scripts.
+- Because the contents aren't replicated, moving a part here after it has been shown to clients behaves like removing it from the world.
+- `Archivable` and cloning rules still apply. Mark templates `Archivable` if you intend to clone them.
+
+## See also
+
+- `ReplicatedStorage`, the shared container.
+- `ServerScriptService`, the container for server scripts.
+- `Instance`, cloning and hierarchy behavior.

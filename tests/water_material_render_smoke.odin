@@ -28,7 +28,8 @@ main :: proc() {
 		ctx,
 	); assert(vp != nil); defer k.Kine_Filament_Viewport_Destroy(vp)
 	cube := k.Kine_Filament_Viewport_Primitive(ctx, k.KINE_MESH_CUBE)
-	water := k.Kine_Filament_Viewport_Primitive(ctx, k.KINE_MESH_WATER_GRID)
+	water := k.Kine_Filament_GetWaterGrid(ctx, 36, 36)
+	assert(water != nil)
 	items: [6]k.KineFilamentDrawItem
 	for &item in items {item.mesh = cube; item.transform[0] = 1; item.transform[5] = 1; item.transform[10] = 1; item.transform[15] = 1; item.r = .8; item.g = .8; item.b = .8; item.param1 = .8; item.flags = 3; item.transmission = 1}
 	items[0].transform[0] = 44; items[0].transform[5] = 2; items[0].transform[10] = 44; items[0].transform[7] = -2

@@ -4,12 +4,13 @@ import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
+import renderer "../renderer"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 
 ScreenGui_Class := Class_Info {
 	name   = "ScreenGui",
-	parent = &Instance_Class,
+	parent = &LayerCollector_Class,
 }
 
 ScreenGui :: struct {
@@ -84,6 +85,16 @@ ScreenGui_get :: proc(
 		vm.PushBoolean(L, ScreenGui.render_on_top)
 	case "Size":
 		datatypes.Push_Vector2(L, datatype_registry, ScreenGui.size)
+	case "AbsoluteSize":
+		width, height := gui_layout_last_width, gui_layout_last_height
+		if (width <= 0 || height <= 0) && object.signal_registry != nil {
+			width, height = renderer.viewport_size(object.signal_registry.renderer)
+		}
+		ctx := Class_Step_Context{viewport_width = width, viewport_height = height}
+		_, _, w, h := GuiObject_get_absolute_transform(object, &ctx)
+		datatypes.Push_Vector2(L, datatype_registry, {max(0, w), max(0, h)})
+	case "AbsolutePosition":
+		datatypes.Push_Vector2(L, datatype_registry, ScreenGui.render_offset)
 
 	case "RenderOffset":
 		datatypes.Push_Vector2(L, datatype_registry, ScreenGui.render_offset)
@@ -420,6 +431,8 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 			"Enabled",
 			"IgnoreGuiInset",
 			"RenderOnTop",
+			"AbsolutePosition",
+			"AbsoluteSize",
 		},
 	)
 }

@@ -1,0 +1,49 @@
+---
+title: DoubleConstrainedValue
+description: Store a number clamped between a minimum and maximum.
+---
+
+`DoubleConstrainedValue` is a number with bounds. Writing a value outside the range stores the nearest bound, and a read-only `ConstrainedValue` gives you the clamped result.
+
+## Getting started
+
+```lua
+local value = Instance.new("DoubleConstrainedValue")
+value.MinValue = 0
+value.MaxValue = 100
+value.Value = 250
+
+print(value.Value)            -- 100
+print(value.ConstrainedValue) -- 100
+value.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `number` | Read/write | `0` | The stored number, clamped on assignment. |
+| `ConstrainedValue` | `number` | Read-only | `0` | The current value clamped to the range. |
+| `MinValue` | `number` | Read/write | Lowest double | Lower bound. |
+| `MaxValue` | `number` | Read/write | Highest double | Upper bound. |
+
+`Value` and `ConstrainedValue` differ only when the bounds change after a value was stored. `Value` keeps the stored value, while `ConstrainedValue` applies the current bounds.
+
+```lua
+value.Value = 50
+value.MaxValue = 20
+print(value.Value)            -- 50
+print(value.ConstrainedValue) -- 20
+```
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- The default bounds cover the full double range, so the value behaves like a plain number until you set them.
+- Min and max aren't automatically ordered; setting `MinValue` above `MaxValue` produces an empty range.
+- Cloning copies the value and both bounds.
+
+## See also
+
+- `NumberValue` for an unconstrained number.
+- `IntConstrainedValue` for the integer version.

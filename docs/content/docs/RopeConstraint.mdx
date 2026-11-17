@@ -1,0 +1,54 @@
+---
+title: RopeConstraint
+description: Keep two attachments within a maximum distance with an optional visible rope.
+---
+
+`RopeConstraint` links two attachments and stops them from separating farther than `Length`. It can draw a rope between the anchors.
+
+## Getting started
+
+```lua
+local rope = Instance.new("RopeConstraint")
+rope.Attachment0 = anchor.Attachment
+rope.Attachment1 = crate.Attachment
+rope.Length = 14
+rope.Thickness = 0.3
+rope.Visible = true
+rope.Parent = crate
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First anchor. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second anchor. |
+| `Length` | `number` | Read/write | `10` | Maximum separation in studs. |
+| `Thickness` | `number` | Read/write | `0.2` | Rendered rope radius, minimum `0.01`. |
+| `Visible` | `boolean` | Read/write | `true` | Whether the rope is drawn. |
+| `CanCollide` | `boolean` | Read/write | `true` | Whether the rope collides with other objects. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the constraint is simulated. |
+| `Active` | `boolean` | Read-only | `false` | Whether the rope currently has both ends resolved. |
+
+`Length` and `Thickness` must be non-negative and below `1e7`; out-of-range writes raise an error instead of clamping. Changing a dimension or attachment rebuilds the simulation state.
+
+## How it behaves
+
+The rope is a maximum-distance limit, not a rigid rod. The ends can move closer freely and are pulled back when the span exceeds `Length`. If both attachments are on anchored parts, the rope stays inactive; at least one end must be movable.
+
+`Thickness` only affects the rendered rope. `CanCollide` controls whether the rendered rope interacts with other physics objects.
+
+Setting `Enabled = false` releases the simulation and clears `Active`. Setting `Active` from a script is accepted for compatibility but doesn't change behavior.
+
+## Notes
+
+- Both attachments must belong to parts in the same world.
+- Assigning a non-attachment to an attachment property is ignored.
+- Cloning copies the dimensions and attachment references.
+- The rope only draws when the object is in the workspace and its anchors are valid.
+
+## See also
+
+- `Constraint` for the shared attachment behavior.
+- `SpringConstraint` for a soft connection with stiffness and damping.
+- `Attachment` for anchor configuration.

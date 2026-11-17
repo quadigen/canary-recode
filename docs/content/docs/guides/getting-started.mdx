@@ -1,0 +1,155 @@
+---
+title: Getting started
+description: Run Kinemium, learn how the data model is organized, and put your first part and script into the world.
+---
+
+Kinemium is a game engine with Luau scripting, a native editor, and support for standalone multiplayer games. You build a game the same way you'd expect from a Luau-based engine: create instances, parent them into the world, and connect scripts to services.
+
+This guide gets you from a fresh install to a part that moves under script control.
+
+## Install the engine
+
+The quickest path is a prebuilt artifact from the [GitHub Actions page](https://github.com/quadigen/canary-recode/actions). Pick the build for your operating system, unpack it, and run the executable.
+
+If you'd rather build it yourself, the repository includes a `just` setup:
+
+```bash
+git clone --recurse-submodules https://github.com/quadigen/canary-recode.git
+cd canary-recode
+just deps
+just run
+```
+
+The build recipes are:
+
+| Command | Result |
+| --- | --- |
+| `just run` | Build and run the engine with the editor. |
+| `just editor` | Build the editor. |
+| `just client` | Build a client. |
+| `just server` | Build a server. |
+| `just build` | Build the engine normally, editor included. |
+
+Both the repository and the release artifacts are unstable. Keep backups of anything you care about and expect rough edges.
+
+## Start a session
+
+Running the executable opens the editor by default. The engine also accepts flags:
+
+```bash
+./kinemium --editor
+./kinemium --client --port 7777 --address 127.0.0.1 --username Player
+./kinemium --server --port 7777 --address 0.0.0.0 --map MyGame.KINE --window
+```
+
+Every flag is optional. For singleplayer work, one standalone session is enough, and it runs both the server and client sides in the same process.
+
+## The data model
+
+Everything in a running game lives in one tree under `game`. Services are the top-level branches. Your content hangs below them.
+
+```lua
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+```
+
+`GetService()` returns the same object every time. A typo raises an error, which is why it's safer than reading `game.Workspace` style properties.
+
+The services you'll use first:
+
+| Service | What lives there |
+| --- | --- |
+| `Workspace` | The 3D world, physics, camera, and raycasts. |
+| `ServerScriptService` | Server scripts that clients can't read. |
+| `ReplicatedStorage` | Content both sides need, including remotes and shared modules. |
+| `StarterGui` | `ScreenGui` templates copied to each player. |
+| `Players` | Player objects, characters, and join/leave events. |
+
+## Your first part
+
+Create a script in `ServerScriptService` and give it this body:
+
+```lua
+local Workspace = game:GetService("Workspace")
+
+local part = Instance.new("Part")
+part.Name = "HelloPart"
+part.Size = Vector3.new(4, 1, 4)
+part.Position = Vector3.new(0, 5, 0)
+part.Color = Color3.fromRGB(90, 160, 255)
+part.Anchored = true
+part.Parent = Workspace
+
+print("Created", part.Name)
+```
+
+A few things are worth noticing:
+
+- `Instance.new("Part")` creates an object that isn't in the world yet. It only renders and simulates once it has a parent inside `Workspace`.
+- Parts default to `Anchored = true`, so this one stays at `(0, 5, 0)`.
+- `Size` rejects zero or negative components. Use `Transparency` when you want to hide a part.
+
+## Make it move
+
+Movement belongs in a frame loop. `RunService.Heartbeat` fires once per frame and passes the time since the last frame:
+
+```lua
+local RunService = game:GetService("RunService")
+local part = game:GetService("Workspace"):WaitForChild("HelloPart")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    part.CFrame = part.CFrame * CFrame.Angles(0, math.rad(45) * deltaTime, 0)
+end)
+```
+
+Multiplying by `deltaTime` keeps the rotation speed the same whether the game runs at 30 or 144 frames per second. If you rotate by a fixed amount per frame, it spins faster on faster machines.
+
+## Where scripts run
+
+| Script type | Runs on | Typical home |
+| --- | --- | --- |
+| `Script` | The server, or the runtime it's started in. | `ServerScriptService` for game systems. |
+| `LocalScript` | A client only. | A `ScreenGui` template, or the player's client containers. |
+| `ModuleScript` | Nowhere by itself. | `ReplicatedStorage` for shared code, or beside the scripts that require it. |
+
+A `Script` under `ServerScriptService` starts when the server starts. A `LocalScript` under `StarterGui` is copied into each player's `PlayerGui`, where it runs on that client. If a script seems to do nothing, check which side it's on before you check the code.
+
+## Finding things in the tree
+
+Names aren't guaranteed to be unique, and content can arrive late. Use the lookup that matches the situation:
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local config = ReplicatedStorage:FindFirstChild("Config")
+if config then
+    print(config.Name)
+end
+
+local remote = ReplicatedStorage:WaitForChild("RequestSpawn", 5)
+if not remote then
+    warn("remote never arrived")
+end
+```
+
+`FindFirstChild()` returns `nil` when the child is missing. `WaitForChild()` waits for it and accepts an optional timeout, which is what you want on a client that might start before the server has replicated everything.
+
+## Clean up what you create
+
+Effects and temporary parts add up. `Debris` destroys an instance after a delay:
+
+```lua
+local Debris = game:GetService("Debris")
+
+Debris:AddItem(part, 5)
+```
+
+The delay starts when you call `AddItem()`. There's no cancel method, so keep the handle yourself if you might need to destroy it sooner.
+
+## Next steps
+
+- [Scripting with Luau](/docs/guides/scripting) covers modules, events, and scheduling in more depth.
+- [3D and rendering](/docs/guides/3d) goes from primitive parts to meshes, cameras, and lighting.
+- [Physics](/docs/guides/physics) explains how to make parts fall, collide, and react.
+- [Networking](/docs/guides/networking) is the next step once you need more than one player.

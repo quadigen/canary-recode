@@ -257,15 +257,28 @@ screen.Name = "ScrollScreen"
 
 local scroll = Instance.new("ScrollingFrame", screen)
 scroll.Name = "AutoScroll"
+SCROLL_FRAME = scroll
 scroll.Position = UDim2.fromOffset(0, 0)
 scroll.Size = UDim2.fromOffset(100, 100)
 scroll.CanvasSize = UDim2.fromOffset(300, 200)
 scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 assert(scroll.AutomaticCanvasSize == Enum.AutomaticSize.Y)
+assert(scroll.ElasticBehavior == Enum.ElasticBehavior.WhenScrollable)
+scroll.ElasticBehavior = Enum.ElasticBehavior.Always
+assert(scroll.ElasticBehavior == Enum.ElasticBehavior.Always)
 assert(math.abs(scroll.AbsoluteCanvasSize.X - 300) < 0.01)
 
 local layout = Instance.new("UIListLayout", scroll)
 layout.Padding = UDim.new(0, 5)
+
+SCROLL_SIZE_CHANGES = {}
+SCROLL_CONTENT_SIZE_CHANGES = {}
+scroll:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+	table.insert(SCROLL_SIZE_CHANGES, scroll.AbsoluteSize)
+end)
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	table.insert(SCROLL_CONTENT_SIZE_CHANGES, layout.AbsoluteContentSize)
+end)
 
 for index = 1, 10 do
 	local item = Instance.new("Frame", scroll)
@@ -281,6 +294,17 @@ assert(copy.AutomaticCanvasSize == Enum.AutomaticSize.Y)
 	)
 
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	run_script(
+		&script_vm,
+		`
+assert(#SCROLL_SIZE_CHANGES == 1)
+assert(SCROLL_SIZE_CHANGES[1] == Vector2.new(100, 100))
+assert(#SCROLL_CONTENT_SIZE_CHANGES == 1)
+assert(SCROLL_CONTENT_SIZE_CHANGES[1].Y == 245)
+`,
+		"gui_layout_scrolling_size_changes",
+	)
 
 	scroll := find_gui(&environment, "AutoScroll")
 	expect_object("AutoScroll", scroll)
@@ -294,6 +318,26 @@ assert(copy.AutomaticCanvasSize == Enum.AutomaticSize.Y)
 	}
 	classes.ScrollingFrame_update_animation(frame, rect, 0.016)
 	expect_close("scroll max y", frame.max_scroll_y, 145)
+	run_script(
+		&script_vm,
+		`
+local scroll = SCROLL_FRAME
+local changes = 0
+local connection = scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+	changes += 1
+	if changes == 1 then scroll.CanvasPosition = scroll.CanvasPosition end
+end)
+scroll.CanvasPosition = Vector2.new(0, 30)
+assert(changes == 1)
+scroll.CanvasPosition = Vector2.new(0, 1000)
+assert(scroll.CanvasPosition.Y == 145 and changes == 2)
+scroll.CanvasPosition = Vector2.new(0, 1000)
+assert(changes == 2, "clamping to the current position must not emit a change")
+connection:Disconnect()
+scroll.CanvasPosition = Vector2.zero
+`,
+		"gui_layout_canvas_position_changes",
+	)
 
 	run_script(
 		&script_vm,
@@ -591,6 +635,121 @@ assert(DISABLE_LAYOUT.PositionCallback == nil)
 
 	expect_close("callback disabled x", callback_disable_a.absolute_position.X, 10)
 	expect_close("callback disabled y", callback_disable_a.absolute_position.Y, 20)
+
+	run_script(
+		&script_vm,
+		`
+local screen = Instance.new("ScreenGui")
+assert(screen:IsA("GuiBase2d") and screen:IsA("LayerCollector"))
+screen.Size = Vector2.new(800, 600)
+assert(screen.AbsoluteSize == Vector2.new(800, 600))
+
+local row = Instance.new("Frame", screen)
+row.Size = UDim2.new(UDim.new(0, 200), UDim.new(0, 50))
+assert(typeof(row.Size.X) == "UDim" and typeof(row.Size.Height) == "UDim")
+assert(row.Size.Width.Offset == 200 and row.Size.Y.Offset == 50)
+
+local layout = Instance.new("UIListLayout", row)
+layout.FillDirection = Enum.FillDirection.Horizontal
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local fixed = Instance.new("Frame", row)
+fixed.Size = UDim2.fromOffset(50, 30)
+
+local first = Instance.new("Frame", row)
+first.Name = "IrisFirstFlex"
+first.Size = UDim2.fromOffset(25, 10)
+first.LayoutOrder = 1
+local fill = Instance.new("UIFlexItem", first)
+fill.FlexMode = Enum.UIFlexMode.Fill
+fill.ItemLineAlignment = Enum.ItemLineAlignment.Center
+assert(fill:IsA("UIComponent"))
+
+local second = Instance.new("Frame", row)
+second.Name = "IrisSecondFlex"
+second.Size = UDim2.fromOffset(25, 10)
+second.LayoutOrder = 2
+local custom = Instance.new("UIFlexItem", second)
+custom.FlexMode = Enum.UIFlexMode.Custom
+custom.GrowRatio = 3
+custom.ShrinkRatio = 0
+local copy = custom:Clone()
+assert(copy.FlexMode == Enum.UIFlexMode.Custom and copy.GrowRatio == 3)
+assert(copy.ShrinkRatio == 0)
+copy:Destroy()
+
+local button = Instance.new("TextButton", screen)
+button.Name = "IrisAutoButton"
+button.Size = UDim2.fromOffset(0, 0)
+button.AutomaticSize = Enum.AutomaticSize.XY
+button.Text = ""
+button.RichText = true
+assert(button.RichText)
+button.Transparency = 0.25
+assert(button.BackgroundTransparency == 0.25)
+button.Visible = nil
+assert(button.Visible == false)
+button.Visible = true
+Instance.new("UIListLayout", button)
+local icon = Instance.new("ImageButton", button)
+icon.Size = UDim2.fromOffset(40, 24)
+icon.SliceCenter = Rect.new(1, 2, 10, 12)
+icon.SliceScale = 0.5
+assert(icon.SliceCenter.Min.X == 1 and icon.SliceScale == 0.5)
+button.SelectionImageObject = icon
+assert(button.SelectionImageObject == icon)
+local buttonCopy = button:Clone()
+assert(buttonCopy.SelectionImageObject == buttonCopy.ImageButton)
+buttonCopy.ImageButton:Destroy()
+assert(buttonCopy.SelectionImageObject == nil)
+buttonCopy:Destroy()
+
+local scroll = Instance.new("ScrollingFrame", screen)
+scroll.Name = "IrisScroll"
+scroll.Size = UDim2.fromOffset(120, 80)
+scroll.CanvasSize = UDim2.fromOffset(0, 160)
+scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+scroll.ScrollBarThickness = 8
+scroll.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+local page = Instance.new("Frame", scroll)
+page.Name = "IrisScrollChild"
+page.Size = UDim2.new(1, 0, 0, 160)
+
+IRIS_LAYOUT_ROW = row
+IRIS_LAYOUT_SCROLL = scroll
+`,
+		"iris_compat_layout",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+
+	first_flex := find_gui(&environment, "IrisFirstFlex")
+	second_flex := find_gui(&environment, "IrisSecondFlex")
+	auto_button := find_gui(&environment, "IrisAutoButton")
+	scroll_child := find_gui(&environment, "IrisScrollChild")
+	expect_object("IrisFirstFlex", first_flex)
+	expect_object("IrisSecondFlex", second_flex)
+	expect_object("IrisAutoButton", auto_button)
+	expect_object("IrisScrollChild", scroll_child)
+	expect_close("fill item width", first_flex.absolute_size.X, 50)
+	expect_close("centered flex item y", first_flex.absolute_position.Y, 10)
+	expect_close("custom grow item width", second_flex.absolute_size.X, 100)
+	expect_close("autosizing button child width", auto_button.absolute_size.X, 40)
+	expect_close("autosizing button child height", auto_button.absolute_size.Y, 24)
+	expect_close("inset scrolling child width", scroll_child.absolute_size.X, 112)
+
+	run_script(
+		&script_vm,
+		`
+assert(IRIS_LAYOUT_SCROLL.AbsoluteWindowSize == Vector2.new(112, 80))
+IRIS_LAYOUT_ROW.Size = UDim2.fromOffset(90, 50)
+IRIS_LAYOUT_SCROLL.CanvasSize = UDim2.fromOffset(0, 80)
+`,
+		"iris_compat_layout_resize",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	expect_close("fill item shrinks on overflow", first_flex.absolute_size.X, 15)
+	expect_close("zero shrink ratio keeps basis", second_flex.absolute_size.X, 25)
+	expect_close("scrollbar inset clears", scroll_child.absolute_size.X, 120)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

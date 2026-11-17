@@ -1,0 +1,204 @@
+---
+title: Instance
+description: Work with the hierarchy, properties, attributes, tags, and lifetime of instances in Luau.
+---
+
+`Instance` is the common base class for many of the objects you work with in Kinemium. Parts, scripts, and GUI elements can belong to an object hierarchy, where each object has a name, a class, and an optional parent.
+
+`Instance` inherits from `Object` and exposes the familiar shared object API. This page focuses on what you'll use when building games and tools. See the `Object` reference for the complete shared API, including detailed validation rules and security restrictions.
+
+## Working with the hierarchy
+
+Use `Parent` to move an instance around the tree. Setting it to `nil` detaches the instance without destroying it.
+
+```lua
+local function move(instance, newParent)
+    instance.Parent = newParent
+    print(instance:GetFullName())
+end
+```
+
+You can read existing children by name, for example `container.Header`, when the name doesn't conflict with a property. For optional children, `FindFirstChild()` is a better choice because you can explicitly handle a missing result.
+
+The examples on this page take instances you've already obtained. They don't depend on a particular constructor or factory.
+
+## Properties
+
+| Property | Type | Access | Default / purpose |
+| --- | --- | --- | --- |
+| `Name` | `string` | Read/write | `"Instance"` for a base Instance; subclasses can use other defaults. |
+| `ClassName` | `string` | Read-only | The concrete class name. |
+| `Parent` | `Object?` | Read/write | `nil`; the immediate parent in the hierarchy. |
+| `Archivable` | `boolean` | Read/write | `true`; allows the instance to be cloned. |
+| `CanReplicate` | `boolean` | Read/write | `true`; marks the instance as eligible for replication. |
+| `ReplicationGroup` | `string` | Read/write | `""`; the associated replication group. |
+| `ReplicationMode` | `Enum.ReplicationMode` | Read/write | Controls the selected replication mode. |
+| `NetworkId` | `number` | Read-only | Initially `0`; the network identifier. |
+| `UniqueId` | `UniqueId` | Read-only | The instance's identity, assigned on creation. |
+| `Capabilities` | `SecurityCapabilities` | Restricted write | Security capabilities; only authorized internal scripts can modify these. |
+| `Sandboxed` | `boolean` | Restricted write | `false`; whether the instance itself is sandboxed. |
+| `IsInSandbox` | `boolean` | Read-only | Whether the instance or an ancestor is sandboxed. |
+
+### Parent
+
+Parenting is how you establish relationships between instances. An instance cannot be parented to itself or one of its descendants; attempting this raises an error. Invalid parent values also raise an error. Changing `Parent` doesn't change `ClassName` or create a new object.
+
+### ClassName and IsA
+
+Use `ClassName` when you need the exact class and `IsA()` when you also want to accept subclasses.
+
+```lua
+local function inspect(instance)
+    print(instance.ClassName)
+
+    if instance:IsA("GuiObject") then
+        instance.Visible = true
+    end
+end
+```
+
+## Methods
+
+### Searching and inspecting instances
+
+The following methods are available through the common object API. Searches return `nil` if a matching object cannot be returned. The `recursive` argument defaults to `false`.
+
+| Signature | Description |
+| --- | --- |
+| `FindFirstChild(name: string, recursive: boolean?): Object?` | Finds a child by name; optionally searches deeper. |
+| `FindFirstChildOfClass(className: string): Object?` | Finds a direct child by class or inheritance. |
+| `FindFirstChildWhichIsA(className: string, recursive: boolean?): Object?` | Finds a child by class or inheritance, optionally searching deeper. |
+| `FindFirstAncestor(name: string): Object?` | Finds the nearest ancestor with a matching name. |
+| `FindFirstAncestorOfClass(className: string): Object?` | Finds an ancestor by class or inheritance. |
+| `FindFirstAncestorWhichIsA(className: string): Object?` | Currently finds an ancestor by exact class name. |
+| `WaitForChild(name: string, timeout: number?): Object?` | Looks for a direct child by name; currently does not yield. |
+| `WaitForChildOfClass(className: string, timeout: number?): Object?` | Looks for a direct child by class or inheritance; currently does not yield. |
+| `GetChildren(): {Object}` | Returns a new array of accessible direct children. |
+| `GetDescendants(): {Object}` | Returns a new array of accessible descendants, including nested children. |
+| `GetFullName(): string` | Returns a dot-separated path of names. |
+| `GetProperties(): {string}` | Lists registered property names from the class and its ancestors. |
+| `IsA(className: string): boolean` | Checks the class and its inheritance chain. |
+| `IsAncestorOf(descendant: Object): boolean` | Checks whether the supplied object is beneath this one. |
+| `IsDescendantOf(ancestor: Object): boolean` | Checks whether the supplied object is above this one. |
+
+```lua
+local function showAllGuiObjects(container)
+    for _, object in ipairs(container:GetDescendants()) do
+        if object:IsA("GuiObject") then
+            object.Visible = true
+        end
+    end
+end
+```
+
+`WaitForChild()` and `WaitForChildOfClass()` have a default timeout argument of `10`, but the current implementation doesn't actually wait for elapsed time or yield to other scripts. For objects created later, prefer `ChildAdded` instead. Some shared methods are callable even though they are not listed in the Instance reflection metadata.
+
+### Clone
+
+```lua
+Clone(): Object?
+```
+
+Creates a copy of the instance, including its archivable descendants, attributes, and tags. The copy starts without a parent. If `Archivable` is `false`, cloning returns `nil`. Descendants that aren't archivable are skipped along with their subtrees.
+
+```lua
+local function duplicate(template, destination)
+    local copy = template:Clone()
+    if copy then
+        copy.Parent = destination
+    end
+    return copy
+end
+```
+
+### Destroy
+
+```lua
+Destroy(): ()
+```
+
+Removes the instance and its descendants permanently. Don't continue using an instance after destroying it. To temporarily remove it while keeping the object alive, use `instance.Parent = nil` instead.
+
+### ClearAllChildren
+
+```lua
+ClearAllChildren(): ()
+```
+
+Destroys accessible direct children and their descendants without destroying the container itself.
+
+### Attributes and tags
+
+Use attributes for values and tags for labels. For example, an enemy could have a `Health` attribute and an `Enemy` tag.
+
+| Signature | Description |
+| --- | --- |
+| `GetAttribute(name: string): any` | Reads an attribute, returning `nil` when absent. |
+| `GetAttributes(): { [string]: any }` | Returns a new name-to-value table. |
+| `SetAttribute(name: string, value: any): ()` | Sets an attribute or removes it when the value is `nil`. |
+| `AddTag(tag: string): ()` | Attaches a tag, without creating duplicates. |
+| `RemoveTag(tag: string): ()` | Removes an existing tag. |
+| `HasTag(tag: string): boolean` | Checks if a tag is present. |
+| `GetTags(): {string}` | Returns a new array of tags. |
+
+```lua
+local function setupEnemy(enemy)
+    enemy:AddTag("Enemy")
+    enemy:SetAttribute("Health", 100)
+    enemy:SetAttribute("Damage", 15)
+end
+```
+
+Attribute names support letters, digits, `_`, `-`, `.`, and `/`, up to 100 characters, and cannot start with `RBX` (case-insensitive). Tags must be 1–100 characters with no NUL bytes. Attributes support primitive values, vectors, and registered datatypes, not arbitrary tables or instance references.
+
+### GetPropertyChangedSignal
+
+```lua
+GetPropertyChangedSignal(property: string): signal?
+```
+
+Returns a signal that fires when a change notification is emitted for the specified property. The callback doesn't receive a value, so read the property directly.
+
+```lua
+local function watchParent(instance)
+    local signal = instance:GetPropertyChangedSignal("Parent")
+    if signal then
+        signal:Connect(function()
+            print(instance.Parent)
+        end)
+    end
+end
+```
+
+## Events
+
+`Changed` is declared by `Instance`. The shared object API also exposes hierarchy and destruction events, even though the Instance reflection list only declares `Changed`.
+
+| Event | Callback arguments | Description |
+| --- | --- | --- |
+| `Changed` | `property: string` | A property-change notification is emitted. |
+| `ChildAdded` | `child: Object` | A child is attached directly to the instance. |
+| `ChildRemoved` | `child: Object` | A direct child is detached. |
+| `DescendantAdded` | `descendant: Object` | An object is attached beneath the instance. |
+| `DescendantRemoving` | `descendant: Object` | An object is detached from beneath the instance. |
+| `AncestryChanged` | `object: Object, parent: Object?` | The instance's immediate parent changes. |
+| `Destroying` | None | The instance begins destruction. |
+
+```lua
+local function watchChildren(container)
+    container.ChildAdded:Connect(function(child)
+        print("Added:", child.Name)
+    end)
+
+    container.ChildRemoved:Connect(function(child)
+        print("Removed:", child.Name)
+    end)
+end
+```
+
+Moving a subtree currently sends hierarchy notifications for the moved object rather than separately notifying for every nested descendant. `DescendantRemoving` fires after reparenting has changed the parent relationship. Use the `Object` reference for more details.
+
+## See also
+
+- `Object`, common object API, security, and lifecycle behavior.
+- `GuiObject`, shared properties and events for GUI controls.

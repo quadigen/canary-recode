@@ -183,6 +183,10 @@ is_playing :: proc(sound: ^Sound) -> b32 {
 	return miniaudio.sound_is_playing(&sound.source)
 }
 
+at_end :: proc(sound: ^Sound) -> bool {
+	return is_loaded(sound) && bool(miniaudio.sound_at_end(&sound.source))
+}
+
 set_volume :: proc(sound: ^Sound, volume: f32) {
 	if sound == nil || !sound.loaded {
 		return

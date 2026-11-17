@@ -1,0 +1,81 @@
+---
+title: ScreenGui
+description: Root container for a screen interface, with safe-area and display-order controls.
+---
+
+`ScreenGui` is the top of a screen interface tree. It owns the drawable area, the display order relative to other interfaces, and the safe-area behavior; every visible GUI element sits underneath it.
+
+## Getting started
+
+```lua
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Hud"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 10
+screenGui.Parent = player.PlayerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(240, 120)
+frame.Parent = screenGui
+```
+
+Parent it under `PlayerGui` for a live interface, or under `StarterGui` to provide a template.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the interface renders and receives input. |
+| `DisplayOrder` | `number` | Read/write | `0` | Draw order against other screen interfaces. Higher values draw later. |
+| `ResetOnSpawn` | `boolean` | Read/write | `true` | Whether the interface is rebuilt when the player respawns. |
+| `AutoLocalize` | `boolean` | Read/write | `false` | Localization flag for the contents. |
+| `IgnoreGuiInset` | `boolean` | Read/write | `false` | Whether the interface ignores the safe-area inset. |
+| `IgnoreCursorInset` | `boolean` | Read/write | `false` | Whether the interface ignores the cursor inset. |
+| `ClipToDeviceSafeArea` | `boolean` | Read/write | `true` | Whether drawing is clipped to the device safe area. |
+| `SafeAreaCompatibility` | `Enum.SafeAreaCompatibility` | Read/write | `None` | Safe-area compatibility mode. |
+| `ScreenInsets` | `Enum.ScreenInsets` | Read/write | `None` | Which screen insets apply. |
+| `RenderOnTop` | `boolean` | Read/write | `false` | Draws the interface above other GUI. |
+| `Size` | `Vector2` | Read/write | `(0, 0)` | Explicit interface size. Zero means use the viewport. |
+| `RenderOffset` | `Vector2` | Read/write | `(0, 0)` | Offset applied when drawing the interface. |
+| `AbsolutePosition` | `Vector2` | Read-only | `(0, 0)` | Resolved screen position. |
+| `AbsoluteSize` | `Vector2` | Read-only | Viewport size | Resolved interface size. |
+
+`Size` and `RenderOffset` are vectors in UI units, not `UDim2` values. Leaving `Size` at zero lets the interface use the viewport, which is what most interfaces want.
+
+## Display order and visibility
+
+Two interfaces with the same `DisplayOrder` rely on hierarchy order, which is hard to predict; give each layer a distinct number instead.
+
+```lua
+local pauseMenu = Instance.new("ScreenGui")
+pauseMenu.DisplayOrder = 100
+pauseMenu.Enabled = false
+pauseMenu.Parent = player.PlayerGui
+```
+
+Toggling `Enabled` hides the whole tree from rendering and input. It's cheaper than destroying and rebuilding the interface.
+
+## Safe area
+
+On devices with notches or system bars, `ClipToDeviceSafeArea` and the inset properties decide whether content can extend into those areas. `IgnoreGuiInset` opts out of the standard inset.
+
+```lua
+hud.IgnoreGuiInset = true
+```
+
+`GuiService:GetGuiInset()` gives you the numbers if you want to lay out around the inset yourself.
+
+## Notes
+
+- `ScreenGui` has no methods or events of its own. Its children use `GuiObject` behavior.
+- `ResetOnSpawn` is read by the spawning flow, not by the class itself. A live interface parented under `PlayerGui` with this enabled can be replaced on respawn.
+- `RenderOnTop` is for overlays; ordinary interfaces should stay in normal order.
+- Destroying the `ScreenGui` destroys its whole subtree.
+- Cloning copies every setting, not the rendered state.
+
+## See also
+
+- `GuiObject`, layout and input for elements inside the interface.
+- `Frame`, the usual first child.
+- `Players`, `PlayerGui`.
+- `GuiService`, platform inset values.

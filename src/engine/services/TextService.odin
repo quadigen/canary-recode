@@ -293,7 +293,7 @@ text_service_get :: proc(
 	_ = enum_registry
 
 	switch key {
-	case "GetTextSize", "MeasureText", "GetTextWidth", "GetLineHeight":
+	case "GetTextSize", "GetTextBoundsAsync", "MeasureText", "GetTextWidth", "GetLineHeight":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -318,6 +318,21 @@ text_service_namecall :: proc(
 	_ = enum_registry
 
 	switch method {
+	case "GetTextBoundsAsync":
+		input := classes.Object_From_Argument(L, 2)
+		if !classes.Is_A_Class(input, &classes.GetTextBoundsParams_Class) || input.destroyed {
+			return vm.RaiseError(L, "expected GetTextBoundsParams"), true
+		}
+		params := cast(^classes.GetTextBoundsParams)input
+		if len(params.text) >= 200_000 {return vm.RaiseError(L, "text exceeds the measurement limit"), true}
+		typeface := classes.TextLabel_Load_Typeface_From_Font(params.font)
+		if typeface == nil {typeface = classes.TextLabel_Load_Typeface_From_Family(classes.DEFAULT_FONT)}
+		if typeface == nil {return vm.RaiseError(L, "failed to load a font for text measurement"), true}
+		defer kineffi.Kine_Skia_Typeface_Destroy(typeface)
+		bounds := text_service_get_text_size(typeface, params.text, max(1, params.size), {max(0, params.width), 0})
+		datatypes.Push_Vector2(L, datatype_registry, bounds)
+		return 1, true
+
 	case "MeasureText":
 		text := vm.ArgString(L, 2)
 		text_size := f32(vm.ArgNumber(L, 3))

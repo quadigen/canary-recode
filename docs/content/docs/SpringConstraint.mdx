@@ -1,0 +1,72 @@
+---
+title: SpringConstraint
+description: Pull two attachments together with adjustable stiffness and damping.
+---
+
+`SpringConstraint` connects two attachments with a spring. It can also render a coil between them and limit the travel distance.
+
+## Getting started
+
+```lua
+local spring = Instance.new("SpringConstraint")
+spring.Attachment0 = base.Attachment
+spring.Attachment1 = platform.Attachment
+spring.Stiffness = 400
+spring.Damping = 40
+spring.FreeLength = 2
+spring.Visible = true
+spring.Parent = platform
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First anchor. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second anchor. |
+| `Stiffness` | `number` | Read/write | `0` | Spring strength. Higher pulls harder. |
+| `Damping` | `number` | Read/write | `0` | Resistance to relative motion. |
+| `FreeLength` | `number` | Read/write | `1` | Length at which the spring applies no force. |
+| `MaxForce` | `number` | Read/write | `inf` | Maximum force the spring can apply. |
+| `MinLength` | `number` | Read/write | `0` | Lower travel limit when limits are enabled. |
+| `MaxLength` | `number` | Read/write | `5` | Upper travel limit when limits are enabled. |
+| `LimitsEnabled` | `boolean` | Read/write | `false` | Whether the min and max lengths apply. |
+| `Stand` | `boolean` | Read/write | `false` | Keep the coil standing along its axis instead of sagging. |
+| `Visible` | `boolean` | Read/write | `false` | Whether the coil is drawn. |
+| `Coils` | `number` | Read/write | `3` | Number of rendered coils, clamped to `0` through `8`. |
+| `Color` | `BrickColor` | Read/write | Lemon metalic | Color of the rendered coil. |
+| `Radius` | `number` | Read/write | `0.4` | Radius of the rendered coil. |
+| `Thickness` | `number` | Read/write | `0.1` | Line thickness of the rendered coil. |
+| `CurrentLength` | `number` | Read-only | `0` | Distance between the anchors. |
+| `Active` | `boolean` | Read-only | `false` | Whether the spring is simulating. |
+
+Numeric properties other than `Coils` clamp to `0` or above. Assigning `NaN` raises an error. `MinLength` and `MaxLength` rebuild the joint when they change.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `GetDebugAppliedForce(index: number): Vector3` | Returns the last force applied at end `0` or `1`. |
+| `GetDebugAppliedTorque(index: number): Vector3` | Returns the last torque applied at end `0` or `1`. |
+
+The debug methods return a zero vector for any index other than `0` or `1`. They report the last step's values, so they read zero when the spring is inactive.
+
+## How it behaves
+
+A spring with `Stiffness = 0` and `Damping = 0` applies no force. `FreeLength` is the rest length; a span longer or shorter than it produces a corrective force, capped by `MaxForce`.
+
+`LimitsEnabled` adds hard stops at `MinLength` and `MaxLength`. `Stand` keeps the visual coil aligned with the attachment axis, which is useful for suspension and landing gear.
+
+`CurrentLength` is computed from the attachment positions and reads `0` when either attachment is missing. `Active` requires both attachments to be part of the same workspace.
+
+## Notes
+
+- Assigning a non-attachment to an attachment property is ignored.
+- Cloning copies the configuration but starts inactive.
+- The rendered coil is a gizmo line, not a solid mesh.
+
+## See also
+
+- `RopeConstraint` for a maximum-distance link.
+- `Constraint` for the shared attachment properties.
+- `Attachment` for anchor placement.

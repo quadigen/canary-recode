@@ -338,8 +338,10 @@ terrain_gen_fill_chunk :: proc(
 				}
 
 				water: f32
-				if f32(wy) + 1 <= sea_vox && occ < 1 && depth < 1 {
-					water = 1 // open water above the surface only (no flooded caves)
+				level := clamp(sea_vox - f32(wy), 0, 1)
+				at_sea_surface := f32(wy) + 1 >= sea_vox && hv < sea_vox
+				if level > 0 && ((occ < 1 && depth < 1) || at_sea_surface) {
+					water = level // Fill the surface to sea level without flooding underground caves.
 				}
 				if occ <= 0 && water <= 0 {continue}
 

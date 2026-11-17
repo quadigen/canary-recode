@@ -1,0 +1,30 @@
+---
+title: Folder
+description: Group instances in the hierarchy without adding behavior.
+---
+
+`Folder` is an empty container. It organizes children, keeps the tree readable, and gives you one object to clone or destroy as a group. It adds no members of its own.
+
+## Getting started
+
+```lua
+local folder = Instance.new("Folder")
+folder.Name = "Enemies"
+folder.Parent = game:GetService("Workspace")
+
+local enemy = Instance.new("Model")
+enemy.Parent = folder
+```
+
+## Notes
+
+- Folders are `Instance` objects with the standard hierarchy, cloning, and lifecycle API.
+- They don't render, collide, or simulate.
+- Cloning a folder clones its archivable descendants.
+- Destroying a folder destroys everything inside it.
+- `Folder.IconTint` exists in the implementation but isn't exposed through the Luau property API.
+
+## See also
+
+- `Configuration` for a container that holds settings together.
+- `Model` when the group needs a pivot and bounding box.

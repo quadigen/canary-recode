@@ -564,6 +564,43 @@ tween_get_value :: proc(alpha: f64, style: i64, direction: i64) -> f64 {
 	return tween_ease_in(t, style)
 }
 
+tween_smooth_damp :: proc(
+	current, target, velocity, smooth_time, max_speed, delta_time: f64,
+) -> (
+	f64,
+	f64,
+) {
+	if delta_time <= 0 {
+		return current, velocity
+	}
+	st := smooth_time
+	if st <= 0 {
+		st = 0.0001
+	}
+
+	omega := 2.0 / st
+	x := omega * delta_time
+	exp := 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+
+	original_target := target
+	change := current - target
+	if max_speed > 0 {
+		max_change := max_speed * st
+		change = clamp(change, -max_change, max_change)
+	}
+	target_value := current - change
+
+	temp := (velocity + omega * change) * delta_time
+	new_velocity := (velocity - omega * temp) * exp
+	output := target_value + (change + temp) * exp
+
+	if (original_target - current > 0) == (output > original_target) {
+		output = original_target
+		new_velocity = (output - original_target) / delta_time
+	}
+	return output, new_velocity
+}
+
 tween_service_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -572,7 +609,7 @@ tween_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "Create", "GetValue":
+	case "Create", "GetValue", "SmoothDamp":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -593,6 +630,25 @@ tween_service_namecall :: proc(
 	bool,
 ) {
 	switch method {
+	case "SmoothDamp":
+		current := vm.ArgNumber(L, 2)
+		target := vm.ArgNumber(L, 3)
+		velocity := vm.ArgNumber(L, 4)
+		smooth_time := vm.ArgNumber(L, 5)
+		max_speed := vm.ArgOptionalNumber(L, 6, 1e9)
+		delta_time := vm.ArgNumber(L, 7)
+		new_value, new_velocity := tween_smooth_damp(
+			current,
+			target,
+			velocity,
+			smooth_time,
+			max_speed,
+			delta_time,
+		)
+		vm.PushNumber(L, new_value)
+		vm.PushNumber(L, new_velocity)
+		return 2, true
+
 	case "Create":
 		return tween_create(L, object, datatype_registry)
 

@@ -3,15 +3,17 @@ package services
 import kineffi "../bindings"
 import enums "../enum"
 
-Terrain_Surface_Kind :: enum { Water, Glass, Neon }
+Terrain_Surface_Kind :: enum {
+	Water,
+	Glass,
+	Neon,
+}
 
 Terrain_Surface_Geometry :: struct {
 	vertices: [dynamic]f32,
 	indices:  [dynamic]u32,
 }
 
-// Water still needs vertices for wave displacement. Four subdivisions per voxel
-// give one-stud spacing at the default resolution, down from 32 subdivisions.
 TERRAIN_WATER_SEGMENTS :: 4
 
 Terrain_Build_Chunk_Surfaces :: proc(
@@ -20,12 +22,27 @@ Terrain_Build_Chunk_Surfaces :: proc(
 	output: ^[Terrain_Surface_Kind]Terrain_Surface_Geometry,
 ) {
 	chunk := service.chunks[key]
-	if chunk == nil || chunk.data == nil || chunk.data.surface == 0 {return}
+	if chunk == nil || chunk.data == nil {return}
 	data := chunk.data
 	above_chunk := service.chunks[{key.x, key.y + 1, key.z}]
 	base_x := key.x * TERRAIN_CHUNK_SIZE
 	base_y := key.y * TERRAIN_CHUNK_SIZE
 	base_z := key.z * TERRAIN_CHUNK_SIZE
+	if data.surface > 0 {
+		terrain_append_exposed_surfaces(service, data, above_chunk, base_x, base_y, base_z, output)
+	}
+	if data.solid > 0 {
+		terrain_extend_water_under_shore(service, key, &output[.Water])
+	}
+}
+
+terrain_append_exposed_surfaces :: proc(
+	service: ^Terrain,
+	data: ^Terrain_Chunk_Data,
+	above_chunk: ^Terrain_Chunk,
+	base_x, base_y, base_z: int,
+	output: ^[Terrain_Surface_Kind]Terrain_Surface_Geometry,
+) {
 	vs := service.voxel_size
 	for lx in 0 ..< TERRAIN_CHUNK_SIZE {
 		for ly in 0 ..< TERRAIN_CHUNK_SIZE {
@@ -41,20 +58,104 @@ Terrain_Build_Chunk_Surfaces :: proc(
 					above_data = above_chunk.data if above_chunk != nil else nil
 					above_index = lx * TERRAIN_CHUNK_SIZE * TERRAIN_CHUNK_SIZE + lz
 				}
-				if above_data != nil &&
-				   (above_data.water[above_index] > 0 || above_data.occupancy[above_index] > 0) {continue}
+				if above_data != nil {
+					above_solid := above_data.occupancy[above_index]
+					if water > 0 && material != .Glass && material != .Neon {
+						if above_data.water[above_index] > 0 {continue}
+						below := data.occupancy[index]
+						if below + (above_solid - below) * water >= service.iso_level &&
+						   above_solid >= service.iso_level {continue}
+					} else if above_data.water[above_index] > 0 || above_solid > 0 {continue}
+				}
 
 				kind: Terrain_Surface_Kind
 				level := water
 				#partial switch material {
-				case .Glass: kind = .Glass
+				case .Glass:
+					kind = .Glass
 				case .Neon:
 					kind = .Neon
 					level = max(water, data.occupancy[index])
 				}
 				segments := TERRAIN_WATER_SEGMENTS if kind == .Water else 1
 				terrain_append_surface_grid(
-					&output[kind], base_x + lx, base_z + lz, (f32(base_y + ly) + level) * vs, vs, segments,
+					&output[kind],
+					base_x + lx,
+					base_z + lz,
+					(f32(base_y + ly) + level) * vs,
+					vs,
+					segments,
+				)
+			}
+		}
+	}
+}
+
+terrain_extend_water_under_shore :: proc(
+	service: ^Terrain,
+	key: Terrain_Chunk_Key,
+	surface: ^Terrain_Surface_Geometry,
+) {
+	S :: TERRAIN_CHUNK_SIZE
+	base_x, base_y, base_z := key.x * S, key.y * S, key.z * S
+	chunks: [2][2][2]^Terrain_Chunk_Data
+	for dx in 0 ..< 2 {
+		for dy in 0 ..< 2 {
+			for dz in 0 ..< 2 {
+				if chunk := service.chunks[{key.x + dx, key.y + dy, key.z + dz}]; chunk != nil {
+					chunks[dx][dy][dz] = chunk.data
+				}
+			}
+		}
+	}
+	// The solid mesh samples density at lattice points. A water tile owned by a
+	// voxel at (x,z) extends toward +X/+Z, so its dry neighbors on the opposite
+	// sides can have visible water between the tile boundary and the rock mesh.
+	for ly in 0 ..< S {
+		y := base_y + ly
+		water: [S + 1][S + 1]f32
+		for row, lx in water {
+			for _, lz in row {
+				data := chunks[lx / S][0][lz / S]
+				if data == nil {continue}
+				index := ((lx % S) * S + ly) * S + lz % S
+				level, material := data.water[index], data.material[index]
+				if level <= 0 || material == .Glass || material == .Neon {continue}
+				above := chunks[lx / S][(ly + 1) / S][lz / S]
+				above_index := ((lx % S) * S + (ly + 1) % S) * S + lz % S
+				if above == nil || above.water[above_index] <= 0 {
+					if above != nil && above.occupancy[above_index] >= service.iso_level {continue}
+					water[lx][lz] = level
+				}
+			}
+		}
+		for lx in 0 ..< S {
+			for lz in 0 ..< S {
+				if water[lx][lz] > 0 {continue}
+				levels := [4]f32{0, water[lx + 1][lz], water[lx][lz + 1], water[lx + 1][lz + 1]}
+				level := max(levels[1], levels[2], levels[3])
+				if level <= 0 {continue}
+				x, z := base_x + lx, base_z + lz
+				if terrain_water(service, x, y, z) > 0 {continue}
+				has_land, has_shore := false, false
+				for corner in 0 ..< 4 {
+					cx, cz := x + corner % 2, z + corner / 2
+					below := terrain_occupancy(service, cx, y, cz)
+					above := terrain_occupancy(service, cx, y + 1, cz)
+					density := below + (above - below) * level
+					has_shore = has_shore || density < service.iso_level
+					// A fully occupied lower sample can still have a shallow
+					// layer of water above the interpolated solid surface.
+					has_land = has_land || max(below, density) >= service.iso_level
+				}
+				if !has_land || !has_shore {continue}
+				terrain_append_surface_grid(
+					surface,
+					x,
+					z,
+					(f32(y) + level) * service.voxel_size,
+					service.voxel_size,
+					TERRAIN_WATER_SEGMENTS,
 				)
 			}
 		}
@@ -62,7 +163,10 @@ Terrain_Build_Chunk_Surfaces :: proc(
 }
 
 terrain_append_surface_grid :: proc(
-	surface: ^Terrain_Surface_Geometry, x, z: int, height, voxel_size: f32, segments: int,
+	surface: ^Terrain_Surface_Geometry,
+	x, z: int,
+	height, voxel_size: f32,
+	segments: int,
 ) {
 	base := u32(len(surface.vertices) / 8)
 	step := voxel_size / f32(segments)
@@ -70,8 +174,14 @@ terrain_append_surface_grid :: proc(
 		for sx in 0 ..= segments {
 			append(
 				&surface.vertices,
-				f32(x * segments + sx) * step, height, f32(z * segments + sz) * step,
-				0, 1, 0, f32(sx) / f32(segments), f32(sz) / f32(segments),
+				f32(x * segments + sx) * step,
+				height,
+				f32(z * segments + sz) * step,
+				0,
+				1,
+				0,
+				f32(sx) / f32(segments),
+				f32(sz) / f32(segments),
 			)
 		}
 	}
@@ -84,7 +194,11 @@ terrain_append_surface_grid :: proc(
 	}
 }
 
-terrain_append_chunk_surfaces :: proc(service: ^Terrain, chunk: ^Terrain_Chunk, transform: [16]f32) {
+terrain_append_chunk_surfaces :: proc(
+	service: ^Terrain,
+	chunk: ^Terrain_Chunk,
+	transform: [16]f32,
+) {
 	for mesh, kind in chunk.surface_meshes {
 		if mesh == nil {continue}
 		material_kind := kineffi.KINE_MAT_WATER
@@ -103,14 +217,21 @@ terrain_append_chunk_surfaces :: proc(service: ^Terrain, chunk: ^Terrain_Chunk, 
 			color = terrain_material_color(service, enums.Material.Neon)
 			transmission, param1 = 0, 1
 		}
-		append(&service.draw_items, kineffi.KineFilamentDrawItem{
-			mesh = mesh,
-			transform = transform,
-			r = color.R, g = color.G, b = color.B,
-			param1 = param1, param2 = param2, param3 = param3,
-			transmission = transmission,
-			materialKind = i32(material_kind),
-			flags = u32(kineffi.KINE_FILAMENT_DRAW_CULLING),
-		})
+		append(
+			&service.draw_items,
+			kineffi.KineFilamentDrawItem {
+				mesh = mesh,
+				transform = transform,
+				r = color.R,
+				g = color.G,
+				b = color.B,
+				param1 = param1,
+				param2 = param2,
+				param3 = param3,
+				transmission = transmission,
+				materialKind = i32(material_kind),
+				flags = u32(kineffi.KINE_FILAMENT_DRAW_CULLING),
+			},
+		)
 	}
 }

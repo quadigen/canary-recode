@@ -1,0 +1,53 @@
+---
+title: ServerScriptService
+description: Hold server-side Scripts that should run on the server but not be sent to clients.
+---
+
+`ServerScriptService` is a container for server scripts. Scripts parented under it run on the server, and their contents aren't placed in the replicated world.
+
+The service has no Luau members of its own. Everything you do with it is the shared `Instance` API: parent scripts, organize them in folders, and find them by name.
+
+## Getting started
+
+```lua
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local folder = Instance.new("Folder")
+folder.Name = "Systems"
+folder.Parent = ServerScriptService
+```
+
+## Scripts under this service
+
+When the server starts, it runs every `Script` in the service and its descendants. That makes this the place for bootstrap code, game systems, and anything that must not run on a client.
+
+- A `Script` here runs on the server.
+- A `LocalScript` here doesn't run, because it expects a client runtime.
+- A `ModuleScript` doesn't run on its own; `require()` it from a server script.
+
+```lua
+local bootstrap = Instance.new("Script")
+bootstrap.Name = "Bootstrap"
+bootstrap.Parent = game:GetService("ServerScriptService")
+```
+
+Scripts added after startup are started as they're parented, so spawning a `Script` at runtime runs it.
+
+## What clients see
+
+The service's contents aren't replicated to clients. A client `GetService("ServerScriptService")` gets the service object, but it won't see the scripts' source or their children.
+
+That makes it safe to keep server-only configuration and keys here rather than in `ReplicatedStorage`.
+
+## Notes
+
+- The service is a container, not a runtime switch. Reparenting a script out of it doesn't stop an already running thread; disable or destroy the script.
+- Use `Folder` children to group systems. Nothing about the service's behavior depends on nesting depth.
+- Don't rely on creation order between scripts. Coordinate through events, modules, or explicit initialization.
+- There's no `ServerScriptService`-specific event. Use `ScriptContext` for script-level notifications where needed.
+
+## See also
+
+- `Script`, server-side script behavior.
+- `ModuleScript`, shared code loaded with `require()`.
+- `ReplicatedStorage`, the container clients can see.

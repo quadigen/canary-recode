@@ -1,0 +1,197 @@
+---
+title: TextBox
+description: An editable text field with a caret, selection, find bar, and optional code-editor features.
+---
+
+`TextBox` is the editable text input. It stores text, tracks a caret and selection, and can run as a plain field or as a code editor with line numbers, bracket matching, diagnostics, and a minimap.
+
+## Getting started
+
+```lua
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(0, 320, 0, 40)
+box.PlaceholderText = "Enter a name"
+box.TextSize = 18
+box.ClearTextOnFocus = false
+box.Parent = screenGui
+
+box.Focused:Connect(function()
+    print("editing")
+end)
+
+box.TextChanged:Connect(function()
+    print("now", box.Text)
+end)
+```
+
+## Text and content
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Text` | `string` | Read/write | `""` | Current contents. Writing it fires `TextChanged`. |
+| `PlaceholderText` | `string` | Read/write | `""` | Hint shown while the field is empty. |
+| `TextEditable` | `boolean` | Read/write | `true` | Whether the user can modify the text. |
+| `ClearTextOnFocus` | `boolean` | Read/write | `false` | Clear the field when it gains focus. |
+| `SelectAllOnFocus` | `boolean` | Read/write | `false` | Select the whole contents on focus. |
+| `MultiLine` | `boolean` | Read/write | `false` | Accept line breaks. Changing it resets scroll and caret state. |
+| `WordWrap` | `boolean` | Read/write | `false` | Wrap long lines. `TextWrapped` is an alias. |
+| `MaxLength` | `number` | Read/write | `-1` | Maximum characters, `-1` for no limit. Values below `-1` are raised to `-1`. Setting it below the current length truncates the text. |
+
+`MaxLength` counts characters, not bytes. It applies to user input and to programmatic writes.
+
+## Font and appearance
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Font` | `Enum.Font` | Read/write | `Enum.Font.Legacy` | Legacy font selector. The setter also accepts a `Font` object or a family string. |
+| `FontFace` | `Font` | Read/write | Built-in Montserrat Regular | Font object with family, weight, and style. |
+| `TextSize` | `number` | Read/write | `16` | Font size in pixels, minimum `1`. |
+| `TextColor3` | `Color3` | Read/write | Black | Text color. |
+| `PlaceholderColor3` | `Color3` | Read/write | `(0.5, 0.5, 0.5)` | Placeholder color. |
+| `TextTransparency` | `number` | Read/write | `0` | Text transparency, clamped to `0` through `1`. |
+| `TextXAlignment` | `Enum.TextXAlignment` | Read/write | `Left` | Horizontal alignment. |
+| `TextYAlignment` | `Enum.TextYAlignment` | Read/write | `Center` | Vertical alignment. |
+
+Assigning `Font` with an enum uses that font. Assigning a `Font` object stores the object through `FontFace`. Assigning a string treats it as a font family name.
+
+## Caret and selection
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `CursorPosition` | `number` | Read/write | `1` | Caret position as a one-based character index. |
+| `SelectionStart` | `number` | Read/write | `1` | Selection anchor as a one-based character index. |
+| `SelectionEnd` | `number` | Read/write | `1` | Selection end as a one-based character index. |
+| `SelectedText` | `string` | Read-only | `""` | Currently selected text, or an empty string. |
+| `CaretScreenPosition` | `Vector2` | Read-only | `(0, 0)` | Last resolved caret position on screen. |
+| `CaretColor3` | `Color3` | Read/write | `(0.25, 0.5, 1.0)` | Caret color. |
+| `SelectionColor3` | `Color3` | Read/write | `(0.25, 0.5, 1.0)` | Selection highlight color. |
+| `SelectionTransparency` | `number` | Read/write | `0.65` | Selection highlight transparency, clamped to `0` through `1`. |
+| `FocusColor3` | `Color3` | Read/write | `(0.25, 0.5, 1.0)` | Focus outline color. |
+| `KeyHandled` | `boolean` | Read/write | `false` | Marks the current key event as handled. |
+
+Positions are one-based character offsets, not byte offsets. Setting `SelectionStart` moves the anchor, and setting `SelectionEnd` moves the caret.
+
+## Buffers and counts
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `TextBufferCapacity` | `number` | Read/write | `0` | Reserved buffer capacity in bytes, clamped to `0` through `256 MB`. |
+| `TextByteLength` | `number` | Read-only | `0` | Length of `Text` in UTF-8 bytes. |
+| `MaxUndoEntries` | `number` | Read/write | `1000` | Undo history limit, clamped to `0` through `100000`. |
+| `SyntaxHighlightMaxBytes` | `number` | Read/write | `2 MB` | Text size above which syntax highlighting is skipped, clamped to `0` through `128 MB`. |
+| `LineCount` | `number` | Read-only | Derived | Number of lines in the current text. |
+| `DiagnosticCount` | `number` | Read-only | `0` | Number of diagnostics currently stored. |
+
+`TextBufferCapacity` reserves memory. It isn't a limit on the text length; `MaxLength` is.
+
+## Editor behavior
+
+These settings control code-editor presentation. All are read/write unless noted.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `CodeEditor` | `boolean` | `false` | Enables editor behavior. Changing it resets scroll and caret state. |
+| `ShowLineNumbers` | `boolean` | `true` | Draw the line-number gutter. |
+| `RelativeLineNumbers` | `boolean` | `false` | Show line numbers relative to the caret. |
+| `HighlightCurrentLine` | `boolean` | `true` | Highlight the caret's line. |
+| `BracketMatching` | `boolean` | `true` | Highlight matching brackets. |
+| `TabSpaces` | `boolean` | `true` | Insert spaces for tabs. |
+| `TabSize` | `number` | `4` | Spaces per tab, clamped to `1` through `16`. |
+| `AutoIndent` | `boolean` | `true` | Indent new lines to match the previous line. |
+| `AutoClose` | `boolean` | `true` | Insert closing brackets and quotes automatically. |
+| `AutoIndentBrackets` | `boolean` | `true` | Indent after an opening bracket. |
+| `SmartHome` | `boolean` | `true` | Move Home to the first non-whitespace character first. |
+| `SmartBackspace` | `boolean` | `true` | Backspace by indentation level on whitespace. |
+| `ShowIndentGuides` | `boolean` | `true` | Draw indentation guides. |
+| `HighlightActiveIndentGuide` | `boolean` | `true` | Highlight the guide for the caret's indentation. |
+| `ShowWhitespace` | `boolean` | `false` | Draw whitespace characters. |
+| `ShowScrollbar` | `boolean` | `true` | Show the scrollbar. |
+| `ShowGutterSeparator` | `boolean` | `true` | Draw a separator between gutter and text. |
+| `SmoothScrolling` | `boolean` | `true` | Ease scrolling instead of jumping. |
+| `ShowMinimap` | `boolean` | `false` | Draw the minimap. |
+| `MinimapWidth` | `number` | `76` | Minimap width, clamped to `24` through `200`. |
+| `ScrollbarWidth` | `number` | `8` | Scrollbar width, clamped to `2` through `24`. |
+| `EditorPadding` | `number` | `8` | Padding inside the editor, clamped to `0` through `48`. |
+| `EditorLineHeight` | `number` | `0` | Line height override, clamped to `0` through `128`. |
+| `MouseWheelScrollLines` | `number` | `3` | Lines per wheel step, clamped to `0.1` through `30`. |
+| `ScrollX` | `number` | `0` | Horizontal scroll target, minimum `0`. |
+| `ScrollY` | `number` | `0` | Vertical scroll target, clamped between `0` and the maximum scroll. |
+
+## Find bar
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `FindVisible` | `boolean` | Read/write | `false` | Whether the find bar is open. Setting it to `false` closes the bar and clears the active input state. |
+| `FindQuery` | `string` | Read/write | `""` | Find text. Writing it moves the find caret to the end of the query. |
+| `FindCaseSensitive` | `boolean` | Read/write | `false` | Whether matching is case sensitive. |
+| `ShowFindHighlights` | `boolean` | Read/write | `true` | Highlight matches in the text. |
+
+## Colors
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `FindMatchColor3` | `Color3` | Read/write | `(0.92, 0.68, 0.25)` | Find match highlight. |
+| `LineNumberColor3` | `Color3` | Read/write | `(0.54, 0.57, 0.63)` | Line-number text color. |
+| `CurrentLineColor3` | `Color3` | Read/write | `(0.30, 0.48, 0.73)` | Current line highlight. |
+| `IndentGuideColor3` | `Color3` | Read/write | `(0.47, 0.52, 0.61)` | Indentation guide color. |
+| `BracketMatchColor3` | `Color3` | Read/write | `(0.45, 0.63, 0.95)` | Matching bracket highlight. |
+| `GutterColor3` | `Color3` | Read/write | `(0.93, 0.94, 0.96)` | Gutter background. |
+| `MinimapColor3` | `Color3` | Read/write | `(0.93, 0.94, 0.96)` | Minimap content color. |
+| `ScrollbarColor3` | `Color3` | Read/write | `(0.54, 0.57, 0.64)` | Scrollbar color. |
+
+## Methods
+
+| Signature | Returns | Description |
+| --- | --- | --- |
+| `FindNext(): boolean` | Whether a match was found | Move to the next find match. |
+| `FindPrevious(): boolean` | Whether a match was found | Move to the previous find match. |
+| `OpenFind(): ()` | | Open the find bar. |
+| `CloseFind(): ()` | | Close the find bar. |
+| `GoToLine(line: number, column?: number, selectionLength?: number, focus?: boolean): ()` | | Move the caret. `line` and `column` are one-based; `column` defaults to `1`, `selectionLength` to `0`, and `focus` to `false`. |
+| `CaptureFocus(): ()` | | Give the box keyboard focus. |
+| `ReleaseFocus(): ()` | | Remove keyboard focus. |
+| `IsFocused(): boolean` | Current focus state | Whether the box has keyboard focus. |
+| `SelectAll(): ()` | | Select the entire text. |
+| `ClearSelection(): ()` | | Collapse the selection to the caret. |
+| `CopySelection(): ()` | | Copy the selected text to the clipboard. |
+| `Undo(): ()` | | Undo the last edit. |
+| `Redo(): ()` | | Redo the last undone edit. |
+| `InsertText(text: string): ()` | | Insert text at the caret. |
+| `ReplaceRange(start: number, finish: number, text: string): ()` | | Replace a character range. Bounds are one-based. |
+| `ClearDiagnostics(): ()` | | Remove every stored diagnostic. |
+| `SetDiagnostics(list: {{table}}): ()` | | Replace diagnostics with a list of tables containing `Line`, `Column`, `EndColumn`, and `Message`. |
+| `DiagnosticAtCursor(): table?` | Diagnostic or `nil` | Diagnostic covering the caret. |
+| `DiagnosticAtPoint(x: number, y: number): table?` | Diagnostic or `nil` | Diagnostic at a point in the text box's coordinate space. |
+| `PositionAtPoint(x: number, y: number): number` | One-based character index | Character position at a point relative to the text box. |
+| `GetWordRangeAtCursor(): table` | `{start, finish, text}` | Word around the caret. Bounds are one-based. |
+| `GetLineAtCursor(): table` | `{line, start, finish, text}` | Line containing the caret. |
+
+Diagnostic tables use the same shape as the entries passed to `SetDiagnostics`: `Line`, `Column`, `EndColumn`, and `Message`.
+
+## Events
+
+| Event | Arguments | When it fires |
+| --- | --- | --- |
+| `Focused` | none | The box gains keyboard focus. |
+| `FocusLost` | `enterPressed: boolean` | The box loses focus. The flag is `true` when Enter caused the release. |
+| `TextChanged` | none | The text changes, including programmatic writes. Read `Text` inside the callback. |
+| `KeyDown` | `input: InputObject` | A key is pressed while the box has focus. |
+
+`TextChanged` doesn't pass the new text. Read the `Text` property instead. `KeyDown` passes an `InputObject` with `UserInputType` set to keyboard and the pressed `KeyCode`.
+
+## Notes
+
+- All caret and selection offsets are one-based characters. `TextByteLength` reports bytes, so the two numbers can differ for non-ASCII text.
+- Setting `MaxLength` below the current length truncates immediately.
+- `MultiLine` and `CodeEditor` reset scroll and caret state when changed.
+- `TextBufferCapacity` is a reservation. It doesn't cap input length.
+- `FindVisible = false` closes the bar and clears the find input state, but it doesn't clear `FindQuery`.
+- `TextBox` inherits every `GuiObject` member, including `Size`, `Position`, `AnchorPoint`, `Visible`, and the input events.
+- `TextEditable = false` stops user edits while leaving the text readable and selectable programmatically.
+
+## See also
+
+- `TextLabel` for read-only text.
+- `TextButton` for a clickable caption.
+- `SyntaxHighlighter` for code coloring rules.
+- `GuiObject` for layout and appearance.

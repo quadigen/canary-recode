@@ -1,0 +1,70 @@
+---
+title: HingeConstraint
+description: Join two attachments with a powered rotating hinge.
+---
+
+`HingeConstraint` connects two attachments and allows rotation around one axis. It can act as a free hinge, a motor, or a servo with angle limits.
+
+## Getting started
+
+```lua
+local hinge = Instance.new("HingeConstraint")
+hinge.Attachment0 = frame.Attachment
+hinge.Attachment1 = door.Attachment
+hinge.LimitsEnabled = true
+hinge.LowerAngle = -90
+hinge.UpperAngle = 0
+hinge.Parent = door
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First anchor. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second anchor. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the hinge simulates. |
+| `Visible` | `boolean` | Read/write | `false` | Draw the hinge gizmo. |
+| `Color` | `BrickColor` | Read/write | Green | Gizmo color. |
+| `Radius` | `number` | Read/write | `0.15` | Gizmo radius. |
+| `ActuatorType` | `Enum.ActuatorType` | Read/write | `None` | Free, motor, or servo behavior. |
+| `LimitsEnabled` | `boolean` | Read/write | `false` | Apply the angle limits. |
+| `LowerAngle` | `number` | Read/write | `-45` | Lower limit in degrees. |
+| `UpperAngle` | `number` | Read/write | `45` | Upper limit in degrees. |
+| `AngularVelocity` | `number` | Read/write | `0` | Target motor speed. |
+| `MotorMaxTorque` | `number` | Read/write | `0` | Motor torque limit. |
+| `MotorMaxAcceleration` | `number` | Read/write | `500000` | Motor acceleration limit. |
+| `ServoMaxTorque` | `number` | Read/write | `0` | Servo torque limit. |
+| `TargetAngle` | `number` | Read/write | `0` | Servo target in degrees. |
+| `AngularSpeed` | `number` | Read/write | `0` | Servo speed limit. |
+| `AngularResponsiveness` | `number` | Read/write | `45` | Servo responsiveness. |
+| `SoftlockServoUponReachingTarget` | `boolean` | Read/write | `false` | Hold the servo at its target. |
+| `Restitution` | `number` | Read/write | `0` | Bounce when hitting a limit. |
+| `CurrentAngle` | `number` | Read-only | `0` | Current hinge angle in degrees. |
+
+Numeric properties accept finite values and raise an error for `NaN`. `CurrentAngle` and `Active` are read-only.
+
+## Actuator types
+
+- `None` lets the hinge rotate freely within its limits.
+- `Motor` drives toward `AngularVelocity`, limited by `MotorMaxTorque` and `MotorMaxAcceleration`.
+- `Servo` drives toward `TargetAngle`, limited by `ServoMaxTorque` and `AngularSpeed`.
+
+With limits enabled, the servo target is clamped to the allowed range. `SoftlockServoUponReachingTarget` stops the servo once the error is tiny.
+
+## Limits and restitution
+
+`LowerAngle` and `UpperAngle` are in degrees and can be given in either order; the hinge uses the smaller as the lower bound. When `Restitution` is above zero, the hinge rebounds off a limit with a fraction of the incoming speed instead of stopping dead.
+
+## Notes
+
+- Both attachments need parts in the same world, and at least one part must be movable.
+- Assigning a non-attachment to an attachment property is ignored.
+- The gizmo only renders when `Visible` is true and the anchors are valid.
+- Cloning copies the configuration but starts inactive.
+
+## See also
+
+- `Constraint` for the shared attachment properties.
+- `SpringConstraint` for a linear connection.
+- `Attachment` for placing the hinge axis.

@@ -1,0 +1,154 @@
+---
+title: Interface and timing
+description: UDim, UDim2, Rect, TweenInfo, Font, and DockWidgetPluginGuiInfo.
+---
+
+## UDim
+
+`UDim` pairs a scale with a pixel offset. UI sizes and positions use it through `UDim2`.
+
+| Constructor | Description |
+| --- | --- |
+| `UDim.new(scale?, offset?)` | Both values default to `0`. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Scale` | `number` | Scale factor. |
+| `Offset` | `number` | Pixel offset. |
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Lerp(goal, alpha)` | `UDim` | Interpolates both components. |
+| `FuzzyEq(other, epsilon?)` | `boolean` | Approximate comparison. `epsilon` defaults to `1e-5`. |
+
+Supports `+`, `-`, and `==`.
+
+## UDim2
+
+`UDim2.new(xScale?, xOffset?, yScale?, yOffset?)` combines two `UDim` values. Every component defaults to `0`.
+
+```lua
+local size = UDim2.fromScale(0.5, 0.25)
+local inset = UDim2.fromOffset(320, 40)
+frame.Size = size
+frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `X`, `Width` | `UDim` | Horizontal scale and offset. |
+| `Y`, `Height` | `UDim` | Vertical scale and offset. |
+| `XScale` | `number` | Horizontal scale. |
+| `XOffset` | `number` | Horizontal pixel offset. |
+| `YScale` | `number` | Vertical scale. |
+| `YOffset` | `number` | Vertical pixel offset. |
+
+| Constructor or method | Returns | Description |
+| --- | --- | --- |
+| `UDim2.fromScale(x, y)` | `UDim2` | Scale only, with zero offsets. |
+| `UDim2.fromOffset(x, y)` | `UDim2` | Offsets only, with zero scales. |
+| `UDim2.zero` | `UDim2` | All components zero. |
+| `Lerp(goal, alpha)` | `UDim2` | Interpolates all four components. |
+| `FuzzyEq(other, epsilon?)` | `boolean` | Approximate comparison. `epsilon` defaults to `1e-5`. |
+
+Supports `+`, `-`, and `==`.
+
+## Rect
+
+`Rect` describes a 2D rectangle by its minimum and maximum corners.
+
+| Constructor | Description |
+| --- | --- |
+| `Rect.new()` | Zero-size rectangle at the origin. |
+| `Rect.new(min, max)` | From two `Vector2` corners. |
+| `Rect.new(minX, minY, maxX, maxY)` | From four numbers. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Min` | `Vector2` | Minimum corner. |
+| `Max` | `Vector2` | Maximum corner. |
+| `Width` | `number` | Width, computed from `Min` and `Max`. |
+| `Height` | `number` | Height, computed from `Min` and `Max`. |
+
+## TweenInfo
+
+`TweenInfo` holds the timing for `TweenService`.
+
+```lua
+local TweenService = game:GetService("TweenService")
+local info = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+TweenService:Create(part, info, { Transparency = 1 }):Play()
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `time` | `1` | Duration in seconds. Must be `>= 0`. |
+| `easingStyle` | `Enum.EasingStyle.Quad` | Easing curve. |
+| `easingDirection` | `Enum.EasingDirection.Out` | Direction of the curve. |
+| `repeatCount` | `0` | Repeats after the first play. Must be `>= -1`. |
+| `reverses` | `false` | Play backward after finishing. |
+| `delayTime` | `0` | Seconds before the tween starts. Must be `>= 0`. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Time` | `number` | Duration in seconds. |
+| `EasingStyle` | `Enum.EasingStyle` | Easing curve. |
+| `EasingDirection` | `Enum.EasingDirection` | Direction of the curve. |
+| `RepeatCount` | `number` | Repeat count. |
+| `Reverses` | `boolean` | Whether it reverses. |
+| `DelayTime` | `number` | Delay in seconds. |
+
+## Font
+
+`Font` stores a family, weight, and style. Text properties accept it alongside `Enum.Font`.
+
+```lua
+local font = Font.new("Montserrat", Enum.FontWeight.SemiBold)
+label.FontFace = font
+```
+
+| Constructor | Description |
+| --- | --- |
+| `Font.new(family, weight?, style?)` | `weight` defaults to `Enum.FontWeight.Regular` and `style` to `Enum.FontStyle.Normal`. |
+| `Font.fromEnum(enum)` | Converts an `Enum.Font` value. |
+| `Font.fromName(name)` | Uses a known `Enum.Font` name when possible, otherwise treats the string as a family. |
+| `Font.fromMemory(data, weight?, style?)` | Builds a font from font file bytes. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Family` | `string` | Font family name. |
+| `FromMemory` | `boolean` | Whether the font came from memory data. |
+| `Weight` | `Enum.FontWeight` | Font weight. |
+| `Style` | `Enum.FontStyle` | Font style. |
+| `Bold` | `boolean` | `true` when the weight is `600` or heavier. |
+
+## DockWidgetPluginGuiInfo
+
+Hints for creating a dock widget. Editor and plugin code use it.
+
+`DockWidgetPluginGuiInfo.new(initialDockState?, initialEnabled?, overrideEnabledRestore?, floatingXSize?, floatingYSize?, minWidth?, minHeight?)`
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `initialDockState` | `Enum.InitialDockState.Top` | Starting dock position. |
+| `initialEnabled` | `true` | Whether the widget starts enabled. |
+| `overrideEnabledRestore` | `false` | Whether to override the saved enabled state. |
+| `floatingXSize` | `0` | Floating width. |
+| `floatingYSize` | `0` | Floating height. |
+| `minWidth` | `0` | Minimum width. |
+| `minHeight` | `0` | Minimum height. |
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `InitialDockState` | `Enum.InitialDockState` | Starting dock position. |
+| `InitialEnabled` | `boolean` | Starting enabled state. |
+| `InitialEnabledShouldOverrideRestore` | `boolean` | Restore override flag. |
+| `FloatingXSize` | `number` | Floating width. |
+| `FloatingYSize` | `number` | Floating height. |
+| `MinWidth` | `number` | Minimum width. |
+| `MinHeight` | `number` | Minimum height. |
+
+## See also
+
+- [GuiObject](/docs/GuiObject) for `Size`, `Position`, and `AnchorPoint`.
+- [TweenService](/docs/services/TweenService) for creating tweens.

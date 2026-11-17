@@ -51,6 +51,8 @@ JPH_ObjectVsBroadPhaseLayerFilterRef :: rawptr
 JPH_MotionPropertiesRef :: rawptr
 JPH_ContactListenerRef :: rawptr
 JPH_ConstraintRef :: rawptr
+JPH_RopeRef :: rawptr
+JPH_ROPE_MAX_POINTS :: 49
 
 JPH_BODY_ID_INVALID :: JPH_BodyID(0xffffffff)
 
@@ -376,6 +378,7 @@ foreign lib {
 	JPH_BodyCreationSettings_SetMaxAngularVelocity :: proc(settings: JPH_BodyCreationSettingsRef, maxVelocity: f32) ---
 
 	JPH_BodyCreationSettings_SetMass :: proc(settings: JPH_BodyCreationSettingsRef, mass: f32) ---
+	JPH_BodyCreationSettings_SetMaterialProperties :: proc(settings: JPH_BodyCreationSettingsRef, density, friction, restitution, frictionWeight, restitutionWeight: f32) ---
 
 	JPH_BodyCreationSettings_SetAllowedDOFs :: proc(settings: JPH_BodyCreationSettingsRef, dofs: u32) ---
 	JPH_BodyCreationSettings_SetCollideKinematicVsNonDynamic :: proc(settings: JPH_BodyCreationSettingsRef, allow: i32) ---
@@ -384,6 +387,13 @@ foreign lib {
 
 
 	JPH_PhysicsSystem_Create :: proc(settings: ^JPH_PhysicsSystemSettings) -> JPH_PhysicsSystemRef ---
+	JPH_Rope_Create :: proc(system: JPH_PhysicsSystemRef, body0, body1: JPH_BodyID, start, end: ^JPH_RVec3, length, radius: f32, canCollide: i32, layer: JPH_ObjectLayer) -> JPH_RopeRef ---
+	JPH_Rope_Destroy :: proc(rope: JPH_RopeRef) ---
+	JPH_Rope_Wake :: proc(rope: JPH_RopeRef) ---
+	JPH_Rope_SetCanCollide :: proc(rope: JPH_RopeRef, canCollide: i32) ---
+	JPH_Rope_GetPoints :: proc(rope: JPH_RopeRef, points: ^JPH_RVec3, capacity: u32) -> u32 ---
+	JPH_Rope_GetBodies :: proc(rope: JPH_RopeRef, bodies: ^JPH_BodyID, capacity: u32) -> u32 ---
+	JPH_Rope_GetRestPoints :: proc(start, end: ^JPH_RVec3, length: f32, points: ^JPH_RVec3, capacity: u32) -> u32 ---
 	JPH_PhysicsSystem_Destroy :: proc(system: JPH_PhysicsSystemRef) ---
 	JPH_PhysicsSystem_SetPhysicsSettings :: proc(system: JPH_PhysicsSystemRef, settings: ^JPH_PhysicsSettings) ---
 	JPH_PhysicsSystem_GetPhysicsSettings :: proc(system: JPH_PhysicsSystemRef, outSettings: ^JPH_PhysicsSettings) ---
@@ -406,6 +416,7 @@ foreign lib {
 	JPH_PhysicsSystem_GetNumBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
 	JPH_PhysicsSystem_GetNumActiveBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
 	JPH_PhysicsSystem_SetBodyIsSensor :: proc(system: JPH_PhysicsSystemRef, bodyID: JPH_BodyID, isSensor: i32) ---
+	JPH_PhysicsSystem_SetBodyMaterialProperties :: proc(system: JPH_PhysicsSystemRef, bodyID: JPH_BodyID, density, friction, restitution, frictionWeight, restitutionWeight: f32) ---
 	JPH_PhysicsSystem_IsBodySensor :: proc(system: JPH_PhysicsSystemRef, bodyID: JPH_BodyID) -> i32 ---
 
 

@@ -1,0 +1,37 @@
+---
+title: UIFlexItem
+description: Control how one child participates in a flex layout.
+---
+
+`UIFlexItem` is a per-child modifier for flex layouts. It sets the flex mode and grow and shrink ratios for the GUI object it's parented to.
+
+## Getting started
+
+```lua
+local item = Instance.new("UIFlexItem")
+item.FlexMode = Enum.UIFlexMode.Grow
+item.GrowRatio = 2
+item.ShrinkRatio = 1
+item.Parent = panel
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `FlexMode` | `Enum.UIFlexMode` | Read/write | None | How the item flexes. |
+| `GrowRatio` | `number` | Read/write | `1` | Share of extra space the item takes. |
+| `ShrinkRatio` | `number` | Read/write | `1` | Share of overflow the item gives up. |
+| `ItemLineAlignment` | `Enum.ItemLineAlignment` | Read/write | Automatic | Alignment within a wrapped line. |
+
+## Notes
+
+- Ratios must be finite and non-negative; other values raise an error.
+- Changing a property marks the GUI layout dirty.
+- The modifier applies to its parent GUI object, not to the layout itself.
+- Cloning copies all four settings.
+
+## See also
+
+- `UIListLayout` for the layout that consumes flex items.
+- `UIGridLayout` for grid arrangement.

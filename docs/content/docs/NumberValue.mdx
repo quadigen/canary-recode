@@ -1,0 +1,36 @@
+---
+title: NumberValue
+description: Store a single decimal number in the object tree.
+---
+
+`NumberValue` holds one floating-point number as an instance. Use it for speeds, timers, thresholds, and any numeric setting that should be visible in the tree.
+
+## Getting started
+
+```lua
+local value = Instance.new("NumberValue")
+value.Name = "SpawnDelay"
+value.Value = 2.5
+value.Parent = game:GetService("ReplicatedStorage")
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `number` | Read/write | `1` | The stored number. |
+
+Unlike `IntValue`, fractions are kept exactly as assigned.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- The default is `1`, not `0`.
+- Cloning copies the current value.
+- There's no range clamp; constrain values yourself where it matters.
+
+## See also
+
+- `IntValue` for whole numbers.
+- `DoubleConstrainedValue` for a number with bounds.
+- `StringValue` and `BoolValue` for other simple values.

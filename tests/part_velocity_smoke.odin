@@ -142,6 +142,86 @@ assert(
 )
 `, "part_velocity_position_sync")
 
+	run_script(&script_vm, `
+wood = Instance.new("Part", workspace)
+wood.Anchored = false
+wood.Size = Vector3.one
+wood.Position = Vector3.new(-10, 100, 0)
+wood.Material = Enum.Material.Wood
+metal = Instance.new("Part", workspace)
+metal.Anchored = false
+metal.Size = Vector3.one
+metal.Position = Vector3.new(10, 100, 0)
+metal.Material = Enum.Material.Metal
+`, "material_mass_setup")
+	step(&environment, &script_vm)
+	run_script(&script_vm, `
+local impulse = Vector3.new(1, 0, 0)
+wood:ApplyImpulse(impulse)
+metal:ApplyImpulse(impulse)
+assert(math.abs(wood.AssemblyLinearVelocity.X - 1 / 0.35) < 0.001)
+assert(math.abs(metal.AssemblyLinearVelocity.X - 1 / 7.85) < 0.001)
+
+wood.Material = Enum.Material.Metal
+wood:ApplyImpulse(impulse)
+assert(math.abs(wood.AssemblyLinearVelocity.X - (1 / 0.35 + 1 / 7.85)) < 0.001,
+    "a material change should update mass while preserving velocity")
+metal.Material = Enum.Material.Wood
+`, "material_mass_and_immediate_change")
+	step(&environment, &script_vm)
+	run_script(&script_vm, `
+metal.AssemblyLinearVelocity = Vector3.zero
+metal:ApplyImpulse(Vector3.new(1, 0, 0))
+assert(math.abs(metal.AssemblyLinearVelocity.X - 1 / 0.35) < 0.001)
+`, "material_mass_after_sync")
+
+	run_script(&script_vm, `
+workspace.Gravity = 0
+local floor = Instance.new("Part", workspace)
+floor.Anchored = true
+floor.Size = Vector3.new(10, 2, 10)
+floor.Position = Vector3.new(100, 0, 0)
+floor.Material = Enum.Material.Concrete
+bouncer = Instance.new("Part", workspace)
+bouncer.Anchored = false
+bouncer.Size = Vector3.one
+bouncer.Position = Vector3.new(100, 2, 0)
+bouncer.Material = Enum.Material.Rubber
+`, "material_bounce_setup")
+	step(&environment, &script_vm)
+	run_script(&script_vm, `bouncer.AssemblyLinearVelocity = Vector3.new(0, -20, 0)`, "material_bounce_drop")
+	for _ in 0 ..< 4 {step(&environment, &script_vm)}
+	run_script(&script_vm, `
+local rebound = bouncer.AssemblyLinearVelocity.Y
+-- Rubber has elasticity 0.95 with weight 2, and concrete has 0.2 with weight 1.
+assert(math.abs(rebound - 14) < 0.3, "expected weighted bounce speed near 14, got " .. rebound)
+`, "material_bounce_weight")
+
+	run_script(&script_vm, `
+workspace.Gravity = 196.2
+game:GetService("Physics").SleepThreshold = 0.2
+slope = Instance.new("Part", workspace)
+slope.Size = Vector3.new(40, 2, 12)
+slope.CFrame = CFrame.new(0, 40, 120) * CFrame.Angles(0, 0, math.rad(12))
+slope.Material = Enum.Material.Sand
+slider = Instance.new("Part", workspace)
+slider.Anchored = false
+slider.Size = Vector3.new(2, 2, 2)
+slider.CFrame = slope.CFrame * CFrame.new(0, 2, 0)
+slider.Material = Enum.Material.Wood
+slider_start = slider.Position.X
+`, "material_friction_setup")
+	for _ in 0 ..< 120 {step(&environment, &script_vm)}
+	run_script(&script_vm, `
+assert(math.abs(slider.Position.X - slider_start) < 0.3, "sand should hold the box in place")
+slope.Material = Enum.Material.Ice
+`, "material_ice_change")
+	for _ in 0 ..< 60 {step(&environment, &script_vm)}
+	run_script(&script_vm, `
+local displacement = slider.Position.X - slider_start
+assert(displacement < -2, "ice should let the box slide downhill, X displacement: " .. displacement)
+`, "material_friction_after_sync")
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("PART_VELOCITY_SMOKE_PASSED")

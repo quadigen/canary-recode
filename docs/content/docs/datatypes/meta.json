@@ -1,0 +1,13 @@
+{
+  "title": "Datatypes",
+  "pages": [
+    "index",
+    "vectors",
+    "cframe",
+    "colors",
+    "ui",
+    "sequences",
+    "spatial",
+    "misc"
+  ]
+}

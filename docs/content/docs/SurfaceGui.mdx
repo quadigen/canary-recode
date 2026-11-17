@@ -1,0 +1,58 @@
+---
+title: SurfaceGui
+description: Draw a GUI onto a face of a part.
+---
+
+`SurfaceGui` renders its GUI children onto a surface in the 3D world. Parent it to a part, or set `Adornee`, and its canvas is painted onto the chosen face.
+
+## Getting started
+
+```lua
+local surface = Instance.new("SurfaceGui")
+surface.Face = Enum.NormalId.Front
+surface.CanvasSize = Vector2.new(800, 600)
+surface.PixelsPerStud = 100
+surface.Parent = part
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.fromScale(1, 1)
+label.BackgroundTransparency = 1
+label.Text = "Harbor"
+label.TextScaled = true
+label.Parent = surface
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Active` | `boolean` | Read/write | `true` | Whether the GUI receives input. |
+| `Adornee` | `Instance?` | Read/write | `nil` | Part to draw on when the GUI isn't parented to one. |
+| `AlwaysOnTop` | `boolean` | Read/write | `false` | Draw over other geometry. |
+| `Brightness` | `number` | Read/write | `1` | Brightness multiplier, clamped to `0` through `1000`. |
+| `CanvasSize` | `Vector2` | Read/write | `(800, 600)` | Logical canvas size used for layout. |
+| `ClipsDescendants` | `boolean` | Read/write | `true` | Clip children to the canvas. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the GUI renders. |
+| `Face` | `Enum.NormalId` | Read/write | `Front` | Part face that receives the GUI. |
+| `LightInfluence` | `number` | Read/write | `0` | How much scene lighting affects the GUI, clamped to `0` through `1`. |
+| `MaxDistance` | `number` | Read/write | `1000` | Distance at which the GUI stops rendering, clamped to `0` or above. |
+| `PixelsPerStud` | `number` | Read/write | `100` | Resolution when sizing by pixels per stud, minimum `0.001`. |
+| `Shape` | `Enum.SurfaceGuiShape` | Read/write | `Flat` | Flat or curved surface layout. |
+| `SizingMode` | `Enum.SurfaceGuiSizingMode` | Read/write | `PixelsPerStud` | Whether the canvas is sized in pixels per stud or fixed pixels. |
+| `ToolPunchThroughDistance` | `number` | Read/write | `0` | Depth allowance for held tools. |
+| `ZOffset` | `number` | Read/write | `0` | Depth offset from the surface. |
+
+## Notes
+
+- The target is the parent part, or `Adornee` when set. Without a part target, nothing renders.
+- `CanvasSize` defines the coordinate space for child layout, so scaled children resolve against it.
+- `PixelsPerStud` is clamped to a minimum of `0.001`; values below that are raised.
+- `Brightness` clamps rather than raising.
+- The maximum texture dimension is `4096` pixels.
+- Unlike `ScreenGui`, this object is not a `GuiObject`; it hosts GUI children directly.
+
+## See also
+
+- `Part` for the surface that displays the GUI.
+- `ScreenGui` for screen-space UI.
+- `ViewportFrame` for 3D content inside a GUI.

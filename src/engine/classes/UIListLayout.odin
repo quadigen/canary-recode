@@ -41,6 +41,7 @@ UIListLayout :: struct {
 UIListLayout_Item :: struct {
 	object:   ^Object,
 	gui:      ^GuiObject,
+	flex:     ^UIFlexItem,
 	width:    f32,
 	height:   f32,
 	sequence: int,
@@ -247,6 +248,7 @@ ui_list_layout_collect_items :: proc(
 			UIListLayout_Item {
 				object = object,
 				gui = gui,
+				flex = cast(^UIFlexItem)Find_First_Child_Of_Class(object, "UIFlexItem"),
 				width = width,
 				height = height,
 				sequence = sequence,
@@ -425,6 +427,47 @@ ui_list_layout_item_cross_offset :: proc(
 	return 0
 }
 
+ui_list_layout_item_alignment :: proc(item: ^UIListLayout_Item, default: enums.ItemLineAlignment) -> enums.ItemLineAlignment {
+	if item.flex != nil && item.flex.item_line_alignment != .Automatic {return item.flex.item_line_alignment}
+	return default
+}
+
+ui_list_layout_flex_weight :: proc(layout: ^UIListLayout, item: ^UIListLayout_Item, growing, fill: bool) -> f64 {
+	if item.flex == nil {return 1 if growing && fill else 0}
+	mode := item.flex.flex_mode
+	if growing {
+		if mode == .Custom {return f64(item.flex.grow_ratio)}
+		return 1 if mode == .Grow || mode == .Fill else 0
+	}
+	weight := f64(ui_list_layout_main_size(layout, item))
+	if mode == .Custom {return weight * f64(item.flex.shrink_ratio)}
+	return weight if mode == .Shrink || mode == .Fill else 0
+}
+
+ui_list_layout_distribute_flex :: proc(layout: ^UIListLayout, items: []UIListLayout_Item, free: f32, fill: bool) -> bool {
+	remaining := f64(free)
+	growing := remaining > 0
+	changed := false
+	for abs(remaining) > 0.0001 {
+		total: f64
+		for &item in items {total += ui_list_layout_flex_weight(layout, &item, growing, fill)}
+		if total <= 0 {break}
+		applied: f64
+		clamped := false
+		for &item in items {
+			before := ui_list_layout_main_size(layout, &item)
+			amount := remaining * ui_list_layout_flex_weight(layout, &item, growing, fill) / total
+			clamped = clamped || amount < -f64(before)
+			ui_list_layout_add_main(layout, &item, f32(amount))
+			applied += f64(ui_list_layout_main_size(layout, &item) - before)
+		}
+		changed = changed || applied != 0
+		if !clamped || applied == 0 {break}
+		remaining -= applied
+	}
+	return changed
+}
+
 ui_list_layout_apply_main_flex :: proc(
 	layout: ^UIListLayout,
 	items: []UIListLayout_Item,
@@ -444,19 +487,15 @@ ui_list_layout_apply_main_flex :: proc(
 
 	normal_padding := f32(max(0, line.count - 1)) * item_padding
 	free := available_main - sum_main - normal_padding
+	line_items := items[line.start:line.start + line.count]
+	if ui_list_layout_distribute_flex(layout, line_items, free, flex == .Fill) {
+		sum_main = 0
+		for &item in line_items {sum_main += ui_list_layout_main_size(layout, &item)}
+		free = available_main - sum_main - normal_padding
+	}
+	line.main_size = sum_main + normal_padding
 
 	#partial switch flex {
-	case .Fill:
-		if free > 0 && line.count > 0 {
-			each := free / f32(line.count)
-
-			for index in line.start ..< line.start + line.count {
-				ui_list_layout_add_main(layout, &items[index], each)
-			}
-
-			line.main_size = available_main
-			line.flex_active = true
-		}
 	case .SpaceAround:
 		if free > 0 && line.count > 0 {
 			gap := free / f32(line.count)
@@ -476,10 +515,6 @@ ui_list_layout_apply_main_flex :: proc(
 			line.flex_gap = gap
 			line.flex_active = true
 		}
-	}
-
-	if !line.flex_active {
-		line.main_size = sum_main + normal_padding
 	}
 }
 
@@ -560,6 +595,7 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 	parent := cast(^GuiObject)layout.object.parent
 
 	_, _, parent_width, parent_height := GuiObject_get_absolute_transform(&parent.object, ctx)
+	parent_width, parent_height = scrolling_frame_content_size(&parent.object, parent_width, parent_height)
 
 	parent_width = max(f32(0), parent_width)
 	parent_height = max(f32(0), parent_height)
@@ -671,7 +707,7 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 		max_main = max(max_main, line.main_size)
 	}
 
-	alignment := ui_list_layout_cross_alignment(layout, cross_flex)
+	default_alignment := .Stretch if cross_flex == .Fill else ui_list_layout_cross_alignment(layout, cross_flex)
 
 	if layout.fill_direction == .Vertical {
 		layout.absolute_content_size = {
@@ -702,8 +738,9 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 
 			for item_index in line.start ..< line.start + line.count {
 				item := &items[item_index]
+				alignment := ui_list_layout_item_alignment(item, default_alignment)
 
-				if cross_flex == .Fill || alignment == .Stretch {
+				if alignment == .Stretch {
 					ui_list_layout_set_cross(layout, item, line.cross_size)
 				}
 
@@ -776,8 +813,9 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 
 			for item_index in line.start ..< line.start + line.count {
 				item := &items[item_index]
+				alignment := ui_list_layout_item_alignment(item, default_alignment)
 
-				if cross_flex == .Fill || alignment == .Stretch {
+				if alignment == .Stretch {
 					ui_list_layout_set_cross(layout, item, line.cross_size)
 				}
 

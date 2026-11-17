@@ -1,0 +1,48 @@
+---
+title: UISizeConstraint
+description: Clamp the size of a GUI element between a minimum and maximum.
+---
+
+`UISizeConstraint` is a UI modifier that limits how small or large its parent can become. It's useful when a scaled frame collapses on narrow screens or grows too large on wide ones.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("UISizeConstraint")
+constraint.MinSize = Vector2.new(240, 120)
+constraint.MaxSize = Vector2.new(640, 360)
+constraint.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `MinSize` | `Vector2` | Read/write | `(0, 0)` | Smallest allowed size in pixels. |
+| `MaxSize` | `Vector2` | Read/write | `(inf, inf)` | Largest allowed size in pixels. |
+
+## Behavior
+
+The two bounds stay consistent. Setting `MinSize` above the current maximum clamps it to the maximum, and setting `MaxSize` below the current minimum raises it to the minimum.
+
+```lua
+constraint.MinSize = Vector2.new(500, 500)
+constraint.MaxSize = Vector2.new(300, 300)
+
+print(constraint.MinSize) -- (500, 500) is clamped to the current maximum first
+print(constraint.MaxSize) -- (500, 500)
+```
+
+Changing either bound marks the GUI layout dirty.
+
+## Notes
+
+- Bounds are in pixels, not scale.
+- Modifiers apply to the parent GUI object.
+- Cloning copies both bounds.
+- There's no aspect-ratio lock; use separate minimum and maximum pairs for width and height.
+
+## See also
+
+- `UIPadding` for insets.
+- `GuiObject` for the parent and its `Size` property.

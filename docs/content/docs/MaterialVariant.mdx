@@ -1,0 +1,256 @@
+---
+title: MaterialVariant
+description: Create reusable 3D materials with texture maps, surface controls, and custom shaders.
+---
+
+`MaterialVariant` lets you define your own 3D surface appearance. Rather than configuring each object separately, you can create a named material with its own textures, roughness, metalness, surface relief, emission, and optional custom shader code.
+
+The default shader is included with the class, so you don't need to write shader code just to make a textured material. `MaterialVariant` inherits from `Instance`.
+
+## Getting started
+
+Give the variant a unique `Name` and keep it parented somewhere in the game. Materials are looked up by name; a disabled or unparented variant isn't available for lookup. If several eligible variants share a name, the first match is used.
+
+The examples below assume you already have a `MaterialVariant` object called `variant`. Use your project's material assignment API to reference its name from the desired 3D object. The receiving object's assignment property is outside the scope of this class.
+
+```lua
+local function configureMetal(variant: MaterialVariant, container: Instance)
+    variant.Name = "BrushedMetal"
+    variant.Color = Color3.fromRGB(180, 185, 195)
+    variant.Roughness = 0.35
+    variant.Metalness = 1
+    variant.StudsPerTile = 4
+    variant.Enabled = true
+    variant.Parent = container
+end
+
+configureMetal(variant, workspace)
+```
+
+Roughness controls how sharp or diffuse reflections appear. Metalness controls how metallic the surface behaves. Set it close to `0` for materials such as wood and plastic, and close to `1` for exposed metals.
+
+## Texture maps
+
+A texture map is an image that controls a particular aspect of the material. The default shader supports seven map slots. You can set one map or combine several to create more detailed surfaces.
+
+| Property | What it controls |
+| --- | --- |
+| `ColorMap` / `AlbedoMap` | Base surface color. Both names refer to the same texture slot. |
+| `NormalMap` | Small surface details that affect shading without necessarily changing geometry. |
+| `RoughnessMap` | Local variation in surface roughness. |
+| `MetalnessMap` | Local variation in how metallic the surface is. |
+| `HeightMap` | Height information for displacement and parallax effects. |
+| `AOMap` / `AmbientOcclusionMap` | Ambient occlusion, such as darker creases and recesses. Both names refer to the same slot. |
+| `EmissiveMap` | Areas of the material that emit light visually. |
+
+Each map property accepts a string identifying a texture. Use asset paths or references that are valid in your project. These examples take the actual asset references as parameters rather than assuming a specific asset URI format.
+
+```lua
+local function setTextures(variant, albedo, normal, roughness)
+    variant.ColorMap = albedo
+    variant.NormalMap = normal
+    variant.RoughnessMap = roughness
+    variant.StudsPerTile = 3
+end
+```
+
+Set a map to an empty string to clear it:
+
+```lua
+variant.NormalMap = ""
+```
+
+An empty slot uses a fallback texture. The default fallback is white for color, roughness, metalness, and ambient occlusion, flat for normals, mid-gray for height, and black for emission. If a replacement fails to load, a previously loaded texture can remain in use. Check `LastError` if the surface does not update as expected.
+
+## Texture tiling
+
+`StudsPerTile` controls the scale of the material's texture pattern. Smaller values repeat the pattern more often, while larger values spread it across a greater distance with the default shader.
+
+```lua
+variant.StudsPerTile = 2
+```
+
+The value must be finite and greater than zero.
+
+## Surface depth
+
+Normal maps, parallax and displacement give you different ways to add detail to a surface.
+
+- Use `NormalStrength` to control how strongly normal-map details affect shading.
+- Use `ParallaxDepth` and `ParallaxSteps` to control apparent depth when viewing the height map at an angle.
+- Use `HeightScale` and `HeightMidlevel` to control actual vertex displacement with the default shader. Displacement may need extra geometry to look smooth.
+
+```lua
+local function configureRelief(variant, heightMap, normalMap)
+    variant.HeightMap = heightMap
+    variant.NormalMap = normalMap
+    variant.HeightScale = 0.1
+    variant.HeightMidlevel = 0.5
+    variant.NormalStrength = 1
+    variant.ParallaxDepth = 0.03
+    variant.ParallaxSteps = 24
+    variant.DisplacementSubdivisions = 2
+    variant.DisplacementBounds = 0.1
+end
+```
+
+A midlevel of `0.5` treats the midpoint of the height map as the neutral height. Positive and negative `HeightScale` values are allowed. Subdivision increases geometric detail, but higher levels can be considerably more expensive.
+
+`DisplacementBounds` adds extra room to the rendering bounds, which is useful when a custom vertex shader moves geometry outside its original bounds. These are rendering controls; they do not guarantee corresponding changes to collision geometry.
+
+## Emission and ambient occlusion
+
+Use `EmissiveMap`, `EmissiveColor`, and `EmissiveStrength` together for glowing details like LEDs, signs, or sci-fi panels.
+
+```lua
+local function configureEmission(variant, emissiveMap)
+    variant.EmissiveMap = emissiveMap
+    variant.EmissiveColor = Color3.fromRGB(80, 200, 255)
+    variant.EmissiveStrength = 3
+end
+```
+
+Emission makes a surface look self-lit; it doesn't automatically create a separate light object or guarantee illumination of nearby geometry.
+
+`AOStrength` controls how much the ambient occlusion map affects shading, from `0` to `1`.
+
+## Custom shader source
+
+Most materials only need the built-in shader and texture controls. If you want a custom vertex deformation or surface effect, there are three source properties:
+
+| Property | Purpose |
+| --- | --- |
+| `Source` | Full material shader source. |
+| `VertexSource` | Code inserted at the vertex hook in the material source. |
+| `FragmentSource` | Code inserted at the fragment hook in the material source. |
+
+The vertex and fragment properties insert snippets into the active `Source`; they do not replace the whole shader by themselves. The default source provides both hooks. If you replace the full source, retain the appropriate markers if you plan to use the corresponding snippet properties:
+
+```text
+// MATERIAL_VARIANT_VERTEX_HOOK
+// MATERIAL_VARIANT_FRAGMENT_HOOK
+```
+
+The exact shader variables and hook entry points depend on the material source. You can inspect `variant.Source` to see the default source and where the hooks are placed.
+
+```lua
+print(variant.Source)
+```
+
+The following Luau helper applies snippets written for those hook locations:
+
+```lua
+local function setHooks(variant, vertexCode: string, fragmentCode: string)
+    variant.VertexSource = vertexCode
+    variant.FragmentSource = fragmentCode
+end
+```
+
+Clear either snippet with `""`, or use `ResetShader()` to restore the built-in material source and remove both hooks. Custom shaders must declare and use any texture samplers or uniforms they expect to receive; replacing `Source` does not guarantee that all standard material controls still affect the result.
+
+## Properties
+
+All properties below are read/write unless marked as status values.
+
+### General
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | `true` | Whether the named variant is available for selection. |
+| `Color` | `Color3` | White | Base surface color. |
+| `Roughness` | `number` | `0.5` | Surface roughness, clamped to 0–1. |
+| `Metalness` | `number` | `0` | Metallic response, clamped to 0–1. |
+| `StudsPerTile` | `number` | `4` | Texture scale; must be finite and greater than zero. |
+
+### Texture maps
+
+All map properties have type `string` and default to `""`.
+
+| Property | Description |
+| --- | --- |
+| `ColorMap` | Base color texture. |
+| `AlbedoMap` | Alias for `ColorMap`. |
+| `NormalMap` | Surface normal texture. |
+| `RoughnessMap` | Roughness texture. |
+| `MetalnessMap` | Metalness texture. |
+| `HeightMap` | Surface height texture. |
+| `AOMap` | Ambient occlusion texture. |
+| `AmbientOcclusionMap` | Alias for `AOMap`. |
+| `EmissiveMap` | Emission texture. |
+
+### Surface controls
+
+| Property | Type | Default | Valid range / behavior |
+| --- | --- | --- | --- |
+| `HeightScale` | `number` | `0` | Any finite number, including negative values. |
+| `HeightMidlevel` | `number` | `0.5` | Clamped to 0–1. |
+| `DisplacementSubdivisions` | `number` | `2` | Clamped to 0–4, rounded down to an integer. |
+| `DisplacementBounds` | `number` | `0` | Clamped to zero or greater. |
+| `ParallaxDepth` | `number` | `0` | Clamped to zero or greater. |
+| `ParallaxSteps` | `number` | `24` | Clamped to 8–64, rounded down to an integer. |
+| `NormalStrength` | `number` | `1` | Clamped to zero or greater. |
+| `AOStrength` | `number` | `1` | Clamped to 0–1. |
+| `EmissiveColor` | `Color3` | White | Tint of the emissive contribution. |
+| `EmissiveStrength` | `number` | `1` | Clamped to zero or greater. |
+
+These numeric surface controls reject NaN and infinity. The default shader uses these controls; a custom shader can behave differently.
+
+### Shader configuration and status
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Source` | `string` | Built-in material shader | Complete shader source. |
+| `VertexSource` | `string` | `""` | Code inserted at the vertex hook. |
+| `FragmentSource` | `string` | `""` | Code inserted at the fragment hook. |
+| `Compiled` | `boolean` | Not compiled initially | Status of shader compilation. |
+| `LastError` | `string` | `""` | Latest reported shader or texture error. |
+
+Treat `Compiled` and `LastError` as status values rather than settings. Shader and texture preparation can happen when a material is used, so check these values after the material has had a chance to render.
+
+## Methods
+
+### SetUniform
+
+```lua
+SetUniform(name: string, value: any)
+```
+
+Sets a named shader parameter. Use it for custom shader inputs that you want to control from Luau without replacing the shader source.
+
+The default material stores `baseColor`, `roughness`, and `metallic` as shader parameters. Prefer their dedicated properties `Color`, `Roughness`, and `Metalness` when using the built-in shader. The exact accepted Luau value types and return behavior for the shared uniform API are not specified here.
+
+### GetUniform
+
+```lua
+GetUniform(name: string)
+```
+
+Reads a shader parameter through the uniform API. The exact return type and behavior for missing names are not specified here.
+
+### ResetShader
+
+```lua
+ResetShader(): ()
+```
+
+Restores the built-in material source, clears `VertexSource` and `FragmentSource`, and removes custom uniform entries beyond the three built-in parameters. It does not reset the texture map properties or the other standard material controls.
+
+```lua
+variant:ResetShader()
+```
+
+This is useful if custom shader code fails to compile or you want to return to the normal textured material without rebuilding the variant.
+
+## Debugging a material
+
+If a material isn't appearing as expected, make sure it is enabled and parented, and that the object using it refers to the correct name. Check that your texture references resolve to real assets.
+
+```lua
+if variant.LastError ~= "" then
+    warn(variant.LastError)
+elseif variant.Compiled then
+    print("Material shader compiled")
+end
+```
+
+A compiled shader does not guarantee that all textures loaded successfully. If you are using shader hooks, verify that your current `Source` contains the matching markers. Use `ResetShader()` if you want to start again from the default material.

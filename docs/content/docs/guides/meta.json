@@ -1,0 +1,13 @@
+{
+  "title": "Guides",
+  "pages": [
+    "index",
+    "getting-started",
+    "scripting",
+    "script-environment",
+    "networking",
+    "physics",
+    "3d",
+    "input-and-ui"
+  ]
+}

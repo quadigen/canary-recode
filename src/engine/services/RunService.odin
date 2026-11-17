@@ -23,13 +23,13 @@ Render_Binding :: struct {
 }
 
 RunService :: struct {
-	using service:      Service,
-	callbacks:          [dynamic]Render_Binding,
-	render_stepped_ref: i32,
-	stepped_ref:        i32,
+	using service:       Service,
+	callbacks:           [dynamic]Render_Binding,
+	render_stepped_ref:  i32,
+	stepped_ref:         i32,
 	post_simulation_ref: i32,
-	heartbeat_ref:      i32,
-	elapsed:            f64,
+	heartbeat_ref:       i32,
+	elapsed:             f64,
 }
 
 run_service_construct :: proc(
@@ -89,10 +89,8 @@ run_service_get :: proc(
 	case "Heartbeat":
 		run_service_push_signal(L, &service.heartbeat_ref)
 
-	case "IsRunning":
-		vm.PushBoolean(L, true)
-
-	case "IsServer",
+	case "IsRunning",
+	     "IsServer",
 	     "IsClient",
 	     "IsStudio",
 	     "IsEdit",
@@ -190,6 +188,11 @@ run_service_namecall :: proc(
 		return 0, true
 	case "IsServer":
 		vm.PushBoolean(L, run_service_is_server(service))
+		return 1, true
+	case "IsRunning":
+		mode := run_service_mode(service)
+
+		vm.PushBoolean(L, mode != .Editor)
 		return 1, true
 	case "IsClient":
 		vm.PushBoolean(L, run_service_is_client(service))

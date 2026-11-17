@@ -1,0 +1,147 @@
+---
+title: Players
+description: Work with player objects, their characters, and the events that fire as players join and leave.
+---
+
+`Players` holds the `Player` objects for everyone connected to the game. On a client it also tells you which one is yours, and it's the entry point for working with characters.
+
+## Getting started
+
+```lua
+local Players = game:GetService("Players")
+
+Players.PlayerAdded:Connect(function(player)
+    print(player.Name, "joined")
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    print(player.Name, "left")
+end)
+```
+
+`PlayerAdded` doesn't fire for players who joined before you connected. Walk `GetPlayers()` once after connecting if you also need to handle those:
+
+```lua
+for _, player in ipairs(Players:GetPlayers()) do
+    print("Already here:", player.Name)
+end
+```
+
+## Players service
+
+### Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `LocalPlayer` | `Player?` | Read-only | The player for this client, or `nil` on the server. |
+
+### Methods
+
+| Signature | Description |
+| --- | --- |
+| `GetPlayers(): {Player}` | Returns a new array of the players currently in the service. |
+| `GetPlayerByUserId(userId: number): Player?` | Finds a player by user ID, or returns `nil` when no player matches. |
+
+`GetPlayerByUserId()` returns `nil` for IDs that aren't positive integers, so you can pass the result of arithmetic without worrying about a stray fraction raising an error.
+
+### Events
+
+| Event | Callback arguments | When it fires |
+| --- | --- | --- |
+| `PlayerAdded` | `player: Player` | A player object is added to the service. |
+| `PlayerRemoving` | `player: Player` | A player is about to be removed. |
+
+Both events fire with the player object. `PlayerRemoving` fires before the player is destroyed, so you can still read its properties and children inside the callback.
+
+```lua
+local Players = game:GetService("Players")
+
+Players.PlayerRemoving:Connect(function(player)
+    print(player.Name, "had", player.UserId)
+end)
+```
+
+## Player objects
+
+A `Player` is an `Instance` and a child of the `Players` service. You don't create players yourself; the engine adds them as clients connect.
+
+### Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `UserId` | `number` | Read-only | Assigned on creation | The player's user ID. |
+| `DisplayName` | `string` | Read-only | The player's `Name` | Currently returns `Name`, not a separate display name. |
+| `Character` | `Model?` | Read-only | `nil` | The player's current character, or `nil` when none is loaded. |
+| `WalkSpeed` | `number` | Read/write | `16` | Movement speed. Must be between `0` and `100`. |
+| `JumpPower` | `number` | Read/write | `22` | Jump strength. Must be between `0` and `100`. |
+| `PlayerGui` | `PlayerGui` | Read-only | Created on demand | The container for this player's screen GUI. |
+| `PlayerScripts` | `PlayerScripts` | Read-only | Created on demand | The container for this player's client scripts. |
+
+`PlayerGui` and `PlayerScripts` are created the first time you read them, so you can parent a GUI or a script to them without setting anything up.
+
+Setting `WalkSpeed` or `JumpPower` outside the allowed range raises an error. The values are applied to the player's character controller when one exists, so you can set them before or after the character loads. `JumpPower` is converted into a jump height, which means raising it has a stronger effect than the linear number suggests.
+
+`Displayname` behavior is worth checking in code that shows names to players: since it returns `Name`, changing the instance's name changes what `DisplayName` reports.
+
+### Methods
+
+| Signature | Description |
+| --- | --- |
+| `LoadCharacter(): Model?` | Creates and parents a character for the player. Returns the character, or `nil` if none could be created. |
+| `GetMouse(): Mouse?` | Returns the mouse for the local player, or `nil` for anyone else. |
+| `GetNetworkPing(): number` | Returns the player's recorded network ping. |
+| `DistanceFromCharacter(point: Vector3): number` | Distance from the character's root to a point, in studs. Returns `0` when no character is loaded. |
+| `Teleport(cframe: CFrame): boolean` | Moves the character to a position. Raises an error if there's no character or root part. |
+| `ApplyImpulse(impulse: Vector3): ()` | Applies an impulse to the character. Raises an error if no character is loaded. |
+
+```lua
+local function reportDistance(player, target)
+    local distance = player:DistanceFromCharacter(target)
+    print(("%s is %.1f studs away"):format(player.Name, distance))
+end
+```
+
+`Teleport()` moves the root part and the rest of the character with it, and returns `true` on success. Unlike setting a part's position directly, it also keeps the character controller's vertical state and rotation in sync, so it's the better choice for respawn points and checkpoints.
+
+`LoadCharacter()` can return `nil`, for example on web builds, where character loading isn't implemented. Check the result before using it.
+
+`ApplyImpulse()` and `Teleport()` raise errors rather than failing silently when there's no character to act on. Wrap them in a character check:
+
+```lua
+local function knockBack(player, impulse)
+    if player.Character then
+        player:ApplyImpulse(impulse)
+    end
+end
+```
+
+### Events
+
+| Event | Callback arguments | When it fires |
+| --- | --- | --- |
+| `CharacterAdded` | `character: Model` | A character is assigned to the player. |
+| `CharacterRemoving` | `character: Model` | The current character is about to be replaced. |
+
+```lua
+local Players = game:GetService("Players")
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(character)
+        print(player.Name, "spawned as", character.Name)
+    end)
+end)
+```
+
+`CharacterRemoving` fires with the outgoing character before the new one is assigned. If the player may already have a character by the time your code runs, check `player.Character` in addition to connecting `CharacterAdded`, or you'll miss the first spawn.
+
+## Server and client differences
+
+- `LocalPlayer` is `nil` on the server. Code that reads it should be client-only, or guard the access.
+- `GetMouse()` only works for the local player, because the mouse belongs to a client's input.
+- Player objects are created by the engine. `Instance.new("Player")` isn't supported.
+- Character loading depends on the runtime; `LoadCharacter()` is where that shows up in this API.
+
+## See also
+
+- `RunService`, detect whether you're running on the server or the client.
+- `Instance`, parent, children, and lifecycle methods shared by players and characters.

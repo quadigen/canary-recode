@@ -644,6 +644,16 @@ Camera_Get :: proc(
 	switch key {
 	case "FieldOfView":
 		vm.PushNumber(L, f64(camera.field_of_view))
+	case "DiagonalFieldOfView":
+		width, height := Camera_Effective_Viewport(camera)
+		tangent_v := math.tan(math.to_radians(f64(camera.field_of_view)) * 0.5)
+		if width > 0 && height > 0 {
+			tangent_h := tangent_v * f64(width) / f64(height)
+			diagonal := 2 * math.atan(math.sqrt(tangent_v * tangent_v + tangent_h * tangent_h))
+			vm.PushNumber(L, math.to_degrees(diagonal))
+		} else {
+			vm.PushNumber(L, f64(camera.field_of_view))
+		}
 	case "InputEnabled":
 		vm.PushBoolean(L, camera.input_enabled)
 	case "Sensitivity":
@@ -759,8 +769,9 @@ Camera_World_To_Viewport_Point :: proc(
 
 	forward := datatypes.Vec3_Dot(delta, datatypes.CFrame_LookVector(frame))
 	if forward <= 0 {
+		datatypes.Push_Vector3(L, datatypes.Vector3{})
 		vm.PushBoolean(L, false)
-		return 1, true
+		return 2, true
 	}
 
 
@@ -775,10 +786,9 @@ Camera_World_To_Viewport_Point :: proc(
 	x := (normalized_x + 1) * width * 0.5
 	y := (1 - normalized_y) * height * 0.5
 
+	datatypes.Push_Vector3(L, datatypes.Vector3{x, y, forward})
 	vm.PushBoolean(L, on_screen)
-	vm.PushNumber(L, f64(x))
-	vm.PushNumber(L, f64(y))
-	return 3, true
+	return 2, true
 }
 
 Camera_Set :: proc(

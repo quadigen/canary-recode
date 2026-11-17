@@ -1,0 +1,45 @@
+---
+title: WeldConstraint
+description: Rigidly connect two parts so they move as one assembly.
+---
+
+`WeldConstraint` fixes two parts together at their current relative position. Unlike `Weld`, it uses whole parts rather than attachments.
+
+## Getting started
+
+```lua
+local weld = Instance.new("WeldConstraint")
+weld.Part0 = hull
+weld.Part1 = turret
+weld.Parent = hull
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Part0` | `Part?` | Read/write | `nil` | First part. |
+| `Part1` | `Part?` | Read/write | `nil` | Second part. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the weld is active. |
+| `Active` | `boolean` | Read-only | `true` | Whether the weld is currently simulating. |
+
+`Part0` and `Part1` accept only `Part` instances or `nil`. Assigning another instance type is ignored. The joint is created from the parts' positions when both are set and present in the same world.
+
+## How it behaves
+
+The weld keeps the relative transform the parts had when the joint was created. Moving a welded part moves the assembly unless the other part is anchored.
+
+Changing `Part0`, `Part1`, or `Enabled` releases the existing joint and rebuilds it on the next step. Both parts must belong to the same physics world; a constraint with parts in different places stays inactive.
+
+## Notes
+
+- Anchored parts can be welded to moving parts; the anchored side stays fixed.
+- The weld doesn't merge the parts into one instance; they remain separate objects.
+- Cloning copies the part references.
+- A destroyed part clears its property and releases the weld.
+
+## See also
+
+- `Constraint` for the shared attachment properties.
+- `Attachment` and `RopeConstraint` for flexible links.
+- `Part` for the objects being welded.

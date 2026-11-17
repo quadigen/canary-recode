@@ -337,7 +337,14 @@ viewport_frame_collect :: proc(
 
 		if child == nil || child.destroyed || Is_A_Class(child, &ViewportFrame_Class) {continue}
 
-		if Is_A_Class(child, &Part_Class) {
+		if Is_A_Class(child, &RopeConstraint_Class) {
+			rope := cast(^RopeConstraint)child
+			if item, ok := RopeConstraint_Draw_Item(rope, &frame.object, ctx); ok {
+				hash^ = viewport_frame_hash(hash^, u64(uintptr(item.mesh)))
+				hash^ = viewport_frame_hash(hash^, rope.mesh_revision)
+				append(&frame.items, item)
+			}
+		} else if Is_A_Class(child, &Part_Class) {
 
 			part := cast(^Part)child
 
@@ -346,11 +353,11 @@ viewport_frame_collect :: proc(
 				mesh: ^kineffi.KineFilamentMesh
 
 				if part.material == .Water {
-
-					mesh = kineffi.Kine_Filament_Viewport_Primitive(
-						ctx,
-						kineffi.KINE_MESH_WATER_GRID,
-					)
+					when ODIN_OS == .JS {
+						mesh = kineffi.Kine_Filament_Viewport_Primitive(ctx, kineffi.KINE_MESH_WATER_GRID)
+					} else {
+						mesh = kineffi.Kine_Filament_GetWaterGrid(ctx, part.size.x, part.size.z)
+					}
 
 				} else if Is_A_Class(child, &MeshPart_Class) &&
 				   ViewportFrame_MeshPart_Provider != nil {

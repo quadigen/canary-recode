@@ -1,0 +1,186 @@
+---
+title: UIShader
+description: Create custom UI backgrounds, visual filters, and animated interface effects using SkSL.
+---
+
+`UIShader` lets you write your own visual effects for interface elements. You can draw a custom gradient, distort text and images, tint a whole window, or sample what's behind a panel to create a glass-like effect.
+
+A shader is written in SkSL, but you configure it, control its uniforms, and animate it from Luau. `UIShader` inherits from `Instance`.
+
+## Your first shader
+
+Place a `UIShader` directly inside the GUI object you want to affect. The examples on this page assume you already have a `UIShader` instance named `shader` and a GUI object named `frame`.
+
+This shader draws a gradient from blue to purple across the width of the object:
+
+```lua
+shader.Source = [[
+    uniform float2 size;
+
+    half4 main(float2 p) {
+        float t = clamp(p.x / max(size.x, 1.0), 0.0, 1.0);
+        half3 left = half3(0.12, 0.35, 0.9);
+        half3 right = half3(0.55, 0.15, 0.8);
+        return half4(mix(left, right, t), 1.0);
+    }
+]]
+
+shader.Enabled = true
+shader.Parent = frame
+```
+
+`main()` is evaluated for each point of the shader output. Its `p` argument is in local UI coordinates and `size` is the width and height of the object. The returned four components are red, green, blue, and alpha. When returning translucent colors, premultiply the RGB components by alpha.
+
+Only the first enabled direct `UIShader` child with a non-empty source is selected for a GUI object. Adding more shaders to the same parent doesn't automatically stack effects.
+
+## Shader inputs
+
+The following names have special meaning. Declare only the inputs you intend to use.
+
+| Declaration | Description |
+| --- | --- |
+| `uniform float2 size;` | Width and height of the GUI object in local coordinates. Automatically supplied. |
+| `uniform float4 backgroundColor;` | The object's background RGBA color. Alpha is `1 - BackgroundTransparency`. Automatically supplied. |
+| `uniform shader content;` | Samples the GUI content being filtered, using `content.eval(p)`. |
+| `uniform shader backdrop;` | Samples the available backdrop image using `backdrop.eval(p)`. |
+| `uniform float4 guiTransform;` | The current GUI shader transform, supplied as scale X, scale Y, offset X, offset Y. Optional to declare. |
+
+Only `content` and `backdrop` are supported as shader inputs. Other child shaders, color filters, or blenders cannot be supplied. If declared, `size` and `backgroundColor` must use the exact types above and cannot be arrays.
+
+Without `content`, the shader draws its own output within the GUI rectangle. With `content`, it acts as a filter over the captured UI drawing.
+
+## Filtering existing UI
+
+Declare `content` when you want to modify the appearance of existing UI instead of drawing a new background. This example converts the content to grayscale without changing its alpha:
+
+```lua
+shader.Source = [[
+    uniform shader content;
+
+    half4 main(float2 p) {
+        half4 c = content.eval(p);
+        half gray = dot(c.rgb, half3(0.2126, 0.7152, 0.0722));
+        return half4(gray, gray, gray, c.a);
+    }
+]]
+```
+
+You can use the same technique for color inversion, pixelation, and remapping the position you sample from.
+
+## Sampling nearby pixels
+
+If your shader reads from a position other than `p`, set `SampleRadius` high enough to cover the largest offset. This small horizontal blur samples four pixels to either side:
+
+```lua
+shader.Source = [[
+    uniform shader content;
+
+    half4 main(float2 p) {
+        half4 left = content.eval(p - float2(4.0, 0.0));
+        half4 center = content.eval(p);
+        half4 right = content.eval(p + float2(4.0, 0.0));
+        return (left + center * 2.0 + right) * 0.25;
+    }
+]]
+
+shader.SampleRadius = 4
+```
+
+`SampleRadius` is a sampling allowance, not a blur setting by itself. The source still needs to do the actual blur.
+
+If you're creating a large warp or perspective-like effect that might sample nearly anywhere in the original content, use `FullContentSampling`. This can require more drawing work and memory, so leave it off for small local effects.
+
+## Sampling the backdrop
+
+A backdrop shader reads the available image behind the effect instead of the object's own content. Here's a simple tinted panel:
+
+```lua
+shader.Source = [[
+    uniform shader backdrop;
+
+    half4 main(float2 p) {
+        half4 behind = backdrop.eval(p);
+        half4 tint = half4(0.08, 0.12, 0.2, 1.0);
+        return mix(behind, tint, 0.25);
+    }
+]]
+```
+
+The backdrop is a captured image, not a live reference to every individual GUI object beneath the panel. When no usable backdrop is available, samples can be transparent.
+
+## Transforming UI from Luau
+
+`guiTransform` is a special value that lets you scale and offset the rendered UI through the shader. It works independently of whether your SkSL source declares a matching uniform.
+
+```lua
+-- Scale X, scale Y, offset X, offset Y.
+shader:SetUniform("guiTransform", {1.05, 1.05, 0, -6})
+
+local transform = shader:GetUniform("guiTransform")
+print(transform[1], transform[2])
+
+-- Restore the original transform.
+shader:SetUniform("guiTransform", nil)
+```
+
+Scaling is relative to the object's layout origin. The offsets are in the parent's coordinate space. This transform affects rendering; it isn't a substitute for updating `Position` or `Size`, and you shouldn't assume that input hitboxes follow the transformed appearance.
+
+## Sharper effects
+
+`ResolutionScale` controls the rendering resolution used for a shader, without changing the GUI object's layout size. A value of `2` requests twice the sampling resolution horizontally and vertically, or roughly four times as many pixels for the same area.
+
+```lua
+shader.ResolutionScale = 2
+```
+
+Higher values can help with distorted text, curved edges and resampled content, but cost more memory and rendering time. Supersampling is not guaranteed in all situations; large effects, cached drawing, or nested effects may use the regular rendering path. Start at `1` and increase it only if you can see a benefit.
+
+## Properties
+
+| Property | Type | Default | Access | Description |
+| --- | --- | --- | --- | --- |
+| `Source` | `string` | `""` | Read/write | SkSL shader source. Replacing it invalidates the previous compilation. NUL characters are rejected. |
+| `Enabled` | `boolean` | `true` | Read/write | Whether the shader can affect its parent. |
+| `SampleRadius` | `number` | `0` | Read/write | Sampling allowance for a content filter. Clamped to 0–128. NaN is rejected. |
+| `ResolutionScale` | `number` | `1` | Read/write | Requested rendering resolution multiplier. Finite values are clamped to 1–4. |
+| `FullContentSampling` | `boolean` | `false` | Read/write | Allows a content filter to request a sampling region covering the full object, including its scaled dimensions. |
+| `Compiled` | `boolean` | `false` | Read-only | Whether the shader has compiled successfully. |
+| `LastError` | `string` | `""` | Read-only | Most recent compilation or uniform error. |
+
+## Methods
+
+### SetUniform
+
+```lua
+SetUniform(name: string, value: any)
+```
+
+Sets a named shader parameter. For regular uniforms, use a value that matches the declaration in your source. The full list of accepted Luau value types is not specified by this class.
+
+`size` and `backgroundColor` are reserved and cannot be set manually. Names containing NUL characters are also rejected. A missing or incompatible shader uniform can be reported in `LastError` when the shader is prepared.
+
+The special `guiTransform` uniform accepts exactly four finite numbers in a Luau array, or `nil` to reset to `{1, 1, 0, 0}`. This special form returns no values.
+
+### GetUniform
+
+```lua
+GetUniform(name: string)
+```
+
+Reads a uniform through the shader's uniform API. For `guiTransform`, it returns a four-element `{number}` array. The shared getter's exact return shape and missing-name behavior for regular uniforms are not specified here.
+
+## Debugging
+
+Shader compilation happens when the shader is prepared for drawing. Check the status after it has had a chance to render:
+
+```lua
+if shader.LastError ~= "" then
+    warn(shader.LastError)
+elseif shader.Compiled then
+    print("UI shader compiled")
+end
+```
+
+If nothing appears, make sure the shader is enabled, has a non-empty source, and is a direct child of the intended GUI object. Check that your shader's output alpha is not zero and that your input types match their declarations.
+
+`Compiled` and `LastError` describe different things. A compiled shader can still report an invalid uniform. UI shaders currently require a native renderer; they are not supported by the JavaScript/web build.

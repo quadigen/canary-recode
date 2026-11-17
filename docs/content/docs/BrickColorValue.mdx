@@ -1,0 +1,33 @@
+---
+title: BrickColorValue
+description: Store a BrickColor in the object tree.
+---
+
+`BrickColorValue` holds a named brick color. It predates `Color3Value` and is still useful when you want a palette color with a stable name.
+
+## Getting started
+
+```lua
+local color = Instance.new("BrickColorValue")
+color.Name = "WallColor"
+color.Value = BrickColor.new("Bright red")
+color.Parent = themeFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `BrickColor` | Read/write | Gray | The stored brick color. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the color.
+- Brick colors come from a fixed palette; `Color3Value` gives you arbitrary colors instead.
+- `BrickColor.new()` accepts a name or a palette number.
+
+## See also
+
+- `Color3Value` for arbitrary colors.
+- `Part` and `GuiObject` for display properties.

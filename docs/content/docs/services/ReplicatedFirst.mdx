@@ -1,0 +1,35 @@
+---
+title: ReplicatedFirst
+description: A container for content that should be available to clients before the rest of the world.
+---
+
+`ReplicatedFirst` is a container service meant for content that clients need early in startup. It has no Luau members of its own; it's an `Instance` container like `ReplicatedStorage`, and you use the shared object API with it.
+
+## Getting started
+
+```lua
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+
+local folder = Instance.new("Folder")
+folder.Name = "LoadingAssets"
+folder.Parent = ReplicatedFirst
+```
+
+## What to put here
+
+- Loading screens and their assets, which should appear before the world does.
+- Bootstrap `LocalScript` code that needs to run early.
+- Small content that the client needs while other replication is still finishing.
+
+Keep large assets out of this container. Everything here is paid for at startup, before the player sees the world.
+
+## Notes
+
+- The service exposes no methods, properties, or events beyond the shared `Instance` API.
+- The engine treats the container as a priority hint for replication, not as a guarantee about ordering relative to every other object. Use `Workspace.FinishedReplicating` when you need to know the world has arrived.
+- Clients can remove content from their own copy without affecting the server.
+
+## See also
+
+- `ReplicatedStorage`, the general shared container.
+- `Workspace`, the `FinishedReplicating` event.

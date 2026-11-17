@@ -1,0 +1,64 @@
+---
+title: Decal
+description: Project a texture onto one face of a part.
+---
+
+`Decal` paints a texture onto one face of a parent part. Use it for signs, labels, grime, posters, and any detail that doesn't need its own geometry.
+
+## Getting started
+
+```lua
+local decal = Instance.new("Decal")
+decal.Texture = "textures/sign.png"
+decal.Face = Enum.NormalId.Front
+decal.Parent = part
+```
+
+Parent the decal to a `Part` that's in the Workspace. A decal parented anywhere else, or to a part outside the world, doesn't render.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Texture` | `string` | Read/write | `""` | Asset path of the texture. |
+| `Color3` | `Color3` | Read/write | White | Tint applied to the texture. |
+| `Transparency` | `number` | Read/write | `0` | Transparency, clamped between `0` and `1`. |
+| `Face` | `Enum.NormalId` | Read/write | `Enum.NormalId.Front` | The part face the decal is placed on. |
+| `StudsPerTileU` | `number` | Read/write | `1` | Horizontal tiling size in studs. Values below `0.001` clamp. |
+| `StudsPerTileV` | `number` | Read/write | `1` | Vertical tiling size in studs. Values below `0.001` clamp. |
+| `OffsetStudsU` | `number` | Read/write | `0` | Horizontal offset in studs. |
+| `OffsetStudsV` | `number` | Read/write | `0` | Vertical offset in studs. |
+| `ZOffset` | `number` | Read/write | `0.002` | Distance from the face, used to avoid z-fighting. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the decal renders. |
+| `Culling` | `boolean` | Read/write | `false` | Whether face culling applies to the decal. |
+| `CastShadows` | `boolean` | Read/write | `false` | Whether the decal casts shadows. |
+| `ReceiveShadows` | `boolean` | Read/write | `true` | Whether the decal receives shadows. |
+
+`Color3`, not `Color`, is the tint property on a decal. That's the name to use when reading or writing it.
+
+### Positioning on a face
+
+`Face` selects the surface. `StudsPerTileU` and `StudsPerTileV` control how many studs one copy of the texture covers; smaller values repeat the texture more often.
+
+```lua
+decal.Face = Enum.NormalId.Top
+decal.StudsPerTileU = 4
+decal.StudsPerTileV = 4
+decal.OffsetStudsU = 2
+```
+
+`ZOffset` nudges the decal off the surface. The default is small; raise it if the texture flickers against the part.
+
+## Notes
+
+- A decal has no methods or events of its own.
+- Only one face is decorated per decal. Use several decals for several faces.
+- Removing the parent part removes the decal with it.
+- Cloning copies the texture, tint, face, tiling, offsets, and shadow settings, but not the loaded renderer texture.
+- `Texture` accepts asset paths; the loaded texture is resolved through the asset store, and a missing texture leaves the decal invisible.
+
+## See also
+
+- `Part`, the surface a decal sits on.
+- `MeshPart`, meshes with their own texture.
+- `MaterialVariant`, whole-material appearance changes.

@@ -1,0 +1,25 @@
+---
+title: Guides
+description: Practical walkthroughs for building a game in Kinemium, from the first script to physics, networking, and interface work.
+---
+
+These guides are for building something, not for looking up a single member. Each one walks through a working setup and explains the decisions behind it. When you need exact properties, defaults, or signatures, follow the links into the class and service reference.
+
+| Guide | What it covers |
+| --- | --- |
+| [Getting started](/docs/guides/getting-started) | Install the engine, learn the object tree, run your first script. |
+| [Scripting with Luau](/docs/guides/scripting) | Instances, services, events, modules, and scheduling. |
+| [Networking](/docs/guides/networking) | Server and client scripts, remote events and functions, validation. |
+| [Physics](/docs/guides/physics) | Gravity, impulses, raycasts, constraints, and performance. |
+| [3D and rendering](/docs/guides/3d) | Parts, meshes, cameras, lighting, and world effects. |
+| [Input and UI](/docs/guides/input-and-ui) | Screen interfaces, buttons, raw input, and animation. |
+
+## How to read these
+
+Start with the getting started guide if you haven't run the engine yet. After that, read whichever guide matches the system you're building, then use the reference pages for exact member behavior.
+
+The engine is under active development. Some APIs are placeholders, and a few properties are accepted but do nothing. The guides call those out where they matter, and the reference pages mark them individually. When behavior matters to your game, check the reference page before you rely on it.
+
+## Before you build
+
+You need the engine itself, a text editor for Luau, and a way to run a client and a server when you test networking. The editor can run a standalone session for singleplayer work, which also exercises both sides in one process.

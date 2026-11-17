@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	// A playtest client must reach the network. The server owns the map and any
@@ -39,7 +39,9 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	ok, err := vm.RunInternal(&script_vm, `
+	ok, err := vm.RunInternal(
+		&script_vm,
+		`
 local playtest = game:GetService("PlaytestService")
 assert(playtest ~= nil)
 assert(playtest.IsRunning == false)
@@ -50,7 +52,9 @@ local started, message = pcall(function()
 end)
 assert(started == false)
 assert(string.find(message, ".kine file path", 1, true) ~= nil)
-`, "playtest_service_smoke")
+`,
+		"playtest_service_smoke",
+	)
 	if !ok {
 		fmt.eprintln(err)
 		delete(err)

@@ -1,0 +1,99 @@
+---
+title: PostProcess
+description: Apply custom screen-space effects to the rendered 3D scene.
+---
+
+`PostProcess` lets you change how the rendered 3D scene looks after it has been drawn. You can use it for effects such as color grading, grayscale, chromatic aberration, vignettes, or screen distortion, depending on the shader you write.
+
+Unlike a material, which changes the appearance of a surface, a post-processing shader works with the rendered scene. If you only want to change a window, button, or other UI element, use `UIShader` instead.
+
+`PostProcess` inherits from `Instance`.
+
+## Getting started
+
+A post-processing effect needs a non-empty `Source` and a parent in the game. It also needs to be enabled. The following example assumes you already have a `PostProcess` instance named `effect` and a valid post-processing shader source.
+
+```lua
+local function activateEffect(effect: PostProcess, source: string)
+    effect.Source = source
+    effect.Enabled = true
+    effect.Parent = workspace
+end
+
+activateEffect(effect, shaderSource)
+```
+
+The shader source must use Kinemium's supported post-processing shader format. A Luau function is not a shader. The exact shader entry point and available scene inputs are not specified by this class, so this page does not assume a particular shader template.
+
+## Switching effects
+
+Only one `PostProcess` can be selected at a time. When several parented instances are enabled and have a non-empty source, the first eligible instance is selected. There is no exposed priority or stacking property.
+
+If you want to switch between effects, disable the old one before enabling the new one:
+
+```lua
+local function switchEffect(previous: PostProcess, nextEffect: PostProcess)
+    previous.Enabled = false
+    nextEffect.Enabled = true
+end
+```
+
+You can also toggle an effect without replacing its source:
+
+```lua
+effect.Enabled = not effect.Enabled
+```
+
+## Checking shader status
+
+Shader preparation happens when the effect is selected for rendering. Do not assume that a shader is ready immediately after assigning `Source`.
+
+```lua
+-- Run this after the effect has had a chance to render.
+if effect.LastError ~= "" then
+    warn(effect.LastError)
+elseif effect.Compiled then
+    print("Shader compiled")
+end
+```
+
+If the effect cannot be applied to the scene, it may be disabled automatically and an error recorded in `LastError`. A shader that has been compiled is not necessarily the shader currently selected for rendering.
+
+## Properties
+
+| Property | Type | Default | Access | Description |
+| --- | --- | --- | --- | --- |
+| `Source` | `string` | `""` | Read/write | Shader source code. An empty source makes the instance ineligible for selection. |
+| `Enabled` | `boolean` | `true` | Read/write | Whether this effect can be selected. |
+| `Compiled` | `boolean` | Not compiled initially | Status | Reports whether the shader is compiled. |
+| `LastError` | `string` | `""` | Status | Reports the latest shader error. |
+
+Treat `Compiled` and `LastError` as status values rather than settings.
+
+## Methods
+
+### SetUniform
+
+```lua
+SetUniform(name: string, value: any)
+```
+
+Supplies a named value to the shader. Uniforms let you adjust an effect from Luau without having to rewrite its source for each change. For example, a shader that declares an `intensity` uniform could use it to control the strength of a distortion.
+
+The uniform name and value must match what the shader expects. This class shares its uniform API with `MaterialVariant`; the precise supported Luau value types and return values are not specified here.
+
+### GetUniform
+
+```lua
+GetUniform(name: string)
+```
+
+Reads a uniform value through the shader's uniform API. The exact return type and the behavior for a missing name are not specified here.
+
+## Things to keep in mind
+
+- Keep an effect parented and enabled while you want it to participate in rendering.
+- Multiple instances do not form a chain of effects. Combine effects in one shader if you need them together.
+- Use uniforms for changing parameters rather than assigning a new shader source every frame.
+- Check `LastError` if the effect doesn't appear, and make sure another eligible `PostProcess` is not taking its place.
+- Screen-space effects change the rendered image, not the underlying geometry or physics of objects.

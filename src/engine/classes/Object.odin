@@ -771,6 +771,7 @@ is_object_method :: proc(name: string) -> bool {
 	     "ClearAllChildren",
 	     "FindFirstChild",
 	     "FindFirstChildOfClass",
+	     "FindFirstChildWhichIsA",
 	     "FindFirstAncestor",
 	     "FindFirstAncestorOfClass",
 	     "FindFirstAncestorWhichIsA",
@@ -1103,6 +1104,7 @@ Object_Add_Tag :: proc(object: ^Object, tag: string) {
 		object.signal_registry.tagged_objects[object] = true
 	}
 	object.metadata_revision += 1
+	Object_Fire_Tag_Signal(object, tag, true)
 }
 
 Object_Remove_Tag :: proc(object: ^Object, tag: string) {
@@ -1114,8 +1116,50 @@ Object_Remove_Tag :: proc(object: ^Object, tag: string) {
 			delete_key(&object.signal_registry.tagged_objects, object)
 		}
 		object.metadata_revision += 1
+		Object_Fire_Tag_Signal(object, tag, false)
 		return
 	}
+}
+
+// Returns the CollectionService signal backing GetInstanceAddedSignal /
+// GetInstanceRemovedSignal for one tag, creating it on first subscription.
+Object_Tag_Signal :: proc(registry: ^Registry, tag: string, added: bool) -> ^signals.Signal {
+	if registry == nil || registry.signal_registry == nil || !Tag_Name_Is_Valid(tag) {
+		return nil
+	}
+
+	bucket := &registry.tag_added_signals
+	if !added {
+		bucket = &registry.tag_removed_signals
+	}
+	if signal, ok := bucket[tag]; ok {
+		return signal
+	}
+
+	signal := signals.Create(registry.signal_registry)
+	if signal == nil {return nil}
+	bucket[strings.clone(tag)] = signal
+	return signal
+}
+
+Object_Fire_Tag_Signal :: proc(object: ^Object, tag: string, added: bool) {
+	if object == nil || object.signal_registry == nil || object.signal_registry.signal_registry == nil {
+		return
+	}
+
+	registry := object.signal_registry
+	bucket := &registry.tag_added_signals
+	if !added {
+		bucket = &registry.tag_removed_signals
+	}
+	signal, ok := bucket[tag]
+	if !ok || signal == nil {return}
+
+	L := registry.signal_registry.L
+	if L == nil {return}
+	Push_Object(L, object)
+	signals.Signal_Fire_Arguments(L, signal, vm.StackTop(L), 1)
+	vm.Pop(L)
 }
 
 Object_Push_Tags :: proc(L: ^vm.State, object: ^Object) {
@@ -1180,12 +1224,16 @@ Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Ob
 	destination, ok := clone_object_tree(L, registry, source, &clones)
 	if !ok {return nil, false}
 
-	remap_cloned_attachment_and_weld_refs(clones)
+	remap_cloned_instance_refs(L, registry, clones)
 	return destination, true
 }
 
-remap_cloned_attachment_and_weld_refs :: proc(clones: map[^Object]^Object) {
+remap_cloned_instance_refs :: proc(L: ^vm.State, registry: ^Registry, clones: map[^Object]^Object) {
 	for original, copy in clones {
+		if len(copy.imported_values) != 0 {
+			descriptor := Find_Class(registry, original.class.name)
+			if descriptor != nil {imported_remap_references(L, descriptor, copy, clones)}
+		}
 		if Is_A_Class(original, &Cloth_Class) {
 			cloth := cast(^Cloth)copy
 			if endpoint := clones[cloth.attachment]; endpoint != nil {cloth.attachment = endpoint}
@@ -1233,7 +1281,7 @@ clone_object_children :: proc(L: ^vm.State, registry: ^Registry, source, destina
 	defer delete(clones)
 	clones[source] = destination
 	clone_children_into(L, registry, source, destination, &clones)
-	remap_cloned_attachment_and_weld_refs(clones)
+	remap_cloned_instance_refs(L, registry, clones)
 }
 
 clone_children_into :: proc(
@@ -1342,6 +1390,29 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		return 1, true
 	case "FindFirstChildOfClass":
 		Push_Object(L, Find_First_Child_Of_Class(object, vm.ArgString(L, 2)))
+		return 1, true
+	case "FindFirstChildWhichIsA":
+		class_name := vm.ArgString(L, 2)
+		recursive := vm.ArgOptionalBoolean(L, 3, false)
+		child: ^Object = nil
+		for candidate in object.children {
+			if Is_A(candidate, class_name) {
+				child = candidate
+				break
+			}
+		}
+		if recursive && child == nil {
+			descendants: [dynamic]^Object
+			append_descendants(&descendants, object)
+			for descendant in descendants {
+				if Is_A(descendant, class_name) {
+					child = descendant
+					break
+				}
+			}
+			delete(descendants)
+		}
+		Push_Object(L, child)
 		return 1, true
 	case "WaitForChild":
 		name := vm.ArgString(L, 2)

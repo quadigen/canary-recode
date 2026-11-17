@@ -1,0 +1,134 @@
+---
+title: CollectionService
+description: Group instances with string tags and react when tagged instances are added or removed.
+---
+
+`CollectionService` manages tags: short string labels you attach to instances to group them by behavior instead of by name or hierarchy. Tags are stored on the instance, but this service is how you find everything that shares one.
+
+Tags survive reparenting and cloning, which makes them a better fit than a folder when you care about "everything that's a pickup" rather than "everything inside this container".
+
+## Getting started
+
+```lua
+local CollectionService = game:GetService("CollectionService")
+
+local function registerPickups()
+    for _, instance in ipairs(CollectionService:GetTagged("Pickup")) do
+        print("Pickup:", instance:GetFullName())
+    end
+end
+```
+
+Tagging works from either side. `CollectionService:AddTag(instance, "Pickup")` and `instance:AddTag("Pickup")` do the same thing, and both fire the service's tag signals.
+
+## Methods
+
+### AddTag
+
+```lua
+AddTag(instance: Instance, tag: string): ()
+```
+
+Adds a tag to an instance. Adding a tag that's already present does nothing. The tag must be 1–100 characters and can't contain NUL bytes; an invalid tag raises an error, and so does a target that isn't an accessible instance.
+
+```lua
+local function markAsHazard(part)
+    CollectionService:AddTag(part, "Hazard")
+end
+```
+
+### RemoveTag
+
+```lua
+RemoveTag(instance: Instance, tag: string): ()
+```
+
+Removes a tag if present. Removing a tag that isn't there has no effect and doesn't fire the removed signal.
+
+### HasTag
+
+```lua
+HasTag(instance: Instance, tag: string): boolean
+```
+
+Checks whether the instance has that tag.
+
+### GetTags
+
+```lua
+GetTags(instance: Instance): {string}
+```
+
+Returns a new array of the instance's tags. Changing the returned table doesn't change the instance's tags.
+
+### GetTagged
+
+```lua
+GetTagged(tag: string): {Instance}
+```
+
+Returns a new array of every accessible instance that currently has the tag, in no particular order. Iterate it fresh each time rather than caching the result; instances are tagged and untagged while the game runs.
+
+```lua
+local function damageAllHazards(amount)
+    for _, hazard in ipairs(CollectionService:GetTagged("Hazard")) do
+        if hazard:GetAttribute("Damage") then
+            hazard:SetAttribute("Damage", amount)
+        end
+    end
+end
+```
+
+### GetAllTags
+
+```lua
+GetAllTags(): {string}
+```
+
+Returns a new array of every tag currently in use, with duplicates removed. Useful for debugging or for building a filter UI.
+
+## Signals
+
+### GetInstanceAddedSignal
+
+```lua
+GetInstanceAddedSignal(tag: string): signal
+```
+
+Returns the signal for instances gaining the tag. The callback receives the instance as its only argument.
+
+```lua
+local CollectionService = game:GetService("CollectionService")
+
+CollectionService:GetInstanceAddedSignal("Pickup"):Connect(function(instance)
+    print("New pickup:", instance.Name)
+end)
+```
+
+### GetInstanceRemovedSignal
+
+```lua
+GetInstanceRemovedSignal(tag: string): signal
+```
+
+Returns the signal for instances losing the tag. The callback receives the instance as its only argument.
+
+```lua
+CollectionService:GetInstanceRemovedSignal("Pickup"):Connect(function(instance)
+    print("Removed pickup:", instance.Name)
+end)
+```
+
+Both signals are per tag and shared by all subscribers for that tag. They fire whenever the tag is added or removed, whichever API was used, as long as the signal has been requested at least once. Connect before you start tagging if you don't want to miss the first additions.
+
+## Tag lifetime
+
+- Tags are copied when an instance is cloned.
+- Tags are stored on the object, so `instance:HasTag()` and `CollectionService:HasTag()` agree.
+- Destroying an instance removes it from the service's tagged set; you don't need to untag it first.
+- Tag names are case-sensitive, so `"Pickup"` and `"pickup"` are different tags.
+
+## See also
+
+- `Instance`, the instance-level `AddTag`, `RemoveTag`, `HasTag`, and `GetTags` methods.
+- `Object`, attributes, which are a good companion to tags for per-instance data.

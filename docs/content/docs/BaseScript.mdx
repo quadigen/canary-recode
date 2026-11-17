@@ -1,0 +1,31 @@
+---
+title: BaseScript
+description: Abstract parent of the script classes.
+---
+
+`BaseScript` is the shared parent of `Script` and `LocalScript`. It adds no members of its own and can't be created.
+
+## Getting started
+
+```lua
+local scriptObject = Instance.new("Script")
+
+print(scriptObject:IsA("BaseScript")) -- true
+```
+
+## Members
+
+None. `Script` adds `Source`, `Enabled`, `Disabled`, and `RunContext`; `LocalScript` adds the source and enabled properties relevant to client execution.
+
+## Notes
+
+- `BaseScript` isn't creatable with `Instance.new()`.
+- Use it for `IsA()` checks that should accept either script type.
+- `ModuleScript` does not descend from `BaseScript`; it isn't executed in place.
+- Cloning a concrete script copies its source and enabled state.
+
+## See also
+
+- `Script` for server or general execution.
+- `LocalScript` for client execution.
+- `ModuleScript` for required modules.

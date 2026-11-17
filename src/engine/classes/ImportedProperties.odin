@@ -9,6 +9,8 @@ Imported_Enum :: struct {
 	value: i64,
 }
 
+Imported_Instance :: struct {class: ^Class_Info}
+
 Imported_Value :: union {
 	bool,
 	f64,
@@ -19,6 +21,7 @@ Imported_Value :: union {
 	datatypes.Vector2,
 	datatypes.Vector3,
 	Imported_Enum,
+	Imported_Instance,
 }
 
 Imported_Property :: struct {
@@ -117,6 +120,15 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 	},
 	{{"Decal", "GuiObject"}, {{"AutoLocalize", true}}},
 	{
+		{"ScrollingFrame"},
+		{
+			{
+				"ElasticBehavior",
+				Imported_Enum{"ElasticBehavior", i64(enums.ElasticBehavior.WhenScrollable)},
+			},
+		},
+	},
+	{
 		{"Decal"},
 		{
 			{"EmissiveStrength", f64(1)},
@@ -160,6 +172,7 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 		{
 			{"Draggable", false},
 			{"Interactable", true},
+			{"SelectionImageObject", Imported_Instance{&GuiObject_Class}},
 			{"SelectionOrder", f64(0)},
 			{
 				"SizeConstraint",
@@ -168,6 +181,10 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 		},
 	},
 	{{"ImageLabel", "ImageButton"}, {{"SliceScale", f64(1)}}},
+	{
+		{"TextBox"},
+		{{"RichText", false}, {"TextTruncate", Imported_Enum{"TextTruncate", i64(enums.TextTruncate.None)}}},
+	},
 	{
 		{"ScreenGui"},
 		{{"ZIndexBehavior", Imported_Enum{"ZIndexBehavior", i64(enums.ZIndexBehavior.Sibling)}}},
@@ -291,6 +308,11 @@ imported_property_get :: proc(
 	if !found {return false}
 	if value_ref, stored := object.imported_values[key]; stored {
 		vm.PushRegistryReference(L, value_ref)
+		if _, is_reference := property.default_value.(Imported_Instance); is_reference {
+			value := object_from_argument(L, -1)
+			vm.Pop(L)
+			Push_Object(L, value)
+		}
 		return true
 	}
 
@@ -314,6 +336,8 @@ imported_property_get :: proc(
 		datatypes.Push_Vector3(L, value)
 	case Imported_Enum:
 		_ = enums.Push_Item_By_Value(L, descriptor.registry.enums, value.name, value.value)
+	case Imported_Instance:
+		vm.PushNil(L)
 	}
 	return true
 }
@@ -359,6 +383,12 @@ imported_property_set :: proc(
 	case Imported_Enum:
 		is_default =
 			enums.Arg_Item(L, index, descriptor.registry.enums, value.name).value == value.value
+	case Imported_Instance:
+		is_default = vm.IsNil(L, index)
+		if !is_default && !Is_A_Class(object_from_argument(L, index), value.class) {
+			_ = vm.RaiseError(L, "expected an instance of the required class or nil")
+			return true
+		}
 	}
 
 	vm.ReleaseValue(L, object.imported_values[property.name])
@@ -376,6 +406,20 @@ Imported_Property_Is_Unset :: proc(
 	key: string,
 ) -> bool {
 	return Is_Imported_Property(descriptor, key) && key not_in object.imported_values
+}
+
+imported_remap_references :: proc(L: ^vm.State, descriptor: ^Class_Descriptor, object: ^Object, clones: map[^Object]^Object) {
+	for name, &value_ref in object.imported_values {
+		if _, reference := descriptor.imported_properties[name].default_value.(Imported_Instance); !reference {continue}
+		vm.PushRegistryReference(L, value_ref)
+		mapped := clones[object_from_argument(L, -1)]
+		vm.Pop(L)
+		if mapped == nil {continue}
+		vm.ReleaseValue(L, value_ref)
+		Push_Object(L, mapped)
+		value_ref = vm.RetainValue(L)
+		vm.Pop(L)
+	}
 }
 
 Is_Imported_Property :: proc(descriptor: ^Class_Descriptor, key: string) -> bool {

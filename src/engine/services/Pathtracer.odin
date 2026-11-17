@@ -1,6 +1,6 @@
 package services
 
-// wire:service global="Raytracer"
+// wire:service global="Pathtracer"
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -12,14 +12,14 @@ import vm "../vm"
 import "core:fmt"
 import "core:strings"
 
-Raytracer_Class := classes.Class_Info {
-	name   = "Raytracer",
+Pathtracer_Class := classes.Class_Info {
+	name   = "Pathtracer",
 	parent = &Service_Class,
 }
 
-RAYTRACER_RETRY_FRAMES :: 240
+Pathtracer_RETRY_FRAMES :: 240
 
-Raytracer :: struct {
+Pathtracer :: struct {
 	using service: Service,
 	call_count:    i64,
 	attached:      bool,
@@ -29,20 +29,20 @@ Raytracer :: struct {
 	params:        kineffi.KineRayProperties,
 }
 
-Raytracer_construct :: proc(
+Pathtracer_construct :: proc(
 	renderer: ^classes.Renderer_Object,
 	data_model: rawptr,
 ) -> ^classes.Object {
-	service := new(Raytracer)
-	service.service = Service_Init(&Raytracer_Class, "Raytracer", data_model)
+	service := new(Pathtracer)
+	service.service = Service_Init(&Pathtracer_Class, "Pathtracer", data_model)
 	service.renderer = renderer
 
-	Raytracer_attach(service, renderer)
+	Pathtracer_attach(service, renderer)
 
 	return &service.object
 }
 
-Raytracer_set_error :: proc(service: ^Raytracer, report: string) {
+Pathtracer_set_error :: proc(service: ^Pathtracer, report: string) {
 	if report == service.last_error {
 		return
 	}
@@ -50,10 +50,10 @@ Raytracer_set_error :: proc(service: ^Raytracer, report: string) {
 		delete(service.last_error)
 	}
 	service.last_error = strings.clone(report)
-	fmt.eprintln("[Raytracer] Ray is unavailable:", report)
+	fmt.eprintln("[Pathtracer] Ray is unavailable:", report)
 }
 
-Raytracer_attach :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object) -> bool {
+Pathtracer_attach :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Object) -> bool {
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return false
 	}
@@ -67,13 +67,13 @@ Raytracer_attach :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object
 	}
 
 	if !kineffi.Kine_Filament_HasRay(renderer.Filament) {
-		tracy.ZoneNC("Raytracer Initialize", 0xC678DD)
+		tracy.ZoneNC("Pathtracer Initialize", 0xC678DD)
 		if !kineffi.Kine_Filament_NewRay(renderer.Filament, width, height) {
 			report := string(kineffi.Kine_Filament_GetRayError())
 			if report == "" {
 				report = "unknown error"
 			}
-			Raytracer_set_error(service, report)
+			Pathtracer_set_error(service, report)
 			return false
 		}
 	}
@@ -83,7 +83,7 @@ Raytracer_attach :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object
 		if report == "" {
 			report = "could not switch to render mode 2"
 		}
-		Raytracer_set_error(service, report)
+		Pathtracer_set_error(service, report)
 		return false
 	}
 
@@ -97,14 +97,14 @@ Raytracer_attach :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object
 	service.attached = true
 	service.retry_wait = 0
 	fmt.printf(
-		"[Raytracer] Ray path tracing enabled on the shared Vulkan device (%dx%d)\n",
+		"[Pathtracer] Ray path tracing enabled on the shared Vulkan device (%dx%d)\n",
 		width,
 		height,
 	)
 	return true
 }
 
-Raytracer_Prepare_3D :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Object) {
+Pathtracer_Prepare_3D :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Object) {
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return
 	}
@@ -119,19 +119,19 @@ Raytracer_Prepare_3D :: proc(service: ^Raytracer, renderer: ^classes.Renderer_Ob
 	if width <= 0 || height <= 0 {
 		return
 	}
-	if !Raytracer_attach(service, renderer) {
-		service.retry_wait = RAYTRACER_RETRY_FRAMES
+	if !Pathtracer_attach(service, renderer) {
+		service.retry_wait = Pathtracer_RETRY_FRAMES
 	}
 }
 
-Raytracer_get :: proc(
+Pathtracer_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
-	service := cast(^Raytracer)object
+	service := cast(^Pathtracer)object
 	switch key {
 	case "CallCount":
 		vm.PushNumber(L, f64(service.call_count))
@@ -165,7 +165,7 @@ Raytracer_get :: proc(
 	return true
 }
 
-Raytracer_set :: proc(
+Pathtracer_set :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
@@ -173,7 +173,7 @@ Raytracer_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
-	service := cast(^Raytracer)object
+	service := cast(^Pathtracer)object
 	value := vm.ArgNumber(L, 3)
 
 	switch key {
@@ -208,7 +208,7 @@ Raytracer_set :: proc(
 	return true
 }
 
-Raytracer_namecall :: proc(
+Pathtracer_namecall :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
 	datatype_registry: ^datatypes.Registry,
@@ -218,7 +218,7 @@ Raytracer_namecall :: proc(
 	i32,
 	bool,
 ) {
-	service := cast(^Raytracer)object
+	service := cast(^Pathtracer)object
 	renderer := service.renderer.Filament if service.renderer != nil else nil
 
 	switch method {
@@ -252,7 +252,7 @@ Raytracer_namecall :: proc(
 			if report == "" {
 				report = "could not switch to render mode 1"
 			}
-			Raytracer_set_error(service, report)
+			Pathtracer_set_error(service, report)
 			return 1, true
 		}
 		return 1, true
@@ -262,7 +262,7 @@ Raytracer_namecall :: proc(
 			if report == "" {
 				report = "could not switch to render mode 2"
 			}
-			Raytracer_set_error(service, report)
+			Pathtracer_set_error(service, report)
 			return 1, true
 		}
 		return 1, true
@@ -270,8 +270,8 @@ Raytracer_namecall :: proc(
 	return 0, false
 }
 
-Raytracer_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
-	service := cast(^Raytracer)object
+Pathtracer_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	service := cast(^Pathtracer)object
 	if service.last_error != "" {
 		delete(service.last_error)
 		service.last_error = ""
@@ -280,15 +280,15 @@ Raytracer_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 	free(service)
 }
 
-Register_Raytracer_Class :: proc(registry: ^classes.Registry) {
+Register_Pathtracer_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
-		&Raytracer_Class,
-		Raytracer_construct,
-		Raytracer_destroy,
+		&Pathtracer_Class,
+		Pathtracer_construct,
+		Pathtracer_destroy,
 		creatable = false,
-		get = Raytracer_get,
-		set = Raytracer_set,
+		get = Pathtracer_get,
+		set = Pathtracer_set,
 		properties = []string {
 			"Exposure",
 			"ClampDirect",
@@ -302,6 +302,6 @@ Register_Raytracer_Class :: proc(registry: ^classes.Registry) {
 			"MaxRefractionDepth",
 			"MaxSpecularDepth",
 		},
-		namecall = Raytracer_namecall,
+		namecall = Pathtracer_namecall,
 	)
 }

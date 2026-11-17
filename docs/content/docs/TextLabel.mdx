@@ -1,0 +1,67 @@
+---
+title: TextLabel
+description: Render a block of text in a user interface.
+---
+
+`TextLabel` draws text inside a GUI layout. It exposes the text, font, color, stroke, wrapping, scaling, and alignment properties, and inherits everything from `GuiObject`.
+
+## Getting started
+
+```lua
+local label = Instance.new("TextLabel")
+label.Size = UDim2.fromOffset(240, 48)
+label.Position = UDim2.fromOffset(20, 20)
+label.BackgroundTransparency = 1
+label.Text = "Wave 3"
+label.TextSize = 24
+label.TextColor3 = Color3.fromRGB(255, 255, 255)
+label.Parent = screenGui
+```
+
+## Text properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Text` | `string` | Read/write | The displayed string. |
+| `Font` | `Enum.Font` | Read/write | Legacy font selector. |
+| `FontFace` | `Font` | Read/write | Font object, including family and weight. |
+| `FontSize` | `Enum.FontSize` | Read/write | Named size preset. |
+| `TextSize` | `number` | Read/write | Size in pixels. |
+| `TextColor3` | `Color3` | Read/write | Fill color. |
+| `TextTransparency` | `number` | Read/write | Fill transparency. |
+| `TextStrokeColor3` | `Color3` | Read/write | Outline color. |
+| `TextStrokeTransparency` | `number` | Read/write | Outline transparency. |
+| `TextStrokeThickness` | `number` | Read/write | Outline width. |
+| `TextWrapped` | `boolean` | Read/write | Wrap long lines to the label width. |
+| `TextScaled` | `boolean` | Read/write | Scale text to fill the label. |
+| `TextXAlignment` | `Enum.TextXAlignment` | Read/write | Horizontal alignment. |
+| `TextYAlignment` | `Enum.TextYAlignment` | Read/write | Vertical alignment. |
+| `LineHeight` | `number` | Read/write | Line spacing multiplier. |
+| `TextPadding` | `number` | Read/write | Inner padding in pixels. |
+| `RichText` | `boolean` | Read/write | Parse inline rich text tags. |
+| `TruncateAtEnd` | `boolean` | Read/write | Cut off text that doesn't fit. |
+| `TextBounds` | `Vector2` | Read-only | Measured size of the laid-out text. |
+
+`Font` and `FontFace` are two views of the same setting. Assigning a `Font` keeps the legacy enum; assigning a `FontFace` stores the font object. `FontSize` maps to the nearest named preset, while `TextSize` sets the pixel size directly.
+
+## Alignment
+
+`TextXAlignment` accepts `Left`, `Center`, and `Right`. `TextYAlignment` accepts `Top`, `Center`, and `Bottom`. The defaults are centered on both axes.
+
+```lua
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.TextYAlignment = Enum.TextYAlignment.Top
+```
+
+## Notes
+
+- `TextScaled` takes precedence over `TextSize` when it's enabled.
+- `TextBounds` is updated after layout and is meant for reading, not for sizing the label.
+- Rich text tags are only parsed when `RichText` is true.
+- Inherits `Visible`, `Size`, `Position`, `AnchorPoint`, `BackgroundColor3`, `ZIndex`, and the other `GuiObject` members.
+
+## See also
+
+- `TextButton` for a clickable version.
+- `TextBox` for editable text.
+- `GuiObject` for layout and appearance.

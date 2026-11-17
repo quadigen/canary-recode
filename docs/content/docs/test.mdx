@@ -1,0 +1,401 @@
+---
+title: EditableMesh
+description: Create, inspect, and edit mesh geometry directly from Luau.
+---
+
+`EditableMesh` gives you access to the actual geometry of a mesh. Instead of working with a finished model, you can create vertices, connect them into faces, change their positions, assign colors and UVs, or even define a skeleton from Luau.
+
+Use it for procedural geometry, custom modeling tools, mesh deformation, and surface queries such as finding the closest point on a mesh.
+
+## Working with meshes
+
+There are a few things worth knowing before you start:
+
+- A **vertex** is a point in mesh-local space.
+- A **face** connects three or more vertices to form a surface. A triangle is a face with exactly three vertices.
+- A **normal** describes the direction a surface faces and affects its shading.
+- A **UV** is a 2D texture coordinate.
+- A **bone** is part of a skeleton that can influence vertices.
+
+Vertices, faces, colors, normals, UVs, and bones each have their own numeric IDs. IDs start at `0`, while ordinary Luau arrays start at `1`. An ID returned by the mesh is not necessarily the same as an index into a Luau table.
+
+Keep the IDs returned by creation methods. An unsuccessful creation returns `-1`, not `nil`. Since IDs can change when geometry is removed or merged, don't treat them as permanent identifiers.
+
+## Creating a triangle
+
+The examples on this page assume you already have an `EditableMesh` object named `mesh`. How you obtain the object and attach it to a visible mesh depends on the creation and rendering APIs available in your project.
+
+```lua
+local function createTriangle(mesh: EditableMesh)
+    local a = mesh:AddVertex(Vector3.new(0, 0, 0))
+    local b = mesh:AddVertex(Vector3.new(4, 0, 0))
+    local c = mesh:AddVertex(Vector3.new(0, 4, 0))
+
+    assert(a ~= -1 and b ~= -1 and c ~= -1, "Could not add vertices")
+
+    local face = mesh:AddTriangle(a, b, c)
+    assert(face ~= -1, "Could not create triangle")
+
+    return face, a, b, c
+end
+
+local face, a, b, c = createTriangle(mesh)
+```
+
+The order of the vertices determines the face's winding and the direction of its generated normal. When you add a triangle to a non-fixed mesh, a flat normal is created automatically and assigned to all three corners.
+
+You can also create a polygon with `AddFace()`:
+
+```lua
+local a = mesh:AddVertex(Vector3.new(0, 0, 0))
+local b = mesh:AddVertex(Vector3.new(4, 0, 0))
+local c = mesh:AddVertex(Vector3.new(4, 0, 4))
+local d = mesh:AddVertex(Vector3.new(0, 0, 4))
+
+local face = mesh:AddFace({a, b, c, d})
+assert(face ~= -1)
+```
+
+## Editing an existing mesh
+
+You don't need to recreate a face just to move one of its vertices. Use `GetPosition()` to read a position and `SetPosition()` to change it.
+
+```lua
+local vertex = mesh:FindClosestVertex(Vector3.new(0, 0, 0))
+
+if vertex ~= -1 then
+    local position = mesh:GetPosition(vertex)
+    mesh:SetPosition(vertex, position + Vector3.new(0, 2, 0))
+end
+```
+
+Moving a vertex does not automatically recalculate its stored normals. If you're deforming a mesh and want its shading to follow the new shape, update the relevant normals as well.
+
+## Colors, normals, and UVs
+
+A vertex can be shared by multiple faces. Each face can give that vertex a different normal, color, or UV. This makes it possible to create sharp edges and texture seams without duplicating the vertex position.
+
+To assign an attribute to a face, first create the attribute and then provide its ID for each corner in the same order as `GetFaceVertexIDs()`.
+
+```lua
+local function paintFace(mesh: EditableMesh, face: number, color: Color3)
+    local vertices = mesh:GetFaceVertexIDs(face)
+    if #vertices == 0 then
+        return
+    end
+
+    local colorId = mesh:AddColor(color, 1)
+    assert(colorId ~= -1)
+
+    local colors = table.create(#vertices, colorId)
+    mesh:SetFaceColors(face, colors)
+end
+
+paintFace(mesh, face, Color3.fromRGB(255, 120, 60))
+```
+
+For a triangular face, you can assign texture coordinates like this:
+
+```lua
+local uvA = mesh:AddUV(Vector2.new(0, 0))
+local uvB = mesh:AddUV(Vector2.new(1, 0))
+local uvC = mesh:AddUV(Vector2.new(0, 1))
+
+mesh:SetFaceUVs(face, {uvA, uvB, uvC})
+```
+
+If you only want to change one particular face corner, use `SetVertexFaceColor()`, `SetVertexFaceNormal()`, or `SetVertexFaceUV()`. The simpler `SetVertexColor()`, `SetVertexNormal()`, and `SetVertexUV()` methods create new attributes and currently assign them only to the first face connected to that vertex.
+
+## Finding points on a mesh
+
+All geometry queries work with positions in mesh-local space. You can find a nearby vertex, get every vertex inside a sphere, or cast a ray against the mesh itself.
+
+```lua
+local origin = Vector3.new(1, 1, 10)
+local direction = Vector3.new(0, 0, -1)
+
+local faceId, point, barycentric, vertexIds = mesh:RaycastLocal(origin, direction)
+
+if faceId ~= -1 then
+    print("Hit face", faceId, "at", point)
+    print("Triangle vertices", vertexIds.X, vertexIds.Y, vertexIds.Z)
+    print("Barycentric coordinates", barycentric)
+end
+```
+
+The barycentric coordinates describe how the hit point is distributed across the three vertices of the triangle. For polygons, the hit refers to one of the triangles that make up the polygon.
+
+## Batch operations
+
+When reading several vertices, batch methods let you retrieve their data together. The returned array follows the order of the input IDs.
+
+```lua
+local ids = mesh:FindVerticesWithinSphere(Vector3.new(0, 0, 0), 10)
+local positions = mesh:BatchGetPositions(ids)
+
+for index, position in ipairs(positions) do
+    mesh:SetPosition(ids[index], position + Vector3.new(0, 1, 0))
+end
+```
+
+`BatchGet()` returns a record for each vertex containing its position, normal, color, color alpha, and UV. If a vertex has different attributes on different faces, the record only contains the first associated value of each kind.
+
+## Bones and weights
+
+You can define a hierarchy of bones and specify how much each bone influences a vertex. Each vertex can have up to four bone influences.
+
+```lua
+local root = mesh:AddBone("Root")
+local tip = mesh:AddBone("Tip", root, CFrame.new(0, 2, 0))
+assert(root ~= -1 and tip ~= -1)
+
+mesh:SetVertexBones(a, {root, tip})
+mesh:SetVertexBoneWeights(a, {0.25, 0.75})
+
+mesh:SetBoneCframe(tip, CFrame.new(0, 2, 0) * CFrame.Angles(0, 0, math.rad(25)))
+```
+
+Assign bones before assigning weights. New bone assignments give each bone an equal share by default. Custom weights are normalized to sum to one. The skeleton APIs here define mesh data; displaying or playing back animation requires the appropriate rendering and animation setup.
+
+## Properties
+
+### FixedSize
+
+```lua
+FixedSize: boolean
+```
+
+Default: `false`. Read/write.
+
+When enabled, `FixedSize` prevents adding vertices, normals, colors, UVs, and bones. You can still change existing vertex positions. It also prevents `Triangulate()` from modifying the mesh.
+
+It is not a complete topology lock: adding or removing faces, removing other mesh data, merging vertices, and clearing the mesh are not blocked by this property in the current API.
+
+## Methods
+
+Each signature below describes the Luau-facing API. `number` IDs are zero-based; `()` means the method returns no values. Arrays are ordinary one-based Luau tables.
+
+### Creating geometry
+
+| Method | Description |
+| --- | --- |
+| `AddVertex(position: Vector3): number` | Adds a vertex and returns its ID. Invalid position components are replaced with a zero vector. |
+| `AddFace(vertexIds: {number}): number` | Adds a face using 3–64 distinct, valid vertex IDs. |
+| `AddTriangle(a: number, b: number, c: number): number` | Adds a three-vertex face and returns its ID. |
+| `AddNormal(normal: Vector3): number` | Adds a normal and returns its ID. Supply a unit vector for predictable shading. |
+| `AddColor(color: Color3, alpha: number?): number` | Adds a color and returns its ID. Alpha defaults to `0` and is clamped to the range 0–1. Pass `1` explicitly for full opacity. |
+| `AddUV(uv: Vector2): number` | Adds a texture coordinate and returns its ID. |
+
+All six methods return `-1` if creation is rejected. Invalid normal or UV components are replaced with zero values on creation.
+
+### Editing and removing geometry
+
+| Method | Description |
+| --- | --- |
+| `SetPosition(vertexId: number, position: Vector3): ()` | Moves an existing vertex. Invalid positions or IDs are ignored. |
+| `SetFaceVertices(faceId: number, vertexIds: {number}): ()` | Replaces the vertices of a face and clears its existing corner attribute assignments. |
+| `RemoveVertex(vertexId: number): ()` | Deletes a vertex and removes its references from face vertex lists. Later vertex IDs shift down. |
+| `RemoveFace(faceId: number): ()` | Deletes a face. Later face IDs shift down. |
+| `RemoveNormal(normalId: number): ()` | Deletes a normal and clears or remaps references to it. |
+| `RemoveColor(colorId: number): ()` | Deletes a color and clears or remaps references to it. |
+| `RemoveUV(uvId: number): ()` | Deletes a UV and clears or remaps references to it. |
+| `ResetNormal(normalId: number): ()` | Sets an existing normal to a zero vector; does not calculate a new one. |
+| `Triangulate(): ()` | Splits polygon faces into triangle fans, preserving available corner attributes. Face IDs can change. |
+| `MergeVertices(tolerance: number): {number}` | Welds nearby vertices and returns an old-to-new vertex ID mapping. |
+| `Clear(): ()` | Removes all geometry, bones, and associated mesh data. |
+
+After `RemoveVertex()`, inspect and repair affected faces and their corner attributes. A face may be left with fewer than three vertices, and the remaining corner attributes may no longer line up. Welding can also leave repeated vertex IDs within a face. `Triangulate()` uses a triangle fan, so use triangles or convex polygons for reliable results rather than arbitrary concave shapes.
+
+The mapping from `MergeVertices()` is a Luau array; use `remap[oldId + 1]` to get the new ID. Welding uses spatial buckets, so it is not an exhaustive all-pairs distance search. A nonpositive tolerance uses quantized positions.
+
+### Reading geometry
+
+| Method | Description |
+| --- | --- |
+| `GetPosition(vertexId: number): Vector3` | Returns the vertex position, or a zero vector if the ID is invalid. |
+| `GetVertexPosition(vertexId: number): Vector3` | Alias of `GetPosition()`. |
+| `GetFaces(): {{number}}` | Returns every face as an array of vertex IDs, not an array of face IDs. The face ID is its outer array index minus one. |
+| `GetFaceVertexIDs(faceId: number): {number}` | Returns the ordered vertex IDs of a face, or an empty array for an invalid face. |
+| `GetFaceWithNormals(faceId: number): FaceWithNormals` | Returns the vertex IDs and corresponding normal IDs of a face. |
+| `GetFaceWithUV(faceId: number): FaceWithUV` | Returns the vertex IDs and corresponding UV IDs of a face. |
+| `GetFaceColor(faceId: number): Color3` | Returns the first valid color assigned to the face, or white if none is available. |
+| `GetVertexFaces(vertexId: number): {number}` | Returns IDs of faces containing the given vertex. |
+| `GetAdjacentFaces(faceId: number): {number}` | Returns other faces sharing at least one vertex with the given face, including faces that only meet at a corner. |
+| `GetAdjacentVertices(vertexId: number): {number}` | Returns the unique other vertices on faces containing the given vertex. |
+| `GetCenter(): Vector3` | Returns the center of the mesh's axis-aligned bounding box. |
+| `GetSize(): Vector3` | Returns the dimensions of the mesh's axis-aligned bounding box. |
+| `IdDebugString(id: number): string` | Returns a readable ID description, such as `Vertex 0`. IDs overlap between attribute types, so the description may not identify the type you intended. |
+
+`GetCenter()` and `GetSize()` return a zero vector for an empty mesh. The face records look like this:
+
+```lua
+type FaceWithNormals = {
+    FaceVertexIDs: {number},
+    FaceNormals: {number},
+}
+
+type FaceWithUV = {
+    FaceVertexIDs: {number},
+    FaceUVs: {number},
+}
+```
+
+An invalid face returns an empty table instead of a populated record. An unassigned corner attribute can appear as `-1`.
+
+To enumerate the faces:
+
+```lua
+for index, vertexIds in ipairs(mesh:GetFaces()) do
+    local faceId = index - 1
+    print(faceId, vertexIds)
+end
+```
+
+### Reading attributes
+
+| Method | Description |
+| --- | --- |
+| `GetColor(colorId: number): Color3` | Returns a stored color, or white for an invalid ID. |
+| `GetColorWithAttribute(colorId: number): Color3` | Alias of `GetColor()`. |
+| `GetColors(): {ColorEntry}` | Returns all stored colors with their alpha values, in ID order. |
+| `GetUV(uvId: number): Vector2` | Returns a stored UV, or a zero vector for an invalid ID. |
+| `GetUVs(): {Vector2}` | Returns all stored UV values in ID order. |
+| `GetVertexColor(vertexId: number): Color3` | Returns the first associated color of a vertex, or white if none is available. |
+| `GetVertexColors(vertexId: number): {Color3}` | Returns the color values associated with a vertex. |
+| `GetVertexNormals(vertexId: number): {Vector3}` | Returns the normal values associated with a vertex. |
+| `GetVertexUVs(vertexId: number): {Vector2}` | Returns the UV values associated with a vertex. |
+| `GetVertexFaceColor(vertexId: number, faceId: number): number` | Returns the color ID at a particular face corner, or `-1`. |
+| `GetVertexFaceNormal(vertexId: number, faceId: number): number` | Returns the normal ID at a particular face corner, or `-1`. |
+| `GetVertexFaceUV(vertexId: number, faceId: number): number` | Returns the UV ID at a particular face corner, or `-1`. |
+| `GetVerticesColors(): {Color3}` | Returns the entire stored color array as values, without alpha. |
+| `GetVerticesNormals(): {Vector3}` | Returns the entire stored normal array as values. |
+| `GetVerticesUVs(): {Vector2}` | Alias of `GetUVs()`. |
+
+```lua
+type ColorEntry = {
+    Color: Color3,
+    Alpha: number,
+}
+```
+
+Unlike the face-corner getters, the plural vertex attribute getters return attribute **values**, not attribute IDs. `GetVerticesColors()`, `GetVerticesNormals()`, and `GetVerticesUVs()` return stored attribute arrays, not one value per vertex.
+
+### Assigning attributes
+
+| Method | Description |
+| --- | --- |
+| `SetFaceColors(faceId: number, colorIds: {number}): ()` | Assigns a color ID to each corner of a face. |
+| `SetFaceNormals(faceId: number, normalIds: {number}): ()` | Assigns a normal ID to each corner of a face. |
+| `SetFaceUVs(faceId: number, uvIds: {number}): ()` | Assigns a UV ID to each corner of a face. |
+| `SetVertexFaceColor(vertexId: number, faceId: number, colorId: number): ()` | Assigns an existing color ID to a single face corner. |
+| `SetVertexFaceNormal(vertexId: number, faceId: number, normalId: number): ()` | Assigns an existing normal ID to a single face corner. |
+| `SetVertexFaceUV(vertexId: number, faceId: number, uvId: number): ()` | Assigns an existing UV ID to a single face corner. |
+| `SetVertexColor(vertexId: number, color: Color3): ()` | Creates a color with alpha `1` and assigns it to the vertex's first connected face. |
+| `SetVertexNormal(vertexId: number, normal: Vector3): ()` | Creates a normal and assigns it to the vertex's first connected face. |
+| `SetVertexUV(vertexId: number, uv: Vector2): ()` | Creates a UV and assigns it to the vertex's first connected face. |
+| `SetColorForVertices(vertexIds: {number}, color: Color3): ()` | Applies `SetVertexColor()` behavior to each supplied vertex. |
+| `SetNormalForVertices(vertexIds: {number}, normal: Vector3): ()` | Applies `SetVertexNormal()` behavior to each supplied vertex. |
+| `SetUVForVertices(vertexIds: {number}, uv: Vector2): ()` | Applies `SetVertexUV()` behavior to each supplied vertex. |
+
+For face-wide setters, supply exactly as many IDs as the face has vertices. Although the current API accepts arrays of different lengths, matching them avoids missing or misaligned attributes. The convenience vertex setters require an existing connected face and a non-fixed mesh to have a visible effect; they can create unused attributes on isolated vertices.
+
+Use explicit face-corner setters whenever the same vertex belongs to multiple faces and you want precise control. For reliable vertex attribute queries after changing whole-face assignments, use the face-corner getters to inspect the current IDs directly; vertex-level lookups can retain older associations until a topology change.
+
+### Finding geometry by attribute
+
+| Method | Description |
+| --- | --- |
+| `GetFacesWithAttribute(attributeId: number): {number}` | Finds faces using a matching color, normal, or UV ID. |
+| `GetFacesWithColor(colorId: number): {number}` | Finds faces using the given color ID. |
+| `GetFacesWithNormal(normalId: number): {number}` | Finds faces using the given normal ID. |
+| `GetFacesWithUV(uvId: number): {number}` | Finds faces using the given UV ID. |
+| `GetVerticesWithAttribute(attributeId: number): {number}` | Returns unique vertex IDs from faces using a matching color, normal, or UV ID. |
+| `GetVerticesWithColor(colorId: number): {number}` | Returns unique vertex IDs from faces using the given color ID. |
+| `GetVerticesWithNormal(normalId: number): {number}` | Returns unique vertex IDs from faces using the given normal ID. |
+| `GetVerticesWithUV(uvId: number): {number}` | Returns unique vertex IDs from faces using the given UV ID. |
+| `GetVertexWithColor(colorId: number): {number}` | Alias of `GetVerticesWithColor()`. Returns an array despite its singular name. |
+| `GetVertexWithUV(uvId: number): {number}` | Alias of `GetVerticesWithUV()`. Returns an array despite its singular name. |
+
+The vertex searches return every vertex of a matching face, not just the corners that directly use the attribute. Generic attribute searches compare numeric IDs across all three attribute types; use the type-specific methods to avoid unintended matches. A face can appear more than once in `GetFacesWithAttribute()` if multiple attribute types match.
+
+### Spatial queries
+
+| Method | Description |
+| --- | --- |
+| `FindClosestVertex(point: Vector3): number` | Returns the nearest vertex ID, or `-1` if the mesh has no vertices. |
+| `FindClosestPointOnSurface(point: Vector3): Vector3` | Returns the closest point on the mesh surface, or the original point if no usable face is found. |
+| `FindVerticesWithinSphere(center: Vector3, radius: number): {number}` | Returns IDs of vertices within the sphere, including its boundary. A negative radius returns an empty array. |
+| `RaycastLocal(origin: Vector3, direction: Vector3): (number, Vector3, Vector3, Vector3)` | Returns the nearest intersected face ID, hit position, barycentric coordinates, and three vertex IDs packed into a `Vector3`. |
+
+`RaycastLocal()` checks both sides of faces and normalizes the direction internally. Its magnitude does not limit the ray length. A miss or near-zero direction returns `-1` followed by three zero vectors. `FindClosestPointOnSurface()` returns only a position, not a face ID.
+
+### Batch methods
+
+```lua
+type VertexData = {
+    Position: Vector3,
+    Normal: Vector3,
+    Color: Color3,
+    ColorAlpha: number,
+    UV: Vector2,
+}
+```
+
+| Method | Description |
+| --- | --- |
+| `BatchAdd(faces: {{number}}, positions: {Vector3}, normals: {Vector3}?, colors: {Color3}?, uvs: {Vector2}?): ()` | Updates existing positions starting at ID `0`, appends additional vertices, adds new attribute values, then appends faces. |
+| `BatchGet(vertexIds: {number}): {VertexData}` | Returns positions and the first associated normal, color, alpha, and UV for each requested vertex. |
+| `BatchGetPositions(vertexIds: {number}): {Vector3}` | Returns positions in the same order as the input IDs. |
+| `BatchGetNormals(vertexIds: {number}): {Vector3}` | Returns the first associated normal for each input vertex ID. |
+| `BatchSetNormals(vertexIds: {number}, normals: {Vector3}): ()` | Pairs each ID with its corresponding normal and applies the first-connected-face assignment behavior. |
+| `BatchSetUVs(vertexIds: {number}, uvs: {Vector2}): ()` | Pairs each ID with its corresponding UV and applies the first-connected-face assignment behavior. |
+| `BatchGetTriangles(): ()` | Currently a placeholder. It returns no values; use `GetFaces()` to read face vertex lists instead. |
+
+`BatchAdd()` is not a pure append operation: existing vertex positions can be overwritten. The face arrays contain actual zero-based vertex IDs, not one-based position indices. Added normals, colors, and UVs are stored separately and are not automatically assigned to corners; triangles still receive their generated normals. Batch colors are created with alpha `1`.
+
+```lua
+-- For an empty, non-fixed mesh:
+mesh:BatchAdd({{0, 1, 2}}, {
+    Vector3.new(0, 0, 0),
+    Vector3.new(4, 0, 0),
+    Vector3.new(0, 4, 0),
+})
+```
+
+Missing data returned by `BatchGet()` uses zero vectors, white, and color alpha `1`. `BatchGetPositions()` and `BatchGetNormals()` return zero vectors for missing values. Batch setters process only the pairs present in both input arrays; they do not report invalid entries individually.
+
+### Skeleton methods
+
+| Method | Description |
+| --- | --- |
+| `AddBone(name: string, parentId: number?, cframe: CFrame?, isVirtual: boolean?): number` | Creates a bone and returns its ID or `-1`. Defaults: parent `-1`, identity transform, and `false` for virtual status. |
+| `GetBones(): {number}` | Returns the IDs of all bones. |
+| `GetBoneByName(name: string): number` | Returns the first bone with the given name, or `-1`. |
+| `SetBoneName(boneId: number, name: string): ()` | Renames an existing bone. |
+| `SetBoneCframe(boneId: number, cframe: CFrame): ()` | Changes a bone's current transform. The spelling is `Cframe`, not `CFrame`. |
+| `SetBoneParent(boneId: number, parentId: number): ()` | Reparents a bone. Use `-1` for a root bone. Cyclic parenting is rejected. |
+| `SetVertexBones(vertexId: number, boneIds: {number}): ()` | Assigns up to four bones and initializes their weights equally. An empty array clears the influences. |
+| `SetVertexBoneWeights(vertexId: number, weights: {number}): ()` | Normalizes nonnegative, finite weights. The array must match the assigned bones and have a positive total greater than `0.000001`. |
+| `RemoveBone(boneId: number): ()` | Removes a bone, reparents its children to its parent, and remaps later bone IDs. |
+
+After removing a bone, reassign and normalize the affected vertices' influences before continuing to use them. Removing a bone can leave `-1` in the old influence list.
+
+## Mesh limits
+
+| Limit | Value |
+| --- | ---: |
+| Vertices added through the creation API | 1,000,000 |
+| Faces added through the creation API | 2,000,000 |
+| Vertices per newly created or replaced face | 3–64 |
+| Bones | 512 |
+| Bone influences per vertex | 4 |
+
+These are creation-time limits; topology operations can produce different results. For example, triangulating polygons can increase the face count. Check returned IDs before using them and keep large mesh operations out of unnecessarily frequent update loops.
+
+## Things to keep in mind
+
+- Many setters and removal methods return no values even if the requested change is rejected. Validate IDs and inputs before calling them.
+- Don't use `if id then` to check a mesh ID: `0` and `-1` are both truthy in Luau. Check explicitly for `-1`.
+- Store IDs only as long as they remain valid. Refresh them after removing, welding, clearing, or triangulating geometry.
+- The current API does not expose a `GetVertices()`, `SetNormal()`, `SetColor()`, or `SetUV()` method. Use the available face and vertex operations instead.
+- `BatchGetTriangles()` is not implemented beyond its method entry point.

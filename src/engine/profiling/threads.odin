@@ -334,7 +334,9 @@ reset_thread_state :: proc() {
 thread_frame_flush :: proc() {
 	context = tracy.DefaultContext()
 	thread_frame_serial += 1
-	frame := Thread_Frame_Data{serial = thread_frame_serial}
+	frame := Thread_Frame_Data {
+		serial = thread_frame_serial,
+	}
 	for record in frame_dirty_records {
 		record.last_sample_serial = frame.serial
 		append(

@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_breadth :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.RunInternal(script_vm, source, name)
@@ -13,8 +13,14 @@ run_breadth :: proc(script_vm: ^vm.VM, source, name: string) {
 	}
 }
 
-breadth_step :: proc(server: ^engine_runtime.Environment, server_vm: ^vm.VM, client: ^engine_runtime.Environment, client_vm: ^vm.VM, frames: int) {
-	for frame in 0..<frames {
+breadth_step :: proc(
+	server: ^engine_runtime.Environment,
+	server_vm: ^vm.VM,
+	client: ^engine_runtime.Environment,
+	client_vm: ^vm.VM,
+	frames: int,
+) {
+	for frame in 0 ..< frames {
 		engine_runtime.Environment_Update_Step(server, server_vm, 1.0 / 60.0)
 		engine_runtime.Environment_Update_Step(client, client_vm, 1.0 / 60.0)
 		engine_runtime.Environment_Render_Step(server, server_vm, 1.0 / 60.0)
@@ -33,7 +39,9 @@ main :: proc() {
 	engine_runtime.Environment_Init(&server, &server_vm, nil, .Server)
 	engine_runtime.Environment_Init(&client, &client_vm, nil, .Client)
 
-	run_breadth(&server_vm, `
+	run_breadth(
+		&server_vm,
+		`
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39234))
 
 -- StarterGui tree (ScreenGui -> Frame -> TextLabel with UDim2/UDim/Color3/enum props)
@@ -114,13 +122,19 @@ secret_flag.Value = true
 local secret_script = Instance.new("Script", game:GetService("ServerScriptService"))
 secret_script.Name = "SecretScript"
 secret_script.Source = "print('secret')"
-`, "breadth_server_setup")
+`,
+		"breadth_server_setup",
+	)
 
 	fmt.eprintln("P1 SERVER_SETUP_DONE")
 
-	run_breadth(&client_vm, `
+	run_breadth(
+		&client_vm,
+		`
 assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39234))
-`, "breadth_client_connect")
+`,
+		"breadth_client_connect",
+	)
 
 	fmt.eprintln("P2 CLIENT_CONNECT_DONE")
 
@@ -129,12 +143,18 @@ assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39234))
 	fmt.eprintln("P3 INITIAL_STEP_DONE")
 
 	// The server-side Script must have run on the server.
-	run_breadth(&server_vm, `
+	run_breadth(
+		&server_vm,
+		`
 assert(game:GetService("ServerStorage"):FindFirstChild("SecretPart") ~= nil, "server keeps ServerStorage")
 assert(_G.SERVER_SCRIPT_RAN == true, "server script should run on the server")
-`, "breadth_server_side")
+`,
+		"breadth_server_side",
+	)
 
-	run_breadth(&client_vm, `
+	run_breadth(
+		&client_vm,
+		`
 local function close(a, b) return math.abs(a - b) <= 0.01 end
 
 -- StarterGui tree replicated with values intact.
@@ -188,26 +208,36 @@ assert(client_script ~= nil and _G.CLIENT_SCRIPT_RAN == true, "LocalScript shoul
 assert(game:GetService("ServerStorage"):FindFirstChild("SecretPart") == nil, "ServerStorage must not replicate")
 assert(game:GetService("ServerStorage"):FindFirstChild("SecretFlag") == nil, "ServerStorage values must not replicate")
 assert(game:GetService("ServerScriptService"):FindFirstChild("SecretScript") == nil, "ServerScriptService must not replicate")
-`, "breadth_client_broadcast")
+`,
+		"breadth_client_broadcast",
+	)
 
 	// Live property updates of replicated classes must reach the client.
-	run_breadth(&server_vm, `
+	run_breadth(
+		&server_vm,
+		`
 local frame = game:GetService("StarterGui"):FindFirstChild("Hud"):FindFirstChild("Backdrop")
 frame:FindFirstChild("Title").Text = "Updated Text"
 frame.BackgroundColor3 = Color3.new(0, 1, 0)
 workspace:FindFirstChild("Lamp"):FindFirstChild("LampLight").Range = 30
-`, "breadth_server_mutate")
+`,
+		"breadth_server_mutate",
+	)
 
 	breadth_step(&server, &server_vm, &client, &client_vm, 15)
 
-	run_breadth(&client_vm, `
+	run_breadth(
+		&client_vm,
+		`
 local function close(a, b) return math.abs(a - b) <= 0.01 end
 
 local frame = game:GetService("StarterGui"):FindFirstChild("Hud"):FindFirstChild("Backdrop")
 assert(frame:FindFirstChild("Title").Text == "Updated Text", "live Text update should replicate")
 assert(close(frame.BackgroundColor3.G, 1) and close(frame.BackgroundColor3.R, 0), "live color update should replicate")
 assert(close(workspace:FindFirstChild("Lamp"):FindFirstChild("LampLight").Range, 30), "live PointLight update should replicate")
-`, "breadth_client_live_update")
+`,
+		"breadth_client_live_update",
+	)
 
 	run_breadth(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "breadth_server_stop")
 	run_breadth(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "breadth_client_stop")

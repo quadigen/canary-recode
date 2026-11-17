@@ -1,0 +1,97 @@
+---
+title: Model
+description: Group parts and other objects, then move, measure, and scale them as one unit.
+---
+
+`Model` groups parts and other objects so you can treat them as a single object. It's the class behind characters, vehicles, and any multi-part assembly you want to move, clone, or scale together.
+
+A `Model` is an `Instance`, so it lives in the hierarchy like anything else. What it adds is a pivot, a measured bounding box, and a scale factor that applies to everything inside it.
+
+## Getting started
+
+```lua
+local model = Instance.new("Model")
+model.Name = "Crate"
+model.Parent = game:GetService("Workspace")
+
+local part = Instance.new("Part")
+part.Size = Vector3.new(4, 4, 4)
+part.Parent = model
+```
+
+Parts parented to the model are still independent physics bodies; the model doesn't weld or constrain them. If you need the pieces to stay together, add constraints or welds.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Pivot` | `CFrame` | Read/write | Identity | The model's pivot. Assigning it moves the model the same way `PivotTo()` does. |
+
+When the pivot hasn't been set explicitly, reading `Pivot` returns the center of the model's bounding box. For a character model, it returns the root part's `CFrame` instead, which keeps the pivot at the character's feet rather than at the middle of its geometry.
+
+## Methods
+
+### PivotTo and GetPivot
+
+```lua
+PivotTo(target: CFrame): ()
+GetPivot(): CFrame
+```
+
+`PivotTo()` moves the entire model so its pivot lands on the target `CFrame`. Every part in the model, including parts inside nested models, moves by the same delta. Rotation in the target is applied too, so this is the normal way to teleport or rotate an assembly.
+
+```lua
+local function placeAt(model, position)
+    model:PivotTo(CFrame.new(position))
+end
+```
+
+Unlike setting a part's `CFrame`, moving a model keeps the parts in the same relative arrangement. The parts' own property-change signals still fire for `CFrame` and `Position`, so anything watching an individual part sees the move.
+
+### GetBoundingBox and GetExtentsSize
+
+```lua
+GetBoundingBox(): (CFrame, Vector3)
+GetExtentsSize(): Vector3
+```
+
+`GetBoundingBox()` returns the center and size of the model's axis-aligned bounding box, in world space. `GetExtentsSize()` returns just the size, which is convenient for checking how much room the model needs.
+
+```lua
+local center, size = model:GetBoundingBox()
+print("Fits in", size.X, size.Y, size.Z)
+```
+
+Only parts contribute to the bounding box. Attachments, values, and other non-part children are ignored, and an empty model returns a zero size.
+
+### GetScale and ScaleTo
+
+```lua
+GetScale(): number
+ScaleTo(scale: number): ()
+```
+
+`ScaleTo()` resizes the model relative to its current scale. Part sizes multiply by the ratio, part positions move toward or away from the pivot, attachments scale with their parent, and nested models scale recursively. `GetScale()` reports the accumulated factor.
+
+```lua
+model:ScaleTo(2)
+-- Doubles the model's size.
+
+model:ScaleTo(1)
+-- Back to the authored size.
+```
+
+The scale must be finite and greater than `0`; anything else raises an error. Scaling changes part `Size` and `CFrame` values, so re-check collision and physics costs after enlarging a model.
+
+## Notes
+
+- `Pivot` is the only model property. Scale is set through `ScaleTo()`, not assigned directly.
+- Models can nest. Moving or scaling a parent model affects every model inside it.
+- The bounding box follows the current part geometry, so it changes when parts are added, removed, or resized.
+- Cloning a model copies its pivot and scale along with its children, subject to the usual archivable rules.
+
+## See also
+
+- `Part`, the geometry that makes up a model.
+- `Attachment`, pivot points that scale with the model.
+- `Instance`, cloning, parenting, and hierarchy behavior.

@@ -2,6 +2,7 @@ package classes
 
 import sdl3 "../platform"
 
+import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
@@ -13,6 +14,10 @@ ScrollingFrame_Class := Class_Info {
 	parent = &GuiObject_Class,
 }
 
+Scroll_Bar_Image :: struct {
+	path:   string,
+	handle: ^kineffi.KineSkiaImage,
+}
 
 ScrollingFrame :: struct {
 	using gui_object:       GuiObject,
@@ -29,6 +34,9 @@ ScrollingFrame :: struct {
 	scrollbar_thickness:    f32,
 	scrollbar_color:        datatypes.Color3,
 	scrollbar_transparency: f32,
+	vertical_bar_inset:    enums.ScrollBarInset,
+	horizontal_bar_inset:  enums.ScrollBarInset,
+	scrollbar_images:      [3]Scroll_Bar_Image,
 	scrollbar_auto_hide:    bool,
 	scrollbar_fade_delay:   f32,
 	scrollbar_fade_speed:   f32,
@@ -176,17 +184,42 @@ scrolling_frame_resolve_canvas :: proc(
 	return max(width, f32(0)), max(height, f32(0))
 }
 
+scrolling_frame_window_size :: proc(frame: ^ScrollingFrame, width, height: f32) -> (window_width, window_height: f32) {
+	window_width, window_height = width, height
+	if frame.vertical_bar_inset == .None && frame.horizontal_bar_inset == .None {return}
+	allow_x := frame.scrolling_direction != .Y
+	allow_y := frame.scrolling_direction != .X
+	for _ in 0 ..< 2 {
+		canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, window_width, window_height)
+		if frame.vertical_bar_inset == .Always ||
+		   (frame.vertical_bar_inset == .ScrollBar && allow_y && canvas_height > window_height) {
+			window_width = max(0, width - frame.scrollbar_thickness)
+		}
+		if frame.horizontal_bar_inset == .Always ||
+		   (frame.horizontal_bar_inset == .ScrollBar && allow_x && canvas_width > window_width) {
+			window_height = max(0, height - frame.scrollbar_thickness)
+		}
+	}
+	return
+}
+
+scrolling_frame_content_size :: proc(object: ^Object, width, height: f32) -> (f32, f32) {
+	if !Is_A_Class(object, &ScrollingFrame_Class) {return width, height}
+	return scrolling_frame_window_size(cast(^ScrollingFrame)object, width, height)
+}
+
 
 scrolling_frame_update_bounds :: proc(frame: ^ScrollingFrame, rect: guilib.Rect) {
 	if frame == nil {
 		return
 	}
 
-	canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, rect.width, rect.height)
+	width, height := scrolling_frame_window_size(frame, rect.width, rect.height)
+	canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, width, height)
 
-	frame.max_scroll_x = max(canvas_width - rect.width, f32(0))
+	frame.max_scroll_x = max(canvas_width - width, f32(0))
 
-	frame.max_scroll_y = max(canvas_height - rect.height, f32(0))
+	frame.max_scroll_y = max(canvas_height - height, f32(0))
 
 
 	allows_x := frame.scrolling_direction == .X || frame.scrolling_direction == .XY
@@ -290,26 +323,26 @@ scrolling_frame_vertical_bar :: proc(
 	size := frame.absolute_size
 	position := frame.absolute_position
 
-	canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, size.X, size.Y)
+	width, height := scrolling_frame_window_size(frame, size.X, size.Y)
+	_, canvas_height := scrolling_frame_resolve_canvas(frame, width, height)
 
-	_ = canvas_width
 
 	padding: f32 = 2
 
-	track_height := max(size.Y - padding * 2, f32(0))
+	track_height := max(height - padding * 2, f32(0))
 
 	if track_height <= 0 || canvas_height <= 0 {
 		return guilib.Rect{}, guilib.Rect{}, false
 	}
 
 	track = guilib.Rect {
-		x      = position.X + size.X - frame.scrollbar_thickness - padding,
+		x      = position.X + size.X - frame.scrollbar_thickness - (padding if width == size.X else 0),
 		y      = position.Y + padding,
 		width  = frame.scrollbar_thickness,
 		height = track_height,
 	}
 
-	handle_height := max(track_height * (size.Y / canvas_height), frame.scrollbar_min_handle)
+	handle_height := max(track_height * (height / canvas_height), frame.scrollbar_min_handle)
 
 	handle_height = min(handle_height, track_height)
 
@@ -346,13 +379,13 @@ scrolling_frame_horizontal_bar :: proc(
 	size := frame.absolute_size
 	position := frame.absolute_position
 
-	canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, size.X, size.Y)
+	width, height := scrolling_frame_window_size(frame, size.X, size.Y)
+	canvas_width, _ := scrolling_frame_resolve_canvas(frame, width, height)
 
-	_ = canvas_height
 
 	padding: f32 = 2
 
-	track_width := max(size.X - padding * 2, f32(0))
+	track_width := max(width - padding * 2, f32(0))
 
 	if track_width <= 0 || canvas_width <= 0 {
 		return guilib.Rect{}, guilib.Rect{}, false
@@ -360,12 +393,12 @@ scrolling_frame_horizontal_bar :: proc(
 
 	track = guilib.Rect {
 		x      = position.X + padding,
-		y      = position.Y + size.Y - frame.scrollbar_thickness - padding,
+		y      = position.Y + size.Y - frame.scrollbar_thickness - (padding if height == size.Y else 0),
 		width  = track_width,
 		height = frame.scrollbar_thickness,
 	}
 
-	handle_width := max(track_width * (size.X / canvas_width), frame.scrollbar_min_handle)
+	handle_width := max(track_width * (width / canvas_width), frame.scrollbar_min_handle)
 
 	handle_width = min(handle_width, track_width)
 
@@ -392,6 +425,45 @@ scrolling_frame_point_in_rect :: proc(rect: guilib.Rect, x, y: f32) -> bool {
 	return x >= rect.x && y >= rect.y && x <= rect.x + rect.width && y <= rect.y + rect.height
 }
 
+scrolling_frame_set_bar_image :: proc(image: ^Scroll_Bar_Image, path: string) {
+	label := ImageLabel{image = image.path, owned_image = image.path, stored_image = image.handle}
+	ImageLabel_Set_Image(&label, path)
+	image^ = {label.owned_image, label.stored_image}
+}
+
+scrolling_frame_draw_bar :: proc(frame: ^ScrollingFrame, ctx: ^Class_Step_Context, rect: guilib.Rect, transparency: f32, horizontal: bool) {
+	surface := ctx.renderer.SkiaSurface
+	handle := rect
+	handle.color = frame.scrollbar_color
+	handle.bgTransparency = transparency
+	if frame.scrollbar_images[0].handle == nil && frame.scrollbar_images[1].handle == nil && frame.scrollbar_images[2].handle == nil {
+		guilib.drawRoundedRect(surface, handle, min(handle.width, handle.height) * 0.5)
+		return
+	}
+	if horizontal {
+		guilib.save(surface)
+		guilib.translate(surface, handle.x, handle.y + handle.height)
+		guilib.rotate(surface, -90)
+		handle.x, handle.y, handle.width, handle.height = 0, 0, handle.height, handle.width
+	}
+	defer if horizontal {guilib.restore(surface)}
+	cap := min(handle.width, handle.height * 0.5)
+	heights := [3]f32{cap, handle.height - 2 * cap, cap}
+	for image, i in frame.scrollbar_images {
+		if heights[i] <= 0 {continue}
+		handle.height = heights[i]
+		if image.handle != nil {
+			label := ImageLabel{stored_image = image.handle, image_transparency = transparency, image_color3 = frame.scrollbar_color}
+			ImageLabel_Draw_Image_Patch(&label, ctx, 0, 0,
+				f32(kineffi.Kine_Skia_Image_GetWidth(image.handle)), f32(kineffi.Kine_Skia_Image_GetHeight(image.handle)),
+				handle.x, handle.y, handle.width, handle.height)
+		} else {
+			guilib.drawRoundedRect(surface, handle, 0)
+		}
+		handle.y += handle.height
+	}
+}
+
 
 scrolling_frame_draw_scrollbars :: proc(frame: ^ScrollingFrame, ctx: ^Class_Step_Context) {
 	if frame == nil ||
@@ -406,27 +478,11 @@ scrolling_frame_draw_scrollbars :: proc(frame: ^ScrollingFrame, ctx: ^Class_Step
 
 	_, vertical, vertical_visible := scrolling_frame_vertical_bar(frame)
 
-	if vertical_visible {
-		vertical.color = frame.scrollbar_color
-
-		vertical.bgTransparency = transparency
-
-		radius := min(vertical.width, vertical.height) * 0.5
-
-		guilib.drawRoundedRect(ctx.renderer.SkiaSurface, vertical, radius)
-	}
+	if vertical_visible {scrolling_frame_draw_bar(frame, ctx, vertical, transparency, false)}
 
 	_, horizontal, horizontal_visible := scrolling_frame_horizontal_bar(frame)
 
-	if horizontal_visible {
-		horizontal.color = frame.scrollbar_color
-
-		horizontal.bgTransparency = transparency
-
-		radius := min(horizontal.width, horizontal.height) * 0.5
-
-		guilib.drawRoundedRect(ctx.renderer.SkiaSurface, horizontal, radius)
-	}
+	if horizontal_visible {scrolling_frame_draw_bar(frame, ctx, horizontal, transparency, true)}
 }
 
 
@@ -444,6 +500,10 @@ ScrollingFrame_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 
 	if scrolling_frame_dragged == frame {
 		scrolling_frame_dragged = nil
+	}
+	for image in frame.scrollbar_images {
+		delete(image.path)
+		if image.handle != nil {kineffi.Kine_Skia_Image_Destroy(image.handle)}
 	}
 
 	GuiObject_Free_Signals(cast(^GuiObject)object)
@@ -493,22 +553,26 @@ ScrollingFrame_get :: proc(
 		)
 		return true
 
-	case "AbsoluteCanvasSize":
+	case "AbsoluteWindowSize", "AbsoluteCanvasSize":
 		if datatype_registry == nil {
 			return false
 		}
 
-		canvas_width, canvas_height := scrolling_frame_resolve_canvas(
-			frame,
-			frame.absolute_size.X,
-			frame.absolute_size.Y,
-		)
+		width, height := scrolling_frame_window_size(frame, frame.absolute_size.X, frame.absolute_size.Y)
+		if key == "AbsoluteCanvasSize" {width, height = scrolling_frame_resolve_canvas(frame, width, height)}
 
 		datatypes.Push_Vector2(
 			L,
 			datatype_registry,
-			datatypes.Vector2{canvas_width, canvas_height},
+			datatypes.Vector2{width, height},
 		)
+		return true
+	case "VerticalScrollBarInset", "HorizontalScrollBarInset":
+		value := frame.vertical_bar_inset if key == "VerticalScrollBarInset" else frame.horizontal_bar_inset
+		return enums.Push_Item_By_Value(L, enum_registry, "ScrollBarInset", i64(value))
+	case "TopImage", "MidImage", "BottomImage":
+		index := 0 if key == "TopImage" else (1 if key == "MidImage" else 2)
+		vm.PushString(L, frame.scrollbar_images[index].path)
 		return true
 
 	case "VirtualizedScrolling":
@@ -597,7 +661,9 @@ ScrollingFrame_set :: proc(
 
 		position.X = clamp(position.X, f32(0), frame.max_scroll_x)
 		position.Y = clamp(position.Y, f32(0), frame.max_scroll_y)
-		if frame.canvas_position != position {
+		changed := frame.canvas_position != position
+		if !changed && frame.target_position == position {return true}
+		if changed {
 			gui_mark_layout_for(object, false)
 		}
 
@@ -605,6 +671,10 @@ ScrollingFrame_set :: proc(
 		frame.target_position = position
 
 		scrolling_frame_interact(frame)
+		surfacegui_mark_dirty_for(object)
+		if changed {
+			Object_Fire_Property_Changed(object, key, L)
+		}
 		return true
 
 	case "CanvasSize":
@@ -635,8 +705,8 @@ ScrollingFrame_set :: proc(
 		}
 		return true
 
-	case "AbsoluteCanvasSize":
-		_ = vm.RaiseError(L, "AbsoluteCanvasSize cannot be changed")
+	case "AbsoluteCanvasSize", "AbsoluteWindowSize":
+		_ = vm.RaiseError(L, "absolute scrolling dimensions cannot be changed")
 		return true
 
 	case "VirtualizedScrolling":
@@ -691,7 +761,17 @@ ScrollingFrame_set :: proc(
 
 	case "ScrollBarThickness":
 		frame.scrollbar_thickness = max(f32(vm.ArgNumber(L, value_index)), f32(0))
+		Gui_Layout_Mark_Dirty()
 
+		return true
+	case "VerticalScrollBarInset", "HorizontalScrollBarInset":
+		value := enums.ScrollBarInset(enums.Arg_Item(L, value_index, enum_registry, "ScrollBarInset").value)
+		if key == "VerticalScrollBarInset" {frame.vertical_bar_inset = value} else {frame.horizontal_bar_inset = value}
+		Gui_Layout_Mark_Dirty()
+		return true
+	case "TopImage", "MidImage", "BottomImage":
+		index := 0 if key == "TopImage" else (1 if key == "MidImage" else 2)
+		scrolling_frame_set_bar_image(&frame.scrollbar_images[index], vm.ArgString(L, value_index))
 		return true
 
 	case "ScrollBarImageColor3":
@@ -810,6 +890,9 @@ ScrollingFrame_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.scrollbar_thickness = src.scrollbar_thickness
 	dst.scrollbar_color = src.scrollbar_color
 	dst.scrollbar_transparency = src.scrollbar_transparency
+	dst.vertical_bar_inset = src.vertical_bar_inset
+	dst.horizontal_bar_inset = src.horizontal_bar_inset
+	for image, i in src.scrollbar_images {scrolling_frame_set_bar_image(&dst.scrollbar_images[i], image.path)}
 	dst.scrollbar_auto_hide = src.scrollbar_auto_hide
 	dst.scrollbar_fade_delay = src.scrollbar_fade_delay
 	dst.scrollbar_fade_speed = src.scrollbar_fade_speed
@@ -1111,6 +1194,7 @@ Register_ScrollingFrame :: proc(registry: ^Registry) {
 			"CanvasSize",
 			"AutomaticCanvasSize",
 			"AbsoluteCanvasSize",
+			"AbsoluteWindowSize",
 			"VirtualizedScrolling",
 			"ScrollingEnabled",
 			"ScrollSpeed",
@@ -1119,6 +1203,11 @@ Register_ScrollingFrame :: proc(registry: ^Registry) {
 			"ScrollBarThickness",
 			"ScrollBarImageColor3",
 			"ScrollBarImageTransparency",
+			"VerticalScrollBarInset",
+			"HorizontalScrollBarInset",
+			"TopImage",
+			"MidImage",
+			"BottomImage",
 			"ScrollBarAutoHide",
 			"ScrollBarFadeDelay",
 			"ScrollBarFadeSpeed",

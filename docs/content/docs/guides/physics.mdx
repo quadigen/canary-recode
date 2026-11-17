@@ -1,0 +1,149 @@
+---
+title: Physics
+description: Make parts fall, collide, and react with gravity, impulses, raycasts, and constraints.
+---
+
+Physics in Kinemium is part-driven. A part becomes a simulated body when it's parented into `Workspace` and isn't anchored. You don't create bodies directly; you configure parts and the world, then let the simulation run.
+
+## Anchored or simulated
+
+`Anchored` is the switch between static geometry and a body:
+
+```lua
+local Workspace = game:GetService("Workspace")
+
+local platform = Instance.new("Part")
+platform.Size = Vector3.new(20, 1, 20)
+platform.Position = Vector3.new(0, 0, 0)
+platform.Anchored = true
+platform.Parent = Workspace
+
+local crate = Instance.new("Part")
+crate.Size = Vector3.new(2, 2, 2)
+crate.Position = Vector3.new(0, 8, 0)
+crate.Anchored = false
+crate.Parent = Workspace
+```
+
+The platform stays put. The crate falls onto it. Both still collide, because `Anchored` and `CanCollide` are separate settings.
+
+| Property | Effect |
+| --- | --- |
+| `Anchored` | The part ignores gravity and stays where it is. |
+| `CanCollide` | The part collides with other bodies. |
+| `CanQuery` | Raycasts and spatial queries can hit it. |
+| `CanTouch` | Contact can be reported through `Touched`. |
+
+Turning off `CanCollide` on an unanchored part lets it fall through everything. That's useful for triggers and useless for floors.
+
+## Gravity and simulation
+
+Gravity is global. `Physics.Gravity` defaults to `196.2`, and `Workspace.Gravity` reads and writes the same value:
+
+```lua
+local Physics = game:GetService("Physics")
+local Workspace = game:GetService("Workspace")
+
+Physics.Gravity = 100
+print(Workspace.Gravity) -- 100
+```
+
+Gravity clamps negative values to `0`, so you can't invert it this way. To stop simulation entirely, turn off `Workspace.SimulatePhysics`; the world keeps rendering while bodies stop moving. `Physics.Enabled` reports whether the solver initialized, not whether simulation is running.
+
+## Moving a body
+
+For a one-time push, apply an impulse:
+
+```lua
+crate:ApplyImpulse(Vector3.new(0, 40, 0))
+```
+
+The part must be unanchored. The impulse is in mass units, so a heavier part moves less for the same value. To set motion directly, assign a velocity:
+
+```lua
+crate.AssemblyLinearVelocity = Vector3.new(0, 20, 0)
+```
+
+`AssemblyLinearVelocity` and `AssemblyAngularVelocity` apply to the whole assembly, not just the one part. Setting `CFrame` teleports the part and overrides the simulation for that step, which is fine for respawns and bad for movement you want physics to resolve.
+
+## Per-frame forces
+
+Apply continuous forces in a step callback and scale by `deltaTime`:
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    if crate.AssemblyLinearVelocity.Magnitude < 30 then
+        crate:ApplyImpulse(Vector3.new(0, 30 * deltaTime, 0))
+    end
+end)
+```
+
+Impulses are instantaneous changes in momentum, so multiplying by `deltaTime` turns a per-frame push into a steady acceleration. For a constant force with a direction, `VectorForce` is cleaner than pushing every frame.
+
+## Raycasts
+
+`Workspace:Raycast()` is the main spatial query. It takes an origin, a direction, and optional parameters:
+
+```lua
+local function groundBelow(position)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { character }
+
+    local result = workspace:Raycast(position, Vector3.new(0, -50, 0), params)
+    if not result then
+        return nil
+    end
+
+    return result.Position, result.Normal, result.Instance, result.Distance
+end
+```
+
+The result carries `Position`, `Normal`, `Distance`, `Material`, and `Instance`. Returning `nil` means the ray hit nothing within its length. The direction's magnitude is the ray length, so `Vector3.new(0, -50, 0)` reaches 50 studs down.
+
+Use raycasts for ground checks, line of sight, and placement previews. They only see objects that participate in queries, so `CanQuery = false` parts are invisible to them.
+
+## Constraints
+
+Constraints connect two `Attachment` objects and let the solver handle the relationship:
+
+| Constraint | Behavior |
+| --- | --- |
+| `HingeConstraint` | Rotation around one axis, with motor, servo, and limits. |
+| `RopeConstraint` | Maximum separation distance with an optional rendered rope. |
+| `SpringConstraint` | Spring force with stiffness, damping, and optional limits. |
+| `WeldConstraint` | Rigid connection between two parts. |
+| `VectorForce` | Constant force applied through an attachment. |
+
+A simple hinged door:
+
+```lua
+local hinge = Instance.new("HingeConstraint")
+hinge.Attachment0 = frame.Attachment
+hinge.Attachment1 = door.Attachment
+hinge.LimitsEnabled = true
+hinge.LowerAngle = -90
+hinge.UpperAngle = 0
+hinge.Parent = door
+```
+
+Both attachments must belong to parts in the same world, and at least one side must be movable. Constraints with missing or invalid attachments stay inactive instead of erroring, so check `Active` when a joint doesn't behave.
+
+## Performance
+
+Physics cost scales with the number of awake bodies and the complexity of their collision shapes:
+
+- Anchor anything that never moves. Static geometry is much cheaper than a sleeping body.
+- Let bodies sleep. `Physics.SleepThreshold` and `SleepDelay` control when slow bodies stop being simulated.
+- Raise `Physics.CollisionSubsteps` only when fast objects tunnel through thin geometry. It's clamped between `1` and `8`.
+- Keep `CanCollide` off for decorative parts and `CanQuery` off for parts rays should ignore.
+- Avoid changing `Size` or `Shape` every frame; both rebuild collision geometry.
+
+## Next steps
+
+- `Part` for every physics-related property.
+- `Workspace` for `Raycast()` and world settings.
+- `Physics` for gravity, substeps, and sleep tuning.
+- `Constraint`, `HingeConstraint`, `RopeConstraint`, `SpringConstraint`, `WeldConstraint`, and `VectorForce`.

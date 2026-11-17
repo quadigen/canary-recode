@@ -1,0 +1,48 @@
+---
+title: Frame
+description: A plain rectangle for backgrounds, grouping, and layout in a GUI.
+---
+
+`Frame` is the basic rectangular element in a screen or surface interface. It draws a background, clips or doesn't clip its children, and provides the layout and input behavior from `GuiObject`. It adds no members of its own.
+
+## Getting started
+
+```lua
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(320, 200)
+frame.Position = UDim2.fromScale(0.5, 0.5)
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.BackgroundColor3 = Color3.fromRGB(24, 26, 32)
+frame.BackgroundTransparency = 0.1
+frame.Parent = player.PlayerGui.Hud
+```
+
+## What it's for
+
+- Backgrounds behind labels and buttons.
+- Grouping other elements so a layout modifier applies to them.
+- Panels, panels inside panels, and clipping containers.
+
+Because `Frame` inherits from `GuiObject`, all positioning, sizing, appearance, input, and event behavior from that reference applies.
+
+```lua
+local panel = Instance.new("Frame")
+panel.Size = UDim2.new(0.5, 0, 0, 120)
+panel.ClipsDescendants = true
+panel.Parent = frame
+```
+
+`ClipsDescendants` is worth calling out: a frame with it enabled cuts off anything that extends past its bounds, including children with a different position.
+
+## Notes
+
+- `Frame` has no content of its own beyond its background and border.
+- It can receive pointer input when `Active` is set or `InputSink` is enabled, even when transparent.
+- Rotation is supported through `Rotation` on `GuiObject`; children rotate with it unless they have their own behavior.
+- Use a `ScrollingFrame` instead when content should scroll inside the rectangle.
+
+## See also
+
+- `GuiObject`, layout, appearance, and input for every element.
+- `ScreenGui`, the container a frame is usually parented under.
+- `ScrollingFrame`, a frame with scrollable content.

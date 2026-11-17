@@ -18,6 +18,7 @@ Physics_Body :: struct {
 	body_id:               kineffi.JPH_BodyID,
 	size:                  datatypes.Vector3,
 	shape:                 enums.PartType,
+	material:              enums.Material,
 	anchored:              bool,
 	can_collide:           bool,
 	remote:                bool,

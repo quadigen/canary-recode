@@ -1,0 +1,32 @@
+---
+title: Vector2Value
+description: Store a Vector2 in the object tree.
+---
+
+`Vector2Value` holds a two-component vector as an instance. Use it for screen sizes, offsets, and 2D directions that need to live in the tree.
+
+## Getting started
+
+```lua
+local size = Instance.new("Vector2Value")
+size.Name = "PanelSize"
+size.Value = Vector2.new(320, 180)
+size.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `Vector2` | Read/write | `Vector2.new(0, 0)` | The stored vector. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the vector.
+- Vector components are stored as floats, so very precise values can lose a little precision.
+
+## See also
+
+- `Vector3Value` for 3D vectors.
+- `GuiObject` for the properties that use `Vector2`.

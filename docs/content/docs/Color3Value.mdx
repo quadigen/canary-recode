@@ -1,0 +1,33 @@
+---
+title: Color3Value
+description: Store a Color3 in the object tree.
+---
+
+`Color3Value` holds one color as an instance. Use it for palettes, team colors, and theme settings that several scripts read from one place.
+
+## Getting started
+
+```lua
+local accent = Instance.new("Color3Value")
+accent.Name = "AccentColor"
+accent.Value = Color3.fromRGB(80, 160, 255)
+accent.Parent = themeFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `Color3` | Read/write | White | The stored color. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the color.
+- Components are floats in the `0` to `1` range; `Color3.fromRGB()` is the easy way to build one.
+- There's no alpha channel. Use a separate number if you need transparency.
+
+## See also
+
+- `BrickColorValue` for named brick colors.
+- `GuiObject` and `Part` for the properties that consume colors.

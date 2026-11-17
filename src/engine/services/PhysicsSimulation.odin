@@ -10,7 +10,7 @@ DEFAULT_COLLISION_SUBSTEPS :: 1
 
 Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics, delta_time: f32) {
 	for child in object.children {
-		if child == nil || child.destroyed {continue}
+		if child == nil || child.destroyed || classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
 
 		for entry in classes.Constraint_Steps {
 			if classes.Is_A_Class(child, entry.class) {
@@ -52,6 +52,14 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 		for object in descriptor.instances {
 			if object != nil && !classes.Is_Descendant_Of(object, workspace) {
 				classes.SpringConstraint_release(cast(^classes.SpringConstraint)object)
+			}
+		}
+	}
+	if descriptor := classes.Find_Class(service.signal_registry, "RopeConstraint"); descriptor != nil {
+		for object in descriptor.instances {
+			rope := cast(^classes.RopeConstraint)object
+			if rope != nil && rope.jolt_system == service.system.handle && !workspace_contains_physics_object(workspace, object) {
+				classes.RopeConstraint_release(rope)
 			}
 		}
 	}

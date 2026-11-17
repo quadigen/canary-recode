@@ -812,6 +812,9 @@ lighting_get :: proc(
 	case "ShadowMapSize":
 		vm.PushNumber(L, f64(service.shadow_map_size))
 
+	case "GetSunDirection":
+		vm.PushUserdataMethod(L, key)
+
 	case:
 		return false
 	}
@@ -892,6 +895,25 @@ lighting_set :: proc(
 	return true
 }
 
+lighting_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	service := cast(^Lighting)object
+	switch method {
+	case "GetSunDirection":
+		datatypes.Push_Vector3(L, lighting_sun_direction(service.clock_time))
+		return 1, true
+	}
+	return 0, false
+}
+
 Lighting_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^Lighting)object)
@@ -906,6 +928,7 @@ Register_Lighting_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = lighting_get,
 		set = lighting_set,
+		namecall = lighting_namecall,
 		properties = []string {
 			"Ambient",
 			"Brightness",

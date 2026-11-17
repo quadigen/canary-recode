@@ -1,0 +1,94 @@
+---
+title: LogService
+description: Write structured log messages and read them back, including output from print and warn.
+---
+
+`LogService` collects the game's log output. Everything written through `print()`, `warn()`, or the service's own methods is stored in a bounded history and broadcast to `MessageOut` listeners.
+
+Use it for studio-style diagnostics: an in-game console, an error overlay, or a test harness that asserts on log output.
+
+## Getting started
+
+```lua
+local LogService = game:GetService("LogService")
+
+LogService.MessageOut:Connect(function(message, messageType)
+    print("[" .. messageType .. "]", message)
+end)
+
+LogService:Info("Scene loaded")
+```
+
+`MessageOut` fires for every message, including ones produced by `print()` and `warn()`, so a single listener can capture the whole output stream.
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `MessageCount` | `number` | Read-only | Total messages written since the last `Clear()`. |
+| `InfoCount` | `number` | Read-only | Messages written with the `Info` type. |
+| `WarningCount` | `number` | Read-only | Messages written with the `Warn` type. |
+| `ErrorCount` | `number` | Read-only | Messages written with the `Error` type. |
+| `HistoryGeneration` | `number` | Read-only | Incremented each time the history is cleared. |
+| `MessageOut` | signal | Read-only | Fires with `(message: string, messageType: string)` for each message. |
+
+The type string is one of `"Log"`, `"Info"`, `"Warn"`, or `"Error"`. Messages from `print()` are typed `"Log"` and messages from `warn()` are typed `"Warn"`.
+
+## Methods
+
+### Log, Info, Warn, Error
+
+```lua
+Log(message: string): ()
+Info(message: string): ()
+Warn(message: string): ()
+Error(message: string): ()
+```
+
+Writes a message with the corresponding type. Each call increments `MessageCount` and the matching type counter, appends to the history, and fires `MessageOut`.
+
+```lua
+LogService:Warn("Missing material variant: " .. name)
+```
+
+The counters are per write, not per unique message. Calling `Info()` twice with the same text counts twice.
+
+### Clear
+
+```lua
+Clear(): ()
+```
+
+Empties the history, resets the counters to `0`, and increments `HistoryGeneration`. `MessageOut` listeners stay connected.
+
+```lua
+LogService:Clear()
+assert(LogService.MessageCount == 0)
+```
+
+### GetLogHistory
+
+```lua
+GetLogHistory(): {{ message: string, type: string, timestamp: number }}
+```
+
+Returns a new array of every stored entry, oldest first. Each entry has the message text, its type string, and a Unix timestamp in seconds.
+
+```lua
+for _, entry in ipairs(LogService:GetLogHistory()) do
+    print(entry.timestamp, entry.type, entry.message)
+end
+```
+
+Only the most recent 1,000 entries are kept. Older entries are dropped from the front as new ones arrive, so the history is a rolling window rather than a complete archive.
+
+## Notes
+
+- The history is per runtime. Server and client logs are separate.
+- `print()` and `warn()` in Luau are routed through this service, so they contribute to the counters and history.
+- The timestamp is captured when the entry is written, in seconds, not milliseconds.
+
+## See also
+
+- `RunService`, frame context for diagnostics.
+- `ScriptContext`, where scripts and their errors are managed.

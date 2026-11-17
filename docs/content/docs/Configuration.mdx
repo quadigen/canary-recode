@@ -1,0 +1,31 @@
+---
+title: Configuration
+description: Group related settings in the hierarchy.
+---
+
+`Configuration` is a container for settings. It behaves like a `Folder` and adds no members of its own; its value is semantic, telling readers that the children are configuration rather than content.
+
+## Getting started
+
+```lua
+local config = Instance.new("Configuration")
+config.Name = "Settings"
+config.Parent = game:GetService("ReplicatedStorage")
+
+local speed = Instance.new("NumberValue")
+speed.Name = "WalkSpeed"
+speed.Value = 18
+speed.Parent = config
+```
+
+## Notes
+
+- Inherits directly from `Instance` and exposes no methods, properties, or events.
+- The class is creatable with `Instance.new("Configuration")`.
+- Cloning copies archivable descendants.
+- There's no validation of children; put values, folders, and modules inside as needed.
+
+## See also
+
+- `Folder` for grouping content.
+- `NumberValue`, `StringValue`, and `BoolValue` for the settings themselves.

@@ -175,6 +175,7 @@ replication_schema :: proc(
 		   (property == "Active" || property == "CurrentLength") {
 			continue
 		}
+		if class_name == "RopeConstraint" && property == "Active" {continue}
 		if descriptor != nil && classes.Is_Attachment_Joint(descriptor.info) &&
 		   (property == "Active" || property == "CurrentPosition") {
 			continue
@@ -193,6 +194,8 @@ replication_schema :: proc(
 		     "AbsoluteCellCount",
 		     "AbsoluteCellSize",
 		     "AbsoluteContentSize",
+		     "AbsoluteCanvasSize",
+		     "AbsoluteWindowSize",
 		     "PositionCallback",
 		     "IsLoaded",
 		     "ClassName",

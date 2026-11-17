@@ -1,0 +1,42 @@
+---
+title: CylinderHandleAdornment
+description: Draw a wireframe cylinder or tube at a part.
+---
+
+`CylinderHandleAdornment` draws a cylinder, optionally hollow. Set `InnerRadius` above zero to turn it into a tube.
+
+## Getting started
+
+```lua
+local cylinder = Instance.new("CylinderHandleAdornment")
+cylinder.Adornee = targetPart
+cylinder.Height = 8
+cylinder.Radius = 3
+cylinder.InnerRadius = 2
+cylinder.Transparency = 0.25
+cylinder.Parent = targetPart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | `nil` | Part that provides the reference transform. |
+| `Color3` | `Color3` | Read/write | Green | Wire color. |
+| `Transparency` | `number` | Read/write | `0` | Transparency, clamped to `0` through `1`. |
+| `Height` | `number` | Read/write | `1` | Cylinder height in studs. |
+| `Radius` | `number` | Read/write | `1` | Outer radius in studs. |
+| `InnerRadius` | `number` | Read/write | `0` | Inner radius for a hollow tube. |
+| `CFrame` | `CFrame` | Read/write | Identity | Placement relative to the target part. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- `InnerRadius` of `0` gives a solid cylinder. A value at or above `Radius` leaves no wall to draw.
+- If `Adornee` is `nil`, the parent is used, and the parent must be a `Part`.
+- Cloning copies the target, color, dimensions, and transform.
+
+## See also
+
+- `ConeHandleAdornment` for a tapered shape.
+- `LineHandleAdornment` for a simple line.

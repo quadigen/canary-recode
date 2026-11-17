@@ -1,0 +1,87 @@
+---
+title: Lighting
+description: Control the time of day, ambient light, shadows, and default visual effects.
+---
+
+`Lighting` controls how the world is lit: the sun's position, ambient colors, shadow quality, and exposure. It also creates the default post-processing effects as its children.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+Lighting.ClockTime = 18
+Lighting.Brightness = 2.5
+Lighting.Ambient = Color3.fromRGB(40, 45, 60)
+```
+
+`ClockTime` takes a decimal hour, so `18` is 6 PM. Values wrap around a 24-hour day, so `25` is 1 AM the next day.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `ClockTime` | `number` | Read/write | `10.5` | Time of day in hours. Wrapped into the 0-24 range. |
+| `TimeOfDay` | `string` | Read/write | `"10:30:00"` equivalent | The same time as an `HH:MM:SS` string. |
+| `Brightness` | `number` | Read/write | `2` | Overall light intensity. Negative values clamp to `0`. |
+| `Ambient` | `Color3` | Read/write | White | Light applied to all faces. |
+| `OutdoorAmbient` | `Color3` | Read/write | White | Ambient light outside shadowed areas. |
+| `SunColor` | `Color3` | Read/write | `Color3.new(1, 0.98, 0.95)` | Color of the sun's light. |
+| `GlobalShadows` | `boolean` | Read/write | `true` | Whether shadows are rendered. |
+| `ShadowSoftness` | `number` | Read/write | `0` | Shadow blur, clamped between `0` and `1`. |
+| `ExposureCompensation` | `number` | Read/write | `0` | Exposure adjustment applied to the final image. |
+| `DynamicResolution` | `boolean` | Read/write | `true` | Whether render resolution can drop under load. |
+| `ResolutionScale` | `number` | Read/write | `0.5` | Minimum resolution scale, clamped between `0.1` and `1`. |
+| `ShadowCascades` | `number` | Read/write | `2` | Number of shadow cascades, clamped between `1` and `4`. |
+| `ShadowMapSize` | `number` | Read/write | `2048` | Shadow map resolution, clamped between `256` and `8192`. |
+
+`ShadowCascades` and `ShadowMapSize` are stored as integers, so fractional values are truncated. Raising `ShadowMapSize` sharpens shadows at the cost of memory and fill rate.
+
+### TimeOfDay
+
+`TimeOfDay` accepts exactly the format `HH:MM:SS`, with a 24-hour clock. Anything else raises an error:
+
+```lua
+Lighting.TimeOfDay = "06:30:00"
+```
+
+Reading `TimeOfDay` formats the current `ClockTime` back into a string, so it reflects the wrapped value rather than the value you last assigned.
+
+## Methods
+
+### GetSunDirection
+
+```lua
+GetSunDirection(): Vector3
+```
+
+Returns the direction the sun's light travels, derived from `ClockTime`. The vector stays in sync with the time, so it's useful for aligning lens flares or custom sky elements.
+
+```lua
+local sunDirection = Lighting:GetSunDirection()
+```
+
+## Default effects
+
+When `Lighting` is created, it adds effect objects as children, including `Clouds`, `Atmosphere`, `BloomEffect`, `ColorCorrectionEffect`, `SunRaysEffect`, `SSAOEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect`. Several more exist but start disabled.
+
+```lua
+local bloom = Lighting:FindFirstChild("BloomEffect")
+if bloom then
+    bloom.Enabled = false
+end
+```
+
+Access them by name with `FindFirstChild()` rather than assuming they're present, since a game can remove or replace them. Each effect has its own properties; the effects share a common `Enabled` switch.
+
+Effects are created with replication disabled and are not sent to clients by default.
+
+## Notes
+
+- `ClockTime` wraps instead of clamping, so animating it continuously is safe.
+- `Ambient` and `OutdoorAmbient` are separate controls. Setting one doesn't change the other.
+
+## See also
+
+- `PostProcess`, the shared base for post-processing effects.
+- `Workspace`, the world being lit.

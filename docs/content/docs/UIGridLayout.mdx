@@ -1,0 +1,47 @@
+---
+title: UIGridLayout
+description: Arrange GUI children in a grid of cells.
+---
+
+`UIGridLayout` positions the children of a GUI object in a grid. You set the cell size and padding, and the layout places children row by row until the available space is used.
+
+## Getting started
+
+```lua
+local grid = Instance.new("UIGridLayout")
+grid.CellSize = UDim2.fromOffset(96, 96)
+grid.CellPadding = UDim2.fromOffset(8, 8)
+grid.FillDirection = Enum.FillDirection.Horizontal
+grid.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | Whether the layout runs. |
+| `IgnoreInvisible` | `boolean` | Read/write | Skip invisible children when placing cells. |
+| `FillDirection` | `Enum.FillDirection` | Read/write | Direction cells fill. |
+| `FillDirectionMaxCells` | `number` | Read/write | Maximum cells in the fill direction, clamped to `0` or above. |
+| `HorizontalAlignment` | `Enum.HorizontalAlignment` | Read/write | Horizontal placement of the grid. |
+| `VerticalAlignment` | `Enum.VerticalAlignment` | Read/write | Vertical placement of the grid. |
+| `SortOrder` | `Enum.SortOrder` | Read/write | Order used to sort children. |
+| `CellPadding` | `UDim2` | Read/write | Space between cells. |
+| `CellSize` | `UDim2` | Read/write | Size of each cell. |
+| `AbsoluteCellCount` | `Vector2` | Read-only | Resolved number of columns and rows. |
+| `AbsoluteCellSize` | `Vector2` | Read-only | Resolved cell size in pixels. |
+| `AbsoluteContentSize` | `Vector2` | Read-only | Resolved size of the whole grid. |
+
+## Notes
+
+- `FillDirectionMaxCells = 0` means no explicit cap.
+- `IgnoreInvisible` skips children whose `Visible` is false.
+- The layout positions children but doesn't resize the parent; size the container yourself.
+- `AbsoluteCellCount`, `AbsoluteCellSize`, and `AbsoluteContentSize` are resolved values for reading.
+- Cloning copies the layout settings.
+
+## See also
+
+- `UIListLayout` for a single row or column.
+- `UIPadding` for insets around the grid.
+- `GuiObject` for the parent container.

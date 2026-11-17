@@ -1,0 +1,60 @@
+---
+title: StarterGui
+description: Hold the screen interface templates that a player's GUI starts from.
+---
+
+`StarterGui` is the authoring home for screen interfaces. `ScreenGui` objects parented here are templates for players' own GUI containers, so you build the interface once and each player gets a copy.
+
+The service has no Luau members of its own. It's a container, and the interesting objects are the `ScreenGui` children you put in it.
+
+## Getting started
+
+```lua
+local StarterGui = game:GetService("StarterGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Hud"
+screenGui.Parent = StarterGui
+
+local label = Instance.new("TextLabel")
+label.Text = "Ready"
+label.Size = UDim2.new(0, 200, 0, 40)
+label.Parent = screenGui
+```
+
+## What StarterGui holds
+
+- `ScreenGui` children are the templates for player interfaces.
+- Other objects can be parented here, but only screen GUIs are treated as interface templates.
+
+The engine also renders `ScreenGui` children of this service, which is how you see them while authoring. At runtime, each player's interface lives under `player.PlayerGui` instead.
+
+```lua
+local player = game:GetService("Players").LocalPlayer
+local hud = player.PlayerGui:FindFirstChild("Hud")
+```
+
+## Changing a player's interface
+
+Edits made here after startup don't retroactively change interfaces that were already created for players. To change a live interface, edit the copy under `PlayerGui` or use the LiveSync-style editors.
+
+```lua
+local function showHud(player, visible)
+    local gui = player.PlayerGui:FindFirstChild("Hud")
+    if gui then
+        gui.Enabled = visible
+    end
+end
+```
+
+## Notes
+
+- `StarterGui` isn't `PlayerGui`. They hold different things: templates versus a live player's interface.
+- There's no `GetGuiInset()` here; use `GuiService` for that.
+- A `ScreenGui` template with `ResetOnSpawn` behavior applies to copies, not to the template itself.
+
+## See also
+
+- `ScreenGui`, the interface container.
+- `Players`, accessing `PlayerGui`.
+- `GuiService`, platform inset details.

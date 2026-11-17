@@ -1,0 +1,150 @@
+---
+title: 3D and rendering
+description: Build a scene with parts and meshes, place a camera, and light the world.
+---
+
+A Kinemium scene is a tree of 3D objects under `Workspace`, viewed through a camera and lit by the `Lighting` service. This guide covers the pieces you'll combine for most scenes.
+
+## Coordinates and transforms
+
+Positions are `Vector3` values in studs. The Y axis points up, and the default camera looks down the negative Z axis.
+
+A `CFrame` combines position and rotation:
+
+```lua
+local part = Instance.new("Part")
+part.Size = Vector3.new(6, 1, 6)
+part.CFrame = CFrame.new(0, 6, 0) * CFrame.Angles(0, math.rad(30), 0)
+part.Parent = workspace
+```
+
+Multiplying a position `CFrame` by a rotation `CFrame` applies the rotation around the part's own origin. The order matters: `CFrame.new(...) * CFrame.Angles(...)` rotates in place, while `CFrame.Angles(...) * CFrame.new(...)` offsets along the rotated axes.
+
+`Position` is a shorthand for the translation part of `CFrame`. Writing it keeps the current rotation; writing `CFrame` replaces both.
+
+## Building with parts
+
+`Part` covers primitives: blocks, balls, cylinders, wedges, and the other supported shapes. `Size`, `Color`, `Material`, and `Transparency` are the main appearance controls:
+
+```lua
+local floor = Instance.new("Part")
+floor.Size = Vector3.new(80, 1, 80)
+floor.Position = Vector3.new(0, 0, 0)
+floor.Color = Color3.fromRGB(60, 65, 75)
+floor.Material = Enum.Material.Concrete
+floor.Anchored = true
+floor.Parent = workspace
+```
+
+Group related parts under a `Model` when you want to move, clone, or destroy them together. `Model` adds a pivot and bounding box, which is what you want for a character, vehicle, or building.
+
+`MeshPart` replaces the primitive geometry with an imported mesh:
+
+```lua
+local mesh = Instance.new("MeshPart")
+mesh.MeshId = "models/crate.glb"
+mesh.TextureId = "textures/crate.png"
+mesh.Size = Vector3.new(2, 2, 2)
+mesh.Anchored = true
+mesh.Parent = workspace
+```
+
+The mesh is visual. Collision follows `Size` unless you choose a different `CollisionFidelity`, which trades accuracy for cost.
+
+## The camera
+
+The camera assigned to `Workspace.CurrentCamera` is the one the renderer uses:
+
+```lua
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local camera = Workspace.CurrentCamera
+if camera then
+    camera.CameraType = Enum.CameraType.Scriptable
+    camera.FieldOfView = 70
+
+    local orbitAngle = 0
+
+    RunService:BindToRenderStep("CameraOrbit", 200, function(deltaTime)
+        orbitAngle += deltaTime * 0.3
+        camera.CFrame = CFrame.new(0, 12, 24) * CFrame.Angles(math.rad(-20), orbitAngle, 0)
+    end)
+end
+```
+
+`Scriptable` hands the camera fully to your code and releases the pointer. `Custom` keeps the built-in free camera until you assign a subject. The built-in orbit types (`Orbital`, `Shoulder`, `FirstPerson`, and the rest) follow `CameraSubject`, which is useful when you don't want to write camera math.
+
+Camera work belongs in the render step, not in `Heartbeat`, so it matches the frame being drawn. Keep the callback short.
+
+Two useful projections:
+
+```lua
+local ray = camera:ScreenPointToRay(400, 300)
+local screenPosition, onScreen = camera:WorldToViewportPoint(somePart.Position)
+```
+
+## Lighting
+
+`Lighting` controls the sun, ambient color, shadows, and exposure:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+Lighting.ClockTime = 17.5
+Lighting.Brightness = 2.5
+Lighting.Ambient = Color3.fromRGB(45, 50, 65)
+Lighting.GlobalShadows = true
+Lighting.ShadowMapSize = 2048
+```
+
+`ClockTime` is a decimal hour and wraps around 24, so you can animate a full day by adding to it. `TimeOfDay` is the same value as an `HH:MM:SS` string. `GetSunDirection()` returns the light direction for the current time, which is handy for aligning custom sky or lens effects.
+
+Local lights attach to parts:
+
+```lua
+local lamp = Instance.new("PointLight")
+lamp.Brightness = 2
+lamp.Range = 18
+lamp.Color = Color3.fromRGB(255, 200, 140)
+lamp.Parent = lampPart
+```
+
+`SpotLight` and `SurfaceLight` aim along a chosen face and support shadows. A light only renders when its parent is a part inside the workspace.
+
+## Surface detail
+
+| Object | Use |
+| --- | --- |
+| `Decal` | A flat image on one face of a part. |
+| `SurfaceGui` | A full GUI tree drawn onto a part face. |
+| `ParticleEmitter` | Sparks, smoke, dust, and other particle effects. |
+| `Highlight` | An outline around a model or part. |
+| `ViewportFrame` | A live 3D view inside a GUI element. |
+
+```lua
+local decal = Instance.new("Decal")
+decal.Texture = "textures/sign.png"
+decal.Face = Enum.NormalId.Front
+decal.Parent = signPart
+```
+
+`SurfaceGui` is the one to reach for when the surface needs buttons, text, or layout rather than a single image.
+
+## Rendering cost
+
+The world settings on `Workspace` and `Lighting` control how much gets drawn:
+
+- `Workspace.RenderCulling` skips off-screen objects.
+- `Workspace.MaxDrawDistance` limits how far the camera renders. `0` means no limit.
+- `Workspace.LODDistance` controls when lower-detail meshes take over.
+- `Lighting.ShadowMapSize` and `ShadowCascades` trade shadow quality for performance.
+- `Lighting.DynamicResolution` and `ResolutionScale` let resolution drop under load.
+
+For custom scenes, the biggest wins usually come from fewer shadow-casting lights, fewer transparent surfaces, and keeping draw distance realistic for the scale of the map.
+
+## Next steps
+
+- `Part`, `MeshPart`, `Model`, and `Camera` for the full member lists.
+- `Lighting`, `Decal`, `SurfaceGui`, `ParticleEmitter`, and `Highlight` for scene detail.
+- [Physics](/docs/guides/physics) for making the scene move.

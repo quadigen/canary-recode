@@ -1,0 +1,36 @@
+---
+title: NumberSequenceValue
+description: Store a NumberSequence in the object tree.
+---
+
+`NumberSequenceValue` holds a sequence of keypoints as an instance. Sequences are what effects and animated properties use to describe a value over time or along an axis.
+
+## Getting started
+
+```lua
+local sequence = Instance.new("NumberSequenceValue")
+sequence.Name = "SizeCurve"
+sequence.Value = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0),
+    NumberSequenceKeypoint.new(1, 4),
+})
+sequence.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `NumberSequence` | Read/write | Constant `1` | The stored sequence. |
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Assigning a sequence copies it, so later changes to your local table don't affect the value.
+- Cloning copies the stored sequence.
+- Keypoints should be sorted by time; the value doesn't reorder them for you.
+
+## See also
+
+- `ColorSequenceValue` for color sequences.
+- `ParticleEmitter` and effects that consume sequences.

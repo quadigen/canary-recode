@@ -1,0 +1,45 @@
+---
+title: InputObject
+description: Describe a single input event from a key, pointer, or touch.
+---
+
+`InputObject` carries the details of one input event. Input callbacks receive it as an argument, and it reports what kind of input fired, its state, and its position.
+
+## Getting started
+
+```lua
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+    if input.KeyCode == Enum.KeyCode.Space then
+        print("jump pressed at", input.Position)
+    end
+end)
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `UserInputType` | `Enum.UserInputType` | Read-only | Kind of input, such as keyboard, mouse, or touch. |
+| `UserInputState` | `Enum.UserInputState` | Read-only | Begin, change, end, or cancel. |
+| `KeyCode` | `Enum.KeyCode` | Read-only | Key or button that produced the event. |
+| `Position` | `Vector3` | Read-only | Pointer position. |
+| `Delta` | `Vector3` | Read-only | Movement since the previous event. |
+
+`Position` and `Delta` are `Vector3` values. Using the x and y components is correct for screen input; the z component isn't meaningful for pointer events.
+
+## Notes
+
+- `InputObject` isn't creatable with `Instance.new()`; the engine creates it for input events.
+- The same object is passed to each listener for one event, so don't store it expecting it to update.
+- `UserInputState` distinguishes a press from a release, so check it when a callback fires for both.
+- Cloning an input object copies its values, which is occasionally useful for tests.
+
+## See also
+
+- `UserInputService` for the input events.
+- `ContextActionService` for action-based input handling.

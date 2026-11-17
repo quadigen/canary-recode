@@ -60,8 +60,10 @@ typedef void *JPH_ObjectVsBroadPhaseLayerFilterRef;
 typedef void *JPH_MotionPropertiesRef;
 typedef void *JPH_ContactListenerRef;
 typedef void *JPH_ConstraintRef;
+typedef void *JPH_RopeRef;
 
 #define JPH_BODY_ID_INVALID UINT32_C(0xffffffff)
+#define JPH_ROPE_MAX_POINTS 49
 
 typedef int32_t JPH_MotionType;
 enum {
@@ -391,6 +393,13 @@ JPH_API void JPH_BodyCreationSettings_SetAngularDamping(JPH_BodyCreationSettings
 JPH_API void JPH_BodyCreationSettings_SetGravityFactor(JPH_BodyCreationSettingsRef settings, float factor);
 
 JPH_API JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings *settings);
+JPH_API JPH_RopeRef JPH_Rope_Create(JPH_PhysicsSystemRef system, JPH_BodyID body0, JPH_BodyID body1, const JPH_RVec3 *start, const JPH_RVec3 *end, float length, float radius, int32_t canCollide, JPH_ObjectLayer layer);
+JPH_API void JPH_Rope_Destroy(JPH_RopeRef rope);
+JPH_API void JPH_Rope_Wake(JPH_RopeRef rope);
+JPH_API void JPH_Rope_SetCanCollide(JPH_RopeRef rope, int32_t canCollide);
+JPH_API uint32_t JPH_Rope_GetPoints(JPH_RopeRef rope, JPH_RVec3 *points, uint32_t capacity);
+JPH_API uint32_t JPH_Rope_GetBodies(JPH_RopeRef rope, JPH_BodyID *bodies, uint32_t capacity);
+JPH_API uint32_t JPH_Rope_GetRestPoints(const JPH_RVec3 *start, const JPH_RVec3 *end, float length, JPH_RVec3 *points, uint32_t capacity);
 JPH_API void JPH_PhysicsSystem_Destroy(JPH_PhysicsSystemRef system);
 JPH_API void JPH_PhysicsSystem_SetPhysicsSettings(JPH_PhysicsSystemRef system, const JPH_PhysicsSettings *settings);
 JPH_API JPH_BodyInterfaceRef JPH_PhysicsSystem_GetBodyInterface(JPH_PhysicsSystemRef system);
@@ -700,6 +709,7 @@ JPH_API void JPH_BodyCreationSettings_SetMaxLinearVelocity(JPH_BodyCreationSetti
 JPH_API void JPH_BodyCreationSettings_SetMaxAngularVelocity(JPH_BodyCreationSettingsRef settings, float maxVelocity);
 
 JPH_API void JPH_BodyCreationSettings_SetMass(JPH_BodyCreationSettingsRef settings, float mass);
+JPH_API void JPH_BodyCreationSettings_SetMaterialProperties(JPH_BodyCreationSettingsRef settings, float density, float friction, float restitution, float frictionWeight, float restitutionWeight);
 
 JPH_API void JPH_BodyCreationSettings_SetAllowedDOFs(JPH_BodyCreationSettingsRef settings, uint32_t dofs);
 JPH_API void JPH_BodyCreationSettings_SetCollideKinematicVsNonDynamic(JPH_BodyCreationSettingsRef settings, int32_t allow);
@@ -751,6 +761,7 @@ JPH_API void JPH_BodyInterface_AddAngularImpulse(
 	JPH_BodyInterfaceRef bodyInterface, JPH_BodyID bodyID, const JPH_Vec3 *angularImpulse);
 
 JPH_API void JPH_PhysicsSystem_SetBodyIsSensor(JPH_PhysicsSystemRef system, JPH_BodyID bodyID, int32_t isSensor);
+JPH_API void JPH_PhysicsSystem_SetBodyMaterialProperties(JPH_PhysicsSystemRef system, JPH_BodyID bodyID, float density, float friction, float restitution, float frictionWeight, float restitutionWeight);
 JPH_API int32_t JPH_PhysicsSystem_IsBodySensor(JPH_PhysicsSystemRef system, JPH_BodyID bodyID);
 
 JPH_API void JPH_MotionProperties_SetLinearDamping(JPH_MotionPropertiesRef motionProperties, float damping);

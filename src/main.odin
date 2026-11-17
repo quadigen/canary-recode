@@ -9,13 +9,13 @@ import audio "engine/audio"
 import classes "engine/classes"
 import extensions "engine/extensions"
 import sdl3 "engine/platform"
-import native_sdl "vendor:sdl3"
 import profiling "engine/profiling"
 import renderer "engine/renderer"
 import engine_runtime "engine/runtime"
 import services "engine/services"
 import target "engine/target"
 import vm "engine/vm"
+import native_sdl "vendor:sdl3"
 
 Runtime_Render_Context :: struct {
 	environment: ^engine_runtime.Environment,
@@ -87,6 +87,17 @@ runtime_render_2d :: proc(
 		height,
 		delta_time,
 	)
+}
+
+runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	registry := cast(^services.Registry)vm.UpvaluePointer(L)
+	if registry == nil || registry.data_model == nil {
+		vm.PushNil(L)
+		return 1
+	}
+	classes.Push_Object(L, &registry.data_model.object)
+	return 1
 }
 
 runtime_render_overlay :: proc(
@@ -204,6 +215,9 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	target.set_playtest(options.playtest)
 	vm.AddGlobal_Boolean(&script_vm, "IsPlaytest", options.playtest)
 	vm.AddGlobal_String(&script_vm, "ProjectPath", options.project)
+	vm.PushLightUserdata(script_vm.L, &environment.services)
+	vm.PushFunction(script_vm.L, "settings", runtime_global_settings, 1)
+	vm.SetGlobalFromStack(&script_vm, "settings")
 
 	if options.standalone {
 		sandbox.init_runtime(

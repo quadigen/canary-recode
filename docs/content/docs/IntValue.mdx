@@ -1,0 +1,50 @@
+---
+title: IntValue
+description: Store a single integer in the object tree so scripts can share it.
+---
+
+`IntValue` holds one integer as an instance. It's the simplest way to put a number in the hierarchy where other scripts can find it, and it clones and replicates like any other object.
+
+## Getting started
+
+```lua
+local value = Instance.new("IntValue")
+value.Name = "MaxPlayers"
+value.Value = 8
+value.Parent = game:GetService("ReplicatedStorage")
+
+print(value.Value) -- 8
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `number` | Read/write | `0` | The stored integer. Assigning a fractional number truncates it. |
+
+`Value` is typed as a number in Luau even though the storage is an integer. That means you can read it anywhere a number is accepted, but assigning `2.9` stores `2`.
+
+```lua
+value.Value = 12.75
+print(value.Value) -- 12
+```
+
+## When to use it
+
+- Settings and counters that other scripts find by traversing the tree.
+- Values you want to inspect or change in the editor.
+- Simple per-object configuration that doesn't need a `ModuleScript`.
+
+For larger or structured data, a configuration module is easier to validate. For values shared across the whole game, `ReplicatedStorage` is the usual home.
+
+## Notes
+
+- `IntValue` inherits from `ValueBase`, which adds no members of its own.
+- The value is stored on the instance, so cloning copies the current value.
+- Changing `Value` doesn't raise an error for out-of-range assignments; it's stored as a truncated integer.
+- There's no min/max constraint. Clamp values yourself where the range matters.
+
+## See also
+
+- `StringValue`, `NumberValue`, `BoolValue`, and `ObjectValue` for other single-value containers.
+- `ReplicatedStorage`, sharing configuration between server and clients.

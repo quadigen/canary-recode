@@ -25,6 +25,7 @@
 #include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/SimShapeFilter.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/CompoundShape.h>
@@ -42,6 +43,7 @@
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
@@ -53,6 +55,7 @@
 
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cfloat>
 #include <cmath>
@@ -66,6 +69,49 @@
 
 
 namespace {
+
+// Rigid Parts store their two contact weights in Jolt's per-body user data.
+constexpr uint64_t kMaterialWeightsFlag = uint64_t{1} << 63;
+
+uint64_t PackMaterialWeights(float friction, float restitution) {
+	uint32_t frictionBits, restitutionBits;
+	std::memcpy(&frictionBits, &friction, sizeof(frictionBits));
+	std::memcpy(&restitutionBits, &restitution, sizeof(restitutionBits));
+	return kMaterialWeightsFlag | (uint64_t{restitutionBits} << 32) | frictionBits;
+}
+
+uint64_t GetMaterialWeights(const JPH::Body &body) {
+	const uint64_t data = body.GetUserData();
+	return body.IsRigidBody() && (data & kMaterialWeightsFlag) != 0 ? data : 0;
+}
+
+float GetMaterialWeight(uint64_t weights, unsigned shift) {
+	if (weights == 0)
+		return 1.0f;
+	const uint32_t bits = static_cast<uint32_t>((weights & ~kMaterialWeightsFlag) >> shift);
+	float weight;
+	std::memcpy(&weight, &bits, sizeof(weight));
+	return weight;
+}
+
+float WeightedContactValue(float a, float b, float weightA, float weightB) {
+	const float total = weightA + weightB;
+	return total > 0.0f ? (a * weightA + b * weightB) / total : 0.5f * (a + b);
+}
+
+float CombineFriction(const JPH::Body &a, const JPH::SubShapeID &, const JPH::Body &b, const JPH::SubShapeID &) {
+	const uint64_t weightsA = GetMaterialWeights(a), weightsB = GetMaterialWeights(b);
+	if (weightsA == 0 && weightsB == 0)
+		return std::sqrt(a.GetFriction() * b.GetFriction());
+	return WeightedContactValue(a.GetFriction(), b.GetFriction(), GetMaterialWeight(weightsA, 0), GetMaterialWeight(weightsB, 0));
+}
+
+float CombineRestitution(const JPH::Body &a, const JPH::SubShapeID &, const JPH::Body &b, const JPH::SubShapeID &) {
+	const uint64_t weightsA = GetMaterialWeights(a), weightsB = GetMaterialWeights(b);
+	if (weightsA == 0 && weightsB == 0)
+		return std::max(a.GetRestitution(), b.GetRestitution());
+	return WeightedContactValue(a.GetRestitution(), b.GetRestitution(), GetMaterialWeight(weightsA, 32), GetMaterialWeight(weightsB, 32));
+}
 
 void TraceJolt(const char *format, ...) {
 	std::fputs("[Jolt] ", stderr);
@@ -213,6 +259,8 @@ inline JPH::BodyInterface *ToBodyInterface(JPH_BodyInterfaceRef bi) {
 inline JPH::PhysicsSystem *ToPhysicsSystem(JPH_PhysicsSystemRef ps) {
 	return reinterpret_cast<JPH::PhysicsSystem *>(ps);
 }
+
+#include "rope_constraint.inc"
 
 inline JPH::Shape *ToShape(JPH_ShapeRef shape) {
 	return reinterpret_cast<JPH::Shape *>(shape);
@@ -1003,12 +1051,85 @@ JPH_PhysicsSystemRef JPH_PhysicsSystem_Create(const JPH_PhysicsSystemSettings *s
 		*reinterpret_cast<BPLayerInterfaceTable *>(settings->broadPhaseLayerInterface),
 		*reinterpret_cast<ObjectVsBroadPhaseLayerFilterTable *>(settings->objectVsBroadPhaseLayerFilter),
 		*reinterpret_cast<ObjectLayerPairFilterTable *>(settings->objectLayerPairFilter));
+	system->SetCombineFriction(CombineFriction);
+	system->SetCombineRestitution(CombineRestitution);
+	system->SetSimShapeFilter(&sRopeCollisionFilter);
 
 	return system;
 }
 
 void JPH_PhysicsSystem_Destroy(JPH_PhysicsSystemRef system) {
 	delete ToPhysicsSystem(system);
+}
+
+JPH_RopeRef JPH_Rope_Create(
+	JPH_PhysicsSystemRef system, JPH_BodyID body0, JPH_BodyID body1,
+	const JPH_RVec3 *start, const JPH_RVec3 *end, float length, float radius,
+	int32_t canCollide, JPH_ObjectLayer layer) {
+	if (system == nullptr || start == nullptr || end == nullptr || length <= 0.0f || radius <= 0.0f)
+		return nullptr;
+	auto rope = std::make_unique<Rope>();
+	rope->physics = ToPhysicsSystem(system);
+	rope->anchors[0] = ToBodyID(body0);
+	rope->anchors[1] = ToBodyID(body1);
+	rope->canCollide = canCollide != 0;
+	const auto points = RopeRestPoints(ToJPH(*start), ToJPH(*end), length);
+	if (!rope->Create(points, length, radius, static_cast<JPH::ObjectLayer>(layer)))
+		return nullptr;
+	return rope.release();
+}
+
+void JPH_Rope_Destroy(JPH_RopeRef handle) {
+	delete static_cast<Rope *>(handle);
+}
+
+void JPH_Rope_Wake(JPH_RopeRef handle) {
+	const auto *rope = static_cast<Rope *>(handle);
+	if (rope == nullptr)
+		return;
+	auto &bodies = rope->physics->GetBodyInterface();
+	for (uint32_t i = 0; i < rope->count; ++i)
+		bodies.ActivateBody(rope->links[i].id);
+}
+
+void JPH_Rope_SetCanCollide(JPH_RopeRef handle, int32_t value) {
+	auto *rope = static_cast<Rope *>(handle);
+	const bool canCollide = value != 0;
+	if (rope == nullptr || rope->canCollide == canCollide)
+		return;
+	rope->canCollide = canCollide;
+	auto &bodies = rope->physics->GetBodyInterface();
+	for (uint32_t i = 0; i < rope->count; ++i)
+		bodies.InvalidateContactCache(rope->links[i].id);
+	rope->WakeNearby();
+}
+
+uint32_t JPH_Rope_GetPoints(JPH_RopeRef handle, JPH_RVec3 *points, uint32_t capacity) {
+	const auto *rope = static_cast<Rope *>(handle);
+	if (rope == nullptr || points == nullptr || capacity < rope->count + 1)
+		return 0;
+	return rope->GetPoints(points);
+}
+
+uint32_t JPH_Rope_GetBodies(JPH_RopeRef handle, JPH_BodyID *bodies, uint32_t capacity) {
+	const auto *rope = static_cast<Rope *>(handle);
+	if (rope == nullptr || bodies == nullptr || capacity < rope->count)
+		return 0;
+	for (uint32_t i = 0; i < rope->count; ++i)
+		bodies[i] = rope->links[i].id.GetIndexAndSequenceNumber();
+	return rope->count;
+}
+
+uint32_t JPH_Rope_GetRestPoints(
+	const JPH_RVec3 *start, const JPH_RVec3 *end, float length, JPH_RVec3 *points, uint32_t capacity) {
+	if (start == nullptr || end == nullptr || points == nullptr)
+		return 0;
+	const auto rest = RopeRestPoints(ToJPH(*start), ToJPH(*end), length);
+	if (capacity < rest.count)
+		return 0;
+	for (uint32_t i = 0; i < rest.count; ++i)
+		points[i] = FromJPH(rest.positions[i]);
+	return rest.count;
 }
 
 void JPH_PhysicsSystem_SetPhysicsSettings(
@@ -2438,6 +2559,23 @@ void JPH_BodyCreationSettings_SetMass(JPH_BodyCreationSettingsRef settings, floa
 	bcs->mMassPropertiesOverride.mMass = mass;
 }
 
+void JPH_BodyCreationSettings_SetMaterialProperties(
+	JPH_BodyCreationSettingsRef settings, float density, float friction, float restitution,
+	float frictionWeight, float restitutionWeight) {
+	if (settings == nullptr)
+		return;
+
+	auto *creation = ToBCS(settings);
+	creation->mFriction = friction;
+	creation->mRestitution = restitution;
+	creation->mUserData = PackMaterialWeights(frictionWeight, restitutionWeight);
+	if (creation->HasMassProperties()) {
+		const float mass = density * creation->GetShape()->GetVolume();
+		if (std::isfinite(mass))
+			JPH_BodyCreationSettings_SetMass(settings, mass);
+	}
+}
+
 void JPH_BodyCreationSettings_SetAllowedDOFs(JPH_BodyCreationSettingsRef settings, uint32_t dofs) {
 	if (settings != nullptr)
 		ToBCS(settings)->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(dofs & 0x3f);
@@ -2598,6 +2736,44 @@ void JPH_PhysicsSystem_SetBodyIsSensor(JPH_PhysicsSystemRef system, JPH_BodyID b
 	JPH::BodyLockWrite lock(ToPhysicsSystem(system)->GetBodyLockInterface(), ToBodyID(bodyID));
 	if (lock.Succeeded())
 		lock.GetBody().SetIsSensor(isSensor != 0);
+}
+
+void JPH_PhysicsSystem_SetBodyMaterialProperties(
+	JPH_PhysicsSystemRef system, JPH_BodyID bodyID, float density, float friction, float restitution,
+	float frictionWeight, float restitutionWeight) {
+	if (system == nullptr)
+		return;
+
+	auto *physics = ToPhysicsSystem(system);
+	const JPH::BodyID id = ToBodyID(bodyID);
+	bool dynamic, wakeContacts;
+	JPH::AABox contactBounds;
+	{
+		JPH::BodyLockWrite lock(physics->GetBodyLockInterface(), id);
+		if (!lock.Succeeded() || !lock.GetBody().IsRigidBody())
+			return;
+
+		auto &body = lock.GetBody();
+		body.SetFriction(friction);
+		body.SetRestitution(restitution);
+		body.SetUserData(PackMaterialWeights(frictionWeight, restitutionWeight));
+		dynamic = body.IsDynamic();
+		wakeContacts = body.IsStatic() && body.IsInBroadPhase() && !body.IsSensor();
+		if (wakeContacts) {
+			contactBounds = body.GetWorldSpaceBounds();
+			contactBounds.ExpandBy(JPH::Vec3::sReplicate(physics->GetPhysicsSettings().mSpeculativeContactDistance));
+		}
+		if (dynamic) {
+			const float mass = density * body.GetShape()->GetVolume();
+			if (mass > 0.0f && std::isfinite(mass))
+				body.GetMotionProperties()->ScaleToMass(mass);
+		}
+	}
+	physics->GetBodyInterface().InvalidateContactCache(id);
+	if (dynamic)
+		physics->GetBodyInterface().ActivateBody(id);
+	if (wakeContacts)
+		physics->GetBodyInterface().ActivateBodiesInAABox(contactBounds, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
 }
 
 int32_t JPH_PhysicsSystem_IsBodySensor(JPH_PhysicsSystemRef system, JPH_BodyID bodyID) {

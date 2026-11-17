@@ -1,0 +1,39 @@
+---
+title: UIStroke
+description: Draw an outline around a GUI element or its text.
+---
+
+`UIStroke` is a UI modifier that outlines its parent. It can stroke the object's border, the text, or both, depending on `ApplyStrokeMode`.
+
+## Getting started
+
+```lua
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(20, 20, 20)
+stroke.Thickness = 2
+stroke.Transparency = 0
+stroke.Parent = label
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | Whether the stroke renders. |
+| `Color` | `Color3` | Read/write | Stroke color. |
+| `Transparency` | `number` | Read/write | Stroke transparency, clamped to `0` through `1`. |
+| `Thickness` | `number` | Read/write | Stroke width, clamped to `0` or above. |
+| `ApplyStrokeMode` | `Enum.ApplyStrokeMode` | Read/write | What the stroke applies to. |
+
+## Notes
+
+- `Thickness` never goes negative; negative writes store `0`.
+- `Transparency` clamps rather than raising.
+- `ApplyStrokeMode` selects between the object border, text, and context-dependent behavior.
+- Modifiers apply to the parent GUI object.
+- Cloning copies every stroke setting.
+
+## See also
+
+- `UICorner` for rounded corners.
+- `TextLabel` and `TextButton` for the text the stroke can outline.

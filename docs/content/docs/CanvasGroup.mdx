@@ -1,0 +1,34 @@
+---
+title: CanvasGroup
+description: Apply transparency to a whole group of GUI elements.
+---
+
+`CanvasGroup` renders its children into a layer and applies one transparency value to the result. Overlapping children fade as a single image instead of showing through each other.
+
+## Getting started
+
+```lua
+local group = Instance.new("CanvasGroup")
+group.Size = UDim2.fromScale(1, 1)
+group.BackgroundTransparency = 1
+group.GroupTransparency = 0.25
+group.Parent = screenGui
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `GroupTransparency` | `number` | Read/write | Transparency applied to the rendered group, clamped to `0` through `1`. |
+
+## Notes
+
+- `GroupTransparency = 0` is fully opaque and `1` is fully invisible.
+- The group renders its children into an offscreen layer only while transparency is above zero; at full opacity it draws normally.
+- Per-child `Transparency` values still apply before the group value.
+- Inherits all `GuiObject` members.
+
+## See also
+
+- `Frame` for a plain container.
+- `GuiObject` for layout and appearance.

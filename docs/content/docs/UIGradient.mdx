@@ -1,0 +1,40 @@
+---
+title: UIGradient
+description: Apply a color and transparency gradient to a GUI element.
+---
+
+`UIGradient` is a UI modifier that tints its parent with a color sequence and an optional transparency sequence. The gradient is drawn across the parent using a rotation and offset.
+
+## Getting started
+
+```lua
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 180, 80)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 50, 200)),
+})
+gradient.Rotation = 90
+gradient.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | Whether the gradient renders. |
+| `Color` | `ColorSequence` | Read/write | Color ramp. |
+| `Transparency` | `NumberSequence` | Read/write | Alpha ramp. |
+| `Rotation` | `number` | Read/write | Gradient angle in degrees. |
+| `Offset` | `Vector2` | Read/write | Shifts the gradient along its axis. |
+
+## Notes
+
+- The gradient needs at least two keypoints in both `Color` and `Transparency` to render.
+- Assigning a sequence copies it; later edits to the source don't affect the modifier.
+- `Rotation` is in degrees and accepts any number, including values beyond `360`.
+- Cloning copies both sequences and the offset.
+
+## See also
+
+- `UICorner` and `UIStroke` for other modifiers.
+- `ColorSequenceValue` and `NumberSequenceValue` for reusable sequences.

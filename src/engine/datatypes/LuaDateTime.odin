@@ -47,29 +47,48 @@ date_time_from_iso_date :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 
 	binding := binding_from_upvalue(L)
-	value := Arg_DateTime(L, 1, registry_from_binding(binding))
+	iso := vm.ArgString(L, 1)
 
-	t := time.unix(i64(value.UnixTimestampMillis) / 1000, 0)
-	y, m, d := time.date(t)
+	parsed, consumed := time.iso8601_to_time_utc(iso)
 
-	vm.PushString(L, fmt.tprintf("%04d-%02d-%02d", y, int(m), d))
+	if consumed == 0 || consumed != len(iso) {
+		vm.PushNil(L)
+		return 1
+	}
+
+	nanos := time.to_unix_nanoseconds(parsed)
+	millis := nanos / 1_000_000
+
+	if nanos < 0 && nanos % 1_000_000 != 0 {
+		millis -= 1
+	}
+
+	push_date_time(L, binding, DateTime_FromUnixTimestampMillis(f64(millis)))
+
 	return 1
 }
 
 date_time_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	date_time := cast(^DateTime)value
+
 	switch key {
 	case "UnixTimestamp":
 		vm.PushNumber(L, DateTime_UnixTimestamp(date_time^))
+
 	case "UnixTimestampMillis":
 		vm.PushNumber(L, date_time.UnixTimestampMillis)
-	case "fromIsoDate":
-		t := time.unix(i64(date_time.UnixTimestampMillis) / 1000, 0)
-		y, m, d := time.date(t)
-		vm.PushString(L, fmt.tprintf("%04d-%02d-%02d", y, int(m), d))
+
+	case "FormatLocalTime":
+		when ODIN_OS != .JS {
+			vm.PushUserdataMethod(L, key)
+		} else {
+			return false
+		}
+
 	case:
 		return false
 	}
+
 	return true
 }
 
@@ -87,13 +106,17 @@ date_time_destroy :: proc(value, ctx: rawptr) {
 }
 
 DateTime_Luau_Binding :: proc() -> vm.Userdata_Binding {
-	return vm.Userdata_Binding {
+	binding := vm.Userdata_Binding {
 		name = "DateTime",
 		get = date_time_get,
 		string = date_time_string,
 		destroy = date_time_destroy,
 		equal = date_time_equal,
 	}
+	when ODIN_OS != .JS {
+		binding.namecall = date_time_namecall
+	}
+	return binding
 }
 
 DateTime_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {

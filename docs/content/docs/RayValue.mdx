@@ -1,0 +1,35 @@
+---
+title: RayValue
+description: Store a Ray in the object tree.
+---
+
+`RayValue` holds a ray as an instance. It's a niche container, but useful when a ray is authored data rather than the result of a query.
+
+## Getting started
+
+```lua
+local rayValue = Instance.new("RayValue")
+rayValue.Name = "Probe"
+rayValue.Value = Ray.new(Vector3.new(0, 5, 0), Vector3.new(0, -1, 0))
+rayValue.Parent = configFolder
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Value` | `Ray` | Read/write | Origin `(1, 0, 0)`, direction `(1, 0, 0)` | The stored ray. |
+
+The default is unusual: both the origin and the direction start at `(1, 0, 0)`. Set the value explicitly instead of relying on the default.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- Cloning copies the ray.
+- Direction isn't normalized automatically. Normalize it when you use the ray for a query.
+- No length limit is stored; the direction's magnitude acts as the range where the consumer treats it that way.
+
+## See also
+
+- `Workspace` for `Raycast()`.
+- `Camera` for building rays from screen coordinates.

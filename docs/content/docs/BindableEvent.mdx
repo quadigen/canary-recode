@@ -1,0 +1,59 @@
+---
+title: BindableEvent
+description: Send custom events between scripts in the same runtime through an instance.
+---
+
+`BindableEvent` is a custom event object. One script fires it, other scripts connect to it, and the arguments pass through unchanged. It's a way to publish something without a direct reference between the scripts.
+
+## Getting started
+
+```lua
+local event = Instance.new("BindableEvent")
+event.Name = "WaveStarted"
+event.Parent = game:GetService("ReplicatedStorage")
+
+event.Event:Connect(function(waveNumber)
+    print("Wave", waveNumber, "started")
+end)
+
+event:Fire(3)
+```
+
+## Members
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Event` | signal | Fires for each call to `Fire()`. |
+| `Fire(...)` | method | Fires the event with the arguments you pass. |
+
+`Fire()` accepts any number of arguments and forwards them to listeners in order. It returns nothing and doesn't wait for listeners to finish.
+
+```lua
+event:Fire("spawn", Vector3.new(0, 0, 0), 5)
+```
+
+The event signal is created the first time `Event` is read and reused afterward.
+
+## Communication boundaries
+
+A `BindableEvent` is local to the runtime that owns it. A server-side bindable event doesn't deliver to clients, and a client's event doesn't reach the server. Use `RemoteEvent` when you need to cross that boundary.
+
+```lua
+-- Both sides need their own event, or one shared through replication.
+local serverEvent = game:GetService("ServerStorage"):FindFirstChild("WaveStarted")
+```
+
+Because the object has to be visible to both scripts for them to share it, `ReplicatedStorage` is a common home for events used across several systems on one side.
+
+## Notes
+
+- Listeners run when `Fire()` is called, in connection order, on the calling thread.
+- Arguments aren't copied or serialized; they're passed as-is to the same runtime.
+- Cloning the event creates an independent event with no connections.
+- Destroying the event disconnects nothing automatically; listeners on the old object stop receiving fires because there's nothing left to fire.
+- There's no way to inspect how many listeners are connected.
+
+## See also
+
+- `BindableFunction`, the function-shaped variant.
+- `RemoteEvent`, events that cross between server and client.

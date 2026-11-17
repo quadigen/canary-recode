@@ -29,6 +29,8 @@ Water :: struct {
 	clearCoatRoughness: f32,
 }
 
+WATER_DEFAULT_HEIGHT :: f32(1.75)
+
 Water_Init :: proc() -> Water {
 	return Water {
 		object = Object_Init(&Water_Class),
@@ -37,7 +39,7 @@ Water_Init :: proc() -> Water {
 		speed = 1.0,
 		strength = 1.0,
 		octaves = 6.0,
-		height = 1.0,
+		height = WATER_DEFAULT_HEIGHT,
 		roughness = 0.08,
 		ior = 1.333,
 		thickness = 0.12,
@@ -185,7 +187,7 @@ Water_Render_Params :: proc(water: ^Water) -> kineffi.KineFilamentWaterParams {
 			speed = 1,
 			strength = 1,
 			octaves = 6,
-			height = 1,
+			height = WATER_DEFAULT_HEIGHT,
 			waveScale = 1,
 			foamAmount = 0.55,
 			absorptionR = 0.35,

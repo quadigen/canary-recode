@@ -1,0 +1,32 @@
+---
+title: BasePart
+description: Abstract parent of Part and MeshPart.
+---
+
+`BasePart` is the shared parent of physical parts. It adds no members of its own and can't be created; use `Part` or `MeshPart` for actual geometry.
+
+## Getting started
+
+```lua
+local part = Instance.new("Part")
+
+print(part:IsA("BasePart")) -- true
+print(part:IsA("Part"))     -- true
+```
+
+## Members
+
+None. Size, position, color, material, collision, and physics properties are declared on the concrete part classes.
+
+## Notes
+
+- `BasePart` isn't creatable with `Instance.new()`.
+- It's the class to test with `IsA()` when code should accept any physical part.
+- `Part` and `MeshPart` both descend from it.
+- Cloning a concrete part copies its properties and children.
+
+## See also
+
+- `Part` for basic solids.
+- `MeshPart` for imported meshes.
+- `PartOperation` for CSG results.

@@ -1,0 +1,86 @@
+---
+title: CFrame
+description: A position and 3D rotation used for parts, cameras, and spatial math.
+---
+
+`CFrame` combines a position with a rotation matrix. Every `BasePart` has one, cameras use one, and most 3D placement math goes through it.
+
+```lua
+local cf = CFrame.new(0, 5, 0) * CFrame.Angles(0, math.rad(45), 0)
+part.CFrame = cf
+```
+
+## Constructors
+
+| Call | Result |
+| --- | --- |
+| `CFrame.new()` | Identity frame at the origin. |
+| `CFrame.new(position)` | Frame at `position` with no rotation. |
+| `CFrame.new(position, lookAt)` | Frame at `position` facing `lookAt`. |
+| `CFrame.new(x, y, z)` | Frame at the given position. |
+| `CFrame.new(x, y, z, qx, qy, qz, qw)` | Frame from a position and quaternion. |
+| `CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)` | Frame from a position and nine rotation components. |
+
+Other constructors:
+
+| Call | Result |
+| --- | --- |
+| `CFrame.Angles(rx, ry, rz)` | Rotation from three angles in radians. |
+| `CFrame.fromEulerAnglesXYZ(rx, ry, rz)` | Rotation applied in XYZ order. |
+| `CFrame.fromEulerAnglesYXZ(rx, ry, rz)` | Rotation applied in YXZ order. |
+| `CFrame.fromOrientation(rx, ry, rz)` | Rotation from orientation angles. |
+| `CFrame.fromAxisAngle(axis, angle)` | Rotation around `axis` by `angle` radians. |
+| `CFrame.lookAt(position, target, up?)` | Frame at `position` looking at `target`. |
+| `CFrame.lookAlong(position, direction, up?)` | Frame at `position` pointing along `direction`. |
+| `CFrame.fromMatrix(position, xVector, yVector, zVector?)` | Frame from a position and basis vectors. If `zVector` is omitted, it is the cross product of the other two. |
+| `CFrame.identity` | The identity frame. |
+
+## Members
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Position`, `p` | `Vector3` | World position. |
+| `Rotation` | `CFrame` | Rotation only, with zero position. |
+| `RightVector`, `XVector` | `Vector3` | Right direction. |
+| `UpVector`, `YVector` | `Vector3` | Up direction. |
+| `LookVector` | `Vector3` | Forward direction. |
+| `ZVector` | `Vector3` | Z basis vector. |
+| `X`, `Y`, `Z` | `number` | Position components. |
+
+## Methods
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `Inverse()` | `CFrame` | Inverse transform. |
+| `Lerp(goal, alpha)` | `CFrame` | Interpolates position and rotation. |
+| `ToWorldSpace(cf)` | `CFrame` | Applies `cf` in world space. |
+| `ToObjectSpace(cf)` | `CFrame` | Applies `cf` in local space. |
+| `PointToWorldSpace(point)` | `Vector3` | Transforms a point into world space. |
+| `PointToObjectSpace(point)` | `Vector3` | Transforms a point into local space. |
+| `VectorToWorldSpace(vector)` | `Vector3` | Rotates a direction into world space. |
+| `VectorToObjectSpace(vector)` | `Vector3` | Rotates a direction into local space. |
+| `Orthonormalize()` | `CFrame` | Rebuilds an orthonormal rotation. |
+| `GetComponents()`, `components()` | twelve `number` values | Position followed by nine rotation components. |
+| `ToEulerAnglesXYZ()` | three `number` values | Euler angles in XYZ order. |
+| `ToEulerAnglesYXZ()` | three `number` values | Euler angles in YXZ order. |
+| `ToOrientation()` | three `number` values | Orientation angles. |
+| `ToAxisAngle()` | `(Vector3, number)` | Axis and angle in radians. |
+| `FuzzyEq(other, epsilon?)` | `boolean` | Component-wise comparison. `epsilon` defaults to `1e-5`. |
+| `AngleBetween(other)` | `number` | Angle between the two rotations, in radians. |
+
+## Operators
+
+| Operator | Result |
+| --- | --- |
+| `CFrame + Vector3` | Frame moved by the vector. |
+| `CFrame - Vector3` | Frame moved by the negated vector. |
+| `CFrame * CFrame` | Combined transform. |
+| `CFrame * Vector3` | Transformed point. |
+| `CFrame == CFrame` | Component-wise equality. |
+
+Order matters for `*`. `a * b` applies `b` first, then `a`. To move a part relative to its own axes, multiply its `CFrame` by an offset on the right; to move it in world axes, multiply on the left.
+
+## See also
+
+- [Vectors and rotations](/docs/datatypes/vectors) for `Vector3` and `Quaternion`.
+- [Part](/docs/Part) for the `CFrame` property.

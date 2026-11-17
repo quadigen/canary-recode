@@ -1,0 +1,63 @@
+---
+title: TextButton
+description: A clickable button that displays text.
+---
+
+`TextButton` combines the text properties of `TextLabel` with the button behavior of `GuiButton`. It supports the `Activated` event and automatic hover and press coloring.
+
+## Getting started
+
+```lua
+local button = Instance.new("TextButton")
+button.Size = UDim2.fromOffset(160, 44)
+button.Text = "Start"
+button.TextSize = 20
+button.Parent = screenGui
+
+button.Activated:Connect(function()
+    print("started")
+end)
+```
+
+## Text properties
+
+`TextButton` exposes the same text members as `TextLabel`:
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Text` | `string` | Read/write | Button caption. Defaults to `"Button"`. |
+| `Font` | `Enum.Font` | Read/write | Legacy font selector. |
+| `FontFace` | `Font` | Read/write | Font object. |
+| `FontSize` | `Enum.FontSize` | Read/write | Named size preset. |
+| `TextSize` | `number` | Read/write | Size in pixels. Defaults to `16`. |
+| `TextColor3` | `Color3` | Read/write | Caption color. Defaults to white. |
+| `TextTransparency` | `number` | Read/write | Caption transparency. |
+| `TextStrokeColor3` | `Color3` | Read/write | Outline color. |
+| `TextStrokeTransparency` | `number` | Read/write | Outline transparency. Defaults to fully transparent. |
+| `TextStrokeThickness` | `number` | Read/write | Outline width. |
+| `TextWrapped` | `boolean` | Read/write | Wrap long captions. |
+| `TextScaled` | `boolean` | Read/write | Scale text to the button. |
+| `TextXAlignment` | `Enum.TextXAlignment` | Read/write | Horizontal alignment, centered by default. |
+| `TextYAlignment` | `Enum.TextYAlignment` | Read/write | Vertical alignment, centered by default. |
+| `LineHeight` | `number` | Read/write | Line spacing multiplier. |
+| `TextPadding` | `number` | Read/write | Inner padding in pixels. |
+| `RichText` | `boolean` | Read/write | Parse inline rich text tags. |
+
+## Button behavior
+
+`TextButton` inherits from `GuiButton`, so it has the button members, including `AutoButtonColor`, `Modal`, `Selected`, and the `Activated` event. See `GuiObject` for layout and appearance.
+
+With automatic button color enabled, the background brightens on hover and darkens while pressed.
+
+## Notes
+
+- `Activated` fires on a completed click, including touch input.
+- The text properties are stored on the button itself; there's no child label instance.
+- Assigning `Text` invalidates the cached layout.
+- Font changes also invalidate the layout.
+
+## See also
+
+- `TextLabel` for non-clickable text.
+- `ImageButton` for an image-based button.
+- `GuiObject` for shared GUI members.

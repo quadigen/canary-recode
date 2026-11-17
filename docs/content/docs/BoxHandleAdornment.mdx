@@ -1,0 +1,34 @@
+---
+title: BoxHandleAdornment
+description: Draw a wireframe box around a part.
+---
+
+`BoxHandleAdornment` draws a green wireframe box that follows a target part. It's a lightweight way to highlight a part's bounds.
+
+## Getting started
+
+```lua
+local box = Instance.new("BoxHandleAdornment")
+box.Adornee = targetPart
+box.Parent = targetPart
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Adornee` | `Instance?` | Read/write | Part to outline. Falls back to the adornment's parent. |
+
+The box is drawn slightly larger than the part (`0.05` studs of padding on each axis) and uses a fixed green wire color.
+
+## Notes
+
+- Inherits from `ValueBase`, which adds no members.
+- If `Adornee` is `nil`, the parent is used, and the parent must be a `Part`.
+- The adornment has no effect when the target isn't a part or isn't in the rendered world.
+- Cloning copies the adornment target.
+
+## See also
+
+- `SphereHandleAdornment` and `LineHandleAdornment` for other shapes.
+- `Highlight` for a solid outline effect.

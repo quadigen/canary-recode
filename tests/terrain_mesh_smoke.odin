@@ -133,5 +133,27 @@ terrain:SetCell(-16, 16, 16, Enum.Material.Rock)
 		assert(int(index) < len(water.vertices) / 8)
 	}
 
+	// A dry lattice point at the end of one chunk can border a wet point in
+	// the next chunk, while the actual sloping shore lies between them.
+	run_fill(&script_vm, `
+local terrain = game:GetService("Terrain")
+terrain:Clear()
+for z = 0, 1 do
+    terrain:SetCell(15, 0, z, Enum.Material.Rock)
+    terrain:SetCell(15, 1, z, Enum.Material.Rock)
+    terrain:SetCell(16, 0, z, Enum.Material.Rock)
+    terrain:SetWaterCell(16, 0, z, 1)
+end
+`)
+	clear(&surfaces[.Water].vertices)
+	clear(&surfaces[.Water].indices)
+	services.Terrain_Build_Chunk_Surfaces(terrain, {0, 0, 0}, &surfaces)
+	shore := surfaces[.Water]
+	assert(len(shore.indices) > 0, "water must reach the sloped land in the neighboring chunk")
+	for index in shore.indices {
+		i := int(index) * 8
+		assert(shore.vertices[i] >= 60 && shore.vertices[i] <= 64 && shore.vertices[i + 1] == 4)
+	}
+
 	fmt.println("TERRAIN_MESH_SMOKE_PASSED")
 }

@@ -1,0 +1,83 @@
+---
+title: RemoteEvent
+description: Send one-way events between the server and clients.
+---
+
+`RemoteEvent` is the replicated counterpart to `BindableEvent`. The server can fire to one client or all clients, and a client can fire to the server. The receiving side gets the arguments through `OnServerEvent` or `OnClientEvent`.
+
+## Getting started
+
+```lua
+-- Server: create the remote once and listen for client messages.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local waveStarted = Instance.new("RemoteEvent")
+waveStarted.Name = "WaveStarted"
+waveStarted.Parent = ReplicatedStorage
+
+waveStarted.OnServerEvent:Connect(function(player, waveNumber)
+    print(player.Name, "reached wave", waveNumber)
+end)
+```
+
+```lua
+-- Client: wait for the remote, then send to the server.
+local remote = game:GetService("ReplicatedStorage"):WaitForChild("WaveStarted")
+remote:FireServer(3)
+```
+
+## Members
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `OnServerEvent` | signal | Fires on the server for events sent by a client. The first argument is the sending `Player`. |
+| `OnClientEvent` | signal | Fires on a client for events sent to it. |
+| `FireServer(...)` | method | Client sends an event to the server. |
+| `FireClient(player, ...)` | method | Server sends an event to one player. |
+| `FireAllClients(...)` | method | Server sends an event to every connected client. |
+
+Both signals are created lazily the first time the property is read.
+
+## Sending from the server
+
+```lua
+-- One player.
+remote:FireClient(player, "round", 2)
+
+-- Everyone.
+remote:FireAllClients("round", 2)
+```
+
+`FireClient()` raises an error when the first argument isn't a `Player`. `FireAllClients()` doesn't take a player argument; everything you pass is delivered as event arguments.
+
+## Sending from a client
+
+```lua
+remote:FireServer("interact", doorId)
+```
+
+`FireServer()` only works on a client. Calling it on the server does nothing. `FireClient()` and `FireAllClients()` only work on the server; calling them on a client does nothing.
+
+## Behavior in each runtime
+
+| Call | Client runtime | Server runtime |
+| --- | --- | --- |
+| `FireServer(...)` | Sends to the server. | No-op. |
+| `FireClient(player, ...)` | No-op. | Sends to that player. |
+| `FireAllClients(...)` | No-op. | Sends to every client. |
+
+When the game isn't running as a networked session, events loop back locally: `FireServer()` fires `OnServerEvent` with `nil` as the player argument, and `FireClient()` fires `OnClientEvent` on the same runtime.
+
+## Notes
+
+- `OnServerEvent` arguments are whatever the client chose to send. Validate types, ranges, and permissions before acting on them.
+- Use `WaitForChild()` instead of indexing when the remote may not have replicated yet.
+- Connecting twice gives you two callbacks; there's no de-duplication.
+- Events don't return values. Use `RemoteFunction` when you need a response.
+- A remote must exist on both sides for the object to be usable there.
+
+## See also
+
+- `RemoteFunction` for request and response.
+- `BindableEvent` for same-runtime events.
+- `ReplicatedStorage` for a shared home for remotes.

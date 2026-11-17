@@ -1,0 +1,98 @@
+---
+title: TextService
+description: Measure text with the engine's fonts so labels and layout can be sized accurately.
+---
+
+`TextService` measures text using the same font pipeline that renders it. Use it when you need a label's size before it's drawn, for example to size a panel around dynamic content or to break lines yourself.
+
+## Getting started
+
+```lua
+local TextService = game:GetService("TextService")
+
+local size = TextService:GetTextSize("Hello", 24, Enum.Font.SansSerif, Vector2.new(500, 0))
+print(size.X, size.Y)
+```
+
+`GetTextSize()` returns the width and height the text needs, constrained by the maximum size you pass. A max width of `0` means no constraint.
+
+## Methods
+
+### GetTextSize
+
+```lua
+GetTextSize(
+    text: string,
+    fontSize: number,
+    font: Enum.Font | string | Font,
+    maxSize: Vector2
+): Vector2
+```
+
+Measures a single line or wrapped block of text. The font can be an `Enum.Font` value, a font family name, or a `Font` object. Sizes below `1` are raised to `1` before measuring.
+
+```lua
+local bounds = TextService:GetTextSize(
+    "A longer label that wraps",
+    18,
+    Enum.Font.SansSerif,
+    Vector2.new(200, 0)
+)
+```
+
+If the font can't be loaded, the call raises an error. Stick to fonts that ship with the engine unless you know the custom font is available.
+
+### GetTextBoundsAsync
+
+```lua
+GetTextBoundsAsync(params: GetTextBoundsParams): Vector2
+```
+
+Measures text from a `GetTextBoundsParams` object, which carries the text, font, size, and width. It's the structured version of `GetTextSize()`, and it reads better when you're reusing the same parameters.
+
+```lua
+local params = Instance.new("GetTextBoundsParams")
+params.Text = "Dynamic label"
+params.Size = 20
+params.Width = 300
+
+local bounds = TextService:GetTextBoundsAsync(params)
+```
+
+The text length is capped; a string at or above 200,000 characters raises an error rather than measuring.
+
+### MeasureText
+
+```lua
+MeasureText(text: string, fontSize: number, fontPath: string): Vector2
+```
+
+Measures text using a font loaded from an explicit font path. Use it when the font comes from a file you control rather than from the engine's font list.
+
+### GetTextWidth
+
+```lua
+GetTextWidth(text: string, fontSize: number, fontPath: string): number
+```
+
+Returns only the width of a single line. It's cheaper to read than a full `Vector2` when width is all you need.
+
+### GetLineHeight
+
+```lua
+GetLineHeight(fontSize: number, fontPath: string): number
+```
+
+Returns the line height for a font at a given size. Multiply by the number of lines to estimate a block's height without measuring the text itself.
+
+## Notes
+
+- Results are in UI units, the same units a label's `AbsoluteSize` uses.
+- Measurement uses the font's metrics, so it can differ slightly from the rendered glyph bounds.
+- `GetTextSize()` and `GetTextBoundsAsync()` accept different font inputs. The first takes an enum or family name, the second takes the font stored in the params object.
+- Measuring doesn't create or require a label. It works before any interface exists.
+
+## See also
+
+- `TextLabel`, displaying measured text.
+- `GuiObject`, layout and sizing of GUI elements.

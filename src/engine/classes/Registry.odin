@@ -84,7 +84,7 @@ Class_Step_Phase :: enum {
 }
 
 Gui_Render_Transform :: struct {
-	object: ^Object,
+	object:              ^Object,
 	x, y, width, height: f32,
 }
 
@@ -140,27 +140,27 @@ Method_Security :: proc(name: string, requirement: vm.Security_Requirement) -> M
 }
 
 Class_Descriptor :: struct {
-	info:               ^Class_Info,
-	construct:          Class_Constructor,
-	construct_with_ctx: Class_Constructor_With_Context,
-	construct_ctx:      rawptr,
-	destroy:            Class_Destructor,
-	get:                Class_Getter,
-	set:                Class_Setter,
-	namecall:           Class_Namecall,
-	_step:              Class_Step,
-	_step_phase:        Class_Step_Phase,
-	creatable:          bool,
-	clone:              Class_Clone,
-	binding:            vm.Userdata_Binding,
-	registry:           ^Registry,
-	instances:          [dynamic]^Object,
-	properties:         [dynamic]string,
+	info:                ^Class_Info,
+	construct:           Class_Constructor,
+	construct_with_ctx:  Class_Constructor_With_Context,
+	construct_ctx:       rawptr,
+	destroy:             Class_Destructor,
+	get:                 Class_Getter,
+	set:                 Class_Setter,
+	namecall:            Class_Namecall,
+	_step:               Class_Step,
+	_step_phase:         Class_Step_Phase,
+	creatable:           bool,
+	clone:               Class_Clone,
+	binding:             vm.Userdata_Binding,
+	registry:            ^Registry,
+	instances:           [dynamic]^Object,
+	properties:          [dynamic]string,
 	imported_properties: map[string]Imported_Property,
-	methods:            [dynamic]string,
-	events:             [dynamic]string,
-	member_security:    [dynamic]Member_Security,
-	exports:            [dynamic]Class_Export,
+	methods:             [dynamic]string,
+	events:              [dynamic]string,
+	member_security:     [dynamic]Member_Security,
+	exports:             [dynamic]Class_Export,
 }
 
 Pending_Destroy :: struct {
@@ -256,7 +256,9 @@ Registry :: struct {
 	mode:                   target.Mode,
 	screen_gui_can_display: proc(object: ^Object, data_model: rawptr) -> bool,
 	pending_destroy:        [dynamic]Pending_Destroy,
-	tagged_objects:        map[^Object]bool,
+	tagged_objects:         map[^Object]bool,
+	tag_added_signals:      map[string]^signals.Signal,
+	tag_removed_signals:    map[string]^signals.Signal,
 	destroy_hook:           Destroy_Hook,
 	destroy_hook_ctx:       rawptr,
 	network_ownership:      Network_Ownership_Dispatch,
@@ -397,8 +399,10 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 
 	// A Changed listener may keep Visible in sync with another property.
 	// Reassigning the current value must not reenter that listener.
-	if key == "Visible" && Is_A_Class(object, &GuiObject_Class) &&
-	   (cast(^GuiObject)object).visible == vm.ArgBoolean(L, value_index) {
+	if key == "Visible" &&
+	   Is_A_Class(object, &GuiObject_Class) &&
+	   (cast(^GuiObject)object).visible ==
+		   (!vm.IsNil(L, value_index) && vm.ArgBoolean(L, value_index)) {
 		return true
 	}
 
@@ -413,14 +417,26 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		   key,
 		   value_index,
 	   ) {
+		// These setters notify listeners when the exposed value actually changes.
+		if (key == "Text" && Is_A_Class(object, &TextBox_Class)) ||
+		   (key == "CanvasPosition" && Is_A_Class(object, &ScrollingFrame_Class)) {
+			return true
+		}
+
 		// The write succeeded, so notify subscribers of this exact property.
 		// Funnelling here means every class gets change signals for free,
 		// without each setter having to remember to fire its own.
 		surfacegui_mark_dirty_for(object)
 		// These setters bump the revision only when the value changes.
 		switch key {
-		case "Position", "Size", "AnchorPoint", "Visible", "ZIndex", "Rotation",
-		     "BackgroundTransparency", "BackgroundColor3":
+		case "Position",
+		     "Size",
+		     "AnchorPoint",
+		     "Visible",
+		     "ZIndex",
+		     "Rotation",
+		     "BackgroundTransparency",
+		     "BackgroundColor3":
 			if Gui_Render_Revision() != gui_revision || !Is_A_Class(object, &GuiObject_Class) {
 				gui_invalidate_draw(object)
 			}
@@ -451,7 +467,12 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 	return false
 }
 
-append_properties :: proc(registry: ^Registry, class: ^Class_Info, result: ^[dynamic]string, include_imported := true) {
+append_properties :: proc(
+	registry: ^Registry,
+	class: ^Class_Info,
+	result: ^[dynamic]string,
+	include_imported := true,
+) {
 	if registry == nil || class == nil {
 		return
 	}
@@ -481,7 +502,11 @@ Get_Properties :: proc(registry: ^Registry, object: ^Object) -> [dynamic]string 
 	return result
 }
 
-Class_Property_List :: proc(registry: ^Registry, class_name: string, include_imported := true) -> [dynamic]string {
+Class_Property_List :: proc(
+	registry: ^Registry,
+	class_name: string,
+	include_imported := true,
+) -> [dynamic]string {
 	result: [dynamic]string
 
 	if registry == nil {
@@ -1198,8 +1223,8 @@ Require_Frame_Pop_Stack :: proc(stack: ^Require_Frame_Stack) {
 		return
 	}
 	stack.depth -= 1
-	if common := Script_Common_Of(stack.items[stack.depth]); common != nil &&
-	   common.require_frame_stack == stack {
+	if common := Script_Common_Of(stack.items[stack.depth]);
+	   common != nil && common.require_frame_stack == stack {
 		common.require_frame_stack = nil
 	}
 	stack.items[stack.depth] = nil
@@ -1251,7 +1276,8 @@ Require_Forget_Thread :: proc(registry: ^Registry, thread: ^vm.State) {
 	if stack == nil {return}
 	for stack.depth > 0 {
 		object := stack.items[stack.depth - 1]
-		if common := Script_Common_Of(object); common != nil && common.require_frame_stack == stack {
+		if common := Script_Common_Of(object);
+		   common != nil && common.require_frame_stack == stack {
 			common.require_frame_stack = nil
 			if common.module_state == .Loading {common.module_state = .Unloaded}
 		}
@@ -1416,7 +1442,14 @@ require_script :: proc "c" (L: ^vm.State) -> i32 {
 			if caller := Require_Current_Script(registry, L); caller != nil {
 				module := require_walk_children(caller.parent, path, relative = true)
 				if module == nil {
-					return vm.RaiseError(L, fmt.tprintf("cannot resolve module %q relative to %s", path, Get_Full_Name(caller)))
+					return vm.RaiseError(
+						L,
+						fmt.tprintf(
+							"cannot resolve module %q relative to %s",
+							path,
+							Get_Full_Name(caller),
+						),
+					)
 				}
 				require_replace_arg1(L, module)
 				return require_script_body(L, registry)
@@ -1492,14 +1525,20 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 			}
 			if dependency != L {
 				if registry.require_schedule_retry == nil || !vm.IsYieldable(L) {
-					return vm.RaiseError(L, "require cannot wait for a loading module on this thread")
+					return vm.RaiseError(
+						L,
+						"require cannot wait for a loading module on this thread",
+					)
 				}
 				registry.require_waiting[L] = owner.thread
 				registry.require_schedule_retry(registry.require_retry_ctx, L)
 				return vm.YieldThread(L)
 			}
 		}
-		return vm.RaiseError(L, fmt.tprintf("cyclic require detected while loading %s", Get_Full_Name(object)))
+		return vm.RaiseError(
+			L,
+			fmt.tprintf("cyclic require detected while loading %s", Get_Full_Name(object)),
+		)
 	case .Unloaded:
 	}
 
@@ -1561,6 +1600,11 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	// wire:begin classes
 	Register_Instance(registry)
 	Register_Advanced_Lighting_Effects(registry)
+	Register_Animation(registry)
+	Register_AnimationAuthoring(registry)
+	Register_AnimationController(registry)
+	Register_AnimationTrack(registry)
+	Register_Animator(registry)
 	Register_ArcHandles(registry)
 	Register_Attachment(registry)
 	Register_BallSocketConstraint(registry)
@@ -1590,11 +1634,14 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_CylinderHandleAdornment(registry)
 	Register_Decal(registry)
 	Register_DoubleConstrainedValue(registry)
+	Register_EditableImage(registry)
 	Register_EditableMesh(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
+	Register_GetTextBoundsParams(registry)
 	Register_GPUCompute(registry)
 	Register_GroundDetector(registry)
+	Register_GuiBase(registry)
 	Register_GuiButton(registry)
 	Register_GuiObject(registry)
 	Register_Handles(registry)
@@ -1644,6 +1691,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_SpringConstraint(registry)
 	Register_StateMachine(registry)
 	Register_StringValue(registry)
+	Register_StudioTheme(registry)
 	Register_SurfaceGui(registry)
 	Register_SurfaceLight(registry)
 	Register_SyntaxHighlighter(registry)
@@ -1653,6 +1701,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_UIBackdrop(registry)
 	Register_UICorner(registry)
 	Register_UIDragDetector(registry)
+	Register_UIFlexItem(registry)
 	Register_UIGradient(registry)
 	Register_UIGridLayout(registry)
 	Register_UIListLayout(registry)
@@ -1695,6 +1744,18 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.classes)
 	delete(registry.tagged_objects)
 	registry.tagged_objects = nil
+	added_tags: [dynamic]string
+	for tag, _ in registry.tag_added_signals {append(&added_tags, tag)}
+	for tag in added_tags {delete(tag)}
+	delete(added_tags)
+	delete(registry.tag_added_signals)
+	registry.tag_added_signals = nil
+	removed_tags: [dynamic]string
+	for tag, _ in registry.tag_removed_signals {append(&removed_tags, tag)}
+	for tag in removed_tags {delete(tag)}
+	delete(removed_tags)
+	delete(registry.tag_removed_signals)
+	registry.tag_removed_signals = nil
 	registry.classes = nil
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil

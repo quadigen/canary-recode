@@ -1,0 +1,80 @@
+---
+title: MeshPart
+description: Use an imported mesh as a part, with its own texture and collision fidelity.
+---
+
+`MeshPart` is a `Part` whose visible geometry comes from a mesh asset instead of a primitive shape. Everything from `Part` still applies: it collides, casts shadows, can be anchored, and participates in physics.
+
+## Getting started
+
+```lua
+local meshPart = Instance.new("MeshPart")
+meshPart.MeshId = "models/crate.glb"
+meshPart.TextureId = "textures/crate.png"
+meshPart.Position = Vector3.new(0, 3, 0)
+meshPart.Anchored = true
+meshPart.Parent = game:GetService("Workspace")
+```
+
+The part's `Size` still defines its physics box. The mesh is visual geometry unless you choose a collision fidelity that uses it.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `MeshId` | `string` | Read/write | `""` | Asset path of the mesh. Assigning it clears inline mesh content. |
+| `MeshIndex` | `number` | Read/write | `0` | Index of the mesh inside a multi-mesh asset. Negative values are ignored. |
+| `MeshContent` | `Content` | Read/write | Empty | Inline mesh content, used instead of an asset path. |
+| `TextureId` | `string` | Read/write | `""` | Asset path of the texture. `TextureID` is an alias. |
+| `CollisionFidelity` | `Enum.CollisionFidelity` | Read/write | `Default` | How closely the collision shape follows the mesh. |
+
+These come on top of every `Part` property, so `Size`, `CFrame`, `Anchored`, `CanCollide`, `Color`, and the rest behave the same way.
+
+### Mesh sources
+
+A mesh can come from an asset path or from inline content, not both. Setting `MeshId` clears `MeshContent`, and setting `MeshContent` takes precedence while it's present.
+
+```lua
+meshPart.MeshId = ""
+meshPart.MeshContent = someContent
+```
+
+`MeshIndex` picks one mesh out of an asset that contains several. Assigning a negative or non-numeric index is ignored, and the previous index stays.
+
+### Collision fidelity
+
+`CollisionFidelity` decides whether the part collides as its box or as its mesh:
+
+- `Default` uses the engine's default for the asset.
+- Other values trade accuracy for cost. More accurate collision means more triangles to test.
+
+Changing fidelity rebuilds the part's collision geometry, so set it when you create the part rather than every frame.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `GetMeshContent(): Content` | Returns the inline mesh content. |
+| `SetMeshContent(content: Content): ()` | Replaces the inline mesh content. |
+
+`ApplyImpulse()` and the CSG methods from `Part` are also available.
+
+```lua
+local content = meshPart:GetMeshContent()
+```
+
+## UsePartColor
+
+`UsePartColor` is only readable on `PartOperation`, which is a separate CSG class. A plain `MeshPart` reports `false` for it, so don't use it to decide whether a mesh takes the part's color.
+
+## Notes
+
+- Mesh assets load asynchronously. A part can exist and simulate before its mesh is ready, so don't measure or query the visual geometry immediately after assignment.
+- `Size` and the mesh's authored dimensions can disagree. Scale the part, or the asset, deliberately; physics follows `Size`.
+- Cloning copies the mesh path, index, texture, fidelity, and inline content, but not any loaded renderer resources.
+- A missing mesh asset still leaves a usable physics part.
+
+## See also
+
+- `Part`, the base geometry class.
+- `EditableMesh`, editing mesh geometry from Luau.

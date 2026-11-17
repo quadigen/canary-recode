@@ -1,0 +1,189 @@
+---
+title: Input and UI
+description: Build screen interfaces, handle clicks and keys, and animate the result.
+---
+
+Interfaces in Kinemium are built from `ScreenGui` and the GUI classes, driven by input from `UserInputService` or the GUI elements themselves. This guide covers the layout, the input paths, and the animation tools.
+
+## Put an interface on screen
+
+`ScreenGui` is the container. Parent one to `StarterGui` and it becomes a template for each player's `PlayerGui`:
+
+```lua
+local StarterGui = game:GetService("StarterGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "Hud"
+screenGui.Parent = StarterGui
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.new(0, 260, 0, 44)
+label.Position = UDim2.new(0, 16, 0, 16)
+label.BackgroundTransparency = 1
+label.Text = "Ready"
+label.TextSize = 22
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.Parent = screenGui
+```
+
+`UDim2` combines a scale and an offset on each axis. `UDim2.new(0, 260, 0, 44)` is 260 by 44 pixels regardless of window size, while `UDim2.new(1, -32, 0, 44)` stretches to the parent's width minus 32 pixels.
+
+`AnchorPoint` decides which point of the element sits at `Position`. The default `(0, 0)` is the top-left corner. For a centered panel:
+
+```lua
+panel.AnchorPoint = Vector2.new(0.5, 0.5)
+panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+```
+
+## Buttons
+
+`TextButton` and `ImageButton` fire `Activated` on a completed click:
+
+```lua
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 160, 0, 44)
+button.Position = UDim2.new(0, 16, 0, 80)
+button.Text = "Start"
+button.Parent = screenGui
+
+button.Activated:Connect(function()
+    print("started")
+end)
+```
+
+With `AutoButtonColor` on, the button brightens on hover and darkens while pressed. Turn it off if you're styling the states yourself.
+
+## Layout without manual math
+
+Layout modifiers arrange children for you:
+
+| Modifier | Effect |
+| --- | --- |
+| `UIListLayout` | Stack children in a row or column. |
+| `UIGridLayout` | Place children in a grid. |
+| `UIPadding` | Inset the content area. |
+| `UISizeConstraint` | Clamp a child's minimum and maximum size. |
+| `UICorner` | Round the corners. |
+| `UIStroke` | Draw an outline. |
+
+```lua
+local list = Instance.new("UIListLayout")
+list.FillDirection = Enum.FillDirection.Vertical
+list.Padding = UDim.new(0, 8)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Parent = panel
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 12)
+padding.PaddingLeft = UDim.new(0, 12)
+padding.Parent = panel
+```
+
+Set `LayoutOrder` on children when the visual order should differ from creation order.
+
+## Input from the device
+
+`UserInputService` reports raw input. Its events pass an `InputObject` plus a `gameProcessedEvent` flag:
+
+```lua
+local UserInputService = game:GetService("UserInputService")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.E then
+        print("interact")
+    end
+end)
+```
+
+Checking `gameProcessed` first keeps a shortcut from firing while a text box has focus or a GUI already consumed the click. For keys that are held rather than pressed once, poll:
+
+```lua
+local RunService = game:GetService("RunService")
+
+RunService.Heartbeat:Connect(function()
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+        -- sprint
+    end
+end)
+```
+
+To capture the pointer for first-person controls, set `MouseBehavior`:
+
+```lua
+UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+-- Release it later.
+UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+```
+
+## Input scoped to a GUI element
+
+GUI elements have their own input events. Set `Active` (or `InputSink`) so the element is eligible:
+
+```lua
+panel.Active = true
+
+panel.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        print("pressed")
+    end
+end)
+
+panel.MouseEnter:Connect(function(x, y)
+    panel.BackgroundColor3 = Color3.fromRGB(70, 75, 90)
+end)
+
+panel.MouseLeave:Connect(function(x, y)
+    panel.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+end)
+```
+
+`GuiObject` input callbacks receive one argument, the `InputObject`. They don't include the processed flag that `UserInputService` passes.
+
+## Named actions
+
+`ContextActionService` binds an action to one or more inputs and gives you priorities:
+
+```lua
+local ContextActionService = game:GetService("ContextActionService")
+
+local function onInteract(actionName, inputState, inputObject)
+    if inputState ~= Enum.UserInputState.Begin then
+        return Enum.ContextActionResult.Pass
+    end
+
+    print("interact")
+    return Enum.ContextActionResult.Sink
+end
+
+ContextActionService:BindAction("Interact", onInteract, false, Enum.KeyCode.E)
+```
+
+Return `Sink` to consume the input or `Pass` to let lower-priority handlers and the GUI see it. The touch-button argument must be `false`; on-screen touch buttons aren't implemented, and passing `true` raises an error.
+
+## Animating the interface
+
+`TweenService` handles numeric, `UDim2`, and `Color3` properties:
+
+```lua
+local TweenService = game:GetService("TweenService")
+
+local info = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local tween = TweenService:Create(panel, info, {
+    BackgroundTransparency = 0,
+    Position = UDim2.new(0.5, 0, 0.5, 0),
+})
+
+tween:Play()
+```
+
+Only tween properties whose current value is one of those types. If you need a different curve, `TweenService:GetValue()` evaluates an easing function you can apply yourself.
+
+## Next steps
+
+- `ScreenGui`, `GuiObject`, `TextLabel`, `TextButton`, and `TextBox` for the interface classes.
+- `UserInputService` and `ContextActionService` for the full input API.
+- `TweenService` for animation details and tween lifecycle.

@@ -18,8 +18,8 @@ Extension_API :: struct {
 
 // api surface
 API_Register_Class :: proc(info: ^classes.Class_Info) -> bool {
-	
-    return true
+
+	return true
 }
 
 api := Extension_API {

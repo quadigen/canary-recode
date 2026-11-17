@@ -1,0 +1,39 @@
+---
+title: UISquircle
+description: Round GUI corners with a superellipse curve.
+---
+
+`UISquircle` is a corner modifier that uses a superellipse instead of a circular arc. The result sits between a rounded rectangle and a true squircle.
+
+## Getting started
+
+```lua
+local squircle = Instance.new("UISquircle")
+squircle.Radius = UDim.new(0, 20)
+squircle.Exponent = 4
+squircle.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Radius` | `UDim` | Read/write | `UDim.new(0, 15)` | Radius applied to every corner. |
+| `Exponent` | `number` | Read/write | `4` | Curve shape, minimum `2`. |
+| `TopLeftRadius` | `UDim` | Read/write | `0` | Per-corner override. |
+| `TopRightRadius` | `UDim` | Read/write | `0` | Per-corner override. |
+| `BottomLeftRadius` | `UDim` | Read/write | `0` | Per-corner override. |
+| `BottomRightRadius` | `UDim` | Read/write | `0` | Per-corner override. |
+
+## Notes
+
+- `Exponent` below `2` is raised to `2`.
+- Higher exponents approach a rectangle; lower values approach an ellipse.
+- Per-corner radii override `Radius` for that corner.
+- Modifiers apply to the parent GUI object.
+- Cloning copies the radius and exponent values.
+
+## See also
+
+- `UICorner` for a plain rounded rectangle.
+- `UIStroke` for an outline.

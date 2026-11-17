@@ -1,0 +1,42 @@
+---
+title: UIShadow
+description: Draw a soft drop shadow behind a GUI element.
+---
+
+`UIShadow` is a UI modifier that draws a blurred shadow behind its parent. Blur, offset, spread, color, transparency, and falloff are all configurable.
+
+## Getting started
+
+```lua
+local shadow = Instance.new("UIShadow")
+shadow.BlurRadius = UDim.new(0, 16)
+shadow.Offset = UDim2.fromOffset(0, 6)
+shadow.Transparency = 0.4
+shadow.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the shadow renders. |
+| `BlurRadius` | `UDim` | Read/write | `UDim.new(0, 12)` | Blur amount. |
+| `Offset` | `UDim2` | Read/write | `UDim2.fromOffset(0, 4)` | Shadow displacement. |
+| `Spread` | `UDim2` | Read/write | `UDim2.new()` | Extra size around the parent. |
+| `Color3` | `Color3` | Read/write | Black | Shadow color. |
+| `Transparency` | `number` | Read/write | `0.35` | Shadow transparency, clamped to `0` through `1`. |
+| `Exponent` | `number` | Read/write | `2` | Falloff curve, minimum `1`. |
+| `ZIndex` | `number` | Read/write | `0` | Draw order of the shadow. |
+| `ShowForText` | `boolean` | Read/write | `false` | Also draw a shadow for text. |
+
+## Notes
+
+- `Exponent` values below `1` are raised to `1`.
+- `Transparency` clamps instead of raising.
+- The modifier applies to its parent GUI object.
+- Cloning copies every shadow setting.
+
+## See also
+
+- `UIStroke` for an outline instead of a shadow.
+- `UIBackdrop` for blurring what's behind the element.

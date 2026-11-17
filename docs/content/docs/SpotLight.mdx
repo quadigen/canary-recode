@@ -1,0 +1,43 @@
+---
+title: SpotLight
+description: Shine a cone of light from a face of a part.
+---
+
+`SpotLight` emits a cone from one face of its parent part. Aim it with `Face`, widen it with `Angle`, and set how far it reaches with `Range`.
+
+## Getting started
+
+```lua
+local light = Instance.new("SpotLight")
+light.Face = Enum.NormalId.Front
+light.Angle = 60
+light.Range = 30
+light.Brightness = 3
+light.Shadows = true
+light.Parent = fixturePart
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Brightness` | `number` | Read/write | `1` | Light strength, clamped to `0` or above. |
+| `Color` | `Color3` | Read/write | White | Light color. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the light is emitted. |
+| `Shadows` | `boolean` | Read/write | `false` | Whether the cone casts shadows. |
+| `Angle` | `number` | Read/write | `90` | Cone width in degrees, clamped to `0` through `180`. |
+| `Face` | `Enum.NormalId` | Read/write | `Front` | Face of the part the light points along. |
+| `Range` | `number` | Read/write | `16` | Falloff distance in studs, clamped to `0` or above. |
+
+## Notes
+
+- The light starts at the parent part's center and points along the chosen face.
+- `Angle` is the full cone angle; a value of `0` produces a very narrow beam.
+- The parent must be a `Part` inside the workspace.
+- Cloning copies the angle, face, range, and shared light settings.
+
+## See also
+
+- `SurfaceLight` for a light spread across a whole face.
+- `PointLight` for omni-directional light.
+- `Light` for the shared settings.

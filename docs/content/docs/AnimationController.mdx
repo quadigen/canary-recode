@@ -1,0 +1,48 @@
+---
+title: AnimationController
+description: Load animations onto a rigged MeshPart without a Humanoid.
+---
+
+`AnimationController` is the non-character animation host. Point it at a rigged `MeshPart`, load `Animation` objects, and control the returned tracks.
+
+## Getting started
+
+```lua
+local controller = Instance.new("AnimationController")
+controller.MeshPart = rig
+controller.Parent = rig
+
+local track = controller:LoadAnimation(animation)
+track:Play()
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `MeshPart` | `MeshPart?` | Read/write | Rig that receives the animations. |
+| `AnimationPlayed` | signal | Read-only | Fires with each track when playback starts. |
+
+`MeshPart` accepts a `MeshPart` or `nil`. Assigning another instance type is ignored. Changing the mesh releases any animation state owned by child animators.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `LoadAnimation(animation: Animation): AnimationTrack` | Creates a track for the rig. |
+| `GetPlayingAnimationTracks(): {AnimationTrack}` | Returns the current tracks. |
+
+`LoadAnimation()` creates or reuses a child `Animator` and returns a track owned by it. It raises an error when the rig is missing, the mesh is controlled by another animator, or the clip can't be found. `GetPlayingAnimationTracks()` returns an empty table when no animator exists yet.
+
+## Notes
+
+- The controller creates an `Animator` child on demand.
+- It doesn't simulate walking, jumping, or physics; use `Humanoid` for characters.
+- `AnimationPlayed` fires on the controller and on the owning animator.
+- Cloning copies the mesh reference and no live tracks.
+
+## See also
+
+- `Animator` for the underlying track owner.
+- `Animation` and `AnimationTrack` for clips and playback.
+- `Humanoid` for character animation.

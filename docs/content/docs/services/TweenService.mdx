@@ -1,0 +1,170 @@
+---
+title: TweenService
+description: Animate numbers, UDim2 values, and colors over time with eased, repeating tweens.
+---
+
+`TweenService` animates properties for you: give it an instance, a `TweenInfo`, and the values you want to reach, and it interpolates from the current value over time.
+
+Tweens are a good fit for UI transitions, part colors, and any movement that doesn't need physics. They only handle the value types listed below; for everything else, drive the property yourself on `RunService.Heartbeat`.
+
+## Getting started
+
+```lua
+local TweenService = game:GetService("TweenService")
+
+local function fadeIn(frame)
+    local info = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local tween = TweenService:Create(frame, info, {
+        BackgroundTransparency = 0,
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+    })
+
+    tween:Play()
+end
+```
+
+## TweenInfo
+
+`TweenInfo` describes how a tween behaves. All fields are set through the constructor:
+
+```lua
+TweenInfo.new(
+    time: number?,
+    easingStyle: Enum.EasingStyle?,
+    easingDirection: Enum.EasingDirection?,
+    repeatCount: number?,
+    reverses: boolean?,
+    delayTime: number?
+)
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `time` | `1` | Duration of one cycle, in seconds. Must be `>= 0`. |
+| `easingStyle` | `Enum.EasingStyle.Quad` | The curve applied to progress. |
+| `easingDirection` | `Enum.EasingDirection.Out` | Which end of the curve the easing is applied to. |
+| `repeatCount` | `0` | Extra cycles after the first. Use `-1` to repeat forever. Must be `>= -1`. |
+| `reverses` | `false` | Whether alternate cycles play backwards. |
+| `delayTime` | `0` | Seconds to wait before the first cycle starts. Must be `>= 0`. |
+
+Negative durations or delays, non-finite values, and repeat counts below `-1` raise an error.
+
+Available easing styles are `Linear`, `Sine`, `Back`, `Quad`, `Quart`, `Quint`, `Bounce`, `Elastic`, `Exponential`, `Circular`, and `Cubic`. Directions are `In`, `Out`, and `InOut`.
+
+## Methods
+
+### Create
+
+```lua
+Create(instance: Instance, info: TweenInfo, goals: { [string]: number | UDim2 | Color3 }): Tween
+```
+
+Creates a tween for the listed properties. The goal table maps property names to target values, and the tween reads each property's value when you call `Create()` to use as the start. Later changes to those properties don't move the start point.
+
+```lua
+local tween = TweenService:Create(part, TweenInfo.new(2), {
+    Transparency = 1,
+})
+```
+
+Only `number`, `UDim2`, and `Color3` goals are supported, and each goal must match the type the property currently holds. Creating a tween raises an error when:
+
+- The first argument isn't an accessible `Instance`.
+- The goal table is empty.
+- A goal value isn't one of the supported types.
+- A property can't be read, or its current value isn't a supported type.
+- A goal's type differs from the property's current type.
+
+Each tween is its own object. You can have several tweens running on different properties of the same instance, but avoid running two tweens on the same property at once; whichever updates last wins, which makes the result hard to reason about.
+
+### GetValue
+
+```lua
+GetValue(alpha: number, easingStyle: Enum.EasingStyle, easingDirection: Enum.EasingDirection): number
+```
+
+Evaluates an easing curve for you without creating a tween. Pass progress between `0` and `1` and get the eased progress back. Useful when you're animating something the tween system doesn't support.
+
+```lua
+local eased = TweenService:GetValue(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+part.CFrame = startCFrame:Lerp(goalCFrame, eased)
+```
+
+### SmoothDamp
+
+```lua
+SmoothDamp(
+    current: number,
+    target: number,
+    velocity: number,
+    smoothTime: number,
+    maxSpeed: number?,
+    deltaTime: number
+): (number, number)
+```
+
+Returns a new value and a new velocity for frame-rate-independent smoothing, similar to a critically damped spring. Keep the velocity between calls and feed it back in:
+
+```lua
+local value, velocity = 0, 0
+
+local function step(deltaTime)
+    value, velocity = TweenService:SmoothDamp(value, 10, velocity, 0.3, math.huge, deltaTime)
+end
+```
+
+`maxSpeed` defaults to a very large number, so in practice it isn't limiting unless you pass a smaller one. `smoothTime` is roughly how long the value takes to reach the target; a value of `0` or less is treated as `0.0001`. If `deltaTime` is `0` or negative, the inputs come back unchanged.
+
+## Tween objects
+
+`Create()` returns a `Tween`, which is an engine `Instance` but isn't parented anywhere. It isn't creatable with `Instance.new()`.
+
+| Member | Type | Access | Description |
+| --- | --- | --- | --- |
+| `PlaybackState` | `Enum.PlaybackState` | Read-only | `Begin`, `Delayed`, `Playing`, `Paused`, `Completed`, or `Cancelled`. |
+| `TimePosition` | `number` | Read/write | Current position in the tween, in seconds. Setting it seeks to that point. |
+| `Duration` | `number` | Read-only | Total length in seconds, including repeats. For an infinite repeat it's one cycle's length. |
+| `Completed` | signal | Read-only | Fires once when the tween finishes or is cancelled. |
+
+### Play, Pause, Cancel
+
+```lua
+Play(): ()
+Pause(): ()
+Cancel(): ()
+```
+
+`Play()` starts the tween, or resumes it from `Paused`. Calling it on a tween that already completed or was cancelled restarts from the beginning. `Pause()` only affects a tween that's playing or waiting on its delay.
+
+`Cancel()` stops the tween and moves it to `Cancelled`; it doesn't restore the properties to their starting values. The `Completed` signal fires for cancellation too, so check `PlaybackState` if you need to tell the two apart:
+
+```lua
+tween.Completed:Connect(function(playbackState)
+    if playbackState == Enum.PlaybackState.Completed then
+        print("Finished")
+    elseif playbackState == Enum.PlaybackState.Cancelled then
+        print("Cancelled")
+    end
+end)
+```
+
+### Seeking
+
+Assigning `TimePosition` moves the tween's playback cursor, clamped to `>= 0`. The new value is applied on the tween's next update rather than at the moment of assignment. Seeking doesn't change `PlaybackState`; a paused tween stays paused, and a completed tween doesn't restart.
+
+## Repeat and reverse behavior
+
+`repeatCount` counts extra cycles, not total runs. `0` plays once; `2` plays three times. With `reverses` enabled, every second cycle runs backwards, so a value that eases out to its goal comes back in the next cycle. When the last cycle finishes, the tween applies the goal values and fires `Completed`.
+
+With an infinite repeat count, the tween keeps cycling until you cancel it or the target is destroyed.
+
+## Notes
+
+- A tween keeps a reference to its target. If the target is destroyed mid-tween, the tween stops changing properties instead of erroring, but it still advances and can reach `Completed`.
+- Tweens update on the engine's update phase, which means the property changes on the next step after `Play()`.
+- The goal table is read once. To animate through several values, create a new tween, or drive the property in a loop.
+
+## See also
+
+- `RunService`, frame and simulation steps for animation you handle yourself.
+- `GuiObject`, the layout and appearance properties most tweens target.

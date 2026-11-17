@@ -21,6 +21,8 @@ ImageButton :: struct {
 	image_rect_size:    datatypes.Vector2,
 	resample_mode:      enums.ResampleMode,
 	scale_type:         enums.ScaleType,
+	slice_center:       datatypes.Rect,
+	slice_scale:        f32,
 	tile_size:          datatypes.UDim2,
 }
 
@@ -39,6 +41,7 @@ ImageButton_Init :: proc() -> ImageButton {
 		image_rect_size = datatypes.Vector2{X = 0, Y = 0},
 		resample_mode = .Default,
 		scale_type = .Stretch,
+		slice_scale = 1,
 		tile_size = datatypes.UDim2{},
 	}
 }
@@ -55,6 +58,8 @@ ImageButton_to_image_label :: proc(button: ^ImageButton) -> ImageLabel {
 		image_rect_size = button.image_rect_size,
 		resample_mode = button.resample_mode,
 		scale_type = button.scale_type,
+		slice_center = button.slice_center,
+		slice_scale = button.slice_scale,
 		tile_size = button.tile_size,
 	}
 }
@@ -77,6 +82,8 @@ ImageButton_sync_image_label :: proc(button: ^ImageButton, label: ^ImageLabel) {
 	button.resample_mode = label.resample_mode
 
 	button.scale_type = label.scale_type
+	button.slice_center = label.slice_center
+	button.slice_scale = label.slice_scale
 
 	button.tile_size = label.tile_size
 }
@@ -90,6 +97,8 @@ ImageButton_is_image_property :: proc(key: string) -> bool {
 	     "ImageRectSize",
 	     "ResampleMode",
 	     "ScaleType",
+	     "SliceCenter",
+	     "SliceScale",
 	     "TileSize":
 		return true
 	}
@@ -240,6 +249,8 @@ Register_ImageButton :: proc(registry: ^Registry) {
 			"ImageRectSize",
 			"ResampleMode",
 			"ScaleType",
+			"SliceCenter",
+			"SliceScale",
 			"TileSize",
 		},
 	)

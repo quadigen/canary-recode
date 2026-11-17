@@ -1,0 +1,52 @@
+---
+title: UIListLayout
+description: Stack GUI children in a row or column.
+---
+
+`UIListLayout` arranges the children of a GUI object one after another in a single line. Padding, wrapping, flex alignment, and sort order control the result.
+
+## Getting started
+
+```lua
+local list = Instance.new("UIListLayout")
+list.FillDirection = Enum.FillDirection.Vertical
+list.Padding = UDim.new(0, 6)
+list.SortOrder = Enum.SortOrder.LayoutOrder
+list.Parent = frame
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | Whether the layout runs. |
+| `FillDirection` | `Enum.FillDirection` | Read/write | Row or column direction. |
+| `Padding` | `UDim` | Read/write | Space between items. |
+| `SortOrder` | `Enum.SortOrder` | Read/write | Order used to sort children. |
+| `HorizontalAlignment` | `Enum.HorizontalAlignment` | Read/write | Horizontal placement. |
+| `VerticalAlignment` | `Enum.VerticalAlignment` | Read/write | Vertical placement. |
+| `Wraps` | `boolean` | Read/write | Wrap items onto a new line when full. |
+| `MaxItemsPerLine` | `number` | Read/write | Items per line before wrapping. |
+| `LinePadding` | `UDim` | Read/write | Space between wrapped lines. |
+| `Reverse` | `boolean` | Read/write | Reverse the item order. |
+| `IgnoreInvisible` | `boolean` | Read/write | Skip invisible children. |
+| `HorizontalFlex` | `Enum.UIFlexAlignment` | Read/write | How items distribute on the horizontal axis. |
+| `VerticalFlex` | `Enum.UIFlexAlignment` | Read/write | How items distribute on the vertical axis. |
+| `ItemLineAlignment` | `Enum.ItemLineAlignment` | Read/write | Alignment of items within a wrapped line. |
+| `PaddingLeft` | `UDim` | Read/write | Per-side padding. |
+
+Per-side padding properties mirror `Padding` for edges the layout needs.
+
+## Notes
+
+- `Wraps` requires a line limit or a container size to determine when to break.
+- `MaxItemsPerLine` only applies when wrapping is enabled.
+- `IgnoreInvisible` skips children whose `Visible` is false.
+- The layout doesn't resize the parent container.
+- Cloning copies the layout settings.
+
+## See also
+
+- `UIGridLayout` for a two-dimensional arrangement.
+- `UIPadding` for insets around the list.
+- `GuiObject` for the parent container.

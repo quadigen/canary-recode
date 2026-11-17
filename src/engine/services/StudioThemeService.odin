@@ -1,6 +1,6 @@
 package services
-// wire:service
 
+// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -43,34 +43,42 @@ StudioThemeService_Class := classes.Class_Info {
 }
 
 StudioThemeService :: struct {
-	using service:      Service,
-	explorer_hidden:    bool,
-	selected_theme_ref: i32,
-	theme_object_ref:   i32,
-	theme_changed:      ^signals.Signal,
-	padding:            f64,
-	header_height:      f64,
-	bottom_padding:     f64,
-	show_output:        bool,
-	layout_width:       f32,
-	layout_height:      f32,
-	dock:               gui.Dock_State,
+	using service:        Service,
+	explorer_hidden:      bool,
+	selected_theme_ref:   i32,
+	theme_object_ref:     i32,
+	theme_changed:        ^signals.Signal,
+	studio_theme:         ^classes.StudioTheme,
+	studio_theme_changed: ^signals.Signal,
+	padding:              f64,
+	header_height:        f64,
+	bottom_padding:       f64,
+	show_output:          bool,
+	layout_width:         f32,
+	layout_height:        f32,
+	dock:                 gui.Dock_State,
 }
 
 studio_theme_color :: proc(L: ^vm.State, r, g, b: f64, a: f64 = 255) {
+
 	vm.NewTable(L, 0, 4)
 
 	vm.PushNumber(L, r / 255.0)
+
 	vm.SetField(L, -2, "R")
 
 	vm.PushNumber(L, g / 255.0)
+
 	vm.SetField(L, -2, "G")
 
 	vm.PushNumber(L, b / 255.0)
+
 	vm.SetField(L, -2, "B")
 
 	vm.PushNumber(L, a / 255.0)
+
 	vm.SetField(L, -2, "A")
+
 }
 
 StudioThemeService_Update_Layout :: proc(
@@ -79,14 +87,19 @@ StudioThemeService_Update_Layout :: proc(
 	datatype_registry: ^datatypes.Registry,
 	width, height: i32,
 ) {
+
 	if registry == nil || L == nil || datatype_registry == nil || width <= 0 || height <= 0 {
+
 		return
+
 	}
 
 	descriptor := Find_Service(registry, "StudioThemeService")
 
 	if descriptor == nil || descriptor.object == nil {
+
 		return
+
 	}
 
 	service := cast(^StudioThemeService)descriptor.object
@@ -94,6 +107,7 @@ StudioThemeService_Update_Layout :: proc(
 	size_changed := service.layout_width != f32(width) || service.layout_height != f32(height)
 
 	service.layout_width = f32(width)
+
 	service.layout_height = f32(height)
 
 	studio_theme_ensure_initialized(L, service, datatype_registry)
@@ -103,6 +117,7 @@ StudioThemeService_Update_Layout :: proc(
 	studio_theme_set_coordinates(L, service, datatype_registry)
 
 	if size_changed {
+
 		fmt.printf(
 			"[StudioTheme Resize] %gx%g -> %dx%d\n",
 			service.layout_width,
@@ -112,28 +127,35 @@ StudioThemeService_Update_Layout :: proc(
 		)
 
 		studio_theme_fire_changed(L, service)
+
 	}
 
 	vm.Pop(L)
+
 }
 
 studio_theme_set_color :: proc(L: ^vm.State, name: string, r, g, b: f64, a: f64 = 255) {
-	studio_theme_color(L, r, g, b, a)
-	vm.SetField(L, -2, name)
-}
 
+	studio_theme_color(L, r, g, b, a)
+
+	vm.SetField(L, -2, name)
+
+}
 
 studio_theme_push_udim2 :: proc(
 	L: ^vm.State,
 	registry: ^datatypes.Registry,
 	x_scale, x_offset, y_scale, y_offset: f32,
 ) {
+
 	datatypes.Push_UDim2(L, registry, datatypes.UDim2_New(x_scale, x_offset, y_scale, y_offset))
+
 }
 
-
 studio_theme_push_vector2 :: proc(L: ^vm.State, registry: ^datatypes.Registry, x, y: f32) {
+
 	datatypes.Push_Vector2(L, registry, datatypes.Vector2{x, y})
+
 }
 
 studio_theme_set_coordinate :: proc(
@@ -142,80 +164,118 @@ studio_theme_set_coordinate :: proc(
 	name: string,
 	coordinate: gui.Layout_Coordinate,
 ) {
+
 	vm.NewTable(L, 0, 2)
 
 	datatypes.Push_UDim2(L, registry, coordinate.Size)
+
 	vm.SetField(L, -2, "Size")
 
 	datatypes.Push_UDim2(L, registry, coordinate.Position)
+
 	vm.SetField(L, -2, "Position")
 
 	vm.SetField(L, -2, name)
+
 }
 
-
 studio_theme_parse_anchor :: proc(name: string) -> (gui.Dock_Anchor, bool) {
+
 	switch name {
+
 	case "TopLeft":
 		return .Top_Left, true
+
 	case "TopCenter":
 		return .Top_Center, true
+
 	case "TopRight":
 		return .Top_Right, true
+
 	case "MiddleLeft":
 		return .Middle_Left, true
+
 	case "Center":
 		return .Middle_Center, true
+
 	case "MiddleRight":
 		return .Middle_Right, true
+
 	case "BottomLeft":
 		return .Bottom_Left, true
+
 	case "BottomCenter":
 		return .Bottom_Center, true
+
 	case "BottomRight":
 		return .Bottom_Right, true
+
 	}
+
 	return .Top_Left, false
+
 }
 
 studio_theme_anchor_name :: proc(a: gui.Dock_Anchor) -> string {
+
 	switch a {
+
 	case .Top_Left:
 		return "TopLeft"
+
 	case .Top_Center:
 		return "TopCenter"
+
 	case .Top_Right:
 		return "TopRight"
+
 	case .Middle_Left:
 		return "MiddleLeft"
+
 	case .Middle_Center:
 		return "Center"
+
 	case .Middle_Right:
 		return "MiddleRight"
+
 	case .Bottom_Left:
 		return "BottomLeft"
+
 	case .Bottom_Center:
 		return "BottomCenter"
+
 	case .Bottom_Right:
 		return "BottomRight"
+
 	}
+
 	return ""
+
 }
 
 studio_theme_dock_target :: proc(name: string) -> (gui.Dock_Panel, bool) {
+
 	switch name {
+
 	case "Topbar":
 		return .Topbar, true
+
 	case "Viewport", "CodeEditor":
 		return .Viewport, true
+
 	case "Explorer":
 		return .Explorer, true
+
 	case "Inspector":
 		return .Inspector, true
+
 	case "Output":
 		return .Output, true
+
 	}
+
 	return .Explorer, false
+
 }
 
 studio_theme_refresh_layout :: proc(
@@ -223,13 +283,17 @@ studio_theme_refresh_layout :: proc(
 	service: ^StudioThemeService,
 	registry: ^datatypes.Registry,
 ) {
+
 	studio_theme_ensure_initialized(L, service, registry)
 
 	vm.PushRegistryReference(L, service.selected_theme_ref)
+
 	studio_theme_set_coordinates(L, service, registry)
+
 	vm.Pop(L)
 
 	studio_theme_fire_changed(L, service)
+
 }
 
 studio_theme_set_coordinates :: proc(
@@ -237,14 +301,19 @@ studio_theme_set_coordinates :: proc(
 	service: ^StudioThemeService,
 	registry: ^datatypes.Registry,
 ) {
+
 	if registry == nil {
+
 		return
+
 	}
 
 	config := gui.Editor_Layout_Default_Config()
 
 	config.P = f32(service.padding)
+
 	config.TopH = f32(service.header_height)
+
 	config.show_output = service.show_output
 
 	service.dock.slots[.Output].visible = service.show_output
@@ -287,359 +356,415 @@ studio_theme_set_coordinates :: proc(
 		"InspectorCoordinates",
 		coordinates.InspectorCoordinates,
 	)
+
 }
 
-
 studio_theme_push_layout_config :: proc(L: ^vm.State, service: ^StudioThemeService) {
+
 	vm.NewTable(L, 0, 12)
 
 	vm.PushNumber(L, service.padding)
+
 	vm.SetField(L, -2, "P")
 
 	vm.PushNumber(L, service.header_height)
+
 	vm.SetField(L, -2, "TopH")
 
 	vm.PushNumber(L, service.bottom_padding)
+
 	vm.SetField(L, -2, "BottomPad")
 
-
 	vm.NewTable(L, 0, 1)
+
 	vm.PushNumber(L, 0)
+
 	vm.SetField(L, -2, "flexGrow")
+
 	vm.SetField(L, -2, "Topbar")
 
-
 	vm.NewTable(L, 0, 1)
-	vm.PushNumber(L, 1)
-	vm.SetField(L, -2, "flexGrow")
-	vm.SetField(L, -2, "Content")
 
+	vm.PushNumber(L, 1)
+
+	vm.SetField(L, -2, "flexGrow")
+
+	vm.SetField(L, -2, "Content")
 
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.78)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 0)
+
 	vm.SetField(L, -2, "minWidth")
 
 	vm.SetField(L, -2, "Left")
 
-
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.22)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 0)
+
 	vm.SetField(L, -2, "minWidth")
 
 	vm.SetField(L, -2, "Right")
 
-
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.7)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 1)
+
 	vm.SetField(L, -2, "layoutOrder")
 
 	vm.SetField(L, -2, "Viewport")
 
-
 	vm.NewTable(L, 0, 1)
 
 	vm.PushString(L, "Viewport")
+
 	vm.SetField(L, -2, "target")
 
 	vm.SetField(L, -2, "CodeEditor")
 
-
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.3)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 2)
+
 	vm.SetField(L, -2, "layoutOrder")
 
 	vm.SetField(L, -2, "Output")
 
-
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.5)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 1)
+
 	vm.SetField(L, -2, "layoutOrder")
 
 	vm.SetField(L, -2, "Explorer")
 
-
 	vm.NewTable(L, 0, 2)
 
 	vm.PushNumber(L, 0.5)
+
 	vm.SetField(L, -2, "flexGrow")
 
 	vm.PushNumber(L, 2)
+
 	vm.SetField(L, -2, "layoutOrder")
 
 	vm.SetField(L, -2, "Inspector")
+
 }
 
-
 studio_theme_push_padded_window_config :: proc(L: ^vm.State, registry: ^datatypes.Registry) {
-	vm.NewTable(L, 0, 6)
 
+	vm.NewTable(L, 0, 6)
 
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, -20, 0, 40)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 1, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, 400, 0.38, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Explorer")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0.5, 0.5)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.7, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "GameSettings")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0.5, 0.5)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0.6, 0, 0.7, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Toolbox")
-
 
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, -20, 0.44, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 1, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, 400, 0.55, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Inspector")
-
 
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 20, 0.99, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 1)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 1, -444, 0, 200)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Output")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 0, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0, 170)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Toolbar")
-
 
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 20, 0, 40)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, 800, 0, 600)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "CodeEditor")
+
 }
 
-
 studio_theme_push_boxed_window_config :: proc(L: ^vm.State, registry: ^datatypes.Registry) {
+
 	X_SIZE :: f32(350)
 
 	vm.NewTable(L, 0, 7)
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 0, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0, 200)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Toolbar")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0, 30)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 1, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, X_SIZE, 0.5, -50)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Explorer")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 1, 0, 0.5, -20)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 1, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, X_SIZE, 0.5, 20)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Inspector")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, X_SIZE, 0, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 0)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 1, -X_SIZE * 2, 1, -200)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "CodeEditor")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 1, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 1)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 1, -X_SIZE, 0, 200)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Output")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0.5, 0.5)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.7, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "GameSettings")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0.5, 0, 0.5, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0.5, 0.5)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0.6, 0, 0.7, 0)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "Toolbox")
 
-
 	vm.NewTable(L, 0, 3)
 
 	studio_theme_push_udim2(L, registry, 0, 0, 1, 0)
+
 	vm.SetField(L, -2, "position")
 
 	studio_theme_push_vector2(L, registry, 0, 1)
+
 	vm.SetField(L, -2, "anchorPoint")
 
 	studio_theme_push_udim2(L, registry, 0, X_SIZE, 1, -20)
+
 	vm.SetField(L, -2, "size")
 
 	vm.SetField(L, -2, "FileBrowser")
+
 }
 
-
 studio_theme_push_theme_object :: proc(L: ^vm.State, registry: ^datatypes.Registry) {
+
 	vm.NewTable(L, 0, 7)
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(35, 35, 35))
+
 	vm.SetField(L, -2, "MainBackground")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(25, 25, 25))
+
 	vm.SetField(L, -2, "Titlebar")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(43, 43, 43))
+
 	vm.SetField(L, -2, "Button")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(214, 133, 37))
+
 	vm.SetField(L, -2, "MainButton")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(220, 220, 220))
+
 	vm.SetField(L, -2, "MainText")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(180, 180, 180))
+
 	vm.SetField(L, -2, "SubText")
 
 	datatypes.Push_Color3(L, registry, datatypes.FromRGB(38, 38, 38))
+
 	vm.SetField(L, -2, "InputFieldBackground")
+
 }
 
-
 studio_theme_set_color_value :: proc(L: ^vm.State, name: string, color: Studio_Theme_Color) {
+
 	studio_theme_set_color(L, name, color.r, color.g, color.b, color.a)
+
 }
 
 studio_theme_push_default_theme :: proc(
@@ -647,6 +772,7 @@ studio_theme_push_default_theme :: proc(
 	service: ^StudioThemeService,
 	registry: ^datatypes.Registry,
 ) {
+
 	vm.NewTable(L, 0, 32)
 
 	studio_theme_set_color_value(L, "BaseColor", THEME_BASE_COLOR)
@@ -679,65 +805,201 @@ studio_theme_push_default_theme :: proc(
 
 	studio_theme_set_color_value(L, "CodeEditorBgColor", THEME_CODE_EDITOR_BACKGROUND)
 
-
 	vm.PushNumber(L, 6)
+
 	vm.SetField(L, -2, "CornerRadius")
 
 	vm.PushNumber(L, 4)
+
 	vm.SetField(L, -2, "ButtonCornerRadius")
 
 	vm.PushString(L, "./src/engine/assets/fonts/Montserrat-Regular.ttf")
+
 	vm.SetField(L, -2, "Font")
 
 	vm.PushString(L, "./src/engine/assets/fonts/Montserrat-Regular.ttf")
+
 	vm.SetField(L, -2, "FontBold")
 
 	studio_theme_set_coordinates(L, service, registry)
 
 	studio_theme_push_layout_config(L, service)
+
 	vm.SetField(L, -2, "LayoutConfig")
 
 	studio_theme_push_padded_window_config(L, registry)
+
 	vm.SetField(L, -2, "WindowConfig")
+
 }
 
-
 studio_theme_release_ref :: proc(L: ^vm.State, ref: ^i32) {
+
 	if ref == nil || ref^ <= 0 {
+
 		return
+
 	}
 
 	vm.ReleaseValue(L, ref^)
+
 	ref^ = -1
+
 }
 
+studio_theme_native_is_live :: proc(service: ^StudioThemeService) -> bool {
+
+	if service == nil || service.studio_theme == nil {return false}
+
+	model := service.data_model
+
+	if model == nil || model.registry == nil || model.registry.classes == nil {return false}
+
+	descriptor := classes.Find_Class(model.registry.classes, "StudioTheme")
+
+	if descriptor == nil {return false}
+
+	for object in descriptor.instances {
+
+		if object == cast(^classes.Object)service.studio_theme {
+
+			return !object.destroyed
+
+		}
+
+	}
+
+	return false
+
+}
+
+studio_theme_ensure_native :: proc(L: ^vm.State, service: ^StudioThemeService) {
+
+	if studio_theme_native_is_live(service) {return}
+
+	service.studio_theme = nil
+
+	model := service.data_model
+
+	if model == nil ||
+	   model.registry == nil ||
+	   model.registry.classes == nil ||
+	   model.registry.vm_state == nil {return}
+
+	object, ok := classes.Push_New(
+		model.registry.classes,
+		model.registry.vm_state,
+		"StudioTheme",
+		false,
+	)
+
+	if !ok || object == nil {return}
+
+	service.studio_theme = cast(^classes.StudioTheme)object
+
+	classes.StudioTheme_Set_Palette(service.studio_theme, &service.selected_theme_ref)
+
+	vm.Pop(L)
+
+}
+
+studio_theme_sync_native_name :: proc(L: ^vm.State, service: ^StudioThemeService) {
+	if service == nil || service.studio_theme == nil {return}
+
+	name := "Dark"
+	has_name := false
+
+	if service.theme_object_ref > 0 {
+		vm.PushRegistryReference(L, service.theme_object_ref)
+		if vm.GetField(L, -1, "Name") == .String {
+			value := vm.ArgString(L, -1)
+			if value == "Dark" || value == "Light" {
+				name = value
+				has_name = true
+			}
+		}
+		vm.Pop(L)
+		vm.Pop(L)
+	}
+
+	if !has_name && service.selected_theme_ref > 0 {
+		vm.PushRegistryReference(L, service.selected_theme_ref)
+		if vm.GetField(L, -1, "Name") == .String {
+			value := vm.ArgString(L, -1)
+			if value == "Dark" || value == "Light" {
+				name = value
+				has_name = true
+			}
+		}
+		vm.Pop(L)
+		vm.Pop(L)
+	}
+
+	// Only use the persisted Studio preference when the selected palette
+	// itself doesn't explicitly specify a Dark/Light theme name.
+	if !has_name && service.data_model != nil {
+		if studio_object := DataModel_Get_Service(service.data_model, "Studio");
+		   studio_object != nil {
+			studio := cast(^Studio)studio_object
+			if setting, ok := studio.settings["theme"]; ok && setting.kind == .String {
+				if setting.string_val == "Light" {
+					name = "Light"
+				}
+			}
+		}
+	}
+
+	classes.StudioTheme_Set_Kind(service.studio_theme, name)
+}
+
+studio_theme_fire_native_changed :: proc(L: ^vm.State, service: ^StudioThemeService) {
+
+	studio_theme_ensure_native(L, service)
+
+	studio_theme_sync_native_name(L, service)
+
+	if service.studio_theme_changed == nil {return}
+
+	signals.Fire(L, service.studio_theme_changed, 0)
+
+}
 
 studio_theme_ensure_initialized :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
 	registry: ^datatypes.Registry,
 ) {
+
 	if service.selected_theme_ref > 0 {
+
 		return
+
 	}
 
 	studio_theme_push_default_theme(L, service, registry)
 
 	service.selected_theme_ref = vm.RetainValue(L)
+
 	vm.Pop(L)
 
 	studio_theme_push_theme_object(L, registry)
 
 	service.theme_object_ref = vm.RetainValue(L)
-	vm.Pop(L)
-}
 
+	vm.Pop(L)
+
+	studio_theme_ensure_native(L, service)
+
+	studio_theme_sync_native_name(L, service)
+
+}
 
 studio_theme_reset_default :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
 	registry: ^datatypes.Registry,
 ) {
+
 	studio_theme_release_ref(L, &service.selected_theme_ref)
 
 	studio_theme_release_ref(L, &service.theme_object_ref)
@@ -745,64 +1007,86 @@ studio_theme_reset_default :: proc(
 	studio_theme_push_default_theme(L, service, registry)
 
 	service.selected_theme_ref = vm.RetainValue(L)
+
 	vm.Pop(L)
 
 	studio_theme_push_theme_object(L, registry)
 
 	service.theme_object_ref = vm.RetainValue(L)
-	vm.Pop(L)
-}
 
+	vm.Pop(L)
+
+	studio_theme_ensure_native(L, service)
+
+	studio_theme_sync_native_name(L, service)
+
+}
 
 studio_theme_set_selected :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
 	value_index: int,
 ) -> bool {
+
 	if !vm.IsTable(L, value_index) {
+
 		_ = vm.RaiseError(L, "StudioThemeService theme must be a table")
+
 		return false
+
 	}
 
 	studio_theme_release_ref(L, &service.selected_theme_ref)
 
 	vm.PushValue(L, value_index)
+
 	service.selected_theme_ref = vm.RetainValue(L)
+
 	vm.Pop(L)
 
 	return true
-}
 
+}
 
 studio_theme_set_theme_object :: proc(
 	L: ^vm.State,
 	service: ^StudioThemeService,
 	value_index: int,
 ) {
+
 	studio_theme_release_ref(L, &service.theme_object_ref)
 
 	vm.PushValue(L, value_index)
+
 	service.theme_object_ref = vm.RetainValue(L)
+
 	vm.Pop(L)
+
 }
 
-
 studio_theme_fire_changed :: proc(L: ^vm.State, service: ^StudioThemeService) {
+
 	if service.theme_changed == nil {
+
 		return
+
 	}
 
 	if service.theme_object_ref > 0 {
+
 		vm.PushRegistryReference(L, service.theme_object_ref)
+
 	} else {
+
 		vm.PushNil(L)
+
 	}
 
 	signals.Fire(L, service.theme_changed, 1)
 
 	vm.Pop(L)
-}
 
+}
 
 studio_theme_service_get :: proc(
 	L: ^vm.State,
@@ -811,16 +1095,21 @@ studio_theme_service_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
+
 	service := cast(^StudioThemeService)object
 
 	switch key {
+
 	case "ExplorerHidden":
 		vm.PushBoolean(L, service.explorer_hidden)
 
 	case "_Intents":
 		if enum_registry == nil {
+
 			vm.PushNil(L)
+
 			return true
+
 		}
 
 		_ = enums.Push_Item_By_Value(
@@ -838,13 +1127,43 @@ studio_theme_service_get :: proc(
 
 		vm.PushRegistryReference(L, service.selected_theme_ref)
 
+	case "Theme", "StudioTheme":
+		studio_theme_ensure_initialized(L, service, datatype_registry)
+
+		studio_theme_ensure_native(L, service)
+
+		if service.studio_theme != nil {
+
+			classes.Push_Object(L, &service.studio_theme.object)
+
+		} else {
+
+			vm.PushNil(L)
+
+		}
+
+	case "StudioThemeChanged":
+		if service.studio_theme_changed != nil {
+
+			signals.Push(L, service.studio_theme_changed)
+
+		} else {
+
+			vm.PushNil(L)
+
+		}
+
 	case "ThemeObject":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
 
 		if service.theme_object_ref > 0 {
+
 			vm.PushRegistryReference(L, service.theme_object_ref)
+
 		} else {
+
 			vm.PushNil(L)
+
 		}
 
 	case "InitRenderer",
@@ -862,11 +1181,12 @@ studio_theme_service_get :: proc(
 
 	case:
 		return false
+
 	}
 
 	return true
-}
 
+}
 
 studio_theme_service_set :: proc(
 	L: ^vm.State,
@@ -876,9 +1196,11 @@ studio_theme_service_set :: proc(
 	key: string,
 	value_index: int,
 ) -> bool {
+
 	service := cast(^StudioThemeService)object
 
 	switch key {
+
 	case "ExplorerHidden":
 		service.explorer_hidden = vm.ArgBoolean(L, value_index)
 
@@ -890,11 +1212,12 @@ studio_theme_service_set :: proc(
 
 	case:
 		return false
+
 	}
 
 	return true
-}
 
+}
 
 studio_theme_service_namecall :: proc(
 	L: ^vm.State,
@@ -906,24 +1229,29 @@ studio_theme_service_namecall :: proc(
 	i32,
 	bool,
 ) {
+
 	service := cast(^StudioThemeService)object
 
 	switch method {
 
-
 	case "InitRenderer":
 		service.padding = 4
+
 		service.header_height = 33
+
 		service.bottom_padding = 12
+
 		service.show_output = true
+
 		service.dock = gui.Dock_Default_State()
 
 		studio_theme_reset_default(L, service, datatype_registry)
 
 		studio_theme_fire_changed(L, service)
 
-		return 0, true
+		studio_theme_fire_native_changed(L, service)
 
+		return 0, true
 
 	case "GetTheme":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
@@ -932,22 +1260,26 @@ studio_theme_service_namecall :: proc(
 
 		return 1, true
 
-
 	case "SetTheme":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
 
 		if !studio_theme_set_selected(L, service, 2) {
+
 			return 0, true
+
 		}
 
 		if !vm.IsNoneOrNil(L, 3) {
+
 			studio_theme_set_theme_object(L, service, 3)
+
 		}
 
 		studio_theme_fire_changed(L, service)
 
-		return 0, true
+		studio_theme_fire_native_changed(L, service)
 
+		return 0, true
 
 	case "ChangeLayoutSettings":
 		service.padding = vm.ArgOptionalNumber(L, 2, service.padding)
@@ -963,21 +1295,26 @@ studio_theme_service_namecall :: proc(
 		studio_theme_set_coordinates(L, service, datatype_registry)
 
 		if vm.GetField(L, -1, "LayoutConfig") == .Table {
+
 			vm.PushNumber(L, service.padding)
+
 			vm.SetField(L, -2, "P")
 
 			vm.PushNumber(L, service.header_height)
+
 			vm.SetField(L, -2, "TopH")
 
 			vm.PushNumber(L, service.bottom_padding)
+
 			vm.SetField(L, -2, "BottomPad")
+
 		}
 
 		vm.Pop(L)
+
 		vm.Pop(L)
 
 		return 0, true
-
 
 	case "MakeUIPadded":
 		studio_theme_ensure_initialized(L, service, datatype_registry)
@@ -1009,52 +1346,73 @@ studio_theme_service_namecall :: proc(
 		return vm.RaiseError(L, "ExportThemeAsJson requires the native JSON/filesystem bridge"),
 			true
 
-
 	case "LoadThemeJson":
 		return vm.RaiseError(L, "LoadThemeJson requires the native JSON/filesystem bridge"), true
 
 	case "DockWindow":
 		panel, ok := studio_theme_dock_target(vm.ArgString(L, 2))
+
 		if !ok {
+
 			return vm.RaiseError(L, "DockWindow: unknown window"), true
+
 		}
+
 		anchor, anchor_ok := studio_theme_parse_anchor(vm.ArgString(L, 3))
+
 		if !anchor_ok {
+
 			return vm.RaiseError(L, "DockWindow: unknown anchor, e.g. TopRight"), true
+
 		}
 
 		full_span := vm.ArgOptionalBoolean(L, 4, false)
+
 		gui.dock_move_panel(&service.dock, panel, anchor, full_span)
+
 		if panel == .Output {
+
 			service.show_output = true
+
 		}
 
 		studio_theme_refresh_layout(L, service, datatype_registry)
+
 		return 0, true
 
 	case "GetWindowDock":
 		panel, ok := studio_theme_dock_target(vm.ArgString(L, 2))
-		if !ok {
-			return vm.RaiseError(L, "GetWindowDock: unknown window"), true
-		}
-		vm.PushString(L, studio_theme_anchor_name(service.dock.slots[panel].anchor))
-		return 1, true
 
+		if !ok {
+
+			return vm.RaiseError(L, "GetWindowDock: unknown window"), true
+
+		}
+
+		vm.PushString(L, studio_theme_anchor_name(service.dock.slots[panel].anchor))
+
+		return 1, true
 
 	case "ResetDocking":
 		service.dock = gui.Dock_Default_State()
+
 		service.show_output = true
+
 		studio_theme_refresh_layout(L, service, datatype_registry)
+
 		return 0, true
+
 	}
 
 	return 0, false
+
 }
 
 StudioThemeService_construct :: proc(
 	renderer: ^classes.Renderer_Object,
 	data_model: rawptr,
 ) -> ^classes.Object {
+
 	service := new(StudioThemeService)
 
 	service.service = Service_Init(&StudioThemeService_Class, "StudioThemeService", data_model)
@@ -1062,30 +1420,50 @@ StudioThemeService_construct :: proc(
 	service.explorer_hidden = true
 
 	service.selected_theme_ref = -1
+
 	service.theme_object_ref = -1
 
 	service.padding = 4
+
 	service.header_height = 33
+
 	service.bottom_padding = 12
+
 	service.show_output = true
 
 	service.layout_width = 800
+
 	service.layout_height = 600
+
 	service.show_output = true
+
 	service.dock = gui.Dock_Default_State()
 
 	model := cast(^DataModel)data_model
 
 	if model != nil && model.registry != nil && model.registry.signal_registry != nil {
+
 		service.theme_changed = signals.Create(model.registry.signal_registry)
+
+		service.studio_theme_changed = signals.Create(model.registry.signal_registry)
+
 	}
 
 	return &service.object
+
 }
 
-
 StudioThemeService_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+
 	service := cast(^StudioThemeService)object
+
+	if studio_theme_native_is_live(service) {
+
+		classes.StudioTheme_Set_Palette(service.studio_theme, nil)
+
+	}
+
+	service.studio_theme = nil
 
 	if service.data_model != nil &&
 	   service.data_model.registry != nil &&
@@ -1097,15 +1475,21 @@ StudioThemeService_destroy :: proc(object: ^classes.Object, renderer: ^classes.R
 		studio_theme_release_ref(L, &service.selected_theme_ref)
 
 		studio_theme_release_ref(L, &service.theme_object_ref)
+
 	}
 
 	service.theme_changed = nil
 
+	service.studio_theme_changed = nil
+
 	classes.Object_Destroy(object)
+
 	free(service)
+
 }
 
 Register_StudioThemeService_Class :: proc(registry: ^classes.Registry) {
+
 	classes.Register_Class(
 		registry,
 		&StudioThemeService_Class,
@@ -1116,4 +1500,5 @@ Register_StudioThemeService_Class :: proc(registry: ^classes.Registry) {
 		set = studio_theme_service_set,
 		namecall = studio_theme_service_namecall,
 	)
+
 }

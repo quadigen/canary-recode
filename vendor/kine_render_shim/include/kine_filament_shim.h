@@ -442,6 +442,9 @@ KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext *ctx, float d
 // shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad, 6 = cylinder,
 //        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
 KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, int shape);
+// Shared water mesh owned by the renderer context.
+KINE_API KineFilamentMesh *Kine_Filament_GetWaterGrid(
+	KineFilamentContext *ctx, float width, float depth);
 // Mesh indices follow scene traversal order. Zero loads the complete model.
 typedef struct KineFilamentMeshList KineFilamentMeshList;
 KINE_API KineFilamentMeshList *Kine_Filament_ListMeshes(const char *path);

@@ -1,0 +1,49 @@
+---
+title: ReplicatedStorage
+description: A container for objects that both the server and clients can access.
+---
+
+`ReplicatedStorage` is the shared container for content both sides of a game need: module scripts, configuration, prefabs, and assets. Like the other storage services, it has no Luau members of its own.
+
+## Getting started
+
+```lua
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local config = ReplicatedStorage:FindFirstChild("Config")
+if config then
+    print(config.Name)
+end
+```
+
+## What belongs here
+
+- `ModuleScript` objects that both the server and clients require.
+- Templates that either side clones into the world.
+- Shared configuration values and folders.
+
+```lua
+local function spawnTemplate(name, parent)
+    local template = game:GetService("ReplicatedStorage"):FindFirstChild(name)
+    if not template then
+        return nil
+    end
+
+    local copy = template:Clone()
+    copy.Parent = parent
+    return copy
+end
+```
+
+## Notes
+
+- The service exposes no methods, properties, or events beyond the shared `Instance` API.
+- The current implementation treats it as a plain container. Don't assume that parenting something here sends it to clients; replication behavior is separate from the container.
+- Content is visible to every client, so keep server-only values and credentials in `ServerStorage` or `ServerScriptService` instead.
+- Look objects up with `FindFirstChild()` when they might be missing, and handle `nil` rather than indexing straight into the container.
+
+## See also
+
+- `ServerStorage`, server-only content.
+- `ReplicatedFirst`, content clients need early.
+- `ModuleScript`, shared code loaded with `require()`.

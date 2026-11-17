@@ -69,6 +69,7 @@ struct KineViewportPool {
     Texture *environment = nullptr;
     KineMesh *shadowBoundsMesh = nullptr;
     View *view = nullptr, *copyView = nullptr, *clearView = nullptr;
+    KineWaterContactDepth waterContact;
     std::vector<std::unique_ptr<KineViewportScratch>> scratch;
     Camera *camera = nullptr;
     Scene *presentScene = nullptr;
@@ -288,6 +289,7 @@ void kine_vp_update_chunks(KineFilamentViewport *vp,const KineFilamentDrawItem *
             kine_bind_mesh_geometry(ctx,builder,g.key,base,c.material,c.extraMaterials,g.colors.data()+offset,g.uvs.data()+offset,n,false);
             builder.boundingBox(kine_compute_batch_bounds(mesh,g.transforms.data()+offset,n,g.key.shader,g.key.materialKind==KINE_MAT_WATER ? .65f*ctx->water.strength*ctx->water.height : 0.0f))
                 .instances(n,c.instances).culling(g.key.culling).castShadows(g.key.castShadow).receiveShadows(g.key.receiveShadow);
+            builder.layerMask(0xff, kine_scene_geometry_layer(g.key.materialKind));
             if(g.key.materialKind==KINE_MAT_GLASS)builder.channel(2);
             if(!mesh->bones.empty() && mesh->skinMatrices.size()==mesh->bones.size())builder.skinning(mesh->skinMatrices.size(),mesh->skinMatrices.data());
             builder.build(*ctx->engine,c.entity);vp->scene->addEntity(c.entity);vp->chunks.push_back(c);
@@ -497,7 +499,14 @@ KINE_API bool Kine_Filament_Viewport_Update(KineFilamentViewport *vp, const Kine
     shadowOptions.constantBias=0.001f;shadowOptions.normalBias=0.1f;shadowOptions.polygonOffsetConstant=0.25f;shadowOptions.polygonOffsetSlope=0.5f;
     lightManager.setShadowOptions(lightManager.getInstance(vp->lightEntity),shadowOptions);
     }
-    for(auto &c:vp->chunks)if(c.key.materialKind==KINE_MAT_WATER || c.key.materialKind==KINE_MAT_FORCEFIELD) {kine_apply_material_params(ctx,c.material,c.key,false);vp->dirty=true;}
+    Texture *contactDepth = nullptr;
+    for(auto &c:vp->chunks)if(c.key.materialKind==KINE_MAT_WATER || c.key.materialKind==KINE_MAT_FORCEFIELD) {
+        kine_apply_material_params(ctx,c.material,c.key,false);vp->dirty=true;
+        if (c.material->getMaterial() == ctx->waterMaterial && ctx->water.foamAmount > 0.0f) {
+            if (!contactDepth) contactDepth = kine_prepare_water_contact(ctx, ctx->viewportPool->waterContact);
+            kine_set_water_contact(c.material, contactDepth, ctx->whiteTex);
+        }
+    }
     kine_vp_prepare_copy_effects(vp);
     vp->initialized = true; return true;
 }
@@ -523,6 +532,7 @@ static View *kine_vp_configure_view(KineFilamentViewport *vp) {
     // SSR samples the preceding image. Only opt-in previews need a private
     // lightweight View/history; they still share the same Engine and device.
     auto *view=vp->historyView ? vp->historyView : ctx->viewportPool->view;
+    view->setVisibleLayers(0xff, 0xff);
     view->setPostProcessingEnabled(s.postProcessing!=0);view->setShadowingEnabled(s.shadows!=0 && vp->hasShadowCasters);
     view->setShadowType(ShadowType::PCF);
     auto bloom=kine_vp_bloom(vp);
@@ -576,6 +586,9 @@ static void kine_viewport_render_queued(KineFilamentContext *ctx) {
         // Cover the entire scratch attachment; subrect final blits sample outside
         // their colour history on this backend. The camera keeps the UI aspect.
         renderView->setViewport({0,0,uint32_t(vp->scratch->width),uint32_t(vp->scratch->height)});
+        if (ctx->water.foamAmount > 0.0f && std::any_of(vp->chunks.begin(), vp->chunks.end(),
+                [ctx](const auto &chunk) { return chunk.material->getMaterial() == ctx->waterMaterial; }))
+            kine_render_water_contact(ctx, renderView, pool.waterContact);
         Renderer::ClearOptions clear{};clear.clear=false;clear.discard=false;clear.clearColor={0,0,0,0};
         ctx->renderer->setClearOptions(clear);ctx->renderer->render(renderView);
         // Effects run at the origin of a shared scratch target. An opaque GPU
@@ -675,6 +688,7 @@ static void kine_viewport_shutdown(KineFilamentContext *ctx) {
     if (pool->view) ctx->engine->destroy(pool->view);
     if (pool->copyView) ctx->engine->destroy(pool->copyView);
     if (pool->clearView) ctx->engine->destroy(pool->clearView);
+    kine_destroy_water_contact(ctx->engine, pool->waterContact);
     for (auto &p : pool->scratch) {
         p->clearScene->remove(p->clearEntity);ctx->engine->destroy(p->clearEntity);EntityManager::get().destroy(p->clearEntity);
         ctx->engine->destroy(p->clearScene);ctx->engine->destroy(p->clearMaterial);

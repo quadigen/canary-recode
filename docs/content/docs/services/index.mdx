@@ -1,0 +1,99 @@
+---
+title: Services
+description: Get the engine's built-in services from game and use them to drive players, physics, input, and more.
+---
+
+Services are long-lived objects the engine creates for you. There's one of each, they're created the first time something asks for them, and they stay alive for the whole session. Instead of constructing a `Players` or a `RunService` yourself, you ask `game` for it.
+
+`game` is the data model: the root of the object tree and the entry point to every service. Services are parented to it, and their `Name` matches the service name you use to look them up.
+
+## Getting a service
+
+```lua
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+print(Players.Parent == game) -- true
+```
+
+`GetService()` returns the same object every time, so it's cheap to call where you need it rather than threading a service through every function.
+
+You can also read a service like a property:
+
+```lua
+local Workspace = game.Workspace
+```
+
+This works only for registered service names and returns the same object as `GetService()`. `GetService()` is still the better habit, because a typo raises an error instead of quietly returning `nil`, and because the property form isn't available for every name on every platform.
+
+### When a service might not exist
+
+`GetService()` raises an error if the name isn't registered, if the service can't be created, or if your script doesn't have the security capabilities the service requires. If you're checking whether an optional service is present, use `FindService()` instead:
+
+```lua
+local profiler = game:FindService("ProfilerService")
+if profiler then
+    print(profiler.Name)
+end
+```
+
+`FindService()` returns `nil` in all of those cases rather than raising. Both methods are also exposed as properties (`game.GetService`, `game.FindService`) so you can pass them around, but call them with `game` as the receiver.
+
+Availability depends on where the game runs. Some services are only registered on desktop builds, and a few are reserved for internal editor or scripting contexts; asking for those from a normal script raises an "insufficient security capabilities" error. Builds for the browser register a smaller set of services, with stand-ins for the ones the editor UI needs.
+
+## Closing the game
+
+`BindToClose()` registers a function to run when the game shuts down. Use it to save state or release resources that won't survive process exit.
+
+```lua
+game:BindToClose(function()
+    print("Shutting down")
+end)
+```
+
+The callback receives no arguments and runs once for each registration. Registering the same function twice runs it twice. Registration lasts for the rest of the session; there's no corresponding unbind method.
+
+## Game metadata
+
+`game` exposes a few properties describing the running session:
+
+| Property | Type | Current value |
+| --- | --- | --- |
+| `PlaceId` | `number` | `0` |
+| `PlaceVersion` | `number` | `1` |
+| `GameId` | `number` | `0` |
+| `JobId` | `string` | `""` |
+| `PrivateServerId` | `string` | `""` |
+| `PrivateServerOwnerId` | `number` | `0` |
+
+These are currently placeholders, so don't treat them as unique identifiers for a running server.
+
+## Documented services
+
+| Service | What it's for |
+| --- | --- |
+| `CollectionService` | Tag instances and subscribe to tag changes. |
+| `ContextActionService` | Bind named actions to inputs with priorities. |
+| `Debris` | Destroy instances automatically after a delay. |
+| `GuiService` | Read platform inset and window details. |
+| `Lighting` | Set the time of day, ambient light, shadows, and default effects. |
+| `LogService` | Write structured log messages and read the history back. |
+| `Physics` | Tune gravity, substeps, and sleep behavior. |
+| `Players` | Work with player objects, characters, and player events. |
+| `ReplicatedFirst` | Hold content clients need early in startup. |
+| `ReplicatedStorage` | Hold content both sides can access. |
+| `RunService` | Query the runtime mode and run code on frame and simulation steps. |
+| `ServerScriptService` | Hold server-side scripts. |
+| `ServerStorage` | Hold server-only content. |
+| `StarterGui` | Hold screen interface templates. |
+| `TextService` | Measure text with the engine's fonts. |
+| `TweenService` | Animate numeric, `UDim2`, and `Color3` properties over time. |
+| `UserInputService` | Read keyboard, mouse, and touch state and listen for input. |
+| `Workspace` | Manage the 3D world, physics settings, camera, and raycasts. |
+
+More services will appear here as their Luau APIs are verified. In the meantime, `GetService()` works with any name the engine registers.
+
+## See also
+
+- `Instance`, the object tree services live in.
+- `Object`, shared behavior for every engine object.
