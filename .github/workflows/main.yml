@@ -73,6 +73,23 @@ jobs:
           release: latest
       - name: Show Odin version
         run: odin version
+      # Git tree IDs include pinned submodule commits without walking vendor/**.
+      - name: Calculate dependency fingerprints
+        id: dependency-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_hash=$(
+            {
+              git ls-tree HEAD -- CMakeLists.txt cmake vendor tools .gitmodules .github/workflows/main.yml
+              printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            } | git hash-object --stdin
+          )
+          odin_hash=$(odin version | git hash-object --stdin)
+          workspace_hash=$(printf '%s\n' "$GITHUB_WORKSPACE" | git hash-object --stdin)
+          echo "native=$native_hash" >> "$GITHUB_OUTPUT"
+          echo "odin=$odin_hash" >> "$GITHUB_OUTPUT"
+          echo "workspace=$workspace_hash" >> "$GITHUB_OUTPUT"
       - name: Verify runner architecture
         shell: bash
         run: |
@@ -116,8 +133,9 @@ jobs:
             vendor/build/**/*.lib
             vendor/build/**/*.so*
             vendor/build/**/*.dylib
+            vendor/build/**/*.dll
             vendor/build/lib/*.anchor
-          key: native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.cache-key }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'vendor/**', 'tools/fetch_skia.py', 'tools/isolate_skia_symbols.py', '.github/workflows/main.yml') }}
+          key: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.skia.outputs.cache-key }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.dependency-hash.outputs.workspace }}
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         shell: bash
@@ -209,6 +227,27 @@ jobs:
       - name: Isolate Skia shader compiler symbols
         shell: bash
         run: python tools/isolate_skia_symbols.py '${{ steps.skia.outputs.path }}'
+      - name: Setup sccache (desktop)
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Configure local compiler cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.cache/sccache-desktop" >> "$GITHUB_ENV"
+          echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"
+          echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+      - name: Restore desktop compiler cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        id: desktop-compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/sccache-desktop
+          key: sccache-desktop-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.skia.outputs.cache-key }}
+          restore-keys: |
+            sccache-desktop-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Configure and build native dependencies (Windows)
         if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -323,10 +362,41 @@ jobs:
             vendor/build/**/*.lib
             vendor/build/**/*.so*
             vendor/build/**/*.dylib
+            vendor/build/**/*.dll
             vendor/build/lib/*.anchor
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
-      - name: Build Odin vendor libraries (Unix)
+      - name: Flush desktop compiler cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: bash
+        continue-on-error: true
+        run: |
+          sccache --show-stats
+          sccache --stop-server
+      - name: Save desktop compiler cache
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.desktop-compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/sccache-desktop
+          key: ${{ steps.desktop-compiler-cache.outputs.cache-primary-key }}
+      - name: Resolve Odin vendor paths (Unix)
         if: runner.os != 'Windows'
+        id: odin-vendor-paths
+        shell: bash
+        run: |
+          root="$(odin root)"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+      - name: Restore Odin vendor libraries (Unix)
+        if: runner.os != 'Windows'
+        id: odin-vendor-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/miniaudio/lib
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/stb/lib
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/box2d/lib
+          key: odin-vendor-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.dependency-hash.outputs.odin }}-${{ steps.dependency-hash.outputs.native }}
+      - name: Build Odin vendor libraries (Unix)
+        if: runner.os != 'Windows' && steps.odin-vendor-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           odin_root="$(odin root)"
@@ -349,6 +419,15 @@ jobs:
             "$odin_root/vendor/stb/src" \
             build_stb.sh
           CC=clang LD=wasm-ld bash "$odin_root/vendor/box2d/build_box2d.sh"
+      - name: Save Odin vendor libraries (Unix)
+        if: runner.os != 'Windows' && steps.odin-vendor-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/miniaudio/lib
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/stb/lib
+            ${{ steps.odin-vendor-paths.outputs.root }}/vendor/box2d/lib
+          key: ${{ steps.odin-vendor-cache.outputs.cache-primary-key }}
       - name: Stage static ENet and OpenSSL libraries (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -626,6 +705,37 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
+      # Git tree IDs include pinned submodule commits without walking vendor/**.
+      - name: Calculate dependency fingerprints
+        id: dependency-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_hash=$(
+            {
+              git ls-tree HEAD -- CMakeLists.txt cmake vendor tools .gitmodules .github/workflows/main.yml
+              printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            } | git hash-object --stdin
+          )
+          odin_hash=$(odin version | git hash-object --stdin)
+          workspace_hash=$(printf '%s\n' "$GITHUB_WORKSPACE" | git hash-object --stdin)
+          echo "native=$native_hash" >> "$GITHUB_OUTPUT"
+          echo "odin=$odin_hash" >> "$GITHUB_OUTPUT"
+          echo "workspace=$workspace_hash" >> "$GITHUB_OUTPUT"
+      - name: Resolve Emscripten SDK fingerprint
+        id: emsdk-hash
+        shell: bash
+        run: |
+          hash=$(git ls-tree HEAD -- .tools/emsdk | git hash-object --stdin)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+      - name: Cache Emscripten SDK and sysroot
+        uses: actions/cache@v5
+        with:
+          path: |
+            .tools/emsdk/upstream
+            .tools/emsdk/node
+            .tools/emsdk/python
+          key: emsdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.emsdk-hash.outputs.hash }}-${{ steps.dependency-hash.outputs.workspace }}
       - name: Install Emscripten
         shell: pwsh
         run: |
@@ -636,6 +746,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & './.tools/emsdk/emsdk.bat' activate latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Identify active Emscripten version
+        id: emsdk-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_hash=$(cat .tools/emsdk/upstream/emscripten/emscripten-version.txt | git hash-object --stdin)
+          echo "hash=$version_hash" >> "$GITHUB_OUTPUT"
+      - name: Restore Filament material compiler
+        id: web-matc
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/filament-matc
+          key: filament-matc-v1.74.0-windows-${{ runner.arch }}-v1
       - name: Install Filament material compiler (matc)
         shell: pwsh
         run: |
@@ -646,12 +769,34 @@ jobs:
             curl.exe --fail --location --retry 4 --output $archive 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz'
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          tar -xzf $archive -C $toolDir
           $matc = Join-Path $toolDir 'bin/matc.exe'
+          if (!(Test-Path -LiteralPath $matc)) {
+            tar -xzf $archive -C $toolDir
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           if (!(Test-Path -LiteralPath $matc)) {
             throw "matc was not found at $matc"
           }
           Write-Output "FILAMENT_MATC=$matc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Save Filament material compiler
+        if: steps.web-matc.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/filament-matc
+          key: ${{ steps.web-matc.outputs.cache-primary-key }}
+      - name: Cache web runtime dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            .cache/web-deps
+            .cache/filament-web
+          key: web-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/build_wasm.ps1') }}
+      # Restore exact native input matches only; CMake still reconfigures and builds.
+      - name: Cache WebAssembly native build
+        uses: actions/cache@v5
+        with:
+          path: build/web-native
+          key: web-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.emsdk-version.outputs.hash }}-${{ steps.dependency-hash.outputs.odin }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.dependency-hash.outputs.workspace }}
       - name: Check Web Odin source
         run: odin check src -target:js_wasm32
       - name: Build Kinemium Web (WASM)
@@ -693,6 +838,23 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
+      # Git tree IDs include pinned submodule commits without walking vendor/**.
+      - name: Calculate dependency fingerprints
+        id: dependency-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          native_hash=$(
+            {
+              git ls-tree HEAD -- CMakeLists.txt cmake vendor tools .gitmodules .github/workflows/main.yml
+              printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            } | git hash-object --stdin
+          )
+          odin_hash=$(odin version | git hash-object --stdin)
+          workspace_hash=$(printf '%s\n' "$GITHUB_WORKSPACE" | git hash-object --stdin)
+          echo "native=$native_hash" >> "$GITHUB_OUTPUT"
+          echo "odin=$odin_hash" >> "$GITHUB_OUTPUT"
+          echo "workspace=$workspace_hash" >> "$GITHUB_OUTPUT"
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -728,6 +890,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/isolate_skia_symbols.py .cache/skia/android-x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Calculate Android package fingerprint
+        id: android-package-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash=$(
+            {
+              git ls-tree HEAD -- tools/build_android.ps1
+              printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            } | git hash-object --stdin
+          )
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
       - name: Cache Android dependency downloads
         id: android-deps
         uses: actions/cache/restore@v5
@@ -736,12 +910,14 @@ jobs:
             .cache/android
             build/vcpkg-binary-cache
             build/vcpkg-installed
-          key: android-deps-v1-${{ runner.os }}-${{ hashFiles('tools/build_android.ps1') }}
+          key: android-deps-v2-${{ runner.os }}-${{ runner.arch }}-ndk30.0.16248370-${{ steps.android-package-hash.outputs.hash }}
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
@@ -749,6 +925,21 @@ jobs:
           install_runtime: true
           cache: true
           stripdown: false
+      - name: Resolve Android SDK cache paths
+        id: android-sdk-paths
+        shell: pwsh
+        run: |
+          if (-not $env:ANDROID_HOME) { throw 'ANDROID_HOME is not set' }
+          "ndk=$(Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370')" >> $env:GITHUB_OUTPUT
+          "platform=$(Join-Path $env:ANDROID_HOME 'platforms/android-36')" >> $env:GITHUB_OUTPUT
+      - name: Restore Android SDK components
+        id: android-sdk-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ steps.android-sdk-paths.outputs.ndk }}
+            ${{ steps.android-sdk-paths.outputs.platform }}
+          key: android-sdk-v1-${{ runner.os }}-${{ runner.arch }}-ndk30.0.16248370-api36
       - name: Install Android SDK components
         shell: pwsh
         run: |
@@ -765,6 +956,14 @@ jobs:
           if (!(Test-Path -LiteralPath (Join-Path $env:ANDROID_HOME 'ndk/30.0.16248370/build/cmake/android.toolchain.cmake'))) {
             throw 'Android NDK 30.0.16248370 was not installed'
           }
+      - name: Save Android SDK components
+        if: steps.android-sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ steps.android-sdk-paths.outputs.ndk }}
+            ${{ steps.android-sdk-paths.outputs.platform }}
+          key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}
       - name: Prepare Android dependency packages
         shell: pwsh
         run: |
@@ -782,8 +981,20 @@ jobs:
             build/vcpkg-binary-cache
             build/vcpkg-installed
           key: ${{ steps.android-deps.outputs.cache-primary-key }}
+      # Only dependency/native work trees, never the Odin application objects or APK.
+      # Exact matches avoid restoring CMake metadata for different source revisions.
+      - name: Cache Android native build trees
+        uses: actions/cache@v5
+        with:
+          path: |
+            build/android-native-*
+            build/android-box2d-*
+            build/android-vendor-*
+          key: android-native-v1-${{ runner.os }}-${{ runner.arch }}-ndk30.0.16248370-${{ steps.skia_android.outputs.cache-key }}-${{ steps.dependency-hash.outputs.odin }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.dependency-hash.outputs.workspace }}
       - name: Build Kinemium Android (APK)
         shell: pwsh
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.caching=true"
         run: |
           try {
             $binaryCache = Join-Path $PWD 'build/vcpkg-binary-cache'
