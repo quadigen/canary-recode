@@ -1,0 +1,84 @@
+---
+title: Pose
+description: A bone transform at a keyframe, with an optional weight.
+---
+
+`Pose` describes where one bone should be at a keyframe. A keyframe can hold several poses, and a pose can hold sub-poses when a rig needs a hierarchy of transforms.
+
+`Pose` inherits from `Instance`.
+
+## Getting started
+
+```lua
+local pose = Instance.new("Pose")
+pose.Name = "LeftArm"
+pose.CFrame = CFrame.Angles(math.rad(45), 0, 0)
+pose.Weight = 1
+keyframe:AddPose(pose)
+```
+
+The pose's `Name` must match the target bone's name in the rig. If no bone has that name, the pose is compiled but has nothing to affect.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `CFrame` | `CFrame` | Read/write | Identity | Bone transform for this pose. |
+| `Weight` | `number` | Read/write | `1` | Blend weight. |
+
+`Weight` is stored as the value you assign, including values outside `0`-`1`. When the pose is compiled, the weight is clamped to `0`-`1`. A weight of `0` contributes nothing; `1` applies the transform fully.
+
+```lua
+pose.Weight = 0.5
+```
+
+## Methods
+
+### GetSubPoses
+
+```lua
+GetSubPoses(): {Pose}
+```
+
+Returns the pose's direct `Pose` children in a one-based table. Sub-poses let you express a chain beneath a single named pose.
+
+### AddSubPose
+
+```lua
+AddSubPose(pose: Pose): ()
+```
+
+Parents an existing `Pose` to this pose. Passing a non-`Pose` instance raises an error.
+
+```lua
+local finger = Instance.new("Pose")
+finger.Name = "LeftIndex"
+pose:AddSubPose(finger)
+```
+
+### RemoveSubPose
+
+```lua
+RemoveSubPose(pose: Pose): ()
+```
+
+Unparents a sub-pose that belongs to this pose. Other instances and poses from elsewhere are ignored.
+
+## How poses are compiled
+
+Poses are collected recursively. A pose's `Name` selects the bone, `CFrame` supplies the transform, and `Weight` controls how much of the transform is applied. Sub-poses are compiled under their parent and can target deeper bones.
+
+A pose under a keyframe is sampled at that keyframe's `Time`. Between keyframes, the animator interpolates the bone transforms.
+
+## Notes
+
+- `CFrame` is relative to the bone, not to the world.
+- Poses are matched by name, so renaming a bone in the rig without renaming the pose breaks the link.
+- Cloning copies the pose's `CFrame`, `Weight`, and descendants.
+- Editing a pose after loading an animation track doesn't change the loaded clip.
+
+## See also
+
+- `Keyframe` for the time and event that owns the pose.
+- `KeyframeSequence` for the full clip.
+- `Animator` for playback on a rigged mesh.

@@ -1,0 +1,191 @@
+---
+title: PathfindingService
+description: Build paths across the world with a navigation mesh.
+---
+
+`PathfindingService` computes paths between two points. It builds a navigation mesh from the parts around the query and returns waypoints an NPC can follow.
+
+The methods are synchronous. A path across a large or complex map can take noticeable time, so don't compute one every frame for every character.
+
+## Getting started
+
+```lua
+local PathfindingService = game:GetService("PathfindingService")
+
+local path = PathfindingService:CreatePath({
+    AgentRadius = 2,
+    AgentHeight = 5,
+    AgentCanJump = true,
+})
+
+path:ComputeAsync(startPosition, goalPosition)
+
+for _, waypoint in path:GetWaypoints() do
+    print(waypoint.Position, waypoint.Action)
+end
+```
+
+The navigation mesh is cached by agent dimensions. Changing the agent size triggers a rebuild.
+
+## Service properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `EmptyCutoff` | `number` | Read-only | `0.16` | Fixed cutoff value reported by the service. |
+
+## Service methods
+
+### CreatePath
+
+```lua
+CreatePath(agentParams: {
+    AgentRadius: number?,
+    AgentHeight: number?,
+    AgentCanJump: boolean?,
+    AgentCanClimb: boolean?,
+    WaypointSpacing: number?,
+}?): Path
+```
+
+Creates an empty `Path` configured for an agent. All fields are optional.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `AgentRadius` | `2` | Agent radius in studs. Values must be greater than `0` to apply. |
+| `AgentHeight` | `5` | Agent height in studs. Values must be greater than `0` to apply. |
+| `AgentCanJump` | `true` | Allows paths that require a jump. |
+| `AgentCanClimb` | `false` | Stored on the path. The current mesh builder doesn't use it. |
+| `WaypointSpacing` | `4` | Approximate distance between waypoints. Values must be greater than `0`. |
+
+```lua
+local path = PathfindingService:CreatePath({ AgentRadius = 3.5 })
+```
+
+If the path can't be created, the call raises an error.
+
+### FindPathAsync
+
+```lua
+FindPathAsync(start: Vector3, finish: Vector3): Path
+```
+
+A shortcut that creates a path with default agent settings, computes it, and returns it.
+
+```lua
+local path = PathfindingService:FindPathAsync(origin, destination)
+```
+
+It always uses the default agent dimensions; there's no way to pass agent parameters to this method. Use `CreatePath()` and `Path:ComputeAsync()` when the agent size matters.
+
+### ComputeRawPathAsync and ComputeSmoothPathAsync
+
+```lua
+ComputeRawPathAsync(start: Vector3, finish: Vector3, maxDistance: number?): Path
+ComputeSmoothPathAsync(start: Vector3, finish: Vector3, maxDistance: number?): Path
+```
+
+These create a default-agent path and compute it, like `FindPathAsync()`. `maxDistance` defaults to `0` and must not exceed `512`; a larger value raises an error. The value is validated but isn't otherwise used to limit the search, and the two methods produce the same path.
+
+```lua
+local path = PathfindingService:ComputeSmoothPathAsync(start, finish, 128)
+```
+
+Prefer `CreatePath()` for new code, because it lets you set the agent dimensions.
+
+## Path objects
+
+### Status
+
+```lua
+Status: Enum.PathStatus
+```
+
+Read-only status of the last computation. Before a path is computed it's `Enum.PathStatus.NoPath`.
+
+### ComputeAsync
+
+```lua
+ComputeAsync(start: Vector3, finish: Vector3): ()
+```
+
+Computes a path and stores the waypoints on the path. It returns no values. Check `Status` afterward to see whether a path was found.
+
+```lua
+path:ComputeAsync(origin, destination)
+
+if path.Status ~= Enum.PathStatus.Success then
+    warn("No path")
+end
+```
+
+### GetWaypoints
+
+```lua
+GetWaypoints(): {{
+    Position: Vector3,
+    Action: Enum.PathWaypointAction,
+    Label: string?,
+}}
+```
+
+Returns the computed waypoints as a one-based array. Each entry has a world `Position`, an `Action`, and a `Label` that is always `nil` in the current implementation.
+
+```lua
+for index, waypoint in path:GetWaypoints() do
+    print(index, waypoint.Position, waypoint.Action)
+end
+```
+
+### GetPointCoordinates
+
+```lua
+GetPointCoordinates(): {Vector3}
+```
+
+Returns just the waypoint positions in a one-based array. It's a lighter alternative when you don't need actions or labels.
+
+### CheckOcclusionAsync
+
+```lua
+CheckOcclusionAsync(startIndex: number): number
+```
+
+Checks whether the path is blocked from a one-based waypoint index onward. It returns the index of the first blocked waypoint, or `-1` if the path is clear.
+
+```lua
+local blockedAt = path:CheckOcclusionAsync(2)
+if blockedAt ~= -1 then
+    -- Recompute from the blocked section.
+end
+```
+
+The check fires `Blocked` when a path becomes blocked and `Unblocked` when it clears again. The event arguments are the blocked waypoint index.
+
+### Blocked and Unblocked events
+
+```lua
+path.Blocked:Connect(function(waypointIndex: number)
+    print("Blocked at", waypointIndex)
+end)
+
+path.Unblocked:Connect(function(waypointIndex: number)
+    print("Unblocked at", waypointIndex)
+end)
+```
+
+These fire from `CheckOcclusionAsync()`, not continuously in the background. If you never check, they never fire.
+
+## Notes
+
+- Paths are computed against the current world geometry. Moving parts can invalidate a path after it's built.
+- `Status` is the reliable success check; the method itself returns nothing.
+- `FindPathAsync()` doesn't accept agent parameters.
+- `maxDistance` above `512` raises an error, but values at or below it don't limit the result.
+- The navigation mesh is rebuilt when agent dimensions change.
+- There's no built-in pathfollowing; move the character along the waypoints yourself.
+
+## See also
+
+- `Humanoid` for character movement.
+- `Workspace` for raycasts and world queries.
+- `RunService` for updating movement each frame.

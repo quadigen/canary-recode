@@ -1,0 +1,280 @@
+---
+title: Saving player data
+description: Load, change, and save persistent player data with DataStoreService, including retries and schema changes.
+---
+
+`DataStoreService` gives a server a named key-value store that survives restarts. Most games use it for one record per player: coins, inventory, progress, settings, and anything else that must still be there next session.
+
+The store follows a few rules that shape the design:
+
+- It's server-only. Clients and editor sessions can't open a data store.
+- Calls are synchronous, even though their names end in `Async`.
+- Values are JSON-encoded, so only primitives, arrays, dictionaries, and datatypes with a defined encoding survive a round trip.
+- There's no automatic retry, session locking, or cross-server coordination exposed to Luau.
+
+## Open a store
+
+Get a handle once, at the top of a server script:
+
+```lua
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+
+local saves = DataStoreService:GetDataStore("PlayerSaves", "v1")
+```
+
+The first argument is the store name. The second is the scope; use it to separate seasons, save slots, or test data without renaming every key. Omitting it uses `"global"`.
+
+The backing database lives in `./kinemium_datastore`. Set `KINEMIUM_DATASTORE_PATH` before starting the server to point it somewhere else.
+
+## Pick keys and a schema
+
+Use `Player.UserId`, not the display name:
+
+```lua
+local function keyFor(player)
+    return tostring(player.UserId)
+end
+```
+
+User IDs don't change, names can, and a number string is a valid store key.
+
+Define defaults in one place and store a schema version with every record:
+
+```lua
+local DEFAULT_DATA = {
+    version = 1,
+    coins = 0,
+    level = 1,
+    inventory = {},
+}
+
+local function newData()
+    return {
+        version = DEFAULT_DATA.version,
+        coins = DEFAULT_DATA.coins,
+        level = DEFAULT_DATA.level,
+        inventory = {},
+    }
+end
+```
+
+Build a fresh table for each player. Sharing `DEFAULT_DATA.inventory` between players would make changes leak across saves.
+
+## Load when a player joins
+
+`GetAsync()` returns `nil, nil` for a key that doesn't exist. Merge whatever you read over the defaults so an older save doesn't produce missing fields:
+
+```lua
+local function loadData(player)
+    local ok, stored = pcall(function()
+        return saves:GetAsync(keyFor(player))
+    end)
+
+    if not ok then
+        warn("load failed for", player.Name, stored)
+        return nil
+    end
+
+    if type(stored) ~= "table" then
+        return newData()
+    end
+
+    local data = newData()
+    data.version = tonumber(stored.version) or 1
+    data.coins = tonumber(stored.coins) or data.coins
+    data.level = tonumber(stored.level) or data.level
+    if type(stored.inventory) == "table" then
+        data.inventory = stored.inventory
+    end
+    return data
+end
+```
+
+Return `nil` when the load failed instead of silently using defaults. Otherwise a transient database error looks like a brand-new player, and the next save can erase real progress.
+
+Keep the loaded table in a server-side map:
+
+```lua
+local sessions = {}
+
+local function startSession(player)
+    local data = loadData(player)
+    if data == nil then
+        -- Decide your policy: retry on a timer, or keep the player read-only
+        -- until a later load succeeds.
+        warn("no session created for", player.Name)
+        return
+    end
+
+    sessions[player.UserId] = data
+end
+
+Players.PlayerAdded:Connect(startSession)
+
+for _, player in Players:GetPlayers() do
+    startSession(player)
+end
+```
+
+The loop matters because `PlayerAdded` may fire before the script connects. Guard against double-loading if your game can call `LoadCharacter()` more than once.
+
+## Save when a player leaves
+
+`PlayerRemoving` fires before the player object is destroyed, so its `UserId` and attributes are still readable:
+
+```lua
+local function saveData(player)
+    local data = sessions[player.UserId]
+    if data == nil then
+        return
+    end
+
+    sessions[player.UserId] = nil
+
+    local ok, err = pcall(function()
+        saves:SetAsync(keyFor(player), data)
+    end)
+
+    if not ok then
+        warn("save failed for", player.Name, err)
+    end
+end
+
+Players.PlayerRemoving:Connect(saveData)
+```
+
+`SetAsync()` overwrites the whole key. That's fine when one server owns the player's record for the session. It is not safe for two servers editing the same key at once, which is why the game should not hand the same player to two servers.
+
+Save early and often enough that a crash doesn't lose everything. Periodic autosaves are normal, but don't write every frame.
+
+## Change a value safely
+
+For currency and other counters, `UpdateAsync()` reads the current value, calls your transform, and writes the result:
+
+```lua
+local function addCoins(userId, amount)
+    local ok, result = pcall(function()
+        return saves:UpdateAsync(tostring(userId), function(current)
+            local data = type(current) == "table" and current or newData()
+            data.coins = (tonumber(data.coins) or 0) + amount
+            return data
+        end)
+    end)
+
+    if not ok then
+        warn("coin update failed", result)
+        return nil
+    end
+
+    return result
+end
+```
+
+Returning `nil` from the transform cancels the write and makes `UpdateAsync()` return `nil`.
+
+`UpdateAsync()` is the read-modify-write primitive, but it isn't a lock. If another server writes the same key between the read and the write, the last writer still wins. Keep a single authoritative session per player and use `UpdateAsync()` for changes that need to see the latest stored value.
+
+## Version the schema
+
+When the shape changes, bump the stored version and migrate on load:
+
+```lua
+local function migrate(data)
+    if (data.version or 0) < 2 then
+        data.settings = data.settings or { music = true }
+        data.version = 2
+    end
+    return data
+end
+```
+
+Run migrations inside `loadData()` before the merged table is handed to gameplay code. Keep old fields readable for one release if other scripts still reference them, and write the new version back on the next save.
+
+## Ordered data and leaderboards
+
+Use an ordered store when you need sorted numeric values:
+
+```lua
+local coinBoard = DataStoreService:GetOrderedDataStore("CoinBoard")
+
+coinBoard:IncrementAsync(tostring(player.UserId), 25)
+
+local pages = coinBoard:GetSortedAsync(false, 10)
+local topTen = pages:GetCurrentPage()
+
+for rank, entry in topTen do
+    print(rank, entry.key, entry.value)
+end
+```
+
+`GetSortedAsync()` only works on stores created with `GetOrderedDataStore()` or `GetOrderedDataStore()`'s aliases. You can call `AdvanceToNextPageAsync()` to continue, and an empty page means there's nothing more.
+
+## Retry a failed call
+
+Every store call can fail. A small retry helper keeps repeated failures out of gameplay code:
+
+```lua
+local function withRetries(attempts, callback)
+    local lastError
+
+    for attempt = 1, attempts do
+        local ok, result = pcall(callback)
+        if ok then
+            return result
+        end
+
+        lastError = result
+        task.wait(2 ^ attempt)
+    end
+
+    error(lastError)
+end
+```
+
+Then call `withRetries(3, function() return saves:GetAsync(key) end)`. Don't retry a write that may have succeeded on the server but failed on the way back without making the operation idempotent; a blind retry can duplicate a reward.
+
+## Store only encodable data
+
+Data stores JSON-encode values. These survive:
+
+- Booleans, numbers, and strings.
+- Arrays and dictionaries.
+- Engine datatypes that have a defined encoding.
+
+These don't:
+
+- Functions and threads.
+- Cyclic tables.
+- Tables nested more than 20 levels deep.
+- Instances, including parts and models.
+
+Store an ID or a plain data table instead of an object reference. `CFrame`, `Vector3`, and similar datatypes are fine only if the engine has an encoding for them, so test the shape you plan to save.
+
+## Test locally
+
+There's no separate test backend. Use a different store name or scope for development:
+
+```lua
+local saves = DataStoreService:GetDataStore("PlayerSaves", "dev")
+```
+
+`RemoveDataStore(name, scope)` deletes every record in a store. It is destructive and has no undo; guard it behind an explicit admin command or run it manually.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| `GetAsync` works on the server but errors on a client | Data stores are server-only. Move the call into a server script. |
+| A new player starts with no coins every session | The save failed, or the code saved under a different key or scope. |
+| A value comes back `nil` after saving | The value isn't JSON-encodable or the save silently failed. |
+| A save appears to vanish after a crash | Only `PlayerRemoving` was used; add periodic saves. |
+| A retry creates two rewards | The write wasn't idempotent; make the operation safe to repeat. |
+| Two servers overwrite each other | There's no session lock. Keep one authoritative server per player. |
+
+## Next steps
+
+- [Networking](/docs/guides/networking) for telling a client what the server loaded.
+- `DataStoreService` for the full method reference.
+- `Players` for join, leave, and character events.
+- [HTTP and external APIs](/docs/guides/http-and-external-apis) when saves live behind your own backend.

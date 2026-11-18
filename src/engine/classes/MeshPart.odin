@@ -212,6 +212,8 @@ mesh_part_namecall :: proc(
 		mesh_part.editable_mesh_version = 0
 		Hierarchy_Touched()
 		return 0, true
+	case "GetBoneNames", "GetAnimationClips":
+		return Animation_MeshPart_Namecall(L, mesh_part, method)
 	case:
 	}
 
@@ -251,6 +253,12 @@ Register_MeshPart :: proc(registry: ^Registry) {
 		namecall = mesh_part_namecall,
 		clone = mesh_part_clone,
 		properties = []string{"CollisionFidelity", "TextureId", "MeshId", "MeshIndex", "MeshContent"},
-		methods = []string{"ApplyImpulse", "GetMeshContent", "SetMeshContent"},
+		methods = []string{
+			"ApplyImpulse",
+			"GetMeshContent",
+			"SetMeshContent",
+			"GetBoneNames",
+			"GetAnimationClips",
+		},
 	)
 }

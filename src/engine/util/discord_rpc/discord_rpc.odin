@@ -1,6 +1,4 @@
 
-
-
 package discord_rpc
 
 import "base:runtime"

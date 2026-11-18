@@ -1,0 +1,47 @@
+---
+title: SunRaysEffect
+description: Add visible light shafts radiating from the sun.
+---
+
+`SunRaysEffect` draws shafts of light from the sun's position in the sky. The effect follows `Lighting.ClockTime`, so it fades out at night instead of glowing from below the horizon.
+
+`SunRaysEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local rays = Lighting:FindFirstChild("SunRaysEffect")
+if not rays then
+    rays = Instance.new("SunRaysEffect")
+    rays.Parent = Lighting
+end
+
+rays.Enabled = true
+rays.Intensity = 0.2
+rays.Spread = 1
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Intensity` | `number` | Read/write | `0.1` | Brightness of the rays, clamped between `0` and `1`. |
+| `Spread` | `number` | Read/write | `1` | Angular spread of the rays, clamped between `0` and `1`. |
+
+`Spread` is converted to an angle for the renderer. Higher values fan the rays out more; lower values keep them tight around the sun.
+
+The effective intensity is multiplied by daylight. If `Lighting.ClockTime` puts the sun below the horizon, the rays disappear even when `Enabled` is true.
+
+## Notes
+
+- Only one sun-ray effect is used. The last `SunRaysEffect` child of `Lighting` wins.
+- Sun rays are skipped in the editor's fast viewport.
+- Cloning copies `Enabled`, `Intensity`, and `Spread`.
+
+## See also
+
+- `Lighting` for `ClockTime`, the sun direction, and ambient light.
+- `Atmosphere` for sky color and haze around the horizon.

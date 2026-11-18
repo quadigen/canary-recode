@@ -1,0 +1,255 @@
+---
+title: Procedural images and GPU compute
+description: Generate and process RGBA pixels with EditableImage, then run bulk float32 operations with GPUCompute.
+---
+
+`EditableImage` gives you a pixel buffer you can generate or modify from Luau. `GPUCompute` runs large float32 buffer operations on the GPU. They cover different halves of the same workflow: pixels are RGBA8, compute is float32, and there is no direct bridge between the two in the current API.
+
+This guide shows both independently, then explains how to move data between them yourself.
+
+## Create an image
+
+Images come from `AssetService`, not `Instance.new()`:
+
+```lua
+local AssetService = game:GetService("AssetService")
+
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(64, 64),
+})
+```
+
+The default is `1` by `1`. Each axis may be `1` through `1024`, and fractional sizes are truncated. The new image starts as transparent black.
+
+To load an existing image, wrap the path in `Content`:
+
+```lua
+local loaded = AssetService:CreateEditableImageAsync(
+    Content.fromUri("textures/checker.png")
+)
+```
+
+The source must resolve locally, decode successfully, be no larger than 64 MB, and fit within `1024` by `1024` pixels.
+
+## Write pixels
+
+Pixel buffers are RGBA8, row by row, four bytes per pixel. The buffer index is zero-based:
+
+```lua
+local size = 64
+local pixels = buffer.create(size * size * 4)
+
+for y = 0, size - 1 do
+    for x = 0, size - 1 do
+        local offset = (y * size + x) * 4
+        local light = (math.floor(x / 8) + math.floor(y / 8)) % 2 == 0
+        local value = light and 255 or 35
+
+        buffer.writeu8(pixels, offset, value)
+        buffer.writeu8(pixels, offset + 1, value)
+        buffer.writeu8(pixels, offset + 2, value)
+        buffer.writeu8(pixels, offset + 3, 255)
+    end
+end
+
+image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+```
+
+The buffer must contain exactly `width * height * 4` bytes. Invalid regions raise an error instead of clipping.
+
+## Edit an existing image
+
+Read a region, change it, and write it back:
+
+```lua
+local pixels = image:ReadPixelsBuffer(Vector2.new(0, 0), image.Size)
+
+for offset = 0, buffer.len(pixels) - 4, 4 do
+    local r = buffer.readu8(pixels, offset)
+    local g = buffer.readu8(pixels, offset + 1)
+    local b = buffer.readu8(pixels, offset + 2)
+
+    buffer.writeu8(pixels, offset, 255 - r)
+    buffer.writeu8(pixels, offset + 1, 255 - g)
+    buffer.writeu8(pixels, offset + 2, 255 - b)
+end
+
+image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+```
+
+Keep the alpha channel in index `+3` unless you intentionally want transparent pixels. There are no per-pixel accessors; read or write a rectangle and index the buffer yourself.
+
+## Generate a gradient
+
+A simple vertical gradient:
+
+```lua
+local width, height = 64, 128
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(width, height),
+})
+local pixels = buffer.create(width * height * 4)
+
+for y = 0, height - 1 do
+    for x = 0, width - 1 do
+        local offset = (y * width + x) * 4
+        local t = y / (height - 1)
+
+        buffer.writeu8(pixels, offset, math.floor(255 * t))
+        buffer.writeu8(pixels, offset + 1, math.floor(120 * (1 - t)))
+        buffer.writeu8(pixels, offset + 2, 220)
+        buffer.writeu8(pixels, offset + 3, 255)
+    end
+end
+
+image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+```
+
+The result is a data buffer. The current API has no verified way to bind an `EditableImage` to an `ImageLabel`, `Decal`, or material, so don't assume it appears on screen. Use images to prepare or process data until a display binding exists.
+
+## Resize safely
+
+Assigning `Size` replaces the pixel buffer with transparent black:
+
+```lua
+image.Size = Vector2.new(128, 64) -- all previous pixels are gone
+```
+
+Read the old pixels first if you need to preserve them, create a new image at the target size, and copy the overlapping rectangle yourself.
+
+## Run a GPU operation
+
+Create a `GPUCompute` instance and check support before dispatching:
+
+```lua
+local GPUCompute = Instance.new("GPUCompute")
+
+local supported, supportError = GPUCompute:IsSupported()
+if not supported then
+    warn("GPU compute unavailable:", supportError)
+    return
+end
+```
+
+Buffers are arrays of little-endian float32 values. For an element-wise add, both inputs must have the same number of elements:
+
+```lua
+local count = 1024
+local a = buffer.create(count * 4)
+local b = buffer.create(count * 4)
+
+for index = 0, count - 1 do
+    buffer.writef32(a, index * 4, index)
+    buffer.writef32(b, index * 4, 1)
+end
+
+local dispatched, dispatchError = GPUCompute:Dispatch("Add", a, b)
+if not dispatched then
+    warn("dispatch failed:", dispatchError)
+    return
+end
+```
+
+Operations are case-sensitive: `"Add"`, `"Subtract"`, `"Multiply"`, `"Divide"`, `"Min"`, `"Max"`, `"Abs"`, `"Negate"`, `"Sqrt"`, and `"MatrixMultiply"`.
+
+Unary operations take one buffer:
+
+```lua
+GPUCompute:Dispatch("Sqrt", a)
+```
+
+`MatrixMultiply` takes dimensions after the two buffers:
+
+```lua
+GPUCompute:Dispatch("MatrixMultiply", a, b, rows, inner, columns)
+```
+
+The dimensions must be positive whole numbers, and `a` and `b` must contain `rows * inner` and `inner * columns` floats.
+
+## Collect the result
+
+`Dispatch()` is asynchronous. Poll on a later frame:
+
+```lua
+local RunService = game:GetService("RunService")
+local connection
+
+connection = RunService.Heartbeat:Connect(function()
+    local result, pollError = GPUCompute:Poll()
+
+    if pollError then
+        warn("compute failed:", pollError)
+        connection:Disconnect()
+        return
+    end
+
+    if result then
+        print("first value:", buffer.readf32(result, 0))
+        connection:Disconnect()
+    end
+end)
+```
+
+`Poll()` returns `nil` while the work is running, then returns the result buffer once and clears it. A second poll returns `nil` until another dispatch completes. Dispatching again before polling replaces the pending result.
+
+## Move between pixels and compute
+
+The two formats don't share a buffer:
+
+| Type | Layout |
+| --- | --- |
+| `EditableImage` | RGBA8, four bytes per pixel |
+| `GPUCompute` | float32, four bytes per number |
+
+To process an image on the GPU, convert it yourself. For example, read RGBA8 pixels, compute a luminance value per pixel, and write that value into a float32 buffer:
+
+```lua
+local function luminanceBuffer(image)
+    local pixels = image:ReadPixelsBuffer(Vector2.new(0, 0), image.Size)
+    local count = image.Size.X * image.Size.Y
+    local values = buffer.create(count * 4)
+
+    for index = 0, count - 1 do
+        local offset = index * 4
+        local r = buffer.readu8(pixels, offset) / 255
+        local g = buffer.readu8(pixels, offset + 1) / 255
+        local b = buffer.readu8(pixels, offset + 2) / 255
+        local luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+        buffer.writef32(values, index * 4, luminance)
+    end
+
+    return values
+end
+```
+
+Converting the result back to RGBA8 is the same process in reverse. Keep dimensions and buffer lengths in a single place so the two representations can't drift.
+
+## Limits and performance
+
+- `EditableImage` dimensions are limited to `1024` per axis.
+- Loaded image files are limited to 64 MB.
+- GPU buffers are limited to 4,000,000 elements for element-wise work.
+- Matrix products are limited by the output element count and a 256,000,000-product cap.
+- `CreateEditableImageAsync()` decodes synchronously and can stall the calling script on a large file.
+- A Luau loop over a megapixel image is expensive. Prefer processing smaller regions or moving float work to the GPU.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| `Instance.new("EditableImage")` fails | Create it through `AssetService` instead. |
+| `WritePixelsBuffer` errors | The region is outside the image, or the buffer isn't exactly `width * height * 4` bytes. |
+| Pixels look shifted or scrambled | The buffer index is byte-based and zero-based, and rows are tightly packed. |
+| Image changes disappear after resizing | Assigning `Size` clears the pixel buffer. |
+| Nothing appears on screen | `EditableImage` has no verified display binding yet. |
+| `Dispatch` returns `false` | The operation name is wrong, buffer lengths don't match, or the backend is unsupported. |
+| `Poll` always returns `nil` | The operation is still running, or the result was already collected. |
+| GPU result is wrong | Buffers were written at the wrong element offset; each float32 occupies four bytes. |
+
+## Next steps
+
+- `EditableImage` for pixel buffer methods.
+- `AssetService` for creating and loading images.
+- `GPUCompute` for the complete operation list and limits.
+- [Asset paths and references](/docs/guides/asset-paths) for resolving local image files.

@@ -1,0 +1,70 @@
+---
+title: ContentProvider
+description: Download ZIP archives and preload content.
+---
+
+`ContentProvider` handles content preparation. The useful method today is `DownloadZip()`, which fetches an archive over HTTP and extracts it into a local directory. Use it to install maps, texture packs, or other bundled assets at runtime.
+
+## Getting started
+
+```lua
+local ContentProvider = game:GetService("ContentProvider")
+
+ContentProvider:DownloadZip(
+    "https://example.com/packs/props.zip",
+    "./content/props"
+)
+```
+
+The service uses `HttpService` internally, so HTTP must be enabled and the URL must be reachable.
+
+## Methods
+
+### DownloadZip
+
+```lua
+DownloadZip(url: string, location: string, stripRoot: boolean?): boolean
+```
+
+Downloads a ZIP archive from `url` and extracts it into `location`. `stripRoot` defaults to `false`.
+
+```lua
+local ok = ContentProvider:DownloadZip(
+    "https://example.com/assets.zip",
+    "./content/assets",
+    true
+)
+print(ok) -- true
+```
+
+On success it returns `true`. On failure it raises an error describing the stage that failed: a missing `HttpService`, a failed download, an invalid ZIP, a write failure, or an extraction failure.
+
+`stripRoot` controls whether the archive's top-level folder is removed during extraction. With `false`, a ZIP containing `pack/textures/a.png` produces `location/pack/textures/a.png`. With `true`, the same archive produces `location/textures/a.png`.
+
+The download is done in memory before extraction, so very large archives consume memory and then disk space. The method is synchronous.
+
+### PreloadAsync
+
+```lua
+PreloadAsync(instances: {Instance}): ()
+```
+
+Present for compatibility, but it's a no-op. It returns immediately and doesn't inspect the argument.
+
+```lua
+ContentProvider:PreloadAsync({ workspace })
+```
+
+Don't use it to wait for assets. Load the asset through the API that owns it instead.
+
+## Notes
+
+- Extraction happens on the calling thread; a large archive will block the script.
+- The destination path is relative to the running game unless you pass an absolute path.
+- Existing files at the destination may be overwritten by the extraction.
+- The service doesn't expose progress or cancellation.
+
+## See also
+
+- `HttpService` for individual requests and image downloads.
+- `InsertService` for creating mesh parts from local assets.

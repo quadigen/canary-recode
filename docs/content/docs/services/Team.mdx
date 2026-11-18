@@ -1,0 +1,48 @@
+---
+title: Team
+description: Describe a team's color and assignment settings.
+---
+
+`Team` is a data object that describes a team: its color, order, and whether it can be auto-assigned. Create one with `Instance.new("Team")` and parent it to `Teams`.
+
+`Team` inherits from `Instance`. The current engine stores these settings but doesn't automatically assign players or characters to teams.
+
+## Getting started
+
+```lua
+local Teams = game:GetService("Teams")
+
+local defenders = Instance.new("Team")
+defenders.Name = "Defenders"
+defenders.TeamColor = Color3.fromRGB(70, 130, 220)
+defenders.AutoAssignable = true
+defenders.TeamOrder = 1
+defenders.Parent = Teams
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `TeamColor` | `Color3` | Read/write | `Color3.new(0, 0, 0)` | Color associated with the team. |
+| `AutoAssignable` | `boolean` | Read/write | `true` | Whether the team is marked for automatic assignment. |
+| `Neutral` | `boolean` | Read/write | `false` | Whether the team is marked neutral. |
+| `AllowTeamChangeOnTouch` | `boolean` | Read/write | `false` | Whether touching the team is allowed to change a player's team. |
+| `TeamOrder` | `number` | Read/write | `0` | Numeric ordering value. Fractions are truncated to an integer. |
+
+`TeamColor` accepts a `Color3`. `TeamOrder` is stored as a signed integer, so assigning `2.9` stores `2`.
+
+The flags are plain stored values. The verified API doesn't expose a team-assignment method that reads `AutoAssignable`, `Neutral`, or `AllowTeamChangeOnTouch`, so setting them won't change a player's team on its own.
+
+## Notes
+
+- A `Team` has no methods or events of its own.
+- The team's `Name` is what `Teams:GetTeamFromName()` searches.
+- Parent the team to `Teams` so `Teams:GetTeams()` can find it.
+- Cloning copies all five properties and the name.
+- This page documents the object's public surface, not an unverified team-assignment system. Check for engine updates before building match logic around these flags.
+
+## See also
+
+- `Teams` for listing and finding teams.
+- `Players` for player objects.

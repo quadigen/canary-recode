@@ -1,0 +1,61 @@
+---
+title: AntiAliasingEffect
+description: Smooth jagged edges with FXAA, TAA, or MSAA.
+---
+
+`AntiAliasingEffect` selects the anti-aliasing technique used for the 3D view. Edges of geometry, thin details, and specular highlights are the usual reasons to turn it on.
+
+`AntiAliasingEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a disabled anti-aliasing effect by default. Configure it and enable it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local aa = Lighting:FindFirstChild("AntiAliasingEffect")
+if not aa then
+    aa = Instance.new("AntiAliasingEffect")
+    aa.Parent = Lighting
+end
+
+aa.Enabled = true
+aa.FXAA = true
+aa.TAA = false
+aa.MSAA = false
+aa.SampleCount = 4
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns anti-aliasing on or off. |
+| `FXAA` | `boolean` | Read/write | `false` | Enables fast approximate anti-aliasing. |
+| `TAA` | `boolean` | Read/write | `false` | Enables temporal anti-aliasing. |
+| `MSAA` | `boolean` | Read/write | `false` | Enables multisample anti-aliasing. |
+| `SampleCount` | `number` | Read/write | `4` | Multisample count, clamped between `1` and `8`. |
+
+The flags are independent. Enabling more than one asks the renderer to combine them; the visual result and cost depend on the backend. `SampleCount` is truncated to a whole number before use.
+
+When `Enabled` is false, the renderer receives all three flags as false and a sample count of `1`, regardless of the stored values.
+
+## Choosing a technique
+
+- **FXAA** is the cheapest option and softens edges after rendering. It can blur fine text or high-contrast details slightly.
+- **TAA** uses previous frames and generally produces steadier edges, at the cost of some ghosting on fast-moving objects.
+- **MSAA** samples geometry edges directly. It's usually the cleanest for hard edges and the most expensive, especially at high sample counts.
+
+Start with one technique and measure. Turning all three on is rarely the best use of frame time.
+
+## Notes
+
+- Only one anti-aliasing effect is used. The last `AntiAliasingEffect` child of `Lighting` wins.
+- The effect is skipped in the editor's fast viewport.
+- Cloning copies every property above.
+
+## See also
+
+- `Lighting` for the scene's render settings.
+- `ToneMappingEffect` and `ColorCorrectionEffect` for the rest of the post chain.

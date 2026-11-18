@@ -1,0 +1,213 @@
+---
+title: Asset paths and references
+description: Use file paths, project://, builtin://, and kineasset:// correctly, and know what gets embedded in a .kine.
+---
+
+Properties that load assets, such as `MeshPart.MeshId`, `MeshPart.TextureId`, `ImageLabel.Image`, `Sound.SoundId`, and `Animation.AnimationId`, take a string. The prefix on that string decides who resolves it and whether the data travels with your game.
+
+There are four everyday forms:
+
+| Reference | Resolved from | Travels with the map? |
+| --- | --- | --- |
+| `models/hero.glb` | The filesystem, relative to the running process | Yes, if the file is readable when the map is saved |
+| `file://models/hero.glb` | The filesystem, with the prefix removed | Yes, if the file is readable when the map is saved |
+| `project://assets/models/hero.glb` | The active project root, or the project files bundled into an export | Yes in a project/executable export |
+| `builtin://icons/Part.svg` | Assets compiled into the engine | No data is embedded; the engine supplies it |
+| `kineasset://<id>` | The map's embedded asset table | Yes |
+
+`kineasset://` is the stored form, not an authoring scheme. You normally let the serializer produce it instead of typing it yourself.
+
+## project:// is for files in your project
+
+Use `project://` for game assets that live under the project root:
+
+```lua
+local body = Instance.new("MeshPart")
+body.MeshId = "project://assets/models/robot.glb"
+body.TextureId = "project://assets/textures/robot.png"
+body.Parent = workspace
+
+local step = Instance.new("Sound")
+step.SoundId = "project://assets/audio/step.wav"
+step.Parent = body
+```
+
+The path after `project://` is relative to the project root. Use forward slashes and keep it inside the project:
+
+```text
+project://assets/models/robot.glb
+project://ui/badge.png
+project://animations/wave.fbx
+```
+
+The project resolver rejects paths it considers unsafe or ambiguous:
+
+- `.` and `..` components
+- empty components, including a leading slash or trailing slash
+- backslashes and colons
+- NUL bytes
+- symlinks anywhere in the path
+
+That means `project://../outside.glb` and `project://C:\art\hero.glb` do not resolve. Copy the asset into the project and reference it by a path below the root.
+
+In the editor, `project://` reads the live file from the active project, so changes show up without re-exporting. A project or executable export collects the project's regular files into the asset table as path-addressed entries. The `project://` strings are preserved rather than rewritten, and they resolve from the bundled copy when no project root is active.
+
+Because the export bundles the project tree, keep large unused files out of the project directory. The export also skips build output, autosaves, backups, and its own output paths.
+
+If you use `project://` before a project is active, resolution returns nothing. The property still stores the string, but the asset won't load.
+
+## builtin:// is for engine-provided assets
+
+`builtin://` points at assets compiled into the engine. The engine resolves these directly; they are never copied into the map.
+
+Images:
+
+```lua
+local icon = Instance.new("ImageLabel")
+icon.Image = "builtin://icons/Part.svg"
+```
+
+Class icons use `builtin://icons/` and the shared icon set uses `builtin://global-icons/`:
+
+```lua
+icon.Image = "builtin://global-icons/ArrowDown.svg"
+```
+
+Fonts use `builtin://fonts/`:
+
+```lua
+label.FontFace = Font.new("builtin://fonts/Montserrat-Bold.ttf")
+```
+
+`builtin://` is not a general virtual filesystem. It only works in classes that have a built-in resolver, and the available names are defined by the engine version. A wrong name leaves the image blank or falls back to the class default; it does not search the disk.
+
+Use `builtin://` for engine icons and fonts, not for your own files. Your assets belong under `project://` or a normal path.
+
+## Plain paths and file:// are filesystem paths
+
+A string without a scheme is a filesystem path:
+
+```lua
+body.MeshId = "assets/models/robot.glb"
+body.TextureId = "textures/robot.png"
+```
+
+Relative paths are resolved from the running process's working directory, not from the project root. If the editor was launched somewhere else, the same relative string can point somewhere else. Use `project://` when the asset belongs to the project.
+
+`file://` is an optional prefix on a filesystem path. It is stripped before the file is read:
+
+```lua
+body.TextureId = "file://textures/robot.png"
+body.TextureId = "file:///home/dev/game/textures/robot.png"
+
+-- Windows
+body.MeshId = "file://C:\\art\\robot.fbx"
+```
+
+`file://` is not URL decoding and it is not a sandbox. The text after the prefix is used as the path, so spaces are literal and an absolute path remains absolute.
+
+Both plain paths and `file://` paths are readable inputs for embedding. When a map is saved, a readable regular file within the asset size limit is stored in the map and the property is rewritten to a `kineasset://` reference. If the file is missing or unreadable, the property keeps the original path and the asset fails when something tries to load it.
+
+Absolute paths are fine for a quick local test, but they are a poor choice for a shared project because they depend on one machine's directory layout. Prefer `project://` for assets that belong to the game.
+
+## kineasset:// is the embedded form
+
+When the serializer can read an asset, it registers the file's bytes and rewrites the property to a content-addressed reference:
+
+```lua
+print(body.MeshId)
+-- kineasset://4f8c2a7d91b30e6c
+```
+
+The part after the scheme is an asset id, not a file path. It is derived from the file contents, so identical bytes collapse to one entry. A map can reference the same texture from several properties without storing it repeatedly.
+
+`kineasset://` values are resolved from the map's asset table:
+
+1. The serializer reads the authored path.
+2. It stores the bytes in the `.kine` asset table.
+3. It writes a `kineasset://<id>` value into the property.
+4. On load, the asset table is published before instances are created, so the property can resolve immediately.
+5. Re-exporting keeps the id and writes the bytes out again.
+
+The original file is not needed at runtime or after export. This is what makes a map with embedded textures, meshes, sounds, fonts, and animation files portable.
+
+A loaded instance keeps the `kineasset://` string in its property. Treat that string as opaque: pass it through, clone it, or assign it to another asset property. Do not strip the scheme, turn it into a cache path, or construct one by hand. The engine materializes a temporary file only for consumers that require a filesystem path, and manages that cache itself.
+
+A missing `kineasset://` entry is different from a missing ordinary path. The map says the data should be present, so the engine reports that the embedded asset is missing. On a network client, this can mean the server has not sent the asset table yet.
+
+`kineasset://` is also used for `Animation.AnimationId`, so an animation file referenced by a rig follows the same save, load, and re-export rules.
+
+## What gets embedded
+
+| Authored value | Stored in the map | Notes |
+| --- | --- | --- |
+| Readable `models/hero.glb` | `kineasset://<id>` | Bytes are copied into the map. |
+| Readable `file://models/hero.glb` | `kineasset://<id>` | The prefix is only used to read the file. |
+| `project://assets/models/hero.glb` | `project://assets/models/hero.glb` | Project exports add a path-addressed copy of the file. |
+| `builtin://icons/Part.svg` | `builtin://icons/Part.svg` | The engine supplies the bytes. |
+| `kineasset://<id>` | `kineasset://<id>` | The entry is noted for re-export. |
+| Unreadable path | The original path | No bytes are available; loading fails later. |
+| `memory://...` | Usually unchanged | Runtime-only; some runtime images can be captured when saving. |
+| `https://...` | Unchanged | Not a local asset path; use the HTTP/content services. |
+
+The asset table has limits: up to 256 MiB per asset, 512 MiB total in a project bundle, and 65,536 entries. A file over the limit is not embedded, so it won't be portable.
+
+## A complete example
+
+```lua
+local model = Instance.new("Model")
+model.Name = "Robot"
+model.Parent = workspace
+
+local body = Instance.new("MeshPart", model)
+body.Name = "Body"
+body.MeshId = "project://assets/models/robot.glb"
+body.TextureId = "project://assets/textures/robot.png"
+body.Size = Vector3.new(2, 4, 1)
+
+local badge = Instance.new("ImageLabel", body)
+badge.Image = "builtin://icons/Part.svg"
+badge.Size = UDim2.fromOffset(32, 32)
+
+local step = Instance.new("Sound", body)
+step.SoundId = "project://assets/audio/step.wav"
+
+local wave = Instance.new("Animation")
+wave.Name = "Wave"
+wave.AnimationId = "project://animations/wave.fbx"
+wave.ClipName = "Wave"
+```
+
+At authoring time these are project or built-in references. When the map is exported, the project files are carried along; when a plain file is embedded, its property becomes `kineasset://` and the bytes live inside the map.
+
+## Which scheme should I use?
+
+| Situation | Use |
+| --- | --- |
+| A texture, mesh, sound, font, or animation that belongs to the project | `project://...` |
+| An engine icon or bundled font | `builtin://...` |
+| A one-off local file for testing | A plain path or `file://...` |
+| A value read from a loaded map | Leave `kineasset://...` alone |
+| An image generated or downloaded at runtime | The API that created it; don't persist `memory://` by hand |
+| A remote URL | `HttpService` or `ContentProvider`, not an asset property |
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `project://` asset is missing | No active project, or the path uses `..`, a backslash, a colon, a trailing slash, or a symlink. | Keep the file under the project root and use a simple forward-slash path. |
+| Asset works in the editor, missing in an export | The file was outside the project tree or wasn't included in the project bundle. | Move it under the project root and reference it with `project://`; check the export size limits. |
+| `kineasset://` asset is missing after loading | The map's asset table wasn't loaded, or the entry was removed. | Load the `.kine` through the normal loader; on a client, ensure the server sent the asset table. |
+| A plain relative path points at the wrong file | It is resolved from the process working directory, not the project root. | Use `project://` or an absolute path. |
+| Built-in icon is blank | The name isn't in the engine's built-in set. | Use a documented `builtin://icons/`, `builtin://global-icons/`, or `builtin://fonts/` name. |
+| A large asset didn't travel with the map | It exceeded the per-asset or total embedding limit. | Reduce the file, split it, or package it as a project file with a realistic size budget. |
+| `file://` path fails on Windows | The text after the scheme is used literally. | Keep the drive path after `file://`, or use `project://`. |
+
+## See also
+
+- [MeshPart](/docs/MeshPart) for mesh and texture references.
+- [Animation and rigs](/docs/guides/animation-authoring) for animation assets and `Animation.AnimationId`.
+- [ContentProvider](/docs/services/ContentProvider) for downloading asset packs.
+- [HttpService](/docs/services/HttpService) for runtime downloads that aren't local assets.
+- [InsertService](/docs/services/InsertService) for creating a mesh part from a resolvable asset.
+- [Procedural images and GPU compute](/docs/guides/procedural-images-and-gpu) for loading and editing pixel data.

@@ -71,9 +71,11 @@ animation_track_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	free(t)
 }
 Animation_Track_Snapshot :: proc(t: ^AnimationTrack) -> kineffi.KineAnimationTrackState {
-	if Animation_Track_Valid(t) {
-		_ = kineffi.Kine_Filament_AnimationTrackGetState(t.native_track, &t.cached_state)
+	if !Animation_Track_Valid(t) {
+		if t != nil {t.cached_state = {}}
+		return {}
 	}
+	_ = kineffi.Kine_Filament_AnimationTrackGetState(t.native_track, &t.cached_state)
 	return t.cached_state
 }
 animation_track_get :: proc(

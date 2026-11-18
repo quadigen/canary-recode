@@ -20,6 +20,7 @@ FONT_BODY := #load("../src/engine/assets/fonts/Montserrat-Regular.ttf")
 RUNTIME_IMAGE :: "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
 RUNTIME_IMAGE_URI :: "memory://asset-portability-smoke"
 AUDIO_BODY :: "test bytes for an audio asset"
+ANIMATION_BODY :: "animation bytes that are not really an fbx but are definitely bytes"
 MISSING_PATH :: "does/not/exist.fbx"
 
 run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
@@ -188,6 +189,7 @@ main :: proc() {
 	decal_path := write_asset(scratch, "scorch.png", DECAL_BODY)
 	font_path := write_asset(scratch, "custom.ttf", string(FONT_BODY))
 	sound_path := write_asset(scratch, "custom.wav", AUDIO_BODY)
+	animation_path := write_asset(scratch, "hero_wave.fbx", ANIMATION_BODY)
 	classes.ImageLabel_Register_Runtime_Image(RUNTIME_IMAGE_URI, RUNTIME_IMAGE)
 
 	script_vm := vm.New()
@@ -201,6 +203,7 @@ main :: proc() {
 		{"DecalPath", decal_path},
 		{"FontPath", font_path},
 		{"SoundPath", sound_path},
+		{"AnimationPath", animation_path},
 		{"RuntimeImage", RUNTIME_IMAGE_URI},
 	}) {
 		vm.PushString(script_vm.L, input.value)
@@ -244,6 +247,10 @@ contentSound.AudioContent = Content.fromUri(SoundPath)
 local contentMesh = Instance.new("MeshPart", model)
 contentMesh.Name = "ContentMesh"
 contentMesh.MeshContent = Content.fromUri(MeshPath)
+local animation = Instance.new("Animation", model)
+animation.Name = "Wave"
+animation.AnimationId = AnimationPath
+animation.ClipName = "Wave"
 
 model.Parent = game.Workspace
 KineRoot = model
@@ -283,7 +290,7 @@ KineRoot = model
 
 	// Deleting the sources is the whole point: if anything still reads from disk
 	// the checks below fail instead of quietly passing.
-	for path in ([]string{mesh_path, texture_path, decal_path, font_path, sound_path}) {
+	for path in ([]string{mesh_path, texture_path, decal_path, font_path, sound_path, animation_path}) {
 		if os.remove(path) != nil {
 			panic(fmt.tprintf("could not delete %s", path))
 		}
@@ -324,6 +331,7 @@ assert(decal ~= nil, "decal survived")
 KineMeshValue = mesh.MeshId
 KineTextureValue = mesh.TextureId
 KineDecalValue = decal.Texture
+KineAnimationValue = LoadedRoot:FindFirstChild("Wave").AnimationId
 `,
 		"asset_verify",
 	)
@@ -334,10 +342,21 @@ KineDecalValue = decal.Texture
 	defer delete(texture_value)
 	decal_value := read_global_string(&script_vm, "KineDecalValue")
 	defer delete(decal_value)
+	animation_value := read_global_string(&script_vm, "KineAnimationValue")
+	defer delete(animation_value)
 
 	expect_bytes("MeshId", mesh_value, MESH_BODY)
 	expect_bytes("TextureId", texture_value, TEXTURE_BODY)
 	expect_bytes("Decal.Texture", decal_value, DECAL_BODY)
+	expect_bytes("Animation.AnimationId", animation_value, ANIMATION_BODY)
+	animation_id, animation_embedded := assetstore.Parse_Uri(animation_value)
+	if !animation_embedded {
+		panic("Animation.AnimationId is not an embedded reference")
+	}
+	animation_asset, animation_found := assetstore.Find(animation_id)
+	if !animation_found || animation_asset.kind != assetstore.Asset_Kind.Animation {
+		panic("Animation.AnimationId was not embedded as an Animation asset")
+	}
 
 	reexport_path := fmt.tprintf("%s/reexport.kine", scratch)
 	reexport_err := serializer.Serialize_To_File(&environment.classes, script_vm.L, loaded, reexport_path)
@@ -366,6 +385,7 @@ ReexportNormal = ReexportRoot.MaterialVariant.NormalMap
 ReexportSound = ReexportRoot.Sound.SoundId
 ReexportContentSound = ReexportRoot.ContentSound.AudioContent.Uri
 ReexportContentMesh = ReexportRoot.ContentMesh.MeshContent.Uri
+ReexportAnimation = ReexportRoot.Wave.AnimationId
 `, "asset_reexport_verify")
 	for check in ([]struct{global, body: string}{
 		{"ReexportFont", string(FONT_BODY)},
@@ -376,6 +396,7 @@ ReexportContentMesh = ReexportRoot.ContentMesh.MeshContent.Uri
 		{"ReexportSound", AUDIO_BODY},
 		{"ReexportContentSound", AUDIO_BODY},
 		{"ReexportContentMesh", MESH_BODY},
+		{"ReexportAnimation", ANIMATION_BODY},
 	}) {
 		value := read_global_string(&script_vm, check.global)
 		defer delete(value)
@@ -566,6 +587,11 @@ KineLegacyMesh = LegacyRoot:FindFirstChild("Body").MeshId
 	defer delete(texture_hint)
 	if texture_hint != "png" {
 		panic(fmt.tprintf("texture format hint was %q, want png", texture_hint))
+	}
+	animation_hint := assetstore.Format_Hint(animation_value)
+	defer delete(animation_hint)
+	if animation_hint != "fbx" {
+		panic(fmt.tprintf("animation format hint was %q, want fbx", animation_hint))
 	}
 
 	// A Content that points at a live engine object has no URI at all, so before

@@ -29,9 +29,6 @@ set_target_properties(kine_luau PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# This is the single build target needed before linking the Odin executable.
-# KinemiumOdinAliases emits the subsystem archives imported by the bindings
-# package, including their transitive Filament, Skia, Vulkan, and Jolt inputs.
 set(KINEMIUM_ODIN_LIBRARY_TARGETS
     KinemiumOdinAliases
     kine_luau

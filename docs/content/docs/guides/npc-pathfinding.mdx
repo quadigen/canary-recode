@@ -1,0 +1,194 @@
+---
+title: NPCs and pathfinding
+description: Compute navigation paths around obstacles and move characters or simple agents along the waypoints.
+---
+
+`PathfindingService` builds a navigation mesh from the parts around a query and returns waypoints. You still have to move the agent yourself. There's no built-in pathfollowing, so a useful NPC is two pieces: a path query and a movement loop.
+
+This guide shows both, starting with a simple part-based agent so the movement logic is easy to see, then adapting it to a character with a `Humanoid`.
+
+## Ask for a path
+
+Create a path with the agent's size, then compute it between two world positions:
+
+```lua
+local PathfindingService = game:GetService("PathfindingService")
+
+local path = PathfindingService:CreatePath({
+    AgentRadius = 2,
+    AgentHeight = 5,
+    AgentCanJump = true,
+    WaypointSpacing = 4,
+})
+
+path:ComputeAsync(Vector3.new(-40, 8, 0), Vector3.new(40, 8, 0))
+
+if path.Status ~= Enum.PathStatus.Success then
+    warn("no path to the target")
+    return
+end
+
+for index, waypoint in path:GetWaypoints() do
+    print(index, waypoint.Position, waypoint.Action)
+end
+```
+
+`ComputeAsync()` returns nothing. Check `path.Status` afterward; only `Enum.PathStatus.Success` means there are usable waypoints.
+
+| Agent field | Default | What it controls |
+| --- | --- | --- |
+| `AgentRadius` | `2` | How much clearance the agent needs around obstacles. |
+| `AgentHeight` | `5` | How much vertical room the agent needs. |
+| `AgentCanJump` | `true` | Whether the path may include jump waypoints. |
+| `AgentCanClimb` | `false` | Stored on the path; the current mesh builder doesn't use it. |
+| `WaypointSpacing` | `4` | Approximate distance between waypoints. |
+
+The navigation mesh is cached by agent dimensions. Reusing the same dimensions reuses the mesh, and changing them triggers a rebuild. The mesh is built from queryable geometry, so parts with `CanQuery = false` contribute nothing.
+
+## Follow waypoints with a simple agent
+
+The waypoint list includes the start point first and the goal last. For a part-based NPC, move an anchored marker part toward each waypoint:
+
+```lua
+local RunService = game:GetService("RunService")
+
+local function followPath(path, part, speed)
+    local waypoints = path:GetWaypoints()
+    if #waypoints < 2 then
+        return
+    end
+
+    local index = 2
+    local connection
+
+    connection = RunService.Heartbeat:Connect(function(deltaTime)
+        if index > #waypoints then
+            connection:Disconnect()
+            return
+        end
+
+        local target = waypoints[index].Position
+        local offset = target - part.Position
+        local distance = offset.Magnitude
+
+        if distance < 1 then
+            index += 1
+            return
+        end
+
+        part.Position += offset.Unit * math.min(speed * deltaTime, distance)
+    end)
+end
+```
+
+Keep the marker anchored; otherwise physics tries to own the part's position at the same time as your movement loop. The `math.min()` keeps the part from overshooting a waypoint on a long frame. When the last waypoint is reached, the connection disconnects instead of leaving a permanent per-frame loop.
+
+For a simple NPC, `speed` is studs per second. For a character, use `Humanoid.WalkSpeed` as the baseline.
+
+## Use a Humanoid character
+
+If the NPC is a character model with a `Humanoid` and its controller, let the humanoid handle movement:
+
+```lua
+local function walkPath(character, path)
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid == nil then
+        return
+    end
+
+    for _, waypoint in path:GetWaypoints() do
+        if waypoint.Action == Enum.PathWaypointAction.Jump then
+            humanoid:Jump()
+        end
+
+        humanoid:WalkTo(waypoint.Position)
+
+        local deadline = os.clock() + 4
+        repeat
+            task.wait(0.1)
+            local reached = (character:GetPivot().Position - waypoint.Position).Magnitude < 2
+            if reached then
+                break
+            end
+        until os.clock() > deadline
+    end
+end
+```
+
+`Humanoid:WalkTo()` moves toward a position but does not pathfind around obstacles. The service supplies the route; the humanoid walks each leg. The timeout prevents one blocked waypoint from stalling the entire NPC forever.
+
+A humanoid's movement properties are proxies to its character controller. Without a controller in the model, `WalkSpeed` reads `nil` and `WalkTo()` returns `false`.
+
+## Recompute when the world changes
+
+A path is a snapshot. A door that closes or a crate that moves can invalidate it:
+
+```lua
+local blockedAt = path:CheckOcclusionAsync(1)
+if blockedAt ~= -1 then
+    -- Recompute from the blocked waypoint onward.
+    local waypoints = path:GetWaypoints()
+    local from = waypoints[blockedAt]
+    path:ComputeAsync(from.Position, goalPosition)
+end
+```
+
+`CheckOcclusionAsync()` returns the first blocked waypoint index, or `-1` when the path is clear. It doesn't run continuously in the background; the `Blocked` and `Unblocked` events fire from the check, so poll it on a timer or when you know geometry changed.
+
+Don't recompute every frame for every NPC. A path query across a large map is synchronous and can stall the script that runs it. Recompute on a blocked result, on a new destination, or on a slow schedule.
+
+## Handle failure
+
+A failed query has a status other than `Success` and no waypoints:
+
+```lua
+path:ComputeAsync(origin, destination)
+
+if path.Status ~= Enum.PathStatus.Success or #path:GetWaypoints() == 0 then
+    -- Walk to a fallback point, wait, or give up.
+    return
+end
+```
+
+Common reasons for failure are a destination inside geometry, a start point with no navigable surface, an agent too wide for the gap, or `CanQuery = false` on the only floor. Check the world before assuming the service is wrong.
+
+`FindPathAsync()` is a shortcut that uses the default agent dimensions. It's fine for a first prototype, but `CreatePath()` is the right choice once the NPC has a size.
+
+## Keep NPCs reasonable
+
+- Compute paths on the server, where the world is authoritative.
+- Give each NPC a budget: one path at a time, one recompute at a time, and a minimum interval between queries.
+- Stop following when the NPC dies, is destroyed, or loses its target.
+- Use `WaypointSpacing` to trade path detail for fewer waypoints.
+- Anchor decorative parts and keep `CanQuery` off for geometry the mesh shouldn't see.
+- Reuse a single `Path` object for repeated queries from the same agent instead of creating one per frame.
+
+## Debugging a path
+
+Print the waypoints and their actions while you tune the agent dimensions:
+
+```lua
+for index, waypoint in path:GetWaypoints() do
+    print(index, waypoint.Position, waypoint.Action)
+end
+```
+
+`waypoint.Label` is always `nil` in the current implementation, so don't use labels to mark named destinations. Compare the waypoint positions against your floor and obstacle layout instead.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| `Status` is not `Success` | No navigable surface at the start or goal, or the agent is too wide. |
+| Path goes through a wall | The wall isn't queryable (`CanQuery = false`), or the agent radius is too small. |
+| Waypoints exist but the NPC doesn't move | The path loop was never started, or the humanoid has no controller. |
+| NPC walks into a moving obstacle | The path is stale; check occlusion and recompute. |
+| Path query stalls the server | Too many queries, or one query over a very large map. Budget recomputes. |
+| Jump waypoints are ignored | The part-following loop ignores `Action`; jump handling is up to your agent. |
+
+## Next steps
+
+- `PathfindingService` for `CreatePath()`, `ComputeAsync()`, and the path object reference.
+- `Humanoid` for `WalkTo()`, health, and character movement.
+- `Workspace` for raycasts and world queries.
+- [Networking](/docs/guides/network-ownership) for which machine simulates the NPC's parts.

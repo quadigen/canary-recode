@@ -1,9 +1,11 @@
 package classes
 
+import assetstore "../assetstore"
 import kineffi "../bindings"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
+import "core:strings"
 
 Animation_Native_Priority :: proc(value: i64) -> i32 {
 	if value == 1000 {return 0}
@@ -87,6 +89,7 @@ Animation_Resolve_Mesh :: proc(a: ^Animator) -> ^MeshPart {
 	}
 	node := a.object.parent
 	for node != nil {
+		if Is_A_Class(node, &MeshPart_Class) {return cast(^MeshPart)node}
 		if Is_A_Class(node, &AnimationController_Class) {
 			controller := cast(^AnimationController)node
 			if Animation_Is_Live(registry, "MeshPart", controller.mesh_part) {
@@ -157,6 +160,45 @@ Animation_Animator_Ready :: proc(a: ^Animator) -> bool {
 }
 Animation_Track_Valid :: proc(t: ^AnimationTrack) -> bool {
 	return t != nil && t.native_track != nil && t.owner != nil && Animation_Animator_Valid(t.owner)
+}
+
+// Animation_Import_Clips copies clips from an animation asset onto the rig,
+// matching channels by bone name. The source mesh is temporary: only the
+// animation records survive, so a rig can play a clip from a file that was
+// authored separately from its mesh.
+Animation_Import_Clips :: proc(
+	ctx: ^kineffi.KineFilamentContext,
+	mesh: ^kineffi.KineFilamentMesh,
+	source: string,
+) -> bool {
+	if ctx == nil || mesh == nil || source == "" {return false}
+
+	temporary: ^kineffi.KineFilamentMesh
+	if data, found := assetstore.Resolve_Bytes(source); found && len(data) > 0 {
+		hint := assetstore.Format_Hint(source)
+		defer delete(hint)
+		c_hint := strings.clone_to_cstring(hint == "" ? "glb" : hint)
+		defer delete(c_hint)
+		temporary = kineffi.Kine_Filament_CreateMeshFromMemoryIndexed(
+			ctx,
+			raw_data(data),
+			uintptr(len(data)),
+			c_hint,
+			0,
+		)
+	} else if !assetstore.Is_Uri(source) {
+		path := assetstore.Resolve_Path(source)
+		defer delete(path)
+		if path != "" {
+			c_path := strings.clone_to_cstring(path)
+			defer delete(c_path)
+			temporary = kineffi.Kine_Filament_CreateMeshFromPathIndexed(ctx, c_path, 0)
+		}
+	}
+	if temporary == nil {return false}
+	defer _ = kineffi.Kine_Filament_DestroyMesh(ctx, temporary)
+
+	return kineffi.Kine_Filament_MeshImportAnimations(mesh, temporary) > 0
 }
 
 Animation_Ensure_Child_Animator :: proc(L: ^vm.State, container: ^Object) -> ^Animator {

@@ -1,0 +1,195 @@
+---
+title: Network ownership
+description: Decide which machine simulates a part, hand ownership to a player, and keep physics authoritative.
+---
+
+Every unanchored part has a network owner: the machine responsible for simulating it. By default the server owns everything, but the server can hand a part to a player's client so that client simulates it locally and the server mirrors the result. This is how games keep character movement and nearby physics responsive without giving up server authority.
+
+This guide covers the ownership methods, automatic assignment, and the behavior that causes most ownership bugs.
+
+## Who owns what
+
+A part is simulated by exactly one of three kinds of owner:
+
+| Owner | Meaning |
+| --- | --- |
+| Server | The server simulates the part. This is the default. |
+| A player's client | That client simulates the part and uploads its transform and velocity. |
+| Automatic | The server keeps reassigning the part based on which player is nearby. |
+
+A handoff preserves motion. When the server hands a part to a client, it also sends the part's current position, rotation, and velocities, so ownership changing doesn't stop or reset the part. The new owner continues from where the part was.
+
+Anchored parts are never simulated, so they have no owner and reject `SetNetworkOwner()`.
+
+## Methods
+
+`Part` and `Model` expose the same four methods:
+
+| Method | Purpose |
+| --- | --- |
+| `SetNetworkOwner(player)` | Give ownership to a connected player. Without an argument, pin the part to the server. |
+| `GetNetworkOwner()` | Return the owning `Player`, or `nil` if the server owns it or there is no owner. |
+| `SetNetworkOwnershipAuto()` | Return the part to automatic ownership. |
+| `GetNetworkOwnershipStatus()` | Return an `Enum.NetworkOwnership` value describing the current assignment. |
+
+The methods require replication to be running. Calling them before the server or client connection is started raises an error.
+
+## Assigning ownership from the server
+
+The server is the authority. Pass a connected `Player` to hand a part to that player's client:
+
+```lua
+local crate = workspace:WaitForChild("Crate")
+local player = game.Players:GetPlayers()[1]
+
+crate:SetNetworkOwner(player)
+print(crate:GetNetworkOwner() == player) -- true
+```
+
+The player must be connected to the server and must be the object's `Player` instance, not a user ID or a name. Passing a player who isn't connected raises an error.
+
+Once assigned this way, the part is locked to that player. Automatic ownership won't take it away, even if the player walks far away. Call `SetNetworkOwnershipAuto()` to release the lock:
+
+```lua
+crate:SetNetworkOwnershipAuto()
+```
+
+Calling `SetNetworkOwner()` with no argument is a server-side pin, not a release to automatic ownership:
+
+```lua
+crate:SetNetworkOwner() -- server owns it from now on
+```
+
+The part stays server-owned until something calls `SetNetworkOwnershipAuto()` or assigns it to a player again. This is the right call for a part the server must always simulate, such as a moving platform or a projectile.
+
+## Requesting ownership from a client
+
+A client can claim a part for itself:
+
+```lua
+local crate = workspace:WaitForChild("Crate")
+crate:SetNetworkOwner(game.Players.LocalPlayer)
+```
+
+The client applies the change optimistically, then sends a request to the server. The server validates the request against its own replicated copy, applies it, and broadcasts the new owner. Until that round trip finishes, other clients still see the old owner.
+
+A client may only name its own `Player`. Passing another player or a non-`Player` value raises an error. Every client also has the reverse call:
+
+```lua
+crate:SetNetworkOwner() -- return this part to automatic ownership
+```
+
+On a client, the no-argument form doesn't pin the part to the server. It asks the server to clear the lock and resume automatic assignment. The server may immediately hand the part back to a nearby player.
+
+Requests work only on parts and models that already exist on both sides. If the part hasn't replicated yet, the request is ignored. Wait for the part before claiming it.
+
+## Automatic ownership
+
+Automatic ownership is on by default. Every 0.1 seconds the server looks for unanchored parts near each player's character and assigns them to the closest client.
+
+The rules are:
+
+- A part becomes a candidate within 50 studs of a player's character root.
+- The current owner keeps the part until it is more than 80 studs away.
+- Another player takes over only when they are more than twice as close as the current owner.
+- Anchored parts, parts with a locked owner, and character parts are never reassigned.
+- A part that hasn't fully replicated to a client isn't assigned to that client yet.
+
+The two distances form a hysteresis band: assignment happens at 50 studs, release at 80, so a part sitting near the boundary doesn't bounce between owners every step.
+
+Parts connected by `BallSocketConstraint`, `HingeConstraint`, `PrismaticConstraint`, `RodConstraint`, `RopeConstraint`, `SpringConstraint`, or `WeldConstraint` form one ownership group. The server uses the group's center for distance checks and transfers the whole group at once, so a welded assembly or a hinged door always has a single owner.
+
+Character parts belong to the player who owns the character. That's why a player's own body simulates locally without any explicit `SetNetworkOwner()` call.
+
+## Models
+
+Passing a `Model` applies the call to every part inside it, at any depth:
+
+```lua
+local vehicle = workspace:WaitForChild("Vehicle")
+vehicle:SetNetworkOwner(player)
+```
+
+Anchored descendants are skipped, and the rest of the model becomes a single locked ownership unit. `GetNetworkOwner()` and `GetNetworkOwnershipStatus()` on a model report the state of its first descendant part. Use a model when you want a vehicle, a ragdoll, or a contraption to move as one unit.
+
+Calling `SetNetworkOwner()` on a single part changes only that part, even if it's welded to others. If the parts must move together, set the owner on the model, or use automatic ownership, which groups constrained parts itself.
+
+## Reading ownership
+
+`GetNetworkOwnershipStatus()` tells you how the part is owned from the current machine's perspective:
+
+| Value | Meaning |
+| --- | --- |
+| `Enum.NetworkOwnership.Server` | The server owns this part. |
+| `Enum.NetworkOwnership.Client` | This client owns the part. |
+| `Enum.NetworkOwnership.ServerPart` | The server owns the part as part of a model assignment. |
+| `Enum.NetworkOwnership.ClientPart` | This client owns the part as part of a model assignment. |
+| `Enum.NetworkOwnership.Unknown` | The part has no replication state, or replication isn't running. |
+
+The `Part` variants only describe how the assignment was made; the simulation behavior is the same.
+
+Status is local. A client only reports `Client` for parts it owns itself. A part owned by another player looks like `Server` from a client's point of view, even though that other client is actually simulating it. If you need to know whether you can move a part locally, check for `Client` or `ClientPart`:
+
+```lua
+local status = crate:GetNetworkOwnershipStatus()
+local iOwnIt = status == Enum.NetworkOwnership.Client
+    or status == Enum.NetworkOwnership.ClientPart
+
+if iOwnIt then
+    crate.AssemblyLinearVelocity = Vector3.new(0, 50, 0)
+end
+```
+
+`GetNetworkOwner()` returns `nil` for a server-owned part and the owning `Player` for a player-owned one. On a client, treat `nil` or any player other than `LocalPlayer` as "not mine".
+
+## Reacting to changes
+
+Every part fires `OwnershipChanged` when its owner changes. The callback receives the new owner as a `Player`, or `nil` when the part becomes server-owned:
+
+```lua
+crate.OwnershipChanged:Connect(function(owner)
+    if owner == nil then
+        print("server owns the crate")
+    else
+        print("owner is", owner.Name)
+    end
+end)
+```
+
+A model transfer or automatic group transfer fires the event on each affected part. The event fires on both the server and the clients. Use it to enable local input handling when a client gains a part and to clean up when it loses one.
+
+## What the server accepts from an owner
+
+A client-owned part is simulated on that client, but the server still checks what it receives. The server rejects invalid transforms and velocities and sends a correction back to the owner, which snaps the part to the server's copy. The current limits are:
+
+- At most 120 ownership updates per second per part.
+- A single update may not jump more than about 128 studs from the server's copy.
+- Linear and angular velocity are capped around 1024 studs per second.
+
+The client applies the correction and continues simulating from the corrected transform. These limits stop a client from teleporting an owned part or accelerating it without bound. They are generous enough for normal movement but will interrupt scripted teleports. Teleport a client-owned part on the server, or temporarily take ownership back with `SetNetworkOwner()`, instead of moving it a long distance on the client.
+
+Because the client is the simulator, two clients should never own the same part. The server enforces a single owner, and the last assignment wins.
+
+## Testing
+
+Ownership needs a server and at least one client. Run them as separate processes with the commands from the [networking guide](/docs/guides/networking#testing-two-sides), or use a standalone session for quick checks.
+
+A standalone session runs both sides in one process, so local parts may be auto-assigned to the local player even without an explicit claim. That's useful for testing movement, but it won't reproduce a real client's latency or a handoff between two players.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| `SetNetworkOwner` errors on an anchored part | Unanchor the part first; static parts have no owner. |
+| `That player is not connected` | Pass a `Player` from `game.Players:GetPlayers()`, not a name or ID. |
+| Client passes another player and gets an error | A client may only claim a part for its own `LocalPlayer`. |
+| Part never becomes client-owned | It's anchored, locked by an earlier `SetNetworkOwner`, a character part, or no player is within 50 studs. |
+| Part snaps back while moving on a client | The client doesn't own it, or an update exceeded the server's speed, distance, or rate limit. |
+| Ownership doesn't change on the server | The client's request hasn't arrived yet; wait a few frames. |
+| A welded assembly splits between owners | Set ownership on the model, or let automatic ownership group the constraints. |
+
+## Next steps
+
+- `Part` and `Model` for the method reference.
+- [Networking](/docs/guides/networking) for remote events, functions, and validation.
+- [Physics](/docs/guides/physics) for how the simulation uses the owner.

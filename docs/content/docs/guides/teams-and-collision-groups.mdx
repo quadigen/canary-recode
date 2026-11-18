@@ -1,0 +1,218 @@
+---
+title: Teams, collision groups, and multiplayer rules
+description: Build server-authoritative team assignment with Teams, and understand what collision groups do today.
+---
+
+The engine gives you `Team` objects for describing teams and `PhysicsService` for naming collision groups. Neither one runs a match for you. `Team` properties are stored but don't assign players automatically, and collision-group registration doesn't expose the masks needed to make groups ignore each other.
+
+You can still build teams. Keep the assignment in server-side state, replicate the label to clients, and enforce every rule on the server.
+
+## Create teams
+
+Teams are children of the `Teams` service:
+
+```lua
+local Teams = game:GetService("Teams")
+
+local red = Instance.new("Team")
+red.Name = "Red"
+red.TeamColor = Color3.fromRGB(200, 40, 40)
+red.AutoAssignable = true
+red.TeamOrder = 1
+red.Parent = Teams
+
+local blue = Instance.new("Team")
+blue.Name = "Blue"
+blue.TeamColor = Color3.fromRGB(40, 90, 200)
+blue.AutoAssignable = true
+blue.TeamOrder = 2
+blue.Parent = Teams
+```
+
+List them with `Teams:GetTeams()`, and look one up by name with `Teams:GetTeamFromName("Red")`. Only direct children are searched; nested folders aren't.
+
+`AutoAssignable`, `Neutral`, and `AllowTeamChangeOnTouch` are flags you can read. The engine doesn't consume them for automatic assignment, so your script decides what they mean.
+
+## Keep assignment on the server
+
+Use a table keyed by `UserId`, and mirror the label onto the player for clients:
+
+```lua
+local Players = game:GetService("Players")
+
+local assignments = {}
+
+local function assignTeam(player, team)
+    assignments[player.UserId] = team
+    player:SetAttribute("Team", team.Name)
+end
+
+local function clearTeam(player)
+    assignments[player.UserId] = nil
+    player:SetAttribute("Team", nil)
+end
+```
+
+Attributes on a replicated player are part of its replicated metadata, so a client can read `game.Players.LocalPlayer:GetAttribute("Team")` for display. Treat that as presentation only. Rules such as damage, scoring, and spawn choice should read `assignments` on the server.
+
+On a client, looking up the matching `Team` object is straightforward:
+
+```lua
+local Teams = game:GetService("Teams")
+local teamName = game.Players.LocalPlayer:GetAttribute("Team")
+
+local team = teamName and Teams:GetTeamFromName(teamName)
+if team then
+    print("my color is", team.TeamColor)
+end
+```
+
+The client's copy of the attribute is not proof of identity. A modified client can claim anything locally; the server's table is the authority.
+
+## Pick a team on join
+
+A simple balance pass reads the teams in `TeamOrder` and chooses the smallest:
+
+```lua
+local function teamSize(team)
+    local count = 0
+    for _, player in Players:GetPlayers() do
+        if assignments[player.UserId] == team then
+            count += 1
+        end
+    end
+    return count
+end
+
+local function pickTeam()
+    local candidates = Teams:GetTeams()
+    table.sort(candidates, function(a, b)
+        return a.TeamOrder < b.TeamOrder
+    end)
+
+    local best
+    local bestSize = math.huge
+
+    for _, team in candidates do
+        if team.AutoAssignable then
+            local size = teamSize(team)
+            if size < bestSize then
+                best = team
+                bestSize = size
+            end
+        end
+    end
+
+    return best
+end
+
+Players.PlayerAdded:Connect(function(player)
+    local team = pickTeam()
+    if team then
+        assignTeam(player, team)
+    end
+end)
+
+Players.PlayerRemoving:Connect(clearTeam)
+```
+
+`AutoAssignable` is just a flag here; the script is what makes it meaningful. If you want spectators or a neutral team, skip assignment and leave the attribute `nil`.
+
+## Enforce rules on the server
+
+Every gameplay check that depends on a team belongs on the server:
+
+```lua
+local function canDamage(attacker, victim)
+    local attackerTeam = assignments[attacker.UserId]
+    local victimTeam = assignments[victim.UserId]
+
+    if attackerTeam == nil or victimTeam == nil then
+        return true
+    end
+
+    return attackerTeam ~= victimTeam
+end
+```
+
+Apply the same pattern to scoring, capture points, team-only doors, and chat channels. Never let a client send "I am on Red" and then trust it.
+
+## Spawn players with their team
+
+`SpawnLocation.Neutral` and the other spawn flags are stored settings; they don't read your team table. Move the character yourself when it loads:
+
+```lua
+local redSpawn = CFrame.new(-40, 5, 0)
+
+local function placePlayer(player)
+    local team = assignments[player.UserId]
+    if team and team.Name == "Red" then
+        player:Teleport(redSpawn)
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        placePlayer(player)
+    end)
+
+    -- The character may already exist when this handler runs.
+    if player.Character then
+        placePlayer(player)
+    end
+end)
+```
+
+`Player:Teleport()` keeps the character controller in sync, unlike setting a part's position directly. Guard it against a `nil` character; the method raises when there's nothing to move.
+
+For a visual team color, either tint the character's parts on spawn or read the team name on the client and drive the interface from it. There's no automatic character-color assignment tied to `Team.TeamColor`.
+
+## Collision groups today
+
+`PhysicsService` can register names and report them:
+
+```lua
+local PhysicsService = game:GetService("PhysicsService")
+
+PhysicsService:RegisterCollisionGroup("Red")
+PhysicsService:RegisterCollisionGroup("Blue")
+
+print(PhysicsService:IsCollisionGroupRegistered("Red")) -- true
+```
+
+`Part.CollisionGroup` exists and can store a group name:
+
+```lua
+part.CollisionGroup = "Red"
+```
+
+That is not enough to make Red and Blue pass through each other. The current API doesn't expose collision masks, and registering a name doesn't change which parts collide. `PhysicsService:Raycast()`, `RaycastParams()`, and `OverlapParams()` are placeholders that return empty tables; use `Workspace:Raycast()` for real queries.
+
+For now, express gameplay filtering with the tools that work:
+
+- Keep a server-side team table and reject invalid targets in combat code.
+- Use `CanCollide` and `CanTouch` for broad physical behavior.
+- Use `CanQuery` and `RaycastParams` to exclude parts from spatial queries.
+- Use attributes or tags to label parts for your own filtering logic.
+
+Check the reference again before building a design that depends on collision groups; this is an area where the exposed surface may grow.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| Everyone joins the same team | The code reads `AutoAssignable` but no script performs assignment. |
+| A player has no team | `pickTeam()` returned `nil`, or the join handler ran before the team existed. |
+| Team colors don't appear on characters | `TeamColor` is data; nothing applies it to `Part.Color` automatically. |
+| A player spawns at the wrong place | `SpawnLocation.Neutral` doesn't read your team table; teleport on `CharacterAdded`. |
+| A client sees the wrong team | The attribute wasn't set on the server, or the client is reading a stale value before replication. |
+| Collision groups don't stop collisions | Registration and `Part.CollisionGroup` don't expose collision masks yet. |
+| Team rules can be bypassed | The check ran on a client. Re-run it on the server using the assignment table. |
+
+## Next steps
+
+- [Networking](/docs/guides/networking) for validating client requests.
+- [Saving player data](/docs/guides/saving-player-data) for persisting a chosen team.
+- `Teams` and `Team` for the data model reference.
+- `PhysicsService` for the collision-group surface and its placeholders.
+- `Players` for join, leave, character, and teleport APIs.

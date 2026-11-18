@@ -6,8 +6,20 @@
     "scripting",
     "script-environment",
     "networking",
+    "network-ownership",
+    "saving-player-data",
     "physics",
+    "2d-games",
+    "npc-pathfinding",
     "3d",
-    "input-and-ui"
+    "terrain-and-environment",
+    "lighting-and-effects",
+    "animation-authoring",
+    "procedural-images-and-gpu",
+    "asset-paths",
+    "input-and-ui",
+    "teams-and-collision-groups",
+    "http-and-external-apis",
+    "localization"
   ]
 }

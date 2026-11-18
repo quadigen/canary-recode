@@ -1,0 +1,61 @@
+---
+title: ReflectionProbeEffect
+description: Capture reflections from a point in the world for reflective surfaces.
+---
+
+`ReflectionProbeEffect` gives reflective materials something to reflect. It captures a view from a position in the scene and feeds that capture to the renderer, either following the camera or staying at a fixed point.
+
+`ReflectionProbeEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a reflection probe by default. Configure the existing one rather than adding a second:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local probe = Lighting:FindFirstChild("ReflectionProbeEffect")
+if not probe then
+    probe = Instance.new("ReflectionProbeEffect")
+    probe.Parent = Lighting
+end
+
+probe.Enabled = true
+probe.AutoPosition = false
+probe.Position = Vector3.new(0, 12, 0)
+probe.Resolution = 128
+probe.UpdateInterval = 1
+probe.Intensity = 1
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the probe on or off. |
+| `AutoPosition` | `boolean` | Read/write | `true` | Follow the camera instead of using `Position`. |
+| `Position` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | World position used when `AutoPosition` is false. |
+| `Resolution` | `number` | Read/write | `128` | Capture resolution, clamped between `32` and `512`. |
+| `UpdateInterval` | `number` | Read/write | `1` | Seconds between captures, clamped between `0.1` and `60`. |
+| `Intensity` | `number` | Read/write | `1` | Reflection strength, clamped between `0` and `10`. |
+| `NearPlane` | `number` | Read/write | `0.1` | Near clipping plane, clamped between `0.01` and `10`. |
+| `MaxDistance` | `number` | Read/write | `1000` | Maximum capture distance, clamped between `1` and `10000`. |
+
+`Resolution` and `UpdateInterval` are numeric even though they describe discrete values. Fractions are passed through; the renderer may quantize them.
+
+## Choosing a position
+
+With `AutoPosition` enabled, the probe follows the camera, which works well for outdoor scenes where the sky and distant geometry dominate reflections. With it disabled, the probe captures from `Position`, giving stable local reflections for a room, a shiny floor, or a vehicle.
+
+A fixed probe is cheaper to reason about but becomes wrong when the reflective surface moves far from the probe. Larger `UpdateInterval` values reduce capture cost at the price of stale reflections.
+
+## Notes
+
+- Only one reflection probe is used. The last `ReflectionProbeEffect` child of `Lighting` wins.
+- The probe is skipped in the editor's fast viewport.
+- Cloning copies every property above.
+
+## See also
+
+- `Lighting` for the rest of the environment settings.
+- `ScreenSpaceReflectionsEffect` for reflections derived from the current frame.

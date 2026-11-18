@@ -1,0 +1,245 @@
+---
+title: HTTP and external APIs
+description: Make GET and POST requests, decode JSON, download images, and handle failures with HttpService.
+---
+
+`HttpService` talks to web APIs and converts JSON. Use it when data lives behind your own backend, a leaderboard service, or any endpoint outside the game. It isn't a replacement for `DataStoreService`; local saves should stay local unless you need an external system.
+
+Requests are synchronous. A slow endpoint blocks the script that called it, so keep requests off the frame loop and out of code that runs for every player every tick.
+
+## Make a GET request
+
+```lua
+local HttpService = game:GetService("HttpService")
+
+local body = HttpService:GetAsync("https://example.com/status")
+local data = HttpService:JSONDecode(body)
+
+print(data.ok)
+```
+
+`GetAsync()` returns the response body as a string. It raises an error on a non-2xx status or a transport failure, so wrap calls that can fail:
+
+```lua
+local ok, body = pcall(function()
+    return HttpService:GetAsync("https://example.com/status")
+end)
+
+if not ok then
+    warn("request failed:", body)
+    return
+end
+```
+
+## Use RequestAsync when you need details
+
+`RequestAsync()` returns a table and doesn't raise for an HTTP error status:
+
+```lua
+local ok, response = pcall(function()
+    return HttpService:RequestAsync({
+        Url = "https://example.com/players",
+        Method = "GET",
+        Headers = {
+            ["Accept"] = "application/json",
+        },
+    })
+end)
+
+if not ok then
+    warn("transport failed:", response)
+    return
+end
+
+if not response.Success then
+    warn(response.StatusCode, response.StatusMessage, response.Body)
+    return
+end
+
+local players = HttpService:JSONDecode(response.Body)
+```
+
+The response has `Success`, `StatusCode`, `StatusMessage`, `Body`, and `Headers`. `RequestAsync()` still raises for an invalid request table, an unsupported method, or a transport failure, which is why it's inside `pcall`.
+
+Use `RequestAsync()` for anything where you need the status code or response headers. Use `GetAsync()` and `PostAsync()` for simple calls that can treat every failure the same way.
+
+## POST JSON
+
+`PostAsync()` defaults the content type to `application/json`:
+
+```lua
+local payload = HttpService:JSONEncode({
+    player = "Ada",
+    score = 1200,
+})
+
+local ok, body = pcall(function()
+    return HttpService:PostAsync("https://example.com/scores", payload)
+end)
+
+if not ok then
+    warn("score submit failed:", body)
+    return
+end
+
+print(body)
+```
+
+With `RequestAsync()`, set the header yourself:
+
+```lua
+local response = HttpService:RequestAsync({
+    Url = "https://example.com/scores",
+    Method = "POST",
+    Headers = {
+        ["Content-Type"] = "application/json",
+        ["Authorization"] = "Bearer " .. apiKey,
+    },
+    Body = HttpService:JSONEncode({ player = "Ada", score = 1200 }),
+})
+```
+
+## Write a small JSON request helper
+
+Most code needs the same three steps: send, check status, decode. Put them in one helper:
+
+```lua
+local HttpService = game:GetService("HttpService")
+
+local function requestJson(url, options)
+    options = options or {}
+
+    local ok, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = url,
+            Method = options.method or "GET",
+            Headers = options.headers,
+            Body = options.body,
+        })
+    end)
+
+    if not ok then
+        return nil, "transport: " .. tostring(response)
+    end
+
+    if not response.Success then
+        return nil, string.format(
+            "HTTP %d %s: %s",
+            response.StatusCode,
+            response.StatusMessage,
+            response.Body
+        )
+    end
+
+    local decodeOk, decoded = pcall(function()
+        return HttpService:JSONDecode(response.Body)
+    end)
+
+    if not decodeOk then
+        return nil, "invalid JSON: " .. tostring(decoded)
+    end
+
+    return decoded
+end
+```
+
+The helper returns the decoded value or `nil` plus a message. Callers can distinguish transport failures, HTTP errors, and malformed JSON without another layer of `pcall`.
+
+## Retry with a limit
+
+There's no built-in retry or timeout. Add your own, with a cap:
+
+```lua
+local function requestWithRetries(url, attempts)
+    local lastError
+
+    for attempt = 1, attempts do
+        local data, err = requestJson(url)
+        if data ~= nil then
+            return data
+        end
+
+        lastError = err
+        task.wait(2 ^ attempt)
+    end
+
+    return nil, lastError
+end
+```
+
+Only retry operations that are safe to repeat. A GET usually is. A POST that creates a purchase or grants a reward may not be. Add an idempotency key if the remote service supports one.
+
+## JSON rules
+
+`JSONEncode()` supports booleans, numbers, strings, and tables:
+
+- Arrays are tables with consecutive integer keys starting at `1`.
+- Other tables become objects with string or number keys.
+- Integers and integer-valued floats encode as integers.
+- `nil` encodes as `null` when passed directly.
+
+Encoding raises for functions, unsupported userdata, ambiguous mixed tables, cyclic tables, `NaN`, infinity, and tables nested more than 20 levels deep.
+
+`JSONDecode()` turns arrays into one-based tables, objects into string-keyed tables, and `null` into `nil`. Invalid JSON raises, so keep decoding inside `pcall` when the response comes from outside your control.
+
+## Download an image
+
+`GetImageBytes()` returns `Content`:
+
+```lua
+local ok, content = pcall(function()
+    return HttpService:GetImageBytes("https://example.com/icon.png")
+end)
+
+if not ok then
+    warn("image download failed:", content)
+end
+```
+
+The response must be a decodable image. The method raises on a failed download or an undecodable body. Pass the `Content` to an API that accepts content, such as an image decoder, and keep the consumer's size limits in mind.
+
+For downloadable asset packs, `ContentProvider:DownloadZip()` fetches and extracts an archive. It uses `HttpService` internally, is synchronous, and writes to disk at the destination you provide.
+
+## Handle secrets correctly
+
+Treat API keys, bearer tokens, and private endpoints as server-only:
+
+- Keep secrets in server scripts, never in a client `LocalScript`, `ReplicatedStorage`, or a replicated attribute.
+- Make the HTTP call on the server and send only the result to clients through a remote event.
+- Don't let a client choose the URL or headers for a privileged request.
+- Validate and rate-limit any remote that triggers an HTTP call on the server.
+
+A client can read everything in `ReplicatedStorage`, and a modified client can call any remote you expose.
+
+## Other methods
+
+`GenerateGUID()` returns a locally generated GUID string. It isn't guaranteed unique across processes, so don't use it as a durable database key.
+
+`UrlEncode()` percent-encodes query values:
+
+```lua
+local query = "name=" .. HttpService:UrlEncode("Ada Lovelace")
+```
+
+`OpenURL()` asks the platform to open a URL in the browser or default handler. It doesn't fetch the page for your script.
+
+`CreateWebStreamClient()` opens a WebSocket, but only in the editor, only when HTTP is enabled, and only for `Enum.WebStreamClientType.WebSocket` with a `ws://` or `wss://` URL. Opening is asynchronous; wait for `Opened` before sending if the server requires a handshake.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| `GetAsync` raises on a 404 | It raises for every non-2xx response; use `RequestAsync` to inspect the status. |
+| `RequestAsync` raises instead of returning | The request table is invalid, the method is unsupported, or the transport failed. |
+| JSON decode fails | The endpoint returned HTML or an error page, not JSON. Log `Body` before decoding. |
+| JSON encode fails | The table is cyclic, too deep, mixed, or contains an unsupported value. |
+| A request blocks the whole server | HTTP is synchronous; move slow calls off the frame loop. |
+| A client sees your API key | The secret was placed in replicated content or sent to the client. |
+| A retry creates duplicate data | The operation isn't idempotent. Retry only safe requests. |
+
+## Next steps
+
+- `HttpService` for every method and JSON rule.
+- [Saving player data](/docs/guides/saving-player-data) for persistence that stays inside the game.
+- [Networking](/docs/guides/networking) for keeping external calls on the server.
+- `ContentProvider` for ZIP downloads and asset packs.

@@ -27,6 +27,7 @@ The part's `Size` still defines its physics box. The mesh is visual geometry unl
 | `MeshContent` | `Content` | Read/write | Empty | Inline mesh content, used instead of an asset path. |
 | `TextureId` | `string` | Read/write | `""` | Asset path of the texture. `TextureID` is an alias. |
 | `CollisionFidelity` | `Enum.CollisionFidelity` | Read/write | `Default` | How closely the collision shape follows the mesh. |
+| `RenderFidelity` | `Enum.RenderFidelity` | Read/write | `Automatic` | How aggressively the mesh is simplified for rendering. |
 
 These come on top of every `Part` property, so `Size`, `CFrame`, `Anchored`, `CanCollide`, `Color`, and the rest behave the same way.
 
@@ -56,8 +57,18 @@ Changing fidelity rebuilds the part's collision geometry, so set it when you cre
 | --- | --- |
 | `GetMeshContent(): Content` | Returns the inline mesh content. |
 | `SetMeshContent(content: Content): ()` | Replaces the inline mesh content. |
+| `GetBoneNames(): {string}` | Returns the bone names of a rigged mesh, or an empty table for a static mesh. |
+| `GetAnimationClips(): {{ Index: number, Name: string, Length: number }}` | Returns the clips imported with the mesh. `Length` is in seconds. |
 
 `ApplyImpulse()` and the CSG methods from `Part` are also available.
+
+```lua
+for _, clip in meshPart:GetAnimationClips() do
+	print(clip.Name, clip.Length)
+end
+```
+
+Use `GetAnimationClips()` to build an `Animation` for a rigid rig: set `Animation.ClipName` to a returned `Name`, then load it through an `Animator` parented under the part.
 
 ```lua
 local content = meshPart:GetMeshContent()
@@ -78,3 +89,4 @@ local content = meshPart:GetMeshContent()
 
 - `Part`, the base geometry class.
 - `EditableMesh`, editing mesh geometry from Luau.
+- [Asset paths and references](/docs/guides/asset-paths) for project, built-in, file, and embedded asset references.

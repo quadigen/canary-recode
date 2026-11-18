@@ -1,0 +1,245 @@
+---
+title: Terrain and environment
+description: Generate, edit, and copy voxel terrain, then match it with atmosphere and cloud settings.
+---
+
+`Terrain` is a voxel world inside the 3D Workspace. You can generate a landscape, carve holes and caves, place water, and copy regions without building every hill out of parts. `Atmosphere` and `Clouds` then set the sky that frames it.
+
+Terrain editing is server-authoritative in multiplayer. Run generation and edits from a server script; clients should receive the result through replication.
+
+## Generate a landscape
+
+`GenerateArea()` builds terrain around a world-space center:
+
+```lua
+local Terrain = game:GetService("Terrain")
+
+Terrain:GenerateArea(0, 0, 256, {
+    seed = 12345,
+    detail = "medium",
+    seaLevel = 40,
+    baseHeight = 180,
+    mountainHeight = 320,
+    hillHeight = 50,
+    caves = true,
+    overhangs = true,
+    biomes = true,
+})
+```
+
+`x` and `z` default to `0`, and `radius` defaults to `256`. Generation runs in the background, so the landscape appears over several frames:
+
+```lua
+task.spawn(function()
+    while Terrain.QueuedChunkCount > 0 do
+        print("chunks waiting:", Terrain.QueuedChunkCount)
+        task.wait(0.25)
+    end
+    print("terrain ready")
+end)
+```
+
+`detail` presets set a voxel size and flat shading: `"lowpoly"`, `"medium"`, `"high"`, or `"ultra"`. Explicit fields override the preset. `lowpoly` also disables caves and overhangs.
+
+Use `GenerateChunk()` when you want to build outward from chunk coordinates rather than a world-space radius. Its radius is clamped to `0`-`32`.
+
+## Edit the terrain
+
+Voxel coordinates are cell indices, not studs. `VoxelSize` controls how many studs each cell represents, and defaults to `4`.
+
+Write one cell:
+
+```lua
+Terrain:SetVoxel(10, 20, 10, 1, Enum.Material.Rock)
+
+local cell = Terrain:GetVoxel(10, 20, 10)
+if cell then
+    print(cell.occupancy, cell.material)
+end
+```
+
+Fill a shape:
+
+```lua
+Terrain:FillBlock(
+    CFrame.new(0, 10, 0),
+    Vector3.new(40, 4, 40),
+    Enum.Material.Grass
+)
+
+Terrain:FillBall(Vector3.new(20, 30, 0), 12, Enum.Material.Rock)
+```
+
+`FillBlock()` raises an error when the shape exceeds terrain bounds or the voxel limit at the current `VoxelSize`. The other fill methods don't report that failure, so check the result visually or by reading cells back.
+
+Carve with occupancy `0`:
+
+```lua
+Terrain:SetVoxel(0, 20, 0, 0, Enum.Material.Air)
+```
+
+`SetCell()` writes full occupancy with a material. `GetCell()` returns the solid material and occupancy, while `GetWaterCell()` returns water occupancy separately.
+
+## Convert between cells and studs
+
+When you have a world position and need a cell:
+
+```lua
+local cell = Terrain:WorldToCell(Vector3.new(12, 34, 56))
+print(cell.X, cell.Y, cell.Z)
+```
+
+Going the other way:
+
+```lua
+local center = Terrain:CellCenterToWorld(3, 8, 14)
+local corner = Terrain:CellCornerToWorld(3, 8, 14)
+```
+
+`WorldToCellPreferEmpty()` and `WorldToCellPreferSolid()` find the nearest cell of the requested kind. These helpers are essential when a gameplay position needs to line up with an edit.
+
+## Paint materials and water
+
+Change the color terrain uses for a material:
+
+```lua
+Terrain:SetMaterialColor(
+    Enum.Material.Grass,
+    Color3.fromRGB(60, 130, 50)
+)
+
+print(Terrain:GetMaterialColor(Enum.Material.Grass))
+```
+
+`MaterialColors` returns a copy. Changing that table doesn't update the terrain; use `SetMaterialColor()`.
+
+Place water in a cell:
+
+```lua
+Terrain:SetWaterCell(4, 10, 4)
+```
+
+Water is stored separately from solid occupancy, so one cell can contain both. Tune the surface with `WaterColor`, `WaterTransparency`, `WaterReflectance`, `WaterWaveSize`, and `WaterWaveSpeed`.
+
+## Copy a region
+
+`CopyRegion()` snapshots cells, and `PasteRegion()` writes them somewhere else:
+
+```lua
+local snapshot = Terrain:CopyRegion(Region3int16.new(
+    Vector3int16.new(0, 0, 0),
+    Vector3int16.new(16, 32, 16)
+))
+
+Terrain:PasteRegion(
+    snapshot,
+    Vector3int16.new(100, 0, 100),
+    false
+)
+```
+
+Both regions use cell coordinates. `pasteEmpty` defaults to `false`; pass `true` when you want empty cells in the snapshot to erase the destination.
+
+## Read and write larger areas
+
+`ReadVoxels()` and `WriteVoxels()` use nested one-based grids indexed `[x][y][z]`:
+
+```lua
+local region = Region3.new(
+    Vector3.new(-20, 0, -20),
+    Vector3.new(20, 40, 20)
+)
+
+local materials, occupancy = Terrain:ReadVoxels(region, 4)
+Terrain:WriteVoxels(region, 4, materials, occupancy)
+```
+
+For one layer at a time, `ReadVoxelChannels()` and `WriteVoxelChannels()` accept `SolidMaterial`, `SolidOccupancy`, and `LiquidOccupancy`.
+
+Keep large reads out of the frame loop. A big region allocates a table per column.
+
+## Build from a height function
+
+`CreateHeightfield()` bakes a height function into a `MeshPart` named `Heightfield` under Workspace:
+
+```lua
+Terrain:CreateHeightfield(
+    Vector3.new(-100, 0, -100),
+    Vector2.new(200, 200),
+    Enum.Material.Grass,
+    function(x, z)
+        return math.sin(x * 0.05) * 6 + math.cos(z * 0.04) * 4
+    end,
+    1
+)
+```
+
+The origin is the corner, `size` is the X/Z extent, and `heightAt(x, z)` returns height relative to the origin. `spacing` defaults to `1`, and each axis is limited to 256 segments. The result is a mesh, not editable terrain cells.
+
+## Set the sky
+
+`Lighting` creates a default `Atmosphere` and `Clouds`. Find or add them, then adjust:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local atmosphere = Lighting:FindFirstChild("Atmosphere")
+if not atmosphere then
+    atmosphere = Instance.new("Atmosphere")
+    atmosphere.Parent = Lighting
+end
+
+atmosphere.SkyColor = Color3.fromRGB(70, 130, 220)
+atmosphere.HorizonColor = Color3.fromRGB(220, 190, 170)
+atmosphere.GroundColor = Color3.fromRGB(35, 30, 28)
+atmosphere.SunIntensity = 80000
+```
+
+The current sky pass reads `SkyColor`, `HorizonColor`, `GroundColor`, and `SunIntensity`, blended with daylight from `Lighting.ClockTime`. `Enabled`, `Density`, `Offset`, `Color`, `Decay`, `Glare`, `Haze`, and `SunDirection` are stored but not applied, so setting `Enabled = false` doesn't remove the sky colors. Remove the instance if you need a different environment.
+
+Clouds use their own switch:
+
+```lua
+local clouds = Lighting:FindFirstChild("Clouds")
+if not clouds then
+    clouds = Instance.new("Clouds")
+    clouds.Parent = Lighting
+end
+
+clouds.Enabled = true
+clouds.Cover = 0.6       -- fraction of the sky, not a percentage
+clouds.Density = 0.02    -- small values; the default is 0.01
+clouds.Height = 750
+clouds.Thickness = 260
+clouds.Color = Color3.fromRGB(245, 245, 250)
+```
+
+Only the last `Atmosphere` and last `Clouds` child of `Lighting` are used. Clouds are skipped in the editor's fast viewport.
+
+## Keep terrain work affordable
+
+- Generate at a lower `detail` or larger `VoxelSize` first, then refine only the playable area.
+- Wait for `QueuedChunkCount` to drain before reading or editing generated cells.
+- Avoid `FillRegion()` and `ReadVoxels()` over huge areas every frame.
+- Changing `VoxelSize`, `IsoLevel`, or `FlatShading` invalidates all terrain meshes and rebuilds them. Treat those as setup-time settings.
+- `Clear()` removes every cell; use it in a controlled reset path, not as routine cleanup.
+- Check `MaxExtents` before building outside the world.
+
+## Common failures
+
+| Symptom | Likely cause |
+| --- | --- |
+| Terrain doesn't appear immediately | Generation is asynchronous; wait for `QueuedChunkCount` to reach zero. |
+| A fill does nothing or errors | The shape is outside `MaxExtents` or beyond the voxel limit. |
+| Edits happen in the wrong place | You mixed cell indices with world studs; use the coordinate helpers. |
+| `MaterialColors` changes don't show | That property returns a copy; call `SetMaterialColor()`. |
+| Sky colors don't change | You're editing a property the current sky pass doesn't read; use the three color fields and `SunIntensity`. |
+| Caves disappear at low detail | `lowpoly` disables caves and overhangs. |
+| Terrain work stutters every frame | Large reads, writes, or `VoxelSize` changes are running in the game loop. |
+
+## Next steps
+
+- `Terrain` for every generation option, fill shape, and voxel method.
+- `Atmosphere` and `Clouds` for sky and cloud properties.
+- [Lighting and post-processing](/docs/guides/lighting-and-effects) for the effect stack and time of day.
+- `Workspace` for the 3D world that owns the terrain.

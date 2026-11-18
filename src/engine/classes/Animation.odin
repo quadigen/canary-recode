@@ -14,6 +14,7 @@ Animation :: struct {
 	using object: Object,
 	clip_index:   i32,
 	clip_name:    string,
+	animation_id: string,
 	looped:       bool,
 	priority:     i32,
 	sequence:     ^Object, // weak reference; always validated before use
@@ -27,6 +28,7 @@ animation_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 animation_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	anim := cast(^Animation)object
 	delete(anim.clip_name)
+	delete(anim.animation_id)
 	Object_Destroy(object)
 	free(anim)
 }
@@ -43,6 +45,8 @@ animation_get :: proc(
 		vm.PushNumber(L, f64(anim.clip_index))
 	case "ClipName":
 		vm.PushString(L, anim.clip_name)
+	case "AnimationId":
+		vm.PushString(L, anim.animation_id)
 	case "Looped":
 		vm.PushBoolean(L, anim.looped)
 	case "Priority":
@@ -73,6 +77,9 @@ animation_set :: proc(
 	case "ClipName":
 		delete(anim.clip_name)
 		anim.clip_name = strings.clone(vm.ArgString(L, index))
+	case "AnimationId":
+		delete(anim.animation_id)
+		anim.animation_id = strings.clone(vm.ArgString(L, index))
 	case "Looped":
 		anim.looped = vm.ArgBoolean(L, index)
 	case "Priority":
@@ -92,6 +99,7 @@ animation_clone :: proc(source, destination: ^Object) {
 	dst := cast(^Animation)destination
 	dst.clip_index = src.clip_index
 	dst.clip_name = strings.clone(src.clip_name)
+	dst.animation_id = strings.clone(src.animation_id)
 	dst.looped = src.looped
 	dst.priority = src.priority
 	dst.sequence = src.sequence
@@ -185,11 +193,8 @@ Animation_Compile_Sequence :: proc(
 	}
 	return index
 }
-Animation_Resolve_Clip :: proc(mesh: ^kineffi.KineFilamentMesh, anim: ^Animation) -> i32 {
+Animation_Find_Clip :: proc(mesh: ^kineffi.KineFilamentMesh, anim: ^Animation) -> i32 {
 	if mesh == nil || anim == nil {return -1}
-	if Animation_Is_Live(anim.object.signal_registry, "KeyframeSequence", anim.sequence) {
-		return Animation_Compile_Sequence(mesh, anim.sequence)
-	}
 	count := kineffi.Kine_Filament_GetMeshAnimationCount(mesh)
 	if anim.clip_name != "" {
 		for index: i32 = 0; index < count; index += 1 {
@@ -201,6 +206,24 @@ Animation_Resolve_Clip :: proc(mesh: ^kineffi.KineFilamentMesh, anim: ^Animation
 	if anim.clip_index < 0 || anim.clip_index >= count {return -1}
 	return anim.clip_index
 }
+Animation_Resolve_Clip :: proc(
+	mesh: ^kineffi.KineFilamentMesh,
+	ctx: ^kineffi.KineFilamentContext,
+	anim: ^Animation,
+) -> i32 {
+	if mesh == nil || anim == nil {return -1}
+	if Animation_Is_Live(anim.object.signal_registry, "KeyframeSequence", anim.sequence) {
+		return Animation_Compile_Sequence(mesh, anim.sequence)
+	}
+	// A clip already on the rig wins, so loading the same Animation twice does
+	// not duplicate the imported clip. Otherwise an AnimationId supplies the
+	// missing clip, imported by bone name.
+	if index := Animation_Find_Clip(mesh, anim); index >= 0 {return index}
+	if anim.animation_id != "" && Animation_Import_Clips(ctx, mesh, anim.animation_id) {
+		return Animation_Find_Clip(mesh, anim)
+	}
+	return -1
+}
 Register_Animation :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -210,6 +233,6 @@ Register_Animation :: proc(registry: ^Registry) {
 		get = animation_get,
 		set = animation_set,
 		clone = animation_clone,
-		properties = []string{"ClipIndex", "ClipName", "Looped", "Priority", "Source"},
+		properties = []string{"ClipIndex", "ClipName", "AnimationId", "Looped", "Priority", "Source"},
 	)
 }

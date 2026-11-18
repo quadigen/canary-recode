@@ -20,6 +20,9 @@ Device :: struct {
 	pipeline:   vk.Pipeline,
 	commands:   vk.CommandPool,
 	job:        Job,
+	custom:     Custom_State,
+	limits:     vk.PhysicalDeviceLimits,
+	robust_access: bool,
 }
 
 Storage :: struct {
@@ -80,6 +83,15 @@ open :: proc(device: ^Device) -> (err: string) {
 		"vkGetPhysicalDeviceMemoryProperties",
 	)
 	get_memory(physical, &device.memory)
+	get_properties := cast(vk.ProcGetPhysicalDeviceProperties)resolve(device.instance, "vkGetPhysicalDeviceProperties")
+	properties: vk.PhysicalDeviceProperties
+	get_properties(physical, &properties)
+	device.limits = properties.limits
+	get_features := cast(vk.ProcGetPhysicalDeviceFeatures)resolve(device.instance, "vkGetPhysicalDeviceFeatures")
+	available_features: vk.PhysicalDeviceFeatures
+	get_features(physical, &available_features)
+	features := vk.PhysicalDeviceFeatures{robustBufferAccess = available_features.robustBufferAccess}
+	device.robust_access = bool(features.robustBufferAccess)
 	create_device := cast(vk.ProcCreateDevice)resolve(device.instance, "vkCreateDevice")
 	priority: f32 = 1
 	queue_info := vk.DeviceQueueCreateInfo {
@@ -92,6 +104,7 @@ open :: proc(device: ^Device) -> (err: string) {
 		sType                = .DEVICE_CREATE_INFO,
 		queueCreateInfoCount = 1,
 		pQueueCreateInfos    = &queue_info,
+		pEnabledFeatures     = &features,
 	}
 	if create_device(physical, &info, nil, &device.handle) != .SUCCESS {
 		return "could not create a Vulkan compute device"
@@ -273,7 +286,7 @@ create_storage :: proc(device: ^Device, storage: ^Storage, bytes: int) -> bool {
 }
 
 dispatch :: proc(device: ^Device, params: Parameters, a, b: []u8) -> (err: string) {
-	if device.job.submitted {return "a GPUCompute job is already pending"}
+	if device.job.submitted || device.custom.submitted {return "a GPUCompute job is already pending"}
 	if reason := open(device); reason != "" {return reason}
 	defer {
 		if err != "" {clear_result(device)}
@@ -425,6 +438,7 @@ close :: proc(device: ^Device) {
 			_ = d.WaitForFences(handle, 1, &device.job.fence, true, max(u64))
 		}
 		clear_result(device)
+		custom_close(device)
 		if device.pipeline != 0 {d.DestroyPipeline(handle, device.pipeline, nil)}
 		if device.layout != 0 {d.DestroyPipelineLayout(handle, device.layout, nil)}
 		if device.set_layout != 0 {d.DestroyDescriptorSetLayout(handle, device.set_layout, nil)}

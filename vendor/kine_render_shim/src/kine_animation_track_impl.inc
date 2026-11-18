@@ -308,6 +308,44 @@ static KineQuat kine_quat_from_rotation(const float *m) {
     return kine_normalize_quat(q);
 }
 
+KINE_API int Kine_Filament_MeshImportAnimations(
+    KineFilamentMesh *targetMesh, KineFilamentMesh *sourceMesh) {
+    auto *target = reinterpret_cast<KineMesh *>(targetMesh);
+    auto *source = reinterpret_cast<KineMesh *>(sourceMesh);
+    if (!target || !source || target == source || source->animations.empty() ||
+        target->bones.empty() || source->bones.empty()) return 0;
+    int imported = 0;
+    for (const auto &sourceAnimation : source->animations) {
+        KineAnimation animation;
+        animation.name = sourceAnimation.name;
+        animation.duration = sourceAnimation.duration;
+        animation.events = sourceAnimation.events;
+        for (const auto &sourceChannel : sourceAnimation.channels) {
+            if (sourceChannel.bone < 0 ||
+                (size_t)sourceChannel.bone >= source->bones.size()) continue;
+            const std::string &boneName =
+                source->bones[(size_t)sourceChannel.bone].name;
+            int targetBone = -1;
+            for (size_t b = 0; b < target->bones.size(); ++b) {
+                if (target->bones[b].name == boneName) {
+                    targetBone = (int)b;
+                    break;
+                }
+            }
+            if (targetBone < 0) continue;
+            KineAnimationChannel channel = sourceChannel;
+            channel.bone = targetBone;
+            animation.channels.push_back(std::move(channel));
+        }
+        // A clip whose bones do not exist on this rig cannot drive it.
+        if (animation.channels.empty() || !std::isfinite(animation.duration) ||
+            animation.duration <= 0.0f) continue;
+        target->animations.push_back(std::move(animation));
+        ++imported;
+    }
+    return imported;
+}
+
 KINE_API int Kine_Filament_MeshCreateAnimation(KineFilamentMesh *mesh, const char *name, float duration) {
     auto *m=reinterpret_cast<KineMesh *>(mesh);
     if (!m || !std::isfinite(duration) || duration <= 0.0f || duration > 36000.0f || !name) return -1;

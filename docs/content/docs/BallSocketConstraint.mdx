@@ -1,0 +1,69 @@
+---
+title: BallSocketConstraint
+description: Pin two attachments together while allowing them to rotate.
+---
+
+`BallSocketConstraint` keeps the world positions of `Attachment0` and `Attachment1` together, like a ball-and-socket joint. The connected parts can still rotate around that point, which makes it useful for shoulders, chains, dangling signs, and ragdoll limbs.
+
+`BallSocketConstraint` inherits from `Constraint`, so it also has `Enabled`, `Active`, `Attachment0`, and `Attachment1`.
+
+## Getting started
+
+```lua
+local socket = Instance.new("BallSocketConstraint")
+socket.Attachment0 = shoulder
+socket.Attachment1 = upperArm
+socket.LimitsEnabled = true
+socket.UpperAngle = 60
+socket.Parent = character
+```
+
+Both attachments need to belong to parts in the same physics world. At least one of the connected bodies must be dynamic, or the constraint has nothing to move.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `LimitsEnabled` | `boolean` | Read/write | `false` | Restrict rotation around the attachment axes. |
+| `UpperAngle` | `number` | Read/write | `45` | Maximum rotation in degrees, from `0` to `180`. |
+
+### LimitsEnabled
+
+When false, the joint behaves as an unlimited ball socket. The parts can rotate freely around the shared point.
+
+When true, the constraint limits rotation around the attachment's Y and Z axes to `±UpperAngle` degrees. Changing this property rebuilds the joint on the next physics step.
+
+### UpperAngle
+
+`UpperAngle` is in degrees and accepts values from `0` through `180`. Assigning a value outside that range raises an error instead of clamping it.
+
+```lua
+socket.UpperAngle = 90
+```
+
+Changing the angle rebuilds the joint, so it can briefly become inactive while the simulation recreates it.
+
+## Shared constraint properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the joint is simulated. |
+| `Active` | `boolean` | Read-only | `true` | Whether the joint currently has two resolvable ends. |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First attachment. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second attachment. |
+
+`Active` can't be assigned. The constraint becomes active after both attachments resolve to bodies and at least one is dynamic. Replacing an attachment or changing a limit releases the current joint and creates a new one.
+
+## Notes
+
+- The two attachments can belong to the same assembly only if at least one side is dynamic; a joint between two static bodies is skipped.
+- The constraint doesn't weld the parts. They remain free to rotate around the socket.
+- Cloning copies the attachment references and limit settings, but not the live joint state.
+- Destroying the constraint releases its physics joint.
+
+## See also
+
+- `Constraint` for the shared attachment behavior.
+- `HingeConstraint` for a single rotation axis.
+- `PrismaticConstraint` for sliding movement.
+- `RodConstraint` for a fixed distance without rotation limits.

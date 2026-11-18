@@ -24,6 +24,7 @@ track:Play()
 | --- | --- | --- | --- |
 | `ClipIndex` | `number` | Read/write | Index of the clip in the rig's mesh. |
 | `ClipName` | `string` | Read/write | Name of the clip. Takes precedence when set. |
+| `AnimationId` | `string` | Read/write | Asset path of an animation file whose clips can be applied to the rig. |
 | `Looped` | `boolean` | Read/write | Restart automatically when the clip ends. |
 | `Priority` | `Enum.AnimationPriority` | Read/write | Blending priority relative to other tracks. |
 | `Source` | `Instance?` | Read/write | Keyframe sequence used instead of a mesh clip. |
@@ -33,6 +34,8 @@ track:Play()
 When `ClipName` is not empty, the animator looks up the clip by name. Otherwise it uses `ClipIndex`. `ClipIndex` accepts values from `0` through `100000`; anything outside that range is ignored.
 
 Assigning `Source` replaces the clip lookup with a keyframe sequence instance. Setting it to `nil` clears the source and returns to index or name lookup. Assigning an instance that isn't a keyframe sequence is ignored.
+
+`AnimationId` points at an animation file (FBX, glTF, DAE, and the other formats the mesh importer reads). If the rig has no matching clip, the animator imports the file's clips, matching channels to rig bones by name, and selects one with `ClipName` or `ClipIndex`. This lets a mesh and its animations be authored as separate files. A saved map embeds the file as a `kineasset://` entry, the same asset table executable builds carry, and re-exporting keeps that reference instead of turning it back into a disk path.
 
 ## Notes
 
@@ -45,3 +48,4 @@ Assigning `Source` replaces the clip lookup with a keyframe sequence instance. S
 
 - `Animator` for loading and tracking animations.
 - `AnimationTrack` for playback control.
+- [Asset paths and references](/docs/guides/asset-paths) for `project://`, `builtin://`, and embedded `kineasset://` values.

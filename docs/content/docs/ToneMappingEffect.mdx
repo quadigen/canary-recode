@@ -1,0 +1,53 @@
+---
+title: ToneMappingEffect
+description: Control highlight rolloff, exposure, and white balance for the final image.
+---
+
+`ToneMappingEffect` maps the renderer's high-dynamic-range output into displayable colors. It controls how bright values roll off, plus exposure and color temperature adjustments.
+
+`ToneMappingEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a disabled tone-mapping effect by default. Find it or add one, then enable it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local tone = Lighting:FindFirstChild("ToneMappingEffect")
+if not tone then
+    tone = Instance.new("ToneMappingEffect")
+    tone.Parent = Lighting
+end
+
+tone.Enabled = true
+tone.Mode = 2
+tone.ExposureCompensation = 0.25
+tone.Temperature = 0.05
+tone.Tint = 0
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Mode` | `number` | Read/write | `2` | Tone-mapping curve, clamped between `0` and `3`. |
+| `ExposureCompensation` | `number` | Read/write | `0` | Exposure adjustment, clamped between `-10` and `10`. |
+| `Temperature` | `number` | Read/write | `0` | Warm/cool balance, clamped between `-1` and `1`. |
+| `Tint` | `number` | Read/write | `0` | Green/magenta balance, clamped between `-1` and `1`. |
+
+`Mode` is a numeric switch passed to the renderer, not an enum. The available modes are defined by the renderer; the class only guarantees the `0`-`3` range. Values outside it clamp.
+
+`ExposureCompensation` is separate from `Lighting.ExposureCompensation`. Both affect the final image, so adjust one at a time when you're matching a look.
+
+## Notes
+
+- Tone mapping is an advanced lighting effect. It's skipped in the editor's fast viewport.
+- Only one tone-mapping effect is used. The last `ToneMappingEffect` child of `Lighting` wins.
+- Cloning copies every property above.
+
+## See also
+
+- `ColorCorrectionEffect` for brightness, contrast, and saturation.
+- `Lighting` for the scene's main exposure setting.

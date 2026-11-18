@@ -2,13 +2,21 @@
   "title": "Services",
   "pages": [
     "index",
+    "AssetService",
     "CollectionService",
+    "ContentProvider",
     "ContextActionService",
+    "DataStoreService",
     "Debris",
     "GuiService",
+    "HttpService",
+    "InsertService",
     "Lighting",
+    "LocalizationService",
     "LogService",
+    "PathfindingService",
     "Physics",
+    "PhysicsService",
     "Players",
     "ReplicatedFirst",
     "ReplicatedStorage",
@@ -16,9 +24,15 @@
     "ServerScriptService",
     "ServerStorage",
     "StarterGui",
+    "StarterPlayer",
+    "Stats",
+    "Team",
+    "Teams",
+    "Terrain",
     "TextService",
     "TweenService",
     "UserInputService",
-    "Workspace"
+    "Workspace",
+    "Workspace2D"
   ]
 }

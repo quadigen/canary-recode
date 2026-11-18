@@ -1,0 +1,69 @@
+---
+title: Teams
+description: List and look up Team objects in the data model.
+---
+
+`Teams` is the container service for `Team` instances. It gives you a way to list teams and find one by name. It doesn't assign players to teams or drive any gameplay behavior by itself.
+
+## Getting started
+
+```lua
+local Teams = game:GetService("Teams")
+
+local red = Instance.new("Team")
+red.Name = "Red"
+red.TeamColor = Color3.fromRGB(200, 40, 40)
+red.AutoAssignable = true
+red.Parent = Teams
+```
+
+## Methods
+
+### GetTeams
+
+```lua
+GetTeams(): {Team}
+```
+
+Returns the direct `Team` children of the service as a one-based array. Other children are skipped.
+
+```lua
+for _, team in Teams:GetTeams() do
+    print(team.Name, team.TeamColor)
+end
+```
+
+### GetTeamFromName
+
+```lua
+GetTeamFromName(name: string): Instance?
+```
+
+Returns the first child of `Teams` with the given name, or `nil` if there isn't one. The lookup is by name and doesn't check the child's class, so a non-`Team` child with the same name can be returned.
+
+```lua
+local team = Teams:GetTeamFromName("Red")
+if team then
+    print(team.TeamColor)
+end
+```
+
+### FindChildByName
+
+```lua
+FindChildByName(name: string): Instance?
+```
+
+An alias for `GetTeamFromName()` with the same behavior.
+
+## Notes
+
+- The service is data-only. The current API doesn't expose a method that assigns a player or character to a team.
+- `Team.AutoAssignable` and the other `Team` properties are stored, but nothing in the verified API consumes them automatically.
+- Teams are direct children of the service; nested folders aren't searched.
+- There's no service-level event for teams being added or removed. Use the normal instance events on the service if you need to watch the hierarchy.
+
+## See also
+
+- `Team` for the team object's properties.
+- `Players` for player objects.

@@ -1,63 +1,170 @@
 ---
 title: ImageLabel
-description: Display an image inside a user interface.
+description: Display images, icons, sprites, and live EditableImage pixel buffers in a user interface.
 ---
 
-`ImageLabel` draws an image in a GUI layout. It supports tinting, transparency, sub-rectangles, nine-slice scaling, tiling, and resampling modes.
+`ImageLabel` is a `GuiObject` that displays an image without providing button-specific input behavior. It can load image assets from a URI or display a live `EditableImage` created by a script.
 
-## Getting started
+Use it for icons, HUD graphics, inventory previews, sprite sheets, scalable backgrounds, procedural textures, and custom renderer output.
+
+## Displaying an image
+
+Create an ImageLabel and parent it to a visible GUI container. The example assumes the LocalScript is inside a ScreenGui:
 
 ```lua
-local icon = Instance.new("ImageLabel")
-icon.Size = UDim2.fromOffset(64, 64)
-icon.BackgroundTransparency = 1
-icon.Image = "rbxassetid://1234567890"
-icon.ImageColor3 = Color3.fromRGB(255, 200, 80)
-icon.Parent = screenGui
+local label = Instance.new("ImageLabel")
+label.Size = UDim2.fromOffset(160, 160)
+label.BackgroundTransparency = 1
+label.Image = "textures/icon.png"
+label.Parent = script.Parent
 ```
+
+You can also assign a `Content` URI:
+
+```lua
+label.ImageContent = Content.fromUri("textures/icon.png")
+```
+
+`Image` and `ImageContent` refer to the same URI-based source. Assigning either one replaces the current editable-image attachment, if any.
+
+## Image sources
+
+| Source | Example |
+| --- | --- |
+| Project or local path | `textures/icon.png` |
+| Built-in class icon | `builtin://icons/Part.svg` |
+| Built-in global icon | `builtin://global-icons/ArrowDown.svg` |
+| Embedded project asset | `kineasset://...` |
+| Registered runtime image | `memory://...` |
+| Inline SVG | `data:image/svg+xml;utf8,...` |
+
+Runtime image IDs must have been registered through the engine's asset infrastructure before use. An arbitrary `memory://` URI does not allocate an image. Asset availability and decoding depend on the resolved source; inspect `IsLoaded` if an image fails to display.
+
+## Displaying an EditableImage
+
+For an image generated or modified at runtime, assign the `EditableImage` object directly to the label. There is no need to encode the pixels as a PNG or create a temporary file.
+
+```lua
+local AssetService = game:GetService("AssetService")
+local screenGui = script.Parent
+
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(128, 128),
+})
+image.Parent = screenGui
+
+local label = Instance.new("ImageLabel")
+label.Size = UDim2.fromOffset(256, 256)
+label.BackgroundTransparency = 1
+label.EditableImage = image
+label.Parent = screenGui
+
+local pixels = buffer.create(128 * 128 * 4)
+for offset = 0, buffer.len(pixels) - 4, 4 do
+    buffer.writeu8(pixels, offset, 255)
+    buffer.writeu8(pixels, offset + 1, 120)
+    buffer.writeu8(pixels, offset + 2, 40)
+    buffer.writeu8(pixels, offset + 3, 255)
+end
+
+image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+```
+
+The label automatically displays the latest pixels whenever it renders. This makes it useful for GPU-generated previews, dynamic canvases, and progressive renderers. You can attach the same EditableImage to multiple labels without copying its pixel data yourself.
+
+The label's size controls how large the image appears on screen; it does not change the source image's resolution.
+
+### Switching image sources
+
+```lua
+label.EditableImage = image       -- display the live pixel buffer
+label.EditableImage = nil         -- detach it and leave the label empty
+label.Image = "textures/icon.png" -- display an ordinary image instead
+```
+
+Attaching an EditableImage clears the previous URI and releases the decoded image. Detaching does not restore the previous URI. While an editable image is attached, `Image` is empty and `ImageContent` returns an empty URI rather than an object-backed Content value.
+
+Cloning an ImageLabel that has an EditableImage attached gives the clone a reference to the same source, not a separate copy of the pixels. Destroying a label detaches its source without destroying it. In the bridge implementation, destroying the source detaches every label referencing it.
+
+### Current editable-image limitations
+
+The editable-image rendering branch uses a raw-pixel draw operation instead of the ordinary decoded-image renderer.
+
+| Feature | Ordinary image | EditableImage |
+| --- | --- | --- |
+| Stretch to label bounds | Yes | Yes |
+| `ImageTransparency` | Yes | Yes |
+| `ImageColor3` tint | Yes | Not applied |
+| Source rectangle | Yes | Not applied |
+| ScaleType, tiling, nine-slicing | Yes | Always stretches |
+| Explicit `ResampleMode` selection | Yes | Not applied |
+| Stored-image shadow, blur, and motion blur | Supported by the ordinary path | Not applied |
+
+Inherited GUI rendering and layout still run normally before the editable image is drawn. The editable source is treated as dynamic GUI content.
+
+## Sprite sheets
+
+For ordinary image sources, `ImageRectOffset` and `ImageRectSize` select a rectangular region from the source image.
+
+```lua
+label.Image = "textures/sprites.png"
+label.ImageRectOffset = Vector2.new(64, 0)
+label.ImageRectSize = Vector2.new(32, 32)
+```
+
+The rectangle is expressed in source-image pixels. A zero size component lets the renderer use the remaining extent on that axis. Use nonnegative offsets within the source image.
+
+## Scaling and nine-slicing
+
+`ScaleType` determines how an ordinary image fills the label. Stretch scales the image to the entire rectangle. For nine-sliced images, the source center can be stretched while the surrounding borders preserve their proportions.
+
+```lua
+label.Image = "textures/panel.png"
+label.ScaleType = Enum.ScaleType.Slice
+label.SliceCenter = Rect.new(12, 12, 52, 52)
+label.SliceScale = 1
+```
+
+Choose a slice center that lies within the selected image region and has a positive width and height. If the center is invalid, the renderer falls back to stretch. The border sizes are reduced proportionally when the label is smaller than their combined dimensions.
+
+When tiled scaling is selected, `TileSize` controls the tile dimensions relative to the displayed label. `ResampleMode` selects the sampling behavior for ordinary images; nearest-neighbor sampling is useful for pixel art.
+
+```lua
+label.ResampleMode = Enum.ResampleMode.Nearest
+```
+
+The current setter also accepts `Enum.ResamplerMode.Pixelated` as an alias for nearest-neighbor sampling. Other values from that legacy enum map to the default mode.
 
 ## Properties
 
-| Property | Type | Access | Description |
+All properties below are specific to ImageLabel; inherited properties such as `Size`, `Position`, `Visible`, `BackgroundTransparency`, and `Parent` are documented under `GuiObject` and `Instance`.
+
+| Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `Image` | `string` | Read/write | Image asset URI. |
-| `ImageContent` | `Content` | Read/write | Typed content view of the image. |
-| `IsLoaded` | `boolean` | Read-only | Whether the image has been loaded. |
-| `ImageTransparency` | `number` | Read/write | Transparency, clamped to `0` through `1`. |
-| `ImageColor3` | `Color3` | Read/write | Tint applied to the image. |
-| `ImageRectOffset` | `Vector2` | Read/write | Top-left offset of the source rectangle. |
-| `ImageRectSize` | `Vector2` | Read/write | Size of the source rectangle. |
-| `ResampleMode` | `Enum.ResampleMode` | Read/write | Filtering when the image is scaled. |
-| `ScaleType` | `Enum.ScaleType` | Read/write | Stretch, tile, or slice behavior. |
-| `SliceCenter` | `Rect` | Read/write | Nine-slice border rectangle. |
-| `SliceScale` | `number` | Read/write | Scale of the nine-slice border, minimum `0`. |
-| `TileSize` | `UDim2` | Read/write | Tile size when `ScaleType` is `Tile`. |
+| `Image` | `string` | `""` | URI of an ordinary image. The setter also accepts a URI-based Content value. |
+| `ImageContent` | `Content` | Empty URI | Content representation of the ordinary image URI. |
+| `EditableImage` | `EditableImage?` | `nil` | Live reference to the editable source, mutually exclusive with ordinary image sources. |
+| `IsLoaded` | `boolean` | `false` | Read-only. True if an ordinary image was decoded or an editable image is attached. |
+| `ImageTransparency` | `number` | `0` | Image opacity expressed as transparency: `0` opaque, `1` invisible. Clamped to 0–1. |
+| `ImageColor3` | `Color3` | `Color3.new(1, 1, 1)` | Color tint for an ordinary image. |
+| `ImageRectOffset` | `Vector2` | `Vector2.new(0, 0)` | Top-left source rectangle offset in pixels. |
+| `ImageRectSize` | `Vector2` | `Vector2.new(0, 0)` | Source rectangle dimensions in pixels. |
+| `ResampleMode` | `Enum.ResampleMode` | `Default` | Sampling mode for an ordinary image. |
+| `ScaleType` | `Enum.ScaleType` | `Stretch` | Scaling behavior for an ordinary image. |
+| `SliceCenter` | `Rect` | Zero rectangle | Center region for nine-slicing, relative to the selected source rectangle. |
+| `SliceScale` | `number` | `1` | Multiplier for nine-slice borders; negative values are clamped to zero. |
+| `TileSize` | `UDim2` | Scale 1, 1; offsets 0, 0 | Tile dimensions when using tiled scaling. |
 
-`Image` accepts either a string URI or a `Content` value. Reading it returns the stored URI string. `ImageContent` is the typed form.
+All properties except `IsLoaded` are read/write. `IsLoaded` describes the presence of a source, not whether the image is opaque, visible on screen, or finished rendering by a custom shader.
 
-Assigning `IsLoaded` raises a read-only error.
+## Methods
 
-## Example: nine-slice panel
+ImageLabel currently introduces no class-specific methods. It inherits the standard GUI and Instance APIs.
 
-```lua
-local panel = Instance.new("ImageLabel")
-panel.Image = "rbxassetid://1234567890"
-panel.ScaleType = Enum.ScaleType.Slice
-panel.SliceCenter = Rect.new(16, 16, 48, 48)
-panel.SliceScale = 1
-```
+## Things to keep in mind
 
-## Notes
-
-- `ImageTransparency` is clamped rather than rejected.
-- `SliceScale` clamps negative values to `0`.
-- `SliceCenter` is only used when `ScaleType` is `Slice`.
-- `TileSize` is only used when `ScaleType` is `Tile`.
-- `ResampleMode` also accepts the older `ResamplerMode` enum; `Pixelated` maps to nearest-neighbor.
-- Inherits all `GuiObject` members.
-
-## See also
-
-- `ImageButton` for a clickable image.
-- `Decal` for images on 3D parts.
-- `GuiObject` for layout and appearance.
+- Set `BackgroundTransparency` separately from `ImageTransparency` if you want a transparent background behind your image.
+- Use `EditableImage` for raw pixels and `Image` or `ImageContent` for encoded image assets.
+- Assign the EditableImage once, then update its pixels directly. Reassigning it every frame is unnecessary.
+- If an ordinary image is not loading, check its URI and `IsLoaded` before changing its rendering properties.
+- A label can be larger than its image, but stretching cannot add source detail. Increase the EditableImage resolution when needed.

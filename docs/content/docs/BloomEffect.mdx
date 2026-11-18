@@ -1,0 +1,63 @@
+---
+title: BloomEffect
+description: Add a soft glow around bright parts of the scene.
+---
+
+`BloomEffect` makes bright areas bleed light into their surroundings. It's the effect most scenes reach for first when they want a soft, filmed look without changing the actual lights.
+
+`BloomEffect` inherits from `LightingEffect`, so it has `Enabled`. It only does something while it's a child of `Lighting`; putting it under a part or a folder has no visual effect.
+
+## Getting started
+
+A new `Lighting` already contains a `BloomEffect` named `BloomEffect`, but you can add your own and tune it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local bloom = Lighting:FindFirstChild("BloomEffect")
+if not bloom then
+    bloom = Instance.new("BloomEffect")
+    bloom.Parent = Lighting
+end
+
+bloom.Enabled = true
+bloom.Intensity = 0.35
+bloom.Size = 32
+bloom.Threshold = 1.1
+```
+
+Only one bloom effect is used at a time. If you add several, the last `BloomEffect` in `Lighting`'s child list is the one that gets applied.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Intensity` | `number` | Read/write | `0.5` | Strength of the glow. Negative values clamp to `0`. |
+| `Size` | `number` | Read/write | `50` | Spread of the glow. Negative values clamp to `0`. |
+| `Threshold` | `number` | Read/write | `1` | Brightness needed before a pixel blooms. Negative values clamp to `0`. |
+| `LensFlare` | `boolean` | Read/write | `false` | Adds a lens-flare style streak to the bloom. |
+
+`Lighting` tunes the intensity of the bloom it creates for you. A default child starts at `0.25`, not the class default of `0.5`, so read the property if you need the current value.
+
+## How the values behave
+
+`Size` is converted to a whole number when the effect renders; fractions are truncated. A `Threshold` of `0` or less disables thresholding, so every lit pixel can contribute. Raising it keeps dim surfaces from glowing.
+
+`Intensity` and `Size` have no upper limit. Very large values wash out the scene rather than producing a useful effect, and they cost fill rate.
+
+## Blur and bloom
+
+`Lighting` uses a `BlurEffect` to drive bloom only when there's no active `BloomEffect` child. Since `Lighting` creates a bloom by default, adding a `BlurEffect` alongside it won't change the image until you remove the bloom.
+
+## Notes
+
+- Bloom is skipped in the editor's fast viewport.
+- Toggling `Enabled` is cheaper than destroying and recreating the instance.
+- The effect is rendering-only; it doesn't change lighting values or part colors.
+- Cloning copies every property listed above.
+
+## See also
+
+- `Lighting` for the scene's overall exposure and time of day.
+- `BlurEffect` for a cheaper soft-focus look when no bloom is present.

@@ -1,0 +1,278 @@
+---
+title: Terrain
+description: Generate, carve, and edit voxel terrain from Luau.
+---
+
+`Terrain` is the engine's voxel world. It can generate hills, mountains, caves, and biomes, and you can edit individual voxels, fill shapes, or copy regions. It's a service, so get it with `game:GetService("Terrain")`.
+
+Terrain is stored in a sparse voxel grid. Coordinates are cell indices, and `VoxelSize` sets how many studs each cell represents. The default grid is 4 studs per cell with a chunk size of 16 cells.
+
+## Getting started
+
+```lua
+local Terrain = game:GetService("Terrain")
+
+Terrain:GenerateArea(0, 0, 256, {
+    seed = 12345,
+    seaLevel = 40,
+    baseHeight = 180,
+    mountainHeight = 320,
+    hillHeight = 50,
+    caves = true,
+    overhangs = true,
+    biomes = true,
+})
+```
+
+Generation runs in the background. Large areas take time to appear, and the service reports how many chunks are waiting through `QueuedChunkCount`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Decoration` | `boolean` | Read/write | `true` | Enables grass and ground decoration. |
+| `FlatShading` | `boolean` | Read/write | `false` | Uses flat shading for terrain meshes. |
+| `GrassLength` | `number` | Read/write | `0.1` | Grass length, clamped between `0` and `1`. |
+| `GrassDensity` | `number` | Read/write | `6` | Grass density, clamped between `0` and `24`. |
+| `GrassRenderDistance` | `number` | Read/write | `140` | Grass draw distance, clamped between `10` and `500`. |
+| `IsSmooth` | `boolean` | Read-only | `true` | Always reports `true`. |
+| `MaterialColors` | `{[string]: Color3}` | Read-only | Per-material defaults | Map of material names to their terrain colors. |
+| `MaterialVariant` | `string` | Read/write | `""` | Material variant applied to terrain surfaces. |
+| `MaxExtents` | `Region3int16` | Read-only | `-16000` to `16000` on each axis | Allowed cell extents. |
+| `WaterColor` | `Color3` | Read/write | `Color3.new(0.05, 0.29, 0.55)` | Water color. |
+| `WaterReflectance` | `number` | Read/write | `1` | Water reflectance, clamped between `0` and `1`. |
+| `WaterTransparency` | `number` | Read/write | `0.3` | Water transparency, clamped between `0` and `1`. |
+| `WaterWaveSize` | `number` | Read/write | `1` | Wave size, clamped between `0` and `1`. |
+| `WaterWaveSpeed` | `number` | Read/write | `10` | Wave speed, clamped between `0` and `100`. |
+| `VoxelSize` | `number` | Read/write | `4` | Studs per voxel. Must be greater than `0`. |
+| `IsoLevel` | `number` | Read/write | `0.5` | Surface threshold, clamped between `0.001` and `0.999`. |
+| `ChunkSize` | `number` | Read-only | `16` | Cells per chunk edge. |
+| `QueuedChunkCount` | `number` | Read-only | `0` | Chunks waiting to be processed. |
+
+Changing `VoxelSize`, `IsoLevel`, or `FlatShading` invalidates all terrain meshes and rebuilds them. `WaterWaveSize` and `WaterWaveSpeed` are stored per service; the renderer uses them for the water surface.
+
+`MaterialColors` returns a new table. Changing that table doesn't change the terrain; use `SetMaterialColor()` instead.
+
+## Generation
+
+### GenerateArea
+
+```lua
+GenerateArea(x: number?, z: number?, radius: number?, options: GenOptions?): ()
+```
+
+Generates terrain around a world-space center. `x` and `z` default to `0`, and `radius` defaults to `256`. It returns no values.
+
+```lua
+Terrain:GenerateArea(200, -300, 128, { detail = "medium", seed = 7 })
+```
+
+### GenerateChunk
+
+```lua
+GenerateChunk(cx: number?, cz: number?, radius: number?, options: GenOptions?): ()
+```
+
+Generates a square block of chunks around chunk coordinates `cx` and `cz`. Both default to `0`. `radius` defaults to `0` and is clamped to `0`-`32`, so a radius of `1` generates the center chunk and its eight neighbors.
+
+### Fill
+
+```lua
+Fill(
+    x: number?,
+    y: number?,
+    z: number?,
+    width: number?,
+    height: number?,
+    options: FillOptions?
+): ()
+```
+
+Starts generation for a rectangular volume. The position defaults to `0, 0, 0`; `width` and `height` default to `20`. The fill options use `terrainType` (`"flat"`, `"hills"`, or `"mountains"`), `caves`, `seed`, `noiseScale`, `roughness`, `caveDensity`, and `caveSize`.
+
+### Generation options
+
+`GenerateArea()` and `GenerateChunk()` accept these fields:
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `detail` | none | Preset: `"lowpoly"`, `"medium"`, `"high"`, or `"ultra"`. |
+| `voxelSize` | current `VoxelSize` | Overrides the preset. Clamped to `1`-`64`. |
+| `flatShading` | current setting | Overrides the preset. |
+| `seed` | `49297` | Whole-number seed. |
+| `seaLevel` | `48` | Sea level in studs. |
+| `baseHeight` | `200` | Base terrain height, clamped to `0`-`2000`. |
+| `mountainHeight` | `360` | Mountain height, clamped to `0`-`3000`. |
+| `hillHeight` | `56` | Hill height, clamped to `0`-`1000`. |
+| `snowLine` | `220` | Snow line in studs above sea level. |
+| `minY` | `-192` | Minimum generated height. |
+| `maxY` | `704` | Maximum generated height. |
+| `featureScale` | `1` | Feature frequency, clamped to `0.1`-`8`. |
+| `caveSize` | `1` | Cave scale, clamped to `0.25`-`3`. |
+| `caves` | `true` | Generate caves. |
+| `overhangs` | `true` | Generate overhangs. |
+| `biomes` | `true` | Generate biome variation. |
+| `workers` | `4` | Worker count. |
+
+The `detail` presets set a voxel size and flat shading before explicit fields are applied. `lowpoly` also disables caves and overhangs.
+
+## Editing voxels
+
+### SetVoxel and GetVoxel
+
+```lua
+SetVoxel(x: number?, y: number?, z: number?, occupancy: number, material: Enum.Material?): ()
+GetVoxel(x: number?, y: number?, z: number?): {occupancy: number, material: Enum.Material}?
+```
+
+`SetVoxel()` writes a cell with occupancy clamped between `0` and `1`. The material defaults to `Grass`. `GetVoxel()` returns a table with `occupancy` and `material`, or `nil` when no cell exists at that position.
+
+```lua
+Terrain:SetVoxel(10, 20, 10, 1, Enum.Material.Rock)
+local cell = Terrain:GetVoxel(10, 20, 10)
+if cell then
+    print(cell.occupancy, cell.material)
+end
+```
+
+### GetCell, GetWaterCell, and their setters
+
+```lua
+GetCell(x: number?, y: number?, z: number?): Enum.Material, number
+GetWaterCell(x: number?, y: number?, z: number?): Enum.Material, number
+SetCell(x: number?, y: number?, z: number?, material: Enum.Material?): ()
+SetCells(region: Region3int16, material: Enum.Material?): ()
+SetWaterCell(x: number?, y: number?, z: number?): ()
+```
+
+`GetCell()` returns the solid material and occupancy. `GetWaterCell()` always reports `Material.Water` and the water occupancy at the cell. Missing cells report `Air` and `0`.
+
+`SetCell()` writes occupancy `1` with the given material (default `Grass`). `SetCells()` does the same for every cell in a `Region3int16`. `SetWaterCell()` writes water occupancy `1`.
+
+### Fill shapes
+
+```lua
+FillBall(center: Vector3, radius: number, material: Enum.Material?): ()
+FillBlock(cframe: CFrame, size: Vector3, material: Enum.Material?): ()
+FillWedge(cframe: CFrame, size: Vector3, material: Enum.Material?): ()
+FillCylinder(cframe: CFrame, height: number, radius: number, material: Enum.Material?): ()
+FillRegion(region: Region3, resolution: number?, material: Enum.Material?): ()
+ReplaceMaterial(region: Region3, resolution: number?, source: Enum.Material?, target: Enum.Material?): ()
+```
+
+All material arguments default to `Grass`. `FillRegion()` and `ReplaceMaterial()` default `resolution` to the current `VoxelSize`.
+
+`FillBlock()` raises an error when the shape exceeds the terrain bounds or the voxel limit at the current `VoxelSize`. The other fill methods don't report that failure.
+
+```lua
+Terrain:FillBall(Vector3.new(0, 30, 0), 12, Enum.Material.Rock)
+Terrain:FillBlock(CFrame.new(0, 10, 0), Vector3.new(40, 4, 40), Enum.Material.Grass)
+```
+
+### Read and write grids
+
+```lua
+ReadVoxels(region: Region3, resolution: number?): {Material}, {number}
+WriteVoxels(region: Region3, resolution: number?, materials: {Material}, occupancy: {number}): ()
+```
+
+Both return or accept nested grids indexed `[x][y][z]`, one-based on every axis. `ReadVoxels()` returns the material grid first and the occupancy grid second. `WriteVoxels()` expects them in the same order.
+
+```lua
+local region = Region3.new(Vector3.new(-20, 0, -20), Vector3.new(20, 40, 20))
+local materials, occupancy = Terrain:ReadVoxels(region, 4)
+```
+
+Grids can be large. Reading a big region allocates a table per column, so do it during setup rather than every frame.
+
+### Channels
+
+```lua
+ReadVoxelChannels(region: Region3, resolution: number?, channels: {string}): {[string]: any}
+WriteVoxelChannels(region: Region3, resolution: number?, channels: {[string]: any}): ()
+```
+
+Channels let you read or write one layer at a time. Supported names are `SolidMaterial`, `SolidOccupancy`, and `LiquidOccupancy`. `ReadVoxelChannels()` returns a dictionary containing only the channels you asked for. `WriteVoxelChannels()` accepts a dictionary with any of those keys.
+
+```lua
+local result = Terrain:ReadVoxelChannels(region, 4, { "SolidOccupancy" })
+print(result.SolidOccupancy)
+```
+
+### Copy and paste
+
+```lua
+CopyRegion(region: Region3int16): TerrainRegion
+PasteRegion(region: TerrainRegion, corner: Vector3int16, pasteEmpty: boolean?): ()
+```
+
+`CopyRegion()` snapshots a region in cell coordinates. `PasteRegion()` writes it at `corner`, which is also in cell coordinates. `pasteEmpty` defaults to `false`; when true, empty cells in the snapshot erase cells at the destination.
+
+```lua
+local snapshot = Terrain:CopyRegion(Region3int16.new(
+    Vector3int16.new(0, 0, 0),
+    Vector3int16.new(16, 32, 16)
+))
+
+Terrain:PasteRegion(snapshot, Vector3int16.new(100, 0, 100), false)
+```
+
+## Materials and coordinates
+
+```lua
+GetMaterialColor(material: Enum.Material?): Color3
+SetMaterialColor(material: Enum.Material?, color: Color3): ()
+```
+
+`GetMaterialColor()` reads the terrain color for a material, defaulting to `SmoothPlastic` if the argument is omitted. `SetMaterialColor()` updates it and marks the terrain dirty.
+
+```lua
+Terrain:SetMaterialColor(Enum.Material.Grass, Color3.fromRGB(60, 130, 50))
+```
+
+Coordinate helpers convert between cells and world space:
+
+| Method | Returns |
+| --- | --- |
+| `CellCornerToWorld(x?, y?, z?)` | World position of a cell corner. |
+| `CellCenterToWorld(x?, y?, z?)` | World position of a cell center. |
+| `WorldToCell(position)` | Integer cell containing a world position. |
+| `WorldToCellPreferEmpty(position)` | Nearest empty cell, preferring the containing cell. |
+| `WorldToCellPreferSolid(position)` | Nearest solid cell, preferring the containing cell. |
+
+`WorldToCell()` returns a `Vector3` of cell indices even though the components are whole numbers.
+
+## Other methods
+
+```lua
+Clear(): ()
+CountCells(): number
+GenerateMesh(): ()
+CreateHeightfield(
+    origin: Vector3,
+    size: Vector2,
+    material: Enum.Material,
+    heightAt: (x: number, z: number) -> number,
+    spacing: number?
+): ()
+```
+
+- `Clear()` removes every terrain cell. It doesn't change the service's properties.
+- `CountCells()` returns the number of stored cells.
+- `GenerateMesh()` marks all terrain chunks dirty so their meshes rebuild.
+- `CreateHeightfield()` bakes a height function into a `MeshPart` named `Heightfield` under `Workspace`. `spacing` defaults to `1`, and at most 256 segments are allowed per axis. The method returns no useful value. The origin is the corner, `size` is the X/Z extent, and `heightAt(x, z)` returns the height relative to the origin.
+
+`AutowedgeCell()`, `AutowedgeCells()`, and `ConvertToSmooth()` are placeholders. `AutowedgeCell()` always returns `false`; the other two do nothing.
+
+## Notes
+
+- Terrain editing is server-authoritative in multiplayer. Run it from a server script.
+- Large generation jobs are asynchronous. Check `QueuedChunkCount` if you need to wait before editing the result.
+- The world is limited to `MaxExtents`. Shapes outside it can't be stored.
+- `VoxelSize` is a global setting; changing it changes how every cell maps to world space.
+- Water is stored separately from solid occupancy, so a cell can contain both.
+
+## See also
+
+- `Workspace` for the world and physics.
+- `Part` and `MeshPart` for non-voxel geometry.

@@ -1,0 +1,310 @@
+---
+title: Animation and rigs
+description: Import clips, play and blend animation tracks, and build procedural keyframe sequences in Luau.
+---
+
+Animation in Kinemium has three layers: a rigged `MeshPart` supplies the skeleton, an `Animation` selects a clip, and an `Animator` or `AnimationController` owns the tracks that play on the rig.
+
+A clip can come from three places:
+
+- The mesh file itself, imported alongside the skeleton.
+- A separate animation file referenced by `Animation.AnimationId`.
+- A `KeyframeSequence` you build in Luau and assign to `Animation.Source`.
+
+Most games use a mix. Imported clips cover authored motion, while runtime sequences are useful for procedural movement, small variations, and effects that react to gameplay.
+
+## Quick start
+
+This plays the first clip imported with the rig's mesh:
+
+```lua
+local rig = workspace.Robot
+
+local controller = Instance.new("AnimationController")
+controller.MeshPart = rig
+controller.Parent = rig
+
+local animation = Instance.new("Animation")
+animation.Name = "Idle"
+animation.ClipName = "Idle"
+animation.Looped = true
+animation.Priority = Enum.AnimationPriority.Idle
+
+local track = controller:LoadAnimation(animation)
+track:Play(0.25)
+```
+
+`LoadAnimation()` raises an error when the rig isn't ready, the clip can't be found, or another animator is already controlling the mesh. A rig can have only one animator at a time.
+
+## Inspect the rig first
+
+Bones and clips are supplied by the mesh, so ask the `MeshPart` what it actually imported:
+
+```lua
+local rig = workspace.Robot
+
+for _, boneName in rig:GetBoneNames() do
+    print("bone", boneName)
+end
+
+for _, clip in rig:GetAnimationClips() do
+    print("clip", clip.Index, clip.Name, clip.Length)
+end
+```
+
+`GetBoneNames()` returns an empty table for a static mesh. If it's empty, the asset has no skeleton and no amount of pose or clip setup will animate it.
+
+`GetAnimationClips()` returns `Index`, `Name`, and `Length` in seconds. `Index` is zero-based. Clip names and bone names are case-sensitive, and a misspelled bone name is silently ignored rather than raising an error.
+
+Meshes load asynchronously. If a query comes back empty immediately after assigning `MeshId`, give the mesh a frame to finish importing before treating the rig as static.
+
+## Choose a clip
+
+`Animation` can select a clip by name or index:
+
+```lua
+local animation = Instance.new("Animation")
+animation.ClipName = "Run" -- takes precedence when set
+animation.ClipIndex = 0     -- used when ClipName is empty
+animation.Looped = true
+animation.Priority = Enum.AnimationPriority.Movement
+```
+
+`ClipName` wins when it isn't empty. A name that doesn't exist raises an error when the animation is loaded; it is not a silent fallback to `ClipIndex`.
+
+`Looped` and `Priority` are defaults for the track. You can still change `track.Looped` and `track.Priority` after loading it.
+
+## Play an imported clip
+
+A clip imported with `MeshPart.MeshId` needs no extra asset path:
+
+```lua
+local walk = Instance.new("Animation")
+walk.Name = "Walk"
+walk.ClipName = "Walk"
+walk.Looped = true
+walk.Priority = Enum.AnimationPriority.Movement
+
+local walkTrack = controller:LoadAnimation(walk)
+walkTrack:Play(0.2, 1, 1)
+```
+
+If the rig exposes several clips, load each one once and keep the track. Loading the same animation repeatedly creates new tracks rather than restarting the old one.
+
+## Use a separate animation file
+
+When the mesh and its animations are authored separately, point `Animation.AnimationId` at the animation file and select a clip by name:
+
+```lua
+local wave = Instance.new("Animation")
+wave.Name = "Wave"
+wave.AnimationId = "models/robot_wave.fbx"
+wave.ClipName = "Wave"
+wave.Looped = false
+wave.Priority = Enum.AnimationPriority.Action
+
+local waveTrack = controller:LoadAnimation(wave)
+waveTrack:Play(0.15)
+```
+
+The file can be FBX, glTF/GLB, DAE, or another animated format the mesh importer reads. If the rig already has a clip with that name, the animator uses it and leaves the file alone. Otherwise it imports the file's clips, matching channels to rig bones by name. Channels for bones the rig doesn't have are skipped, and a clip with no matching channels can't be loaded.
+
+This is the right place to share a library of animations across several rigs. Keep the skeleton and bone names consistent between the mesh and the animation file; matching is by name, not by hierarchy position.
+
+A saved map embeds the referenced file in its asset table. Executable builds carry the same table, so the animation keeps working without the original file next to the game. The editor stores the reference as a `kineasset://` entry internally and re-exports it in that form; treat it as an ordinary asset path in your scripts.
+
+If `Animation.Source` is set, it takes precedence over both `AnimationId` and the mesh's clips.
+
+## Build a sequence in Luau
+
+A `KeyframeSequence` contains `Keyframe` children, and each keyframe contains `Pose` children. Times are in seconds, and each `Pose` targets one bone by name:
+
+```lua
+local function addKeyframe(sequence, time, poses)
+    local keyframe = Instance.new("Keyframe")
+    keyframe.Time = time
+
+    for boneName, cframe in poses do
+        local pose = Instance.new("Pose")
+        pose.Name = boneName
+        pose.CFrame = cframe
+        pose.Weight = 1
+        keyframe:AddPose(pose)
+    end
+
+    sequence:AddKeyframe(keyframe)
+    return keyframe
+end
+
+local wave = Instance.new("KeyframeSequence")
+wave.Name = "Wave"
+wave.Loop = false
+wave.Priority = Enum.AnimationPriority.Action
+
+addKeyframe(wave, 0, {
+    RightArm = CFrame.Angles(0, 0, 0),
+})
+
+addKeyframe(wave, 0.35, {
+    RightArm = CFrame.Angles(0, 0, math.rad(-80)),
+})
+
+addKeyframe(wave, 0.7, {
+    RightArm = CFrame.Angles(0, 0, 0),
+})
+```
+
+Assign it through `Animation.Source`:
+
+```lua
+local animation = Instance.new("Animation")
+animation.Source = wave
+
+local track = controller:LoadAnimation(animation)
+track:Play(0.1, 1, 1)
+```
+
+The sequence's `Loop` and `Priority` are applied when the track is loaded and override the matching values on the `Animation`. The clip name comes from the sequence's `Name`; its duration is the largest keyframe time, with a minimum of `0.001` seconds.
+
+A few rules matter when building sequences:
+
+- Keyframes are sorted by `Time`, not by the order they were added.
+- `Keyframe.Time` accepts values from `0` through `36000`. Values outside that range are ignored, leaving the previous time in place.
+- `Pose.CFrame` is relative to the target bone, not the world.
+- Pose names must match bone names exactly.
+- `Pose.Weight` is stored as assigned but clamped to `0`-`1` when the clip is compiled.
+- A keyframe with no poses still contributes its time and its keyframe event.
+- An empty sequence cannot be loaded; `LoadAnimation()` raises an error.
+
+`Animation.Source` holds a weak reference. Keep the sequence parented or otherwise alive for as long as the animation may be loaded; destroying it clears the source.
+
+## Playback and scrubbing
+
+`AnimationTrack` controls one loaded clip:
+
+```lua
+track:Play(0.2, 1, 1)   -- fade time, weight, speed
+track:AdjustSpeed(0.5)
+track.TimePosition = 0.4
+track:AdjustWeight(0.75, 0.3)
+track:Stop(0.2)
+```
+
+`Play()` defaults to a `0.1` second fade, weight `1`, and speed `1`. `Stop()` also defaults to a `0.1` second fade.
+
+Useful track state:
+
+| Member | Meaning |
+| --- | --- |
+| `IsPlaying` | Whether the clip is currently playing. |
+| `Length` | Clip length in seconds. |
+| `TimePosition` | Current position; writable for scrubbing. |
+| `Speed` | Read-only; change it with `AdjustSpeed()`. |
+| `WeightCurrent` / `WeightTarget` | Current and target blend weight. |
+| `Looped` / `Priority` | Per-track playback settings. |
+
+`AnimationTrack` becomes invalid when its animator is destroyed or the rig is released. Calls on a dead track either do nothing or raise an error, depending on the method.
+
+## Events and markers
+
+Keyframe names become animation events. Connect `KeyframeReached` before playback starts:
+
+```lua
+track.KeyframeReached:Connect(function(name)
+    print("reached", name)
+end)
+```
+
+Markers add named events with a string payload. Create a `KeyframeMarker`, give it a `Name` and `Value`, and add it to a keyframe:
+
+```lua
+local marker = Instance.new("KeyframeMarker")
+marker.Name = "Footstep"
+marker.Value = "left"
+
+local keyframe = wave:GetKeyframes()[2]
+keyframe:AddMarker(marker)
+```
+
+Listen for the marker by its name:
+
+```lua
+track:GetMarkerReachedSignal("Footstep"):Connect(function(value)
+    print("stepped", value)
+end)
+```
+
+The signal is created the first time you request it. Connect before `Play()` or you'll miss the first pass.
+
+`GetTimeOfKeyframe(name)` returns the time of a named keyframe and raises an error when the name doesn't exist. Track parameters are a separate, per-track store for gameplay data:
+
+```lua
+track:SetParameter("combo", 2)
+print(track:GetParameter("combo")) -- 2
+track:SetParameter("combo", nil)   -- removes it
+```
+
+## Blending and priorities
+
+Higher-priority tracks take precedence when several tracks target the same bones. Use priority for the role of a clip and weight for how strongly it contributes:
+
+```lua
+local idle = controller:LoadAnimation(idleAnimation)
+idle.Priority = Enum.AnimationPriority.Idle
+idle:Play(0.2, 1, 1)
+
+local wave = controller:LoadAnimation(waveAnimation)
+wave.Priority = Enum.AnimationPriority.Action
+wave:Play(0.15, 0.8, 1)
+```
+
+The priority order is `Idle`, `Movement`, `Action`, `Action2`, `Action3`, `Action4`, then `Core`. A higher-priority track overrides a lower one; weights control the blend among active tracks at the same priority.
+
+Use `AnimationController` for a rig without a character, or `Humanoid` for a character. Both create an `Animator` underneath. Don't parent a second animator to a rig that already has one; `LoadAnimation()` raises until the old one is destroyed or reparented.
+
+## Editing and swapping clips
+
+A clip is compiled when the animator loads it. Editing a `KeyframeSequence` afterward does not update an existing track:
+
+```lua
+local keyframe = wave:GetKeyframes()[2]
+keyframe.Time = 0.5
+
+local updated = controller:LoadAnimation(animation)
+track:Stop(0.1)
+updated:Play(0.1, 1, 1)
+track = updated
+```
+
+The same pattern swaps one animation for another. For imported clips, change `ClipName` or `AnimationId` and load a new track; the old track keeps playing its original clip until stopped.
+
+Build a sequence when its parameters change, not on every frame. If you only need to move one bone per frame, a scripted transform is usually simpler than regenerating a clip.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `LoadAnimation()` raises | The rig isn't ready or is static, the clip name/index is wrong, the sequence is empty, or another animator owns the mesh. | Check `GetBoneNames()` and `GetAnimationClips()`, fix the clip selector, or destroy the other animator. |
+| Nothing moves | Pose names don't match bones, weight is zero, or the track isn't playing. | Compare names exactly, set `Pose.Weight`/`track.AdjustWeight`, and call `Play()`. |
+| The rig stays in its bind pose | The animation file has no channels for this rig's bones. | Use a file authored against the same skeleton, or check the bone names. |
+| The clip doesn't loop | The loop setting is on the wrong object. | Set `Animation.Looped` for imported clips, `sequence.Loop` for `Source`, or `track.Looped` after loading. |
+| Markers never fire | The signal was connected after playback started, or the marker is past the clip's end. | Connect before `Play()` and keep marker times within the sequence duration. |
+| Edited poses don't show | The track was loaded before the edit. | Load a new track and stop the old one. |
+| `AnimationId` doesn't load | The file is missing, unsupported, or has no bones matching the rig. | Verify the path, format, and bone names; `LoadAnimation()` raises when the clip still can't be found. |
+| A second animator fails | The rig already has an animator. | Use the existing `AnimationController`/`Animator`, or destroy it first. |
+
+## Performance
+
+- Load each track once and reuse it. Repeated `LoadAnimation()` calls create new native tracks.
+- Build or edit a `KeyframeSequence` only when its inputs change, not every frame.
+- Keep the number of animated bones and simultaneous high-priority tracks reasonable.
+- Stop or destroy animators you no longer need; a destroyed animator releases its native tracks and the rig.
+- For imported animation files, the first load pays the import cost. Later loads reuse the clips already on the rig.
+
+## Where to go next
+
+- [Animation](/docs/Animation) for clip selection, `AnimationId`, and playback defaults.
+- [AnimationController](/docs/AnimationController) and [Animator](/docs/Animator) for hosting tracks.
+- [AnimationTrack](/docs/AnimationTrack) for playback, events, and parameters.
+- [AnimationClip](/docs/AnimationClip), [KeyframeSequence](/docs/KeyframeSequence), [Keyframe](/docs/Keyframe), and [Pose](/docs/Pose) for the authoring API.
+- [MeshPart](/docs/MeshPart) for importing rigged meshes and inspecting their clips and bones.

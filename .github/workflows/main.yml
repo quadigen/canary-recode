@@ -161,7 +161,6 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: brew install cmake enet ninja llvm openssl@3
-# The upstream macOS release only contains ARM64 tools and libraries
       - name: Restore Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
         id: filament-intel

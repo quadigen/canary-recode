@@ -49,6 +49,9 @@ KINE_API void Kine_Filament_StepAnimations(KineFilamentContext *ctx, float dt);
 KINE_API void Kine_Filament_SetAnimationAutoStep(KineFilamentContext *ctx, bool enabled);
 
 KINE_API int Kine_Filament_MeshCreateAnimation(KineFilamentMesh *mesh, const char *name, float duration);
+/* Copies clips from source onto target, matching channels by bone name. Returns
+ * the number of clips appended (0 when none could drive the target rig). */
+KINE_API int Kine_Filament_MeshImportAnimations(KineFilamentMesh *target, KineFilamentMesh *source);
 /* local CFrame offset from bind pose: x,y,z,r00..r22 (12 floats) */
 KINE_API bool Kine_Filament_MeshAddAnimationPose(KineFilamentMesh *mesh, int clipIndex,
     const char *boneName, float time, const float *cframe12, float weight);

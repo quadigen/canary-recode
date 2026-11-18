@@ -1,0 +1,231 @@
+---
+title: Lighting and post-processing
+description: Build a mood with time of day, sky settings, shadows, and a controlled stack of post-processing effects.
+---
+
+Lighting in Kinemium comes from one service and a set of child effects. `Lighting` owns the sun, ambient light, and shadows. Everything that happens after the scene is drawn. bloom, color grading, blur, vignette are effect objects parented to the same service.
+
+This guide builds two looks from scratch and explains the rules that decide which effects actually render.
+
+## Start with the sun
+
+`ClockTime` is a decimal hour. `6` is sunrise, `12` is noon, `18` is sunset, and values outside `0`-`24` wrap:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+Lighting.ClockTime = 17.5
+Lighting.Brightness = 2.4
+Lighting.Ambient = Color3.fromRGB(55, 60, 75)
+Lighting.OutdoorAmbient = Color3.fromRGB(70, 72, 82)
+Lighting.SunColor = Color3.fromRGB(255, 214, 170)
+```
+
+The sun direction is derived from `ClockTime` and is available through `GetSunDirection()` if you need to align something with it.
+
+Shadows are controlled separately:
+
+```lua
+Lighting.GlobalShadows = true
+Lighting.ShadowSoftness = 0.35
+Lighting.ShadowCascades = 2
+Lighting.ShadowMapSize = 2048
+```
+
+`ShadowSoftness` above `0.25` also changes the shadow filter, so it's the property that matters most for a soft, overcast look. Raising `ShadowMapSize` sharpens shadows and costs memory.
+
+## Shape the sky
+
+Two objects decide what you see above the horizon: `Atmosphere` and `Clouds`.
+
+`Atmosphere` sets four values that the current sky pass reads: `SkyColor`, `HorizonColor`, `GroundColor`, and `SunIntensity`. Other atmosphere properties are stored but don't change the image, so don't spend time tuning `Density` or `Haze` yet.
+
+```lua
+local atmosphere = Lighting:FindFirstChild("Atmosphere")
+if not atmosphere then
+    atmosphere = Instance.new("Atmosphere")
+    atmosphere.Parent = Lighting
+end
+
+atmosphere.SkyColor = Color3.fromRGB(58, 104, 176)
+atmosphere.HorizonColor = Color3.fromRGB(244, 186, 140)
+atmosphere.GroundColor = Color3.fromRGB(44, 38, 34)
+atmosphere.SunIntensity = 60000
+```
+
+`Clouds` is a normal `Instance` with an `Enabled` property. It must also be a child of `Lighting`.
+
+```lua
+local clouds = Lighting:FindFirstChild("Clouds")
+if not clouds then
+    clouds = Instance.new("Clouds")
+    clouds.Parent = Lighting
+end
+
+clouds.Enabled = true
+clouds.Cover = 0.55
+clouds.Density = 0.02
+clouds.Height = 720
+clouds.Thickness = 260
+clouds.Color = Color3.fromRGB(245, 230, 220)
+```
+
+`Cover`, `Density`, `Height`, and `Thickness` accept any number without clamping. Negative heights and densities produce nothing useful, so keep them in a sane range.
+
+## Understand the effect stack
+
+`Lighting` already has effect children when the game starts. You can tune them in place, replace them, or add your own. Two rules decide what the renderer uses:
+
+1. **Last child wins.** For each effect class, only the last matching child of `Lighting` is applied. Adding a second `BloomEffect` silently disables the first.
+2. **Most effects are exclusive.** `ColorCorrectionEffect`, `BloomEffect`, `SunRaysEffect`, `SSAOEffect`, `DepthOfFieldEffect`, `VignetteEffect`, and `ScreenSpaceReflectionsEffect` each apply at most one instance.
+
+That means the safe pattern is to find the existing child first, and only create one if it's missing:
+
+```lua
+local function getEffect(className)
+    local existing = Lighting:FindFirstChildOfClass(className)
+    if existing then
+        return existing
+    end
+
+    local effect = Instance.new(className)
+    effect.Parent = Lighting
+    return effect
+end
+```
+
+`FindFirstChildOfClass()` returns the first match, not the last one the renderer will use. If your game adds effects dynamically, keep your own reference instead of searching by name every frame.
+
+`BlurEffect` is a special case: it's only applied when `Lighting` has no `BloomEffect` child at all. If both exist, the bloom path wins and the blur is ignored. Don't combine them and expect a blurred image.
+
+## Recipe: warm sunset
+
+This setup combines a low sun, a tinted atmosphere, soft shadows, and gentle grading:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+Lighting.ClockTime = 17.8
+Lighting.Brightness = 2.2
+Lighting.ExposureCompensation = 0.05
+Lighting.ShadowSoftness = 0.4
+
+local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+if atmosphere then
+    atmosphere.SkyColor = Color3.fromRGB(72, 112, 180)
+    atmosphere.HorizonColor = Color3.fromRGB(250, 178, 128)
+    atmosphere.GroundColor = Color3.fromRGB(48, 40, 36)
+    atmosphere.SunIntensity = 55000
+end
+
+local grade = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+if grade then
+    grade.Enabled = true
+    grade.Brightness = 0.03
+    grade.Contrast = 0.12
+    grade.Saturation = 0.08
+end
+
+local rays = Lighting:FindFirstChildOfClass("SunRaysEffect")
+if rays then
+    rays.Enabled = true
+    rays.Intensity = 0.18
+    rays.Spread = 0.8
+end
+```
+
+Sun rays fade out on their own as the sun drops below the horizon, so this keeps working if you animate `ClockTime` into the night.
+
+## Recipe: soft interior
+
+Interiors usually want less contrast, a little bloom, and a shallow depth of field. This one disables sun rays and ambient occlusion, then leans on bloom and a vignette:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+Lighting.ClockTime = 13
+Lighting.Brightness = 1.6
+Lighting.ExposureCompensation = 0.1
+Lighting.ShadowSoftness = 0.6
+
+local bloom = Lighting:FindFirstChildOfClass("BloomEffect")
+if bloom then
+    bloom.Enabled = true
+    bloom.Intensity = 0.22
+    bloom.Size = 40
+    bloom.Threshold = 1.2
+end
+
+local dof = Lighting:FindFirstChildOfClass("DepthOfFieldEffect")
+if dof then
+    dof.Enabled = true
+    dof.FocusDistance = 18
+    dof.InFocusRadius = 8
+    dof.NearIntensity = 0.15
+    dof.FarIntensity = 0.35
+end
+
+local vignette = Lighting:FindFirstChildOfClass("VignetteEffect")
+if vignette then
+    vignette.Enabled = true
+    vignette.Color = Color3.fromRGB(10, 8, 12)
+    vignette.Transparency = 0.3
+    vignette.Midpoint = 0.45
+    vignette.Feather = 0.6
+end
+
+local rays = Lighting:FindFirstChildOfClass("SunRaysEffect")
+if rays then
+    rays.Enabled = false
+end
+```
+
+Depth of field switches on only when `Enabled` is true and at least one intensity is above `0`. Setting both intensities to `0` is the same as disabling it.
+
+## Tune grading carefully
+
+`ColorCorrectionEffect` adds to `Lighting.ExposureCompensation`, and the engine also adds a small lift at night. Values that look fine at noon can clip at dusk.
+
+- `Brightness` is additive. Use small steps, around `0.02` to `0.1`.
+- `Contrast` is applied as `1 + Contrast`. `-1` removes all contrast, so stay well above it.
+- `Saturation` works the same way. `-1` produces grayscale.
+- `TintColor` is stored but the current grading pass ignores it. Use `Color3` values on lights and materials instead.
+
+If the scene looks washed out, check exposure before raising brightness. If it looks flat, add contrast before saturation.
+
+## Performance and the fast viewport
+
+The editor's fast viewport skips most of this work. Clouds, bloom, ambient occlusion, depth of field, color grading, sun rays, anti-aliasing, vignette, screen-space reflections, and the advanced lighting effects are all bypassed there.
+
+That's useful while editing, but it means the editor preview can look very different from a running game. Test the final look in a normal session.
+
+In game, the expensive settings are:
+
+| Setting | Cost |
+| --- | --- |
+| `ShadowMapSize` | Memory and fill rate; larger maps cost more. |
+| `ShadowCascades` | Extra shadow passes per frame. |
+| `ShadowSoftness` | A wider filter, and above `0.25` a more expensive one. |
+| `DynamicResolution` | Trades sharpness for frame rate by lowering resolution under load. |
+| `ResolutionScale` | Sets the floor for that drop, between `0.1` and `1`. |
+
+If you need a consistent image for screenshots or a stylized game, turn off `DynamicResolution` so the resolution doesn't change under load.
+
+## A note on defaults
+
+Effects created by `Lighting` aren't always at their class defaults. The default bloom starts at `0.25` intensity instead of `0.5`, the default ambient occlusion uses a radius of `0.5` and intensity `0.6`, and the default screen-space reflections use `MaxDistance = 100`, `Thickness = 0.2`, and `Bias = 0.01`.
+
+Read the current value before changing it, or set every property you care about explicitly. That makes the look reproducible across sessions and engine updates.
+
+## Check your work
+
+- Look at the scene at noon and at dusk. Grading that works at one time often fails at the other.
+- Disable each effect one at a time to see what it contributes.
+- Check that only one instance of each effect class is parented to `Lighting`.
+- Compare the editor viewport against a real session, since the fast viewport skips effects.
+
+## Next steps
+
+- [Terrain and environment](/docs/guides/terrain-and-environment) for `Atmosphere`, `Clouds`, and generated landscapes.
+- `Lighting` for time of day, shadows, and the default effect children.
+- `PostProcess` and the individual effect classes for their properties.

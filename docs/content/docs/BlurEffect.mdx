@@ -1,0 +1,54 @@
+---
+title: BlurEffect
+description: Soften the whole scene with a controllable blur.
+---
+
+`BlurEffect` blurs the rendered scene. In the current renderer its settings feed the bloom pass rather than a separate blur pass, which makes it useful as a low-cost soft-focus effect when you don't want a full bloom setup.
+
+`BlurEffect` inherits from `LightingEffect`, so it has `Enabled`. It has to be a child of `Lighting`.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local blur = Instance.new("BlurEffect")
+blur.Size = 8
+blur.Parent = Lighting
+```
+
+`Lighting` creates a `BloomEffect` by default. A `BlurEffect` is only applied when there's no `BloomEffect` child, so disable or remove the bloom first if this is the look you want:
+
+```lua
+local bloom = Lighting:FindFirstChild("BloomEffect")
+if bloom then
+    bloom:Destroy()
+end
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Size` | `number` | Read/write | `10` | Blur radius. Negative values clamp to `0`. |
+
+`Size` is also used as the bloom intensity, scaled down by 100, and truncated to a whole number for the render pass. A size of `10` gives an intensity of `0.1`; a size of `100` gives `1`.
+
+## Limitations
+
+- **Bloom wins.** If `Lighting` has any `BloomEffect` child, `BlurEffect` is ignored. This is why adding a blur to a default scene seems to do nothing.
+- **One blur.** If several `BlurEffect` children exist, the last one in the child list is used.
+- **No directional or local blur.** The effect applies to the whole view.
+
+If you need a blur that coexists with bloom, the public API doesn't currently separate the two passes. A `PostProcess` shader is the alternative.
+
+## Notes
+
+- Blur is skipped in the editor's fast viewport.
+- Cloning copies `Enabled` and `Size`.
+
+## See also
+
+- `BloomEffect` for the effect that normally owns this pass.
+- `PostProcess` for custom screen-space shaders.

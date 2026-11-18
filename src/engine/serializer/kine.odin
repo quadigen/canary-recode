@@ -590,6 +590,10 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		if property == "SoundId" {
 			return .Audio, true
 		}
+	case "Animation":
+		if property == "AnimationId" {
+			return .Animation, true
+		}
 	case "MaterialVariant":
 		switch property {
 		case "ColorMap",

@@ -113,7 +113,7 @@ Animation_Load_Track :: proc(L: ^vm.State, a: ^Animator, source: ^Object) -> (i3
 			true
 	}
 	anim := cast(^Animation)source
-	clip_index := Animation_Resolve_Clip(a.native_mesh, anim)
+	clip_index := Animation_Resolve_Clip(a.native_mesh, a.native_context, anim)
 	if clip_index < 0 {
 		return vm.RaiseError(L, "animation clip not found or source KeyframeSequence is empty"),
 			true

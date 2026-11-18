@@ -1,0 +1,58 @@
+---
+title: SSAOEffect
+description: Darken creases and contact areas with screen-space ambient occlusion.
+---
+
+`SSAOEffect` adds contact shadows in corners, crevices, and where objects meet. It makes dense geometry read better without adding extra lights.
+
+`SSAOEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local ao = Lighting:FindFirstChild("SSAOEffect")
+if not ao then
+    ao = Instance.new("SSAOEffect")
+    ao.Parent = Lighting
+end
+
+ao.Enabled = true
+ao.Radius = 0.75
+ao.Intensity = 0.8
+ao.Power = 1.4
+ao.Quality = 3
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Radius` | `number` | Read/write | `0.3` | Sampling radius. Negative values clamp to `0`. |
+| `Power` | `number` | Read/write | `1` | Falloff strength. Values clamp to at least `0.001`. |
+| `Intensity` | `number` | Read/write | `1` | Darkness of the occlusion. Negative values clamp to `0`. |
+| `Quality` | `number` | Read/write | `2` | Quality level from `0` to `3`. Fractions are truncated. |
+| `AOType` | `number` | Read/write | `0` | Occlusion mode from `0` to `1`. Fractions are truncated. |
+
+`Lighting` tunes its default child to a radius of `0.5` and an intensity of `0.6`, so the values in a fresh scene differ from the class defaults.
+
+## Tuning it
+
+`Radius` is in view-space units rather than studs, so the right value depends on camera distance and scene scale. Small radii catch tight seams; larger radii darken broader areas around objects.
+
+`Quality` and `AOType` are numbers, not enum items. Values outside their ranges clamp to the nearest end. Higher quality costs more per frame, so lower it first if the effect is too expensive.
+
+`Power` controls how quickly the darkening falls off. Values below `1` spread it out; higher values concentrate it in deep creases.
+
+## Notes
+
+- Only one ambient-occlusion effect is used. The last `SSAOEffect` child of `Lighting` wins.
+- The effect is skipped in the editor's fast viewport.
+- Cloning copies every property above.
+
+## See also
+
+- `Lighting` for the scene's overall lighting.
+- `ScreenSpaceReflectionsEffect` for the matching reflection pass.

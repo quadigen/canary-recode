@@ -72,13 +72,21 @@ These are currently placeholders, so don't treat them as unique identifiers for 
 
 | Service | What it's for |
 | --- | --- |
+| `AssetService` | Create editable images, blank or loaded from an asset. |
 | `CollectionService` | Tag instances and subscribe to tag changes. |
+| `ContentProvider` | Download ZIP archives and prepare content. |
 | `ContextActionService` | Bind named actions to inputs with priorities. |
+| `DataStoreService` | Save persistent key-value data on the server. |
 | `Debris` | Destroy instances automatically after a delay. |
 | `GuiService` | Read platform inset and window details. |
+| `HttpService` | Make HTTP requests and encode or decode JSON. |
+| `InsertService` | Create a `MeshPart` from a locally resolvable mesh. |
 | `Lighting` | Set the time of day, ambient light, shadows, and default effects. |
+| `LocalizationService` | Read and set the locale identifiers the game reports. |
 | `LogService` | Write structured log messages and read the history back. |
+| `PathfindingService` | Build navigation paths and return waypoints. |
 | `Physics` | Tune gravity, substeps, and sleep behavior. |
+| `PhysicsService` | Register collision-group names and query the list. |
 | `Players` | Work with player objects, characters, and player events. |
 | `ReplicatedFirst` | Hold content clients need early in startup. |
 | `ReplicatedStorage` | Hold content both sides can access. |
@@ -86,10 +94,16 @@ These are currently placeholders, so don't treat them as unique identifiers for 
 | `ServerScriptService` | Hold server-side scripts. |
 | `ServerStorage` | Hold server-only content. |
 | `StarterGui` | Hold screen interface templates. |
+| `StarterPlayer` | Set defaults for newly spawned characters. |
+| `Stats` | Read Luau heap memory usage. |
+| `Team` | Describe a team's color and stored assignment flags. |
+| `Teams` | List and look up `Team` objects. |
+| `Terrain` | Generate, carve, and edit voxel terrain. |
 | `TextService` | Measure text with the engine's fonts. |
 | `TweenService` | Animate numeric, `UDim2`, and `Color3` properties over time. |
 | `UserInputService` | Read keyboard, mouse, and touch state and listen for input. |
 | `Workspace` | Manage the 3D world, physics settings, camera, and raycasts. |
+| `Workspace2D` | Manage the separate 2D physics world for `Part2D` bodies. |
 
 More services will appear here as their Luau APIs are verified. In the meantime, `GetService()` works with any name the engine registers.
 

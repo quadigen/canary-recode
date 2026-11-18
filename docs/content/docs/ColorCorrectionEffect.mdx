@@ -1,0 +1,56 @@
+---
+title: ColorCorrectionEffect
+description: Adjust the brightness, contrast, and saturation of the final image.
+---
+
+`ColorCorrectionEffect` grades the rendered scene. Use it to warm up a sunset, mute a gloomy level, or push contrast for a stylized look without editing every material.
+
+`ColorCorrectionEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local grade = Lighting:FindFirstChild("ColorCorrectionEffect")
+if not grade then
+    grade = Instance.new("ColorCorrectionEffect")
+    grade.Parent = Lighting
+end
+
+grade.Brightness = 0.05
+grade.Contrast = 0.2
+grade.Saturation = -0.15
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Brightness` | `number` | Read/write | `0` | Additive brightness, clamped between `-1` and `1`. |
+| `Contrast` | `number` | Read/write | `0` | Contrast adjustment, clamped between `-1` and `1`. |
+| `Saturation` | `number` | Read/write | `0` | Saturation adjustment, clamped between `-1` and `1`. |
+| `TintColor` | `Color3` | Read/write | White | Color tint stored on the effect. |
+
+The renderer maps these values to multipliers: `Contrast` becomes `1 + Contrast` and `Saturation` becomes `1 + Saturation`. A value of `0` leaves that component alone; `-1` removes all contrast or color.
+
+`Brightness` is combined with `Lighting.ExposureCompensation` and a small night-time lift. A scene that already looks bright can become clipped quickly, so adjust exposure and brightness together.
+
+`TintColor` is stored and cloned, but the current color-grading pass doesn't use it. Changing it won't tint the image.
+
+## Multiple effects
+
+Only one color correction is applied. If `Lighting` has several `ColorCorrectionEffect` children, the last one in the child list wins. Put your effect last or remove the others when you need deterministic results.
+
+## Notes
+
+- Color correction is skipped in the editor's fast viewport.
+- Disabling the effect falls back to `Lighting.ExposureCompensation` alone.
+- Cloning copies `Enabled`, the three adjustments, and `TintColor`.
+
+## See also
+
+- `Lighting` for exposure and ambient light.
+- `ToneMappingEffect` for highlight rolloff and white balance.
+- `VignetteEffect` for darkening the edges of the frame.

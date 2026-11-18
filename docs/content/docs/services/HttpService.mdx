@@ -1,0 +1,226 @@
+---
+title: HttpService
+description: Make HTTP requests, encode JSON, and work with URLs from Luau.
+---
+
+`HttpService` handles network requests and the JSON conversions that usually come with them. Use it for leaderboards, web APIs, downloading images, or any data that lives outside the game.
+
+Requests are synchronous: the call returns when the response arrives or the request fails. A slow endpoint blocks the calling script, so avoid making requests every frame.
+
+## Getting started
+
+```lua
+local HttpService = game:GetService("HttpService")
+
+local body = HttpService:GetAsync("https://example.com/status")
+print(body)
+
+local decoded = HttpService:JSONDecode(body)
+print(decoded.ok)
+```
+
+`HttpEnabled` is `true` by default and read-only in the current API. If requests are disabled, methods that contact the network raise an error.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `HttpEnabled` | `boolean` | Read-only | `true` | Whether HTTP requests are allowed. |
+
+## Methods
+
+### GetAsync
+
+```lua
+GetAsync(url: string): string
+```
+
+Sends a GET request and returns the response body as a string. Non-2xx responses raise an error, as do transport failures.
+
+```lua
+local html = HttpService:GetAsync("https://example.com")
+```
+
+The response is returned as text. Decode it with `JSONDecode()` when the endpoint returns JSON.
+
+### PostAsync
+
+```lua
+PostAsync(url: string, body: string, contentType: string?): string
+```
+
+Sends a POST request. The optional content type defaults to `"application/json"`.
+
+```lua
+local response = HttpService:PostAsync(
+    "https://example.com/scores",
+    HttpService:JSONEncode({ player = "Ada", score = 1200 })
+)
+```
+
+Like `GetAsync()`, it returns the body as a string and raises on a non-2xx response or transport failure.
+
+### RequestAsync
+
+```lua
+RequestAsync(request: {
+    Url: string,
+    Method: string?,
+    Body: string?,
+    Headers: {[string]: string}?,
+}): {
+    Success: boolean,
+    StatusCode: number,
+    StatusMessage: string,
+    Body: string,
+    Headers: {[string]: string},
+}
+```
+
+Sends a request described by a table and returns a response table. `Method` defaults to `"GET"`, and `Body` defaults to an empty string.
+
+```lua
+local response = HttpService:RequestAsync({
+    Url = "https://example.com/players",
+    Method = "POST",
+    Headers = { ["Content-Type"] = "application/json" },
+    Body = HttpService:JSONEncode({ name = "Ada" }),
+})
+
+if response.Success then
+    print(response.StatusCode, response.Body)
+else
+    warn(response.StatusCode, response.StatusMessage)
+end
+```
+
+`RequestAsync()` doesn't raise for an HTTP error status; check `Success` or `StatusCode`. It still raises for an invalid request table, an unsupported method, or a transport failure. `Headers` is a map of response headers.
+
+### GetImageBytes
+
+```lua
+GetImageBytes(url: string, headers: {[string]: string}?): Content
+```
+
+Downloads an image and returns it as `Content`. The optional headers table is applied to the request.
+
+```lua
+local content = HttpService:GetImageBytes("https://example.com/icon.png")
+```
+
+The download must succeed and the response must be a decodable image. Failures raise an error.
+
+### JSONEncode
+
+```lua
+JSONEncode(value: any?): string
+```
+
+Encodes a value as JSON. `nil` becomes `"null"`.
+
+```lua
+local text = HttpService:JSONEncode({
+    name = "Ada",
+    scores = { 10, 20, 30 },
+    active = true,
+})
+```
+
+Supported values are booleans, numbers, strings, and tables. Arrays are detected by consecutive integer keys starting at `1`; other tables become objects. Object keys must be strings or numbers. Integers and integer-valued floats encode as integers; other numbers encode as floats.
+
+Encoding raises an error for functions, userdata that isn't handled as a datatype, mixed array/object tables that can't be represented, cyclic tables, tables nested more than 20 levels deep, and `NaN` or infinity.
+
+### JSONDecode
+
+```lua
+JSONDecode(text: string): any
+```
+
+Parses JSON text into Luau values. Arrays become one-based tables, objects become string-keyed tables, and `null` becomes `nil`.
+
+```lua
+local data = HttpService:JSONDecode('{"ok":true,"items":[1,2,3]}')
+print(data.ok, data.items[1])
+```
+
+Invalid JSON raises an error. Duplicate keys are resolved by the parser, so don't depend on which value survives in malformed input.
+
+### GenerateGUID
+
+```lua
+GenerateGUID(bracketed: boolean?): string
+```
+
+Returns a new GUID string. Pass `true` to wrap it in braces, as in `{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`.
+
+```lua
+local id = HttpService:GenerateGUID(false)
+local braced = HttpService:GenerateGUID(true)
+```
+
+The value is generated locally. It isn't guaranteed to be unique across processes, so don't use it as a durable database key.
+
+### UrlEncode
+
+```lua
+UrlEncode(value: string): string
+```
+
+Percent-encodes a string for use in a URL query or form body.
+
+```lua
+local query = "name=" .. HttpService:UrlEncode("Ada Lovelace")
+```
+
+### OpenURL
+
+```lua
+OpenURL(url: string): ()
+```
+
+Asks the platform to open a URL in the default browser or handler. It returns no values and raises an error if the platform rejects the request.
+
+```lua
+HttpService:OpenURL("https://example.com/docs")
+```
+
+This is a desktop integration, not a network request. It doesn't fetch the page for your script.
+
+### CreateWebStreamClient
+
+```lua
+CreateWebStreamClient(
+    kind: Enum.WebStreamClientType,
+    request: { Url: string }
+): WebStreamClient
+```
+
+Opens a WebSocket client. This method is only available in the editor, only when HTTP is enabled, and only supports `Enum.WebStreamClientType.WebSocket` with a `ws://` or `wss://` URL.
+
+```lua
+local client = HttpService:CreateWebStreamClient(
+    Enum.WebStreamClientType.WebSocket,
+    { Url = "wss://example.com/socket" }
+)
+
+client.MessageReceived:Connect(function(message)
+    print(message)
+end)
+
+client:Send("hello")
+```
+
+The returned client has `ConnectionState`, `Send()`, `Close()`, and the `Opened`, `Closed`, `Error`, and `MessageReceived` signals. Opening is asynchronous; watch `Opened` before sending if the server requires a handshake.
+
+## Notes
+
+- Requests are blocking. A request that never completes can stall the script that made it.
+- There's no built-in retry, timeout, or caching layer exposed to Luau.
+- `RequestAsync()` is the only method that gives you the status code and headers without raising on an HTTP error.
+- JSON depth is limited; very deep or cyclic tables fail to encode.
+- Response bodies are strings, including JSON. Use `JSONDecode()` yourself.
+
+## See also
+
+- `ContentProvider` for downloading and extracting ZIP archives.
+- `DataStoreService` for persistent game data that doesn't need an external server.

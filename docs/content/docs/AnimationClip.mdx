@@ -1,0 +1,68 @@
+---
+title: AnimationClip
+description: The shared base for animation clips that carry loop and priority settings.
+---
+
+`AnimationClip` is the base class for animation data that an `Animator` can play. It holds the two playback settings every clip shares: whether it loops and what priority it has when blended with other tracks.
+
+`AnimationClip` inherits from `Instance`. It isn't creatable on its own; `KeyframeSequence` is the concrete class you create.
+
+## Getting started
+
+There's no `Instance.new("AnimationClip")`. Create a `KeyframeSequence` and treat its inherited properties as the clip settings:
+
+```lua
+local sequence = Instance.new("KeyframeSequence")
+sequence.Name = "Idle"
+sequence.Loop = true
+sequence.Priority = Enum.AnimationPriority.Idle
+```
+
+An existing `KeyframeSequence` is the object you assign to `Animation.Source`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Loop` | `boolean` | Read/write | `false` | Whether playback restarts when the clip ends. |
+| `Priority` | `Enum.AnimationPriority` | Read/write | `Enum.AnimationPriority.Idle` | Blending priority. |
+
+### Loop
+
+When true, a loaded track restarts from the beginning after its last keyframe. When false, it stops at the end. For a `KeyframeSequence`, this value is applied when the animation is loaded, not when it's played.
+
+### Priority
+
+Priority decides which animation wins when several tracks target the same bones. Higher-priority tracks override lower-priority ones. The available values are `Idle`, `Movement`, `Action`, `Action2`, `Action3`, `Action4`, and `Core`, in increasing order.
+
+```lua
+sequence.Priority = Enum.AnimationPriority.Action
+```
+
+For a `KeyframeSequence` loaded through `Animation.Source`, the sequence's `Loop` and `Priority` take precedence over the values on the `Animation` instance.
+
+## Using a clip
+
+A clip by itself doesn't play. Assign it to an `Animation` and load that animation on an `Animator`:
+
+```lua
+local animation = Instance.new("Animation")
+animation.Source = sequence
+
+local track = animator:LoadAnimation(animation)
+track:Play()
+```
+
+The animator needs a ready rigged `MeshPart`, and the sequence must contain at least one keyframe. Otherwise `LoadAnimation()` raises an error.
+
+## Notes
+
+- `AnimationClip` has no methods or events of its own.
+- Cloning a `KeyframeSequence` copies `Loop`, `Priority`, and its descendants according to normal instance cloning.
+- The clip's `Name` becomes the clip name when the sequence is compiled.
+
+## See also
+
+- `KeyframeSequence` for the concrete clip container.
+- `Keyframe` and `Pose` for the clip's contents.
+- `Animation` for binding a clip to an animator.

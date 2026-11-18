@@ -1,0 +1,63 @@
+---
+title: Atmosphere
+description: Set the sky, horizon, and ground colors that frame the scene.
+---
+
+`Atmosphere` defines the colors the renderer uses for the sky dome, the horizon, and the ground. It's the main way to change the mood of the sky without replacing the whole environment.
+
+`Atmosphere` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates an atmosphere by default. Find it or add one, then adjust the colors:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local atmosphere = Lighting:FindFirstChild("Atmosphere")
+if not atmosphere then
+    atmosphere = Instance.new("Atmosphere")
+    atmosphere.Parent = Lighting
+end
+
+atmosphere.Density = 0.35
+atmosphere.SkyColor = Color3.fromRGB(70, 130, 220)
+atmosphere.HorizonColor = Color3.fromRGB(220, 190, 170)
+atmosphere.GroundColor = Color3.fromRGB(35, 30, 28)
+atmosphere.SunIntensity = 80000
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Stored on the effect, but not consulted by the current sky pass. |
+| `Density` | `number` | Read/write | `0.3` | Stored haze density, clamped between `0` and `1`. Not currently used for rendering. |
+| `Offset` | `number` | Read/write | `0` | Stored height offset, clamped between `-1` and `1`. Not currently used for rendering. |
+| `Color` | `Color3` | Read/write | `Color3.fromRGB(199, 219, 255)` | General atmosphere color. Stored but not used by the current sky pass. |
+| `Decay` | `Color3` | Read/write | `Color3.fromRGB(89, 115, 153)` | Decay color. Stored but not used by the current sky pass. |
+| `Glare` | `number` | Read/write | `0` | Glare amount, clamped between `0` and `1`. Stored but not used by the current sky pass. |
+| `Haze` | `number` | Read/write | `0` | Haze amount, clamped to at least `0`. Stored but not used by the current sky pass. |
+| `SunDirection` | `Vector3` | Read/write | `Vector3.new(0.35, 0.85, 0.25)` | Stored sun direction. The renderer derives its direction from `Lighting.ClockTime`. |
+| `SkyColor` | `Color3` | Read/write | `Color3.fromRGB(82, 148, 242)` | Sky color used by the current sky pass. |
+| `HorizonColor` | `Color3` | Read/write | `Color3.fromRGB(199, 219, 255)` | Horizon color used by the current sky pass. |
+| `GroundColor` | `Color3` | Read/write | `Color3.fromRGB(26, 31, 36)` | Ground color used by the current sky pass. |
+| `SunIntensity` | `number` | Read/write | `100000` | Sun brightness, clamped to at least `0`. |
+
+## What the renderer uses
+
+The current sky pass reads `SkyColor`, `HorizonColor`, `GroundColor`, and `SunIntensity`, then blends them with daylight from `Lighting.ClockTime`. It does **not** check `Enabled` or use `Density`, `Offset`, `Color`, `Decay`, `Glare`, `Haze`, or `SunDirection`.
+
+That means setting `Enabled = false` doesn't remove the sky colors. Remove the `Atmosphere` instance or set its colors to neutral values if you need a different environment. The stored properties are still cloned and are safe to use for your own settings data.
+
+## Notes
+
+- Only one atmosphere is used. The last `Atmosphere` child of `Lighting` wins.
+- If no atmosphere exists, `Lighting` uses temporary default values rather than leaving the sky unconfigured.
+- `SunIntensity` is multiplied by `Lighting.Brightness` and daylight, so a change can be subtle in the middle of the day.
+
+## See also
+
+- `Clouds` for cloud cover.
+- `FogEffect` for distance and ground fog.
+- `Lighting` for `ClockTime` and `Brightness`.

@@ -620,6 +620,7 @@ foreign kine_filament {
 	Kine_Filament_SetAnimationAutoStep :: proc(ctx: ^KineFilamentContext, enabled: bool) ---
 
 	Kine_Filament_MeshCreateAnimation :: proc(mesh: ^KineFilamentMesh, name: cstring, duration: f32) -> i32 ---
+	Kine_Filament_MeshImportAnimations :: proc(target, source: ^KineFilamentMesh) -> i32 ---
 	Kine_Filament_MeshAddAnimationPose :: proc(mesh: ^KineFilamentMesh, index: i32, boneName: cstring, time: f32, cf: ^f32, weight: f32) -> bool ---
 	Kine_Filament_MeshAddAnimationEvent :: proc(mesh: ^KineFilamentMesh, index: i32, time: f32, name: cstring, parameter: cstring, marker: bool) -> bool ---
 	Kine_Filament_MeshGetKeyframeTime :: proc(mesh: ^KineFilamentMesh, index: i32, name: cstring) -> f32 ---

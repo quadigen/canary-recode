@@ -1,0 +1,75 @@
+---
+title: AssetService
+description: Create editable images, blank or loaded from an existing asset.
+---
+
+`AssetService` is how you get an `EditableImage`. You can start with a blank canvas at a size you choose, or decode an existing image file into pixels you can modify.
+
+The service has no other public members. It doesn't load models or arbitrary assets.
+
+## Getting started
+
+```lua
+local AssetService = game:GetService("AssetService")
+
+local icon = AssetService:CreateEditableImage({
+    Size = Vector2.new(32, 32),
+})
+
+print(icon.Size) -- 32, 32
+```
+
+## Methods
+
+### CreateEditableImage
+
+```lua
+CreateEditableImage(options: { Size: Vector2 }?): EditableImage
+```
+
+Creates a blank image. Without `options`, or without a `Size` field, the result is `1` by `1`.
+
+```lua
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(256, 128),
+})
+```
+
+`Size` must be between `1` and `1024` on each axis. Fractional components are truncated to whole pixels, so `Vector2.new(64.9, 32.2)` gives you a 64 by 32 image. A missing, zero, negative, or oversized dimension raises `invalid EditableImage size`.
+
+Passing something other than a table raises `expected image options`.
+
+The new pixels are transparent black. If you need a starting color, fill the buffer yourself with `WritePixelsBuffer()`.
+
+### CreateEditableImageAsync
+
+```lua
+CreateEditableImageAsync(content: Content): EditableImage
+```
+
+Decodes an image into a new `EditableImage`, keeping its pixel dimensions.
+
+```lua
+local image = AssetService:CreateEditableImageAsync(
+    Content.fromUri("textures/checker.png")
+)
+```
+
+The argument is a `Content`, not a plain string. Wrap a path with `Content.fromUri()` before calling. The URI can point at an asset the engine can resolve locally, at an image currently used by an `ImageLabel`, or at a file inside the project.
+
+The source must be a decodable image no larger than 64 MB, and its width and height must each be between `1` and `1024`. Anything else raises `image is unavailable or exceeds the editable image size limit`. A file that reports valid dimensions but fails to decode raises `could not decode editable image`.
+
+Images are decoded to RGBA8, so a grayscale or palette PNG comes back with four channels per pixel.
+
+## Notes
+
+- Creation is synchronous, including the decode in `CreateEditableImageAsync()`. A large PNG will block the calling script while it loads.
+- The 64 MB limit applies to the encoded file, not the decoded pixel buffer.
+- Both methods return an `EditableImage` that you own. Save a reference to it; the service doesn't keep one for you.
+- `Instance.new("EditableImage")` isn't supported. Always go through this service.
+
+## See also
+
+- `EditableImage` for reading and writing the pixels.
+- `ContentProvider` for downloading image packs before decoding them.
+- `GPUCompute` for processing pixel buffers on the GPU.

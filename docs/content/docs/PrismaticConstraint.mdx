@@ -1,0 +1,73 @@
+---
+title: PrismaticConstraint
+description: Constrain two attachments to slide along a single axis.
+---
+
+`PrismaticConstraint` connects two attachments with a slider. The parts stay aligned and move along the attachment axis instead of separating in other directions. Pistons, sliding doors, and adjustable rails are the usual uses.
+
+`PrismaticConstraint` inherits from `Constraint`, so it also has `Enabled`, `Active`, `Attachment0`, and `Attachment1`.
+
+## Getting started
+
+```lua
+local slider = Instance.new("PrismaticConstraint")
+slider.Attachment0 = railAttachment
+slider.Attachment1 = carriageAttachment
+slider.LimitsEnabled = true
+slider.LowerLimit = -6
+slider.UpperLimit = 6
+slider.Parent = model
+```
+
+The slider axis comes from the attachments' axes. Line the attachment axes up with the direction you want the parts to move.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `LimitsEnabled` | `boolean` | Read/write | `false` | Restrict travel between the two limits. |
+| `LowerLimit` | `number` | Read/write | `-5` | One end of the travel range, in studs. |
+| `UpperLimit` | `number` | Read/write | `5` | Other end of the travel range, in studs. |
+| `CurrentPosition` | `number` | Read-only | `0` | Current position along the axis. |
+
+### LimitsEnabled
+
+With limits off, the slider can travel freely along its axis. With limits on, travel is restricted to the range between `LowerLimit` and `UpperLimit`.
+
+The values don't have to be ordered. If `LowerLimit` is greater than `UpperLimit`, the engine uses the smaller value as the lower bound, so the pair still describes a valid interval.
+
+Changing `LimitsEnabled`, `LowerLimit`, or `UpperLimit` rebuilds the joint. Do it during setup rather than every frame.
+
+### CurrentPosition
+
+`CurrentPosition` reports how far the slider has moved along its axis, in studs. It's read-only. While the constraint isn't simulated, it reports `0`.
+
+```lua
+local travel = slider.CurrentPosition
+```
+
+The value is relative to the reference position established when the joint was created. With limits enabled, it tracks within the configured range; with limits disabled, it can continue past the old limit values.
+
+## Shared constraint properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the joint is simulated. |
+| `Active` | `boolean` | Read-only | `true` | Whether the joint currently has two resolvable ends. |
+| `Attachment0` | `Attachment?` | Read/write | `nil` | First attachment. |
+| `Attachment1` | `Attachment?` | Read/write | `nil` | Second attachment. |
+
+`Active` and `CurrentPosition` can't be assigned. Assigning either is ignored.
+
+## Notes
+
+- The constraint uses both attachments' axes and secondary axes to align the parts; mismatched axes can produce unexpected rotation.
+- At least one connected body must be dynamic.
+- Cloning resets the live joint. The copy keeps the limit settings but starts inactive.
+- Destroying the constraint releases its physics joint.
+
+## See also
+
+- `Constraint` for the shared attachment behavior.
+- `BallSocketConstraint` for rotation around a point.
+- `RodConstraint` for a fixed distance.

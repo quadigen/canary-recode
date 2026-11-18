@@ -1,0 +1,59 @@
+---
+title: Clouds
+description: Add a layer of procedural clouds above the scene.
+---
+
+`Clouds` draws a cloud layer in the sky. You control how much of the sky is covered, how dense and tall the clouds are, and their color.
+
+`Clouds` inherits from `Instance`, not `LightingEffect`, but it has its own `Enabled` property. It must be a child of `Lighting` to render.
+
+## Getting started
+
+`Lighting` creates a cloud layer by default. Find it or add one, then tune it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local clouds = Lighting:FindFirstChild("Clouds")
+if not clouds then
+    clouds = Instance.new("Clouds")
+    clouds.Parent = Lighting
+end
+
+clouds.Enabled = true
+clouds.Cover = 0.6
+clouds.Density = 0.02
+clouds.Height = 750
+clouds.Thickness = 260
+clouds.Color = Color3.fromRGB(245, 245, 250)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the cloud layer on or off. |
+| `Cover` | `number` | Read/write | `0.5` | Fraction of the sky covered. No clamping is applied. |
+| `Density` | `number` | Read/write | `0.01` | Cloud density. No clamping is applied. |
+| `Height` | `number` | Read/write | `700` | Height of the cloud layer in studs. No clamping is applied. |
+| `Thickness` | `number` | Read/write | `240` | Vertical thickness of the layer in studs. No clamping is applied. |
+| `Color` | `Color3` | Read/write | White | Cloud color. |
+
+The setter accepts any number for `Cover`, `Density`, `Height`, and `Thickness`, including negative values. The renderer receives them as-is, so use sensible ranges rather than relying on validation.
+
+## How it's applied
+
+`Lighting` uses the last `Clouds` child in its child list. When `Enabled` is false, or when there's no cloud instance, the renderer receives a disabled cloud layer.
+
+Clouds are skipped in the editor's fast viewport.
+
+## Notes
+
+- `Cover` is a fraction, not a percentage. `0.5` covers about half the sky.
+- `Density` values are small; the default is `0.01`, not `1`.
+- Cloning copies `Enabled`, `Cover`, `Density`, `Height`, `Thickness`, and `Color`.
+
+## See also
+
+- `Atmosphere` for sky and horizon colors.
+- `Lighting` for time of day and sun direction.

@@ -1,0 +1,57 @@
+---
+title: ScreenSpaceReflectionsEffect
+description: Reflect nearby geometry using information from the current frame.
+---
+
+`ScreenSpaceReflectionsEffect` adds reflections based on what's already visible on screen. It works well on wet floors, polished metal, and other smooth surfaces, and it doesn't need a reflection probe to produce local detail.
+
+`ScreenSpaceReflectionsEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local reflections = Lighting:FindFirstChild("ScreenSpaceReflectionsEffect")
+if not reflections then
+    reflections = Instance.new("ScreenSpaceReflectionsEffect")
+    reflections.Parent = Lighting
+end
+
+reflections.Enabled = true
+reflections.Thickness = 0.3
+reflections.Bias = 0.02
+reflections.MaxDistance = 120
+reflections.Stride = 0.5
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Thickness` | `number` | Read/write | `0.5` | Thickness of the reflected surface, clamped to at least `0`. |
+| `Bias` | `number` | Read/write | `0.05` | Depth offset used to avoid self-reflection. Not clamped. |
+| `MaxDistance` | `number` | Read/write | `10` | Maximum ray distance, clamped to at least `0`. |
+| `Stride` | `number` | Read/write | `0.5` | Ray step size, clamped to at least `0`. |
+
+`Lighting` tunes its default child to `Thickness = 0.2`, `Bias = 0.01`, and `MaxDistance = 100`, so a fresh scene doesn't use the class defaults.
+
+## Tuning it
+
+`MaxDistance` is the main performance control: shorter rays miss more distant reflections but cost less. `Stride` controls how far each sample jumps; larger values are faster and noisier.
+
+`Thickness` determines how much geometry a ray can pass through before it's considered a hit. Raise it for thin surfaces, lower it if reflections smear across nearby objects. `Bias` hides surfaces from their own reflections; very large values can detach reflections from their source.
+
+Because the effect only knows about pixels on screen, reflected objects outside the view can't appear. A `ReflectionProbeEffect` fills in some of that missing information, especially for the sky.
+
+## Notes
+
+- Only one screen-space reflection effect is used. The last `ScreenSpaceReflectionsEffect` child of `Lighting` wins.
+- The effect is skipped in the editor's fast viewport.
+- Cloning copies every property above.
+
+## See also
+
+- `ReflectionProbeEffect` for a captured environment reflection.
+- `Lighting` for exposure and the rest of the effects stack.

@@ -45,6 +45,7 @@ Asset_Kind :: enum u8 {
 	Audio   = 3,
 	Data    = 4,
 	Path_File = 5, // An embedded file addressable by its authored path.
+	Animation = 6, // A clip source applied to a rig by bone name.
 }
 
 // Asset is one embedded blob. Bytes are owned by the store.

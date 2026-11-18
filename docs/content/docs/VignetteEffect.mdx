@@ -1,0 +1,55 @@
+---
+title: VignetteEffect
+description: Darken the edges of the screen to focus attention on the center.
+---
+
+`VignetteEffect` draws a soft dark frame around the view. It's a small change that can make a scene feel more cinematic or push the player's eye toward the middle of the screen.
+
+`VignetteEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a disabled vignette by default. Find it or add one, then enable it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local vignette = Lighting:FindFirstChild("VignetteEffect")
+if not vignette then
+    vignette = Instance.new("VignetteEffect")
+    vignette.Parent = Lighting
+end
+
+vignette.Enabled = true
+vignette.Midpoint = 0.6
+vignette.Roundness = 0.5
+vignette.Feather = 0.6
+vignette.Transparency = 0.35
+vignette.Color = Color3.new(0, 0, 0)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Midpoint` | `number` | Read/write | `0.5` | Where the darkening starts, clamped between `0` and `1`. |
+| `Roundness` | `number` | Read/write | `0.4` | Shape of the vignette, clamped between `0` and `1`. |
+| `Feather` | `number` | Read/write | `0.5` | Softness of the transition, clamped between `0` and `1`. |
+| `Color` | `Color3` | Read/write | Black | Color applied at the edges. |
+| `Transparency` | `number` | Read/write | `0.25` | How much the vignette shows through, clamped between `0` and `1`. |
+
+`Transparency` is inverted for rendering: the renderer receives `1 - Transparency`. A value of `0` produces the strongest edge; `1` makes the vignette invisible.
+
+`Midpoint` moves the start of the darkening toward the center as it increases. `Feather` controls how gradually it fades in. `Roundness` changes the shape from a more rectangular frame to a circular one.
+
+## Notes
+
+- Only one vignette is used. The last `VignetteEffect` child of `Lighting` wins.
+- The effect is skipped in the editor's fast viewport.
+- Cloning copies every property above.
+
+## See also
+
+- `ColorCorrectionEffect` for grading the rest of the image.
+- `Lighting` for scene exposure and time of day.

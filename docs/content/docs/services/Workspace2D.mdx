@@ -1,0 +1,65 @@
+---
+title: Workspace2D
+description: The separate 2D physics world that contains Part2D bodies and simulates them in screen space.
+---
+
+`Workspace2D` is the service that owns Kinemium's 2D physics world. `Part2D` bodies are parented to it, fall under downward gravity, and collide with each other. It's completely separate from `Workspace`: 2D bodies don't interact with 3D parts, and 3D queries don't see them.
+
+Get the service with `game:GetService("Workspace2D")`. The engine creates it; `Instance.new("Workspace2D")` isn't supported.
+
+## Getting started
+
+```lua
+local Workspace2D = game:GetService("Workspace2D")
+
+local floor = Instance.new("Part2D")
+floor.Size = UDim2.fromOffset(600, 40)
+floor.Position = UDim2.fromOffset(100, 500)
+floor.AnchorPoint = Vector2.new(0, 0)
+floor.Anchored = true
+floor.Parent = Workspace2D
+
+local box = Instance.new("Part2D")
+box.Size = UDim2.fromOffset(40, 40)
+box.Position = UDim2.fromOffset(320, 100)
+box.AnchorPoint = Vector2.new(0, 0)
+box.Anchored = false
+box.Parent = Workspace2D
+```
+
+## Members
+
+`Workspace2D` has no service-specific properties, methods, or events. Its public surface is the one it inherits from `Service` and `Instance`, plus its `Part2D` children.
+
+Use the normal instance API to manage the scene:
+
+```lua
+for _, child in Workspace2D:GetChildren() do
+    if child:IsA("Part2D") then
+        print(child.Name, child.Position)
+    end
+end
+```
+
+## Simulation
+
+The world runs a fixed step of `1/60` second with gravity `(0, 130)` in screen pixels, where positive Y points down the screen. The Box2D world enables sleeping and uses four worker threads.
+
+A body is created the first time its `Part2D` renders, using the part's `AbsolutePosition` and `AbsoluteSize`. The body is a box with fixed density `1` and friction `0.3`. After each step, the simulation writes the body's transform back into the part's `Position` as a `UDim2` with zero scale components.
+
+Because body creation happens on first render, set `Size`, `Position`, and `AnchorPoint` before the part is rendered. Changing those properties afterward doesn't rebuild an existing fixture.
+
+## Limitations
+
+- Only box shapes are simulated, even when `Part2D.IsBall` is `true`.
+- `Density`, `Friction`, `Elasticity`, `CanCollide`, `VelocityX`, and `VelocityY` are stored on `Part2D` but aren't consumed by the current simulation.
+- Anchored bodies stay at the position where their body was created and overwrite the part's `Position` each step.
+- There's no exposed method to apply an impulse, set a body's velocity, or rebuild a fixture.
+- The world is separate from `Workspace`; 2D parts don't collide with 3D geometry.
+
+## See also
+
+- `Part2D` for the body's properties and behavior.
+- `GuiObject` for inherited position, size, anchor, rotation, and appearance.
+- [2D games](/docs/guides/2d-games) for a practical scene setup.
+- `Workspace` for the 3D world.

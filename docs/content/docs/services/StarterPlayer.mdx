@@ -1,0 +1,71 @@
+---
+title: StarterPlayer
+description: Set the default walk speed, jump power, and appearance for new characters.
+---
+
+`StarterPlayer` holds the defaults applied to newly spawned characters. Change its properties to make every player faster, jump higher, or start with a different appearance.
+
+The service also contains the `StarterPlayerScripts` and `StarterCharacterScripts` containers that the engine creates for you.
+
+## Getting started
+
+```lua
+local StarterPlayer = game:GetService("StarterPlayer")
+
+StarterPlayer.CharacterWalkSpeed = 20
+StarterPlayer.CharacterJumpPower = 60
+StarterPlayer.CharacterMaxSlopeAngle = 60
+```
+
+These values are applied when a character controller is created. Changing them later affects characters spawned afterward, not ones already in the world.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `AutoJumpEnabled` | `boolean` | Read/write | `true` | Stored auto-jump preference. Not currently applied to controllers. |
+| `CharacterWalkSpeed` | `number` | Read/write | `16` | Default walk speed. Must be at least `0`. |
+| `CharacterJumpPower` | `number` | Read/write | `53.1534` | Default jump power. Must be at least `0`. |
+| `CharacterMaxSlopeAngle` | `number` | Read/write | `89` | Maximum walkable slope in degrees, from `0` to `90`. |
+| `LoadCharacterAppearance` | `boolean` | Read/write | `true` | Stored appearance preference. Not currently applied to controllers. |
+
+Assigning a negative speed or jump power raises an error and leaves the old value in place. `CharacterMaxSlopeAngle` raises for values below `0` or above `90`.
+
+### How speed and jump power are applied
+
+`CharacterWalkSpeed` and `CharacterMaxSlopeAngle` are copied directly to a new character controller. `CharacterJumpPower` is converted into a jump height using the engine's character gravity, so it behaves like an initial upward impulse rather than a raw velocity.
+
+Changing the values doesn't retroactively update existing controllers. Set them before the character spawns if you need consistent movement.
+
+### Stored-only properties
+
+`AutoJumpEnabled` and `LoadCharacterAppearance` are stored and cloned, but the current character setup doesn't read them. Don't rely on them to disable auto-jump or to skip appearance loading.
+
+## Child containers
+
+When `StarterPlayer` is created, it adds:
+
+- `StarterPlayerScripts`, a `PlayerScripts` container.
+- `StarterCharacterScripts`, a `StarterCharacterScripts` container.
+
+Put client scripts that should run once per player in `StarterPlayerScripts`. Put scripts that should be cloned into each character in `StarterCharacterScripts`.
+
+```lua
+local scripts = StarterPlayer:FindFirstChild("StarterPlayerScripts")
+if scripts then
+    print(scripts.ClassName)
+end
+```
+
+## Notes
+
+- The service is created by the engine; `GetService("StarterPlayer")` is the supported way to reach it.
+- The properties affect character controllers, not arbitrary parts.
+- `CharacterJumpPower` is not a direct velocity value, despite the name.
+- Cloning the service isn't a normal workflow; the engine owns the instance.
+
+## See also
+
+- `Humanoid` for per-character movement.
+- `Players` for spawning and player lifecycle.
+- `StarterGui` for interface defaults.

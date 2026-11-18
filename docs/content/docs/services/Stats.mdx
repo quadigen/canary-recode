@@ -1,0 +1,51 @@
+---
+title: Stats
+description: Read memory usage for the running Luau runtime.
+---
+
+`Stats` exposes runtime statistics. At the moment it has one method, `GetTotalMemoryUsageMb()`, which reports how much memory the Luau heap is using.
+
+## Getting started
+
+```lua
+local Stats = game:GetService("Stats")
+
+local megabytes = Stats:GetTotalMemoryUsageMb()
+print(string.format("Luau heap: %.2f MB", megabytes))
+```
+
+## Methods
+
+### GetTotalMemoryUsageMb
+
+```lua
+GetTotalMemoryUsageMb(): number
+```
+
+Returns the Luau heap size in megabytes. The value is a floating-point number, so format it before showing it to a player.
+
+```lua
+local before = Stats:GetTotalMemoryUsageMb()
+
+local data = {}
+for i = 1, 10000 do
+    data[i] = { index = i }
+end
+
+local after = Stats:GetTotalMemoryUsageMb()
+print("Growth:", after - before, "MB")
+```
+
+This measures the scripting heap, not the renderer, physics world, textures, or audio buffers. A low number doesn't mean the process is using little memory overall.
+
+## Notes
+
+- The value is a snapshot; call the method again for a fresh reading.
+- It's available on every runtime target, including clients and the editor.
+- There are no events, setters, or per-category breakdowns.
+- Don't poll it every frame just to display a number; update a label a few times per second instead.
+
+## See also
+
+- `RunService` for timing work each frame.
+- `LogService` for recording diagnostics.

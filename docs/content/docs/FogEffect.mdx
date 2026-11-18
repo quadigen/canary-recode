@@ -1,0 +1,62 @@
+---
+title: FogEffect
+description: Add distance, ground, and height-based fog to a scene.
+---
+
+`FogEffect` controls atmospheric fog: how thick it is, how far it reaches, and how it pools near a chosen height. It's useful for hiding distant terrain edges, adding depth, or building a misty valley.
+
+`FogEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a disabled fog effect by default. Find it or add one, then enable it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local fog = Lighting:FindFirstChild("FogEffect")
+if not fog then
+    fog = Instance.new("FogEffect")
+    fog.Parent = Lighting
+end
+
+fog.Enabled = true
+fog.Density = 0.02
+fog.Distance = 600
+fog.Height = 20
+fog.HeightFalloff = 0.15
+fog.MaximumOpacity = 1
+fog.Color = Color3.fromRGB(170, 185, 200)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `Density` | `number` | Read/write | `0.01` | Fog thickness, clamped between `0` and `1`. |
+| `Distance` | `number` | Read/write | `0` | Maximum fog distance, clamped between `0` and `10000`. |
+| `Height` | `number` | Read/write | `0` | Height where ground fog is concentrated, clamped between `-10000` and `10000`. |
+| `HeightFalloff` | `number` | Read/write | `0.1` | How quickly fog fades above `Height`, clamped between `0` and `10`. |
+| `MaximumOpacity` | `number` | Read/write | `1` | Upper limit on fog opacity, clamped between `0` and `1`. |
+| `Color` | `Color3` | Read/write | `Color3.fromRGB(179, 204, 230)` | Fog color. |
+
+A `Distance` of `0` leaves distance fog unconstrained; use `Density` to control the look. Setting a positive distance fades fog out at that range.
+
+## How it's applied
+
+Fog is one of the advanced lighting effects. `Lighting` sends its values to the renderer once per frame, and the effect doesn't run in the editor's fast viewport.
+
+Only one `FogEffect` is used. If you add several, the last one in `Lighting`'s child list wins.
+
+## Notes
+
+- Disabling the effect leaves no fog from this class.
+- The values are passed through as configured; the renderer decides the exact visual falloff.
+- Cloning copies every property above.
+
+## See also
+
+- `Atmosphere` for sky color and horizon haze.
+- `Clouds` for cloud cover above the scene.
+- `Lighting` for time of day and exposure.

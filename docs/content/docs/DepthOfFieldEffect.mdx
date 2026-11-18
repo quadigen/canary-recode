@@ -1,0 +1,68 @@
+---
+title: DepthOfFieldEffect
+description: Blur the foreground and background around a chosen focus distance.
+---
+
+`DepthOfFieldEffect` keeps a band of the scene sharp and blurs what's closer to or farther from the camera. It's useful for close-up shots, cutscenes, and making a busy background recede.
+
+`DepthOfFieldEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+
+## Getting started
+
+`Lighting` creates a disabled depth-of-field effect by default. Find it, or add one, then enable it:
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local dof = Lighting:FindFirstChild("DepthOfFieldEffect")
+if not dof then
+    dof = Instance.new("DepthOfFieldEffect")
+    dof.Parent = Lighting
+end
+
+dof.Enabled = true
+dof.FocusDistance = 24
+dof.InFocusRadius = 10
+dof.NearIntensity = 0.35
+dof.FarIntensity = 0.6
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
+| `FarIntensity` | `number` | Read/write | `0.25` | Blur strength behind the focus band, clamped between `0` and `1`. |
+| `FocusDistance` | `number` | Read/write | `10` | Distance from the camera to the sharp area. Clamped to at least `0.001`. |
+| `InFocusRadius` | `number` | Read/write | `10` | Size of the sharp band around `FocusDistance`. Negative values clamp to `0`. |
+| `NearIntensity` | `number` | Read/write | `0.25` | Blur strength in front of the focus band, clamped between `0` and `1`. |
+
+The effect turns on when `Enabled` is true and at least one of `NearIntensity` or `FarIntensity` is greater than `0`. Setting both to `0` is the same as disabling it.
+
+## Tuning it
+
+`FocusDistance` is measured in studs from the camera. A large `InFocusRadius` makes almost everything sharp; a small one narrows the sharp area and makes the blur more obvious.
+
+`NearIntensity` and `FarIntensity` are quantized to roughly 32 steps for rendering, so extremely small changes at the low end may not be visible. They're also clamped to `0`-`1`; values above `1` don't add more blur.
+
+If the camera moves, update `FocusDistance` from the distance to your subject. Reading the camera's `CFrame` and subtracting the subject position is enough:
+
+```lua
+local camera = workspace.CurrentCamera
+
+local function focusOn(subjectPosition: Vector3)
+    local distance = (subjectPosition - camera.CFrame.Position).Magnitude
+    dof.FocusDistance = distance
+end
+```
+
+## Notes
+
+- Only one depth-of-field effect is used. The last `DepthOfFieldEffect` child of `Lighting` wins.
+- The effect is skipped in the editor's fast viewport.
+- Cloning copies `Enabled` and all four tuning values.
+
+## See also
+
+- `Lighting` for the rest of the scene's post-processing.
+- `Camera` for controlling the viewpoint.

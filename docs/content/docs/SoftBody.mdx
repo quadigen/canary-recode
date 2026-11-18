@@ -1,0 +1,124 @@
+---
+title: SoftBody
+description: Simulate a deformable mesh that squashes, bends, and reacts to impulses.
+---
+
+`SoftBody` turns a mesh into a deformable object. It builds a particle simulation from the mesh's triangles, so the surface can bend, compress, and jiggle instead of staying rigid. Use it for gelatin blocks, soft props, cloth-like blobs, and other objects that need to give under pressure.
+
+`SoftBody` inherits from `Instance`, so you can name it, parent it, and clone it like any other object.
+
+## Getting started
+
+A soft body needs a mesh and a place in the world. The following assumes you have a mesh asset available in the project:
+
+```lua
+local body = Instance.new("SoftBody")
+body.MeshId = "rbxasset://models/Jelly.glb"
+body.MeshIndex = 0
+body.CFrame = CFrame.new(0, 10, 0)
+body.Scale = Vector3.new(2, 2, 2)
+body.Color = Color3.fromRGB(220, 80, 90)
+body.Material = Enum.Material.SmoothPlastic
+body.Parent = workspace
+```
+
+The mesh is loaded when the body is first simulated. If loading fails, `LastError` explains why and the body stays inert.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `MeshId` | `string` | Read/write | `""` | Asset path or URI for the mesh. |
+| `MeshIndex` | `number` | Read/write | `0` | Submesh index inside the mesh. Must be a non-negative whole number. |
+| `MeshContent` | `Content` | Read/write | empty | In-memory content; takes precedence when it references a valid editable mesh. |
+| `CFrame` | `CFrame` | Read/write | Identity | Authored spawn pose. |
+| `Scale` | `Vector3` | Read/write | `Vector3.new(1, 1, 1)` | Mesh scale. Each component must be between `0.001` and `1000`. |
+| `Color` | `Color3` | Read/write | White | Surface color. |
+| `Material` | `Enum.Material` | Read/write | `Enum.Material.SmoothPlastic` | Surface material. |
+| `MaterialVariant` | `string` | Read/write | `""` | Material variant name. |
+| `Transparency` | `number` | Read/write | `0` | Opacity, clamped between `0` and `1`. |
+| `Enabled` | `boolean` | Read/write | `true` | Whether the simulation updates. |
+| `Anchored` | `boolean` | Read/write | `false` | Pins the body in place. |
+| `Mass` | `number` | Read/write | `1` | Total mass, from `0.001` to `1000000`. |
+| `SpringCompliance` | `number` | Read/write | `0.00005` | Spring softness, from `0` to `1`. |
+| `BendCompliance` | `number` | Read/write | `0.001` | Bend softness, from `0` to `1`. |
+| `ShapeRetention` | `number` | Read/write | `0` | How strongly the mesh returns to its rest shape, from `0` to `1`. |
+| `Damping` | `number` | Read/write | `0.1` | Motion damping, from `0` to `100`. |
+| `Pressure` | `number` | Read/write | `0` | Internal pressure, from `0` to `1000000`. |
+| `Friction` | `number` | Read/write | `0.4` | Surface friction, from `0` to `1`. |
+| `GravityScale` | `number` | Read/write | `1` | Gravity multiplier, from `0` to `10`. |
+| `VertexRadius` | `number` | Read/write | `0.03` | Collision radius of each particle, from `0` to `10`. |
+| `SolverIterations` | `number` | Read/write | `8` | Solver iterations, a whole number from `1` to `64`. |
+| `LastError` | `string` | Read-only | `""` | Why the latest mesh or simulation setup failed. |
+
+Most numeric settings raise an error when assigned outside their supported range. `Scale`, `MeshIndex`, and `SolverIterations` also reject fractional values where whole numbers are required.
+
+### CFrame and the live pose
+
+`CFrame` is the authored pose used when the body spawns and when it's serialized. It isn't updated every frame with the simulation result. To read where the mesh actually is, call `GetSimulationCFrame()`.
+
+Assigning `CFrame` marks the authored pose dirty. The simulation uses the new pose the next time it rebuilds.
+
+### Mesh limits
+
+A soft body rejects meshes that are too large to simulate or don't contain usable triangles. The public limits are:
+
+- At most 32,768 vertices.
+- At most 98,304 indices.
+- At most 8,192 particles after welding.
+
+If the mesh fails those checks, `LastError` is set to a message about invalid geometry or the mesh limit.
+
+## Methods
+
+### ApplyImpulse
+
+```lua
+ApplyImpulse(impulse: Vector3): ()
+```
+
+Adds an impulse to the body for the next simulation step. The impulse is accumulated, so calling it several times in one frame adds the values together.
+
+```lua
+body:ApplyImpulse(Vector3.new(0, 40, 0))
+```
+
+Each component must be finite and at most `1e8` in magnitude; larger values raise an error. Impulses are ignored while `Enabled` is false or `Anchored` is true. The accumulated impulse is cleared after it's applied.
+
+### GetSimulationCFrame
+
+```lua
+GetSimulationCFrame(): CFrame
+```
+
+Returns the current simulated pose. Before the first simulation step, or after the authored `CFrame` is changed, this returns the authored pose.
+
+```lua
+local current = body:GetSimulationCFrame()
+```
+
+## Events
+
+### Touched
+
+`Touched` is exposed as a signal, but the callback arguments and exact firing conditions aren't specified by the class definition. Treat it as a notification and don't depend on a particular argument list.
+
+```lua
+body.Touched:Connect(function(...)
+    print("SoftBody contact", ...)
+end)
+```
+
+## Notes
+
+- The body must be in the Workspace hierarchy to simulate.
+- Changing mesh-related properties marks the geometry dirty and rebuilds it; expect a pause for large meshes.
+- Setting `Anchored` clears any pending impulse.
+- Cloning copies the mesh selection, pose, scale, appearance, and simulation settings. It doesn't copy live deformation or pending impulses.
+- `MaterialVariant` is stored on the body; whether a variant is available depends on the project's materials.
+
+## See also
+
+- `Cloth` for a dedicated fabric simulation with attachments.
+- `MeshPart` for rigid meshes.
+- `Workspace` for the world the body simulates in.

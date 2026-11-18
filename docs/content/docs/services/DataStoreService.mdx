@@ -1,0 +1,289 @@
+---
+title: DataStoreService
+description: Save persistent key-value data to a local store on the server.
+---
+
+`DataStoreService` gives you persistent storage that survives between sessions. Each data store is a named key-value map with an optional scope, backed by a local database on disk.
+
+The service is server-only. Clients and editor sessions can't open data stores; asking for one from those contexts raises an error. Calls are synchronous even though their names end in `Async`, so a write completes before the call returns.
+
+## Getting started
+
+```lua
+local DataStoreService = game:GetService("DataStoreService")
+local saves = DataStoreService:GetDataStore("PlayerSaves")
+
+local function saveCoins(userId: number, coins: number)
+    saves:SetAsync(tostring(userId), {
+        coins = coins,
+        updatedAt = os.time(),
+    })
+end
+```
+
+The database lives in `./kinemium_datastore` by default. Set the `KINEMIUM_DATASTORE_PATH` environment variable before the server starts to use a different directory.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `LimitReached` | `boolean` | Read-only | `false` | Always reports `false` in the current implementation. |
+
+## Service methods
+
+### GetDataStore
+
+```lua
+GetDataStore(name: string, scope: string?): DataStore
+```
+
+Returns a handle for a named store. `scope` defaults to `"global"`. An empty name raises an error. `CreateDataStore()` is an alias.
+
+```lua
+local inventory = DataStoreService:GetDataStore("Inventory", "season-1")
+```
+
+Handles are lightweight; getting the same name and scope again returns another handle to the same data.
+
+### GetGlobalDataStore
+
+```lua
+GetGlobalDataStore(): DataStore
+```
+
+Returns a handle for the store named `"global"` in the `"global"` scope. `CreateGlobalDataStore()` is an alias.
+
+### GetOrderedDataStore
+
+```lua
+GetOrderedDataStore(name: string, scope: string?): DataStore
+```
+
+Returns a handle that supports `GetSortedAsync()`. `scope` defaults to `"global"`. An empty name raises an error. `CreateOrderedDataStore()` is an alias.
+
+```lua
+local leaderboard = DataStoreService:GetOrderedDataStore("Coins")
+```
+
+### RemoveDataStore
+
+```lua
+RemoveDataStore(name: string, scope: string?): ()
+```
+
+Deletes all records in the named store and scope. `scope` defaults to `"global"`. It returns no values and raises if the name is empty or the deletion fails.
+
+```lua
+DataStoreService:RemoveDataStore("Inventory", "season-1")
+```
+
+Treat this as destructive. There's no undo.
+
+### GetRequestBudgetForRequestType
+
+```lua
+GetRequestBudgetForRequestType(requestType: any): number
+```
+
+Always returns `60`. The argument is ignored and `LimitReached` never becomes true, so request throttling isn't currently enforced.
+
+## DataStore objects
+
+A `DataStore` handle has these read-only properties:
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `Name` | `string` | Store name. |
+| `Scope` | `string` | Store scope. |
+
+### GetAsync
+
+```lua
+GetAsync(key: string): any, DataStoreKeyInfo?
+```
+
+Reads a key. If the key exists, it returns the decoded value and a key-info object. If it doesn't, it returns `nil, nil`.
+
+```lua
+local value, info = saves:GetAsync(tostring(player.UserId))
+if value then
+    print(value.coins, info.Version)
+end
+```
+
+An empty key raises an error. The call is synchronous.
+
+### SetAsync
+
+```lua
+SetAsync(key: string, value: any, userIds: {number}?): ()
+```
+
+Writes a value, overwriting any existing value. The optional `userIds` array is stored as metadata attached to the key. It returns no values.
+
+```lua
+saves:SetAsync("1234", { coins = 50 }, { 1234 })
+```
+
+Values are encoded as JSON. Supported values include primitives, arrays, dictionaries, and engine datatypes that have a defined encoding. Functions, threads, cyclic tables, and tables nested more than 20 levels deep fail to encode.
+
+### UpdateAsync
+
+```lua
+UpdateAsync(key: string, transform: (current: any) -> any): any, DataStoreKeyInfo
+```
+
+Reads the current value, calls `transform` with it (or `nil` if the key is missing), and writes the return value. It's the safe way to do read-modify-write without a separate `GetAsync()`/`SetAsync()` pair.
+
+```lua
+saves:UpdateAsync("1234", function(current)
+    local data = current or { coins = 0 }
+    data.coins += 10
+    return data
+end)
+```
+
+Returning `nil` from the callback cancels the write and makes `UpdateAsync()` return `nil`. On success it returns the new value and key info. The callback must be a function, or the call raises an error.
+
+### RemoveAsync
+
+```lua
+RemoveAsync(key: string): any?, DataStoreKeyInfo?
+```
+
+Deletes a key and returns the value that was removed plus its key info. If the key doesn't exist, it returns `nil`.
+
+```lua
+local removed = saves:RemoveAsync("1234")
+```
+
+### IncrementAsync
+
+```lua
+IncrementAsync(key: string, delta: number): number, DataStoreKeyInfo
+```
+
+Adds `delta` to a numeric value and returns the new value plus key info. A missing key starts from `0`. The value is stored as a number and also used as the sort key for ordered stores.
+
+```lua
+local newTotal = leaderboard:IncrementAsync("1234", 25)
+```
+
+`delta` must be a number; `NaN` raises an error.
+
+### GetVersionAsync
+
+```lua
+GetVersionAsync(key: string, version: string): any?, DataStoreKeyInfo?
+```
+
+Reads a historical version of a key. The version string comes from `DataStoreKeyInfo.Version`. If the version doesn't exist, it returns `nil, nil`.
+
+```lua
+local oldValue = saves:GetVersionAsync("1234", info.Version)
+```
+
+### ListVersionsAsync
+
+```lua
+ListVersionsAsync(
+    key: string,
+    sortDirection: string?,
+    minDate: number?,
+    maxDate: number?,
+    pageSize: number?
+): DataStorePages
+```
+
+Lists historical versions of a key. `sortDirection` defaults to an empty string; if it contains `"Descending"` the results are reversed. `minDate` and `maxDate` filter by creation time. `pageSize` defaults to `25` and is clamped to `1`-`100`.
+
+```lua
+local versions = saves:ListVersionsAsync("1234", nil, nil, nil, 10)
+```
+
+### RemoveVersionAsync
+
+```lua
+RemoveVersionAsync(key: string, version: string): ()
+```
+
+Deletes one historical version. The version must be a valid number string or the call raises an error. It returns no values.
+
+### GetSortedAsync
+
+```lua
+GetSortedAsync(
+    ascending: boolean?,
+    pageSize: number?,
+    minValue: number?,
+    maxValue: number?
+): DataStorePages
+```
+
+Returns a paged, sorted view of an ordered store. `ascending` defaults to `true`, and `pageSize` defaults to `25` and is clamped to `1`-`100`. `minValue` and `maxValue` filter the sort values.
+
+```lua
+local pages = leaderboard:GetSortedAsync(false, 10)
+local topTen = pages:GetCurrentPage()
+```
+
+Calling this on a store created with `GetDataStore()` rather than `GetOrderedDataStore()` raises an error.
+
+## Key info
+
+`DataStoreKeyInfo` describes the record you read:
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `Version` | `string` | Read-only | Version identifier, suitable for `GetVersionAsync()`. |
+| `CreatedTime` | `number` | Read-only | Creation timestamp. |
+| `UpdatedTime` | `number` | Read-only | Last update timestamp. |
+
+### GetMetadata
+
+```lua
+GetMetadata(): any
+```
+
+Returns the stored metadata as decoded JSON, or `nil` if there isn't any.
+
+### GetUserIds
+
+```lua
+GetUserIds(): any
+```
+
+Returns the stored user ID array as decoded JSON, or `nil` if there isn't any.
+
+## Pages
+
+`DataStorePages` represents one page of results:
+
+```lua
+GetCurrentPage(): {{key: string, value: any, keyInfo: DataStoreKeyInfo}}
+AdvanceToNextPageAsync(): ()
+```
+
+`GetCurrentPage()` returns a one-based array of entries. `AdvanceToNextPageAsync()` moves to the next page and returns no values. It doesn't tell you whether another page exists; reading the next page after the end returns an empty array.
+
+```lua
+local page = pages:GetCurrentPage()
+for _, entry in page do
+    print(entry.key, entry.value)
+end
+pages:AdvanceToNextPageAsync()
+```
+
+## Notes
+
+- Data stores are only available in server, standalone, and singleplayer runtimes.
+- Calls are blocking. A large write can stall the script that performs it.
+- Values are JSON-encoded, so datatypes without an encoding can't be stored.
+- There's no automatic retry, session locking, or cross-server coordination exposed to Luau.
+- `LimitReached` and `GetRequestBudgetForRequestType()` are placeholders, not real throttling.
+- Removing a store or version is permanent.
+
+## See also
+
+- `HttpService` for external persistence.
+- `Players` for user IDs you can use as keys.

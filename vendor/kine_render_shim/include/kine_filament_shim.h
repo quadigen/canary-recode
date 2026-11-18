@@ -532,14 +532,14 @@ KINE_API void Kine_Filament_DestroyTex(KineFilamentContext *ctx, KineFilamentTex
 
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh(
 	KineFilamentContext *ctx,
-	const float *vertexData, // interleaved px,py,pz,nx,ny,nz,u,v — 8 floats/vertex
+	const float *vertexData,
 	int vertexCount,
 	const uint16_t *indices,
 	int indexCount);
 // 32-bit indices for large meshes. Counts are vertices and indices, not bytes.
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh32(
 	KineFilamentContext *ctx,
-	const float *vertexData, // interleaved px,py,pz,nx,ny,nz,u,v — 8 floats/vertex
+	const float *vertexData,
 	int vertexCount,
 	const uint32_t *indices,
 	int indexCount);
@@ -548,16 +548,15 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh32(
 // materials declaring `requires: [ color ]` read them via getColor().
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMeshEx(
 	KineFilamentContext *ctx,
-	const float *vertexData, // interleaved px,py,pz,nx,ny,nz,u,v — 8 floats/vertex
-	const float *colorData,	 // interleaved r,g,b,a — 4 floats/vertex, or null
+	const float *vertexData,
+	const float *colorData,
 	int vertexCount,
 	const uint16_t *indices,
 	int indexCount);
-// 32-bit indices for large meshes. Counts are vertices and indices, not bytes.
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMeshEx32(
 	KineFilamentContext *ctx,
-	const float *vertexData, // interleaved px,py,pz,nx,ny,nz,u,v — 8 floats/vertex
-	const float *colorData,	 // interleaved r,g,b,a — 4 floats/vertex, or null
+	const float *vertexData,
+	const float *colorData,
 	int vertexCount,
 	const uint32_t *indices,
 	int indexCount);

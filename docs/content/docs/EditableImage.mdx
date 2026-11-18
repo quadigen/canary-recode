@@ -1,0 +1,196 @@
+---
+title: EditableImage
+description: Create, edit, and display raw RGBA pixel buffers directly from Luau.
+---
+
+`EditableImage` gives you direct access to the pixels of an image. You can generate images from scratch, edit existing textures, or display the output of a custom GPU compute shader without saving anything to disk.
+
+Use it for procedural textures, drawing tools, image processing, software renderers, and progressive rendering previews such as path tracers.
+
+`EditableImage` inherits from `Instance`.
+
+## Creating an image
+
+Use `AssetService:CreateEditableImage()` to allocate a blank image:
+
+```lua
+local AssetService = game:GetService("AssetService")
+
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(256, 256),
+})
+```
+
+The default size is 1 by 1. A new image starts as transparent black. Each dimension can be between 1 and 1024 pixels in the current implementation.
+
+You can also load a locally available image through `AssetService`:
+
+```lua
+local image = AssetService:CreateEditableImageAsync(
+    Content.fromUri("textures/checker.png")
+)
+```
+
+The source must resolve locally and decode successfully. The existing asset loader limits encoded files to 64 MB and requires the decoded image to fit within the editable-image size limit. Despite the method name, decoding currently happens synchronously.
+
+## Understanding pixel buffers
+
+Pixels are stored as tightly packed RGBA8 values in row-major order, starting at the top-left corner. Each pixel occupies four bytes:
+
+| Byte offset | Channel | Range |
+| --- | --- | --- |
+| `0` | Red | 0–255 |
+| `1` | Green | 0–255 |
+| `2` | Blue | 0–255 |
+| `3` | Alpha | 0–255 |
+
+Alpha `0` means transparent and `255` means opaque. Pixel coordinates and buffer byte offsets start at `0`.
+
+For a full image of width `w`, the first byte of pixel `(x, y)` is `(y * w + x) * 4`. For a rectangular region, use the width of that region instead of the full image width when indexing the returned buffer.
+
+## Writing pixels
+
+The following example generates a colored gradient and writes it to an image:
+
+```lua
+local AssetService = game:GetService("AssetService")
+local width, height = 256, 256
+
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(width, height),
+})
+
+local pixels = buffer.create(width * height * 4)
+
+for y = 0, height - 1 do
+    for x = 0, width - 1 do
+        local offset = (y * width + x) * 4
+        buffer.writeu8(pixels, offset, math.floor(x / (width - 1) * 255))
+        buffer.writeu8(pixels, offset + 1, math.floor(y / (height - 1) * 255))
+        buffer.writeu8(pixels, offset + 2, 170)
+        buffer.writeu8(pixels, offset + 3, 255)
+    end
+end
+
+image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+```
+
+You can update a smaller region instead of the whole image. The buffer must contain exactly four bytes per pixel in the specified region.
+
+## Reading and editing pixels
+
+`ReadPixelsBuffer()` copies a region into a Luau buffer. Changing that buffer does not change the image until you write it back.
+
+```lua
+local position = Vector2.new(16, 16)
+local size = Vector2.new(32, 32)
+local pixels = image:ReadPixelsBuffer(position, size)
+
+for offset = 0, buffer.len(pixels) - 4, 4 do
+    for channel = 0, 2 do
+        local value = buffer.readu8(pixels, offset + channel)
+        buffer.writeu8(pixels, offset + channel, 255 - value)
+    end
+end
+
+image:WritePixelsBuffer(position, size, pixels)
+```
+
+This inverts the RGB channels inside the selected region while preserving alpha. Regions must be entirely inside the image. Invalid coordinates are rejected rather than clipped.
+
+## Displaying an EditableImage
+
+An `ImageLabel` can display an `EditableImage` directly through its `EditableImage` property. Unlike a file-based image, you assign the object itself rather than a URI.
+
+The following snippet assumes `image` is an existing EditableImage and the LocalScript is inside a ScreenGui:
+
+```lua
+local screenGui = script.Parent
+image.Parent = screenGui
+
+local preview = Instance.new("ImageLabel")
+preview.Name = "Preview"
+preview.Size = UDim2.fromScale(1, 1)
+preview.BackgroundTransparency = 1
+preview.EditableImage = image
+preview.Parent = screenGui
+```
+
+Any subsequent calls to `WritePixelsBuffer()` are visible the next time the label renders. You do not need to reassign the image after every update. Multiple labels can reference the same image.
+
+Assigning `nil` to `preview.EditableImage` detaches the preview. Assigning a normal `Image` or `ImageContent` also detaches the editable image. The label does not own the image; keep the source alive while you use it. Destroying the source clears its attached label references.
+
+The editable-image rendering path stretches the whole source to the label's bounds and supports `ImageTransparency`. Tinting, source rectangles, nine-slice scaling, tiling, explicit resampling modes, and stored-image effects are not applied by this path yet.
+
+## Working with GPUCompute
+
+`GPUCompute` can generate a packed RGBA8 buffer that an EditableImage can display. The shader writes one `uint` per pixel and packs red, green, blue, and alpha into successive bytes:
+
+```glsl
+uint rgba = r | (g << 8) | (b << 16) | (a << 24);
+```
+
+Here the four channels are unsigned integers in the range 0–255. On the current little-endian backend the result has the same byte layout as an EditableImage pixel buffer.
+
+After dispatching the shader, wait until `PollShader()` reports completion, then copy the output:
+
+```lua
+-- compute and output are an existing GPUCompute instance and buffer ID.
+local done, err = compute:PollShader()
+assert(not err, err)
+
+if done then
+    local pixels = assert(compute:ReadBuffer(output))
+    image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+end
+```
+
+The GPU output must contain `image.Size.X * image.Size.Y * 4` bytes. If the shader produces floating-point colors, convert them to RGBA8 before writing them to the image. There is no automatic format conversion or direct GPU texture sharing in this API.
+
+See `GPUCompute` for a complete shader-generated image example.
+
+## Properties
+
+### Size
+
+```lua
+Size: Vector2
+```
+
+Default: `Vector2.new(1, 1)`. Read/write.
+
+The dimensions of the source pixel buffer, not the displayed size of an ImageLabel. Assigning a different size reallocates the image and clears its previous pixels to transparent black. Assigning the same effective dimensions preserves the pixels. Fractional dimensions within the permitted range are truncated to integers by the current setter; use whole numbers for predictable results.
+
+```lua
+image.Size = Vector2.new(512, 288)
+```
+
+If the image is attached to an ImageLabel, it stays attached when resized. Recreate or resize any separate GPU buffers to match the new dimensions before writing the next frame.
+
+## Methods
+
+| Method | Description |
+| --- | --- |
+| `ReadPixelsBuffer(position: Vector2, size: Vector2): buffer` | Copies a rectangular region into a tightly packed RGBA8 buffer. |
+| `WritePixelsBuffer(position: Vector2, size: Vector2, pixels: buffer): ()` | Copies a tightly packed RGBA8 buffer into a rectangular region of the image. |
+
+Both methods require nonnegative, whole-number coordinates, positive whole-number region dimensions, and a region contained within the image. The write buffer must have exactly `size.X * size.Y * 4` bytes. Invalid regions or buffer lengths raise a script error.
+
+## Image limits
+
+| Limit | Value |
+| --- | ---: |
+| Minimum width or height | 1 pixel |
+| Maximum width or height | 1024 pixels |
+| Bytes per pixel | 4 |
+| Maximum raw image storage | 4 MiB |
+
+These limits describe the supplied EditableImage bridge implementation. Native builds that increase the size constant or change the asset loader may have different limits.
+
+## Things to keep in mind
+
+- An EditableImage is not restricted to images loaded from disk. It can be generated entirely by your script or GPU.
+- Keep the alpha channel at `255` for opaque output; a buffer filled only with RGB values may be invisible.
+- A low-resolution image stretched across a large label will appear soft or pixelated. Increase the source dimensions, not just the label's size.
+- Use bulk writes or update only the affected region rather than making a separate method call for every pixel.
+- Reading GPU buffers back to Luau and copying them into an image has a cost. For progressive rendering, consider updating the preview every few samples.

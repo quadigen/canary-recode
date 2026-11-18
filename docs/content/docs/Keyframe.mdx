@@ -1,0 +1,113 @@
+---
+title: Keyframe
+description: A point in time in a KeyframeSequence, with poses and markers.
+---
+
+`Keyframe` marks a moment in a `KeyframeSequence`. It stores a time in seconds and owns the `Pose` instances that describe the rig at that moment. It can also hold markers that become animation events.
+
+`Keyframe` inherits from `Instance`.
+
+## Getting started
+
+```lua
+local keyframe = Instance.new("Keyframe")
+keyframe.Name = "Contact"
+keyframe.Time = 0.4
+
+local pose = Instance.new("Pose")
+pose.Name = "RightFoot"
+pose.CFrame = CFrame.new(0, 0.5, 0)
+pose.Weight = 1
+keyframe:AddPose(pose)
+```
+
+Add the keyframe to a sequence with `KeyframeSequence:AddKeyframe()`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Time` | `number` | Read/write | `0` | Position in the clip, in seconds. |
+
+`Time` accepts values from `0` through `36000`. Assigning a value outside that range is ignored rather than clamped or raised as an error. Fractional seconds are supported.
+
+```lua
+keyframe.Time = 1.25
+```
+
+The clip's duration is the largest keyframe time in the sequence, with a minimum of `0.001` seconds.
+
+## Methods
+
+### GetPoses
+
+```lua
+GetPoses(): {Pose}
+```
+
+Returns the keyframe's direct `Pose` children in a one-based table.
+
+### AddPose
+
+```lua
+AddPose(pose: Pose): ()
+```
+
+Parents an existing `Pose` to the keyframe. Passing a non-`Pose` instance raises an error.
+
+```lua
+local pose = Instance.new("Pose")
+pose.Name = "Torso"
+keyframe:AddPose(pose)
+```
+
+### RemovePose
+
+```lua
+RemovePose(pose: Pose): ()
+```
+
+Unparents a pose that belongs to this keyframe. Other instances and poses from elsewhere are ignored.
+
+### GetMarkers
+
+```lua
+GetMarkers(): {KeyframeMarker}
+```
+
+Returns the keyframe's marker children. Markers are instances with a `Name` and a string `Value`; they're compiled into animation events at the keyframe's time.
+
+### AddMarker
+
+```lua
+AddMarker(marker: KeyframeMarker): ()
+```
+
+Parents an existing marker to the keyframe. Passing a non-marker instance raises an error.
+
+### RemoveMarker
+
+```lua
+RemoveMarker(marker: KeyframeMarker): ()
+```
+
+Unparents a marker that belongs to this keyframe. Other instances are ignored.
+
+## How keyframes are used
+
+Keyframe `Name` values become animation events when the sequence is compiled. Poses under the keyframe are sampled at `Time`, and the animator interpolates between adjacent keyframes.
+
+Poses are matched to bones by `Pose.Name`, so the pose's name matters more than its position in the tree. A keyframe with no poses still contributes its time and event to the clip.
+
+## Notes
+
+- Keyframes don't have to be added in time order; the compiler sorts by `Time`.
+- Moving a keyframe to a different sequence with `AddKeyframe()` changes which clip it belongs to.
+- Cloning copies the keyframe's time and its descendants.
+- Editing a keyframe after an animation track is loaded doesn't retime the existing track.
+
+## See also
+
+- `KeyframeSequence` for the clip container.
+- `Pose` for the bone transforms under a keyframe.
+- `Animation` and `Animator` for playback.

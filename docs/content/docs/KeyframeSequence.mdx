@@ -1,0 +1,121 @@
+---
+title: KeyframeSequence
+description: Build a keyframe animation in Luau and play it through an Animator.
+---
+
+`KeyframeSequence` is a clip made of `Keyframe` children. Each keyframe holds poses for the rig's bones, and the animator interpolates between them. You can build one entirely in Luau, which makes it possible to generate or edit animations at runtime.
+
+`KeyframeSequence` inherits from `AnimationClip`, so it has `Loop` and `Priority`. It inherits from `Instance` as well.
+
+## Getting started
+
+```lua
+local sequence = Instance.new("KeyframeSequence")
+sequence.Name = "Wave"
+sequence.Loop = false
+sequence.Priority = Enum.AnimationPriority.Action
+
+local keyframe = Instance.new("Keyframe")
+keyframe.Name = "Start"
+keyframe.Time = 0
+sequence:AddKeyframe(keyframe)
+
+local pose = Instance.new("Pose")
+pose.Name = "RightArm"
+pose.CFrame = CFrame.Angles(0, 0, math.rad(10))
+pose.Weight = 1
+keyframe:AddPose(pose)
+```
+
+Attach the sequence to an `Animation` and load it:
+
+```lua
+local animation = Instance.new("Animation")
+animation.Source = sequence
+
+local track = animator:LoadAnimation(animation)
+track:Play()
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Loop` | `boolean` | Read/write | `false` | Restart when the clip ends. |
+| `Priority` | `Enum.AnimationPriority` | Read/write | `Enum.AnimationPriority.Idle` | Blending priority. |
+
+These values are inherited from `AnimationClip` and are applied when the animator loads the sequence. They override the corresponding properties on the `Animation` instance.
+
+## Methods
+
+### GetKeyframes
+
+```lua
+GetKeyframes(): {Keyframe}
+```
+
+Returns the sequence's keyframe children in tree order. The table is one-based.
+
+```lua
+for index, keyframe in sequence:GetKeyframes() do
+    print(index, keyframe.Time)
+end
+```
+
+Only direct `Keyframe` children are included. Other children are ignored.
+
+### AddKeyframe
+
+```lua
+AddKeyframe(keyframe: Keyframe): ()
+```
+
+Parents an existing `Keyframe` to the sequence. It doesn't create a new keyframe.
+
+```lua
+local keyframe = Instance.new("Keyframe")
+keyframe.Time = 0.5
+sequence:AddKeyframe(keyframe)
+```
+
+Passing anything other than a `Keyframe` raises an error. Adding a keyframe that already has a parent moves it.
+
+### RemoveKeyframe
+
+```lua
+RemoveKeyframe(keyframe: Keyframe): ()
+```
+
+Removes a keyframe from the sequence by setting its parent to `nil`. If the instance isn't a child of this sequence, or isn't a `Keyframe`, nothing happens and no error is raised.
+
+```lua
+sequence:RemoveKeyframe(keyframe)
+```
+
+## How the sequence is compiled
+
+When an animator loads an `Animation` whose `Source` is this sequence, the engine builds a clip with:
+
+- The sequence's `Name` as the clip name.
+- A duration equal to the largest keyframe `Time`, with a minimum of `0.001` seconds.
+- One pose entry per `Pose` under each keyframe.
+- An animation event for each keyframe, using the keyframe's `Name`.
+- An animation event for each marker under a keyframe, using the marker's `Name` and `Value`.
+
+Pose `Name` values must match the rig's bone names. A pose that doesn't match a bone won't animate anything.
+
+An empty sequence (no keyframes) can't be loaded; the animator raises an error.
+
+## Notes
+
+- Keyframes are sorted by their `Time` values when the clip is compiled, not by their order in the tree.
+- Editing a sequence after loading doesn't update an existing `AnimationTrack`. Load a new track to see the changes.
+- Cloning copies the sequence and its keyframe descendants.
+- The sequence must stay alive while it's assigned to `Animation.Source`; destroying it clears the source reference.
+
+## See also
+
+- `Keyframe` for timing and poses.
+- `Pose` for bone transforms.
+- `AnimationClip` for the shared loop and priority settings.
+- `Animation` and `Animator` for playback.

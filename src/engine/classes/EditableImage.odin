@@ -12,9 +12,10 @@ EditableImage_Class := Class_Info {
 }
 
 EditableImage :: struct {
-	using object:  Object,
-	width, height: int,
-	pixels:        []u8,
+	using object:    Object,
+	width, height:   int,
+	pixels:          []u8,
+	attached_labels: [dynamic]^ImageLabel,
 }
 
 EditableImage_Resize :: proc(image: ^EditableImage, width, height: int) {
@@ -33,6 +34,12 @@ editable_image_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr)
 
 editable_image_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	image := cast(^EditableImage)object
+	for label in image.attached_labels {
+		if label != nil && label.editable_image == image {
+			label.editable_image = nil
+		}
+	}
+	delete(image.attached_labels)
 	delete(image.pixels)
 	Object_Destroy(object)
 	free(image)
@@ -112,8 +119,9 @@ editable_image_namecall :: proc(
 	pixels: []u8
 	if write {
 		pixels = vm.ArgBuffer(L, 4)
-		if len(pixels) !=
-		   row_bytes * height {return vm.RaiseError(L, "incorrect pixel buffer size"), true}
+		if len(pixels) != row_bytes * height {
+			return vm.RaiseError(L, "incorrect pixel buffer size"), true
+		}
 	} else {
 		pixels = make([]u8, row_bytes * height, context.temp_allocator)
 	}

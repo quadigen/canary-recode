@@ -1,0 +1,363 @@
+---
+title: GPUCompute
+description: Run mathematical operations and custom GLSL compute shaders on the GPU from Luau.
+---
+
+`GPUCompute` lets you use the GPU for work that does not have to pass through the usual rendering pipeline. You can dispatch built-in mathematical operations or write a GLSL compute shader, allocate persistent storage buffers, and read the results back into Luau.
+
+Use it for procedural images, particle simulations, numerical calculations, image processing, and custom rendering algorithms such as ray tracing and path tracing.
+
+`GPUCompute` inherits from `Instance`.
+
+## Getting started
+
+Create a GPUCompute instance and check whether the backend is available:
+
+```lua
+local compute = Instance.new("GPUCompute")
+local supported, err = compute:IsSupported()
+
+if not supported then
+    warn("GPU compute unavailable:", err)
+    compute:Destroy()
+    return
+end
+```
+
+The current backend uses Vulkan. Runtime GLSL compilation uses the native glslang compiler bundled with Filament in supported Kinemium builds. The current implementation has Linux and Windows backend code; availability depends on the build, driver, and device features. `IsSupported()` checks device initialization, not whether every custom shader can be compiled or run.
+
+There are two ways to use GPUCompute:
+
+| Workflow | Methods | Data |
+| --- | --- | --- |
+| Built-in operations | `Dispatch()`, `Poll()` | Float32 arrays |
+| Programmable compute | `CompileShader()`, persistent buffer methods, `DispatchShader()`, `PollShader()` | Raw bytes interpreted according to the shader layout |
+
+Both workflows submit GPU work asynchronously. Each instance supports one pending job at a time. Collect the result of the current job before dispatching another or modifying its resources.
+
+## Built-in mathematical operations
+
+Built-in operations accept little-endian float32 values packed into Luau buffers. Each number occupies four bytes.
+
+```lua
+local RunService = game:GetService("RunService")
+local compute = Instance.new("GPUCompute")
+assert(compute:IsSupported())
+
+local count = 1024
+local a = buffer.create(count * 4)
+local b = buffer.create(count * 4)
+
+for i = 0, count - 1 do
+    buffer.writef32(a, i * 4, i)
+    buffer.writef32(b, i * 4, 10)
+end
+
+assert(compute:Dispatch("Add", a, b))
+
+local connection
+connection = RunService.Heartbeat:Connect(function()
+    local result, err = compute:Poll()
+    if err then
+        connection:Disconnect()
+        compute:Destroy()
+        error(err)
+    end
+    if not result then return end
+
+    connection:Disconnect()
+    print(buffer.readf32(result, 0)) -- 10
+    print(buffer.readf32(result, 4)) -- 11
+    compute:Destroy()
+end)
+```
+
+`Poll()` returns `nil` until the result is ready. Once it returns the result buffer, the pending job is cleared. Polling again returns `nil` until another mathematical operation completes.
+
+### Available operations
+
+Operation names are case-sensitive.
+
+| Operation | Inputs | Result |
+| --- | --- | --- |
+| `Add` | a, b | a + b |
+| `Subtract` | a, b | a - b |
+| `Multiply` | a, b | a * b, element-wise |
+| `Divide` | a, b | a / b, element-wise |
+| `Min` | a, b | Minimum of each pair |
+| `Max` | a, b | Maximum of each pair |
+| `Abs` | a | Absolute value |
+| `Negate` | a | Negative value |
+| `Sqrt` | a | Square root |
+| `MatrixMultiply` | a, b, rows, inner, columns | Matrix product |
+
+For binary element-wise operations, both buffers must contain the same number of float32 values. Unary operations take only one input buffer. Supply valid numerical inputs for the operation you choose.
+
+### Matrix multiplication
+
+Matrices are stored in row-major order. To multiply an `m` by `k` matrix by a `k` by `n` matrix, provide the dimensions in the order `m`, `k`, `n`.
+
+```lua
+-- A: 2 rows, 3 columns. B: 3 rows, 2 columns.
+local a = buffer.create(6 * 4)
+local b = buffer.create(6 * 4)
+
+for i, value in ipairs({1, 2, 3, 4, 5, 6}) do
+    buffer.writef32(a, (i - 1) * 4, value)
+end
+for i, value in ipairs({7, 8, 9, 10, 11, 12}) do
+    buffer.writef32(b, (i - 1) * 4, value)
+end
+
+assert(compute:Dispatch("MatrixMultiply", a, b, 2, 3, 2))
+-- Poll on a later frame. The 2x2 result contains 58, 64, 139, 154.
+```
+
+## Writing a compute shader
+
+Unlike built-in operations, custom compute shaders run your own GLSL code. You describe the data layout, the work performed by each invocation, and how the result is stored.
+
+The following shader multiplies each element of a persistent float32 buffer by two:
+
+```lua
+local compute = Instance.new("GPUCompute")
+assert(compute:IsSupported())
+
+assert(compute:CompileShader([[
+#version 450
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) buffer Values {
+    float values[];
+};
+
+layout(push_constant) uniform Params {
+    uint count;
+} p;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= p.count) return;
+    values[i] *= 2.0;
+}
+]], 1))
+```
+
+The second argument is the number of storage-buffer bindings in the shader's set `0` layout. Bindings are numbered from `0` to `bindingCount - 1`. Every slot in this layout needs a bound buffer before dispatch, even if the shader does not use that slot.
+
+A shader must define a compute entry point named `main`. The current compiler targets Vulkan 1.0 and SPIR-V 1.0. Custom compute exposes storage buffers and push constants, not sampled textures, storage images, or the engine's framebuffer.
+
+### Allocating and uploading buffers
+
+```lua
+local count = 256
+local id = assert(compute:CreateBuffer(count * 4))
+local initial = buffer.create(count * 4)
+
+for i = 0, count - 1 do
+    buffer.writef32(initial, i * 4, i)
+end
+
+assert(compute:WriteBuffer(id, initial))
+assert(compute:BindBuffer(0, id))
+```
+
+`CreateBuffer()` returns a positive numeric buffer ID owned by that GPUCompute instance. IDs are not binding indices. Buffers start with zero-filled storage and retain their contents between dispatches. A buffer's size is fixed at creation; allocate a new buffer if you need a different size.
+
+The optional offset in `WriteBuffer()` and `ReadBuffer()` is measured in bytes, not elements.
+
+### Passing parameters
+
+Push constants let you send small amounts of data to a shader without allocating a storage buffer for each parameter.
+
+```lua
+local constants = buffer.create(4)
+buffer.writeu32(constants, 0, count)
+assert(compute:SetPushConstants(constants))
+```
+
+The bytes must match the layout declared in GLSL. The current API accepts up to 128 bytes in multiples of four, and pads unused bytes with zero. For vectors, matrices, or structures, account for GLSL alignment and padding rather than assuming values are always packed consecutively.
+
+### Dispatching and collecting results
+
+The shader above defines 64 invocations per workgroup. To process 256 elements, dispatch four workgroups:
+
+```lua
+local RunService = game:GetService("RunService")
+assert(compute:DispatchShader(math.ceil(count / 64), 1, 1))
+
+local connection
+connection = RunService.Heartbeat:Connect(function()
+    local done, err = compute:PollShader()
+    if err then
+        connection:Disconnect()
+        compute:Destroy()
+        error(err)
+    end
+    if not done then return end
+
+    connection:Disconnect()
+    local result = assert(compute:ReadBuffer(id))
+    print(buffer.readf32(result, 4 * 4)) -- 8
+
+    assert(compute:DestroyBuffer(id))
+    compute:Destroy()
+end)
+```
+
+`DispatchShader()` takes workgroup counts, not the total number of invocations. Use `math.ceil()` when the data size is not a multiple of the local workgroup size, and check array bounds inside your shader.
+
+Unlike `Poll()`, `PollShader()` returns a completion boolean, not a buffer. Once it reports `true`, the job is cleared and persistent buffers can be read, updated, reused, or destroyed. Polling with no pending shader job returns `false` without an error. Track whether you have submitted a job instead of polling indefinitely.
+
+## Generating an image with a shader
+
+One useful workflow is to write packed RGBA8 pixels into a GPU storage buffer and display them with an `EditableImage` attached to an `ImageLabel`.
+
+This complete example creates a gradient on the GPU. Place it in a LocalScript under a ScreenGui:
+
+```lua
+local AssetService = game:GetService("AssetService")
+local RunService = game:GetService("RunService")
+local screenGui = script.Parent
+local width, height = 320, 180
+
+local compute = Instance.new("GPUCompute")
+assert(compute:IsSupported())
+
+assert(compute:CompileShader([[
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, std430) writeonly buffer Output {
+    uint pixels[];
+};
+
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+} p;
+
+void main() {
+    uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= p.width || xy.y >= p.height) return;
+
+    vec2 uv = vec2(xy) / vec2(p.width - 1u, p.height - 1u);
+    uint r = uint(uv.x * 255.0 + 0.5);
+    uint g = uint(uv.y * 255.0 + 0.5);
+    uint b = 180u;
+    pixels[xy.y * p.width + xy.x] =
+        r | (g << 8) | (b << 16) | 0xff000000u;
+}
+]], 1))
+
+local output = assert(compute:CreateBuffer(width * height * 4))
+assert(compute:BindBuffer(0, output))
+
+local params = buffer.create(8)
+buffer.writeu32(params, 0, width)
+buffer.writeu32(params, 4, height)
+assert(compute:SetPushConstants(params))
+
+local image = AssetService:CreateEditableImage({
+    Size = Vector2.new(width, height),
+})
+image.Parent = screenGui
+
+local preview = Instance.new("ImageLabel")
+preview.Size = UDim2.fromScale(1, 1)
+preview.BackgroundTransparency = 1
+preview.EditableImage = image
+preview.Parent = screenGui
+
+assert(compute:DispatchShader(math.ceil(width / 8), math.ceil(height / 8)))
+
+local connection
+connection = RunService.Heartbeat:Connect(function()
+    local done, err = compute:PollShader()
+    if err then
+        connection:Disconnect()
+        compute:Destroy()
+        error(err)
+    end
+    if not done then return end
+
+    connection:Disconnect()
+    local pixels = assert(compute:ReadBuffer(output))
+    image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
+
+    assert(compute:DestroyBuffer(output))
+    compute:Destroy()
+end)
+```
+
+Each invocation writes one pixel. On the current little-endian targets, the packed `uint` layout matches the four RGBA8 bytes expected by EditableImage. The image remains visible after the GPUCompute instance is destroyed because the pixels have already been copied into it.
+
+## Progressive rendering and simulation
+
+Persistent buffers are especially useful when each dispatch depends on the result of the previous one. For example, a path tracer can use one storage buffer for accumulated floating-point radiance and another for the display-ready RGBA8 output.
+
+For each sample, dispatch the shader, poll until completion, and update the preview from the output buffer when needed. Keep the accumulation buffer allocated between samples. On a camera or scene change, reset the accumulation and sample count before continuing.
+
+For a shader using `vec4` per pixel for accumulation and a packed `uint` per pixel for display, allocate 16 and 4 bytes per pixel respectively. Update the preview every few samples to reduce GPU-to-Luau readback and GUI upload work.
+
+GPUCompute does not automatically provide Workspace geometry, materials, lighting, or a camera. To build a custom scene renderer, serialize the scene into buffers yourself and implement intersections and shading in GLSL.
+
+## Properties
+
+GPUCompute introduces no class-specific properties. It inherits the standard Instance API.
+
+## Methods
+
+`string?` denotes an optional error message. Methods returning `(boolean, string?)` return `true` on success or `false` with a diagnostic on failure, except `PollShader()`, where `false` also means the job has not completed. Methods returning a buffer or ID return `nil` with a diagnostic on backend failure. Invalid argument types or out-of-range integer arguments may raise a script error instead.
+
+### Device and built-in operations
+
+| Method | Description |
+| --- | --- |
+| `IsSupported(): (boolean, string?)` | Opens or checks the compute device and reports whether initialization succeeded. |
+| `Dispatch(operation: string, a: buffer, b: buffer?, rows: number?, inner: number?, columns: number?): (boolean, string?)` | Submits a built-in float32 operation. Matrix dimensions are required only for `MatrixMultiply`. |
+| `Poll(): (buffer?, string?)` | Retrieves the completed mathematical result once, or returns `nil` if none is ready. |
+
+### Programmable shaders
+
+| Method | Description |
+| --- | --- |
+| `CompileShader(source: string, bindingCount: number): (boolean, string?)` | Compiles GLSL and creates a compute pipeline with the given number of contiguous storage-buffer slots. |
+| `CreateBuffer(size: number): (number?, string?)` | Allocates zero-filled persistent storage. Size is in bytes and must be a positive multiple of four. |
+| `WriteBuffer(id: number, data: buffer, offset: number?): (boolean, string?)` | Copies bytes into a persistent buffer. Offset defaults to `0`. |
+| `ReadBuffer(id: number, offset: number?, size: number?): (buffer?, string?)` | Copies a nonempty byte range back to Luau. Offset defaults to `0`; size defaults to the remaining bytes. |
+| `BindBuffer(binding: number, id: number): (boolean, string?)` | Associates a persistent buffer with a zero-based storage binding. |
+| `SetPushConstants(data: buffer): (boolean, string?)` | Replaces the current push-constant data. Unused bytes are cleared. |
+| `DispatchShader(x: number, y: number?, z: number?): (boolean, string?)` | Submits a custom compute job. `y` and `z` default to `1`. |
+| `PollShader(): (boolean, string?)` | Returns `true` once the pending custom job has completed. Returns `false` while pending or when no job exists. |
+| `DestroyBuffer(id: number): (boolean, string?)` | Releases persistent storage and clears the bindings that reference it. |
+
+Each GPUCompute instance holds one current custom pipeline. A successful `CompileShader()` replaces the previous pipeline and clears its binding assignments and push constants, but retains existing persistent buffers. Rebind them and set parameters again before dispatching. A failed compile does not replace the previously installed pipeline.
+
+Call the inherited `Destroy()` method to release the device, custom pipeline, and any remaining persistent buffers. Destroying an instance while work is running may block until it finishes. Prefer to poll for completion first.
+
+## Limits
+
+| Limit | Value |
+| --- | ---: |
+| Elements per built-in input or result buffer | 4,000,000 float32 values |
+| Matrix scalar products per dispatch | 256,000,000 |
+| Storage buffer bindings per custom shader | 16 |
+| Persistent buffers per GPUCompute instance | 64 |
+| Bytes per persistent buffer | 64 MiB |
+| Total persistent buffer storage per instance | 256 MiB |
+| Push constants | 128 bytes |
+| GLSL source length | 1 MiB |
+| Pending jobs per GPUCompute instance | 1 |
+
+These are the engine limits in the supplied Vulkan backend. Device limits, storage-buffer range, available memory, and supported GLSL features can impose stricter restrictions. Custom compilation also requires Vulkan `robustBufferAccess` on this backend.
+
+## Things to keep in mind
+
+- Use trusted local shaders. Bounds checks and allocation limits do not make arbitrary GPU programs safe; long-running or malformed workloads can stall a device.
+- Check the second return value on failure. Compile diagnostics are returned to Luau and often include a GLSL line number.
+- Keep the shader's `std430` storage layouts and push-constant layout consistent with the byte offsets in Luau. A GLSL `vec3` in a structure may require padding.
+- Wait for the corresponding poll method before reading or modifying persistent buffers, compiling another shader, or submitting more work on the same instance.
+- `IsSupported()` can succeed even when runtime compilation is missing or a particular shader exceeds the device's capabilities.
+- An execution error can reset the GPUCompute device and invalidate previously allocated buffers. Recreate the compute resources after a device failure.
+- GPU buffers are not automatically exposed as textures. Use `ReadBuffer()` and `EditableImage:WritePixelsBuffer()` for the current image-preview workflow.

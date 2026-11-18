@@ -1,0 +1,67 @@
+---
+title: InsertService
+description: Build a MeshPart from a mesh asset that exists locally.
+---
+
+`InsertService` creates a `MeshPart` from a mesh file the engine can resolve on disk or in its asset store. It's the scripted version of dragging a mesh into the scene: you get a part configured with that mesh, ready to size, position, and parent.
+
+The service only exposes `CreateMeshPartAsync()`. It doesn't insert models, download assets, or accept asset IDs from the marketplace.
+
+## Getting started
+
+```lua
+local InsertService = game:GetService("InsertService")
+
+local crate = InsertService:CreateMeshPartAsync(
+    "models/crate.glb",
+    Enum.CollisionFidelity.Box,
+    Enum.RenderFidelity.Precise
+)
+
+crate.Position = Vector3.new(0, 2, 0)
+crate.Anchored = true
+crate.Parent = workspace
+```
+
+## Methods
+
+### CreateMeshPartAsync
+
+```lua
+CreateMeshPartAsync(
+    meshId: string,
+    collisionFidelity: Enum.CollisionFidelity,
+    renderFidelity: Enum.RenderFidelity
+): MeshPart
+```
+
+Creates a `MeshPart` using the mesh at `meshId`.
+
+`meshId` has to point at a mesh the engine can read locally: an embedded asset, a path inside the project, or a file path. If the asset can't be found or is empty, the call raises `mesh asset is unavailable`. A remote URL or a marketplace ID that hasn't been downloaded won't work.
+
+`collisionFidelity` becomes the part's `CollisionFidelity`. Use `Enum.CollisionFidelity.Box` when you want cheap box collision, or a mesh-based option when the shape matters.
+
+`renderFidelity` becomes the part's `RenderFidelity`, which controls how aggressively the mesh is simplified at distance. `Enum.RenderFidelity.Automatic` lets the engine decide, `Precise` keeps detail, and `Performance` favors frame rate.
+
+```lua
+local rock = InsertService:CreateMeshPartAsync(
+    "models/rock.glb",
+    Enum.CollisionFidelity.Hull,
+    Enum.RenderFidelity.Automatic
+)
+```
+
+The returned part has `MeshId` set but no `Parent`, so it won't appear until you parent it. The mesh doesn't resize the part automatically, so set `Size` to match the asset's bounds if the visual result looks wrong.
+
+Despite the name, the call is synchronous. There's no progress reporting and no callback; the mesh is either available when you call it or the call fails.
+
+## Notes
+
+- Errors are raised, not returned. Wrap the call in `pcall()` if the mesh path comes from user input or a downloaded pack.
+- There's no batching. Creating many parts from many meshes means one call per part.
+- `TextureId` and other surface properties aren't set for you. Assign them after creation if the mesh needs a texture.
+
+## See also
+
+- `MeshPart` for the full set of properties and methods on the result.
+- `ContentProvider` for downloading mesh packs before inserting from them.

@@ -1,0 +1,101 @@
+---
+title: PhysicsService
+description: Register collision groups and query the collision-group list.
+---
+
+`PhysicsService` manages named collision groups. In the current engine, group registration works, but the raycast and overlap methods are placeholders that return empty tables. Use `Workspace` for real spatial queries.
+
+## Getting started
+
+```lua
+local PhysicsService = game:GetService("PhysicsService")
+
+PhysicsService:RegisterCollisionGroup("Players")
+PhysicsService:RegisterCollisionGroup("NPCs")
+
+print(PhysicsService:IsCollisionGroupRegistered("Players")) -- true
+```
+
+## Methods
+
+### RegisterCollisionGroup
+
+```lua
+RegisterCollisionGroup(name: string): ()
+```
+
+Adds a collision group name to the service's list. Registering the same name twice is harmless; the duplicate is ignored. An empty name raises an error.
+
+```lua
+PhysicsService:RegisterCollisionGroup("Debris")
+```
+
+Registration only records the name. The current API doesn't expose collision masks, so this doesn't by itself change which parts collide.
+
+### IsCollisionGroupRegistered
+
+```lua
+IsCollisionGroupRegistered(name: string): boolean
+```
+
+Returns `true` if the group name has been registered. `CollisionGroupExists()` is an alias with the same behavior.
+
+```lua
+if not PhysicsService:IsCollisionGroupRegistered("Players") then
+    PhysicsService:RegisterCollisionGroup("Players")
+end
+```
+
+### GetRegisteredCollisionGroups
+
+```lua
+GetRegisteredCollisionGroups(): {{name: string}}
+```
+
+Returns a one-based array of tables, each with a `name` field. The `Default` group is always present.
+
+```lua
+for _, group in PhysicsService:GetRegisteredCollisionGroups() do
+    print(group.name)
+end
+```
+
+### Collision group predicates
+
+These methods are exposed but don't implement collision filtering:
+
+| Signature | Returns | Notes |
+| --- | --- | --- |
+| `IsCollisionGroupDefault(name: string)` | `boolean` | True only for `"Default"`. |
+| `IsCollisionGroupDoesNotCollide(name: string)` | `boolean` | Always `false`. |
+| `IsCollisionGroupNotCollide(name: string)` | `boolean` | Always `false`. Alias of the above. |
+| `IsCollisionGroupNotCollideWith(name: string)` | `boolean` | Always `false`. Alias of the above. |
+
+### Raycast and overlap placeholders
+
+```lua
+Raycast(origin: Vector3, direction: Vector3, params: any?): {}
+RaycastParams(): {}
+OverlapParams(): {}
+```
+
+All three return an empty table in the current implementation. They don't perform a query and don't accept meaningful parameters.
+
+```lua
+local hits = PhysicsService:Raycast(origin, direction)
+print(#hits) -- 0
+```
+
+Use `Workspace:Raycast()` and the corresponding `Workspace` query methods instead. Don't build gameplay around these placeholders.
+
+## Notes
+
+- The service starts with a single `Default` group.
+- Group names are case-sensitive.
+- Destroying or unregistering a group isn't exposed.
+- There's no way to assign a part to a group through this service yet.
+
+## See also
+
+- `Workspace` for raycasts, spatial queries, and physics settings.
+- `Physics` for gravity, substeps, and sleep tuning.

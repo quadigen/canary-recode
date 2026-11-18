@@ -132,6 +132,11 @@ add_subdirectory(webview)
 # yaml
 add_subdirectory(libyaml)
 
+# Reuse the compiler already present in Filament, not Shaderc.
+if(NOT ANDROID AND NOT EMSCRIPTEN AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    add_subdirectory(kine_shader_compiler)
+endif()
+
 add_library(KinemiumLibs STATIC EXCLUDE_FROM_ALL
     "${CMAKE_CURRENT_BINARY_DIR}/kinemium_libs.c"
 )
@@ -227,6 +232,7 @@ endforeach()
 
 # List of component targets to link and merge into KinemiumLibs
 set(KINE_COMPONENT_TARGETS
+    kine_shader_compiler
     # Renderer
     kine_render_shim
     kine_filament_shim
@@ -424,8 +430,12 @@ if(MSVC)
     # Renderer bindings already import their Windows component archives.
     # Merge only the data libraries consumed through KinemiumLibs.lib so this
     # archive stays small and does not duplicate the Filament/Skia bundles.
+    set(_kine_msvc_bundle "$<TARGET_FILE:libzstd_static>;$<TARGET_FILE:miniz>;$<TARGET_FILE:yaml>")
+    if(TARGET kine_shader_compiler)
+        list(APPEND _kine_msvc_bundle "$<TARGET_FILE:kine_shader_compiler>")
+    endif()
     set_target_properties(KinemiumLibs PROPERTIES
-        STATIC_LIBRARY_OPTIONS "$<TARGET_FILE:libzstd_static>;$<TARGET_FILE:miniz>;$<TARGET_FILE:yaml>"
+        STATIC_LIBRARY_OPTIONS "${_kine_msvc_bundle}"
     )
 elseif(APPLE)
     set(_kine_bundle_archive "$<TARGET_FILE:KinemiumLibs>.bundle")
