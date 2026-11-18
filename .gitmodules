@@ -31,3 +31,6 @@
 [submodule "vendor/rocksdb"]
 	path = vendor/rocksdb
 	url = https://github.com/meta/rocksdb
+[submodule "vendor/filament-compiler-source"]
+	path = vendor/filament-compiler-source
+	url = https://github.com/google/filament.git
