@@ -68,13 +68,20 @@ if (-not $vcpkgExecutable) {
 }
 $vcpkgInstalled = Join-Path $repo "build\vcpkg-installed"
 $vcpkgArgs = New-Object System.Collections.ArrayList
+
 foreach ($abi in $Abis) {
     $triplet = $VcpkgTriplets[$abi]
+
     [void]$vcpkgArgs.Add("openssl:$triplet")
     [void]$vcpkgArgs.Add("enet:$triplet")
+    [void]$vcpkgArgs.Add("curl[core,openssl,websockets]:$triplet")
 }
+
 & $vcpkgExecutable install $vcpkgArgs "--x-install-root=$vcpkgInstalled"
-if ($LASTEXITCODE -ne 0) { throw "Android OpenSSL/ENet dependency build failed" }
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Android dependency build failed"
+}
 
 $filamentVersion = "1.74.0"
 $sdlVersion = "3.4.14"

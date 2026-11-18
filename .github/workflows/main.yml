@@ -153,6 +153,8 @@ jobs:
             libxss-dev \
             libxtst-dev \
             libxxf86vm-dev \
+            libcurl4-openssl-dev \
+            ldd \
             libwebkit2gtk-4.1-dev \
             ninja-build
       - name: Install macOS build dependencies
@@ -347,7 +349,7 @@ jobs:
           build_odin_vendor_library \
             "$odin_root/vendor/stb/src" \
             build_stb.sh
-          bash "$odin_root/vendor/box2d/build_box2d.sh"
+          CC=clang LD=wasm-ld bash "$odin_root/vendor/box2d/build_box2d.sh"
       - name: Stage static ENet and OpenSSL libraries (macOS)
         if: runner.os == 'macOS'
         shell: bash

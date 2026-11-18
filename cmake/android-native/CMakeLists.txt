@@ -119,8 +119,10 @@ if(KINE_ODIN_OBJECTS)
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_write.a"
         "${KINE_ANDROID_BOX2D_LIBRARY}"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libenet.a"
+        "${KINE_ANDROID_VCPKG_DIR}/lib/libcurl.a"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libssl.a"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libcrypto.a"
+        "${KINE_ANDROID_VCPKG_DIR}/lib/libz.a"
     )
     list(JOIN KINE_ANDROID_LINK_LIBS "," KINE_ANDROID_LINK_GROUP)
 
