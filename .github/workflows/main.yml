@@ -154,7 +154,7 @@ jobs:
             libxtst-dev \
             libxxf86vm-dev \
             libcurl4-openssl-dev \
-            ldd \
+            lld \
             libwebkit2gtk-4.1-dev \
             ninja-build
       - name: Install macOS build dependencies
