@@ -663,7 +663,7 @@ workspace_append_draw_items :: proc(
 					if material_kind == kineffi.KINE_MAT_DEFAULT &&
 					   render_material.texture != nil &&
 					   mesh_texture == nil {
-						param3 = max(1.0, max(size.x, max(size.y, size.z)) / 4.0)
+						param3 = f32(max(1.0, max(size.x, max(size.y, size.z)) / 4.0))
 					}
 				}
 

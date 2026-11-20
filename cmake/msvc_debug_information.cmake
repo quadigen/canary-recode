@@ -4,6 +4,10 @@
 function(kine_msvc_embedded_debug_information directory)
     get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
     get_property(children DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+    if(KINE_MSVC_DISABLE_COMPILER_CACHE)
+        set_property(DIRECTORY "${directory}" PROPERTY RULE_LAUNCH_COMPILE "")
+        set_property(DIRECTORY "${directory}" PROPERTY RULE_LAUNCH_LINK "")
+    endif()
 
     # Legacy projects can add /Zi through the directory's language flags
     # rather than through a target property (miniz and RocksDB do this).
@@ -51,8 +55,14 @@ function(kine_msvc_embedded_debug_information directory)
 
         # Respect the parent-selected compiler cache, not a dependency's
         # independent choice of ccache from PATH (e.g. RocksDB).
+        if(KINE_MSVC_DISABLE_COMPILER_CACHE)
+            set_property(TARGET "${target}" PROPERTY RULE_LAUNCH_COMPILE "")
+            set_property(TARGET "${target}" PROPERTY RULE_LAUNCH_LINK "")
+        endif()
         foreach(lang IN ITEMS C CXX)
-            if(CMAKE_${lang}_COMPILER_LAUNCHER)
+            if(KINE_MSVC_DISABLE_COMPILER_CACHE)
+                set_property(TARGET "${target}" PROPERTY ${lang}_COMPILER_LAUNCHER "")
+            elseif(CMAKE_${lang}_COMPILER_LAUNCHER)
                 set_property(TARGET "${target}" PROPERTY
                     ${lang}_COMPILER_LAUNCHER "${CMAKE_${lang}_COMPILER_LAUNCHER}")
             endif()

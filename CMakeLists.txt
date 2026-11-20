@@ -20,6 +20,14 @@ if(MSVC)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
 	# Prefer object-embedded debug info for native dependencies with symbols.
 	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+	option(KINE_MSVC_DISABLE_COMPILER_CACHE "Compile native MSVC sources directly" OFF)
+	if(KINE_MSVC_DISABLE_COMPILER_CACHE)
+		# Some upstream libraries request both /Zi and /Z7. MSVC honors the
+		# last option, but sccache still tries to archive the nonexistent PDB.
+		set(CMAKE_C_COMPILER_LAUNCHER "")
+		set(CMAKE_CXX_COMPILER_LAUNCHER "")
+		set(CCACHE_FOUND FALSE) # RocksDB's automatic ccache discovery
+	endif()
 endif()
 
 # The application is written in Odin. CMake owns only the native wrappers and
@@ -60,7 +68,7 @@ endif()
 if(MSVC)
     include(cmake/msvc_debug_information.cmake)
     kine_msvc_embedded_debug_information("${CMAKE_CURRENT_SOURCE_DIR}")
-    if(CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+    if(KINE_MSVC_DISABLE_COMPILER_CACHE OR CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "")
         set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "")
     endif()

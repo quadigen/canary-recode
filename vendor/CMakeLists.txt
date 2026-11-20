@@ -84,7 +84,7 @@ set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
 set(TRACY_ON_DEMAND ON CACHE BOOL "Only profile while Tracy is connected" FORCE)
 set(TRACY_STATIC ON CACHE BOOL "Build Tracy statically" FORCE)
 set(TRACY_LTO OFF CACHE BOOL "" FORCE)
-if(CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+if(KINE_MSVC_DISABLE_COMPILER_CACHE OR CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
     # Tracy otherwise installs ccache as a global compile AND link launcher.
     set(NO_CCACHE ON CACHE BOOL "Use the parent compiler launcher" FORCE)
 endif()

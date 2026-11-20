@@ -2,6 +2,7 @@
 import json
 import re
 import sys
+import subprocess
 from pathlib import Path
 
 DEBUG_FORMAT = re.compile(r'(?<!\S)"?[-/]Z([iI7])"?(?=\s|$)')
@@ -22,8 +23,14 @@ def shared_pdb_commands(commands):
             yield entry["file"]
 
 
+def compiler_cache_commands(commands):
+    cache = re.compile(r'(?:^|[\\/"\s])s?ccache(?:\.exe)?(?=["\s]|$)', re.IGNORECASE)
+    return [command for command in commands if cache.search(command)]
+
+
 def main():
-    commands = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+    database = Path(sys.argv[1])
+    commands = json.loads(database.read_text(encoding="utf-8-sig"))
     failures = list(shared_pdb_commands(commands))
     if failures:
         print("Shared compiler PDB (/Zi or /ZI) still enabled:", file=sys.stderr)
@@ -31,6 +38,20 @@ def main():
             print(f"  {failure}", file=sys.stderr)
         return 1
     print(f"Validated {len(commands)} compile commands: no shared compiler PDBs.")
+    if "--no-compiler-cache" in sys.argv[2:]:
+        # compile_commands.json excludes launcher prefixes. Check the actual
+        # commands Ninja will execute, including upstream launcher overrides.
+        ninja = subprocess.run(
+            ["ninja", "-C", str(database.parent), "-t", "commands"],
+            check=True, capture_output=True, text=True, errors="replace",
+        )
+        cached = compiler_cache_commands(ninja.stdout.splitlines())
+        if cached:
+            print("Unexpected Windows compiler cache launcher:", file=sys.stderr)
+            for command in cached[:5]:
+                print(command, file=sys.stderr)
+            return 1
+        print("Validated Ninja commands: no ccache or sccache launchers.")
     return 0
 
 

@@ -228,10 +228,10 @@ jobs:
         shell: bash
         run: python tools/isolate_skia_symbols.py '${{ steps.skia.outputs.path }}'
       - name: Setup sccache (desktop)
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         uses: mozilla-actions/sccache-action@v0.0.11
       - name: Configure local compiler cache
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.cache/sccache-desktop" >> "$GITHUB_ENV"
@@ -240,7 +240,7 @@ jobs:
           echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
       - name: Restore desktop compiler cache
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         id: desktop-compiler-cache
         uses: actions/cache/restore@v5
         with:
@@ -257,9 +257,9 @@ jobs:
           if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -C '${{ steps.skia.outputs.cmake }}'
+          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -DKINE_MSVC_DISABLE_COMPILER_CACHE=ON -C '${{ steps.skia.outputs.cmake }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/check_msvc_debug_information.py vendor/build/compile_commands.json
+          python tools/check_msvc_debug_information.py vendor/build/compile_commands.json --no-compiler-cache
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build vendor/build --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -368,14 +368,14 @@ jobs:
             vendor/build/lib/*.anchor
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Flush desktop compiler cache
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: bash
         continue-on-error: true
         run: |
           sccache --show-stats
           sccache --stop-server
       - name: Save desktop compiler cache
-        if: steps.native-cache.outputs.cache-hit != 'true' && steps.desktop-compiler-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && steps.native-cache.outputs.cache-hit != 'true' && steps.desktop-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: .cache/sccache-desktop
