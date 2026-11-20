@@ -1486,7 +1486,17 @@ int32_t JPH_PhysicsSystem_CastRay(
 }
 
 extern "C" JPH_ShapeRef JPH_CapsuleShape_Create(float halfHeight, float radius, float convexRadius) {
-	return new JPH::CapsuleShape(halfHeight, radius);
+	if (!std::isfinite(halfHeight) || !std::isfinite(radius) || halfHeight < 0.0f || radius <= 0.0f)
+		return nullptr;
+
+	JPH::CapsuleShapeSettings settings(halfHeight, radius);
+	JPH::ShapeSettings::ShapeResult result = settings.Create();
+	if (result.HasError())
+		return nullptr;
+
+	JPH::Shape *shape = result.Get().GetPtr();
+	shape->AddRef();
+	return shape;
 }
 
 int32_t JPH_PhysicsSystem_CastShapeDetailed(

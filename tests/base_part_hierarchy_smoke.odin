@@ -4,9 +4,9 @@
 // nothing and silently selected zero objects.
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -69,6 +69,14 @@ end
 assert(#parts == 2, "IsA(BasePart) and Anchored matched " .. #parts .. " objects, expected 2")
 assert(parts[1] == part or parts[2] == part, "the anchored Part was not selected")
 assert(parts[1] == mesh or parts[2] == mesh, "the anchored MeshPart was not selected")
+
+-- A MeshPart without a rig has no bones, and the bone API reports that
+-- instead of raising.
+assert(#mesh:GetBoneNames() == 0, "a static MeshPart exposed bones")
+assert(mesh:GetBoneWorldCFrame("Root") == nil, "static bone world cframe")
+assert(mesh:GetBoneTransform("Root") == nil, "static bone transform")
+assert(mesh:GetBoneParent("Root") == nil, "static bone parent")
+mesh:SetBoneTransform("Root", CFrame.new(1, 2, 3))
 
 -- Unanchoring through the selected object has to actually take effect.
 parts[1].Anchored = false

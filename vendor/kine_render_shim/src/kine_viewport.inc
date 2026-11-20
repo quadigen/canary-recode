@@ -270,7 +270,7 @@ void kine_vp_update_chunks(KineFilamentViewport *vp,const KineFilamentDrawItem *
         it->transforms.push_back(kine_from_row_major(items[i].transform));
         const float alpha=key.materialKind==KINE_MAT_DEFAULT ? std::clamp(items[i].transmission,0.0f,1.0f) : 1.0f;
         it->colors.push_back({items[i].r,items[i].g,items[i].b,alpha});
-        it->uvs.push_back(items[i].param3>0 ? items[i].param3 : 1.0f);
+        it->uvs.push_back(items[i].param3!=0 ? items[i].param3 : 1.0f);
     }
     size_t index=0;
     for(auto &g:groups)for(size_t offset=0;offset<g.transforms.size();offset+=64) {

@@ -1,0 +1,82 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Kinemium Babylon renderer smoke</title>
+<canvas id="world" width="320" height="240"></canvas>
+<pre id="result">RUNNING</pre>
+<script src="../.cache/babylon-web/node_modules/babylonjs/babylon.js"></script>
+<script src="../web/babylon_backend.js"></script>
+<script>
+  (async () => {
+    const result = document.getElementById("result");
+    const check = (condition, msg) => { if (!condition) throw Error(msg); };
+    try {
+      const canvas = document.getElementById("world"), memory = new WebAssembly.Memory({ initial: 4 }), stats = { frames: 0 };
+      const h = () => new Uint8Array(memory.buffer), d = () => new DataView(memory.buffer);
+      const a = createKinemiumBabylonBackend({ B: BABYLON, canvas, heap8: h, heap32: d, stats });
+      const c = a.Kine_Filament_CreateForSDLWindow(0, 320, 240); check(c, "context");
+      a.Kine_Filament_SetCameraLookAt(c, 0, 0, 8, 0, 0, 0, 0, 1, 0);
+      a.Kine_Filament_SetCameraPerspective(c, 60, 320 / 240, .1, 100);
+      a.Kine_Filament_CreateSky(c, .02, .03, .04, 1);
+      a.Kine_Filament_SetShadowOptions(c, false, 0);
+      const box = a.Kine_Filament_CreateMesh(c, 1), cyl = a.Kine_Filament_CreateMesh(c, 6);
+      check(box && cyl, "primitive handles");
+      const request = new XMLHttpRequest();
+      request.open("GET", "../src/engine/assets/shapes/Capsule.glb", false);
+      request.overrideMimeType("text/plain; charset=x-user-defined");
+      request.send();
+      const glb = Uint8Array.from(request.responseText, ch => ch.charCodeAt(0) & 255);
+      h().set(glb, 4096);
+      const capsule = a.Kine_Filament_CreateMeshFromMemoryIndexed(c, 4096, glb.length, 0, 0);
+      check(capsule, "embedded GLB mesh");
+      const bounds = 256;
+      check(a.Kine_Filament_GetMeshBounds(box, bounds, bounds + 12), "bounds");
+      check(Math.abs(d().getFloat32(bounds + 12, true) - 1) < .001, "box extent");
+      const texPtr = 800;
+      h().set([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0], texPtr);
+      const tex = a.Kine_Filament_CreateTexFromPixels(c, 2, 2, 12, texPtr); check(tex, "padded RGBA");
+      const item = 1024, view = d();
+      function submit(mid, tid, x = 0, kind = 2) {
+        view.setUint32(item, mid, true); view.setUint32(item + 4, tid, true);
+        const m = [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+        m.forEach((v, i) => view.setFloat32(item + 8 + i * 4, v, true));
+        [1, .2, .1, 1, 0, 1, 0].forEach((v, i) => view.setFloat32(item + 72 + i * 4, v, true));
+        view.setInt32(item + 100, kind, true); view.setUint32(item + 104, 3, true);
+        check(a.Kine_Filament_DrawMeshListVersioned(c, item, 1, 1n, 1n), "draw");
+      }
+      const copy = document.createElement("canvas"); copy.width = 320; copy.height = 240;
+      const ctx = copy.getContext("2d", { willReadFrequently: true });
+      function read(x, y) { ctx.clearRect(0, 0, 320, 240); ctx.drawImage(canvas, 0, 0); return [...ctx.getImageData(x, y, 1, 1).data]; }
+      // Render until asynchronous shader compilation has completed.
+      for (let i = 0; i < 45; i++) { submit(box, tex); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
+      const center = read(160, 120), corner = read(10, 10);
+      check(center[0] > corner[0] + 20, "visible centered box " + center + " / " + corner);
+      for (let i = 0; i < 5; i++) { submit(box, tex, 4); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
+      const moved = read(160, 120); check(Math.abs(moved[0] - corner[0]) < 12, "world transform moved box " + moved + " / " + corner);
+      submit(box, tex, 0); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true);
+      a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true);
+      check(Math.abs(read(160, 120)[0] - corner[0]) < 12, "stale pooled draw disappears");
+      check(a.Kine_Filament_UpdateTexFromPixels(c, tex, 2, 2, 12, texPtr), "texture update");
+      const light = a.Kine_Filament_CreateLightEx(c, 0, 0, 2, 2, 0, -1, 0, 1, 1, 1, 100, 10, 0, 1, false, true);
+      check(light > 0 && a.Kine_Filament_SetPositionLight(c, light, 1, 2, 3), "light handle");
+      check(a.Kine_Filament_RemoveLight(c, light), "remove light");
+      a.Kine_Filament_SetBloom(c, true, .15);
+      a.Kine_Filament_SetAntiAliasing(c, true, false, false, 1);
+      a.Kine_Filament_SetDepthOfField(c, false, 0, 1, 0);
+      a.Kine_Filament_SetAmbientOcclusion(c, true, .3, 1, 1, 1, 0);
+      a.Kine_Filament_SetScreenSpaceReflections(c, true, .5, .05, 10, 1);
+      a.Kine_Filament_SetDynamicResolution(c, true, .5, .5);
+      check(canvas.width === 160 && canvas.height === 120, "render scale");
+      submit(capsule, 0, 0, 0);
+      for (let i = 0; i < 5; i++) { if (i > 0) submit(capsule, 0, 0, 0); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
+      a.Kine_Filament_SetScreenSpaceReflections(c, false, .5, .05, 10, 1);
+      a.Kine_Filament_SetAmbientOcclusion(c, false, .3, 1, 1, 1, 0);
+      a.Kine_Filament_SetDynamicResolution(c, false, 1, 1);
+      check(a.Kine_Filament_DestroyMesh(c, box) && a.Kine_Filament_DestroyMesh(c, cyl) && a.Kine_Filament_DestroyMesh(c, capsule), "destroy meshes");
+      check(a.Kine_Filament_DestroyTex(c, tex), "destroy texture");
+      a.Kine_Filament_Destroy(c);
+      check(stats.babylonContexts === 0 && stats.meshes === 0 && stats.textures === 0, "resource cleanup");
+      result.textContent = "BABYLON_BACKEND_SMOKE_PASSED " + JSON.stringify({ center, corner, moved, stats });
+      document.title = "PASS";
+    } catch (e) { result.textContent = "BABYLON_BACKEND_SMOKE_FAILED " + e.stack; document.title = "FAIL"; console.error(e); }
+  })();
+</script>

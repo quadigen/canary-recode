@@ -27,6 +27,7 @@ end
 | `Gravity` | `number` | Read/write | Physics default | Downward acceleration applied to simulated bodies. |
 | `SimulatePhysics` | `boolean` | Read/write | `true` | Whether the world simulates. `AutoSimulate` is an alias. |
 | `GlobalWind` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Wind force applied to cloth and other affected objects. |
+| `FluidForces` | `boolean` | Read/write | `false` | Compatibility alias for `Aerodynamics.Enabled`. |
 | `FallenPartsDestroyHeight` | `number` | Read/write | `-500` | Y position below which parts are destroyed. Clamped to -50000 through 50000. |
 | `FallHeightEnabled` | `boolean` | Read/write | `true` | Whether parts are destroyed when they fall below the limit. |
 | `CurrentCamera` | `Camera?` | Read/write | None until set | The camera used for rendering. |
@@ -116,6 +117,7 @@ If the event fires before you connect, your callback won't run. Treat it as a on
 
 ## See also
 
+- `Aerodynamics`, atmosphere, wind, and fluid body coefficients.
 - `Lighting`, sky, shadows, and visual effects for the world.
 - `RunService`, frame and simulation steps.
 - `Terrain`, the voxel terrain owned by Workspace.

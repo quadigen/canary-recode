@@ -143,11 +143,6 @@ Camera_Update_Mouse_Look :: proc(camera: ^Camera, focused: bool) -> bool {
 		if !camera.mouse_look_active {
 			camera.mouse_look_active = true
 
-			// Relative mode only hides the cursor. Some window systems refuse
-			// the grab (for example Wayland without pointer constraints), and
-			// SDL still reports motion deltas without it, so keep rotating and
-			// treat the capture as best effort. Only the first frame of the
-			// drag is discarded to avoid a jump from the pointer warp.
 			window := sdl3.GetMouseFocus()
 
 			if window != nil {
@@ -454,9 +449,6 @@ Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object)
 	}
 }
 
-// Camera input moves the camera without going through the property setters,
-// so the renderer's idle check cannot notice it on its own. Tell the 3D scene
-// it changed, otherwise the viewport keeps presenting the previous image.
 camera_mark_moved :: proc(camera: ^Camera, previous: datatypes.CFrame) {
 	if camera != nil && camera.CFrame != previous {
 		Render_3D_Mark_Dirty()
@@ -578,6 +570,9 @@ Camera_Namecall :: proc(
 	bool,
 ) {
 	switch method_name {
+	case "GetRenderCFrame":
+		datatypes.Push_CFrame(L, datatype_registry, (cast(^Camera)object).CFrame)
+		return 1, true
 	case "ScreenPointToRay", "ViewportPointToRay":
 		return Camera_Screen_Point_To_Ray(L, object, datatype_registry, method_name)
 	case "WorldToViewportPoint", "WorldToScreenPoint":
@@ -628,6 +623,15 @@ Register_Camera :: proc(registry: ^Registry) {
 			"Yaw",
 			"Sensitivity",
 			"InputEnabled",
+			"ViewportSize",
+			"DiagonalFieldOfView",
+		},
+		methods = []string {
+			"ScreenPointToRay",
+			"ViewportPointToRay",
+			"WorldToViewportPoint",
+			"WorldToScreenPoint",
+			"GetRenderCFrame",
 		},
 	)
 }
@@ -697,7 +701,8 @@ Camera_Get :: proc(
 		datatypes.Push_Vector2(L, types, datatypes.Vector2{width, height})
 		return true
 
-	case "ScreenPointToRay",
+	case "GetRenderCFrame",
+	     "ScreenPointToRay",
 	     "ViewportPointToRay",
 	     "WorldToViewportPoint",
 	     "WorldToScreenPoint",
@@ -729,6 +734,11 @@ Camera_Screen_Point_To_Ray :: proc(
 	camera := cast(^Camera)object
 	x := f32(vm.ArgNumber(L, 2))
 	y := f32(vm.ArgNumber(L, 3))
+	depth := f32(vm.ArgOptionalNumber(L, 4, 0))
+	if method_name == "ScreenPointToRay" {
+		x += sdl3.UI_Safe_Left / sdl3.UI_Scale
+		y += sdl3.UI_Safe_Top / sdl3.UI_Scale
+	}
 
 	frame := camera.CFrame
 	origin := datatypes.CFrame_Position(frame)
@@ -745,6 +755,7 @@ Camera_Screen_Point_To_Ray :: proc(
 
 	direction := datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(frame, view))
 
+	origin = datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, depth))
 	datatypes.Push_Ray(L, datatype_registry, datatypes.Ray{Origin = origin, Direction = direction})
 	return 1, true
 }
@@ -786,6 +797,10 @@ Camera_World_To_Viewport_Point :: proc(
 	x := (normalized_x + 1) * width * 0.5
 	y := (1 - normalized_y) * height * 0.5
 
+	if method_name == "WorldToScreenPoint" {
+		x -= sdl3.UI_Safe_Left / sdl3.UI_Scale
+		y -= sdl3.UI_Safe_Top / sdl3.UI_Scale
+	}
 	datatypes.Push_Vector3(L, datatypes.Vector3{x, y, forward})
 	vm.PushBoolean(L, on_screen)
 	return 2, true

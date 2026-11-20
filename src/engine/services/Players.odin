@@ -201,7 +201,7 @@ player_namecall :: proc(
 			return 1, true
 		}
 		point := datatypes.Arg_Vector3(L, 2)
-		delta := datatypes.Vector3{
+		delta := datatypes.Vector3 {
 			x = point.x - root.position.x,
 			y = point.y - root.position.y,
 			z = point.z - root.position.z,
@@ -325,7 +325,7 @@ players_get :: proc(
 		if service.player_removing ==
 		   nil {service.player_removing = signals.Create(service.signal_registry.signal_registry)}
 		signals.Push(L, service.player_removing)
-	case "GetPlayers", "GetPlayerByUserId":
+	case "GetPlayers", "GetPlayerByUserId", "GetPlayerFromCharacter":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -344,6 +344,23 @@ players_namecall :: proc(
 	bool,
 ) {
 	service := cast(^Players)object
+	if method == "GetPlayerFromCharacter" {
+		character := classes.Object_From_Argument(L, 2)
+		if character != nil {
+			for child in service.children {
+				if child == nil || child.destroyed || !classes.Is_A(child, "Player") {continue}
+				player := cast(^Player)child
+				if player.character != nil &&
+				   !player.character.destroyed &&
+				   &player.character.object == character {
+					classes.Push_Object(L, child)
+					return 1, true
+				}
+			}
+		}
+		vm.PushNil(L)
+		return 1, true
+	}
 	if method == "GetPlayerByUserId" {
 		id := vm.ArgNumber(L, 2)
 		player: ^Player
@@ -425,7 +442,24 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		get = player_get,
 		set = player_set,
 		namecall = player_namecall,
-		methods = []string{"LoadCharacter", "GetMouse", "Teleport", "ApplyImpulse"},
+		methods = []string {
+			"LoadCharacter",
+			"GetMouse",
+			"GetNetworkPing",
+			"DistanceFromCharacter",
+			"Teleport",
+			"ApplyImpulse",
+		},
+		events = []string{"CharacterAdded", "CharacterRemoving"},
+		properties = []string {
+			"UserId",
+			"DisplayName",
+			"Character",
+			"PlayerScripts",
+			"PlayerGui",
+			"WalkSpeed",
+			"JumpPower",
+		},
 	)
 	classes.Register_Class(
 		registry,
@@ -436,7 +470,7 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		get = players_get,
 		namecall = players_namecall,
 		events = []string{"PlayerAdded", "PlayerRemoving"},
-		methods = []string{"GetPlayers", "GetPlayerByUserId"},
+		methods = []string{"GetPlayers", "GetPlayerByUserId", "GetPlayerFromCharacter"},
 		properties = []string{"LocalPlayer"},
 	)
 }

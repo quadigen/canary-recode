@@ -66,6 +66,18 @@
 #include <backend/platforms/VulkanPlatform.h>
 
 #endif
+
+// Optional Linux OpenXR loader. No runtime or SDK is required for desktop builds.
+#if KINE_FILAMENT_USE_VULKAN && defined(__linux__) && !defined(__ANDROID__) && __has_include(<openxr/openxr.h>) && __has_include(<openxr/openxr_platform.h>)
+#define KINE_XR_COMPILED 1
+#define XR_USE_GRAPHICS_API_VULKAN
+#define XR_NO_PROTOTYPES
+#include <openxr/openxr.h>
+#include <openxr/openxr_platform.h>
+#include <dlfcn.h>
+#else
+#define KINE_XR_COMPILED 0
+#endif
 #include "kine_cloud_package.h"
 #include "kine_decal_package.h"
 #include "kine_gizmo_package.h"
@@ -124,6 +136,7 @@ struct VkQueue_T;
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -628,7 +641,10 @@ static void kine_viewport_destroy_shader_batches(KineFilamentContext *ctx, KineF
 static void kine_viewport_update_shader_uniforms(KineFilamentContext *ctx, KineFilamentShader *shader);
 static void kine_viewport_invalidate_batches(KineFilamentContext *ctx, const KineMesh *mesh, const KineTexHandle *texture);
 
+struct KineXR;
 struct KineFilamentContext {
+	KineXR *xr = nullptr;
+	bool xrAttempted = false;
 	std::vector<KineFilamentAnimator *> animationAnimators;
 	bool animationAutoStep = true;
 	KineAdvancedEffectState advancedEffects[7];
@@ -827,7 +843,7 @@ struct KineFilamentCompositorSwapChain : backend::Platform::SwapChain {};
 // Filament and Skia only keep GPU views of it. No pixel copies or new devices.
 struct KineViewportExternalImage : backend::Platform::ExternalImage {
     VkImage image = VK_NULL_HANDLE;
-    uint32_t size = 0;
+    uint32_t size = 0, width = 0, height = 0;
     ~KineViewportExternalImage() noexcept override = default;
 };
 
@@ -917,6 +933,80 @@ static bool kine_instance_extension_available(const char *name) {
 	return false;
 }
 
+#if KINE_XR_COMPILED
+// XR_KHR_vulkan_enable requires the runtime's Vulkan extensions to be
+// enabled at device creation, before a graphics-bound session can be made.
+static bool kine_xr_required_extensions(std::vector<std::string> &instanceNames,
+                                        std::vector<std::string> &deviceNames) {
+    const char *enable=std::getenv("KINE_VR");
+    if(!enable || std::strcmp(enable,"1")!=0)return false;
+    void *loader=dlopen("libopenxr_loader.so.1",RTLD_NOW|RTLD_LOCAL);
+    if(!loader)return false;
+    auto get=reinterpret_cast<PFN_xrGetInstanceProcAddr>(dlsym(loader,"xrGetInstanceProcAddr"));
+    XrInstance xr=XR_NULL_HANDLE;
+    PFN_xrDestroyInstance destroy=nullptr;
+    bool ready=false;
+    do {
+        if(!get)break;
+        PFN_xrVoidFunction fn=nullptr;
+        if(XR_FAILED(get(XR_NULL_HANDLE,"xrCreateInstance",&fn))||!fn)break;
+        auto create=reinterpret_cast<PFN_xrCreateInstance>(fn);
+        const char *ext=XR_KHR_VULKAN_ENABLE_EXTENSION_NAME;
+        XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
+        std::strcpy(info.applicationInfo.applicationName,"Kinemium");
+        std::strcpy(info.applicationInfo.engineName,"Kinemium");
+        info.applicationInfo.apiVersion=XR_MAKE_VERSION(1,0,0);
+        info.enabledExtensionCount=1;info.enabledExtensionNames=&ext;
+        if(XR_FAILED(create(&info,&xr)))break;
+        if(XR_FAILED(get(xr,"xrDestroyInstance",&fn))||!fn)break;
+        destroy=reinterpret_cast<PFN_xrDestroyInstance>(fn);
+        if(XR_FAILED(get(xr,"xrGetSystem",&fn))||!fn)break;
+        auto systemProc=reinterpret_cast<PFN_xrGetSystem>(fn);
+        XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};
+        systemInfo.formFactor=XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+        XrSystemId system=XR_NULL_SYSTEM_ID;
+        if(XR_FAILED(systemProc(xr,&systemInfo,&system)))break;
+        auto collect=[&](auto query,std::vector<std::string> &names){
+            uint32_t size=0;
+            if(XR_FAILED(query(xr,system,0,&size,nullptr)))return false;
+            if(!size)return true;
+            std::vector<char> buffer(size);
+            if(XR_FAILED(query(xr,system,size,&size,buffer.data())))return false;
+            const char *start=buffer.data();
+            while(*start){
+                while(*start==' ')++start;
+                const char *end=start;
+                while(*end && *end!=' ')++end;
+                if(end!=start)names.emplace_back(start,end);
+                start=end;
+            }
+            return true;
+        };
+        if(XR_FAILED(get(xr,"xrGetVulkanInstanceExtensionsKHR",&fn))||!fn)break;
+        if(!collect(reinterpret_cast<PFN_xrGetVulkanInstanceExtensionsKHR>(fn),instanceNames))break;
+        if(XR_FAILED(get(xr,"xrGetVulkanDeviceExtensionsKHR",&fn))||!fn)break;
+        if(!collect(reinterpret_cast<PFN_xrGetVulkanDeviceExtensionsKHR>(fn),deviceNames))break;
+        ready=true;
+    }while(false);
+    if(xr && destroy)destroy(xr);
+    dlclose(loader);
+    if(!ready)fprintf(stderr,"[KineXR] runtime/HMD unavailable during Vulkan initialization; using desktop mode\n");
+    return ready;
+}
+static bool kine_xr_append_extensions(std::vector<const char*> &enabled,const std::vector<std::string> &required,
+                                      const std::vector<VkExtensionProperties> &available){
+    for(const auto &name:required){
+        if(std::any_of(enabled.begin(),enabled.end(),[&](const char *s){return s && name==s;}))continue;
+        if(std::none_of(available.begin(),available.end(),[&](const VkExtensionProperties &e){return name==e.extensionName;})){
+            fprintf(stderr,"[KineXR] required Vulkan extension unavailable: %s\n",name.c_str());return false;
+        }
+    }
+    for(const auto &name:required)
+        if(std::none_of(enabled.begin(),enabled.end(),[&](const char *s){return s && name==s;}))enabled.push_back(name.c_str());
+    return true;
+}
+#endif
+
 class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlatformBase {
   public:
 	KineFilamentCompositorVulkanPlatform(void *sdlWindow, int width, int height)
@@ -942,7 +1032,8 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
         ExternalImageMetadata out{};
         out.filamentFormat = backend::TextureFormat::RGBA8;
         out.filamentUsage = backend::TextureUsage::COLOR_ATTACHMENT | backend::TextureUsage::SAMPLEABLE;
-        out.width = out.height = image->size; out.layers = 1;
+        out.width = image->width ? image->width : image->size;
+        out.height = image->height ? image->height : image->size; out.layers = 1;
         out.samples = VK_SAMPLE_COUNT_1_BIT; out.format = VK_FORMAT_R8G8B8A8_UNORM;
         out.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         return out;
@@ -957,6 +1048,11 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 	KineVulkanCompositor *compositor() const noexcept {
 		return mCompositor;
 	}
+
+#if KINE_XR_COMPILED
+	bool xrVulkanReady() const noexcept { return mXrVulkanReady; }
+	uint32_t xrVulkanApiVersion() const noexcept { return mXrVulkanApiVersion; }
+#endif
 
 	void setExtent(int width, int height) noexcept {
 		mWidth = width;
@@ -1239,6 +1335,21 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 			}
 		}
 
+#if KINE_XR_COMPILED
+        mXrVulkanApiVersion=createInfo.pApplicationInfo && createInfo.pApplicationInfo->apiVersion ? createInfo.pApplicationInfo->apiVersion : VK_API_VERSION_1_0;
+        mXrVulkanReady=kine_xr_required_extensions(mXrInstanceExtensions,mXrDeviceExtensions);
+        if(mXrVulkanReady){
+            uint32_t count=0;
+            auto get=reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+            auto enumerate=get?reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(get(nullptr,"vkEnumerateInstanceExtensionProperties")):nullptr;
+            if(!enumerate || enumerate(nullptr,&count,nullptr)!=VK_SUCCESS)mXrVulkanReady=false;
+            else{
+                std::vector<VkExtensionProperties> available(count);
+                mXrVulkanReady=enumerate(nullptr,&count,available.data())==VK_SUCCESS &&
+                    kine_xr_append_extensions(extensions,mXrInstanceExtensions,available);
+            }
+        }
+#endif
 		VkInstanceCreateInfo compositorCreateInfo = createInfo;
 		compositorCreateInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
 		compositorCreateInfo.ppEnabledExtensionNames = extensions.data();
@@ -1356,6 +1467,17 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 			}
 		}
 
+#if KINE_XR_COMPILED
+        if(mXrVulkanReady){
+            uint32_t count=0;auto physical=this->getPhysicalDevice();
+            if(!physical || vkEnumerateDeviceExtensionProperties(physical,nullptr,&count,nullptr)!=VK_SUCCESS)mXrVulkanReady=false;
+            else{
+                std::vector<VkExtensionProperties> available(count);
+                mXrVulkanReady=vkEnumerateDeviceExtensionProperties(physical,nullptr,&count,available.data())==VK_SUCCESS &&
+                    kine_xr_append_extensions(extensions,mXrDeviceExtensions,available);
+            }
+        }
+#endif
 		VkDeviceCreateInfo compositorCreateInfo = createInfo;
 		compositorCreateInfo.enabledExtensionCount =
 			static_cast<uint32_t>(extensions.size());
@@ -1398,6 +1520,11 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 	}
 
   private:
+#if KINE_XR_COMPILED
+    bool mXrVulkanReady=false;
+    uint32_t mXrVulkanApiVersion=VK_API_VERSION_1_0;
+    std::vector<std::string> mXrInstanceExtensions,mXrDeviceExtensions;
+#endif
 	KineVulkanCompositor *mCompositor = nullptr;
 	void *mSdlWindow = nullptr;
 	int mWidth = 0;
@@ -4629,8 +4756,6 @@ static bool kine_ensure_cloud_layer(KineFilamentContext *ctx) {
 		.material(0, ctx->cloudMI)
 		.geometry(0, RenderableManager::PrimitiveType::TRIANGLES, ctx->cloudMesh->vb,
 				  ctx->cloudMesh->ib)
-		// The camera lives inside the box, so frustum culling is decided by
-		// the transform instead of a sky-sized bounding sphere.
 		.culling(false)
 		.castShadows(false)
 		.receiveShadows(false)
@@ -4638,22 +4763,15 @@ static bool kine_ensure_cloud_layer(KineFilamentContext *ctx) {
 	return true;
 }
 
-static void kine_update_cloud_layer(KineFilamentContext *ctx) {
-	if (!ctx || !ctx->cloudEnabled || !ctx->camera)
-		return;
-	if (!kine_ensure_cloud_layer(ctx))
-		return;
-
-	if (!ctx->cloudInScene) {
-		ctx->scene->addEntity(ctx->cloudEntity);
-		ctx->cloudInScene = true;
-	}
-
+static void kine_update_cloud_for_camera(KineFilamentContext *ctx, Camera *camera,
+		Entity entity, MaterialInstance *mi) {
+	if (!ctx || !camera || !mi || entity.isNull()) return;
 	const float thickness = std::max(ctx->cloudThickness, 1.0f);
 
-	// Use the camera's real pose and projection, not cached copies.
-	const math::mat4 modelD = ctx->camera->getModelMatrix();
-	const math::mat4 projD = ctx->camera->getProjectionMatrix();
+	// Independent eye projections are asymmetric. Fit the cloud proxy to
+	// each actual frustum, including the offset of its optical centre.
+	const math::mat4 modelD = camera->getModelMatrix();
+	const math::mat4 projD = camera->getProjectionMatrix();
 
 	const math::float3 eye{(float)modelD[3].x, (float)modelD[3].y, (float)modelD[3].z};
 	const math::float3 right{(float)modelD[0].x, (float)modelD[0].y, (float)modelD[0].z};
@@ -4665,11 +4783,14 @@ static void kine_update_cloud_layer(KineFilamentContext *ctx) {
 	if (!(focalX > 1e-6) || !(focalY > 1e-6))
 		return;
 
-	const float distance = (float)ctx->camera->getCullingFar() * 0.98f;
-	// Slight overscan so edges and TAA jitter never reveal the border.
-	const float halfWidth = (float)(distance / focalX) * 1.05f;
-	const float halfHeight = (float)(distance / focalY) * 1.05f;
-	const math::float3 centre = eye + forward * distance;
+	const float distance = (float)camera->getCullingFar() * 0.98f;
+	// In a perspective matrix, clip.w = -view.z. The centre of NDC is
+	// therefore at x = distance * P[2][0] / P[0][0] (likewise for y).
+	const float halfWidth = (float)(distance / focalX) * 1.08f;
+	const float halfHeight = (float)(distance / focalY) * 1.08f;
+	const float shiftX = (float)(distance * projD[2].x / focalX);
+	const float shiftY = (float)(distance * projD[2].y / focalY);
+	const math::float3 centre = eye + forward * distance + right * shiftX + up * shiftY;
 
 	const math::mat4f transform{
 		math::float4{right.x * halfWidth, right.y * halfWidth, right.z * halfWidth, 0.0f},
@@ -4678,15 +4799,14 @@ static void kine_update_cloud_layer(KineFilamentContext *ctx) {
 		math::float4{centre.x, centre.y, centre.z, 1.0f}};
 
 	TransformManager &tm = ctx->engine->getTransformManager();
-	auto instance = tm.getInstance(ctx->cloudEntity);
+	auto instance = tm.getInstance(entity);
 	if (!instance.isValid()) {
-		tm.create(ctx->cloudEntity);
-		instance = tm.getInstance(ctx->cloudEntity);
+		tm.create(entity);
+		instance = tm.getInstance(entity);
 	}
 	if (instance.isValid())
 		tm.setTransform(instance, transform);
 
-	MaterialInstance *mi = ctx->cloudMI;
 	mi->setParameter("time", ctx->time);
 	mi->setParameter("cover", ctx->cloudCover);
 	mi->setParameter("density", ctx->cloudDensity);
@@ -4701,6 +4821,15 @@ static void kine_update_cloud_layer(KineFilamentContext *ctx) {
 	mi->setParameter("sunDirection", ctx->sunDirection);
 	mi->setParameter("sunColor", math::float3{1.0f, 0.97f, 0.92f});
 	mi->setParameter("cloudColor", ctx->cloudColor);
+}
+
+static void kine_update_cloud_layer(KineFilamentContext *ctx) {
+	if (!ctx || !ctx->cloudEnabled || !ctx->camera || !kine_ensure_cloud_layer(ctx)) return;
+	if (!ctx->cloudInScene) {
+		ctx->scene->addEntity(ctx->cloudEntity);
+		ctx->cloudInScene = true;
+	}
+	kine_update_cloud_for_camera(ctx, ctx->camera, ctx->cloudEntity, ctx->cloudMI);
 }
 
 KINE_API void Kine_Filament_SetClouds(
@@ -6083,10 +6212,12 @@ KINE_API void Kine_Filament_SetSun(
 }
 
 #include "kine_advanced_lighting.inc"
+#include "kine_openxr.inc"
 
 KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 	if (!ctx)
 		return;
+	kine_xr_destroy(ctx);
 	/* Destroy track handles before meshes or engine resources. */
 	while (!ctx->animationAnimators.empty())
 		Kine_Filament_AnimatorDestroy(ctx->animationAnimators.back());
@@ -6783,6 +6914,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 		kine_prepare_ssgi(ctx);
 	}
 
+	kine_xr_begin(ctx);
 	bool beganFrame;
 	{
 		KineFrameProfileScope profile(ctx, "Filament Begin Frame");
@@ -6896,6 +7028,7 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 									  (uint32_t)ctx->width, (uint32_t)ctx->height, std::move(pb));
 		}
 #endif
+		kine_xr_render(ctx);
 		ctx->renderer->endFrame();
 #if KINE_FILAMENT_USE_VULKAN
 		if (ctx->useFilamentOwnedCompositor) {
@@ -6912,6 +7045,8 @@ KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTim
 	} else {
 		fprintf(stderr, "[Kine] beginFrame FAILED this frame\n");
 	}
+	// With the optional XR desktop panel, finish after Skia draws its overlay.
+	if (!kine_xr_defer_end(ctx)) kine_xr_end(ctx);
 
 	kine_finish_batch_frame(ctx);
 
@@ -8702,7 +8837,7 @@ static void kine_queue_mesh(
 		queued.materialKind = materialKind;
 		// Same factor Filament feeds to instanceUvScale (see kine_default.mat):
 		// only the default material retiles, by its stud-scale parameter.
-		queued.uvScale = perInstanceUv ? (param3 > 0.0f ? param3 : 1.0f) : 1.0f;
+		queued.uvScale = perInstanceUv ? (param3 != 0.0f ? param3 : 1.0f) : 1.0f;
 		queued.param1 = param1;
 		queued.param2 = param2;
 		queued.param3 = param3;
@@ -8779,7 +8914,7 @@ static void kine_queue_mesh(
 	pending.colors.emplace_back(color);
 
 	const float uvScale = perInstanceUv
-							  ? (param3 > 0.0f ? param3 : 1.0f)
+							  ? (param3 != 0.0f ? param3 : 1.0f)
 							  : 1.0f;
 	{
 		uint32_t bits = 0;

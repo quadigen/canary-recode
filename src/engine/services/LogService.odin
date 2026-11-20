@@ -21,14 +21,14 @@ LogService_Class := classes.Class_Info {
 }
 
 LogService :: struct {
-	using service: Service,
-	message_count: i64,
+	using service:      Service,
+	message_count:      i64,
 	history_generation: i64,
-	info_count:    i64,
-	warning_count: i64,
-	error_count:   i64,
-	history:       [dynamic]LogEntry,
-	message_out:   ^signals.Signal,
+	info_count:         i64,
+	warning_count:      i64,
+	error_count:        i64,
+	history:            [dynamic]LogEntry,
+	message_out:        ^signals.Signal,
 }
 
 LOG_HISTORY_LIMIT :: 1000
@@ -87,7 +87,9 @@ log_service_fire_message_out :: proc(service: ^LogService, message: string) {
 log_service_emit_tagged :: proc(tag, message: string) {
 	if tag == "ERROR" && playtest_pause_on_error && !playtest_paused {
 		playtest_paused = true
-		fmt.eprintln("[WARN] Paused on error. Press F6 in the playtest window to resume, or stop the playtest.")
+		fmt.eprintln(
+			"[WARN] Paused on error. Press F6 in the playtest window to resume, or stop the playtest.",
+		)
 	}
 	line_start := 0
 	for index in 0 ..= len(message) {
@@ -263,7 +265,7 @@ log_service_get :: proc(
 	case "MessageOut":
 		signals.Push(L, service.message_out)
 
-	case "Log", "Info", "Warn", "Error", "Clear", "GetLogHistory":
+	case "Log", "Info", "Warn", "Error", "Clear", "ClearOutput", "GetLogHistory":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -309,7 +311,7 @@ log_service_namecall :: proc(
 		log_service_write(service, message, "Error")
 		return 0, true
 
-	case "Clear":
+	case "Clear", "ClearOutput":
 		service.history_generation += 1
 		service.message_count = 0
 		service.info_count = 0
@@ -329,6 +331,19 @@ log_service_namecall :: proc(
 
 			vm.PushString(L, entry.log_type)
 			vm.SetField(L, -2, "type")
+
+			message_type := enums.MessageType.MessageOutput
+			switch entry.log_type {
+			case "Info":
+				message_type = .MessageInfo
+			case "Warn":
+				message_type = .MessageWarning
+			case "Error":
+				message_type = .MessageError
+			}
+			if enums.Push_Item_By_Value(L, enum_registry, "MessageType", i64(message_type)) {
+				vm.SetField(L, -2, "messageType")
+			}
 
 			vm.PushNumber(L, f64(entry.timestamp))
 			vm.SetField(L, -2, "timestamp")
@@ -357,5 +372,15 @@ Register_LogService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = log_service_get,
 		namecall = log_service_namecall,
+		methods = []string {
+			"Log",
+			"Info",
+			"Warn",
+			"Error",
+			"Clear",
+			"ClearOutput",
+			"GetLogHistory",
+		},
+		events = []string{"MessageOut"},
 	)
 }

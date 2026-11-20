@@ -1274,6 +1274,20 @@ KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface *surface) {
 	/* Raster surfaces are synchronous. */
 }
 
+KINE_SKIA_API int Kine_Skia_Surface_GetVulkanLayout(KineSkiaSurface *surface, uint32_t *layout) {
+#if KINE_SKIA_BUILD_VULKAN
+    if (!surface || !surface->vulkanContext || !layout) return 0;
+    Kine_Skia_Surface_Flush(surface);
+    GrVkImageInfo info{};
+    if (!GrBackendRenderTargets::GetVkImageInfo(surface->vulkanRenderTarget, &info)) return 0;
+    *layout = static_cast<uint32_t>(info.fImageLayout);
+    return 1;
+#else
+    (void)surface; (void)layout;
+    return 0;
+#endif
+}
+
 KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
 	KineSkiaSurface *surface,
 	KineSkiaSurface *backdrop) {

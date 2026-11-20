@@ -61,7 +61,7 @@ data_model_get :: proc(
 		}
 	}
 	switch key {
-	case "GetService", "FindService":
+	case "GetService", "FindService", "BindToClose":
 		vm.PushUserdataMethod(L, key)
 	case "PlaceId":
 		vm.PushNumber(L, 0)
@@ -176,5 +176,14 @@ Register_DataModel_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = data_model_get,
 		namecall = data_model_namecall,
+		methods = []string{"GetService", "FindService", "BindToClose"},
+		properties = []string {
+			"PlaceId",
+			"PlaceVersion",
+			"GameId",
+			"JobId",
+			"PrivateServerId",
+			"PrivateServerOwnerId",
+		},
 	)
 }

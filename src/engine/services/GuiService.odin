@@ -34,12 +34,49 @@ gui_service_get :: proc(
 	en: ^enums.Registry,
 	key: string,
 ) -> bool {
+	service := cast(^Service)object
+	registry: ^classes.Registry
+	if service.data_model != nil &&
+	   service.data_model.registry != nil {registry = service.data_model.registry.classes}
 	switch key {
+	case "SelectedObject":
+		if selected := classes.Gui_Get_Selected(registry);
+		   selected != nil {classes.Push_Object(L, &selected.object)} else {vm.PushNil(L)}
+		return true
+	case "GuiNavigationEnabled":
+		vm.PushBoolean(L, registry != nil && !registry.gui_navigation_disabled)
+		return true
 	case "IsWindows":
 		vm.PushBoolean(L, ODIN_OS == .Windows)
 		return true
 	case "GetGuiInset", "IsTenFootInterface":
 		vm.PushUserdataMethod(L, key)
+		return true
+	}
+	return false
+}
+
+gui_service_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	dt: ^datatypes.Registry,
+	en: ^enums.Registry,
+	key: string,
+	index: int,
+) -> bool {
+	service := cast(^Service)object
+	if service.data_model == nil || service.data_model.registry == nil {return false}
+	registry := service.data_model.registry.classes
+	if registry == nil {return false}
+	switch key {
+	case "SelectedObject":
+		if vm.IsNoneOrNil(L, index) {return classes.Gui_Set_Selected(registry, nil)}
+		selected := classes.Object_From_Argument(L, index)
+		if selected == nil || !classes.Is_A(selected, "GuiObject") {return false}
+		return classes.Gui_Set_Selected(registry, cast(^classes.GuiObject)selected)
+	case "GuiNavigationEnabled":
+		registry.gui_navigation_disabled = !vm.ArgBoolean(L, index)
+		if registry.gui_navigation_disabled {_ = classes.Gui_Set_Selected(registry, nil)}
 		return true
 	}
 	return false
@@ -84,8 +121,9 @@ Register_GuiService_Class :: proc(registry: ^classes.Registry) {
 		gui_service_destroy,
 		creatable = false,
 		get = gui_service_get,
+		set = gui_service_set,
 		namecall = gui_service_namecall,
 		methods = []string{"GetGuiInset", "IsTenFootInterface"},
-		properties = []string{"IsWindows"},
+		properties = []string{"IsWindows", "SelectedObject", "GuiNavigationEnabled"},
 	)
 }

@@ -7,6 +7,7 @@ import vm "../vm"
 import "core:fmt"
 
 REMOTE_FUNCTION_TIMEOUT_MS :: 10_000
+UNRELIABLE_REMOTE_MAX_PAYLOAD :: 1000
 
 Remote_Invoke_Pending :: struct {
 	entity_id:  u32,
@@ -36,13 +37,18 @@ remote_find_player_peer :: proc(
 	return nil, nil
 }
 
-remote_common_capabilities :: proc(service: ^ReplicatorService, peer: ^Replication_Transport_Peer) -> u32 {
+remote_common_capabilities :: proc(
+	service: ^ReplicatorService,
+	peer: ^Replication_Transport_Peer,
+) -> u32 {
 	if service.mode == .Client {
 		return service.client_capabilities & service.server_capabilities
 	}
 	if peer != nil {
 		connection := replication_peer_of(service, peer)
-		return service.server_capabilities & connection.client_capabilities if connection != nil else 0
+		return(
+			service.server_capabilities & connection.client_capabilities if connection != nil else 0 \
+		)
 	}
 	capabilities := service.server_capabilities
 	for connection in service.peers {
@@ -52,7 +58,10 @@ remote_common_capabilities :: proc(service: ^ReplicatorService, peer: ^Replicati
 }
 
 remote_encode_args :: proc(
-	L: ^vm.State, first, last: int, bytes: ^[dynamic]u8, capabilities: u32,
+	L: ^vm.State,
+	first, last: int,
+	bytes: ^[dynamic]u8,
+	capabilities: u32,
 ) -> bool {
 	for index := first; index <= last; index += 1 {
 		if !replication_encode_value(L, index, bytes, 0, remote_capabilities = capabilities) {
@@ -67,12 +76,33 @@ remote_send_fire :: proc(
 	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	args: []u8,
+	unreliable: bool = false,
 ) -> bool {
+	if unreliable {
+		if peer == nil ||
+		   entity_id == 0 ||
+		   len(args) > UNRELIABLE_REMOTE_MAX_PAYLOAD {return false}
+		if (remote_common_capabilities(service, peer) &
+			   Replication_Capability_Unreliable_Remote) ==
+		   0 {return false}
+		if service.mode == .Client {
+			if !service.handshake_complete {return false}
+		} else {
+			connection := replication_peer_of(service, peer)
+			entity := replication_entity_by_id(service, entity_id)
+			if connection == nil ||
+			   !connection.handshake_complete ||
+			   connection.known[entity_id] == 0 ||
+			   entity == nil ||
+			   !replication_visible(service, connection, entity.object) {return false}
+		}
+	}
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
 	append(&bytes, ..args)
-	return replication_send(service, peer, 16, bytes[:])
+	kind := Replication_Kind_Unreliable_Remote if unreliable else u8(16)
+	return replication_send(service, peer, kind, bytes[:], !unreliable)
 }
 
 remote_send_invoke_request :: proc(
@@ -167,14 +197,21 @@ remote_call_dispatch :: proc(
 
 	top := vm.StackTop(L)
 
-	if classes.Is_A(instance, "RemoteEvent") {
+	unreliable := instance.class == &classes.UnreliableRemoteEvent_Class
+	if classes.Is_A(instance, "RemoteEvent") || unreliable {
 		switch method {
 		case "FireServer":
 			switch replicator.mode {
 			case .Client:
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, 2, top, &bytes, remote_common_capabilities(replicator, replicator.remote)) {
+				if !remote_encode_args(
+					L,
+					2,
+					top,
+					&bytes,
+					remote_common_capabilities(replicator, replicator.remote),
+				) {
 					return 0, true
 				}
 				_ = remote_send_fire(
@@ -182,6 +219,7 @@ remote_call_dispatch :: proc(
 					replicator.remote,
 					replication_entity_id(replicator, instance),
 					bytes[:],
+					unreliable,
 				)
 			case .Server:
 
@@ -199,7 +237,7 @@ remote_call_dispatch :: proc(
 			first_arg := 2
 			if method == "FireClient" {
 				if !vm.IsNoneOrNil(L, 2) {
-					target = cast(^classes.Object)vm.UserdataValue(L, 2)
+					target = classes.Object_From_Argument(L, 2)
 				}
 				if target == nil || !classes.Is_A(target, "Player") {
 					return vm.RaiseError(L, "FireClient expects a Player as the first argument"),
@@ -212,18 +250,30 @@ remote_call_dispatch :: proc(
 				peer, _ := remote_find_player_peer(replicator, target)
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, first_arg, top, &bytes, remote_common_capabilities(replicator, peer)) {
+				if !remote_encode_args(
+					L,
+					first_arg,
+					top,
+					&bytes,
+					remote_common_capabilities(replicator, peer),
+				) {
 					return 0, true
 				}
 				entity_id := replication_entity_id(replicator, instance)
 				if method == "FireClient" {
 					if peer != nil {
-						_ = remote_send_fire(replicator, peer, entity_id, bytes[:])
+						_ = remote_send_fire(replicator, peer, entity_id, bytes[:], unreliable)
 					}
 				} else {
 					for &connection in replicator.peers {
 						if connection.peer != nil {
-							_ = remote_send_fire(replicator, connection.peer, entity_id, bytes[:])
+							_ = remote_send_fire(
+								replicator,
+								connection.peer,
+								entity_id,
+								bytes[:],
+								unreliable,
+							)
 						}
 					}
 				}
@@ -242,7 +292,13 @@ remote_call_dispatch :: proc(
 			case .Client:
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, 2, top, &bytes, remote_common_capabilities(replicator, replicator.remote)) {
+				if !remote_encode_args(
+					L,
+					2,
+					top,
+					&bytes,
+					remote_common_capabilities(replicator, replicator.remote),
+				) {
 					return 0, true
 				}
 				invoke_id := replicator.next_invoke_id
@@ -281,7 +337,13 @@ remote_call_dispatch :: proc(
 				peer, _ := remote_find_player_peer(replicator, target)
 				bytes: [dynamic]u8
 				defer delete(bytes)
-				if !remote_encode_args(L, first_arg, top, &bytes, remote_common_capabilities(replicator, peer)) {
+				if !remote_encode_args(
+					L,
+					first_arg,
+					top,
+					&bytes,
+					remote_common_capabilities(replicator, peer),
+				) {
 					return 0, true
 				}
 				invoke_id := replicator.next_invoke_id
@@ -387,15 +449,28 @@ remote_receive_fire :: proc(
 	peer: ^Replication_Transport_Peer,
 	entity_id: u32,
 	reader: ^Replication_Reader,
+	unreliable: bool = false,
 ) {
 	entity := replication_entity_by_id(service, entity_id)
 	if entity == nil || entity.object == nil || entity.object.destroyed {
 		reader.offset = len(reader.data)
 		return
 	}
-	if !classes.Is_A(entity.object, "RemoteEvent") {
+	expected_class :=
+		&classes.UnreliableRemoteEvent_Class if unreliable else &classes.RemoteEvent_Class
+	if !classes.Is_A_Class(entity.object, expected_class) {
 		reader.valid = false
 		return
+	}
+	if unreliable && service.mode == .Server {
+		connection := replication_peer_of(service, peer)
+		if connection == nil ||
+		   !connection.handshake_complete ||
+		   connection.known[entity_id] == 0 ||
+		   !replication_visible(service, connection, entity.object) {
+			reader.offset = len(reader.data)
+			return
+		}
 	}
 	top := vm.StackTop(L)
 	defer vm.SetStackTop(L, top)
@@ -418,6 +493,7 @@ remote_receive_fire :: proc(
 
 	arg_count := offset_before
 	for reader.valid && reader.offset < len(reader.data) {
+		if !vm.CheckStack(L, 16) {reader.valid = false; return}
 		replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 		if !reader.valid {
 			return
@@ -513,7 +589,13 @@ remote_run_invoke :: proc(
 	}
 	results: [dynamic]u8
 	defer delete(results)
-	if !remote_encode_args(L, base + 1, vm.StackTop(L), &results, remote_common_capabilities(service, request_peer)) {
+	if !remote_encode_args(
+		L,
+		base + 1,
+		vm.StackTop(L),
+		&results,
+		remote_common_capabilities(service, request_peer),
+	) {
 		_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, nil)
 		return
 	}

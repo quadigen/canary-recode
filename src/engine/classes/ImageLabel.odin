@@ -32,6 +32,8 @@ ImageLabel :: struct {
 	image:              string,
 	owned_image:        string,
 	stored_image:       ^kineffi.KineSkiaImage,
+	aseprite_playback:  ^Aseprite_Image_Playback,
+	animated_source:    bool,
 	editable_image:     ^EditableImage,
 	image_transparency: f32,
 	image_color3:       datatypes.Color3,
@@ -93,6 +95,12 @@ ImageLabel_Destroy_Stored_Image :: proc(image_label: ^ImageLabel) {
 	if image_label == nil {
 		return
 	}
+	if image_label.aseprite_playback != nil {
+		aseprite_image_destroy(image_label.aseprite_playback)
+		image_label.aseprite_playback = nil
+		image_label.stored_image = nil
+	}
+	image_label.animated_source = false
 	if image_label.stored_image != nil {
 		kineffi.Kine_Skia_Image_Destroy(image_label.stored_image)
 		image_label.stored_image = nil
@@ -111,6 +119,7 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 		if !found || len(data) == 0 {
 			return
 		}
+		if ImageLabel_Load_Animated_Bytes(image_label, transmute([]u8)data) {return}
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			&data[0],
 			uintptr(len(data)),
@@ -122,6 +131,7 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 		if !found || len(data) == 0 {
 			return
 		}
+		if ImageLabel_Load_Animated_Bytes(image_label, transmute([]u8)data) {return}
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
@@ -132,6 +142,7 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 	if strings.has_prefix(path, DATA_SVG_PREFIX) {
 		data := path[len(DATA_SVG_PREFIX):]
 		if len(data) == 0 {return}
+		if ImageLabel_Load_Animated_Bytes(image_label, transmute([]u8)data) {return}
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
@@ -142,6 +153,7 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 		if len(data) == 0 {
 			return
 		}
+		if ImageLabel_Load_Animated_Bytes(image_label, transmute([]u8)data) {return}
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			raw_data(data),
 			uintptr(len(data)),
@@ -150,6 +162,18 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 	}
 	if assetstore.Is_Uri(path) {
 		assetstore.Report_Missing_Asset(path, "ImageLabel image")
+	}
+	format := animated_path_format(path)
+	if format != "" {
+		image_label.animated_source = true
+		if format == "aseprite" {
+			resolved := assetstore.Resolve_Path(path)
+			defer delete(resolved)
+			data, found := assetstore.Read_Asset_File(resolved)
+			defer delete(data)
+			if found {ImageLabel_Load_Animated_Bytes(image_label, data)}
+			return
+		}
 	}
 	cpath := assetstore.Resolve_C_Path(path)
 	if cpath == nil {return}
@@ -187,8 +211,9 @@ ImageLabel_Set_Image :: proc(image_label: ^ImageLabel, path: string) {
 	if image_label == nil {
 		return
 	}
+	had_editable := image_label.editable_image != nil
 	ImageLabel_Unbind_Editable(image_label)
-	if image_label.image == path {
+	if image_label.image == path && !had_editable {
 		return
 	}
 	copy := assetstore.Resolve_Ugc_Asset(path, .Texture)
@@ -261,6 +286,9 @@ ImageLabel_get :: proc(
 		} else {
 			Push_Object(L, &image_label.editable_image.object)
 		}
+	case "AnimatedContent":
+		if datatype_registry == nil {return false}
+		if image_label.animated_source {datatypes.Push_Animated(L, datatype_registry, datatypes.Animated{uri = image_label.image})} else {vm.PushNil(L)}
 	case "ImageContent":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Content(L, datatype_registry, datatypes.Content_From_URI(image_label.image))
@@ -317,18 +345,31 @@ ImageLabel_set :: proc(
 			}
 			ImageLabel_Set_Editable(image_label, cast(^EditableImage)source)
 		}
-	case "Image":
+	case "Image", "ImageContent", "AnimatedContent":
+		if key == "AnimatedContent" && vm.IsNoneOrNil(L, value_index) {
+			ImageLabel_Set_Image(image_label, "")
+			return true
+		}
+		if datatype_registry != nil &&
+		   vm.IsUserdataType(L, value_index, &datatype_registry.animated) {
+			animated := datatypes.Arg_Animated(L, value_index, datatype_registry)
+			ImageLabel_Set_Image(image_label, animated.uri)
+			image_label.animated_source = animated.uri != ""
+			return true
+		}
+		if key == "AnimatedContent" {
+			_ = vm.RaiseError(L, "expected Animated or nil")
+			return true
+		}
 		if datatype_registry != nil &&
 		   vm.IsUserdataType(L, value_index, &datatype_registry.content) {
 			content := datatypes.Arg_Content(L, value_index, datatype_registry)
 			ImageLabel_Set_Image(image_label, content.uri)
-		} else {
+		} else if key == "Image" {
 			ImageLabel_Set_Image(image_label, vm.ArgString(L, value_index))
+		} else {
+			_ = vm.RaiseError(L, "expected Content or Animated")
 		}
-	case "ImageContent":
-		if datatype_registry == nil {return false}
-		content := datatypes.Arg_Content(L, value_index, datatype_registry)
-		ImageLabel_Set_Image(image_label, content.uri)
 	case "IsLoaded":
 		_ = vm.RaiseError(L, "IsLoaded is read-only")
 	case "ImageTransparency":
@@ -481,6 +522,10 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 	image_label := cast(^ImageLabel)object
+	if image_label.aseprite_playback != nil {
+		ImageLabel_Tick_Aseprite(image_label)
+		if len(image_label.aseprite_playback.images) > 1 {ctx.gui_dynamic = true}
+	}
 	if image_label.editable_image != nil {
 		ctx.gui_dynamic = true
 	}
@@ -661,6 +706,7 @@ Register_ImageLabel :: proc(registry: ^Registry) {
 			"Image",
 			"EditableImage",
 			"ImageContent",
+			"AnimatedContent",
 			"IsLoaded",
 			"ImageTransparency",
 			"ImageColor3",

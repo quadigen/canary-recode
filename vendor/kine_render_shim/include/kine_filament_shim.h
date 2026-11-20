@@ -224,10 +224,27 @@ KINE_API bool Kine_Ray_GetProperties(KineFilamentContext *ctx, KineRayProperties
 
 // deltaTime (seconds) drives ctx->time, used to animate the water material.
 KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTime);
+/* Optional OpenXR support. Pose output is position followed by row-major 3x3 rotation. */
+KINE_API void Kine_Filament_XR_Poll(KineFilamentContext *ctx);
+KINE_API void Kine_Filament_XR_IdleFrame(KineFilamentContext *ctx);
+KINE_API void Kine_Filament_XR_FinishFrame(KineFilamentContext *ctx);
+KINE_API bool Kine_Filament_XR_GetUIPointer(KineFilamentContext *ctx, int hand, float *u, float *v, float *trigger);
+typedef struct KineSkiaSurface KineSkiaSurface;
+/* Borrowed Skia surface; valid only until XR_FinishFrame. */
+KINE_API KineSkiaSurface *Kine_Filament_XR_BeginUI(KineFilamentContext *ctx, int width, int height, int *outWidth, int *outHeight);
+KINE_API bool Kine_Filament_XR_Active(KineFilamentContext *ctx);
+KINE_API bool Kine_Filament_XR_Available(KineFilamentContext *ctx);
+KINE_API bool Kine_Filament_XR_GetPose(KineFilamentContext *ctx, int index, float *out);
+/* hand: 0 left, 1 right. active_mask: trigger=1, grip=2, stick=4. */
+typedef struct KineXRControllerState {
+    float trigger, grip, stick_x, stick_y;
+    uint32_t active_mask;
+} KineXRControllerState;
+KINE_API bool Kine_Filament_XR_GetControllerState(KineFilamentContext *ctx, int hand, KineXRControllerState *out);
+KINE_API bool Kine_Filament_XR_SetHaptic(KineFilamentContext *ctx, int hand, float amplitude, float seconds, float frequency);
 
 // Lightweight isolated previews. All handles share ctx's Engine and atlas pool.
 typedef struct KineFilamentViewport KineFilamentViewport;
-typedef struct KineSkiaSurface KineSkiaSurface;
 typedef struct KineViewportSettings {
     float camera[16];
     float ambient[3], lightColor[3], lightDirection[3];

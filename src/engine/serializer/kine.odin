@@ -134,6 +134,7 @@ READ_ONLY_PROPERTIES := [?]string {
 	"AbsoluteCellSize",
 	"PositionCallback",
 	"IsLoaded",
+	"AnimatedContent", // Alias of Image; the URI is serialized by Image.
 }
 
 Value_Tag :: enum u8 {
@@ -149,8 +150,6 @@ Value_Tag :: enum u8 {
 	InstanceReference = 19,
 }
 
-// Stable ids for every serializable userdata datatype. New types are appended
-// at the end so old files keep decoding.
 Datatype_Id :: enum u16 {
 	Axes,
 	BrickColor,
@@ -178,6 +177,7 @@ Datatype_Id :: enum u16 {
 	Vector3,
 	Vector3int16,
 	Rect,
+	Animated,
 }
 
 // Datatype_Id_Name is the label used in error messages, so a bad record names
@@ -194,6 +194,8 @@ Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 		return "Color3"
 	case .ColorSequence:
 		return "ColorSequence"
+	case .Animated:
+		return "Animated"
 	case .Content:
 		return "Content"
 	case .DateTime:
@@ -241,38 +243,38 @@ Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 }
 
 Writer :: struct {
-	data:             [dynamic]u8,
+	data:               [dynamic]u8,
 	// Excludes a child during serialization. Called with the child and its
 	// immediate parent for every child that would otherwise be written; returning
 	// true skips that child and its subtree. The exporter uses it to strip
 	// editor-only services (CoreGui, EditorService, ...) from the DataModel root
 	// before writing a map file.
-	exclude_child:    proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
+	exclude_child:      proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
 	// Ids this stream actually referenced, in first-use order. Only these are
 	// written to the asset table, so assets left in the store by an
 	// already-loaded map do not leak into the file being written.
-	used_ids:         [dynamic]string,
-	used_seen:        map[string]bool,
-	class_properties: map[^classes.Class_Info][dynamic]string,
+	used_ids:           [dynamic]string,
+	used_seen:          map[string]bool,
+	class_properties:   map[^classes.Class_Info][dynamic]string,
 	// embed_assets is false for a version 2 stream, where asset properties keep
 	// the author's bare paths and no table is written.
-	embed_assets:     bool,
-	script_asset_root: string,
-	project_files:     map[string]bool,
+	embed_assets:       bool,
+	script_asset_root:  string,
+	project_files:      map[string]bool,
 	path_assets:        map[string]assetstore.Asset,
 	script_assets_seen: map[string]bool,
 	// version is the layout being written. A few value records changed shape
 	// between versions, so a record can consult it rather than guessing.
-	version:          u8,
-	replicated_value: bool,
+	version:            u8,
+	replicated_value:   bool,
 	// warn carries the reason a record was left out of the stream, owned by the
 	// Writer. Writing never fails the whole file over one bad record: the call
 	// site that skipped the record takes this detail and logs it instead, which
 	// is what makes an incomplete map report itself rather than load as a
 	// mysteriously missing property.
-	warn:             string,
-	instance_indices: map[^classes.Object]u32,
-	instance_patches: [dynamic]Instance_Reference_Patch,
+	warn:               string,
+	instance_indices:   map[^classes.Object]u32,
+	instance_patches:   [dynamic]Instance_Reference_Patch,
 }
 
 Instance_Reference_Patch :: struct {
@@ -642,7 +644,8 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 	}
 
 	if strings.has_prefix(authored, assetstore.PROJECT_ASSET_SCHEME) {
-		if file, found := assetstore.Find_Path_File(authored); found && authored not_in w.project_files {
+		if file, found := assetstore.Find_Path_File(authored);
+		   found && authored not_in w.project_files {
 			note_asset(w, file.id)
 		}
 		return strings.clone(authored)
@@ -658,7 +661,7 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 	} else if !strings.contains(authored, "://") || strings.has_prefix(authored, "file://") {
 		data, _ = assetstore.Read_Asset_File(authored)
 	}
-		if data == nil {
+	if data == nil {
 		if file, found := assetstore.Find_Path_File(authored); found {
 			note_asset(w, file.id)
 			return assetstore.Make_Uri(file.id)
@@ -678,8 +681,11 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 
 note_path_asset :: proc(w: ^Writer, path: string, data: []u8) -> bool {
 	id := assetstore.Content_Id(data, path)
-	if existing, found := assetstore.Find(id); found &&
-	   (existing.kind != .Path_File || existing.path != path || !bytes.equal(existing.bytes, data)) {
+	if existing, found := assetstore.Find(id);
+	   found &&
+	   (existing.kind != .Path_File ||
+			   existing.path != path ||
+			   !bytes.equal(existing.bytes, data)) {
 		delete(id)
 		delete(data)
 		return false
@@ -689,7 +695,12 @@ note_path_asset :: proc(w: ^Writer, path: string, data: []u8) -> bool {
 		delete(data)
 		return false
 	}
-	w.path_assets[id] = {id = id, path = strings.clone(path), kind = .Path_File, bytes = data}
+	w.path_assets[id] = {
+		id    = id,
+		path  = strings.clone(path),
+		kind  = .Path_File,
+		bytes = data,
+	}
 	note_asset(w, id)
 	return true
 }
@@ -757,6 +768,8 @@ datatype_id_of_binding :: proc(name: string) -> (Datatype_Id, bool) {
 		return .Color3, true
 	case "ColorSequence":
 		return .ColorSequence, true
+	case "Animated":
+		return .Animated, true
 	case "Content":
 		return .Content, true
 	case "DateTime":
@@ -846,6 +859,11 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 			write_f32(w, keypoint.Value.G)
 			write_f32(w, keypoint.Value.B)
 		}
+	case .Animated:
+		value := cast(^datatypes.Animated)ptr
+		uri := embed_path(w, value.uri, .Texture)
+		write_string(w, uri)
+		delete(uri)
 	case .Content:
 		value := cast(^datatypes.Content)ptr
 		// Content is the generic file handle, so a local path inside one is an
@@ -1055,7 +1073,8 @@ write_value :: proc(
 		   codec != nil {
 			if w.version <
 			   KINE_EXTENSION_VERSION {return writer_skip(w, "%s requires KINE version 6", binding.name)}
-			required_flag := datatypes.EXTENSION_REPLICATED if w.replicated_value else datatypes.EXTENSION_PERSISTABLE
+			required_flag :=
+				datatypes.EXTENSION_REPLICATED if w.replicated_value else datatypes.EXTENSION_PERSISTABLE
 			if codec.flags & required_flag == 0 {
 				purpose := "replication" if w.replicated_value else "persistence"
 				return writer_skip(w, "%s does not allow %s", binding.name, purpose)
@@ -1111,12 +1130,20 @@ write_value :: proc(
 // Metadata replication uses the version 8 value layout independently of map versions.
 REPLICATED_VALUE_VERSION :: 8
 
-Append_Replicated_Value :: proc(bytes: ^[dynamic]u8, L: ^vm.State, registry: ^classes.Registry) -> bool {
+Append_Replicated_Value :: proc(
+	bytes: ^[dynamic]u8,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+) -> bool {
 	if binding := vm.UserdataBindingOf(L, -1); binding != nil && binding.name == "Content" {
 		value := cast(^datatypes.Content)vm.UserdataValue(L, -1)
 		if value.object_id != 0 {return false}
 	}
-	w := Writer{data = bytes^, version = REPLICATED_VALUE_VERSION, replicated_value = true}
+	w := Writer {
+		data             = bytes^,
+		version          = REPLICATED_VALUE_VERSION,
+		replicated_value = true,
+	}
 	start := len(w.data)
 	ok := write_value(&w, L, registry, -1)
 	if !ok {resize(&w.data, start)}
@@ -1125,8 +1152,19 @@ Append_Replicated_Value :: proc(bytes: ^[dynamic]u8, L: ^vm.State, registry: ^cl
 	return ok
 }
 
-Read_Replicated_Value :: proc(data: []u8, L: ^vm.State, registry: ^classes.Registry) -> (int, bool) {
-	r := Reader{data = data, version = REPLICATED_VALUE_VERSION, replicated_value = true}
+Read_Replicated_Value :: proc(
+	data: []u8,
+	L: ^vm.State,
+	registry: ^classes.Registry,
+) -> (
+	int,
+	bool,
+) {
+	r := Reader {
+		data             = data,
+		version          = REPLICATED_VALUE_VERSION,
+		replicated_value = true,
+	}
 	defer Error_Delete(&r.err)
 	ok := read_value(&r, L, registry)
 	return r.pos, ok
@@ -1236,6 +1274,11 @@ read_datatype_value_record :: proc(
 		}
 		datatypes.Push_ColorSequence(L, registry, datatypes.ColorSequence{Keypoints = keypoints})
 		delete(keypoints)
+	case .Animated:
+		uri, ok := read_string(r)
+		if !ok {return false}
+		defer delete(uri)
+		datatypes.Push_Animated(L, registry, datatypes.Animated{uri = uri})
 	case .Content:
 		uri, ok := read_string(r)
 		if !ok {
@@ -1253,7 +1296,11 @@ read_datatype_value_record :: proc(
 			}
 			if r.replicated_value && object_id != 0 {
 				delete(uri)
-				return reader_fail(r, .Malformed_Record, "a Content object handle cannot be replicated")
+				return reader_fail(
+					r,
+					.Malformed_Record,
+					"a Content object handle cannot be replicated",
+				)
 			}
 			content.object_id = object_id
 			content.object_kind = object_kind
@@ -1556,10 +1603,11 @@ read_datatype_value_record :: proc(
 		if !read_f32s(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Rect(L, registry, datatypes.Rect{
-			Min = {values[0], values[1]},
-			Max = {values[2], values[3]},
-		})
+		datatypes.Push_Rect(
+			L,
+			registry,
+			datatypes.Rect{Min = {values[0], values[1]}, Max = {values[2], values[3]}},
+		)
 	case:
 		return reader_fail(
 			r,
@@ -1691,18 +1739,25 @@ read_value_record :: proc(
 		}
 		allowed := true
 		if r.replicated_value {
-			codec := datatypes.Find_Extension_Codec(registry.datatypes, extension_id, type_name, wire_version)
+			codec := datatypes.Find_Extension_Codec(
+				registry.datatypes,
+				extension_id,
+				type_name,
+				wire_version,
+			)
 			allowed = codec != nil && codec.flags & datatypes.EXTENSION_REPLICATED != 0
 		}
-		decoded := allowed && datatypes.Extension_Codec_Decode_Value(
-			registry.datatypes,
-			L,
-			extension_id,
-			type_name,
-			wire_version,
-			raw_data(bytes),
-			uintptr(size),
-		)
+		decoded :=
+			allowed &&
+			datatypes.Extension_Codec_Decode_Value(
+				registry.datatypes,
+				L,
+				extension_id,
+				type_name,
+				wire_version,
+				raw_data(bytes),
+				uintptr(size),
+			)
 		if !decoded {
 			fmt.eprintf(
 				"[kine] skipped unavailable extension datatype %s.%s (wire %d)\n",
@@ -1809,11 +1864,17 @@ read_class_property :: proc(
 	if kind, is_asset := asset_kind_of(class_name, property); is_asset {
 		_ = replace_stack_asset(w, L, base + 1, kind)
 	}
-	if w.embed_assets && property == "Source" &&
+	if w.embed_assets &&
+	   property == "Source" &&
 	   (class_name == "Script" || class_name == "LocalScript" || class_name == "ModuleScript") {
 		source := vm.ArgString(L, base + 1)
 		if len(source) > 0 {
-			luauh.luau_visit_string_literals(raw_data(source), uintptr(len(source)), serialize_script_asset, w)
+			luauh.luau_visit_string_literals(
+				raw_data(source),
+				uintptr(len(source)),
+				serialize_script_asset,
+				w,
+			)
 		}
 	}
 	offset := len(w.data)
@@ -1841,14 +1902,23 @@ read_class_property :: proc(
 // ---------------------------------------------------------------------------
 
 property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
+	if property == "PrimaryPart" &&
+	   classes.Is_A_Class(object, &classes.Model_Class) &&
+	   object.class != &classes.CharacterModel_Class {
+		return true
+	}
 	if property == "SelectionImageObject" && classes.Is_A_Class(object, &classes.GuiObject_Class) {
 		return true
 	}
-	if object.class == &classes.WeldConstraint_Class && (property == "Part0" || property == "Part1") {
+	if object.class == &classes.WeldConstraint_Class &&
+	   (property == "Part0" || property == "Part1") {
 		return true
 	}
-	return (property == "Attachment0" || property == "Attachment1") &&
-	       (object.class == &classes.Cloth_Class || classes.Is_A_Class(object, &classes.Constraint_Class))
+	return(
+		(property == "Attachment0" || property == "Attachment1") &&
+		(object.class == &classes.Cloth_Class ||
+				classes.Is_A_Class(object, &classes.Constraint_Class)) \
+	)
 }
 
 property_is_saveable :: proc(property: string) -> bool {
@@ -1945,7 +2015,8 @@ write_instance :: proc(
 		property_count += 1
 	}
 	for property in properties {
-		if !property_is_saveable(property) || classes.Imported_Property_Is_Unset(descriptor, object, property) {
+		if !property_is_saveable(property) ||
+		   classes.Imported_Property_Is_Unset(descriptor, object, property) {
 			continue
 		}
 		if object.class.name == "Workspace" &&
@@ -2097,9 +2168,21 @@ Apply_Loaded_Service_Properties :: proc(
 
 	for property in properties {
 		vm.PushRegistryReference(L, property.value_ref)
-		applied, apply_err := apply_property(L, registry, target, descriptor, property.name, vm.StackTop(L))
+		applied, apply_err := apply_property(
+			L,
+			registry,
+			target,
+			descriptor,
+			property.name,
+			vm.StackTop(L),
+		)
 		if !applied {
-			fmt.eprintf("[kine] could not restore %s.%s: %s\n", target.class.name, property.name, apply_err)
+			fmt.eprintf(
+				"[kine] could not restore %s.%s: %s\n",
+				target.class.name,
+				property.name,
+				apply_err,
+			)
 		}
 		delete(apply_err)
 	}
@@ -2107,8 +2190,15 @@ Apply_Loaded_Service_Properties :: proc(
 
 loaded_service_property_is_setting :: proc(key: string) -> bool {
 	switch key {
-	case "Name", "Parent", "Archivable", "CanReplicate", "ReplicationMode",
-	     "ReplicationGroup", "Capabilities", "Sandboxed", "CurrentCamera":
+	case "Name",
+	     "Parent",
+	     "Archivable",
+	     "CanReplicate",
+	     "ReplicationMode",
+	     "ReplicationGroup",
+	     "Capabilities",
+	     "Sandboxed",
+	     "CurrentCamera":
 		return false
 	}
 	return true
@@ -2249,8 +2339,12 @@ read_instance :: proc(
 	}
 
 	// Properties.
-	track_service := r.service_properties != nil && parent != nil && parent.parent == nil &&
-	                 classes.Is_A(parent, "DataModel") && classes.Is_A(object, "Service")
+	track_service :=
+		r.service_properties != nil &&
+		parent != nil &&
+		parent.parent == nil &&
+		classes.Is_A(parent, "DataModel") &&
+		classes.Is_A(object, "Service")
 	property_count, property_count_ok := read_u32(r)
 	if !property_count_ok {
 		classes.Destroy_Hierarchy(object)
@@ -2899,7 +2993,17 @@ Serialize :: proc(
 	[]u8,
 	Error,
 ) {
-	return serialize(registry, L, object, KINE_VERSION, exclude_child, terrain, script_asset_root, project_output_file, project_output_directory)
+	return serialize(
+		registry,
+		L,
+		object,
+		KINE_VERSION,
+		exclude_child,
+		terrain,
+		script_asset_root,
+		project_output_file,
+		project_output_directory,
+	)
 }
 
 // Serialize_Legacy writes the version 2 layout: no asset table, and asset
@@ -2950,12 +3054,12 @@ serialize :: proc(
 	// discovered while properties are read, and the asset table has to precede
 	// the tree in the output. The tree buffer is then copied in one step.
 	tree := Writer {
-		data             = make([dynamic]u8, 0, 4096),
-		exclude_child    = exclude_child,
-		embed_assets     = version >= KINE_ASSET_VERSION,
+		data              = make([dynamic]u8, 0, 4096),
+		exclude_child     = exclude_child,
+		embed_assets      = version >= KINE_ASSET_VERSION,
 		script_asset_root = script_asset_root,
-		version          = version,
-		class_properties = make(map[^classes.Class_Info][dynamic]string),
+		version           = version,
+		class_properties  = make(map[^classes.Class_Info][dynamic]string),
 	}
 	// Odin runs defers in reverse order, so every element cleanup has to be in
 	// the same block as the delete of the array that holds those elements.
@@ -2986,9 +3090,18 @@ serialize :: proc(
 
 	if script_asset_root != "" && project_output_file != "" {
 		when ODIN_OS == .JS {
-			return nil, Error_Make(.Invalid_Argument, -1, "bundling local project files is unavailable in the browser")
+			return nil, Error_Make(
+				.Invalid_Argument,
+				-1,
+				"bundling local project files is unavailable in the browser",
+			)
 		} else {
-			if err := bundle_project_files(&tree, script_asset_root, project_output_file, project_output_directory); !Error_Is_None(err) {
+			if err := bundle_project_files(
+				&tree,
+				script_asset_root,
+				project_output_file,
+				project_output_directory,
+			); !Error_Is_None(err) {
 				return nil, err
 			}
 		}
@@ -3150,7 +3263,7 @@ Deserialize :: proc(
 	defer vm.SetStackTop(L, base)
 
 	reader := Reader {
-		data = data,
+		data               = data,
 		service_properties = service_properties,
 	}
 	defer Error_Delete(&reader.err)

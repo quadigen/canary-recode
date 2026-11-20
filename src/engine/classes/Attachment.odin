@@ -4,6 +4,7 @@ import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:math"
 import "core:math/linalg"
 
 Attachment_Class := Class_Info {
@@ -48,9 +49,73 @@ Attachment_Local_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
 	if !valid {return datatypes.CFrame_New_Position(attachment.position)}
 	back := linalg.cross(axis, normal)
 	return datatypes.CFrame_FromMatrix(
-		attachment.position, {axis.x, axis.y, axis.z}, {normal.x, normal.y, normal.z},
+		attachment.position,
+		{axis.x, axis.y, axis.z},
+		{normal.x, normal.y, normal.z},
 		{back.x, back.y, back.z},
 	)
+}
+
+Attachment_Parent_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
+	for parent := attachment.parent; parent != nil; parent = parent.parent {
+		if parent.destroyed {continue}
+		if Is_A_Class(parent, &Part_Class) {return (cast(^Part)parent).cframe}
+		if Is_A_Class(
+			parent,
+			&Attachment_Class,
+		) {return Attachment_World_Frame(cast(^Attachment)parent)}
+	}
+	return datatypes.CFrame_Identity
+}
+
+Attachment_World_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
+	return datatypes.CFrame_Mul_CFrame(
+		Attachment_Parent_Frame(attachment),
+		Attachment_Local_Frame(attachment),
+	)
+}
+
+attachment_set_local_frame :: proc(attachment: ^Attachment, frame: datatypes.CFrame) {
+	attachment.position = datatypes.CFrame_Position(frame)
+	attachment.axis = datatypes.CFrame_RightVector(frame)
+	attachment.secondary_axis = datatypes.CFrame_UpVector(frame)
+	attachment.orientation = {}
+}
+
+attachment_orientation :: proc(frame: datatypes.CFrame) -> datatypes.Vector3 {
+	x, y, z := datatypes.CFrame_ToEulerAnglesYXZ(frame)
+	return {math.to_degrees(x), math.to_degrees(y), math.to_degrees(z)}
+}
+
+attachment_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	dt: ^datatypes.Registry,
+	en: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	if method != "GetConstraints" {return 0, false}
+	vm.NewTable(L, 0)
+	registry := object.signal_registry
+	if registry == nil {return 1, true}
+	index := 1
+	for descriptor in registry.classes {
+		if !Is_Class_A(descriptor.info, &Constraint_Class) {continue}
+		for candidate in descriptor.instances {
+			if candidate == nil ||
+			   candidate.destroyed ||
+			   !Object_Is_Accessible(L, candidate) {continue}
+			constraint := cast(^Constraint)candidate
+			if constraint.attachment0 != object && constraint.attachment1 != object {continue}
+			Push_Object(L, candidate)
+			vm.SetArrayValue(L, -2, index)
+			index += 1
+		}
+	}
+	return 1, true
 }
 
 Attachment_get :: proc(
@@ -66,14 +131,26 @@ Attachment_get :: proc(
 	case "CFrame":
 		if datatype_registry == nil {return false}
 		datatypes.Push_CFrame(L, datatype_registry, Attachment_Local_Frame(attachment))
+	case "WorldCFrame":
+		datatypes.Push_CFrame(L, datatype_registry, Attachment_World_Frame(attachment))
+	case "WorldPosition":
+		datatypes.Push_Vector3(L, datatypes.CFrame_Position(Attachment_World_Frame(attachment)))
+	case "WorldOrientation":
+		datatypes.Push_Vector3(L, attachment_orientation(Attachment_World_Frame(attachment)))
+	case "WorldAxis":
+		datatypes.Push_Vector3(L, datatypes.CFrame_RightVector(Attachment_World_Frame(attachment)))
+	case "WorldSecondaryAxis":
+		datatypes.Push_Vector3(L, datatypes.CFrame_UpVector(Attachment_World_Frame(attachment)))
+	case "GetConstraints":
+		vm.PushUserdataMethod(L, key)
 	case "Position":
 		datatypes.Push_Vector3(L, attachment.position)
 	case "Orientation":
-		datatypes.Push_Vector3(L, attachment.orientation)
+		datatypes.Push_Vector3(L, attachment_orientation(Attachment_Local_Frame(attachment)))
 	case "Axis":
-		datatypes.Push_Vector3(L, attachment.axis)
+		datatypes.Push_Vector3(L, datatypes.CFrame_RightVector(Attachment_Local_Frame(attachment)))
 	case "SecondaryAxis":
-		datatypes.Push_Vector3(L, attachment.secondary_axis)
+		datatypes.Push_Vector3(L, datatypes.CFrame_UpVector(Attachment_Local_Frame(attachment)))
 	case:
 		return false
 	}
@@ -95,18 +172,57 @@ Attachment_set :: proc(
 	case "CFrame":
 		if datatype_registry == nil {return false}
 		frame := datatypes.Arg_CFrame(L, value_index, datatype_registry)
-		attachment.position = {frame.x, frame.y, frame.z}
-		attachment.axis = {frame.r00, frame.r10, frame.r20}
-		attachment.secondary_axis = {frame.r01, frame.r11, frame.r21}
-		attachment.orientation = {}
+		attachment_set_local_frame(attachment, frame)
+	case "WorldCFrame":
+		frame := datatypes.Arg_CFrame(L, value_index, datatype_registry)
+		attachment_set_local_frame(
+			attachment,
+			datatypes.CFrame_Mul_CFrame(
+				datatypes.CFrame_Inverse(Attachment_Parent_Frame(attachment)),
+				frame,
+			),
+		)
+	case "WorldPosition":
+		attachment.position = datatypes.CFrame_PointToObjectSpace(
+			Attachment_Parent_Frame(attachment),
+			datatypes.Arg_Vector3(L, value_index),
+		)
+	case "WorldOrientation":
+		angles := datatypes.Arg_Vector3(L, value_index)
+		frame := datatypes.CFrame_FromEulerAnglesYXZ(
+			math.to_radians(angles.x),
+			math.to_radians(angles.y),
+			math.to_radians(angles.z),
+		)
+		world_position := datatypes.CFrame_Position(Attachment_World_Frame(attachment))
+		frame.x, frame.y, frame.z = world_position.x, world_position.y, world_position.z
+		attachment_set_local_frame(
+			attachment,
+			datatypes.CFrame_Mul_CFrame(
+				datatypes.CFrame_Inverse(Attachment_Parent_Frame(attachment)),
+				frame,
+			),
+		)
 	case "Position":
 		attachment.position = datatypes.Arg_Vector3(L, value_index)
 	case "Orientation":
-		attachment.orientation = datatypes.Arg_Vector3(L, value_index)
+		angles := datatypes.Arg_Vector3(L, value_index)
+		frame := datatypes.CFrame_FromEulerAnglesYXZ(
+			math.to_radians(angles.x),
+			math.to_radians(angles.y),
+			math.to_radians(angles.z),
+		)
+		frame.x, frame.y, frame.z =
+			attachment.position.x, attachment.position.y, attachment.position.z
+		attachment_set_local_frame(attachment, frame)
 	case "Axis":
+		attachment.secondary_axis = datatypes.CFrame_UpVector(Attachment_Local_Frame(attachment))
 		attachment.axis = datatypes.Arg_Vector3(L, value_index)
+		attachment.orientation = {}
 	case "SecondaryAxis":
+		attachment.axis = datatypes.CFrame_RightVector(Attachment_Local_Frame(attachment))
 		attachment.secondary_axis = datatypes.Arg_Vector3(L, value_index)
+		attachment.orientation = {}
 	case:
 		return false
 	}
@@ -190,6 +306,19 @@ Register_Attachment :: proc(registry: ^Registry) {
 		get = Attachment_get,
 		set = Attachment_set,
 		clone = Attachment_clone,
-		properties = []string{"Position", "Orientation", "Axis", "SecondaryAxis", "CFrame"},
+		namecall = attachment_namecall,
+		properties = []string {
+			"Position",
+			"Orientation",
+			"Axis",
+			"SecondaryAxis",
+			"CFrame",
+			"WorldCFrame",
+			"WorldPosition",
+			"WorldOrientation",
+			"WorldAxis",
+			"WorldSecondaryAxis",
+		},
+		methods = []string{"GetConstraints"},
 	)
 }

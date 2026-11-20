@@ -22,30 +22,32 @@ PlaytestService_Class := classes.Class_Info {
 }
 
 Playtest_Output :: struct {
-	read:    ^os.File,
-	pending: [dynamic]u8,
+	read:     ^os.File,
+	pending:  [dynamic]u8,
 	warnings: map[string]Playtest_Warning,
 }
 
 Playtest_Warning :: struct {
 	last_emitted: time.Tick,
-	suppressed: int,
+	suppressed:   int,
 }
 
 PlaytestService :: struct {
-	using service:   Service,
-	server_process:  os.Process,
-	client_process:  os.Process,
-	server_output:   Playtest_Output,
-	client_output:   Playtest_Output,
+	using service:     Service,
+	server_process:    os.Process,
+	client_process:    os.Process,
+	server_output:     Playtest_Output,
+	client_output:     Playtest_Output,
 	forwarding_output: bool,
-	running:         bool,
-	singleplayer:    bool,
-	android_session: bool,
-	last_exit_code:  int,
-	last_error:      string,
-	map_path:        string,
-	temp_map_dir:    string,
+	running:           bool,
+	singleplayer:      bool,
+	android_session:   bool,
+	last_exit_code:    int,
+	last_error:        string,
+	map_path:          string,
+	temp_map_dir:      string,
+	tree_dir:          string,
+	tree_sequence:     u32,
 }
 
 PLAYTEST_ADDRESS :: "127.0.0.1"
@@ -64,7 +66,13 @@ playtest_set_error :: proc(service: ^PlaytestService, value: string) {
 }
 
 playtest_cleanup_temp_map :: proc(service: ^PlaytestService) {
-	if service == nil || len(service.temp_map_dir) == 0 {return}
+	if service == nil {return}
+	if service.tree_dir != "" {
+		_ = os.remove_all(service.tree_dir)
+		delete(service.tree_dir)
+		service.tree_dir = ""
+	}
+	if len(service.temp_map_dir) == 0 {return}
 	if err := os.remove_all(service.temp_map_dir); err != nil {
 		_ = err
 	}
@@ -109,7 +117,12 @@ playtest_after_tag :: proc(line, tag: string) -> string {
 	return message
 }
 
-playtest_forward_warning :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output, message: string) {
+playtest_forward_warning :: proc(
+	service: ^PlaytestService,
+	source: string,
+	output: ^Playtest_Output,
+	message: string,
+) {
 	now := time.tick_now()
 	if warning, seen := output.warnings[message]; seen {
 		if time.tick_diff(warning.last_emitted, now) < PLAYTEST_WARNING_INTERVAL {
@@ -117,7 +130,9 @@ playtest_forward_warning :: proc(service: ^PlaytestService, source: string, outp
 			output.warnings[message] = warning
 			return
 		}
-		output.warnings[message] = {last_emitted = now}
+		output.warnings[message] = {
+			last_emitted = now,
+		}
 		if warning.suppressed > 0 {
 			message := fmt.tprintf("%s (%d repeats suppressed)", message, warning.suppressed)
 			playtest_log_line(service, source, message, "Warn")
@@ -133,13 +148,20 @@ playtest_forward_warning :: proc(service: ^PlaytestService, source: string, outp
 			}
 		}
 		if len(output.warnings) < PLAYTEST_WARNING_LIMIT {
-			output.warnings[strings.clone(message)] = {last_emitted = now}
+			output.warnings[strings.clone(message)] = {
+				last_emitted = now,
+			}
 		}
 	}
 	playtest_log_line(service, source, message, "Warn")
 }
 
-playtest_forward_line :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output, raw_line: string) {
+playtest_forward_line :: proc(
+	service: ^PlaytestService,
+	source: string,
+	output: ^Playtest_Output,
+	raw_line: string,
+) {
 	line := strings.trim_space(raw_line)
 	if line == "" {return}
 
@@ -263,7 +285,10 @@ playtest_refresh :: proc(service: ^PlaytestService) {
 	service.last_exit_code = client_exit != 0 ? client_exit : server_exit
 	if service.last_exit_code != 0 {
 		source := "client" if client_exit != 0 else "server"
-		playtest_set_error(service, fmt.tprintf("Playtest %s exited with status %d", source, service.last_exit_code))
+		playtest_set_error(
+			service,
+			fmt.tprintf("Playtest %s exited with status %d", source, service.last_exit_code),
+		)
 	}
 	service.server_process = {}
 	service.client_process = {}
@@ -384,7 +409,9 @@ playtest_get :: proc(
 	case "Start", "StartServer", "StartClient", "StartSinglePlayer", "Stop":
 		vm.PushUserdataMethod(L, key)
 	case:
-		return false
+		if _, ok := playtest_tree_method(key); !ok {return false}
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return false}
+		vm.PushUserdataMethod(L, key)
 	}
 	return true
 }
@@ -399,13 +426,14 @@ Playtest_Session_Mode :: enum {
 
 
 Playtest_Launch :: struct {
-	mode:     Playtest_Session_Mode,
-	map_path: string,
-	address:  string,
-	port:     u16,
-	headless: bool,
+	mode:            Playtest_Session_Mode,
+	map_path:        string,
+	address:         string,
+	port:            u16,
+	headless:        bool,
 	client_headless: bool,
-	pause_on_error: bool,
+	pause_on_error:  bool,
+	tree_dir:        string,
 }
 
 playtest_default_launch :: proc(mode: Playtest_Session_Mode) -> Playtest_Launch {
@@ -424,7 +452,17 @@ playtest_command :: proc(args: []string, launch: Playtest_Launch, client := true
 		command = slice.concatenate([][]string{command, {"--headless"}}, context.temp_allocator)
 	}
 	if launch.pause_on_error {
-		command = slice.concatenate([][]string{command, {"--pause-on-error"}}, context.temp_allocator)
+		command = slice.concatenate(
+			[][]string{command, {"--pause-on-error"}},
+			context.temp_allocator,
+		)
+	}
+	if launch.tree_dir != "" {
+		role := "Client" if client else "Server"
+		command = slice.concatenate(
+			[][]string{command, {"--playtest-tree-dir", pt_path(launch.tree_dir, role)}},
+			context.temp_allocator,
+		)
 	}
 	return command
 }
@@ -455,8 +493,7 @@ playtest_check_map_path :: proc(L: ^vm.State, method, path: string) -> bool {
 
 
 playtest_abandon_map :: proc(service: ^PlaytestService, path: string, owned: bool) {
-	if !owned {return}
-	delete(path)
+	if owned {delete(path)}
 	playtest_cleanup_temp_map(service)
 }
 
@@ -575,11 +612,12 @@ playtest_record :: proc(
 playtest_launch :: proc(
 	L: ^vm.State,
 	service: ^PlaytestService,
-	launch: Playtest_Launch,
+	requested: Playtest_Launch,
 ) -> (
 	i32,
 	bool,
 ) {
+	launch := requested
 	if service.forwarding_output {
 		vm.PushBoolean(L, false)
 		return 1, true
@@ -615,18 +653,49 @@ playtest_launch :: proc(
 	}
 
 
+	tree_dir, tree_err := os.make_directory_temp("", "kinemium-playtest-tree-*", context.allocator)
+	if tree_err != nil {
+		playtest_abandon_map(service, path, map_owned)
+		playtest_set_error(service, "could not create private playtest tree channel")
+		vm.PushBoolean(L, false)
+		return 1, true
+	}
+	service.tree_dir = tree_dir
+	when ODIN_OS != .Windows {
+		if os.change_mode(tree_dir, os.Permissions{.Read_User, .Write_User, .Execute_User}) !=
+		   nil {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, "could not secure playtest tree channel")
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+	}
+	service.tree_sequence = 0
+	launch.tree_dir = tree_dir
+	for role in ([]string{"Server", "Client"}) {
+		if os.make_directory(
+			   pt_path(tree_dir, role),
+			   os.Permissions{.Read_User, .Write_User, .Execute_User},
+		   ) !=
+		   nil {
+			playtest_abandon_map(service, path, map_owned)
+			playtest_set_error(service, "could not create playtest tree endpoint")
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+	}
 	port := fmt.tprintf("%d", launch.port)
 
 	switch launch.mode {
 	case .Singleplayer:
 		command := []string {
-				executable,
-				"--singleplayer",
-				"--playtest-host",
-				"--map",
-				path,
-				"--username",
-				"SinglePlayer",
+			executable,
+			"--singleplayer",
+			"--playtest-host",
+			"--map",
+			path,
+			"--username",
+			"SinglePlayer",
 		}
 		process, stderr_pipe, failure, failed := playtest_spawn(playtest_command(command, launch))
 		if failed {
@@ -665,7 +734,9 @@ playtest_launch :: proc(
 				port,
 			}
 		}
-		process, stderr_pipe, failure, failed := playtest_spawn(playtest_command(command, launch, false))
+		process, stderr_pipe, failure, failed := playtest_spawn(
+			playtest_command(command, launch, false),
+		)
 		if failed {
 			playtest_abandon_map(service, path, map_owned)
 			playtest_set_error(service, failure)
@@ -676,15 +747,18 @@ playtest_launch :: proc(
 
 	case .Client_Only:
 		process, stderr_pipe, failure, failed := playtest_spawn(
-			playtest_command([]string {
-				executable,
-				"--client",
-				"--playtest-host",
-				"--address",
-				launch.address,
-				"--port",
-				port,
-			}, launch),
+			playtest_command(
+				[]string {
+					executable,
+					"--client",
+					"--playtest-host",
+					"--address",
+					launch.address,
+					"--port",
+					port,
+				},
+				launch,
+			),
 		)
 		if failed {
 			playtest_abandon_map(service, path, map_owned)
@@ -719,15 +793,18 @@ playtest_launch :: proc(
 
 
 		client_process, client_stderr, client_failure, client_failed := playtest_spawn(
-			playtest_command([]string {
-				executable,
-				"--client",
-				"--playtest-host",
-				"--address",
-				launch.address,
-				"--port",
-				port,
-			}, launch),
+			playtest_command(
+				[]string {
+					executable,
+					"--client",
+					"--playtest-host",
+					"--address",
+					launch.address,
+					"--port",
+					port,
+				},
+				launch,
+			),
 		)
 		if client_failed {
 
@@ -853,6 +930,7 @@ playtest_namecall :: proc(
 	bool,
 ) {
 	service := cast(^PlaytestService)object
+	if op, ok := playtest_tree_method(method); ok {return playtest_tree_namecall(L, service, op)}
 	switch method {
 	case "Start":
 		launch := playtest_default_launch(.Pair)
@@ -922,5 +1000,54 @@ Register_PlaytestService_Class :: proc(registry: ^classes.Registry) {
 		namecall = playtest_namecall,
 		_step = playtest_step,
 		_step_phase = .Update,
+		member_security = []classes.Member_Security {
+			classes.Method_Security(
+				"GetGameTree",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"GetInstanceProperties",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"GetInstanceProperty",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"SetInstanceProperty",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"CreateInstance",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"DestroyInstance",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"ReparentInstance",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"SetInstanceReference",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+		},
+		methods = []string {
+			"Start",
+			"StartServer",
+			"StartClient",
+			"StartSinglePlayer",
+			"Stop",
+			"GetGameTree",
+			"GetInstanceProperties",
+			"GetInstanceProperty",
+			"SetInstanceProperty",
+			"CreateInstance",
+			"DestroyInstance",
+			"ReparentInstance",
+			"SetInstanceReference",
+		},
 	)
 }

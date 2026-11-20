@@ -1,0 +1,7 @@
+find_package(OpenXR CONFIG REQUIRED)
+add_library(kine_openxr STATIC kine_openxr.c)
+target_compile_features(kine_openxr PRIVATE c_std_11)
+target_include_directories(kine_openxr PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(kine_openxr PUBLIC OpenXR::openxr_loader)
+add_executable(kine_openxr_probe probe.c)
+target_link_libraries(kine_openxr_probe PRIVATE kine_openxr)

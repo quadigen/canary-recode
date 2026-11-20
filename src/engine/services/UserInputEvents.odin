@@ -102,12 +102,13 @@ user_input_fire :: proc(
 	service: ^UserInputService,
 	signal: ^signals.Signal,
 	value: classes.InputObject_Value,
+	gui_processed: bool = false,
 ) {
 	if signal == nil || service.signal_registry == nil {return}
 	input := classes.Push_InputObject(L, service.signal_registry, value)
 	if input == nil {return}
 	processed := context_action_dispatch(L, service.data_model, value, vm.StackTop(L))
-	vm.PushBoolean(L, processed || user_input_pointer_over_gui(service, value))
+	vm.PushBoolean(L, processed || gui_processed || user_input_pointer_over_gui(service, value))
 	signals.Fire(L, signal, 2)
 	vm.Pop(L, 2)
 
@@ -116,6 +117,7 @@ user_input_fire :: proc(
 
 user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event: sdl3.Event) {
 	if service == nil || L == nil {return}
+	when ODIN_OS != .JS {if gamepad_handle_event(service, L, event) {return}}
 	#partial switch event.type {
 	case .FINGER_DOWN, .FINGER_MOTION, .FINGER_UP, .FINGER_CANCELED:
 		user_input_handle_finger(L, service, event)
@@ -152,6 +154,8 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 			},
 		)
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP:
+		if event.type ==
+		   .MOUSE_BUTTON_DOWN {_ = classes.Gui_Set_Selected(service.signal_registry, nil)}
 		input_type := user_input_mouse_type(event.button.button)
 		index := user_input_mouse_index(input_type)
 		if index < 0 {return}

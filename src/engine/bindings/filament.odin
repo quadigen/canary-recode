@@ -40,6 +40,11 @@ KINE_RENDER_MODE_RAY :: 2
 
 KineFilamentContext :: struct {}
 
+KineXRControllerState :: struct {
+	trigger, grip, stick_x, stick_y: f32,
+	active_mask:                     u32,
+}
+
 
 KineFilamentMesh :: struct {}
 KineFilamentAnimator :: struct {}
@@ -156,7 +161,7 @@ KineFilamentDrawItem :: struct {
 	transmission: f32,
 	materialKind: i32,
 	flags:        u32,
-	reserved:     u32, // Optional opacity as float bits for Water and ForceField. Zero uses the default.
+	reserved:     u32,
 	shader:       ^KineFilamentShader,
 }
 
@@ -405,6 +410,19 @@ foreign kine_filament {
 
 
 	Kine_Filament_RenderFrame :: proc(ctx: ^KineFilamentContext, deltaTime: f32) ---
+
+	when ODIN_OS == .Linux && !#config(KINE_ANDROID, false) {
+		Kine_Filament_XR_Poll :: proc(ctx: ^KineFilamentContext) ---
+		Kine_Filament_XR_IdleFrame :: proc(ctx: ^KineFilamentContext) ---
+		Kine_Filament_XR_FinishFrame :: proc(ctx: ^KineFilamentContext) ---
+		Kine_Filament_XR_GetUIPointer :: proc(ctx: ^KineFilamentContext, hand: i32, u, v, trigger: ^f32) -> bool ---
+		Kine_Filament_XR_BeginUI :: proc(ctx: ^KineFilamentContext, width, height: i32, out_width, out_height: ^i32) -> ^KineSkiaSurface ---
+		Kine_Filament_XR_Active :: proc(ctx: ^KineFilamentContext) -> bool ---
+		Kine_Filament_XR_Available :: proc(ctx: ^KineFilamentContext) -> bool ---
+		Kine_Filament_XR_GetPose :: proc(ctx: ^KineFilamentContext, index: i32, out: ^f32) -> bool ---
+		Kine_Filament_XR_GetControllerState :: proc(ctx: ^KineFilamentContext, hand: i32, out: ^KineXRControllerState) -> bool ---
+		Kine_Filament_XR_SetHaptic :: proc(ctx: ^KineFilamentContext, hand: i32, amplitude, seconds, frequency: f32) -> bool ---
+	}
 
 
 	Kine_Filament_Resize :: proc(ctx: ^KineFilamentContext, width: i32, height: i32) ---

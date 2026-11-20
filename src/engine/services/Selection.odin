@@ -8,14 +8,13 @@ import enums "../enum"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 
-Selection_Class := classes.Class_Info{
+Selection_Class := classes.Class_Info {
 	name   = "Selection",
 	parent = &Service_Class,
 }
 
 Selection :: struct {
-	using service: Service,
-
+	using service:         Service,
 	selected:              [dynamic]^classes.Object,
 	selection_changed_ref: i32,
 }
@@ -71,7 +70,10 @@ selection_object_from_argument :: proc(L: ^vm.State, index: int) -> ^classes.Obj
 selection_read_instances :: proc(
 	L: ^vm.State,
 	index: int,
-) -> (result: [dynamic]^classes.Object, ok: bool) {
+) -> (
+	result: [dynamic]^classes.Object,
+	ok: bool,
+) {
 	if !vm.IsTable(L, index) {
 		return nil, false
 	}
@@ -99,7 +101,7 @@ selection_push_instances :: proc(L: ^vm.State, items: []^classes.Object) {
 	vm.NewTable(L, len(items))
 	for item, index in items {
 		classes.Push_Object(L, item)
-		vm.SetArrayValue(L, -2, index+1)
+		vm.SetArrayValue(L, -2, index + 1)
 	}
 }
 
@@ -160,11 +162,7 @@ Selection_Get :: proc(selection: ^Selection) -> []^classes.Object {
 	return selection.selected[:]
 }
 
-Selection_Set :: proc(
-	selection: ^Selection,
-	L: ^vm.State,
-	items: []^classes.Object,
-) -> bool {
+Selection_Set :: proc(selection: ^Selection, L: ^vm.State, items: []^classes.Object) -> bool {
 	if selection == nil {
 		return false
 	}
@@ -193,11 +191,7 @@ Selection_Set :: proc(
 	return true
 }
 
-Selection_Add :: proc(
-	selection: ^Selection,
-	L: ^vm.State,
-	items: []^classes.Object,
-) -> bool {
+Selection_Add :: proc(selection: ^Selection, L: ^vm.State, items: []^classes.Object) -> bool {
 	if selection == nil {
 		return false
 	}
@@ -217,11 +211,7 @@ Selection_Add :: proc(
 	return changed
 }
 
-Selection_Remove :: proc(
-	selection: ^Selection,
-	L: ^vm.State,
-	items: []^classes.Object,
-) -> bool {
+Selection_Remove :: proc(selection: ^Selection, L: ^vm.State, items: []^classes.Object) -> bool {
 	if selection == nil {
 		return false
 	}
@@ -276,7 +266,7 @@ selection_get :: proc(
 			vm.PushNil(L)
 		}
 
-	case "Get", "Set", "Add", "Remove":
+	case "Get", "Set", "Add", "Remove", "Clear":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -292,10 +282,16 @@ selection_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	selection := cast(^Selection)object
 
 	switch method {
+	case "Clear":
+		_ = Selection_Clear(selection, L)
+		return 0, true
 	case "Get":
 		selection_push_instances(L, selection.selected[:])
 		return 1, true
@@ -331,10 +327,7 @@ selection_namecall :: proc(
 	return 0, false
 }
 
-selection_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+selection_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	selection := cast(^Selection)object
 
 	if selection.selection_changed_ref > 0 &&
@@ -342,10 +335,7 @@ selection_destroy :: proc(
 	   selection.data_model.registry != nil &&
 	   selection.data_model.registry.vm_state != nil &&
 	   selection.data_model.registry.vm_state.L != nil {
-		vm.ReleaseValue(
-			selection.data_model.registry.vm_state.L,
-			selection.selection_changed_ref,
-		)
+		vm.ReleaseValue(selection.data_model.registry.vm_state.L, selection.selection_changed_ref)
 	}
 
 	selection.selection_changed_ref = -1
@@ -366,7 +356,7 @@ Register_Selection_Class :: proc(registry: ^classes.Registry) {
 		get = selection_get,
 		namecall = selection_namecall,
 		properties = []string{"SelectionThickness", "SelectionChanged"},
-		methods = []string{"Get", "Set", "Add", "Remove"},
+		methods = []string{"Get", "Set", "Add", "Remove", "Clear"},
 		events = []string{},
 	)
 }

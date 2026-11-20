@@ -210,6 +210,9 @@ int kine_lua_resume(lua_State* L, lua_State* from, int arguments) { return lua_r
 void kine_lua_resetthread(lua_State* L) { lua_resetthread(L); }
 int kine_lua_type(lua_State* L, int index) { return lua_type(L, index); }
 const char* kine_lua_typename(lua_State* L, int type) { return lua_typename(L, type); }
+int kine_lua_equal(lua_State* L, int idx1, int idx2) { return lua_equal(L, idx1, idx2); }
+int kine_lua_rawequal(lua_State* L, int idx1, int idx2) { return lua_rawequal(L, idx1, idx2); }
+int kine_lua_lessthan(lua_State* L, int idx1, int idx2) { return lua_lessthan(L, idx1, idx2); }
 int kine_lua_isnumber(lua_State* L, int index) { return lua_isnumber(L, index); }
 int kine_lua_isstring(lua_State* L, int index) { return lua_isstring(L, index); }
 double kine_lua_tonumberx(lua_State* L, int index, int* isNumber) { return lua_tonumberx(L, index, isNumber); }

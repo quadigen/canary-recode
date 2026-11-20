@@ -33,7 +33,7 @@ end)
 | `GamepadEnabled` | `boolean` | Read-only | `false` | Whether a gamepad is considered connected. Stays `false` in this build. |
 | `AccelerometerEnabled` | `boolean` | Read-only | `false` | Whether an accelerometer is available. |
 | `GyroscopeEnabled` | `boolean` | Read-only | `false` | Currently always `false`. |
-| `VREnabled` | `boolean` | Read-only | `false` | Currently always `false`. |
+| `VREnabled` | `boolean` | Read-only | `false` | Whether a local OpenXR session is running. See [VRService](./VRService). |
 | `OnScreenKeyboardVisible` | `boolean` | Read-only | `false` | Currently always `false`. |
 | `MouseIconEnabled` | `boolean` | Read/write | `true` | Whether the system cursor is shown. |
 | `MouseDeltaSensitivity` | `number` | Read/write | `1` | Multiplier for mouse movement deltas, clamped between `0` and `10`. |
@@ -42,7 +42,7 @@ end)
 | `InputChanged` | signal | Read-only | N/A | Fires when an input changes, such as pointer movement or a wheel scroll. |
 | `InputEnded` | signal | Read-only | N/A | Fires when an input ends. |
 
-The availability properties describe the device, not your permission to read it. `GamepadEnabled` stays `false` because gamepad detection isn't implemented, and the three "always `false`" properties are placeholders.
+The availability properties describe the device, not your permission to read it. `GamepadEnabled` stays `false` because gamepad detection isn't implemented, and the remaining "always `false`" properties are placeholders.
 
 `MouseBehavior` is the standard way to lock the pointer for first-person controls. Set it back to `Default` to release the pointer:
 

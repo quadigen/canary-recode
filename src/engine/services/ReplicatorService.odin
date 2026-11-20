@@ -23,8 +23,11 @@ Replication_Mode :: enum {
 }
 
 Replication_Sample :: struct {
-	tick:  u32,
-	frame: datatypes.CFrame,
+	tick:             u32,
+	frame:            datatypes.CFrame,
+	linear_velocity:  datatypes.Vector3,
+	angular_velocity: datatypes.Vector3,
+	has_velocity:     bool,
 }
 
 Replication_Entity :: struct {
@@ -114,6 +117,8 @@ Replication_Peer :: struct {
 	finished_replicating_sent: bool,
 	gravity_sent:              bool,
 	last_gravity:              f32,
+	character_settings_sent:   bool,
+	last_character_settings:   u8,
 	focus_x:                   f32,
 	focus_y:                   f32,
 	focus_z:                   f32,
@@ -268,9 +273,9 @@ ReplicatorService :: struct {
 	terrain_sync_due:              bool,
 	ack_elapsed:                   f32,
 	ack_full_elapsed:              f32,
-	diag_kind_counts:              [32]u64,
-	diag_kind_bytes:               [32]u64,
-	diag_subtype_counts:           [16][32]u64,
+	diag_kind_counts:              [34]u64,
+	diag_kind_bytes:               [34]u64,
+	diag_subtype_counts:           [16][34]u64,
 	invoke_pending:                [dynamic]Remote_Invoke_Pending,
 	next_invoke_id:                u32,
 	drops_window:                  u64,
@@ -340,10 +345,13 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	L: ^vm.State
 	// A VM finalizer can run after Players or a replicated character is gone.
 	// During lua_close, release transport state and let the VM destroy its objects.
-	if !vm.Is_Closing() && service.signal_registry != nil && service.signal_registry.vm_state != nil {
+	if !vm.Is_Closing() &&
+	   service.signal_registry != nil &&
+	   service.signal_registry.vm_state != nil {
 		L = service.signal_registry.vm_state.L
 	}
-	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players") if L != nil else nil
+	players :=
+		cast(^Players)DataModel_Get_Service(service.data_model, "Players") if L != nil else nil
 	if service.host != nil {
 		if service.mode == .Client && service.remote != nil {
 			transport_peer_disconnect(service.remote)
@@ -456,7 +464,8 @@ replication_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 	delete(service.schemas)
 	if service.event_signal != nil {signals.Destroy(service.event_signal)}
 	for callback in service.event_callbacks {
-		if !vm.Is_Closing() && service.signal_registry != nil &&
+		if !vm.Is_Closing() &&
+		   service.signal_registry != nil &&
 		   service.signal_registry.vm_state != nil &&
 		   service.signal_registry.vm_state.L != nil {
 			vm.ReleaseValue(service.signal_registry.vm_state.L, callback.reference)

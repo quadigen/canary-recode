@@ -15,6 +15,8 @@ ImageButton :: struct {
 	image:              string,
 	owned_image:        string,
 	stored_image:       ^kineffi.KineSkiaImage,
+	aseprite_playback:  ^Aseprite_Image_Playback,
+	animated_source:    bool,
 	image_transparency: f32,
 	image_color3:       datatypes.Color3,
 	image_rect_offset:  datatypes.Vector2,
@@ -52,6 +54,8 @@ ImageButton_to_image_label :: proc(button: ^ImageButton) -> ImageLabel {
 		image = button.image,
 		owned_image = button.owned_image,
 		stored_image = button.stored_image,
+		aseprite_playback = button.aseprite_playback,
+		animated_source = button.animated_source,
 		image_transparency = button.image_transparency,
 		image_color3 = button.image_color3,
 		image_rect_offset = button.image_rect_offset,
@@ -70,6 +74,8 @@ ImageButton_sync_image_label :: proc(button: ^ImageButton, label: ^ImageLabel) {
 	button.owned_image = label.owned_image
 
 	button.stored_image = label.stored_image
+	button.aseprite_playback = label.aseprite_playback
+	button.animated_source = label.animated_source
 
 	button.image_transparency = label.image_transparency
 
@@ -91,6 +97,9 @@ ImageButton_sync_image_label :: proc(button: ^ImageButton, label: ^ImageLabel) {
 ImageButton_is_image_property :: proc(key: string) -> bool {
 	switch key {
 	case "Image",
+	     "ImageContent",
+	     "AnimatedContent",
+	     "IsLoaded",
 	     "ImageTransparency",
 	     "ImageColor3",
 	     "ImageRectOffset",
@@ -214,6 +223,7 @@ ImageButton_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	ImageLabel_render(&label.object, ctx)
+	button.stored_image = label.stored_image
 }
 
 ImageButton_clone :: proc(source: ^Object, destination: ^Object) {
@@ -243,6 +253,9 @@ Register_ImageButton :: proc(registry: ^Registry) {
 		clone = ImageButton_clone,
 		properties = []string {
 			"Image",
+			"ImageContent",
+			"AnimatedContent",
+			"IsLoaded",
 			"ImageTransparency",
 			"ImageColor3",
 			"ImageRectOffset",

@@ -39,6 +39,11 @@ when KINE_RENDERER_GL {
 			width, height: i32,
 			delta_time: f32,
 		),
+		DrawVRUI:          proc(
+			user_data: rawptr,
+			surface: ^kineffi.KineSkiaSurface,
+			width, height, panel_width, panel_height: i32,
+		),
 		OnEvent:           proc(user_data: rawptr, event: sdl3.Event),
 		OnResize:          proc(user_data: rawptr, width, height: i32),
 		Ready:             bool,
@@ -168,7 +173,7 @@ when KINE_RENDERER_GL {
 
 	init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
 		width, height := width, height
-		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
+		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS | sdl3.INIT_GAMEPAD) {
 			show_fatal_error("Failed to initialize SDL")
 			return
 		}
@@ -230,14 +235,17 @@ when KINE_RENDERER_GL {
 				event: sdl3.Event
 
 				for sdl3.PollEvent(&event) {
+					sdl3.Gamepad_Open(event)
 					if renderer.OnEvent != nil {
 						renderer.OnEvent(renderer.UserData, event)
 					}
+					sdl3.Gamepad_Close(event)
 					renderer.CurrentEvent = &event
 					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
-						if renderer.CanClose == nil || renderer.CanClose(renderer.UserData) {running = false}
+						if renderer.CanClose == nil ||
+						   renderer.CanClose(renderer.UserData) {running = false}
 					case .KEY_DOWN:
 						if renderer.KeyDown != nil {
 							renderer.KeyDown(event.key.scancode)

@@ -25,7 +25,7 @@ You can also assign a `Content` URI:
 label.ImageContent = Content.fromUri("textures/icon.png")
 ```
 
-`Image` and `ImageContent` refer to the same URI-based source. Assigning either one replaces the current editable-image attachment, if any.
+`Image` and `ImageContent` refer to the same URI-based source. Both accept Animated values as well. Assigning either one replaces the current editable-image attachment, if any.
 
 ## Image sources
 
@@ -142,7 +142,8 @@ All properties below are specific to ImageLabel; inherited properties such as `S
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
 | `Image` | `string` | `""` | URI of an ordinary image. The setter also accepts a URI-based Content value. |
-| `ImageContent` | `Content` | Empty URI | Content representation of the ordinary image URI. |
+| `ImageContent` | `Content` | Empty URI | Content representation of the image URI; setter also accepts Animated. |
+| `AnimatedContent` | `Animated?` | nil | Animated image handle. Assign nil to clear the image. |
 | `EditableImage` | `EditableImage?` | `nil` | Live reference to the editable source, mutually exclusive with ordinary image sources. |
 | `IsLoaded` | `boolean` | `false` | Read-only. True if an ordinary image was decoded or an editable image is attached. |
 | `ImageTransparency` | `number` | `0` | Image opacity expressed as transparency: `0` opaque, `1` invisible. Clamped to 0–1. |
@@ -168,3 +169,12 @@ ImageLabel currently introduces no class-specific methods. It inherits the stand
 - Assign the EditableImage once, then update its pixels directly. Reassigning it every frame is unnecessary.
 - If an ordinary image is not loading, check its URI and `IsLoaded` before changing its rendering properties.
 - A label can be larger than its image, but stretching cannot add source detail. Increase the EditableImage resolution when needed.
+
+## Animated images
+
+```lua
+label.AnimatedContent = Animated.fromUri("project://sprites/player.aseprite")
+label.ResampleMode = Enum.ResampleMode.Nearest
+```
+
+GIF and Aseprite images play automatically. Aseprite uses its original frame durations and loops through the whole sprite. Each label or button has independent playback state.

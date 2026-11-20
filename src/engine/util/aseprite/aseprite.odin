@@ -36,7 +36,6 @@ package aseprite
 import "base:runtime"
 import "core:compress/deflate"
 import "core:log"
-import "core:os"
 import "core:strings"
 
 Color :: struct {
@@ -192,23 +191,18 @@ Error :: enum {
 	Invalid_Layer_Index,
 	Invalid_Cel,
 	Inflate_Failed,
+	Resource_Limit,
 }
 
 // ---------------------------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------------------------
 
-load_from_file :: proc(path: string, allocator := context.allocator) -> (ase: ^Ase, err: Error) {
-	data, read_err := os.read_entire_file(path, allocator)
-	if read_err != nil {
-		return nil, .File_Read_Failed
-	}
-	defer delete(data, allocator)
-	return load_from_memory(data, allocator)
-}
 
 load_from_memory :: proc(data: []u8, allocator := context.allocator) -> (ase: ^Ase, err: Error) {
 	context.allocator = allocator
+	if len(data) > 32 * 1024 * 1024 {return nil, .Resource_Limit}
+	if len(data) < 128 {return nil, .Truncated}
 
 	ase = new(Ase)
 	ase.allocator = allocator
@@ -264,10 +258,22 @@ load_from_memory :: proc(data: []u8, allocator := context.allocator) -> (ase: ^A
 	p.bpp = bits_per_pixel / 8
 	p.valid_layer_opacity = header_flags & 1 != 0
 
+	if ase.w < 1 ||
+	   ase.h < 1 ||
+	   frame_count < 1 ||
+	   ase.w > 4096 ||
+	   ase.h > 4096 ||
+	   frame_count > 1024 ||
+	   i64(ase.w) * i64(ase.h) * i64(frame_count) > 16 * 1024 * 1024 {return ase, .Resource_Limit}
 	ase.frames = make([]Frame, frame_count)
 
 	for &frame in ase.frames {
-		skip(r, 4) // frame size
+		p.udata_kind = .None
+		frame_start := r.pos
+		frame_size := int(read_u32(r))
+		if frame_size < 16 || frame_size > len(data) - frame_start {return ase, .Truncated}
+		frame_end := frame_start + frame_size
+		r.data = data[:frame_end]
 		if read_u16(r) != 0xF1FA {
 			return ase, .Bad_Frame_Magic
 		}
@@ -289,7 +295,7 @@ load_from_memory :: proc(data: []u8, allocator := context.allocator) -> (ase: ^A
 			chunk_size := int(read_u32(r))
 			chunk_type := read_u16(r)
 			chunk_end := chunk_start + chunk_size
-			if r.overrun || chunk_size < 6 || chunk_end > len(data) {
+			if r.overrun || chunk_size < 6 || chunk_end > frame_end {
 				return ase, .Truncated
 			}
 
@@ -302,9 +308,11 @@ load_from_memory :: proc(data: []u8, allocator := context.allocator) -> (ase: ^A
 			if r.overrun {
 				return ase, .Truncated
 			}
-			r.data = data
+			r.data = data[:frame_end]
 			r.pos = chunk_end
 		}
+		r.data = data
+		r.pos = frame_end
 	}
 
 	// Blend all cel pixels into each frame, for convenience.
@@ -503,6 +511,7 @@ Parser :: struct {
 	full:                []u8,
 	ase:                 ^Ase,
 	bpp:                 int,
+	cel_bytes:           i64,
 	valid_layer_opacity: bool,
 	layer_stack:         [dynamic]int, // layer_stack[child_level] = most recent layer at that depth
 	udata_kind:          UData_Kind,
@@ -536,6 +545,7 @@ parse_chunk :: proc(p: ^Parser, frame: ^Frame, chunk_type: u16, chunk_end: int) 
 			if r.overrun {
 				return .Truncated
 			}
+			if index + count > 65536 {return .Resource_Limit}
 			palette_ensure_size(ase, index + count)
 			for _ in 0 ..< count {
 				entry := &ase.palette[index]
@@ -604,7 +614,10 @@ parse_chunk :: proc(p: ^Parser, frame: ^Frame, chunk_type: u16, chunk_end: int) 
 			// Raw cel.
 			cel.w = int(read_u16(r))
 			cel.h = int(read_u16(r))
+			if cel.w > 4096 || cel.h > 4096 {return .Resource_Limit}
 			size := cel.w * cel.h * p.bpp
+			p.cel_bytes += i64(size)
+			if p.cel_bytes > 64 * 1024 * 1024 {return .Resource_Limit}
 			if r.overrun || size > remaining(r) {
 				return .Invalid_Cel
 			}
@@ -627,7 +640,10 @@ parse_chunk :: proc(p: ^Parser, frame: ^Frame, chunk_type: u16, chunk_end: int) 
 			if r.overrun {
 				return .Truncated
 			}
+			if cel.w > 4096 || cel.h > 4096 {return .Resource_Limit}
 			size := cel.w * cel.h * p.bpp
+			p.cel_bytes += i64(size)
+			if p.cel_bytes > 64 * 1024 * 1024 {return .Resource_Limit}
 			stream := r.data[r.pos:chunk_end]
 			r.pos = chunk_end
 			pixels, ok := inflate_cel(stream, size)
@@ -710,6 +726,11 @@ parse_chunk :: proc(p: ^Parser, frame: ^Frame, chunk_type: u16, chunk_end: int) 
 		if r.overrun {
 			return .Truncated
 		}
+		if entry_count < 0 ||
+		   entry_count > 65536 ||
+		   first < 0 ||
+		   last < first ||
+		   last >= entry_count {return .Invalid_Cel}
 		if first <= last {
 			// Each entry takes at least 6 bytes, which bounds the allocation by the chunk size.
 			if (last - first + 1) * 6 > remaining(r) {
@@ -832,10 +853,10 @@ inflate_cel :: proc(stream: []u8, expected: int) -> (pixels: []u8, ok: bool) {
 	buf: [dynamic]u8
 	defer delete(buf)
 
-	if err := deflate.inflate_zlib(&buf, stream, expected); err != nil {
+	if err := deflate.inflate_zlib(&buf, stream, expected, expected); err != nil {
 		return nil, false
 	}
-	if len(buf) < expected {
+	if len(buf) != expected {
 		return nil, false
 	}
 	pixels = make([]u8, expected)
@@ -900,8 +921,8 @@ compose_frame :: proc(ase: ^Ase, frame: ^Frame) {
 			continue
 		}
 
-		opacity := u8(src_cel.opacity * ase.layers[cel.layer].opacity * 255.0)
-		cx, cy, cw, ch := src_cel.x, src_cel.y, src_cel.w, src_cel.h
+		opacity := u8(cel.opacity * ase.layers[cel.layer].opacity * 255.0)
+		cx, cy, cw, ch := cel.x, cel.y, src_cel.w, src_cel.h
 
 		cl := -min(cx, 0) // first source column
 		ct := -min(cy, 0) // first source row

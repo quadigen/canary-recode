@@ -1,0 +1,99 @@
+---
+title: Aerodynamics
+description: Configure atmosphere, wind, and aerodynamic body coefficients for the physics simulation.
+---
+
+`Aerodynamics` owns the fluid solver settings used by `Workspace`. It replaces the old on/off `Workspace.FluidForces` switch with configurable atmosphere, wind, and body coefficients.
+
+Aerodynamics is disabled by default. Set `Enabled` to `true` to apply fluid forces to unanchored parts. `Workspace.FluidForces` remains as a compatibility alias for `Enabled`.
+
+## Getting started
+
+```lua
+local Aerodynamics = game:GetService("Aerodynamics")
+
+Aerodynamics.Enabled = true
+Aerodynamics.Wind = Vector3.new(4, 0, 0)
+Aerodynamics.Density = 1.225
+```
+
+## Properties
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | `boolean` | `false` | Whether aerodynamic forces are applied. Alias: `Workspace.FluidForces`. |
+| `Atmosphere` | `Enum.AerodynamicsAtmosphere` | `Standard` | Density model. `Standard` uses a sea-level atmosphere; `Legacy` uses a constant density with an optional scale height. |
+| `Density` | `number` | `1.225` | Sea-level air density in kg/m³. |
+| `MetersPerUnit` | `number` | `1` | World units per meter. Must be greater than zero. |
+| `ReferenceHeight` | `number` | `0` | World-space height treated as sea level. |
+| `DensityScaleHeight` | `number` | `0` | Scale height used by `Legacy` density falloff. `0` keeps density constant. |
+| `Wind` | `Vector3` | `0, 0, 0` | Additional wind velocity. Added to `Workspace.GlobalWind`. |
+| `WindShear` | `Vector3` | `0, 0, 0` | Wind change per meter of altitude. |
+| `Gust` | `Vector3` | `0, 0, 0` | Gust amplitude per axis. |
+| `GustFrequency` | `number` | `0` | Gust oscillation frequency in Hz. |
+| `GustWavelength` | `number` | `0` | Spatial wavelength of the gust field in meters. `0` disables the spatial component. |
+| `MinSpeed` | `number` | `0.05` | Airspeed below which a sample produces no force. |
+| `MaxSpeed` | `number` | `200` | Airspeed cap. `0` means unlimited. |
+| `ThinRatio` | `number` | `0.25` | Thin-body ratio used to classify automatic wings. |
+| `MinimumDimension` | `number` | `0.001` | Bodies thinner than this are ignored. |
+| `MaxForce` | `number` | `0` | Force limit in newtons. `0` means unlimited. |
+| `MaxTorque` | `number` | `0` | Torque limit in newton-meters. `0` means unlimited. |
+| `Mode` | `Enum.AerodynamicsMode` | `Auto` | Body model: `Auto`, `DragOnly`, `Wing`, or `Disabled`. |
+| `NormalAxis` | `Enum.AerodynamicsNormalAxis` | `Auto` | Wing normal axis: `Auto`, `X`, `Y`, or `Z`. |
+| `DragCoefficient` | `number` | `1.05` | Base drag coefficient. |
+| `ProfileDrag` | `number` | `0.025` | Zero-lift profile drag. |
+| `LiftMultiplier` | `number` | `1` | Scales generated lift. |
+| `StallAngle` | `number` | `15` | Stall angle in degrees. Clamped between `0.001` and `89.999`. |
+| `Efficiency` | `number` | `0.8` | Wing efficiency used for induced drag. |
+| `MaxLift` | `number` | `1.35` | Lift coefficient cap. |
+| `AreaMultiplier` | `number` | `1` | Scales the effective reference area. |
+| `DirectionalDrag` | `Vector3` | `0, 0, 0` | Per-axis drag weights. `0, 0, 0` uses `1, 1, 1`. |
+| `PressureOffset` | `Vector3` | `0, 0, 0` | Shifts the center of pressure in body space. |
+| `IncidenceAngle` | `number` | `0` | Wing incidence in degrees. |
+| `WaveDrag` | `number` | `0` | Transonic wave-drag strength. |
+| `SoundSpeed` | `number` | `0` | Speed of sound in m/s. `0` samples it from the atmosphere. |
+| `WakeSleeping` | `boolean` | `true` | Whether sleeping bodies are woken to receive aerodynamic forces. |
+
+## Atmosphere and wind
+
+`Standard` models density, pressure, temperature, and sound speed from altitude. `Legacy` keeps `Density` constant unless `DensityScaleHeight` is greater than zero, in which case density falls off exponentially with height.
+
+Wind combines the world-wide `Workspace.GlobalWind` with the service's `Wind`, `WindShear`, and `Gust` fields. Gusts are deterministic for a given place and time, so they stay consistent across clients.
+
+```lua
+local Aerodynamics = game:GetService("Aerodynamics")
+local Workspace = game:GetService("Workspace")
+
+Workspace.GlobalWind = Vector3.new(2, 0, 0)
+Aerodynamics.Wind = Vector3.new(0, 0, -3)
+Aerodynamics.WindShear = Vector3.new(0.05, 0, 0)
+Aerodynamics.Gust = Vector3.new(1.5, 0.5, 0)
+Aerodynamics.GustFrequency = 0.2
+Aerodynamics.GustWavelength = 40
+```
+
+## Methods
+
+### ResetToDefaults
+
+```lua
+ResetToDefaults(): ()
+```
+
+Restores every property to its default value. This also disables aerodynamics.
+
+```lua
+game:GetService("Aerodynamics"):ResetToDefaults()
+```
+
+## Notes
+
+- All numeric properties are clamped to valid ranges. Setting a non-finite number raises an error and leaves the previous value in place.
+- `Workspace.FluidForces` reads and writes `Enabled`, so existing scripts that only toggle fluid forces keep working.
+- Body options apply to every part in the world. For per-part overrides, configure the part's shape, size, and density rather than changing the global coefficients.
+- Buoyancy and water forces are handled by the separate water simulation, not by `Aerodynamics`.
+
+## See also
+
+- `Workspace`, world physics settings and `GlobalWind`.
+- `Physics`, simulation stepping and gravity.

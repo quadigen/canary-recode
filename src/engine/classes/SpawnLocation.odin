@@ -110,6 +110,7 @@ Register_SpawnLocation :: proc(registry: ^Registry) {
 		spawn_location_destroy,
 		get = spawn_location_get,
 		set = spawn_location_set,
+		namecall = part_namecall,
 		clone = spawn_location_clone,
 		properties = []string{"Enabled", "Neutral", "Duration"},
 	)

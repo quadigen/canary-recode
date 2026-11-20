@@ -381,12 +381,20 @@ http_service_get :: proc(
 	     "JSONDecode",
 	     "JSONEncode",
 	     "OpenLink",
-	     "UrlEncode":
+	     "UrlEncode",
+	     "UrlDecode":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
 
 	return false
+}
+
+http_hex_digit :: proc(c: u8) -> (u8, bool) {
+	if c >= '0' && c <= '9' {return c - '0', true}
+	if c >= 'a' && c <= 'f' {return c - 'a' + 10, true}
+	if c >= 'A' && c <= 'F' {return c - 'A' + 10, true}
+	return 0, false
 }
 
 http_service_push_guid :: proc(L: ^vm.State, bracketed: bool) {
@@ -761,8 +769,28 @@ http_service_namecall :: proc(
 		return 1, true
 
 	case "GenerateGUID":
-		bracketed := vm.ArgBoolean(L, 2)
+		bracketed := true
+		if !vm.IsNoneOrNil(L, 2) {bracketed = vm.ArgBoolean(L, 2)}
 		http_service_push_guid(L, bracketed)
+		return 1, true
+
+	case "UrlDecode":
+		value := vm.ArgString(L, 2)
+		decoded := make([dynamic]u8, 0, len(value))
+		defer delete(decoded)
+		for i := 0; i < len(value); i += 1 {
+			if value[i] == '%' && i + 2 < len(value) {
+				a, a_ok := http_hex_digit(value[i + 1])
+				b, b_ok := http_hex_digit(value[i + 2])
+				if a_ok && b_ok {
+					append(&decoded, a * 16 + b)
+					i += 2
+					continue
+				}
+			}
+			append(&decoded, value[i])
+		}
+		vm.PushString(L, string(decoded[:]))
 		return 1, true
 
 	case "UrlEncode":
@@ -812,6 +840,16 @@ Register_HttpService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = http_service_get,
 		namecall = http_service_namecall,
-		methods = []string{"CreateWebStreamClient"},
+		methods = []string {
+			"CreateWebStreamClient",
+			"GetAsync",
+			"PostAsync",
+			"RequestAsync",
+			"JSONEncode",
+			"JSONDecode",
+			"GenerateGUID",
+			"UrlEncode",
+			"UrlDecode",
+		},
 	)
 }

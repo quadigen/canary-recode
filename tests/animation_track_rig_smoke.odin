@@ -215,10 +215,11 @@ rig.Parent = workspace
 	camera.viewport_height = HEIGHT
 	direction := datatypes.Vector3{0.6, 0.12, 1}
 	direction_length := f32(
-		math.sqrt(f64(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z)),
+		math.sqrt(
+			f64(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z),
+		),
 	)
-	distance :=
-		radius / f32(math.sin(math.to_radians(f64(camera.field_of_view) * 0.5))) * 1.12
+	distance := radius / f32(math.sin(math.to_radians(f64(camera.field_of_view) * 0.5))) * 1.12
 	eye := datatypes.Vector3 {
 		target.x + direction.x / direction_length * distance,
 		target.y + direction.y / direction_length * distance,
@@ -263,6 +264,24 @@ local clips = rig:GetAnimationClips()
 assert(#bones > 0, "rig exposed no bones")
 assert(type(bones[1]) == "string" and bones[1] ~= "", "bone name is not a string")
 assert(#clips > 0, "rig exposed no animation clips")
+
+local firstBone = bones[1]
+local firstParent = rig:GetBoneParent(firstBone)
+assert(firstParent == nil or type(firstParent) == "string", "bone parent is not a string or nil")
+assert(rig:GetBoneParent("__missing_bone__") == nil, "unknown bone has a parent")
+assert(rig:GetBoneTransform("__missing_bone__") == nil, "unknown bone has a transform")
+assert(rig:GetBoneWorldCFrame("__missing_bone__") == nil, "unknown bone has a world cframe")
+
+local restTransform = rig:GetBoneTransform(firstBone)
+assert(typeof(restTransform) == "CFrame", "bone transform is not a CFrame")
+local restWorld = rig:GetBoneWorldCFrame(firstBone)
+assert(typeof(restWorld) == "CFrame", "bone world cframe is not a CFrame")
+
+rig:SetBoneTransform(firstBone, restTransform * CFrame.new(0, 0.5, 0))
+local movedWorld = rig:GetBoneWorldCFrame(firstBone)
+assert((movedWorld.Position - restWorld.Position).Magnitude > 0.01, "SetBoneTransform did not move the bone")
+rig:SetBoneTransform(firstBone, restTransform)
+
 for _, clip in clips do
     assert(type(clip.Index) == "number" and clip.Index >= 0, "clip index")
     assert(type(clip.Name) == "string" and clip.Name ~= "", "clip name")
@@ -351,12 +370,12 @@ track:AdjustWeight(1, 0)
 	// The pose frames are a headless-only visual regression check. Reading the
 	// surface back five times is what made the visible run feel like it hung.
 	if !visual {
-	// Occlude nothing: capture at evenly spaced times through the clip.
-	for fraction, pose in POSE_FRACTIONS {
-		run(
-			&v,
-			fmt.tprintf(
-				`
+		// Occlude nothing: capture at evenly spaced times through the clip.
+		for fraction, pose in POSE_FRACTIONS {
+			run(
+				&v,
+				fmt.tprintf(
+					`
 local track = TRACK
 local target = track.Length * %v
 track.TimePosition = target
@@ -366,55 +385,55 @@ assert(track.IsPlaying, "scrubbing stopped the track")
 assert(track.WeightCurrent == 1, "scrubbing changed the weight")
 POSED_TIME = track.TimePosition
 `,
-				fraction,
-			),
-			"pose_scrub",
-		)
-		capture_frame(
-			&env,
-			&v,
-			ctx,
-			&view,
-			compositor,
-			pose_frames[pose],
-			fmt.tprintf("build/animation_track_rig_pose_%d.ppm", pose),
-		)
-	}
+					fraction,
+				),
+				"pose_scrub",
+			)
+			capture_frame(
+				&env,
+				&v,
+				ctx,
+				&view,
+				compositor,
+				pose_frames[pose],
+				fmt.tprintf("build/animation_track_rig_pose_%d.ppm", pose),
+			)
+		}
 
-	foreground: [POSE_COUNT]int
-	changed: [POSE_COUNT]int
-	mean: [POSE_COUNT]f64
-	for frame, pose in pose_frames {
-		foreground[pose], _ = frame_difference(control, frame)
-		changed[pose], mean[pose] = frame_difference(pose_frames[0], frame)
+		foreground: [POSE_COUNT]int
+		changed: [POSE_COUNT]int
+		mean: [POSE_COUNT]f64
+		for frame, pose in pose_frames {
+			foreground[pose], _ = frame_difference(control, frame)
+			changed[pose], mean[pose] = frame_difference(pose_frames[0], frame)
+			fmt.println(
+				"ANIMATION_RIG_FRAME",
+				pose,
+				"time_fraction",
+				POSE_FRACTIONS[pose],
+				"foreground",
+				foreground[pose],
+				"changed_vs_rest",
+				changed[pose],
+				"mean_delta",
+				mean[pose],
+			)
+		}
+		for pose in 0 ..< POSE_COUNT {
+			assert(foreground[pose] > 500, "the rig is not visible in the captured frame")
+		}
+		assert(changed[1] > 100, "the animation does not visibly change the rig pose")
+		assert(changed[2] > 100, "the animation does not visibly change the rig pose")
+		assert(changed[3] > 100, "the animation does not visibly change the rig pose")
+		assert(save_contact_sheet(pose_frames, "build/animation_track_rig_contact.ppm"))
 		fmt.println(
-			"ANIMATION_RIG_FRAME",
-			pose,
-			"time_fraction",
-			POSE_FRACTIONS[pose],
-			"foreground",
-			foreground[pose],
-			"changed_vs_rest",
-			changed[pose],
-			"mean_delta",
-			mean[pose],
+			"ANIMATION_RIG_VISUAL",
+			"build/animation_track_rig_pose_0.ppm",
+			"build/animation_track_rig_pose_1.ppm",
+			"build/animation_track_rig_pose_2.ppm",
+			"build/animation_track_rig_pose_3.ppm",
+			"build/animation_track_rig_contact.ppm",
 		)
-	}
-	for pose in 0 ..< POSE_COUNT {
-		assert(foreground[pose] > 500, "the rig is not visible in the captured frame")
-	}
-	assert(changed[1] > 100, "the animation does not visibly change the rig pose")
-	assert(changed[2] > 100, "the animation does not visibly change the rig pose")
-	assert(changed[3] > 100, "the animation does not visibly change the rig pose")
-	assert(save_contact_sheet(pose_frames, "build/animation_track_rig_contact.ppm"))
-	fmt.println(
-		"ANIMATION_RIG_VISUAL",
-		"build/animation_track_rig_pose_0.ppm",
-		"build/animation_track_rig_pose_1.ppm",
-		"build/animation_track_rig_pose_2.ppm",
-		"build/animation_track_rig_pose_3.ppm",
-		"build/animation_track_rig_contact.ppm",
-	)
 	}
 
 	// Looping restarts the clip and fires DidLoop during the Update phase.

@@ -41,11 +41,16 @@ wasm:
     & ./tools/build_wasm.ps1
 
 [unix]
+wasm-setup:
+    bash ./tools/setup_wasm.sh
+
+[unix]
 wasm:
-    pwsh -NoProfile -File ./tools/build_wasm.ps1
+    bash ./tools/build_wasm.sh editor
 
 wasm-serve:
-    {{python}} -m http.server 8000 --directory build/web
+    @{{python}} -c "from pathlib import Path; assert Path('build/web/kinemium_engine.wasm').is_file(), 'Run just wasm successfully first'"
+    {{python}} -m http.server 8000 --bind 127.0.0.1 --directory build/web
 
 [windows]
 wasm-client address="" port="":
@@ -53,10 +58,11 @@ wasm-client address="" port="":
 
 [unix]
 wasm-client address="" port="":
-    pwsh -NoProfile -File ./tools/build_wasm_client.ps1 -Address "{{address}}" -Port "{{port}}"
+    bash ./tools/build_wasm.sh client "{{address}}" "{{port}}"
 
 wasm-client-serve:
-    {{python}} -m http.server 8001 --directory build/web-client
+    @{{python}} -c "from pathlib import Path; assert Path('build/web-client/kinemium_engine.wasm').is_file(), 'Run just wasm-client successfully first'"
+    {{python}} -m http.server 8001 --bind 127.0.0.1 --directory build/web-client
 
 [windows]
 android:
@@ -83,7 +89,12 @@ tests_services := '''
     part_nil_body_smoke
     physics_sleep_tuning_smoke
     physics_collider_smoke
+    capsule_part_smoke
     workspace_physics_smoke
+    aerodynamics_service_smoke
+    aseprite_service_smoke
+    playtest_tree_smoke
+    vr_service_smoke
     hinge_constraint_smoke
     spring_constraint_smoke
     rope_constraint_smoke
@@ -109,6 +120,7 @@ tests_services := '''
     material_catalog_smoke
     water_buoyancy_camera_smoke
     terrain_service_smoke
+    terrain_sdf_smoke
     terrain_collision_smoke
     singleplayer_smoke
     playtest_launch_smoke
@@ -133,6 +145,7 @@ tests_gui := '''
     gui_rotation_smoke
     gui_layout_smoke
     screen_gui_clip_smoke
+    vr_gui_smoke
     surface_gui_input_smoke
 '''
 
@@ -149,8 +162,10 @@ tests_replication := '''
     replication_constraint_smoke
     replicator_multi_peer_smoke
     replication_remote_smoke
+    replication_unreliable_remote_smoke
     replication_breadth_smoke
     character_replication_smoke
+    physics_model_smoke
     editor_pivot_smoke
     water_character_network_smoke
     character_void_world_drive_smoke

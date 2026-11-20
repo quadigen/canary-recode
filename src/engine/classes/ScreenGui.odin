@@ -76,9 +76,19 @@ ScreenGui_get :: proc(
 	case "ClipToDeviceSafeArea":
 		vm.PushBoolean(L, ScreenGui.clip_to_device_safe_area)
 	case "SafeAreaCompatibility":
-		_ = enums.Push_Item_By_Value(L, enum_registry, "SafeAreaCompatibility", i64(ScreenGui.safe_area_compat))
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"SafeAreaCompatibility",
+			i64(ScreenGui.safe_area_compat),
+		)
 	case "ScreenInsets":
-		_ = enums.Push_Item_By_Value(L, enum_registry, "ScreenInsets", i64(ScreenGui.screen_insets))
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ScreenInsets",
+			i64(ScreenGui.screen_insets),
+		)
 	case "IgnoreGuiInset":
 		vm.PushBoolean(L, ScreenGui.ignore_gui_inset)
 	case "RenderOnTop":
@@ -90,7 +100,10 @@ ScreenGui_get :: proc(
 		if (width <= 0 || height <= 0) && object.signal_registry != nil {
 			width, height = renderer.viewport_size(object.signal_registry.renderer)
 		}
-		ctx := Class_Step_Context{viewport_width = width, viewport_height = height}
+		ctx := Class_Step_Context {
+			viewport_width  = width,
+			viewport_height = height,
+		}
 		_, _, w, h := GuiObject_get_absolute_transform(object, &ctx)
 		datatypes.Push_Vector2(L, datatype_registry, {max(0, w), max(0, h)})
 	case "AbsolutePosition":
@@ -128,11 +141,11 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	}
 	gui_discard_picture(gui)
 
-	// First draw live after a change. It discovers animated content and
-	// effects that need the destination pixels before we start recording.
 	parent_dynamic := ctx.gui_dynamic
 	ctx.gui_dynamic = false
-	recording := gui.draw_observed && !gui.draw_dynamic &&
+	recording :=
+		gui.draw_observed &&
+		!gui.draw_dynamic &&
 		gui.draw_observed_revision == revision &&
 		gui.draw_picture_rect == bounds &&
 		kineffi.Kine_Skia_Surface_BeginPicture(surface) != 0
@@ -184,7 +197,8 @@ screen_gui_draw_child :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	rotated := GuiObject_push_rotation(gui, ctx)
 	defer if rotated {GuiObject_pop_rotation(ctx)}
 
-	shader_layer := shader_ready && shader.samples_content && UIShader_Apply(shader, ctx, rect, true)
+	shader_layer :=
+		shader_ready && shader.samples_content && UIShader_Apply(shader, ctx, rect, true)
 	defer if shader_layer {
 		guilib.restore(ctx.renderer.SkiaSurface) // Composite the shaded layer.
 		guilib.restore(ctx.renderer.SkiaSurface) // Restore the parent's transform and clip.
@@ -249,9 +263,9 @@ ScreenGui_RenderChildren_Visible :: proc(
 		shader := UIShader_Find(child)
 		if (shader == nil || shader.gui_transform == UI_SHADER_IDENTITY_TRANSFORM) &&
 		   (child_rect.x + child_rect.width < viewport.x ||
-		   child_rect.x > viewport.x + viewport.width ||
-		   child_rect.y + child_rect.height < viewport.y ||
-		   child_rect.y > viewport.y + viewport.height) {
+				   child_rect.x > viewport.x + viewport.width ||
+				   child_rect.y + child_rect.height < viewport.y ||
+				   child_rect.y > viewport.y + viewport.height) {
 			continue
 		}
 
@@ -295,6 +309,29 @@ ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	ScreenGui_RenderChildren(object, ctx)
+}
+
+Render_VR_ScreenGuis :: proc(registry: ^Registry, L: ^vm.State, width, height: i32) {
+	if registry == nil || L == nil || registry.renderer == nil {return}
+	descriptor := Find_Class(registry, "ScreenGui")
+	if descriptor == nil {return}
+	Sort_ScreenGui_Instances(descriptor)
+	ctx := Class_Step_Context {
+		L               = L,
+		renderer        = registry.renderer,
+		data_model      = registry.data_model,
+		viewport_width  = width,
+		viewport_height = height,
+		delta_time      = 0,
+		cache_gui       = false,
+	}
+	overlays := [?]bool{false, true}
+	for overlay in overlays {
+		ctx.gui_overlay = overlay
+		for object in descriptor.instances {
+			if object != nil && !object.destroyed {ScreenGui_render(object, &ctx)}
+		}
+	}
 }
 
 ScreenGui_Is_Visible :: proc(gui: ^ScreenGui) -> bool {

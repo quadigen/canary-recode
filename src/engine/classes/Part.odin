@@ -14,6 +14,7 @@ Part_Class := Class_Info {
 Part :: struct {
 	using object:      Object,
 	cframe:            datatypes.CFrame,
+	pivot_offset:      datatypes.CFrame,
 	color:             datatypes.Color3,
 	size:              datatypes.Vector3,
 	transparency:      f64,
@@ -36,6 +37,7 @@ Part_Init :: proc() -> Part {
 	return Part {
 		object = Object_Init(&Part_Class),
 		cframe = datatypes.CFrame_Identity,
+		pivot_offset = datatypes.CFrame_Identity,
 		color = datatypes.Color3{R = 1, G = 1, B = 1},
 		size = datatypes.Vector3{4, 1, 2},
 		anchored = true,
@@ -111,6 +113,11 @@ part_get :: proc(
 	case "CFrame":
 		if datatype_registry == nil {return false}
 		datatypes.Push_CFrame(L, datatype_registry, part.cframe)
+	case "PivotOffset":
+		if datatype_registry == nil {return false}
+		datatypes.Push_CFrame(L, datatype_registry, part.pivot_offset)
+	case "GetPivot", "PivotTo", "GetVelocityAtPosition":
+		vm.PushUserdataMethod(L, key)
 	case "Color":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, part.color)
@@ -185,6 +192,9 @@ part_set :: proc(
 		if datatype_registry == nil {return false}
 		part.cframe = datatypes.Arg_CFrame(L, value_index, datatype_registry)
 		part.position = {part.cframe.x, part.cframe.y, part.cframe.z}
+	case "PivotOffset":
+		if datatype_registry == nil {return false}
+		part.pivot_offset = datatypes.Arg_CFrame(L, value_index, datatype_registry)
 	case "Color":
 		if datatype_registry == nil {return false}
 		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
@@ -226,6 +236,19 @@ part_set :: proc(
 	return true
 }
 
+Part_Get_Pivot :: proc(part: ^Part) -> datatypes.CFrame {
+	return datatypes.CFrame_Mul_CFrame(part.cframe, part.pivot_offset)
+}
+
+Part_Pivot_To :: proc(part: ^Part, target: datatypes.CFrame) {
+	part.cframe = datatypes.CFrame_Mul_CFrame(target, datatypes.CFrame_Inverse(part.pivot_offset))
+	part.position = datatypes.CFrame_Position(part.cframe)
+	Hierarchy_Touched()
+	Render_3D_Mark_Dirty()
+	Object_Fire_Property_Changed(&part.object, "CFrame")
+	if !part.destroyed {Object_Fire_Property_Changed(&part.object, "Position")}
+}
+
 part_namecall :: proc(
 	L: ^vm.State,
 	object: ^Object,
@@ -238,6 +261,26 @@ part_namecall :: proc(
 ) {
 	part := cast(^Part)object
 	switch method {
+	case "GetPivot":
+		datatypes.Push_CFrame(L, datatype_registry, Part_Get_Pivot(part))
+		return 1, true
+	case "PivotTo":
+		Part_Pivot_To(part, datatypes.Arg_CFrame(L, 2, datatype_registry))
+		return 0, true
+	case "GetVelocityAtPosition":
+		point := datatypes.Arg_Vector3(L, 2)
+		registry := part.signal_registry
+		linear := Part_Linear_Velocity(registry, object)
+		angular := Part_Angular_Velocity(registry, object)
+		center := datatypes.CFrame_Position(part.cframe)
+		datatypes.Push_Vector3(
+			L,
+			datatypes.Vec3_Add(
+				linear,
+				datatypes.Vec3_Cross(angular, datatypes.Vec3_Subtract(point, center)),
+			),
+		)
+		return 1, true
 	case "UnionAsync":
 		return part_csg_namecall(L, object, .Union, enum_registry), true
 	case "SubtractAsync":
@@ -259,6 +302,7 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst := cast(^Part)destination
 
 	dst.cframe = src.cframe
+	dst.pivot_offset = src.pivot_offset
 	dst.color = src.color
 	dst.size = src.size
 	dst.transparency = src.transparency
@@ -305,7 +349,13 @@ Register_Part :: proc(registry: ^Registry) {
 			"AssemblyLinearVelocity",
 			"AssemblyAngularVelocity",
 		},
-		methods = []string{"ApplyImpulse", "UnionAsync", "SubtractAsync", "IntersectAsync", "Negate"},
+		methods = []string {
+			"ApplyImpulse",
+			"UnionAsync",
+			"SubtractAsync",
+			"IntersectAsync",
+			"Negate",
+		},
 		events = []string{"Touched"},
 	)
 }

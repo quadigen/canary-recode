@@ -24,12 +24,20 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "AnalyticsCustomFieldKeys", AnalyticsCustomFieldKeys)
 	Register_Reflected_Enum(registry, "AnalyticsEconomyAction", AnalyticsEconomyAction)
 	Register_Reflected_Enum(registry, "AnalyticsEconomyFlowType", AnalyticsEconomyFlowType)
-	Register_Reflected_Enum(registry, "AnalyticsEconomyTransactionType", AnalyticsEconomyTransactionType)
+	Register_Reflected_Enum(
+		registry,
+		"AnalyticsEconomyTransactionType",
+		AnalyticsEconomyTransactionType,
+	)
 	Register_Reflected_Enum(registry, "AnalyticsLogLevel", AnalyticsLogLevel)
 	Register_Reflected_Enum(registry, "AnalyticsProgressionStatus", AnalyticsProgressionStatus)
 	Register_Reflected_Enum(registry, "AnalyticsProgressionType", AnalyticsProgressionType)
 	Register_Reflected_Enum(registry, "AnimationClipFromVideoStatus", AnimationClipFromVideoStatus)
-	Register_Reflected_Enum(registry, "AnimationNodeBlend2DInputMode", AnimationNodeBlend2DInputMode)
+	Register_Reflected_Enum(
+		registry,
+		"AnimationNodeBlend2DInputMode",
+		AnimationNodeBlend2DInputMode,
+	)
 	Register_Reflected_Enum(registry, "AnimationNodeInterruptible", AnimationNodeInterruptible)
 	Register_Reflected_Enum(registry, "AnimationNodePlayMode", AnimationNodePlayMode)
 	Register_Reflected_Enum(registry, "AnimationNodeTransitionType", AnimationNodeTransitionType)
@@ -37,9 +45,17 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "AnimationNodeWaitFor", AnimationNodeWaitFor)
 	Register_Reflected_Enum(registry, "AnimationPriority", AnimationPriority)
 	Register_Reflected_Enum(registry, "AnimatorRetargetingMode", AnimatorRetargetingMode)
-	Register_Reflected_Enum(registry, "AnnotationChannelContentPreference", AnnotationChannelContentPreference)
+	Register_Reflected_Enum(
+		registry,
+		"AnnotationChannelContentPreference",
+		AnnotationChannelContentPreference,
+	)
 	Register_Reflected_Enum(registry, "AnnotationEditingMode", AnnotationEditingMode)
-	Register_Reflected_Enum(registry, "AnnotationPlaceContentPreference", AnnotationPlaceContentPreference)
+	Register_Reflected_Enum(
+		registry,
+		"AnnotationPlaceContentPreference",
+		AnnotationPlaceContentPreference,
+	)
 	Register_Reflected_Enum(registry, "AnnotationRequestStatus", AnnotationRequestStatus)
 	Register_Reflected_Enum(registry, "AnnotationRequestType", AnnotationRequestType)
 	Register_Reflected_Enum(registry, "AppLifecycleManagerState", AppLifecycleManagerState)
@@ -70,22 +86,54 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "AvatarItemType", AvatarItemType)
 	Register_Reflected_Enum(registry, "Dimension", Dimension)
 	Register_Reflected_Enum(registry, "AvatarPromptResult", AvatarPromptResult)
-	Register_Reflected_Enum(registry, "AvatarSettingsAccessoryLimitMethod", AvatarSettingsAccessoryLimitMethod)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsAccessoryLimitMethod",
+		AvatarSettingsAccessoryLimitMethod,
+	)
 	Register_Reflected_Enum(registry, "AvatarSettingsAccessoryMode", AvatarSettingsAccessoryMode)
-	Register_Reflected_Enum(registry, "AvatarSettingsAnimationClipsMode", AvatarSettingsAnimationClipsMode)
-	Register_Reflected_Enum(registry, "AvatarSettingsAnimationPacksMode", AvatarSettingsAnimationPacksMode)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsAnimationClipsMode",
+		AvatarSettingsAnimationClipsMode,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsAnimationPacksMode",
+		AvatarSettingsAnimationPacksMode,
+	)
 	Register_Reflected_Enum(registry, "AvatarSettingsAppearanceMode", AvatarSettingsAppearanceMode)
 	Register_Reflected_Enum(registry, "AvatarSettingsBuildMode", AvatarSettingsBuildMode)
 	Register_Reflected_Enum(registry, "AvatarSettingsClothingMode", AvatarSettingsClothingMode)
 	Register_Reflected_Enum(registry, "AvatarSettingsCollisionMode", AvatarSettingsCollisionMode)
-	Register_Reflected_Enum(registry, "AvatarSettingsCustomAccessoryMode", AvatarSettingsCustomAccessoryMode)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsCustomAccessoryMode",
+		AvatarSettingsCustomAccessoryMode,
+	)
 	Register_Reflected_Enum(registry, "AvatarSettingsCustomBodyType", AvatarSettingsCustomBodyType)
-	Register_Reflected_Enum(registry, "AvatarSettingsCustomClothingMode", AvatarSettingsCustomClothingMode)
-	Register_Reflected_Enum(registry, "AvatarSettingsHitAndTouchDetectionMode", AvatarSettingsHitAndTouchDetectionMode)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsCustomClothingMode",
+		AvatarSettingsCustomClothingMode,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsHitAndTouchDetectionMode",
+		AvatarSettingsHitAndTouchDetectionMode,
+	)
 	Register_Reflected_Enum(registry, "AvatarSettingsJumpMode", AvatarSettingsJumpMode)
-	Register_Reflected_Enum(registry, "AvatarSettingsLegacyCollisionMode", AvatarSettingsLegacyCollisionMode)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarSettingsLegacyCollisionMode",
+		AvatarSettingsLegacyCollisionMode,
+	)
 	Register_Reflected_Enum(registry, "AvatarSettingsScaleMode", AvatarSettingsScaleMode)
-	Register_Reflected_Enum(registry, "AvatarThumbnailCustomizationType", AvatarThumbnailCustomizationType)
+	Register_Reflected_Enum(
+		registry,
+		"AvatarThumbnailCustomizationType",
+		AvatarThumbnailCustomizationType,
+	)
 	Register_Reflected_Enum(registry, "AvatarUnificationMode", AvatarUnificationMode)
 	Register_Reflected_Enum(registry, "Axis", Axis)
 	Register_Reflected_Enum(registry, "BenefitType", BenefitType)
@@ -152,7 +200,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "DebuggerStatus", DebuggerStatus)
 	Register_Reflected_Enum(registry, "DefaultScriptSyncFileType", DefaultScriptSyncFileType)
 	Register_Reflected_Enum(registry, "DevCameraOcclusionMode", DevCameraOcclusionMode)
-	Register_Reflected_Enum(registry, "DevComputerCameraMovementMode", DevComputerCameraMovementMode)
+	Register_Reflected_Enum(
+		registry,
+		"DevComputerCameraMovementMode",
+		DevComputerCameraMovementMode,
+	)
 	Register_Reflected_Enum(registry, "DevComputerMovementMode", DevComputerMovementMode)
 	Register_Reflected_Enum(registry, "DevTouchCameraMovementMode", DevTouchCameraMovementMode)
 	Register_Reflected_Enum(registry, "DevTouchMovementMode", DevTouchMovementMode)
@@ -179,16 +231,44 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "environmentalPhysicsThrottle", environmentalPhysicsThrottle)
 	Register_Reflected_Enum(registry, "ExperienceAuthScope", ExperienceAuthScope)
 	Register_Reflected_Enum(registry, "ExperienceEventStatus", ExperienceEventStatus)
-	Register_Reflected_Enum(registry, "ExperienceStateCaptureSelectionMode", ExperienceStateCaptureSelectionMode)
-	Register_Reflected_Enum(registry, "ExperienceStateRecordingLoadMode", ExperienceStateRecordingLoadMode)
-	Register_Reflected_Enum(registry, "ExperienceStateRecordingLoadSourceType", ExperienceStateRecordingLoadSourceType)
-	Register_Reflected_Enum(registry, "ExperienceStateRecordingPlaybackMode", ExperienceStateRecordingPlaybackMode)
+	Register_Reflected_Enum(
+		registry,
+		"ExperienceStateCaptureSelectionMode",
+		ExperienceStateCaptureSelectionMode,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"ExperienceStateRecordingLoadMode",
+		ExperienceStateRecordingLoadMode,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"ExperienceStateRecordingLoadSourceType",
+		ExperienceStateRecordingLoadSourceType,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"ExperienceStateRecordingPlaybackMode",
+		ExperienceStateRecordingPlaybackMode,
+	)
 	Register_Reflected_Enum(registry, "ExplosionType", ExplosionType)
 	Register_Reflected_Enum(registry, "FACSDataLod", FACSDataLod)
-	Register_Reflected_Enum(registry, "FacialAgeEstimationResultType", FacialAgeEstimationResultType)
-	Register_Reflected_Enum(registry, "FacialAnimationStreamingState", FacialAnimationStreamingState)
+	Register_Reflected_Enum(
+		registry,
+		"FacialAgeEstimationResultType",
+		FacialAgeEstimationResultType,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"FacialAnimationStreamingState",
+		FacialAnimationStreamingState,
+	)
 	Register_Reflected_Enum(registry, "FacsActionUnit", FacsActionUnit)
-	Register_Reflected_Enum(registry, "FeatureRestrictionAbuseVector", FeatureRestrictionAbuseVector)
+	Register_Reflected_Enum(
+		registry,
+		"FeatureRestrictionAbuseVector",
+		FeatureRestrictionAbuseVector,
+	)
 	Register_Reflected_Enum(registry, "FieldOfViewMode", FieldOfViewMode)
 	Register_Reflected_Enum(registry, "FillDirection", FillDirection)
 	Register_Reflected_Enum(registry, "FilterErrorType", FilterErrorType)
@@ -197,6 +277,9 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "FinishRecordingOperation", FinishRecordingOperation)
 	Register_Reflected_Enum(registry, "FluidFidelity", FluidFidelity)
 	Register_Reflected_Enum(registry, "FluidForces", FluidForces)
+	Register_Reflected_Enum(registry, "AerodynamicsMode", AerodynamicsMode)
+	Register_Reflected_Enum(registry, "AerodynamicsAtmosphere", AerodynamicsAtmosphere)
+	Register_Reflected_Enum(registry, "AerodynamicsNormalAxis", AerodynamicsNormalAxis)
 	Register_Reflected_Enum(registry, "Font", Font)
 	Register_Reflected_Enum(registry, "FontSize", FontSize)
 	Register_Reflected_Enum(registry, "FontStyle", FontStyle)
@@ -244,7 +327,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "InitialDockState", InitialDockState)
 	Register_Reflected_Enum(registry, "InputActionType", InputActionType)
 	Register_Reflected_Enum(registry, "InputType", InputType)
-	Register_Reflected_Enum(registry, "IntermediateMeshGenerationResult", IntermediateMeshGenerationResult)
+	Register_Reflected_Enum(
+		registry,
+		"IntermediateMeshGenerationResult",
+		IntermediateMeshGenerationResult,
+	)
 	Register_Reflected_Enum(registry, "InterpolationThrottlingMode", InterpolationThrottlingMode)
 	Register_Reflected_Enum(registry, "InviteState", InviteState)
 	Register_Reflected_Enum(registry, "ItemLineAlignment", ItemLineAlignment)
@@ -261,14 +348,26 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ListDisplayMode", ListDisplayMode)
 	Register_Reflected_Enum(registry, "ListenerLocation", ListenerLocation)
 	Register_Reflected_Enum(registry, "ListenerType", ListenerType)
-	Register_Reflected_Enum(registry, "LiveEditingAtomicUpdateResponse", LiveEditingAtomicUpdateResponse)
-	Register_Reflected_Enum(registry, "LiveEditingBroadcastMessageType", LiveEditingBroadcastMessageType)
+	Register_Reflected_Enum(
+		registry,
+		"LiveEditingAtomicUpdateResponse",
+		LiveEditingAtomicUpdateResponse,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"LiveEditingBroadcastMessageType",
+		LiveEditingBroadcastMessageType,
+	)
 	Register_Reflected_Enum(registry, "LoadCharacterLayeredClothing", LoadCharacterLayeredClothing)
 	Register_Reflected_Enum(registry, "LoadDynamicHeads", LoadDynamicHeads)
 	Register_Reflected_Enum(registry, "LocationType", LocationType)
 	Register_Reflected_Enum(registry, "LuauTypeCheckMode", LuauTypeCheckMode)
 	Register_Reflected_Enum(registry, "MakeupType", MakeupType)
-	Register_Reflected_Enum(registry, "MarketplaceBulkPurchasePromptStatus", MarketplaceBulkPurchasePromptStatus)
+	Register_Reflected_Enum(
+		registry,
+		"MarketplaceBulkPurchasePromptStatus",
+		MarketplaceBulkPurchasePromptStatus,
+	)
 	Register_Reflected_Enum(registry, "MarketplaceProductType", MarketplaceProductType)
 	Register_Reflected_Enum(registry, "MarkupKind", MarkupKind)
 	Register_Reflected_Enum(registry, "MatchmakingType", MatchmakingType)
@@ -289,7 +388,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ModifierKey", ModifierKey)
 	Register_Reflected_Enum(registry, "MouseBehavior", MouseBehavior)
 	Register_Reflected_Enum(registry, "MoveState", MoveState)
-	Register_Reflected_Enum(registry, "MoverConstraintRootBehaviorMode", MoverConstraintRootBehaviorMode)
+	Register_Reflected_Enum(
+		registry,
+		"MoverConstraintRootBehaviorMode",
+		MoverConstraintRootBehaviorMode,
+	)
 	Register_Reflected_Enum(registry, "MuteState", MuteState)
 	Register_Reflected_Enum(registry, "NameOcclusion", NameOcclusion)
 	Register_Reflected_Enum(registry, "NegateOperationHiddenHistory", NegateOperationHiddenHistory)
@@ -311,7 +414,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ParticleEmitterShapeStyle", ParticleEmitterShapeStyle)
 	Register_Reflected_Enum(registry, "ParticleFlipbookLayout", ParticleFlipbookLayout)
 	Register_Reflected_Enum(registry, "ParticleFlipbookMode", ParticleFlipbookMode)
-	Register_Reflected_Enum(registry, "ParticleFlipbookTextureCompatible", ParticleFlipbookTextureCompatible)
+	Register_Reflected_Enum(
+		registry,
+		"ParticleFlipbookTextureCompatible",
+		ParticleFlipbookTextureCompatible,
+	)
 	Register_Reflected_Enum(registry, "ParticleOrientation", ParticleOrientation)
 	Register_Reflected_Enum(registry, "PathStatus", PathStatus)
 	Register_Reflected_Enum(registry, "PathWaypointAction", PathWaypointAction)
@@ -326,10 +433,18 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "Platform", Platform)
 	Register_Reflected_Enum(registry, "PlaybackState", PlaybackState)
 	Register_Reflected_Enum(registry, "PlayerActions", PlayerActions)
-	Register_Reflected_Enum(registry, "PlayerCharacterDestroyBehavior", PlayerCharacterDestroyBehavior)
+	Register_Reflected_Enum(
+		registry,
+		"PlayerCharacterDestroyBehavior",
+		PlayerCharacterDestroyBehavior,
+	)
 	Register_Reflected_Enum(registry, "PlayerChatType", PlayerChatType)
 	Register_Reflected_Enum(registry, "PlayerDataErrorState", PlayerDataErrorState)
-	Register_Reflected_Enum(registry, "PlayerDataLoadFailureBehavior", PlayerDataLoadFailureBehavior)
+	Register_Reflected_Enum(
+		registry,
+		"PlayerDataLoadFailureBehavior",
+		PlayerDataLoadFailureBehavior,
+	)
 	Register_Reflected_Enum(registry, "PlayerExitReason", PlayerExitReason)
 	Register_Reflected_Enum(registry, "PoseEasingDirection", PoseEasingDirection)
 	Register_Reflected_Enum(registry, "PoseEasingStyle", PoseEasingStyle)
@@ -346,7 +461,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ProductPurchaseDecision", ProductPurchaseDecision)
 	Register_Reflected_Enum(registry, "PromptCreateAssetResult", PromptCreateAssetResult)
 	Register_Reflected_Enum(registry, "PromptCreateAvatarResult", PromptCreateAvatarResult)
-	Register_Reflected_Enum(registry, "PromptExperienceDetailsResult", PromptExperienceDetailsResult)
+	Register_Reflected_Enum(
+		registry,
+		"PromptExperienceDetailsResult",
+		PromptExperienceDetailsResult,
+	)
 	Register_Reflected_Enum(registry, "PromptLinkSharingResult", PromptLinkSharingResult)
 	Register_Reflected_Enum(registry, "PromptPublishAssetResult", PromptPublishAssetResult)
 	Register_Reflected_Enum(registry, "PropertyStatus", PropertyStatus)
@@ -356,18 +475,42 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "QualityLevel", QualityLevel)
 	Register_Reflected_Enum(registry, "R15CollisionType", R15CollisionType)
 	Register_Reflected_Enum(registry, "RaycastFilterType", RaycastFilterType)
-	Register_Reflected_Enum(registry, "ReadCapturesFromGalleryResult", ReadCapturesFromGalleryResult)
+	Register_Reflected_Enum(
+		registry,
+		"ReadCapturesFromGalleryResult",
+		ReadCapturesFromGalleryResult,
+	)
 	Register_Reflected_Enum(registry, "RecommendationActionType", RecommendationActionType)
-	Register_Reflected_Enum(registry, "RecommendationDepartureIntent", RecommendationDepartureIntent)
+	Register_Reflected_Enum(
+		registry,
+		"RecommendationDepartureIntent",
+		RecommendationDepartureIntent,
+	)
 	Register_Reflected_Enum(registry, "RecommendationImpressionType", RecommendationImpressionType)
-	Register_Reflected_Enum(registry, "RecommendationItemContentType", RecommendationItemContentType)
+	Register_Reflected_Enum(
+		registry,
+		"RecommendationItemContentType",
+		RecommendationItemContentType,
+	)
 	Register_Reflected_Enum(registry, "RecommendationItemVisibility", RecommendationItemVisibility)
 	Register_Reflected_Enum(registry, "RejectCharacterDeletions", RejectCharacterDeletions)
 	Register_Reflected_Enum(registry, "RenderFidelity", RenderFidelity)
 	Register_Reflected_Enum(registry, "RenderPriority", RenderPriority)
-	Register_Reflected_Enum(registry, "RenderingCacheOptimizationMode", RenderingCacheOptimizationMode)
-	Register_Reflected_Enum(registry, "RenderingTestComparisonMethod", RenderingTestComparisonMethod)
-	Register_Reflected_Enum(registry, "ReplicateInstanceDestroySetting", ReplicateInstanceDestroySetting)
+	Register_Reflected_Enum(
+		registry,
+		"RenderingCacheOptimizationMode",
+		RenderingCacheOptimizationMode,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"RenderingTestComparisonMethod",
+		RenderingTestComparisonMethod,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"ReplicateInstanceDestroySetting",
+		ReplicateInstanceDestroySetting,
+	)
 	Register_Reflected_Enum(registry, "ResamplerMode", ResamplerMode)
 	Register_Reflected_Enum(registry, "ReservedHighlightId", ReservedHighlightId)
 	Register_Reflected_Enum(registry, "RestPose", RestPose)
@@ -391,7 +534,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "SafeAreaCompatibility", SafeAreaCompatibility)
 	Register_Reflected_Enum(registry, "SalesTypeFilter", SalesTypeFilter)
 	Register_Reflected_Enum(registry, "SandboxedInstanceMode", SandboxedInstanceMode)
-	Register_Reflected_Enum(registry, "SaveAvatarThumbnailCustomizationFailure", SaveAvatarThumbnailCustomizationFailure)
+	Register_Reflected_Enum(
+		registry,
+		"SaveAvatarThumbnailCustomizationFailure",
+		SaveAvatarThumbnailCustomizationFailure,
+	)
 	Register_Reflected_Enum(registry, "SaveFilter", SaveFilter)
 	Register_Reflected_Enum(registry, "SavedQualitySetting", SavedQualitySetting)
 	Register_Reflected_Enum(registry, "ScaleType", ScaleType)
@@ -415,7 +562,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "SingleplayerScriptMode", SingleplayerScriptMode)
 	Register_Reflected_Enum(registry, "SizeConstraint", SizeConstraint)
 	Register_Reflected_Enum(registry, "SolverConvergenceMetricType", SolverConvergenceMetricType)
-	Register_Reflected_Enum(registry, "SolverConvergenceVisualizationMode", SolverConvergenceVisualizationMode)
+	Register_Reflected_Enum(
+		registry,
+		"SolverConvergenceVisualizationMode",
+		SolverConvergenceVisualizationMode,
+	)
 	Register_Reflected_Enum(registry, "SortDirection", SortDirection)
 	Register_Reflected_Enum(registry, "SortOrder", SortOrder)
 	Register_Reflected_Enum(registry, "SpecialKey", SpecialKey)
@@ -429,9 +580,21 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "StrokeSizingMode", StrokeSizingMode)
 	Register_Reflected_Enum(registry, "StudioCloseMode", StudioCloseMode)
 	Register_Reflected_Enum(registry, "StudioDataModelType", StudioDataModelType)
-	Register_Reflected_Enum(registry, "StudioPlaceUpdateFailureReason", StudioPlaceUpdateFailureReason)
-	Register_Reflected_Enum(registry, "StudioScriptEditorColorCategories", StudioScriptEditorColorCategories)
-	Register_Reflected_Enum(registry, "StudioScriptEditorColorPresets", StudioScriptEditorColorPresets)
+	Register_Reflected_Enum(
+		registry,
+		"StudioPlaceUpdateFailureReason",
+		StudioPlaceUpdateFailureReason,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"StudioScriptEditorColorCategories",
+		StudioScriptEditorColorCategories,
+	)
+	Register_Reflected_Enum(
+		registry,
+		"StudioScriptEditorColorPresets",
+		StudioScriptEditorColorPresets,
+	)
 	Register_Reflected_Enum(registry, "StudioStyleGuideColor", StudioStyleGuideColor)
 	Register_Reflected_Enum(registry, "StudioStyleGuideModifier", StudioStyleGuideModifier)
 	Register_Reflected_Enum(registry, "Style", Style)
@@ -535,7 +698,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "TriStateBoolean", TriStateBoolean)
 	Register_Reflected_Enum(registry, "TweenStatus", TweenStatus)
 	Register_Reflected_Enum(registry, "UICaptureMode", UICaptureMode)
-	Register_Reflected_Enum(registry, "UIDragDetectorBoundingBehavior", UIDragDetectorBoundingBehavior)
+	Register_Reflected_Enum(
+		registry,
+		"UIDragDetectorBoundingBehavior",
+		UIDragDetectorBoundingBehavior,
+	)
 	Register_Reflected_Enum(registry, "UIDragDetectorDragRelativity", UIDragDetectorDragRelativity)
 	Register_Reflected_Enum(registry, "UIDragDetectorDragSpace", UIDragDetectorDragSpace)
 	Register_Reflected_Enum(registry, "UIDragDetectorDragStyle", UIDragDetectorDragStyle)
@@ -567,7 +734,11 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ViewMode", ViewMode)
 	Register_Reflected_Enum(registry, "VirtualCursorMode", VirtualCursorMode)
 	Register_Reflected_Enum(registry, "VirtualInputMode", VirtualInputMode)
-	Register_Reflected_Enum(registry, "VoiceChatDistanceAttenuationType", VoiceChatDistanceAttenuationType)
+	Register_Reflected_Enum(
+		registry,
+		"VoiceChatDistanceAttenuationType",
+		VoiceChatDistanceAttenuationType,
+	)
 	Register_Reflected_Enum(registry, "VoiceChatState", VoiceChatState)
 	Register_Reflected_Enum(registry, "VoiceClientLeaveReasons", VoiceClientLeaveReasons)
 	Register_Reflected_Enum(registry, "VoiceControlPath", VoiceControlPath)

@@ -39,11 +39,11 @@ MAX_ASSET_TOTAL_BYTES :: 512 * 1024 * 1024
 // extension carried alongside the bytes, so appending kinds never invalidates
 // files written by older builds.
 Asset_Kind :: enum u8 {
-	Unknown = 0,
-	Mesh    = 1,
-	Texture = 2,
-	Audio   = 3,
-	Data    = 4,
+	Unknown   = 0,
+	Mesh      = 1,
+	Texture   = 2,
+	Audio     = 3,
+	Data      = 4,
 	Path_File = 5, // An embedded file addressable by its authored path.
 	Animation = 6, // A clip source applied to a rig by bone name.
 }
@@ -200,7 +200,8 @@ Register :: proc(data: []u8, path: string, kind: Asset_Kind) -> string {
 			store(id, path, kind, data)
 			return id
 		}
-		same := bytes_equal(existing.bytes, data) &&
+		same :=
+			bytes_equal(existing.bytes, data) &&
 			(kind != .Path_File || (existing.kind == kind && existing.path == path))
 		if same {
 			delete(data)
@@ -318,7 +319,8 @@ Set_Project_Root :: proc(path: string) {
 Project_Asset_Path :: proc(uri: string) -> (string, bool) {
 	if !strings.has_prefix(uri, PROJECT_ASSET_SCHEME) {return "", false}
 	path := uri[len(PROJECT_ASSET_SCHEME):]
-	if path == "" || strings.has_suffix(path, "/") ||
+	if path == "" ||
+	   strings.has_suffix(path, "/") ||
 	   strings.contains_any(path, "\\:\x00") {return "", false}
 	pieces := path
 	for piece in strings.split_iterator(&pieces, "/") {
@@ -387,7 +389,8 @@ Resolve_Ugc_Asset :: proc(value: string, kind: Asset_Kind) -> string {
 	if value == "" || !UGC_Assets_Enabled() {
 		return strings.clone(value)
 	}
-	if (strings.contains(value, "://") && !strings.has_prefix(value, "file://")) || strings.has_prefix(value, "data:") {
+	if (strings.contains(value, "://") && !strings.has_prefix(value, "file://")) ||
+	   strings.has_prefix(value, "data:") {
 		return strings.clone(value)
 	}
 	data, found := Read_Asset_File(value)
@@ -452,15 +455,48 @@ strip_file_scheme :: proc(path: string) -> string {
 }
 
 Is_Ugc_File_Path :: proc(path: string) -> bool {
-	if strings.has_prefix(path, "data:") || strings.contains(path, "://") ||
-	   strings.contains(path, "\x00") || strings.contains(path, "\n") {return false}
+	if strings.has_prefix(path, "data:") ||
+	   strings.contains(path, "://") ||
+	   strings.contains(path, "\x00") ||
+	   strings.contains(path, "\n") {return false}
 	ext := extension_of(path)
 	defer delete(ext)
 	switch ext {
-	case "png", "svg", "jpeg", "jpg", "webp", "gif", "bmp", "ico", "tga", "dds", "ktx", "ktx2",
-	     "glb", "gltf", "obj", "fbx", "dae", "stl", "ply", "3ds", "blend", "3mf",
-	     "wav", "mp3", "ogg", "flac", "opus", "aiff", "aif", "m4a",
-	     "ttf", "otf", "ttc", "woff", "woff2":
+	case "png",
+	     "svg",
+	     "jpeg",
+	     "jpg",
+	     "webp",
+	     "gif",
+	     "bmp",
+	     "ico",
+	     "tga",
+	     "dds",
+	     "ktx",
+	     "ktx2",
+	     "glb",
+	     "gltf",
+	     "obj",
+	     "fbx",
+	     "dae",
+	     "stl",
+	     "ply",
+	     "3ds",
+	     "blend",
+	     "3mf",
+	     "wav",
+	     "mp3",
+	     "ogg",
+	     "flac",
+	     "opus",
+	     "aiff",
+	     "aif",
+	     "m4a",
+	     "ttf",
+	     "otf",
+	     "ttc",
+	     "woff",
+	     "woff2":
 		return true
 	}
 	return false

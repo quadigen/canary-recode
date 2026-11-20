@@ -1,0 +1,95 @@
+---
+title: VRService
+description: Enable experimental OpenXR stereo rendering and read headset and controller poses.
+---
+
+`VRService` exposes the desktop OpenXR session to local scripts. The first implementation targets Linux with the Vulkan renderer. A normal desktop launch does not require OpenXR or a headset.
+
+## Running a VR game
+
+On Arch Linux install the OpenXR SDK and loader, then install Monado from the AUR:
+
+```bash
+sudo pacman -S openxr
+yay -S monado-git
+```
+
+Rebuild the native libraries and the engine after installing the headers:
+
+```bash
+just deps
+just build
+```
+
+To simulate a headset and controllers without hardware, run Monado with its QWERTY driver in a separate terminal:
+
+```bash
+QWERTY_ENABLE=1 XRT_DEBUG_GUI=1 XRT_COMPOSITOR_FORCE_XCB=1 monado-service
+```
+
+Then run a saved map in singleplayer mode:
+
+```bash
+KINE_VR=1 XR_RUNTIME_JSON=/usr/share/openxr/1/openxr_monado.json ./build/kinemium --singleplayer --map path/to/game.kine
+```
+
+If your package installs the manifest elsewhere, use that path instead. The runtime and engine must choose the same Vulkan physical device. Keep the desktop window unminimized. The simulator's Qwerty System help panel describes its keyboard and mouse controls.
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `VREnabled` | boolean | Read-only | Whether the OpenXR session is running. |
+| `VRAvailable` | boolean | Read-only | Whether an OpenXR graphics session was successfully created in this launch. |
+
+`UserInputService.VREnabled` reports the same running session state.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `GetUserCFrame(userCFrame: Enum.UserCFrame): CFrame` | The last valid tracked pose in OpenXR local tracking space; identity if unavailable. |
+| `GetUserCFrameEnabled(userCFrame: Enum.UserCFrame): boolean` | Whether a valid pose is available for this frame snapshot. |
+
+Tracking poses are available for `Head`, `LeftHand`, `RightHand`, and `Floor` (if the runtime supports stage space). Hands represent controller grip poses, not individual fingers. One tracking meter is one engine world unit.
+
+## Example: visualize controller tracking
+
+Place this code in a local script in a map. The two anchored parts follow controller grip poses relative to the base camera. Do not multiply the headset pose into the base camera yourself: the stereo renderer already applies the tracked eye transforms.
+
+```lua
+local VR = game:GetService("VRService")
+local RunService = game:GetService("RunService")
+
+local hands = {
+    {Enum.UserCFrame.LeftHand, Color3.fromRGB(70, 140, 255)},
+    {Enum.UserCFrame.RightHand, Color3.fromRGB(255, 145, 55)},
+}
+
+for _, hand in ipairs(hands) do
+    local part = Instance.new("Part")
+    part.Size = Vector3.new(0.12, 0.12, 0.12)
+    part.Color = hand[2]
+    part.Anchored = true
+    part.CanCollide = false
+    part.Transparency = 1
+    part.Parent = workspace
+    hand[3] = part
+end
+
+RunService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    for _, hand in ipairs(hands) do
+        local valid = VR.VREnabled and VR:GetUserCFrameEnabled(hand[1])
+        hand[3].Transparency = valid and 0 or 1
+        if valid then
+            hand[3].CFrame = camera.CFrame * VR:GetUserCFrame(hand[1])
+        end
+    end
+end)
+```
+
+## Implementation status
+
+This is an experimental raster-rendered stereo path. It renders separate eye cameras and copies their images on the Vulkan GPU to runtime swapchains. It uses synchronous GPU completion initially; performance, image layouts, physical headset compatibility and runtime behavior still need validation on a real build. Desktop 2D GUI, path tracing, custom post-processes, controller buttons, haptics, skeleton hand tracking, mobile/Windows VR, and automatic locomotion are not included. VR startup failures fall back to normal desktop rendering.

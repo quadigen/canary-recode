@@ -55,11 +55,23 @@ kne_get_color_sequence :: proc(L: ^vm.State, index: int, registry: ^datatypes.Re
 	return datatypes.KNE_Require_Value(L, index, &registry.color_sequence)
 }
 
-kne_push_color_sequence_keypoint :: proc(L: ^vm.State, registry: ^datatypes.Registry, handle: rawptr) {
-	datatypes.Push_ColorSequenceKeypoint(L, registry, (cast(^datatypes.ColorSequenceKeypoint)handle)^)
+kne_push_color_sequence_keypoint :: proc(
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	handle: rawptr,
+) {
+	datatypes.Push_ColorSequenceKeypoint(
+		L,
+		registry,
+		(cast(^datatypes.ColorSequenceKeypoint)handle)^,
+	)
 }
 
-kne_get_color_sequence_keypoint :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_color_sequence_keypoint :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.color_sequence_keypoint)
 }
 
@@ -79,11 +91,23 @@ kne_get_date_time :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registr
 	return datatypes.KNE_Require_Value(L, index, &registry.date_time)
 }
 
-kne_push_dock_widget_plugin_gui_info :: proc(L: ^vm.State, registry: ^datatypes.Registry, handle: rawptr) {
-	datatypes.Push_DockWidgetPluginGuiInfo(L, registry, (cast(^datatypes.DockWidgetPluginGuiInfo)handle)^)
+kne_push_dock_widget_plugin_gui_info :: proc(
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	handle: rawptr,
+) {
+	datatypes.Push_DockWidgetPluginGuiInfo(
+		L,
+		registry,
+		(cast(^datatypes.DockWidgetPluginGuiInfo)handle)^,
+	)
 }
 
-kne_get_dock_widget_plugin_gui_info :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_dock_widget_plugin_gui_info :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.dock_widget_plugin_gui_info)
 }
 
@@ -115,15 +139,31 @@ kne_push_number_sequence :: proc(L: ^vm.State, registry: ^datatypes.Registry, ha
 	datatypes.Push_NumberSequence(L, registry, (cast(^datatypes.NumberSequence)handle)^)
 }
 
-kne_get_number_sequence :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_number_sequence :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.number_sequence)
 }
 
-kne_push_number_sequence_keypoint :: proc(L: ^vm.State, registry: ^datatypes.Registry, handle: rawptr) {
-	datatypes.Push_NumberSequenceKeypoint(L, registry, (cast(^datatypes.NumberSequenceKeypoint)handle)^)
+kne_push_number_sequence_keypoint :: proc(
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	handle: rawptr,
+) {
+	datatypes.Push_NumberSequenceKeypoint(
+		L,
+		registry,
+		(cast(^datatypes.NumberSequenceKeypoint)handle)^,
+	)
 }
 
-kne_get_number_sequence_keypoint :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_number_sequence_keypoint :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.number_sequence_keypoint)
 }
 
@@ -147,7 +187,11 @@ kne_push_physical_properties :: proc(L: ^vm.State, registry: ^datatypes.Registry
 	datatypes.Push_PhysicalProperties(L, registry, (cast(^datatypes.PhysicalProperties)handle)^)
 }
 
-kne_get_physical_properties :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_physical_properties :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.physical_properties)
 }
 
@@ -215,11 +259,23 @@ kne_get_region3int16 :: proc(L: ^vm.State, index: int, registry: ^datatypes.Regi
 	return datatypes.KNE_Require_Value(L, index, &registry.region3int16)
 }
 
-kne_push_security_capabilities :: proc(L: ^vm.State, registry: ^datatypes.Registry, handle: rawptr) {
-	datatypes.Push_SecurityCapabilities(L, registry, (cast(^datatypes.SecurityCapabilities)handle)^)
+kne_push_security_capabilities :: proc(
+	L: ^vm.State,
+	registry: ^datatypes.Registry,
+	handle: rawptr,
+) {
+	datatypes.Push_SecurityCapabilities(
+		L,
+		registry,
+		(cast(^datatypes.SecurityCapabilities)handle)^,
+	)
 }
 
-kne_get_security_capabilities :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+kne_get_security_capabilities :: proc(
+	L: ^vm.State,
+	index: int,
+	registry: ^datatypes.Registry,
+) -> rawptr {
 	return datatypes.KNE_Require_Value(L, index, &registry.security_capabilities)
 }
 
@@ -295,7 +351,15 @@ kne_get_vector3int16 :: proc(L: ^vm.State, index: int, registry: ^datatypes.Regi
 	return datatypes.KNE_Require_Value(L, index, &registry.vector3int16)
 }
 
-KNE_Engine_Datatypes := [?]KNE_Engine_Datatype{
+kne_push_animated :: proc(L: ^vm.State, registry: ^datatypes.Registry, handle: rawptr) {
+	datatypes.Push_Animated(L, registry, (cast(^datatypes.Animated)handle)^)
+}
+
+kne_get_animated :: proc(L: ^vm.State, index: int, registry: ^datatypes.Registry) -> rawptr {
+	return datatypes.KNE_Require_Value(L, index, &registry.animated)
+}
+
+KNE_Engine_Datatypes := [?]KNE_Engine_Datatype {
 	{
 		name = "Axes",
 		field = "axes",
@@ -610,5 +674,14 @@ KNE_Engine_Datatypes := [?]KNE_Engine_Datatype{
 		size = size_of(datatypes.Vector3int16),
 		push = kne_push_vector3int16,
 		get = kne_get_vector3int16,
+	},
+	{
+		name = "Animated",
+		field = "animated",
+		tag = datatypes.DATATYPE_TAG_BASE + 35,
+		kind = KNE_Value_Kind(60),
+		size = size_of(datatypes.Animated),
+		push = kne_push_animated,
+		get = kne_get_animated,
 	},
 }

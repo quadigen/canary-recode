@@ -3,7 +3,7 @@
 
   const baseEl = document.getElementById("skia-base");
   const overlayEl = document.getElementById("skia-overlay");
-  const filamentEl = document.getElementById("filament-canvas");
+  const worldEl = document.getElementById("world-canvas");
   const statusEl = document.getElementById("startup-status");
   const runtimeEl = document.getElementById("runtime-value");
   const encoder = new TextEncoder();
@@ -18,7 +18,7 @@
   let CanvasKit = null;
   let defaultTypeface = null;
   let surfaceSerial = 0;
-  const stats = window.__kinemiumStats = { surfaces: 0, draws2d: 0, filamentContexts: 0, meshes: 0, frames: 0 };
+  const stats = window.__kinemiumStats = { surfaces: 0, draws2d: 0, babylonContexts: 0, meshes: 0, frames: 0 };
 
   const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
   const width = () => Math.max(1, Math.round(innerWidth * dpr()));
@@ -40,8 +40,16 @@
     heap8()[ptr + count] = 0;
     return count;
   };
+  const bootStart = performance.now();
+  stats.startup = {};
   const report = text => { statusEl.textContent = text; };
-  const phase = async text => { report(text); };
+  const phase = async text => {
+    stats.startup[text] = Math.round(performance.now() - bootStart);
+    document.documentElement.dataset.enginePhase = text;
+    report(text);
+    console.info("[Kinemium startup]", text, stats.startup[text] + "ms");
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
 
   const scanCodes = {
     KeyA: 4, KeyB: 5, KeyC: 6, KeyD: 7, KeyE: 8, KeyF: 9, KeyG: 10, KeyH: 11, KeyI: 12, KeyJ: 13, KeyK: 14, KeyL: 15, KeyM: 16,
@@ -58,13 +66,76 @@
   addEventListener("keydown", e => { const scancode = scanCodes[e.code] || 0; keys.add(scancode); events.push({ type: 8, scancode, mods: mods(e), repeat: e.repeat }); });
   addEventListener("keyup", e => { const scancode = scanCodes[e.code] || 0; keys.delete(scancode); events.push({ type: 9, scancode, mods: mods(e) }); });
   addEventListener("keypress", e => { if (e.key.length === 1) events.push({ type: 10, text: e.key }); });
-  addEventListener("mousemove", e => { const p = point(e); mouse.dx = e.movementX * dpr(); mouse.dy = e.movementY * dpr(); mouse.x = p.x; mouse.y = p.y; events.push({ type: 11, ...p, dx: mouse.dx, dy: mouse.dy }); });
-  addEventListener("mousedown", e => { const p = point(e), button = e.button === 0 ? 1 : e.button === 1 ? 2 : 3; mouse.buttons |= 1 << (button - 1); events.push({ type: 12, ...p, button, clicks: e.detail }); });
-  addEventListener("mouseup", e => { const p = point(e), button = e.button === 0 ? 1 : e.button === 1 ? 2 : 3; mouse.buttons &= ~(1 << (button - 1)); events.push({ type: 13, ...p, button, clicks: e.detail }); });
+  // Babylon cancels pointerdown's default action, which suppresses the
+  // compatibility mousedown/mouseup events. Consume native pointer events
+  // before the 3D renderer sees them, with one queue entry per actual event.
+  const pointerButtons = new Map();
+  const lastClicks = new Map();
+  const mouseButton = button => [1, 2, 3, 4, 5][button] || 0;
+  const updatePointer = e => {
+    const p = point(e);
+    mouse.x = p.x; mouse.y = p.y;
+    return p;
+  };
+  const releasePointer = (e, cancelled = false) => {
+    const pressed = pointerButtons.get(e.pointerId);
+    if (!pressed) return;
+    const p = cancelled ? {x: mouse.x, y: mouse.y} : updatePointer(e);
+    const button = mouseButton(e.button);
+    const release = cancelled ? [...pressed.keys()] : [button];
+    for (const b of release) {
+      if (!pressed.has(b)) continue;
+      const clicks = pressed.get(b);
+      pressed.delete(b);
+      mouse.buttons &= ~(1 << (b - 1));
+      // Cancelled gestures release away from the GUI so they cannot activate it.
+      events.push({type:13, ...(cancelled ? {x:-1,y:-1} : p), button:b, clicks});
+    }
+    if (!pressed.size) pointerButtons.delete(e.pointerId);
+  };
+  addEventListener("pointermove", e => {
+    if (!e.isPrimary) return;
+    const p=updatePointer(e), dx=(e.movementX || 0)*dpr(), dy=(e.movementY || 0)*dpr();
+    mouse.dx += dx; mouse.dy += dy;
+    // Pointer Events uses pointerdown/up for the first/last button only.
+    // A chorded mouse button change is reported via pointermove.
+    if (e.pointerType === "mouse" && e.button >= 0 && e.button <= 4) {
+      const b=mouseButton(e.button), mask=[1,4,2,8,16][e.button];
+      const isDown=!!(e.buttons & mask), wasDown=pointerButtons.get(e.pointerId)?.has(b);
+      if (isDown && !wasDown) pressPointer(e);
+      else if (!isDown && wasDown) releasePointer(e);
+    }
+    events.push({type:11,...p,dx,dy,buttons:mouse.buttons});
+  }, true);
+  function pressPointer(e) {
+    if (!e.isPrimary) return;
+    const p=updatePointer(e), button=mouseButton(e.button);
+    if (!button) return;
+    let pressed=pointerButtons.get(e.pointerId);
+    if (!pressed) pointerButtons.set(e.pointerId,pressed=new Map());
+    if (pressed.has(button)) return;
+    const now=performance.now(), last=lastClicks.get(button);
+    const clicks=last && now-last.time<=500 && Math.hypot(p.x-last.x,p.y-last.y)<=5*dpr() ? Math.min(last.clicks+1,255) : 1;
+    lastClicks.set(button,{...p,time:now,clicks});
+    pressed.set(button,clicks);
+    mouse.buttons |= 1 << (button-1);
+    events.push({type:12,...p,button,clicks});
+  }
+  addEventListener("pointerdown", pressPointer, true);
+  addEventListener("pointerup", e => releasePointer(e), true);
+  addEventListener("pointercancel", e => releasePointer(e,true), true);
+  addEventListener("lostpointercapture", e => {
+    if(!e.buttons) releasePointer(e,true);
+  }, true);
   addEventListener("wheel", e => { const p = point(e); events.push({ type: 14, ...p, dx: -Math.sign(e.deltaX), dy: -Math.sign(e.deltaY) }); e.preventDefault(); }, { passive: false });
   addEventListener("contextmenu", e => e.preventDefault());
   addEventListener("focus", () => { mouse.focused = true; events.push({ type: 6 }); });
-  addEventListener("blur", () => { mouse.focused = false; keys.clear(); events.push({ type: 5 }); });
+  addEventListener("blur", () => {
+    mouse.focused = false; keys.clear();
+    for(const pointerId of [...pointerButtons.keys()]) releasePointer({pointerId},true);
+    mouse.buttons=0; mouse.dx=mouse.dy=0; lastClicks.clear();
+    events.push({type:5});
+  });
   addEventListener("resize", () => events.push({ type: 7 }));
 
   const platform = {
@@ -74,20 +145,25 @@
     host_mouse_buttons: () => mouse.buttons, host_modifiers: () => 0, host_focused: () => mouse.focused ? 1 : 0,
     host_now_ns: () => BigInt(Math.round(performance.now() * 1e6)),
     host_key_down: sc => keys.has(sc) ? 1 : 0,
-    host_poll_event: () => { currentEvent = events.shift() || {}; return currentEvent.type || 0; },
+    host_poll_event: () => {
+      currentEvent = events.shift() || {};
+      if(currentEvent.type===12)stats.pointerDowns=(stats.pointerDowns||0)+1;
+      if(currentEvent.type===13)stats.pointerUps=(stats.pointerUps||0)+1;
+      return currentEvent.type || 0;
+    },
     host_event_scancode: () => currentEvent.scancode || 0, host_event_modifiers: () => currentEvent.mods || 0,
     host_event_repeat: () => currentEvent.repeat ? 1 : 0, host_event_button: () => currentEvent.button || 0,
     host_event_clicks: () => currentEvent.clicks || 0, host_event_x: () => currentEvent.x || 0, host_event_y: () => currentEvent.y || 0,
     host_event_dx: () => currentEvent.dx || 0, host_event_dy: () => currentEvent.dy || 0,
     host_copy_event_text: (ptr, cap) => copyString(currentEvent.text || "", ptr, cap),
     host_system_theme: () => matchMedia("(prefers-color-scheme: dark)").matches ? 2 : 1,
-    host_set_relative: on => { if (on) filamentEl.requestPointerLock?.(); else document.exitPointerLock?.(); },
+    host_set_relative: on => { if (on) worldEl.requestPointerLock?.(); else document.exitPointerLock?.(); },
     host_show_cursor: visible => document.body.style.cursor = visible ? "default" : "none",
     host_warp_mouse: () => { }, host_text_input: () => { },
     host_set_cursor: kind => { document.body.style.cursor = ["default", "text", "wait", "crosshair", "progress", "nwse-resize", "nesw-resize", "ew-resize", "ns-resize", "move", "not-allowed", "pointer"][kind] || "default"; },
     host_set_clipboard: ptr => { navigator.clipboard?.writeText(cstr(ptr)); return 1; },
     host_copy_clipboard: () => 0
-    , host_debug_phase: () => { }
+    , host_debug_phase: code => {stats.startup["native-"+code]=Math.round(performance.now()-bootStart);console.info("[Kinemium native]",code);}
   };
 
   // Minimal audio host: the web engine's audio backend forwards each fire-and-
@@ -101,6 +177,7 @@
   // real filesystem. Backed by localStorage so project data survives reloads;
   // the engine only ever sees opaque string keys and byte buffers.
   const storage = {
+    host_random_guid: (ptr, cap) => copyString(crypto.randomUUID(), ptr, cap),
     host_storage_get: (keyPtr, outPtr, cap) => {
       let value = null; try { value = localStorage.getItem(cstr(keyPtr)); } catch { value = null; }
       if (value === null) return -1;
@@ -151,9 +228,10 @@
       } catch (e) { console.error("[net] could not open WebSocket to", url, e); return -1; }
     },
     host_net_state: id => { const c = sockets.get(id); return c ? c.state : 2; },
-    host_net_send: (id, ptr, len) => {
+    host_net_send: (id, ptr, len, disposable = 0) => {
       const c = sockets.get(id);
       if (!c || c.state !== 1) return 0;
+      if (disposable && c.ws.bufferedAmount > 16 * 1024) return 0;
       try { c.ws.send(heap8().subarray(ptr, ptr + len).slice()); return 1; } catch { return 0; }
     },
     host_net_message_size: id => { const c = sockets.get(id); return (c && c.queue.length) ? c.queue[0].length : 0; },
@@ -189,6 +267,30 @@
   const surfaces = new Map(), images = new Map(), shaders = new Map(), typefaces = new Map();
   let nextHandle = 1;
   const handle = (map, value) => { const id = nextHandle++; map.set(id, value); return id; };
+  const builtinFontHandles = new Map(), pinnedFaces = new Set();
+  const pendingFontNotifications = new Set();
+  const clearFontCaches = id => {
+    const prefix = id + "|";
+    for (const [k,f] of fontCache) if (k.startsWith(prefix)) {f.delete();fontCache.delete(k);}
+    for (const k of widthCache.keys()) if (k.startsWith(prefix)) widthCache.delete(k);
+  };
+  const getBuiltinFont = name => {
+    if (!/^[a-zA-Z0-9_. -]+$/.test(name)) return 0;
+    if (builtinFontHandles.has(name)) return builtinFontHandles.get(name);
+    const id = handle(typefaces, defaultTypeface);
+    builtinFontHandles.set(name,id);pinnedFaces.add(id);
+    fetch("fonts/"+encodeURIComponent(name)).then(r=>{if(!r.ok)throw Error(r.status);return r.arrayBuffer();}).then(bytes=>{
+      const face=CanvasKit.Typeface.MakeFreeTypeFaceFromData(bytes);
+      if(face){clearFontCaches(id);typefaces.set(id,face);pendingFontNotifications.add(id);}
+    }).catch(error=>console.warn("Builtin font fallback:",name,error));
+    return id;
+  };
+  const preloadFont = async name => {
+    const r=await fetch("fonts/"+encodeURIComponent(name));
+    if(!r.ok)throw Error("Font "+name+" "+r.status);
+    const face=CanvasKit.Typeface.MakeFreeTypeFaceFromData(await r.arrayBuffer());
+    if(face){const id=handle(typefaces,face);builtinFontHandles.set(name,id);pinnedFaces.add(id);}
+  };
   const measure = (font, text) => { if (!font || !text) return 0; const glyphs = font.getGlyphIDs(text); if (!glyphs || !glyphs.length) return 0; const widths = font.getGlyphWidths(glyphs); let w = 0; for (let i = 0; i < widths.length; i++) w += widths[i]; return w; };
   // Fonts and glyph-advance widths are requested hundreds of times per frame by
   // the text layout pass. Reuse Font objects and memoize widths; both Font
@@ -299,8 +401,8 @@
     Kine_Skia_Surface_MeasureText: (text, size) => measureCached(defaultTypeface, 0, size, cstr(text)),
     Kine_Skia_Surface_GetFontAscent: size => -size * .8, Kine_Skia_Surface_GetFontLineHeight: size => size * 1.2,
     Kine_Skia_Typeface_LoadFromMemory: (ptr, size) => { const bytes = heap8().slice(ptr, ptr + size); const tf = CanvasKit.Typeface.MakeFreeTypeFaceFromData(bytes.buffer); return tf ? handle(typefaces, tf) : 0; },
-    Kine_Skia_Typeface_LoadFromFile: () => 0,
-    Kine_Skia_Typeface_Destroy: id => { typefaces.get(id)?.delete(); typefaces.delete(id); },
+    Kine_Skia_Typeface_LoadFromFile: ptr => {const path=cstr(ptr);return path.startsWith("builtin://fonts/")?getBuiltinFont(path.slice(16)):0;},
+    Kine_Skia_Typeface_Destroy: id => { if(pinnedFaces.has(id))return;clearFontCaches(id);typefaces.get(id)?.delete();typefaces.delete(id); },
     Kine_Skia_Typeface_MeasureText: (tf, text, size) => { const face = typefaces.get(tf) || defaultTypeface; if (!face) return 0; return measureCached(face, tf, size, cstr(text)); },
     Kine_Skia_Typeface_GetLineHeight: (tf, size) => size * 1.2, Kine_Skia_Typeface_GetAscent: (tf, size) => -size * .8,
     Kine_Skia_Surface_DrawTextTypeface: (id, text, x, y, size, tf, r, g, b, a) => { const c = surf(id)?.canvas, face = typefaces.get(tf) || defaultTypeface; if (!c || !face) return; const f = fontFor(face, tf, size); stats.draws2d++; withPaint(color(r, g, b, a), 0, p => c.drawText(cstr(text), x, y, p, f)); },
@@ -368,211 +470,8 @@
     Kine_Skia_RuntimeShader_GetLastError: () => 0, Kine_Skia_Surface_DrawRuntimeShaderRect: () => { }
   };
 
-  const filamentContexts = new Map(), filamentMeshes = new Map(), filamentLights = new Map(), filamentTextures = new Map();
-  let materialBytes = null;
-  let _filamentSampler = null;
-  const filamentSampler = () => _filamentSampler ??= new Filament.TextureSampler(Filament.MinFilter.LINEAR, Filament.MagFilter.LINEAR, Filament.WrapMode.REPEAT);
-  // Meshes carry positions, uv0 and normals: the web material is lit, so the
-  // shading model reads the geometry normal and the sun light casts shadows.
-  const cubeGeometry = () => {
-    const positions = [], uvs = [], normals = [], indices = [];
-    const faces = [[[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]], [[1, 0, 0], [0, 0, -1], [0, 1, 0]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [1, 0, 0], [0, 0, -1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]]];
-    for (const [n, u, v] of faces) {
-      const base = positions.length / 3;
-      for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-        positions.push(n[0] + u[0] * su + v[0] * sv, n[1] + u[1] * su + v[1] * sv, n[2] + u[2] * su + v[2] * sv);
-        uvs.push((su + 1) / 2, (sv + 1) / 2);
-        normals.push(n[0], n[1], n[2]);
-      }
-      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    }
-    return { positions: new Float32Array(positions), uvs: new Float32Array(uvs), normals: new Float32Array(normals), indices: new Uint16Array(indices) };
-  };
-  // The sphere is a unit sphere, so position doubles as the outward normal.
-  const sphereGeometry = () => { const rings = 16, segments = 24, positions = [], uvs = [], normals = [], indices = []; for (let y = 0; y <= rings; y++) { const v = y / rings, phi = v * Math.PI; for (let x = 0; x <= segments; x++) { const u = x / segments, theta = u * Math.PI * 2; const nx = Math.sin(phi) * Math.cos(theta), ny = Math.cos(phi), nz = Math.sin(phi) * Math.sin(theta); positions.push(nx, ny, nz); uvs.push(u, v); normals.push(nx, ny, nz); } } for (let y = 0; y < rings; y++) { for (let x = 0; x < segments; x++) { const a = y * (segments + 1) + x, b = a + segments + 1; indices.push(a, b, a + 1, b, b + 1, a + 1); } } return { positions: new Float32Array(positions), uvs: new Float32Array(uvs), normals: new Float32Array(normals), indices: new Uint16Array(indices) }; };
-  // Upload the shape's vertex/index buffers once. Geometry is shared by every
-  // instance of a shape; only the entity (transform + material instance) is
-  // per-instance, because the engine draws each object as its own list entry
-  // (it does not pack instances into a single draw). A shared entity would make
-  // all instances overwrite one transform and one material.
-  // This Filament version has no NORMAL attribute: the geometry normal is fed
-  // through TANGENTS as a packed tangent-frame quaternion, which the built-in
-  // SurfaceOrientation helper produces from the normals.
-  const uploadGeometry = (ctx, geo) => { const F = Filament; const count = geo.positions.length / 3; const normals = geo.normals && geo.normals.length === count * 3 ? geo.normals : new Float32Array(count * 3); const sob = new F.SurfaceOrientation$Builder(); sob.vertexCount(count); sob.normals(normals, 0); const orientation = sob.build(); const tangents = orientation.getQuats(count); const vb = F.VertexBuffer.Builder().vertexCount(count).bufferCount(3).attribute(F.VertexAttribute.POSITION, 0, F.VertexBuffer$AttributeType.FLOAT3, 0, 12).attribute(F.VertexAttribute.UV0, 1, F.VertexBuffer$AttributeType.FLOAT2, 0, 8).attribute(F.VertexAttribute.TANGENTS, 2, F.VertexBuffer$AttributeType.SHORT4, 0, 8).normalized(F.VertexAttribute.TANGENTS).build(ctx.engine); vb.setBufferAt(ctx.engine, 0, geo.positions); vb.setBufferAt(ctx.engine, 1, geo.uvs); vb.setBufferAt(ctx.engine, 2, tangents); const ib = F.IndexBuffer.Builder().indexCount(geo.indices.length).bufferType(F.IndexBuffer$IndexType.USHORT).build(ctx.engine); ib.setBuffer(ctx.engine, geo.indices); return { vb, ib }; };
-  const createNode = mesh => { const ctx = mesh.ctx, F = Filament, e = F.EntityManager.get().create(); const mi = ctx.material.createInstance(); mi.setFloat4Parameter("baseColor", [.55, .65, .82, 1]); mi.setFloatParameter("hasTexture", 0); mi.setFloatParameter("roughness", .4); mi.setFloatParameter("metallic", 0); mi.setFloatParameter("shadowStrength", 1); F.RenderableManager.Builder(1).boundingBox({ center: [0, 0, 0], halfExtent: [1, 1, 1] }).castShadows(true).receiveShadows(true).material(0, mi).geometry(0, F.RenderableManager$PrimitiveType.TRIANGLES, mesh.vb, mesh.ib).build(ctx.engine, e); return { entity: e, material: mi, inScene: false, castShadow: true, receiveShadow: true }; };
-  // Per-part CastShadow/ReceiveShadow ride in the draw item flags (see
-  // workspace_part_flags). The renderable is per pooled node, so the flags are
-  // only pushed when they differ from what the node already has.
-  const applyNodeShadowFlags = (ctx, node, flags) => { const cast = (flags & 1) !== 0, receive = (flags & 2) !== 0; if (node.castShadow === cast && node.receiveShadow === receive) return; try { const rm = ctx.renderables, inst = rm.getInstance(node.entity); if (inst) { rm.setCastShadows(inst, cast); rm.setReceiveShadows(inst, receive); inst.delete?.(); } } catch { } node.castShadow = cast; node.receiveShadow = receive; };
-  // Nodes are pooled per shape and reused frame to frame; `used` counts how many
-  // nodes this frame's draw list touched so stale nodes can be hidden again.
-  const acquireNode = mesh => { const k = mesh.used; let node = mesh.nodes[k]; if (!node) { node = createNode(mesh); mesh.nodes[k] = node; } mesh.used = k + 1; return node; };
-  const buildTexture = (ctx, width, height, pixels) => { const F = Filament; const tex = F.Texture.Builder().width(width).height(height).levels(1).sampler(F.Texture$Sampler.SAMPLER_2D).format(F.Texture$InternalFormat.SRGB8_A8).build(ctx.engine); tex.setImage(ctx.engine, 0, new F.PixelBuffer(pixels, F.PixelDataFormat.RGBA, F.PixelDataType.UBYTE)); return tex; };
-  // A single scene-wide skybox/IBL is enough: the web shell hosts one Filament
-  // view. The engine drives the sky through SetSkyAtmosphere, which supplies the
-  // zenith/horizon/ground colours; we rebuild the skybox and the ambient IBL
-  // from the same blend the native shim uses.
-  let skybox = null, indirectLight = null;
-  const atmosphereColor = (elev, skyR, skyG, skyB, horR, horG, horB, gndR, gndG, gndB) => {
-    const clamp = v => v < 0 ? 0 : v > 1 ? 1 : v; let r, g, b;
-    if (elev >= 0) { const t = Math.pow(clamp(elev), .45); r = horR + t * (skyR - horR); g = horG + t * (skyG - horG); b = horB + t * (skyB - horB); }
-    else if (elev >= -0.1) { const t = (elev + 0.1) / 0.1; r = gndR + t * (horR - gndR); g = gndG + t * (horG - gndG); b = gndB + t * (horB - gndB); }
-    else { r = gndR; g = gndG; b = gndB; }
-    return [clamp(r), clamp(g), clamp(b)];
-  };
-  const setSkybox = (ctx, r, g, b, a) => {
-    try {
-      if (skybox) { ctx.scene.setSkybox(null); skybox.delete?.(); skybox = null; }
-      skybox = Filament.Skybox.Builder().color([r, g, b, a]).build(ctx.engine);
-      ctx.scene.setSkybox(skybox);
-      ctx.renderer.setClearOptions({ clear: true, clearColor: [r, g, b, 1] });
-      stats.skybox = (stats.skybox || 0) + 1;
-    } catch { stats.skyboxFailed = (stats.skyboxFailed || 0) + 1; }
-  };
-  const setIndirectLight = (ctx, r, g, b, intensity) => {
-    try {
-      if (indirectLight) { ctx.scene.setIndirectLight(null); indirectLight.delete?.(); indirectLight = null; }
-      indirectLight = Filament.IndirectLight.Builder().irradianceSh(1, new Float32Array([r, g, b])).intensity(intensity > 0 ? intensity : 15000).build(ctx.engine);
-      ctx.scene.setIndirectLight(indirectLight);
-    } catch { }
-  };
-  // A single directional sun drives the lit material and casts shadows. The
-  // engine points it and scales its intensity through SetSkyAtmosphere/SetSun;
-  // the initial direction only matters until the first atmosphere apply.
-  const createSunLight = (ctx, dir) => {
-    const F = Filament;
-    const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-    const e = F.EntityManager.get().create();
-    F.LightManager.Builder(F.LightManager$Type.SUN)
-      .color([1, .98, .95]).intensity(100000)
-      .direction([dir[0] / len, dir[1] / len, dir[2] / len])
-      .sunAngularRadius(1.9).castShadows(true)
-      .shadowOptions({ mapSize: 4096, shadowCascades: 4, shadowFar: 0, shadowNearHint: .5, shadowFarHint: 160, stable: true, screenSpaceContactShadows: true })
-      .build(ctx.engine, e);
-    ctx.scene.addEntity(e);
-    ctx.sunLight = e; ctx.sunDir = dir.slice();
-    return e;
-  };
-  // Direction (and optionally intensity) of the sun light. `scaleByElevation`
-  // mirrors the native shim: a sun below the horizon fades the light out.
-  const applySun = (ctx, dx, dy, dz, intensity, scaleByElevation) => {
-    if (!ctx.sunLight) return;
-    const len = Math.hypot(dx, dy, dz) || 1; dx /= len; dy /= len; dz /= len;
-    let value = intensity;
-    if (scaleByElevation) { let e = (dy + .05) / .15; e = e < 0 ? 0 : e > 1 ? 1 : e; value = intensity * e; }
-    try { const lm = ctx.engine.getLightManager(), inst = lm.getInstance(ctx.sunLight); lm.setDirection(inst, [-dx, -dy, -dz]); lm.setIntensity(inst, value); } catch { }
-  };
-  const SHADOW_TYPES = { 0: "PCF", 1: "VSM", 2: "DPCF", 3: "PCSS" };
-  const applySunShadow = ctx => {
-    if (!ctx.sunLight || !ctx.sunShadow) return;
-    try {
-      const T = Filament.View$ShadowType, lm = ctx.engine.getLightManager(), inst = lm.getInstance(ctx.sunLight);
-      lm.setShadowOptions(inst, { ...ctx.sunShadow, shadowType: T[SHADOW_TYPES[ctx.shadowFilter] || "PCF"] });
-    } catch { }
-  };
-  const qualityFromInt = q => { const Q = Filament.View$QualityLevel; return [Q.LOW, Q.MEDIUM, Q.HIGH, Q.ULTRA][q | 0] ?? Q.MEDIUM; };
-  // Minimal GLB reader: the engine ships one primitive per shape with
-  // POSITION / NORMAL / TEXCOORD_0 / uint16 indices, so the web shell extracts
-  // the attributes the lit material needs and rebuilds a Filament vertex buffer.
-  // Primitives without a NORMAL accessor get averaged face normals.
-  const GLB_COMP_SIZE = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
-  const GLB_NUM_COMP = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
-  const parseGlbMesh = bytes => {
-    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (bytes.byteLength < 12 || dv.getUint32(0, true) !== 0x46546C67) return null;
-    let off = 12, json = null, bin = null;
-    while (off + 8 <= bytes.byteLength) {
-      const clen = dv.getUint32(off, true), ctype = dv.getUint32(off + 4, true), start = off + 8;
-      if (ctype === 0x4E4F534A) json = JSON.parse(new TextDecoder().decode(bytes.subarray(start, start + clen)));
-      else if (ctype === 0x004E4942) bin = bytes.subarray(start, start + clen);
-      off = start + clen;
-    }
-    if (!json || !bin) return null;
-    const bdv = new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
-    const read = (accIdx) => {
-      const acc = json.accessors[accIdx], bv = json.bufferViews[acc.bufferView];
-      const cs = GLB_COMP_SIZE[acc.componentType], nc = GLB_NUM_COMP[acc.type];
-      const stride = bv.byteStride || cs * nc, base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
-      if (acc.componentType === 5126) { const out = new Float32Array(acc.count * nc); for (let i = 0; i < acc.count; i++)for (let c = 0; c < nc; c++)out[i * nc + c] = bdv.getFloat32(base + i * stride + c * 4, true); return out; }
-      if (acc.componentType === 5123) { const out = new Uint16Array(acc.count); for (let i = 0; i < acc.count; i++)out[i] = bdv.getUint16(base + i * stride, true); return out; }
-      if (acc.componentType === 5125) { const out = new Uint32Array(acc.count); for (let i = 0; i < acc.count; i++)out[i] = bdv.getUint32(base + i * stride, true); return out; }
-      const out = new Uint8Array(acc.count); for (let i = 0; i < acc.count; i++)out[i] = bdv.getUint8(base + i * stride); return out;
-    };
-    const positions = [], uvs = [], normals = [], indices = [];
-    for (const mesh of (json.meshes || [])) {
-      for (const p of mesh.primitives) {
-        const pos = read(p.attributes.POSITION);
-        const uv = p.attributes.TEXCOORD_0 != null ? read(p.attributes.TEXCOORD_0) : null;
-        const nrm = p.attributes.NORMAL != null ? read(p.attributes.NORMAL) : null;
-        const base = positions.length / 3, vcount = pos.length / 3;
-        for (let i = 0; i < pos.length; i++)positions.push(pos[i]);
-        for (let i = 0; i < vcount; i++)uvs.push(uv ? uv[i * 2] : 0, uv ? uv[i * 2 + 1] : 0);
-        const primStart = indices.length;
-        if (p.indices != null) { const idx = read(p.indices); for (let i = 0; i < idx.length; i++)indices.push(base + idx[i]); }
-        else { for (let i = 0; i < vcount; i++)indices.push(base + i); }
-        if (nrm) { for (let i = 0; i < vcount; i++)normals.push(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]); }
-        else {
-          for (let i = 0; i < vcount; i++)normals.push(0, 0, 0);
-          for (let i = primStart; i + 2 < indices.length; i += 3) {
-            const ia = indices[i] * 3, ib = indices[i + 1] * 3, ic = indices[i + 2] * 3;
-            const ux = positions[ib] - positions[ia], uy = positions[ib + 1] - positions[ia + 1], uz = positions[ib + 2] - positions[ia + 2];
-            const vx = positions[ic] - positions[ia], vy = positions[ic + 1] - positions[ia + 1], vz = positions[ic + 2] - positions[ia + 2];
-            const fx = uy * vz - uz * vy, fy = uz * vx - ux * vz, fz = ux * vy - uy * vx;
-            for (const o of [ia, ib, ic]) { normals[o] += fx; normals[o + 1] += fy; normals[o + 2] += fz; }
-          }
-          for (let i = 0; i < vcount; i++) {
-            const o = (base + i) * 3, len = Math.hypot(normals[o], normals[o + 1], normals[o + 2]) || 1;
-            normals[o] /= len; normals[o + 1] /= len; normals[o + 2] /= len;
-          }
-        }
-      }
-    }
-    if (positions.length === 0 || indices.length === 0) return null;
-    return { positions: new Float32Array(positions), uvs: new Float32Array(uvs), normals: new Float32Array(normals), indices: new Uint16Array(indices) };
-  };
-  const filament = {
-    Kine_Filament_CreateForSDLWindow: (win, w, h) => { const engine = Filament.Engine.create(filamentEl), scene = engine.createScene(), view = engine.createView(), renderer = engine.createRenderer(), swap = engine.createSwapChain(), ce = Filament.EntityManager.get().create(), camera = engine.createCamera(ce), material = engine.createMaterial(materialBytes); view.setScene(scene); view.setCamera(camera); view.setViewport([0, 0, w, h]); view.setPostProcessingEnabled(true); view.setShadowingEnabled(true); camera.setProjectionFov(60, w / h, .1, 1000, Filament.Camera$Fov.VERTICAL); camera.lookAt([8, 7, 12], [0, 0, 0], [0, 1, 0]); renderer.setClearOptions({ clear: true, clearColor: [.035, .055, .09, 1] }); const ctx = { engine, scene, view, renderer, swap, camera, material, w, h, shadowFilter: 0, sunShadow: null, renderables: engine.getRenderableManager() }; stats.filamentContexts++; createSunLight(ctx, [.5, -1, .8]); return handle(filamentContexts, ctx); },
-    Kine_Filament_CreateMesh: (cid, shape) => { const ctx = filamentContexts.get(cid); if (!ctx) return 0; stats.meshes++; const { vb, ib } = uploadGeometry(ctx, shape === 2 ? sphereGeometry() : cubeGeometry()); return handle(filamentMeshes, { ctx, vb, ib, nodes: [], used: 0 }); },
-    Kine_Filament_CreateMeshFromMemory: (cid, ptr, len, hint) => { const ctx = filamentContexts.get(cid); if (!ctx || !ptr || !len) return 0; try { const geo = parseGlbMesh(heap8().subarray(ptr, ptr + len)); if (!geo) return 0; stats.meshes++; const { vb, ib } = uploadGeometry(ctx, geo); return handle(filamentMeshes, { ctx, vb, ib, nodes: [], used: 0 }); } catch (e) { console.error("CreateMeshFromMemory", e); return 0; } },
-    Kine_Filament_CreateMeshFromPath: () => 0,
-    Kine_Filament_DrawMeshList: (cid, ptr, count) => { const ctx = filamentContexts.get(cid); if (!ctx) return; stats.drawListCalls = (stats.drawListCalls || 0) + 1; stats.drawItems = (stats.drawItems || 0) + count; const dv = heap32(), stride = 116, tm = ctx.engine.getTransformManager(), sampler = filamentSampler(); for (let n = 0; n < count; n++) { const p = ptr + n * stride, m = filamentMeshes.get(dv.getUint32(p, true)); if (!m) continue; const node = acquireNode(m); if (!node.inScene) { ctx.scene.addEntity(node.entity); node.inScene = true; } applyNodeShadowFlags(ctx, node, dv.getUint32(p + 104, true)); if (dv.getUint32(p + 4, true)) stats.texSeen = (stats.texSeen || 0) + 1; const raw = []; for (let i = 0; i < 16; i++)raw.push(dv.getFloat32(p + 8 + i * 4, true)); const matrix = [raw[0], raw[4], raw[8], raw[12], raw[1], raw[5], raw[9], raw[13], raw[2], raw[6], raw[10], raw[14], raw[3], raw[7], raw[11], raw[15]]; const inst = tm.getInstance(node.entity); tm.setTransform(inst, matrix); inst.delete(); node.material.setFloat4Parameter("baseColor", [dv.getFloat32(p + 72, true), dv.getFloat32(p + 76, true), dv.getFloat32(p + 80, true), 1]); if (dv.getInt32(p + 100, true) === 0) { node.material.setFloatParameter("roughness", dv.getFloat32(p + 84, true)); node.material.setFloatParameter("metallic", dv.getFloat32(p + 88, true)); } const uv = dv.getFloat32(p + 92, true), texEntry = filamentTextures.get(dv.getUint32(p + 4, true)); if (texEntry) { node.material.setTextureParameter("baseColorMap", texEntry, sampler); node.material.setFloatParameter("hasTexture", 1); node.material.setFloat2Parameter("uvScale", [uv > 0.0001 ? uv : 1, uv > 0.0001 ? uv : 1]); stats.texBound = (stats.texBound || 0) + 1; } else { node.material.setFloatParameter("hasTexture", 0); node.material.setFloat2Parameter("uvScale", [1, 1]); } } },
-    Kine_Filament_DrawMeshListVersioned: (cid, ptr, count) => filament.Kine_Filament_DrawMeshList(cid, ptr, count),
-    Kine_Filament_RenderFrame: cid => { const c = filamentContexts.get(cid); if (c) { const t = performance.now(); stats.frames++; for (const mesh of filamentMeshes.values()) { for (let i = mesh.used; i < mesh.nodes.length; i++) { const nd = mesh.nodes[i]; if (nd && nd.inScene) { c.scene.remove(nd.entity); nd.inScene = false; } } mesh.used = 0; } c.renderer.render(c.swap, c.view); c.engine.execute(); stats.renderMs = performance.now() - t; } },
-    Kine_Filament_Resize: (cid, w, h) => { const c = filamentContexts.get(cid); if (c) { filamentEl.width = w; filamentEl.height = h; c.view.setViewport([0, 0, w, h]); c.camera.setProjectionFov(60, w / h, .1, 1000, Filament.Camera$Fov.VERTICAL); } },
-    Kine_Filament_SetViewport: (cid, x, y, w, h) => {
-      const c = filamentContexts.get(cid);
-      if (c) c.view.setViewport([x, height() - y - h, w, h]);
-    },
-    Kine_Filament_SetCameraPerspective: (cid, fov, aspect, near, far) => filamentContexts.get(cid)?.camera.setProjectionFov(fov, aspect, near, far, Filament.Camera$Fov.VERTICAL),
-    Kine_Filament_SetCameraLookAt: (cid, ex, ey, ez, tx, ty, tz, ux, uy, uz) => filamentContexts.get(cid)?.camera.lookAt([ex, ey, ez], [tx, ty, tz], [ux, uy, uz]),
-    Kine_Filament_CreateSky: (cid, r, g, b, a) => { const c = filamentContexts.get(cid); if (c) setSkybox(c, r, g, b, a > 0 ? a : 1); },
-    Kine_Filament_SetSkyAtmosphere: (cid, sunX, sunY, sunZ, skyR, skyG, skyB, horR, horG, horB, gndR, gndG, gndB, sunIntensity) => { const c = filamentContexts.get(cid); if (!c) return 1; const [r, g, b] = atmosphereColor(sunY, skyR, skyG, skyB, horR, horG, horB, gndR, gndG, gndB); setSkybox(c, r, g, b, 1); setIndirectLight(c, r, g, b, 15000); applySun(c, sunX, sunY, sunZ, sunIntensity, true); return 1; },
-    Kine_Filament_SetSun: (cid, sunX, sunY, sunZ, sunIntensity) => { const c = filamentContexts.get(cid); if (c) applySun(c, sunX, sunY, sunZ, sunIntensity, false); return 1; },
-    Kine_Filament_SetShadowOptions: (cid, enabled, filter) => { const c = filamentContexts.get(cid); if (!c) return 1; try { c.view.setShadowingEnabled(!!enabled); } catch { } c.shadowFilter = filter | 0; applySunShadow(c); return 1; },
-    Kine_Filament_SetSunShadowOptions: (cid, mapSize, cascades, shadowFar, shadowNearHint, shadowFarHint, stable, contactShadows) => { const c = filamentContexts.get(cid); if (!c) return 1; let p = 8; const want = Math.max(mapSize | 0, 8); while (p < want) p <<= 1; c.sunShadow = { mapSize: Math.min(p, 8192), shadowCascades: Math.max(1, Math.min(cascades | 0, 4)), shadowFar: Math.max(shadowFar, 0), shadowNearHint: Math.max(shadowNearHint, .001), shadowFarHint: Math.max(shadowFarHint, shadowNearHint + .001), stable: !!stable, lispsm: !stable, constantBias: .004, normalBias: 1.25, polygonOffsetConstant: .75, polygonOffsetSlope: 2.5, screenSpaceContactShadows: !!contactShadows, stepCount: 16 }; applySunShadow(c); return 1; },
-    Kine_Filament_SetPostProcessing: (cid, enabled) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setPostProcessingEnabled(!!enabled); } catch { } } return 1; },
-    Kine_Filament_SetBloom: (cid, enabled, strength, resolution, levels, threshold, lensFlare) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setBloomOptions({ enabled: !!enabled, strength: Math.min(Math.max(strength, 0), 1), resolution: Math.min(Math.max(resolution | 0, 8), 4096), levels: Math.min(Math.max(levels | 0, 1), 11), threshold: !!threshold, lensFlare: !!lensFlare }); } catch { } } return 1; },
-    Kine_Filament_SetAmbientOcclusion: (cid, enabled, radius, power, intensity, quality, aoType) => { const c = filamentContexts.get(cid); if (c) { try { const AO = Filament.View$AmbientOcclusionOptions$AmbientOcclusionType; c.view.setAmbientOcclusionOptions({ enabled: !!enabled, radius: Math.min(Math.max(radius, 0), 10), power: Math.max(power, .001), intensity: Math.max(intensity, 0), quality: qualityFromInt(quality), aoType: (aoType | 0) === 1 ? AO.GTAO : AO.SAO }); } catch { } } return 1; },
-    Kine_Filament_SetAntiAliasing: (cid, fxaa, taa, msaa, sampleCount) => { const c = filamentContexts.get(cid); if (c) { try { const AA = Filament.View$AntiAliasing; c.view.setAntiAliasing(fxaa ? AA.FXAA : AA.NONE); c.view.setTemporalAntiAliasingOptions({ enabled: !!taa }); c.view.setMultiSampleAntiAliasingOptions({ enabled: !!msaa, sampleCount: Math.min(Math.max(sampleCount | 0, 1), 8) }); } catch { } } return 1; },
-    Kine_Filament_SetDynamicResolution: (cid, enabled, minScale, maxScale, quality, sharpness) => { const c = filamentContexts.get(cid); if (c) { try { const lo = Math.min(Math.max(minScale, .1), 1), hi = Math.min(Math.max(maxScale, lo), 2); c.view.setDynamicResolutionOptions({ enabled: !!enabled, minScale: [lo, lo], maxScale: [hi, hi], sharpness: Math.min(Math.max(sharpness, 0), 1), quality: qualityFromInt(quality) }); } catch { } } return 1; },
-    Kine_Filament_SetDepthOfField: (cid, enabled, cocScale, cocAspectRatio, maxApertureDiameter, maxForegroundCOC, maxBackgroundCOC) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setDepthOfFieldOptions({ enabled: !!enabled, cocScale: Math.max(cocScale, 0), cocAspectRatio: Math.max(cocAspectRatio, .001), maxApertureDiameter: Math.max(maxApertureDiameter, 0), maxForegroundCOC: Math.min(Math.max(maxForegroundCOC | 0, 0), 32), maxBackgroundCOC: Math.min(Math.max(maxBackgroundCOC | 0, 0), 32) }); } catch { } } return 1; },
-    Kine_Filament_SetFocusDistance: (cid, distance) => { const c = filamentContexts.get(cid); if (c) { try { c.camera.setFocusDistance(Math.max(distance, .001)); } catch { } } return 1; },
-    Kine_Filament_SetVignette: (cid, enabled, midPoint, roundness, feather, r, g, b, a) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setVignetteOptions({ enabled: !!enabled, midPoint: Math.min(Math.max(midPoint, 0), 1), roundness: Math.min(Math.max(roundness, 0), 1), feather: Math.min(Math.max(feather, 0), 1), color: [Math.max(r, 0), Math.max(g, 0), Math.max(b, 0), Math.min(Math.max(a, 0), 1)] }); } catch { } } return 1; },
-    Kine_Filament_SetScreenSpaceReflections: (cid, enabled, thickness, bias, maxDistance, stride) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setScreenSpaceReflectionsOptions({ enabled: !!enabled, thickness: Math.max(thickness, 0), bias: Math.max(bias, 0), maxDistance: Math.max(maxDistance, 0), stride: Math.max(stride, .001) }); } catch { } } return 1; },
-    Kine_Filament_SetColorGrading: (cid, exposure, contrast, saturation, vibrance, temperature, tint) => { const c = filamentContexts.get(cid); if (c) { try { if (c.colorGrading) { c.view.setColorGrading(null); c.colorGrading.delete?.(); c.colorGrading = null; } const cg = Filament.ColorGrading.Builder().exposure(exposure).contrast(Math.max(contrast, .001)).saturation(Math.max(saturation, 0)).vibrance(Math.max(vibrance, 0)).whiteBalance(temperature, tint).build(c.engine); c.colorGrading = cg; c.view.setColorGrading(cg); } catch { } } return 1; },
-    Kine_Filament_ClearColorGrading: (cid) => { const c = filamentContexts.get(cid); if (c && c.colorGrading) { try { c.view.setColorGrading(null); c.colorGrading.delete?.(); } catch { } c.colorGrading = null; } return 1; },
-    Kine_Filament_SetRenderQuality: (cid, hdrQuality) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setRenderQuality({ hdrColorBuffer: qualityFromInt(hdrQuality) }); } catch { } } return 1; },
-    Kine_Filament_SetDithering: (cid, enabled) => { const c = filamentContexts.get(cid); if (c) { try { const D = Filament.View$Dithering; c.view.setDithering(enabled ? D.TEMPORAL : D.NONE); } catch { } } return 1; },
-    Kine_Filament_SetSunRays: (cid, enabled, distance, cutOffDistance, maximumOpacity, height, heightFalloff, density, inScatteringStart, inScatteringSize, r, g, b, fogColorFromIbl) => { const c = filamentContexts.get(cid); if (c) { try { c.view.setFogOptions({ enabled: !!enabled, distance: Math.max(distance, 0), cutOffDistance: cutOffDistance > 0 ? Math.max(cutOffDistance, distance) : Infinity, maximumOpacity: Math.min(Math.max(maximumOpacity, 0), 1), height: height, heightFalloff: Math.max(heightFalloff, 0), density: Math.max(density, 0), inScatteringStart: Math.max(inScatteringStart, 0), inScatteringSize: enabled ? Math.max(inScatteringSize, .001) : -1, color: [Math.max(r, 0), Math.max(g, 0), Math.max(b, 0)], fogColorFromIbl: !!fogColorFromIbl }); } catch { } } return 1; },
-    Kine_Filament_DestroyMesh: (cid, id) => { const m = filamentMeshes.get(id); if (m) { for (const node of m.nodes) { if (node) { if (node.inScene) m.ctx.scene.remove(node.entity); m.ctx.engine.destroyEntity(node.entity); } } filamentMeshes.delete(id); } return 1; },
-    Kine_Filament_CreateTexFromPixels: (cid, w, h, rowBytes, ptr) => { const c = filamentContexts.get(cid); if (!c || !ptr || w <= 0 || h <= 0) return 0; const tex = buildTexture(c, w, h, heap8().slice(ptr, ptr + h * rowBytes)); stats.textures = (stats.textures || 0) + 1; return handle(filamentTextures, tex); },
-    Kine_Filament_UpdateTexFromPixels: (cid, id, w, h, rowBytes, ptr) => { const tex = filamentTextures.get(id), c = filamentContexts.get(cid); if (!tex || !c || !ptr) return 0; tex.setImage(c.engine, 0, new Filament.PixelBuffer(heap8().slice(ptr, ptr + h * rowBytes), Filament.PixelDataFormat.RGBA, Filament.PixelDataType.UBYTE)); return 1; },
-    Kine_Filament_CreatePbrTexFromPixels: (cid, w, h, rowBytes, ptr) => { const c = filamentContexts.get(cid); if (!c || !ptr || w <= 0 || h <= 0) return 0; const tex = buildTexture(c, w, h, heap8().slice(ptr, ptr + h * rowBytes)); stats.textures = (stats.textures || 0) + 1; return handle(filamentTextures, tex); },
-    Kine_Filament_GetMeshTexture: () => 0, Kine_Filament_CreateTex: () => 0,
-    Kine_Filament_DestroyTex: (cid, id) => { const tex = filamentTextures.get(id); if (tex) tex.delete?.(); filamentTextures.delete(id); return 1; },
-    Kine_Filament_CreateLightEx: () => handle(filamentLights, {}), Kine_Filament_RemoveLight: id => { filamentLights.delete(id); return 1; },
-    Kine_Filament_SetPositionLight: () => 1, Kine_Filament_SetColorLight: () => 1, Kine_Filament_SetIntensityLight: () => 1, Kine_Filament_SetFalloffLight: () => 1, Kine_Filament_SetEnabledLight: () => 1, Kine_Filament_SetDirectionLight: () => 1, Kine_Filament_SetConeLight: () => 1, Kine_Filament_SetShadowLight: () => 1
-  };
+  // Keep the existing Odin import ABI; GPU work is handled by Babylon.js.
+  let renderer3D;
 
   // Emscripten setjmp/longjmp + C++ exception runtime. Luau and Jolt use C++
   // exceptions that unwind across indirect calls; the wasm references these
@@ -677,24 +576,38 @@
   });
   const wasi = { fd_close: () => 0, fd_seek: () => 0, fd_write: (fd, iovs, count, written) => { let total = 0, out = ""; const dv = heap32(); for (let i = 0; i < count; i++) { const p = dv.getUint32(iovs + i * 8, true), n = dv.getUint32(iovs + i * 8 + 4, true); out += decoder.decode(heap8().subarray(p, p + n)); total += n; } if (written) dv.setUint32(written, total, true); if (out.trim()) console.log(out.trimEnd()); return 0; } };
 
-  const loadFilament = () => new Promise((resolve, reject) => { try { Filament.init([], resolve); } catch (e) { reject(e); } });
   async function start() {
-    report("Loading Skia CanvasKit…");
+    await phase("Loading CanvasKit");
+    const engineFetch = fetch("kinemium_engine.wasm");
+    // Begin compiling as soon as bytes arrive, in parallel with UI setup.
+    const compiled = engineFetch.then(response=>{if(!response.ok)throw Error("WASM download: "+response.status);return WebAssembly.compileStreaming(response);});
+    compiled.catch(()=>{});
+    const manifestFetch = fetch("material-manifest.json").then(r=>r.ok?r.json():{}).catch(()=>({}));
     CanvasKit = await CanvasKitInit({ locateFile: f => `canvaskit/${f}` });
     defaultTypeface = CanvasKit.Typeface.MakeFreeTypeFaceFromData(await (await fetch("fonts/Roboto.ttf")).arrayBuffer());
-    report("Loading Filament WebGL…");
-    await loadFilament();
-    materialBytes = new Uint8Array(await (await fetch("filament/kine_web.filamat")).arrayBuffer());
+    await phase("Loading core fonts");
+    await Promise.all(["Montserrat-Regular.ttf","JetBrainsMono-Regular.ttf","RobotoMono-Regular.ttf"].map(name=>preloadFont(name).catch(error=>console.warn(error))));
+    await phase("Loading Babylon.js renderer");
+    if (!globalThis.BABYLON || !globalThis.createKinemiumBabylonBackend) throw new Error("Babylon.js renderer bundle is missing");
+    renderer3D = createKinemiumBabylonBackend({ B: BABYLON, canvas: worldEl, heap8, heap32, stats, materialManifest: await manifestFetch });
     await phase("starting-odin-luau-jolt");
     const memoryInterface = new odin.WasmMemoryInterface();
     let imports = odin.setupDefaultImports(memoryInterface, null, memoryInterface.memory);
-    imports = { ...imports, kinemium_platform: withStubs(platform), kinemium_skia: withStubs(skia), kinemium_filament: withStubs(filament), kinemium_audio: withStubs(audio), kinemium_storage: withStubs(storage), kinemium_net: withStubs(net), env, wasi_snapshot_preview1: wasi };
-    const result = await WebAssembly.instantiateStreaming(fetch("kinemium_engine.wasm"), imports);
-    wasm = result.instance.exports; memory = wasm.memory; table = wasm.__indirect_function_table;
+    imports = { ...imports, kinemium_platform: withStubs(platform), kinemium_skia: withStubs(skia), kinemium_filament: withStubs(renderer3D), kinemium_audio: withStubs(audio), kinemium_storage: withStubs(storage), kinemium_net: withStubs(net), env, wasi_snapshot_preview1: wasi };
+    await phase("Downloading and compiling WebAssembly");
+    const module = await compiled;
+    await phase("Instantiating WebAssembly");
+    const instance = await WebAssembly.instantiate(module, imports);
+    wasm = instance.exports; memory = wasm.memory; table = wasm.__indirect_function_table;
     memoryInterface.setExports(wasm); memoryInterface.setMemory(memory);
+    await phase("Initializing native libraries");
+    // wasm-ld must not wrap every exported function with C++ constructors.
+    // Run them exactly once before starting Luau/Jolt/Odin.
+    wasm.__wasm_call_ctors?.();
+    await phase("Starting Odin runtime");
+    wasm._start();
     const context = wasm.default_context_ptr();
     await phase("odin-context-ready");
-    wasm._start();
     await phase("luau-vm-ready");
     await phase("installing-engine-environment");
     await new Promise(resolve => requestAnimationFrame(resolve));
@@ -704,13 +617,13 @@
     await new Promise(resolve => requestAnimationFrame(resolve));
     wasm.initialize_scripts(context);
     await phase("studio-luau-modules-ready");
-    await phase("creating-skia-and-filament");
+    await phase("creating-skia-and-babylon");
     await new Promise(resolve => requestAnimationFrame(resolve));
-    wasm.initialize_renderer(context);
+    if (!wasm.initialize_renderer(context)) throw Error("Renderer initialization failed");
     await phase("engine-ready");
-    runtimeEl.textContent = "Running in Firefox"; document.documentElement.dataset.engineReady = "true";
+    runtimeEl.textContent = stats.renderer || "Running in browser"; document.documentElement.dataset.engineReady = "true";
     let then = performance.now();
-    const frame = now => { try { stats.frameCalls = (stats.frameCalls || 0) + 1; const t0 = performance.now(); const keep = wasm.step(Math.min((now - then) / 1000, .1), context); stats.stepMs = performance.now() - t0; if (now - then > 0) stats.fps = Math.round(1000 / (now - then)); then = now; if (keep) requestAnimationFrame(frame); else wasm._end(); } catch (error) { console.error(error); document.documentElement.dataset.engineError = "true"; runtimeEl.textContent = "Frame failed"; statusEl.textContent = error.message; } };
+    const frame = now => { try { stats.frameCalls = (stats.frameCalls || 0) + 1; const t0 = performance.now(); for(const id of pendingFontNotifications){wasm.web_font_ready?.(id,context);} pendingFontNotifications.clear(); const keep = wasm.step(Math.min((now - then) / 1000, .1), context); stats.stepMs = performance.now() - t0; if (now - then > 0) stats.fps = Math.round(1000 / (now - then)); then = now; if (keep) requestAnimationFrame(frame); else wasm._end(); } catch (error) { console.error(error); document.documentElement.dataset.engineError = "true"; runtimeEl.textContent = "Frame failed"; statusEl.textContent = error.message; } };
     requestAnimationFrame(frame);
   }
   start().catch(error => { console.error(error); runtimeEl.textContent = "Startup failed"; statusEl.textContent = error.message; statusEl.style.color = "#ff7088"; document.documentElement.dataset.engineError = "true"; });

@@ -52,8 +52,8 @@ content_id_is_stable_and_length_sensitive :: proc(t: ^testing.T) {
 
 @(test)
 register_dedups_by_content :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -79,8 +79,8 @@ defer release_store()
 
 @(test)
 register_empty_blob :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -102,8 +102,8 @@ defer release_store()
 
 @(test)
 register_as_dedups_the_stream_id :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -158,8 +158,8 @@ uri_round_trip :: proc(t: ^testing.T) {
 
 @(test)
 resolve_bytes_only_handles_embedded_values :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -192,7 +192,7 @@ format_hint_case :: struct {
 format_hint_normalizes_extensions :: proc(t: ^testing.T) {
 	expect := testing.expect
 
-	cases := []format_hint_case{
+	cases := []format_hint_case {
 		{"models/hero.FBX", "fbx"},
 		{"models/hero.fbx", "fbx"},
 		{`C:\art\hero.gltf`, "gltf"},
@@ -205,19 +205,15 @@ format_hint_normalizes_extensions :: proc(t: ^testing.T) {
 	}
 	for test_case in cases {
 		got := Format_Hint(test_case.path)
-		expect(
-			t,
-			got == test_case.want,
-			fmt_hint_message(test_case.path, test_case.want, got),
-		)
+		expect(t, got == test_case.want, fmt_hint_message(test_case.path, test_case.want, got))
 		delete(got)
 	}
 }
 
 @(test)
 format_hint_uses_the_authored_path :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -257,8 +253,8 @@ resolve_path_passes_plain_paths_through :: proc(t: ^testing.T) {
 
 @(test)
 materialize_extracts_into_the_cache :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -273,11 +269,7 @@ defer release_store()
 
 	expect(t, os.exists(path), "file landed on disk")
 	expect(t, strings.has_suffix(path, ".fbx"), "authored extension is kept")
-	expect(
-		t,
-		strings.contains(path, ASSET_CACHE_SUBDIR),
-		"file lives under the cache directory",
-	)
+	expect(t, strings.contains(path, ASSET_CACHE_SUBDIR), "file lives under the cache directory")
 
 	expect(t, !strings.contains(path, "models"), "authored directories are dropped")
 	expect(t, !strings.contains(path, ".."), "no traversal in the cached name")
@@ -297,8 +289,8 @@ defer release_store()
 
 @(test)
 materialize_rejects_traversal_in_the_extension :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()
@@ -329,18 +321,7 @@ register_as_rejects_an_id_that_is_not_a_content_id :: proc(t: ^testing.T) {
 	Clear()
 	defer Clear()
 
-	for hostile in ([]string{
-		`../../../windows/system32/evil`,
-		`..\\..\\evil`,
-		`C:\\evil`,
-		`nothexatall`,
-		`0123456789ABCDEF`,
-		`0123456789abcde`,
-		`0123456789abcdef-`,
-		`0123456789abcdef-x`,
-		`0123456789abcdef.fbx`,
-		` `,
-	}) {
+	for hostile in ([]string{`../../../windows/system32/evil`, `..\\..\\evil`, `C:\\evil`, `nothexatall`, `0123456789ABCDEF`, `0123456789abcde`, `0123456789abcdef-`, `0123456789abcdef-x`, `0123456789abcdef.fbx`, ` `}) {
 		accepted := Register_As(hostile, blob('x'), "authored/path.fbx", .Mesh)
 		expect(t, !accepted, fmt.tprintf("rejected hostile id %q", hostile))
 	}
@@ -349,13 +330,7 @@ register_as_rejects_an_id_that_is_not_a_content_id :: proc(t: ^testing.T) {
 		panic("a hostile id reached the store")
 	}
 
-	for valid in ([]string{
-		`0123456789abcdef`,
-		`abcdef0123456789`,
-		`0000000000000000`,
-		`0123456789abcdef-1`,
-		`0123456789abcdef-8`,
-	}) {
+	for valid in ([]string{`0123456789abcdef`, `abcdef0123456789`, `0000000000000000`, `0123456789abcdef-1`, `0123456789abcdef-8`}) {
 		accepted := Register_As(valid, blob('y'), "authored/path.fbx", .Mesh)
 		expect(t, accepted, fmt.tprintf("accepted content id %q", valid))
 	}
@@ -436,8 +411,8 @@ read_asset_file_reads_from_disk :: proc(t: ^testing.T) {
 
 @(test)
 clear_drops_every_entry :: proc(t: ^testing.T) {
-hold_store()
-defer release_store()
+	hold_store()
+	defer release_store()
 	expect := testing.expect
 	Clear()
 	defer Clear()

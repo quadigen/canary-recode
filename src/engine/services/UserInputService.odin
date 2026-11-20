@@ -20,6 +20,10 @@ UserInputService :: struct {
 	mouse_enabled:           bool,
 	touch_enabled:           bool,
 	gamepad_enabled:         bool,
+	gamepad_ids:             [8]u32,
+	gamepad_axes:            [8][6]f32,
+	gamepad_buttons:         [8][15]bool,
+	gamepad_direction:       [8][2]i32,
 	mouse_icon_enabled:      bool,
 	mouse_behavior:          enums.MouseBehavior,
 	mouse_delta_sensitivity: f32,
@@ -94,7 +98,9 @@ user_input_service_get :: proc(
 		vm.PushBoolean(L, service.touch_enabled)
 	case "GamepadEnabled":
 		vm.PushBoolean(L, service.gamepad_enabled)
-	case "GyroscopeEnabled", "VREnabled", "OnScreenKeyboardVisible":
+	case "VREnabled":
+		vm.PushBoolean(L, VR_Service_Enabled(&service.service))
+	case "GyroscopeEnabled", "OnScreenKeyboardVisible":
 		vm.PushBoolean(L, false)
 	case "MouseIconEnabled":
 		vm.PushBoolean(L, service.mouse_icon_enabled)
@@ -124,6 +130,12 @@ user_input_service_get :: proc(
 	     "GetMouseButtonsPressed",
 	     "GetFocusedTextBox",
 	     "GetTouches",
+	     "GetConnectedGamepads",
+	     "GetGamepadConnected",
+	     "GetGamepadState",
+	     "IsGamepadButtonDown",
+	     "GetSupportedGamepadKeyCodes",
+	     "GamepadSupports",
 	     "GetMouse":
 		vm.PushUserdataMethod(L, key)
 	case:
@@ -193,6 +205,82 @@ user_input_push_mouse_button :: proc(
 	)
 }
 
+GAMEPAD_INPUT_KEYS := [15]enums.KeyCode {
+	.ButtonA,
+	.ButtonB,
+	.ButtonX,
+	.ButtonY,
+	.ButtonSelect,
+	.None,
+	.ButtonStart,
+	.ButtonL3,
+	.ButtonR3,
+	.ButtonL1,
+	.ButtonR1,
+	.DPadUp,
+	.DPadDown,
+	.DPadLeft,
+	.DPadRight,
+}
+
+gamepad_input_index :: proc(L: ^vm.State, enum_registry: ^enums.Registry, arg: int) -> int {
+	item := enums.Arg_Item(L, arg, enum_registry, "UserInputType")
+	return int(item.value) - int(enums.UserInputType.Gamepad1)
+}
+
+gamepad_supported_key :: proc(key: enums.KeyCode) -> bool {
+	if key == .None {return false}
+	for candidate in GAMEPAD_INPUT_KEYS {if key == candidate {return true}}
+	return key == .Thumbstick1 || key == .Thumbstick2 || key == .ButtonL2 || key == .ButtonR2
+}
+
+user_input_push_gamepad_state :: proc(L: ^vm.State, service: ^UserInputService, slot: int) {
+	vm.NewTable(L, 18)
+	if slot < 0 || slot >= len(service.gamepad_ids) || service.gamepad_ids[slot] == 0 {return}
+	input_type := enums.UserInputType(i64(enums.UserInputType.Gamepad1) + i64(slot))
+	index := 1
+	for key, i in GAMEPAD_INPUT_KEYS {
+		if key == .None {continue}
+		down := service.gamepad_buttons[slot][i]
+		value := classes.InputObject_Value {
+			UserInputType  = input_type,
+			KeyCode        = key,
+			UserInputState = .Begin if down else .End,
+			Position       = {0, 0, 1 if down else 0},
+		}
+		if classes.Push_InputObject(L, service.signal_registry, value) != nil {
+			vm.SetArrayValue(L, -2, index)
+			index += 1
+		}
+	}
+	axes := service.gamepad_axes[slot]
+
+	axis_keys := [?]enums.KeyCode{.Thumbstick1, .Thumbstick2, .ButtonL2, .ButtonR2}
+	for key, i in axis_keys {
+		position: datatypes.Vector3
+		switch i {
+		case 0:
+			position = {axes[0], -axes[1], 0}
+		case 1:
+			position = {axes[2], -axes[3], 0}
+		case 2:
+			position.z = max(0, axes[4])
+		case 3:
+			position.z = max(0, axes[5])
+		}
+		value := classes.InputObject_Value {
+			UserInputType  = input_type,
+			KeyCode        = key,
+			UserInputState = .Change if i < 2 else (.Begin if position.z > 0.5 else .End),
+			Position       = position,
+		}
+		if classes.Push_InputObject(L, service.signal_registry, value) != nil {
+			vm.SetArrayValue(L, -2, index)
+			index += 1
+		}
+	}
+}
+
 user_input_service_namecall :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -205,6 +293,74 @@ user_input_service_namecall :: proc(
 ) {
 	service := cast(^UserInputService)object
 	switch method {
+	case "GetConnectedGamepads":
+		vm.NewTable(L, 8)
+		index := 1
+		for id, slot in service.gamepad_ids {
+			if id == 0 {continue}
+			_ = enums.Push_Item_By_Value(
+				L,
+				enum_registry,
+				"UserInputType",
+				i64(enums.UserInputType.Gamepad1) + i64(slot),
+			)
+			vm.SetArrayValue(L, -2, index)
+			index += 1
+		}
+		return 1, true
+	case "GetGamepadConnected":
+		slot := gamepad_input_index(L, enum_registry, 2)
+		vm.PushBoolean(
+			L,
+			slot >= 0 && slot < len(service.gamepad_ids) && service.gamepad_ids[slot] != 0,
+		)
+		return 1, true
+	case "GetGamepadState":
+		slot := gamepad_input_index(L, enum_registry, 2)
+		user_input_push_gamepad_state(L, service, slot)
+		return 1, true
+	case "IsGamepadButtonDown":
+		slot := gamepad_input_index(L, enum_registry, 2)
+		item := enums.Arg_Item(L, 3, enum_registry, "KeyCode")
+		key := enums.KeyCode(item.value)
+		down := false
+		if slot >= 0 &&
+		   slot < len(service.gamepad_ids) &&
+		   service.gamepad_ids[slot] != 0 &&
+		   key != .None {
+			for candidate, i in GAMEPAD_INPUT_KEYS {
+				if key == candidate {down = service.gamepad_buttons[slot][i]; break}
+			}
+			if key == .ButtonL2 {down = service.gamepad_axes[slot][4] > 0.5}
+			if key == .ButtonR2 {down = service.gamepad_axes[slot][5] > 0.5}
+		}
+		vm.PushBoolean(L, down)
+		return 1, true
+	case "GamepadSupports", "GetSupportedGamepadKeyCodes":
+		slot := gamepad_input_index(L, enum_registry, 2)
+		connected := slot >= 0 && slot < len(service.gamepad_ids) && service.gamepad_ids[slot] != 0
+		if method == "GamepadSupports" {
+			item := enums.Arg_Item(L, 3, enum_registry, "KeyCode")
+			vm.PushBoolean(L, connected && gamepad_supported_key(enums.KeyCode(item.value)))
+			return 1, true
+		}
+		vm.NewTable(L, 18)
+		if connected {
+			index := 1
+			for key in GAMEPAD_INPUT_KEYS {
+				if key == .None {continue}
+				_ = enums.Push_Item_By_Value(L, enum_registry, "KeyCode", i64(key))
+				vm.SetArrayValue(L, -2, index)
+				index += 1
+			}
+			axis_keys := [?]enums.KeyCode{.Thumbstick1, .Thumbstick2, .ButtonL2, .ButtonR2}
+			for key in axis_keys {
+				_ = enums.Push_Item_By_Value(L, enum_registry, "KeyCode", i64(key))
+				vm.SetArrayValue(L, -2, index)
+				index += 1
+			}
+		}
+		return 1, true
 	case "GetImageForKeyCode":
 		_ = enums.Arg_Item(L, 2, enum_registry, "KeyCode")
 		// This runtime ships no controller-specific key images.
@@ -363,6 +519,12 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 			"IsKeyDown",
 			"IsMouseButtonPressed",
 			"GetTouches",
+			"GetConnectedGamepads",
+			"GetGamepadConnected",
+			"GetGamepadState",
+			"IsGamepadButtonDown",
+			"GetSupportedGamepadKeyCodes",
+			"GamepadSupports",
 		},
 		member_security = []classes.Member_Security {
 			classes.Method_Security(

@@ -43,6 +43,56 @@ end)
 
 Use `GenerateChunk()` when you want to build outward from chunk coordinates rather than a world-space radius. Its radius is clamped to `0`-`32`.
 
+## Smooth volumetric terrain
+
+Use `style = "sdf"` or `detail = "smooth"` for an SDF-inspired density field with rounded rock formations, smooth unions and three-dimensional variation. The smooth preset selects 2-stud voxels and disables flat shading. Existing terrain styles remain unchanged.
+
+```lua
+local Terrain = game:GetService("Terrain")
+Terrain:SetMaterialColor(Enum.Material.Rock, Color3.fromRGB(175, 175, 175))
+Terrain.Decoration = false
+
+Terrain:GenerateArea(0, 0, 96, {
+    detail = "smooth",
+    style = "sdf",
+    seed = 12345,
+    voxelSize = 2,
+    seaLevel = -32,
+    baseHeight = 150,
+    mountainHeight = 95,
+    hillHeight = 22,
+    minY = -48,
+    maxY = 160,
+    scale = 100,
+    octaves = 7,
+    gain = 0.41,
+    lacunarity = 2,
+    surfaceAmplitude = 22,
+    blendRadius = 6,
+    rockSize = 9,
+    rockDensity = 0.45,
+    material = Enum.Material.Rock,
+    caves = false,
+    overhangs = true,
+})
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| scale | 120 | Broad noise feature size in studs |
+| octaves | 7 | Maximum number of noise layers (1–10) |
+| gain | 0.41 | Amplitude multiplier for successive octaves |
+| lacunarity | 2 | Frequency multiplier for successive octaves |
+| surfaceAmplitude | 18 | 3D surface displacement in studs |
+| blendRadius | 5 | Smooth union width in studs |
+| rockSize | 7 | Rounded rock radius scale in studs |
+| rockDensity | 0.28 | Probability of a rock in each placement cell (0–1) |
+| material | Rock | Solid terrain material |
+
+Noise layers smaller than the voxel lattice can represent are faded out. Smaller voxels provide smoother silhouettes, at a higher generation, memory, and meshing cost. Changing voxel size through generation clears the existing terrain; test on a fresh place.
+
+This mode uses the normal chunked occupancy storage and marching-cubes mesh pipeline, not direct GPU SDF ray marching or a sparse distance-field clipmap. Generated terrain remains editable through the existing voxel APIs.
+
 ## Edit the terrain
 
 Voxel coordinates are cell indices, not studs. `VoxelSize` controls how many studs each cell represents, and defaults to `4`.

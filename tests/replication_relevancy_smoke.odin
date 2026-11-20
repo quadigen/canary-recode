@@ -10,18 +10,17 @@ package main
 //   - anything that is not spatially positioned follows the focus's scope
 //   - a part that leaves the relevance sphere is despawned on the client, not
 //     simply left behind at its last position
-//   - a client with no focus at all gets nothing rather than the whole world
+//   - a joined client without an initial focus receives the visible world
 //
-// The last two are the ones that used to leak: relevancy returned true for
-// anything it could not measure, and there was no despawn packet, so a part that
-// walked out of range stayed on the client forever at a frozen position.
+// Distance-based despawning prevents stale parts from remaining on the client.
+// A joined client without a spatial focus still receives its permitted scene.
 
-import "core:fmt"
+import classes "../src/engine/classes"
 import datatypes "../src/engine/datatypes"
 import engine_runtime "../src/engine/runtime"
-import classes "../src/engine/classes"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -34,7 +33,11 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 
 step_network :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM) {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
-	services.Replication_Step(cast(^services.ReplicatorService)descriptor.object, script_vm.L, 1.0 / 60.0)
+	services.Replication_Step(
+		cast(^services.ReplicatorService)descriptor.object,
+		script_vm.L,
+		1.0 / 60.0,
+	)
 }
 
 settle :: proc(
@@ -169,8 +172,16 @@ pair_start :: proc(pair: ^Pair, server_script, client_script: string) {
 }
 
 pair_stop :: proc(pair: ^Pair) {
-	run_script(&pair.client_vm, `game:GetService("ReplicatorService"):Stop()`, "relevancy_client_stop")
-	run_script(&pair.server_vm, `game:GetService("ReplicatorService"):Stop()`, "relevancy_server_stop")
+	run_script(
+		&pair.client_vm,
+		`game:GetService("ReplicatorService"):Stop()`,
+		"relevancy_client_stop",
+	)
+	run_script(
+		&pair.server_vm,
+		`game:GetService("ReplicatorService"):Stop()`,
+		"relevancy_server_stop",
+	)
 	vm.Close(&pair.server_vm)
 	vm.Close(&pair.client_vm)
 	engine_runtime.Environment_Destroy(&pair.server)
@@ -411,11 +422,9 @@ workspace:FindFirstChild("Distant").CFrame = CFrame.new(300, 0, 0)
 // ---------------------------------------------------------------------------
 // 5. Losing the character does not blank the world.
 //
-//    The focus is the client's own character, and relevancy means "no focus"
-//    replicates nothing at all. A respawn unbinds the old model, so there is a
-//    window with no owned Part on the server. Without the cached focus point
-//    that window would despawn the whole scene and then spend time rebuilding
-//    it, which shows up as a visible hitch on every death.
+//    A respawn unbinds the old model, leaving a window with no owned Part.
+//    Keeping the cached focus avoids changing the streaming radius during
+//    that window, which would otherwise cause unnecessary scene churn.
 // ---------------------------------------------------------------------------
 losing_the_character_does_not_blank_the_world :: proc() {
 	pair: Pair
@@ -439,9 +448,92 @@ character:Destroy()
 	settle(&pair.server, &pair.server_vm, &pair.client, &pair.client_vm, 200)
 
 	names = client_workspace_names(&pair)
-	assert(
-		has_name(names, "Roamer"),
-		"the scene was blanked while the client had no character",
+	assert(has_name(names, "Roamer"), "the scene was blanked while the client had no character")
+	pair_stop(&pair)
+}
+
+// A client that joins without ever having a character must get the map,
+// complete the initial replication barrier and receive subsequent changes.
+characterless_join_replicates_world :: proc() {
+	pair: Pair
+	pair_start(
+		&pair,
+		`
+local characters = game:GetService("CharacterService")
+characters.CharacterAutoLoads = false
+local r = game:GetService("ReplicatorService")
+r.RelevancyDistance = 400
+assert(r:StartServer("127.0.0.1", 39326))
+local map = Instance.new("Model", workspace)
+map.Name = "CharacterlessMap"
+local spawn = Instance.new("Part", workspace)
+spawn.Name = "Spawn"
+spawn.Anchored = true
+spawn.CFrame = CFrame.new(0, 0, 0)
+local part = Instance.new("Part", map)
+part.Name = "Marker"
+part.Anchored = true
+part.CFrame = CFrame.new(20, 5, 0)
+local far = Instance.new("Part", workspace)
+far.Name = "FarWithoutFocus"
+far.Anchored = true
+far.CFrame = CFrame.new(5000, 0, 0)
+local hidden = Instance.new("Part", workspace)
+hidden.Name = "ServerPrivate"
+hidden.CanReplicate = false
+local shared = Instance.new("Folder", game:GetService("ReplicatedStorage"))
+shared.Name = "SharedWithoutCharacter"
+`,
+		`
+finished = 0
+workspace.FinishedReplicating:Connect(function()
+    assert(workspace:FindFirstChild("CharacterlessMap"))
+    finished += 1
+end)
+assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39326))
+`,
+	)
+	run_script(
+		&pair.server_vm,
+		`
+local player = game:GetService("Players"):GetPlayers()[1]
+assert(player and player.Character == nil)
+workspace.CharacterlessMap.Marker.CFrame = CFrame.new(50, 5, 0)
+`,
+		"characterless_server_verify",
+	)
+	settle(&pair.server, &pair.server_vm, &pair.client, &pair.client_vm, 120)
+	run_script(
+		&pair.client_vm,
+		`
+assert(game:GetService("Players").LocalPlayer.Character == nil)
+assert(workspace.CharacterlessMap.Marker.Position.X == 50)
+assert(workspace:FindFirstChild("FarWithoutFocus"))
+assert(not workspace:FindFirstChild("ServerPrivate"))
+assert(game:GetService("ReplicatedStorage"):FindFirstChild("SharedWithoutCharacter"))
+local stats = game:GetService("ReplicatorService"):GetStats()
+assert(stats.sceneReady and stats.replicationFinished and finished == 1)
+`,
+		"characterless_client_verify",
+	)
+	run_script(
+		&pair.server_vm,
+		`
+local player = game:GetService("Players"):GetPlayers()[1]
+assert(game:GetService("CharacterService"):LoadCharacter(player))
+`,
+		"characterless_manual_spawn",
+	)
+	settle(&pair.server, &pair.server_vm, &pair.client, &pair.client_vm, 240)
+	run_script(
+		&pair.client_vm,
+		`
+assert(game:GetService("Players").LocalPlayer.Character)
+assert(workspace.CharacterlessMap.Marker)
+assert(not workspace:FindFirstChild("FarWithoutFocus"))
+assert(finished == 1)
+`,
+		"characterless_manual_spawn_verify",
 	)
 	pair_stop(&pair)
 }
@@ -452,5 +544,6 @@ main :: proc() {
 	range_churn_does_not_grow_client_state()
 	lod_reduces_update_rate_for_distant_parts()
 	losing_the_character_does_not_blank_the_world()
+	characterless_join_replicates_world()
 	fmt.println("REPLICATION_RELEVANCY_SMOKE_PASSED")
 }

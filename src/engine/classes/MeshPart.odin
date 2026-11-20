@@ -26,6 +26,8 @@ MeshPart :: struct {
 	editable_mesh_version: u64,
 	native_is_editable:    bool,
 	use_part_color:        bool,
+	bone_transforms:       [][16]f32,
+	bone_transforms_mesh:  ^kineffi.KineFilamentMesh,
 }
 
 MeshPart_Init :: proc() -> MeshPart {
@@ -60,6 +62,7 @@ mesh_part_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 mesh_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	mesh_part := cast(^MeshPart)object
 
+	MeshPart_Reset_Bone_Transforms(mesh_part)
 	if mesh_part.native_mesh != nil && mesh_part.native_context != nil {
 		_ = kineffi.Kine_Filament_DestroyMesh(mesh_part.native_context, mesh_part.native_mesh)
 	}
@@ -100,7 +103,11 @@ mesh_part_get :: proc(
 		vm.PushNumber(L, f64(mesh_part.mesh_index))
 
 	case "MeshContent":
-		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(mesh_part.mesh_content))
+		datatypes.Push_Content(
+			L,
+			datatype_registry,
+			datatypes.Content_Clone(mesh_part.mesh_content),
+		)
 
 	case "TextureId", "TextureID":
 		vm.PushString(L, mesh_part.texture_id)
@@ -143,17 +150,21 @@ mesh_part_set :: proc(
 		mesh_part.mesh_content = datatypes.Content{}
 		mesh_part.editable_mesh_id = 0
 		mesh_part.editable_mesh_version = 0
+		MeshPart_Reset_Bone_Transforms(mesh_part)
 		Hierarchy_Touched()
 
 	case "MeshIndex":
 		index := vm.ArgNumber(L, value_index)
 		if index >= 0 && index <= f64(max(u32)) && mesh_part.mesh_index != u32(index) {
 			mesh_part.mesh_index = u32(index)
+			MeshPart_Reset_Bone_Transforms(mesh_part)
 			Hierarchy_Touched()
 		}
 
 	case "MeshContent":
-		content := datatypes.Content_Clone(datatypes.Arg_Content(L, value_index, datatype_registry))
+		content := datatypes.Content_Clone(
+			datatypes.Arg_Content(L, value_index, datatype_registry),
+		)
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = content
 		if content.object_kind == 1 {
@@ -162,6 +173,7 @@ mesh_part_set :: proc(
 			mesh_part.editable_mesh_id = 0
 		}
 		mesh_part.editable_mesh_version = 0
+		MeshPart_Reset_Bone_Transforms(mesh_part)
 		Hierarchy_Touched()
 
 	case "TextureId", "TextureID":
@@ -198,7 +210,11 @@ mesh_part_namecall :: proc(
 
 	switch method {
 	case "GetMeshContent":
-		datatypes.Push_Content(L, datatype_registry, datatypes.Content_Clone(mesh_part.mesh_content))
+		datatypes.Push_Content(
+			L,
+			datatype_registry,
+			datatypes.Content_Clone(mesh_part.mesh_content),
+		)
 		return 1, true
 	case "SetMeshContent":
 		content := datatypes.Content_Clone(datatypes.Arg_Content(L, 2, datatype_registry))
@@ -210,10 +226,16 @@ mesh_part_namecall :: proc(
 			mesh_part.editable_mesh_id = 0
 		}
 		mesh_part.editable_mesh_version = 0
+		MeshPart_Reset_Bone_Transforms(mesh_part)
 		Hierarchy_Touched()
 		return 0, true
-	case "GetBoneNames", "GetAnimationClips":
-		return Animation_MeshPart_Namecall(L, mesh_part, method)
+	case "GetBoneNames",
+	     "GetAnimationClips",
+	     "GetBoneWorldCFrame",
+	     "GetBoneTransform",
+	     "SetBoneTransform",
+	     "GetBoneParent":
+		return Animation_MeshPart_Namecall(L, mesh_part, datatype_registry, method)
 	case:
 	}
 
@@ -240,6 +262,7 @@ mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.editable_mesh_id = src.editable_mesh_id
 	dst.editable_mesh_version = src.editable_mesh_version
 	dst.native_is_editable = src.native_is_editable
+	MeshPart_Reset_Bone_Transforms(dst)
 }
 
 Register_MeshPart :: proc(registry: ^Registry) {
@@ -252,13 +275,23 @@ Register_MeshPart :: proc(registry: ^Registry) {
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 		clone = mesh_part_clone,
-		properties = []string{"CollisionFidelity", "TextureId", "MeshId", "MeshIndex", "MeshContent"},
-		methods = []string{
+		properties = []string {
+			"CollisionFidelity",
+			"TextureId",
+			"MeshId",
+			"MeshIndex",
+			"MeshContent",
+		},
+		methods = []string {
 			"ApplyImpulse",
 			"GetMeshContent",
 			"SetMeshContent",
 			"GetBoneNames",
 			"GetAnimationClips",
+			"GetBoneWorldCFrame",
+			"GetBoneTransform",
+			"SetBoneTransform",
+			"GetBoneParent",
 		},
 	)
 }

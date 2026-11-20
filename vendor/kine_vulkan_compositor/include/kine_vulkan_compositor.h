@@ -112,6 +112,12 @@ Kine_VulkanCompositor_GetSkiaContext(KineVulkanCompositor* compositor);
 KINE_VULKAN_COMPOSITOR_API void*
 Kine_VulkanCompositor_GetCurrentSkiaSurface(KineVulkanCompositor* compositor);
 
+/* Flush the completed overlay and expose the active desktop image for a
+   synchronous read on the shared graphics queue. Restore its layout before EndFrame. */
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_GetXRPanelSource(KineVulkanCompositor* compositor, void** image,
+    uint32_t* width, uint32_t* height, uint32_t* format);
+
 KINE_VULKAN_COMPOSITOR_API uint32_t
 Kine_VulkanCompositor_GetSwapchainImages(
     KineVulkanCompositor* compositor,

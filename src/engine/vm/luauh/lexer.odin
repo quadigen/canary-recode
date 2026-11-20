@@ -1,7 +1,7 @@
 package luauh
 
 when ODIN_OS == .JS {
-	foreign import lib "../../../../build/web-native/lib/kine_luau_web.o"
+	foreign import lib "../../../../build/web-native/lib/kine_lexer_link.o"
 } else when ODIN_OS == .Windows {
 	foreign import lib {"../../../../vendor/build/lib/kine_luau.lib", "../../../../vendor/build/vendor/luau/Luau.Analysis.lib", "../../../../vendor/build/vendor/luau/Luau.Config.lib", "../../../../vendor/build/vendor/luau/Luau.CodeGen.lib", "../../../../vendor/build/vendor/luau/Luau.Compiler.lib", "../../../../vendor/build/vendor/luau/Luau.VM.lib", "../../../../vendor/build/vendor/luau/Luau.Ast.lib", "../../../../vendor/build/vendor/luau/Luau.Bytecode.lib", "../../../../vendor/build/vendor/luau/Luau.Common.lib"}
 } else when #config(KINE_ANDROID, false) {
@@ -79,7 +79,7 @@ kine_luau_Token :: struct {
 
 @(default_calling_convention = "c", link_prefix = "kine_")
 foreign lib {
-	luau_visit_string_literals :: proc(source: [^]u8, size: uintptr, visit: proc "c" ([^]u8, uintptr, rawptr), user_data: rawptr) ---
+	luau_visit_string_literals :: proc(source: [^]u8, size: uintptr, visit: proc "c" (_: [^]u8, _: uintptr, _: rawptr), user_data: rawptr) ---
 	luau_lexer_create :: proc(text: cstring, size: uintptr) -> rawptr ---
 	luau_lexer_destroy :: proc(handle: rawptr) ---
 	luau_lexer_next :: proc(handle: rawptr) -> kine_luau_Token ---

@@ -10,6 +10,7 @@
     "BasePart",
     "BaseScript",
     "Model",
+    "PhysicsModel",
     "Folder",
     "Configuration",
     "Part",
@@ -39,6 +40,7 @@
     "BindableEvent",
     "BindableFunction",
     "RemoteEvent",
+    "UnreliableRemoteEvent",
     "RemoteFunction",
     "IntValue",
     "StringValue",
@@ -126,6 +128,7 @@
     "ParticleEmitter",
     "test",
     "---Datatypes---",
+    "Animated",
     "datatypes",
     "---Services---",
     "services"

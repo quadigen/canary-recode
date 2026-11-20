@@ -8,15 +8,16 @@
 </head>
 <body>
   <main id="desktop" aria-label="Kinemium client web view">
-    <canvas id="filament-canvas"></canvas>
+    <canvas id="world-canvas"></canvas>
     <canvas id="skia-base"></canvas>
     <canvas id="skia-overlay"></canvas>
     <div id="startup"><div class="spinner"></div><strong>Kinemium Client</strong><span id="startup-status">Loading engine technologies…</span></div>
-    <div id="runtime-badge"><span></span><b id="runtime-value">Starting</b><small>Odin · Luau · Jolt · Skia · Filament</small></div>
+    <div id="runtime-badge"><span></span><b id="runtime-value">Starting</b><small>Odin · Luau · Jolt · Skia · Babylon.js</small></div>
   </main>
   <script src="odin.js"></script>
   <script src="canvaskit/canvaskit.js"></script>
-  <script src="filament/filament.js"></script>
+  <script src="babylon/babylon.js"></script>
+  <script src="babylon_backend.js"></script>
   <script src="app.js"></script>
   <script type="module">
     // The client connects to a native server using the build-time defaults or

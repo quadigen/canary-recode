@@ -29,34 +29,45 @@ Terrain_Biome :: enum u8 {
 
 // Heights and levels are in STUDS.
 Terrain_Chunk_Gen_Options :: struct {
-	seed:            i64,
-	voxel_size:      f32, // studs per voxel; <= 0 keeps the service's current size
-	flat_shading:    Maybe(bool), // unset keeps the service's current setting
-	sea_level:       f32,
-	base_height:     f32, // continent relief: ocean floor .. inland plateau
-	mountain_height: f32,
-	hill_height:     f32,
-	snow_line:       f32, // studs above sea level at temperature 0.5
-	min_y, max_y:    f32, // vertical extent generated
-	feature_scale:   f32, // frequency multiplier (bigger = smaller features)
-	cave_size:       f32,
-	caves:           bool,
-	overhangs:       bool,
-	biomes:          bool,
-	workers:         int,
+	seed:             i64,
+	voxel_size:       f32, // studs per voxel; <= 0 keeps the service's current size
+	flat_shading:     Maybe(bool), // unset keeps the service's current setting
+	sea_level:        f32,
+	base_height:      f32, // continent relief: ocean floor .. inland plateau
+	mountain_height:  f32,
+	hill_height:      f32,
+	snow_line:        f32, // studs above sea level at temperature 0.5
+	min_y, max_y:     f32, // vertical extent generated
+	feature_scale:    f32, // frequency multiplier (bigger = smaller features)
+	cave_size:        f32,
+	caves:            bool,
+	overhangs:        bool,
+	biomes:           bool,
+	workers:          int,
+	sdf_style:        bool,
+	sdf_scale:        f32,
+	sdf_octaves:      int,
+	sdf_gain:         f32,
+	sdf_lacunarity:   f32,
+	sdf_amplitude:    f32,
+	sdf_blend:        f32,
+	sdf_material:     enums.Material,
+	sdf_rock_size:    f32,
+	sdf_rock_density: f32,
 
 	// Filled in by Terrain_Generate_Chunks (don't set).
-	min_chunk_y:     int,
-	max_chunk_y:     int,
+	min_chunk_y:      int,
+	max_chunk_y:      int,
 }
 
 Terrain_Gen_Column :: struct {
-	height:   f32, // reference units (studs / TERRAIN_GEN_REF)
-	mountain: f32,
-	temp:     f32,
-	moist:    f32,
-	gx, gz:   f32,
-	biome:    Terrain_Biome,
+	height:    f32, // reference units (studs / TERRAIN_GEN_REF)
+	mountain:  f32,
+	temp:      f32,
+	moist:     f32,
+	gx, gz:    f32,
+	biome:     Terrain_Biome,
+	sdf_rocks: [9]Terrain_SDF_Rock,
 }
 
 Terrain_Gen_Columns :: [TERRAIN_GEN_COLUMN_DIM * TERRAIN_GEN_COLUMN_DIM]Terrain_Gen_Column
@@ -94,6 +105,15 @@ terrain_default_chunk_gen_options :: proc() -> Terrain_Chunk_Gen_Options {
 		overhangs = true,
 		biomes = true,
 		workers = TERRAIN_GEN_DEFAULT_WORKERS,
+		sdf_scale = 120,
+		sdf_octaves = 7,
+		sdf_gain = 0.41,
+		sdf_lacunarity = 2,
+		sdf_amplitude = 18,
+		sdf_blend = 5,
+		sdf_material = .Rock,
+		sdf_rock_size = 7,
+		sdf_rock_density = 0.28,
 	}
 }
 
@@ -160,6 +180,10 @@ terrain_gen_sample_column :: proc(
 	s := o.feature_scale
 	sea := o.sea_level * k
 	vref := o.voxel_size * k // reference units per voxel
+	if o.sdf_style {
+		h := Terrain_SDF_Height(o, world_x, world_z) * k
+		return Terrain_Gen_Column{height = h, mountain = 0.5, temp = 0.5, moist = 0.5}
+	}
 
 	// Fade out features the voxel grid can't represent, so coarse grids don't alias.
 	detail_fade := terrain_smoothstep(2.5, 6, (1 / (0.09 * s)) / vref)
@@ -278,6 +302,7 @@ terrain_gen_fill_chunk :: proc(
 	scale := vs / TERRAIN_GEN_REF // reference units per voxel
 	x0, y0, z0 := key.x * S, key.y * S, key.z * S
 	margin: f32 = o.overhangs ? 12 : 2
+	if o.sdf_style {margin = terrain_sdf_band(o) / TERRAIN_GEN_REF}
 	sea_ref := o.sea_level / TERRAIN_GEN_REF
 	if f32(y0) * scale > max(max_h + margin, sea_ref) {return nil}
 
@@ -309,7 +334,17 @@ terrain_gen_fill_chunk :: proc(
 				depth := hv - f32(wy) // voxels below the heightfield
 				d := depth * norm
 
-				if o.overhangs && col.mountain > 0.6 && math.abs(d) * scale < 6 {
+				if o.sdf_style {
+					field := Terrain_SDF_Density(
+						o,
+						f32(wx) * vs,
+						f32(wy) * vs,
+						f32(wz) * vs,
+						col.height * TERRAIN_GEN_REF,
+					)
+					field = terrain_sdf_merge_rocks(o, field, f32(wy) * vs, &col.sdf_rocks)
+					d = field * norm / vs
+				} else if o.overhangs && col.mountain > 0.6 && math.abs(d) * scale < 6 {
 					n := terrain_fbm(
 						f32(wx) * scale,
 						f32(wy) * scale,
@@ -323,7 +358,7 @@ terrain_gen_fill_chunk :: proc(
 				}
 				occ := clamp(0.5 + d, 0, 1)
 
-				if caves && depth * scale > 6 && occ > 0 {
+				if !o.sdf_style && caves && depth * scale > 6 && occ > 0 {
 					cf := 0.045 * o.feature_scale
 					px, py, pz := f32(wx) * scale, f32(wy) * scale, f32(wz) * scale
 					a := terrain_fbm(px, py, pz, 2, cf, 1, o.seed + 4049) - 0.5
@@ -347,7 +382,8 @@ terrain_gen_fill_chunk :: proc(
 
 				material := enums.Material.Water
 				if occ > 0 {
-					material = terrain_gen_material(col.biome, max(depth * norm, 0) * scale, steep)
+					material =
+						o.sdf_material if o.sdf_style else terrain_gen_material(col.biome, max(depth * norm, 0) * scale, steep)
 				}
 
 				idx := (lx * S + ly) * S + lz
@@ -413,6 +449,16 @@ terrain_gen_run_column :: proc(o: ^Terrain_Chunk_Gen_Options, job: ^Terrain_Gen_
 				inv
 			c.biome = terrain_gen_pick_biome(o, c)
 			max_h = max(max_h, c.height)
+			if o.sdf_style {
+				c.sdf_rocks = terrain_sdf_rocks_at(o, f32(x0 - 1 + i) * vs, f32(z0 - 1 + j) * vs)
+				for rock in c.sdf_rocks {
+					if rock.radius <= 0 {break}
+					max_h = max(
+						max_h,
+						(rock.center_y + rock.radius + o.sdf_blend) / TERRAIN_GEN_REF,
+					)
+				}
+			}
 		}
 	}
 
@@ -636,6 +682,7 @@ terrain_release_chunk_generation :: proc(service: ^Terrain) {
 terrain_read_chunk_gen_options :: proc(
 	L: ^vm.State,
 	table_index: int,
+	enum_registry: ^enums.Registry = nil,
 ) -> Terrain_Chunk_Gen_Options {
 	o := terrain_default_chunk_gen_options()
 	if !vm.IsTable(L, table_index) {return o}
@@ -654,6 +701,10 @@ terrain_read_chunk_gen_options :: proc(
 		case terrain_equal_fold(preset, "high"):
 			o.voxel_size = 4
 			o.flat_shading = false
+		case terrain_equal_fold(preset, "smooth"):
+			o.voxel_size = 2
+			o.flat_shading = false
+			o.sdf_style = true
 		case terrain_equal_fold(preset, "ultra"):
 			o.voxel_size = 2
 			o.flat_shading = false
@@ -691,5 +742,54 @@ terrain_read_chunk_gen_options :: proc(
 	o.caves = terrain_table_bool(L, table_index, "caves", o.caves)
 	o.overhangs = terrain_table_bool(L, table_index, "overhangs", o.overhangs)
 	o.biomes = terrain_table_bool(L, table_index, "biomes", o.biomes)
+	if style, ok := terrain_table_string(L, table_index, "style"); ok {
+		o.sdf_style = terrain_equal_fold(style, "sdf") || terrain_equal_fold(style, "smooth")
+	}
+	if o.sdf_style {
+		if o.voxel_size <= 0 {o.voxel_size = 2}
+		if _, specified := o.flat_shading.?; !specified {o.flat_shading = false}
+	}
+	o.sdf_scale = clamp(
+		f32(terrain_table_number(L, table_index, "scale", f64(o.sdf_scale))),
+		8,
+		2000,
+	)
+	o.sdf_octaves = clamp(
+		int(math.floor(terrain_table_number(L, table_index, "octaves", f64(o.sdf_octaves)))),
+		1,
+		10,
+	)
+	o.sdf_gain = clamp(
+		f32(terrain_table_number(L, table_index, "gain", f64(o.sdf_gain))),
+		0.05,
+		0.95,
+	)
+	o.sdf_lacunarity = clamp(
+		f32(terrain_table_number(L, table_index, "lacunarity", f64(o.sdf_lacunarity))),
+		1.2,
+		4,
+	)
+	o.sdf_amplitude = clamp(
+		f32(terrain_table_number(L, table_index, "surfaceAmplitude", f64(o.sdf_amplitude))),
+		0,
+		200,
+	)
+	o.sdf_blend = clamp(
+		f32(terrain_table_number(L, table_index, "blendRadius", f64(o.sdf_blend))),
+		0,
+		64,
+	)
+	o.sdf_rock_size = clamp(
+		f32(terrain_table_number(L, table_index, "rockSize", f64(o.sdf_rock_size))),
+		1,
+		64,
+	)
+	o.sdf_rock_density = clamp(
+		f32(terrain_table_number(L, table_index, "rockDensity", f64(o.sdf_rock_density))),
+		0,
+		1,
+	)
+	if mat, ok := terrain_table_material(L, table_index, enum_registry);
+	   ok && mat != .Air && !terrain_material_is_liquid(mat) {o.sdf_material = mat}
 	return o
 }

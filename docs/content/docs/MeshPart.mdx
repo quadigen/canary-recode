@@ -58,6 +58,10 @@ Changing fidelity rebuilds the part's collision geometry, so set it when you cre
 | `GetMeshContent(): Content` | Returns the inline mesh content. |
 | `SetMeshContent(content: Content): ()` | Replaces the inline mesh content. |
 | `GetBoneNames(): {string}` | Returns the bone names of a rigged mesh, or an empty table for a static mesh. |
+| `GetBoneWorldCFrame(boneName: string): CFrame?` | Returns the bone's world-space CFrame, or `nil` if the bone does not exist. |
+| `GetBoneTransform(boneName: string): CFrame?` | Returns the bone's local transform, relative to its parent bone. |
+| `SetBoneTransform(boneName: string, transform: CFrame): ()` | Sets a bone's local transform. |
+| `GetBoneParent(boneName: string): string?` | Returns the parent bone's name, or `nil` for a root bone or unknown bone. |
 | `GetAnimationClips(): {{ Index: number, Name: string, Length: number }}` | Returns the clips imported with the mesh. `Length` is in seconds. |
 
 `ApplyImpulse()` and the CSG methods from `Part` are also available.
@@ -73,6 +77,19 @@ Use `GetAnimationClips()` to build an `Animation` for a rigid rig: set `Animatio
 ```lua
 local content = meshPart:GetMeshContent()
 ```
+
+### Bone transforms
+
+`GetBoneTransform()` and `SetBoneTransform()` work in the bone's parent space. Moving one bone moves its children with it, and a root bone uses the mesh's own space. `GetBoneWorldCFrame()` combines the bone hierarchy with the part's `CFrame` and `Size`, so you can attach other objects to a bone:
+
+```lua
+local head = meshPart:GetBoneParent("Neck")
+local world = meshPart:GetBoneWorldCFrame("Head")
+
+meshPart:SetBoneTransform("Head", meshPart:GetBoneTransform("Head") * CFrame.Angles(0, 0, math.rad(15)))
+```
+
+All three getters return `nil` when the bone does not exist or the mesh has no bones. `SetBoneTransform()` is ignored in those cases, and it is also ignored while an `Animator` owns the mesh, because the animator owns the pose.
 
 ## UsePartColor
 

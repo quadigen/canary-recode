@@ -1,0 +1,30 @@
+---
+title: Animated
+description: A reusable, immutable handle to an encoded animated image.
+---
+
+Animated is a native datatype similar to Content. Its URI identifies the source asset; playback state is independent for every ImageLabel or ImageButton.
+
+```lua
+local animation = Animated.fromUri("project://sprites/player.aseprite")
+local image = Instance.new("ImageLabel")
+image.AnimatedContent = animation
+```
+
+## Constructors
+
+| Constructor | Description |
+| --- | --- |
+| `Animated.fromUri(uri)` | Creates an asset handle; decoding happens on assignment. |
+| `Animated.fromBuffer(bytes)` | Registers a GIF or Aseprite buffer as an embedded asset. |
+| `Animated.fromBytes(bytes)` | Alias of fromBuffer; accepts a binary string or buffer. |
+
+The source URI is available through `Uri`; `IsUri` tests whether it is nonempty. Two values compare equal when their URIs match. Buffer imports are bounded to 32 MiB and checked by file signature; full decoding occurs on assignment.
+
+## Playback
+
+Assign Animated to Image, ImageContent, or AnimatedContent. AnimatedContent returns the animation handle, or nil for a static image. GIF uses the native Skia animation decoder. Aseprite uses its original frame durations and loops across the entire canvas animation. Tags, speed controls, APNG and animated WebP are not supported for playback yet.
+
+AsepriteService:CreateAnimated returns Animated and sprite metadata. AsepriteService:CreateImageLabels returns the individual frame labels, metadata, and Animated.
+
+Animated URI values and embedded sources are serializable. Project-relative paths refer to project assets. No external Aseprite executable is required.

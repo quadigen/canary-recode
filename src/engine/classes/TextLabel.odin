@@ -9,7 +9,7 @@ import enums "../enum"
 import guilib "../gui"
 import vm "../vm"
 
-TEXT_LABEL_FONTS := #load_directory("../assets/fonts")
+when ODIN_OS != .JS {TEXT_LABEL_FONTS := #load_directory("../assets/fonts")}
 
 BUILTIN_FONT_PREFIX :: "builtin://fonts/"
 
@@ -106,6 +106,17 @@ TextLabel_Load_Typeface_From_Family :: proc(family: string) -> ^kineffi.KineSkia
 		return nil
 	}
 
+	when ODIN_OS == .JS {
+		if strings.has_prefix(resolved_family, BUILTIN_FONT_PREFIX) ||
+		   resolved_family == "rbxasset://fonts/families/RobotoMono.json" {
+			path := resolved_family
+			if path ==
+			   "rbxasset://fonts/families/RobotoMono.json" {path = "builtin://fonts/RobotoMono-Regular.ttf"}
+			cpath := strings.clone_to_cstring(path)
+			defer delete(cpath)
+			return kineffi.Kine_Skia_Typeface_LoadFromFile(cpath)
+		}
+	}
 	if data, ok := TextLabel_Resolve_Font_Memory(resolved_family); ok {
 		if len(data) == 0 {
 			return nil
@@ -239,9 +250,9 @@ TextLabel_Find_Builtin_Font :: proc(name: string) -> (data: []u8, ok: bool) {
 		return nil, false
 	}
 
-	for file in TEXT_LABEL_FONTS {
-		if file.name == name {
-			return file.data, true
+	when ODIN_OS != .JS {
+		for file in TEXT_LABEL_FONTS {
+			if file.name == name {return file.data, true}
 		}
 	}
 
@@ -1399,7 +1410,12 @@ text_label_render :: proc(
 		guilib.save(ctx.renderer.SkiaSurface)
 		guilib.clipRect(
 			ctx.renderer.SkiaSurface,
-			guilib.Rect{x = content_x, y = content_y, width = content_width, height = content_height},
+			guilib.Rect {
+				x = content_x,
+				y = content_y,
+				width = content_width,
+				height = content_height,
+			},
 		)
 	}
 	defer if clip_text {guilib.restore(ctx.renderer.SkiaSurface)}
@@ -1563,4 +1579,30 @@ Register_TextLabel :: proc(registry: ^Registry) {
 			"TextBounds",
 		},
 	)
+}
+
+
+// A lazily loaded web font replaces its fallback; discard only layouts
+// measured against that typeface.
+TextLabel_Web_Font_Ready :: proc(registry: ^Registry, face: ^kineffi.KineSkiaTypeface) {
+	if registry == nil || face == nil {return}
+	for d in registry.classes {
+		if d == nil {continue}
+		for object in d.instances {
+			if object == nil || object.destroyed {continue}
+			switch object.class {
+			case &TextLabel_Class:
+				label := cast(^TextLabel)object
+				if label.stored_typeface == face {text_render_layout_clear(&label.render_layout)}
+			case &TextButton_Class:
+				button := cast(^TextButton)object
+				if button.stored_typeface == face {text_render_layout_clear(&button.render_layout)}
+			case &TextBox_Class:
+				box := cast(^TextBox)object
+				if box.stored_typeface == face {box.content_measure_valid = false}
+			case:
+			}
+		}
+	}
+	Gui_Layout_Mark_Dirty()
 }

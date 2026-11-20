@@ -37,14 +37,6 @@ run_headless :: proc(options: Startup_Options) -> bool {
 		players := cast(^services.Players)services.Ensure_Service(&environment.services, "Players")
 		if players != nil && players.local_player == nil {
 			players.local_player = services.Players_Add(players, script_vm.L, 1, options.username)
-			if players.local_player != nil {
-				characters := cast(^services.CharacterService)services.Ensure_Service(
-					&environment.services,
-					"CharacterService",
-				)
-				if characters !=
-				   nil {_ = services.CharacterService_Load(characters, players.local_player)}
-			}
 		}
 	}
 
@@ -60,6 +52,10 @@ run_headless :: proc(options: Startup_Options) -> bool {
 				server_scripts,
 			)
 		}
+	}
+
+	if options.singleplayer {
+		services.CharacterService_Load_Local_Player(&environment.services)
 	}
 
 	if !options.singleplayer {
@@ -86,6 +82,7 @@ run_headless :: proc(options: Startup_Options) -> bool {
 		now := time.now()
 		delta_time := f32(time.diff(previous, now)) / f32(time.Second)
 		previous = now
+		services.Playtest_Tree_Pump(options.playtest_tree_dir, &environment.services, script_vm.L)
 		if !services.Log_Is_Playtest_Paused() {
 			engine_runtime.Environment_Update_Step(&environment, &script_vm, min(delta_time, 0.1))
 		}

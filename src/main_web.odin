@@ -4,6 +4,8 @@ package main
 import sandbox "./sandboxed"
 import "core:fmt"
 import "core:strings"
+import kineffi "engine/bindings"
+import classes "engine/classes"
 import sdl3 "engine/platform"
 import renderer "engine/renderer"
 import engine_runtime "engine/runtime"
@@ -130,4 +132,10 @@ initialize_renderer :: proc() -> bool {
 @(export)
 step :: proc(delta_time: f64) -> bool {
 	return renderer.frame(delta_time)
+}
+
+
+@(export)
+web_font_ready :: proc(face: ^kineffi.KineSkiaTypeface) {
+	classes.TextLabel_Web_Font_Ready(&environment.classes, face)
 }

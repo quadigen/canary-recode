@@ -1,5 +1,3 @@
-#+build !js
-
 // wire:service
 
 package services
@@ -7,14 +5,10 @@ package services
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
-import fsutil "../fsutil"
 import signals "../signals"
 import vm "../vm"
 import "core:encoding/json"
-import "core:fmt"
-import "core:os"
 import "core:strings"
-import "core:time"
 
 Studio :: struct {
 	using service:   Service,
@@ -148,79 +142,11 @@ studio_free_settings :: proc(service: ^Studio) {
 
 }
 
-studio_settings_path :: proc() -> (string, bool) {
-
-	data_dir, err := os.user_data_dir(context.allocator)
-
-	if err != nil {
-
-		return "", false
-
-	}
-
-	defer delete(data_dir)
-
-	kinemium_dir, join_err := os.join_path({data_dir, "Kinemium"}, context.allocator)
-
-	if join_err != nil {
-
-		return "", false
-
-	}
-
-	if !os.exists(kinemium_dir) {
-
-		if make_err := fsutil.Make_Directory_All(kinemium_dir); make_err != nil {
-
-			delete(kinemium_dir)
-
-			return "", false
-
-		}
-
-	}
-
-	path, path_err := os.join_path({kinemium_dir, "studio-settings.json"}, context.allocator)
-
-	delete(kinemium_dir)
-
-	if path_err != nil {
-
-		return "", false
-
-	}
-
-	return path, true
-
-}
-
 studio_load_settings :: proc(service: ^Studio) {
 
-	path, ok := studio_settings_path()
-
-	if !ok {
-
-		return
-
-	}
-
-	defer delete(path)
-
-	if !os.exists(path) {
-
-		return
-
-	}
-
-	data, read_err := os.read_entire_file(path, context.allocator)
-
-	if read_err != nil {
-
-		return
-
-	}
-
-	defer delete(data, context.allocator)
+	data, ok := studio_read_settings()
+	if !ok {return}
+	defer delete(data)
 
 	value, parse_err := json.parse_string(
 		string(data),
@@ -280,16 +206,6 @@ studio_load_settings :: proc(service: ^Studio) {
 
 studio_save_settings :: proc(service: ^Studio) {
 
-	path, ok := studio_settings_path()
-
-	if !ok {
-
-		return
-
-	}
-
-	defer delete(path)
-
 	obj := make(json.Object, context.temp_allocator)
 
 	for key, setting in service.settings {
@@ -317,7 +233,7 @@ studio_save_settings :: proc(service: ^Studio) {
 
 	}
 
-	_ = os.write_entire_file(path, marshalled)
+	studio_write_settings(marshalled)
 
 }
 

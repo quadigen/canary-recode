@@ -1,6 +1,6 @@
 package classes
 
-Instance_Class := Class_Info{
+Instance_Class := Class_Info {
 	name   = "Instance",
 	parent = &Object_Class,
 }
@@ -10,9 +10,7 @@ Instance :: struct {
 }
 
 Instance_Init :: proc() -> Instance {
-	return Instance{
-		object = Object_Init(&Instance_Class, "Instance"),
-	}
+	return Instance{object = Object_Init(&Instance_Class, "Instance")}
 }
 
 instance_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -30,10 +28,7 @@ instance_clone :: proc(source: ^Object, destination: ^Object) {
 	// No extra properties
 }
 
-// Base Instance members. Every class inherits these, so declaring them once
-// here gives ReflectionService a complete answer for any class without each
-// subclass having to restate them.
-INSTANCE_PROPERTIES := []string{
+INSTANCE_PROPERTIES := []string {
 	"Name",
 	"ClassName",
 	"Parent",
@@ -48,7 +43,7 @@ INSTANCE_PROPERTIES := []string{
 	"IsInSandbox",
 }
 
-INSTANCE_METHODS := []string{
+INSTANCE_METHODS := []string {
 	"Clone",
 	"Destroy",
 	"ClearAllChildren",
@@ -58,6 +53,13 @@ INSTANCE_METHODS := []string{
 	"GetTags",
 	"FindFirstChild",
 	"FindFirstChildOfClass",
+	"FindFirstChildWhichIsA",
+	"FindFirstDescendant",
+	"FindFirstAncestor",
+	"FindFirstAncestorOfClass",
+	"FindFirstAncestorWhichIsA",
+	"WaitForChild",
+	"WaitForChildOfClass",
 	"GetChildren",
 	"GetDescendants",
 	"GetFullName",
@@ -67,12 +69,20 @@ INSTANCE_METHODS := []string{
 	"IsDescendantOf",
 	"GetAttribute",
 	"GetAttributes",
+	"GetAttributeChangedSignal",
 	"SetAttribute",
 	"GetPropertyChangedSignal",
 }
 
-INSTANCE_EVENTS := []string{
+INSTANCE_EVENTS := []string {
 	"Changed",
+	"AttributeChanged",
+	"ChildAdded",
+	"ChildRemoved",
+	"DescendantAdded",
+	"DescendantRemoving",
+	"AncestryChanged",
+	"Destroying",
 }
 
 Register_Instance :: proc(registry: ^Registry) {
@@ -87,4 +97,3 @@ Register_Instance :: proc(registry: ^Registry) {
 		events = INSTANCE_EVENTS,
 	)
 }
-

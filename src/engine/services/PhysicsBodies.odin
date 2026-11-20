@@ -191,14 +191,23 @@ physics_cone_shape :: proc(scale: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 }
 
 physics_capsule_shape :: proc(size: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
-	radius := max(min(size.x, size.z) * 0.5, 0.001)
-	half_height := max(size.y * 0.5 - radius, 0)
+	if !physics_finite_f32(size.x) ||
+	   !physics_finite_f32(size.y) ||
+	   !physics_finite_f32(size.z) {return nil}
+	half_x := max(size.x * 0.5, 0.001)
+	half_y := max(size.y * 0.5, 0.001)
+	half_z := max(size.z * 0.5, 0.001)
+	radius := min(half_x, min(half_y, half_z))
+	half_height := max(half_y - radius, 0)
+	if half_height <= 0 {return kineffi.JPH_SphereShape_Create(radius)}
 	return kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
 }
 
 physics_is_mesh_operation :: proc(mesh: ^classes.MeshPart) -> bool {
-	return classes.Is_A_Class(&mesh.object, &classes.PartOperation_Class) &&
-	       (classes.MeshPart_Source_Path(mesh) != "" || mesh.editable_mesh_id != 0)
+	return(
+		classes.Is_A_Class(&mesh.object, &classes.PartOperation_Class) &&
+		(classes.MeshPart_Source_Path(mesh) != "" || mesh.editable_mesh_id != 0) \
+	)
 }
 
 physics_meshpart_shape :: proc(
@@ -227,7 +236,12 @@ physics_meshpart_shape :: proc(
 		case .Hull, .Default:
 			return physics_cached_mesh_shape(service, mesh_part, scale, .Hull)
 		case .PreciseConvexDecomposition:
-			return physics_cached_mesh_shape(service, mesh_part, scale, .PreciseConvexDecomposition)
+			return physics_cached_mesh_shape(
+				service,
+				mesh_part,
+				scale,
+				.PreciseConvexDecomposition,
+			)
 		case .TriangleMesh:
 			if mesh_part.anchored {
 				return physics_cached_mesh_shape(service, mesh_part, scale, .TriangleMesh)
@@ -286,7 +300,10 @@ physics_load_mesh_data :: proc(
 			c_hint := strings.clone_to_cstring(hint)
 			defer delete(c_hint)
 			data = kineffi.Kine_Filament_LoadMeshDataFromMemoryIndexed(
-				raw_data(bytes), uintptr(len(bytes)), c_hint, mesh_part.mesh_index,
+				raw_data(bytes),
+				uintptr(len(bytes)),
+				c_hint,
+				mesh_part.mesh_index,
 			)
 		}
 	}
@@ -637,6 +654,11 @@ physics_create_body :: proc(
 		properties.restitution_weight,
 	)
 	kineffi.JPH_BodyCreationSettings_SetIsSensor(settings, part.can_collide ? 0 : 1)
+	gravity_scale: f32 = 1
+	if model := classes.PhysicsModel_For(&part.object); model != nil {
+		gravity_scale = model.gravity_scale
+	}
+	if !static {kineffi.JPH_BodyCreationSettings_SetGravityFactor(settings, gravity_scale)}
 
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
 
@@ -707,26 +729,31 @@ physics_create_body :: proc(
 	}
 
 	return Physics_Body {
-			object                = &part.object,
-			body_id               = body_id,
-			size                  = part.size,
-			shape                 = part.shape,
-			material              = part.material,
-			anchored              = part.anchored,
-			can_collide           = part.can_collide,
-			remote                = remote,
-			last_cframe           = part.cframe,
-			mesh_id               = mesh_id,
-			mesh_index            = mesh_index,
-			editable_mesh_id      = editable_mesh_id,
+			object = &part.object,
+			body_id = body_id,
+			size = part.size,
+			shape = part.shape,
+			material = part.material,
+			anchored = part.anchored,
+			can_collide = part.can_collide,
+			remote = remote,
+			gravity_scale = gravity_scale,
+			last_cframe = part.cframe,
+			mesh_id = mesh_id,
+			mesh_index = mesh_index,
+			editable_mesh_id = editable_mesh_id,
 			editable_mesh_version = physics_mesh_part_version(mesh),
-			collision_fidelity    = mesh_part_collision_fidelity(mesh),
+			collision_fidelity = mesh_part_collision_fidelity(mesh),
 		},
 		true
 }
 
 
-physics_update_body_material :: proc(service: ^Physics, body: ^Physics_Body, material: enums.Material) {
+physics_update_body_material :: proc(
+	service: ^Physics,
+	body: ^Physics_Body,
+	material: enums.Material,
+) {
 	if body.material == material {return}
 	properties := jolt.Material_Get_Properties(material)
 	kineffi.JPH_PhysicsSystem_SetBodyMaterialProperties(
@@ -1427,7 +1454,11 @@ Physics_Ensure_Character_Capsule :: proc(
 	layer := jolt.OBJECT_LAYER_DEFORMABLE_CAPSULE if deformable_only else jolt.OBJECT_LAYER_MOVING
 	if coll.body_created {
 		if coll.deformable_only != deformable_only {
-			kineffi.JPH_BodyInterface_SetObjectLayer(service.system.body_interface, coll.body_id, layer)
+			kineffi.JPH_BodyInterface_SetObjectLayer(
+				service.system.body_interface,
+				coll.body_id,
+				layer,
+			)
 			coll.deformable_only = deformable_only
 			if deformable_only {
 				delete_key(&service.body_to_part, coll.body_id)
@@ -1576,7 +1607,8 @@ Physics_Advance_Character_Capsule :: proc(
 		resting_point = to
 	} else {
 		resting_point = from
-		if !coll.deformable_only && speed_squared > CHARACTER_MIN_WAKE_SPEED * CHARACTER_MIN_WAKE_SPEED {
+		if !coll.deformable_only &&
+		   speed_squared > CHARACTER_MIN_WAKE_SPEED * CHARACTER_MIN_WAKE_SPEED {
 			Physics_Wake_Character_Neighbors(service, coll, from, to)
 		}
 	}
@@ -1737,16 +1769,23 @@ Physics_Fill_Candidate_Bodies :: proc(
 	if softbodies := classes.Find_Class(service.signal_registry, "SoftBody"); softbodies != nil {
 		for object in softbodies.instances {
 			body := cast(^classes.SoftBody)object
-			if !body.destroyed && body.enabled && body.anchored &&
+			if !body.destroyed &&
+			   body.enabled &&
+			   body.anchored &&
 			   body.anchor_body_id != kineffi.JPH_BODY_ID_INVALID {
 				append(out, body.anchor_body_id)
 			}
 		}
 	}
-	if ropes := classes.Find_Class(service.signal_registry, "RopeConstraint"); !static_only && ropes != nil {
+	if ropes := classes.Find_Class(service.signal_registry, "RopeConstraint");
+	   !static_only && ropes != nil {
 		for object in ropes.instances {
 			rope := cast(^classes.RopeConstraint)object
-			if rope == nil || rope.destroyed || !rope.enabled || !rope.can_collide || rope.jolt_rope == nil {continue}
+			if rope == nil ||
+			   rope.destroyed ||
+			   !rope.enabled ||
+			   !rope.can_collide ||
+			   rope.jolt_rope == nil {continue}
 			ids: [kineffi.JPH_ROPE_MAX_POINTS - 1]kineffi.JPH_BodyID
 			count := int(kineffi.JPH_Rope_GetBodies(rope.jolt_rope, &ids[0], len(ids)))
 			append(out, ..ids[:count])
@@ -1799,7 +1838,8 @@ Physics_Character_Report_Overlaps :: proc(
 		body_id := results[i]
 		if body_id == coll.body_id {continue}
 		part := physics_part_for_body(service, body_id)
-		if part == root || (part == nil && physics_softbody_for_anchor(service, body_id) == nil) {continue}
+		if part == root ||
+		   (part == nil && physics_softbody_for_anchor(service, body_id) == nil) {continue}
 		Physics_Character_Report_Contact(service, coll, root, body_id)
 	}
 }

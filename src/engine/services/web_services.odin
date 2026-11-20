@@ -16,6 +16,7 @@ foreign kinemium_storage {
 	host_storage_get :: proc(key: cstring, out: [^]u8, cap: i32) -> i32 ---
 	host_storage_set :: proc(key: cstring, value: [^]u8, len: i32) -> i32 ---
 	host_storage_remove :: proc(key: cstring) -> i32 ---
+	host_random_guid :: proc(out: [^]u8, cap: i32) -> i32 ---
 }
 
 web_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -786,7 +787,13 @@ web_http_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "JSONDecode", "JSONEncode", "RequestAsync", "GetAsync", "GetImageBytes", "UrlEncode":
+	case "JSONDecode",
+	     "JSONEncode",
+	     "RequestAsync",
+	     "GetAsync",
+	     "GetImageBytes",
+	     "UrlEncode",
+	     "GenerateGUID":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -805,6 +812,14 @@ web_http_namecall :: proc(
 	bool,
 ) {
 	switch method {
+	case "GenerateGUID":
+		bytes: [37]u8
+		n := host_random_guid(raw_data(bytes[:]), i32(len(bytes)))
+		if n != 36 {return vm.RaiseError(L, "Browser UUID generation failed"), true}
+		braces := true
+		if vm.StackTop(L) >= 2 {braces = vm.ArgBoolean(L, 2)}
+		if braces {vm.PushString(L, strings.concatenate({"{", string(bytes[:36]), "}"}, context.temp_allocator))} else {vm.PushString(L, string(bytes[:36]))}
+		return 1, true
 	case "UrlEncode":
 		vm.PushString(L, vm.ArgString(L, 2))
 		return 1, true
@@ -1033,6 +1048,7 @@ web_editor_service_construct :: proc(
 // ---- registration ----
 
 Register_Web_Service_Classes :: proc(registry: ^classes.Registry) {
+	Register_Web_Editor_Extras(registry)
 	classes.Register_Class(
 		registry,
 		&Web_ContentProvider_Class,
@@ -1136,6 +1152,7 @@ Register_Web_Service_Classes :: proc(registry: ^classes.Registry) {
 }
 
 Register_Web_Services :: proc(registry: ^Registry) {
+	Register_Web_Editor_Extra_Services(registry)
 	Register_Service(registry, "DialogService", "DialogService", "DialogService")
 	Register_Service(registry, "ExportService", "ExportService", "ExportService")
 	Register_Service(registry, "Filesystem", "Filesystem", "Filesystem")

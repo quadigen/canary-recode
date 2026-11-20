@@ -175,8 +175,22 @@ set_material :: proc(material: enums.Material, config: Material_Config) {
 	draw_params_valid[index] = false
 }
 
+when ODIN_OS == .JS {
+	foreign import web_renderer "kinemium_filament"
+	foreign web_renderer {
+		host_load_builtin_material :: proc "c" (ctx: ^kineffi.KineFilamentContext, material: i32) -> ^kineffi.KineFilamentTex ---
+	}
+}
+
 load_texture :: proc(material: enums.Material, entry: ^Material) {
 	if entry.loaded || entry.decode_worker != nil || active_renderer == nil {return}
+	when ODIN_OS == .JS {
+		if active_renderer.Filament != nil {
+			entry.texture = host_load_builtin_material(active_renderer.Filament, i32(material))
+			entry.loaded = true
+		}
+		return
+	}
 	files := builtin_material_files(material)
 	if len(files) == 0 {entry.loaded = true; return}
 	if texture_workers >= MAX_TEXTURE_WORKERS {return}

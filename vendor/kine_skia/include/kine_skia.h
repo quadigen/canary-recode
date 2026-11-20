@@ -114,6 +114,8 @@ KINE_SKIA_API int Kine_Skia_Surface_GetHeight(const KineSkiaSurface *surface);
 KINE_SKIA_API uint32_t Kine_Skia_Surface_GetRowBytes(const KineSkiaSurface *surface);
 KINE_SKIA_API void *Kine_Skia_Surface_GetPixels(KineSkiaSurface *surface);
 KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface *surface);
+/* Flush and query the current layout of an externally wrapped Vulkan image. */
+KINE_SKIA_API int Kine_Skia_Surface_GetVulkanLayout(KineSkiaSurface *surface, uint32_t *layout);
 KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
 	KineSkiaSurface *surface,
 	KineSkiaSurface *backdrop);

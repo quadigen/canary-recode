@@ -935,15 +935,15 @@ studio_theme_sync_native_name :: proc(L: ^vm.State, service: ^StudioThemeService
 		vm.Pop(L)
 	}
 
-	// Only use the persisted Studio preference when the selected palette
-	// itself doesn't explicitly specify a Dark/Light theme name.
-	if !has_name && service.data_model != nil {
-		if studio_object := DataModel_Get_Service(service.data_model, "Studio");
-		   studio_object != nil {
-			studio := cast(^Studio)studio_object
-			if setting, ok := studio.settings["theme"]; ok && setting.kind == .String {
-				if setting.string_val == "Light" {
-					name = "Light"
+	when ODIN_OS != .JS {
+		if !has_name && service.data_model != nil {
+			if studio_object := DataModel_Get_Service(service.data_model, "Studio");
+			   studio_object != nil {
+				studio := cast(^Studio)studio_object
+				if setting, ok := studio.settings["theme"]; ok && setting.kind == .String {
+					if setting.string_val == "Light" {
+						name = "Light"
+					}
 				}
 			}
 		}

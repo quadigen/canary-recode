@@ -1,0 +1,56 @@
+---
+title: PlaytestService
+description: Internal editor APIs for launching and inspecting local playtest processes.
+---
+
+PlaytestService runs local desktop playtests. The editor and each playtest process own separate DataModels. The tree inspection API sends requests to the active runtime process and applies edits on its engine thread.
+
+These methods require the Internals capability, in addition to the existing Studio access restriction. They are not game script APIs.
+
+## Live inspection
+
+```lua
+local service = game:GetService("PlaytestService")
+local tree, err = service:GetGameTree("Server")
+
+if tree then
+    for _, node in ipairs(tree) do
+        print(node.Id, node.ParentId, node.Name, node.ClassName)
+    end
+end
+```
+
+The target is `"Server"` or `"Client"`. In singleplayer mode both names address the same local runtime. Server-only and client-only sessions expose only the corresponding running local process, not a remote server.
+
+Tree results are flat arrays in parent-before-child order. Each node contains Id, ParentId, Name and ClassName. The root's ParentId is empty. Id is a stable runtime unique ID, not an engine Instance or a network ID. Do not reuse IDs across sessions or targets.
+
+## Internal methods
+
+| Method | Successful result |
+| --- | --- |
+| GetGameTree(target) | Array of tree nodes |
+| GetInstanceProperties(target, id) | Dictionary of supported reflected property values |
+| GetInstanceProperty(target, id, property) | Property value |
+| SetInstanceProperty(target, id, property, value) | true |
+| SetInstanceReference(target, id, property, referenceId?) | true |
+| CreateInstance(target, parentId, className, name?) | ID of the created instance |
+| ReparentInstance(target, id, parentId) | true |
+| DestroyInstance(target, id) | true |
+
+Failures return nil and an error message. GetInstanceProperty may successfully return nil. Instance-valued properties are represented as tables containing InstanceId; assign them using SetInstanceReference. Passing nil as referenceId clears a nullable reference. Unsupported property types, including methods and signals, cannot cross the channel.
+
+```lua
+local partId, err = service:CreateInstance("Server", workspaceId, "Part", "Preview")
+if partId then
+    assert(service:SetInstanceProperty("Server", partId, "Anchored", true))
+    assert(service:SetInstanceProperty("Server", partId, "Size", Vector3.new(4, 1, 4)))
+end
+```
+
+The operation runs through the normal engine property setter, so gameplay and replication rules still apply. Client edits may be overwritten by server authority. The editor's original map is not modified.
+
+Service/root destruction and reparenting, security property changes, and hierarchy cycles are blocked. Create objects beneath a service or existing instance, not the DataModel itself.
+
+## Transport and limits
+
+The local desktop launcher creates a per-session filesystem channel with separate server and client mailboxes, and removes it when the session ends. No network port is opened. The native host pumps requests even when simulation is paused on an error. Calls are synchronous with a two-second timeout; avoid invoking them every render frame. On a timeout the operation may still execute, so refresh before retrying a mutation. A tree response is limited to 50,000 nodes and messages to 16 MiB. Android and browser playtests do not currently expose this channel.

@@ -140,7 +140,8 @@ workspace_water_mesh :: proc(
 	when ODIN_OS == .JS {
 		if workspace.water_grid_mesh == nil {
 			workspace.water_grid_mesh = kineffi.Kine_Filament_CreateMesh(
-				filament, kineffi.KINE_MESH_WATER_GRID,
+				filament,
+				kineffi.KINE_MESH_WATER_GRID,
 			)
 		}
 		mesh = workspace.water_grid_mesh
@@ -167,6 +168,7 @@ workspace_meshpart_mesh :: proc(
 			_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
 			part.native_mesh = nil
 			part.native_context = nil
+			classes.MeshPart_Reset_Bone_Transforms(part)
 		}
 		return nil
 	}
@@ -181,6 +183,7 @@ workspace_meshpart_mesh :: proc(
 		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
 		part.native_mesh = nil
 		part.native_context = nil
+		classes.MeshPart_Reset_Bone_Transforms(part)
 	}
 	tracy.ZoneNC("Workspace Load MeshPart", 0xB48EAD)
 	delete(part.native_mesh_id)
@@ -256,6 +259,7 @@ workspace_editable_meshpart_mesh :: proc(
 		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
 		part.native_mesh = nil
 		part.native_context = nil
+		classes.MeshPart_Reset_Bone_Transforms(part)
 	}
 
 	corners: [dynamic]classes.EditableMesh_Corner_Data
@@ -462,6 +466,7 @@ Workspace_Frustum_Contains_Sphere :: proc(
 
 
 Workspace_Draw_Params :: struct {
+	hidden_character:  ^classes.Object,
 	replicator:        ^ReplicatorService,
 	reflection_center: datatypes.Vector3,
 	reflection_radius: f32,
@@ -508,13 +513,19 @@ workspace_append_draw_items :: proc(
 		   child.destroyed ||
 		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
 
+		if params != nil && child == params.hidden_character {continue}
+
 		if classes.Is_A_Class(child, &classes.Cloth_Class) {
 			workspace_append_cloth(workspace, cast(^classes.Cloth)child, renderer, items, params)
 		} else if classes.Is_A_Class(child, &classes.SoftBody_Class) {
 			workspace_append_softbody(cast(^classes.SoftBody)child, renderer, items, params)
 		} else if classes.Is_A_Class(child, &classes.RopeConstraint_Class) {
 			rope := cast(^classes.RopeConstraint)child
-			if item, ok := classes.RopeConstraint_Draw_Item(rope, &workspace.object, renderer.Filament); ok {
+			if item, ok := classes.RopeConstraint_Draw_Item(
+				rope,
+				&workspace.object,
+				renderer.Filament,
+			); ok {
 				fabric, _ := materials.Lookup(.Fabric)
 				item.tex = fabric.texture
 				if params != nil {
@@ -643,23 +654,20 @@ workspace_append_draw_items :: proc(
 					}
 				}
 
-				if material_kind == kineffi.KINE_MAT_DEFAULT &&
-				   render_material.texture != nil &&
-				   mesh_texture == nil {
-					STUDS_PER_TILE :: f32(4.0)
-
-					largest_dimension := size.x
-					if size.y > largest_dimension {
-						largest_dimension = size.y
+				// Negative tile density selects physical, object-space projection.
+				// Imported textures retain their authored UV coordinates.
+				when ODIN_OS != .JS {
+					if material_kind == kineffi.KINE_MAT_DEFAULT &&
+					   render_material.texture != nil &&
+					   mesh_texture == nil &&
+					   !is_meshpart {
+						param3 = -0.25
 					}
-					if size.z > largest_dimension {
-						largest_dimension = size.z
-					}
-
-					param3 = largest_dimension / STUDS_PER_TILE
-
-					if param3 < 1.0 {
-						param3 = 1.0
+				} else {
+					if material_kind == kineffi.KINE_MAT_DEFAULT &&
+					   render_material.texture != nil &&
+					   mesh_texture == nil {
+						param3 = max(1.0, max(size.x, max(size.y, size.z)) / 4.0)
 					}
 				}
 
@@ -789,6 +797,17 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 
 		if camera := cast(^classes.Camera)ctx.renderer.ActiveCamera; camera != nil {
 			params.eye = datatypes.Vector3{camera.CFrame.x, camera.CFrame.y, camera.CFrame.z}
+			if camera.CameraType == .FirstPerson {
+				players := cast(^Players)Service_Get_Service(&workspace.service, "Players")
+				if players != nil && players.local_player != nil {
+					character := players.local_player.character
+					if character != nil &&
+					   !character.destroyed &&
+					   camera.CameraSubject == &character.object {
+						params.hidden_character = &character.object
+					}
+				}
+			}
 
 			if workspace.lod_distance > 0 {
 				params.lod_distance_sq = workspace.lod_distance * workspace.lod_distance
@@ -797,7 +816,10 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 
 			params.max_distance = workspace.max_draw_distance
 
-			if workspace.cull_parts {
+			// The desktop camera frustum is not the union of the two XR eye frusta.
+			// Keep scene geometry for both eyes until stereo frustum culling is added.
+			xr_active := VR_Service_Enabled(&workspace.service)
+			if workspace.cull_parts && !xr_active {
 				far := WORKSPACE_FRUSTUM_FAR
 				if workspace.max_draw_distance > 0 && workspace.max_draw_distance < far {
 					far = workspace.max_draw_distance
@@ -880,6 +902,9 @@ workspace_get :: proc(
 		classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
 	case "Terrain":
 		classes.Push_Object(L, Service_Get_Service(&workspace.service, "Terrain"))
+	case "FluidForces":
+		aerodynamics := cast(^Aerodynamics)Service_Get_Service(&workspace.service, "Aerodynamics")
+		vm.PushBoolean(L, aerodynamics != nil && aerodynamics.enabled)
 	case "SimulatePhysics", "AutoSimulate":
 		vm.PushBoolean(L, workspace.simulate_physics)
 	case "Gravity":
@@ -939,10 +964,16 @@ workspace_set :: proc(
 		if registry != nil && registry.registry.classes.renderer != nil {
 			registry.registry.classes.renderer.ActiveCamera = camera
 		}
+	case "FluidForces":
+		aerodynamics := cast(^Aerodynamics)Service_Get_Service(&workspace.service, "Aerodynamics")
+		if aerodynamics != nil {
+			aerodynamics.enabled = vm.ArgBoolean(L, value_index)
+		}
 	case "SimulatePhysics", "AutoSimulate":
 		simulate := vm.ArgBoolean(L, value_index)
 		if workspace.simulate_physics && !simulate {
-			if descriptor := classes.Find_Class(workspace.signal_registry, "Cloth"); descriptor != nil {
+			if descriptor := classes.Find_Class(workspace.signal_registry, "Cloth");
+			   descriptor != nil {
 				for object in descriptor.instances {
 					cloth := cast(^classes.Cloth)object
 					if cloth.pose_source == .Simulation {cloth.pose_source = .Preview}
@@ -1077,8 +1108,10 @@ workspace_namecall :: proc(
 			}
 		}
 		vec2 := datatypes.Vector2 {
-			max(f32(width) - platform.UI_Safe_Left - platform.UI_Safe_Right, 0) / platform.UI_Scale,
-			max(f32(height) - platform.UI_Safe_Top - platform.UI_Safe_Bottom, 0) / platform.UI_Scale,
+			max(f32(width) - platform.UI_Safe_Left - platform.UI_Safe_Right, 0) /
+			platform.UI_Scale,
+			max(f32(height) - platform.UI_Safe_Top - platform.UI_Safe_Bottom, 0) /
+			platform.UI_Scale,
 		}
 		datatypes.Push_Vector2(L, datatype_registry, vec2)
 		return 1, true
@@ -1143,6 +1176,7 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"FallenPartsDestroyHeight",
 			"FallHeightEnabled",
 			"DistributedGameTime",
+			"FluidForces",
 			"Dimension",
 			"RenderCulling",
 			"MaxDrawDistance",

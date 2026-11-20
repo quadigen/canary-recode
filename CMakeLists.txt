@@ -38,7 +38,6 @@ set(KINEMIUM_ODIN_LIBRARY_TARGETS
     JoltWrapper
     rocksdb
 )
-
 # Bindings for compression and YAML import the consolidated archive on every
 # desktop platform, while renderer bindings may still use component aliases.
 list(APPEND KINEMIUM_ODIN_LIBRARY_TARGETS KinemiumLibs)
@@ -46,3 +45,6 @@ list(APPEND KINEMIUM_ODIN_LIBRARY_TARGETS KinemiumLibs)
 add_custom_target(KinemiumOdinLibraries ALL
     DEPENDS ${KINEMIUM_ODIN_LIBRARY_TARGETS}
 )
+if(TARGET kine_openxr_probe)
+    add_dependencies(KinemiumOdinLibraries kine_openxr_probe)
+endif()

@@ -17,8 +17,7 @@ Read_Asset_File :: proc(authored: string) -> ([]u8, bool) {
 	status, stat_err := os.stat(path, context.allocator)
 	if stat_err != nil {return nil, false}
 	defer os.file_info_delete(status, context.allocator)
-	if status.type != .Regular || status.size < 0 ||
-	   status.size > i64(MAX_ASSET_BYTES) {
+	if status.type != .Regular || status.size < 0 || status.size > i64(MAX_ASSET_BYTES) {
 		return nil, false
 	}
 

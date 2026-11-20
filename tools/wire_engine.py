@@ -325,7 +325,7 @@ def run():
 
     datatype_entries = sorted(
         ({"Name": b, "Field": to_snake_case(b)} for b in bindings),
-        key=lambda e: sort_key(e["Name"]),
+        key=lambda e: (e["Name"] == "Animated", sort_key(e["Name"])),
     )
     dup_fields = find_duplicates([e["Field"] for e in datatype_entries])
     if dup_fields:

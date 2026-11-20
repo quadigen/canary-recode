@@ -14,18 +14,20 @@ CharacterService_Class := classes.Class_Info {
 }
 
 CharacterService :: struct {
-	using service:          Service,
-	move_direction:         datatypes.Vector3,
-	jump_queued:            bool,
-	local_jump_pending:     bool,
-	scripted_move:          bool,
-	input_sequence:         u32,
-	last_ack:               u32,
-	authoritative_received: bool,
-	scene_frozen:           bool,
-	respawn_time:           f32,
-	predictions:            [dynamic]Character_Prediction,
-	pending_binds:          [dynamic]^classes.CharacterModel,
+	using service:           Service,
+	move_direction:          datatypes.Vector3,
+	jump_queued:             bool,
+	local_jump_pending:      bool,
+	native_input_enabled:    bool,
+	native_input_overridden: bool,
+	character_auto_loads:    bool,
+	input_sequence:          u32,
+	last_ack:                u32,
+	authoritative_received:  bool,
+	scene_frozen:            bool,
+	respawn_time:            f32,
+	predictions:             [dynamic]Character_Prediction,
+	pending_binds:           [dynamic]^classes.CharacterModel,
 }
 
 Character_Prediction :: struct {
@@ -40,6 +42,7 @@ character_service_construct :: proc(
 	service := new(CharacterService)
 	service.service = Service_Init(&CharacterService_Class, "CharacterService", data_model)
 	service.respawn_time = 5
+	service.character_auto_loads = true
 	return &service.object
 }
 
@@ -88,7 +91,7 @@ character_service_singleplayer :: proc(data_model: ^DataModel) -> bool {
 	return(
 		data_model != nil &&
 		data_model.registry != nil &&
-		data_model.registry.mode == .Singleplayer \
+		(data_model.registry.mode == .Singleplayer || data_model.registry.mode == .Standalone) \
 	)
 }
 
@@ -215,6 +218,7 @@ CharacterService_Update_Death :: proc(
 	player.ragdoll = false
 	player.respawn_timer = 0
 	CharacterService_Unload(service, player)
+	if !service.character_auto_loads {return}
 	if has_origin {
 		_ = CharacterService_Load(service, player, &respawn_origin)
 	} else {
@@ -223,11 +227,13 @@ CharacterService_Update_Death :: proc(
 }
 
 character_service_is_template :: proc(object: ^classes.Object) -> bool {
-	return object != nil &&
-	       object.name == "StarterCharacter" &&
-	       classes.Is_A(object, "Model") &&
-	       object.parent != nil &&
-	       classes.Is_A(object.parent, "StarterPlayer")
+	return(
+		object != nil &&
+		object.name == "StarterCharacter" &&
+		classes.Is_A(object, "Model") &&
+		object.parent != nil &&
+		classes.Is_A(object.parent, "StarterPlayer") \
+	)
 }
 
 CharacterService_Load :: proc(
@@ -273,7 +279,12 @@ CharacterService_Load :: proc(
 			template_provides_controller =
 				classes.Find_Child(template, "CharacterController") != nil
 			registry := service.data_model.registry
-			classes.CharacterModel_Copy_Template(registry.vm_state.L, registry.classes, model, template)
+			classes.CharacterModel_Copy_Template(
+				registry.vm_state.L,
+				registry.classes,
+				model,
+				template,
+			)
 		}
 	}
 	classes.Set_Name(object, player.name)
@@ -515,6 +526,10 @@ character_service_get :: proc(
 	     "SetMoveDirection",
 	     "Jump":
 		vm.PushUserdataMethod(L, key)
+	case "CharacterAutoLoads":
+		vm.PushBoolean(L, service.character_auto_loads)
+	case "NativeInputEnabled":
+		vm.PushBoolean(L, service.native_input_enabled)
 	case "RespawnTime":
 		vm.PushNumber(L, f64(service.respawn_time))
 	case:
@@ -533,12 +548,48 @@ character_service_set :: proc(
 ) -> bool {
 	service := cast(^CharacterService)object
 	switch key {
+	case "CharacterAutoLoads":
+		service.character_auto_loads = vm.ArgBoolean(L, value_index)
+	case "NativeInputEnabled":
+		if service.data_model != nil && service.data_model.registry != nil {
+			descriptor := Find_Service(service.data_model.registry, "ReplicatorService")
+			if descriptor != nil &&
+			   descriptor.object != nil &&
+			   (cast(^ReplicatorService)descriptor.object).mode == .Client {
+				service.native_input_overridden = true
+			}
+		}
+		CharacterService_Set_Native_Input(service, vm.ArgBoolean(L, value_index))
 	case "RespawnTime":
 		service.respawn_time = max(f32(vm.ArgNumber(L, value_index)), 0)
 	case:
 		return false
 	}
 	return true
+}
+
+CharacterService_Set_Native_Input :: proc(service: ^CharacterService, enabled: bool) {
+	if service == nil || service.native_input_enabled == enabled {return}
+	service.native_input_enabled = enabled
+	service.move_direction = {}
+	service.jump_queued = false
+	service.local_jump_pending = false
+}
+
+CharacterService_Auto_Load :: proc(
+	service: ^CharacterService,
+	player: ^Player,
+) -> ^classes.CharacterModel {
+	if service == nil || !service.character_auto_loads {return nil}
+	return CharacterService_Load(service, player)
+}
+
+CharacterService_Load_Local_Player :: proc(registry: ^Registry) {
+	if registry == nil {return}
+	players := cast(^Players)Ensure_Service(registry, "Players")
+	if players == nil || players.local_player == nil {return}
+	characters := cast(^CharacterService)Ensure_Service(registry, "CharacterService")
+	_ = CharacterService_Auto_Load(characters, players.local_player)
 }
 
 character_service_namecall :: proc(
@@ -574,7 +625,6 @@ character_service_namecall :: proc(
 		return 1, true
 	case "SetMoveDirection":
 		service.move_direction = datatypes.Arg_Vector3(L, 2)
-		service.scripted_move = true
 		vm.PushBoolean(L, true)
 		return 1, true
 	case "Jump":
@@ -596,6 +646,15 @@ Register_CharacterService_Class :: proc(registry: ^classes.Registry) {
 		get = character_service_get,
 		set = character_service_set,
 		namecall = character_service_namecall,
-		properties = []string{"RespawnTime"},
+		properties = []string{"RespawnTime", "NativeInputEnabled", "CharacterAutoLoads"},
+		methods = []string {
+			"LoadPlayer",
+			"LoadCharacter",
+			"UnloadPlayer",
+			"UnloadCharacter",
+			"GetCharacter",
+			"SetMoveDirection",
+			"Jump",
+		},
 	)
 }

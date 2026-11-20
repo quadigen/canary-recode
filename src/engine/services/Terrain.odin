@@ -3175,7 +3175,7 @@ terrain_service_namecall :: proc(
 		z := f32(vm.ArgOptionalNumber(L, 3, 0))
 		radius := f32(vm.ArgOptionalNumber(L, 4, 256))
 		options := terrain_default_chunk_gen_options()
-		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5)}
+		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5, enum_registry)}
 		Terrain_Generate_Area(service, x, z, radius, options)
 		return 0, true
 
@@ -3184,7 +3184,7 @@ terrain_service_namecall :: proc(
 		cz := int(math.floor(vm.ArgOptionalNumber(L, 3, 0)))
 		radius := clamp(int(math.floor(vm.ArgOptionalNumber(L, 4, 0))), 0, 32)
 		options := terrain_default_chunk_gen_options()
-		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5)}
+		if vm.IsTable(L, 5) {options = terrain_read_chunk_gen_options(L, 5, enum_registry)}
 		Terrain_Generate_Chunks(
 			service,
 			cx - radius,
@@ -3714,7 +3714,7 @@ Register_Terrain_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = terrain_service_get,
 		set = terrain_service_set,
-		methods = []string{"GenerateChunk"},
+		methods = []string{"GenerateChunk", "GenerateArea"},
 		namecall = terrain_service_namecall,
 		properties = []string {
 			"Decoration",

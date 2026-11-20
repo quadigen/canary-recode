@@ -1,0 +1,69 @@
+---
+title: VRService
+description: Read OpenXR head and hand tracking, controller input, and trigger haptic feedback.
+---
+
+`VRService` is a client-side service for Kinemium's experimental Linux Vulkan/OpenXR backend. Start the application with `KINE_VR=1` and an active OpenXR runtime. Normal desktop and server execution return inactive values.
+
+## Properties
+
+| Property | Type | Description |
+| --- | --- | --- |
+| VREnabled | boolean | The native XR session is running. |
+| VRAvailable | boolean | The XR session was initialized successfully. |
+
+## Methods
+
+| Method | Return |
+| --- | --- |
+| `GetUserCFrame(userCFrame)` | CFrame in OpenXR local tracking space, or identity if invalid |
+| `GetUserCFrameEnabled(userCFrame)` | boolean |
+| `GetControllerState(hand)` | table |
+| `SetControllerHaptic(hand, amplitude, seconds, frequency?)` | boolean |
+
+The hand argument must be `Enum.UserCFrame.LeftHand` or `Enum.UserCFrame.RightHand`.
+For tracking, `Head` and `Floor` are also supported when available.
+Multiply a local tracked pose by the application's base camera CFrame to get its world transform.
+
+### Controller state
+
+| Field | Type | Description |
+| --- | --- | --- |
+| Active | boolean | At least one input action is active |
+| Trigger | number | Analog value from 0 to 1, or select button as 0/1 |
+| Grip | number | Analog squeeze or digital grip from 0 to 1 |
+| Thumbstick | Vector2 | Stick or trackpad axes |
+| TriggerAvailable | boolean | Trigger/select action active |
+| GripAvailable | boolean | Squeeze action active |
+| ThumbstickAvailable | boolean | Stick/trackpad action active |
+
+Unavailable input reads as zero; use availability flags to distinguish this from a released control.
+Input is sampled once per XR frame; scripts may read the previous completed sample.
+The simple controller profile exposes select (mapped to Trigger) but not necessarily grip or stick actions.
+
+### Haptics
+
+Amplitude is between 0 and 1. Duration is specified in seconds (0 to 10).
+The optional frequency is expressed in Hz; zero selects the runtime's default.
+Zero amplitude or duration stops that hand's vibration. The call returns false
+when the session is inactive/unfocused or the request is rejected. Actual
+vibration depends on controller/runtime support.
+
+```lua
+local VR = game:GetService("VRService")
+local RunService = game:GetService("RunService")
+local hand = Enum.UserCFrame.RightHand
+local held = false
+
+RunService.RenderStepped:Connect(function()
+    local state = VR:GetControllerState(hand)
+    local pressed = state.TriggerAvailable and state.Trigger > 0.7
+    if pressed and not held then
+        VR:SetControllerHaptic(hand, 0.5, 0.1)
+    end
+    held = pressed
+end)
+```
+
+This is an experimental Kinemium-specific input API. It does not yet dispatch
+VR button events via UserInputService or ContextActionService.

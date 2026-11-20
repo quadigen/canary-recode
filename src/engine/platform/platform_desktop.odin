@@ -24,6 +24,19 @@ ShowOpenFileDialog :: sdl.ShowOpenFileDialog
 
 INIT_VIDEO :: sdl.INIT_VIDEO
 INIT_EVENTS :: sdl.INIT_EVENTS
+INIT_GAMEPAD :: sdl.INIT_GAMEPAD
+Gamepad_Open :: proc(event: Event) {
+	if event.type == .GAMEPAD_ADDED {
+		if sdl.GetGamepadFromID(event.gdevice.which) == nil {
+			_ = sdl.OpenGamepad(event.gdevice.which)
+		}
+	}
+}
+Gamepad_Close :: proc(event: Event) {
+	if event.type == .GAMEPAD_REMOVED {
+		if pad := sdl.GetGamepadFromID(event.gdevice.which); pad != nil {sdl.CloseGamepad(pad)}
+	}
+}
 WINDOW_RESIZABLE :: sdl.WINDOW_RESIZABLE
 WINDOW_VULKAN :: sdl.WINDOW_VULKAN
 WINDOW_OPENGL :: sdl.WINDOW_OPENGL

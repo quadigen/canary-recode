@@ -1,6 +1,7 @@
 #+build js
 package renderer
 
+import target "../target"
 import "core:strings"
 
 import kineffi "../bindings"
@@ -28,6 +29,11 @@ RendererObject :: struct {
 		surface: ^kineffi.KineSkiaSurface,
 		width, height: i32,
 		delta_time: f32,
+	),
+	DrawVRUI:          proc(
+		user_data: rawptr,
+		surface: ^kineffi.KineSkiaSurface,
+		width, height, panel_width, panel_height: i32,
 	),
 	OnEvent:           proc(user_data: rawptr, event: sdl3.Event),
 	Ready:             bool,
@@ -123,10 +129,11 @@ init :: proc(window_name: string, width, height: i32, renderer: ^RendererObject)
 	window := sdl3.CreateWindow(name, frame_width, frame_height, sdl3.WINDOW_RESIZABLE)
 	_ = sdl3.GetWindowSizeInPixels(window, &frame_width, &frame_height)
 	filament := kineffi.Kine_Filament_CreateForSDLWindow(window, frame_width, frame_height)
-	if filament == nil {panic("Failed to create Filament WebGL renderer")}
+	if filament == nil {panic("Failed to create Babylon.js web renderer")}
 
 	renderer.Filament = filament
 	renderer.Ready = true
+	renderer.RenderFilament = !target.is_editor()
 	renderer.Window = window
 	web_state = {
 		renderer = renderer,
@@ -179,18 +186,26 @@ frame :: proc(delta_time: f64) -> bool {
 	if renderer.Draw3D != nil {renderer.Draw3D(renderer.UserData, renderer.Filament, dt)}
 	apply_viewport_rect(renderer)
 	// Clear the final viewport once, before publishing the base canvas.
-	if renderer.HasViewportRect {
+	if renderer.RenderFilament && renderer.HasViewportRect {
 		rect := renderer.ViewportRect
 		surface := web_state.base_surface
 		kineffi.Kine_Skia_Surface_Save(surface)
 		kineffi.Kine_Skia_Surface_ClipRect(
-			surface, f32(rect[0]), f32(rect[1]), f32(rect[2]), f32(rect[3]),
+			surface,
+			f32(rect[0]),
+			f32(rect[1]),
+			f32(rect[2]),
+			f32(rect[3]),
 		)
 		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
 		kineffi.Kine_Skia_Surface_Restore(surface)
 	}
 	kineffi.Kine_Skia_Surface_Flush(web_state.base_surface)
-	kineffi.Kine_Filament_Viewport_RenderFrame(renderer.Filament, dt, true)
+	kineffi.Kine_Filament_Viewport_RenderFrame(
+		renderer.Filament,
+		dt,
+		renderer.RenderFilament && renderer.HasViewportRect,
+	)
 
 	kineffi.Kine_Skia_Surface_Clear(web_state.overlay_surface, 0, 0, 0, 0)
 	renderer.SkiaSurface = web_state.overlay_surface

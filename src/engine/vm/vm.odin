@@ -910,6 +910,10 @@ PushRegistryReference :: proc(L: ^State, reference: i32) {
 	luauh.lua_rawgeti(L, luauh.LUA_REGISTRYINDEX, reference)
 }
 
+ValuesEqual :: proc(L: ^State, a, b: int) -> bool {
+	return luauh.lua_equal(L, i32(a), i32(b)) != 0
+}
+
 RetainValue :: proc(L: ^State, index: int = -1) -> i32 {
 	return luauh.lua_ref(L, i32(index))
 }

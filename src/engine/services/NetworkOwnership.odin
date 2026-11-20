@@ -48,11 +48,13 @@ replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Re
 replication_set_ownership :: proc(
 	service: ^ReplicatorService,
 	entity: ^Replication_Entity,
-	owner_id: u32,
+	requested_owner: u32,
 	refresh_physics: bool = true,
 	notify: bool = true,
 ) {
 	if service == nil || entity == nil {return}
+	owner_id := requested_owner
+	if classes.PhysicsModel_Server_Authoritative(entity.object) {owner_id = 0}
 	previous := entity.owner_id
 	entity.owner_id = owner_id
 	if previous != owner_id {
@@ -107,7 +109,7 @@ replication_set_ownership :: proc(
 }
 
 replication_auto_owner :: proc(object: ^classes.Object) -> u32 {
-	if object == nil {return 0}
+	if object == nil || classes.PhysicsModel_Server_Authoritative(object) {return 0}
 	for current := object; current != nil; current = current.parent {
 		if classes.Is_A(current, "CharacterModel") {
 			model := cast(^classes.CharacterModel)current
@@ -209,8 +211,12 @@ ownership_group_ready :: proc(
 replication_transfer_group :: proc(
 	service: ^ReplicatorService,
 	parts: []^Replication_Entity,
-	owner_id: u32,
+	requested_owner: u32,
 ) {
+	owner_id := requested_owner
+	for entity in parts {
+		if classes.PhysicsModel_Server_Authoritative(entity.object) {owner_id = 0; break}
+	}
 	if len(parts) > (int(Replication_Max_Frame_Payload) - 4) / OWNERSHIP_RECORD_BYTES {return}
 	changed: [dynamic]^Replication_Entity
 	defer delete(changed)
@@ -408,13 +414,20 @@ replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
 
 		center: datatypes.Vector3
 		anchored, locked := false, false
+		server_authoritative := false
 		for entity in group {
+			server_authoritative =
+				server_authoritative || classes.PhysicsModel_Server_Authoritative(entity.object)
 			part := cast(^classes.Part)entity.object
 			anchored = anchored || part.anchored
 			locked = locked || entity.owner_locked || replication_auto_owner(entity.object) != 0
 			center.x += part.cframe.x
 			center.y += part.cframe.y
 			center.z += part.cframe.z
+		}
+		if server_authoritative {
+			replication_transfer_group(service, group[:], 0)
+			continue
 		}
 		if locked {continue}
 		current := group[0].owner_id
@@ -499,6 +512,11 @@ replication_receive_ownership_request :: proc(
 	   !classes.Is_A(entity.object, "Part") ||
 	   !replication_in_scope(service, entity.object) {return}
 	part := cast(^classes.Part)entity.object
+	if classes.PhysicsModel_Server_Authoritative(entity.object) {
+		// Correct an optimistic client claim even if it hasn't received settings yet.
+		replication_broadcast_ownership(service, entity)
+		return
+	}
 	if part.anchored && !automatic {return}
 	if automatic {
 		entity.owner_locked = false
@@ -614,6 +632,21 @@ network_ownership_set :: proc(
 	if classes.Is_A(object, "Part") {
 		part := cast(^classes.Part)object
 		if part.anchored {return vm.RaiseError(L, "Cannot change the network owner of an anchored part")}
+	}
+	if target != nil {
+		if classes.PhysicsModel_Server_Authoritative(object) {
+			return vm.RaiseError(L, "ServerAuthoritative PhysicsModel cannot have a client owner")
+		}
+		if classes.Is_A(object, "Model") {
+			parts: [dynamic]^classes.Part
+			defer delete(parts)
+			ownership_collect_parts(object, &parts)
+			for part in parts {
+				if classes.PhysicsModel_Server_Authoritative(&part.object) {
+					return vm.RaiseError(L, "Model contains a server-authoritative PhysicsModel")
+				}
+			}
+		}
 	}
 	if replicator.mode == .Server {
 		if target != nil {

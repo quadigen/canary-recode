@@ -238,41 +238,46 @@ Part_Apply_Impulse :: proc(
 }
 
 Registry :: struct {
-	active_post_process:    ^Object,
-	classes:                [dynamic]^Class_Descriptor,
-	datatypes:              ^datatypes.Registry,
-	enums:                  ^enums.Registry,
-	renderer:               ^Renderer_Object,
-	data_model:             rawptr,
-	vm_state:               ^vm.VM,
-	signal_registry:        ^signals.Registry,
-	fallback_require_ref:   i32,
-	require_resolver:       Require_Resolver,
-	require_resolver_ctx:   rawptr,
-	require_frames:         map[^vm.State]^Require_Frame_Stack,
-	require_waiting:        map[^vm.State]^vm.State,
-	require_schedule_retry: proc(ctx: rawptr, L: ^vm.State),
-	require_retry_ctx:      rawptr,
-	mode:                   target.Mode,
-	screen_gui_can_display: proc(object: ^Object, data_model: rawptr) -> bool,
-	pending_destroy:        [dynamic]Pending_Destroy,
-	tagged_objects:         map[^Object]bool,
-	tag_added_signals:      map[string]^signals.Signal,
-	tag_removed_signals:    map[string]^signals.Signal,
-	destroy_hook:           Destroy_Hook,
-	destroy_hook_ctx:       rawptr,
-	network_ownership:      Network_Ownership_Dispatch,
-	network_ownership_ctx:  rawptr,
-	model_pivoted:          proc(ctx: rawptr, model: ^Model),
-	camera_obstruction:     proc(
+	active_post_process:     ^Object,
+	gui_selected:            ^GuiObject,
+	gui_gamepad_pressed:     ^GuiObject,
+	gui_gamepad_owner:       u32,
+	gui_navigation_disabled: bool,
+	gui_gamepad_direction:   [2]i32,
+	classes:                 [dynamic]^Class_Descriptor,
+	datatypes:               ^datatypes.Registry,
+	enums:                   ^enums.Registry,
+	renderer:                ^Renderer_Object,
+	data_model:              rawptr,
+	vm_state:                ^vm.VM,
+	signal_registry:         ^signals.Registry,
+	fallback_require_ref:    i32,
+	require_resolver:        Require_Resolver,
+	require_resolver_ctx:    rawptr,
+	require_frames:          map[^vm.State]^Require_Frame_Stack,
+	require_waiting:         map[^vm.State]^vm.State,
+	require_schedule_retry:  proc(ctx: rawptr, L: ^vm.State),
+	require_retry_ctx:       rawptr,
+	mode:                    target.Mode,
+	screen_gui_can_display:  proc(object: ^Object, data_model: rawptr) -> bool,
+	pending_destroy:         [dynamic]Pending_Destroy,
+	tagged_objects:          map[^Object]bool,
+	tag_added_signals:       map[string]^signals.Signal,
+	tag_removed_signals:     map[string]^signals.Signal,
+	destroy_hook:            Destroy_Hook,
+	destroy_hook_ctx:        rawptr,
+	network_ownership:       Network_Ownership_Dispatch,
+	network_ownership_ctx:   rawptr,
+	model_pivoted:           proc(ctx: rawptr, model: ^Model),
+	camera_obstruction:      proc(
 		ctx: rawptr,
 		camera: ^Camera,
 		target, desired: datatypes.Vector3,
 	) -> datatypes.Vector3,
-	remote_call:            Remote_Call_Dispatch,
-	remote_call_ctx:        rawptr,
-	part_body:              Part_Body_Access,
-	part_body_ctx:          rawptr,
+	remote_call:             Remote_Call_Dispatch,
+	remote_call_ctx:         rawptr,
+	part_body:               Part_Body_Access,
+	part_body_ctx:           rawptr,
 }
 
 Registry_Init :: proc(
@@ -703,14 +708,6 @@ descriptor_destroy :: proc(value, ctx: rawptr) {
 		}
 	}
 
-	// A live Instance can reach this finalizer without going through
-	// Destroy_Hierarchy: lua_close finalizes every remaining userdata, so every
-	// still-registered Instance is torn down here in an unspecified order. Run
-	// the same pre-destroy hook Flush_Pending_Destroy uses so services drop
-	// their references (e.g. ScriptContext forgets a destroyed Script's thread)
-	// before the class destructor frees the object. Without this a destroyed
-	// Script left a dangling entry in script_context.threads and ScriptContext's
-	// own destructor dereferenced freed memory.
 	if descriptor != nil && descriptor.registry != nil {
 		if descriptor.registry.renderer != nil &&
 		   descriptor.registry.renderer.ActiveCamera == object {
@@ -802,17 +799,9 @@ Register_Class :: proc(
 
 	append(&registry.classes, descriptor)
 
-	// Materialise the inheritance chain now that the class is known to the
-	// engine, rather than lazily on the first Is_A. Done per registration so
-	// the very first physics walk does not pay to build several hundred chains,
-	// and so a class registered after its subclass still ends up correct: the
-	// walk reads `parent` pointers, not the registry.
 	Class_Register_Ancestors(info)
 }
 
-// Member_Requirement returns the security requirement registered for a member
-// access on a class, or SECURITY_REQUIREMENT_NONE when the class declares no
-// rule for it. ReflectionService uses this to report a member's Permits.
 Member_Requirement :: proc(
 	descriptor: ^Class_Descriptor,
 	name: string,
@@ -994,6 +983,15 @@ Flush_Pending_Destroy :: proc(registry: ^Registry) {
 			descriptor.registry.renderer.ActiveCamera = nil
 		}
 
+		if Is_A_Class(object, &Part_Class) {
+			for candidate in registry.classes {
+				if !Is_Class_A(candidate.info, &Model_Class) {continue}
+				for instance in candidate.instances {
+					model := cast(^Model)instance
+					if model.primary_part == object {model.primary_part = nil}
+				}
+			}
+		}
 		if registry.destroy_hook != nil {
 			registry.destroy_hook(object, registry.destroy_hook_ctx)
 		}
@@ -1660,6 +1658,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_MaterialVariant(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
+	Register_PhysicsModel(registry)
 	Register_ModuleScript(registry)
 	Register_MovementController(registry)
 	Register_NumberRangeValue(registry)
@@ -1675,6 +1674,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_PrismaticConstraint(registry)
 	Register_RayValue(registry)
 	Register_RemoteEvent(registry)
+	Register_UnreliableRemoteEvent(registry)
 	Register_RemoteFunction(registry)
 	Register_RigidBody2D(registry)
 	Register_RodConstraint(registry)

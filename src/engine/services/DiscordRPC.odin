@@ -183,12 +183,20 @@ worker_proc :: proc(data: rawptr) {
 			last_attempt = time.tick_now()
 
 			snap := take_snapshot(sh)
-			if rpc.connect(&client, snap.app_id) == .None {
+			connect_err := rpc.connect(&client, snap.app_id)
+			if connect_err == .None {
 				free_str(connected_id)
 				connected_id = snap.app_id
 				snap.app_id = ""
 				applied_gen = 0
 				fmt.printfln("[DiscordRPC] connected as %s", client.user.username)
+			} else {
+				fmt.eprintfln(
+					"[DiscordRPC] connection failed: %v (%d: %s)",
+					connect_err,
+					client.last_error.code,
+					client.last_error.message,
+				)
 			}
 			snapshot_destroy(&snap)
 			continue
@@ -216,7 +224,10 @@ worker_proc :: proc(data: rawptr) {
 		}
 
 
-		rpc.update(&client, 250)
+		update_err := rpc.update(&client, 250)
+		if update_err != .None {
+			fmt.eprintfln("[DiscordRPC] connection lost: %v", update_err)
+		}
 		if client.last_error.code != 0 {
 			fmt.eprintfln(
 				"[DiscordRPC] Discord error %d: %s",

@@ -5,14 +5,9 @@ import vm "../vm"
 
 DATATYPE_TAG_BASE :: 64
 
-// Extension datatypes take tags above the engine range. The engine currently
-// occupies 64..98; 100..127 is reserved for KNE libraries.
 EXTENSION_TAG_BASE :: 100
 EXTENSION_TAG_MAX :: 127
 
-// Extension_Codec is registered by the KNE host. It lets the serializer and
-// replication layer persist/replicate extension datatypes without importing the
-// extensions package (which would be a cycle).
 Extension_Codec_Encode :: proc(
 	user: rawptr,
 	payload: rawptr,
@@ -46,41 +41,42 @@ Registry :: struct {
 	extension_codecs:            [dynamic]Extension_Codec,
 	extension_tags:              [EXTENSION_TAG_MAX - EXTENSION_TAG_BASE + 1]bool,
 	// wire:begin datatype-fields
-	axes: vm.Userdata_Binding,
-	brick_color: vm.Userdata_Binding,
-	c_frame: vm.Userdata_Binding,
-	color3: vm.Userdata_Binding,
-	color_sequence: vm.Userdata_Binding,
-	color_sequence_keypoint: vm.Userdata_Binding,
-	content: vm.Userdata_Binding,
-	date_time: vm.Userdata_Binding,
+	axes:                        vm.Userdata_Binding,
+	brick_color:                 vm.Userdata_Binding,
+	c_frame:                     vm.Userdata_Binding,
+	color3:                      vm.Userdata_Binding,
+	color_sequence:              vm.Userdata_Binding,
+	color_sequence_keypoint:     vm.Userdata_Binding,
+	content:                     vm.Userdata_Binding,
+	date_time:                   vm.Userdata_Binding,
 	dock_widget_plugin_gui_info: vm.Userdata_Binding,
-	faces: vm.Userdata_Binding,
-	font: vm.Userdata_Binding,
-	number_range: vm.Userdata_Binding,
-	number_sequence: vm.Userdata_Binding,
-	number_sequence_keypoint: vm.Userdata_Binding,
-	overlap_params: vm.Userdata_Binding,
-	path_waypoint: vm.Userdata_Binding,
-	physical_properties: vm.Userdata_Binding,
-	quaternion: vm.Userdata_Binding,
-	random: vm.Userdata_Binding,
-	ray: vm.Userdata_Binding,
-	raycast_params: vm.Userdata_Binding,
-	raycast_result: vm.Userdata_Binding,
-	rect: vm.Userdata_Binding,
-	region3: vm.Userdata_Binding,
-	region3int16: vm.Userdata_Binding,
-	security_capabilities: vm.Userdata_Binding,
-	terrain_region: vm.Userdata_Binding,
-	tween_info: vm.Userdata_Binding,
-	u_dim: vm.Userdata_Binding,
-	u_dim2: vm.Userdata_Binding,
-	unique_id: vm.Userdata_Binding,
-	vector2: vm.Userdata_Binding,
-	vector2int16: vm.Userdata_Binding,
-	vector3: vm.Userdata_Binding,
-	vector3int16: vm.Userdata_Binding,
+	faces:                       vm.Userdata_Binding,
+	font:                        vm.Userdata_Binding,
+	number_range:                vm.Userdata_Binding,
+	number_sequence:             vm.Userdata_Binding,
+	number_sequence_keypoint:    vm.Userdata_Binding,
+	overlap_params:              vm.Userdata_Binding,
+	path_waypoint:               vm.Userdata_Binding,
+	physical_properties:         vm.Userdata_Binding,
+	quaternion:                  vm.Userdata_Binding,
+	random:                      vm.Userdata_Binding,
+	ray:                         vm.Userdata_Binding,
+	raycast_params:              vm.Userdata_Binding,
+	raycast_result:              vm.Userdata_Binding,
+	rect:                        vm.Userdata_Binding,
+	region3:                     vm.Userdata_Binding,
+	region3int16:                vm.Userdata_Binding,
+	security_capabilities:       vm.Userdata_Binding,
+	terrain_region:              vm.Userdata_Binding,
+	tween_info:                  vm.Userdata_Binding,
+	u_dim:                       vm.Userdata_Binding,
+	u_dim2:                      vm.Userdata_Binding,
+	unique_id:                   vm.Userdata_Binding,
+	vector2:                     vm.Userdata_Binding,
+	vector2int16:                vm.Userdata_Binding,
+	vector3:                     vm.Userdata_Binding,
+	vector3int16:                vm.Userdata_Binding,
+	animated:                    vm.Userdata_Binding,
 	// wire:end datatype-fields
 }
 
@@ -123,6 +119,7 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector2int16 = Vector2int16_Luau_Binding()
 	registry.vector3 = Vector3_Luau_Binding()
 	registry.vector3int16 = Vector3int16_Luau_Binding()
+	registry.animated = Animated_Luau_Binding()
 	// wire:end datatype-bindings
 
 	// wire:begin datatype-tags
@@ -161,6 +158,7 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector2int16.tag = DATATYPE_TAG_BASE + 32
 	registry.vector3.tag = DATATYPE_TAG_BASE + 33
 	registry.vector3int16.tag = DATATYPE_TAG_BASE + 34
+	registry.animated.tag = DATATYPE_TAG_BASE + 35
 	// wire:end datatype-tags
 
 	// wire:begin datatype-contexts
@@ -234,6 +232,8 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector3.owner = registry
 	registry.vector3int16.ctx = &registry.vector3int16
 	registry.vector3int16.owner = registry
+	registry.animated.ctx = &registry.animated
+	registry.animated.owner = registry
 	// wire:end datatype-contexts
 }
 
@@ -396,29 +396,84 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	install_library(vm_state, "BrickColor", &registry.brick_color, BrickColor_Install_Fields)
 	install_library(vm_state, "CFrame", &registry.c_frame, CFrame_Install_Fields)
 	install_library(vm_state, "Color3", &registry.color3, Color3_Install_Fields)
-	install_library(vm_state, "ColorSequence", &registry.color_sequence, ColorSequence_Install_Fields)
-	install_library(vm_state, "ColorSequenceKeypoint", &registry.color_sequence_keypoint, ColorSequenceKeypoint_Install_Fields)
+	install_library(
+		vm_state,
+		"ColorSequence",
+		&registry.color_sequence,
+		ColorSequence_Install_Fields,
+	)
+	install_library(
+		vm_state,
+		"ColorSequenceKeypoint",
+		&registry.color_sequence_keypoint,
+		ColorSequenceKeypoint_Install_Fields,
+	)
 	install_library(vm_state, "Content", &registry.content, Content_Install_Fields)
 	install_library(vm_state, "DateTime", &registry.date_time, DateTime_Install_Fields)
-	install_library(vm_state, "DockWidgetPluginGuiInfo", &registry.dock_widget_plugin_gui_info, DockWidgetPluginGuiInfo_Install_Fields)
+	install_library(
+		vm_state,
+		"DockWidgetPluginGuiInfo",
+		&registry.dock_widget_plugin_gui_info,
+		DockWidgetPluginGuiInfo_Install_Fields,
+	)
 	install_library(vm_state, "Faces", &registry.faces, Faces_Install_Fields)
 	install_library(vm_state, "Font", &registry.font, Font_Install_Fields)
 	install_library(vm_state, "NumberRange", &registry.number_range, NumberRange_Install_Fields)
-	install_library(vm_state, "NumberSequence", &registry.number_sequence, NumberSequence_Install_Fields)
-	install_library(vm_state, "NumberSequenceKeypoint", &registry.number_sequence_keypoint, NumberSequenceKeypoint_Install_Fields)
-	install_library(vm_state, "OverlapParams", &registry.overlap_params, OverlapParams_Install_Fields)
+	install_library(
+		vm_state,
+		"NumberSequence",
+		&registry.number_sequence,
+		NumberSequence_Install_Fields,
+	)
+	install_library(
+		vm_state,
+		"NumberSequenceKeypoint",
+		&registry.number_sequence_keypoint,
+		NumberSequenceKeypoint_Install_Fields,
+	)
+	install_library(
+		vm_state,
+		"OverlapParams",
+		&registry.overlap_params,
+		OverlapParams_Install_Fields,
+	)
 	install_library(vm_state, "PathWaypoint", &registry.path_waypoint, PathWaypoint_Install_Fields)
-	install_library(vm_state, "PhysicalProperties", &registry.physical_properties, PhysicalProperties_Install_Fields)
+	install_library(
+		vm_state,
+		"PhysicalProperties",
+		&registry.physical_properties,
+		PhysicalProperties_Install_Fields,
+	)
 	install_library(vm_state, "Quaternion", &registry.quaternion, Quaternion_Install_Fields)
 	install_library(vm_state, "Random", &registry.random, Random_Install_Fields)
 	install_library(vm_state, "Ray", &registry.ray, Ray_Install_Fields)
-	install_library(vm_state, "RaycastParams", &registry.raycast_params, RaycastParams_Install_Fields)
-	install_library(vm_state, "RaycastResult", &registry.raycast_result, RaycastResult_Install_Fields)
+	install_library(
+		vm_state,
+		"RaycastParams",
+		&registry.raycast_params,
+		RaycastParams_Install_Fields,
+	)
+	install_library(
+		vm_state,
+		"RaycastResult",
+		&registry.raycast_result,
+		RaycastResult_Install_Fields,
+	)
 	install_library(vm_state, "Rect", &registry.rect, Rect_Install_Fields)
 	install_library(vm_state, "Region3", &registry.region3, Region3_Install_Fields)
 	install_library(vm_state, "Region3int16", &registry.region3int16, Region3int16_Install_Fields)
-	install_library(vm_state, "SecurityCapabilities", &registry.security_capabilities, SecurityCapabilities_Install_Fields)
-	install_library(vm_state, "TerrainRegion", &registry.terrain_region, TerrainRegion_Install_Fields)
+	install_library(
+		vm_state,
+		"SecurityCapabilities",
+		&registry.security_capabilities,
+		SecurityCapabilities_Install_Fields,
+	)
+	install_library(
+		vm_state,
+		"TerrainRegion",
+		&registry.terrain_region,
+		TerrainRegion_Install_Fields,
+	)
 	install_library(vm_state, "TweenInfo", &registry.tween_info, TweenInfo_Install_Fields)
 	install_library(vm_state, "UDim", &registry.u_dim, UDim_Install_Fields)
 	install_library(vm_state, "UDim2", &registry.u_dim2, UDim2_Install_Fields)
@@ -427,6 +482,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	install_library(vm_state, "Vector2int16", &registry.vector2int16, Vector2int16_Install_Fields)
 	install_library(vm_state, "Vector3", &registry.vector3, Vector3_Install_Fields)
 	install_library(vm_state, "Vector3int16", &registry.vector3int16, Vector3int16_Install_Fields)
+	install_library(vm_state, "Animated", &registry.animated, Animated_Install_Fields)
 	// wire:end datatype-libraries
 }
 

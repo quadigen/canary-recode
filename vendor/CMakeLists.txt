@@ -34,6 +34,11 @@ add_subdirectory(kine_render_shim)
 add_subdirectory(kine_skia)
 add_subdirectory(kine_vulkan_compositor)
 
+option(KINE_WITH_OPENXR "Build initial OpenXR native integration and probe" OFF)
+if(KINE_WITH_OPENXR)
+    add_subdirectory(kine_openxr)
+endif()
+
 if(TARGET kine_filament_shim AND TARGET kine_vulkan_compositor)
     target_link_libraries(kine_filament_shim PUBLIC kine_vulkan_compositor)
 endif()

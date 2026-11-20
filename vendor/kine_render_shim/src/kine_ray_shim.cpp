@@ -40,6 +40,25 @@ uint64_t kine_hash_bytes(uint64_t hash, const void *data, size_t size) {
 	return hash;
 }
 
+// The signed UV parameter is a physical tile density for primitive materials.
+// Quantize axis lengths to avoid BVH rebuilds caused by rotation roundoff.
+void kine_physical_uv_size(const KineRayDraw &draw, float scale[3]) {
+    for (int axis = 0; axis < 3; ++axis) {
+        const float x = draw.xform[axis], y = draw.xform[4 + axis], z = draw.xform[8 + axis];
+        const float length = std::sqrt(x*x + y*y + z*z);
+        scale[axis] = std::max(0.0001f, std::round(length * 10000.0f) / 10000.0f);
+    }
+}
+
+uint64_t kine_hash_uv_size(uint64_t hash, const KineRayDraw &draw) {
+    if (draw.uvScale < 0.0f) {
+        float scale[3];
+        kine_physical_uv_size(draw, scale);
+        hash = kine_hash_bytes(hash, scale, sizeof(scale));
+    }
+    return hash;
+}
+
 // The structure hash covers which meshes/materials take part in the scene, the
 // transform hash covers where they are. Keeping them apart matters: a moving
 // object must only update its instance matrix, because the alternative -- any
@@ -63,6 +82,7 @@ uint64_t kine_hash_draws(const KineRayFrame &frame, bool structure) {
 			hash = kine_hash_bytes(hash, &draw.param3, sizeof(draw.param3));
 			hash = kine_hash_bytes(hash, &draw.transmission, sizeof(draw.transmission));
 			hash = kine_hash_bytes(hash, &draw.uvScale, sizeof(draw.uvScale));
+		hash = kine_hash_uv_size(hash, draw);
 			hash = kine_hash_bytes(hash, &draw.baseColor.pixels, sizeof(draw.baseColor.pixels));
 			hash = kine_hash_bytes(hash, &draw.normalMap.pixels, sizeof(draw.normalMap.pixels));
 		} else {
@@ -126,6 +146,7 @@ uint64_t kine_draw_key(const KineRayDraw &draw) {
 	hash = kine_hash_bytes(hash, &draw.param3, sizeof(draw.param3));
 	hash = kine_hash_bytes(hash, &draw.transmission, sizeof(draw.transmission));
 	hash = kine_hash_bytes(hash, &draw.uvScale, sizeof(draw.uvScale));
+		hash = kine_hash_uv_size(hash, draw);
 	hash = kine_hash_bytes(hash, &draw.baseColor.pixels, sizeof(draw.baseColor.pixels));
 	hash = kine_hash_bytes(hash, &draw.normalMap.pixels, sizeof(draw.normalMap.pixels));
 	return hash;
@@ -321,7 +342,39 @@ Ray::MeshHandle kine_get_mesh(KineRayState *state, const KineRayDraw &draw, uint
 	// vertices instead.
 	const int stride = draw.vertexStrideFloats;
 	const float *vertexData = draw.vertexData;
-	if (draw.uvScale != 1.0f && draw.uvScale > 0.0f && stride > 7 && draw.vertexCount > 0) {
+    int vertexCount = draw.vertexCount;
+    if (draw.uvScale < 0.0f && stride > 7 && draw.vertexCount > 0 && draw.indexCount % 3 == 0) {
+        // Ray consumes ordinary UVs. Bake physical dominant-axis projection
+        // per triangle, duplicating corners to allow projection seams without
+        // corrupting neighbouring faces of the original mesh.
+        float scale[3];
+        kine_physical_uv_size(draw, scale);
+        const float density = -draw.uvScale;
+        auto projected = std::make_unique<std::vector<float>>(size_t(draw.indexCount) * size_t(stride));
+        for (int i = 0; i < draw.indexCount; i += 3) {
+            float p[3][3];
+            for (int corner = 0; corner < 3; ++corner) {
+                const float *src = draw.vertexData + size_t(draw.indices[i+corner]) * size_t(stride);
+                for (int axis = 0; axis < 3; ++axis) p[corner][axis] = src[axis] * scale[axis];
+            }
+            float a[3], b[3];
+            for (int axis = 0; axis < 3; ++axis) {a[axis] = p[1][axis]-p[0][axis]; b[axis] = p[2][axis]-p[0][axis];}
+            const float n[3] = {std::abs(a[1]*b[2]-a[2]*b[1]), std::abs(a[2]*b[0]-a[0]*b[2]), std::abs(a[0]*b[1]-a[1]*b[0])};
+            const int axis = n[0] >= n[1] && n[0] >= n[2] ? 0 : (n[1] >= n[2] ? 1 : 2);
+            const int u = axis == 0 ? 2 : 0, v = axis == 1 ? 2 : 1;
+            for (int corner = 0; corner < 3; ++corner) {
+                const float *src = draw.vertexData + size_t(draw.indices[i+corner]) * size_t(stride);
+                float *dst = projected->data() + size_t(i+corner) * size_t(stride);
+                memcpy(dst, src, size_t(stride) * sizeof(float));
+                dst[6] = p[corner][u] * density;
+                dst[7] = p[corner][v] * density;
+                (*indices)[size_t(i+corner)] = uint32_t(i+corner);
+            }
+        }
+        vertexData = projected->data();
+        vertexCount = draw.indexCount;
+        state->vertex_buffers.push_back(std::move(projected));
+    } else if (draw.uvScale != 1.0f && draw.uvScale > 0.0f && stride > 7 && draw.vertexCount > 0) {
 		auto scaled = std::make_unique<std::vector<float>>(
 			size_t(draw.vertexCount) * size_t(stride));
 		memcpy(scaled->data(), draw.vertexData, scaled->size() * sizeof(float));
@@ -334,7 +387,7 @@ Ray::MeshHandle kine_get_mesh(KineRayState *state, const KineRayDraw &draw, uint
 		state->vertex_buffers.push_back(std::move(scaled));
 	}
 
-	const Ray::Span<const float> vertex_span(vertexData, draw.vertexCount * stride);
+	const Ray::Span<const float> vertex_span(vertexData, vertexCount * stride);
 	const auto make_attribute = [&vertex_span, stride](int offset) {
 		Ray::vtx_attribute_t attribute;
 		attribute.data = vertex_span;

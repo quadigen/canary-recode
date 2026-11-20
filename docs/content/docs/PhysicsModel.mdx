@@ -1,0 +1,43 @@
+---
+title: PhysicsModel
+description: Configure rigid-body simulation, aerodynamics and network replication for a model.
+---
+
+`PhysicsModel` extends [Model](/docs/Model) with settings for vehicles, machines, spacecraft and other networked physics assemblies. It does not weld parts automatically; author connections with constraints as usual.
+
+```lua
+local ship = Instance.new("PhysicsModel", workspace)
+ship.Name = "Ship"
+ship.ServerAuthoritative = true
+ship.GravityScale = 0.25
+ship.AerodynamicsEnabled = true
+ship.DragMultiplier = 0.8
+ship.LiftMultiplier = 1.2
+ship.NetworkUpdateRate = 30
+ship.InterpolationDelay = 0.08
+ship.MaxExtrapolationTime = 0.15
+
+local hull = Instance.new("Part", ship)
+hull.Anchored = false
+hull.CFrame = CFrame.new(0, 30, 0)
+ship.PrimaryPart = hull
+```
+
+## Properties
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| ServerAuthoritative | boolean | true | Keeps descendant rigid bodies under server ownership. Client ownership requests are rejected. |
+| GravityScale | number | 1 | Multiplies world gravity; 0 disables gravity. Range -10 to 10. |
+| AerodynamicsEnabled | boolean | true | Allows the world aerodynamics solver to affect descendant bodies, when enabled globally. |
+| DragMultiplier | number | 1 | Multiplies aerodynamic drag coefficients. |
+| LiftMultiplier | number | 1 | Multiplies aerodynamic lift. |
+| NetworkUpdateRate | number | 0 | Maximum transform snapshots per second (0 uses the global cadence). It cannot exceed the server's snapshot rate or override bandwidth/LOD limits. |
+| ReplicateVelocity | boolean | true | Includes measured linear and angular velocity in body snapshots when available. |
+| InterpolationEnabled | boolean | true | Smooth remote transforms; false uses the newest received transform directly. |
+| InterpolationDelay | number | -1 | Seconds of interpolation buffering; a negative value inherits the global delay. |
+| MaxExtrapolationTime | number | 0.3 | Maximum seconds of prediction after the last snapshot. 0 disables prediction. |
+
+The nearest enclosing PhysicsModel supplies each body's settings. Settings are saved with the model, cloned and synchronized to peers. All ordinary Model APIs are available. Descendant parts remain independent rigid bodies unless connected with welds or other constraints.
+
+Velocity-aware prediction is for remote rendering and does not run a second authoritative physics simulation. Remote collision proxies follow the replicated pose. Server authority reduces client control over a vehicle, but it also means input usually needs to reach the server before physics responds.

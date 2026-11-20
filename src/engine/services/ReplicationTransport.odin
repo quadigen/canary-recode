@@ -47,6 +47,9 @@ Replication_Capability_Metadata :: u32(1 << 14)
 Replication_Capability_Player_Reference :: u32(1 << 15)
 Replication_Capability_Buffer :: u32(1 << 16)
 Replication_Capability_Join_Batch :: u32(1 << 17)
+Replication_Capability_Character_Settings :: u32(1 << 18)
+Replication_Capability_Body_Velocity :: u32(1 << 19)
+Replication_Capability_Unreliable_Remote :: u32(1 << 20)
 REPLICATION_SNAPSHOT_CLOCK_RATE :: 120
 
 
@@ -68,7 +71,10 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Metadata |
 	Replication_Capability_Player_Reference |
 	Replication_Capability_Buffer |
-	Replication_Capability_Join_Batch
+	Replication_Capability_Join_Batch |
+	Replication_Capability_Character_Settings |
+	Replication_Capability_Body_Velocity |
+	Replication_Capability_Unreliable_Remote
 
 Replication_Handshake_Ok: u8 = 0
 Replication_Handshake_Version_Mismatch: u8 = 1
@@ -95,6 +101,8 @@ Replication_Kind_Deformable :: u8(28)
 Replication_Kind_Script_Source :: u8(29)
 Replication_Kind_Metadata :: u8(30)
 Replication_Kind_Join_Batch :: u8(31)
+Replication_Kind_Character_Settings :: u8(32)
+Replication_Kind_Unreliable_Remote :: u8(33)
 
 Replication_Deformable_Cloth :: u8(0)
 Replication_Deformable_SoftBody :: u8(1)
@@ -390,7 +398,7 @@ replication_receive_hello :: proc(
 		service.data_model.registry,
 		"CharacterService",
 	)
-	if character_service != nil && player != nil {CharacterService_Load(character_service, player)}
+	_ = CharacterService_Auto_Load(character_service, player)
 	connection.player = player
 	connection.client_capabilities = capabilities
 	welcome_capabilities := service.server_capabilities
@@ -748,11 +756,31 @@ replication_send :: proc(
 	append(&bytes, ..payload)
 	channel :=
 		reliable ? Replication_Transport_Channel_Reliable : Replication_Transport_Channel_Unreliable
-	if !transport_peer_send(peer, channel, bytes[:], reliable) {return false}
+	if !transport_peer_send(peer, channel, bytes[:], reliable, kind == Replication_Kind_Unreliable_Remote) {return false}
 	service.packets_sent += 1
 	service.bytes_sent += u64(len(bytes))
 	if budgeted {connection.bytes_this_tick += u32(wire_size)}
 	return true
+}
+
+// Send saved/server defaults separately from character entities so a player
+// can receive them even when automatic character loading is disabled.
+replication_send_character_settings :: proc(service: ^ReplicatorService) {
+	characters := cast(^CharacterService)DataModel_Get_Service(service.data_model, "CharacterService")
+	if characters == nil {return}
+	flags := u8(0)
+	if characters.character_auto_loads {flags |= 1}
+	if characters.native_input_enabled {flags |= 2}
+	payload := [1]u8{flags}
+	for &peer in service.peers {
+		if !peer.handshake_complete ||
+		   (peer.client_capabilities & service.server_capabilities & Replication_Capability_Character_Settings) == 0 ||
+		   (peer.character_settings_sent && peer.last_character_settings == flags) {continue}
+		if replication_send(service, peer.peer, Replication_Kind_Character_Settings, payload[:]) {
+			peer.character_settings_sent = true
+			peer.last_character_settings = flags
+		}
+	}
 }
 
 replication_send_gravity_updates :: proc(service: ^ReplicatorService) {
@@ -1504,6 +1532,21 @@ replication_receive :: proc(
 			CharacterService_Flush_Pending_Binds(service.data_model)
 			fmt.println("Network scene ready; client may now build its character")
 		}
+	case Replication_Kind_Character_Settings:
+		if service.mode != .Client || peer != service.remote || !service.handshake_complete {return}
+		if len(reader.data) != 1 || reader.data[0] > 3 {
+			reader.valid = false
+			break
+		}
+		flags := reader.data[0]
+		reader.offset = 1
+		characters := cast(^CharacterService)DataModel_Get_Service(service.data_model, "CharacterService")
+		if characters != nil {
+			characters.character_auto_loads = (flags & 1) != 0
+			if !characters.native_input_overridden {
+				CharacterService_Set_Native_Input(characters, (flags & 2) != 0)
+			}
+		}
 	case Replication_Kind_World_Gravity:
 		if service.mode != .Client ||
 		   peer != service.remote ||
@@ -1673,6 +1716,23 @@ replication_receive :: proc(
 		material := enums.Material(reader.data[reader.offset + 2])
 		shape := enums.PartType(reader.data[reader.offset + 3])
 		reader.offset += 4
+		sample := Replication_Sample{tick = tick, frame = frame}
+		remaining := len(reader.data) - reader.offset
+		if remaining == 28 &&
+		   (service.client_capabilities & service.server_capabilities & Replication_Capability_Body_Velocity) != 0 {
+			sample.linear_velocity = {replication_read_f32(&reader), replication_read_f32(&reader), replication_read_f32(&reader)}
+			sample.angular_velocity = {replication_read_f32(&reader), replication_read_f32(&reader), replication_read_f32(&reader)}
+			sample.has_velocity = replication_vector3_finite(sample.linear_velocity) &&
+			                      replication_vector3_finite(sample.angular_velocity)
+			if !sample.has_velocity {reader.valid = false; break}
+		} else if remaining != 4 {
+			reader.valid = false
+			break
+		}
+		if !replication_frame_finite(frame) || !replication_vector3_finite(size) {
+			reader.valid = false
+			break
+		}
 		if reader.valid {
 			players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 			character := object.parent
@@ -1745,9 +1805,9 @@ replication_receive :: proc(
 				}
 				if len(entity.samples) > 0 &&
 				   entity.samples[len(entity.samples) - 1].tick == tick {
-					entity.samples[len(entity.samples) - 1].frame = frame
+					entity.samples[len(entity.samples) - 1] = sample
 				} else {
-					append(&entity.samples, Replication_Sample{tick = tick, frame = frame})
+					append(&entity.samples, sample)
 				}
 				if len(entity.samples) > 32 {ordered_remove(&entity.samples, 0)}
 				entity.sample_age = 0
@@ -1937,6 +1997,7 @@ replication_receive :: proc(
 		   connection.player == nil ||
 		   entity.owner_id != connection.player.user_id ||
 		   entity.object == nil ||
+		   classes.PhysicsModel_Server_Authoritative(entity.object) ||
 		   !classes.Is_A(entity.object, "Part") {
 			service.owned_states_rejected += 1
 			return
@@ -2116,7 +2177,16 @@ replication_receive :: proc(
 			if !ok && err != "" {delete(err)}
 		}
 		vm.ReleaseValue(L, payload_ref)
-	case 16:
+	case 16, Replication_Kind_Unreliable_Remote:
+		unreliable := data[4] == Replication_Kind_Unreliable_Remote
+		if unreliable {
+			if len(reader.data) > 4 + UNRELIABLE_REMOTE_MAX_PAYLOAD {reader.valid = false; break}
+			if (remote_common_capabilities(service, peer) & Replication_Capability_Unreliable_Remote) == 0 {return}
+			if service.mode == .Server {
+				connection := replication_peer_of(service, peer)
+				if connection == nil || !connection.handshake_complete {return}
+			} else if service.mode != .Client || !service.handshake_complete || peer != service.remote {return}
+		}
 		if service.mode == .Server {
 			known := false
 			for connection in service.peers {if connection.peer == peer {known = true; break}}
@@ -2124,7 +2194,7 @@ replication_receive :: proc(
 		} else if peer != service.remote {return}
 		id := replication_read_u32(&reader)
 		if !reader.valid || id == 0 {break}
-		remote_receive_fire(service, L, peer, id, &reader)
+		remote_receive_fire(service, L, peer, id, &reader, unreliable)
 		if !reader.valid {break}
 	case 17:
 		if service.mode == .Server {

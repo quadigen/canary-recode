@@ -109,9 +109,12 @@ collection_service_namecall :: proc(
 		tag := vm.ArgString(L, 3)
 		if !collection_validate_tag(L, tag) {return 0, true}
 		switch method {
-		case "AddTag": classes.Object_Add_Tag(target, tag)
-		case "RemoveTag": classes.Object_Remove_Tag(target, tag)
-		case "HasTag": vm.PushBoolean(L, classes.Object_Has_Tag(target, tag)); return 1, true
+		case "AddTag":
+			classes.Object_Add_Tag(target, tag)
+		case "RemoveTag":
+			classes.Object_Remove_Tag(target, tag)
+		case "HasTag":
+			vm.PushBoolean(L, classes.Object_Has_Tag(target, tag)); return 1, true
 		}
 		return 0, true
 
@@ -121,7 +124,8 @@ collection_service_namecall :: proc(
 		vm.NewTable(L, 0)
 		index := 1
 		for item in service.signal_registry.tagged_objects {
-			if item.destroyed || !classes.Object_Is_Accessible(L, item) ||
+			if item.destroyed ||
+			   !classes.Object_Is_Accessible(L, item) ||
 			   !classes.Object_Has_Tag(item, tag) {continue}
 			classes.Push_Object(L, item)
 			vm.SetArrayValue(L, -2, index)
@@ -164,5 +168,15 @@ Register_CollectionService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = collection_service_get,
 		namecall = collection_service_namecall,
+		methods = []string {
+			"AddTag",
+			"RemoveTag",
+			"HasTag",
+			"GetTags",
+			"GetTagged",
+			"GetAllTags",
+			"GetInstanceAddedSignal",
+			"GetInstanceRemovedSignal",
+		},
 	)
 }

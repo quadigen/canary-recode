@@ -170,6 +170,7 @@ MAP_CONTENT_SERVICES := [?]string {
 	"StarterGui",
 	"StarterPack",
 	"StarterPlayer",
+	"CharacterService",
 	"ServerScriptService",
 	"ServerStorage",
 }
@@ -197,6 +198,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
 	when ODIN_OS != .JS {Register_AccountService_Class(registry.classes)}
+	Register_Aerodynamics_Class(registry.classes)
+	Register_AsepriteService_Class(registry.classes)
 	Register_AssetService_Class(registry.classes)
 	Register_ChangeHistoryService_Class(registry.classes)
 	Register_CharacterService_Class(registry.classes)
@@ -261,7 +264,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_StarterPack_Class(registry.classes)
 	Register_StarterPlayer_Class(registry.classes)
 	Register_Stats_Class(registry.classes)
-	when ODIN_OS != .JS {Register_Studio_Class(registry.classes)}
+	Register_Studio_Class(registry.classes)
 	Register_StudioService_Class(registry.classes)
 	Register_StudioThemeService_Class(registry.classes)
 	Register_TaskScheduler_Class(registry.classes)
@@ -285,6 +288,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	// wire:end service-classes
 	// wire:begin services
 	when ODIN_OS != .JS {Register_Service(registry, "AccountService", "AccountService", "accountService")}
+	Register_Service(registry, "Aerodynamics", "Aerodynamics")
+	Register_Service(registry, "AsepriteService", "AsepriteService")
 	Register_Service(registry, "AssetService", "AssetService")
 	Register_Service(registry, "ChangeHistoryService", "ChangeHistoryService")
 	Register_Service(registry, "CharacterService", "CharacterService")
@@ -343,7 +348,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "StarterPack", "StarterPack", "StarterPack")
 	Register_Service(registry, "StarterPlayer", "StarterPlayer", "StarterPlayer")
 	Register_Service(registry, "Stats", "Stats")
-	when ODIN_OS != .JS {Register_Service(registry, "Studio", "Studio")}
+	Register_Service(registry, "Studio", "Studio")
 	Register_Service(registry, "StudioService", "StudioService")
 	Register_Service(registry, "StudioThemeService", "StudioThemeService")
 	Register_Service(registry, "TaskScheduler", "TaskScheduler")

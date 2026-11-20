@@ -1810,6 +1810,25 @@ FluidForces :: enum {
 	Experimental = 1,
 }
 
+AerodynamicsMode :: enum {
+	Auto     = 0,
+	DragOnly = 1,
+	Wing     = 2,
+	Disabled = 3,
+}
+
+AerodynamicsAtmosphere :: enum {
+	Legacy   = 0,
+	Standard = 1,
+}
+
+AerodynamicsNormalAxis :: enum {
+	Auto = 0,
+	X    = 1,
+	Y    = 2,
+	Z    = 3,
+}
+
 Font :: enum {
 	Legacy                = 0,
 	Arial                 = 1,
@@ -4406,6 +4425,22 @@ KeyCode :: enum {
 	VolumeUp     = 350,
 	VolumeDown   = 351,
 	ButtonSelect = 352,
+	ButtonA      = 353,
+	ButtonB      = 354,
+	ButtonY      = 355,
+	ButtonL1     = 356,
+	ButtonR1     = 357,
+	ButtonL2     = 358,
+	ButtonR2     = 359,
+	ButtonL3     = 360,
+	ButtonR3     = 361,
+	ButtonStart  = 362,
+	DPadUp       = 363,
+	DPadDown     = 364,
+	DPadLeft     = 365,
+	DPadRight    = 366,
+	Thumbstick1  = 367,
+	Thumbstick2  = 368,
 }
 
 GraphicsLevel :: enum {

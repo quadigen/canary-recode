@@ -53,6 +53,8 @@ foreign clib {
 	c_close :: proc(fd: c.int) -> c.int ---
 	@(link_name = "getpid")
 	c_getpid :: proc() -> c.int ---
+	@(link_name = "getuid")
+	c_getuid :: proc() -> c.uint ---
 	@(link_name = "getenv")
 	c_getenv :: proc(name: cstring) -> cstring ---
 }
@@ -72,6 +74,10 @@ transport_open :: proc(t: ^Transport) -> bool {
 		"app/com.discordapp.DiscordCanary",
 		"snap.discord",
 		"snap.discord-canary",
+		"app/com.discordapp.DiscordPTB",
+		"app/dev.vencord.Vesktop",
+		"app/io.github.equicord.equibop",
+		"app/io.github.spacingbat3.webcord",
 	}
 	for name in env_names {
 		dir := c_getenv(name)
@@ -88,7 +94,18 @@ transport_open :: proc(t: ^Transport) -> bool {
 			}
 		}
 	}
-	return try_dir(t, "/tmp", "")
+	when ODIN_OS == .Linux {
+		// Launchers can omit XDG_RUNTIME_DIR even when the desktop socket exists.
+		buf: [64]u8
+		base := fmt.bprintf(buf[:], "/run/user/%d", c_getuid())
+		for sub in sub_dirs {
+			if try_dir(t, base, sub) {return true}
+		}
+	}
+	for sub in sub_dirs {
+		if try_dir(t, "/tmp", sub) {return true}
+	}
+	return false
 }
 
 @(private = "file")

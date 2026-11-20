@@ -17,23 +17,25 @@ import tracy "../util/odin-tracy"
 import vm "../vm"
 
 Environment :: struct {
-	classes:    classes.Registry,
-	datatypes:  datatypes.Registry,
-	enums:      engine_enums.Registry,
-	services:   services.Registry,
-	globals:    globals.Registry,
-	signals:    signals.Registry,
-	modules:    vm.Environment,
-	renderer:   ^renderer.RendererObject,
-	packages:   packages.Registry,
-	extensions: extensions.Context,
-	mode:       target.Mode,
-
-	// 3D idle tracking: the renderer only asks Filament to render when one of
-	// these differs from the revision captured after the last rendered frame.
-	render_3d_revision_drawn: u64,
-	render_3d_drawn:          bool,
-	render_3d_viewport:       [4]i32,
+	classes:                    classes.Registry,
+	datatypes:                  datatypes.Registry,
+	enums:                      engine_enums.Registry,
+	services:                   services.Registry,
+	globals:                    globals.Registry,
+	signals:                    signals.Registry,
+	modules:                    vm.Environment,
+	renderer:                   ^renderer.RendererObject,
+	packages:                   packages.Registry,
+	extensions:                 extensions.Context,
+	mode:                       target.Mode,
+	render_3d_revision_drawn:   u64,
+	render_3d_drawn:            bool,
+	render_3d_viewport:         [4]i32,
+	vr_pointer_valid:           bool,
+	vr_pointer_down:            bool,
+	vr_pointer_latched:         bool,
+	vr_pointer_hand:            i32,
+	vr_pointer_x, vr_pointer_y: f32,
 }
 
 
@@ -477,6 +479,50 @@ Environment_Render_Overlay :: proc(
 		gui_overlay = true,
 		cache_gui = gui_cache_enabled(environment.renderer),
 	)
+	classes.Gui_Draw_Selection(&environment.classes)
+}
+
+// Re-render ScreenGui roots into the transparent XR target using the
+// desktop layout's logical coordinates. No second layout or script step.
+Environment_Render_VR_UI :: proc(
+	environment: ^Environment,
+	vm_state: ^vm.VM,
+	surface: ^renderer.Skia_Surface,
+	width, height, panel_width, panel_height: i32,
+) {
+	if environment == nil ||
+	   vm_state == nil ||
+	   vm_state.L == nil ||
+	   environment.renderer == nil ||
+	   surface == nil ||
+	   width <= 0 ||
+	   height <= 0 ||
+	   panel_width <= 0 ||
+	   panel_height <= 0 {return}
+	previous_surface := environment.renderer.SkiaSurface
+	environment.renderer.SkiaSurface = surface
+	defer environment.renderer.SkiaSurface = previous_surface
+
+	skia := cast(^kineffi.KineSkiaSurface)surface
+	kineffi.Kine_Skia_Surface_Save(skia)
+	defer kineffi.Kine_Skia_Surface_Restore(skia)
+	kineffi.Kine_Skia_Surface_Scale(
+		skia,
+		f32(panel_width) / f32(width),
+		f32(panel_height) / f32(height),
+	)
+	scale, inset_x, inset_y, virtual_width, virtual_height := ui_metrics(width, height)
+	ui_scaled := ui_scale_begin(surface, scale, inset_x, inset_y)
+	defer ui_scale_end(surface, ui_scaled)
+	classes.Render_VR_ScreenGuis(&environment.classes, vm_state.L, virtual_width, virtual_height)
+	classes.Gui_Draw_Selection(&environment.classes)
+	if environment.vr_pointer_valid {
+		x := (environment.vr_pointer_x - f32(inset_x)) / scale
+		y := (environment.vr_pointer_y - f32(inset_y)) / scale
+		kineffi.Kine_Skia_Surface_DrawRect(skia, x - 7, y - 7, 14, 14, 0, 0, 0, 255, 3)
+		kineffi.Kine_Skia_Surface_DrawRect(skia, x - 6, y - 6, 12, 12, 255, 255, 255, 255, 2)
+		kineffi.Kine_Skia_Surface_DrawRect(skia, x - 2, y - 2, 4, 4, 255, 255, 255, 255, 0)
+	}
 }
 
 gui_cache_enabled :: proc(render: ^renderer.RendererObject) -> bool {

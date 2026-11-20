@@ -715,18 +715,18 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 		"ReplicatorService",
 	)
 	singleplayer := character_service_singleplayer(service.data_model)
-	server_side := replicator != nil && (replicator.mode == .Server || singleplayer)
-	local_side := replicator != nil && (replicator.mode == .Client || singleplayer)
+	server_side := singleplayer || (replicator != nil && replicator.mode == .Server)
+	local_side := singleplayer || (replicator != nil && replicator.mode == .Client)
 	if !server_side && !local_side {return}
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	if players == nil {return}
 
-	if local_side && !service.scripted_move {
+	if local_side && service.native_input_enabled {
 		focused := sdl3.GetKeyboardFocus() != nil
 		keys := sdl3.GetKeyboardState(nil)
 		workspace := cast(^Workspace)DataModel_Get_Service(service.data_model, "Workspace")
 		direction := datatypes.Vector3{}
-		if focused && workspace != nil && workspace.current_camera != nil {
+		if focused && keys != nil && workspace != nil && workspace.current_camera != nil {
 			orientation := workspace.current_camera.CFrame
 			look := datatypes.CFrame_LookVector(orientation)
 			right := datatypes.CFrame_RightVector(orientation)

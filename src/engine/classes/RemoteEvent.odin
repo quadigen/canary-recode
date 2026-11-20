@@ -11,8 +11,7 @@ RemoteEvent_Class := Class_Info {
 }
 
 RemoteEvent :: struct {
-	using object: Object,
-
+	using object:    Object,
 	on_server_event: ^signals.Signal,
 	on_client_event: ^signals.Signal,
 }

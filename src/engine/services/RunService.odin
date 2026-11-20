@@ -28,6 +28,8 @@ RunService :: struct {
 	render_stepped_ref:  i32,
 	stepped_ref:         i32,
 	post_simulation_ref: i32,
+	pre_simulation_ref:  i32,
+	pre_render_ref:      i32,
 	heartbeat_ref:       i32,
 	elapsed:             f64,
 }
@@ -42,6 +44,8 @@ run_service_construct :: proc(
 	service.render_stepped_ref = -1
 	service.stepped_ref = -1
 	service.post_simulation_ref = -1
+	service.pre_simulation_ref = -1
+	service.pre_render_ref = -1
 	service.heartbeat_ref = -1
 
 	return &service.object
@@ -85,6 +89,10 @@ run_service_get :: proc(
 		run_service_push_signal(L, &service.stepped_ref)
 	case "PostSimulation":
 		run_service_push_signal(L, &service.post_simulation_ref)
+	case "PreSimulation":
+		run_service_push_signal(L, &service.pre_simulation_ref)
+	case "PreRender":
+		run_service_push_signal(L, &service.pre_render_ref)
 
 	case "Heartbeat":
 		run_service_push_signal(L, &service.heartbeat_ref)
@@ -251,6 +259,8 @@ Run_Service_Render_Step :: proc(service: ^RunService, L: ^vm.State, delta_time: 
 
 	delete(callback_refs)
 
+	if service.pre_render_ref >
+	   0 {run_service_fire_signal(L, &service.pre_render_ref, f64(delta_time))}
 	run_service_fire_signal(L, &service.render_stepped_ref, f64(delta_time))
 }
 
@@ -342,11 +352,15 @@ run_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 		if service.post_simulation_ref > 0 {
 			vm.ReleaseValue(L, service.post_simulation_ref)
 		}
+		if service.pre_simulation_ref > 0 {vm.ReleaseValue(L, service.pre_simulation_ref)}
+		if service.pre_render_ref > 0 {vm.ReleaseValue(L, service.pre_render_ref)}
 	}
 
 	service.render_stepped_ref = -1
 	service.stepped_ref = -1
 	service.post_simulation_ref = -1
+	service.pre_simulation_ref = -1
+	service.pre_render_ref = -1
 	service.heartbeat_ref = -1
 
 	delete(service.callbacks)
@@ -369,6 +383,8 @@ Run_Service_Stepped :: proc(service: ^RunService, L: ^vm.State, delta_time: f32)
 	if service.stepped_ref > 0 {
 		run_service_fire_signal(L, &service.stepped_ref, service.elapsed, f64(delta_time))
 	}
+	if service.pre_simulation_ref >
+	   0 {run_service_fire_signal(L, &service.pre_simulation_ref, f64(delta_time))}
 }
 
 Run_Service_Post_Simulation :: proc(service: ^RunService, L: ^vm.State, delta_time: f32) {
@@ -385,6 +401,25 @@ Register_RunService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = run_service_get,
 		namecall = run_service_namecall,
-		events = []string{"PostSimulation"},
+		events = []string {
+			"RenderStepped",
+			"Stepped",
+			"Heartbeat",
+			"PreRender",
+			"PreSimulation",
+			"PostSimulation",
+		},
+		methods = []string {
+			"BindToRenderStep",
+			"UnbindFromRenderStep",
+			"IsRunning",
+			"IsServer",
+			"IsClient",
+			"IsStudio",
+			"IsEdit",
+			"IsStandalone",
+			"IsSingleplayer",
+			"IsRunningAsync",
+		},
 	)
 }

@@ -1,10 +1,12 @@
 package services
 
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 import "core:sort"
 import "core:strings"
 
@@ -166,6 +168,8 @@ replication_schema :: proc(
 	schema.class_name = strings.clone(class_name)
 	descriptor := classes.Find_Class(service.data_model.registry.classes, class_name)
 	for property in properties {
+		if class_name == "PhysicsModel" &&
+		   (property == "Pivot" || property == "WorldPivot") {continue}
 		if class_name == "Attachment" && property == "CFrame" {continue}
 		if class_name == "HingeConstraint" &&
 		   (property == "Active" || property == "CurrentAngle") {
@@ -176,7 +180,8 @@ replication_schema :: proc(
 			continue
 		}
 		if class_name == "RopeConstraint" && property == "Active" {continue}
-		if descriptor != nil && classes.Is_Attachment_Joint(descriptor.info) &&
+		if descriptor != nil &&
+		   classes.Is_Attachment_Joint(descriptor.info) &&
 		   (property == "Active" || property == "CurrentPosition") {
 			continue
 		}
@@ -249,6 +254,7 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 		class_name == "Color3Value" ||
 		class_name == "CFrameValue" ||
 		class_name == "RemoteEvent" ||
+		class_name == "UnreliableRemoteEvent" ||
 		class_name == "RemoteFunction" ||
 		class_name == "StateMachine" ||
 		class_name == "CharacterMotor" ||
@@ -373,6 +379,13 @@ replication_visible :: proc(
 	    current != nil && !classes.Is_A(current, "Service");
 	    current = current.parent {
 		if !current.can_replicate {return false}
+		if current.class == &classes.UnreliableRemoteEvent_Class &&
+		   (connection.client_capabilities &
+				   service.server_capabilities &
+				   Replication_Capability_Unreliable_Remote) ==
+			   0 {
+			return false
+		}
 		switch current.replication_mode {
 		case .Never, .ServerOnly:
 			return false
@@ -482,7 +495,11 @@ replication_relevant_to :: proc(
 	if object == nil {return false}
 	// Parts in an owned PlayerGui belong to its viewports.
 	if _, owner := replication_scope(service, object); owner != nil {return true}
-	if !has_focus {return false}
+	// A joined player without an owned spatial focus still needs the world,
+	// e.g. a lobby, spectator or a game using custom character controllers.
+	// Visibility, ownership, groups and suppression are checked separately.
+	// Once a focus exists, normal distance streaming resumes.
+	if !has_focus {return connection != nil && connection.handshake_complete && connection.player != nil}
 	distance_sq := service.relevancy_distance * service.relevancy_distance
 	// An entity cannot arrive before its ancestors, including streamed-out parts.
 	for current := object;
@@ -635,6 +652,62 @@ replication_peer_snapshot_tick :: proc(
 	return u32(f64(service.clock) * f64(connection.snapshot_clock_rate))
 }
 
+// Read the actual rigid-body velocities from Jolt or the current network owner.
+// A missing body falls back to the existing position-derived prediction.
+replication_body_velocity :: proc(
+	service: ^ReplicatorService,
+	part: ^classes.Part,
+) -> (
+	linear, angular: datatypes.Vector3,
+	valid: bool,
+) {
+	if part == nil || part.anchored {return}
+	model := classes.PhysicsModel_For(&part.object)
+	if model == nil || !model.replicate_velocity {return}
+	entity := replication_entity(service, &part.object)
+	if entity != nil && entity.owner_id != 0 {
+		if entity.last_upload_owner != entity.owner_id {return}
+		linear, angular = entity.owned_linear_velocity, entity.owned_angular_velocity
+	} else {
+		physics := cast(^Physics)DataModel_Get_Service(service.data_model, "Physics")
+		if physics == nil || !physics.initialized {return}
+		index := part.part_index
+		if index < 0 || index >= len(physics.bodies) {return}
+		body := &physics.bodies[index]
+		if body.object != &part.object ||
+		   body.remote ||
+		   body.body_id == kineffi.JPH_BODY_ID_INVALID {return}
+		l, a: kineffi.JPH_Vec3
+		kineffi.JPH_BodyInterface_GetLinearVelocity(
+			physics.system.body_interface,
+			body.body_id,
+			&l,
+		)
+		kineffi.JPH_BodyInterface_GetAngularVelocity(
+			physics.system.body_interface,
+			body.body_id,
+			&a,
+		)
+		linear, angular = {l.x, l.y, l.z}, {a.x, a.y, a.z}
+	}
+	valid = replication_vector3_finite(linear) && replication_vector3_finite(angular)
+	return
+}
+
+replication_model_state_due :: proc(
+	service: ^ReplicatorService,
+	peer: ^Replication_Peer,
+	object: ^classes.Object,
+	last_tick, tick: u32,
+) -> bool {
+	model := classes.PhysicsModel_For(object)
+	if model == nil || model.network_update_rate <= 0 || last_tick == 0 {return true}
+	clock_rate := peer.snapshot_clock_rate
+	if clock_rate <= 0 {clock_rate = service.snapshot_rate}
+	interval := u32(max(1, math.ceil(clock_rate / max(1, model.network_update_rate))))
+	return tick - last_tick >= interval
+}
+
 replication_send_part_state :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
@@ -667,7 +740,18 @@ replication_send_part_state :: proc(
 	append(&bytes, part.can_collide ? u8(1) : u8(0))
 	append(&bytes, u8(part.material))
 	append(&bytes, u8(part.shape))
-
+	if (connection.client_capabilities &
+		   service.server_capabilities &
+		   Replication_Capability_Body_Velocity) !=
+	   0 {
+		linear, angular, valid := replication_body_velocity(service, part)
+		if valid {
+			values := [6]f32{linear.x, linear.y, linear.z, angular.x, angular.y, angular.z}
+			for value in values {
+				replication_put_f32(&bytes, value)
+			}
+		}
+	}
 
 	hash: u64 = 14695981039346656037
 	for byte in bytes[9:] {
@@ -886,7 +970,15 @@ replication_send_property_batch :: proc(
 		classes.Push_Object(L, item.object)
 		for name in names {
 			clear(&value)
-			if !replication_encode_pushed_property(L, item.object, name, &value) {continue}
+			// A primary part must be known to this peer before sending its ID.
+			property_peer := connection if name == "PrimaryPart" else nil
+			if !replication_encode_pushed_property(
+				L,
+				item.object,
+				name,
+				&value,
+				property_peer,
+			) {continue}
 			for byte in value {hash = (hash ~ u64(byte)) * 1099511628211}
 			append(&packet, 2)
 			replication_put_u32(&packet, item.id)
@@ -1282,11 +1374,13 @@ replication_peer_spawn_ready :: proc(
 ) -> bool {
 	if service == nil || connection == nil || connection.player == nil {return false}
 	character := connection.player.character
-	if character == nil || character.destroyed {return false}
-	for child in character.children {
-		if child == nil || child.destroyed || !classes.Is_A(child, "Part") {continue}
-		item := replication_entity(service, child)
-		if item == nil || !connection.initialized[item.id] {return false}
+	// Spectators and manually spawned players can finish joining with no character.
+	if character != nil && !character.destroyed {
+		for child in character.children {
+			if child == nil || child.destroyed || !classes.Is_A(child, "Part") {continue}
+			item := replication_entity(service, child)
+			if item == nil || !connection.initialized[item.id] {return false}
+		}
 	}
 	if spawn_part != nil {
 		item := replication_entity(service, &spawn_part.object)
@@ -1360,8 +1454,17 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	}
 
 
+	// A server-authoritative PhysicsModel cannot retain a previous client owner.
+	for entity in service.entity_list {
+		if entity.owner_id != 0 &&
+		   classes.Is_A(entity.object, "Part") &&
+		   classes.PhysicsModel_Server_Authoritative(entity.object) {
+			replication_set_ownership(service, entity, 0)
+		}
+	}
 	// A new owner must see the same gravity before it starts simulating.
 	replication_send_gravity_updates(service)
+	replication_send_character_settings(service)
 	if service.auto_ownership_enabled &&
 	   service.clock - service.auto_ownership_clock >= REPLICATION_AUTO_OWNERSHIP_INTERVAL {
 		service.auto_ownership_clock = service.clock
@@ -1609,23 +1712,31 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				tick := replication_peer_snapshot_tick(service, &connection)
 				// A second sample of the final pose tells observers its inferred velocity is zero.
 				repeat_acknowledged := !last.rest_sent && tick != last.tick
-				state_sent, state_token, suppressed := replication_send_part_state(
+				if replication_model_state_due(
 					service,
 					&connection,
-					cast(^classes.Part)item.object,
+					item.object,
+					last.tick,
 					tick,
-					settled,
-					confirmed,
-					false,
-					repeat_acknowledged,
-				)
-				if suppressed {
-					service.unchanged_states_skipped += 1
-				} else if state_sent {
-					connection.part_states[item.id] = {
-						token     = state_token,
-						tick      = tick,
-						rest_sent = settled && state_token == confirmed,
+				) {
+					state_sent, state_token, suppressed := replication_send_part_state(
+						service,
+						&connection,
+						cast(^classes.Part)item.object,
+						tick,
+						settled,
+						confirmed,
+						false,
+						repeat_acknowledged,
+					)
+					if suppressed {
+						service.unchanged_states_skipped += 1
+					} else if state_sent {
+						connection.part_states[item.id] = {
+							token     = state_token,
+							tick      = tick,
+							rest_sent = settled && state_token == confirmed,
+						}
 					}
 				}
 			} else {

@@ -118,6 +118,8 @@ Object :: struct {
 	children:             [dynamic]^Object,
 	signal_registry:      ^Registry,
 	attributes:           [dynamic]Object_Attribute,
+	attribute_signals:    [dynamic]Object_Property_Signal,
+	attribute_changed:    ^signals.Signal,
 	tags:                 [dynamic]string,
 	metadata_revision:    u64,
 	server_attributes:    [dynamic]string,
@@ -247,7 +249,6 @@ Hierarchy_Signal_Kind :: enum {
 }
 
 Object_Hierarchy_Signal :: proc(self: ^Object, kind: Hierarchy_Signal_Kind) -> ^signals.Signal {
-	// lua_close runs destructors while the collector is tearing down the VM.
 	if vm.Is_Closing() {return nil}
 	if self == nil {
 		return nil
@@ -445,6 +446,16 @@ Object_Destroy :: proc(self: ^Object) {
 	self.imported_values = nil
 
 	Object_Free_Property_Signals(self)
+	for entry in self.attribute_signals {
+		if entry.signal != nil {signals.Destroy(entry.signal)}
+		delete(entry.name)
+	}
+	delete(self.attribute_signals)
+	self.attribute_signals = nil
+	if self.attribute_changed != nil {
+		signals.Destroy(self.attribute_changed)
+		self.attribute_changed = nil
+	}
 
 	if self.child_added != nil {
 		signals.Destroy(self.child_added)
@@ -543,7 +554,8 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 		return
 	}
 
-	if new_parent != nil && (self.destroyed || new_parent.destroyed || Is_Descendant_Of(new_parent, self)) {
+	if new_parent != nil &&
+	   (self.destroyed || new_parent.destroyed || Is_Descendant_Of(new_parent, self)) {
 		return
 	}
 
@@ -616,7 +628,6 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 	surfacegui_mark_dirty_for(self)
 
 	self.destroyed = true
-	// Listeners can unregister this exact userdata before it is detached.
 	Object_Fire_Destroying(self)
 
 	Render_3D_Mark_Dirty()
@@ -784,6 +795,8 @@ is_object_method :: proc(name: string) -> bool {
 	     "IsDescendantOf",
 	     "GetAttribute",
 	     "GetAttributes",
+	     "GetAttributeChangedSignal",
+	     "FindFirstDescendant",
 	     "SetAttribute",
 	     "AddTag",
 	     "RemoveTag",
@@ -805,7 +818,10 @@ object_method :: proc "c" (L: ^vm.State) -> i32 {
 	binding := vm.UserdataBindingOf(L, 1)
 	object := object_from_argument(L, 1)
 	if object == nil {
-		if method == "Destroy" && binding != nil && binding.name == "Instance" && vm.UserdataValue(L, 1) == nil {
+		if method == "Destroy" &&
+		   binding != nil &&
+		   binding.name == "Instance" &&
+		   vm.UserdataValue(L, 1) == nil {
 			return 0
 		}
 		return vm.RaiseError(L, "expected an Instance")
@@ -893,6 +909,10 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 		signals.Push(L, Object_Hierarchy_Signal(object, .Descendant_Removing))
 	case "AncestryChanged":
 		signals.Push(L, Object_Hierarchy_Signal(object, .Ancestry_Changed))
+	case "AttributeChanged":
+		if object.attribute_changed ==
+		   nil {object.attribute_changed = Object_Create_Hierarchy_Signal(object)}
+		signals.Push(L, object.attribute_changed)
 	case "Changed":
 		signals.Push(L, Object_Changed_Signal(object))
 	case "Destroying":
@@ -917,8 +937,6 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 	return true
 }
 
-// Bumped whenever anything that can change the rendered 3D scene changes, so
-// the renderer can skip Filament completely on frames where nothing moved.
 render_3d_revision: u64
 
 Render_3D_Mark_Dirty :: #force_inline proc "contextless" () {render_3d_revision += 1}
@@ -1051,7 +1069,39 @@ Attribute_Value_Is_Supported :: proc(L: ^vm.State, index: int) -> bool {
 	return false
 }
 
-Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: int) -> bool {
+Object_Attribute_Signal :: proc(object: ^Object, name: string) -> ^signals.Signal {
+	if object == nil || object.destroyed {return nil}
+	for entry in object.attribute_signals {
+		if entry.name == name {return entry.signal}
+	}
+	signal := Object_Create_Hierarchy_Signal(object)
+	if signal != nil {
+		append(
+			&object.attribute_signals,
+			Object_Property_Signal{name = strings.clone(name), signal = signal},
+		)
+	}
+	return signal
+}
+
+Object_Fire_Attribute_Changed :: proc(L: ^vm.State, object: ^Object, name: string) {
+	if L == nil || object == nil || object.destroyed || vm.Is_Closing() {return}
+	stable_name := strings.clone(name)
+	defer delete(stable_name)
+	for entry in object.attribute_signals {
+		if entry.name == stable_name {
+			signals.Fire(L, entry.signal, 0)
+			break
+		}
+	}
+	if !object.destroyed && object.attribute_changed != nil {
+		vm.PushString(L, stable_name)
+		signals.Fire(L, object.attribute_changed, 1)
+		vm.Pop(L)
+	}
+}
+
+Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, input_index: int) -> bool {
 	if !Attribute_Name_Is_Valid(name) {
 		_ = vm.RaiseError(
 			L,
@@ -1060,18 +1110,29 @@ Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: 
 		return false
 	}
 	index := attribute_index(object, name)
+	value_index := input_index
+	if value_index < 0 {value_index = vm.StackTop(L) + value_index + 1}
 	if vm.IsNil(L, value_index) {
 		if index >= 0 {
+			removed_name := strings.clone(name)
+			defer delete(removed_name)
 			vm.ReleaseValue(L, object.attributes[index].value_ref)
 			delete(object.attributes[index].name)
 			ordered_remove(&object.attributes, index)
 			object.metadata_revision += 1
+			Object_Fire_Attribute_Changed(L, object, removed_name)
 		}
 		return true
 	}
 	if !Attribute_Value_Is_Supported(L, value_index) {
 		_ = vm.RaiseError(L, "unsupported attribute value type")
 		return false
+	}
+	if index >= 0 {
+		vm.PushRegistryReference(L, object.attributes[index].value_ref)
+		equal := vm.ValuesEqual(L, -1, value_index)
+		vm.Pop(L)
+		if equal {return true}
 	}
 	vm.PushValue(L, value_index)
 	value_ref := vm.RetainValue(L)
@@ -1086,6 +1147,7 @@ Set_Attribute :: proc(L: ^vm.State, object: ^Object, name: string, value_index: 
 		)
 	}
 	object.metadata_revision += 1
+	Object_Fire_Attribute_Changed(L, object, name)
 	return true
 }
 
@@ -1121,8 +1183,6 @@ Object_Remove_Tag :: proc(object: ^Object, tag: string) {
 	}
 }
 
-// Returns the CollectionService signal backing GetInstanceAddedSignal /
-// GetInstanceRemovedSignal for one tag, creating it on first subscription.
 Object_Tag_Signal :: proc(registry: ^Registry, tag: string, added: bool) -> ^signals.Signal {
 	if registry == nil || registry.signal_registry == nil || !Tag_Name_Is_Valid(tag) {
 		return nil
@@ -1143,7 +1203,9 @@ Object_Tag_Signal :: proc(registry: ^Registry, tag: string, added: bool) -> ^sig
 }
 
 Object_Fire_Tag_Signal :: proc(object: ^Object, tag: string, added: bool) {
-	if object == nil || object.signal_registry == nil || object.signal_registry.signal_registry == nil {
+	if object == nil ||
+	   object.signal_registry == nil ||
+	   object.signal_registry.signal_registry == nil {
 		return
 	}
 
@@ -1183,7 +1245,12 @@ Object_Replace_Metadata :: proc(L: ^vm.State, source, destination: ^Object) {
 	if source == destination {return}
 	vm.PushNil(L)
 	for len(destination.attributes) > 0 {
-		_ = Set_Attribute(L, destination, destination.attributes[len(destination.attributes) - 1].name, -1)
+		_ = Set_Attribute(
+			L,
+			destination,
+			destination.attributes[len(destination.attributes) - 1].name,
+			-1,
+		)
 	}
 	vm.Pop(L)
 	for len(destination.tags) > 0 {
@@ -1228,16 +1295,25 @@ Clone_Object :: proc(L: ^vm.State, registry: ^Registry, source: ^Object) -> (^Ob
 	return destination, true
 }
 
-remap_cloned_instance_refs :: proc(L: ^vm.State, registry: ^Registry, clones: map[^Object]^Object) {
+remap_cloned_instance_refs :: proc(
+	L: ^vm.State,
+	registry: ^Registry,
+	clones: map[^Object]^Object,
+) {
 	for original, copy in clones {
 		if len(copy.imported_values) != 0 {
 			descriptor := Find_Class(registry, original.class.name)
 			if descriptor != nil {imported_remap_references(L, descriptor, copy, clones)}
 		}
+		if Is_A_Class(original, &Model_Class) {
+			model := cast(^Model)copy
+			model.primary_part = clones[model.primary_part]
+		}
 		if Is_A_Class(original, &Cloth_Class) {
 			cloth := cast(^Cloth)copy
 			if endpoint := clones[cloth.attachment]; endpoint != nil {cloth.attachment = endpoint}
-			if endpoint := clones[cloth.attachment1]; endpoint != nil {cloth.attachment1 = endpoint}
+			if endpoint := clones[cloth.attachment1];
+			   endpoint != nil {cloth.attachment1 = endpoint}
 		}
 		if Is_A_Class(original, &Constraint_Class) {
 			constraint := cast(^Constraint)copy
@@ -1261,7 +1337,10 @@ clone_object_tree :: proc(
 	registry: ^Registry,
 	source: ^Object,
 	clones: ^map[^Object]^Object,
-) -> (^Object, bool) {
+) -> (
+	^Object,
+	bool,
+) {
 	if !source.archivable {return nil, false}
 	destination, ok := Push_New(registry, &vm.VM{L = L}, Get_Class_Name(source), false)
 	if !ok || destination == nil {return nil, false}
@@ -1388,8 +1467,34 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		}
 		Push_Object(L, child)
 		return 1, true
+	case "FindFirstDescendant":
+		name := vm.ArgString(L, 2)
+		descendants: [dynamic]^Object
+		defer delete(descendants)
+		append_descendants(&descendants, object)
+		for descendant in descendants {
+			if descendant.name == name &&
+			   !descendant.destroyed &&
+			   Object_Is_Accessible(L, descendant) {
+				Push_Object(L, descendant)
+				return 1, true
+			}
+		}
+		vm.PushNil(L)
+		return 1, true
 	case "FindFirstChildOfClass":
-		Push_Object(L, Find_First_Child_Of_Class(object, vm.ArgString(L, 2)))
+		class_name := vm.ArgString(L, 2)
+		for child in object.children {
+			if child != nil &&
+			   !child.destroyed &&
+			   child.class != nil &&
+			   child.class.name == class_name &&
+			   Object_Is_Accessible(L, child) {
+				Push_Object(L, child)
+				return 1, true
+			}
+		}
+		vm.PushNil(L)
 		return 1, true
 	case "FindFirstChildWhichIsA":
 		class_name := vm.ArgString(L, 2)
@@ -1462,11 +1567,11 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		}
 		Push_Object(L, nil)
 		return 1, true
-	case "FindFirstAncestorOfClass":
+	case "FindFirstAncestorWhichIsA":
 		class_name := vm.ArgString(L, 2)
 		ancestor := object.parent
 		for ancestor != nil {
-			if Is_A(ancestor, class_name) {
+			if Is_A(ancestor, class_name) && Object_Is_Accessible(L, ancestor) {
 				Push_Object(L, ancestor)
 				return 1, true
 			}
@@ -1474,11 +1579,13 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		}
 		Push_Object(L, nil)
 		return 1, true
-	case "FindFirstAncestorWhichIsA":
+	case "FindFirstAncestorOfClass":
 		class_name := vm.ArgString(L, 2)
 		ancestor := object.parent
 		for ancestor != nil {
-			if ancestor.class != nil && ancestor.class.name == class_name {
+			if ancestor.class != nil &&
+			   ancestor.class.name == class_name &&
+			   Object_Is_Accessible(L, ancestor) {
 				Push_Object(L, ancestor)
 				return 1, true
 			}
@@ -1527,6 +1634,11 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 			vm.SetField(L, -2, attribute.name)
 		}
 		return 1, true
+	case "GetAttributeChangedSignal":
+		name := vm.ArgString(L, 2)
+		if !Attribute_Name_Is_Valid(name) {return vm.RaiseError(L, "invalid attribute name"), true}
+		signals.Push(L, Object_Attribute_Signal(object, name))
+		return 1, true
 	case "SetAttribute":
 		_ = Set_Attribute(L, object, vm.ArgString(L, 2), 3)
 		return 0, true
@@ -1534,9 +1646,12 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		tag := vm.ArgString(L, 2)
 		if !Tag_Name_Is_Valid(tag) {return vm.RaiseError(L, "tag must be 1-100 characters"), true}
 		switch method {
-		case "AddTag": Object_Add_Tag(object, tag)
-		case "RemoveTag": Object_Remove_Tag(object, tag)
-		case "HasTag": vm.PushBoolean(L, Object_Has_Tag(object, tag)); return 1, true
+		case "AddTag":
+			Object_Add_Tag(object, tag)
+		case "RemoveTag":
+			Object_Remove_Tag(object, tag)
+		case "HasTag":
+			vm.PushBoolean(L, Object_Has_Tag(object, tag)); return 1, true
 		}
 		return 0, true
 	case "GetTags":

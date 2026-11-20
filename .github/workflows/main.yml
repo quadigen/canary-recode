@@ -753,44 +753,13 @@ jobs:
           set -euo pipefail
           version_hash=$(cat .tools/emsdk/upstream/emscripten/emscripten-version.txt | git hash-object --stdin)
           echo "hash=$version_hash" >> "$GITHUB_OUTPUT"
-      - name: Restore Filament material compiler
-        id: web-matc
-        uses: actions/cache/restore@v5
-        with:
-          path: .cache/filament-matc
-          key: filament-matc-v1.74.0-windows-${{ runner.arch }}-v1
-      - name: Install Filament material compiler (matc)
-        shell: pwsh
-        run: |
-          $toolDir = '.cache/filament-matc'
-          $archive = Join-Path $toolDir 'filament-v1.74.0-windows.tgz'
-          New-Item -ItemType Directory -Force $toolDir | Out-Null
-          if (!(Test-Path -LiteralPath $archive)) {
-            curl.exe --fail --location --retry 4 --output $archive 'https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-windows.tgz'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          $matc = Join-Path $toolDir 'bin/matc.exe'
-          if (!(Test-Path -LiteralPath $matc)) {
-            tar -xzf $archive -C $toolDir
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          if (!(Test-Path -LiteralPath $matc)) {
-            throw "matc was not found at $matc"
-          }
-          Write-Output "FILAMENT_MATC=$matc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Save Filament material compiler
-        if: steps.web-matc.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: .cache/filament-matc
-          key: ${{ steps.web-matc.outputs.cache-primary-key }}
       - name: Cache web runtime dependencies
         uses: actions/cache@v5
         with:
           path: |
             .cache/web-deps
-            .cache/filament-web
-          key: web-runtime-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/build_wasm.ps1') }}
+            .cache/babylon-web
+          key: web-runtime-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/build_wasm.ps1') }}
       # Restore exact native input matches only; CMake still reconfigures and builds.
       - name: Cache WebAssembly native build
         uses: actions/cache@v5

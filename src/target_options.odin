@@ -8,22 +8,23 @@ import "core:strings"
 import target "engine/target"
 
 Startup_Options :: struct {
-	address:      string,
-	port:         u16,
-	map_path:     string,
-	game_library: string,
-	playtest:     bool,
-	singleplayer: bool,
-	update_check: bool,
-	no_update:    bool,
-	window:       bool,
-	headless:     bool,
-	pause_on_error: bool,
-	mode:         target.Mode,
-	standalone:   bool,
-	username:     string,
-	project:      string,
-	fast_viewport: bool,
+	address:           string,
+	port:              u16,
+	map_path:          string,
+	game_library:      string,
+	playtest:          bool,
+	playtest_tree_dir: string,
+	singleplayer:      bool,
+	update_check:      bool,
+	no_update:         bool,
+	window:            bool,
+	headless:          bool,
+	pause_on_error:    bool,
+	mode:              target.Mode,
+	standalone:        bool,
+	username:          string,
+	project:           string,
+	fast_viewport:     bool,
 }
 
 startup_options :: proc() -> (Startup_Options, bool) {
@@ -119,6 +120,10 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			index += 1
 			options.map_path = args[index]
 			options.playtest = true
+		case "--playtest-tree-dir":
+			if index + 1 >= len(args) {return options, false}
+			index += 1
+			options.playtest_tree_dir = args[index]
 		case "--playtest-host":
 			options.playtest = true
 		case "--singleplayer":
@@ -237,5 +242,7 @@ startup_options_for :: proc(args: []string) -> (Startup_Options, bool) {
 			options.username = "Server"
 		}
 	}
+	if options.playtest_tree_dir != "" &&
+	   (!options.playtest || options.mode == .Editor) {return options, false}
 	return options, true
 }

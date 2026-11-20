@@ -37,6 +37,8 @@ GuiObject :: struct {
 	border_color3:               datatypes.Color3,
 	absolute_position:           datatypes.Vector2,
 	absolute_size:               datatypes.Vector2,
+	selection_gained:            ^signals.Signal,
+	selection_lost:              ^signals.Signal,
 	input_began:                 ^signals.Signal,
 	input_changed:               ^signals.Signal,
 	input_ended:                 ^signals.Signal,
@@ -93,7 +95,7 @@ GuiObject_Init :: proc() -> GuiObject {
 		rotation = 0,
 		automatic_size = .None,
 		active = false,
-		selectable = true,
+		selectable = false,
 		visible = true,
 		zindex = 0,
 		border_size_pixels = 0,
@@ -138,6 +140,10 @@ gui_object_remove_from_tracking :: proc(items: ^[dynamic]^GuiObject, gui: ^GuiOb
 gui_object_untrack :: proc(gui: ^GuiObject) {
 	if gui == nil {return}
 	if gui_event_depth > 0 {append(&gui_event_invalidated, gui)}
+	if registry := gui.signal_registry; registry != nil {
+		if registry.gui_selected == gui {registry.gui_selected = nil}
+		if registry.gui_gamepad_pressed == gui {registry.gui_gamepad_pressed = nil}
+	}
 	if gui.hover_listener_registered {
 		gui_object_remove_from_tracking(&gui_hover_listeners, gui)
 		gui.hover_listener_registered = false
@@ -196,6 +202,9 @@ GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
 	if gui == nil {return}
 	gui_object_untrack(gui)
 	gui_discard_picture(gui)
+	if gui.selection_gained !=
+	   nil {signals.Destroy(gui.selection_gained); gui.selection_gained = nil}
+	if gui.selection_lost != nil {signals.Destroy(gui.selection_lost); gui.selection_lost = nil}
 
 	if gui.input_began != nil {
 		signals.Destroy(gui.input_began)
@@ -248,8 +257,6 @@ gui_invalidate_draw :: proc(object: ^Object) {
 	}
 }
 
-// Layout dependencies stay within a top-level GUI tree. Ancestors can measure
-// their descendants, and a list/grid can move siblings within that same tree.
 gui_mark_layout_for :: proc(object: ^Object, full := true) {
 	gui_layout_dirty = true
 	gui_render_revision += 1
@@ -381,8 +388,6 @@ GuiObject_get :: proc(
 
 		size := gui.absolute_size
 		if !gui.base_solved {
-			// Constructors can read geometry before the first retained layout
-			// pass, for example when fitting a camera to a new ViewportFrame.
 			ctx := Class_Step_Context {
 				viewport_width  = gui_layout_last_width,
 				viewport_height = gui_layout_last_height,
@@ -404,6 +409,12 @@ GuiObject_get :: proc(
 		gui_object_ensure_signal(gui, &gui.input_ended)
 		signals.Push(L, gui.input_ended)
 
+	case "SelectionGained":
+		gui_object_ensure_signal(gui, &gui.selection_gained)
+		signals.Push(L, gui.selection_gained)
+	case "SelectionLost":
+		gui_object_ensure_signal(gui, &gui.selection_lost)
+		signals.Push(L, gui.selection_lost)
 	case "MouseEnter":
 		gui_object_ensure_signal(gui, &gui.mouse_enter, true)
 		signals.Push(L, gui.mouse_enter)
@@ -521,7 +532,8 @@ GuiObject_get_absolute_transform :: proc(
 
 	gui_cached := cast(^GuiObject)object
 	if ctx.gui_transform.object == nil &&
-	   !gui_layout_dirty && !gui_layout_solving &&
+	   !gui_layout_dirty &&
+	   !gui_layout_solving &&
 	   gui_cached.base_solved &&
 	   gui_cached.resolved_size_valid &&
 	   ctx.viewport_width == gui_layout_last_width &&
@@ -536,7 +548,11 @@ GuiObject_get_absolute_transform :: proc(
 		object.parent,
 		ctx,
 	)
-	parent_width, parent_height = scrolling_frame_content_size(object.parent, parent_width, parent_height)
+	parent_width, parent_height = scrolling_frame_content_size(
+		object.parent,
+		parent_width,
+		parent_height,
+	)
 
 	gui := cast(^GuiObject)object
 
@@ -770,7 +786,6 @@ Gui_Overlay_Needs_Backdrop :: proc(registry: ^Registry) -> bool {
 				if !effect.enabled || effect.zoom <= 1 || effect.transparency >= 1 {continue}
 			case &UIShader_Class:
 				effect := cast(^UIShader)object
-				// A backdrop child must have this identifier in its SkSL source.
 				if !effect.enabled || !strings.contains(effect.source, "backdrop") {continue}
 			}
 			gui := cast(^GuiObject)object.parent
@@ -786,8 +801,6 @@ Gui_Overlay_Needs_Backdrop :: proc(registry: ^Registry) -> bool {
 	return false
 }
 
-// Compatibility entrypoints retained for other classes that may call them.
-// Hot-path hit testing uses gui_object_hit_subtree_reverse instead.
 gui_object_visit_painted_subtree :: proc(
 	object: ^Object,
 	screen: ^ScreenGui,
@@ -877,12 +890,14 @@ gui_object_point_in_own_rect :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 
 gui_object_point_in_child_area :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 	px, py := GuiObject_screen_to_local(gui, x, y)
-	width, height := scrolling_frame_content_size(&gui.object, gui.absolute_size.X, gui.absolute_size.Y)
+	width, height := scrolling_frame_content_size(
+		&gui.object,
+		gui.absolute_size.X,
+		gui.absolute_size.Y,
+	)
 	return GuiObject_point_in_rect(px, py, gui.absolute_position, {width, height})
 }
 
-// Children render after their parents; later siblings render above earlier siblings.
-// Reverse traversal returns the same last-painted winner without testing the whole tree.
 gui_object_hit_subtree_reverse :: proc(
 	object: ^Object,
 	x, y: f32,
@@ -896,7 +911,6 @@ gui_object_hit_subtree_reverse :: proc(
 		child := object.children[index]
 		if child == nil || child.destroyed {continue}
 
-		// Screen/SurfaceGui roots are processed independently.
 		if Is_A_Class(child, &ScreenGui_Class) || Is_A_Class(child, &SurfaceGui_Class) {
 			continue
 		}
@@ -905,10 +919,10 @@ gui_object_hit_subtree_reverse :: proc(
 			gui := cast(^GuiObject)child
 			if !gui.visible {continue}
 
-			// Descendants cannot be hit outside an ancestor's clipping region.
 			inside := gui_object_point_in_own_rect(gui, x, y) if gui.clips_descendants else false
 			if gui.clips_descendants && !inside {continue}
-			if !gui.clips_descendants || !Is_A_Class(child, &ScrollingFrame_Class) ||
+			if !gui.clips_descendants ||
+			   !Is_A_Class(child, &ScrollingFrame_Class) ||
 			   gui_object_point_in_child_area(gui, x, y) {
 				if descendant := gui_object_hit_subtree_reverse(child, x, y, require_paint);
 				   descendant != nil {
@@ -949,7 +963,6 @@ GuiObject_find_topmost :: proc(
 	screen_descriptor := Find_Class(registry, "ScreenGui")
 	if screen_descriptor == nil {return nil}
 
-	// Overlays have the final rendering pass, so test them first.
 	index := len(screen_descriptor.instances)
 	for index > 0 {
 		index -= 1
@@ -976,7 +989,6 @@ GuiObject_find_topmost :: proc(
 		}
 	}
 
-	// Rootless GUI objects belong to the background pass.
 	class_index := len(registry.classes)
 	for class_index > 0 {
 		class_index -= 1
@@ -1219,12 +1231,10 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 	epoch := gui_hover_epoch
 	clear(&gui_hover_next)
 
-	// Every element in the target's ancestor chain receives hover/movement.
 	for gui in result.chain {
 		gui_object_hover_add(gui, epoch, result.x, result.y, true)
 	}
 
-	// Passive listeners do not consume clicks, but must still receive hover.
 	index := 0
 	for index < len(gui_hover_listeners) {
 		gui := gui_hover_listeners[index]
@@ -1276,7 +1286,6 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 		index += 1
 	}
 
-	// Reuse the dynamic-array allocations for subsequent motions.
 	clear(&gui_hover_previous)
 	for gui in gui_hover_next {append(&gui_hover_previous, gui)}
 
@@ -1348,7 +1357,6 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 		if index < 0 {return}
 		input_type := gui_object_mouse_type(event.button.button)
 
-		// InputEnded goes to captured targets even if the cursor moved elsewhere.
 		for len(gui_mouse_captured[index]) > 0 {
 			gui := pop(&gui_mouse_captured[index])
 			if gui == nil || gui.destroyed || !gui.mouse_input_down[index] {continue}
@@ -1410,7 +1418,11 @@ gui_parent_basis_size :: proc(gui: ^GuiObject, ctx: ^Class_Step_Context) -> (wid
 		parent_gui := cast(^GuiObject)parent
 
 		if parent_gui.previous_size_valid {
-			return scrolling_frame_content_size(parent, parent_gui.previous_size.X, parent_gui.previous_size.Y)
+			return scrolling_frame_content_size(
+				parent,
+				parent_gui.previous_size.X,
+				parent_gui.previous_size.Y,
+			)
 		}
 
 		return scrolling_frame_content_size(parent, parent_gui.base_size.X, parent_gui.base_size.Y)
@@ -1672,7 +1684,6 @@ surfacegui_mark_dirty_for :: proc(object: ^Object) {
 }
 
 
-
 gui_layout_dirty: bool = true
 gui_layout_full_dirty: bool = true
 gui_layout_all_dirty: bool = true
@@ -1694,8 +1705,6 @@ Gui_Layout_Mark_Dirty :: #force_inline proc "contextless" () {
 	gui_render_revision += 1
 }
 
-// Moving an element normally changes only absolute transforms. Content-sized
-// ancestors are handled by the full layout path instead.
 Gui_Layout_Mark_Transform_Dirty :: #force_inline proc "contextless" () {
 	gui_layout_dirty = true
 	gui_layout_all_dirty = true
@@ -1957,8 +1966,10 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	}
 
 
-	resized := registry != gui_layout_registry ||
-		width != gui_layout_last_width || height != gui_layout_last_height
+	resized :=
+		registry != gui_layout_registry ||
+		width != gui_layout_last_width ||
+		height != gui_layout_last_height
 	if !resized && !gui_layout_dirty {return}
 
 	tracy.ZoneNC("Update_GUI_Layout", 0xE5C07B)
@@ -1972,8 +1983,6 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	gui_layout_solving = true
 	defer {
 		gui_layout_solving = false
-		// Size listeners can invalidate layout. Run them after the solver has
-		// committed its results so those writes are picked up on the next pass.
 		for object, previous in size_changes {
 			if object.destroyed {continue}
 			if Is_A_Class(object, &UIListLayout_Class) {
@@ -1994,11 +2003,11 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		viewport_height = height,
 	}
 
-	// Retain all measurements and list/grid overrides for position-only edits.
 	if !resized && !gui_layout_full_dirty {
 		tracy.ZoneNC("GUI Transform-Only Layout", 0x56B6C2)
 		for root in gui_layout_roots {
-			if root == nil || root.object.destroyed ||
+			if root == nil ||
+			   root.object.destroyed ||
 			   (!gui_layout_all_dirty && !root.layout_dirty) {continue}
 			px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
 			x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
@@ -2114,7 +2123,12 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 					previous := layout.absolute_content_size
 					UIListLayout_Apply(layout, registry, &ctx)
 					if layout.absolute_content_size != previous {
-						gui_track_size_change(&size_changes, object, "AbsoluteContentSize", previous)
+						gui_track_size_change(
+							&size_changes,
+							object,
+							"AbsoluteContentSize",
+							previous,
+						)
 					}
 				} else if Is_A_Class(object, &UIGridLayout_Class) {
 					UIGridLayout_Apply(cast(^UIGridLayout)object, registry, &ctx)
@@ -2309,7 +2323,11 @@ gui_render_children :: proc(
 	if Is_A_Class(object, &ScrollingFrame_Class) {
 		frame := cast(^ScrollingFrame)object
 		scrolling_frame_virtualized = frame.virtualized_scrolling
-		viewport.width, viewport.height = scrolling_frame_window_size(frame, rect.width, rect.height)
+		viewport.width, viewport.height = scrolling_frame_window_size(
+			frame,
+			rect.width,
+			rect.height,
+		)
 	}
 
 	if !gui.clips_descendants {
@@ -2732,7 +2750,6 @@ GuiObject_set :: proc(
 		_ = vm.RaiseError(L, "AbsoluteSize cannot be changed")
 		return true
 	case:
-		// Name is also used to sort children in list and grid layouts.
 		if key == "Name" {gui_mark_layout_for(object)}
 		return false
 	}
@@ -2839,6 +2856,8 @@ Register_GuiObject :: proc(registry: ^Registry) {
 			"InputBegan",
 			"InputChanged",
 			"InputEnded",
+			"SelectionGained",
+			"SelectionLost",
 			"MouseEnter",
 			"MouseLeave",
 			"MouseMoved",

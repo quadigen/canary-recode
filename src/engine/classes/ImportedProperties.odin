@@ -9,7 +9,9 @@ Imported_Enum :: struct {
 	value: i64,
 }
 
-Imported_Instance :: struct {class: ^Class_Info}
+Imported_Instance :: struct {
+	class: ^Class_Info,
+}
 
 Imported_Value :: union {
 	bool,
@@ -61,18 +63,11 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 			{"EnableFluidForces", true},
 			{"Locked", false},
 			{"Massless", false},
-			{"PivotOffset", datatypes.CFrame_Identity},
 			{"Reflectance", f64(0)},
 			{"RootPriority", f64(0)},
 		},
 	},
-	{
-		{"Part"},
-		{
-			// A seat exported as a Part can still carry its original Disabled field.
-			{"Disabled", false},
-		},
-	},
+	{{"Part"}, {{"Disabled", false}}},
 	{
 		{"MeshPart"},
 		{
@@ -183,7 +178,10 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 	{{"ImageLabel", "ImageButton"}, {{"SliceScale", f64(1)}}},
 	{
 		{"TextBox"},
-		{{"RichText", false}, {"TextTruncate", Imported_Enum{"TextTruncate", i64(enums.TextTruncate.None)}}},
+		{
+			{"RichText", false},
+			{"TextTruncate", Imported_Enum{"TextTruncate", i64(enums.TextTruncate.None)}},
+		},
 	},
 	{
 		{"ScreenGui"},
@@ -408,9 +406,15 @@ Imported_Property_Is_Unset :: proc(
 	return Is_Imported_Property(descriptor, key) && key not_in object.imported_values
 }
 
-imported_remap_references :: proc(L: ^vm.State, descriptor: ^Class_Descriptor, object: ^Object, clones: map[^Object]^Object) {
+imported_remap_references :: proc(
+	L: ^vm.State,
+	descriptor: ^Class_Descriptor,
+	object: ^Object,
+	clones: map[^Object]^Object,
+) {
 	for name, &value_ref in object.imported_values {
-		if _, reference := descriptor.imported_properties[name].default_value.(Imported_Instance); !reference {continue}
+		if _, reference := descriptor.imported_properties[name].default_value.(Imported_Instance);
+		   !reference {continue}
 		vm.PushRegistryReference(L, value_ref)
 		mapped := clones[object_from_argument(L, -1)]
 		vm.Pop(L)

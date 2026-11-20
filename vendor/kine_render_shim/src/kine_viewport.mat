@@ -5,6 +5,7 @@ material {
     doubleSided : true,
     instanced : true,
     requires : [ uv0, color ],
+    variables : [ tilePosition, tileAxisX, tileAxisY ],
     parameters : [
         { type : float4[64], name : instanceColors },
         { type : float[64],  name : instanceUvScale },
@@ -27,6 +28,19 @@ material {
 }
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
+        float tile = materialParams.instanceUvScale[getInstanceIndex()];
+        // The orthonormal axes remove object scale, so coordinates are measured
+        // in studs rather than normalized mesh units. Translation and rotation
+        // travel with each instance.
+        mat4 model = getWorldFromModelMatrix();
+        vec3 axisX = normalize(model[0].xyz);
+        vec3 axisY = normalize(model[1].xyz);
+        vec3 axisZ = normalize(model[2].xyz);
+        vec3 relative = material.worldPosition.xyz - model[3].xyz;
+        vec3 p = vec3(dot(relative, axisX), dot(relative, axisY), dot(relative, axisZ)) * abs(tile);
+        material.tilePosition = vec4(p, 0.0);
+        material.tileAxisX = vec4(axisX, 0.0);
+        material.tileAxisY = vec4(axisY, 0.0);
         if (materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
             // Per-instance UV tiling: the stud-scale factor is stored per
             // instance (indexed by getInstanceIndex()) so parts of different
@@ -35,6 +49,14 @@ vertex {
             instTile = instTile > 0.0001 ? instTile : 1.0;
             vec2 uv = material.uv0 * materialParams.uvScale * instTile;
             float height = textureLod(materialParams_heightMap, uv, 0.0).r;
+            if (tile < 0.0) {
+                vec3 n = normalize(vec3(dot(material.worldNormal, axisX), dot(material.worldNormal, axisY), dot(material.worldNormal, axisZ)));
+                vec3 w = pow(abs(n), vec3(4.0));
+                w /= max(dot(w, vec3(1.0)), 0.00001);
+                height = textureLod(materialParams_heightMap, p.zy, 0.0).r * w.x
+                       + textureLod(materialParams_heightMap, p.xz, 0.0).r * w.y
+                       + textureLod(materialParams_heightMap, p.xy, 0.0).r * w.z;
+            }
 
             // Move actual vertices in world units so the height map changes
             // the silhouette. The centered range lets mortar recede while
@@ -45,12 +67,25 @@ vertex {
     }
 }
 fragment {
+    vec4 tileSample(sampler2D map, vec3 p, vec3 w) {
+        return texture(map, p.zy) * w.x + texture(map, p.xz) * w.y + texture(map, p.xy) * w.z;
+    }
+
     void material(inout MaterialInputs material) {
         // Per-instance UV tiling (see the vertex stage): the stud-scale factor
         // rides in a fixed 64-slot array indexed by getInstanceIndex(), so
         // differently-sized parts still batch into a single material instance.
         float instTile = materialParams.instanceUvScale[getInstanceIndex()];
+        bool physical = instTile < 0.0;
         instTile = instTile > 0.0001 ? instTile : 1.0;
+        vec3 p = variable_tilePosition.xyz;
+        vec3 ax = normalize(variable_tileAxisX.xyz);
+        vec3 ay = normalize(variable_tileAxisY.xyz);
+        vec3 az = normalize(cross(ax, ay));
+        mat3 basis = mat3(ax, ay, az);
+        vec3 n = normalize(transpose(basis) * getWorldGeometricNormalVector());
+        vec3 weights = pow(abs(n), vec3(4.0));
+        weights /= max(dot(weights, vec3(1.0)), 0.00001);
         vec2 uv = getUV0() * materialParams.uvScale * instTile;
 
         // -------------------------------------------------------------------
@@ -60,7 +95,7 @@ fragment {
         // (before the loop starts moving it) to avoid blocky artefacts that
         // appear when derivatives are computed inside a loop with a break.
         // -------------------------------------------------------------------
-        if (materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
+        if (!physical && materialParams.hasHeightMap > 0.5 && materialParams.heightScale > 0.00001) {
             vec2 uvDx = dFdx(uv);
             vec2 uvDy = dFdy(uv);
 
@@ -102,19 +137,23 @@ fragment {
         }
 
         if (materialParams.hasNormalMap > 0.5) {
-            material.normal =
-                texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+            if (physical) {
+                vec3 nx = texture(materialParams_normalMap, p.zy).xyz * 2.0 - 1.0;
+                vec3 ny = texture(materialParams_normalMap, p.xz).xyz * 2.0 - 1.0;
+                vec3 nz = texture(materialParams_normalMap, p.xy).xyz * 2.0 - 1.0;
+                // Orient the tangent perturbations along each projection and
+                // preserve the geometric normal for a neutral normal map.
+                vec3 wx = n * max(nx.z, 0.001) + vec3(0.0, nx.y, nx.x);
+                vec3 wy = n * max(ny.z, 0.001) + vec3(ny.x, 0.0, ny.y);
+                vec3 wz = n * max(nz.z, 0.001) + vec3(nz.x, nz.y, 0.0);
+                vec3 worldNormal = basis * normalize(wx * weights.x + wy * weights.y + wz * weights.z);
+                material.normal = transpose(getWorldTangentFrame()) * worldNormal;
+            } else {
+                material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
+            }
         }
-
         prepareMaterial(material);
-
         material.shadowStrength = materialParams.shadowStrength;
-
-        // Normal maps are tangent-space inputs. prepareMaterial() initializes
-        // MaterialInputs, so custom values must be assigned after it.
-        if (materialParams.hasNormalMap > 0.5) {
-            material.normal = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;
-        }
 
         // -------------------------------------------------------------------
         // Surface properties. The per-instance tint lives in a fixed 64-slot
@@ -122,7 +161,7 @@ fragment {
         // 64 instances, see kine_max_chunk_instances()).
         vec4 color = materialParams.instanceColors[getInstanceIndex()] * materialParams.baseColorFactor;
         if (materialParams.hasTexture > 0.5) {
-            color *= texture(materialParams_baseColorMap, uv);
+            color *= physical ? tileSample(materialParams_baseColorMap, p, weights) : texture(materialParams_baseColorMap, uv);
         }
         if (materialParams.alphaCutoff > 0.0 && color.a * getColor().a < materialParams.alphaCutoff) {
             discard;
@@ -131,7 +170,7 @@ fragment {
         float roughness = materialParams.roughness;
         float metallic  = materialParams.metallic;
         if (materialParams.hasOrmMap > 0.5) {
-            vec3 orm = texture(materialParams_ormMap, uv).rgb;
+            vec3 orm = (physical ? tileSample(materialParams_ormMap, p, weights) : texture(materialParams_ormMap, uv)).rgb;
             material.ambientOcclusion = orm.r;
             // ORM maps modulate the instance's surface controls. Treating the
             // texture as an unconditional replacement made the legacy 1x1

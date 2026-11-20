@@ -15,6 +15,7 @@ Model :: struct {
 	pivot:        datatypes.CFrame,
 	pivot_set:    bool,
 	scale:        f32,
+	primary_part: ^Object,
 }
 
 Model_Init :: proc() -> Model {
@@ -38,13 +39,23 @@ Model_clone :: proc(source: ^Object, destination: ^Object) {
 	src, dst := cast(^Model)source, cast(^Model)destination
 	dst.pivot, dst.pivot_set = src.pivot, src.pivot_set
 	dst.scale = src.scale
+	dst.primary_part = src.primary_part
+}
+
+Model_Primary_Part :: proc(model: ^Model) -> ^Part {
+	if Is_A(&model.object, "CharacterModel") {
+		if root := CharacterModel_Root(cast(^CharacterModel)model); root != nil {return root}
+	}
+	candidate := model.primary_part
+	if candidate == nil ||
+	   candidate.destroyed ||
+	   !Is_Descendant_Of(candidate, &model.object) {return nil}
+	if !Is_A_Class(candidate, &Part_Class) {return nil}
+	return cast(^Part)candidate
 }
 
 Model_Get_Pivot :: proc(model: ^Model) -> datatypes.CFrame {
-	if Is_A(&model.object, "CharacterModel") {
-		if root := CharacterModel_Root(cast(^CharacterModel)model);
-		   root != nil {return root.cframe}
-	}
+	if part := Model_Primary_Part(model); part != nil {return Part_Get_Pivot(part)}
 	if model.pivot_set {return model.pivot}
 
 	low, high: datatypes.Vector3
@@ -97,8 +108,10 @@ Model_Get_Bounding_Box :: proc(model: ^Model) -> (datatypes.CFrame, datatypes.Ve
 	Model_Bounds(&model.object, &low, &high, &found, datatypes.CFrame_Inverse(pivot))
 	if !found {return pivot, {}}
 	center := datatypes.Vec3_Multiply(datatypes.Vec3_Add(low, high), 0.5)
-	return datatypes.CFrame_Mul_CFrame(pivot, datatypes.CFrame_New_Position(center)),
-	       datatypes.Vec3_Subtract(high, low)
+	return datatypes.CFrame_Mul_CFrame(
+		pivot,
+		datatypes.CFrame_New_Position(center),
+	), datatypes.Vec3_Subtract(high, low)
 }
 
 Model_Transform_Children :: proc(
@@ -152,7 +165,10 @@ Model_Pivot_To :: proc(model: ^Model, target: datatypes.CFrame) {
 }
 
 model_scale_children :: proc(
-	object: ^Object, center: datatypes.Vector3, ratio: f32, changed: ^[dynamic]^Object,
+	object: ^Object,
+	center: datatypes.Vector3,
+	ratio: f32,
+	changed: ^[dynamic]^Object,
 ) {
 	for child in object.children {
 		if child == nil || child.destroyed {continue}
@@ -160,9 +176,10 @@ model_scale_children :: proc(
 		case Is_A_Class(child, &Part_Class):
 			part := cast(^Part)child
 			current := datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
-			position := datatypes.Vec3_Add(center, datatypes.Vec3_Multiply(
-				datatypes.Vec3_Subtract(current, center), ratio,
-			))
+			position := datatypes.Vec3_Add(
+				center,
+				datatypes.Vec3_Multiply(datatypes.Vec3_Subtract(current, center), ratio),
+			)
 			part.position = position
 			part.cframe.x, part.cframe.y, part.cframe.z = position.x, position.y, position.z
 			part.size = datatypes.Vec3_Multiply(part.size, ratio)
@@ -216,9 +233,21 @@ model_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "Pivot":
+	case "Pivot", "WorldPivot":
 		datatypes.Push_CFrame(L, datatype_registry, Model_Get_Pivot(cast(^Model)object))
-	case "PivotTo", "GetPivot", "GetBoundingBox", "GetExtentsSize", "ScaleTo", "GetScale":
+	case "PrimaryPart":
+		part := Model_Primary_Part(cast(^Model)object)
+		Push_Object(L, &part.object if part != nil else nil)
+	case "PivotTo",
+	     "GetPivot",
+	     "GetBoundingBox",
+	     "GetExtentsSize",
+	     "ScaleTo",
+	     "GetScale",
+	     "TranslateBy",
+	     "GetPrimaryPartCFrame",
+	     "SetPrimaryPartCFrame",
+	     "MoveTo":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -235,11 +264,36 @@ model_set_pivot :: proc(model: ^Model, frame: datatypes.CFrame) {
 }
 
 model_set :: proc(
-	L: ^vm.State, object: ^Object, datatype_registry: ^datatypes.Registry,
-	enum_registry: ^enums.Registry, key: string, index: int,
+	L: ^vm.State,
+	object: ^Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	index: int,
 ) -> bool {
-	if key != "Pivot" {return false}
-	model_set_pivot(cast(^Model)object, datatypes.Arg_CFrame(L, index, datatype_registry))
+	model := cast(^Model)object
+	switch key {
+	case "Pivot":
+		model_set_pivot(model, datatypes.Arg_CFrame(L, index, datatype_registry))
+	case "WorldPivot":
+		model.pivot = datatypes.Arg_CFrame(L, index, datatype_registry)
+		model.pivot_set = true
+	case "PrimaryPart":
+		if vm.IsNoneOrNil(L, index) {
+			model.pivot = Model_Get_Pivot(model)
+			model.pivot_set = true
+			model.primary_part = nil
+			return true
+		}
+		part := object_from_argument(L, index)
+		if part == nil || !Is_A_Class(part, &Part_Class) || !Is_Descendant_Of(part, object) {
+			_ = vm.RaiseError(L, "PrimaryPart must be a descendant BasePart")
+			return true
+		}
+		model.primary_part = part
+	case:
+		return false
+	}
 	return true
 }
 
@@ -253,7 +307,29 @@ model_namecall :: proc(
 	i32,
 	bool,
 ) {
+	model := cast(^Model)object
 	switch method {
+	case "MoveTo":
+		position := datatypes.Arg_Vector3(L, 2)
+		frame := Model_Get_Pivot(model)
+		frame.x, frame.y, frame.z = position.x, position.y, position.z
+		model_set_pivot(model, frame)
+		return 0, true
+	case "TranslateBy":
+		offset := datatypes.Arg_Vector3(L, 2)
+		model_set_pivot(model, datatypes.CFrame_Add_Vector3(Model_Get_Pivot(model), offset))
+		return 0, true
+	case "GetPrimaryPartCFrame":
+		part := Model_Primary_Part(model)
+		if part == nil {return vm.RaiseError(L, "Model has no PrimaryPart"), true}
+		datatypes.Push_CFrame(L, datatype_registry, part.cframe)
+		return 1, true
+	case "SetPrimaryPartCFrame":
+		part := Model_Primary_Part(model)
+		if part == nil {return vm.RaiseError(L, "Model has no PrimaryPart"), true}
+		frame := datatypes.Arg_CFrame(L, 2, datatype_registry)
+		model_set_pivot(model, datatypes.CFrame_Mul_CFrame(frame, part.pivot_offset))
+		return 0, true
 	case "PivotTo":
 		model_set_pivot(cast(^Model)object, datatypes.Arg_CFrame(L, 2, datatype_registry))
 		return 0, true
@@ -291,6 +367,18 @@ Register_Model :: proc(registry: ^Registry) {
 		get = model_get,
 		set = model_set,
 		namecall = model_namecall,
-		methods = []string{"PivotTo", "GetPivot", "GetBoundingBox", "GetExtentsSize", "ScaleTo", "GetScale"},
+		properties = []string{"Pivot", "WorldPivot", "PrimaryPart"},
+		methods = []string {
+			"PivotTo",
+			"GetPivot",
+			"GetBoundingBox",
+			"GetExtentsSize",
+			"ScaleTo",
+			"GetScale",
+			"TranslateBy",
+			"GetPrimaryPartCFrame",
+			"SetPrimaryPartCFrame",
+			"MoveTo",
+		},
 	)
 }

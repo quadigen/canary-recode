@@ -40,49 +40,54 @@ when !KINE_RENDERER_GL {
 	Skia_Surface :: kineffi.KineSkiaSurface
 
 	RendererObject :: struct {
-		KeyDown:           proc(scancode: sdl3.Scancode),
-		KeyUp:             proc(scancode: sdl3.Scancode),
-		MouseClick:        proc(button: sdl3.MouseButtonEvent),
-		OnClose:           proc(user_data: rawptr),
-		CanClose:          proc(user_data: rawptr) -> bool,
-		Step:              proc(user_data: rawptr, delta_time: f32),
-		UserData:          rawptr,
-		Draw3D:            proc(
+		KeyDown:              proc(scancode: sdl3.Scancode),
+		KeyUp:                proc(scancode: sdl3.Scancode),
+		MouseClick:           proc(button: sdl3.MouseButtonEvent),
+		OnClose:              proc(user_data: rawptr),
+		CanClose:             proc(user_data: rawptr) -> bool,
+		Step:                 proc(user_data: rawptr, delta_time: f32),
+		UserData:             rawptr,
+		Draw3D:               proc(
 			user_data: rawptr,
 			ctx: ^kineffi.KineFilamentContext,
 			delta_time: f32,
 		),
-		Draw2D:            proc(
+		Draw2D:               proc(
 			user_data: rawptr,
 			surface: ^kineffi.KineSkiaSurface,
 			width, height: i32,
 			delta_time: f32,
 		),
-		DrawOverlay:       proc(
+		DrawOverlay:          proc(
 			user_data: rawptr,
 			surface: ^kineffi.KineSkiaSurface,
 			width, height: i32,
 			delta_time: f32,
 		),
-		OnEvent:           proc(user_data: rawptr, event: sdl3.Event),
-		OnResize:          proc(user_data: rawptr, width, height: i32),
-		Ready:             bool,
-		HasWorldToView:    bool,
-		WorldToView:       [12]f32,
-		ActiveCamera:      rawptr,
-		SkiaSurface:       ^kineffi.KineSkiaSurface,
-		Filament:          ^kineffi.KineFilamentContext,
-		HasViewportRect:   bool,
-		RenderFilament:    bool,
-		ViewportRect:      [4]i32,
-		ViewportRect_Host: bool,
-		Cache2D:           bool,
-		Render3DCheck:     proc(user_data: rawptr) -> bool,
+		DrawVRUI:             proc(
+			user_data: rawptr,
+			surface: ^kineffi.KineSkiaSurface,
+			width, height, panel_width, panel_height: i32,
+		),
+		OnEvent:              proc(user_data: rawptr, event: sdl3.Event),
+		OnResize:             proc(user_data: rawptr, width, height: i32),
+		Ready:                bool,
+		HasWorldToView:       bool,
+		WorldToView:          [12]f32,
+		ActiveCamera:         rawptr,
+		SkiaSurface:          ^kineffi.KineSkiaSurface,
+		Filament:             ^kineffi.KineFilamentContext,
+		HasViewportRect:      bool,
+		RenderFilament:       bool,
+		ViewportRect:         [4]i32,
+		ViewportRect_Host:    bool,
+		Cache2D:              bool,
+		Render3DCheck:        proc(user_data: rawptr) -> bool,
 		OverlayNeedsBackdrop: proc(user_data: rawptr) -> bool,
-		MouseScale:        [2]f32,
-		CurrentEvent:      ^sdl3.Event,
-		Window:            ^sdl3.Window,
-		Compositor:        ^kineffi.KineVulkanCompositor,
+		MouseScale:           [2]f32,
+		CurrentEvent:         ^sdl3.Event,
+		Window:               ^sdl3.Window,
+		Compositor:           ^kineffi.KineVulkanCompositor,
 	}
 
 
@@ -198,7 +203,7 @@ when !KINE_RENDERER_GL {
 	init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
 		width, height := width, height
 		_ = sdl3.SetAppMetadata("Kinemium", "", "kinemium")
-		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS) {
+		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS | sdl3.INIT_GAMEPAD) {
 			show_fatal_error("Failed to initialize SDL")
 			return
 		}
@@ -288,14 +293,17 @@ when !KINE_RENDERER_GL {
 					}
 					event_zone := tracy.ZoneNC("Dispatch SDL Event", 0x61AFEF)
 					tracy.ZoneValue(event_zone, u64(event.type))
+					sdl3.Gamepad_Open(event)
 					if renderer.OnEvent != nil {
 						renderer.OnEvent(renderer.UserData, event)
 					}
+					sdl3.Gamepad_Close(event)
 					renderer.CurrentEvent = &event
 					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
 					case .QUIT, .WINDOW_CLOSE_REQUESTED:
-						if renderer.CanClose == nil || renderer.CanClose(renderer.UserData) {running = false}
+						if renderer.CanClose == nil ||
+						   renderer.CanClose(renderer.UserData) {running = false}
 					case .KEY_DOWN:
 						if renderer.KeyDown != nil {
 							renderer.KeyDown(event.key.scancode)
@@ -341,7 +349,10 @@ when !KINE_RENDERER_GL {
 				kineffi.Kine_Filament_Resize(filament, pixel_width, pixel_height)
 				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 ||
 				   kineffi.Kine_VulkanCompositor_IsReady(compositor) == 0 {
-					fmt.eprintf("Vulkan resize failed: %s\n", kineffi.Kine_VulkanCompositor_GetLastError(compositor))
+					fmt.eprintf(
+						"Vulkan resize failed: %s\n",
+						kineffi.Kine_VulkanCompositor_GetLastError(compositor),
+					)
 					previous_ticks = sdl3.GetTicksNS()
 					sdl3.Delay(10)
 					continue
@@ -370,6 +381,11 @@ when !KINE_RENDERER_GL {
 			delta_time := min(f32(now - previous_ticks) / 1_000_000_000.0, 0.1)
 			previous_ticks = now
 			renderer.SkiaSurface = nil
+			xr_active := false
+			when ODIN_OS == .Linux && !#config(KINE_ANDROID, false) {
+				kineffi.Kine_Filament_XR_Poll(filament)
+				xr_active = kineffi.Kine_Filament_XR_Active(filament)
+			}
 
 			{
 				tracy.ZoneNC("Engine Step", 0xD08770)
@@ -436,11 +452,19 @@ when !KINE_RENDERER_GL {
 
 			world_3d := renderer.RenderFilament && renderer.HasViewportRect
 			if world_3d &&
+			   !xr_active &&
 			   renderer.Render3DCheck != nil &&
 			   !renderer.Render3DCheck(renderer.UserData) {
 				world_3d = false
 			}
+			// An active XR session alone does not guarantee Filament will draw
+			// anything to the desktop swapchain (e.g. the project picker).
 			rendered_3d := world_3d || kineffi.Kine_Filament_Viewport_HasWork(filament)
+			when ODIN_OS == .Linux && !#config(KINE_ANDROID, false) {
+				if xr_active && !rendered_3d {
+					kineffi.Kine_Filament_XR_IdleFrame(filament)
+				}
+			}
 			if rendered_3d {
 				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
 				z := profiling.Begin("Filament RenderFrame", 0xC678DD)
@@ -469,9 +493,10 @@ when !KINE_RENDERER_GL {
 				}
 				if overlay_surface != nil {
 					skia_overlay := cast(^kineffi.KineSkiaSurface)overlay_surface
-					needs_backdrop := overlay_surface != base_surface &&
+					needs_backdrop :=
+						overlay_surface != base_surface &&
 						(renderer.OverlayNeedsBackdrop == nil ||
-						 renderer.OverlayNeedsBackdrop(renderer.UserData))
+								renderer.OverlayNeedsBackdrop(renderer.UserData))
 					if needs_backdrop {
 						// The overlay wraps the swapchain image after Filament has
 						// rendered the 3D scene. Snapshot it before UI draws so
@@ -495,6 +520,31 @@ when !KINE_RENDERER_GL {
 					if needs_backdrop {kineffi.Kine_Skia_Surface_ClearBackdrop(skia_overlay)}
 					renderer.SkiaSurface = nil
 				}
+			}
+
+			when ODIN_OS == .Linux && !#config(KINE_ANDROID, false) {
+				if renderer.DrawVRUI != nil {
+					panel_width, panel_height: i32
+					surface: ^kineffi.KineSkiaSurface
+					if xr_active {
+						surface = kineffi.Kine_Filament_XR_BeginUI(
+							filament,
+							frame_width,
+							frame_height,
+							&panel_width,
+							&panel_height,
+						)
+					}
+					renderer.DrawVRUI(
+						renderer.UserData,
+						surface,
+						frame_width,
+						frame_height,
+						panel_width,
+						panel_height,
+					)
+				}
+				if xr_active {kineffi.Kine_Filament_XR_FinishFrame(filament)}
 			}
 
 			present_ok: bool

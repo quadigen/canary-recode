@@ -58,6 +58,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/luacode_link.c") -o (Join-Path $nativeLib "kine_luacode_link.o")
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/lualib_link.c") -o (Join-Path $nativeLib "kine_lualib_link.o")
+& $emcc -c (Join-Path $repoRoot "cmake/web-native/lexer_link.c") -o (Join-Path $nativeLib "kine_lexer_link.o")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $emcc -c (Join-Path $repoRoot "cmake/web-native/webview_link.c") -o (Join-Path $nativeLib "kine_webview_link.o")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/web_allocator.c") -o (Join-Path $nativeLib "web_allocator.o")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -66,10 +70,7 @@ foreach ($archive in $runtimeArchives) {
     Copy-Item -LiteralPath (Join-Path $systemLib $archive) -Destination (Join-Path $nativeLib $archive) -Force
 }
 $linkFlags = @(
-    "--allow-multiple-definition", "--export-table",
-    # Emscripten setjmp/longjmp + C++ exception runtime (Luau/Jolt throw across
-    # the JS boundary). The browser shell implements __cxa_* / invoke_* in JS and
-    # calls these wasm helpers, so they must be exported and force-linked.
+    "--allow-multiple-definition", "--export-table", "--strip-debug", "--export=__wasm_call_ctors",
     "--export=setThrew", "--export=_emscripten_tempret_set", "--export=_emscripten_tempret_get",
     "--export=__cxa_increment_exception_refcount", "--export=__cxa_decrement_exception_refcount",
     "--export=__cxa_can_catch", "--export=__cxa_get_exception_ptr",
@@ -116,10 +117,11 @@ if ($ClientPort) { $odinArguments += "-define:KINE_PORT=$ClientPort" }
 & $odinCommand.Source @odinArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Stage the desktop shell and official CanvasKit/Filament browser distributions.
+# Stage the desktop shell and official CanvasKit/Babylon.js browser distributions.
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/$Shell") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.css") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.js") -Destination $outputPath -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "web/babylon_backend.js") -Destination $outputPath -Force
 Copy-Item -LiteralPath $odinRuntime -Destination (Join-Path $outputPath "odin.js") -Force
 
 $canvasKitRoot = Join-Path $repoRoot ".cache/web-deps/node_modules/canvaskit-wasm/bin"
@@ -136,25 +138,34 @@ New-Item -ItemType Directory -Force $fontOutput | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "src/engine/assets/fonts/Roboto-VariableFont_wdth_wght.ttf") `
     -Destination (Join-Path $fontOutput "Roboto.ttf") -Force
 
-$filamentCache = Join-Path $repoRoot ".cache/filament-web"
-$filamentArchive = Join-Path $filamentCache "filament-v1.74.0-web.tgz"
-if (!(Test-Path -LiteralPath (Join-Path $filamentCache "filament.wasm"))) {
-    New-Item -ItemType Directory -Force $filamentCache | Out-Null
-    Invoke-WebRequest "https://github.com/google/filament/releases/download/v1.74.0/filament-v1.74.0-web.tgz" -OutFile $filamentArchive
-    tar -xzf $filamentArchive -C $filamentCache
+# Pin and stage the browser renderer locally, so the shipped web runtime
+# doesn't request a CDN or require the native Filament material compiler.
+$babylonVersion = "9.28.0"
+$babylonCache = Join-Path $repoRoot ".cache/babylon-web"
+$babylonRoot = Join-Path $babylonCache "node_modules/babylonjs"
+$babylonPackage = Join-Path $babylonRoot "package.json"
+$installedVersion = if (Test-Path -LiteralPath $babylonPackage) {
+    (Get-Content -LiteralPath $babylonPackage -Raw | ConvertFrom-Json).version
+} else { "" }
+if ($installedVersion -ne $babylonVersion -or !(Test-Path -LiteralPath (Join-Path $babylonRoot "babylon.js"))) {
+    npm install --prefix $babylonCache --no-save --package-lock=false --ignore-scripts "babylonjs@$babylonVersion"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-$filamentOutput = Join-Path $outputPath "filament"
-New-Item -ItemType Directory -Force $filamentOutput | Out-Null
-Copy-Item -LiteralPath (Join-Path $filamentCache "filament.js") -Destination $filamentOutput -Force
-Copy-Item -LiteralPath (Join-Path $filamentCache "filament.wasm") -Destination $filamentOutput -Force
-
-$matc = if ($env:FILAMENT_MATC) { $env:FILAMENT_MATC } else {
-    Get-ChildItem -Path (Split-Path -Parent $repoRoot) -Filter "matc.exe" -Recurse -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty FullName
+$babylonOutput = Join-Path $outputPath "babylon"
+New-Item -ItemType Directory -Force $babylonOutput | Out-Null
+Copy-Item -LiteralPath (Join-Path $babylonRoot "babylon.js") -Destination $babylonOutput -Force
+foreach ($notice in @("license.md", "NOTICE.md")) {
+    if (Test-Path -LiteralPath (Join-Path $babylonRoot $notice)) {
+        Copy-Item -LiteralPath (Join-Path $babylonRoot $notice) -Destination $babylonOutput -Force
+    }
 }
-if (!$matc) { throw "Filament matc is required. Set FILAMENT_MATC to matc.exe." }
-& $matc -a opengl -p mobile -o (Join-Path $filamentOutput "kine_web.filamat") (Join-Path $repoRoot "web/kine_web.mat")
+# Existing output directories may contain the legacy web backend.
+$legacyRenderer = Join-Path $outputPath "filament"
+if (Test-Path -LiteralPath $legacyRenderer) {
+    Remove-Item -LiteralPath $legacyRenderer -Recurse -Force
+}
+
+python (Join-Path $repoRoot "tools/stage_web_assets.py") $outputPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $wasm = Get-Item (Join-Path $outputPath "kinemium_engine.wasm")

@@ -18,8 +18,9 @@ import vm "engine/vm"
 import native_sdl "vendor:sdl3"
 
 Runtime_Render_Context :: struct {
-	environment: ^engine_runtime.Environment,
-	vm_state:    ^vm.VM,
+	environment:       ^engine_runtime.Environment,
+	vm_state:          ^vm.VM,
+	playtest_tree_dir: string,
 }
 
 runtime_update_step :: proc(user_data: rawptr, delta_time: f32) {
@@ -27,6 +28,7 @@ runtime_update_step :: proc(user_data: rawptr, delta_time: f32) {
 	if ctx == nil {
 		return
 	}
+	services.Playtest_Tree_Pump(ctx.playtest_tree_dir, &ctx.environment.services, ctx.vm_state.L)
 	if !services.Log_Is_Playtest_Paused() {
 		engine_runtime.Environment_Update_Step(ctx.environment, ctx.vm_state, delta_time)
 		if extensions.Game_Exit_Requested(&ctx.environment.extensions) {
@@ -118,6 +120,32 @@ runtime_render_overlay :: proc(
 	)
 }
 
+runtime_render_vr_ui :: proc(
+	user_data: rawptr,
+	surface: ^renderer.Skia_Surface,
+	width, height, panel_width, panel_height: i32,
+) {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil {return}
+	engine_runtime.Environment_Update_VR_Pointer(
+		ctx.environment,
+		ctx.vm_state,
+		width,
+		height,
+		surface != nil,
+	)
+	if surface == nil {return}
+	engine_runtime.Environment_Render_VR_UI(
+		ctx.environment,
+		ctx.vm_state,
+		surface,
+		width,
+		height,
+		panel_width,
+		panel_height,
+	)
+}
+
 runtime_overlay_needs_backdrop :: proc(user_data: rawptr) -> bool {
 	ctx := cast(^Runtime_Render_Context)user_data
 	return(
@@ -167,8 +195,9 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 
 	environment: engine_runtime.Environment
 	render_context := Runtime_Render_Context {
-		environment = &environment,
-		vm_state    = &script_vm,
+		environment       = &environment,
+		vm_state          = &script_vm,
+		playtest_tree_dir = options.playtest_tree_dir,
 	}
 
 	renderer_object := renderer.RendererObject {
@@ -176,6 +205,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 		Draw3D = runtime_render_3d,
 		Draw2D = runtime_render_2d,
 		DrawOverlay = runtime_render_overlay,
+		DrawVRUI = runtime_render_vr_ui,
 		UserData = &render_context,
 		RenderFilament = true,
 		KeyDown = proc(scancode: sdl3.Scancode) {
@@ -239,8 +269,6 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	}
 	environment.services.fast_editor_viewport = options.fast_viewport
 
-	// Load KNE native extensions from ./extensions before any game code runs, so
-	// a script can use what they registered from its first line.
 	{
 		loaded, extension_error := extensions.Discover_Default(&environment.extensions)
 		if loaded > 0 {
@@ -284,21 +312,12 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 					options.username,
 				)
 			}
-			if players != nil && players.local_player != nil {
-				character_service := cast(^services.CharacterService)(services.Ensure_Service(
-						&environment.services,
-						"CharacterService",
-					))
-				if character_service != nil {
-					_ = services.CharacterService_Load(character_service, players.local_player)
-				}
-			}
 		}
 	}
 
 	if !load_game_library(&environment, options) {return false}
 
-	if target.is_server() || options.singleplayer {
+	if target.is_server() || options.singleplayer || options.standalone {
 		server_script_service := cast(^services.ServerScriptService)(services.Ensure_Service(
 				&environment.services,
 				"ServerScriptService",
@@ -315,6 +334,10 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 				fmt.println("Finished running scripts")
 			}
 		}
+	}
+
+	if options.singleplayer || options.standalone {
+		services.CharacterService_Load_Local_Player(&environment.services)
 	}
 
 	if target.is_server() {

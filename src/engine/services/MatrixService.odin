@@ -2,7 +2,7 @@
 package services
 
 import tracy "../util/odin-tracy"
-// wire:service global="matrix"
+// wire:service
 
 import "core:bytes"
 import "core:encoding/json"
@@ -26,12 +26,7 @@ MATRIX_DEVICE_NAME :: "Kinemium Engine"
 MATRIX_SYNC_INTERVAL :: 2.0
 MATRIX_SESSION_FILE :: "session.json"
 
-// Matrix_Session_Persistence can be disabled by test harnesses so they never
-// read or overwrite a developer's real saved session.
 Matrix_Session_Persistence := true
-
-// Matrix_Session_Path_Override lets tests point the saved session at a
-// temporary file instead of the user's real data directory.
 Matrix_Session_Path_Override := ""
 
 Matrix_Session :: struct {

@@ -1799,6 +1799,29 @@ Kine_VulkanCompositor_GetCurrentSkiaSurface(KineVulkanCompositor* compositor)
     return compositor ? compositor->currentSkiaSurface : nullptr;
 }
 
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_GetXRPanelSource(KineVulkanCompositor* compositor, void** image,
+    uint32_t* width, uint32_t* height, uint32_t* format)
+{
+    if (!compositor || !image || !width || !height || !format) return 0;
+    {
+        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
+        if (!compositor->frameActive ||
+            (compositor->filamentPrepared && !compositor->overlayActive) ||
+            compositor->currentImageIndex >= compositor->swapchainImages.size() ||
+            !(compositor->swapchainUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return 0;
+    }
+    auto* surface = compositor->overlaySkiaSurface ?
+        compositor->overlaySkiaSurface : compositor->currentSkiaSurface;
+    if (!surface) return 0;
+    Kine_Skia_Surface_Flush(surface);
+    *image = compositor->swapchainImages[compositor->currentImageIndex];
+    *width = compositor->width;
+    *height = compositor->height;
+    *format = static_cast<uint32_t>(compositor->swapchainFormat);
+    return 1;
+}
+
 KINE_VULKAN_COMPOSITOR_API uint32_t
 Kine_VulkanCompositor_GetSwapchainImages(
     KineVulkanCompositor* compositor,
