@@ -5,6 +5,7 @@ import tracy "./engine/util/odin-tracy"
 import sandbox "./sandboxed"
 import "core:fmt"
 import "core:os"
+import "core:time"
 import audio "engine/audio"
 import classes "engine/classes"
 import extensions "engine/extensions"
@@ -172,6 +173,7 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 
 run_desktop :: proc(options: Startup_Options) -> bool {
 	tracy.SetThreadName("Main")
+	startup_started := time.tick_now()
 	if target.is_client() && !options.standalone {
 		if !options.playtest && (options.address == "" || options.address == "0.0.0.0") {
 			fmt.eprintln(
@@ -249,6 +251,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	vm.PushFunction(script_vm.L, "settings", runtime_global_settings, 1)
 	vm.SetGlobalFromStack(&script_vm, "settings")
 
+	fmt.eprintf("[Startup] VM and audio: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
 	if options.standalone {
 		sandbox.init_runtime(
 			cast(^vm.VM)uintptr(&script_vm),
@@ -267,6 +270,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
 		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
+	fmt.eprintf("[Startup] runtime and editor initialized: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
 	environment.services.fast_editor_viewport = options.fast_viewport
 
 	{
@@ -414,6 +418,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 			return false
 		}
 	}
+	fmt.eprintf("[Startup] entering renderer: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
 	renderer.init(title, 800, 600, &renderer_object)
 
 	if !options.playtest {
@@ -423,34 +428,32 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 }
 
 main :: proc() {
-	fmt.println("Hello World! Step 1")
+
 	when tracy.TRACY_ENABLE {
 		context.allocator = tracy.InitDefaultAllocator(
 			callstack_size = #config(TRACY_ALLOC_CALLSTACK, 0),
 		)
 	}
-	fmt.println("Hello World! Step 2")
+
 	services.Update_Handle_Command_Line()
-	fmt.println("Hello World! Step 3")
+
 	when ODIN_OS == .Windows {
 		exe_path, err := os.get_executable_path(context.allocator)
 		if err == nil {
 			sdl3.register_protocol(exe_path)
 		}
 	}
-	fmt.println("Hello World! Step 4")
+
 	options, options_ok := startup_options()
 	if !options_ok {os.exit(1)}
 
-	fmt.println("Hello World! Step 5")
 	target.set_mode(options.mode)
 
-	fmt.println("Hello World! Step 6")
 	if options.headless || (target.is_server() && !options.window) {
-		fmt.println("Hello World! Step 7: Server")
+
 		if !run_headless(options) {os.exit(1)}
 	} else {
-		fmt.println("Hello World! Step 7: Desktop")
+
 		if !run_desktop(options) {os.exit(1)}
 	}
 }

@@ -27,12 +27,13 @@ main :: proc() {
 	defer vm.Close(&script_vm)
 
 	run_script(&script_vm, `
-workspace.Gravity = 40
+JointTestGravity = Vector3.new(0, -40, 0)
 function part(x, y, z, anchored)
 	local result = Instance.new("Part", workspace)
 	result.Size = vector.create(2, 2, 2)
 	result.CFrame = CFrame.new(x, y, z)
 	result.Anchored = anchored
+	result.Gravity = JointTestGravity
 	result.CanCollide = false
 	return result
 end
@@ -125,7 +126,10 @@ weight:Destroy()
 assert(rod.Attachment1 == nil and not rod.Active)
 
 -- A separate ball-socket starts outside its angular limit.
-workspace.Gravity = 0
+JointTestGravity = Vector3.zero
+for _, p in workspace:GetDescendants() do
+	if p:IsA("BasePart") then p.Gravity = JointTestGravity end
+end
 local base = part(20, 20, 0, true)
 ball = part(20, 20, 0, false)
 ball.CFrame = ball.CFrame * CFrame.Angles(0, 0, math.rad(70))

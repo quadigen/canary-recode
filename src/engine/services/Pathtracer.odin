@@ -23,6 +23,7 @@ Pathtracer :: struct {
 	using service: Service,
 	call_count:    i64,
 	attached:      bool,
+	requested:     bool,
 	retry_wait:    i32,
 	last_error:    string,
 	renderer:      ^classes.Renderer_Object,
@@ -37,7 +38,15 @@ Pathtracer_construct :: proc(
 	service.service = Service_Init(&Pathtracer_Class, "Pathtracer", data_model)
 	service.renderer = renderer
 
-	Pathtracer_attach(service, renderer)
+	// Match kine_ray_default_properties() without initializing a GPU device.
+	service.params = {
+		maxTotalDepth = 8,
+		maxDiffuseDepth = 4,
+		maxSpecularDepth = 8,
+		maxRefractionDepth = 8,
+		samplesPerFrame = 1,
+		minSamples = 128,
+	}
 
 	return &service.object
 }
@@ -78,17 +87,9 @@ Pathtracer_attach :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Obje
 		}
 	}
 
-	if !kineffi.Kine_Filament_SetRenderMode(renderer.Filament, kineffi.KINE_RENDER_MODE_FILAMENT) {
-		report := string(kineffi.Kine_Filament_GetRayError())
-		if report == "" {
-			report = "could not switch to render mode 2"
-		}
-		Pathtracer_set_error(service, report)
-		return false
-	}
-
-	kineffi.Kine_Ray_GetProperties(renderer.Filament, &service.params)
+	// Keep any parameters set by scripts before the renderer existed.
 	kineffi.Kine_Ray_SetProperties(renderer.Filament, &service.params)
+	kineffi.Kine_Ray_GetProperties(renderer.Filament, &service.params)
 
 	if service.last_error != "" {
 		delete(service.last_error)
@@ -97,18 +98,27 @@ Pathtracer_attach :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Obje
 	service.attached = true
 	service.retry_wait = 0
 	fmt.printf(
-		"[Pathtracer] Ray path tracing enabled on the shared Vulkan device (%dx%d)\n",
+		"[Pathtracer] Ray initialized on the shared Vulkan device (%dx%d)\n",
 		width,
 		height,
 	)
 	return true
 }
 
-Pathtracer_Prepare_3D :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Object) {
-	if service == nil || renderer == nil || renderer.Filament == nil {
-		return
+Pathtracer_Activate :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Object) -> bool {
+	if !Pathtracer_attach(service, renderer) {return false}
+	if kineffi.Kine_Filament_GetRenderMode(renderer.Filament) == kineffi.KINE_RENDER_MODE_RAY {
+		return true
 	}
-	if service.attached {
+	if !kineffi.Kine_Filament_SetRenderMode(renderer.Filament, kineffi.KINE_RENDER_MODE_RAY) {
+		Pathtracer_set_error(service, string(kineffi.Kine_Filament_GetRayError()))
+		return false
+	}
+	return true
+}
+
+Pathtracer_Prepare_3D :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_Object) {
+	if service == nil || !service.requested || renderer == nil || renderer.Filament == nil {
 		return
 	}
 	if service.retry_wait > 0 {
@@ -116,10 +126,8 @@ Pathtracer_Prepare_3D :: proc(service: ^Pathtracer, renderer: ^classes.Renderer_
 		return
 	}
 	width, height := renderer_pkg.viewport_size(renderer)
-	if width <= 0 || height <= 0 {
-		return
-	}
-	if !Pathtracer_attach(service, renderer) {
+	if width <= 0 || height <= 0 {return}
+	if !Pathtracer_Activate(service, renderer) {
 		service.retry_wait = Pathtracer_RETRY_FRAMES
 	}
 }
@@ -247,25 +255,22 @@ Pathtracer_namecall :: proc(
 		classes.Push_Object(L, Service_Get_Service(&service.service, vm.ArgString(L, 2)))
 		return 1, true
 	case "Enable":
-		if !kineffi.Kine_Filament_SetRenderMode(renderer, kineffi.KINE_RENDER_MODE_RAY) {
-			report := string(kineffi.Kine_Filament_GetRayError())
-			if report == "" {
-				report = "could not switch to render mode 1"
-			}
-			Pathtracer_set_error(service, report)
-			return 1, true
+		service.requested = true
+		service.retry_wait = 0
+		// A script may enable Ray before SDL/Filament is ready. Prepare_3D
+		// completes the request once the viewport has a valid size.
+		if renderer == nil {
+			return 0, true
 		}
-		return 1, true
+		Pathtracer_Prepare_3D(service, service.renderer)
+		return 0, true
 	case "Disable":
-		if !kineffi.Kine_Filament_SetRenderMode(renderer, kineffi.KINE_RENDER_MODE_FILAMENT) {
-			report := string(kineffi.Kine_Filament_GetRayError())
-			if report == "" {
-				report = "could not switch to render mode 2"
-			}
-			Pathtracer_set_error(service, report)
-			return 1, true
+		service.requested = false
+		service.retry_wait = 0
+		if renderer != nil && !kineffi.Kine_Filament_SetRenderMode(renderer, kineffi.KINE_RENDER_MODE_FILAMENT) {
+			Pathtracer_set_error(service, string(kineffi.Kine_Filament_GetRayError()))
 		}
-		return 1, true
+		return 0, true
 	}
 	return 0, false
 }

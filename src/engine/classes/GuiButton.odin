@@ -352,7 +352,7 @@ gui_button_fire_activated :: proc(
 		InputObject_Value {
 			UserInputType = input_type,
 			UserInputState = .End,
-			Position = {event.x, event.y, 0},
+			Position = {f64(event.x), f64(event.y), 0},
 		},
 	)
 	if input == nil {

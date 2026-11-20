@@ -2,6 +2,7 @@ package services
 
 import kineffi "../bindings"
 import enums "../enum"
+import datatypes "../datatypes"
 
 Terrain_Surface_Kind :: enum {
 	Water,
@@ -20,6 +21,7 @@ Terrain_Build_Chunk_Surfaces :: proc(
 	service: ^Terrain,
 	key: Terrain_Chunk_Key,
 	output: ^[Terrain_Surface_Kind]Terrain_Surface_Geometry,
+	local_coordinates: bool = false,
 ) {
 	chunk := service.chunks[key]
 	if chunk == nil || chunk.data == nil {return}
@@ -29,10 +31,10 @@ Terrain_Build_Chunk_Surfaces :: proc(
 	base_y := key.y * TERRAIN_CHUNK_SIZE
 	base_z := key.z * TERRAIN_CHUNK_SIZE
 	if data.surface > 0 {
-		terrain_append_exposed_surfaces(service, data, above_chunk, base_x, base_y, base_z, output)
+		terrain_append_exposed_surfaces(service, data, above_chunk, base_x, base_y, base_z, output, local_coordinates)
 	}
 	if data.solid > 0 {
-		terrain_extend_water_under_shore(service, key, &output[.Water])
+		terrain_extend_water_under_shore(service, key, &output[.Water], local_coordinates)
 	}
 }
 
@@ -42,6 +44,7 @@ terrain_append_exposed_surfaces :: proc(
 	above_chunk: ^Terrain_Chunk,
 	base_x, base_y, base_z: int,
 	output: ^[Terrain_Surface_Kind]Terrain_Surface_Geometry,
+	local_coordinates: bool = false,
 ) {
 	vs := service.voxel_size
 	for lx in 0 ..< TERRAIN_CHUNK_SIZE {
@@ -80,9 +83,9 @@ terrain_append_exposed_surfaces :: proc(
 				segments := TERRAIN_WATER_SEGMENTS if kind == .Water else 1
 				terrain_append_surface_grid(
 					&output[kind],
-					base_x + lx,
-					base_z + lz,
-					(f32(base_y + ly) + level) * vs,
+					(lx if local_coordinates else base_x + lx),
+					(lz if local_coordinates else base_z + lz),
+					(f32(ly if local_coordinates else base_y + ly) + level) * vs,
 					vs,
 					segments,
 				)
@@ -95,6 +98,7 @@ terrain_extend_water_under_shore :: proc(
 	service: ^Terrain,
 	key: Terrain_Chunk_Key,
 	surface: ^Terrain_Surface_Geometry,
+	local_coordinates: bool = false,
 ) {
 	S :: TERRAIN_CHUNK_SIZE
 	base_x, base_y, base_z := key.x * S, key.y * S, key.z * S
@@ -151,9 +155,9 @@ terrain_extend_water_under_shore :: proc(
 				if !has_land || !has_shore {continue}
 				terrain_append_surface_grid(
 					surface,
-					x,
-					z,
-					(f32(y) + level) * service.voxel_size,
+					(lx if local_coordinates else x),
+					(lz if local_coordinates else z),
+					(f32(ly if local_coordinates else y) + level) * service.voxel_size,
 					service.voxel_size,
 					TERRAIN_WATER_SEGMENTS,
 				)
@@ -198,6 +202,7 @@ terrain_append_chunk_surfaces :: proc(
 	service: ^Terrain,
 	chunk: ^Terrain_Chunk,
 	transform: [16]f32,
+	origin: datatypes.Vector3,
 ) {
 	for mesh, kind in chunk.surface_meshes {
 		if mesh == nil {continue}
@@ -230,7 +235,8 @@ terrain_append_chunk_surfaces :: proc(
 				param3 = param3,
 				transmission = transmission,
 				materialKind = i32(material_kind),
-				flags = u32(kineffi.KINE_FILAMENT_DRAW_CULLING),
+				flags = u32(kineffi.KINE_FILAMENT_DRAW_CULLING | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION),
+				worldPosition = {origin.x, origin.y, origin.z},
 			},
 		)
 	}

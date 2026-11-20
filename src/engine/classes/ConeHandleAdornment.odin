@@ -110,22 +110,22 @@ cone_adornment_matrix :: proc(
 	part: ^Part,
 	local_cf: datatypes.CFrame,
 	height, radius: f32,
-) -> [16]f32 {
+) -> [16]f64 {
 	world := datatypes.CFrame_Mul_CFrame(part.cframe, local_cf)
 	d := radius * 2
-	return [16]f32 {
-		world.r00 * d,
-		world.r01 * height,
-		world.r02 * d,
-		world.x,
-		world.r10 * d,
-		world.r11 * height,
-		world.r12 * d,
-		world.y,
-		world.r20 * d,
-		world.r21 * height,
-		world.r22 * d,
-		world.z,
+	return [16]f64 {
+		f64(world.r00 * f64(d)),
+		f64(world.r01 * f64(height)),
+		f64(world.r02 * f64(d)),
+		f64(world.x),
+		f64(world.r10 * f64(d)),
+		f64(world.r11 * f64(height)),
+		f64(world.r12 * f64(d)),
+		f64(world.y),
+		f64(world.r20 * f64(d)),
+		f64(world.r21 * f64(height)),
+		f64(world.r22 * f64(d)),
+		f64(world.z),
 		0,
 		0,
 		0,

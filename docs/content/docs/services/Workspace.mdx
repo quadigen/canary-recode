@@ -5,14 +5,12 @@ description: Manage the 3D world's physics settings, active camera, and spatial 
 
 `Workspace` is the service that holds the 3D scene. Parts, models, terrain, and other 3D objects live under it, and it owns the physics settings and world queries that act on them.
 
-If an object has a position in the world, it's usually parented to Workspace. Reparenting a part away from Workspace removes it from the simulated world.
+If an object has a position in the world, it's usually parented to Workspace. Reparenting a part away from Workspace removes it from the simulated world. Rigid-body gravity is configured on each part through `Part.Gravity`.
 
 ## Getting started
 
 ```lua
 local Workspace = game:GetService("Workspace")
-
-print(Workspace.Gravity)
 
 local spawnPart = Workspace:FindFirstChild("SpawnPart")
 if spawnPart then
@@ -24,7 +22,6 @@ end
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
-| `Gravity` | `number` | Read/write | Physics default | Downward acceleration applied to simulated bodies. |
 | `SimulatePhysics` | `boolean` | Read/write | `true` | Whether the world simulates. `AutoSimulate` is an alias. |
 | `GlobalWind` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Wind force applied to cloth and other affected objects. |
 | `FluidForces` | `boolean` | Read/write | `false` | Compatibility alias for `Aerodynamics.Enabled`. |

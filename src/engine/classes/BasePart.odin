@@ -34,7 +34,7 @@ Register_BasePart :: proc(registry: ^Registry) {
 		base_part_destroy,
 		creatable = false,
 		clone = base_part_clone,
-		properties = []string{"PivotOffset"},
+		properties = []string{"PivotOffset", "Gravity"},
 		methods = []string{"GetPivot", "PivotTo", "GetVelocityAtPosition"},
 	)
 }

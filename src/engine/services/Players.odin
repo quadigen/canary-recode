@@ -257,7 +257,7 @@ player_namecall :: proc(
 					   controller,
 					   "RotationController",
 				   ); rotation != nil {
-					rotation.yaw = math.to_degrees(yaw)
+					rotation.yaw = f32(math.to_degrees(yaw))
 					rotation.target_yaw = rotation.yaw
 				}
 				if collision := cast(^classes.CollisionController)classes.CharacterController_Find(
@@ -269,11 +269,11 @@ player_namecall :: proc(
 						"Physics",
 					)
 					if physics !=
-					   nil {Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{frame.x, frame.y, frame.z}, math.to_degrees(yaw))}
+					   nil {Physics_Set_Character_Capsule(physics, collision, datatypes.Vector3{frame.x, frame.y, frame.z}, f32(math.to_degrees(yaw)))}
 				}
 			}
 			player.vertical_speed = 0
-			player.ground_y = frame.y
+			player.ground_y = f32(frame.y)
 		}
 		vm.PushBoolean(L, true)
 		return 1, true

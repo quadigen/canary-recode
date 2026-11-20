@@ -123,9 +123,9 @@ terrain_create_heightfield :: proc(
 	if material == .Air || material == .Water {
 		return strings.clone("Terrain:CreateHeightfield expects a surface material")
 	}
-	if !physics_finite_f32(origin.x) ||
-	   !physics_finite_f32(origin.y) ||
-	   !physics_finite_f32(origin.z) ||
+	if !physics_finite_f32(f32(origin.x)) ||
+	   !physics_finite_f32(f32(origin.y)) ||
+	   !physics_finite_f32(f32(origin.z)) ||
 	   !physics_finite_f32(size.X) ||
 	   !physics_finite_f32(size.Y) ||
 	   size.X < 0.002 ||
@@ -148,7 +148,7 @@ terrain_create_heightfield :: proc(
 		size,
 		max(1, int(nx)),
 		max(1, int(nz)),
-		origin.y,
+		f32(origin.y),
 	)
 	if err != "" {return err}
 
@@ -163,8 +163,8 @@ terrain_create_heightfield :: proc(
 	part.mesh_id = uri
 	part.material = material
 	part.collision_fidelity = .TriangleMesh
-	part.size = {size.X, height, size.Y}
-	part.position = {origin.x, origin.y + center_y, origin.z}
+	part.size = {f64(size.X), f64(height), f64(size.Y)}
+	part.position = {origin.x, origin.y + f64(center_y), origin.z}
 	part.cframe.x, part.cframe.y, part.cframe.z = part.position.x, part.position.y, part.position.z
 	classes.Set_Name(object, "Heightfield")
 	classes.Set_Parent(object, workspace)

@@ -19,20 +19,23 @@ workspace_append_cloth :: proc(
 		cloth.material_variant,
 		renderer.Filament,
 	)
+	pin := classes.Cloth_World_Pin(cloth)
 	item := kineffi.KineFilamentDrawItem {
+		worldPosition = {pin.x, pin.y, pin.z},
 		mesh      = mesh,
 		shader    = shader,
 		transform = classes.Cloth_Surface_Transform(cloth),
 		r         = cloth.color.R,
 		g         = cloth.color.G,
 		b         = cloth.color.B,
-		flags     = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS,
+		flags     = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
 	}
 	if params != nil {
 		params.hash = workspace_hash_u64(params.hash, u64(uintptr(mesh)))
 		params.hash = workspace_hash_u64(params.hash, cloth.revision)
 		params.hash = workspace_hash_u64(params.hash, u64(uintptr(shader)))
 		params.hash = workspace_hash_u64(params.hash, shader_revision)
+		for v in item.worldPosition {params.hash = workspace_hash_u64(params.hash, transmute(u64)v)}
 		params.hash = workspace_hash_f32(params.hash, item.r)
 		params.hash = workspace_hash_f32(params.hash, item.g)
 		params.hash = workspace_hash_f32(params.hash, item.b)

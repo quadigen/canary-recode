@@ -79,9 +79,9 @@ aerodynamics_apply_defaults :: proc(service: ^Aerodynamics) {
 	service.area_multiplier = aero.DEFAULT_BODY_OPTIONS.area_multiplier
 	service.directional_drag = {}
 	service.pressure_offset = {
-		aero.DEFAULT_BODY_OPTIONS.pressure_offset[0],
-		aero.DEFAULT_BODY_OPTIONS.pressure_offset[1],
-		aero.DEFAULT_BODY_OPTIONS.pressure_offset[2],
+		f64(aero.DEFAULT_BODY_OPTIONS.pressure_offset[0]),
+		f64(aero.DEFAULT_BODY_OPTIONS.pressure_offset[1]),
+		f64(aero.DEFAULT_BODY_OPTIONS.pressure_offset[2]),
 	}
 	service.incidence_deg = aero.DEFAULT_BODY_OPTIONS.incidence_deg
 	service.wave_drag = aero.DEFAULT_BODY_OPTIONS.wave_drag
@@ -150,12 +150,12 @@ Aerodynamics_Settings :: proc(service: ^Aerodynamics, workspace: ^Workspace) -> 
 	settings.reference_height = service.reference_height
 	settings.density_scale_height = service.density_scale_height
 	settings.wind = {
-		(workspace != nil ? workspace.global_wind.x : 0) + service.wind.x,
-		(workspace != nil ? workspace.global_wind.y : 0) + service.wind.y,
-		(workspace != nil ? workspace.global_wind.z : 0) + service.wind.z,
+		f32((workspace != nil ? workspace.global_wind.x : 0) + service.wind.x),
+		f32((workspace != nil ? workspace.global_wind.y : 0) + service.wind.y),
+		f32((workspace != nil ? workspace.global_wind.z : 0) + service.wind.z),
 	}
-	settings.wind_shear = {service.wind_shear.x, service.wind_shear.y, service.wind_shear.z}
-	settings.gust = {service.gust.x, service.gust.y, service.gust.z}
+	settings.wind_shear = {f32(service.wind_shear.x), f32(service.wind_shear.y), f32(service.wind_shear.z)}
+	settings.gust = {f32(service.gust.x), f32(service.gust.y), f32(service.gust.z)}
 	settings.gust_frequency = service.gust_frequency
 	settings.gust_wavelength = service.gust_wavelength
 	settings.time_seconds = workspace != nil ? workspace.distributed_game_time : 0
@@ -180,14 +180,14 @@ Aerodynamics_Options :: proc(service: ^Aerodynamics) -> aero.Body_Options {
 	options.max_lift = service.max_lift
 	options.area_multiplier = service.area_multiplier
 	options.directional_drag = {
-		service.directional_drag.x,
-		service.directional_drag.y,
-		service.directional_drag.z,
+		f32(service.directional_drag.x),
+		f32(service.directional_drag.y),
+		f32(service.directional_drag.z),
 	}
 	options.pressure_offset = {
-		service.pressure_offset.x,
-		service.pressure_offset.y,
-		service.pressure_offset.z,
+		f32(service.pressure_offset.x),
+		f32(service.pressure_offset.y),
+		f32(service.pressure_offset.z),
 	}
 	options.incidence_deg = service.incidence_deg
 	options.wave_drag = service.wave_drag
@@ -234,9 +234,9 @@ aerodynamics_set_vector :: proc(
 	non_negative := false,
 ) {
 	value := datatypes.Arg_Vector3(L, index)
-	if !physics_finite_f32(value.x) ||
-	   !physics_finite_f32(value.y) ||
-	   !physics_finite_f32(value.z) {
+	if !physics_finite_f32(f32(value.x)) ||
+	   !physics_finite_f32(f32(value.y)) ||
+	   !physics_finite_f32(f32(value.z)) {
 		_ = vm.RaiseError(L, fmt.tprintf("Aerodynamics.%s must be finite", label))
 		return
 	}

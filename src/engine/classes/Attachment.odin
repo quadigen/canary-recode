@@ -50,9 +50,9 @@ Attachment_Local_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
 	back := linalg.cross(axis, normal)
 	return datatypes.CFrame_FromMatrix(
 		attachment.position,
-		{axis.x, axis.y, axis.z},
-		{normal.x, normal.y, normal.z},
-		{back.x, back.y, back.z},
+		{f64(axis.x), f64(axis.y), f64(axis.z)},
+		{f64(normal.x), f64(normal.y), f64(normal.z)},
+		{f64(back.x), f64(back.y), f64(back.z)},
 	)
 }
 

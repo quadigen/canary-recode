@@ -110,7 +110,9 @@ RopeConstraint_Draw_Item :: proc(rope: ^RopeConstraint, root: ^Object, ctx: ^kin
 	if rope.mesh == nil || rope.mesh_radius != radius || rope.mesh_points != points {
 		vertices: Rope_Vertices
 		indices: Rope_Indices
-		index_count := Rope_Build_Tube(points[:count], radius, &vertices, &indices)
+		local_points := points
+		for &p in local_points[:count] {p.x -= points[0].x; p.y -= points[0].y; p.z -= points[0].z}
+		index_count := Rope_Build_Tube(local_points[:count], radius, &vertices, &indices)
 		vertex_count := i32(count * ROPE_TUBE_STRIDE)
 		if rope.mesh == nil {
 			rope.mesh = kineffi.Kine_Filament_CreateCustomMesh32(ctx, &vertices[0][0], vertex_count, &indices[0], i32(index_count))
@@ -129,6 +131,7 @@ RopeConstraint_Draw_Item :: proc(rope: ^RopeConstraint, root: ^Object, ctx: ^kin
 		transform = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1},
 		r = 0.54, g = 0.39, b = 0.24,
 		param1 = 0.88, param3 = 1,
-		flags = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS,
+		flags = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+		worldPosition = {points[0].x, points[0].y, points[0].z},
 	}, true
 }

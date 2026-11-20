@@ -85,7 +85,7 @@ Physics_Raycast :: proc(
 	native_result, did_hit := jolt.System_Cast_Ray(
 		&service.system,
 		kineffi.JPH_RVec3{f64(origin.x), f64(origin.y), f64(origin.z)},
-		kineffi.JPH_Vec3{direction.x, direction.y, direction.z},
+		kineffi.JPH_Vec3{f32(direction.x), f32(direction.y), f32(direction.z)},
 		candidates[:],
 		.Include,
 	)
@@ -94,14 +94,14 @@ Physics_Raycast :: proc(
 
 	if service.terrain_body_ids[native_result.bodyID] {
 		hit_position := datatypes.Vector3 {
-			f32(native_result.position.x),
-			f32(native_result.position.y),
-			f32(native_result.position.z),
+			native_result.position.x,
+			native_result.position.y,
+			native_result.position.z,
 		}
 		result = datatypes.RaycastResult {
 			Position    = hit_position,
-			Normal      = {native_result.normal.x, native_result.normal.y, native_result.normal.z},
-			Distance    = datatypes.Vec3_Magnitude(direction) * native_result.fraction,
+			Normal      = {f64(native_result.normal.x), f64(native_result.normal.y), f64(native_result.normal.z)},
+			Distance    = f32(datatypes.Vec3_Magnitude(direction) * f64(native_result.fraction)),
 			Material    = terrain_material_at_world(service, hit_position),
 			InstanceRef = 0,
 			ObjectRef   = nil,
@@ -114,12 +114,12 @@ Physics_Raycast :: proc(
 	if part == nil {return}
 	result = datatypes.RaycastResult {
 		Position    = {
-			f32(native_result.position.x),
-			f32(native_result.position.y),
-			f32(native_result.position.z),
+			native_result.position.x,
+			native_result.position.y,
+			native_result.position.z,
 		},
-		Normal      = {native_result.normal.x, native_result.normal.y, native_result.normal.z},
-		Distance    = datatypes.Vec3_Magnitude(direction) * native_result.fraction,
+		Normal      = {f64(native_result.normal.x), f64(native_result.normal.y), f64(native_result.normal.z)},
+		Distance    = f32(datatypes.Vec3_Magnitude(direction) * f64(native_result.fraction)),
 		Material    = part.material,
 		InstanceRef = part.lua_ref,
 		ObjectRef   = part,

@@ -88,7 +88,7 @@ CharacterController_Apply_Impulse :: proc(
 	if cc == nil || cc.destroyed || cc.ragdoll { return false }
 	cc.knockback.x += impulse.x / CHARACTER_NOMINAL_MASS
 	cc.knockback.z += impulse.z / CHARACTER_NOMINAL_MASS
-	cc.vertical_speed += impulse.y / CHARACTER_NOMINAL_MASS
+	cc.vertical_speed += f32(impulse.y / CHARACTER_NOMINAL_MASS)
 	return true
 }
 

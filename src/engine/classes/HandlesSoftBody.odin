@@ -47,10 +47,10 @@ Handles_Apply_SoftBody_Axis :: proc(
 	local_axis := handles_axis_vector(axis)
 	switch style {
 	case .Movement:
-		offset := datatypes.Vec3_Multiply(local_axis, delta)
+		offset := datatypes.Vec3_Multiply(local_axis, f64(delta))
 		frame = datatypes.CFrame_Mul_CFrame(frame, datatypes.CFrame_New_Position(offset))
 	case .Rotation:
-		rotation := datatypes.CFrame_FromAxisAngle(local_axis, delta)
+		rotation := datatypes.CFrame_FromAxisAngle(local_axis, f64(delta))
 		frame = datatypes.CFrame_Mul_CFrame(frame, rotation)
 	case .Resize:
 		if !handles_resize_softbody(body, component, delta, centered, &frame) {return}
@@ -61,9 +61,9 @@ Handles_Apply_SoftBody_Axis :: proc(
 
 handles_softbody_bounds :: proc(positions: []kineffi.JPH_Vec3) -> (low, high: datatypes.Vector3) {
 	first := positions[0]
-	low, high = {first.x, first.y, first.z}, {first.x, first.y, first.z}
+	low, high = {f64(first.x), f64(first.y), f64(first.z)}, {f64(first.x), f64(first.y), f64(first.z)}
 	for position in positions[1:] {
-		point := datatypes.Vector3{position.x, position.y, position.z}
+		point := datatypes.Vector3{f64(position.x), f64(position.y), f64(position.z)}
 		low = datatypes.Vec3_Min(low, point)
 		high = datatypes.Vec3_Max(high, point)
 	}

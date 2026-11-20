@@ -356,7 +356,7 @@ viewport_frame_collect :: proc(
 					when ODIN_OS == .JS {
 						mesh = kineffi.Kine_Filament_Viewport_Primitive(ctx, kineffi.KINE_MESH_WATER_GRID)
 					} else {
-						mesh = kineffi.Kine_Filament_GetWaterGrid(ctx, part.size.x, part.size.z)
+						mesh = kineffi.Kine_Filament_GetWaterGrid(ctx, f32(part.size.x), f32(part.size.z))
 					}
 
 				} else if Is_A_Class(child, &MeshPart_Class) &&
@@ -395,18 +395,18 @@ viewport_frame_collect :: proc(
 					item := kineffi.KineFilamentDrawItem {
 						mesh         = mesh,
 						transform    = {
-							cf.r00 * size.x * scale,
-							cf.r01 * size.y * scale,
-							cf.r02 * size.z * scale,
-							cf.x,
-							cf.r10 * size.x * scale,
-							cf.r11 * size.y * scale,
-							cf.r12 * size.z * scale,
-							cf.y,
-							cf.r20 * size.x * scale,
-							cf.r21 * size.y * scale,
-							cf.r22 * size.z * scale,
-							cf.z,
+							f32(cf.r00 * size.x * f64(scale)),
+							f32(cf.r01 * size.y * f64(scale)),
+							f32(cf.r02 * size.z * f64(scale)),
+							f32(cf.x),
+							f32(cf.r10 * size.x * f64(scale)),
+							f32(cf.r11 * size.y * f64(scale)),
+							f32(cf.r12 * size.z * f64(scale)),
+							f32(cf.y),
+							f32(cf.r20 * size.x * f64(scale)),
+							f32(cf.r21 * size.y * f64(scale)),
+							f32(cf.r22 * size.z * f64(scale)),
+							f32(cf.z),
 							0,
 							0,
 							0,
@@ -454,7 +454,7 @@ viewport_frame_collect :: proc(
 					if item.tex != nil &&
 					   mesh_texture == nil &&
 					   params.kind ==
-						   kineffi.KINE_MAT_DEFAULT {item.param3 = max(f32(1), max(size.x, max(size.y, size.z)) / 4)}
+						   kineffi.KINE_MAT_DEFAULT {item.param3 = f32(max(1, max(size.x, max(size.y, size.z)) / 4))}
 
 					hash^ = viewport_frame_hash(hash^, u64(uintptr(item.tex)))
 
@@ -462,7 +462,9 @@ viewport_frame_collect :: proc(
 
 					for value in ([3]f32{item.param1, item.param2, item.param3}) {hash^ = viewport_frame_hash(hash^, u64(transmute(u32)value))}
 
-					item.flags = u32(kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS)
+					item.flags = u32(kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION)
+					item.worldPosition = {cf.x, cf.y, cf.z}
+					for v in item.worldPosition {hash^ = viewport_frame_hash(hash^, transmute(u64)v)}
 
 					if part.castshadow {item.flags |= u32(kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS)}
 
@@ -690,6 +692,16 @@ viewport_frame_submit :: proc(
 	_ = resize(&frame.items, 0)
 	scene_hash: u64 = 14695981039346656037
 	viewport_frame_collect(frame, &frame.object, ctx, &scene_hash)
+    origin := [3]f64{math.floor(camera.CFrame.x / 1024) * 1024, math.floor(camera.CFrame.y / 1024) * 1024, math.floor(camera.CFrame.z / 1024) * 1024}
+    for v in origin {scene_hash = viewport_frame_hash(scene_hash, transmute(u64)v)}
+    for &item in frame.items {
+        for axis in 0..<3 {
+            offset := axis*4+3
+            world := item.worldPosition[axis] if (item.flags & kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION) != 0 else f64(item.transform[offset])
+            item.transform[offset] = f32(world-origin[axis])
+        }
+        item.flags &= ~u32(kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION)
+    }
 
 	size := frame.absolute_size
 	density := max(f32(1), sdl3.UI_Scale) * frame.resolution_scale
@@ -704,18 +716,18 @@ viewport_frame_submit :: proc(
 
 	settings := kineffi.KineViewportSettings {
 		camera         = {
-			camera.CFrame.r00,
-			camera.CFrame.r01,
-			camera.CFrame.r02,
-			camera.CFrame.x,
-			camera.CFrame.r10,
-			camera.CFrame.r11,
-			camera.CFrame.r12,
-			camera.CFrame.y,
-			camera.CFrame.r20,
-			camera.CFrame.r21,
-			camera.CFrame.r22,
-			camera.CFrame.z,
+			f32(camera.CFrame.r00),
+			f32(camera.CFrame.r01),
+			f32(camera.CFrame.r02),
+			f32(camera.CFrame.x - origin[0]),
+			f32(camera.CFrame.r10),
+			f32(camera.CFrame.r11),
+			f32(camera.CFrame.r12),
+			f32(camera.CFrame.y - origin[1]),
+			f32(camera.CFrame.r20),
+			f32(camera.CFrame.r21),
+			f32(camera.CFrame.r22),
+			f32(camera.CFrame.z - origin[2]),
 			0,
 			0,
 			0,
@@ -724,9 +736,9 @@ viewport_frame_submit :: proc(
 		ambient        = {frame.ambient.R, frame.ambient.G, frame.ambient.B},
 		lightColor     = {frame.light_color.R, frame.light_color.G, frame.light_color.B},
 		lightDirection = {
-			frame.light_direction.x,
-			frame.light_direction.y,
-			frame.light_direction.z,
+			f32(frame.light_direction.x),
+			f32(frame.light_direction.y),
+			f32(frame.light_direction.z),
 		},
 		fieldOfView    = camera.field_of_view,
 		shadows        = quality_shadows ? 1 : 0,

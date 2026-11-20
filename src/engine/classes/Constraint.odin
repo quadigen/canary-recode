@@ -44,11 +44,11 @@ constraint_attachment_axes :: proc(
 	axis, normal: [3]f32,
 	valid: bool,
 ) {
-	axis = {attachment.axis.x, attachment.axis.y, attachment.axis.z}
+	axis = {f32(attachment.axis.x), f32(attachment.axis.y), f32(attachment.axis.z)}
 	normal = {
-		attachment.secondary_axis.x,
-		attachment.secondary_axis.y,
-		attachment.secondary_axis.z,
+		f32(attachment.secondary_axis.x),
+		f32(attachment.secondary_axis.y),
+		f32(attachment.secondary_axis.z),
 	}
 	axis_length := linalg.length(axis)
 	if !(axis_length > 0) || math.is_inf(axis_length) {return {}, {}, false}

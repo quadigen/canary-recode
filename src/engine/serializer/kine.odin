@@ -92,7 +92,8 @@ import "core:strings"
 KINE_MAGIC :: "KINE"
 
 // KINE_VERSION is the version written by this build.
-KINE_VERSION :: 8
+KINE_VERSION :: 9
+KINE_DOUBLE_COORDINATE_VERSION :: 9
 KINE_REFERENCE_VERSION :: 8
 KINE_MATERIAL_VARIANT_VERSION :: 7
 
@@ -833,18 +834,18 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_i32(w, value.number)
 	case .CFrame:
 		value := cast(^datatypes.CFrame)ptr
-		write_f32(w, value.x)
-		write_f32(w, value.y)
-		write_f32(w, value.z)
-		write_f32(w, value.r00)
-		write_f32(w, value.r01)
-		write_f32(w, value.r02)
-		write_f32(w, value.r10)
-		write_f32(w, value.r11)
-		write_f32(w, value.r12)
-		write_f32(w, value.r20)
-		write_f32(w, value.r21)
-		write_f32(w, value.r22)
+		write_coordinate(w, value.x)
+		write_coordinate(w, value.y)
+		write_coordinate(w, value.z)
+		write_coordinate(w, value.r00)
+		write_coordinate(w, value.r01)
+		write_coordinate(w, value.r02)
+		write_coordinate(w, value.r10)
+		write_coordinate(w, value.r11)
+		write_coordinate(w, value.r12)
+		write_coordinate(w, value.r20)
+		write_coordinate(w, value.r21)
+		write_coordinate(w, value.r22)
 	case .Color3:
 		value := cast(^datatypes.Color3)ptr
 		write_f32(w, value.R)
@@ -925,9 +926,9 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		}
 	case .PathWaypoint:
 		value := cast(^datatypes.PathWaypoint)ptr
-		write_f32(w, value.Position.x)
-		write_f32(w, value.Position.y)
-		write_f32(w, value.Position.z)
+		write_coordinate(w, value.Position.x)
+		write_coordinate(w, value.Position.y)
+		write_coordinate(w, value.Position.z)
 		write_i64(w, i64(value.Action))
 		write_string(w, value.Label)
 	case .PhysicalProperties:
@@ -945,12 +946,12 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_f32(w, value.W)
 	case .Region3:
 		value := cast(^datatypes.Region3)ptr
-		write_f32(w, value.Min.x)
-		write_f32(w, value.Min.y)
-		write_f32(w, value.Min.z)
-		write_f32(w, value.Max.x)
-		write_f32(w, value.Max.y)
-		write_f32(w, value.Max.z)
+		write_coordinate(w, value.Min.x)
+		write_coordinate(w, value.Min.y)
+		write_coordinate(w, value.Min.z)
+		write_coordinate(w, value.Max.x)
+		write_coordinate(w, value.Max.y)
+		write_coordinate(w, value.Max.z)
 	case .Region3int16:
 		value := cast(^datatypes.Region3int16)ptr
 		write_i16(w, value.Min.X)
@@ -996,9 +997,9 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_i16(w, value.Y)
 	case .Vector3:
 		value := cast(^datatypes.Vector3)ptr
-		write_f32(w, value.x)
-		write_f32(w, value.y)
-		write_f32(w, value.z)
+		write_coordinate(w, value.x)
+		write_coordinate(w, value.y)
+		write_coordinate(w, value.z)
 	case .Vector3int16:
 		value := cast(^datatypes.Vector3int16)ptr
 		write_i16(w, value.X)
@@ -1050,9 +1051,9 @@ write_value :: proc(
 	case .Vector:
 		write_u8(w, u8(Value_Tag.Vector3))
 		x, y, z := vm.ArgVector3(L, value_index)
-		write_f32(w, x)
-		write_f32(w, y)
-		write_f32(w, z)
+		write_coordinate(w, x)
+		write_coordinate(w, y)
+		write_coordinate(w, z)
 		return true
 	case .Userdata:
 		binding := vm.UserdataBindingOf(L, value_index)
@@ -1215,26 +1216,26 @@ read_datatype_value_record :: proc(
 		}
 		datatypes.Push_BrickColor(L, registry, datatypes.BrickColor_From_Number(value))
 	case .CFrame:
-		values := [12]f32{}
-		if !read_f32s(r, values[:]) {
+		values := [12]f64{}
+		if !read_coordinates(r, values[:]) {
 			return false
 		}
 		datatypes.Push_CFrame(
 			L,
 			registry,
 			datatypes.CFrame {
-				x = values[0],
-				y = values[1],
-				z = values[2],
-				r00 = values[3],
-				r01 = values[4],
-				r02 = values[5],
-				r10 = values[6],
-				r11 = values[7],
-				r12 = values[8],
-				r20 = values[9],
-				r21 = values[10],
-				r22 = values[11],
+				x = f64(values[0]),
+				y = f64(values[1]),
+				z = f64(values[2]),
+				r00 = f64(values[3]),
+				r01 = f64(values[4]),
+				r02 = f64(values[5]),
+				r10 = f64(values[6]),
+				r11 = f64(values[7]),
+				r12 = f64(values[8]),
+				r20 = f64(values[9]),
+				r21 = f64(values[10]),
+				r22 = f64(values[11]),
 			},
 		)
 	case .Color3:
@@ -1432,8 +1433,8 @@ read_datatype_value_record :: proc(
 		datatypes.Push_NumberSequence(L, registry, datatypes.NumberSequence{Keypoints = keypoints})
 		delete(keypoints)
 	case .PathWaypoint:
-		values := [3]f32{}
-		if !read_f32s(r, values[:]) {
+		values := [3]f64{}
+		if !read_coordinates(r, values[:]) {
 			return false
 		}
 		action, o1 := read_i64(r)
@@ -1442,7 +1443,7 @@ read_datatype_value_record :: proc(
 			return false
 		}
 		waypoint := datatypes.PathWaypoint {
-			Position = datatypes.Vector3{x = values[0], y = values[1], z = values[2]},
+			Position = datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])},
 			Action = enums.PathWaypointAction(action),
 			Label = strings.clone(label),
 		}
@@ -1477,16 +1478,16 @@ read_datatype_value_record :: proc(
 			datatypes.Quaternion{X = values[0], Y = values[1], Z = values[2], W = values[3]},
 		)
 	case .Region3:
-		values := [6]f32{}
-		if !read_f32s(r, values[:]) {
+		values := [6]f64{}
+		if !read_coordinates(r, values[:]) {
 			return false
 		}
 		datatypes.Push_Region3(
 			L,
 			registry,
 			datatypes.Region3 {
-				Min = datatypes.Vector3{x = values[0], y = values[1], z = values[2]},
-				Max = datatypes.Vector3{x = values[3], y = values[4], z = values[5]},
+				Min = datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])},
+				Max = datatypes.Vector3{x = f64(values[3]), y = f64(values[4]), z = f64(values[5])},
 			},
 		)
 	case .Region3int16:
@@ -1583,11 +1584,11 @@ read_datatype_value_record :: proc(
 		}
 		datatypes.Push_Vector2int16(L, registry, datatypes.Vector2int16{X = x, Y = y})
 	case .Vector3:
-		values := [3]f32{}
-		if !read_f32s(r, values[:]) {
+		values := [3]f64{}
+		if !read_coordinates(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Vector3(L, datatypes.Vector3{x = values[0], y = values[1], z = values[2]})
+		datatypes.Push_Vector3(L, datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])})
 	case .Vector3int16:
 		values := [3]i16{}
 		if !read_i16s(r, values[:]) {
@@ -1707,13 +1708,13 @@ read_value_record :: proc(
 		delete(value)
 		return true
 	case .Vector3:
-		x, o1 := read_f32(r)
-		y, o2 := read_f32(r)
-		z, o3 := read_f32(r)
+		x, o1 := read_coordinate(r)
+		y, o2 := read_coordinate(r)
+		z, o3 := read_coordinate(r)
 		if !o1 || !o2 || !o3 {
 			return false
 		}
-		vm.PushVector3(L, x, y, z)
+		vm.PushVector3(L, f64(x), f64(y), f64(z))
 		return true
 	case .Userdata:
 		id, ok := read_u16(r)
@@ -3215,6 +3216,7 @@ read_kine_header :: proc(reader: ^Reader) -> bool {
 	// voxel grid to restore. Version 4 also decodes, but its Font records carry
 	// no face bytes, so a font that only existed in memory does not survive it.
 	if version != KINE_VERSION &&
+	   version != KINE_REFERENCE_VERSION &&
 	   version != KINE_MATERIAL_VARIANT_VERSION &&
 	   version != KINE_EXTENSION_VERSION &&
 	   version != KINE_FONT_VERSION &&
@@ -3337,4 +3339,24 @@ Deserialize :: proc(
 		delete(apply_err)
 	}
 	return object, Error_None
+}
+
+
+// v9 stores world coordinates as IEEE-754 binary64; old maps retain their layout.
+write_coordinate :: proc(w: ^Writer, value: f64) {
+ if w.version >= KINE_DOUBLE_COORDINATE_VERSION {write_f64(w, value)}
+ else {write_f32(w, f32(value))}
+}
+read_coordinate :: proc(r: ^Reader) -> (f64, bool) {
+ if r.version >= KINE_DOUBLE_COORDINATE_VERSION {return read_f64(r)}
+ v, ok := read_f32(r)
+ return f64(v), ok
+}
+read_coordinates :: proc(r: ^Reader, values: []f64) -> bool {
+ for &v in values {
+  value, ok := read_coordinate(r)
+  if !ok {return false}
+  v = value
+ }
+ return true
 }

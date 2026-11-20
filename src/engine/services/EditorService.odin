@@ -8,6 +8,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:thread"
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -36,6 +37,7 @@ Editor_Fetch_Result :: struct {
 	path:              string,
 	downloaded:        bool,
 	update_checked:    bool,
+	refresh_pending:   bool,
 	using_stale_cache: bool,
 	warning:           string,
 	error_message:     string,
@@ -241,15 +243,14 @@ EditorService_Read_Cached_Version :: proc(path: string) -> string {
 	return strings.clone(version)
 }
 
-EditorService_Remote_Version :: proc(service: ^EditorService) -> (string, bool) {
-	http_object := Service_Get_Service(&service.service, "HttpService")
-	if http_object == nil {
+EditorService_Remote_Version :: proc(http_service: ^HttpService) -> (string, bool) {
+	if http_service == nil {
 		fmt.eprintln("[EditorService] HttpService unavailable for version check")
 		return "", false
 	}
 
 	commit: Editor_Commit
-	if !HttpService_GetJSON(cast(^HttpService)http_object, EDITOR_REPOSITORY_API_URL, &commit) {
+	if !HttpService_GetJSON(http_service, EDITOR_REPOSITORY_API_URL, &commit) {
 		fmt.eprintf("[EditorService] version request failed: %s\n", EDITOR_REPOSITORY_API_URL)
 		return "", false
 	}
@@ -309,12 +310,11 @@ EditorService_Needs_Download :: proc(
 }
 
 EditorService_Download_Blob :: proc(
-	service: ^EditorService,
+	http_service: ^HttpService,
 	archive_path: string,
 	reference: string,
 ) -> bool {
-	http_object := Service_Get_Service(&service.service, "HttpService")
-	if http_object == nil {
+	if http_service == nil {
 		fmt.eprintln("[EditorService] HttpService unavailable for editor download")
 		return false
 	}
@@ -323,7 +323,7 @@ EditorService_Download_Blob :: proc(
 	defer delete(url)
 	fmt.eprintf("[EditorService] downloading editor archive: %s\n", url)
 
-	data, fetched := HttpService_GetAsync(cast(^HttpService)http_object, url)
+	data, fetched := HttpService_GetAsync(http_service, url)
 	if !fetched {
 		fmt.eprintf("[EditorService] editor archive request failed: %s\n", url)
 		return false
@@ -361,6 +361,8 @@ EditorService_Download_Blob :: proc(
 EditorService_Get_Editor :: proc(
 	service: ^EditorService,
 	check_remote := true,
+	prefer_cache := false,
+	http_override: ^HttpService = nil,
 ) -> Editor_Fetch_Result {
 	result := Editor_Fetch_Result{}
 
@@ -381,10 +383,22 @@ EditorService_Get_Editor :: proc(
 		cached_version,
 	)
 
+	// A warm launch must never wait for GitHub. Refresh after the archive
+	// has been read into memory; the new editor is used on the next launch.
+	if prefer_cache && valid_cache {
+		result.path = archive_path
+		result.refresh_pending = check_remote
+		return result
+	}
+
+	http_service := http_override
+	if http_service == nil && service != nil && (check_remote || !valid_cache) {
+		http_service = cast(^HttpService)Service_Get_Service(&service.service, "HttpService")
+	}
 	remote_version := ""
 	update_checked := false
 	if check_remote {
-		remote_version, update_checked = EditorService_Remote_Version(service)
+		remote_version, update_checked = EditorService_Remote_Version(http_service)
 	}
 	defer if len(remote_version) > 0 {delete(remote_version)}
 	result.update_checked = update_checked
@@ -416,7 +430,7 @@ EditorService_Get_Editor :: proc(
 		download_reference = remote_version
 	}
 
-	if !EditorService_Download_Blob(service, archive_path, download_reference) {
+	if !EditorService_Download_Blob(http_service, archive_path, download_reference) {
 		if valid_cache {
 			result.path = archive_path
 			result.using_stale_cache = true
@@ -436,6 +450,19 @@ EditorService_Get_Editor :: proc(
 	}
 
 	return result
+}
+
+// Independent worker: no VM, service registry, or renderer pointers cross
+// threads. The local HTTP service is used only for its synchronous HTTP helper.
+EditorService_Refresh_Cache_Background :: proc() {
+	thread.run(proc() {
+		http_service := HttpService{http_enabled = true}
+		result := EditorService_Get_Editor(nil, http_override = &http_service)
+		defer if result.path != "" {delete(result.path)}
+		if result.downloaded {
+			fmt.eprintln("[EditorService] refreshed editor cache; available on next launch")
+		}
+	}, name = "Editor cache refresh")
 }
 
 editor_service_construct :: proc(

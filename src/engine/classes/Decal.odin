@@ -195,7 +195,7 @@ decal_vec_neg :: proc(v: datatypes.Vector3) -> datatypes.Vector3 {
 }
 
 decal_vec_mul :: proc(v: datatypes.Vector3, s: f32) -> datatypes.Vector3 {
-	return datatypes.Vector3{v.x * s, v.y * s, v.z * s}
+	return datatypes.Vector3{v.x * f64(s), v.y * f64(s), v.z * f64(s)}
 }
 
 decal_vec_add :: proc(a, b: datatypes.Vector3) -> datatypes.Vector3 {
@@ -230,82 +230,82 @@ part_face_info :: proc(part: ^Part, face: enums.NormalId, z_offset: f32) -> Deca
 		info.normal = look
 		info.horizontal = right
 		info.vertical = up
-		info.width = part.size.x
-		info.height = part.size.y
+		info.width = f32(part.size.x)
+		info.height = f32(part.size.y)
 
-		info.center = decal_vec_add(position, decal_vec_mul(look, part.size.z * 0.5 + z_offset))
+		info.center = decal_vec_add(position, decal_vec_mul(look, f32(part.size.z * 0.5 + f64(z_offset))))
 
 	case .Back:
 		info.normal = back
 		info.horizontal = decal_vec_neg(right)
 		info.vertical = up
-		info.width = part.size.x
-		info.height = part.size.y
+		info.width = f32(part.size.x)
+		info.height = f32(part.size.y)
 
-		info.center = decal_vec_add(position, decal_vec_mul(back, part.size.z * 0.5 + z_offset))
+		info.center = decal_vec_add(position, decal_vec_mul(back, f32(part.size.z * 0.5 + f64(z_offset))))
 
 	case .Right:
 		info.normal = right
 		info.horizontal = back
 		info.vertical = up
-		info.width = part.size.z
-		info.height = part.size.y
+		info.width = f32(part.size.z)
+		info.height = f32(part.size.y)
 
-		info.center = decal_vec_add(position, decal_vec_mul(right, part.size.x * 0.5 + z_offset))
+		info.center = decal_vec_add(position, decal_vec_mul(right, f32(part.size.x * 0.5 + f64(z_offset))))
 
 	case .Left:
 		info.normal = decal_vec_neg(right)
 		info.horizontal = look
 		info.vertical = up
-		info.width = part.size.z
-		info.height = part.size.y
+		info.width = f32(part.size.z)
+		info.height = f32(part.size.y)
 
 		info.center = decal_vec_add(
 			position,
-			decal_vec_mul(info.normal, part.size.x * 0.5 + z_offset),
+			decal_vec_mul(info.normal, f32(part.size.x * 0.5 + f64(z_offset))),
 		)
 
 	case .Top:
 		info.normal = up
 		info.horizontal = right
 		info.vertical = back
-		info.width = part.size.x
-		info.height = part.size.z
+		info.width = f32(part.size.x)
+		info.height = f32(part.size.z)
 
-		info.center = decal_vec_add(position, decal_vec_mul(up, part.size.y * 0.5 + z_offset))
+		info.center = decal_vec_add(position, decal_vec_mul(up, f32(part.size.y * 0.5 + f64(z_offset))))
 
 	case .Bottom:
 		info.normal = decal_vec_neg(up)
 		info.horizontal = right
 		info.vertical = look
-		info.width = part.size.x
-		info.height = part.size.z
+		info.width = f32(part.size.x)
+		info.height = f32(part.size.z)
 
 		info.center = decal_vec_add(
 			position,
-			decal_vec_mul(info.normal, part.size.y * 0.5 + z_offset),
+			decal_vec_mul(info.normal, f32(part.size.y * 0.5 + f64(z_offset))),
 		)
 	}
 
 	return info
 }
 
-decal_transform :: proc(info: Decal_Face_Info) -> [16]f32 {
+decal_transform :: proc(info: Decal_Face_Info) -> [16]f64 {
 
 
-	return [16]f32 {
-		info.horizontal.x * info.width,
-		info.normal.x,
-		info.vertical.x * info.height,
-		info.center.x,
-		info.horizontal.y * info.width,
-		info.normal.y,
-		info.vertical.y * info.height,
-		info.center.y,
-		info.horizontal.z * info.width,
-		info.normal.z,
-		info.vertical.z * info.height,
-		info.center.z,
+	return [16]f64 {
+		f64(info.horizontal.x * f64(info.width)),
+		f64(info.normal.x),
+		f64(info.vertical.x * f64(info.height)),
+		f64(info.center.x),
+		f64(info.horizontal.y * f64(info.width)),
+		f64(info.normal.y),
+		f64(info.vertical.y * f64(info.height)),
+		f64(info.center.y),
+		f64(info.horizontal.z * f64(info.width)),
+		f64(info.normal.z),
+		f64(info.vertical.z * f64(info.height)),
+		f64(info.center.z),
 		0,
 		0,
 		0,
@@ -411,7 +411,7 @@ Decal_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 decal_apply_style :: proc(
 	decal: ^Decal,
 	renderer: ^Renderer_Object,
-	transform: ^[16]f32,
+	transform: ^[16]f64,
 	width, height: f32,
 ) {
 	_ = kineffi.Kine_Filament_SetDecalTransform(

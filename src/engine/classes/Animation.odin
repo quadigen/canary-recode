@@ -118,18 +118,18 @@ Animation_Compile_Pose :: proc(
 	pose := cast(^Pose)object
 	cf := pose.cframe
 	mat := [12]f32 {
-		cf.x,
-		cf.y,
-		cf.z,
-		cf.r00,
-		cf.r01,
-		cf.r02,
-		cf.r10,
-		cf.r11,
-		cf.r12,
-		cf.r20,
-		cf.r21,
-		cf.r22,
+		f32(cf.x),
+		f32(cf.y),
+		f32(cf.z),
+		f32(cf.r00),
+		f32(cf.r01),
+		f32(cf.r02),
+		f32(cf.r10),
+		f32(cf.r11),
+		f32(cf.r12),
+		f32(cf.r20),
+		f32(cf.r21),
+		f32(cf.r22),
 	}
 	bone_name := strings.clone_to_cstring(object.name)
 	_ = kineffi.Kine_Filament_MeshAddAnimationPose(

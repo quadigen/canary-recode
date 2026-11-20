@@ -65,7 +65,7 @@ physics_hook_get_linear_velocity :: proc(
 		body.body_id,
 		&velocity,
 	)
-	return datatypes.Vector3{velocity.x, velocity.y, velocity.z}, true
+	return datatypes.Vector3{f64(velocity.x), f64(velocity.y), f64(velocity.z)}, true
 }
 
 physics_hook_set_linear_velocity :: proc(
@@ -75,7 +75,7 @@ physics_hook_set_linear_velocity :: proc(
 ) {
 	physics, body := physics_hook_body(ctx, object)
 	if physics == nil {return}
-	velocity := kineffi.JPH_Vec3{value.x, value.y, value.z}
+	velocity := kineffi.JPH_Vec3{f32(value.x), f32(value.y), f32(value.z)}
 	kineffi.JPH_BodyInterface_SetLinearVelocity(
 		physics.system.body_interface,
 		body.body_id,
@@ -104,7 +104,7 @@ physics_hook_get_angular_velocity :: proc(
 		body.body_id,
 		&velocity,
 	)
-	return datatypes.Vector3{velocity.x, velocity.y, velocity.z}, true
+	return datatypes.Vector3{f64(velocity.x), f64(velocity.y), f64(velocity.z)}, true
 }
 
 physics_hook_set_angular_velocity :: proc(
@@ -114,7 +114,7 @@ physics_hook_set_angular_velocity :: proc(
 ) {
 	physics, body := physics_hook_body(ctx, object)
 	if physics == nil {return}
-	velocity := kineffi.JPH_Vec3{value.x, value.y, value.z}
+	velocity := kineffi.JPH_Vec3{f32(value.x), f32(value.y), f32(value.z)}
 	kineffi.JPH_BodyInterface_SetAngularVelocity(
 		physics.system.body_interface,
 		body.body_id,
@@ -133,7 +133,7 @@ physics_hook_apply_impulse :: proc(
 	part := cast(^classes.Part)object
 	if part.material == .Water {return false}
 	physics_update_body_material(physics, body, part.material)
-	value := kineffi.JPH_Vec3{impulse.x, impulse.y, impulse.z}
+	value := kineffi.JPH_Vec3{f32(impulse.x), f32(impulse.y), f32(impulse.z)}
 	kineffi.JPH_BodyInterface_AddImpulse(physics.system.body_interface, body.body_id, &value)
 	kineffi.JPH_BodyInterface_ActivateBody(physics.system.body_interface, body.body_id)
 	return true

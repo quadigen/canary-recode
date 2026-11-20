@@ -240,9 +240,9 @@ editable_mesh_valid_bone :: proc(mesh: ^EditableMesh, id: i32) -> bool {
 
 editable_mesh_valid_position :: proc(value: datatypes.Vector3) -> bool {
 	return(
-		editable_mesh_finite(value.x) &&
-		editable_mesh_finite(value.y) &&
-		editable_mesh_finite(value.z) \
+		editable_mesh_finite(f32(value.x)) &&
+		editable_mesh_finite(f32(value.y)) &&
+		editable_mesh_finite(f32(value.z)) \
 	)
 }
 
@@ -772,9 +772,9 @@ EditableMesh_Find_Closest_Vertex :: proc(mesh: ^EditableMesh, point: datatypes.V
 	for &position, index in &mesh.vertices {
 		delta := datatypes.Vec3_Subtract(position, point)
 		distance := datatypes.Vec3_Magnitude_Squared(delta)
-		if best == EDITABLE_MESH_NONE || distance < best_distance {
+		if best == EDITABLE_MESH_NONE || distance < f64(best_distance) {
 			best = i32(index)
-			best_distance = distance
+			best_distance = f32(distance)
 		}
 	}
 
@@ -792,7 +792,7 @@ EditableMesh_Find_Vertices_Within_Sphere :: proc(
 	radius_squared := radius * radius
 	for &position, index in &mesh.vertices {
 		delta := datatypes.Vec3_Subtract(position, center)
-		if datatypes.Vec3_Magnitude_Squared(delta) <= radius_squared {
+		if datatypes.Vec3_Magnitude_Squared(delta) <= f64(radius_squared) {
 			append(&result, i32(index))
 		}
 	}
@@ -953,9 +953,9 @@ EditableMesh_Closest_Point_On_Surface :: proc(
 			)
 			delta := datatypes.Vec3_Subtract(candidate, point)
 			distance := datatypes.Vec3_Magnitude_Squared(delta)
-			if !found || distance < best_distance {
+			if !found || distance < f64(best_distance) {
 				found = true
-				best_distance = distance
+				best_distance = f32(distance)
 				face_id = i32(current_face)
 				position = candidate
 				barycentric = weights
@@ -1024,14 +1024,14 @@ EditableMesh_Raycast_Local :: proc(
 
 			distance := datatypes.Vec3_Dot(edge2, qvec) * inv
 			if distance < 1.0e-6 {continue}
-			if found && distance >= best_distance {continue}
+			if found && distance >= f64(best_distance) {continue}
 
 			found = true
-			best_distance = distance
+			best_distance = f32(distance)
 			face_id = i32(current_face)
 			point = datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(normalized, distance))
 			barycentric = datatypes.Vector3{1 - u - v, u, v}
-			vertex_ids = datatypes.Vector3{f32(a_id), f32(b_id), f32(c_id)}
+			vertex_ids = datatypes.Vector3{f64(f32(a_id)), f64(f32(b_id)), f64(f32(c_id))}
 		}
 	}
 
@@ -1133,9 +1133,9 @@ editable_mesh_weld :: proc(
 		}
 
 		cell := [3]int {
-			int(math.floor(position.x / bucket)),
-			int(math.floor(position.y / bucket)),
-			int(math.floor(position.z / bucket)),
+			int(math.floor(position.x / f64(bucket))),
+			int(math.floor(position.y / f64(bucket))),
+			int(math.floor(position.z / f64(bucket))),
 		}
 
 		merged := false
@@ -1148,7 +1148,7 @@ editable_mesh_weld :: proc(
 					candidate, found := occupied[key]
 					if !found {continue}
 					delta := datatypes.Vec3_Subtract(mesh.vertices[candidate], position)
-					if datatypes.Vec3_Magnitude_Squared(delta) <= tolerance_squared {
+					if datatypes.Vec3_Magnitude_Squared(delta) <= f64(tolerance_squared) {
 						remap[index] = candidate
 						merged = true
 						break

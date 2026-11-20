@@ -92,19 +92,19 @@ BoxHandleAdornment_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	pad: f32 = 0.05
-	xf := [16]f32 {
-		part.size.x + pad,
+	xf := [16]f64 {
+		f64(part.size.x + f64(pad)),
 		0,
 		0,
-		part.position.x,
+		f64(part.position.x),
 		0,
-		part.size.y + pad,
+		f64(part.size.y + f64(pad)),
 		0,
-		part.position.y,
+		f64(part.position.y),
 		0,
 		0,
-		part.size.z + pad,
-		part.position.z,
+		f64(part.size.z + f64(pad)),
+		f64(part.position.z),
 		0,
 		0,
 		0,

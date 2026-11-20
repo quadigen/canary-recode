@@ -80,16 +80,16 @@ user_input_pointer_over_gui :: proc(
 
 		if classes.GuiObject_find_topmost(
 			   service.signal_registry,
-			   x,
-			   y,
+			   f32(x),
+			   f32(y),
 			   true,
-			   user_input_point_in_viewport(service, x, y),
+			   user_input_point_in_viewport(service, f32(x), f32(y)),
 		   ) !=
 		   nil {
 			return true
 		}
 
-		if classes.GuiObject_surface_pointer_over(service.signal_registry, x, y, true) {
+		if classes.GuiObject_surface_pointer_over(service.signal_registry, f32(x), f32(y), true) {
 			return true
 		}
 	case:
@@ -171,7 +171,7 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 			classes.InputObject_Value {
 				UserInputType = input_type,
 				UserInputState = is_down ? .Begin : .End,
-				Position = {event.button.x, event.button.y, 0},
+				Position = {f64(event.button.x), f64(event.button.y), 0},
 			},
 		)
 	case .MOUSE_MOTION:
@@ -190,8 +190,8 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 			classes.InputObject_Value {
 				UserInputType = .MouseMovement,
 				UserInputState = .Change,
-				Position = {event.motion.x, event.motion.y, 0},
-				Delta = {delta.X, delta.Y, 0},
+				Position = {f64(event.motion.x), f64(event.motion.y), 0},
+				Delta = {f64(delta.X), f64(delta.Y), 0},
 			},
 		)
 	case .MOUSE_WHEEL:
@@ -209,8 +209,8 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 			classes.InputObject_Value {
 				UserInputType = .MouseWheel,
 				UserInputState = .Change,
-				Position = {event.wheel.mouse_x, event.wheel.mouse_y, event.wheel.y},
-				Delta = {event.wheel.x, 0, event.wheel.y},
+				Position = {f64(event.wheel.mouse_x), f64(event.wheel.mouse_y), f64(event.wheel.y)},
+				Delta = {f64(event.wheel.x), 0, f64(event.wheel.y)},
 			},
 		)
 	}
@@ -242,7 +242,7 @@ user_input_handle_finger :: proc(L: ^vm.State, service: ^UserInputService, event
 		value := classes.InputObject_Value {
 			UserInputType  = .Touch,
 			UserInputState = .Begin,
-			Position       = {x, y, 0},
+			Position       = {f64(x), f64(y), 0},
 		}
 		append(&service.touches, UserInputTouch{id = finger.fingerID, value = value})
 		service.last_input_type = .Touch
@@ -253,7 +253,7 @@ user_input_handle_finger :: proc(L: ^vm.State, service: ^UserInputService, event
 			value := classes.InputObject_Value {
 				UserInputType  = .Touch,
 				UserInputState = .Change,
-				Position       = {x, y, 0},
+				Position       = {f64(x), f64(y), 0},
 			}
 			append(&service.touches, UserInputTouch{id = finger.fingerID, value = value})
 			service.last_input_type = .Touch
@@ -262,8 +262,8 @@ user_input_handle_finger :: proc(L: ^vm.State, service: ^UserInputService, event
 		}
 		value := service.touches[index].value
 		value.UserInputState = .Change
-		value.Position = {x, y, 0}
-		value.Delta = {finger.dx * size.x, finger.dy * size.y, 0}
+		value.Position = {f64(x), f64(y), 0}
+		value.Delta = {f64(finger.dx * size.x), f64(finger.dy * size.y), 0}
 		service.touches[index].value = value
 		service.last_input_type = .Touch
 		user_input_fire(L, service, service.input_changed, value)
@@ -272,7 +272,7 @@ user_input_handle_finger :: proc(L: ^vm.State, service: ^UserInputService, event
 		if index < 0 {return}
 		value := service.touches[index].value
 		value.UserInputState = .End
-		value.Position = {x, y, 0}
+		value.Position = {f64(x), f64(y), 0}
 		ordered_remove(&service.touches, index)
 		service.last_input_type = .Touch
 		user_input_fire(L, service, service.input_ended, value)

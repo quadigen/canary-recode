@@ -347,9 +347,9 @@ sync_spot_light :: proc(light: ^SpotLight, ctx: ^Class_Step_Context) {
 			position.x,
 			position.y,
 			position.z,
-			direction.x,
-			direction.y,
-			direction.z,
+			f32(direction.x),
+			f32(direction.y),
+			f32(direction.z),
 			light.color.R,
 			light.color.G,
 			light.color.B,
@@ -377,9 +377,9 @@ sync_spot_light :: proc(light: ^SpotLight, ctx: ^Class_Step_Context) {
 	kineffi.Kine_Filament_SetDirectionLight(
 		filament,
 		light.native_id,
-		direction.x,
-		direction.y,
-		direction.z,
+		f32(direction.x),
+		f32(direction.y),
+		f32(direction.z),
 	)
 
 	kineffi.Kine_Filament_SetColorLight(
@@ -433,9 +433,9 @@ sync_surface_light :: proc(light: ^SurfaceLight, ctx: ^Class_Step_Context) {
 			position.x,
 			position.y,
 			position.z,
-			direction.x,
-			direction.y,
-			direction.z,
+			f32(direction.x),
+			f32(direction.y),
+			f32(direction.z),
 			light.color.R,
 			light.color.G,
 			light.color.B,
@@ -463,9 +463,9 @@ sync_surface_light :: proc(light: ^SurfaceLight, ctx: ^Class_Step_Context) {
 	kineffi.Kine_Filament_SetDirectionLight(
 		filament,
 		light.native_id,
-		direction.x,
-		direction.y,
-		direction.z,
+		f32(direction.x),
+		f32(direction.y),
+		f32(direction.z),
 	)
 
 	kineffi.Kine_Filament_SetColorLight(

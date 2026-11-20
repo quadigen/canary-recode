@@ -15,13 +15,13 @@
 extern "C" {
 #endif
 
-#define KINE_GAME_ABI_MAJOR 1u
+#define KINE_GAME_ABI_MAJOR 2u
 #define KINE_GAME_ABI_MINOR 0u
 
 typedef void *kine_game_context;
 typedef void *kine_game_instance;
 typedef struct { const char *data; size_t length; } kine_game_string;
-typedef struct { float x, y, z; } kine_game_vector3;
+typedef struct { double x, y, z; } kine_game_vector3;
 typedef struct { float r, g, b; } kine_game_color3;
 
 enum kine_game_role { KINE_GAME_SINGLEPLAYER, KINE_GAME_CLIENT, KINE_GAME_SERVER };

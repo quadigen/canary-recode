@@ -96,7 +96,7 @@ else()
     FetchContent_Declare(
         tracy
         GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-        GIT_TAG v0.14.1
+        GIT_TAG v0.15.0
         GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE
     )
@@ -320,6 +320,11 @@ else()
     # across releases and runner images. Resolve exact archive filenames below
     # the SDK's lib tree rather than coupling them to CMAKE_SYSTEM_PROCESSOR.
     set(KINE_FILAMENT_ARCHIVE_DIR "${FILAMENT_DIR}/lib")
+endif()
+file(GLOB_RECURSE _kine_dawn_archives LIST_DIRECTORIES FALSE
+    "${KINE_FILAMENT_ARCHIVE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}webgpu_dawn${CMAKE_STATIC_LIBRARY_SUFFIX}")
+if(_kine_dawn_archives)
+    list(APPEND KINE_FILAMENT_ARCHIVE_NAMES webgpu_dawn)
 endif()
 foreach(_filament_archive IN LISTS KINE_FILAMENT_ARCHIVE_NAMES)
     if(WIN32)

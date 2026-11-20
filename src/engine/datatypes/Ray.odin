@@ -27,6 +27,6 @@ Ray_ClosestPoint :: proc(ray: Ray, point: Vector3) -> Vector3 {
 Ray_Distance :: proc(ray: Ray, point: Vector3) -> f32 {
 	closest := Ray_ClosestPoint(ray, point)
 	dx, dy, dz := point.x-closest.x, point.y-closest.y, point.z-closest.z
-	return math.sqrt(dx*dx + dy*dy + dz*dz)
+	return f32(math.sqrt(dx*dx + dy*dy + dz*dz))
 }
 

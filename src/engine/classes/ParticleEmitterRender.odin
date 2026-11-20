@@ -38,9 +38,9 @@ particle_emitter_frame :: proc(
 		attachment := cast(^Attachment)parent
 		rotation := attachment.orientation
 		local_frame = datatypes.CFrame_FromOrientation(
-			rotation.x * PARTICLE_DEGREES,
-			rotation.y * PARTICLE_DEGREES,
-			rotation.z * PARTICLE_DEGREES,
+			rotation.x * f64(PARTICLE_DEGREES),
+			rotation.y * f64(PARTICLE_DEGREES),
+			rotation.z * f64(PARTICLE_DEGREES),
 		)
 		local_frame = datatypes.CFrame_Add_Vector3(local_frame, attachment.position)
 		part = parent.parent
@@ -75,10 +75,10 @@ particle_emitter_direction :: proc(
 	yaw := (rand.float32() - 0.5) * spread.X * PARTICLE_DEGREES
 	pitch := (rand.float32() - 0.5) * spread.Y * PARTICLE_DEGREES
 	return datatypes.Vec3_Add(
-		datatypes.Vec3_Multiply(forward, math.cos(yaw) * math.cos(pitch)),
+		datatypes.Vec3_Multiply(forward, f64(math.cos(yaw) * math.cos(pitch))),
 		datatypes.Vec3_Add(
-			datatypes.Vec3_Multiply(right, math.sin(yaw) * math.cos(pitch)),
-			datatypes.Vec3_Multiply(up, math.sin(pitch)),
+			datatypes.Vec3_Multiply(right, f64(math.sin(yaw) * math.cos(pitch))),
+			datatypes.Vec3_Multiply(up, f64(math.sin(pitch))),
 		),
 	)
 }
@@ -103,9 +103,9 @@ particle_emitter_spawn :: proc(
 		lifetime := particle_emitter_sample(emitter.lifetime)
 		if lifetime <= 0 {continue}
 		local_position := datatypes.Vector3 {
-			(rand.float32() - 0.5) * size.x,
-			(rand.float32() - 0.5) * size.y,
-			(rand.float32() - 0.5) * size.z,
+			f64((rand.float32() - 0.5)) * size.x,
+			f64((rand.float32() - 0.5)) * size.y,
+			f64((rand.float32() - 0.5)) * size.z,
 		}
 		direction := particle_emitter_direction(emitter.emission_direction, emitter.spread_angle)
 		append(
@@ -114,7 +114,7 @@ particle_emitter_spawn :: proc(
 				position = datatypes.CFrame_PointToWorldSpace(frame, local_position),
 				velocity = datatypes.Vec3_Multiply(
 					datatypes.CFrame_VectorToWorldSpace(frame, direction),
-					particle_emitter_sample(emitter.speed),
+					f64(particle_emitter_sample(emitter.speed)),
 				),
 				lifetime = lifetime,
 				rotation = particle_emitter_sample(emitter.rotation) * PARTICLE_DEGREES,
@@ -147,18 +147,18 @@ ParticleEmitter_Step :: proc(registry: ^Registry, delta_time: f32, wind: datatyp
 				if particle.age >= particle.lifetime {continue}
 				particle.velocity = datatypes.Vec3_Add(
 					particle.velocity,
-					datatypes.Vec3_Multiply(emitter.acceleration, dt),
+					datatypes.Vec3_Multiply(emitter.acceleration, f64(dt)),
 				)
 				particle.velocity = datatypes.Vec3_Add(
 					target,
 					datatypes.Vec3_Multiply(
 						datatypes.Vec3_Subtract(particle.velocity, target),
-						retention,
+						f64(retention),
 					),
 				)
 				particle.position = datatypes.Vec3_Add(
 					particle.position,
-					datatypes.Vec3_Multiply(particle.velocity, dt),
+					datatypes.Vec3_Multiply(particle.velocity, f64(dt)),
 				)
 				emitter.particles[survivors] = particle
 				survivors += 1
@@ -266,9 +266,9 @@ ParticleEmitter_Render :: proc(registry: ^Registry, renderer: ^Renderer_Object) 
 	descriptor := Find_Class(registry, "ParticleEmitter")
 	if descriptor == nil {return}
 	view := renderer.WorldToView
-	right := datatypes.Vector3{view[3], view[4], view[5]}
-	up := datatypes.Vector3{view[6], view[7], view[8]}
-	back := datatypes.Vector3{view[9], view[10], view[11]}
+	right := datatypes.Vector3{f64(view[3]), f64(view[4]), f64(view[5])}
+	up := datatypes.Vector3{f64(view[6]), f64(view[7]), f64(view[8])}
+	back := datatypes.Vector3{f64(view[9]), f64(view[10]), f64(view[11])}
 	for object in descriptor.instances {
 		if object == nil || object.destroyed {continue}
 		emitter := cast(^ParticleEmitter)object
@@ -295,31 +295,32 @@ ParticleEmitter_Render :: proc(registry: ^Registry, renderer: ^Renderer_Object) 
 			angle := particle.rotation + particle.spin * particle.age
 			sin, cos := math.sin(angle) * size, math.cos(angle) * size
 			x_axis := datatypes.Vec3_Add(
-				datatypes.Vec3_Multiply(right, cos),
-				datatypes.Vec3_Multiply(up, sin),
+				datatypes.Vec3_Multiply(right, f64(cos)),
+				datatypes.Vec3_Multiply(up, f64(sin)),
 			)
 			y_axis := datatypes.Vec3_Add(
-				datatypes.Vec3_Multiply(right, -sin),
-				datatypes.Vec3_Multiply(up, cos),
+				datatypes.Vec3_Multiply(right, f64(-sin)),
+				datatypes.Vec3_Multiply(up, f64(cos)),
 			)
 			position := datatypes.Vec3_Add(
 				particle.position,
-				datatypes.Vec3_Multiply(back, emitter.z_offset),
+				datatypes.Vec3_Multiply(back, f64(emitter.z_offset)),
 			)
 			item := kineffi.KineFilamentParticleItem {
+				worldPosition = {position.x, position.y, position.z},
 				transform = {
-					x_axis.x,
-					y_axis.x,
-					back.x,
-					position.x,
-					x_axis.y,
-					y_axis.y,
-					back.y,
-					position.y,
-					x_axis.z,
-					y_axis.z,
-					back.z,
-					position.z,
+					f32(x_axis.x),
+					f32(y_axis.x),
+					f32(back.x),
+					0,
+					f32(x_axis.y),
+					f32(y_axis.y),
+					f32(back.y),
+					0,
+					f32(x_axis.z),
+					f32(y_axis.z),
+					f32(back.z),
+					0,
 					0,
 					0,
 					0,

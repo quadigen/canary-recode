@@ -83,18 +83,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "Android dependency build failed"
 }
 
-$filamentVersion = "1.74.0"
-$sdlVersion = "3.4.14"
+$filamentVersion = "1.81.0"
+$sdlVersion = "3.4.20"
 $cache = Join-Path $repo ".cache\android"
-$filamentRoot = Join-Path $cache "filament\filament"
-$filamentHostRoot = Join-Path $cache "filament-host"
-$localFilamentHost = Join-Path $repo "vendor\build\_deps\filament_prebuilt-src"
-if (Test-Path (Join-Path $localFilamentHost "bin\matc.exe")) {
-    $filamentHostRoot = $localFilamentHost
-}
+$filamentRoot = Join-Path $cache "filament-$filamentVersion\filament"
+$filamentHostRoot = Join-Path $cache "filament-host-$filamentVersion"
 $sdlAar = Join-Path $cache "sdl3\SDL3-$sdlVersion.aar"
 $skiaRoot = Join-Path $repo "vendor\build\vendor\kine_skia\skia-src"
-$box2dRoot = Join-Path $cache "box2d"
+$box2dRoot = Join-Path $cache "box2d-3.2.0"
 
 function Expand-Tarball([string]$Url, [string]$Archive, [string]$Destination) {
     New-Item -ItemType Directory -Force $Destination | Out-Null
@@ -111,13 +107,13 @@ foreach ($abi in $Abis) {
     $filamentArch = $FilamentArchs[$abi]
     $filamentLib = Join-Path $filamentRoot "lib\$filamentArch\libfilament.a"
     if (-not (Test-Path $filamentLib)) {
-        $archive = Join-Path $cache "filament\filament-v$filamentVersion-android-native.tgz"
+        $archive = Join-Path $cache "filament-$filamentVersion\filament-v$filamentVersion-android-native.tgz"
         Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-android-native.tgz" $archive (Split-Path $filamentRoot)
         break
     }
 }
 if (-not (Test-Path (Join-Path $filamentHostRoot "bin\matc.exe"))) {
-    $archive = Join-Path $cache "filament-host\filament-v$filamentVersion-windows.tgz"
+    $archive = Join-Path $cache "filament-host-$filamentVersion\filament-v$filamentVersion-windows.tgz"
     Expand-Tarball "https://github.com/google/filament/releases/download/v$filamentVersion/filament-v$filamentVersion-windows.tgz" $archive $filamentHostRoot
 }
 foreach ($hostTool in @('matc.exe', 'resgen.exe')) {
@@ -140,7 +136,7 @@ if (-not $UsePrebuiltSkia -and -not (Test-Path (Join-Path $skiaRoot "bin\gn.exe"
 }
 if (-not (Test-Path (Join-Path $box2dRoot ".git"))) {
     New-Item -ItemType Directory -Force (Split-Path $box2dRoot) | Out-Null
-    & git clone --depth 1 --branch v3.1.1 https://github.com/erincatto/box2d.git $box2dRoot
+    & git clone --depth 1 --branch v3.2.0 https://github.com/erincatto/box2d.git $box2dRoot
     if ($LASTEXITCODE -ne 0) { throw "Box2D checkout failed" }
 }
 
@@ -205,7 +201,7 @@ foreach ($abi in $Abis) {
     }
     $skiaOut = Join-Path $skiaRoot "out\$skiaBuildName"
     $nativeBuild = Join-Path $repo "build\android-native-$abi"
-    $boxBuild = Join-Path $repo "build\android-box2d-$abi"
+    $boxBuild = Join-Path $repo "build\android-box2d-3.2.0-$abi"
     $vendorOut = Join-Path $repo "build\android-vendor-$abi"
     $jniOut = Join-Path $repo "build\android-jni\$abi"
     $odinObjects = Join-Path $repo "build\android-$abi"
@@ -235,7 +231,7 @@ foreach ($abi in $Abis) {
     & cmake --build $nativeBuild --parallel
     if ($LASTEXITCODE -ne 0) { throw "Native Android $abi dependency build failed" }
 
-    $boxBuild = Join-Path $repo "build\android-box2d-$abi"
+    $boxBuild = Join-Path $repo "build\android-box2d-3.2.0-$abi"
     & cmake -S $box2dRoot -B $boxBuild -G Ninja "-DCMAKE_MAKE_PROGRAM=$ninjaExecutable" "-DCMAKE_TOOLCHAIN_FILE=$toolchain" "-DANDROID_ABI=$abi" "-DANDROID_PLATFORM=android-$ApiLevel" -DANDROID_STL=c++_static -DBOX2D_SAMPLES=OFF -DBOX2D_UNIT_TESTS=OFF -DBOX2D_VALIDATE=OFF -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "Box2D Android $abi configuration failed" }
     & cmake --build $boxBuild --parallel

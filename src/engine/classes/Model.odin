@@ -150,7 +150,7 @@ Model_Pivot_To :: proc(model: ^Model, target: datatypes.CFrame) {
 				   "RotationController",
 			   ); rotation != nil {
 				_, yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(target)
-				rotation.yaw = math.to_degrees(yaw)
+				rotation.yaw = f32(math.to_degrees(yaw))
 				rotation.target_yaw = rotation.yaw
 			}
 		}
@@ -178,23 +178,23 @@ model_scale_children :: proc(
 			current := datatypes.Vector3{part.cframe.x, part.cframe.y, part.cframe.z}
 			position := datatypes.Vec3_Add(
 				center,
-				datatypes.Vec3_Multiply(datatypes.Vec3_Subtract(current, center), ratio),
+				datatypes.Vec3_Multiply(datatypes.Vec3_Subtract(current, center), f64(ratio)),
 			)
 			part.position = position
 			part.cframe.x, part.cframe.y, part.cframe.z = position.x, position.y, position.z
-			part.size = datatypes.Vec3_Multiply(part.size, ratio)
+			part.size = datatypes.Vec3_Multiply(part.size, f64(ratio))
 			append(changed, child)
 		case Is_A_Class(child, &Model_Class):
 			model := cast(^Model)child
 			pivot := Model_Get_Pivot(model)
-			pivot.x = center.x + (pivot.x - center.x) * ratio
-			pivot.y = center.y + (pivot.y - center.y) * ratio
-			pivot.z = center.z + (pivot.z - center.z) * ratio
+			pivot.x = center.x + (pivot.x - center.x) * f64(ratio)
+			pivot.y = center.y + (pivot.y - center.y) * f64(ratio)
+			pivot.z = center.z + (pivot.z - center.z) * f64(ratio)
 			model.pivot, model.pivot_set = pivot, true
 			model.scale *= ratio
 		case Is_A_Class(child, &Attachment_Class):
 			attachment := cast(^Attachment)child
-			attachment.position = datatypes.Vec3_Multiply(attachment.position, ratio)
+			attachment.position = datatypes.Vec3_Multiply(attachment.position, f64(ratio))
 			append(changed, child)
 		}
 		model_scale_children(child, center, ratio, changed)

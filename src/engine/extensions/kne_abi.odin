@@ -3,7 +3,7 @@ package extensions
 
 import "core:strings"
 
-KNE_ABI_MAJOR :: u32(2)
+KNE_ABI_MAJOR :: u32(3)
 KNE_ABI_MINOR :: u32(0)
 
 
@@ -92,7 +92,7 @@ KNE_Vector2 :: struct {
 }
 
 KNE_Vector3 :: struct {
-	x, y, z: f32,
+	x, y, z: f64,
 }
 
 KNE_Color3 :: struct {
@@ -101,10 +101,10 @@ KNE_Color3 :: struct {
 
 
 KNE_CFrame :: struct {
-	x, y, z:       f32,
-	r00, r01, r02: f32,
-	r10, r11, r12: f32,
-	r20, r21, r22: f32,
+	x, y, z:       f64,
+	r00, r01, r02: f64,
+	r10, r11, r12: f64,
+	r20, r21, r22: f64,
 }
 
 KNE_Vector2Int16 :: struct {

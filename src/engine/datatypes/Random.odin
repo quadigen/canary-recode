@@ -92,8 +92,8 @@ Random_Next_Unit_Vector :: proc(
 	radius := math.sqrt(max(0.0, 1.0-z*z))
 
 	return Vector3{
-		f32(radius * math.cos(theta)),
-		f32(radius * math.sin(theta)),
-		f32(z),
+		f64(f32(radius * math.cos(theta))),
+		f64(f32(radius * math.sin(theta))),
+		f64(f32(z)),
 	}
 }

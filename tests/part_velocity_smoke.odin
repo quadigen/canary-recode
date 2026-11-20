@@ -176,7 +176,6 @@ assert(math.abs(metal.AssemblyLinearVelocity.X - 1 / 0.35) < 0.001)
 `, "material_mass_after_sync")
 
 	run_script(&script_vm, `
-workspace.Gravity = 0
 local floor = Instance.new("Part", workspace)
 floor.Anchored = true
 floor.Size = Vector3.new(10, 2, 10)
@@ -184,6 +183,7 @@ floor.Position = Vector3.new(100, 0, 0)
 floor.Material = Enum.Material.Concrete
 bouncer = Instance.new("Part", workspace)
 bouncer.Anchored = false
+bouncer.Gravity = Vector3.zero
 bouncer.Size = Vector3.one
 bouncer.Position = Vector3.new(100, 2, 0)
 bouncer.Material = Enum.Material.Rubber
@@ -198,7 +198,7 @@ assert(math.abs(rebound - 14) < 0.3, "expected weighted bounce speed near 14, go
 `, "material_bounce_weight")
 
 	run_script(&script_vm, `
-workspace.Gravity = 196.2
+bouncer.Gravity = Vector3.new(0, -196.2, 0)
 game:GetService("Physics").SleepThreshold = 0.2
 slope = Instance.new("Part", workspace)
 slope.Size = Vector3.new(40, 2, 12)

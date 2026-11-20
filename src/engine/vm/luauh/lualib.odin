@@ -36,8 +36,8 @@ foreign lib {
 	luaL_optinteger64 :: proc(L: ^lua_State, nArg: i32, def: i64) -> i64 ---
 	luaL_checkunsigned :: proc(L: ^lua_State, numArg: i32) -> u32 ---
 	luaL_optunsigned :: proc(L: ^lua_State, numArg: i32, def: u32) -> u32 ---
-	luaL_checkvector :: proc(L: ^lua_State, narg: i32) -> ^f32 ---
-	luaL_optvector :: proc(L: ^lua_State, narg: i32, def: ^f32) -> ^f32 ---
+	luaL_checkvector :: proc(L: ^lua_State, narg: i32) -> ^f64 ---
+	luaL_optvector :: proc(L: ^lua_State, narg: i32, def: ^f64) -> ^f64 ---
 	luaL_checkstack :: proc(L: ^lua_State, sz: i32, msg: cstring) ---
 	luaL_checktype :: proc(L: ^lua_State, narg: i32, t: i32) ---
 	luaL_checkany :: proc(L: ^lua_State, narg: i32) ---

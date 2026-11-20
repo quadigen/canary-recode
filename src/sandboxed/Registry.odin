@@ -8,6 +8,7 @@ import target "../engine/target"
 import vm "../engine/vm"
 import "core:fmt"
 import "core:strings"
+import "core:time"
 
 script_vm: ^vm.VM
 environment: ^engine_runtime.Environment
@@ -98,7 +99,13 @@ run_modules :: proc(loaded: []packages.Internal_Module) {
 
 run_internal_module :: proc(module_name: string) {
 	source := strings.concatenate({"require(\"@internal/", module_name, "\")"})
+	defer delete(source)
+	started := time.tick_now()
 	run_code(source, module_name)
+	when ODIN_OS != .JS {
+		elapsed := time.duration_milliseconds(time.tick_since(started))
+		if elapsed >= 50 {fmt.eprintf("[Startup] editor module %s: %.1f ms (including dependencies)\n", module_name, elapsed)}
+	}
 }
 
 run_startup_module :: proc(module_name: string) {
@@ -208,6 +215,7 @@ init :: proc(
 				fetch := services.EditorService_Get_Editor(
 					cast(^services.EditorService)editor_object,
 					check_remote = !target.is_playtest(),
+					prefer_cache = true,
 				)
 				if fetch.warning != "" {
 					fmt.eprintf("[EditorStartup] %s\n", fetch.warning)
@@ -222,6 +230,9 @@ init :: proc(
 						&environment.packages,
 						fetch.path,
 					) {
+						if fetch.refresh_pending {
+							services.EditorService_Refresh_Cache_Background()
+						}
 						if fetch.downloaded {
 							fmt.printf(
 								"[EditorStartup] downloaded editor update to %s\n",

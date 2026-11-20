@@ -30,7 +30,7 @@ rotation_controller_destroy :: proc(object: ^Object, renderer: ^Renderer_Object)
 RotationController_Set_Target :: proc(rc: ^RotationController, direction: datatypes.Vector3) {
 	if rc == nil {return}
 	target := math.atan2(direction.x, direction.z) * 180 / math.PI
-	rc.target_yaw = target
+	rc.target_yaw = f32(target)
 }
 
 RotationController_Step :: proc(rc: ^RotationController, dt: f32) -> (yaw: f32) {

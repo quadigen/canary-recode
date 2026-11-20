@@ -111,8 +111,8 @@ Camera_Sync_Angles_From_CFrame :: proc(camera: ^Camera) {
 
 	look := datatypes.CFrame_LookVector(camera.CFrame)
 
-	camera.pitch = math.asin(clamp(look.y, -1, 1))
-	camera.yaw = math.atan2(-look.x, -look.z)
+	camera.pitch = f32(math.asin(clamp(look.y, -1, 1)))
+	camera.yaw = f32(math.atan2(-look.x, -look.z))
 }
 
 Camera_Release_Mouse :: proc(camera: ^Camera) {
@@ -220,7 +220,7 @@ Camera_Set_Position :: proc(camera: ^Camera, position: datatypes.Vector3) {
 }
 
 Camera_Freecam_Step :: proc(camera: ^Camera, dt: f32, focused: bool, rotating: bool) {
-	rotation := datatypes.CFrame_FromOrientation(camera.pitch, camera.yaw, 0)
+	rotation := datatypes.CFrame_FromOrientation(f64(camera.pitch), f64(camera.yaw), 0)
 
 	orientation := camera.CFrame
 	if rotating {
@@ -268,15 +268,15 @@ Camera_Freecam_Step :: proc(camera: ^Camera, dt: f32, focused: bool, rotating: b
 	target := datatypes.Vector3{}
 	length_squared := movement.x * movement.x + movement.y * movement.y + movement.z * movement.z
 	if length_squared > 0 {
-		scale := camera.move_speed / math.sqrt(length_squared)
+		scale := f64(camera.move_speed) / math.sqrt(length_squared)
 		target = datatypes.Vector3{movement.x * scale, movement.y * scale, movement.z * scale}
 	}
 
 	alpha := 1 - math.exp(-camera.move_smoothing * dt)
 
-	camera.velocity.x += (target.x - camera.velocity.x) * alpha
-	camera.velocity.y += (target.y - camera.velocity.y) * alpha
-	camera.velocity.z += (target.z - camera.velocity.z) * alpha
+	camera.velocity.x += (target.x - camera.velocity.x) * f64(alpha)
+	camera.velocity.y += (target.y - camera.velocity.y) * f64(alpha)
+	camera.velocity.z += (target.z - camera.velocity.z) * f64(alpha)
 
 	speed_squared :=
 		camera.velocity.x * camera.velocity.x +
@@ -287,16 +287,16 @@ Camera_Freecam_Step :: proc(camera: ^Camera, dt: f32, focused: bool, rotating: b
 	}
 
 	position := datatypes.CFrame_Position(camera.CFrame)
-	position.x += camera.velocity.x * dt
-	position.y += camera.velocity.y * dt
-	position.z += camera.velocity.z * dt
+	position.x += camera.velocity.x * f64(dt)
+	position.y += camera.velocity.y * f64(dt)
+	position.z += camera.velocity.z * f64(dt)
 
 	if rotating && camera.pending_scroll != 0 {
 		distance := camera.pending_scroll * camera.scroll_step
 
-		position.x += look.x * distance
-		position.y += look.y * distance
-		position.z += look.z * distance
+		position.x += look.x * f64(distance)
+		position.y += look.y * f64(distance)
+		position.z += look.z * f64(distance)
 	}
 
 	camera.pending_scroll = 0
@@ -338,7 +338,7 @@ Camera_Subject_Orbit_Step :: proc(
 ) {
 	Camera_Consume_Orbit_Scroll(camera)
 
-	rotation := datatypes.CFrame_FromOrientation(camera.pitch, camera.yaw, 0)
+	rotation := datatypes.CFrame_FromOrientation(f64(camera.pitch), f64(camera.yaw), 0)
 
 	look := datatypes.CFrame_LookVector(rotation)
 	right := datatypes.CFrame_RightVector(rotation)
@@ -354,23 +354,23 @@ Camera_Subject_Orbit_Step :: proc(
 		Camera_Set_Position(camera, position)
 
 	case .TopDown:
-		position.y += camera.orbit_distance
+		position.y += f64(camera.orbit_distance)
 
 		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
 	case .Isometric:
 		horizontal := camera.orbit_distance * 0.70710678
 
-		position.x += math.sin(camera.yaw) * horizontal
-		position.z += math.cos(camera.yaw) * horizontal
-		position.y += horizontal
+		position.x += f64(math.sin(camera.yaw) * horizontal)
+		position.z += f64(math.cos(camera.yaw) * horizontal)
+		position.y += f64(horizontal)
 
 		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
 	case .Shoulder:
-		position.x -= look.x * camera.orbit_distance
-		position.y -= look.y * camera.orbit_distance
-		position.z -= look.z * camera.orbit_distance
+		position.x -= look.x * f64(camera.orbit_distance)
+		position.y -= look.y * f64(camera.orbit_distance)
+		position.z -= look.z * f64(camera.orbit_distance)
 
 		position.x += right.x * 2
 		position.y += right.y * 2
@@ -383,9 +383,9 @@ Camera_Subject_Orbit_Step :: proc(
 		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 
 	case .Custom, .Orbital, .ThirdPerson, .Follow:
-		position.x -= look.x * camera.orbit_distance
-		position.y -= look.y * camera.orbit_distance
-		position.z -= look.z * camera.orbit_distance
+		position.x -= look.x * f64(camera.orbit_distance)
+		position.y -= look.y * f64(camera.orbit_distance)
+		position.z -= look.z * f64(camera.orbit_distance)
 
 		camera.CFrame = datatypes.CFrame_LookAt(position, target)
 	}
@@ -414,18 +414,18 @@ Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object)
 	view := datatypes.CFrame_Inverse(camera.CFrame)
 
 	renderer.WorldToView = [12]f32 {
-		view.x,
-		view.y,
-		view.z,
-		view.r00,
-		view.r01,
-		view.r02,
-		view.r10,
-		view.r11,
-		view.r12,
-		view.r20,
-		view.r21,
-		view.r22,
+		f32(view.x),
+		f32(view.y),
+		f32(view.z),
+		f32(view.r00),
+		f32(view.r01),
+		f32(view.r02),
+		f32(view.r10),
+		f32(view.r11),
+		f32(view.r12),
+		f32(view.r20),
+		f32(view.r21),
+		f32(view.r22),
 	}
 
 	renderer.HasWorldToView = true
@@ -434,17 +434,17 @@ Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object)
 		look := datatypes.CFrame_LookVector(camera.CFrame)
 		up := datatypes.CFrame_UpVector(camera.CFrame)
 
-		kineffi.Kine_Filament_SetCameraLookAt(
+		kineffi.Kine_Filament_SetCameraPose(
 			renderer.Filament,
-			camera.CFrame.x,
-			camera.CFrame.y,
-			camera.CFrame.z,
-			camera.CFrame.x + look.x,
-			camera.CFrame.y + look.y,
-			camera.CFrame.z + look.z,
-			up.x,
-			up.y,
-			up.z,
+			f64(camera.CFrame.x),
+			f64(camera.CFrame.y),
+			f64(camera.CFrame.z),
+			f64(look.x),
+			f64(look.y),
+			f64(look.z),
+			f64(up.x),
+			f64(up.y),
+			f64(up.z),
 		)
 	}
 }
@@ -751,11 +751,11 @@ Camera_Screen_Point_To_Ray :: proc(
 	normalized_y := 1 - (y / height) * 2
 
 
-	view := datatypes.Vector3{normalized_x * aspect * tangent, normalized_y * tangent, -1}
+	view := datatypes.Vector3{f64(normalized_x * aspect * tangent), f64(normalized_y * tangent), -1}
 
 	direction := datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(frame, view))
 
-	origin = datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, depth))
+	origin = datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, f64(depth)))
 	datatypes.Push_Ray(L, datatype_registry, datatypes.Ray{Origin = origin, Direction = direction})
 	return 1, true
 }
@@ -788,18 +788,18 @@ Camera_World_To_Viewport_Point :: proc(
 
 	normalized_x :=
 		datatypes.Vec3_Dot(delta, datatypes.CFrame_RightVector(frame)) /
-		(forward * tangent * aspect)
+		(forward * f64(tangent) * f64(aspect))
 	normalized_y :=
-		datatypes.Vec3_Dot(delta, datatypes.CFrame_UpVector(frame)) / (forward * tangent)
+		datatypes.Vec3_Dot(delta, datatypes.CFrame_UpVector(frame)) / (forward * f64(tangent))
 
 	on_screen := normalized_x >= -1 && normalized_x <= 1 && normalized_y >= -1 && normalized_y <= 1
 
-	x := (normalized_x + 1) * width * 0.5
-	y := (1 - normalized_y) * height * 0.5
+	x := (normalized_x + 1) * f64(width) * 0.5
+	y := (1 - normalized_y) * f64(height) * 0.5
 
 	if method_name == "WorldToScreenPoint" {
-		x -= sdl3.UI_Safe_Left / sdl3.UI_Scale
-		y -= sdl3.UI_Safe_Top / sdl3.UI_Scale
+		x -= f64(sdl3.UI_Safe_Left / sdl3.UI_Scale)
+		y -= f64(sdl3.UI_Safe_Top / sdl3.UI_Scale)
 	}
 	datatypes.Push_Vector3(L, datatypes.Vector3{x, y, forward})
 	vm.PushBoolean(L, on_screen)

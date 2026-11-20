@@ -13,7 +13,7 @@ import "core:sort"
 import "core:strings"
 
 
-Replication_Protocol_Version: u32 = 11
+Replication_Protocol_Version: u32 = 13
 
 
 Replication_Max_Frame_Payload: u32 = 1048576
@@ -1046,6 +1046,9 @@ replication_receive_deformable :: proc(
 	case Replication_Deformable_Cloth:
 		if !classes.Is_A(object, "Cloth") {reader.valid = false; return}
 		cloth := cast(^classes.Cloth)object
+		new_origin := datatypes.Vector3{replication_read_f64(reader), replication_read_f64(reader), replication_read_f64(reader)}
+		if !reader.valid || !replication_vector3_finite(new_origin) {reader.valid = false; return}
+		cloth.simulation_origin = new_origin
 		for &particle in cloth.particles {
 			particle.position.x = replication_read_f32(reader)
 			particle.position.y = replication_read_f32(reader)
@@ -1700,9 +1703,9 @@ replication_receive :: proc(
 		part := cast(^classes.Part)object
 		frame := replication_read_cframe(&reader)
 		size := datatypes.Vector3 {
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
 		}
 		color := datatypes.Color3 {
 			R = replication_read_f32(&reader),
@@ -1718,10 +1721,10 @@ replication_receive :: proc(
 		reader.offset += 4
 		sample := Replication_Sample{tick = tick, frame = frame}
 		remaining := len(reader.data) - reader.offset
-		if remaining == 28 &&
+		if remaining == 52 &&
 		   (service.client_capabilities & service.server_capabilities & Replication_Capability_Body_Velocity) != 0 {
-			sample.linear_velocity = {replication_read_f32(&reader), replication_read_f32(&reader), replication_read_f32(&reader)}
-			sample.angular_velocity = {replication_read_f32(&reader), replication_read_f32(&reader), replication_read_f32(&reader)}
+			sample.linear_velocity = {replication_read_f64(&reader), replication_read_f64(&reader), replication_read_f64(&reader)}
+			sample.angular_velocity = {replication_read_f64(&reader), replication_read_f64(&reader), replication_read_f64(&reader)}
 			sample.has_velocity = replication_vector3_finite(sample.linear_velocity) &&
 			                      replication_vector3_finite(sample.angular_velocity)
 			if !sample.has_velocity {reader.valid = false; break}
@@ -1769,9 +1772,9 @@ replication_receive :: proc(
 				if characters != nil && !characters.authoritative_received {
 					character_translate(
 						cast(^classes.CharacterModel)object.parent,
-						frame.x - part.cframe.x,
-						frame.y - part.cframe.y,
-						frame.z - part.cframe.z,
+						f32(frame.x - part.cframe.x),
+						f32(frame.y - part.cframe.y),
+						f32(frame.z - part.cframe.z),
 					)
 					characters.authoritative_received = true
 				}
@@ -1793,7 +1796,7 @@ replication_receive :: proc(
 					dy := frame.y - last.y
 					dz := frame.z - last.z
 					if dx * dx + dy * dy + dz * dz >
-					   service.teleport_threshold * service.teleport_threshold {
+					   f64(service.teleport_threshold) * f64(service.teleport_threshold) {
 						snap = true
 					}
 				}
@@ -1936,21 +1939,21 @@ replication_receive :: proc(
 		if service.mode != .Client || peer != service.remote {return}
 		id := replication_read_u32(&reader)
 		owner_id := replication_read_u32(&reader)
-		has_extended := reader.offset + 25 == len(reader.data)
+		has_extended := reader.offset + 49 == len(reader.data)
 		model_flag := false
 		linear := datatypes.Vector3{}
 		angular := datatypes.Vector3{}
 		if has_extended {
 			model_flag = replication_read_u8(&reader) != 0
 			linear = datatypes.Vector3 {
-				replication_read_f32(&reader),
-				replication_read_f32(&reader),
-				replication_read_f32(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
 			}
 			angular = datatypes.Vector3 {
-				replication_read_f32(&reader),
-				replication_read_f32(&reader),
-				replication_read_f32(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
 			}
 		}
 		changed := false
@@ -2008,32 +2011,32 @@ replication_receive :: proc(
 				   transmute(i32)(upload_tick - entity.pivot_upload_after) <= 0) {return}
 		if entity.last_upload_owner == entity.owner_id &&
 		   transmute(i32)(upload_tick - entity.last_upload_tick) <= 0 {return}
-		if reader.offset + 72 != len(reader.data) {
+		if reader.offset + 144 != len(reader.data) {
 			service.owned_states_rejected += 1
 			return
 		}
 		frame := datatypes.CFrame{}
-		frame.x = replication_read_f32(&reader)
-		frame.y = replication_read_f32(&reader)
-		frame.z = replication_read_f32(&reader)
-		frame.r00 = replication_read_f32(&reader)
-		frame.r01 = replication_read_f32(&reader)
-		frame.r02 = replication_read_f32(&reader)
-		frame.r10 = replication_read_f32(&reader)
-		frame.r11 = replication_read_f32(&reader)
-		frame.r12 = replication_read_f32(&reader)
-		frame.r20 = replication_read_f32(&reader)
-		frame.r21 = replication_read_f32(&reader)
-		frame.r22 = replication_read_f32(&reader)
+		frame.x = replication_read_f64(&reader)
+		frame.y = replication_read_f64(&reader)
+		frame.z = replication_read_f64(&reader)
+		frame.r00 = replication_read_f64(&reader)
+		frame.r01 = replication_read_f64(&reader)
+		frame.r02 = replication_read_f64(&reader)
+		frame.r10 = replication_read_f64(&reader)
+		frame.r11 = replication_read_f64(&reader)
+		frame.r12 = replication_read_f64(&reader)
+		frame.r20 = replication_read_f64(&reader)
+		frame.r21 = replication_read_f64(&reader)
+		frame.r22 = replication_read_f64(&reader)
 		linear := datatypes.Vector3 {
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
 		}
 		angular := datatypes.Vector3 {
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
-			replication_read_f32(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
+			replication_read_f64(&reader),
 		}
 
 
@@ -2065,7 +2068,7 @@ replication_receive :: proc(
 		dy := frame.y - part.cframe.y
 		dz := frame.z - part.cframe.z
 		if dx * dx + dy * dy + dz * dz >
-		   service.owned_teleport_tolerance * service.owned_teleport_tolerance {
+		   f64(service.owned_teleport_tolerance) * f64(service.owned_teleport_tolerance) {
 			service.owned_states_rejected += 1
 			replication_send_owned_correction(service, connection, id, part.cframe)
 			return
@@ -2083,7 +2086,7 @@ replication_receive :: proc(
 			ox := frame.x - entity.owned_window_origin.x
 			oy := frame.y - entity.owned_window_origin.y
 			oz := frame.z - entity.owned_window_origin.z
-			if ox * ox + oy * oy + oz * oz > service.owned_max_speed * service.owned_max_speed {
+			if ox * ox + oy * oy + oz * oz > f64(f64(service.owned_max_speed) * f64(service.owned_max_speed)) {
 				service.owned_states_rejected += 1
 				replication_send_owned_correction(service, connection, id, part.cframe)
 				return
@@ -2092,9 +2095,9 @@ replication_receive :: proc(
 
 
 		if linear.x * linear.x + linear.y * linear.y + linear.z * linear.z >
-			   service.owned_max_speed * service.owned_max_speed ||
+			   f64(service.owned_max_speed) * f64(service.owned_max_speed) ||
 		   angular.x * angular.x + angular.y * angular.y + angular.z * angular.z >
-			   service.owned_max_speed * service.owned_max_speed {
+			   f64(service.owned_max_speed) * f64(service.owned_max_speed) {
 			service.owned_states_rejected += 1
 			return
 		}

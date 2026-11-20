@@ -22,13 +22,13 @@ main :: proc() {
 	run_script(
 		&script_vm,
 		`
-workspace.Gravity = 0
 base = Instance.new("Part", workspace)
 base.Anchored = true
 base.CanCollide = false
 base.Size = vector.create(2, 2, 2)
 wheel = Instance.new("Part", workspace)
 wheel.Anchored = false
+wheel.Gravity = Vector3.zero
 wheel.CanCollide = false
 wheel.Size = vector.create(2, 2, 2)
 base.CFrame = CFrame.new(0, 10, 0)
@@ -120,7 +120,6 @@ hinge.Parent = nil
 	run_script(
 		&script_vm,
 		`
-workspace.Gravity = 196.2
 base = Instance.new("Part", workspace)
 base.Size = vector.create(2, 2, 2)
 base.CFrame = CFrame.new(0, 10, 0)

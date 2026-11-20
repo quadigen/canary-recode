@@ -148,6 +148,8 @@ KINE_FILAMENT_DRAW_RECEIVE_SHADOWS :: (1 << 1)
 KINE_FILAMENT_DRAW_CULLING :: (1 << 2)
 
 
+KINE_FILAMENT_DRAW_WORLD_POSITION :: (1 << 3)
+
 KineFilamentDrawItem :: struct {
 	mesh:         ^KineFilamentMesh,
 	tex:          ^KineFilamentTex,
@@ -163,6 +165,7 @@ KineFilamentDrawItem :: struct {
 	flags:        u32,
 	reserved:     u32,
 	shader:       ^KineFilamentShader,
+	worldPosition: [3]f64,
 }
 
 
@@ -201,6 +204,7 @@ KineFilamentParticleItem :: struct {
 	g:         u8,
 	b:         u8,
 	a:         u8,
+	worldPosition: [3]f64,
 }
 
 
@@ -551,6 +555,9 @@ foreign kine_filament {
 	Kine_Filament_SetCameraLookAt :: proc(ctx: ^KineFilamentContext, eyeX: f32, eyeY: f32, eyeZ: f32, targetX: f32, targetY: f32, targetZ: f32, upX: f32, upY: f32, upZ: f32) ---
 
 
+	Kine_Filament_SetCameraPose :: proc(ctx: ^KineFilamentContext, x, y, z, dx, dy, dz, ux, uy, uz: f64) ---
+
+
 	Kine_Filament_BlitToScreen :: proc(ctx: ^KineFilamentContext, dstX: i32, dstY: i32, dstWidth: i32, dstHeight: i32) -> i32 ---
 
 
@@ -709,37 +716,37 @@ foreign kine_filament {
 	Kine_Filament_DrawMeshOutline :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, r: f32, g: f32, b: f32, thickness: f32, mat4: ^f32) -> i32 ---
 
 
-	Kine_Filament_DrawGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, hoveredAxis: i32, selectedAxis: i32) ---
+	Kine_Filament_DrawGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f64, hoveredAxis: i32, selectedAxis: i32) ---
 
 
-	Kine_Filament_PickGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, screenX: f32, screenY: f32) -> i32 ---
+	Kine_Filament_PickGizmo :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f64, screenX: f32, screenY: f32) -> i32 ---
 
 
-	Kine_Filament_GetGizmoDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
+	Kine_Filament_GetGizmoDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f64, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32) -> f32 ---
 
 
-	Kine_Filament_DrawGizmoLine :: proc(ctx: ^KineFilamentContext, ax: f32, ay: f32, az: f32, bx: f32, by: f32, bz: f32, r: f32, g: f32, b: f32, thickness: f32) ---
+	Kine_Filament_DrawGizmoLine :: proc(ctx: ^KineFilamentContext, ax: f64, ay: f64, az: f64, bx: f64, by: f64, bz: f64, r: f32, g: f32, b: f32, thickness: f32) ---
 
 
-	Kine_Filament_DrawGizmoLines :: proc(ctx: ^KineFilamentContext, points: ^f32, segmentCount: u32, r: f32, g: f32, b: f32, thickness: f32) ---
+	Kine_Filament_DrawGizmoLines :: proc(ctx: ^KineFilamentContext, points: ^f64, segmentCount: u32, r: f32, g: f32, b: f32, thickness: f32) ---
 
 
-	Kine_Filament_DrawGizmoCube :: proc(ctx: ^KineFilamentContext, mat4: ^f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32) ---
+	Kine_Filament_DrawGizmoCube :: proc(ctx: ^KineFilamentContext, mat4: ^f64, r: f32, g: f32, b: f32, wire: bool, thickness: f32) ---
 
 
-	Kine_Filament_DrawGizmoSphere :: proc(ctx: ^KineFilamentContext, cx: f32, cy: f32, cz: f32, radius: f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
+	Kine_Filament_DrawGizmoSphere :: proc(ctx: ^KineFilamentContext, cx: f64, cy: f64, cz: f64, radius: f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
 
 
-	Kine_Filament_DrawGizmoCylinder :: proc(ctx: ^KineFilamentContext, mat4: ^f32, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
+	Kine_Filament_DrawGizmoCylinder :: proc(ctx: ^KineFilamentContext, mat4: ^f64, r: f32, g: f32, b: f32, wire: bool, thickness: f32, segments: i32) ---
 
 
-	Kine_Filament_DrawGizmoMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f32, r: f32, g: f32, b: f32) ---
+	Kine_Filament_DrawGizmoMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f64, r: f32, g: f32, b: f32) ---
 
 
-	Kine_Filament_DrawGizmoWireMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f32, r: f32, g: f32, b: f32, thickness: f32, featureAngleDeg: f32) ---
+	Kine_Filament_DrawGizmoWireMesh :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, mat4: ^f64, r: f32, g: f32, b: f32, thickness: f32, featureAngleDeg: f32) ---
 
 
-	Kine_Filament_GetGizmoPlaneDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f32, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32, outFirst: ^f32, outSecond: ^f32) -> i32 ---
+	Kine_Filament_GetGizmoPlaneDragDelta :: proc(ctx: ^KineFilamentContext, gizmo: ^KineFilamentGizmo, mat4: ^f64, axis: i32, startX: f32, startY: f32, currentX: f32, currentY: f32, outFirst: ^f32, outSecond: ^f32) -> i32 ---
 
 
 	Kine_Filament_CreateCustomMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
@@ -778,10 +785,10 @@ foreign kine_filament {
 	Kine_Filament_SetSun :: proc(ctx: ^KineFilamentContext, sunDirX: f32, sunDirY: f32, sunDirZ: f32, sunIntensity: f32) -> i32 ---
 
 
-	Kine_Filament_CreateLight :: proc(ctx: ^KineFilamentContext, px: f32, py: f32, pz: f32, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32) -> i32 ---
+	Kine_Filament_CreateLight :: proc(ctx: ^KineFilamentContext, px: f64, py: f64, pz: f64, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32) -> i32 ---
 
 
-	Kine_Filament_CreateLightEx :: proc(ctx: ^KineFilamentContext, lightType: i32, px: f32, py: f32, pz: f32, dx: f32, dy: f32, dz: f32, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32, innerConeRadians: f32, outerConeRadians: f32, castShadows: bool, enabled: bool) -> i32 ---
+	Kine_Filament_CreateLightEx :: proc(ctx: ^KineFilamentContext, lightType: i32, px: f64, py: f64, pz: f64, dx: f32, dy: f32, dz: f32, cr: f32, cg: f32, cb: f32, intensity: f32, falloff: f32, innerConeRadians: f32, outerConeRadians: f32, castShadows: bool, enabled: bool) -> i32 ---
 
 
 	Kine_Filament_SetColorLight :: proc(ctx: ^KineFilamentContext, light: i32, r: f32, g: f32, b: f32) -> i32 ---
@@ -793,7 +800,7 @@ foreign kine_filament {
 	Kine_Filament_SetFalloffLight :: proc(ctx: ^KineFilamentContext, light: i32, falloff: f32) -> i32 ---
 
 
-	Kine_Filament_SetPositionLight :: proc(ctx: ^KineFilamentContext, light: i32, x: f32, y: f32, z: f32) -> i32 ---
+	Kine_Filament_SetPositionLight :: proc(ctx: ^KineFilamentContext, light: i32, x: f64, y: f64, z: f64) -> i32 ---
 
 
 	Kine_Filament_SetDirectionLight :: proc(ctx: ^KineFilamentContext, light: i32, x: f32, y: f32, z: f32) -> i32 ---
@@ -829,7 +836,7 @@ foreign kine_filament {
 	Kine_Filament_RemoveDecal :: proc(ctx: ^KineFilamentContext, decal: i32) -> i32 ---
 
 
-	Kine_Filament_SetDecalTransform :: proc(ctx: ^KineFilamentContext, decal: i32, mat4: ^f32) -> i32 ---
+	Kine_Filament_SetDecalTransform :: proc(ctx: ^KineFilamentContext, decal: i32, mat4: ^f64) -> i32 ---
 
 
 	Kine_Filament_EditDecal :: proc(ctx: ^KineFilamentContext, decal: i32, width: f32, height: f32, culling: bool, castShadows: bool, receiveShadows: bool) -> i32 ---

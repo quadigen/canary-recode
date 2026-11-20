@@ -307,18 +307,18 @@ highlight_transform :: proc(part: ^Part) -> [16]f32 {
 	render_size := datatypes.Vector3{part.size.x * 0.5, part.size.y * 0.5, part.size.z * 0.5}
 
 	return [16]f32 {
-		cframe.r00 * render_size.x,
-		cframe.r01 * render_size.y,
-		cframe.r02 * render_size.z,
-		cframe.x,
-		cframe.r10 * render_size.x,
-		cframe.r11 * render_size.y,
-		cframe.r12 * render_size.z,
-		cframe.y,
-		cframe.r20 * render_size.x,
-		cframe.r21 * render_size.y,
-		cframe.r22 * render_size.z,
-		cframe.z,
+		f32(cframe.r00 * render_size.x),
+		f32(cframe.r01 * render_size.y),
+		f32(cframe.r02 * render_size.z),
+		f32(cframe.x),
+		f32(cframe.r10 * render_size.x),
+		f32(cframe.r11 * render_size.y),
+		f32(cframe.r12 * render_size.z),
+		f32(cframe.y),
+		f32(cframe.r20 * render_size.x),
+		f32(cframe.r21 * render_size.y),
+		f32(cframe.r22 * render_size.z),
+		f32(cframe.z),
 		0,
 		0,
 		0,
@@ -345,10 +345,10 @@ highlight_append_part_items :: proc(
 	if !have_camera {
 
 
-		distance = HIGHLIGHT_FALLBACK_DISTANCE
+		distance = f64(HIGHLIGHT_FALLBACK_DISTANCE)
 	}
 
-	world_per_pixel := highlight_world_per_pixel(distance, ctx.viewport_height)
+	world_per_pixel := highlight_world_per_pixel(f32(distance), ctx.viewport_height)
 
 	transform := highlight_transform(part)
 
@@ -359,6 +359,8 @@ highlight_append_part_items :: proc(
 			kineffi.KineFilamentDrawItem {
 				mesh = mesh,
 				transform = transform,
+				flags = kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+				worldPosition = {part.cframe.x, part.cframe.y, part.cframe.z},
 				r = highlight.outline_color.R,
 				g = highlight.outline_color.G,
 				b = highlight.outline_color.B,
@@ -380,6 +382,8 @@ highlight_append_part_items :: proc(
 			kineffi.KineFilamentDrawItem {
 				mesh = mesh,
 				transform = transform,
+				flags = kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+				worldPosition = {part.cframe.x, part.cframe.y, part.cframe.z},
 				r = highlight.fill_color.R,
 				g = highlight.fill_color.G,
 				b = highlight.fill_color.B,

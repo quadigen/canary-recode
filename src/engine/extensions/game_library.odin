@@ -7,7 +7,7 @@ import tracy "../util/odin-tracy"
 import "core:fmt"
 import "core:strings"
 
-GAME_ABI_MAJOR :: u32(1)
+GAME_ABI_MAJOR :: u32(2)
 GAME_ABI_MINOR :: u32(0)
 
 Game_Role :: enum u32 {Singleplayer, Client, Server}

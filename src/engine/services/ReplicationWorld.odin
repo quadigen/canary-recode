@@ -289,7 +289,7 @@ character_subtree_class :: proc(class_name: string) -> bool {
 replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
 	return(
 		object != nil &&
-		((classes.Is_A_Class(object, &classes.Part_Class) && property == "CanTouch") ||
+		((classes.Is_A_Class(object, &classes.Part_Class) && (property == "CanTouch" || property == "Gravity")) ||
 				(classes.Is_A_Class(object, &classes.PartOperation_Class) &&
 						(property == "UsePartColor" ||
 								property == "CanQuery" ||
@@ -414,7 +414,7 @@ replication_focus :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 ) -> (
-	x, y, z: f32,
+	x, y, z: f64,
 	ok: bool,
 ) {
 	if connection.player == nil {return 0, 0, 0, false}
@@ -433,21 +433,21 @@ replication_focus :: proc(
 
 replication_lod_tier :: proc(
 	service: ^ReplicatorService,
-	fx, fy, fz: f32,
+	fx, fy, fz: f64,
 	part: ^classes.Part,
 ) -> (
 	far: bool,
 ) {
 	if service.lod_near_fraction >= 1 {return false}
 	if service.relevancy_distance <= 0 {return false}
-	near_sq := service.relevancy_distance * service.relevancy_distance * service.lod_near_fraction
+	near_sq := f64(service.relevancy_distance) * f64(service.relevancy_distance) * f64(service.lod_near_fraction)
 	return replication_distance_sq(fx, fy, fz, part) > near_sq
 }
 
 
 replication_lod_due :: proc(
 	service: ^ReplicatorService,
-	fx, fy, fz: f32,
+	fx, fy, fz: f64,
 	part: ^classes.Part,
 ) -> bool {
 	if !replication_lod_tier(service, fx, fy, fz, part) {return true}
@@ -468,10 +468,10 @@ replication_peer_focus_part :: proc(service: ^ReplicatorService, user_id: u32) -
 	return nil
 }
 
-replication_distance_sq :: proc(fx, fy, fz: f32, part: ^classes.Part) -> f32 {
-	dx := part.cframe.x - fx
-	dy := part.cframe.y - fy
-	dz := part.cframe.z - fz
+replication_distance_sq :: proc(fx, fy, fz: f64, part: ^classes.Part) -> f64 {
+	dx := part.cframe.x - f64(fx)
+	dy := part.cframe.y - f64(fy)
+	dz := part.cframe.z - f64(fz)
 	return dx * dx + dy * dy + dz * dz
 }
 
@@ -489,7 +489,7 @@ replication_relevant_to :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	object: ^classes.Object,
-	fx, fy, fz: f32,
+	fx, fy, fz: f64,
 	has_focus: bool,
 ) -> bool {
 	if object == nil {return false}
@@ -500,7 +500,7 @@ replication_relevant_to :: proc(
 	// Visibility, ownership, groups and suppression are checked separately.
 	// Once a focus exists, normal distance streaming resumes.
 	if !has_focus {return connection != nil && connection.handshake_complete && connection.player != nil}
-	distance_sq := service.relevancy_distance * service.relevancy_distance
+	distance_sq := f64(service.relevancy_distance) * f64(service.relevancy_distance)
 	// An entity cannot arrive before its ancestors, including streamed-out parts.
 	for current := object;
 	    current != nil && !classes.Is_A(current, "Service");
@@ -517,7 +517,7 @@ replication_visible_to :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	object: ^classes.Object,
-	fx, fy, fz: f32,
+	fx, fy, fz: f64,
 	has_focus: bool,
 ) -> bool {
 	if !replication_relevant_to(service, connection, object, fx, fy, fz, has_focus) {
@@ -589,7 +589,7 @@ replication_send_owned_state :: proc(
 	   (part.parent == nil || !classes.Is_A(part.parent, "CharacterModel")) {return false}
 	linear := classes.Part_Linear_Velocity(service.signal_registry, &part.object)
 	angular := classes.Part_Angular_Velocity(service.signal_registry, &part.object)
-	values := [18]f32 {
+	values := [18]f64 {
 		part.cframe.x,
 		part.cframe.y,
 		part.cframe.z,
@@ -613,7 +613,7 @@ replication_send_owned_state :: proc(
 	hash := u64(14695981039346656037)
 	if resting {
 		for value in values[:12] {
-			hash = (hash ~ u64(transmute(u32)value)) * 1099511628211
+			hash = (hash ~ transmute(u64)value) * 1099511628211
 		}
 		// Refresh unchanged resting poses twice a second in case an upload was lost.
 		if entity.owned_rest_upload_tick != 0 &&
@@ -627,7 +627,7 @@ replication_send_owned_state :: proc(
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity.id)
 	replication_put_u32(&bytes, service.tick)
-	for value in values {replication_put_f32(&bytes, value)}
+	for value in values {replication_put_f64(&bytes, value)}
 	if !replication_send(
 		service,
 		service.remote,
@@ -688,7 +688,7 @@ replication_body_velocity :: proc(
 			body.body_id,
 			&a,
 		)
-		linear, angular = {l.x, l.y, l.z}, {a.x, a.y, a.z}
+		linear, angular = {f64(l.x), f64(l.y), f64(l.z)}, {f64(a.x), f64(a.y), f64(a.z)}
 	}
 	valid = replication_vector3_finite(linear) && replication_vector3_finite(angular)
 	return
@@ -729,9 +729,9 @@ replication_send_part_state :: proc(
 	replication_put_u32(&bytes, tick)
 	replication_put_string(&bytes, part.name)
 	replication_put_cframe(&bytes, part.cframe)
-	replication_put_f32(&bytes, part.size.x)
-	replication_put_f32(&bytes, part.size.y)
-	replication_put_f32(&bytes, part.size.z)
+	replication_put_f64(&bytes, part.size.x)
+	replication_put_f64(&bytes, part.size.y)
+	replication_put_f64(&bytes, part.size.z)
 	replication_put_f32(&bytes, part.color.R)
 	replication_put_f32(&bytes, part.color.G)
 	replication_put_f32(&bytes, part.color.B)
@@ -746,9 +746,9 @@ replication_send_part_state :: proc(
 	   0 {
 		linear, angular, valid := replication_body_velocity(service, part)
 		if valid {
-			values := [6]f32{linear.x, linear.y, linear.z, angular.x, angular.y, angular.z}
+			values := [6]f64{linear.x, linear.y, linear.z, angular.x, angular.y, angular.z}
 			for value in values {
-				replication_put_f32(&bytes, value)
+				replication_put_f64(&bytes, value)
 			}
 		}
 	}
@@ -768,7 +768,7 @@ replication_send_part_state :: proc(
 
 
 replication_frame_finite :: proc(frame: datatypes.CFrame) -> bool {
-	values := [12]f32 {
+	values := [12]f64 {
 		frame.x,
 		frame.y,
 		frame.z,
@@ -805,9 +805,9 @@ replication_frame_rotation_valid :: proc(frame: datatypes.CFrame) -> bool {
 
 	tolerance: f32 = 1e-3
 	rows := [3][3]f32 {
-		{frame.r00, frame.r01, frame.r02},
-		{frame.r10, frame.r11, frame.r12},
-		{frame.r20, frame.r21, frame.r22},
+		{f32(frame.r00), f32(frame.r01), f32(frame.r02)},
+		{f32(frame.r10), f32(frame.r11), f32(frame.r12)},
+		{f32(frame.r20), f32(frame.r21), f32(frame.r22)},
 	}
 	for row in rows {
 		length_sq := row[0] * row[0] + row[1] * row[1] + row[2] * row[2]
@@ -1101,7 +1101,7 @@ replication_spawn_entity :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	object: ^classes.Object,
-	focus_x, focus_y, focus_z: f32,
+	focus_x, focus_y, focus_z: f64,
 	has_focus: bool,
 ) -> bool {
 	if object == nil || object.destroyed {return false}
@@ -1148,7 +1148,7 @@ replication_spawn_tree :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	root: ^classes.Object,
-	focus_x, focus_y, focus_z: f32,
+	focus_x, focus_y, focus_z: f64,
 	has_focus: bool,
 ) -> int {
 	if service == nil || connection == nil || root == nil || root.destroyed {return 0}
@@ -1175,7 +1175,7 @@ replication_spawn_tree_with_ancestry :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 	root: ^classes.Object,
-	focus_x, focus_y, focus_z: f32,
+	focus_x, focus_y, focus_z: f64,
 	has_focus: bool,
 ) -> int {
 	if service == nil || connection == nil || root == nil || root.destroyed {return 0}
@@ -1289,7 +1289,7 @@ replication_initialise_tree :: proc(
 replication_peer_scene_complete :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
-	focus_x, focus_y, focus_z: f32,
+	focus_x, focus_y, focus_z: f64,
 	has_focus: bool,
 ) -> bool {
 	if service == nil || connection == nil {return false}
@@ -1449,7 +1449,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		dx := current.x - item.velocity_origin.x
 		dy := current.y - item.velocity_origin.y
 		dz := current.z - item.velocity_origin.z
-		item.velocity_sq = dx * dx + dy * dy + dz * dz
+		item.velocity_sq = f32(dx * dx + dy * dy + dz * dz)
 		item.velocity_origin = current
 	}
 
@@ -1813,6 +1813,9 @@ replication_send_deformables :: proc(service: ^ReplicatorService, connection: ^R
 			bytes: [dynamic]u8
 			replication_put_u32(&bytes, item.id)
 			append(&bytes, Replication_Deformable_Cloth)
+			replication_put_f64(&bytes, cloth.simulation_origin.x)
+			replication_put_f64(&bytes, cloth.simulation_origin.y)
+			replication_put_f64(&bytes, cloth.simulation_origin.z)
 			for particle in cloth.particles {
 				replication_put_f32(&bytes, particle.position.x)
 				replication_put_f32(&bytes, particle.position.y)
@@ -1860,7 +1863,7 @@ replication_send_extra_properties :: proc(
 	script := replication_peer_script(service, connection, item.object)
 	defer delete(sendable)
 	if replication_builtin_property(item.object, "CanTouch") {
-		append(&sendable, "CanTouch")
+		append(&sendable, "CanTouch", "Gravity")
 	}
 	if replication_builtin_property(item.object, "MeshId") {
 		append(&sendable, "MeshId")

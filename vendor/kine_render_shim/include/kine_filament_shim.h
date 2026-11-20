@@ -62,6 +62,7 @@ KINE_API const char *Kine_Filament_Shader_GetLastError(void);
 #define KINE_FILAMENT_DRAW_CAST_SHADOWS (1u << 0)
 #define KINE_FILAMENT_DRAW_RECEIVE_SHADOWS (1u << 1)
 #define KINE_FILAMENT_DRAW_CULLING (1u << 2)
+#define KINE_FILAMENT_DRAW_WORLD_POSITION (1u << 3)
 
 /* Packed frame-submission item used by Kine_Filament_DrawMeshList.
    Keep this layout in sync with filament/structs.luau. */
@@ -80,6 +81,7 @@ typedef struct KineFilamentDrawItem {
 	uint32_t flags;
 	uint32_t reserved; // Optional opacity encoded as float bits for Water and ForceField. Zero uses the default.
 	KineFilamentShader *shader;
+	double worldPosition[3]; // valid only with KINE_FILAMENT_DRAW_WORLD_POSITION
 } KineFilamentDrawItem;
 
 typedef struct KineFilamentParticleItem {
@@ -88,6 +90,7 @@ typedef struct KineFilamentParticleItem {
 	uint8_t g;
 	uint8_t b;
 	uint8_t a;
+	double worldPosition[3];
 } KineFilamentParticleItem;
 
 typedef struct KineGLTextureInfo {
@@ -448,6 +451,11 @@ KINE_API void Kine_Filament_SetCameraLookAt(
 	float targetX, float targetY, float targetZ,
 	float upX, float upY, float upZ);
 
+// Double-precision camera position and direction (not an absolute target).
+KINE_API void Kine_Filament_SetCameraPose(
+ KineFilamentContext *ctx, double x, double y, double z,
+ double dx, double dy, double dz, double ux, double uy, double uz);
+
 KINE_API bool Kine_Filament_BlitToScreen(KineFilamentContext *ctx, int dstX, int dstY, int dstWidth, int dstHeight);
 KINE_API void Kine_Filament_SetCameraPerspective(
 	KineFilamentContext *ctx,
@@ -659,19 +667,19 @@ KINE_API void Kine_Filament_DrawMeshOutline(
 KINE_API void Kine_Filament_DrawGizmo(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int hoveredAxis,
 	int selectedAxis);
 KINE_API int Kine_Filament_PickGizmo(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	float screenX,
 	float screenY);
 KINE_API float Kine_Filament_GetGizmoDragDelta(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int axis,
 	float startX,
 	float startY,
@@ -684,7 +692,7 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
 KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int axis,
 	float startX,
 	float startY,
@@ -748,13 +756,13 @@ KINE_API void Kine_Filament_SetSun(
 // ---------------------------------------------------------------------------
 KINE_API int Kine_Filament_CreateLight(
 	KineFilamentContext *ctx,
-	float px, float py, float pz,
+	double px, double py, double pz,
 	float cr, float cg, float cb,
 	float intensity, float falloff);
 
 KINE_API int Kine_Filament_CreateLightEx(
 	KineFilamentContext *ctx, int lightType,
-	float px, float py, float pz,
+	double px, double py, double pz,
 	float dx, float dy, float dz,
 	float cr, float cg, float cb,
 	float intensity, float falloff,
@@ -768,7 +776,7 @@ KINE_API void Kine_Filament_SetIntensityLight(
 KINE_API void Kine_Filament_SetFalloffLight(
 	KineFilamentContext *ctx, int light, float falloff);
 KINE_API void Kine_Filament_SetPositionLight(
-	KineFilamentContext *ctx, int light, float x, float y, float z);
+	KineFilamentContext *ctx, int light, double x, double y, double z);
 KINE_API void Kine_Filament_SetDirectionLight(
 	KineFilamentContext *ctx, int light, float x, float y, float z);
 KINE_API void Kine_Filament_SetConeLight(
@@ -787,15 +795,15 @@ KINE_API void Kine_Filament_RemoveLight(KineFilamentContext *ctx, int light);
 // ---------------------------------------------------------------------------
 KINE_API void Kine_Filament_DrawGizmoLine(
 	KineFilamentContext *ctx,
-	float ax, float ay, float az,
-	float bx, float by, float bz,
+	double ax, double ay, double az,
+	double bx, double by, double bz,
 	float r, float g, float b,
 	float thickness);
 
 /* points: 6 floats per segment (ax ay az bx by bz). */
 KINE_API void Kine_Filament_DrawGizmoLines(
 	KineFilamentContext *ctx,
-	const float *points,
+	const double *points,
 	uint32_t segmentCount,
 	float r, float g, float b,
 	float thickness);
@@ -803,14 +811,14 @@ KINE_API void Kine_Filament_DrawGizmoLines(
 /* Unit cube (edge 1, centered) transformed by mat4; put the size in the scale. */
 KINE_API void Kine_Filament_DrawGizmoCube(
 	KineFilamentContext *ctx,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b,
 	bool wire,
 	float thickness);
 
 KINE_API void Kine_Filament_DrawGizmoSphere(
 	KineFilamentContext *ctx,
-	float cx, float cy, float cz,
+	double cx, double cy, double cz,
 	float radius,
 	float r, float g, float b,
 	bool wire,
@@ -820,7 +828,7 @@ KINE_API void Kine_Filament_DrawGizmoSphere(
 /* Unit cylinder (diameter 1, height 1 along local Y, centered) transformed by mat4. */
 KINE_API void Kine_Filament_DrawGizmoCylinder(
 	KineFilamentContext *ctx,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b,
 	bool wire,
 	float thickness,
@@ -830,14 +838,14 @@ KINE_API void Kine_Filament_DrawGizmoCylinder(
 KINE_API void Kine_Filament_DrawGizmoMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b);
 
 /* Any mesh as a wireframe of unique triangle edges (capped at 16384 per call). */
 KINE_API void Kine_Filament_DrawGizmoWireMesh(
     KineFilamentContext* ctx,
     KineFilamentMesh* mesh,
-    const float* mat4,
+    const double* mat4,
     float r, float g, float b,
     float thickness,
     float featureAngleDeg);   /* 0 = every edge; ~30 = outline-style */
@@ -869,7 +877,7 @@ KINE_API bool Kine_Filament_SetDecalTiling(
 	float studsPerTileU, float studsPerTileV);
 
 KINE_API void Kine_Filament_RemoveDecal(KineFilamentContext *ctx, int decal);
-KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext *ctx, int decal, float *mat4);
+KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext *ctx, int decal, double *mat4);
 
 KINE_API bool Kine_Filament_EditDecal(
 	KineFilamentContext *ctx, int decal,

@@ -257,23 +257,23 @@ pathfinding_hash_part :: proc(hash: ^Pathfinding_Hash, part: ^classes.Part) {
 	pathfinding_hash_bool(hash, part.can_query)
 	pathfinding_hash_raw(hash, &part.shape)
 
-	pathfinding_hash_f32(hash, part.size.x)
-	pathfinding_hash_f32(hash, part.size.y)
-	pathfinding_hash_f32(hash, part.size.z)
+	pathfinding_hash_f32(hash, f32(part.size.x))
+	pathfinding_hash_f32(hash, f32(part.size.y))
+	pathfinding_hash_f32(hash, f32(part.size.z))
 
 	frame := part.cframe
-	pathfinding_hash_f32(hash, frame.x)
-	pathfinding_hash_f32(hash, frame.y)
-	pathfinding_hash_f32(hash, frame.z)
-	pathfinding_hash_f32(hash, frame.r00)
-	pathfinding_hash_f32(hash, frame.r01)
-	pathfinding_hash_f32(hash, frame.r02)
-	pathfinding_hash_f32(hash, frame.r10)
-	pathfinding_hash_f32(hash, frame.r11)
-	pathfinding_hash_f32(hash, frame.r12)
-	pathfinding_hash_f32(hash, frame.r20)
-	pathfinding_hash_f32(hash, frame.r21)
-	pathfinding_hash_f32(hash, frame.r22)
+	pathfinding_hash_f32(hash, f32(frame.x))
+	pathfinding_hash_f32(hash, f32(frame.y))
+	pathfinding_hash_f32(hash, f32(frame.z))
+	pathfinding_hash_f32(hash, f32(frame.r00))
+	pathfinding_hash_f32(hash, f32(frame.r01))
+	pathfinding_hash_f32(hash, f32(frame.r02))
+	pathfinding_hash_f32(hash, f32(frame.r10))
+	pathfinding_hash_f32(hash, f32(frame.r11))
+	pathfinding_hash_f32(hash, f32(frame.r12))
+	pathfinding_hash_f32(hash, f32(frame.r20))
+	pathfinding_hash_f32(hash, f32(frame.r21))
+	pathfinding_hash_f32(hash, f32(frame.r22))
 
 	if classes.Is_A(&part.object, "MeshPart") {
 		mesh_part := cast(^classes.MeshPart)part
@@ -468,7 +468,7 @@ pathfinding_clear_waypoints :: proc(path: ^Path) {
 
 
 pathfinding_to_floats :: proc(value: datatypes.Vector3) -> [3]f32 {
-	return {value.x, value.y, value.z}
+	return {f32(value.x), f32(value.y), f32(value.z)}
 }
 
 
@@ -602,7 +602,7 @@ pathfinding_compute :: proc(
 
 
 	last := corners[corner_count - 1]
-	final_position := datatypes.Vector3{f32(last.x), f32(last.y), f32(last.z)}
+	final_position := datatypes.Vector3{f64(f32(last.x)), f64(f32(last.y)), f64(f32(last.z))}
 
 	spacing := path.waypoint_spacing
 	if spacing < 1.0 {
@@ -610,9 +610,9 @@ pathfinding_compute :: proc(
 	}
 
 	previous := datatypes.Vector3 {
-		f32(snapped_start_pos[0]),
-		f32(snapped_start_pos[1]),
-		f32(snapped_start_pos[2]),
+		f64(f32(snapped_start_pos[0])),
+		f64(f32(snapped_start_pos[1])),
+		f64(f32(snapped_start_pos[2])),
 	}
 
 
@@ -626,15 +626,15 @@ pathfinding_compute :: proc(
 		}
 
 		current := datatypes.Vector3 {
-			f32(corners[index].x),
-			f32(corners[index].y),
-			f32(corners[index].z),
+			f64(f32(corners[index].x)),
+			f64(f32(corners[index].y)),
+			f64(f32(corners[index].z)),
 		}
 
 
 		distance := datatypes.Vec3_Magnitude(datatypes.Vec3_Subtract(current, previous))
 
-		if distance <= spacing || distance <= 0.0001 {
+		if distance <= f64(spacing) || distance <= 0.0001 {
 			continue
 		}
 
@@ -644,7 +644,7 @@ pathfinding_compute :: proc(
 		}
 
 		for step in 1 ..= steps {
-			t := f32(step) * spacing / distance
+			t := f64(f32(step) * spacing) / distance
 			interpolated := datatypes.Vector3 {
 				previous.x + (current.x - previous.x) * t,
 				previous.y + (current.y - previous.y) * t,
@@ -653,7 +653,7 @@ pathfinding_compute :: proc(
 
 
 			action := enums.PathWaypointAction.Walk
-			if interpolated.y - previous.y > PATHFINDING_JUMP_THRESHOLD {
+			if interpolated.y - previous.y > f64(PATHFINDING_JUMP_THRESHOLD) {
 				action = .Jump
 			}
 

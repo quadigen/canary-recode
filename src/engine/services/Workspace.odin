@@ -146,7 +146,7 @@ workspace_water_mesh :: proc(
 		}
 		mesh = workspace.water_grid_mesh
 	} else {
-		mesh = kineffi.Kine_Filament_GetWaterGrid(filament, size.x, size.z)
+		mesh = kineffi.Kine_Filament_GetWaterGrid(filament, f32(size.x), f32(size.z))
 	}
 	if mesh == nil {return workspace_part_mesh(workspace, filament, .Block)}
 	return mesh
@@ -291,8 +291,8 @@ workspace_editable_meshpart_mesh :: proc(
 			(corner.position.z - center.z) * scale.z,
 		}
 		append(&indices, u32(corner_index))
-		append(&vertex_data, position.x, position.y, position.z)
-		append(&vertex_data, corner.normal.x, corner.normal.y, corner.normal.z)
+		append(&vertex_data, f32(position.x), f32(position.y), f32(position.z))
+		append(&vertex_data, f32(corner.normal.x), f32(corner.normal.y), f32(corner.normal.z))
 		append(&vertex_data, corner.uv.X, corner.uv.Y)
 		append(&color_data, corner.color.R, corner.color.G, corner.color.B, corner.alpha)
 	}
@@ -348,18 +348,18 @@ Workspace_Apply_View :: proc(
 	view := renderer.WorldToView
 	return datatypes.CFrame_Mul_CFrame(
 		datatypes.CFrame {
-			x = view[0],
-			y = view[1],
-			z = view[2],
-			r00 = view[3],
-			r01 = view[4],
-			r02 = view[5],
-			r10 = view[6],
-			r11 = view[7],
-			r12 = view[8],
-			r20 = view[9],
-			r21 = view[10],
-			r22 = view[11],
+			x = f64(view[0]),
+			y = f64(view[1]),
+			z = f64(view[2]),
+			r00 = f64(view[3]),
+			r01 = f64(view[4]),
+			r02 = f64(view[5]),
+			r10 = f64(view[6]),
+			r11 = f64(view[7]),
+			r12 = f64(view[8]),
+			r20 = f64(view[9]),
+			r21 = f64(view[10]),
+			r22 = f64(view[11]),
 		},
 		cframe,
 	)
@@ -389,10 +389,11 @@ WORKSPACE_STREAM_ID :: u64(0x574F524B53504345)
 
 Workspace_Frustum_Plane :: struct {
 	normal: datatypes.Vector3,
-	offset: f32,
+	offset: f64,
 }
 
 Workspace_Frustum :: struct {
+	eye: datatypes.Vector3,
 	planes: [6]Workspace_Frustum_Plane,
 }
 
@@ -421,20 +422,14 @@ Workspace_Frustum_Build :: proc(
 	normals := [6]datatypes.Vector3 {
 		forward,
 		datatypes.Vec3_Negate(forward),
-		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, tan_half_v), up),
-		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, tan_half_v), up),
-		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, tan_half_x), right),
-		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, tan_half_x), right),
+		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, f64(tan_half_v)), up),
+		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, f64(tan_half_v)), up),
+		datatypes.Vec3_Subtract(datatypes.Vec3_Multiply(forward, f64(tan_half_x)), right),
+		datatypes.Vec3_Add(datatypes.Vec3_Multiply(forward, f64(tan_half_x)), right),
 	}
 
-	offsets := [6]f32 {
-		-datatypes.Vec3_Dot(normals[0], eye) - WORKSPACE_FRUSTUM_NEAR,
-		-datatypes.Vec3_Dot(normals[1], eye) + far,
-		-datatypes.Vec3_Dot(normals[2], eye),
-		-datatypes.Vec3_Dot(normals[3], eye),
-		-datatypes.Vec3_Dot(normals[4], eye),
-		-datatypes.Vec3_Dot(normals[5], eye),
-	}
+	frustum.eye = eye
+	offsets := [6]f64{-f64(WORKSPACE_FRUSTUM_NEAR), f64(far), 0, 0, 0, 0}
 
 	for i in 0 ..< 6 {
 		length := datatypes.Vec3_Magnitude(normals[i])
@@ -456,8 +451,9 @@ Workspace_Frustum_Contains_Sphere :: proc(
 	radius: f32,
 ) -> bool {
 	if frustum == nil {return true}
+	relative := datatypes.Vec3_Subtract(center, frustum.eye)
 	for plane in frustum.planes {
-		if datatypes.Vec3_Dot(plane.normal, center) + plane.offset < -radius {
+		if datatypes.Vec3_Dot(plane.normal, relative) + f64(plane.offset) < f64(-radius) {
 			return false
 		}
 	}
@@ -490,7 +486,7 @@ workspace_distance_squared :: proc(a, b: datatypes.Vector3) -> f32 {
 	dx := a.x - b.x
 	dy := a.y - b.y
 	dz := a.z - b.z
-	return dx * dx + dy * dy + dz * dz
+	return f32(dx * dx + dy * dy + dz * dz)
 }
 
 workspace_set_3d_state :: proc(state: bool, workspace: ^Workspace) {
@@ -571,7 +567,7 @@ workspace_append_draw_items :: proc(
 			}
 
 			center := datatypes.Vector3{cframe.x, cframe.y, cframe.z}
-			radius := 0.5 * datatypes.Vec3_Magnitude(size) + WORKSPACE_CULL_MARGIN
+			radius := 0.5 * datatypes.Vec3_Magnitude(size) + f64(WORKSPACE_CULL_MARGIN)
 			if is_meshpart && mesh != nil {
 
 
@@ -580,48 +576,48 @@ workspace_append_draw_items :: proc(
 					center = datatypes.CFrame_PointToWorldSpace(
 						cframe,
 						{
-							local_center[0] * render_size.x,
-							local_center[1] * render_size.y,
-							local_center[2] * render_size.z,
+							f64(local_center[0]) * render_size.x,
+							f64(local_center[1]) * render_size.y,
+							f64(local_center[2]) * render_size.z,
 						},
 					)
 					radius =
 						datatypes.Vec3_Magnitude(
 							datatypes.Vector3 {
-								half_extent[0] * render_size.x,
-								half_extent[1] * render_size.y,
-								half_extent[2] * render_size.z,
+								f64(half_extent[0]) * render_size.x,
+								f64(half_extent[1]) * render_size.y,
+								f64(half_extent[2]) * render_size.z,
 							},
 						) +
-						WORKSPACE_CULL_MARGIN
+						f64(WORKSPACE_CULL_MARGIN)
 				}
 			}
 			if variant := classes.MaterialVariant_Find(
 				child.signal_registry,
 				part.material_variant,
 			); variant != nil {
-				radius += abs(variant.height_scale) + variant.displacement_bounds
+				radius += f64(abs(variant.height_scale) + variant.displacement_bounds)
 			}
 
 			visible := true
 			distance_sq: f32
 			if params != nil {
 				distance_sq = workspace_distance_squared(center, params.eye)
-				draw_distance := params.max_distance + radius
-				if params.max_distance > 0 && distance_sq > draw_distance * draw_distance {
+				draw_distance := f64(params.max_distance) + radius
+				if params.max_distance > 0 && f64(distance_sq) > draw_distance * draw_distance {
 					visible = false
 				}
 				if visible &&
 				   params.frustum != nil &&
-				   !Workspace_Frustum_Contains_Sphere(params.frustum, center, radius) {
+				   !Workspace_Frustum_Contains_Sphere(params.frustum, center, f32(radius)) {
 					visible = false
 				}
 
 
 				if !visible && params.reflection_radius > 0 {
-					capture_radius := params.reflection_radius + radius
+					capture_radius := f64(params.reflection_radius) + radius
 					visible =
-						workspace_distance_squared(center, params.reflection_center) <=
+						f64(workspace_distance_squared(center, params.reflection_center)) <=
 						capture_radius * capture_radius
 				}
 			}
@@ -681,18 +677,18 @@ workspace_append_draw_items :: proc(
 					mesh         = mesh,
 					tex          = draw_texture,
 					transform    = {
-						cframe.r00 * render_size.x,
-						cframe.r01 * render_size.y,
-						cframe.r02 * render_size.z,
-						cframe.x,
-						cframe.r10 * render_size.x,
-						cframe.r11 * render_size.y,
-						cframe.r12 * render_size.z,
-						cframe.y,
-						cframe.r20 * render_size.x,
-						cframe.r21 * render_size.y,
-						cframe.r22 * render_size.z,
-						cframe.z,
+						f32(cframe.r00 * render_size.x),
+						f32(cframe.r01 * render_size.y),
+						f32(cframe.r02 * render_size.z),
+						f32(cframe.x),
+						f32(cframe.r10 * render_size.x),
+						f32(cframe.r11 * render_size.y),
+						f32(cframe.r12 * render_size.z),
+						f32(cframe.y),
+						f32(cframe.r20 * render_size.x),
+						f32(cframe.r21 * render_size.y),
+						f32(cframe.r22 * render_size.z),
+						f32(cframe.z),
 						0,
 						0,
 						0,
@@ -706,7 +702,8 @@ workspace_append_draw_items :: proc(
 					param3       = param3,
 					transmission = transmission,
 					materialKind = material_kind,
-					flags        = workspace_part_flags(part),
+					flags        = workspace_part_flags(part) | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+					worldPosition = {cframe.x, cframe.y, cframe.z},
 				}
 
 
@@ -718,6 +715,7 @@ workspace_append_draw_items :: proc(
 					for i in 0 ..< 16 {
 						params.hash = workspace_hash_f32(params.hash, item.transform[i])
 					}
+					for v in item.worldPosition {params.hash = workspace_hash_u64(params.hash, transmute(u64)v)}
 					params.hash = workspace_hash_f32(params.hash, item.r)
 					params.hash = workspace_hash_f32(params.hash, item.g)
 					params.hash = workspace_hash_f32(params.hash, item.b)
@@ -791,7 +789,7 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 			&probe_center[0],
 			&params.reflection_radius,
 		) {
-			params.reflection_center = {probe_center[0], probe_center[1], probe_center[2]}
+			params.reflection_center = {f64(probe_center[0]), f64(probe_center[1]), f64(probe_center[2])}
 		}
 		frustum: Workspace_Frustum
 
@@ -896,7 +894,6 @@ workspace_get :: proc(
 	key: string,
 ) -> bool {
 	workspace := cast(^Workspace)object
-	physics := workspace_physics(workspace)
 	switch key {
 	case "CurrentCamera":
 		classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
@@ -907,8 +904,6 @@ workspace_get :: proc(
 		vm.PushBoolean(L, aerodynamics != nil && aerodynamics.enabled)
 	case "SimulatePhysics", "AutoSimulate":
 		vm.PushBoolean(L, workspace.simulate_physics)
-	case "Gravity":
-		vm.PushNumber(L, physics == nil ? 196.2 : f64(physics.gravity))
 	case "Dimension":
 		if enum_registry == nil {return false}
 		_ = enums.Push_Item_By_Value(L, enum_registry, "Dimension", i64(workspace.dimension))
@@ -983,19 +978,15 @@ workspace_set :: proc(
 		workspace.simulate_physics = simulate
 	case "Enable3dRendering":
 		workspace.enable_3d = vm.ArgBoolean(L, value_index)
-	case "Gravity":
-		physics := workspace_physics(workspace)
-		if physics == nil {return false}
-		Physics_Set_Gravity(physics, f32(vm.ArgNumber(L, value_index)))
 	case "Dimension":
 		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "Dimension")
 		workspace.dimension = enums.Dimension(item.value)
 	case "GlobalWind":
 		wind := datatypes.Arg_Vector3(L, value_index)
-		if !physics_finite_f32(wind.x) ||
-		   !physics_finite_f32(wind.y) ||
-		   !physics_finite_f32(wind.z) {
+		if !physics_finite_f32(f32(wind.x)) ||
+		   !physics_finite_f32(f32(wind.y)) ||
+		   !physics_finite_f32(f32(wind.z)) {
 			_ = vm.RaiseError(L, "Workspace.GlobalWind must be finite")
 			return true
 		}
@@ -1171,7 +1162,6 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		properties = []string {
 			"CurrentCamera",
 			"SimulatePhysics",
-			"Gravity",
 			"GlobalWind",
 			"FallenPartsDestroyHeight",
 			"FallHeightEnabled",

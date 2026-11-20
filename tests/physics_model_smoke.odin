@@ -168,7 +168,7 @@ assert(p.AssemblyLinearVelocity.X > 1 and p.AssemblyAngularVelocity.Y > 0.1)
 				&position,
 				&rotation,
 			)
-			assert(body.remote && abs(f32(position.x) - part.position.x) < 0.01)
+			assert(body.remote && abs(position.x - part.position.x) < 0.01)
 		}
 	}
 	assert(found)

@@ -326,9 +326,9 @@ softbody_namecall :: proc(
 	if method != "ApplyImpulse" {return 0, false}
 	value := datatypes.Arg_Vector3(L, 2)
 	total := kineffi.JPH_Vec3 {
-		body.impulse.x + value.x,
-		body.impulse.y + value.y,
-		body.impulse.z + value.z,
+		f32(f64(body.impulse.x) + value.x),
+		f32(f64(body.impulse.y) + value.y),
+		f32(f64(body.impulse.z) + value.z),
 	}
 	if !(abs(total.x) <= 1e8 && abs(total.y) <= 1e8 && abs(total.z) <= 1e8) {
 		return vm.RaiseError(L, "SoftBody impulse components must be finite and at most 1e8"), true

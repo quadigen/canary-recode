@@ -11,6 +11,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	add_subdirectory(../luau luau)
 endif()
 
+# Native double vectors (including the VM's altered GC/type-tag layout).
+target_compile_definitions(Luau.VM PUBLIC LUA_VECTOR_DOUBLE=1)
+if(TARGET Luau.CodeGen)
+    target_compile_definitions(Luau.CodeGen PUBLIC LUA_VECTOR_DOUBLE=1)
+endif()
+
 add_library(kine_luau STATIC src/kine_luau.cpp)
 target_include_directories(kine_luau PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/../luau/VM/include

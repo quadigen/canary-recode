@@ -123,9 +123,9 @@ CharacterService_Spawn_Position :: proc(
 		dy := candidate.y - origin.y
 		dz := candidate.z - origin.z
 		dist := dx * dx + dy * dy + dz * dz
-		if !found || dist < best_dist {
+		if !found || dist < f64(best_dist) {
 			found = true
-			best_dist = dist
+			best_dist = f32(dist)
 			position = candidate
 		}
 	}
@@ -325,7 +325,7 @@ CharacterService_Load :: proc(
 	classes.Set_Parent(object, workspace)
 	vm.Pop(service.data_model.registry.vm_state.L)
 	Player_Set_Character(player, service.data_model.registry.vm_state.L, model)
-	player.ground_y = spawn.y
+	player.ground_y = f32(spawn.y)
 	player.vertical_speed = 0
 
 
@@ -412,7 +412,7 @@ character_service_bind_ready :: proc(
 ) {
 	Player_Set_Character(player, L, model)
 	root := classes.CharacterModel_Root(model)
-	if root != nil {player.ground_y = root.cframe.y}
+	if root != nil {player.ground_y = f32(root.cframe.y)}
 	if player == players.local_player {
 		workspace := cast(^Workspace)DataModel_Get_Service(data_model, "Workspace")
 		if workspace != nil && workspace.current_camera != nil {

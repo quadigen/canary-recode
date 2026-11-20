@@ -1302,8 +1302,8 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 				InputObject_Value {
 					UserInputType = .MouseMovement,
 					UserInputState = .Change,
-					Position = {result.x, result.y, 0},
-					Delta = {event.motion.xrel, event.motion.yrel, 0},
+					Position = {f64(result.x), f64(result.y), 0},
+					Delta = {f64(event.motion.xrel), f64(event.motion.yrel), 0},
 				},
 			)
 		}
@@ -1348,7 +1348,7 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 			InputObject_Value {
 				UserInputType = gui_object_mouse_type(event.button.button),
 				UserInputState = .Begin,
-				Position = {hit.x, hit.y, 0},
+				Position = {f64(hit.x), f64(hit.y), 0},
 			},
 		)
 
@@ -1374,7 +1374,7 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 				InputObject_Value {
 					UserInputType = input_type,
 					UserInputState = .End,
-					Position = {px, py, 0},
+					Position = {f64(px), f64(py), 0},
 				},
 			)
 		}
@@ -1390,8 +1390,8 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 			InputObject_Value {
 				UserInputType = .MouseWheel,
 				UserInputState = .Change,
-				Position = {hit.x, hit.y, event.wheel.y},
-				Delta = {event.wheel.x, 0, event.wheel.y},
+				Position = {f64(hit.x), f64(hit.y), f64(event.wheel.y)},
+				Delta = {f64(event.wheel.x), 0, f64(event.wheel.y)},
 			},
 		)
 		if gui_object_event_invalid(gui) {return}

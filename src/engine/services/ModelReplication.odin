@@ -52,7 +52,7 @@ replication_model_pivoted :: proc(ctx: rawptr, model: ^classes.Model) {
 	replication_put_u32(&payload, model.network_id)
 	replication_put_u32(&payload, revision)
 	cf := classes.Model_Get_Pivot(model)
-	values := [?]f32 {
+	values := [?]f64 {
 		cf.x,
 		cf.y,
 		cf.z,
@@ -66,7 +66,7 @@ replication_model_pivoted :: proc(ctx: rawptr, model: ^classes.Model) {
 		cf.r21,
 		cf.r22,
 	}
-	for value in values {replication_put_f32(&payload, value)}
+	for value in values {replication_put_f64(&payload, value)}
 	for &connection in service.peers {
 		if connection.handshake_complete &&
 		   connection.known[model.network_id] != 0 &&
@@ -111,9 +111,7 @@ replication_receive_model_pivot :: proc(
 		return
 	}
 	if subtype != 0 || service.mode != .Client || peer != service.remote {return}
-	cf: datatypes.CFrame
-	values := cast(^[12]f32)&cf
-	for &value in values {value = replication_read_f32(reader)}
+	cf := replication_read_cframe(reader)
 	if !reader.valid ||
 	   reader.offset != len(reader.data) ||
 	   !replication_frame_finite(cf) ||

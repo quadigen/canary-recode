@@ -162,7 +162,7 @@ cloth.Parent = CurtainGroup
 
 	// Place the character halfway between two particle columns on a wide curtain.
 	ok, err = vm.Run(&script_vm, `
-workspace.Gravity = 0
+game:GetService("Physics").Gravity = 0
 CurtainGroup.Parent = workspace
 cloth.Attachment0.Position = Vector3.new(-11, 0, 0)
 cloth.Attachment1.Position = Vector3.new(11, 0, 0)
@@ -174,7 +174,7 @@ clothHits = 0
 	for i in 0..<25 {
 		root.cframe.x = 1.1
 		root.cframe.y = 2.5
-		root.cframe.z = 2 - f32(i) * 0.16
+		root.cframe.z = 2 - f64(i) * 0.16
 		services.CharacterService_Server_Touch(characters, character, physics, dt)
 		services.Physics_Step(physics, dt)
 	}

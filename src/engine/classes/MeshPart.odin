@@ -37,6 +37,7 @@ MeshPart_Init :: proc() -> MeshPart {
 			cframe = datatypes.CFrame_Identity,
 			color = datatypes.Color3{R = 1, G = 1, B = 1},
 			size = datatypes.Vector3{4, 1, 2},
+			gravity = PART_DEFAULT_GRAVITY,
 			anchored = true,
 			can_collide = true,
 			can_query = true,

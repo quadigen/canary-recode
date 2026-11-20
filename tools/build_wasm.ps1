@@ -140,7 +140,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "src/engine/assets/fonts/Roboto-Vari
 
 # Pin and stage the browser renderer locally, so the shipped web runtime
 # doesn't request a CDN or require the native Filament material compiler.
-$babylonVersion = "9.28.0"
+$babylonVersion = "9.37.1"
 $babylonCache = Join-Path $repoRoot ".cache/babylon-web"
 $babylonRoot = Join-Path $babylonCache "node_modules/babylonjs"
 $babylonPackage = Join-Path $babylonRoot "package.json"

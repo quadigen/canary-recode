@@ -226,7 +226,7 @@
     const api = {
       Kine_Filament_CreateForSDLWindow: (_win, w, h) => {
         try {
-          const engine = new B.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true, disableWebGL2Support: false }, false);
+          const engine = new B.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true, disableWebGL2Support: false, useLargeWorldRendering: true }, false);
           engine.setSize(w, h, true);
           const scene = new B.Scene(engine); scene.useRightHandedSystem = true;
           const camera = new B.FreeCamera("Camera", vec(8, 7, 12), scene);
@@ -252,9 +252,18 @@
       Kine_Filament_SetMeshDoubleSided: mid => { const m = meshes.get(mid); if (m) m.doubleSided = true; },
       Kine_Filament_DestroyMesh: destroyMesh,
       Kine_Filament_DrawMeshList: (id, p, count) => {
-        const c = get(id), stride = 116; if (!c || count < 0 || (count && !valid(p, count * stride))) return 0;
+        const c = get(id), stride = 144; if (!c || count < 0 || (count && !valid(p, count * stride))) return 0;
         const d = heap32(); stats.drawListCalls = (stats.drawListCalls || 0) + 1; stats.drawItems = (stats.drawItems || 0) + count;
-        for (let i = 0; i < count; i++) { const o = p + i * stride, f = j => d.getFloat32(o + j, true); draw(c, d.getUint32(o, true), d.getUint32(o + 4, true), floats(o + 8, 16), f(72), f(76), f(80), f(84), f(88), f(92), f(96), d.getInt32(o + 100, true), d.getUint32(o + 104, true), f(108)); }
+        for (let i = 0; i < count; i++) {
+          const o = p + i * stride, f = j => d.getFloat32(o + j, true);
+          const flags = d.getUint32(o + 104, true), matrix = Array.from(floats(o + 8, 16));
+          if (flags & 8) {
+            matrix[3] = d.getFloat64(o + 120, true);
+            matrix[7] = d.getFloat64(o + 128, true);
+            matrix[11] = d.getFloat64(o + 136, true);
+          }
+          draw(c, d.getUint32(o, true), d.getUint32(o + 4, true), matrix, f(72), f(76), f(80), f(84), f(88), f(92), f(96), d.getInt32(o + 100, true), flags, f(108));
+        }
         return 1;
       },
       Kine_Filament_DrawMeshListVersioned: (...a) => api.Kine_Filament_DrawMeshList(...a),
@@ -265,6 +274,11 @@
       Kine_Filament_SetViewport: withContext((c, x, y, w, h) => { c.camera.viewport = new B.Viewport(x / c.w, 1 - (y + h) / c.h, w / c.w, h / c.h); }),
       Kine_Filament_SetCameraPerspective: withContext((c, fov, _aspect, near, far) => { c.camera.fov = fov * Math.PI / 180; c.camera.minZ = Math.max(.001, near); c.camera.maxZ = Math.max(c.camera.minZ + .001, far); }),
       Kine_Filament_SetCameraLookAt: withContext((c, x, y, z, tx, ty, tz, ux, uy, uz) => { c.camera.position.copyFromFloats(x, y, z); c.camera.upVector.copyFromFloats(ux, uy, uz); c.camera.setTarget(vec(tx, ty, tz)); }),
+      Kine_Filament_SetCameraPose: withContext((c, x, y, z, dx, dy, dz, ux, uy, uz) => {
+        c.camera.position.copyFromFloats(x, y, z);
+        c.camera.upVector.copyFromFloats(ux, uy, uz);
+        c.camera.setTarget(vec(x + dx, y + dy, z + dz));
+      }),
       Kine_Filament_SetCameraPosition: withContext((c, x, y, z) => c.camera.position.copyFromFloats(x, y, z)),
       Kine_Filament_SetCameraDirection: withContext((c, x, y, z) => c.camera.setTarget(c.camera.position.add(vec(x, y, z)))),
       Kine_Filament_CreateSky: withContext(sky),

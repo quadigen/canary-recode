@@ -43,8 +43,8 @@ set(RECASTNAVIGATION_DT_VIRTUAL_QUERYFILTER OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     RecastNavigation
     GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
-    GIT_TAG main
-    GIT_SHALLOW TRUE
+    GIT_TAG 9f4ce64458dfae86e1239c525ddc219c4e9e06f1
+    GIT_SHALLOW FALSE
 )
 
 # Upstream applies -Werror at directory scope. The wrapper is a separate target

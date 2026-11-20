@@ -816,9 +816,9 @@ data_store_lua_userdata_to_json :: proc(
 		data_store_json_put_vector3(
 			object,
 			"Position",
-			value.Position.x,
-			value.Position.y,
-			value.Position.z,
+			f32(value.Position.x),
+			f32(value.Position.y),
+			f32(value.Position.z),
 		)
 		data_store_json_put_integer(object, "Action", i64(value.Action))
 		data_store_json_put_string(object, "Label", value.Label)
@@ -849,16 +849,16 @@ data_store_lua_userdata_to_json :: proc(
 		data_store_json_put_vector3(
 			object,
 			"Origin",
-			value.Origin.x,
-			value.Origin.y,
-			value.Origin.z,
+			f32(value.Origin.x),
+			f32(value.Origin.y),
+			f32(value.Origin.z),
 		)
 		data_store_json_put_vector3(
 			object,
 			"Direction",
-			value.Direction.x,
-			value.Direction.y,
-			value.Direction.z,
+			f32(value.Direction.x),
+			f32(value.Direction.y),
+			f32(value.Direction.z),
 		)
 		return object^, ""
 
@@ -872,8 +872,8 @@ data_store_lua_userdata_to_json :: proc(
 	case "Region3":
 		value := cast(^datatypes.Region3)ptr
 		object := data_store_json_typed_object("Region3")
-		data_store_json_put_vector3(object, "Min", value.Min.x, value.Min.y, value.Min.z)
-		data_store_json_put_vector3(object, "Max", value.Max.x, value.Max.y, value.Max.z)
+		data_store_json_put_vector3(object, "Min", f32(value.Min.x), f32(value.Min.y), f32(value.Min.z))
+		data_store_json_put_vector3(object, "Max", f32(value.Max.x), f32(value.Max.y), f32(value.Max.z))
 		return object^, ""
 
 	case "Region3int16":
@@ -1069,9 +1069,9 @@ data_store_json_vector3 :: proc(object: json.Object, key: string) -> datatypes.V
 	#partial switch nested in value {
 	case json.Object:
 		return {
-			x = f32(data_store_json_number(nested, "X")),
-			y = f32(data_store_json_number(nested, "Y")),
-			z = f32(data_store_json_number(nested, "Z")),
+			x = data_store_json_number(nested, "X"),
+			y = data_store_json_number(nested, "Y"),
+			z = data_store_json_number(nested, "Z"),
 		}
 	}
 	return {}
@@ -1103,9 +1103,9 @@ data_store_push_datatype :: proc(
 	if type_name == "Vector3" {
 		vm.PushVector3(
 			L,
-			f32(data_store_json_number(object, "X")),
-			f32(data_store_json_number(object, "Y")),
-			f32(data_store_json_number(object, "Z")),
+			data_store_json_number(object, "X"),
+			data_store_json_number(object, "Y"),
+			data_store_json_number(object, "Z"),
 		)
 		return true
 	}
@@ -1153,18 +1153,18 @@ data_store_push_datatype :: proc(
 			L,
 			datatypes_registry,
 			datatypes.CFrame_New_Matrix(
-				f32(data_store_json_number(object, "X")),
-				f32(data_store_json_number(object, "Y")),
-				f32(data_store_json_number(object, "Z")),
-				f32(data_store_json_number(object, "R00")),
-				f32(data_store_json_number(object, "R01")),
-				f32(data_store_json_number(object, "R02")),
-				f32(data_store_json_number(object, "R10")),
-				f32(data_store_json_number(object, "R11")),
-				f32(data_store_json_number(object, "R12")),
-				f32(data_store_json_number(object, "R20")),
-				f32(data_store_json_number(object, "R21")),
-				f32(data_store_json_number(object, "R22")),
+				data_store_json_number(object, "X"),
+				data_store_json_number(object, "Y"),
+				data_store_json_number(object, "Z"),
+				data_store_json_number(object, "R00"),
+				data_store_json_number(object, "R01"),
+				data_store_json_number(object, "R02"),
+				data_store_json_number(object, "R10"),
+				data_store_json_number(object, "R11"),
+				data_store_json_number(object, "R12"),
+				data_store_json_number(object, "R20"),
+				data_store_json_number(object, "R21"),
+				data_store_json_number(object, "R22"),
 			),
 		)
 

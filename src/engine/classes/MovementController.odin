@@ -46,10 +46,10 @@ MovementController_Step :: proc(mc: ^MovementController, dt: f32) -> (move_dir: 
 		flat.x /= length
 		flat.z /= length
 	}
-	target_x, target_z := flat.x * mc.walk_speed, flat.z * mc.walk_speed
+	target_x, target_z := flat.x * f64(mc.walk_speed), flat.z * f64(mc.walk_speed)
 	step := mc.acceleration * dt
-	mc.desired_velocity.x = move_toward(mc.desired_velocity.x, target_x, step)
-	mc.desired_velocity.z = move_toward(mc.desired_velocity.z, target_z, step)
+	mc.desired_velocity.x = f64(move_toward(f32(mc.desired_velocity.x), f32(target_x), step))
+	mc.desired_velocity.z = f64(move_toward(f32(mc.desired_velocity.z), f32(target_z), step))
 	if mc.jump_buffer_time > 0 {
 		mc.jump_buffer_time -= dt
 		if mc.jump_buffer_time <= 0 {mc.jump_buffered = false}

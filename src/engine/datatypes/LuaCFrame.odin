@@ -53,9 +53,9 @@ cframe_new :: proc "c" (L: ^vm.State) -> i32 {
 			L,
 			binding,
 			CFrame_New_XYZ(
-				f32(vm.ArgNumber(L, 1)),
-				f32(vm.ArgNumber(L, 2)),
-				f32(vm.ArgNumber(L, 3)),
+				f64(vm.ArgNumber(L, 1)),
+				f64(vm.ArgNumber(L, 2)),
+				f64(vm.ArgNumber(L, 3)),
 			),
 		)
 	case 7:
@@ -63,13 +63,13 @@ cframe_new :: proc "c" (L: ^vm.State) -> i32 {
 			L,
 			binding,
 			CFrame_New_Quaternion(
-				f32(vm.ArgNumber(L, 1)),
-				f32(vm.ArgNumber(L, 2)),
-				f32(vm.ArgNumber(L, 3)),
-				f32(vm.ArgNumber(L, 4)),
-				f32(vm.ArgNumber(L, 5)),
-				f32(vm.ArgNumber(L, 6)),
-				f32(vm.ArgNumber(L, 7)),
+				f64(vm.ArgNumber(L, 1)),
+				f64(vm.ArgNumber(L, 2)),
+				f64(vm.ArgNumber(L, 3)),
+				f64(vm.ArgNumber(L, 4)),
+				f64(vm.ArgNumber(L, 5)),
+				f64(vm.ArgNumber(L, 6)),
+				f64(vm.ArgNumber(L, 7)),
 			),
 		)
 	case 12:
@@ -77,18 +77,18 @@ cframe_new :: proc "c" (L: ^vm.State) -> i32 {
 			L,
 			binding,
 			CFrame_New_Matrix(
-				f32(vm.ArgNumber(L, 1)),
-				f32(vm.ArgNumber(L, 2)),
-				f32(vm.ArgNumber(L, 3)),
-				f32(vm.ArgNumber(L, 4)),
-				f32(vm.ArgNumber(L, 5)),
-				f32(vm.ArgNumber(L, 6)),
-				f32(vm.ArgNumber(L, 7)),
-				f32(vm.ArgNumber(L, 8)),
-				f32(vm.ArgNumber(L, 9)),
-				f32(vm.ArgNumber(L, 10)),
-				f32(vm.ArgNumber(L, 11)),
-				f32(vm.ArgNumber(L, 12)),
+				f64(vm.ArgNumber(L, 1)),
+				f64(vm.ArgNumber(L, 2)),
+				f64(vm.ArgNumber(L, 3)),
+				f64(vm.ArgNumber(L, 4)),
+				f64(vm.ArgNumber(L, 5)),
+				f64(vm.ArgNumber(L, 6)),
+				f64(vm.ArgNumber(L, 7)),
+				f64(vm.ArgNumber(L, 8)),
+				f64(vm.ArgNumber(L, 9)),
+				f64(vm.ArgNumber(L, 10)),
+				f64(vm.ArgNumber(L, 11)),
+				f64(vm.ArgNumber(L, 12)),
 			),
 		)
 	case:
@@ -102,7 +102,7 @@ cframe_angles :: proc "c" (L: ^vm.State) -> i32 {
 	push_cframe(
 		L,
 		binding_from_upvalue(L),
-		CFrame_Angles(f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3))),
+		CFrame_Angles(f64(vm.ArgNumber(L, 1)), f64(vm.ArgNumber(L, 2)), f64(vm.ArgNumber(L, 3))),
 	)
 	return 1
 }
@@ -113,9 +113,9 @@ cframe_from_euler_xyz :: proc "c" (L: ^vm.State) -> i32 {
 		L,
 		binding_from_upvalue(L),
 		CFrame_FromEulerAnglesXYZ(
-			f32(vm.ArgNumber(L, 1)),
-			f32(vm.ArgNumber(L, 2)),
-			f32(vm.ArgNumber(L, 3)),
+			f64(vm.ArgNumber(L, 1)),
+			f64(vm.ArgNumber(L, 2)),
+			f64(vm.ArgNumber(L, 3)),
 		),
 	)
 	return 1
@@ -127,9 +127,9 @@ cframe_from_euler_yxz :: proc "c" (L: ^vm.State) -> i32 {
 		L,
 		binding_from_upvalue(L),
 		CFrame_FromEulerAnglesYXZ(
-			f32(vm.ArgNumber(L, 1)),
-			f32(vm.ArgNumber(L, 2)),
-			f32(vm.ArgNumber(L, 3)),
+			f64(vm.ArgNumber(L, 1)),
+			f64(vm.ArgNumber(L, 2)),
+			f64(vm.ArgNumber(L, 3)),
 		),
 	)
 	return 1
@@ -141,9 +141,9 @@ cframe_from_orientation :: proc "c" (L: ^vm.State) -> i32 {
 		L,
 		binding_from_upvalue(L),
 		CFrame_FromOrientation(
-			f32(vm.ArgNumber(L, 1)),
-			f32(vm.ArgNumber(L, 2)),
-			f32(vm.ArgNumber(L, 3)),
+			f64(vm.ArgNumber(L, 1)),
+			f64(vm.ArgNumber(L, 2)),
+			f64(vm.ArgNumber(L, 3)),
 		),
 	)
 	return 1
@@ -154,7 +154,7 @@ cframe_from_axis_angle :: proc "c" (L: ^vm.State) -> i32 {
 	push_cframe(
 		L,
 		binding_from_upvalue(L),
-		CFrame_FromAxisAngle(arg_vector3(L, 1), f32(vm.ArgNumber(L, 2))),
+		CFrame_FromAxisAngle(arg_vector3(L, 1), f64(vm.ArgNumber(L, 2))),
 	)
 	return 1
 }
@@ -242,7 +242,7 @@ cframe_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	return true
 }
 
-push_angles :: proc(L: ^vm.State, x, y, z: f32) {
+push_angles :: proc(L: ^vm.State, x, y, z: f64) {
 	vm.PushNumber(L, f64(x))
 	vm.PushNumber(L, f64(y))
 	vm.PushNumber(L, f64(z))
@@ -259,7 +259,7 @@ cframe_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		push_cframe(
 			L,
 			binding,
-			CFrame_Lerp(cf^, require_cframe(L, 2, binding)^, f32(vm.ArgNumber(L, 3))),
+			CFrame_Lerp(cf^, require_cframe(L, 2, binding)^, f64(vm.ArgNumber(L, 3))),
 		)
 		return 1, true
 	case "ToWorldSpace":
@@ -311,7 +311,7 @@ cframe_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		other := require_cframe(L, 2, binding)
 		vm.PushBoolean(
 			L,
-			CFrame_FuzzyEq_Epsilon(cf^, other^, f32(vm.ArgOptionalNumber(L, 3, 1.0e-5))),
+			CFrame_FuzzyEq_Epsilon(cf^, other^, f64(vm.ArgOptionalNumber(L, 3, 1.0e-5))),
 		)
 		return 1, true
 	case "AngleBetween":

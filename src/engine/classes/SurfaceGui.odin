@@ -413,7 +413,7 @@ surfacegui_visible_distance :: proc(
 	dz := camera_position.z - center.z
 	distance_squared := dx * dx + dy * dy + dz * dz
 
-	return distance_squared <= gui.max_distance * gui.max_distance
+	return distance_squared <= f64(gui.max_distance * gui.max_distance)
 }
 
 surfacegui_camera :: proc(renderer: ^Renderer_Object) -> ^Camera {
@@ -467,7 +467,7 @@ surfacegui_screen_ray :: proc(
 	normalized_y := 1 - (local_y / height) * 2
 	tangent := f32(math.tan(math.to_radians(f64(CAMERA_FIELD_OF_VIEW_DEGREES)) * 0.5))
 	aspect := width / height
-	view := datatypes.Vector3{normalized_x * aspect * tangent, normalized_y * tangent, -1}
+	view := datatypes.Vector3{f64(normalized_x * aspect * tangent), f64(normalized_y * tangent), -1}
 
 	origin = datatypes.CFrame_Position(camera.CFrame)
 	direction = datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(camera.CFrame, view))
@@ -491,16 +491,16 @@ surfacegui_ray_face :: proc(
 	}
 
 	distance =
-		datatypes.Vec3_Dot(datatypes.Vec3_Subtract(info.center, origin), info.normal) / denominator
+		f32(datatypes.Vec3_Dot(datatypes.Vec3_Subtract(info.center, origin), info.normal) / denominator)
 
 	if distance <= 0 {
 		return
 	}
 
-	point := datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, distance))
+	point := datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, f64(distance)))
 	delta := datatypes.Vec3_Subtract(point, info.center)
-	u := datatypes.Vec3_Dot(delta, info.horizontal) / info.width + 0.5
-	v := 0.5 - datatypes.Vec3_Dot(delta, info.vertical) / info.height
+	u := datatypes.Vec3_Dot(delta, info.horizontal) / f64(info.width) + 0.5
+	v := 0.5 - datatypes.Vec3_Dot(delta, info.vertical) / f64(info.height)
 
 	if u < 0 || u > 1 || v < 0 || v > 1 {
 		return
@@ -511,8 +511,8 @@ surfacegui_ray_face :: proc(
 		return
 	}
 
-	canvas_x = u * canvas_width
-	canvas_y = v * canvas_height
+	canvas_x = f32(u * f64(canvas_width))
+	canvas_y = f32(v * f64(canvas_height))
 	ok = true
 	return
 }
@@ -570,7 +570,7 @@ surfacegui_hit_test :: proc(
 		if surface.max_distance > 0 {
 			info := part_face_info(part, surface.face, 0)
 			delta := datatypes.Vec3_Subtract(camera_position, info.center)
-			if datatypes.Vec3_Dot(delta, delta) > surface.max_distance * surface.max_distance {
+			if datatypes.Vec3_Dot(delta, delta) > f64(surface.max_distance * surface.max_distance) {
 				continue
 			}
 		}

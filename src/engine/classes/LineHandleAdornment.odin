@@ -116,9 +116,9 @@ LineHandleAdornment_step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	ax := world.x
 	ay := world.y
 	az := world.z
-	bx := ax + world.r01 * adornment.length
-	by := ay + world.r11 * adornment.length
-	bz := az + world.r21 * adornment.length
+	bx := ax + world.r01 * f64(adornment.length)
+	by := ay + world.r11 * f64(adornment.length)
+	bz := az + world.r21 * f64(adornment.length)
 
 	kineffi.Kine_Filament_DrawGizmoLine(
 		ctx.renderer.Filament,

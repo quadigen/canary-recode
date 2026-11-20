@@ -270,7 +270,7 @@ SpringConstraint_step :: proc(
 	}
 }
 
-spring_attachment_point :: proc(object: ^Object) -> ([3]f32, bool) {
+spring_attachment_point :: proc(object: ^Object) -> ([3]f64, bool) {
 	if !Is_A_Class(object, &Attachment_Class) ||
 	   object.destroyed ||
 	   !Is_A_Class(object.parent, &Part_Class) {
@@ -279,7 +279,7 @@ spring_attachment_point :: proc(object: ^Object) -> ([3]f32, bool) {
 	attachment := cast(^Attachment)object
 	part := cast(^Part)object.parent
 	p := datatypes.CFrame_PointToWorldSpace(part.cframe, attachment.position)
-	return {p.x, p.y, p.z}, true
+	return {f64(p.x), f64(p.y), f64(p.z)}, true
 }
 
 spring_attachments_in_workspace :: proc(spring: ^SpringConstraint) -> bool {
@@ -309,23 +309,23 @@ SpringConstraint_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	if !(length > 1e-5) || math.is_inf(length) {return}
 
 	SEGMENTS_PER_COIL :: 12
-	lines: [SPRING_MAX_COILS * SEGMENTS_PER_COIL + 2][2][3]f32
+	lines: [SPRING_MAX_COILS * SEGMENTS_PER_COIL + 2][2][3]f64
 	count := 1
 	lines[0] = {first, last}
 	if config.coils > 0 && config.radius > 0 {
 		axis := delta / length
-		reference := abs(axis.y) < 0.9 ? [3]f32{0, 1, 0} : [3]f32{1, 0, 0}
+		reference := abs(axis.y) < 0.9 ? [3]f64{0, 1, 0} : [3]f64{1, 0, 0}
 		right := linalg.normalize(linalg.cross(axis, reference))
 		up := linalg.cross(axis, right)
 		segments := int(math.ceil(config.coils * SEGMENTS_PER_COIL))
 		previous := first
 		for i in 0 ..= segments {
-			t := f32(i) / f32(segments)
-			angle := t * config.coils * (2 * math.PI)
+			t := f64(i) / f64(segments)
+			angle := t * f64(config.coils) * (2 * math.PI)
 			next :=
 				first +
 				t * delta +
-				config.radius * (math.cos(angle) * right + math.sin(angle) * up)
+				f64(config.radius) * (math.cos(f64(angle)) * right + math.sin(f64(angle)) * up)
 			lines[i] = {previous, next}
 			previous = next
 		}
@@ -478,7 +478,7 @@ SpringConstraint_namecall :: proc(
 			&spring.applied_force if method == "GetDebugAppliedForce" else &spring.applied_torque
 		value = values[i32(index)]
 	}
-	datatypes.Push_Vector3(L, {value.x, value.y, value.z})
+	datatypes.Push_Vector3(L, {f64(value.x), f64(value.y), f64(value.z)})
 	return 1, true
 }
 

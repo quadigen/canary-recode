@@ -31,15 +31,15 @@ Value_Type :: enum i32 {
 	LightUserdata = 2,
 	Number        = 3,
 	Integer       = 4,
-	Vector        = 5,
-	String        = 6,
-	Table         = 7,
-	Function      = 8,
-	Userdata      = 9,
-	Thread        = 10,
-	Buffer        = 11,
-	Class         = 12,
-	Object        = 13,
+	Vector        = 13,
+	String        = 5,
+	Table         = 6,
+	Function      = 7,
+	Userdata      = 8,
+	Thread        = 9,
+	Buffer        = 10,
+	Class         = 11,
+	Object        = 12,
 }
 
 Userdata_Get_Proc :: proc(L: ^State, value, ctx: rawptr, key: string) -> bool
@@ -496,7 +496,7 @@ PushNil :: proc(L: ^State) {
 	luauh.lua_pushnil(L)
 }
 
-PushVector3 :: proc(L: ^State, x, y, z: f32) {
+PushVector3 :: proc(L: ^State, x, y, z: f64) {
 	luauh.lua_pushvector(L, x, y, z)
 }
 
@@ -540,9 +540,9 @@ UpvaluePointer :: proc(L: ^State, index: int = 1) -> rawptr {
 	return luauh.lua_tolightuserdata(L, UpvalueIndex(index))
 }
 
-ArgVector3 :: proc(L: ^State, index: int) -> (x, y, z: f32) {
+ArgVector3 :: proc(L: ^State, index: int) -> (x, y, z: f64) {
 	value := luauh.luaL_checkvector(L, i32(index))
-	components := cast([^]f32)value
+	components := cast([^]f64)value
 	return components[0], components[1], components[2]
 }
 

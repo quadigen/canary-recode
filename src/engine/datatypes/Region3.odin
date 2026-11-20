@@ -45,14 +45,14 @@ Region3_ExpandToGrid :: proc(region: Region3, resolution: f32) -> (Region3, bool
 
 	return Region3{
 		Min = Vector3{
-			math.floor(region.Min.x / resolution) * resolution,
-			math.floor(region.Min.y / resolution) * resolution,
-			math.floor(region.Min.z / resolution) * resolution,
+			math.floor(region.Min.x / f64(resolution)) * f64(resolution),
+			math.floor(region.Min.y / f64(resolution)) * f64(resolution),
+			math.floor(region.Min.z / f64(resolution)) * f64(resolution),
 		},
 		Max = Vector3{
-			math.ceil(region.Max.x / resolution) * resolution,
-			math.ceil(region.Max.y / resolution) * resolution,
-			math.ceil(region.Max.z / resolution) * resolution,
+			math.ceil(region.Max.x / f64(resolution)) * f64(resolution),
+			math.ceil(region.Max.y / f64(resolution)) * f64(resolution),
+			math.ceil(region.Max.z / f64(resolution)) * f64(resolution),
 		},
 	}, true
 }

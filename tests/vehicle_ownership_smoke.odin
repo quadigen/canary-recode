@@ -18,13 +18,13 @@ main :: proc() {
 	defer {vm.Close(&v); rt.Environment_Destroy(&env)}
 	run(&v, `
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39321))
-workspace.Gravity = 0
 car = Instance.new("Model", workspace)
 car.Name = "Car"
 for i, name in ipairs({"Chassis", "Wheel", "Cabin"}) do
 	local p = Instance.new("Part", car)
 	p.Name = name
 	p.Anchored = false
+	p.Gravity = Vector3.zero
 	p.CanCollide = false
 	p.CFrame = CFrame.new(i * 4, 8, 0)
 end

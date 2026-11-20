@@ -185,14 +185,14 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .cache/filament-mac-x64
-          key: filament-v1.74.0-macos-x64-v1
+          key: filament-v1.81.0-macos-x64-v1
       - name: Build Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true' && steps.filament-intel.outputs.cache-hit != 'true'
         shell: bash
         run: |
           sdk="$GITHUB_WORKSPACE/.cache/filament-mac-x64"
-          source_dir="$RUNNER_TEMP/filament-v1.74.0"
-          git clone --depth 1 --branch v1.74.0 https://github.com/google/filament.git "$source_dir"
+          source_dir="$RUNNER_TEMP/filament-v1.81.0"
+          git clone --depth 1 --branch v1.81.0 https://github.com/google/filament.git "$source_dir"
           (
             cd "$source_dir"
             export CC="$(xcrun --find clang)"
@@ -742,9 +742,9 @@ jobs:
           if (-not (Test-Path -LiteralPath '.tools/emsdk')) {
             git clone https://github.com/emscripten-core/emsdk.git .tools/emsdk
           }
-          & './.tools/emsdk/emsdk.bat' install latest
+          & './.tools/emsdk/emsdk.bat' install 7.0.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & './.tools/emsdk/emsdk.bat' activate latest
+          & './.tools/emsdk/emsdk.bat' activate 7.0.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Identify active Emscripten version
         id: emsdk-version

@@ -14,7 +14,7 @@ include(FetchContent)
 FetchContent_Declare(
     SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG release-3.4.14
+    GIT_TAG release-3.4.20
     GIT_SHALLOW TRUE
 )
 
@@ -118,9 +118,10 @@ if(KINE_WITH_FILAMENT)
         set(KINE_MATC_BACKEND "opengl")
     endif()
 
-    if(NOT DEFINED FILAMENT_DIR)
+    set(FILAMENT_VERSION "1.81.0")
+    # Re-resolve auto-downloaded SDKs after a version bump; preserve custom SDK paths.
+    if(NOT DEFINED FILAMENT_DIR OR FILAMENT_DIR MATCHES "/filament_prebuilt-src(/[^/]+)?$")
         include(FetchContent)
-        set(FILAMENT_VERSION "1.74.0")
         if(WIN32)
             set(FILAMENT_OS "windows")
         elseif(APPLE)
@@ -209,14 +210,14 @@ if(KINE_WITH_FILAMENT)
         add_custom_command(
             OUTPUT  ${_bin}
             COMMAND ${MATC_EXE} -a ${KINE_MATC_BACKEND} -p ${KINE_MATC_PLATFORM} -o ${_bin} ${_src}
-            DEPENDS ${_src} ${ARGN}
+            DEPENDS ${_src} ${ARGN} "${MATC_EXE}"
             COMMENT "Compiling Filament material: ${NAME}.mat"
         )
 
         add_custom_command(
             OUTPUT  ${_cpp} ${_h}
             COMMAND ${RESGEN_EXE} -c -p ${NAME}_package -x ${MAT_GEN_DIR} ${_bin}
-            DEPENDS ${_bin}
+            DEPENDS ${_bin} "${RESGEN_EXE}"
             COMMENT "Generating material package: ${NAME}_package"
         )
 
@@ -324,6 +325,17 @@ if(KINE_WITH_FILAMENT)
             set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
             set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
             set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+
+            # Assimp's ccache option installs a GLOBAL rule launcher, stacking
+            # it on top of the compiler launcher selected by the parent build.
+            if(MSVC OR CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+                set(ASSIMP_BUILD_USE_CCACHE OFF CACHE BOOL "" FORCE)
+            endif()
+            if(MSVC)
+                # Assimp adds /Zi and a shared compile PDB even in Release.
+                # Avoid PDB contention during parallel builds and caching.
+                set(ASSIMP_INSTALL_PDB OFF CACHE BOOL "" FORCE)
+            endif()
             if(APPLE)
                 find_package(ZLIB REQUIRED)
                 set(ASSIMP_BUILD_ZLIB OFF CACHE BOOL "" FORCE)
@@ -343,10 +355,15 @@ if(KINE_WITH_FILAMENT)
             FetchContent_Declare(
                 assimp
                 GIT_REPOSITORY https://github.com/assimp/assimp.git
-                GIT_TAG v5.4.3
+                GIT_TAG v6.0.6
                 GIT_SHALLOW TRUE
             )
             FetchContent_MakeAvailable(assimp)
+            if(MSVC AND TARGET assimp)
+                # Keep Release debug information in each object instead of
+                # writing a shared compiler PDB (/Zi).
+                target_compile_options(assimp PRIVATE "$<$<CONFIG:Release>:/Z7>")
+            endif()
         endif()
 
         if(TARGET assimp::assimp)
@@ -441,6 +458,11 @@ if(KINE_WITH_FILAMENT)
     )
     if(NOT ANDROID)
         list(PREPEND KINE_FILAMENT_CORE_LIBS matp bluegl)
+    endif()
+    file(GLOB_RECURSE _kine_dawn_archives LIST_DIRECTORIES FALSE
+        "${FILAMENT_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}webgpu_dawn${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    if(_kine_dawn_archives)
+        list(APPEND KINE_FILAMENT_CORE_LIBS webgpu_dawn)
     endif()
     if(UNIX AND NOT APPLE)
         list(JOIN KINE_FILAMENT_CORE_LIBS "," KINE_FILAMENT_CORE_LIBS_GROUP)

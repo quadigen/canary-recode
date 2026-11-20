@@ -16,7 +16,7 @@ main :: proc() {
 
 	run(&script_vm, `
 workspace.SimulatePhysics = true
-workspace.Gravity = 80
+game:GetService("Physics").Gravity = 80
 local template = Instance.new("Model", game:GetService("ReplicatedStorage"))
 local mount = Instance.new("Part", template)
 mount.Name = "Mount"
@@ -54,7 +54,8 @@ end)
 	       fmt.tprintf("cloth must rest on the shelf, lowest Y = %v", lowest(cloth)))
 	run(&script_vm, `
 assert(ClothHits > 0 and ShelfHits == ClothHits)
-workspace.Gravity = 0
+game:GetService("Physics").Gravity = 0
+Shelf.Gravity = Vector3.zero
 Shelf.Anchored = false
 Shelf.Position += Vector3.new(0, 0.4, 0)
 `, "cloth_rigid_move_shelf")
@@ -62,7 +63,7 @@ Shelf.Position += Vector3.new(0, 0.4, 0)
 	assert(lowest(cloth) >= 4.90,
 	       fmt.tprintf("the moved shelf must push intersecting cloth out, lowest Y = %v", lowest(cloth)))
 
-	run(&script_vm, `Shelf.CanCollide = false; workspace.Gravity = 80`, "cloth_rigid_disable_shelf")
+	run(&script_vm, `Shelf.CanCollide = false; game:GetService("Physics").Gravity = 80`, "cloth_rigid_disable_shelf")
 	for _ in 0 ..< 35 {services.Physics_Step(physics, 1.0 / 60.0)}
 	assert(lowest(cloth) < 4.4, "cloth should pass through a noncollidable shelf")
 	fmt.println("CLOTH_RIGID_COLLISION_SMOKE_PASSED")

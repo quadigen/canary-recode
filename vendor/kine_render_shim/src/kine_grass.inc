@@ -86,13 +86,13 @@ static float kine_grass_weight(const KineTerrainWeights &weight, uint32_t mask) 
 }
 
 static bool kine_grass_is_near(
-    const KineFilamentContext *ctx, const KineMesh *terrain, const float *m) {
+    const KineFilamentContext *ctx, const KineMesh *terrain, const float *m, const double *worldPosition) {
     if (!ctx || !terrain || !m)
         return false;
     const math::float3 p = terrain->localBounds.center;
-    const double x = double(m[0]) * p.x + double(m[1]) * p.y + double(m[2]) * p.z + m[3];
-    const double y = double(m[4]) * p.x + double(m[5]) * p.y + double(m[6]) * p.z + m[7];
-    const double z = double(m[8]) * p.x + double(m[9]) * p.y + double(m[10]) * p.z + m[11];
+    const double x = double(m[0]) * p.x + double(m[1]) * p.y + double(m[2]) * p.z + (worldPosition ? worldPosition[0] : m[3]);
+    const double y = double(m[4]) * p.x + double(m[5]) * p.y + double(m[6]) * p.z + (worldPosition ? worldPosition[1] : m[7]);
+    const double z = double(m[8]) * p.x + double(m[9]) * p.y + double(m[10]) * p.z + (worldPosition ? worldPosition[2] : m[11]);
     const double sx = std::sqrt(double(m[0]) * m[0] + double(m[4]) * m[4] + double(m[8]) * m[8]);
     const double sy = std::sqrt(double(m[1]) * m[1] + double(m[5]) * m[5] + double(m[9]) * m[9]);
     const double sz = std::sqrt(double(m[2]) * m[2] + double(m[6]) * m[6] + double(m[10]) * m[10]);
@@ -285,10 +285,10 @@ static KineMesh *kine_grass_generate(KineFilamentContext *ctx, KineMesh *terrain
     return grass;
 }
 
-static KineMesh *kine_grass_get(KineFilamentContext *ctx, KineMesh *terrain, const float *transform) {
+static KineMesh *kine_grass_get(KineFilamentContext *ctx, KineMesh *terrain, const float *transform, const double *worldPosition = nullptr) {
     if (!ctx || !terrain || !ctx->grassEnabled || !ctx->grassShader ||
         !terrain->vb || !terrain->ib || terrain->terrainWeights.empty() ||
-        !kine_grass_is_near(ctx, terrain, transform))
+        !kine_grass_is_near(ctx, terrain, transform, worldPosition))
         return nullptr;
     if (!terrain->grassAttempted) {
         terrain->grassAttempted = true;

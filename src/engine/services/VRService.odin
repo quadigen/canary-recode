@@ -62,18 +62,18 @@ vr_service_pose :: proc(service: ^Service, index: i32) -> (datatypes.CFrame, boo
 			values: [12]f32
 			if kineffi.Kine_Filament_XR_GetPose(ctx, index, &values[0]) {
 				return datatypes.CFrame {
-						x = values[0],
-						y = values[1],
-						z = values[2],
-						r00 = values[3],
-						r01 = values[4],
-						r02 = values[5],
-						r10 = values[6],
-						r11 = values[7],
-						r12 = values[8],
-						r20 = values[9],
-						r21 = values[10],
-						r22 = values[11],
+						x = f64(values[0]),
+						y = f64(values[1]),
+						z = f64(values[2]),
+						r00 = f64(values[3]),
+						r01 = f64(values[4]),
+						r02 = f64(values[5]),
+						r10 = f64(values[6]),
+						r11 = f64(values[7]),
+						r12 = f64(values[8]),
+						r20 = f64(values[9]),
+						r21 = f64(values[10]),
+						r22 = f64(values[11]),
 					},
 					true
 			}

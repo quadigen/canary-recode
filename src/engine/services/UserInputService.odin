@@ -200,7 +200,7 @@ user_input_push_mouse_button :: proc(
 		classes.InputObject_Value {
 			UserInputType = input_type,
 			UserInputState = .Begin,
-			Position = {service.mouse_location.X, service.mouse_location.Y, 0},
+			Position = {f64(service.mouse_location.X), f64(service.mouse_location.Y), 0},
 		},
 	)
 }
@@ -260,13 +260,13 @@ user_input_push_gamepad_state :: proc(L: ^vm.State, service: ^UserInputService, 
 		position: datatypes.Vector3
 		switch i {
 		case 0:
-			position = {axes[0], -axes[1], 0}
+			position = {f64(axes[0]), f64(-axes[1]), 0}
 		case 1:
-			position = {axes[2], -axes[3], 0}
+			position = {f64(axes[2]), f64(-axes[3]), 0}
 		case 2:
-			position.z = max(0, axes[4])
+			position.z = f64(max(0, axes[4]))
 		case 3:
-			position.z = max(0, axes[5])
+			position.z = f64(max(0, axes[5]))
 		}
 		value := classes.InputObject_Value {
 			UserInputType  = input_type,

@@ -28,7 +28,7 @@ ship.PrimaryPart = hull
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
 | ServerAuthoritative | boolean | true | Keeps descendant rigid bodies under server ownership. Client ownership requests are rejected. |
-| GravityScale | number | 1 | Multiplies world gravity; 0 disables gravity. Range -10 to 10. |
+| GravityScale | number | 1 | Multiplies each contained rigid part’s gravity vector; 0 disables gravity. Range -10 to 10. |
 | AerodynamicsEnabled | boolean | true | Allows the world aerodynamics solver to affect descendant bodies, when enabled globally. |
 | DragMultiplier | number | 1 | Multiplies aerodynamic drag coefficients. |
 | LiftMultiplier | number | 1 | Multiplies aerodynamic lift. |

@@ -46,13 +46,13 @@ camera_resolve_obstruction :: proc(
 	hit, collided := jolt.System_Cast_Shape(
 		&physics.system,
 		{f64(target.x), f64(target.y), f64(target.z)},
-		{displacement.x, displacement.y, displacement.z},
+		{f32(displacement.x), f32(displacement.y), f32(displacement.z)},
 		sphere,
 		candidates[:],
 		.Include,
-		distance + radius,
+		f32(distance + f64(radius)),
 	)
 	if !collided {return desired}
-	fraction := max(0, hit.fraction - 0.05 / distance)
+	fraction := max(0, f64(hit.fraction) - 0.05 / distance)
 	return datatypes.Vec3_Add(target, datatypes.Vec3_Multiply(displacement, fraction))
 }

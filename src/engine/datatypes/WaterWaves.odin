@@ -64,9 +64,9 @@ Water_Wave_Displacement :: proc(
 		amplitude := 0.65 * strength * height * wave.weight
 		phase := k * (dx * p.x + dz * p.y) - math.sqrt(9.81 * k) * (time * speed) + wave.phase
 		horizontal := min(amplitude * 0.35, 0.12 / k) * math.cos(phase)
-		result.x += dx * horizontal
-		result.z += dz * horizontal
-		result.y += amplitude * math.sin(phase)
+		result.x += f64(dx * horizontal)
+		result.z += f64(dz * horizontal)
+		result.y += f64(amplitude * math.sin(phase))
 	}
 	return result
 }
@@ -91,7 +91,7 @@ Water_Wave_Sample :: proc(
 			scale,
 			count,
 		)
-		qx, qz = x - displacement.x, z - displacement.z
+		qx, qz = f32(f64(x) - displacement.x), f32(f64(z) - displacement.z)
 	}
 	wave_scale := max(scale, 0.25)
 	p, warp_x, warp_z := water_wave_warp({qx, qz}, wave_scale)

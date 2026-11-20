@@ -27,14 +27,14 @@ workspace_query_box :: proc(cf: datatypes.CFrame, size: datatypes.Vector3) -> Wo
 			datatypes.CFrame_UpVector(cf),
 			datatypes.CFrame_ZVector(cf),
 		},
-		half = {size.x * 0.5, size.y * 0.5, size.z * 0.5},
+		half = {f32(size.x * 0.5), f32(size.y * 0.5), f32(size.z * 0.5)},
 	}
 }
 
 workspace_box_projection :: proc(box: Workspace_Query_Box, axis: datatypes.Vector3) -> f32 {
 	radius: f32
 	for basis, i in box.axes {
-		radius += box.half[i] * abs(datatypes.Vec3_Dot(basis, axis))
+		radius += f32(f64(box.half[i]) * abs(datatypes.Vec3_Dot(basis, axis)))
 	}
 	return radius
 }
@@ -52,7 +52,7 @@ workspace_boxes_overlap :: proc(a, b: Workspace_Query_Box) -> bool {
 	}
 	for axis in axes {
 		if abs(datatypes.Vec3_Dot(delta, axis)) >
-		   workspace_box_projection(a, axis) + workspace_box_projection(b, axis) {
+		   f64(workspace_box_projection(a, axis) + workspace_box_projection(b, axis)) {
 			return false
 		}
 	}
@@ -67,7 +67,7 @@ workspace_box_overlaps_sphere :: proc(
 	delta := datatypes.Vec3_Subtract(center, box.center)
 	distance_squared: f64
 	for axis, i in box.axes {
-		distance := f64(max(abs(datatypes.Vec3_Dot(delta, axis)) - box.half[i], 0))
+		distance := f64(max(abs(datatypes.Vec3_Dot(delta, axis)) - f64(box.half[i]), 0))
 		distance_squared += distance * distance
 	}
 	return distance_squared <= f64(radius) * f64(radius)
@@ -95,9 +95,9 @@ workspace_get_part_bounds :: proc(
 		cf := datatypes.Arg_CFrame(L, 2, registry)
 		size := datatypes.Arg_Vector3(L, 3)
 		if !physics_valid_cframe(cf) ||
-		   !physics_finite_f32(size.x) ||
-		   !physics_finite_f32(size.y) ||
-		   !physics_finite_f32(size.z) ||
+		   !physics_finite_f32(f32(size.x)) ||
+		   !physics_finite_f32(f32(size.y)) ||
+		   !physics_finite_f32(f32(size.z)) ||
 		   size.x < 0 ||
 		   size.y < 0 ||
 		   size.z < 0 {
@@ -107,9 +107,9 @@ workspace_get_part_bounds :: proc(
 	} else {
 		center = datatypes.Arg_Vector3(L, 2)
 		radius = f32(vm.ArgNumber(L, 3))
-		if !physics_finite_f32(center.x) ||
-		   !physics_finite_f32(center.y) ||
-		   !physics_finite_f32(center.z) ||
+		if !physics_finite_f32(f32(center.x)) ||
+		   !physics_finite_f32(f32(center.y)) ||
+		   !physics_finite_f32(f32(center.z)) ||
 		   !physics_finite_f32(radius) ||
 		   radius < 0 {
 			return vm.RaiseError(L, "expected a finite center and nonnegative radius")

@@ -89,6 +89,20 @@ assert(close(big.Magnitude, math.sqrt(100*100 + 200*200 + 300*300)))
 local id1 = Vector3.new(1, 2, 3):Dot(Vector3.new(1, 2, 3))
 assert(close(id1, 14))
 
+local origin = 1000000000
+local p = Vector3.new(origin + 0.125, -origin - 0.25, origin)
+local q = Vector3.new(origin, -origin, origin)
+assert(p.X == origin + 0.125 and p.Y == -origin - 0.25)
+assert((p - q) == Vector3.new(0.125, -0.25, 0))
+assert((q + Vector3.new(0.125, -0.25, 0)) == p)
+assert(Vector3.new(1000000000.125, 0, 0).X == 1000000000.125)
+local frame = CFrame.new(p)
+assert(frame.Position == p)
+assert((frame * CFrame.new(0.125, 0, 0)).X == origin + 0.25)
+assert(frame:PointToObjectSpace(p + Vector3.new(0.125, 0, 0)) == Vector3.new(0.125, 0, 0))
+assert((CFrame.new(1000000000.125, 0, 0)).X == 1000000000.125)
+local map = {[p] = 7}
+assert(map[Vector3.new(origin + 0.125, -origin - 0.25, origin)] == 7)
 assert(not pcall(function() Vector3.extra = true end))
 `
 

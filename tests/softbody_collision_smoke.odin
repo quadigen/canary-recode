@@ -18,7 +18,7 @@ main :: proc() {
 	run(
 		&script_vm,
 		`
-workspace.Gravity = 0
+game:GetService("Physics").Gravity = 0
 local function soft(x, z)
     local b = Instance.new("SoftBody", workspace)
     b.MeshId = "src/engine/assets/shapes/Block.glb"
@@ -32,6 +32,7 @@ local function ball(x, z)
     b.Size = Vector3.new(1, 1, 1)
     b.CFrame = CFrame.new(x, 0, z)
     b.Anchored = false
+    b.Gravity = Vector3.zero
     return b
 end
 a, b = soft(-4, 0), soft(0, 0)

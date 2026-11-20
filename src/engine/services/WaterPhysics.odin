@@ -83,12 +83,12 @@ Water_Context_Create :: proc(physics: ^Physics) -> Water_Context {
 
 water_part_interval :: proc(part: ^classes.Part, x, z: f32) -> (bottom, top: f32, found: bool) {
 	inverse := datatypes.CFrame_Inverse(part.cframe)
-	origin := datatypes.CFrame_Mul_Vector3(inverse, {x, 0, z})
+	origin := datatypes.CFrame_Mul_Vector3(inverse, {f64(x), 0, f64(z)})
 	direction := datatypes.Vector3{inverse.r01, inverse.r11, inverse.r21}
 	low, high := f32(-1e8), f32(1e8)
-	o := [?]f32{origin.x, origin.y, origin.z}
-	d := [?]f32{direction.x, direction.y, direction.z}
-	size := [?]f32{part.size.x, part.size.y, part.size.z}
+	o := [?]f32{f32(origin.x), f32(origin.y), f32(origin.z)}
+	d := [?]f32{f32(direction.x), f32(direction.y), f32(direction.z)}
+	size := [?]f32{f32(part.size.x), f32(part.size.y), f32(part.size.z)}
 	for i in 0 ..< 3 {
 		half := size[i] * 0.5
 		if abs(d[i]) < 0.00001 {
@@ -111,11 +111,11 @@ Water_Submersion :: proc(
 ) {
 	if len(water.parts) == 0 && (water.terrain == nil || len(water.terrain.chunks) == 0) {return}
 	half := max(half_height, 0.05)
-	bottom, top := position.y - half, position.y + half
+	bottom, top := position.y - f64(half), position.y + f64(half)
 	params := water.params
 	h, speed := datatypes.Water_Wave_Sample(
-		position.x,
-		position.z,
+		f32(position.x),
+		f32(position.z),
 		water.time,
 		params.speed,
 		params.strength,
@@ -126,15 +126,15 @@ Water_Submersion :: proc(
 	velocity = speed
 	wet := f32(0)
 	for part in water.parts {
-		low, high, inside := water_part_interval(part, position.x, position.z)
-		if inside {wet = max(wet, max(0, min(top, high + h) - max(bottom, low)))}
+		low, high, inside := water_part_interval(part, f32(position.x), f32(position.z))
+		if inside {wet = max(wet, f32(max(0, min(top, f64(high + h)) - max(bottom, f64(low)))))}
 	}
 	if terrain := water.terrain; terrain != nil && len(terrain.chunks) > 0 {
 		vs := terrain.voxel_size
-		x, z := int(math.floor(position.x / vs)), int(math.floor(position.z / vs))
+		x, z := int(math.floor(position.x / f64(vs))), int(math.floor(position.z / f64(vs)))
 		amplitude := 0.65 * water.params.strength * water.params.height
-		first := int(math.floor((bottom - amplitude - 0.15) / vs + 0.5)) - 1
-		last := int(math.ceil((top + amplitude - 0.15) / vs + 0.5)) + 1
+		first := int(math.floor((bottom - f64(amplitude) - 0.15) / f64(vs) + 0.5)) - 1
+		last := int(math.ceil((top + f64(amplitude) - 0.15) / f64(vs) + 0.5)) + 1
 		terrain_wet := f32(0)
 		for y in first ..= last {
 			cell, exists := Terrain_Get_Cell(terrain, x, y, z)
@@ -144,7 +144,7 @@ Water_Submersion :: proc(
 			high := (f32(y) + max(cell.water, cell.occupancy) - 0.5) * vs + 0.15
 			above, has_above := Terrain_Get_Cell(terrain, x, y + 1, z)
 			if !has_above || (above.water <= 0 && above.occupancy <= 0) {high += h}
-			terrain_wet += max(0, min(top, high) - max(bottom, low))
+			terrain_wet += f32(max(0, min(top, f64(high)) - max(bottom, f64(low))))
 		}
 		wet = max(wet, terrain_wet)
 	}
@@ -191,7 +191,7 @@ Physics_Apply_Water :: proc(physics: ^Physics, dt: f32) {
 			{cf.x + half.x * .65, cf.y, cf.z + half.z * .65},
 		}
 		for point in points {
-			wet, speed := Water_Submersion(&water, point, half.y)
+			wet, speed := Water_Submersion(&water, point, f32(half.y))
 			fraction += wet / 5; wave_speed += speed * wet / 5
 		}
 		if fraction <= 0 {continue}
@@ -203,7 +203,8 @@ Physics_Apply_Water :: proc(physics: ^Physics, dt: f32) {
 			&velocity,
 		)
 		buoyancy := water_density / jolt.Material_Get_Properties(body.material).density
-		velocity.y = Water_Buoyant_Velocity(velocity.y, wave_speed, fraction, physics.gravity, dt, buoyancy)
+		gravity := physics_part_gravity(part)
+		velocity.y = Water_Buoyant_Velocity(velocity.y, wave_speed, fraction, f32(-gravity.y), dt, buoyancy)
 		drag := math.exp(-0.8 * fraction * dt)
 		velocity.x *= drag; velocity.z *= drag
 		k.JPH_BodyInterface_ActivateBody(physics.system.body_interface, body.body_id)

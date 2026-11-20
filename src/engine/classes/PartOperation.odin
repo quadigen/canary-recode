@@ -114,20 +114,20 @@ Part_Csg_Operation :: enum u32 {
 
 part_csg_input :: proc(part: ^Part) -> (input: kineffi.Csg_Input, valid: bool) {
 	f := part.cframe
-	input.size = {part.size.x, part.size.y, part.size.z}
+	input.size = {f32(part.size.x), f32(part.size.y), f32(part.size.z)}
 	input.transform = {
-		f.x,
-		f.y,
-		f.z,
-		f.r00,
-		f.r01,
-		f.r02,
-		f.r10,
-		f.r11,
-		f.r12,
-		f.r20,
-		f.r21,
-		f.r22,
+		f32(f.x),
+		f32(f.y),
+		f32(f.z),
+		f32(f.r00),
+		f32(f.r01),
+		f32(f.r02),
+		f32(f.r10),
+		f32(f.r11),
+		f32(f.r12),
+		f32(f.r20),
+		f32(f.r21),
+		f32(f.r22),
 	}
 	input.shape = i32(part.shape)
 	input.negative = i32(Is_A_Class(&part.object, &NegateOperation_Class))
@@ -244,10 +244,10 @@ Part_Csg :: proc(
 		part_clone(operands[0], object)
 		mesh := cast(^MeshPart)object
 		mesh.mesh_id = assetstore.Make_Uri(id)
-		mesh.position = {output.center[0], output.center[1], output.center[2]}
-		mesh.size = {output.size[0], output.size[1], output.size[2]}
+		mesh.position = {f64(output.center[0]), f64(output.center[1]), f64(output.center[2])}
+		mesh.size = {f64(output.size[0]), f64(output.size[1]), f64(output.size[2])}
 		mesh.cframe.x, mesh.cframe.y, mesh.cframe.z =
-			output.center[0], output.center[1], output.center[2]
+			f64(output.center[0]), f64(output.center[1]), f64(output.center[2])
 		mesh.shape = .Block
 		mesh.collision_fidelity = collision_fidelity
 		mesh.use_part_color = true

@@ -32,6 +32,7 @@ Parts default to anchored, so they stay where you put them until you turn `Ancho
 | `Shape` | `Enum.PartType` | Read/write | `Enum.PartType.Block` | Block, ball, cylinder, wedge, and other supported shapes. |
 | `Material` | `Enum.Material` | Read/write | `Enum.Material.SmoothPlastic` | Surface material. |
 | `MaterialVariant` | `string` | Read/write | `""` | Name of a material variant to use. |
+| `Gravity` | `Vector3` | Read/write | `Vector3.new(0, -196.2, 0)` | World-space acceleration in studs/s², independent for each part. |
 | `Anchored` | `boolean` | Read/write | `true` | Whether the part is fixed in place. |
 | `CanCollide` | `boolean` | Read/write | `true` | Whether the part collides with other bodies. |
 | `CanQuery` | `boolean` | Read/write | `true` | Whether spatial queries such as raycasts can hit it. |
@@ -91,11 +92,11 @@ The part must have `CanTouch` enabled and participate in the simulation for cont
 
 ## Cloning
 
-A cloned part copies its size, shape, color, transparency, material, variant, collision settings, collision group, anchors, and transform. It does not copy its live velocity or its `Touched` connections. The clone starts with no parent, like any other cloned instance.
+A cloned part copies its gravity, size, shape, color, transparency, material, variant, collision settings, collision group, anchors, and transform. It does not copy its live velocity or its `Touched` connections. The clone starts with no parent, like any other cloned instance.
 
 ## Notes
 
-- Physical behavior is global plus per-part: `Workspace.Gravity` and the `Physics` service set the rules, and these properties decide how this part follows them.
+- `Gravity` is independent of other parts and of `Physics.Gravity`. Use a zero vector for weightlessness, positive Y for upward gravity, or X/Z for sideways gravity. `PhysicsModel.GravityScale` multiplies the vector. Anchored parts retain the value without moving.
 - `CollisionGroup` only matters if collision groups are configured; the string itself doesn't create the group.
 - Changing `Size` or `Shape` rebuilds the part's collision geometry, so avoid doing it every frame.
 - Pivot-style movement of a whole assembly belongs on `Model`, not on individual parts.

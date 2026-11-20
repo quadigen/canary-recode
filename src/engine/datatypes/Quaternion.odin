@@ -78,12 +78,12 @@ Quaternion_FromAxisAngle :: proc(axis: Vector3, angle: f32) -> Quaternion {
 	}
 
 	half := angle * 0.5
-	s := math.sin(half) / length
+	s := f64(math.sin(half)) / length
 
 	return Quaternion_Unit(Quaternion{
-		axis.x * s,
-		axis.y * s,
-		axis.z * s,
+		f32(axis.x * s),
+		f32(axis.y * s),
+		f32(axis.z * s),
 		math.cos(half),
 	})
 }
@@ -148,8 +148,8 @@ Quaternion_ToAxisAngle :: proc(q: Quaternion) -> (axis: Vector3, angle: f32) {
 	}
 
 	return Vector3{
-		unit.X / scale,
-		unit.Y / scale,
-		unit.Z / scale,
+		f64(unit.X / scale),
+		f64(unit.Y / scale),
+		f64(unit.Z / scale),
 	}, angle
 }

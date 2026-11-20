@@ -84,7 +84,7 @@ typedef struct kne_vector2 {
 } kne_vector2;
 
 typedef struct kne_vector3 {
-	float x, y, z;
+	double x, y, z;
 } kne_vector3;
 
 typedef struct kne_vector2int16 {
@@ -100,10 +100,10 @@ typedef struct kne_color3 {
 } kne_color3;
 
 typedef struct kne_cframe {
-	float x, y, z;
-	float r00, r01, r02;
-	float r10, r11, r12;
-	float r20, r21, r22;
+	double x, y, z;
+	double r00, r01, r02;
+	double r10, r11, r12;
+	double r20, r21, r22;
 } kne_cframe;
 
 typedef struct kne_udim {

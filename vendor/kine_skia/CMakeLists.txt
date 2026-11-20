@@ -51,7 +51,7 @@ set_property(
 
 set(
     KINE_SKIA_GIT_TAG
-    "main"
+    "12610b69511d842ef7c55c859a4d7e88f5c3efbe"
     CACHE STRING
     "Skia git tag, branch, or commit to download"
 )

@@ -153,16 +153,16 @@ when ODIN_OS != .JS {
 			}
 			switch axis {
 			case 0, 1:
-				key = .Thumbstick1; value.Position = {axes[0], -axes[1], 0}
+				key = .Thumbstick1; value.Position = {f64(axes[0]), f64(-axes[1]), 0}
 			case 2, 3:
-				key = .Thumbstick2; value.Position = {axes[2], -axes[3], 0}
+				key = .Thumbstick2; value.Position = {f64(axes[2]), f64(-axes[3]), 0}
 			case 4, 5:
 				key = .ButtonL2 if axis == 4 else .ButtonR2
-				value.Position = {0, 0, max(0, axes[axis])}
+				value.Position = {0, 0, f64(max(0, axes[axis]))}
 			}
 			value.KeyCode = key
 			if axis <
-			   4 {if axis % 2 == 0 {value.Delta.x = axes[axis] - old} else {value.Delta.y = old - axes[axis]}} else {value.Delta.z = axes[axis] - old}
+			   4 {if axis % 2 == 0 {value.Delta.x = f64(axes[axis] - old)} else {value.Delta.y = f64(old - axes[axis])}} else {value.Delta.z = f64(axes[axis] - old)}
 			if abs(axes[axis]) > 0.2 {service.last_input_type = input_type}
 			user_input_fire(L, service, service.input_changed, value, processed)
 			return true

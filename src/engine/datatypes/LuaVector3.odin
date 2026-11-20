@@ -26,9 +26,9 @@ vector3_new :: proc "c" (L: ^vm.State) -> i32 {
 	push_vector3_native(
 		L,
 		Vector3 {
-			f32(vm.ArgOptionalNumber(L, 1)),
-			f32(vm.ArgOptionalNumber(L, 2)),
-			f32(vm.ArgOptionalNumber(L, 3)),
+			f64(vm.ArgOptionalNumber(L, 1)),
+			f64(vm.ArgOptionalNumber(L, 2)),
+			f64(vm.ArgOptionalNumber(L, 3)),
 		},
 	)
 	return 1
@@ -140,7 +140,7 @@ vector3_fuzzy_eq :: proc "c" (L: ^vm.State) -> i32 {
 		Vec3_FuzzyEq(
 			Arg_Vector3(L, 1),
 			Arg_Vector3(L, 2),
-			f32(vm.ArgOptionalNumber(L, 3, 1.0e-5)),
+			f64(vm.ArgOptionalNumber(L, 3, 1.0e-5)),
 		),
 	)
 	return 1
@@ -151,7 +151,7 @@ vector3_lerp :: proc "c" (L: ^vm.State) -> i32 {
 
 	push_vector3_native(
 		L,
-		Vec3_Lerp(Arg_Vector3(L, 1), Arg_Vector3(L, 2), f32(vm.ArgNumber(L, 3))),
+		Vec3_Lerp(Arg_Vector3(L, 1), Arg_Vector3(L, 2), f64(vm.ArgNumber(L, 3))),
 	)
 	return 1
 }

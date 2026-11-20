@@ -23,16 +23,16 @@ local physics = game:GetService("Physics")
 assert(physics:IsA("Service"))
 assert(physics.Enabled)
 assert(math.abs(physics.Gravity - 196.2) < 0.001)
-assert(math.abs(workspace.Gravity - 196.2) < 0.001)
-
-workspace.Gravity = 100
-assert(physics.Gravity == 100 and workspace.Gravity == 100)
+physics.Gravity = 100
+assert(physics.Gravity == 100)
+assert(not pcall(function() return workspace.Gravity end))
 assert(workspace.FallenPartsDestroyHeight == -500)
 assert(workspace.FallHeightEnabled)
 
 local model = Instance.new("Model", workspace)
 local part = Instance.new("Part", model)
 part.Name = "Target"
+assert(math.abs(part.Gravity.Y + 196.2) < 0.001)
 part.Anchored = true
 part.Size = vector.create(4, 4, 4)
 part.CFrame = CFrame.new(0, 0, 0)

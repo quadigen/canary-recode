@@ -86,7 +86,7 @@ hinge_angle_limits :: proc(config: Hinge_Config) -> (lower, upper: f32) {
 hinge_gizmo_frame :: proc(
 	object, workspace: ^Object,
 ) -> (
-	pivot, axis, normal: [3]f32,
+	pivot, axis, normal: [3]f64,
 	valid: bool,
 ) {
 	if object == nil ||
@@ -99,12 +99,12 @@ hinge_gizmo_frame :: proc(
 	if !ok {return}
 	cframe := (cast(^Part)object.parent).cframe
 	p := datatypes.CFrame_PointToWorldSpace(cframe, attachment.position)
-	a := datatypes.CFrame_VectorToWorldSpace(cframe, {local_axis.x, local_axis.y, local_axis.z})
+	a := datatypes.CFrame_VectorToWorldSpace(cframe, {f64(local_axis.x), f64(local_axis.y), f64(local_axis.z)})
 	n := datatypes.CFrame_VectorToWorldSpace(
 		cframe,
-		{local_normal.x, local_normal.y, local_normal.z},
+		{f64(local_normal.x), f64(local_normal.y), f64(local_normal.z)},
 	)
-	return {p.x, p.y, p.z}, {a.x, a.y, a.z}, {n.x, n.y, n.z}, true
+	return {f64(p.x), f64(p.y), f64(p.z)}, {f64(a.x), f64(a.y), f64(a.z)}, {f64(n.x), f64(n.y), f64(n.z)}, true
 }
 
 HingeConstraint_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
@@ -126,11 +126,11 @@ HingeConstraint_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	other_pivot, _, other_normal, ok1 := hinge_gizmo_frame(hinge.attachment1, workspace)
 	if !ok0 || !ok1 {return}
 
-	radius := config.radius
+	radius := f64(config.radius)
 	tangent := linalg.cross(axis, normal)
 	lower, upper := hinge_angle_limits(config)
 	ARC_SEGMENTS :: 32
-	lines: [ARC_SEGMENTS + 5][2][3]f32
+	lines: [ARC_SEGMENTS + 5][2][3]f64
 	lines[0] = {pivot - radius * axis, pivot + radius * axis}
 	lines[1] = {other_pivot, other_pivot + radius * other_normal}
 	count := 2
@@ -139,12 +139,12 @@ HingeConstraint_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		count += 1
 	}
 
-	start := pivot + radius * (math.cos(lower) * normal + math.sin(lower) * tangent)
+	start := pivot + radius * (math.cos(f64(lower)) * normal + math.sin(f64(lower)) * tangent)
 	previous := start
 	if upper > lower {
 		for i in 1 ..= ARC_SEGMENTS {
 			angle := lower + (upper - lower) * f32(i) / ARC_SEGMENTS
-			point := pivot + radius * (math.cos(angle) * normal + math.sin(angle) * tangent)
+			point := pivot + radius * (math.cos(f64(angle)) * normal + math.sin(f64(angle)) * tangent)
 			lines[count] = {previous, point}
 			count += 1
 			previous = point
@@ -167,7 +167,7 @@ HingeConstraint_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		color.R,
 		color.G,
 		color.B,
-		min(radius * 0.08, 0.05),
+		f32(min(radius * 0.08, 0.05)),
 	)
 }
 

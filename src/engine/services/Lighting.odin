@@ -129,9 +129,9 @@ lighting_sun_direction :: proc(clock_time: f64) -> datatypes.Vector3 {
 	horizontal := math.cos(phase)
 
 	return datatypes.Vector3 {
-		x = f32(horizontal * math.cos(SUN_ARC_TILT)),
-		y = f32(math.sin(phase)),
-		z = f32(horizontal * math.sin(SUN_ARC_TILT)),
+		x = f64(f32(horizontal * math.cos(SUN_ARC_TILT))),
+		y = f64(f32(math.sin(phase))),
+		z = f64(f32(horizontal * math.sin(SUN_ARC_TILT))),
 	}
 }
 
@@ -346,7 +346,7 @@ lighting_sun_profile :: proc(
 	direction := lighting_sun_direction(service.clock_time)
 
 
-	daylight := lighting_smoothstep(-0.12, 0.28, direction.y)
+	daylight := lighting_smoothstep(-0.12, 0.28, f32(direction.y))
 
 	gain := lighting_ambient_gain(
 		datatypes.Color3 {

@@ -106,14 +106,14 @@ Humanoid_Sync :: proc(h: ^Humanoid, cc: ^CharacterController, L: ^vm.State, dt: 
 			movement.input_direction = datatypes.Vector3{}
 		} else {
 			moved :=
-				math.abs(root.cframe.x - h.walk_last_x) + math.abs(root.cframe.z - h.walk_last_z)
+				math.abs(root.cframe.x - f64(h.walk_last_x)) + math.abs(root.cframe.z - f64(h.walk_last_z))
 			if moved > 0.1 {
 				h.stuck_steps = 0
 			} else {
 				h.stuck_steps += 1
 			}
-			h.walk_last_x = root.cframe.x
-			h.walk_last_z = root.cframe.z
+			h.walk_last_x = f32(root.cframe.x)
+			h.walk_last_z = f32(root.cframe.z)
 			if h.stuck_steps >= 120 {
 				h.walk_to_active = false
 				h.stuck_steps = 0

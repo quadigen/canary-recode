@@ -47,18 +47,18 @@ workspace_append_softbody :: proc(
 		shader       = shader,
 		tex          = material.texture,
 		transform    = {
-			frame.r00,
-			frame.r01,
-			frame.r02,
-			frame.x,
-			frame.r10,
-			frame.r11,
-			frame.r12,
-			frame.y,
-			frame.r20,
-			frame.r21,
-			frame.r22,
-			frame.z,
+			f32(frame.r00),
+			f32(frame.r01),
+			f32(frame.r02),
+			f32(frame.x),
+			f32(frame.r10),
+			f32(frame.r11),
+			f32(frame.r12),
+			f32(frame.y),
+			f32(frame.r20),
+			f32(frame.r21),
+			f32(frame.r22),
+			f32(frame.z),
 			0,
 			0,
 			0,
@@ -73,7 +73,8 @@ workspace_append_softbody :: proc(
 		transmission = surface.transmission,
 		materialKind = surface.kind,
 		reserved     = alpha_bits,
-		flags        = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS,
+		flags        = kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS | kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+		worldPosition = {frame.x, frame.y, frame.z},
 	}
 	if params != nil {
 		params.hash = workspace_hash_u64(params.hash, u64(uintptr(mesh)))
@@ -88,6 +89,7 @@ workspace_append_softbody :: proc(
 		params.hash = workspace_hash_f32(params.hash, item.param3)
 		params.hash = workspace_hash_f32(params.hash, item.transmission)
 		for component in item.transform {params.hash = workspace_hash_f32(params.hash, component)}
+		for component in item.worldPosition {params.hash = workspace_hash_u64(params.hash, transmute(u64)component)}
 		params.hash = workspace_hash_f32(params.hash, item.r)
 		params.hash = workspace_hash_f32(params.hash, item.g)
 		params.hash = workspace_hash_f32(params.hash, item.b)

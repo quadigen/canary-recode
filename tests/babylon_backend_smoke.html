@@ -40,7 +40,8 @@
         const m = [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
         m.forEach((v, i) => view.setFloat32(item + 8 + i * 4, v, true));
         [1, .2, .1, 1, 0, 1, 0].forEach((v, i) => view.setFloat32(item + 72 + i * 4, v, true));
-        view.setInt32(item + 100, kind, true); view.setUint32(item + 104, 3, true);
+        view.setInt32(item + 100, kind, true); view.setUint32(item + 104, 11, true);
+        view.setFloat64(item + 120, x, true); view.setFloat64(item + 128, 0, true); view.setFloat64(item + 136, 0, true);
         check(a.Kine_Filament_DrawMeshListVersioned(c, item, 1, 1n, 1n), "draw");
       }
       const copy = document.createElement("canvas"); copy.width = 320; copy.height = 240;
@@ -52,6 +53,13 @@
       check(center[0] > corner[0] + 20, "visible centered box " + center + " / " + corner);
       for (let i = 0; i < 5; i++) { submit(box, tex, 4); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
       const moved = read(160, 120); check(Math.abs(moved[0] - corner[0]) < 12, "world transform moved box " + moved + " / " + corner);
+      const farX = 1000000000.125;
+      a.Kine_Filament_SetCameraPose(c, farX, 0, 8, 0, 0, -1, 0, 1, 0);
+      for (let i = 0; i < 5; i++) { submit(box, tex, farX); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
+      const farCenter = read(160, 120); check(farCenter[0] > corner[0] + 20, "far-origin centered box " + farCenter);
+      for (let i = 0; i < 5; i++) { submit(box, tex, farX + 4); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true); await new Promise(r => setTimeout(r, 20)); }
+      check(Math.abs(read(160, 120)[0] - corner[0]) < 12, "far-origin shift preserved");
+      a.Kine_Filament_SetCameraPose(c, 0, 0, 8, 0, 0, -1, 0, 1, 0);
       submit(box, tex, 0); a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true);
       a.Kine_Filament_Viewport_RenderFrame(c, 1 / 60, true);
       check(Math.abs(read(160, 120)[0] - corner[0]) < 12, "stale pooled draw disappears");

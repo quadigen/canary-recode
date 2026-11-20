@@ -271,13 +271,13 @@ physics_read_softbodies :: proc(service: ^Physics) {
 		   ) ==
 		   0 {continue}
 		frame := datatypes.CFrame_New_Quaternion(
-			f32(position.x),
-			f32(position.y),
-			f32(position.z),
-			rotation.x,
-			rotation.y,
-			rotation.z,
-			rotation.w,
+			position.x,
+			position.y,
+			position.z,
+			f64(rotation.x),
+			f64(rotation.y),
+			f64(rotation.z),
+			f64(rotation.w),
 		)
 		body.simulation_cframe = frame
 		body.revision += 1

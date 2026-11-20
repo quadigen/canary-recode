@@ -17,7 +17,7 @@ LUA_EXECUTION_CALLBACK_STORAGE :: 512
 LUA_MINSTRTABSIZE              :: 32
 LUA_MAXCAPTURES                :: 32
 LUA_VECTOR_SIZE                :: 3 // must be 3 or 4
-LUA_VECTOR_DOUBLE              :: 0
+LUA_VECTOR_DOUBLE              :: 1
 LUA_EXTRA_SIZE                 :: (LUA_VECTOR_SIZE-2)
 
 

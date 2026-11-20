@@ -26,7 +26,7 @@ replication_put_f32 :: proc(bytes: ^[dynamic]u8, value: f32) {
 }
 
 replication_put_cframe :: proc(bytes: ^[dynamic]u8, frame: datatypes.CFrame) {
-	values := [12]f32 {
+	values := [12]f64 {
 		frame.x,
 		frame.y,
 		frame.z,
@@ -40,7 +40,7 @@ replication_put_cframe :: proc(bytes: ^[dynamic]u8, frame: datatypes.CFrame) {
 		frame.r21,
 		frame.r22,
 	}
-	for value in values {replication_put_f32(bytes, value)}
+	for value in values {replication_put_f64(bytes, value)}
 }
 
 Replication_Reader :: struct {
@@ -92,18 +92,18 @@ replication_read_f32 :: proc(reader: ^Replication_Reader) -> f32 {
 
 replication_read_cframe :: proc(reader: ^Replication_Reader) -> datatypes.CFrame {
 	return {
-		x = replication_read_f32(reader),
-		y = replication_read_f32(reader),
-		z = replication_read_f32(reader),
-		r00 = replication_read_f32(reader),
-		r01 = replication_read_f32(reader),
-		r02 = replication_read_f32(reader),
-		r10 = replication_read_f32(reader),
-		r11 = replication_read_f32(reader),
-		r12 = replication_read_f32(reader),
-		r20 = replication_read_f32(reader),
-		r21 = replication_read_f32(reader),
-		r22 = replication_read_f32(reader),
+		x = replication_read_f64(reader),
+		y = replication_read_f64(reader),
+		z = replication_read_f64(reader),
+		r00 = replication_read_f64(reader),
+		r01 = replication_read_f64(reader),
+		r02 = replication_read_f64(reader),
+		r10 = replication_read_f64(reader),
+		r11 = replication_read_f64(reader),
+		r12 = replication_read_f64(reader),
+		r20 = replication_read_f64(reader),
+		r21 = replication_read_f64(reader),
+		r22 = replication_read_f64(reader),
 	}
 }
 
@@ -481,9 +481,9 @@ replication_encode_value :: proc(
 	case .Vector:
 		append(bytes, 6)
 		x, y, z := vm.ArgVector3(L, index)
-		replication_put_f32(bytes, x)
-		replication_put_f32(bytes, y)
-		replication_put_f32(bytes, z)
+		replication_put_f64(bytes, x)
+		replication_put_f64(bytes, y)
+		replication_put_f64(bytes, z)
 	case .Userdata:
 		binding := vm.UserdataBindingOf(L, index)
 		if binding == nil {return false}
@@ -500,7 +500,7 @@ replication_encode_value :: proc(
 		} else if binding.name == "CFrame" {
 			append(bytes, 8)
 			frame := cast(^datatypes.CFrame)vm.UserdataValue(L, index)
-			values := [12]f32 {
+			values := [12]f64 {
 				frame.x,
 				frame.y,
 				frame.z,
@@ -514,7 +514,7 @@ replication_encode_value :: proc(
 				frame.r21,
 				frame.r22,
 			}
-			for value in values {replication_put_f32(bytes, value)}
+			for value in values {replication_put_f64(bytes, value)}
 		} else if binding.name == "UDim" {
 			append(bytes, 9)
 			value := cast(^datatypes.UDim)vm.UserdataValue(L, index)
@@ -676,10 +676,10 @@ replication_decode_value :: proc(
 			vm.Pop(L)
 		}
 	case 6:
-		x := replication_read_f32(reader)
-		y := replication_read_f32(reader)
-		z := replication_read_f32(reader)
-		vm.PushVector3(L, x, y, z)
+		x := replication_read_f64(reader)
+		y := replication_read_f64(reader)
+		z := replication_read_f64(reader)
+		vm.PushVector3(L, f64(x), f64(y), f64(z))
 	case 7:
 		color := datatypes.Color3 {
 			R = replication_read_f32(reader),
@@ -689,18 +689,18 @@ replication_decode_value :: proc(
 		datatypes.Push_Color3(L, datatype_registry, color)
 	case 8:
 		frame := datatypes.CFrame{}
-		frame.x = replication_read_f32(reader)
-		frame.y = replication_read_f32(reader)
-		frame.z = replication_read_f32(reader)
-		frame.r00 = replication_read_f32(reader)
-		frame.r01 = replication_read_f32(reader)
-		frame.r02 = replication_read_f32(reader)
-		frame.r10 = replication_read_f32(reader)
-		frame.r11 = replication_read_f32(reader)
-		frame.r12 = replication_read_f32(reader)
-		frame.r20 = replication_read_f32(reader)
-		frame.r21 = replication_read_f32(reader)
-		frame.r22 = replication_read_f32(reader)
+		frame.x = replication_read_f64(reader)
+		frame.y = replication_read_f64(reader)
+		frame.z = replication_read_f64(reader)
+		frame.r00 = replication_read_f64(reader)
+		frame.r01 = replication_read_f64(reader)
+		frame.r02 = replication_read_f64(reader)
+		frame.r10 = replication_read_f64(reader)
+		frame.r11 = replication_read_f64(reader)
+		frame.r12 = replication_read_f64(reader)
+		frame.r20 = replication_read_f64(reader)
+		frame.r21 = replication_read_f64(reader)
+		frame.r22 = replication_read_f64(reader)
 		datatypes.Push_CFrame(L, datatype_registry, frame)
 	case 9:
 		if reader.offset + 8 > len(reader.data) {reader.valid = false; vm.PushNil(L); return}
@@ -862,4 +862,12 @@ replication_decode_value :: proc(
 	case:
 		reader.valid = false; vm.PushNil(L)
 	}
+}
+
+
+replication_put_f64 :: proc(bytes: ^[dynamic]u8, value: f64) {
+ replication_put_u64(bytes, transmute(u64)value)
+}
+replication_read_f64 :: proc(reader: ^Replication_Reader) -> f64 {
+ return transmute(f64)replication_read_u64(reader)
 }

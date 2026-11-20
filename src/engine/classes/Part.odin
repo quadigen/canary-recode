@@ -5,11 +5,14 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 import "core:strings"
+import "core:math"
 
 Part_Class := Class_Info {
 	name   = "Part",
 	parent = &BasePart_Class,
 }
+
+PART_DEFAULT_GRAVITY :: datatypes.Vector3{0, -196.2, 0}
 
 Part :: struct {
 	using object:      Object,
@@ -17,6 +20,7 @@ Part :: struct {
 	pivot_offset:      datatypes.CFrame,
 	color:             datatypes.Color3,
 	size:              datatypes.Vector3,
+	gravity:           datatypes.Vector3,
 	transparency:      f64,
 	anchored:          bool,
 	can_collide:       bool,
@@ -40,6 +44,7 @@ Part_Init :: proc() -> Part {
 		pivot_offset = datatypes.CFrame_Identity,
 		color = datatypes.Color3{R = 1, G = 1, B = 1},
 		size = datatypes.Vector3{4, 1, 2},
+		gravity = PART_DEFAULT_GRAVITY,
 		anchored = true,
 		can_collide = true,
 		can_query = true,
@@ -121,6 +126,8 @@ part_get :: proc(
 	case "Color":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, part.color)
+	case "Gravity":
+		datatypes.Push_Vector3(L, part.gravity)
 	case "Size":
 		datatypes.Push_Vector3(L, part.size)
 	case "CastShadow":
@@ -198,6 +205,15 @@ part_set :: proc(
 	case "Color":
 		if datatype_registry == nil {return false}
 		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
+	case "Gravity":
+		gravity := datatypes.Arg_Vector3(L, value_index)
+		if math.is_nan(gravity.x) || math.is_inf(gravity.x) ||
+		   math.is_nan(gravity.y) || math.is_inf(gravity.y) ||
+		   math.is_nan(gravity.z) || math.is_inf(gravity.z) {
+			_ = vm.RaiseError(L, "Gravity components must be finite")
+			return true
+		}
+		part.gravity = gravity
 	case "Size":
 		size := datatypes.Arg_Vector3(L, value_index)
 
@@ -305,6 +321,7 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.pivot_offset = src.pivot_offset
 	dst.color = src.color
 	dst.size = src.size
+	dst.gravity = src.gravity
 	dst.transparency = src.transparency
 	dst.anchored = src.anchored
 	dst.can_collide = src.can_collide

@@ -90,7 +90,7 @@ softbody_load_editable :: proc(body: ^classes.SoftBody, mesh: ^classes.EditableM
 	body.indices = make([]u32, len(corners))
 	for corner, i in corners {
 		p, n := corner.position, corner.normal
-		body.vertices[i] = {p.x, p.y, p.z, n.x, n.y, n.z, corner.uv.X, corner.uv.Y}
+		body.vertices[i] = {f32(p.x), f32(p.y), f32(p.z), f32(n.x), f32(n.y), f32(n.z), corner.uv.X, corner.uv.Y}
 		body.indices[i] = u32(i)
 	}
 	return true
@@ -103,9 +103,9 @@ softbody_weld_geometry :: proc(body: ^classes.SoftBody) -> bool {
 	rest: [dynamic]kineffi.JPH_Vec3
 	defer delete(rest)
 	for &vertex, i in body.vertices {
-		vertex[0] *= body.scale.x
-		vertex[1] *= body.scale.y
-		vertex[2] *= body.scale.z
+		vertex[0] *= f32(body.scale.x)
+		vertex[1] *= f32(body.scale.y)
+		vertex[2] *= f32(body.scale.z)
 		if !(abs(vertex[0]) <= 1e6 && abs(vertex[1]) <= 1e6 && abs(vertex[2]) <= 1e6) {
 			return false
 		}

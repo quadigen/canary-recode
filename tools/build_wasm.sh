@@ -98,8 +98,8 @@ if [[ ! -f "$canvaskit/canvaskit.js" || ! -f "$canvaskit/canvaskit.wasm" ]]; the
   npm install --prefix "$repo/.cache/web-deps" --no-save --package-lock=false --ignore-scripts canvaskit-wasm@0.42.0
 fi
 babylon="$repo/.cache/babylon-web/node_modules/babylonjs"
-if [[ ! -f "$babylon/babylon.js" ]] || ! node -e 'process.exit(require(process.argv[1]).version==="9.28.0"?0:1)' "$babylon/package.json"; then
-  npm install --prefix "$repo/.cache/babylon-web" --no-save --package-lock=false --ignore-scripts babylonjs@9.28.0
+if [[ ! -f "$babylon/babylon.js" ]] || ! node -e 'process.exit(require(process.argv[1]).version==="9.37.1"?0:1)' "$babylon/package.json"; then
+  npm install --prefix "$repo/.cache/babylon-web" --no-save --package-lock=false --ignore-scripts babylonjs@9.37.1
 fi
 mkdir -p "$output/canvaskit" "$output/babylon" "$output/fonts"
 cp "$repo/web/$page" "$output/index.html"

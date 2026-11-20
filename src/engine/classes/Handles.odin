@@ -226,20 +226,20 @@ handles_destroy_native :: proc(
 	}
 }
 
-handles_cframe_matrix :: proc(cf: datatypes.CFrame) -> [16]f32 {
-	return [16]f32 {
-		cf.r00,
-		cf.r01,
-		cf.r02,
-		cf.x,
-		cf.r10,
-		cf.r11,
-		cf.r12,
-		cf.y,
-		cf.r20,
-		cf.r21,
-		cf.r22,
-		cf.z,
+handles_cframe_matrix :: proc(cf: datatypes.CFrame) -> [16]f64 {
+	return [16]f64 {
+		f64(cf.r00),
+		f64(cf.r01),
+		f64(cf.r02),
+		f64(cf.x),
+		f64(cf.r10),
+		f64(cf.r11),
+		f64(cf.r12),
+		f64(cf.y),
+		f64(cf.r20),
+		f64(cf.r21),
+		f64(cf.r22),
+		f64(cf.z),
 		0,
 		0,
 		0,
@@ -331,9 +331,9 @@ handles_part_half_extents :: proc(part: ^Part) -> (x, y, z: f32) {
 	hx := part.size.x * 0.5
 	hy := part.size.y * 0.5
 	hz := part.size.z * 0.5
-	x = abs(part.cframe.r00) * hx + abs(part.cframe.r01) * hy + abs(part.cframe.r02) * hz
-	y = abs(part.cframe.r10) * hx + abs(part.cframe.r11) * hy + abs(part.cframe.r12) * hz
-	z = abs(part.cframe.r20) * hx + abs(part.cframe.r21) * hy + abs(part.cframe.r22) * hz
+	x = f32(abs(part.cframe.r00) * hx + abs(part.cframe.r01) * hy + abs(part.cframe.r02) * hz)
+	y = f32(abs(part.cframe.r10) * hx + abs(part.cframe.r11) * hy + abs(part.cframe.r12) * hz)
+	z = f32(abs(part.cframe.r20) * hx + abs(part.cframe.r21) * hy + abs(part.cframe.r22) * hz)
 	return
 }
 
@@ -363,13 +363,13 @@ handles_accumulate_bounds :: proc(object: ^Object, min, max: ^datatypes.Vector3,
 			min,
 			max,
 			found,
-			datatypes.Vector3{part.cframe.x - ex, part.cframe.y - ey, part.cframe.z - ez},
+			datatypes.Vector3{part.cframe.x - f64(ex), part.cframe.y - f64(ey), part.cframe.z - f64(ez)},
 		)
 		handles_expand_bounds(
 			min,
 			max,
 			found,
-			datatypes.Vector3{part.cframe.x + ex, part.cframe.y + ey, part.cframe.z + ez},
+			datatypes.Vector3{part.cframe.x + f64(ex), part.cframe.y + f64(ey), part.cframe.z + f64(ez)},
 		)
 	}
 	for child in object.children {
@@ -496,11 +496,11 @@ handles_axis_component :: proc(axis: i32) -> int {
 handles_vector_component :: proc(v: datatypes.Vector3, component: int) -> f32 {
 	switch component {
 	case 0:
-		return v.x
+		return f32(v.x)
 	case 1:
-		return v.y
+		return f32(v.y)
 	case 2:
-		return v.z
+		return f32(v.z)
 	}
 	return 0
 }
@@ -508,11 +508,11 @@ handles_vector_component :: proc(v: datatypes.Vector3, component: int) -> f32 {
 handles_vector_set_component :: proc(v: ^datatypes.Vector3, component: int, value: f32) {
 	switch component {
 	case 0:
-		v.x = value
+		v.x = f64(value)
 	case 1:
-		v.y = value
+		v.y = f64(value)
 	case 2:
-		v.z = value
+		v.z = f64(value)
 	}
 }
 
@@ -554,9 +554,9 @@ Handles_Apply_Model_Axis :: proc(
 	world_axis := datatypes.CFrame_VectorToWorldSpace(pivot, local_axis)
 	switch style {
 	case .Movement:
-		handles_model_translate(model, datatypes.Vec3_Multiply(world_axis, delta))
+		handles_model_translate(model, datatypes.Vec3_Multiply(world_axis, f64(delta)))
 	case .Rotation:
-		rotation := datatypes.CFrame_FromAxisAngle(world_axis, delta)
+		rotation := datatypes.CFrame_FromAxisAngle(world_axis, f64(delta))
 		transform := datatypes.CFrame_Mul_CFrame(
 			datatypes.CFrame_Mul_CFrame(pivot, rotation),
 			datatypes.CFrame_Inverse(pivot),
@@ -598,7 +598,7 @@ handles_selection_apply_axis :: proc(
 		)
 		selection.attachment.position = datatypes.Vec3_Add(
 			selection.attachment.position,
-			datatypes.Vec3_Multiply(parent_axis, delta),
+			datatypes.Vec3_Multiply(parent_axis, f64(delta)),
 		)
 		return
 	}
@@ -780,32 +780,32 @@ handles_apply_axis_delta :: proc(part: ^Part, axis: i32, delta: f32, style: enum
 
 	switch style {
 	case .Movement:
-		part.cframe.x += world_axis.x * delta
-		part.cframe.y += world_axis.y * delta
-		part.cframe.z += world_axis.z * delta
+		part.cframe.x += world_axis.x * f64(delta)
+		part.cframe.y += world_axis.y * f64(delta)
+		part.cframe.z += world_axis.z * f64(delta)
 		part.position.x = part.cframe.x
 		part.position.y = part.cframe.y
 		part.position.z = part.cframe.z
 	case .Resize:
 		centered := handles_resize_centered()
 		if !centered {
-			part.cframe.x += world_axis.x * delta * 0.5
-			part.cframe.y += world_axis.y * delta * 0.5
-			part.cframe.z += world_axis.z * delta * 0.5
+			part.cframe.x += world_axis.x * f64(delta) * 0.5
+			part.cframe.y += world_axis.y * f64(delta) * 0.5
+			part.cframe.z += world_axis.z * f64(delta) * 0.5
 			part.position.x = part.cframe.x
 			part.position.y = part.cframe.y
 			part.position.z = part.cframe.z
 		}
 		switch axis {
 		case kineffi.KINE_GIZMO_AXIS_X:
-			part.size.x = max(0.05, part.size.x + delta * (centered ? 2 : 1))
+			part.size.x = max(0.05, part.size.x + f64(delta * (centered ? 2 : 1)))
 		case kineffi.KINE_GIZMO_AXIS_Y:
-			part.size.y = max(0.05, part.size.y + delta * (centered ? 2 : 1))
+			part.size.y = max(0.05, part.size.y + f64(delta * (centered ? 2 : 1)))
 		case kineffi.KINE_GIZMO_AXIS_Z:
-			part.size.z = max(0.05, part.size.z + delta * (centered ? 2 : 1))
+			part.size.z = max(0.05, part.size.z + f64(delta * (centered ? 2 : 1)))
 		}
 	case .Rotation:
-		rotation := datatypes.CFrame_FromAxisAngle(local_axis, delta)
+		rotation := datatypes.CFrame_FromAxisAngle(local_axis, f64(delta))
 		part.cframe = datatypes.CFrame_Mul_CFrame(part.cframe, rotation)
 	}
 }
@@ -985,7 +985,7 @@ handles_step_common :: proc(
 	previous_left^ = left
 
 	draw_pivot := selection.pivot
-	if dragging^ && selection.model != nil {draw_pivot = drag_pivot^}
+	if current, valid := handles_resolve_selection(adornee); valid && selection.attachment == nil {draw_pivot = current.pivot}
 	if selection.softbody != nil {draw_pivot = SoftBody_Current_CFrame(selection.softbody)}
 	if selection.attachment != nil {
 		offset := datatypes.Vec3_Subtract(

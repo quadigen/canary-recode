@@ -178,7 +178,7 @@ int kine_lua_setmetatable(lua_State* L, int index) { return lua_setmetatable(L, 
 int kine_lua_setfenv(lua_State* L, int index) { return lua_setfenv(L, index); }
 void kine_lua_pushnumber(lua_State* L, double value) { lua_pushnumber(L, value); }
 void kine_lua_pushinteger64(lua_State* L, int64_t value) { lua_pushinteger64(L, value); }
-void kine_lua_pushvector(lua_State* L, float x, float y, float z) { lua_pushvector(L, x, y, z); }
+void kine_lua_pushvector(lua_State* L, double x, double y, double z) { lua_pushvector(L, x, y, z); }
 void kine_lua_pushboolean(lua_State* L, int value) { lua_pushboolean(L, value); }
 void kine_lua_pushstring(lua_State* L, const char* value) { lua_pushstring(L, value); }
 void kine_lua_pushnil(lua_State* L) { lua_pushnil(L); }
@@ -191,7 +191,7 @@ double kine_luaL_checknumber(lua_State* L, int index) { return luaL_checknumber(
 int64_t kine_luaL_checkinteger64(lua_State* L, int index) { return luaL_checkinteger64(L, index); }
 int kine_luaL_checkboolean(lua_State* L, int index) { return luaL_checkboolean(L, index); }
 const char* kine_luaL_checklstring(lua_State* L, int index, size_t* size) { return luaL_checklstring(L, index, size); }
-const float* kine_luaL_checkvector(lua_State* L, int index) { return luaL_checkvector(L, index); }
+const double* kine_luaL_checkvector(lua_State* L, int index) { return luaL_checkvector(L, index); }
 void kine_lua_pushlightuserdatatagged(lua_State* L, void* value, int tag) { lua_pushlightuserdatatagged(L, value, tag); }
 void* kine_lua_tolightuserdata(lua_State* L, int index) { return lua_tolightuserdata(L, index); }
 void kine_lua_settop(lua_State* L, int index) { lua_settop(L, index); }

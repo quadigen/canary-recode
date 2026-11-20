@@ -28,7 +28,6 @@ main :: proc() {
 	run_script(
 		&script_vm,
 		`
-workspace.Gravity = 0
 base = Instance.new("Part", workspace)
 base.Name = "SpringBase"
 base.Anchored = true
@@ -38,6 +37,7 @@ base.CFrame = CFrame.new(0, 10, 0)
 top = Instance.new("Part", workspace)
 top.Name = "SpringTop"
 top.Anchored = false
+top.Gravity = Vector3.zero
 top.CanCollide = false
 top.Size = base.Size
 top.CFrame = CFrame.new(3, 14, 0) * CFrame.Angles(0, 0, 0.8)

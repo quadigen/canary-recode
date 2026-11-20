@@ -57,15 +57,15 @@ lua_Type :: enum i32 {
 	LIGHTUSERDATA = 2,
 	NUMBER        = 3,
 	INTEGER       = 4,
-	VECTOR        = 5,
-	STRING        = 6,
-	TABLE         = 7,
-	FUNCTION      = 8,
-	USERDATA      = 9,
-	THREAD        = 10,
-	BUFFER        = 11,
-	CLASS         = 12,
-	OBJECT        = 13,
+	VECTOR        = 13,
+	STRING        = 5,
+	TABLE         = 6,
+	FUNCTION      = 7,
+	USERDATA      = 8,
+	THREAD        = 9,
+	BUFFER        = 10,
+	CLASS         = 11,
+	OBJECT        = 12,
 	DEADKEY       = 14,
 	PROTO         = 15,
 	UPVAL         = 16,
@@ -134,7 +134,7 @@ foreign lib {
 	lua_tonumberx :: proc(L: ^lua_State, idx: i32, isnum: ^i32) -> f64 ---
 	lua_tointegerx :: proc(L: ^lua_State, idx: i32, isnum: ^i32) -> i32 ---
 	lua_tounsignedx :: proc(L: ^lua_State, idx: i32, isnum: ^i32) -> u32 ---
-	lua_tovector :: proc(L: ^lua_State, idx: i32) -> ^f32 ---
+	lua_tovector :: proc(L: ^lua_State, idx: i32) -> ^f64 ---
 	lua_toboolean :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_tointeger64 :: proc(L: ^lua_State, idx: i32, isinteger: ^i32) -> i64 ---
 	lua_tolstring :: proc(L: ^lua_State, idx: i32, len: ^uintptr) -> cstring ---
@@ -158,7 +158,7 @@ foreign lib {
 	lua_pushinteger :: proc(L: ^lua_State, n: i32) ---
 	lua_pushinteger64 :: proc(L: ^lua_State, n: i64) ---
 	lua_pushunsigned :: proc(L: ^lua_State, n: u32) ---
-	lua_pushvector :: proc(L: ^lua_State, x: f32, y: f32, z: f32) ---
+	lua_pushvector :: proc(L: ^lua_State, x: f64, y: f64, z: f64) ---
 	lua_pushlstring :: proc(L: ^lua_State, s: cstring, l: uintptr) ---
 	lua_pushstring :: proc(L: ^lua_State, s: cstring) ---
 	lua_pushvfstring :: proc(L: ^lua_State, fmt: cstring, argp: rawptr) -> cstring ---
@@ -169,7 +169,7 @@ foreign lib {
 	lua_pushlightuserdatatagged :: proc(L: ^lua_State, p: rawptr, tag: i32) ---
 	lua_newuserdatatagged :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr ---
 	lua_newuserdatataggedwithmetatable :: proc(L: ^lua_State, sz: uintptr, tag: i32) -> rawptr ---
-	lua_newuserdatadtor :: proc(L: ^lua_State, sz: uintptr, dtor: proc "c" (_: rawptr)) -> rawptr ---
+	lua_newuserdatadtor :: proc(L: ^lua_State, sz: uintptr, dtor: lua_Destructor) -> rawptr ---
 
 
 	lua_gettable :: proc(L: ^lua_State, idx: i32) -> i32 ---
@@ -279,7 +279,7 @@ foreign lib {
 }
 
 lua_EmbedderMark :: proc "c" (L: ^lua_State, ref: i32)
-lua_EmbedderGc :: proc "c" (L: ^lua_State, markref: lua_EmbedderMark)
+lua_EmbedderGc :: proc "c" (L: ^lua_State, markref: lua_EmbedderMark) -> i32
 
 @(default_calling_convention = "c", link_prefix = "kine_")
 foreign lib {
@@ -328,7 +328,7 @@ foreign lib {
 
 
 	lua_userdatadirectfield_setnumber :: proc(result: rawptr, n: f64) ---
-	lua_userdatadirectfield_setvector :: proc(result: rawptr, x: f32, y: f32, z: f32) ---
+	lua_userdatadirectfield_setvector :: proc(result: rawptr, x: f64, y: f64, z: f64) ---
 	lua_userdatadirectfield_setboolean :: proc(result: rawptr, b: i32) ---
 	lua_userdatadirectfield_setinteger64 :: proc(result: rawptr, n: i64) ---
 	lua_userdatadirectfield_setnil :: proc(result: rawptr) ---
@@ -425,6 +425,7 @@ lua_Callbacks :: struct {
 	panic:               proc "c" (L: ^lua_State, errcode: i32),
 	userthread:          proc "c" (LP: ^lua_State, L: ^lua_State),
 	useratom:            proc "c" (L: ^lua_State, s: cstring, l: uintptr) -> i16,
+	userfinalizer:       proc "c" (L: ^lua_State, co: ^lua_State),
 	debugbreak:          proc "c" (L: ^lua_State, ar: ^lua_Debug),
 	debugstep:           proc "c" (L: ^lua_State, ar: ^lua_Debug),
 	debuginterrupt:      proc "c" (L: ^lua_State, ar: ^lua_Debug),

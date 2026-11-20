@@ -40,7 +40,11 @@ decal_step_cloth :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 		}
 	}
 
-	transform := Cloth_Surface_Transform(cloth)
+	base_transform := Cloth_Surface_Transform(cloth)
+	transform: [16]f64
+	for v, i in base_transform {transform[i] = f64(v)}
+	pin := Cloth_World_Pin(cloth)
+	transform[3], transform[7], transform[11] = pin.x, pin.y, pin.z
 	decal_apply_style(decal, renderer, &transform, cloth.width, cloth.size.Y)
 	_ = kineffi.Kine_Filament_EditMeshDecal(
 		renderer.Filament,

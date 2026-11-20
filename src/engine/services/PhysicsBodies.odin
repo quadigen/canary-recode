@@ -15,20 +15,24 @@ physics_finite_f32 :: proc(value: f32) -> bool {
 	return value == value && value > -1.0e20 && value < 1.0e20
 }
 
+physics_finite_f64 :: proc(value: f64) -> bool {
+	return value == value && value > -1.0e20 && value < 1.0e20
+}
+
 physics_valid_cframe :: proc(cf: datatypes.CFrame) -> bool {
 	return(
-		physics_finite_f32(cf.x) &&
-		physics_finite_f32(cf.y) &&
-		physics_finite_f32(cf.z) &&
-		physics_finite_f32(cf.r00) &&
-		physics_finite_f32(cf.r01) &&
-		physics_finite_f32(cf.r02) &&
-		physics_finite_f32(cf.r10) &&
-		physics_finite_f32(cf.r11) &&
-		physics_finite_f32(cf.r12) &&
-		physics_finite_f32(cf.r20) &&
-		physics_finite_f32(cf.r21) &&
-		physics_finite_f32(cf.r22) \
+		physics_finite_f64(cf.x) &&
+		physics_finite_f64(cf.y) &&
+		physics_finite_f64(cf.z) &&
+		physics_finite_f64(cf.r00) &&
+		physics_finite_f64(cf.r01) &&
+		physics_finite_f64(cf.r02) &&
+		physics_finite_f64(cf.r10) &&
+		physics_finite_f64(cf.r11) &&
+		physics_finite_f64(cf.r12) &&
+		physics_finite_f64(cf.r20) &&
+		physics_finite_f64(cf.r21) &&
+		physics_finite_f64(cf.r22) \
 	)
 }
 
@@ -38,34 +42,34 @@ physics_quaternion_from_cframe :: proc(cf: datatypes.CFrame) -> kineffi.JPH_Quat
 	if trace > 0 {
 		s := math.sqrt(trace + 1.0) * 2.0
 		result = kineffi.JPH_Quat {
-			(cf.r21 - cf.r12) / s,
-			(cf.r02 - cf.r20) / s,
-			(cf.r10 - cf.r01) / s,
-			0.25 * s,
+			f32((cf.r21 - cf.r12) / s),
+			f32((cf.r02 - cf.r20) / s),
+			f32((cf.r10 - cf.r01) / s),
+			f32(0.25 * s),
 		}
 	} else if cf.r00 > cf.r11 && cf.r00 > cf.r22 {
 		s := math.sqrt(1.0 + cf.r00 - cf.r11 - cf.r22) * 2.0
 		result = kineffi.JPH_Quat {
-			0.25 * s,
-			(cf.r01 + cf.r10) / s,
-			(cf.r02 + cf.r20) / s,
-			(cf.r21 - cf.r12) / s,
+			f32(0.25 * s),
+			f32((cf.r01 + cf.r10) / s),
+			f32((cf.r02 + cf.r20) / s),
+			f32((cf.r21 - cf.r12) / s),
 		}
 	} else if cf.r11 > cf.r22 {
 		s := math.sqrt(1.0 + cf.r11 - cf.r00 - cf.r22) * 2.0
 		result = kineffi.JPH_Quat {
-			(cf.r01 + cf.r10) / s,
-			0.25 * s,
-			(cf.r12 + cf.r21) / s,
-			(cf.r02 - cf.r20) / s,
+			f32((cf.r01 + cf.r10) / s),
+			f32(0.25 * s),
+			f32((cf.r12 + cf.r21) / s),
+			f32((cf.r02 - cf.r20) / s),
 		}
 	} else {
 		s := math.sqrt(1.0 + cf.r22 - cf.r00 - cf.r11) * 2.0
 		result = kineffi.JPH_Quat {
-			(cf.r02 + cf.r20) / s,
-			(cf.r12 + cf.r21) / s,
-			0.25 * s,
-			(cf.r10 - cf.r01) / s,
+			f32((cf.r02 + cf.r20) / s),
+			f32((cf.r12 + cf.r21) / s),
+			f32(0.25 * s),
+			f32((cf.r10 - cf.r01) / s),
 		}
 	}
 	return result
@@ -101,9 +105,9 @@ physics_shape_for_part :: proc(
 
 	#partial switch part.shape {
 	case .Ball:
-		return kineffi.JPH_SphereShape_Create(max(min(half.x, min(half.y, half.z)), 0.001))
+		return kineffi.JPH_SphereShape_Create(f32(max(min(half.x, min(half.y, half.z)), 0.001)))
 	case .Cylinder:
-		return kineffi.JPH_CylinderShape_Create(half.y, max(min(half.x, half.z), 0.001), 0)
+		return kineffi.JPH_CylinderShape_Create(f32(half.y), f32(max(min(half.x, half.z), 0.001)), 0)
 	case .Capsule:
 		return physics_capsule_shape(part.size)
 	case .Wedge:
@@ -117,10 +121,10 @@ physics_shape_for_part :: proc(
 	case .TriangleWedge:
 		return physics_convex_hull_shape(physics_triangle_wedge_verts[:], scale)
 	case .Truss, .Torus:
-		value := kineffi.JPH_Vec3{half.x, half.y, half.z}
+		value := kineffi.JPH_Vec3{f32(half.x), f32(half.y), f32(half.z)}
 		return kineffi.JPH_BoxShape_Create(&value, 0)
 	case:
-		value := kineffi.JPH_Vec3{half.x, half.y, half.z}
+		value := kineffi.JPH_Vec3{f32(half.x), f32(half.y), f32(half.z)}
 		return kineffi.JPH_BoxShape_Create(&value, 0)
 	}
 }
@@ -170,7 +174,7 @@ physics_convex_hull_shape :: proc(
 	points := make([]kineffi.JPH_Vec3, len(unit_verts))
 	defer delete(points)
 	for vert, i in unit_verts {
-		points[i] = kineffi.JPH_Vec3{vert.x * scale.x, vert.y * scale.y, vert.z * scale.z}
+		points[i] = kineffi.JPH_Vec3{f32(vert.x * scale.x), f32(vert.y * scale.y), f32(vert.z * scale.z)}
 	}
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(points), u32(len(points)), 0)
 }
@@ -183,24 +187,24 @@ physics_cone_shape :: proc(scale: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 		angle := f32(i) * 2.0 * math.PI / SEGMENTS
 		append(
 			&points,
-			kineffi.JPH_Vec3{math.cos(angle) * scale.x, -scale.y, math.sin(angle) * scale.z},
+			kineffi.JPH_Vec3{f32(f64(math.cos(angle)) * scale.x), f32(-scale.y), f32(f64(math.sin(angle)) * scale.z)},
 		)
 	}
-	append(&points, kineffi.JPH_Vec3{0, scale.y, 0})
+	append(&points, kineffi.JPH_Vec3{0, f32(scale.y), 0})
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(points), u32(len(points)), 0)
 }
 
 physics_capsule_shape :: proc(size: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
-	if !physics_finite_f32(size.x) ||
-	   !physics_finite_f32(size.y) ||
-	   !physics_finite_f32(size.z) {return nil}
+	if !physics_finite_f32(f32(size.x)) ||
+	   !physics_finite_f32(f32(size.y)) ||
+	   !physics_finite_f32(f32(size.z)) {return nil}
 	half_x := max(size.x * 0.5, 0.001)
 	half_y := max(size.y * 0.5, 0.001)
 	half_z := max(size.z * 0.5, 0.001)
 	radius := min(half_x, min(half_y, half_z))
 	half_height := max(half_y - radius, 0)
-	if half_height <= 0 {return kineffi.JPH_SphereShape_Create(radius)}
-	return kineffi.JPH_CapsuleShape_Create(half_height, radius, 0)
+	if half_height <= 0 {return kineffi.JPH_SphereShape_Create(f32(radius))}
+	return kineffi.JPH_CapsuleShape_Create(f32(half_height), f32(radius), 0)
 }
 
 physics_is_mesh_operation :: proc(mesh: ^classes.MeshPart) -> bool {
@@ -231,7 +235,7 @@ physics_meshpart_shape :: proc(
 				max(mesh_part.size.y * 0.5, 0.001),
 				max(mesh_part.size.z * 0.5, 0.001),
 			}
-			value := kineffi.JPH_Vec3{half.x, half.y, half.z}
+			value := kineffi.JPH_Vec3{f32(half.x), f32(half.y), f32(half.z)}
 			return kineffi.JPH_BoxShape_Create(&value, 0)
 		case .Hull, .Default:
 			return physics_cached_mesh_shape(service, mesh_part, scale, .Hull)
@@ -268,9 +272,9 @@ physics_static_triangle_mesh_shape :: proc(
 	defer delete(vertices)
 	defer delete(indices)
 	for &vertex in vertices {
-		vertex.x *= scale.x
-		vertex.y *= scale.y
-		vertex.z *= scale.z
+		vertex.x *= f32(scale.x)
+		vertex.y *= f32(scale.y)
+		vertex.z *= f32(scale.z)
 	}
 	triangles := make([]kineffi.JPH_Triangle, len(indices) / 3)
 	defer delete(triangles)
@@ -366,9 +370,9 @@ physics_mesh_hull_shape :: proc(
 	defer delete(verts)
 	for i in 0 ..< len(verts) {
 		verts[i] = kineffi.JPH_Vec3 {
-			verts[i].x * scale.x,
-			verts[i].y * scale.y,
-			verts[i].z * scale.z,
+			f32(f64(verts[i].x) * scale.x),
+			f32(f64(verts[i].y) * scale.y),
+			f32(f64(verts[i].z) * scale.z),
 		}
 	}
 	if len(verts) < 4 {
@@ -401,9 +405,9 @@ physics_editable_mesh_vertices :: proc(
 	verts := make([]kineffi.JPH_Vec3, len(corners))
 	for corner, i in corners {
 		verts[i] = kineffi.JPH_Vec3 {
-			(corner.position.x - center.x) * scale.x,
-			(corner.position.y - center.y) * scale.y,
-			(corner.position.z - center.z) * scale.z,
+			f32((corner.position.x - center.x) * scale.x),
+			f32((corner.position.y - center.y) * scale.y),
+			f32((corner.position.z - center.z) * scale.z),
 		}
 	}
 	return verts, true
@@ -435,9 +439,9 @@ physics_editable_mesh_triangles :: proc(
 	idx := make([dynamic]u32, len(corners))
 	for corner, i in corners {
 		verts[i] = kineffi.JPH_Vec3 {
-			(corner.position.x - center.x) * scale.x,
-			(corner.position.y - center.y) * scale.y,
-			(corner.position.z - center.z) * scale.z,
+			f32((corner.position.x - center.x) * scale.x),
+			f32((corner.position.y - center.y) * scale.y),
+			f32((corner.position.z - center.z) * scale.z),
 		}
 		idx[i] = u32(i)
 	}
@@ -508,7 +512,7 @@ physics_mesh_pcd_shape :: proc(
 		u32(len(verts)),
 		raw_data(idx),
 		u32(len(idx)),
-		&kineffi.JPH_Vec3{scale.x, scale.y, scale.z},
+		&kineffi.JPH_Vec3{f32(scale.x), f32(scale.y), f32(scale.z)},
 	)
 }
 
@@ -654,11 +658,9 @@ physics_create_body :: proc(
 		properties.restitution_weight,
 	)
 	kineffi.JPH_BodyCreationSettings_SetIsSensor(settings, part.can_collide ? 0 : 1)
-	gravity_scale: f32 = 1
-	if model := classes.PhysicsModel_For(&part.object); model != nil {
-		gravity_scale = model.gravity_scale
-	}
-	if !static {kineffi.JPH_BodyCreationSettings_SetGravityFactor(settings, gravity_scale)}
+	gravity := physics_part_gravity(part)
+	gravity_factor := physics_part_gravity_factor(service, gravity)
+	if !static {kineffi.JPH_BodyCreationSettings_SetGravityFactor(settings, gravity_factor)}
 
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
 
@@ -673,6 +675,8 @@ physics_create_body :: proc(
 		return Physics_Body{}, false
 	}
 
+	motion_properties: kineffi.JPH_MotionPropertiesRef
+	if !static {motion_properties = kineffi.JPH_Body_GetMotionProperties(body)}
 	activation: kineffi.JPH_ActivationMode = static ? .DontActivate : .Activate
 
 	kineffi.JPH_BodyInterface_AddBody(service.system.body_interface, body_id, activation)
@@ -687,9 +691,9 @@ physics_create_body :: proc(
 				entity := replication_entity(replicator, &part.object)
 				if entity != nil && entity.pending_velocity_valid {
 					linear_velocity := kineffi.JPH_Vec3 {
-						entity.pending_linear_velocity.x,
-						entity.pending_linear_velocity.y,
-						entity.pending_linear_velocity.z,
+						f32(entity.pending_linear_velocity.x),
+						f32(entity.pending_linear_velocity.y),
+						f32(entity.pending_linear_velocity.z),
 					}
 					kineffi.JPH_BodyInterface_SetLinearVelocity(
 						service.system.body_interface,
@@ -697,9 +701,9 @@ physics_create_body :: proc(
 						&linear_velocity,
 					)
 					angular_velocity := kineffi.JPH_Vec3 {
-						entity.pending_angular_velocity.x,
-						entity.pending_angular_velocity.y,
-						entity.pending_angular_velocity.z,
+						f32(entity.pending_angular_velocity.x),
+						f32(entity.pending_angular_velocity.y),
+						f32(entity.pending_angular_velocity.z),
 					}
 					kineffi.JPH_BodyInterface_SetAngularVelocity(
 						service.system.body_interface,
@@ -737,7 +741,9 @@ physics_create_body :: proc(
 			anchored = part.anchored,
 			can_collide = part.can_collide,
 			remote = remote,
-			gravity_scale = gravity_scale,
+			gravity = gravity,
+			gravity_factor = gravity_factor,
+			motion_properties = motion_properties,
 			last_cframe = part.cframe,
 			mesh_id = mesh_id,
 			mesh_index = mesh_index,
@@ -783,7 +789,7 @@ physics_build_chunk_shape :: proc(
 	indices: [dynamic]u16
 	defer delete(vertex_data)
 	defer delete(indices)
-	if !Terrain_Build_Chunk_Mesh(terrain, key, &vertex_data, nil, &indices) {
+	if !Terrain_Build_Chunk_Mesh(terrain, key, &vertex_data, nil, &indices, true) {
 		return
 	}
 
@@ -821,8 +827,9 @@ physics_reset_scratch_ids :: proc(ids: ^[dynamic]kineffi.JPH_BodyID) {
 physics_create_terrain_body :: proc(
 	service: ^Physics,
 	shape: kineffi.JPH_ShapeRef,
+	origin: datatypes.Vector3,
 ) -> kineffi.JPH_BodyID {
-	position := kineffi.JPH_RVec3{0, 0, 0}
+	position := kineffi.JPH_RVec3{origin.x, origin.y, origin.z}
 	rotation := kineffi.JPH_Quat{0, 0, 0, 1}
 
 	settings := kineffi.JPH_BodyCreationSettings_Create3(
@@ -883,7 +890,7 @@ physics_rebuild_chunk_body :: proc(service: ^Physics, terrain: ^Terrain, key: Te
 	if shape == nil {return}
 	defer kineffi.JPH_Shape_Destroy(shape)
 
-	body_id := physics_create_terrain_body(service, shape)
+	body_id := physics_create_terrain_body(service, shape, terrain_chunk_world_origin(terrain, key))
 	if body_id == kineffi.JPH_BODY_ID_INVALID {return}
 
 	service.terrain_bodies[key] = body_id
@@ -1396,8 +1403,8 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 }
 
 physics_capsule_size_from_root :: proc(root: ^classes.Part) -> (radius, half_height: f32) {
-	radius = max(root.size.x, root.size.z) / 2 * 0.55
-	half_height = root.size.y / 2 - radius
+	radius = f32(max(root.size.x, root.size.z) / 2 * 0.55)
+	half_height = f32(root.size.y / 2 - f64(radius))
 	if radius <= 0.001 {radius = 0.001}
 	if half_height < 0.01 {half_height = 0.01}
 	return
@@ -1418,15 +1425,15 @@ physics_cframe_from_quaternion :: proc(q: kineffi.JPH_Quat) -> datatypes.CFrame 
 	wy := w * y
 	wz := w * z
 	return datatypes.CFrame {
-		r00 = 1 - 2 * (yy + zz),
-		r01 = 2 * (xy - wz),
-		r02 = 2 * (xz + wy),
-		r10 = 2 * (xy + wz),
-		r11 = 1 - 2 * (xx + zz),
-		r12 = 2 * (yz - wx),
-		r20 = 2 * (xz - wy),
-		r21 = 2 * (yz + wx),
-		r22 = 1 - 2 * (xx + yy),
+		r00 = f64(1 - 2 * (yy + zz)),
+		r01 = f64(2 * (xy - wz)),
+		r02 = f64(2 * (xz + wy)),
+		r10 = f64(2 * (xy + wz)),
+		r11 = f64(1 - 2 * (xx + zz)),
+		r12 = f64(2 * (yz - wx)),
+		r20 = f64(2 * (xz - wy)),
+		r21 = f64(2 * (yz + wx)),
+		r22 = f64(1 - 2 * (xx + yy)),
 	}
 }
 
@@ -1513,7 +1520,7 @@ Physics_Set_Character_Capsule :: proc(
 	   coll == nil ||
 	   !coll.body_created ||
 	   service.system.body_interface == nil {return}
-	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
+	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, f64(math.to_radians(yaw)), 0)
 	cf.x = position.x
 	cf.y = position.y
 	cf.z = position.z
@@ -1550,7 +1557,7 @@ Physics_Wake_Character_Neighbors :: proc(
 		part := cast(^classes.Part)body.object
 		if part == nil || !part.can_collide {continue}
 		half := max(max(part.size.x, part.size.y), part.size.z) * 0.5
-		r := reach + travel + half
+		r := f64(reach + travel) + half
 		r_sq := r * r
 		dx := part.cframe.x - from.x
 		dy := part.cframe.y - from.y
@@ -1593,9 +1600,9 @@ Physics_Advance_Character_Capsule :: proc(
 	body_interface := service.system.body_interface
 	velocity := kineffi.JPH_Vec3{0, 0, 0}
 	if delta_time > 0 {
-		velocity.x = (to.x - from.x) / delta_time
-		velocity.y = (to.y - from.y) / delta_time
-		velocity.z = (to.z - from.z) / delta_time
+		velocity.x = f32((to.x - from.x) / f64(delta_time))
+		velocity.y = f32((to.y - from.y) / f64(delta_time))
+		velocity.z = f32((to.z - from.z) / f64(delta_time))
 	}
 
 
@@ -1612,7 +1619,7 @@ Physics_Advance_Character_Capsule :: proc(
 			Physics_Wake_Character_Neighbors(service, coll, from, to)
 		}
 	}
-	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
+	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, f64(math.to_radians(yaw)), 0)
 	cf.x = resting_point.x
 	cf.y = resting_point.y
 	cf.z = resting_point.z
@@ -1706,9 +1713,9 @@ Physics_Get_Character_Capsule_CFrame :: proc(
 		&rotation,
 	)
 	cf := physics_cframe_from_quaternion(rotation)
-	cf.x = f32(position.x)
-	cf.y = f32(position.y)
-	cf.z = f32(position.z)
+	cf.x = position.x
+	cf.y = position.y
+	cf.z = position.z
 	if !physics_valid_cframe(cf) {return datatypes.CFrame_Identity, false}
 	return cf, true
 }
@@ -1920,18 +1927,18 @@ physics_character_sweep :: proc(
 	native, did_hit := jolt.System_Cast_Shape(
 		&service.system,
 		kineffi.JPH_RVec3{f64(origin.x), f64(origin.y), f64(origin.z)},
-		kineffi.JPH_Vec3{displacement.x, displacement.y, displacement.z},
+		kineffi.JPH_Vec3{f32(displacement.x), f32(displacement.y), f32(displacement.z)},
 		coll.shape,
 		candidates[:],
 		.Include,
 	)
 	if !did_hit {return}
 	position = datatypes.Vector3 {
-		f32(native.position.x),
-		f32(native.position.y),
-		f32(native.position.z),
+		native.position.x,
+		native.position.y,
+		native.position.z,
 	}
-	normal = datatypes.Vector3{native.normal.x, native.normal.y, native.normal.z}
+	normal = datatypes.Vector3{f64(native.normal.x), f64(native.normal.y), f64(native.normal.z)}
 	body_id = native.bodyID
 	fraction = native.fraction
 	hit = true

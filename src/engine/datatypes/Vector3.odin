@@ -3,7 +3,7 @@ package datatypes
 import "core:math"
 
 Vector3 :: struct {
-	x, y, z: f32,
+	x, y, z: f64,
 }
 
 Vector3_Zero  :: Vector3{0, 0, 0}
@@ -12,7 +12,7 @@ Vector3_XAxis :: Vector3{1, 0, 0}
 Vector3_YAxis :: Vector3{0, 1, 0}
 Vector3_ZAxis :: Vector3{0, 0, 1}
 
-Vec3_New :: proc(x, y, z: f32) -> Vector3 {
+Vec3_New :: proc(x, y, z: f64) -> Vector3 {
 	return Vector3{x, y, z}
 }
 
@@ -32,7 +32,7 @@ Vec3_Subtract :: proc(a, b: Vector3) -> Vector3 {
 	}
 }
 
-Vec3_Multiply :: proc(v: Vector3, scalar: f32) -> Vector3 {
+Vec3_Multiply :: proc(v: Vector3, scalar: f64) -> Vector3 {
 	return Vector3{
 		v.x * scalar,
 		v.y * scalar,
@@ -48,7 +48,7 @@ Vec3_Multiply_Vector :: proc(a, b: Vector3) -> Vector3 {
 	}
 }
 
-Vec3_Divide :: proc(v: Vector3, scalar: f32) -> Vector3 {
+Vec3_Divide :: proc(v: Vector3, scalar: f64) -> Vector3 {
 	return Vector3{
 		v.x / scalar,
 		v.y / scalar,
@@ -68,11 +68,11 @@ Vec3_Negate :: proc(v: Vector3) -> Vector3 {
 	return Vector3{-v.x, -v.y, -v.z}
 }
 
-Vec3_Magnitude_Squared :: proc(v: Vector3) -> f32 {
+Vec3_Magnitude_Squared :: proc(v: Vector3) -> f64 {
 	return v.x*v.x + v.y*v.y + v.z*v.z
 }
 
-Vec3_Magnitude :: proc(v: Vector3) -> f32 {
+Vec3_Magnitude :: proc(v: Vector3) -> f64 {
 	return math.sqrt(Vec3_Magnitude_Squared(v))
 }
 
@@ -80,7 +80,7 @@ Vec3_Unit :: proc(v: Vector3) -> Vector3 {
 	magnitude := Vec3_Magnitude(v)
 
 	if magnitude == 0 {
-		nan := math.nan_f32()
+		nan := math.nan_f64()
 		return Vector3{nan, nan, nan}
 	}
 
@@ -111,7 +111,7 @@ Vec3_Floor :: proc(v: Vector3) -> Vector3 {
 	}
 }
 
-vec3_sign_component :: proc(value: f32) -> f32 {
+vec3_sign_component :: proc(value: f64) -> f64 {
 	if value > 0 {
 		return 1
 	}
@@ -129,7 +129,7 @@ Vec3_Sign :: proc(v: Vector3) -> Vector3 {
 	}
 }
 
-Vec3_Dot :: proc(a, b: Vector3) -> f32 {
+Vec3_Dot :: proc(a, b: Vector3) -> f64 {
 	return a.x*b.x + a.y*b.y + a.z*b.z
 }
 
@@ -143,7 +143,7 @@ Vec3_Cross :: proc(a, b: Vector3) -> Vector3 {
 
 // Returns the unsigned angle when axis == nil.
 // When axis is provided, the sign follows the right-hand rule around axis.
-Vec3_Angle :: proc(a, b: Vector3, axis: ^Vector3 = nil) -> f32 {
+Vec3_Angle :: proc(a, b: Vector3, axis: ^Vector3 = nil) -> f64 {
 	cross := Vec3_Cross(a, b)
 	angle := math.atan2(Vec3_Magnitude(cross), Vec3_Dot(a, b))
 
@@ -154,17 +154,17 @@ Vec3_Angle :: proc(a, b: Vector3, axis: ^Vector3 = nil) -> f32 {
 	return angle
 }
 
-vec3_fuzzy_component :: proc(a, b, epsilon: f32) -> bool {
+vec3_fuzzy_component :: proc(a, b, epsilon: f64) -> bool {
 	return a == b || math.abs(a-b) <= (math.abs(a)+1.0)*epsilon
 }
 
-Vec3_FuzzyEq :: proc(a, b: Vector3, epsilon: f32 = 1.0e-5) -> bool {
+Vec3_FuzzyEq :: proc(a, b: Vector3, epsilon: f64 = 1.0e-5) -> bool {
 	return vec3_fuzzy_component(a.x, b.x, epsilon) &&
 	       vec3_fuzzy_component(a.y, b.y, epsilon) &&
 	       vec3_fuzzy_component(a.z, b.z, epsilon)
 }
 
-Vec3_Lerp :: proc(a, goal: Vector3, alpha: f32) -> Vector3 {
+Vec3_Lerp :: proc(a, goal: Vector3, alpha: f64) -> Vector3 {
 	return Vector3{
 		a.x + (goal.x-a.x)*alpha,
 		a.y + (goal.y-a.y)*alpha,

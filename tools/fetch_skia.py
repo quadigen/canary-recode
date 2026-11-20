@@ -15,6 +15,7 @@ import zipfile
 
 
 REPOSITORY = "HumbleUI/SkiaBuild"
+DEFAULT_VERSION = "m143-da51f0d60e-5"
 REQUIRED_LIBRARIES = ("skia", "svg", "skshaper", "skunicode_core", "skunicode_icu")
 
 
@@ -152,14 +153,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("windows", "linux", "macos", "android"), required=True)
     parser.add_argument("--arch", choices=("x64", "arm64"), required=True)
-    parser.add_argument("--version", default="latest")
+    parser.add_argument("--version", default=DEFAULT_VERSION)
     parser.add_argument("--resolve-only", action="store_true")
     parser.add_argument("--metadata", type=Path)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
     root = repo / ".cache" / "skia" / f"{args.platform}-{args.arch}"
     metadata_file = args.metadata or root.parent / f"{args.platform}-{args.arch}-release.json"
-    if args.resolve_only or not metadata_file.is_file():
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8")) if metadata_file.is_file() else None
+    if (args.resolve_only or metadata is None or
+            args.version != "latest" and metadata.get("tag") != args.version):
         metadata = resolve(args.platform, args.arch, args.version)
         metadata_file.parent.mkdir(parents=True, exist_ok=True)
         metadata_file.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

@@ -25,12 +25,12 @@ replication_encode_ownership :: proc(
 	replication_put_u32(bytes, entity.id)
 	replication_put_u32(bytes, entity.owner_id)
 	append(bytes, entity.owned_as_model ? u8(1) : u8(0))
-	replication_put_f32(bytes, linear.x)
-	replication_put_f32(bytes, linear.y)
-	replication_put_f32(bytes, linear.z)
-	replication_put_f32(bytes, angular.x)
-	replication_put_f32(bytes, angular.y)
-	replication_put_f32(bytes, angular.z)
+	replication_put_f64(bytes, linear.x)
+	replication_put_f64(bytes, linear.y)
+	replication_put_f64(bytes, linear.z)
+	replication_put_f64(bytes, angular.x)
+	replication_put_f64(bytes, angular.y)
+	replication_put_f64(bytes, angular.z)
 }
 
 replication_broadcast_ownership :: proc(service: ^ReplicatorService, entity: ^Replication_Entity) {
@@ -249,7 +249,7 @@ replication_transfer_group :: proc(
 			linear, angular := entity.pending_linear_velocity, entity.pending_angular_velocity
 			replication_put_u32(&bytes, entity.id)
 			append(&bytes, entity.owned_as_model ? u8(1) : u8(0))
-			values := [18]f32 {
+			values := [18]f64 {
 				frame.x,
 				frame.y,
 				frame.z,
@@ -270,7 +270,7 @@ replication_transfer_group :: proc(
 				angular.z,
 			}
 			for value in values {
-				replication_put_f32(&bytes, value)
+				replication_put_f64(&bytes, value)
 			}
 		}
 		if len(bytes) > 4 {
@@ -295,7 +295,7 @@ replication_reclaim_disconnected_owner :: proc(service: ^ReplicatorService, owne
 	replication_transfer_group(service, parts[:], 0)
 }
 
-OWNERSHIP_RECORD_BYTES :: 4 + 1 + 18 * 4
+OWNERSHIP_RECORD_BYTES :: 4 + 1 + 18 * 8
 
 replication_receive_group_ownership :: proc(
 	service: ^ReplicatorService,
@@ -310,28 +310,28 @@ replication_receive_group_ownership :: proc(
 		entity := replication_entity_by_id(service, replication_read_u32(reader))
 		model := replication_read_u8(reader) != 0
 		frame := datatypes.CFrame {
-			x   = replication_read_f32(reader),
-			y   = replication_read_f32(reader),
-			z   = replication_read_f32(reader),
-			r00 = replication_read_f32(reader),
-			r01 = replication_read_f32(reader),
-			r02 = replication_read_f32(reader),
-			r10 = replication_read_f32(reader),
-			r11 = replication_read_f32(reader),
-			r12 = replication_read_f32(reader),
-			r20 = replication_read_f32(reader),
-			r21 = replication_read_f32(reader),
-			r22 = replication_read_f32(reader),
+			x   = replication_read_f64(reader),
+			y   = replication_read_f64(reader),
+			z   = replication_read_f64(reader),
+			r00 = replication_read_f64(reader),
+			r01 = replication_read_f64(reader),
+			r02 = replication_read_f64(reader),
+			r10 = replication_read_f64(reader),
+			r11 = replication_read_f64(reader),
+			r12 = replication_read_f64(reader),
+			r20 = replication_read_f64(reader),
+			r21 = replication_read_f64(reader),
+			r22 = replication_read_f64(reader),
 		}
 		linear := datatypes.Vector3 {
-			replication_read_f32(reader),
-			replication_read_f32(reader),
-			replication_read_f32(reader),
+			replication_read_f64(reader),
+			replication_read_f64(reader),
+			replication_read_f64(reader),
 		}
 		angular := datatypes.Vector3 {
-			replication_read_f32(reader),
-			replication_read_f32(reader),
-			replication_read_f32(reader),
+			replication_read_f64(reader),
+			replication_read_f64(reader),
+			replication_read_f64(reader),
 		}
 		if entity == nil ||
 		   entity.object == nil ||
@@ -438,12 +438,12 @@ replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
 			}
 		}
 		count := f32(len(group))
-		center.x /= count
-		center.y /= count
-		center.z /= count
+		center.x /= f64(count)
+		center.y /= f64(count)
+		center.z /= f64(count)
 
-		nearest_id, nearest_sq := u32(0), acquire_sq
-		current_sq: f32
+		nearest_id, nearest_sq := u32(0), f64(acquire_sq)
+		current_sq: f64
 		current_found := false
 		if !anchored {
 			for &peer in service.peers {
@@ -466,7 +466,7 @@ replication_auto_ownership_step :: proc(service: ^ReplicatorService) {
 		if anchored ||
 		   current == 0 ||
 		   !current_found ||
-		   current_sq > release_sq ||
+		   current_sq > f64(release_sq) ||
 		   (nearest_id != 0 && nearest_id != current && nearest_sq * 4 < current_sq) {
 			target = nearest_id
 		}

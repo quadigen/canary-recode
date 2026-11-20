@@ -1533,7 +1533,7 @@ kne_datatypes_get_vector2 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32
 		return {}
 	}
 	x, y, _ := vm.ArgVector3(state, int(index))
-	return KNE_Vector2{x, y}
+	return KNE_Vector2{f32(x), f32(y)}
 }
 
 kne_datatypes_get_vector3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Vector3 {

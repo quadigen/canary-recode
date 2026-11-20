@@ -2,11 +2,11 @@ package datatypes
 import "core:math"
 
 CFrame :: struct {
-    x, y, z: f32,
+    x, y, z: f64,
 
-    r00, r01, r02: f32,
-    r10, r11, r12: f32,
-    r20, r21, r22: f32,
+    r00, r01, r02: f64,
+    r10, r11, r12: f64,
+    r20, r21, r22: f64,
 }
 
 
@@ -58,7 +58,7 @@ cframe_v3_sub :: proc(a, b: Vector3) -> Vector3 {
 }
 
 
-cframe_v3_mul :: proc(v: Vector3, scalar: f32) -> Vector3 {
+cframe_v3_mul :: proc(v: Vector3, scalar: f64) -> Vector3 {
     return Vector3{
         v.x * scalar,
         v.y * scalar,
@@ -67,7 +67,7 @@ cframe_v3_mul :: proc(v: Vector3, scalar: f32) -> Vector3 {
 }
 
 
-cframe_v3_dot :: proc(a, b: Vector3) -> f32 {
+cframe_v3_dot :: proc(a, b: Vector3) -> f64 {
     return a.x * b.x +
            a.y * b.y +
            a.z * b.z
@@ -83,12 +83,12 @@ cframe_v3_cross :: proc(a, b: Vector3) -> Vector3 {
 }
 
 
-cframe_v3_magnitude_squared :: proc(v: Vector3) -> f32 {
+cframe_v3_magnitude_squared :: proc(v: Vector3) -> f64 {
     return cframe_v3_dot(v, v)
 }
 
 
-cframe_v3_magnitude :: proc(v: Vector3) -> f32 {
+cframe_v3_magnitude :: proc(v: Vector3) -> f64 {
     return math.sqrt(cframe_v3_magnitude_squared(v))
 }
 
@@ -104,7 +104,7 @@ cframe_v3_unit :: proc(v: Vector3) -> Vector3 {
 }
 
 
-cframe_clamp :: proc(x, minimum, maximum: f32) -> f32 {
+cframe_clamp :: proc(x, minimum, maximum: f64) -> f64 {
     if x < minimum {
         return minimum
     }
@@ -122,7 +122,7 @@ cframe_clamp :: proc(x, minimum, maximum: f32) -> f32 {
 //
 
 cframe_quat :: struct {
-    x, y, z, w: f32,
+    x, y, z, w: f64,
 }
 
 
@@ -225,7 +225,7 @@ cframe_from_quat :: proc(position: Vector3, input: cframe_quat) -> CFrame {
 }
 
 
-cframe_quat_slerp :: proc(a_input, b_input: cframe_quat, alpha: f32) -> cframe_quat {
+cframe_quat_slerp :: proc(a_input, b_input: cframe_quat, alpha: f64) -> cframe_quat {
     a := cframe_quat_normalize(a_input)
     b := cframe_quat_normalize(b_input)
 
@@ -297,7 +297,7 @@ CFrame_New_Position :: proc(position: Vector3) -> CFrame {
 }
 
 
-CFrame_New_XYZ :: proc(x, y, z: f32) -> CFrame {
+CFrame_New_XYZ :: proc(x, y, z: f64) -> CFrame {
     result := CFrame_Identity
 
     result.x = x
@@ -309,8 +309,8 @@ CFrame_New_XYZ :: proc(x, y, z: f32) -> CFrame {
 
 
 CFrame_New_Quaternion :: proc(
-    x, y, z: f32,
-    qx, qy, qz, qw: f32,
+    x, y, z: f64,
+    qx, qy, qz, qw: f64,
 ) -> CFrame {
     return cframe_from_quat(
         Vector3{x, y, z},
@@ -320,11 +320,11 @@ CFrame_New_Quaternion :: proc(
 
 
 CFrame_New_Matrix :: proc(
-    x, y, z: f32,
+    x, y, z: f64,
 
-    r00, r01, r02: f32,
-    r10, r11, r12: f32,
-    r20, r21, r22: f32,
+    r00, r01, r02: f64,
+    r10, r11, r12: f64,
+    r20, r21, r22: f64,
 ) -> CFrame {
     return CFrame{
         x = x,
@@ -562,7 +562,7 @@ CFrame_Sub_Vector3 :: proc(cf: CFrame, offset: Vector3) -> CFrame {
 // Axis rotations
 //
 
-cframe_rotation_x :: proc(angle: f32) -> CFrame {
+cframe_rotation_x :: proc(angle: f64) -> CFrame {
     c := math.cos(angle)
     s := math.sin(angle)
 
@@ -578,7 +578,7 @@ cframe_rotation_x :: proc(angle: f32) -> CFrame {
 }
 
 
-cframe_rotation_y :: proc(angle: f32) -> CFrame {
+cframe_rotation_y :: proc(angle: f64) -> CFrame {
     c := math.cos(angle)
     s := math.sin(angle)
 
@@ -594,7 +594,7 @@ cframe_rotation_y :: proc(angle: f32) -> CFrame {
 }
 
 
-cframe_rotation_z :: proc(angle: f32) -> CFrame {
+cframe_rotation_z :: proc(angle: f64) -> CFrame {
     c := math.cos(angle)
     s := math.sin(angle)
 
@@ -615,7 +615,7 @@ cframe_rotation_z :: proc(angle: f32) -> CFrame {
 //
 
 CFrame_FromEulerAngles_Order :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
     order: RotationOrder,
 ) -> CFrame {
     x_cf := cframe_rotation_x(rx)
@@ -665,7 +665,7 @@ CFrame_FromEulerAngles_Order :: proc(
 
 
 CFrame_FromEulerAngles_Default :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
 ) -> CFrame {
     return CFrame_FromEulerAngles_Order(
         rx,
@@ -683,7 +683,7 @@ CFrame_FromEulerAngles :: proc{
 
 
 CFrame_FromEulerAnglesXYZ :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
 ) -> CFrame {
     return CFrame_FromEulerAngles_Order(
         rx,
@@ -695,14 +695,14 @@ CFrame_FromEulerAnglesXYZ :: proc(
 
 
 CFrame_Angles :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
 ) -> CFrame {
     return CFrame_FromEulerAnglesXYZ(rx, ry, rz)
 }
 
 
 CFrame_FromEulerAnglesYXZ :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
 ) -> CFrame {
     return CFrame_FromEulerAngles_Order(
         rx,
@@ -714,7 +714,7 @@ CFrame_FromEulerAnglesYXZ :: proc(
 
 
 CFrame_FromOrientation :: proc(
-    rx, ry, rz: f32,
+    rx, ry, rz: f64,
 ) -> CFrame {
     return CFrame_FromEulerAnglesYXZ(rx, ry, rz)
 }
@@ -726,7 +726,7 @@ CFrame_FromOrientation :: proc(
 
 CFrame_FromAxisAngle :: proc(
     axis_input: Vector3,
-    angle: f32,
+    angle: f64,
 ) -> CFrame {
     axis := cframe_v3_unit(axis_input)
 
@@ -907,7 +907,7 @@ CFrame_FromRotationBetweenVectors :: proc(
 
         return CFrame_FromAxisAngle(
             cframe_v3_unit(axis),
-            f32(math.PI),
+            f64(math.PI),
         )
     }
 
@@ -1092,7 +1092,7 @@ CFrame_Orthonormalize :: proc(cf: CFrame) -> CFrame {
 CFrame_Lerp :: proc(
     cf: CFrame,
     goal: CFrame,
-    alpha: f32,
+    alpha: f64,
 ) -> CFrame {
     position := Vector3{
         cf.x + (goal.x - cf.x) * alpha,
@@ -1116,10 +1116,10 @@ CFrame_Lerp :: proc(
 CFrame_GetComponents :: proc(
     cf: CFrame,
 ) -> (
-    x, y, z: f32,
-    r00, r01, r02: f32,
-    r10, r11, r12: f32,
-    r20, r21, r22: f32,
+    x, y, z: f64,
+    r00, r01, r02: f64,
+    r10, r11, r12: f64,
+    r20, r21, r22: f64,
 ) {
     return cf.x, cf.y, cf.z,
         cf.r00, cf.r01, cf.r02,
@@ -1131,10 +1131,10 @@ CFrame_GetComponents :: proc(
 CFrame_Components :: proc(
     cf: CFrame,
 ) -> (
-    x, y, z: f32,
-    r00, r01, r02: f32,
-    r10, r11, r12: f32,
-    r20, r21, r22: f32,
+    x, y, z: f64,
+    r00, r01, r02: f64,
+    r10, r11, r12: f64,
+    r20, r21, r22: f64,
 ) {
     return CFrame_GetComponents(cf)
 }
@@ -1147,7 +1147,7 @@ CFrame_Components :: proc(
 CFrame_ToEulerAngles_Order :: proc(
     cf: CFrame,
     order: RotationOrder,
-) -> (rx, ry, rz: f32) {
+) -> (rx, ry, rz: f64) {
     switch order {
 
     case .XYZ:
@@ -1252,7 +1252,7 @@ CFrame_ToEulerAngles_Order :: proc(
 
 CFrame_ToEulerAngles_Default :: proc(
     cf: CFrame,
-) -> (rx, ry, rz: f32) {
+) -> (rx, ry, rz: f64) {
     return CFrame_ToEulerAngles_Order(
         cf,
         .XYZ,
@@ -1268,7 +1268,7 @@ CFrame_ToEulerAngles :: proc{
 
 CFrame_ToEulerAnglesXYZ :: proc(
     cf: CFrame,
-) -> (rx, ry, rz: f32) {
+) -> (rx, ry, rz: f64) {
     return CFrame_ToEulerAngles_Order(
         cf,
         .XYZ,
@@ -1278,7 +1278,7 @@ CFrame_ToEulerAnglesXYZ :: proc(
 
 CFrame_ToEulerAnglesYXZ :: proc(
     cf: CFrame,
-) -> (rx, ry, rz: f32) {
+) -> (rx, ry, rz: f64) {
     return CFrame_ToEulerAngles_Order(
         cf,
         .YXZ,
@@ -1288,7 +1288,7 @@ CFrame_ToEulerAnglesYXZ :: proc(
 
 CFrame_ToOrientation :: proc(
     cf: CFrame,
-) -> (rx, ry, rz: f32) {
+) -> (rx, ry, rz: f64) {
     return CFrame_ToEulerAnglesYXZ(cf)
 }
 
@@ -1299,7 +1299,7 @@ CFrame_ToOrientation :: proc(
 
 CFrame_ToAxisAngle :: proc(
     cf: CFrame,
-) -> (axis: Vector3, angle: f32) {
+) -> (axis: Vector3, angle: f64) {
     q := cframe_quat_from_cframe(cf)
 
     // Keep result angle in [0, pi].
@@ -1338,7 +1338,7 @@ CFrame_ToAxisAngle :: proc(
 
 CFrame_AngleBetween :: proc(
     a, b: CFrame,
-) -> f32 {
+) -> f64 {
     relative := CFrame_Mul_CFrame(
         CFrame_Inverse(a),
         b,
@@ -1355,7 +1355,7 @@ CFrame_AngleBetween :: proc(
 //
 
 cframe_float_fuzzy_eq :: proc(
-    a, b, epsilon: f32,
+    a, b, epsilon: f64,
 ) -> bool {
     if a == b {
         return true
@@ -1368,7 +1368,7 @@ cframe_float_fuzzy_eq :: proc(
 
 CFrame_FuzzyEq_Epsilon :: proc(
     a, b: CFrame,
-    epsilon: f32,
+    epsilon: f64,
 ) -> bool {
     if !cframe_float_fuzzy_eq(a.x, b.x, epsilon) ||
        !cframe_float_fuzzy_eq(a.y, b.y, epsilon) ||

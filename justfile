@@ -75,6 +75,13 @@ android:
 run: build
     ./build/kinemium{{exe}}
 
+# Use the sibling editor checkout directly while developing, without GitHub or the remote archive.
+build-local-editor editor_dir="../kinemium-editor/internal":
+    odin build src -o:speed -out:build/kinemium{{exe}} -define:EDITOR_MODULES="{{editor_dir}}" -define:EDITOR_COMPONENTS="{{editor_dir}}/Components"
+
+run-local-editor editor_dir="../kinemium-editor/internal": (build-local-editor editor_dir)
+    ./build/kinemium{{exe}}
+
 run-debug: debug
     ./build/kinemium-debug{{exe}}
 
@@ -91,6 +98,7 @@ tests_services := '''
     physics_collider_smoke
     capsule_part_smoke
     workspace_physics_smoke
+    part_gravity_smoke
     aerodynamics_service_smoke
     aseprite_service_smoke
     playtest_tree_smoke

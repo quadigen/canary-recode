@@ -223,7 +223,7 @@ has_name :: proc(names: [dynamic]string, name: string) -> bool {
 // client_position_error returns how far each named part has drifted from where
 // the server put it, measured on the client. LOD is only allowed to affect how
 // often a part is updated, so the far part is expected to trail the near one.
-client_position_error :: proc(pair: ^Pair, near_name, far_name: string) -> (near, far: f32) {
+client_position_error :: proc(pair: ^Pair, near_name, far_name: string) -> (near, far: f64) {
 	descriptor := services.Find_Service(&pair.client.services, "Workspace")
 	workspace := cast(^services.Workspace)descriptor.object
 	for &child in workspace.children {
@@ -239,7 +239,7 @@ client_position_error :: proc(pair: ^Pair, near_name, far_name: string) -> (near
 	return
 }
 
-server_part_z :: proc(pair: ^Pair, name: string) -> f32 {
+server_part_z :: proc(pair: ^Pair, name: string) -> f64 {
 	return server_part_by_name(pair, name).cframe.z
 }
 
@@ -392,10 +392,10 @@ workspace:FindFirstChild("Distant").CFrame = CFrame.new(300, 0, 0)
 	// The motion is driven from Odin rather than from a Luau task.wait, because
 	// this harness calls the VM synchronously and a yield would cross the
 	// metamethod boundary.
-	near_worst: f32 = 0
-	distant_worst: f32 = 0
+	near_worst: f64 = 0
+	distant_worst: f64 = 0
 	for step in 1 ..= 120 {
-		z := f32(step) * 1.2
+		z := f64(step) * 1.2
 		server_part_by_name(&pair, "Near").cframe = datatypes.CFrame_New_XYZ(40, 0, z)
 		server_part_by_name(&pair, "Distant").cframe = datatypes.CFrame_New_XYZ(300, 0, z)
 		settle(&pair.server, &pair.server_vm, &pair.client, &pair.client_vm, 1)

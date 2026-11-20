@@ -9,7 +9,7 @@ import "core:math"
 
 character_translate :: proc(model: ^classes.CharacterModel, dx, dy, dz: f32) {
 	if model == nil || model.destroyed {return}
-	delta := datatypes.CFrame_New_Position({dx, dy, dz})
+	delta := datatypes.CFrame_New_Position({f64(dx), f64(dy), f64(dz)})
 	classes.Model_Transform_Children(&model.object, delta, nil)
 }
 
@@ -45,15 +45,15 @@ character_send_input :: proc(service: ^ReplicatorService) -> bool {
 	length_squared := direction.x * direction.x + direction.z * direction.z
 	if length_squared > 1 {
 		scale := 1 / f32(math.sqrt(length_squared))
-		direction.x *= scale
-		direction.z *= scale
+		direction.x *= f64(scale)
+		direction.z *= f64(scale)
 	}
 	bytes: [dynamic]u8
 	defer delete(bytes)
 
 	replication_put_u32(&bytes, characters.input_sequence)
-	replication_put_f32(&bytes, direction.x)
-	replication_put_f32(&bytes, direction.z)
+	replication_put_f32(&bytes, f32(direction.x))
+	replication_put_f32(&bytes, f32(direction.z))
 	append(&bytes, characters.jump_queued ? u8(1) : u8(0))
 	if replication_send(service, service.remote, 9, bytes[:], false) {
 		root := classes.CharacterModel_Root(players.local_player.character)
@@ -98,11 +98,11 @@ character_reconcile :: proc(
 	if !characters.authoritative_received {
 		character_translate(
 			model,
-			frame.x - root.cframe.x,
-			frame.y - root.cframe.y,
-			frame.z - root.cframe.z,
+			f32(frame.x - root.cframe.x),
+			f32(frame.y - root.cframe.y),
+			f32(frame.z - root.cframe.z),
 		)
-		players.local_player.ground_y = frame.y
+		players.local_player.ground_y = f32(frame.y)
 		characters.authoritative_received = true
 		return
 	}
@@ -114,13 +114,13 @@ character_reconcile :: proc(
 	}
 	dx, dy, dz: f32
 	if predicted != nil {
-		dx = frame.x - predicted.position.x
-		dy = frame.y - predicted.position.y
-		dz = frame.z - predicted.position.z
+		dx = f32(frame.x - predicted.position.x)
+		dy = f32(frame.y - predicted.position.y)
+		dz = f32(frame.z - predicted.position.z)
 	} else {
-		dx = frame.x - root.cframe.x
-		dy = frame.y - root.cframe.y
-		dz = frame.z - root.cframe.z
+		dx = f32(frame.x - root.cframe.x)
+		dy = f32(frame.y - root.cframe.y)
+		dz = f32(frame.z - root.cframe.z)
 	}
 	for len(characters.predictions) > 0 &&
 	    transmute(i32)(ack - characters.predictions[0].sequence) >= 0 {
@@ -135,9 +135,9 @@ character_reconcile :: proc(
 	dz *= scale
 	character_translate(model, dx, dy, dz)
 	for &item in characters.predictions {
-		item.position.x += dx
-		item.position.y += dy
-		item.position.z += dz
+		item.position.x += f64(dx)
+		item.position.y += f64(dy)
+		item.position.z += f64(dz)
 	}
 }
 
@@ -179,7 +179,7 @@ character_receive_input :: proc(
 		move_x *= scale
 		move_z *= scale
 	}
-	player.move_direction = datatypes.Vector3{move_x, 0, move_z}
+	player.move_direction = datatypes.Vector3{f64(move_x), 0, f64(move_z)}
 	if jump {player.jump_queued = true}
 }
 
@@ -210,7 +210,7 @@ character_ground_rest_y :: proc(
 	direction := datatypes.Vector3{0, -2048, 0}
 	result, hit := Physics_Raycast(physics, workspace, origin, direction, &params)
 	if !hit {return 0, false}
-	return result.Position.y + root.size.y * 0.5, true
+	return f32(result.Position.y + root.size.y * 0.5), true
 }
 
 character_client_authoritative :: proc(
@@ -254,7 +254,7 @@ CharacterController_Ground_Cast :: proc(
 	body_id: kineffi.JPH_BodyID,
 	hit: bool,
 ) {
-	rest_y = position.y
+	rest_y = f32(position.y)
 	normal = datatypes.Vector3{0, 1, 0}
 	body_id = kineffi.JPH_BODY_ID_INVALID
 	if physics == nil || coll == nil || !coll.body_created || coll.shape == nil {return}
@@ -264,13 +264,13 @@ CharacterController_Ground_Cast :: proc(
 		physics,
 		coll,
 		origin,
-		datatypes.Vector3{0, -distance, 0},
+		datatypes.Vector3{0, f64(-distance), 0},
 	)
 	if !did_hit {return}
 	length := datatypes.Vec3_Magnitude(contact_normal)
 	if length <= 0.0001 {return}
 	normal = datatypes.Vec3_Divide(contact_normal, length)
-	rest_y = contact.y
+	rest_y = f32(contact.y)
 	body_id = contact_body
 	hit = true
 	return
@@ -308,10 +308,10 @@ CharacterController_Sweep :: proc(
 		normal_length := datatypes.Vec3_Magnitude(contact_normal)
 		if normal_length <= 0.0001 {break}
 		normal := datatypes.Vec3_Divide(contact_normal, normal_length)
-		advance := max(fraction * length - classes.COLLISION_SKIN, 0)
+		advance := max(f64(fraction) * length - classes.COLLISION_SKIN, 0)
 		position = datatypes.Vec3_Add(position, datatypes.Vec3_Multiply(direction, advance))
 		remaining = datatypes.Vec3_Multiply(direction, length - advance)
-		if normal.y >= walkable_cos {
+		if normal.y >= f64(walkable_cos) {
 
 
 			into := datatypes.Vec3_Dot(remaining, normal)
@@ -321,7 +321,7 @@ CharacterController_Sweep :: proc(
 					datatypes.Vec3_Multiply(normal, into),
 				)
 			}
-		} else if normal.y <= -walkable_cos {
+		} else if normal.y <= f64(-walkable_cos) {
 
 			remaining.y = 0
 		} else {
@@ -355,7 +355,7 @@ CharacterController_Ground_Probe :: proc(
 	normal: datatypes.Vector3,
 	body_id: kineffi.JPH_BodyID,
 ) {
-	rest_y = position.y
+	rest_y = f32(position.y)
 	normal = datatypes.Vector3{0, 1, 0}
 	body_id = kineffi.JPH_BODY_ID_INVALID
 	if gd == nil {return}
@@ -366,10 +366,10 @@ CharacterController_Ground_Probe :: proc(
 		position,
 	)
 	if hit {
-		gd.slope_angle = math.to_degrees(math.acos(clamp(hit_normal.y, -1, 1)))
+		gd.slope_angle = f32(math.to_degrees(math.acos(clamp(hit_normal.y, -1, 1))))
 		body_id = hit_body
 	}
-	grounded = hit && hit_normal.y >= CharacterController_Walkable_Cos(max_slope_angle)
+	grounded = hit && hit_normal.y >= f64(CharacterController_Walkable_Cos(max_slope_angle))
 	if grounded {
 		rest_y = hit_rest
 		normal = hit_normal
@@ -467,11 +467,11 @@ CharacterController_Tick :: proc(
 	if collision != nil && collision.body_created && collision.shape != nil {
 
 
-		move := datatypes.Vector3{move_dir.x * dt, 0, move_dir.z * dt}
+		move := datatypes.Vector3{move_dir.x * f64(dt), 0, move_dir.z * f64(dt)}
 
 
-		move.x += cc.knockback.x * dt
-		move.z += cc.knockback.z * dt
+		move.x += cc.knockback.x * f64(dt)
+		move.z += cc.knockback.z * f64(dt)
 		if grounded && ground_normal.y > 0.0001 {
 			move.y = -(move.x * ground_normal.x + move.z * ground_normal.z) / ground_normal.y
 		}
@@ -522,7 +522,7 @@ CharacterController_Tick :: proc(
 
 
 		if cc.vertical_speed != 0 {
-			vertical := datatypes.Vector3{0, cc.vertical_speed * dt, 0}
+			vertical := datatypes.Vector3{0, f64(cc.vertical_speed * dt), 0}
 			applied_vertical := CharacterController_Sweep(
 				physics,
 				collision,
@@ -549,40 +549,40 @@ CharacterController_Tick :: proc(
 			if tracking_contacts {
 				Physics_Character_Report_Contact(physics, collision, root, settle_body)
 			}
-			if settle_normal.y >= CharacterController_Walkable_Cos(cc.max_slope_angle) &&
+			if settle_normal.y >= f64(CharacterController_Walkable_Cos(cc.max_slope_angle)) &&
 			   cc.vertical_speed <= 0 {
-				position.y = settle_y
+				position.y = f64(settle_y)
 				cc.vertical_speed = 0
 				if ground != nil {
 					ground.grounded = true
 					ground.rest_y = settle_y
-					ground.slope_angle = math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1)))
+					ground.slope_angle = f32(math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1))))
 				}
 			}
 		}
 	} else {
-		position.x += move_dir.x * dt
-		position.z += move_dir.z * dt
-		position.y += cc.vertical_speed * dt
+		position.x += move_dir.x * f64(dt)
+		position.z += move_dir.z * f64(dt)
+		position.y += f64(cc.vertical_speed * dt)
 	}
 	yaw: f32
 	_, current_yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(root.cframe)
-	yaw = math.to_degrees(current_yaw)
+	yaw = f32(math.to_degrees(current_yaw))
 	if rotation != nil && cc.auto_rotate {
 		if move_dir.x != 0 || move_dir.z != 0 {
 			classes.RotationController_Set_Target(rotation, move_dir)
 		}
 		yaw = classes.RotationController_Step(rotation, dt)
 	}
-	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, math.to_radians(yaw), 0)
+	cf := datatypes.CFrame_FromEulerAnglesYXZ(0, f64(math.to_radians(yaw)), 0)
 	cf.x = position.x
 	cf.y = position.y
 	cf.z = position.z
 	character_set_root_frame(root, cf)
 
 	knockback_damping := math.exp(-classes.CHARACTER_KNOCKBACK_DAMPING * dt)
-	cc.knockback.x *= knockback_damping
-	cc.knockback.z *= knockback_damping
+	cc.knockback.x *= f64(knockback_damping)
+	cc.knockback.z *= f64(knockback_damping)
 	if math.abs(cc.knockback.x) < 0.0001 {cc.knockback.x = 0}
 	if math.abs(cc.knockback.z) < 0.0001 {cc.knockback.z = 0}
 	if sm != nil {
@@ -653,7 +653,7 @@ CharacterMotor_Advance :: proc(
 		collision,
 		frame_start,
 		frame_end,
-		math.to_degrees(yaw),
+		f32(math.to_degrees(yaw)),
 		frame_dt,
 	)
 }
@@ -819,18 +819,18 @@ CharacterService_Step :: proc(service: ^CharacterService, delta_time: f32) {
 			player.ground_y = -1.0e20
 		}
 		rest_y := player.ground_y
-		if player.jump_queued && root.cframe.y <= rest_y + 0.05 {
+		if player.jump_queued && root.cframe.y <= f64(rest_y + 0.05) {
 			player.vertical_speed = player.jump_power
 		}
 		player.jump_queued = false
 		old_y := root.cframe.y
-		new_y := old_y + player.vertical_speed * dt
+		new_y := old_y + f64(player.vertical_speed * dt)
 		player.vertical_speed -= 50 * dt
-		if found && new_y <= rest_y {new_y = rest_y; player.vertical_speed = 0}
-		dx := player.move_direction.x * player.walk_speed * dt
+		if found && new_y <= f64(rest_y) {new_y = f64(rest_y); player.vertical_speed = 0}
+		dx := player.move_direction.x * f64(player.walk_speed) * f64(dt)
 		dy := new_y - old_y
-		dz := player.move_direction.z * player.walk_speed * dt
+		dz := player.move_direction.z * f64(player.walk_speed) * f64(dt)
 		if dx == 0 && dy == 0 && dz == 0 {continue}
-		character_translate(player.character, dx, dy, dz)
+		character_translate(player.character, f32(dx), f32(dy), f32(dz))
 	}
 }

@@ -462,10 +462,17 @@ struct KineTexHandle {
 
 constexpr size_t KINE_MAX_INSTANCE_COLORS = 64;
 
+// Keep GPU instance matrices small. Material batches never cross a spatial cell.
+static constexpr double KINE_RENDER_CELL_SIZE = 1024.0;
+static double kine_render_cell(double value) {
+ return std::floor(value / KINE_RENDER_CELL_SIZE) * KINE_RENDER_CELL_SIZE;
+}
+
 struct KineBatchKey {
 	KineMesh *mesh = nullptr;
 	KineFilamentShader *shader = nullptr;
 	uint64_t streamId = 0;
+	double originX = 0, originY = 0, originZ = 0;
 
 	int materialKind = 0;
 
@@ -481,6 +488,7 @@ struct KineBatchKey {
 
 	bool operator==(const KineBatchKey &o) const noexcept {
 		return mesh == o.mesh && shader == o.shader && streamId == o.streamId && materialKind == o.materialKind &&
+			   originX == o.originX && originY == o.originY && originZ == o.originZ &&
 			   param1 == o.param1 && param2 == o.param2 && param3 == o.param3 &&
 			   transmission == o.transmission && particleUvOffsetY == o.particleUvOffsetY &&
 			   castShadow == o.castShadow && receiveShadow == o.receiveShadow &&
@@ -494,6 +502,9 @@ struct KineBatchKeyHash {
 		auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
 		mix(std::hash<void *>()(k.shader));
 		mix(std::hash<uint64_t>()(k.streamId));
+		mix(std::hash<double>()(k.originX));
+		mix(std::hash<double>()(k.originY));
+		mix(std::hash<double>()(k.originZ));
 		mix(std::hash<int>()(k.materialKind));
 		mix(std::hash<float>()(k.param1));
 		mix(std::hash<float>()(k.param2));
@@ -513,6 +524,7 @@ struct KineBatchKeyHash {
 // render mode 2 is active. Mirrors what Filament renders, minus the materials
 // Ray has no equivalent for.
 struct KineRayQueuedDraw {
+	math::double3 worldPosition{};
 	KineMesh *mesh = nullptr;
 	bool importedMaterials = false;
 	KineFilamentShader *shader = nullptr;
@@ -579,6 +591,7 @@ struct KineFilamentInstanceBatch {
 };
 
 struct KineRetainedTerrainGrassDraw {
+    double worldPosition[3]{};
     KineMesh *terrain = nullptr;
     KineFilamentTex *texture = nullptr;
     float transform[16] = {};
@@ -1262,18 +1275,23 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 
   protected:
 	ExtensionSet getSwapchainInstanceExtensions() const override {
-		ExtensionSet extensions;
 		uint32_t count = 0;
 		char const *const *required = SDL_Vulkan_GetInstanceExtensions(&count);
+		// Filament 1.81 uses a fixed-capacity vector of immutable strings.
+		// Allow one additional slot for the macOS portability extension.
+		auto extensions = ExtensionSet::with_capacity(count + 1);
 		if (required) {
 			for (uint32_t i = 0; i < count; ++i) {
 				if (required[i]) {
-					extensions.emplace(utils::CString(required[i]));
+					extensions.emplace_back(required[i]);
 				}
 			}
 		}
 #if defined(__APPLE__)
-		extensions.emplace(utils::CString("VK_KHR_portability_enumeration"));
+		const utils::ImmutableCString portability("VK_KHR_portability_enumeration");
+		if (std::find(extensions.begin(), extensions.end(), portability) == extensions.end()) {
+			extensions.push_back(portability);
+		}
 #endif
 		return extensions;
 	}
@@ -4412,6 +4430,11 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 						kine_material_is_highlight_outline(key.materialKind) ? 0 : 1);
 				}
 				renderableBuilder.build(*ctx->engine, entity);
+				auto &tm = ctx->engine->getTransformManager();
+				auto ti = tm.getInstance(entity);
+				const auto origin = math::mat4::translation(math::double3{key.originX, key.originY, key.originZ});
+				if (ti.isValid()) tm.setTransform(ti, origin);
+				else tm.create(entity, {}, origin);
 
 				Scene *targetScene = kine_scene_for_kind(ctx, key.materialKind);
 				if (!targetScene) {
@@ -5253,6 +5276,9 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 	kine_init_gl_ext();
 #endif
 
+	// Keep entity translations accurate before any scene entities are created.
+	ctx->engine->enableAccurateTranslations();
+
 	if (ctx->useFilamentOwnedCompositor) {
 		fprintf(stderr, "[Kine] creating Filament-owned compositor swapchain size=%dx%d\n", width, height);
 
@@ -5291,6 +5317,7 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 	ctx->view->setScene(ctx->scene);
 	ctx->view->setVisibleLayers(0xff,0xff);
 	ctx->view->setCamera(ctx->camera);
+	ctx->view->setGridSize(1024.0);
 	ctx->view->setPostProcessingEnabled(true);
 
 	ctx->view->setDynamicLightingOptions(0.1f, 500.0f);
@@ -6651,7 +6678,7 @@ static bool kine_ray_upload(KineFilamentContext *ctx, int width, int height) {
 // Filament owns the light components, so Ray reads them back the same way the
 // raster pass does: one snapshot per frame, in creation order so the resulting
 // light hash is stable from frame to frame.
-static void kine_collect_ray_lights(KineFilamentContext *ctx, std::vector<KineRayLight> &out) {
+static void kine_collect_ray_lights(KineFilamentContext *ctx, std::vector<KineRayLight> &out, const math::double3 &origin) {
 	if (!ctx || !ctx->engine || !ctx->scene)
 		return;
 
@@ -6672,10 +6699,12 @@ static void kine_collect_ray_lights(KineFilamentContext *ctx, std::vector<KineRa
 
 		KineRayLight light{};
 		light.type = type == LightManager::Type::POINT ? 0 : 1;
-		const math::float3 &position = lm.getPosition(instance);
-		light.position[0] = position.x;
-		light.position[1] = position.y;
-		light.position[2] = position.z;
+		auto &tm = ctx->engine->getTransformManager();
+		auto ti = tm.getInstance(entity);
+		const auto position = ti.isValid() ? tm.getWorldTransformAccurate(ti)[3].xyz : math::double3(lm.getPosition(instance));
+		light.position[0] = float(position.x - origin.x);
+		light.position[1] = float(position.y - origin.y);
+		light.position[2] = float(position.z - origin.z);
 		const math::float3 &direction = lm.getDirection(instance);
 		light.direction[0] = direction.x;
 		light.direction[1] = direction.y;
@@ -6699,7 +6728,10 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 	ctx->rayFrameDraws.clear();
 	ctx->rayFrameDraws.reserve(ctx->rayDraws.size());
 
-	auto appendQueued = [ctx](const KineRayQueuedDraw &queued) {
+	const math::double3 origin{kine_render_cell(ctx->cameraEye.x), kine_render_cell(ctx->cameraEye.y), kine_render_cell(ctx->cameraEye.z)};
+    // deque keeps pointers valid while adding retained streams and imported sections.
+    std::deque<std::array<float, 16>> localTransforms;
+    auto appendQueued = [ctx, &localTransforms, &origin](const KineRayQueuedDraw &queued) {
 		KineMesh *mesh = queued.mesh;
 		if (!mesh || mesh->vertices.empty() || mesh->indices.empty() || mesh->indexCount == 0)
 			return;
@@ -6721,7 +6753,12 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 		draw.vertexCount = (int)mesh->vertices.size();
 		draw.indices = indices.data();
 		draw.indexCount = (int)indices.size();
-		draw.xform = queued.transform;
+		auto &local = localTransforms.emplace_back();
+		std::copy_n(queued.transform, 16, local.data());
+		local[3] = float(queued.worldPosition.x - origin.x);
+		local[7] = float(queued.worldPosition.y - origin.y);
+		local[11] = float(queued.worldPosition.z - origin.z);
+		draw.xform = local.data();
 		draw.color[0] = queued.color[0];
 		draw.color[1] = queued.color[1];
 		draw.color[2] = queued.color[2];
@@ -6805,9 +6842,9 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 		forwardY /= forwardLength;
 		forwardZ /= forwardLength;
 	}
-	frame.camera.origin[0] = (float)ctx->cameraEye.x;
-	frame.camera.origin[1] = (float)ctx->cameraEye.y;
-	frame.camera.origin[2] = (float)ctx->cameraEye.z;
+	frame.camera.origin[0] = float(ctx->cameraEye.x - origin.x);
+	frame.camera.origin[1] = float(ctx->cameraEye.y - origin.y);
+	frame.camera.origin[2] = float(ctx->cameraEye.z - origin.z);
 	frame.camera.forward[0] = (float)forwardX;
 	frame.camera.forward[1] = (float)forwardY;
 	frame.camera.forward[2] = (float)forwardZ;
@@ -6830,7 +6867,7 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 	frame.skyColor[2] = ctx->skyColor.z;
 
 	std::vector<KineRayLight> rayLights;
-	kine_collect_ray_lights(ctx, rayLights);
+	kine_collect_ray_lights(ctx, rayLights, origin);
 	frame.lights = rayLights.data();
 	frame.lightCount = (int)rayLights.size();
 
@@ -7230,6 +7267,16 @@ KINE_API void Kine_Filament_SetCameraLookAt(
 	ctx->camera->lookAt(ctx->cameraEye, ctx->cameraTarget, ctx->cameraUp);
 }
 
+KINE_API void Kine_Filament_SetCameraPose(
+ KineFilamentContext *ctx, double x, double y, double z,
+ double dx, double dy, double dz, double ux, double uy, double uz) {
+ if (!ctx || !ctx->camera) return;
+ ctx->cameraEye = {x, y, z};
+ ctx->cameraTarget = ctx->cameraEye + math::double3{dx, dy, dz};
+ ctx->cameraUp = {ux, uy, uz};
+ ctx->camera->lookAt(ctx->cameraEye, ctx->cameraTarget, ctx->cameraUp);
+}
+
 KINE_API bool Kine_Filament_BlitToScreen(KineFilamentContext *ctx, int dstX, int dstY, int dstWidth, int dstHeight) {
 #if KINE_FILAMENT_USE_VULKAN
 	(void)ctx;
@@ -7281,7 +7328,7 @@ KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext *ctx, float d
 
 KINE_API int Kine_Filament_CreateLight(
 	KineFilamentContext *ctx,
-	float px, float py, float pz,
+	double px, double py, double pz,
 	float cr, float cg, float cb,
 	float intensity,
 	float falloff) {
@@ -7298,7 +7345,7 @@ KINE_API int Kine_Filament_CreateLight(
 KINE_API int Kine_Filament_CreateLightEx(
 	KineFilamentContext *ctx,
 	int lightType,
-	float px, float py, float pz,
+	double px, double py, double pz,
 	float dx, float dy, float dz,
 	float cr, float cg, float cb,
 	float intensity,
@@ -7333,7 +7380,7 @@ KINE_API int Kine_Filament_CreateLightEx(
 	LightManager::Builder builder(type);
 	builder.color({std::max(0.0f, cr), std::max(0.0f, cg), std::max(0.0f, cb)})
 		.intensity(std::max(0.0f, intensity))
-		.position({px, py, pz})
+		.position({0, 0, 0})
 		.falloff(std::max(0.001f, falloff));
 	if (type != LightManager::Type::POINT) {
 		builder.direction({dx, dy, dz})
@@ -7345,6 +7392,10 @@ KINE_API int Kine_Filament_CreateLightEx(
 		return -1;
 	}
 
+	auto &tm = ctx->engine->getTransformManager();
+	auto ti = tm.getInstance(entity);
+	const auto transform = math::mat4::translation(math::double3{px, py, pz});
+	if (ti.isValid()) tm.setTransform(ti, transform); else tm.create(entity, {}, transform);
 	if (enabled)
 		ctx->scene->addEntity(entity);
 	ctx->lights.push_back(entity);
@@ -7508,7 +7559,7 @@ KINE_API bool Kine_Filament_SetDecalTiling(
 	return true;
 }
 
-KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext *ctx, int decal, float *mat4) {
+KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext *ctx, int decal, double *mat4) {
 	if (!ctx || !ctx->engine || !mat4)
 		return false;
 
@@ -7520,11 +7571,11 @@ KINE_API bool Kine_Filament_SetDecalTransform(KineFilamentContext *ctx, int deca
 	if (!rm.hasComponent(entity))
 		return false;
 
-	math::mat4f transform(
-		math::float4{mat4[0], mat4[4], mat4[8], mat4[12]},
-		math::float4{mat4[1], mat4[5], mat4[9], mat4[13]},
-		math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
-		math::float4{mat4[3], mat4[7], mat4[11], mat4[15]});
+	math::mat4 transform(
+		math::double4{mat4[0], mat4[4], mat4[8], mat4[12]},
+		math::double4{mat4[1], mat4[5], mat4[9], mat4[13]},
+		math::double4{mat4[2], mat4[6], mat4[10], mat4[14]},
+		math::double4{mat4[3], mat4[7], mat4[11], mat4[15]});
 
 	TransformManager &tm = ctx->engine->getTransformManager();
 	auto instance = tm.getInstance(entity);
@@ -7631,14 +7682,16 @@ KINE_API void Kine_Filament_SetFalloffLight(KineFilamentContext *ctx, int light,
 	lm.setFalloff(instance, falloff);
 }
 
-KINE_API void Kine_Filament_SetPositionLight(KineFilamentContext *ctx, int light, float x, float y, float z) {
+KINE_API void Kine_Filament_SetPositionLight(KineFilamentContext *ctx, int light, double x, double y, double z) {
 	if (!ctx || !ctx->engine)
 		return;
 	auto &lm = ctx->engine->getLightManager();
 	auto instance = lm.getInstance(Entity::import(light));
 	if (!instance.isValid())
 		return;
-	lm.setPosition(instance, {x, y, z});
+	auto &tm = ctx->engine->getTransformManager();
+	auto ti = tm.getInstance(Entity::import(light));
+	if (ti.isValid()) tm.setTransform(ti, math::mat4::translation(math::double3{x, y, z}));
 }
 
 KINE_API void Kine_Filament_SetDirectionLight(KineFilamentContext *ctx, int light, float x, float y, float z) {
@@ -8786,7 +8839,8 @@ static void kine_queue_mesh(
 	uint64_t streamId = 0,
 	float particleUvOffsetY = 0.0f,
 	KineBatchKey *outKey = nullptr,
-	float opacity = 1.0f) {
+	float opacity = 1.0f,
+	const double *worldPosition = nullptr) {
 	if (!ctx || !mesh || !mat4)
 		return;
 
@@ -8804,6 +8858,17 @@ static void kine_queue_mesh(
 	key.shader = shader && shader->ctx == ctx ? shader : nullptr;
 	if (key.shader) key.mesh = kine_refine_material_mesh(ctx, key.mesh, key.shader->subdivisionLevel);
 	key.streamId = streamId;
+	const double worldX = worldPosition ? worldPosition[0] : double(mat4[3]);
+	const double worldY = worldPosition ? worldPosition[1] : double(mat4[7]);
+	const double worldZ = worldPosition ? worldPosition[2] : double(mat4[11]);
+	if (!std::isfinite(worldX) || !std::isfinite(worldY) || !std::isfinite(worldZ)) return;
+	key.originX = kine_render_cell(worldX);
+	key.originY = kine_render_cell(worldY);
+	key.originZ = kine_render_cell(worldZ);
+	// Subtract in double precision before converting to GPU precision.
+	const float localX = float(worldX - key.originX);
+	const float localY = float(worldY - key.originY);
+	const float localZ = float(worldZ - key.originZ);
 	key.materialKind = materialKind;
 	key.param1 = param1;
 	key.param2 = param2;
@@ -8831,6 +8896,7 @@ static void kine_queue_mesh(
 		queued.importedMaterials=kine_uses_imported_materials(ctx,key);
 		queued.shader = key.shader;
 		memcpy(queued.transform, mat4, sizeof(queued.transform));
+		queued.worldPosition = {worldX, worldY, worldZ};
 		queued.color[0] = r;
 		queued.color[1] = g;
 		queued.color[2] = b;
@@ -8890,7 +8956,8 @@ static void kine_queue_mesh(
 	uint64_t instanceTransformHash = 1469598103934665603ULL;
 	for (size_t offset = 0; offset < 16; ++offset) {
 		uint32_t bits = 0;
-		memcpy(&bits, mat4 + offset, sizeof(bits));
+		const float component = offset == 3 ? localX : offset == 7 ? localY : offset == 11 ? localZ : mat4[offset];
+		memcpy(&bits, &component, sizeof(bits));
 		pending.transformHash ^= bits;
 		pending.transformHash *= 1099511628211ULL;
 		instanceTransformHash ^= bits;
@@ -8900,7 +8967,7 @@ static void kine_queue_mesh(
 		math::float4{mat4[0], mat4[4], mat4[8], mat4[12]},
 		math::float4{mat4[1], mat4[5], mat4[9], mat4[13]},
 		math::float4{mat4[2], mat4[6], mat4[10], mat4[14]},
-		math::float4{mat4[3], mat4[7], mat4[11], mat4[15]});
+		math::float4{localX, localY, localZ, mat4[15]});
 	pending.instanceTransformHashes.emplace_back(instanceTransformHash);
 
 	const bool useAlpha = kine_material_uses_instance_alpha(materialKind) && !(key.shader && key.shader->opacitySource);
@@ -8925,13 +8992,13 @@ static void kine_queue_mesh(
 	pending.uvScales.emplace_back(uvScale);
 
 	if (materialKind == KINE_MAT_TERRAIN) {
-		KineMesh *grass = kine_grass_get(ctx, (KineMesh *)mesh, mat4);
+		KineMesh *grass = kine_grass_get(ctx, (KineMesh *)mesh, mat4, worldPosition);
 		if (grass) {
 			KineBatchKey grassKey;
 			kine_queue_mesh(ctx, (KineFilamentMesh *)grass, KINE_MAT_DEFAULT,
 				1.0f, 1.0f, 1.0f, 0.85f, 0.0f, 1.0f, 0.0f,
 				mat4, false, true, true, tex, ctx->grassShader, streamId,
-				0.0f, &grassKey);
+				0.0f, &grassKey, 1.0f, worldPosition);
 			if (streamId != 0) {
 				auto &keys = ctx->retainedLists[streamId].keys;
 				if (std::find(keys.begin(), keys.end(), grassKey) == keys.end())
@@ -8968,12 +9035,13 @@ KINE_API void Kine_Filament_DrawMeshList(
 	KineFilamentContext *ctx,
 	const KineFilamentDrawItem *items,
 	uint32_t itemCount) {
-	static_assert(sizeof(KineFilamentDrawItem) == 128,
+	static_assert(sizeof(KineFilamentDrawItem) == 152,
 				  "KineFilamentDrawItem ABI must match filament/structs.luau");
 	static_assert(offsetof(KineFilamentDrawItem, transform) == 16 &&
 					  offsetof(KineFilamentDrawItem, materialKind) == 108 &&
 					  offsetof(KineFilamentDrawItem, flags) == 112 &&
-					  offsetof(KineFilamentDrawItem, shader) == 120,
+					  offsetof(KineFilamentDrawItem, shader) == 120 &&
+                          offsetof(KineFilamentDrawItem, worldPosition) == 128,
 				  "KineFilamentDrawItem field offsets must match filament/structs.luau");
 
 	if (!ctx || !items || itemCount == 0)
@@ -8990,7 +9058,8 @@ KINE_API void Kine_Filament_DrawMeshList(
 			(item.flags & KINE_FILAMENT_DRAW_RECEIVE_SHADOWS) != 0,
 			(item.flags & KINE_FILAMENT_DRAW_CULLING) != 0,
 			item.tex,
-			item.shader, 0, 0.0f, nullptr, kine_draw_opacity(item.reserved));
+			item.shader, 0, 0.0f, nullptr, kine_draw_opacity(item.reserved),
+            (item.flags & KINE_FILAMENT_DRAW_WORLD_POSITION) ? item.worldPosition : nullptr);
 	}
 }
 
@@ -9005,7 +9074,7 @@ KINE_API void Kine_Filament_DrawParticles(
 	float uvOffsetY,
 	bool castShadows,
 	bool culling) {
-	static_assert(sizeof(KineFilamentParticleItem) == 68,
+	static_assert(sizeof(KineFilamentParticleItem) == 96,
 				  "KineFilamentParticleItem ABI must match filament/funcs.luau");
 	static_assert(offsetof(KineFilamentParticleItem, r) == 64,
 				  "KineFilamentParticleItem color offset must match filament/funcs.luau");
@@ -9039,7 +9108,7 @@ KINE_API void Kine_Filament_DrawParticles(
 			texture,
 			nullptr,
 			0,
-			uvOffsetY);
+			uvOffsetY, nullptr, 1.0f, item.worldPosition);
 	}
 }
 
@@ -9050,7 +9119,7 @@ static void kine_update_retained_grass_stream(KineFilamentContext *ctx,
                                                uint64_t streamId) {
     for (KineRetainedTerrainGrassDraw &draw : state.terrainGrassDraws) {
         if (!draw.terrain) continue;
-        KineMesh *grass = kine_grass_get(ctx, draw.terrain, draw.transform);
+        KineMesh *grass = kine_grass_get(ctx, draw.terrain, draw.transform, draw.worldPosition);
         if (grass && (!draw.grassActive || draw.grassKey.mesh != grass)) {
             if (draw.grassActive) {
                 const KineBatchKey previous = draw.grassKey;
@@ -9061,7 +9130,7 @@ static void kine_update_retained_grass_stream(KineFilamentContext *ctx,
             kine_queue_mesh(ctx, (KineFilamentMesh *)grass, KINE_MAT_DEFAULT,
                 1.0f, 1.0f, 1.0f, 0.85f, 0.0f, 1.0f, 0.0f,
                 draw.transform, false, true, true, draw.texture,
-                ctx->grassShader, streamId, 0.0f, &grassKey);
+                ctx->grassShader, streamId, 0.0f, &grassKey, 1.0f, draw.worldPosition);
             if (std::find(state.keys.begin(), state.keys.end(), grassKey) == state.keys.end())
                 state.keys.push_back(grassKey);
             draw.grassKey = grassKey;
@@ -9128,16 +9197,19 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			item.shader,
 			streamId,
 			0.0f,
-			&key, kine_draw_opacity(item.reserved));
+			&key, kine_draw_opacity(item.reserved),
+            (item.flags & KINE_FILAMENT_DRAW_WORLD_POSITION) ? item.worldPosition : nullptr);
         if (item.materialKind == KINE_MAT_TERRAIN && item.mesh) {
             KineRetainedTerrainGrassDraw draw;
             draw.terrain = (KineMesh *)item.mesh;
             draw.texture = item.tex;
             memcpy(draw.transform, item.transform, sizeof(draw.transform));
+            for (int axis=0;axis<3;++axis) draw.worldPosition[axis] = (item.flags & KINE_FILAMENT_DRAW_WORLD_POSITION) ? item.worldPosition[axis] : item.transform[axis*4+3];
             if (draw.terrain->grassMesh) {
                 for (const KineBatchKey &grassKey : state.keys) {
                     if (grassKey.mesh == draw.terrain->grassMesh && grassKey.shader == ctx->grassShader &&
-                        grassKey.streamId == streamId) {
+                        grassKey.streamId == streamId && grassKey.originX == key.originX &&
+                        grassKey.originY == key.originY && grassKey.originZ == key.originZ) {
                         draw.grassActive = true;
                         draw.grassKey = grassKey;
                         break;
@@ -9352,7 +9424,7 @@ struct KineGizmoScreenPoint {
 	bool valid = false;
 };
 
-static math::mat4 kine_gizmo_model_matrix(const float *mat4) {
+static math::mat4 kine_gizmo_model_matrix(const double *mat4) {
 	return math::mat4(
 		math::double4{mat4[0], mat4[4], mat4[8], mat4[12]},
 		math::double4{mat4[1], mat4[5], mat4[9], mat4[13]},
@@ -9368,8 +9440,11 @@ static KineGizmoScreenPoint kine_gizmo_project(
 	if (!ctx || !ctx->camera)
 		return result;
 
-	const math::double4 clip = ctx->camera->getProjectionMatrix() *
-							   ctx->camera->getViewMatrix() * model * math::double4{point, 1.0};
+	math::mat4 relative = model;
+    relative[3].xyz -= ctx->cameraEye;
+    math::mat4 view = ctx->camera->getViewMatrix();
+    view[3] = math::double4{0, 0, 0, 1};
+    const math::double4 clip = ctx->camera->getProjectionMatrix() * view * relative * math::double4{point, 1.0};
 	if (clip.w <= 1e-8)
 		return result;
 
@@ -9434,7 +9509,7 @@ static const double KINE_GIZMO_AXIS_HANDOFF = 0.92;
 
 static const double KINE_GIZMO_TARGET_VIEWPORT_FRACTION = 0.125;
 
-static const double KINE_GIZMO_ACTIVE_BOOST = 1.18;
+static const double KINE_GIZMO_ACTIVE_BOOST = 1.0;
 
 static double kine_gizmo_view_scale(KineFilamentContext *ctx, double distance) {
 	if (!ctx || !ctx->camera || distance <= 1e-6)
@@ -9458,14 +9533,14 @@ static double kine_gizmo_view_scale(KineFilamentContext *ctx, double distance) {
 
 struct KineGizmoFrame {
 	math::mat4 model;
-	float scaled[16] = {};
+	double scaled[16] = {};
 
-	float boosted[16] = {};
+	double boosted[16] = {};
 	int hiddenAxis = KINE_GIZMO_AXIS_NONE;
 	int activePlane = KINE_GIZMO_AXIS_NONE;
 };
 
-static void kine_gizmo_scaled_matrix(const float *mat4, double scale, float *out) {
+static void kine_gizmo_scaled_matrix(const double *mat4, double scale, double *out) {
 	// The caller hands us a row-major rigid matrix, so the three basis vectors
 	// live in the top-left 3x3 (indices 0,1,2 / 4,5,6 / 8,9,10). Scale only
 	// those: the translation (indices 3,7,11) is the gizmo origin and must stay
@@ -9474,32 +9549,28 @@ static void kine_gizmo_scaled_matrix(const float *mat4, double scale, float *out
 		out[i] = mat4[i];
 	for (int row = 0; row < 3; ++row)
 		for (int col = 0; col < 3; ++col)
-			out[row * 4 + col] = (float)(mat4[row * 4 + col] * scale);
+			out[row * 4 + col] = mat4[row * 4 + col] * scale;
 }
 
-static KineGizmoFrame kine_gizmo_frame(KineFilamentContext *ctx, const float *mat4, int gizmoType) {
+static KineGizmoFrame kine_gizmo_frame(KineFilamentContext *ctx, const double *mat4, int gizmoType) {
 	KineGizmoFrame frame;
 	frame.model = kine_gizmo_model_matrix(mat4);
 	kine_gizmo_scaled_matrix(mat4, 1.0, frame.scaled);
 	if (!ctx || !ctx->camera)
 		return frame;
 
-	const math::mat4 view = ctx->camera->getViewMatrix();
-	const double t[3] = {view[3].x, view[3].y, view[3].z};
-	const math::double3 eye{
-		-(view[0].x * t[0] + view[0].y * t[1] + view[0].z * t[2]),
-		-(view[1].x * t[0] + view[1].y * t[1] + view[1].z * t[2]),
-		-(view[2].x * t[0] + view[2].y * t[1] + view[2].z * t[2]),
-	};
+	const math::double3 eye = ctx->cameraEye;
 
 	const math::double4 origin = frame.model * math::double4{0.0, 0.0, 0.0, 1.0};
 	const math::double3 toGizmo{origin.x - eye.x, origin.y - eye.y, origin.z - eye.z};
 	const double distance = std::sqrt(
 		toGizmo.x * toGizmo.x + toGizmo.y * toGizmo.y + toGizmo.z * toGizmo.z);
 
-	kine_gizmo_scaled_matrix(mat4, kine_gizmo_view_scale(ctx, distance), frame.scaled);
+	const auto view = ctx->camera->getViewMatrix();
+	const double depth = -(view[0].z * toGizmo.x + view[1].z * toGizmo.y + view[2].z * toGizmo.z);
+	kine_gizmo_scaled_matrix(mat4, kine_gizmo_view_scale(ctx, depth), frame.scaled);
 	kine_gizmo_scaled_matrix(
-		mat4, kine_gizmo_view_scale(ctx, distance) * KINE_GIZMO_ACTIVE_BOOST, frame.boosted);
+		mat4, kine_gizmo_view_scale(ctx, depth) * KINE_GIZMO_ACTIVE_BOOST, frame.boosted);
 
 	frame.model = kine_gizmo_model_matrix(frame.scaled);
 	if (distance <= 1e-6)
@@ -9573,7 +9644,7 @@ static bool kine_gizmo_point_in_quad(
 // ring's world axis points toward or away from the camera.
 static float kine_gizmo_rotate_delta(
 	KineFilamentContext *ctx,
-	const float *mat4,
+	const double *mat4,
 	int axis,
 	float startX, float startY, float currentX, float currentY) {
 	const int index = axis - KINE_GIZMO_AXIS_X;
@@ -9621,7 +9692,7 @@ static float kine_gizmo_rotate_delta(
 // Shapes reuse KINE_MAT_GIZMO, so they are unlit and batched into instances.
 // ---------------------------------------------------------------------------
 
-static const float KINE_IDENTITY_4X4[16] = {
+static const double KINE_IDENTITY_4X4[16] = {
 	1, 0, 0, 0,
 	0, 1, 0, 0,
 	0, 0, 1, 0,
@@ -9648,22 +9719,26 @@ static KineMesh *kine_dbg_prim(KineFilamentContext *ctx, int kind) {
 }
 
 static void kine_dbg_queue(
-	KineFilamentContext *ctx, KineMesh *mesh, const float *m,
+	KineFilamentContext *ctx, KineMesh *mesh, const double *m,
 	float r, float g, float b) {
 	if (!mesh)
 		return;
-	// Same parameters Kine_Filament_DrawGizmo uses, so these share its batches.
+	const double *matrix = m ? m : KINE_IDENTITY_4X4;
+    float local[16];
+    for (int i = 0; i < 16; ++i) local[i] = float(matrix[i]);
+    const double world[3] = {matrix[3], matrix[7], matrix[11]};
+    local[3] = local[7] = local[11] = 0;
 	kine_queue_mesh(
 		ctx, reinterpret_cast<KineFilamentMesh *>(mesh), KINE_MAT_GIZMO,
 		r, g, b,
 		1.0f, 0.0f, 1.0f,
 		0.0f,
-		m ? m : KINE_IDENTITY_4X4,
+		local,
 		false, false, false,
-		nullptr);
+		nullptr, nullptr, 0, 0.0f, nullptr, 1.0f, world);
 }
 
-static math::float3 kine_dbg_xform_point(const float *m, const math::float3 &p) {
+static math::double3 kine_dbg_xform_point(const double *m, const math::double3 &p) {
 	if (!m)
 		return p;
 	return {
@@ -9672,8 +9747,8 @@ static math::float3 kine_dbg_xform_point(const float *m, const math::float3 &p) 
 		m[8] * p.x + m[9] * p.y + m[10] * p.z + m[11]};
 }
 
-static void kine_dbg_trs(float cx, float cy, float cz, float sx, float sy, float sz, float *out) {
-	const float m[16] = {
+static void kine_dbg_trs(double cx, double cy, double cz, float sx, float sy, float sz, double *out) {
+	const double m[16] = {
 		sx, 0, 0, cx,
 		0, sy, 0, cy,
 		0, 0, sz, cz,
@@ -9681,40 +9756,40 @@ static void kine_dbg_trs(float cx, float cy, float cz, float sx, float sy, float
 	memcpy(out, m, sizeof(m));
 }
 
-static math::float3 kine_dbg_cross(const math::float3 &a, const math::float3 &b) {
+static math::double3 kine_dbg_cross(const math::double3 &a, const math::double3 &b) {
 	return {
 		a.y * b.z - a.z * b.y,
 		a.z * b.x - a.x * b.z,
 		a.x * b.y - a.y * b.x};
 }
 
-static math::float3 kine_dbg_normalize(const math::float3 &v) {
-	const float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-	return l > 1e-12f ? math::float3{v.x / l, v.y / l, v.z / l} : math::float3{0, 1, 0};
+static math::double3 kine_dbg_normalize(const math::double3 &v) {
+	const double l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+	return l > 1e-12f ? math::double3{v.x / l, v.y / l, v.z / l} : math::double3{0, 1, 0};
 }
 
 // One world-space segment, drawn as a stretched thin cylinder.
 static void kine_dbg_line(
 	KineFilamentContext *ctx,
-	const math::float3 &a, const math::float3 &b,
+	const math::double3 &a, const math::double3 &b,
 	float thickness, float r, float g, float bl) {
-	const math::float3 d = b - a;
-	const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+	const math::double3 d = b - a;
+	const double len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
 	if (len < 1e-6f)
 		return;
 
-	const math::float3 y = d / len;
-	const math::float3 ref = std::abs(y.y) < 0.99f ? math::float3{0, 1, 0} : math::float3{1, 0, 0};
-	const math::float3 x = normalize(kine_dbg_cross(y, ref));
-	const math::float3 z = kine_dbg_cross(x, y);
-	const math::float3 mid = (a + b) * 0.5f;
+	const math::double3 y = d / len;
+	const math::double3 ref = std::abs(y.y) < 0.99f ? math::double3{0, 1, 0} : math::double3{1, 0, 0};
+	const math::double3 x = normalize(kine_dbg_cross(y, ref));
+	const math::double3 z = kine_dbg_cross(x, y);
+	const math::double3 mid = a + (b - a) * 0.5;
 	const float t = thickness > 0.0f ? thickness : KINE_DEFAULT_WIRE_THICKNESS;
 
 	// The unit cylinder runs along Y (height 1) with diameter 1.
-	const float m[16] = {
-		x.x * t, y.x * len, z.x * t, mid.x,
-		x.y * t, y.y * len, z.y * t, mid.y,
-		x.z * t, y.z * len, z.z * t, mid.z,
+	const double m[16] = {
+		x.x * double(t), y.x * len, z.x * double(t), mid.x,
+		x.y * double(t), y.y * len, z.y * double(t), mid.y,
+		x.z * double(t), y.z * len, z.z * double(t), mid.z,
 		0, 0, 0, 1};
 	kine_dbg_queue(ctx, kine_dbg_prim(ctx, 3), m, r, g, bl);
 }
@@ -9722,19 +9797,19 @@ static void kine_dbg_line(
 // Circle perpendicular to local axis `normalAxis` (0=X,1=Y,2=Z), shifted
 // `offset` along that axis, then transformed by m.
 static void kine_dbg_wire_circle(
-	KineFilamentContext *ctx, const float *m,
+	KineFilamentContext *ctx, const double *m,
 	int normalAxis, float offset, float radius, int segments,
 	float thickness, float r, float g, float b) {
 	const int a = (normalAxis + 1) % 3;
 	const int c = (normalAxis + 2) % 3;
-	math::float3 prev{};
+	math::double3 prev{};
 	for (int i = 0; i <= segments; ++i) {
 		const float ang = 2.0f * (float)M_PI * (float)i / (float)segments;
 		float p[3] = {0, 0, 0};
 		p[normalAxis] = offset;
 		p[a] = radius * std::cos(ang);
 		p[c] = radius * std::sin(ang);
-		const math::float3 world = kine_dbg_xform_point(m, {p[0], p[1], p[2]});
+		const math::double3 world = kine_dbg_xform_point(m, {p[0], p[1], p[2]});
 		if (i > 0)
 			kine_dbg_line(ctx, prev, world, thickness, r, g, b);
 		prev = world;
@@ -9746,14 +9821,14 @@ static int kine_dbg_segments(int s) {
 }
 
 static void kine_dbg_wire_mesh(
-	KineFilamentContext *ctx, const KineMesh *mesh, const float *m,
+	KineFilamentContext *ctx, const KineMesh *mesh, const double *m,
 	float thickness, float r, float g, float b, float featureAngleDeg) {
 	if (!mesh || mesh->indices.size() < 3 || mesh->vertices.empty())
 		return;
 
 	// Weld vertices by quantized position (1/1000 unit).
 	std::unordered_map<uint64_t, uint32_t> weld;
-	std::vector<math::float3> pos;
+	std::vector<math::double3> pos;
 	std::vector<uint32_t> remap(mesh->vertices.size());
 	for (size_t i = 0; i < mesh->vertices.size(); ++i) {
 		const KineVertex &v = mesh->vertices[i];
@@ -9771,7 +9846,7 @@ static void kine_dbg_wire_mesh(
 
 	struct Edge {
 		uint32_t a, b;
-		math::float3 n;
+		math::double3 n;
 		int count;
 		bool feature;
 	};
@@ -9784,7 +9859,7 @@ static void kine_dbg_wire_mesh(
 		if (t[0] >= remap.size() || t[1] >= remap.size() || t[2] >= remap.size())
 			continue;
 		const uint32_t w[3] = {remap[t[0]], remap[t[1]], remap[t[2]]};
-		const math::float3 n = kine_dbg_normalize(
+		const math::double3 n = kine_dbg_normalize(
 			kine_dbg_cross(pos[w[1]] - pos[w[0]], pos[w[2]] - pos[w[0]]));
 
 		for (int e = 0; e < 3; ++e) {
@@ -9823,8 +9898,8 @@ extern "C" {
 
 KINE_API void Kine_Filament_DrawGizmoLine(
 	KineFilamentContext *ctx,
-	float ax, float ay, float az,
-	float bx, float by, float bz,
+	double ax, double ay, double az,
+	double bx, double by, double bz,
 	float r, float g, float b,
 	float thickness) {
 	if (!ctx || !ctx->engine)
@@ -9835,14 +9910,14 @@ KINE_API void Kine_Filament_DrawGizmoLine(
 // points: 6 floats per segment (ax ay az bx by bz).
 KINE_API void Kine_Filament_DrawGizmoLines(
 	KineFilamentContext *ctx,
-	const float *points,
+	const double *points,
 	uint32_t segmentCount,
 	float r, float g, float b,
 	float thickness) {
 	if (!ctx || !ctx->engine || !points)
 		return;
 	for (uint32_t i = 0; i < segmentCount; ++i) {
-		const float *p = points + (size_t)i * 6;
+		const double *p = points + (size_t)i * 6;
 		kine_dbg_line(ctx, {p[0], p[1], p[2]}, {p[3], p[4], p[5]}, thickness, r, g, b);
 	}
 }
@@ -9851,7 +9926,7 @@ KINE_API void Kine_Filament_DrawGizmoLines(
 // size in the matrix scale. wire=false draws a solid cube.
 KINE_API void Kine_Filament_DrawGizmoCube(
 	KineFilamentContext *ctx,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b,
 	bool wire,
 	float thickness) {
@@ -9861,7 +9936,7 @@ KINE_API void Kine_Filament_DrawGizmoCube(
 		kine_dbg_queue(ctx, kine_dbg_prim(ctx, 0), mat4, r, g, b);
 		return;
 	}
-	math::float3 c[8];
+	math::double3 c[8];
 	for (int i = 0; i < 8; ++i) {
 		c[i] = kine_dbg_xform_point(mat4, {(i & 1) ? 0.5f : -0.5f,
 										   (i & 2) ? 0.5f : -0.5f,
@@ -9875,7 +9950,7 @@ KINE_API void Kine_Filament_DrawGizmoCube(
 
 KINE_API void Kine_Filament_DrawGizmoSphere(
 	KineFilamentContext *ctx,
-	float cx, float cy, float cz,
+	double cx, double cy, double cz,
 	float radius,
 	float r, float g, float b,
 	bool wire,
@@ -9884,12 +9959,12 @@ KINE_API void Kine_Filament_DrawGizmoSphere(
 	if (!ctx || !ctx->engine || radius <= 0.0f)
 		return;
 	if (!wire) {
-		float m[16];
+		double m[16];
 		kine_dbg_trs(cx, cy, cz, radius * 2.0f, radius * 2.0f, radius * 2.0f, m);
 		kine_dbg_queue(ctx, kine_dbg_prim(ctx, 1), m, r, g, b);
 		return;
 	}
-	float m[16];
+	double m[16];
 	kine_dbg_trs(cx, cy, cz, 1.0f, 1.0f, 1.0f, m);
 	const int s = kine_dbg_segments(segments);
 	for (int axis = 0; axis < 3; ++axis)
@@ -9899,7 +9974,7 @@ KINE_API void Kine_Filament_DrawGizmoSphere(
 // Unit cylinder (diameter 1, height 1 along local Y, centered) transformed by mat4.
 KINE_API void Kine_Filament_DrawGizmoCylinder(
 	KineFilamentContext *ctx,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b,
 	bool wire,
 	float thickness,
@@ -9928,7 +10003,7 @@ KINE_API void Kine_Filament_DrawGizmoCylinder(
 KINE_API void Kine_Filament_DrawGizmoMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b) {
 	if (!ctx || !ctx->engine || !mesh)
 		return;
@@ -9943,7 +10018,7 @@ KINE_API void Kine_Filament_DrawGizmoMesh(
 KINE_API void Kine_Filament_DrawGizmoWireMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
-	const float *mat4,
+	const double *mat4,
 	float r, float g, float b,
 	float thickness,
 	float featureAngleDeg) {
@@ -9960,7 +10035,7 @@ extern "C" {
 KINE_API int Kine_Filament_PickGizmo(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	float screenX,
 	float screenY) {
 	if (!ctx || !ctx->camera || !gizmo || !mat4)
@@ -10031,7 +10106,7 @@ KINE_API int Kine_Filament_PickGizmo(
 KINE_API float Kine_Filament_GetGizmoDragDelta(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int axis,
 	float startX,
 	float startY,
@@ -10067,7 +10142,7 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
 KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int axis,
 	float startX,
 	float startY,
@@ -10116,7 +10191,7 @@ KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 KINE_API void Kine_Filament_DrawGizmo(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
-	float *mat4,
+	double *mat4,
 	int hoveredAxis,
 	int selectedAxis) {
 	if (!ctx || !gizmo || !mat4)
@@ -10162,16 +10237,7 @@ KINE_API void Kine_Filament_DrawGizmo(
 			b = 0.15f;
 		}
 
-		const float *handle = isActive ? frame.boosted : frame.scaled;
-
-		Kine_Filament_DrawMeshEx(
-			ctx, (KineFilamentMesh *)entry.mesh, KINE_MAT_GIZMO,
-			r, g, b,
-			1.0f, 0.0f, 1.0f,
-			0.0f,
-			const_cast<float *>(handle),
-			false, false, false,
-			nullptr);
+		kine_dbg_queue(ctx, entry.mesh, frame.scaled, r, g, b);
 	}
 }
 }

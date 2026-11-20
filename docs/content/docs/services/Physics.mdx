@@ -19,7 +19,7 @@ Physics.SleepThreshold = 0.1
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
 | `Enabled` | `boolean` | Read-only | `true` when the system initialized | Whether the physics system is available. |
-| `Gravity` | `number` | Read/write | `196.2` | Downward acceleration. Negative values clamp to `0`. |
+| `Gravity` | `number` | Read/write | `196.2` | World downward acceleration for soft bodies, cloth, and other solver bodies without per-part gravity. Negative values clamp to `0`. |
 | `BodyCount` | `number` | Read-only | `0` | Number of physics bodies currently tracked. |
 | `PhysicsThreadCount` | `number` | Read-only | Runtime dependent | Worker threads used by the solver. |
 | `CollisionSubsteps` | `number` | Read/write | Runtime default | Collision substeps per step, clamped between `1` and `8`. |
@@ -52,8 +52,7 @@ Because the count includes anchored parts, it isn't a measure of how much work t
 ## Notes
 
 - Physics properties are global. Per-part behavior comes from the part's own properties such as `Anchored`, `CanCollide`, and `Massless`-style settings where available.
-- Changing `Gravity` affects bodies on their next step, not existing velocities immediately.
-- `Workspace.Gravity` reads and writes the same value, so the two stay in sync.
+- Changing `Gravity` affects non-part solver bodies on their next step, not existing velocities immediately. Rigid parts have their own independent `Gravity` vector.
 - The service doesn't expose body-level APIs; use `Workspace:Raycast()` and the part properties for queries and configuration.
 
 ## See also

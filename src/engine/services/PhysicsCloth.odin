@@ -86,11 +86,12 @@ physics_step_cloth :: proc(
 	start_pins, target_pins: [2][3]f32
 	reset := !cloth.initialized || cloth.pin_count != pin_count
 	for slot in 0 ..< pin_count {
-		target_pins[slot] = {anchors[slot].x, anchors[slot].y, anchors[slot].z}
+		target_pins[slot] = classes.Cloth_Local_Position(cloth, anchors[slot])
 		if linalg.length(target_pins[slot] - cloth.particles[pins[slot]].position) >
 		   max(10, 2 * max(cloth.width, cloth.size.Y)) {reset = true}
 	}
 	if reset {classes.Cloth_Initialize(cloth, anchors, pin_count)}
+	for slot in 0 ..< pin_count {target_pins[slot] = classes.Cloth_Local_Position(cloth, anchors[slot])}
 	for slot in 0 ..< pin_count {
 		start_pins[slot] = cloth.particles[pins[slot]].position
 	}
@@ -99,7 +100,7 @@ physics_step_cloth :: proc(
 	dt := delta_time / f32(substeps)
 	drag := math.exp(-cloth.damping * dt)
 	acceleration := cloth.force / cloth.mass + [3]f32{0, -service.gravity, 0}
-	wind_velocity := [3]f32{wind.x, wind.y, wind.z}
+	wind_velocity := [3]f32{f32(wind.x), f32(wind.y), f32(wind.z)}
 	kick := cloth.impulse / cloth.mass
 	cloth.impulse = {}
 
@@ -138,6 +139,7 @@ physics_step_cloth :: proc(
 					service,
 					sphere,
 					candidates,
+					cloth.simulation_origin,
 					previous[i],
 					&particle,
 					dt,
@@ -188,7 +190,7 @@ physics_collide_cloth_wide_links :: proc(
 				position := cloth.particles[a].position * s + cloth.particles[b].position * t
 				velocity := cloth.particles[a].velocity * s + cloth.particles[b].velocity * t
 				sample := classes.Cloth_Particle{position, velocity}
-				hit := physics_collide_cloth_particle(service, sphere, candidates, old_position, &sample, dt)
+				hit := physics_collide_cloth_particle(service, sphere, candidates, cloth.simulation_origin, old_position, &sample, dt)
 				if hit == kineffi.JPH_BODY_ID_INVALID {continue}
 				physics_report_deformable_contact(service, &cloth.object, hit)
 				weight_a := s if free_a else 0
@@ -242,6 +244,7 @@ physics_collide_cloth_particle :: proc(
 	service: ^Physics,
 	sphere: kineffi.JPH_ShapeRef,
 	candidates: []kineffi.JPH_BodyID,
+	origin: datatypes.Vector3,
 	previous: [3]f32,
 	particle: ^classes.Cloth_Particle,
 	dt: f32,
@@ -250,7 +253,7 @@ physics_collide_cloth_particle :: proc(
 	penetration_depth: f32
 	hit, collided := jolt.System_Cast_Shape(
 		&service.system,
-		{f64(previous.x), f64(previous.y), f64(previous.z)},
+		{origin.x+f64(previous.x), origin.y+f64(previous.y), origin.z+f64(previous.z)},
 		{displacement.x, displacement.y, displacement.z},
 		sphere,
 		candidates,
@@ -272,7 +275,7 @@ physics_collide_cloth_particle :: proc(
 	kineffi.JPH_BodyInterface_GetLinearVelocity(bi, hit.bodyID, &linear)
 	kineffi.JPH_BodyInterface_GetAngularVelocity(bi, hit.bodyID, &angular)
 	kineffi.JPH_BodyInterface_GetCenterOfMassPosition(bi, hit.bodyID, &center)
-	offset := particle.position - [3]f32{f32(center.x), f32(center.y), f32(center.z)}
+	offset := particle.position - [3]f32{f32(center.x-origin.x), f32(center.y-origin.y), f32(center.z-origin.z)}
 	surface_velocity :=
 		[3]f32{linear.x, linear.y, linear.z} +
 		linalg.cross([3]f32{angular.x, angular.y, angular.z}, offset)

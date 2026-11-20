@@ -66,19 +66,19 @@ terrain_sdf_bounds :: proc(
 
 	if shape.kind == .Sphere {
 		r := shape.radius + f32(pad_cells)
-		world_min := datatypes.Vector3{shape.center.x - r, shape.center.y - r, shape.center.z - r}
-		world_max := datatypes.Vector3{shape.center.x + r, shape.center.y + r, shape.center.z + r}
-		min_x = int(math.floor(world_min.x / service.voxel_size))
-		min_y = int(math.floor(world_min.y / service.voxel_size))
-		min_z = int(math.floor(world_min.z / service.voxel_size))
-		max_x = int(math.floor(world_max.x / service.voxel_size))
-		max_y = int(math.floor(world_max.y / service.voxel_size))
-		max_z = int(math.floor(world_max.z / service.voxel_size))
+		world_min := datatypes.Vector3{shape.center.x - f64(r), shape.center.y - f64(r), shape.center.z - f64(r)}
+		world_max := datatypes.Vector3{shape.center.x + f64(r), shape.center.y + f64(r), shape.center.z + f64(r)}
+		min_x = int(math.floor(world_min.x / f64(service.voxel_size)))
+		min_y = int(math.floor(world_min.y / f64(service.voxel_size)))
+		min_z = int(math.floor(world_min.z / f64(service.voxel_size)))
+		max_x = int(math.floor(world_max.x / f64(service.voxel_size)))
+		max_y = int(math.floor(world_max.y / f64(service.voxel_size)))
+		max_z = int(math.floor(world_max.z / f64(service.voxel_size)))
 	} else {
 		h := datatypes.Vector3 {
-			shape.half.x + f32(pad_cells),
-			shape.half.y + f32(pad_cells),
-			shape.half.z + f32(pad_cells),
+			shape.half.x + f64(f32(pad_cells)),
+			shape.half.y + f64(f32(pad_cells)),
+			shape.half.z + f64(f32(pad_cells)),
 		}
 		local_corners := [8]datatypes.Vector3 {
 			{-h.x, -h.y, -h.z},
@@ -90,19 +90,19 @@ terrain_sdf_bounds :: proc(
 			{h.x, h.y, h.z},
 			{-h.x, h.y, h.z},
 		}
-		world_min := datatypes.Vector3{math.INF_F32, math.INF_F32, math.INF_F32}
-		world_max := datatypes.Vector3{-math.INF_F32, -math.INF_F32, -math.INF_F32}
+		world_min := datatypes.Vector3{f64(math.INF_F32), f64(math.INF_F32), f64(math.INF_F32)}
+		world_max := datatypes.Vector3{f64(-math.INF_F32), f64(-math.INF_F32), f64(-math.INF_F32)}
 		for corner in local_corners {
 			world := datatypes.CFrame_Mul_Vector3(shape.cframe, corner)
 			world_min = datatypes.Vec3_Min(world_min, world)
 			world_max = datatypes.Vec3_Max(world_max, world)
 		}
-		min_x = int(math.floor(world_min.x / service.voxel_size))
-		min_y = int(math.floor(world_min.y / service.voxel_size))
-		min_z = int(math.floor(world_min.z / service.voxel_size))
-		max_x = int(math.floor(world_max.x / service.voxel_size))
-		max_y = int(math.floor(world_max.y / service.voxel_size))
-		max_z = int(math.floor(world_max.z / service.voxel_size))
+		min_x = int(math.floor(world_min.x / f64(service.voxel_size)))
+		min_y = int(math.floor(world_min.y / f64(service.voxel_size)))
+		min_z = int(math.floor(world_min.z / f64(service.voxel_size)))
+		max_x = int(math.floor(world_max.x / f64(service.voxel_size)))
+		max_y = int(math.floor(world_max.y / f64(service.voxel_size)))
+		max_z = int(math.floor(world_max.z / f64(service.voxel_size)))
 	}
 
 	// Check the full-width box bounds before converting them to cell coordinates.
@@ -960,9 +960,9 @@ terrain_sample_occupancy :: proc(
 	y0 := int(math.floor(voxel_position.y))
 	z0 := int(math.floor(voxel_position.z))
 
-	fx := voxel_position.x - f32(x0)
-	fy := voxel_position.y - f32(y0)
-	fz := voxel_position.z - f32(z0)
+	fx := voxel_position.x - f64(x0)
+	fy := voxel_position.y - f64(y0)
+	fz := voxel_position.z - f64(z0)
 
 	result: f32
 	for dx in 0 ..< 2 {
@@ -973,7 +973,7 @@ terrain_sample_occupancy :: proc(
 				wz := dz == 0 ? 1 - fz : fz
 				o :=
 					cache != nil ? terrain_cache_occ(cache, x0 + dx, y0 + dy, z0 + dz) : terrain_occupancy(service, x0 + dx, y0 + dy, z0 + dz)
-				result += o * wx * wy * wz
+				result += f32(f64(o) * wx * wy * wz)
 			}
 		}
 	}
@@ -985,21 +985,21 @@ terrain_normal_at_world :: proc(
 	world: datatypes.Vector3,
 	cache: ^Terrain_Density_Cache,
 ) -> datatypes.Vector3 {
-	inv_voxel := 1.0 / service.voxel_size
-	p := datatypes.Vector3{world.x * inv_voxel, world.y * inv_voxel, world.z * inv_voxel}
+	inv_voxel := 1.0 / f64(service.voxel_size)
+	p := datatypes.Vector3{world.x * f64(inv_voxel), world.y * f64(inv_voxel), world.z * f64(inv_voxel)}
 	eps: f32 = 0.5
 
 	dx :=
-		terrain_sample_occupancy(service, {p.x - eps, p.y, p.z}, cache) -
-		terrain_sample_occupancy(service, {p.x + eps, p.y, p.z}, cache)
+		terrain_sample_occupancy(service, {p.x - f64(eps), p.y, p.z}, cache) -
+		terrain_sample_occupancy(service, {p.x + f64(eps), p.y, p.z}, cache)
 	dy :=
-		terrain_sample_occupancy(service, {p.x, p.y - eps, p.z}, cache) -
-		terrain_sample_occupancy(service, {p.x, p.y + eps, p.z}, cache)
+		terrain_sample_occupancy(service, {p.x, p.y - f64(eps), p.z}, cache) -
+		terrain_sample_occupancy(service, {p.x, p.y + f64(eps), p.z}, cache)
 	dz :=
-		terrain_sample_occupancy(service, {p.x, p.y, p.z - eps}, cache) -
-		terrain_sample_occupancy(service, {p.x, p.y, p.z + eps}, cache)
+		terrain_sample_occupancy(service, {p.x, p.y, p.z - f64(eps)}, cache) -
+		terrain_sample_occupancy(service, {p.x, p.y, p.z + f64(eps)}, cache)
 
-	n := datatypes.Vector3{dx, dy, dz}
+	n := datatypes.Vector3{f64(dx), f64(dy), f64(dz)}
 	length := datatypes.Vec3_Magnitude(n)
 	if length < 1.0e-6 {
 		return datatypes.Vector3_YAxis
@@ -1012,16 +1012,16 @@ terrain_material_weights_at_world :: proc(
 	world: datatypes.Vector3,
 	cache: ^Terrain_Density_Cache = nil,
 ) -> [8]f32 {
-	inv_voxel := 1.0 / service.voxel_size
-	vx := world.x * inv_voxel
-	vy := world.y * inv_voxel
-	vz := world.z * inv_voxel
+	inv_voxel := 1.0 / f64(service.voxel_size)
+	vx := world.x * f64(inv_voxel)
+	vy := world.y * f64(inv_voxel)
+	vz := world.z * f64(inv_voxel)
 	x0 := int(math.floor(vx))
 	y0 := int(math.floor(vy))
 	z0 := int(math.floor(vz))
-	fx := vx - f32(x0)
-	fy := vy - f32(y0)
-	fz := vz - f32(z0)
+	fx := vx - f64(x0)
+	fy := vy - f64(y0)
+	fz := vz - f64(z0)
 
 	weights: [8]f32
 	total: f32
@@ -1056,10 +1056,10 @@ terrain_material_weights_at_world :: proc(
 					if cell.material == .Grass || cell.material == .LeafyGrass {layer |= 0x80}
 				}
 				if occupancy <= 0 {continue}
-				weight := wx * wy * wz * occupancy
-				weights[int(layer & 7)] += weight
-				if (layer & 0x80) != 0 {weights[6] += weight}
-				total += weight
+				weight := wx * wy * wz * f64(occupancy)
+				weights[int(layer & 7)] += f32(weight)
+				if (layer & 0x80) != 0 {weights[6] += f32(weight)}
+				total += f32(weight)
 			}
 		}
 	}
@@ -1077,6 +1077,7 @@ Terrain_Edge_Key :: struct {
 }
 
 Terrain_Mesh_Builder :: struct {
+	origin: datatypes.Vector3,
 	service:          ^Terrain,
 	vertex_data:      ^[dynamic]f32,
 	material_weights: ^[dynamic]f32,
@@ -1095,8 +1096,9 @@ terrain_append_vertex :: proc(
 	material_weights: ^[dynamic]f32,
 	position, normal: datatypes.Vector3,
 	cache: ^Terrain_Density_Cache = nil,
+	origin: datatypes.Vector3 = {},
 ) {
-	append(vertex_data, position.x, position.y, position.z, normal.x, normal.y, normal.z, 0, 0)
+	append(vertex_data, f32(position.x - origin.x), f32(position.y - origin.y), f32(position.z - origin.z), f32(normal.x), f32(normal.y), f32(normal.z), 0, 0)
 
 
 	if material_weights != nil {
@@ -1160,8 +1162,8 @@ terrain_edge_vertex :: proc(builder: ^Terrain_Mesh_Builder, key: Terrain_Edge_Ke
 		bx += 1
 	}
 
-	pa := datatypes.Vector3{f32(ax) * vs, f32(ay) * vs, f32(az) * vs}
-	pb := datatypes.Vector3{f32(bx) * vs, f32(by) * vs, f32(bz) * vs}
+	pa := datatypes.Vector3{f64(ax) * f64(vs), f64(ay) * f64(vs), f64(az) * f64(vs)}
+	pb := datatypes.Vector3{f64(bx) * f64(vs), f64(by) * f64(vs), f64(bz) * f64(vs)}
 
 	d0 := terrain_cache_occ(builder.cache, ax, ay, az)
 	d1 := terrain_cache_occ(builder.cache, bx, by, bz)
@@ -1171,9 +1173,9 @@ terrain_edge_vertex :: proc(builder: ^Terrain_Mesh_Builder, key: Terrain_Edge_Ke
 		t = clamp((service.iso_level - d0) / denom, 0, 1)
 	}
 	position := datatypes.Vector3 {
-		pa.x + (pb.x - pa.x) * t,
-		pa.y + (pb.y - pa.y) * t,
-		pa.z + (pb.z - pa.z) * t,
+		pa.x + (pb.x - pa.x) * f64(t),
+		pa.y + (pb.y - pa.y) * f64(t),
+		pa.z + (pb.z - pa.z) * f64(t),
 	}
 
 	normal := terrain_normal_at_world(service, position, builder.cache)
@@ -1186,6 +1188,7 @@ terrain_edge_vertex :: proc(builder: ^Terrain_Mesh_Builder, key: Terrain_Edge_Ke
 		position,
 		normal,
 		builder.cache,
+			builder.origin,
 	)
 	builder.vertex_count += 1
 	builder.edge_vertices[key] = index
@@ -1195,13 +1198,13 @@ terrain_edge_vertex :: proc(builder: ^Terrain_Mesh_Builder, key: Terrain_Edge_Ke
 terrain_vertex_position :: proc(builder: ^Terrain_Mesh_Builder, index: u32) -> datatypes.Vector3 {
 	base := int(index) * 8
 	data := builder.vertex_data
-	return datatypes.Vector3{data[base], data[base + 1], data[base + 2]}
+	return datatypes.Vec3_Add(builder.origin, datatypes.Vector3{f64(data[base]), f64(data[base + 1]), f64(data[base + 2])})
 }
 
 terrain_vertex_normal :: proc(builder: ^Terrain_Mesh_Builder, index: u32) -> datatypes.Vector3 {
 	base := int(index) * 8
 	data := builder.vertex_data
-	return datatypes.Vector3{data[base + 3], data[base + 4], data[base + 5]}
+	return datatypes.Vector3{f64(data[base + 3]), f64(data[base + 4]), f64(data[base + 5])}
 }
 
 terrain_mc_emit :: proc(p0, p1, p2: marching_cubes.Vec3, e0, e1, e2: int, user_data: rawptr) {
@@ -1239,6 +1242,7 @@ terrain_mc_emit :: proc(p0, p1, p2: marching_cubes.Vec3, e0, e1, e2: int, user_d
 			v0,
 			n,
 			builder.cache,
+			builder.origin,
 		)
 		terrain_append_vertex(
 			builder.service,
@@ -1247,6 +1251,7 @@ terrain_mc_emit :: proc(p0, p1, p2: marching_cubes.Vec3, e0, e1, e2: int, user_d
 			v1,
 			n,
 			builder.cache,
+			builder.origin,
 		)
 		terrain_append_vertex(
 			builder.service,
@@ -1255,6 +1260,7 @@ terrain_mc_emit :: proc(p0, p1, p2: marching_cubes.Vec3, e0, e1, e2: int, user_d
 			v2,
 			n,
 			builder.cache,
+			builder.origin,
 		)
 		builder.vertex_count += 3
 		if flip {
@@ -1352,6 +1358,7 @@ Terrain_Build_Chunk_Mesh :: proc(
 	vertex_data: ^[dynamic]f32,
 	material_weights: ^[dynamic]f32,
 	indices: ^[dynamic]u16,
+	local_coordinates: bool = false,
 ) -> bool {
 	if service == nil {
 		return false
@@ -1365,6 +1372,7 @@ Terrain_Build_Chunk_Mesh :: proc(
 		material_weights = material_weights,
 		indices          = indices,
 	}
+	if local_coordinates {builder.origin = terrain_chunk_world_origin(service, key)}
 	defer delete(builder.edge_vertices)
 
 	cache: Terrain_Density_Cache
@@ -1399,6 +1407,7 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 	vertex_data: ^[dynamic]f32,
 	material_weights: ^[dynamic]f32,
 	indices: ^[dynamic]u16,
+	local_coordinates: bool = false,
 ) -> (
 	meshed: bool,
 	gpu_ok: bool,
@@ -1452,9 +1461,9 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 			compositor,
 			raw_data(occ[:]),
 			raw_data(mat[:]),
-			i32(key.x * TERRAIN_CHUNK_SIZE),
-			i32(key.y * TERRAIN_CHUNK_SIZE),
-			i32(key.z * TERRAIN_CHUNK_SIZE),
+			0 if local_coordinates else i32(key.x * TERRAIN_CHUNK_SIZE),
+			0 if local_coordinates else i32(key.y * TERRAIN_CHUNK_SIZE),
+			0 if local_coordinates else i32(key.z * TERRAIN_CHUNK_SIZE),
 			service.voxel_size,
 			service.iso_level,
 			raw_data(verts[:]),
@@ -1477,7 +1486,8 @@ Terrain_Build_Chunk_Mesh_GPU :: proc(
 		append(material_weights, ..weights[:int(vertex_count) * 8])
 		for i in 0 ..< int(vertex_count) {
 			base := i * 8
-			world := datatypes.Vector3{verts[base], verts[base + 1], verts[base + 2]}
+			world := datatypes.Vector3{f64(verts[base]), f64(verts[base + 1]), f64(verts[base + 2])}
+			if local_coordinates {world = datatypes.Vec3_Add(world, terrain_chunk_world_origin(service, key))}
 			mask := terrain_material_weights_at_world(service, world, &cache)
 			material_weights[weights_start + base + 6] = mask[6]
 		}
@@ -1619,13 +1629,14 @@ terrain_poll_mesh_batch :: proc(service: ^Terrain, renderer: ^classes.Renderer_O
 }
 
 terrain_build_job :: proc(service: ^Terrain, job: ^Terrain_Mesh_Job) {
-	Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces)
+	Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces, true)
 	job.has_surface = Terrain_Build_Chunk_Mesh(
 		service,
 		job.key,
 		&job.vertex_data,
 		&job.material_weights,
 		&job.indices,
+		true,
 	)
 }
 
@@ -1729,7 +1740,8 @@ terrain_refresh_draw_items :: proc(service: ^Terrain) {
 		if chunk == nil {
 			continue
 		}
-		terrain_append_chunk_surfaces(service, chunk, identity)
+		origin := terrain_chunk_world_origin(service, chunk.key)
+		terrain_append_chunk_surfaces(service, chunk, identity, origin)
 		for mesh in chunk.meshes {
 			if mesh == nil {
 				continue
@@ -1748,10 +1760,11 @@ terrain_refresh_draw_items :: proc(service: ^Terrain) {
 					param3 = 0.25,
 					transmission = 0,
 					materialKind = kineffi.KINE_MAT_TERRAIN,
+					worldPosition = {origin.x, origin.y, origin.z},
 					flags = u32(
 						kineffi.KINE_FILAMENT_DRAW_CAST_SHADOWS |
 						kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS |
-						kineffi.KINE_FILAMENT_DRAW_CULLING,
+						kineffi.KINE_FILAMENT_DRAW_CULLING | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
 					),
 				},
 			)
@@ -1845,7 +1858,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 			tracy.ZoneNC("Terrain Mesh GPU Readback", 0xC678DD)
 			for i in 0 ..< job_count {
 				job := &jobs[i]
-				Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces)
+				Terrain_Build_Chunk_Surfaces(service, job.key, &job.surfaces, true)
 				meshed, gpu_ok := Terrain_Build_Chunk_Mesh_GPU(
 					service,
 					job.key,
@@ -1853,6 +1866,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 					&job.vertex_data,
 					&job.material_weights,
 					&job.indices,
+		true,
 				)
 				if gpu_ok {
 					job.has_surface = meshed
@@ -1863,6 +1877,7 @@ Terrain_Prepare_3D :: proc(service: ^Terrain, renderer: ^classes.Renderer_Object
 						&job.vertex_data,
 						&job.material_weights,
 						&job.indices,
+		true,
 					)
 				}
 			}
@@ -1925,15 +1940,15 @@ terrain_cell_from_world :: proc(
 ) {
 	inv := 1.0 / service.voxel_size
 	return int(
-		math.floor(position.x * inv),
-	), int(math.floor(position.y * inv)), int(math.floor(position.z * inv))
+		math.floor(position.x * f64(inv)),
+	), int(math.floor(position.y * f64(inv))), int(math.floor(position.z * f64(inv)))
 }
 
 terrain_cell_center_world :: proc(service: ^Terrain, x, y, z: int) -> datatypes.Vector3 {
 	return datatypes.Vector3 {
-		(f32(x) + 0.5) * service.voxel_size,
-		(f32(y) + 0.5) * service.voxel_size,
-		(f32(z) + 0.5) * service.voxel_size,
+		f64((f32(x) + 0.5) * service.voxel_size),
+		f64((f32(y) + 0.5) * service.voxel_size),
+		f64((f32(z) + 0.5) * service.voxel_size),
 	}
 }
 
@@ -1955,9 +1970,9 @@ terrain_region_cells :: proc(
 	return Terrain_Region_Cells {
 			origin = expanded.Min,
 			resolution = resolution,
-			count_x = max(0, int(math.round(size.x / resolution))),
-			count_y = max(0, int(math.round(size.y / resolution))),
-			count_z = max(0, int(math.round(size.z / resolution))),
+			count_x = max(0, int(math.round(size.x / f64(resolution)))),
+			count_y = max(0, int(math.round(size.y / f64(resolution)))),
+			count_z = max(0, int(math.round(size.z / f64(resolution)))),
 		},
 		true
 }
@@ -1967,9 +1982,9 @@ terrain_region_cell_center :: proc(
 	x, y, z: int,
 ) -> datatypes.Vector3 {
 	return datatypes.Vector3 {
-		cells.origin.x + (f32(x) + 0.5) * cells.resolution,
-		cells.origin.y + (f32(y) + 0.5) * cells.resolution,
-		cells.origin.z + (f32(z) + 0.5) * cells.resolution,
+		cells.origin.x + f64((f32(x) + 0.5) * cells.resolution),
+		cells.origin.y + f64((f32(y) + 0.5) * cells.resolution),
+		cells.origin.z + f64((f32(z) + 0.5) * cells.resolution),
 	}
 }
 
@@ -2024,12 +2039,12 @@ terrain_cell_bounds :: proc(
 ) -> Terrain_Cell_Bounds {
 	vs := service.voxel_size
 	return Terrain_Cell_Bounds {
-		min_x = int(math.floor(world_min.x / vs)) - 1,
-		max_x = int(math.floor(world_max.x / vs)) + 1,
-		min_y = int(math.floor(world_min.y / vs)) - 1,
-		max_y = int(math.floor(world_max.y / vs)) + 1,
-		min_z = int(math.floor(world_min.z / vs)) - 1,
-		max_z = int(math.floor(world_max.z / vs)) + 1,
+		min_x = int(math.floor(world_min.x / f64(vs))) - 1,
+		max_x = int(math.floor(world_max.x / f64(vs))) + 1,
+		min_y = int(math.floor(world_min.y / f64(vs))) - 1,
+		max_y = int(math.floor(world_max.y / f64(vs))) + 1,
+		min_z = int(math.floor(world_min.z / f64(vs))) - 1,
+		max_z = int(math.floor(world_max.z / f64(vs))) + 1,
 	}
 }
 
@@ -2055,7 +2070,7 @@ terrain_sdf_box :: proc(local, half: datatypes.Vector3) -> f32 {
 	ox, oy, oz := max(qx, 0), max(qy, 0), max(qz, 0)
 	outside := math.sqrt(ox * ox + oy * oy + oz * oz)
 	inside := min(max(qx, max(qy, qz)), 0)
-	return outside + inside
+	return f32(outside + inside)
 }
 
 terrain_sdf_eval :: proc(
@@ -2064,9 +2079,9 @@ terrain_sdf_eval :: proc(
 	world: datatypes.Vector3,
 ) -> f32 {
 	if shape.kind == .Sphere {
-		return(
+		return f32(
 			datatypes.Vec3_Magnitude(datatypes.Vec3_Subtract(world, shape.center)) -
-			shape.radius \
+			f64(shape.radius)
 		)
 	}
 
@@ -2080,13 +2095,13 @@ terrain_sdf_eval :: proc(
 		dx := math.sqrt(local.x * local.x + local.z * local.z) - shape.half.x
 		dy := math.abs(local.y) - shape.half.y
 		ox, oy := max(dx, 0), max(dy, 0)
-		return min(max(dx, dy), 0) + math.sqrt(ox * ox + oy * oy)
+		return f32(min(max(dx, dy), 0) + math.sqrt(ox * ox + oy * oy))
 	case .Wedge:
 		slope := shape.half.y / shape.half.z
 		plane :=
 			(local.y - shape.half.y + (local.z + shape.half.z) * slope) /
 			math.sqrt(1 + slope * slope)
-		return max(terrain_sdf_box(local, shape.half), plane)
+		return max(terrain_sdf_box(local, shape.half), f32(plane))
 	}
 	return 0
 }
@@ -2251,7 +2266,7 @@ terrain_fill_cylinder :: proc(
 	if height <= 0 || radius <= 0 {
 		return
 	}
-	half := datatypes.Vector3{radius, height * 0.5, radius}
+	half := datatypes.Vector3{f64(radius), f64(height * 0.5), f64(radius)}
 	terrain_sdf_apply(
 		service,
 		Terrain_SDF_Shape{kind = .Cylinder, cframe = cframe, half = half},
@@ -3210,9 +3225,9 @@ terrain_service_namecall :: proc(
 		datatypes.Push_Vector3(
 			L,
 			datatypes.Vector3 {
-				f32(x) * service.voxel_size,
-				f32(y) * service.voxel_size,
-				f32(z) * service.voxel_size,
+				f64(f32(x) * service.voxel_size),
+				f64(f32(y) * service.voxel_size),
+				f64(f32(z) * service.voxel_size),
 			},
 		)
 		return 1, true
@@ -3227,7 +3242,7 @@ terrain_service_namecall :: proc(
 	case "WorldToCell":
 		position := datatypes.Arg_Vector3(L, 2)
 		cx, cy, cz := terrain_cell_from_world(service, position)
-		datatypes.Push_Vector3(L, datatypes.Vector3{f32(cx), f32(cy), f32(cz)})
+		datatypes.Push_Vector3(L, datatypes.Vector3{f64(f32(cx)), f64(f32(cy)), f64(f32(cz))})
 		return 1, true
 
 	case "WorldToCellPreferEmpty", "WorldToCellPreferSolid":
@@ -3235,7 +3250,7 @@ terrain_service_namecall :: proc(
 		prefer_solid := method == "WorldToCellPreferSolid"
 		cx, cy, cz := terrain_cell_from_world(service, position)
 		if prefer_solid == (terrain_occupancy(service, cx, cy, cz) > 0) {
-			datatypes.Push_Vector3(L, datatypes.Vector3{f32(cx), f32(cy), f32(cz)})
+			datatypes.Push_Vector3(L, datatypes.Vector3{f64(f32(cx)), f64(f32(cy)), f64(f32(cz))})
 			return 1, true
 		}
 
@@ -3247,14 +3262,14 @@ terrain_service_namecall :: proc(
 						nx, ny, nz := cx + dx, cy + dy, cz + dz
 						solid := terrain_occupancy(service, nx, ny, nz) > 0
 						if solid == prefer_solid {
-							datatypes.Push_Vector3(L, datatypes.Vector3{f32(nx), f32(ny), f32(nz)})
+							datatypes.Push_Vector3(L, datatypes.Vector3{f64(f32(nx)), f64(f32(ny)), f64(f32(nz))})
 							return 1, true
 						}
 					}
 				}
 			}
 		}
-		datatypes.Push_Vector3(L, datatypes.Vector3{f32(cx), f32(cy), f32(cz)})
+		datatypes.Push_Vector3(L, datatypes.Vector3{f64(f32(cx)), f64(f32(cy)), f64(f32(cz))})
 		return 1, true
 
 	case "GetMaterialColor":
@@ -3737,4 +3752,10 @@ Register_Terrain_Class :: proc(registry: ^classes.Registry) {
 			"QueuedChunkCount",
 		},
 	)
+}
+
+
+terrain_chunk_world_origin :: proc(service: ^Terrain, key: Terrain_Chunk_Key) -> datatypes.Vector3 {
+ scale := f64(TERRAIN_CHUNK_SIZE) * f64(service.voxel_size)
+ return {f64(key.x) * scale, f64(key.y) * scale, f64(key.z) * scale}
 }

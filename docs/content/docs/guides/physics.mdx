@@ -38,17 +38,16 @@ Turning off `CanCollide` on an unanchored part lets it fall through everything. 
 
 ## Gravity and simulation
 
-Gravity is global. `Physics.Gravity` defaults to `196.2`, and `Workspace.Gravity` reads and writes the same value:
+Each rigid part has its own world-space acceleration vector, defaulting to `Vector3.new(0, -196.2, 0)`.
 
 ```lua
-local Physics = game:GetService("Physics")
-local Workspace = game:GetService("Workspace")
-
-Physics.Gravity = 100
-print(Workspace.Gravity) -- 100
+crate.Gravity = Vector3.new(0, -50, 0) -- reduced gravity
+crate.Gravity = Vector3.zero -- no gravity
+crate.Gravity = Vector3.new(25, 0, 0) -- sideways gravity
+crate.Gravity = Vector3.new(0, 100, 0) -- upward gravity
 ```
 
-Gravity clamps negative values to `0`, so you can't invert it this way. To stop simulation entirely, turn off `Workspace.SimulatePhysics`; the world keeps rendering while bodies stop moving. `Physics.Enabled` reports whether the solver initialized, not whether simulation is running.
+`PhysicsModel.GravityScale` multiplies the vector. `Physics.Gravity` remains available for cloth, soft bodies, and other non-part solver bodies. To stop simulation entirely, turn off `Workspace.SimulatePhysics`; the world keeps rendering while bodies stop moving. `Physics.Enabled` reports whether the solver initialized, not whether simulation is running.
 
 ## Moving a body
 

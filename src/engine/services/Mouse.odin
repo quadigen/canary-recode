@@ -232,7 +232,7 @@ Mouse_Direction :: proc(mouse: ^Mouse, camera: ^classes.Camera) -> datatypes.Vec
 	normalized_y := 1 - (mouse.y / mouse.view_size_y) * 2
 	tangent := math.tan(math.to_radians(MOUSE_FIELD_OF_VIEW) * 0.5)
 	aspect := mouse.view_size_x / mouse.view_size_y
-	view := datatypes.Vector3{normalized_x * aspect * tangent, normalized_y * tangent, -1}
+	view := datatypes.Vector3{f64(normalized_x * aspect * tangent), f64(normalized_y * tangent), -1}
 	return datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(camera.CFrame, view))
 }
 
@@ -267,7 +267,7 @@ Mouse_Sync_Filter :: proc(mouse: ^Mouse) {
 
 Mouse_Miss_Hit :: proc(origin, direction: datatypes.Vector3) -> datatypes.CFrame {
 	return datatypes.CFrame_LookAt(
-		datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, MOUSE_MISS_DISTANCE)),
+		datatypes.Vec3_Add(origin, datatypes.Vec3_Multiply(direction, f64(MOUSE_MISS_DISTANCE))),
 		origin,
 	)
 }
@@ -309,7 +309,7 @@ Mouse_Begin_Frame :: proc(mouse: ^Mouse, L: ^vm.State, delta_time: f32) {
 	   mouse.view_size_x > 0 &&
 	   mouse.view_size_y > 0 {
 		Mouse_Sync_Filter(mouse)
-		extent := datatypes.Vec3_Multiply(direction, MOUSE_MISS_DISTANCE)
+		extent := datatypes.Vec3_Multiply(direction, f64(MOUSE_MISS_DISTANCE))
 		result, hit := Physics_Raycast(physics, &workspace.object, origin, extent, &mouse.params)
 		if hit {
 			mouse.hit = datatypes.CFrame_LookAt(result.Position, origin)

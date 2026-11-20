@@ -2,6 +2,7 @@
 package renderer
 
 import "core:fmt"
+import "core:time"
 import "core:strings"
 
 import kineffi "../bindings"
@@ -173,6 +174,8 @@ when KINE_RENDERER_GL {
 
 	init :: proc(windowName: string, width: i32, height: i32, renderer: ^RendererObject) {
 		width, height := width, height
+		startup_started := time.tick_now()
+		first_frame := true
 		if !sdl3.Init(sdl3.INIT_VIDEO | sdl3.INIT_EVENTS | sdl3.INIT_GAMEPAD) {
 			show_fatal_error("Failed to initialize SDL")
 			return
@@ -197,6 +200,7 @@ when KINE_RENDERER_GL {
 		renderer.Window = window
 		defer sdl3.DestroyWindow(window)
 
+		fmt.eprintf("[Startup] SDL window created: %.1f ms after renderer entry\n", time.duration_milliseconds(time.tick_since(startup_started)))
 		_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
 
 		compositor := kineffi.Kine_GL_Compositor_CreateForSDLWindow(window, width, height)
@@ -402,6 +406,10 @@ when KINE_RENDERER_GL {
 					kineffi.Kine_GL_Compositor_GetLastError(compositor),
 				)
 				break
+			}
+			if first_frame {
+				first_frame = false
+				fmt.eprintf("[Startup] first frame presented: %.1f ms after renderer entry\n", time.duration_milliseconds(time.tick_since(startup_started)))
 			}
 			renderer.Ready = true
 			renderer.SkiaSurface = nil

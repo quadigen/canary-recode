@@ -41,6 +41,7 @@ Cloth :: struct {
 	mass, damping:           f32,
 	force, impulse:          [3]f32,
 	particles:               [CLOTH_VERTEX_COUNT]Cloth_Particle,
+	simulation_origin: datatypes.Vector3,
 	initialized:             bool,
 	pin_count:               int,
 	width:                   f32,
@@ -187,22 +188,24 @@ Cloth_Prepare_Surface :: proc(cloth: ^Cloth, workspace: ^Object) -> bool {
 
 Cloth_Initialize :: proc(cloth: ^Cloth, anchors: [2]datatypes.CFrame, pin_count: int) {
 	anchor := anchors[0]
-	start := [3]f32{anchor.x, anchor.y, anchor.z}
+	cloth.simulation_origin = {}
+	if max(abs(anchor.x), abs(anchor.y), abs(anchor.z)) > 4096 {cloth.simulation_origin = {anchor.x, anchor.y, anchor.z}}
+	start := Cloth_Local_Position(cloth, anchor)
 	right := datatypes.CFrame_RightVector(anchor)
 	up := datatypes.CFrame_UpVector(anchor)
-	width := [3]f32{right.x, right.y, right.z} * cloth.size.X
+	width := [3]f32{f32(right.x), f32(right.y), f32(right.z)} * cloth.size.X
 	span := width
-	down := -[3]f32{up.x, up.y, up.z}
+	down := -[3]f32{f32(up.x), f32(up.y), f32(up.z)}
 	cloth.width = cloth.size.X
 	if pin_count == 2 {
-		span = [3]f32{anchors[1].x, anchors[1].y, anchors[1].z} - start
+		span = Cloth_Local_Position(cloth, anchors[1]) - start
 		cloth.width = Cloth_Width(cloth, span)
 		if linalg.dot(span, span) > CLOTH_MIN_SPAN * CLOTH_MIN_SPAN {
 			axis := span / cloth.width
 			gravity := [3]f32{0, -1, 0}
 			down = gravity - axis * linalg.dot(gravity, axis)
 			if linalg.dot(down, down) < 0.000001 {
-				side := [3]f32{right.x, right.y, right.z}
+				side := [3]f32{f32(right.x), f32(right.y), f32(right.z)}
 				down = side - axis * linalg.dot(side, axis)
 				if linalg.dot(down, down) < 0.000001 {
 					down = linalg.cross(axis, [3]f32{0, 0, 1})
@@ -225,9 +228,9 @@ Cloth_Initialize :: proc(cloth: ^Cloth, anchors: [2]datatypes.CFrame, pin_count:
 		}
 	}
 	if pin_count == 2 {
-		cloth.particles[0].position = {anchor.x, anchor.y, anchor.z}
+		cloth.particles[0].position = Cloth_Local_Position(cloth, anchor)
 		second := anchors[1]
-		cloth.particles[CLOTH_SEGMENTS].position = {second.x, second.y, second.z}
+		cloth.particles[CLOTH_SEGMENTS].position = Cloth_Local_Position(cloth, second)
 	}
 	cloth.initialized = true
 	cloth.pin_count = pin_count
@@ -288,7 +291,7 @@ cloth_get :: proc(
 	case "Damping":
 		vm.PushNumber(L, f64(cloth.damping))
 	case "Force":
-		datatypes.Push_Vector3(L, {cloth.force.x, cloth.force.y, cloth.force.z})
+		datatypes.Push_Vector3(L, {f64(cloth.force.x), f64(cloth.force.y), f64(cloth.force.z)})
 	case "ApplyImpulse":
 		vm.PushUserdataMethod(L, key)
 	case:
@@ -357,7 +360,7 @@ cloth_set :: proc(
 			_ = vm.RaiseError(L, "Cloth.Force must be finite")
 			return true
 		}
-		cloth.force = {force.x, force.y, force.z}
+		cloth.force = {f32(force.x), f32(force.y), f32(force.z)}
 	case:
 		return false
 	}
@@ -377,8 +380,8 @@ cloth_namecall :: proc(
 	if method != "ApplyImpulse" {return 0, false}
 	cloth := cast(^Cloth)object
 	impulse := datatypes.Arg_Vector3(L, 2)
-	total := cloth.impulse + [3]f32{impulse.x, impulse.y, impulse.z}
-	if !cloth_finite_vector({total.x, total.y, total.z}) {
+	total := cloth.impulse + [3]f32{f32(impulse.x), f32(impulse.y), f32(impulse.z)}
+	if !cloth_finite_vector({f64(total.x), f64(total.y), f64(total.z)}) {
 		return vm.RaiseError(L, "Cloth impulse must be finite"), true
 	}
 	if cloth.enabled && cloth.attachment != nil {cloth.impulse = total}
@@ -410,4 +413,15 @@ Register_Cloth :: proc(registry: ^Registry) {
 		events = []string{"Touched"},
 		methods = []string{"ApplyImpulse"},
 	)
+}
+
+
+Cloth_Local_Position :: proc(cloth: ^Cloth, frame: datatypes.CFrame) -> [3]f32 {
+ o := cloth.simulation_origin
+ return {f32(frame.x-o.x), f32(frame.y-o.y), f32(frame.z-o.z)}
+}
+Cloth_World_Pin :: proc(cloth: ^Cloth) -> datatypes.Vector3 {
+ p := cloth.particles[CLOTH_PIN].position
+ o := cloth.simulation_origin
+ return {o.x+f64(p.x), o.y+f64(p.y), o.z+f64(p.z)}
 }
