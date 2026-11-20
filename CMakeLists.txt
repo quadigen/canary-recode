@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
+# Dependencies may specify older minimum CMake versions. Keep the modern MSVC
+# debug-information abstraction enabled unless they explicitly opt out.
+set(CMAKE_POLICY_DEFAULT_CMP0141 NEW)
+
 project(KinemiumNative
 	VERSION 0.1.0
 	DESCRIPTION "Native libraries consumed by the Odin runtime"
@@ -14,6 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(MSVC)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+	# Prefer object-embedded debug info for native dependencies with symbols.
+	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
 endif()
 
 # The application is written in Odin. CMake owns only the native wrappers and
@@ -47,4 +53,15 @@ add_custom_target(KinemiumOdinLibraries ALL
 )
 if(TARGET kine_openxr_probe)
     add_dependencies(KinemiumOdinLibraries kine_openxr_probe)
+endif()
+
+# Some upstream projects still hard-code /Zi rather than using CMP0141.
+# Apply the final policy after all native and FetchContent targets exist.
+if(MSVC)
+    include(cmake/msvc_debug_information.cmake)
+    kine_msvc_embedded_debug_information("${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "")
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "")
+    endif()
 endif()

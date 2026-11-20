@@ -259,6 +259,8 @@ jobs:
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
           cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -C '${{ steps.skia.outputs.cmake }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/check_msvc_debug_information.py vendor/build/compile_commands.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build vendor/build --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Configure and build native dependencies (Unix)
