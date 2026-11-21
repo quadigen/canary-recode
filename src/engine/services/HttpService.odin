@@ -160,7 +160,12 @@ HttpService_GetAsync :: proc(
 		return "", false
 	}
 
-	response, err := http_client.get(url, allocator)
+	req: http_client.Request
+	http_client.request_init(&req, .Get, allocator)
+	req.public_only = !service.allow_private_network
+	defer http_client.request_destroy(&req)
+
+	response, err := http_client.request(&req, url, allocator)
 	if err != nil {
 		fmt.eprintf("[HttpService] get error: %v (url: %s)\n", err, url)
 		return "", false
