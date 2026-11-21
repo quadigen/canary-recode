@@ -39,7 +39,7 @@ vignette.Color = Color3.new(0, 0, 0)
 | `Color` | `Color3` | Read/write | Black | Color applied at the edges. |
 | `Transparency` | `number` | Read/write | `0.25` | How much the vignette shows through, clamped between `0` and `1`. |
 
-`Transparency` is inverted for rendering: the renderer receives `1 - Transparency`. A value of `0` produces the strongest edge; `1` makes the vignette invisible.
+A value of `0` produces the strongest edge; `1` makes the vignette invisible.
 
 `Midpoint` moves the start of the darkening toward the center as it increases. `Feather` controls how gradually it fades in. `Roundness` changes the shape from a more rectangular frame to a circular one.
 

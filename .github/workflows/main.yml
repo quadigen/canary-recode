@@ -768,10 +768,25 @@ jobs:
         with:
           path: build/web-native
           key: web-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.emsdk-version.outputs.hash }}-${{ steps.dependency-hash.outputs.odin }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.dependency-hash.outputs.workspace }}
+      - name: Checkout browser editor modules
+        uses: actions/checkout@v6
+        with:
+          repository: quadigen/kinemium-editor
+          ref: main
+          path: build/editor-source
+          persist-credentials: false
+          fetch-depth: 1
       - name: Check Web Odin source
-        run: odin check src -target:js_wasm32
+        shell: pwsh
+        run: |
+          odin check src -target:js_wasm32 -define:BUILD_TARGET=editor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          odin check src -target:js_wasm32 -define:BUILD_TARGET=client
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Kinemium Web (WASM)
         shell: pwsh
+        env:
+          KINEMIUM_EDITOR_MODULES: ${{ github.workspace }}/build/editor-source/internal
         run: |
           & './tools/build_wasm.ps1'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

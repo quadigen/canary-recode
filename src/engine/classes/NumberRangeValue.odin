@@ -4,21 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-NumberRangeValue_Class := Class_Info{
+NumberRangeValue_Class := Class_Info {
 	name   = "NumberRangeValue",
 	parent = &ValueBase_Class,
 }
 
 NumberRangeValue :: struct {
 	using object: Object,
-
-	value: datatypes.NumberRange,
+	value:        datatypes.NumberRange,
 }
 
 NumberRangeValue_Init :: proc() -> NumberRangeValue {
-	return NumberRangeValue{
-		object = Object_Init(&NumberRangeValue_Class),
-	}
+	return NumberRangeValue{object = Object_Init(&NumberRangeValue_Class)}
 }
 
 NumberRangeValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -44,7 +41,7 @@ NumberRangeValue_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_NumberRange(L, datatype_registry, val.value)
 	case:
 		return false
@@ -64,7 +61,7 @@ NumberRangeValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_NumberRange(L, value_index, datatype_registry)
 	case:
 		return false
@@ -86,6 +83,7 @@ Register_NumberRangeValue :: proc(registry: ^Registry) {
 		NumberRangeValue_construct,
 		NumberRangeValue_destroy,
 		get = NumberRangeValue_get,
+		parallel_get = NumberRangeValue_get,
 		set = NumberRangeValue_set,
 		clone = NumberRangeValue_clone,
 		properties = []string{"Value"},

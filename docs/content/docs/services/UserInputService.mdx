@@ -116,11 +116,35 @@ end)
 
 Keyboard and mouse input arrives on desktop builds, touch on Android and web. On a platform without a device, the matching events simply don't fire.
 
+## Keyboard labels and gamepad navigation
+
+| Signature | Description |
+| --- | --- |
+| `GetStringForKeyCode(key: Enum.KeyCode): string` | Returns the keyboard label using the active native keyboard layout when available, or a fallback label. |
+| `GetNavigationGamepads(): {Enum.UserInputType}` | Returns connected gamepads that can navigate GUI. |
+| `IsNavigationGamepad(gamepad: Enum.UserInputType): boolean` | Checks whether a connected gamepad can navigate GUI. |
+| `SetNavigationGamepad(gamepad: Enum.UserInputType, enabled: boolean): ()` | Enables or disables GUI navigation for that gamepad without disabling gameplay input. |
+
+Disabling GUI navigation for a controller doesn't stop its input events.
+
 ## Notes
 
 - Key repeat is filtered out for keyboard input, so holding a key fires `InputBegan` once.
 - The engine creates fresh input objects for each event and destroys them afterward.
 - Input that belongs to a GUI element is delivered there as well; `gameProcessedEvent` tells you whether it was consumed.
+
+## Gamepads
+
+| Method | Description |
+| --- | --- |
+| `GetConnectedGamepads(): {Enum.UserInputType}` | Returns the connected gamepad slots. |
+| `GetGamepadConnected(gamepad: Enum.UserInputType): boolean` | Tests whether a slot is connected. |
+| `GetGamepadState(gamepad: Enum.UserInputType): {InputObject}` | Returns current button and axis information, or an empty array if disconnected. |
+| `IsGamepadButtonDown(gamepad: Enum.UserInputType, key: Enum.KeyCode): boolean` | Tests a supported button's pressed state. |
+| `GamepadSupports(gamepad: Enum.UserInputType, key: Enum.KeyCode): boolean` | Checks support for a key on a connected gamepad. |
+| `GetSupportedGamepadKeyCodes(gamepad: Enum.UserInputType): {Enum.KeyCode}` | Lists supported keys, or an empty array if disconnected. |
+
+The gamepad argument identifies a slot such as `Enum.UserInputType.Gamepad1`. In state results, thumbstick positions use X and Y, and analog triggers use Z.
 
 ## See also
 

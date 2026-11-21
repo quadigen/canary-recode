@@ -1,10 +1,11 @@
 #+build !js
-// wire:service
+
 
 package services
 
 import tracy "../util/odin-tracy"
 
+import "core:crypto/sha2"
 import json "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -92,6 +93,7 @@ UpdateReport :: struct {
 	asset_name:         string,
 	asset_url:          string,
 	asset_size:         i64,
+	asset_digest:       string,
 	staged_ready:       bool,
 	staged_version:     string,
 	error:              string,
@@ -101,6 +103,7 @@ GitHub_Asset :: struct {
 	name:                 string,
 	browser_download_url: string,
 	size:                 i64,
+	digest:               string,
 }
 
 GitHub_Release :: struct {
@@ -217,6 +220,7 @@ update_report_destroy :: proc(report: ^UpdateReport) {
 	delete(report.latest_notes)
 	delete(report.asset_name)
 	delete(report.asset_url)
+	delete(report.asset_digest)
 	delete(report.staged_version)
 	delete(report.error)
 	report^ = {}
@@ -226,6 +230,7 @@ update_release_destroy :: proc(release: ^GitHub_Release) {
 	for &asset in release.assets {
 		delete(asset.name)
 		delete(asset.browser_download_url)
+		delete(asset.digest)
 	}
 	delete(release.assets)
 	delete(release.tag_name)
@@ -401,7 +406,13 @@ update_decode_release :: proc(body: string) -> (GitHub_Release, bool) {
 	return release, true
 }
 
-update_pick_asset :: proc(release: GitHub_Release) -> (name, url: string, size: i64, ok: bool) {
+update_pick_asset :: proc(
+	release: GitHub_Release,
+) -> (
+	name, url, digest: string,
+	size: i64,
+	ok: bool,
+) {
 	expected := Update_Asset_Name(update_os_tag(), update_arch_tag())
 	defer delete(expected)
 
@@ -409,11 +420,12 @@ update_pick_asset :: proc(release: GitHub_Release) -> (name, url: string, size: 
 		if asset.name == expected {
 			return strings.clone(asset.name),
 				strings.clone(asset.browser_download_url),
+				strings.clone(asset.digest),
 				asset.size,
 				true
 		}
 	}
-	return "", "", 0, false
+	return "", "", "", 0, false
 }
 
 
@@ -573,11 +585,26 @@ update_join_dir :: proc(base_dir, name: string) -> string {
 }
 
 
+update_asset_digest_valid :: proc(data, expected: string) -> bool {
+	if len(expected) != 71 || !strings.has_prefix(expected, "sha256:") {return false}
+	ctx: sha2.Context_256
+	sha2.init_256(&ctx)
+	sha2.update(&ctx, transmute([]u8)data)
+	digest: [32]u8
+	sha2.final(&ctx, digest[:])
+	hex := "0123456789abcdef"
+	for b, i in digest {
+		if expected[7 + i * 2] != hex[b >> 4] || expected[8 + i * 2] != hex[b & 15] {return false}
+	}
+	return true
+}
+
 update_download_asset :: proc(url: string) -> (body: string, ok: bool) {
 	current_url := strings.clone(url, context.allocator)
 	defer delete(current_url)
 
 	for hop in 0 ..< UPDATE_MAX_REDIRECTS {
+		if !strings.has_prefix(current_url, "https://") {return "", false}
 		req: http_client.Request
 		http_client.request_init(&req, .Get)
 		defer http_client.request_destroy(&req)
@@ -636,6 +663,9 @@ update_service_stage_to_dir :: proc(service: ^UpdateService, report: UpdateRepor
 		return false
 	}
 	defer delete(data)
+	if report.asset_size <= 0 ||
+	   i64(len(data)) != report.asset_size ||
+	   !update_asset_digest_valid(data, report.asset_digest) {return false}
 
 	temp_dir, temp_err := os.make_directory_temp("", "kinemium-update-*", context.allocator)
 	if temp_err != nil {
@@ -1136,10 +1166,11 @@ update_fetch_report :: proc() -> (UpdateReport, bool) {
 	report.latest_published = strings.clone(release.published_at)
 	report.latest_notes = strings.clone(release.body)
 
-	if name, url, size, found := update_pick_asset(release); found {
+	if name, url, digest, size, found := update_pick_asset(release); found {
 		report.asset_name = name
 		report.asset_url = url
 		report.asset_size = size
+		report.asset_digest = digest
 	} else {
 		report.status = .Check_Failed
 		report.error = fmt.aprintf(

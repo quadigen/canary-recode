@@ -4,8 +4,8 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
-import "core:strings"
 import "core:math"
+import "core:strings"
 
 Part_Class := Class_Info {
 	name   = "Part",
@@ -121,11 +121,28 @@ part_get :: proc(
 	case "PivotOffset":
 		if datatype_registry == nil {return false}
 		datatypes.Push_CFrame(L, datatype_registry, part.pivot_offset)
-	case "GetPivot", "PivotTo", "GetVelocityAtPosition":
+	case "GetPivot",
+	     "PivotTo",
+	     "GetVelocityAtPosition",
+	     "ApplyImpulse",
+	     "ApplyAngularImpulse",
+	     "ApplyImpulseAtPosition",
+	     "GetMass",
+	     "CanCollideWith",
+	     "GetConnectedParts",
+	     "IsGrounded",
+	     "GetJoints",
+	     "GetNoCollisionConstraints":
 		vm.PushUserdataMethod(L, key)
 	case "Color":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, part.color)
+	case "Mass":
+		reg := object.signal_registry
+		mass := f64(0)
+		if reg != nil &&
+		   reg.part_body.get_mass != nil {mass = reg.part_body.get_mass(reg.part_body_ctx, object)}
+		vm.PushNumber(L, mass)
 	case "Gravity":
 		datatypes.Push_Vector3(L, part.gravity)
 	case "Size":
@@ -181,6 +198,7 @@ part_set :: proc(
 	case "CollisionGroup":
 		delete(part.collision_group)
 		part.collision_group = strings.clone(vm.ArgString(L, value_index))
+		Hierarchy_Touched()
 	case "Material":
 		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "Material")
@@ -207,9 +225,12 @@ part_set :: proc(
 		part.color = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case "Gravity":
 		gravity := datatypes.Arg_Vector3(L, value_index)
-		if math.is_nan(gravity.x) || math.is_inf(gravity.x) ||
-		   math.is_nan(gravity.y) || math.is_inf(gravity.y) ||
-		   math.is_nan(gravity.z) || math.is_inf(gravity.z) {
+		if math.is_nan(gravity.x) ||
+		   math.is_inf(gravity.x) ||
+		   math.is_nan(gravity.y) ||
+		   math.is_inf(gravity.y) ||
+		   math.is_nan(gravity.z) ||
+		   math.is_inf(gravity.z) {
 			_ = vm.RaiseError(L, "Gravity components must be finite")
 			return true
 		}
@@ -305,6 +326,36 @@ part_namecall :: proc(
 		return part_csg_namecall(L, object, .Intersect, enum_registry), true
 	case "Negate":
 		return part_csg_namecall(L, object, .Negate, enum_registry), true
+	case "GetConnectedParts", "IsGrounded", "GetJoints", "GetNoCollisionConstraints":
+		return part_joint_namecall(L, object, method)
+	case "GetMass":
+		reg := object.signal_registry
+		mass := f64(0)
+		if reg != nil &&
+		   reg.part_body.get_mass != nil {mass = reg.part_body.get_mass(reg.part_body_ctx, object)}
+		vm.PushNumber(L, mass)
+		return 1, true
+	case "CanCollideWith":
+		other := Object_From_Argument(L, 2)
+		if other == nil ||
+		   !Is_A(other, "BasePart") {return vm.RaiseError(L, "expected BasePart"), true}
+		reg := object.signal_registry
+		vm.PushBoolean(
+			L,
+			reg != nil &&
+			reg.part_body.can_collide_with != nil &&
+			reg.part_body.can_collide_with(reg.part_body_ctx, object, other),
+		)
+		return 1, true
+	case "ApplyAngularImpulse":
+		impulse := datatypes.Arg_Vector3(L, 2)
+		_ = Part_Apply_Angular_Impulse(object.signal_registry, object, impulse)
+		return 0, true
+	case "ApplyImpulseAtPosition":
+		impulse := datatypes.Arg_Vector3(L, 2)
+		position := datatypes.Arg_Vector3(L, 3)
+		_ = Part_Apply_Impulse_At_Position(object.signal_registry, object, impulse, position)
+		return 0, true
 	case "ApplyImpulse":
 		impulse := datatypes.Arg_Vector3(L, 2)
 		_ = Part_Apply_Impulse(part.object.signal_registry, object, impulse)
@@ -338,6 +389,50 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.collision_group = strings.clone(src.collision_group)
 }
 
+part_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "Anchored",
+	     "CanCollide",
+	     "CanQuery",
+	     "CanTouch",
+	     "CollisionGroup",
+	     "MaterialVariant",
+	     "Material",
+	     "Transparency",
+	     "Shape",
+	     "CFrame",
+	     "PivotOffset",
+	     "Color",
+	     "Gravity",
+	     "Size",
+	     "CastShadow",
+	     "Position",
+	     "GetPivot":
+		return part_get(L, object, d, e, key)
+	}
+	return false
+}
+
+part_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	if method != "GetPivot" {return 0, false}
+	return part_namecall(L, object, d, e, method)
+}
+
 Register_Part :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -345,6 +440,8 @@ Register_Part :: proc(registry: ^Registry) {
 		part_construct,
 		part_destroy,
 		get = part_get,
+		parallel_get = part_parallel_get,
+		parallel_namecall = part_parallel_namecall,
 		set = part_set,
 		namecall = part_namecall,
 		clone = part_clone,

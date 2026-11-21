@@ -86,6 +86,8 @@ model.Parent = game:GetService("Workspace")
 
 local Terrain = game:GetService("Terrain")
 Terrain.VoxelSize = 4
+Terrain.Raymarching = true
+Terrain.Decoration = false
 Terrain.WaterColor = Color3.new(0.25, 0.5, 0.75)
 Terrain.GrassLength = 3.5
 
@@ -100,7 +102,7 @@ Terrain:SetVoxel(4, 1, 4, 0.5, Enum.Material.Water)
 assert(
 	game:GetService("ExportService"):ExportToFileSync("` +
 		KINE_PATH +
-		`"),
+		`", ""),
 	"saving the map failed"
 )
 `,
@@ -138,6 +140,10 @@ main :: proc() {
 
 	assert(loaded.voxel_size == source_terrain.voxel_size, "voxel size should round trip")
 	assert(loaded.iso_level == source_terrain.iso_level, "iso level should round trip")
+	assert(
+		loaded.raymarching && !loaded.decoration,
+		"raymarching and decoration should round trip independently",
+	)
 	assert(loaded.grass_length == source_terrain.grass_length, "grass length should round trip")
 	assert(
 		loaded.water_color.R == source_terrain.water_color.R &&

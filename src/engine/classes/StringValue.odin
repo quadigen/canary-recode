@@ -1,26 +1,22 @@
 package classes
 
-import "core:strings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:strings"
 
-StringValue_Class := Class_Info{
+StringValue_Class := Class_Info {
 	name   = "StringValue",
 	parent = &ValueBase_Class,
 }
 
 StringValue :: struct {
 	using object: Object,
-
-	value: string,
+	value:        string,
 }
 
 StringValue_Init :: proc() -> StringValue {
-	return StringValue{
-		object = Object_Init(&StringValue_Class),
-		value = strings.clone(""),
-	}
+	return StringValue{object = Object_Init(&StringValue_Class), value = strings.clone("")}
 }
 
 StringValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -92,6 +88,7 @@ Register_StringValue :: proc(registry: ^Registry) {
 		StringValue_construct,
 		StringValue_destroy,
 		get = StringValue_get,
+		parallel_get = StringValue_get,
 		set = StringValue_set,
 		clone = StringValue_clone,
 		properties = []string{"Value"},

@@ -1,11 +1,11 @@
 package main
 
-import "core:fmt"
-import "core:os"
-import "core:time"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:os"
+import "core:time"
 
 main :: proc() {
 	script_vm := vm.New()
@@ -14,7 +14,10 @@ main :: proc() {
 	defer engine_runtime.Environment_Destroy(&environment)
 	defer vm.Close(&script_vm)
 
-	service := cast(^services.PlaytestService)services.Ensure_Service(&environment.services, "PlaytestService")
+	service := cast(^services.PlaytestService)services.Ensure_Service(
+		&environment.services,
+		"PlaytestService",
+	)
 	reader, writer, pipe_error := os.pipe()
 	assert(pipe_error == nil)
 	defer os.close(writer)
@@ -38,7 +41,9 @@ main :: proc() {
 	_, write_error = os.write(client_writer, transmute([]u8)client_output)
 	assert(write_error == nil)
 
-	ok, err := vm.RunInternal(&script_vm, `
+	ok, err := vm.RunInternal(
+		&script_vm,
+		`
 local playtest = game:GetService("PlaytestService")
 received = {}
 game:GetService("LogService").MessageOut:Connect(function(message)
@@ -49,14 +54,16 @@ game:GetService("LogService").MessageOut:Connect(function(message)
 end)
 assert(playtest.IsRunning)
 assert(playtest.IsRunning)
-assert(#received == 6)
+assert(#received == 6, "received " .. #received .. ": " .. table.concat(received, " | "))
 assert(received[1] == "[Playtest server] first playtest line")
 assert(received[2] == "[Playtest server] second playtest line")
 assert(received[3] == "[Playtest server] particle warning")
 assert(received[4] == "[Playtest server] debugger warning")
 assert(received[5] == received[2])
 assert(received[6] == "[Playtest client] particle warning")
-`, "playtest_output_smoke")
+`,
+		"playtest_output_smoke",
+	)
 	assert(ok, err)
 
 	warning := service.server_output.warnings["particle warning"]
@@ -64,28 +71,40 @@ assert(received[6] == "[Playtest client] particle warning")
 	service.server_output.warnings["particle warning"] = warning
 	_, write_error = os.write(writer, transmute([]u8)client_output)
 	assert(write_error == nil)
-	ok, err = vm.RunInternal(&script_vm, `
+	ok, err = vm.RunInternal(
+		&script_vm,
+		`
 assert(game:GetService("PlaytestService").IsRunning)
 assert(#received == 7)
 assert(received[7] == "[Playtest server] particle warning (1 repeats suppressed)")
-`, "playtest_output_warning_interval")
+`,
+		"playtest_output_warning_interval",
+	)
 	assert(ok, err)
-	ok, err = vm.RunInternal(&script_vm, `
+	ok, err = vm.RunInternal(
+		&script_vm,
+		`
 local log = game:GetService("LogService")
 local generation = log.HistoryGeneration
 log:Clear()
 assert(log.MessageCount == 0 and log.HistoryGeneration == generation + 1)
 assert(#log:GetLogHistory() == 0)
-`, "playtest_output_clear")
+`,
+		"playtest_output_clear",
+	)
 	assert(ok, err)
 	_, write_error = os.write(writer, transmute([]u8)string("[LOG] first line after clear\n"))
 	assert(write_error == nil)
-	ok, err = vm.RunInternal(&script_vm, `
+	ok, err = vm.RunInternal(
+		&script_vm,
+		`
 assert(game:GetService("PlaytestService").IsRunning)
 local log = game:GetService("LogService")
 assert(log.MessageCount == 1)
 assert(log:GetLogHistory()[1].message == "[Playtest server] first line after clear")
-`, "playtest_output_after_clear")
+`,
+		"playtest_output_after_clear",
+	)
 	assert(ok, err)
 	fmt.println("PLAYTEST_OUTPUT_SMOKE_PASSED")
 }

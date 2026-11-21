@@ -1,0 +1,33 @@
+---
+title: Shape2D
+description: Draw polygons and lines from a list of points.
+---
+
+Shape2D draws simple 2D shapes. One class handles both filled polygons and lines.
+
+```lua
+local shape = Instance.new("Shape2D", workspace)
+shape.Points = {
+    Vector2.new(0, 0),
+    Vector2.new(40, 0),
+    Vector2.new(20, 30)
+}
+shape.Position = UDim2.fromOffset(100, 100)
+shape.Color = Color3.fromRGB(255, 180, 40)
+shape.Closed = true
+shape.Thickness = 0 -- filled polygon
+```
+
+For a line, set `Thickness` to a positive number, such as `4`. Its points then form a stroked path. `Closed` joins the final point to the first.
+
+## Properties
+
+| Property | Type | Default |
+| --- | --- | --- |
+| `Points` | {Vector2} | {} |
+| `Color` | Color3 | White |
+| `Transparency` | number | 0 |
+| `Thickness` | number | 0 |
+| `Closed` | boolean | false |
+
+Use `shape.Points = { ... }` to replace the point array. Reading `Points` returns a copy. A Shape2D has no physical collider; use Part2D when collisions are needed. Point arrays are saved in the scene.

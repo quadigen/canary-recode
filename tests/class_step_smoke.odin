@@ -1,23 +1,32 @@
 package main
 
-import "core:fmt"
 import classes "../src/engine/classes"
 import datatypes "../src/engine/datatypes"
 import enums "../src/engine/enum"
 import vm "../src/engine/vm"
+import "core:fmt"
 
-Step_Probe_Class := classes.Class_Info{name = "StepProbe", parent = &classes.Instance_Class}
+Step_Probe_Class := classes.Class_Info {
+	name   = "StepProbe",
+	parent = &classes.Instance_Class,
+}
 expected_renderer: ^classes.Renderer_Object
 construct_saw_renderer: bool
 destroy_saw_renderer: bool
+step_calls: int
+destroy_calls: int
+destroyed_steps: int
 
 Step_Probe :: struct {
 	using object: classes.Object,
-	step_count: i32,
-	last_delta: f32,
+	step_count:   i32,
+	last_delta:   f32,
 }
 
-step_probe_construct :: proc(renderer: ^classes.Renderer_Object, data_model: rawptr) -> ^classes.Object {
+step_probe_construct :: proc(
+	renderer: ^classes.Renderer_Object,
+	data_model: rawptr,
+) -> ^classes.Object {
 	construct_saw_renderer = renderer == expected_renderer
 	probe := new(Step_Probe)
 	probe.object = classes.Object_Init(&Step_Probe_Class, "StepProbe")
@@ -26,6 +35,8 @@ step_probe_construct :: proc(renderer: ^classes.Renderer_Object, data_model: raw
 
 step_probe_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	destroy_saw_renderer = renderer == expected_renderer
+	destroy_calls += 1
+	destroyed_steps += int((cast(^Step_Probe)object).step_count)
 	classes.Object_Destroy(object)
 	free(cast(^Step_Probe)object)
 }
@@ -39,15 +50,19 @@ step_probe_get :: proc(
 ) -> bool {
 	probe := cast(^Step_Probe)object
 	switch key {
-	case "StepCount": vm.PushNumber(L, f64(probe.step_count))
-	case "LastDelta": vm.PushNumber(L, f64(probe.last_delta))
-	case: return false
+	case "StepCount":
+		vm.PushNumber(L, f64(probe.step_count))
+	case "LastDelta":
+		vm.PushNumber(L, f64(probe.last_delta))
+	case:
+		return false
 	}
 	return true
 }
 
 step_probe_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 	probe := cast(^Step_Probe)object
+	step_calls += 1
 	probe.step_count += 1
 	probe.last_delta = ctx.delta_time
 }
@@ -81,26 +96,36 @@ main :: proc() {
 	)
 	classes.Install_Instance_Library(&signal_registry, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 activeProbe = Instance.new("StepProbe")
 destroyedProbe = Instance.new("StepProbe")
 destroyedProbe:Destroy()
-`)
+`,
+	)
 	classes.Step(&signal_registry, script_vm.L, 0.25)
 	classes.Step(&signal_registry, script_vm.L, 0.5)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(activeProbe.StepCount == 2)
 assert(math.abs(activeProbe.LastDelta - 0.5) < 1e-6)
-assert(destroyedProbe.StepCount == 0)
+assert(not pcall(function() return destroyedProbe.StepCount end), "destroyed instances must reject property access")
 activeProbe:Destroy()
-`)
+`,
+	)
 	assert(construct_saw_renderer)
+	assert(step_calls == 2, "destroyed probe must not receive steps")
 	classes.Step(&signal_registry, script_vm.L, 1.0)
-	run_script(&script_vm, `assert(activeProbe.StepCount == 2)`)
+	assert(step_calls == 2, "destroyed active probe must not receive further steps")
+	run_script(&script_vm, `assert(not pcall(function() return activeProbe.StepCount end))`)
 
 	vm.Close(&script_vm)
 	assert(destroy_saw_renderer)
 	classes.Registry_Destroy(&signal_registry)
+	assert(destroy_calls == 2, "each probe must be destructed exactly once")
+	assert(destroyed_steps == 2, "only the live probe may have received steps")
 	enums.Registry_Destroy(&enum_registry)
 	fmt.println("CLASS_STEP_SMOKE_PASSED")
 }

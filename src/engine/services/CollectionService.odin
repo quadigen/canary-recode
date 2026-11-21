@@ -1,6 +1,5 @@
 package services
 
-// wire:service global="CollectionService"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -159,6 +158,37 @@ collection_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.R
 	free(cast(^CollectionService)object)
 }
 
+collection_service_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "HasTag", "GetTags", "GetTagged", "GetAllTags":
+		return collection_service_get(L, object, d, e, key)
+	}
+	return false
+}
+
+collection_service_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "HasTag", "GetTags", "GetTagged", "GetAllTags":
+		return collection_service_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_CollectionService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
@@ -168,6 +198,8 @@ Register_CollectionService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = collection_service_get,
 		namecall = collection_service_namecall,
+		parallel_get = collection_service_parallel_get,
+		parallel_namecall = collection_service_parallel_namecall,
 		methods = []string {
 			"AddTag",
 			"RemoveTag",

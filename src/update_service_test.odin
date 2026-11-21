@@ -51,47 +51,79 @@ update_asset_name_test :: proc(t: ^testing.T) {
 update_swap_bundle_test :: proc(t: ^testing.T) {
 	expect := testing.expect
 
-	pending_dir, pending_err := os.make_directory_temp("", "kinemium-update-test-*", context.allocator)
+	pending_dir, pending_err := os.make_directory_temp(
+		"",
+		"kinemium-update-test-*",
+		context.allocator,
+	)
 	expect(t, pending_err == nil, "create pending directory")
 	defer os.remove_all(pending_dir)
 	defer delete(pending_dir)
 
-	target_dir, target_err := os.make_directory_temp("", "kinemium-target-test-*", context.allocator)
+	target_dir, target_err := os.make_directory_temp(
+		"",
+		"kinemium-target-test-*",
+		context.allocator,
+	)
 	expect(t, target_err == nil, "create target directory")
 	defer os.remove_all(target_dir)
 	defer delete(target_dir)
 
-	bundle_exe := test_join(pending_dir, "kinemium.exe")
+	bundle_name := "kinemium"
+	when ODIN_OS == .Windows {bundle_name = "kinemium.exe"}
+	bundle_exe := test_join(pending_dir, bundle_name)
 	expect(t, bundle_exe != "", "bundle exe path")
-	if bundle_exe == "" { return }
+	if bundle_exe == "" {return}
 	defer delete(bundle_exe)
 
 	bundle_sdl := test_join(pending_dir, "SDL3.dll")
 	expect(t, bundle_sdl != "", "bundle dll path")
-	if bundle_sdl == "" { return }
+	if bundle_sdl == "" {return}
 	defer delete(bundle_sdl)
 
 	bundle_version := test_join(pending_dir, services.UPDATE_PENDING_VERSION_NAME)
 	expect(t, bundle_version != "", "bundle marker path")
-	if bundle_version == "" { return }
+	if bundle_version == "" {return}
 	defer delete(bundle_version)
 
-	expect(t, os.write_entire_file_from_string(bundle_exe, "new-engine-bytes") == nil, "write bundle exe")
-	expect(t, os.write_entire_file_from_string(bundle_sdl, "new-sdl-bytes") == nil, "write bundle dll")
-	expect(t, os.write_entire_file_from_string(bundle_version, "v2.0.0") == nil, "write bundle marker")
+	expect(
+		t,
+		os.write_entire_file_from_string(bundle_exe, "new-engine-bytes") == nil,
+		"write bundle exe",
+	)
+	expect(
+		t,
+		os.write_entire_file_from_string(bundle_sdl, "new-sdl-bytes") == nil,
+		"write bundle dll",
+	)
+	expect(
+		t,
+		os.write_entire_file_from_string(bundle_version, "v2.0.0") == nil,
+		"write bundle marker",
+	)
 
-	target_exe := test_join(target_dir, "kinemium-editor.exe")
+	target_name := "kinemium-editor"
+	when ODIN_OS == .Windows {target_name = "kinemium-editor.exe"}
+	target_exe := test_join(target_dir, target_name)
 	expect(t, target_exe != "", "target exe path")
-	if target_exe == "" { return }
+	if target_exe == "" {return}
 	defer delete(target_exe)
 
 	target_sdl := test_join(target_dir, "SDL3.dll")
 	expect(t, target_sdl != "", "target dll path")
-	if target_sdl == "" { return }
+	if target_sdl == "" {return}
 	defer delete(target_sdl)
 
-	expect(t, os.write_entire_file_from_string(target_exe, "old-engine-bytes") == nil, "write target exe")
-	expect(t, os.write_entire_file_from_string(target_sdl, "old-sdl-bytes") == nil, "write target dll")
+	expect(
+		t,
+		os.write_entire_file_from_string(target_exe, "old-engine-bytes") == nil,
+		"write target exe",
+	)
+	expect(
+		t,
+		os.write_entire_file_from_string(target_sdl, "old-sdl-bytes") == nil,
+		"write target dll",
+	)
 
 	swapped := services.Update_Swap_Bundle(pending_dir, target_exe)
 	expect(t, swapped, "swap the bundle into place")
@@ -108,7 +140,7 @@ update_swap_bundle_test :: proc(t: ^testing.T) {
 update_pending_version_detected_test :: proc(t: ^testing.T) {
 	expect := testing.expect
 
-	// update_pending_read sweeps a fresh (empty) pending root without crashing.
+
 	version, pending_dir, ready := services.Update_Pending_Read()
 	if len(version) > 0 {
 		delete(version)

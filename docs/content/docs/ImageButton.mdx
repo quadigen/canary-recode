@@ -10,7 +10,7 @@ description: A clickable button that displays an image.
 ```lua
 local button = Instance.new("ImageButton")
 button.Size = UDim2.fromOffset(72, 72)
-button.Image = "rbxassetid://1234567890"
+button.Image = "builtin://icons/Part.svg"
 button.Parent = screenGui
 
 button.Activated:Connect(function()
@@ -24,7 +24,9 @@ end)
 
 | Property | Type | Access | Description |
 | --- | --- | --- | --- |
-| `Image` | `string` | Read/write | Image asset URI. |
+| `Image` | `string or Image or Content` | Read/write | URI or bound Image instance, including Animated and EditableImage. |
+| `ImageContent` | `Content` | Read/write | URI-based image source. |
+| `IsLoaded` | `boolean` | Read-only | Whether the source is available. |
 | `ImageTransparency` | `number` | Read/write | Transparency, clamped to `0` through `1`. |
 | `ImageColor3` | `Color3` | Read/write | Tint applied to the image. |
 | `ImageRectOffset` | `Vector2` | Read/write | Source rectangle offset. |
@@ -43,7 +45,6 @@ With automatic button color enabled, the image tints brighter on hover and darke
 
 ## Notes
 
-- `IsLoaded` isn't part of the public property list on this class.
 - `Activated` fires on a completed click, including touch input.
 - The image properties are stored on the button itself; there's no child label instance.
 - Inherits all `GuiObject` members.

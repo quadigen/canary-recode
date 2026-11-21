@@ -4,21 +4,20 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-RayValue_Class := Class_Info{
+RayValue_Class := Class_Info {
 	name   = "RayValue",
 	parent = &ValueBase_Class,
 }
 
 RayValue :: struct {
 	using object: Object,
-
-	value: datatypes.Ray,
+	value:        datatypes.Ray,
 }
 
 RayValue_Init :: proc() -> RayValue {
-	return RayValue{
+	return RayValue {
 		object = Object_Init(&RayValue_Class),
-		value = datatypes.Ray{
+		value = datatypes.Ray {
 			Origin = datatypes.Vector3{1, 0, 0},
 			Direction = datatypes.Vector3{1, 0, 0},
 		},
@@ -48,7 +47,7 @@ RayValue_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Ray(L, datatype_registry, val.value)
 	case:
 		return false
@@ -68,7 +67,7 @@ RayValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_Ray(L, value_index, datatype_registry)
 	case:
 		return false
@@ -90,6 +89,7 @@ Register_RayValue :: proc(registry: ^Registry) {
 		RayValue_construct,
 		RayValue_destroy,
 		get = RayValue_get,
+		parallel_get = RayValue_get,
 		set = RayValue_set,
 		clone = RayValue_clone,
 		properties = []string{"Value"},

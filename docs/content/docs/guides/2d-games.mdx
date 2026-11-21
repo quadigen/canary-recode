@@ -1,159 +1,89 @@
 ---
 title: 2D games
-description: Build a screen-space 2D physics scene with Workspace2D and Part2D, and understand what the current simulation supports.
+description: Build a 2D physics scene with Workspace, World2D, and Part2D.
 ---
 
-Kinemium has a second, separate physics world for 2D games. `Workspace2D` owns the simulation, and `Part2D` is the rectangular body you place inside it. Positions and sizes are in screen pixels, gravity pulls downward in screen space, and the 2D bodies never interact with 3D parts.
+Kinemium uses the same Workspace for 2D and 3D games. Set its dimension to D2 to render a 2D scene and simulate bodies independently of the frame rate.
 
-The current implementation is a box simulation with a narrow public surface. It's useful for falling objects, stacking, and platform layouts, but several `Part2D` properties are stored without being read. This guide shows what works today and where the limits are.
-
-## Create the world
-
-`Workspace2D` is a service, so you don't create it:
+## Create a scene
 
 ```lua
-local Workspace2D = game:GetService("Workspace2D")
-local Workspace = game:GetService("Workspace")
+workspace.Dimension = Enum.Dimension.D2
+local physics = game:GetService("Workspace2D")
+physics.Gravity = Vector2.new(0, 250)
+
+local level = Instance.new("World2D", workspace)
+
+local floor = Instance.new("Part2D", level)
+floor.Size = UDim2.fromOffset(600, 40)
+floor.Position = UDim2.fromOffset(0, 400)
+floor.BackgroundColor3 = Color3.fromRGB(90, 150, 100)
+
+local ball = Instance.new("Part2D", level)
+ball.Size = UDim2.fromOffset(40, 40)
+ball.AnchorPoint = Vector2.new(0.5, 0.5)
+ball.Position = UDim2.fromOffset(300, 100)
+ball.Anchored = false
+ball.IsBall = true
+ball.Elasticity = 0.7
+ball.BackgroundColor3 = Color3.fromRGB(220, 120, 60)
 ```
 
-Get the drawable size from `Workspace:GetWindowDimensions()` so the 2D scene fits the window:
+The ball falls onto the floor and bounces. Positive Y points down.
+
+## Move dynamic objects
 
 ```lua
-local viewport = Workspace:GetWindowDimensions()
+ball.Velocity = Vector2.new(60, 0)
+ball:ApplyImpulse(Vector2.new(0, -150))
 ```
 
-`Part2D` inherits from `GuiObject`, so it uses `UDim2` for position and size and supports the usual appearance properties. Parent parts directly to `Workspace2D`, not to a `ScreenGui`.
+Read the position, rotation, and velocity during a RunService event. The position retains its scale components, so use AbsolutePosition for the resolved top-left position.
 
-## Build a floor and a falling box
+## Group objects
 
-```lua
-local Workspace2D = game:GetService("Workspace2D")
-local Workspace = game:GetService("Workspace")
-
-local viewport = Workspace:GetWindowDimensions()
-
-local floor = Instance.new("Part2D")
-floor.Name = "Floor"
-floor.Size = UDim2.fromOffset(viewport.X, 40)
-floor.Position = UDim2.fromOffset(0, viewport.Y - 40)
-floor.AnchorPoint = Vector2.new(0, 0)
-floor.Anchored = true
-floor.Parent = Workspace2D
-
-local box = Instance.new("Part2D")
-box.Name = "Box"
-box.Size = UDim2.fromOffset(40, 40)
-box.Position = UDim2.fromOffset(viewport.X / 2 - 20, 80)
-box.AnchorPoint = Vector2.new(0, 0)
-box.Anchored = false
-box.BackgroundColor3 = Color3.fromRGB(220, 120, 60)
-box.Parent = Workspace2D
-```
-
-The box falls under gravity `(0, 130)` and lands on the floor. Positive Y is down the screen.
-
-Set `Size`, `Position`, and `AnchorPoint` before the part first renders. The physics body is built from `AbsolutePosition` and `AbsoluteSize` the first time the part is rendered, and resizing or repositioning the part afterward does not rebuild it.
-
-## Stack several bodies
-
-Because collisions between boxes work, you can stack them:
+Use Folder for organization, World2D to enable or disable a scene, and RigidBody2D to keep multiple physics parts together.
 
 ```lua
-local function spawnBox(x, y, size)
-    local box = Instance.new("Part2D")
-    box.Size = UDim2.fromOffset(size, size)
-    box.Position = UDim2.fromOffset(x, y)
-    box.AnchorPoint = Vector2.new(0, 0)
-    box.Anchored = false
-    box.BackgroundColor3 = Color3.fromRGB(80, 160, 220)
-    box.Parent = Workspace2D
-    return box
-end
-
-for index = 1, 5 do
-    spawnBox(200, 60 + index * 50, 36)
+local crate = Instance.new("RigidBody2D", level)
+for i = 1, 2 do
+    local piece = Instance.new("Part2D", crate)
+    piece.Size = UDim2.fromOffset(24, 24)
+    piece.Position = UDim2.fromOffset(100 + i * 24, 80)
+    piece.Anchored = false
 end
 ```
 
-The bodies fall, collide, and settle under the world's sleeping settings. There's no API to apply an impulse, so this is a passive simulation: the initial layout is the gameplay input.
-
-## Read positions back
-
-The simulation writes each body's position into the part's `Position` as a `UDim2` with zero scale and offset components:
+## Query and pause
 
 ```lua
-local RunService = game:GetService("RunService")
+local hit = physics:Raycast(Vector2.new(200, 0), Vector2.new(0, 500))
+if hit then
+    print(hit.Instance.Name)
+end
 
-RunService.Heartbeat:Connect(function()
-    print("box is at", box.Position.X.Offset, box.Position.Y.Offset)
-end)
+workspace.SimulatePhysics = false
+-- The scene is still visible.
+workspace.SimulatePhysics = true
 ```
 
-Read `Position.X.Offset` and `Position.Y.Offset`; the scale components are zero after a simulation step. `AbsolutePosition` is the rendered screen position and accounts for the part's anchor and parent.
+Switch to D3 to stop 2D simulation and restore 3D rendering. Regular GUI elements still work in both modes. The two physics worlds do not interact.
 
-## What the simulation actually uses
+Prefer offset-based positions and sizes for gameplay geometry. Scaled UDim2 properties depend on the logical viewport, which may vary across clients.
 
-The current world creates one box fixture per part with fixed density `1` and friction `0.3`. It reads `Anchored`, `AbsolutePosition`, and `AbsoluteSize`. These stored properties do not affect the simulation yet:
+In Studio, hold the middle mouse button and drag inside the 2D viewport to move around the scene. The grid moves with the scene, so you can reach objects beyond the viewport edges.
 
-- `Density`
-- `Friction`
-- `Elasticity`
-- `CanCollide`
-- `IsBall`
-- `VelocityX`
-- `VelocityY`
+## Simple 2D objects
 
-The consequences matter for design:
-
-- Every body is a rectangle, even if `IsBall` is `true`.
-- You can't push a body by setting `VelocityX` or `VelocityY`.
-- Every body collides, regardless of `CanCollide`.
-- Resizing or rotating a part after its body exists doesn't change the fixture.
-- Anchored parts stay where their body was created, and the part's `Position` is overwritten from the body each step.
-
-Build levels around these limits. If you need a moving platform or an input-controlled body, the current API doesn't expose the force or velocity hook for it.
-
-## Organize a scene
-
-Use plain `Instance` containers, folders, or models under `Workspace2D` only if you also walk them yourself; the service builds bodies for direct `Part2D` children and descendants of `Part2D` children, not for arbitrary nested containers. The safest layout is:
-
-```text
-Workspace2D
-├── Floor        (Part2D, anchored)
-├── LeftWall     (Part2D, anchored)
-├── RightWall    (Part2D, anchored)
-└── Box          (Part2D, unanchored)
-```
-
-Keep the floor and walls anchored. An unanchored wall falls like any other box.
-
-## Debug the scene
-
-A few checks solve most "nothing happens" reports:
+You don't need separate rigid-body classes for floors, physics objects, and moving platforms. Use Part2D and change `Anchored`:
 
 ```lua
-print(box.ClassName)          -- Part2D
-print(box.Parent == Workspace2D)
-print(box.Anchored)           -- false for simulated bodies
-print(box.AbsoluteSize.X, box.AbsoluteSize.Y)
+local floor = Instance.new("Part2D", workspace) -- Anchored defaults to true
+local ball = Instance.new("Part2D", workspace)
+ball.Anchored = false
+ball.IsBall = true
 ```
 
-If the box renders but doesn't fall, it's probably anchored. If it falls through the floor, the floor body may have been created before its size was set. If a body is in the wrong place, remember that the simulation takes over its `Position` after the first step.
+For artwork use Sprite2D, which also handles sprite-sheet playback. Use Shape2D for custom lines or polygons, Trigger2D to detect touching parts, Attachment2D for markers, Camera2D for the view, and CharacterController2D for script-controlled player motion. Use Folder or RigidBody2D to group objects.
 
-## Common failures
-
-| Symptom | Likely cause |
-| --- | --- |
-| `Part2D` doesn't render | It's parented to a `ScreenGui`; parent it to `Workspace2D` instead. |
-| Body falls through the floor | The floor was resized after its body was created, or the floor is unanchored. |
-| Box doesn't fall | `Anchored` is still at its default, `true`. |
-| Setting `VelocityY` does nothing | Velocity properties aren't consumed by the current simulation. |
-| Changing `Density` or `Friction` does nothing | Fixed fixture values are used. |
-| 2D parts collide with 3D parts | They can't; check that you're looking at the 2D world. |
-
-## Next steps
-
-- `Part2D` for every property, including the stored-only fields.
-- `Workspace2D` for the 2D world and its simulation settings.
-- `GuiObject` for position, size, rotation, and appearance.
-- [Input and UI](/docs/guides/input-and-ui) for pointer and keyboard handling.
+For raycasts, use `game:GetService("Workspace2D"):Raycast(origin, direction)` rather than creating an extra node.

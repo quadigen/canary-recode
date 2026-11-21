@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 
 package services
 
@@ -267,6 +267,12 @@ Register_DataStoreService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = data_store_service_get,
 		namecall = data_store_service_namecall,
+		methods = []string {
+			"GetDataStore",
+			"GetGlobalDataStore",
+			"GetOrderedDataStore",
+			"GetRequestBudgetForRequestType",
+		},
 	)
 }
 
@@ -872,8 +878,20 @@ data_store_lua_userdata_to_json :: proc(
 	case "Region3":
 		value := cast(^datatypes.Region3)ptr
 		object := data_store_json_typed_object("Region3")
-		data_store_json_put_vector3(object, "Min", f32(value.Min.x), f32(value.Min.y), f32(value.Min.z))
-		data_store_json_put_vector3(object, "Max", f32(value.Max.x), f32(value.Max.y), f32(value.Max.z))
+		data_store_json_put_vector3(
+			object,
+			"Min",
+			f32(value.Min.x),
+			f32(value.Min.y),
+			f32(value.Min.z),
+		)
+		data_store_json_put_vector3(
+			object,
+			"Max",
+			f32(value.Max.x),
+			f32(value.Max.y),
+			f32(value.Max.z),
+		)
 		return object^, ""
 
 	case "Region3int16":

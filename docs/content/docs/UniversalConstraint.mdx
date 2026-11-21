@@ -1,0 +1,24 @@
+---
+title: UniversalConstraint
+description: Join two attachments while allowing rotation about two axes.
+---
+
+Join two attachments while allowing rotation about two axes.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("UniversalConstraint", partA)
+constraint.Attachment0 = attachmentA
+constraint.Attachment1 = attachmentB
+constraint.LimitsEnabled = true
+constraint.MaxAngle = 35
+```
+
+## Properties
+
+LimitsEnabled and MaxAngle configure approximate angular bounds. Radius and Restitution are retained compatibility properties.
+
+## Notes
+
+Uses a SixDOF joint. The angular bounds are approximate and restitution is not applied by this implementation.

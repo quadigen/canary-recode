@@ -4,22 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-CFrameValue_Class := Class_Info{
+CFrameValue_Class := Class_Info {
 	name   = "CFrameValue",
 	parent = &ValueBase_Class,
 }
 
 CFrameValue :: struct {
 	using object: Object,
-
-	value: datatypes.CFrame,
+	value:        datatypes.CFrame,
 }
 
 CFrameValue_Init :: proc() -> CFrameValue {
-	return CFrameValue{
-		object = Object_Init(&CFrameValue_Class),
-		value = datatypes.CFrame_Identity,
-	}
+	return CFrameValue{object = Object_Init(&CFrameValue_Class), value = datatypes.CFrame_Identity}
 }
 
 CFrameValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -45,7 +41,7 @@ CFrameValue_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_CFrame(L, datatype_registry, val.value)
 	case:
 		return false
@@ -65,7 +61,7 @@ CFrameValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_CFrame(L, value_index, datatype_registry)
 	case:
 		return false
@@ -87,6 +83,7 @@ Register_CFrameValue :: proc(registry: ^Registry) {
 		CFrameValue_construct,
 		CFrameValue_destroy,
 		get = CFrameValue_get,
+		parallel_get = CFrameValue_get,
 		set = CFrameValue_set,
 		clone = CFrameValue_clone,
 		properties = []string{"Value"},

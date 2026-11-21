@@ -39,6 +39,8 @@ light.Parent = part
 - `Shadows` only has an effect on spot and surface lights.
 - Cloning a subclass copies the shared settings plus its own.
 
+`Angle` (number, clamped to 0–180 degrees) and `Face` (`Enum.NormalId`) are read/write on [SpotLight](/docs/SpotLight) and [SurfaceLight](/docs/SurfaceLight), not on point lights.
+
 ## See also
 
 - `PointLight`, `SpotLight`, and `SurfaceLight`.

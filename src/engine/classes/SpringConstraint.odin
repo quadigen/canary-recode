@@ -46,8 +46,6 @@ SpringConstraint_construct :: proc(renderer: ^Renderer_Object, data_model: rawpt
 	spring.object.class = &SpringConstraint_Class
 	spring.name = "SpringConstraint"
 	spring.active = false
-	spring.attachment0 = &spring.object
-	spring.attachment1 = &spring.object
 	spring.config = {
 		color       = datatypes.BrickColor_Lemon_Metalic,
 		coils       = 3,
@@ -110,7 +108,7 @@ spring_create_joint :: proc(
 		return kineffi.JPH_DistanceConstraint_CreateFromIDs(system, &settings, id0, id1)
 	}
 
-	// A prismatic guide leaves one translation free and aligns both attachment frames.
+
 	up0 := spring_world_axis(rotations[0], frames[0].up)
 	up1 := spring_world_axis(rotations[1], frames[1].up)
 	right0 := spring_world_axis(rotations[0], frames[0].right)
@@ -136,7 +134,7 @@ spring_create_joint :: proc(
 		kineffi.JPH_SixDOFConstraintSettings_MakeFixedAxis(&settings, axis)
 	}
 	if min_length == max_length {
-		// Jolt fixes an equal range at zero, so shift the guide origin to the stop.
+
 		settings.position1.x += f64(up0.x) * f64(min_length)
 		settings.position1.y += f64(up0.y) * f64(min_length)
 		settings.position1.z += f64(up0.z) * f64(min_length)
@@ -246,7 +244,7 @@ SpringConstraint_step :: proc(
 	} else if length > 0 {
 		axis = separation / length
 	} else {
-		// Give coincident anchors a direction in which to separate.
+
 		axis = {0, 1, 0}
 	}
 

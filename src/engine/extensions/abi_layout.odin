@@ -81,4 +81,6 @@ import datatypes "../datatypes"
 #assert(size_of(KNE_Vector3Int16) == size_of(sdk.KNE_Vector3Int16))
 #assert(size_of(KNE_Value) == size_of(sdk.KNE_Value))
 #assert(size_of(KNE_Host) == size_of(sdk.KNE_Host))
+#assert(size_of(KNE_VM_Api) == size_of(sdk.KNE_VM_Api))
+#assert(align_of(KNE_VM_Api) == align_of(sdk.KNE_VM_Api))
 #assert(size_of(KNE_Datatype_Desc) == size_of(sdk.KNE_Datatype_Desc))

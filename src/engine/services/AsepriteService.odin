@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import assetstore "../assetstore"
 import classes "../classes"
@@ -40,7 +39,7 @@ aseprite_service_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "GetInfo", "CreateImageLabel", "CreateImageLabels", "CreateAnimated":
+	case "GetInfo", "CreateImageLabel", "CreateImageLabels", "CreateImage":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
@@ -56,7 +55,10 @@ aseprite_service_source :: proc(
 ) {
 	if bytes, ok := vm.ToBuffer(L, 2); ok {return bytes, false}
 	value: string
-	if vm.IsUserdataType(L, 2, &dt.animated) {
+	if object := classes.Object_From_Argument(L, 2);
+	   object != nil && classes.Is_A_Class(object, &classes.EditableImage_Class) {
+		value = (cast(^classes.EditableImage)object).source
+	} else if vm.IsUserdataType(L, 2, &dt.animated) {
 		value = datatypes.Arg_Animated(L, 2, dt).uri
 	} else if vm.TypeOf(L, 2) == .String {
 		value = vm.ArgString(L, 2)
@@ -177,11 +179,13 @@ aseprite_service_convert :: proc(
 	if err != .None {return 0, fmt.tprintf("could not decode Aseprite: %v", err)}
 	defer aseprite.destroy(ase)
 	switch method {
-	case "CreateAnimated":
+	case "CreateImage":
 		animated, ok := datatypes.Animated_From_Bytes(data)
 		if !ok {return 0, "could not register Aseprite animation"}
 		defer delete(animated.uri)
-		datatypes.Push_Animated(L, dt, animated)
+		created, success := classes.Push_New(object.signal_registry, &vm.VM{L = L}, "Animated")
+		if !success {return 0, "could not create Image"}
+		classes.Image_Set_Source(cast(^classes.EditableImage)created, animated.uri)
 		aseprite_push_info(L, dt, ase)
 		return 2, ""
 	case "GetInfo":
@@ -230,7 +234,9 @@ aseprite_service_convert :: proc(
 		animated, ok := datatypes.Animated_From_Bytes(data)
 		if !ok {return 0, "could not register Aseprite animation"}
 		defer delete(animated.uri)
-		datatypes.Push_Animated(L, dt, animated)
+		created, success := classes.Push_New(object.signal_registry, &vm.VM{L = L}, "Animated")
+		if !success {return 0, "could not create Image"}
+		classes.Image_Set_Source(cast(^classes.EditableImage)created, animated.uri)
 		return 3, ""
 	}
 	return 0, "unknown AsepriteService method"
@@ -249,7 +255,7 @@ aseprite_service_namecall :: proc(
 	if method != "GetInfo" &&
 	   method != "CreateImageLabel" &&
 	   method != "CreateImageLabels" &&
-	   method != "CreateAnimated" {return 0, false}
+	   method != "CreateImage" {return 0, false}
 	frame_number: f64 = 1
 	if method == "CreateImageLabel" && !vm.IsNoneOrNil(L, 3) {
 		frame_number = vm.ArgNumber(L, 3)
@@ -268,6 +274,6 @@ Register_AsepriteService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = aseprite_service_get,
 		namecall = aseprite_service_namecall,
-		methods = []string{"GetInfo", "CreateImageLabel", "CreateImageLabels", "CreateAnimated"},
+		methods = []string{"GetInfo", "CreateImageLabel", "CreateImageLabels", "CreateImage"},
 	)
 }

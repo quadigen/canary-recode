@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 package services
 
 import "core:bytes"
@@ -29,9 +29,11 @@ HttpService_Class := classes.Class_Info {
 guid_counter: u64 = 1
 
 HttpService :: struct {
-	using service: Service,
-	http_enabled:  bool,
-	web_streams:   [dynamic]^WebStreamClient,
+	using service:         Service,
+	http_enabled:          bool,
+	script_http_enabled:   bool,
+	allow_private_network: bool,
+	web_streams:           [dynamic]^WebStreamClient,
 }
 
 http_service_construct :: proc(
@@ -45,6 +47,44 @@ http_service_construct :: proc(
 	service.http_enabled = true
 
 	return &service.object
+}
+
+HTTP_SCRIPT_MAX_BODY :: 16 * 1024 * 1024
+
+http_service_trusted :: proc(L: ^vm.State) -> bool {
+	return vm.ThreadHasSecurityCapability(L, datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS)
+}
+
+http_service_script_allowed :: proc(service: ^HttpService, L: ^vm.State) -> bool {
+	return(
+		service.http_enabled &&
+		(service.script_http_enabled ||
+				http_service_trusted(L) ||
+				vm.ThreadHasSecurityCapability(L, i64(enums.SecurityCapability.Network))) \
+	)
+}
+
+http_service_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	en: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	if key != "HttpEnabled" && key != "AllowPrivateNetwork" {return false}
+	if !http_service_trusted(L) {
+		_ = vm.RaiseError(L, "HTTP configuration requires trusted editor permissions")
+		return true
+	}
+	if !vm.IsBoolean(L, value_index) {
+		_ = vm.RaiseError(L, "HTTP configuration expects a boolean")
+		return true
+	}
+	service := cast(^HttpService)object
+	if key ==
+	   "HttpEnabled" {service.script_http_enabled = vm.ArgBoolean(L, value_index)} else {service.allow_private_network = vm.ArgBoolean(L, value_index)}
+	return true
 }
 
 http_service_body_string :: proc(body: http_client.Body_Type) -> string {
@@ -182,6 +222,7 @@ HttpService_GetImageBytes :: proc(
 
 	req: http_client.Request
 	http_client.request_init(&req, .Get)
+	req.public_only = !service.allow_private_network
 
 	allocated_header_keys := make([dynamic]string)
 
@@ -215,7 +256,11 @@ HttpService_GetImageBytes :: proc(
 		return datatypes.Content{}, false
 	}
 
-	data, body_allocated, body_err := http_client.response_body(&response, allocator = allocator)
+	data, body_allocated, body_err := http_client.response_body(
+		&response,
+		max_length = HTTP_SCRIPT_MAX_BODY,
+		allocator = allocator,
+	)
 	if body_err != nil {
 		return datatypes.Content{}, false
 	}
@@ -246,6 +291,7 @@ http_service_send :: proc(
 	L: ^vm.State,
 	method: http.Method,
 	url: string,
+	allow_private_network: bool,
 	request_body: string = "",
 	content_type: string = "",
 	headers_index: int = 0,
@@ -256,6 +302,7 @@ http_service_send :: proc(
 	req: http_client.Request
 
 	http_client.request_init(&req, method)
+	req.public_only = !allow_private_network
 
 	allocated_header_keys := make([dynamic]string)
 
@@ -296,7 +343,10 @@ http_service_send :: proc(
 
 	defer http_client.response_destroy(&response)
 
-	response_body, body_allocated, body_error := http_client.response_body(&response)
+	response_body, body_allocated, body_error := http_client.response_body(
+		&response,
+		max_length = HTTP_SCRIPT_MAX_BODY,
+	)
 
 	if body_error != nil {
 		return vm.RaiseError(
@@ -369,7 +419,10 @@ http_service_get :: proc(
 
 	switch key {
 	case "HttpEnabled":
-		vm.PushBoolean(L, service.http_enabled)
+		vm.PushBoolean(L, http_service_script_allowed(service, L))
+		return true
+	case "AllowPrivateNetwork":
+		vm.PushBoolean(L, service.allow_private_network)
 		return true
 
 	case "GetAsync",
@@ -617,15 +670,21 @@ http_service_namecall :: proc(
 
 	switch method_name {
 	case "GetAsync":
-		if !service.http_enabled {
+		if !http_service_script_allowed(service, L) {
 			return vm.RaiseError(L, "HTTP requests are disabled"), true
 		}
 
 		url := vm.ArgString(L, 2)
 
-		return http_service_send(L, .Get, url), true
+		return http_service_send(L, .Get, url, service.allow_private_network), true
 	case "OpenURL":
+		if !http_service_trusted(
+			L,
+		) {return vm.RaiseError(L, "OpenURL requires trusted editor permissions"), true}
 		url := vm.ArgString(L, 2)
+		if !strings.has_prefix(url, "https://") && !strings.has_prefix(url, "http://") {
+			return vm.RaiseError(L, "OpenURL requires an HTTP(S) URL"), true
+		}
 		cloned := strings.clone_to_cstring(url, context.temp_allocator)
 		result := sdl3.OpenURL(cloned)
 		if result != true {
@@ -637,7 +696,7 @@ http_service_namecall :: proc(
 		}
 		return 0, true
 	case "GetImageBytes":
-		if !service.http_enabled {
+		if !http_service_script_allowed(service, L) {
 			return vm.RaiseError(L, "HTTP requests are disabled"), true
 		}
 
@@ -663,7 +722,7 @@ http_service_namecall :: proc(
 		return 1, true
 
 	case "PostAsync":
-		if !service.http_enabled {
+		if !http_service_script_allowed(service, L) {
 			return vm.RaiseError(L, "HTTP requests are disabled"), true
 		}
 
@@ -672,13 +731,19 @@ http_service_namecall :: proc(
 
 		content_type := vm.ArgOptionalString(L, 4, "application/json")
 
-		return http_service_send(L, .Post, url, body, content_type), true
+		return http_service_send(L, .Post, url, service.allow_private_network, body, content_type),
+			true
 
 	case "CreateWebStreamClient":
+		if !http_service_trusted(L) ||
+		   !http_service_script_allowed(
+				   service,
+				   L,
+			   ) {return vm.RaiseError(L, "WebSocket access requires trusted editor permissions"), true}
 		return http_service_create_web_stream(service, L, enum_registry), true
 
 	case "RequestAsync":
-		if !service.http_enabled {
+		if !http_service_script_allowed(service, L) {
 			return vm.RaiseError(L, "HTTP requests are disabled"), true
 		}
 
@@ -722,7 +787,18 @@ http_service_namecall :: proc(
 			vm.Pop(L)
 		}
 
-		return http_service_send(L, http_method, url, body, "", headers_index, true, false), true
+		return http_service_send(
+				L,
+				http_method,
+				url,
+				service.allow_private_network,
+				body,
+				"",
+				headers_index,
+				true,
+				false,
+			),
+			true
 	case "JSONDecode":
 		value := vm.ArgString(L, 2)
 		decoded, decode_err := json.parse_string(
@@ -820,6 +896,37 @@ http_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Rendere
 	free(service)
 }
 
+http_service_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "HttpEnabled", "JSONEncode", "JSONDecode", "UrlEncode", "UrlDecode":
+		return http_service_get(L, object, d, e, key)
+	}
+	return false
+}
+
+http_service_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "JSONEncode", "JSONDecode", "UrlEncode", "UrlDecode":
+		return http_service_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_HttpService_Class :: proc(registry: ^classes.Registry) {
 	register_web_stream_client(registry)
 	classes.Register_Class(
@@ -829,6 +936,7 @@ Register_HttpService_Class :: proc(registry: ^classes.Registry) {
 		http_service_destroy,
 		properties = []string {
 			"HttpEnabled",
+			"AllowPrivateNetwork",
 			"GetAsync",
 			"GetImageBytes",
 			"PostAsync",
@@ -839,7 +947,10 @@ Register_HttpService_Class :: proc(registry: ^classes.Registry) {
 		},
 		creatable = false,
 		get = http_service_get,
+		set = http_service_set,
+		parallel_get = http_service_parallel_get,
 		namecall = http_service_namecall,
+		parallel_namecall = http_service_parallel_namecall,
 		methods = []string {
 			"CreateWebStreamClient",
 			"GetAsync",

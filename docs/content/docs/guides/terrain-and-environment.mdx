@@ -45,7 +45,7 @@ Use `GenerateChunk()` when you want to build outward from chunk coordinates rath
 
 ## Smooth volumetric terrain
 
-Use `style = "sdf"` or `detail = "smooth"` for an SDF-inspired density field with rounded rock formations, smooth unions and three-dimensional variation. The smooth preset selects 2-stud voxels and disables flat shading. Existing terrain styles remain unchanged.
+Use `style = "sdf"` or `detail = "smooth"` for a volumetric density field with rounded rock formations, smooth unions, and three-dimensional variation. Both enable GPU raymarching. The smooth preset selects 2-stud voxels and disables flat shading.
 
 ```lua
 local Terrain = game:GetService("Terrain")
@@ -91,7 +91,11 @@ Terrain:GenerateArea(0, 0, 96, {
 
 Noise layers smaller than the voxel lattice can represent are faded out. Smaller voxels provide smoother silhouettes, at a higher generation, memory, and meshing cost. Changing voxel size through generation clears the existing terrain; test on a fresh place.
 
-This mode uses the normal chunked occupancy storage and marching-cubes mesh pipeline, not direct GPU SDF ray marching or a sparse distance-field clipmap. Generated terrain remains editable through the existing voxel APIs.
+Raymarching smooths the visible terrain surface and blends material colors. Terrain edits update the surface; collision still uses the voxel-based terrain geometry.
+
+Set `Terrain.Raymarching = true` to enable smooth terrain rendering. Use `Terrain:SetMaterialColor()` to control the blended surface colors.
+
+Run the `tests/terrain_sdf_demo.luau` scene script in an empty place to preview a slate surface with faceted mineral deposits.
 
 ## Edit the terrain
 

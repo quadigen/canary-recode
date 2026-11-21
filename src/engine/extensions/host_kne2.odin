@@ -595,9 +595,23 @@ kne_operation :: proc(
 	out: ^KNE_Value,
 	capacity: i32,
 ) -> i32 {
+	return kne_execute_source(record, source, args, count, out, capacity, value, key)
+}
+
+kne_execute_source :: proc(
+	record: ^Extension_Record,
+	source: string,
+	args: ^KNE_Value,
+	count: i32,
+	out: ^KNE_Value,
+	capacity: i32,
+	receiver: ^KNE_Value = nil,
+	key: KNE_String = {},
+) -> i32 {
 	if record == nil ||
 	   record.ctx == nil ||
 	   record.ctx.vm_state == nil ||
+	   record.ctx.vm_state.L == nil ||
 	   count < 0 ||
 	   capacity < 0 ||
 	   (count > 0 && args == nil) ||
@@ -607,19 +621,57 @@ kne_operation :: proc(
 	defer vm.SetStackTop(parent, top)
 	L := vm.NewThread(parent)
 	ref := vm.RetainValue(parent, -1)
+	first_root := len(record.result_roots)
 	append(&record.result_roots, ref)
+	succeeded := false
+	defer if !succeeded || capacity == 0 {release_result_roots(record, first_root)}
 	ok, err := vm.LoadSource(record.ctx.vm_state, L, source, "KNE")
 	if !ok {delete(record.last_error); record.last_error = err; return -1}
-	push_kne_value(L, record.ctx.datatype_registry, value)
-	vm.PushString(L, KNE_String_To(key))
+	prefix := 0
+	if receiver != nil {
+		push_kne_value(L, record.ctx.datatype_registry, receiver)
+		vm.PushString(L, KNE_String_To(key))
+		prefix = 2
+	}
 	values := cast([^]KNE_Value)args
 	for index in 0 ..< int(count) {push_kne_value(L, record.ctx.datatype_registry, &values[index])}
-	ok, err = vm.ProtectedCall(L, int(count) + 2, -1)
-	if !ok {delete(record.last_error); record.last_error = strings.clone(err); return -1}
+	ok, err = vm.ProtectedCall(L, int(count) + prefix, -1)
+	if !ok {delete(record.last_error); record.last_error = err; return -1}
 	results := min(vm.StackTop(L), int(capacity))
 	outputs := cast([^]KNE_Value)out
 	for index in 0 ..< results {outputs[index] = stack_kne_value(L, record.ctx.datatype_registry, index + 1)}
+	succeeded = true
 	return i32(results)
+}
+
+kne_vm_execute :: proc "c" (
+	ext: KNE_Extension,
+	source: KNE_String,
+	args: ^KNE_Value,
+	count: i32,
+	out: ^KNE_Value,
+	capacity: i32,
+) -> i32 {
+	context = tracy.DefaultContext()
+	return kne_execute_source(record_of(ext), KNE_String_To(source), args, count, out, capacity)
+}
+
+kne_vm_get_buffer :: proc "c" (L: KNE_VM, index: i32, out_size: ^uintptr) -> rawptr {
+	context = tracy.DefaultContext()
+	if out_size != nil {out_size^ = 0}
+	if L == nil {return nil}
+	bytes, ok := vm.ToBuffer(state_of_vm(L), int(index))
+	if !ok {return nil}
+	if out_size != nil {out_size^ = uintptr(len(bytes))}
+	return rawptr(raw_data(bytes))
+}
+
+kne_vm_push_buffer :: proc "c" (L: KNE_VM, data: rawptr, size: uintptr) -> i32 {
+	context = tracy.DefaultContext()
+	if L == nil || (size != 0 && data == nil) || size > uintptr(max(int)) {return 0}
+	bytes := cast([^]u8)data
+	vm.PushBuffer(state_of_vm(L), bytes[:int(size)])
+	return 1
 }
 
 kne_datatypes_construct :: proc "c" (

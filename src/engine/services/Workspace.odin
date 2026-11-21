@@ -1,5 +1,5 @@
 package services
-// wire:service global="workspace"
+
 import "core:fmt"
 
 
@@ -393,7 +393,7 @@ Workspace_Frustum_Plane :: struct {
 }
 
 Workspace_Frustum :: struct {
-	eye: datatypes.Vector3,
+	eye:    datatypes.Vector3,
 	planes: [6]Workspace_Frustum_Plane,
 }
 
@@ -547,6 +547,43 @@ workspace_append_draw_items :: proc(
 			cframe := part.cframe
 			size := part.size
 			render_size := datatypes.Vector3{size.x * 0.5, size.y * 0.5, size.z * 0.5}
+			special := classes.SpecialMesh_Find(child)
+			special_tex: ^kineffi.KineFilamentTex
+			shape := part.shape
+			if special != nil && !is_meshpart {
+				mesh, special_tex = classes.SpecialMesh_Geometry(special, renderer.Filament)
+				cframe = datatypes.CFrame_Add_Vector3(
+					cframe,
+					datatypes.CFrame_VectorToWorldSpace(cframe, special.offset),
+				)
+				switch special.mesh_type {
+				case .FileMesh:
+					render_size = special.scale
+				case .Sphere:
+					shape = .Ball
+				case .Cylinder:
+					shape = .Cylinder
+				case .Wedge, .RightAngleRamp:
+					shape = .Wedge
+				case .CornerWedge:
+					shape = .CornerWedge
+				case .Pyramid:
+					shape = .Pyramid
+				case .Head:
+					shape = .Ball
+				case .Brick, .Torso, .Prism, .ParallelRamp:
+					shape = .Block
+				}
+				if special.mesh_type != .FileMesh {
+					size = {
+						size.x * special.scale.x,
+						size.y * special.scale.y,
+						size.z * special.scale.z,
+					}
+					render_size = datatypes.Vec3_Multiply(size, 0.5)
+				}
+			}
+
 
 			render_material, material_params := materials.Lookup(part.material)
 			material_kind := material_params.kind
@@ -568,7 +605,7 @@ workspace_append_draw_items :: proc(
 
 			center := datatypes.Vector3{cframe.x, cframe.y, cframe.z}
 			radius := 0.5 * datatypes.Vec3_Magnitude(size) + f64(WORKSPACE_CULL_MARGIN)
-			if is_meshpart && mesh != nil {
+			if (is_meshpart || special != nil) && mesh != nil {
 
 
 				local_center, half_extent: [3]f32
@@ -592,10 +629,8 @@ workspace_append_draw_items :: proc(
 						f64(WORKSPACE_CULL_MARGIN)
 				}
 			}
-			if variant := classes.MaterialVariant_Find(
-				child.signal_registry,
-				part.material_variant,
-			); variant != nil {
+			variant := classes.MaterialVariant_Find(child.signal_registry, part.material_variant)
+			if variant != nil {
 				radius += f64(abs(variant.height_scale) + variant.displacement_bounds)
 			}
 
@@ -624,15 +659,16 @@ workspace_append_draw_items :: proc(
 
 			if visible {
 				if mesh == nil && material_kind != kineffi.KINE_MAT_WATER {
-					mesh = workspace_part_mesh(workspace, renderer.Filament, part.shape)
-					// The procedural cylinder has unit diameter and height.
-					if part.shape == .Cylinder && mesh != nil {render_size = size}
+					mesh = workspace_part_mesh(workspace, renderer.Filament, shape)
+
+					if shape == .Cylinder && mesh != nil {render_size = size}
 				}
 
 				if params != nil &&
 				   params.lod_mesh != nil &&
 				   params.lod_distance_sq > 0 &&
 				   !is_meshpart &&
+				   special == nil &&
 				   material_kind != kineffi.KINE_MAT_WATER &&
 				   distance_sq > params.lod_distance_sq {
 					mesh = params.lod_mesh
@@ -650,8 +686,10 @@ workspace_append_draw_items :: proc(
 					}
 				}
 
-				// Negative tile density selects physical, object-space projection.
-				// Imported textures retain their authored UV coordinates.
+				if special_tex !=
+				   nil {mesh_texture = special_tex; draw_texture = special_tex; param3 = 1}
+
+
 				when ODIN_OS != .JS {
 					if material_kind == kineffi.KINE_MAT_DEFAULT &&
 					   render_material.texture != nil &&
@@ -667,16 +705,17 @@ workspace_append_draw_items :: proc(
 					}
 				}
 
-				shader, shader_revision := classes.MaterialVariant_Resolve(
-					child.signal_registry,
-					part.material_variant,
-					renderer.Filament,
-				)
+				shader: ^kineffi.KineFilamentShader
+				shader_revision: u64
+				if variant != nil && renderer.Filament != nil {
+					classes.MaterialVariant_Prepare(variant, renderer.Filament)
+					shader, shader_revision = variant.filament_shader, variant.revision
+				}
 				item := kineffi.KineFilamentDrawItem {
-					shader       = shader,
-					mesh         = mesh,
-					tex          = draw_texture,
-					transform    = {
+					shader        = shader,
+					mesh          = mesh,
+					tex           = draw_texture,
+					transform     = {
 						f32(cframe.r00 * render_size.x),
 						f32(cframe.r01 * render_size.y),
 						f32(cframe.r02 * render_size.z),
@@ -694,19 +733,26 @@ workspace_append_draw_items :: proc(
 						0,
 						1,
 					},
-					r            = part.color.R,
-					g            = part.color.G,
-					b            = part.color.B,
-					param1       = param1,
-					param2       = param2,
-					param3       = param3,
-					transmission = transmission,
-					materialKind = material_kind,
-					flags        = workspace_part_flags(part) | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+					r             = part.color.R,
+					g             = part.color.G,
+					b             = part.color.B,
+					param1        = param1,
+					param2        = param2,
+					param3        = param3,
+					transmission  = transmission,
+					materialKind  = material_kind,
+					flags         = workspace_part_flags(
+						part,
+					) | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
 					worldPosition = {cframe.x, cframe.y, cframe.z},
 				}
 
 
+				if special != nil {
+					item.r *= f32(special.vertex_color.x)
+					item.g *= f32(special.vertex_color.y)
+					item.b *= f32(special.vertex_color.z)
+				}
 				if params != nil {
 					params.hash = workspace_hash_u64(params.hash, u64(uintptr(shader)))
 					params.hash = workspace_hash_u64(params.hash, shader_revision)
@@ -735,28 +781,11 @@ workspace_append_draw_items :: proc(
 	}
 }
 
-workspace_render_2d :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
-	datamodel := cast(^DataModel)ctx.data_model
-	fmt.println("Casted datamodel")
-	workspace2d := DataModel_Get_Service(datamodel, "Workspace2D")
-	fmt.println("Got workspace 2d service")
-	Workspace2D_Render(workspace2d, ctx)
-	fmt.println("Rendered 2d")
-}
-
 workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
 	workspace := cast(^Workspace)object
-
-	if workspace.dimension == enums.Dimension.D2 {
-		fmt.println("Starting to render 2d")
-		workspace_render_2d(object, ctx)
-		fmt.println("Settin filament to false")
-		ctx.renderer.RenderFilament = false
-		fmt.println("Returning")
-		return
-	}
-
-	ctx.renderer.RenderFilament = true
+	if ctx == nil || ctx.renderer == nil {return}
+	ctx.renderer.RenderFilament = workspace.dimension == .D3 && workspace.enable_3d
+	if !ctx.renderer.RenderFilament {return}
 
 	tracy.ZoneNC("Workspace Render 3D", 0xB48EAD)
 	z := profiling.Begin("Workspace Render 3D", 0xB48EAD)
@@ -789,7 +818,11 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 			&probe_center[0],
 			&params.reflection_radius,
 		) {
-			params.reflection_center = {f64(probe_center[0]), f64(probe_center[1]), f64(probe_center[2])}
+			params.reflection_center = {
+				f64(probe_center[0]),
+				f64(probe_center[1]),
+				f64(probe_center[2]),
+			}
 		}
 		frustum: Workspace_Frustum
 
@@ -814,8 +847,7 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 
 			params.max_distance = workspace.max_draw_distance
 
-			// The desktop camera frustum is not the union of the two XR eye frusta.
-			// Keep scene geometry for both eyes until stereo frustum culling is added.
+
 			xr_active := VR_Service_Enabled(&workspace.service)
 			if workspace.cull_parts && !xr_active {
 				far := WORKSPACE_FRUSTUM_FAR
@@ -928,6 +960,9 @@ workspace_get :: proc(
 		if signal == nil {return false}
 		signals.Push(L, signal)
 	case "Raycast",
+	     "GetPartBoundsInBox",
+	     "GetPartBoundsInRadius",
+	     "GetPartsInPart",
 	     "GetNumAwakeParts",
 	     "GetPhysicsThrottling",
 	     "GetRealPhysicsFPS",
@@ -1028,7 +1063,16 @@ workspace_namecall :: proc(
 	bool,
 ) {
 	workspace := cast(^Workspace)object
-	physics := workspace_physics(workspace)
+	physics: ^Physics
+	if vm.ThreadIsParallel(L) {
+		if model := workspace.service.data_model; model != nil {
+			if descriptor := Find_Service(model.registry, "Physics"); descriptor != nil {
+				physics = cast(^Physics)descriptor.object
+			}
+		}
+	} else {
+		physics = workspace_physics(workspace)
+	}
 	switch method {
 	case "Raycast":
 		if datatype_registry ==
@@ -1047,6 +1091,7 @@ workspace_namecall :: proc(
 			datatypes.Vector3{x, y, z},
 			datatypes.Vector3{dx, dy, dz},
 			params,
+			synchronize = !vm.ThreadIsParallel(L),
 		)
 		if !hit {vm.PushNil(L)} else {datatypes.Push_RaycastResult(L, datatype_registry, result)}
 		return 1, true
@@ -1110,6 +1155,63 @@ workspace_namecall :: proc(
 	return 0, false
 }
 
+workspace_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "Terrain":
+		workspace := cast(^Workspace)object
+		if model := workspace.service.data_model; model != nil {
+			if descriptor := Find_Service(model.registry, "Terrain");
+			   descriptor != nil && Service_Access_Allowed(L, descriptor) {
+				classes.Push_Object(L, descriptor.object)
+				return true
+			}
+		}
+		vm.PushNil(L)
+		return true
+	case "CurrentCamera",
+	     "SimulatePhysics",
+	     "AutoSimulate",
+	     "GlobalWind",
+	     "Dimension",
+	     "DistributedGameTime",
+	     "Enable3dRendering",
+	     "FallenPartsDestroyHeight",
+	     "FallHeightEnabled",
+	     "RenderCulling",
+	     "MaxDrawDistance",
+	     "LODDistance",
+	     "Raycast",
+	     "GetPartBoundsInBox",
+	     "GetPartBoundsInRadius",
+	     "GetPartsInPart":
+		return workspace_get(L, object, d, e, key)
+	}
+	return false
+}
+
+workspace_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "Raycast", "GetPartBoundsInBox", "GetPartBoundsInRadius", "GetPartsInPart":
+		return workspace_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	workspace := cast(^Workspace)object
 
@@ -1159,6 +1261,8 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		get = workspace_get,
 		set = workspace_set,
 		namecall = workspace_namecall,
+		parallel_get = workspace_parallel_get,
+		parallel_namecall = workspace_parallel_namecall,
 		properties = []string {
 			"CurrentCamera",
 			"SimulatePhysics",

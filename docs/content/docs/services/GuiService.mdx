@@ -20,7 +20,19 @@ print(topLeft, bottomRight)
 | --- | --- | --- | --- |
 | `IsWindows` | `boolean` | Read-only | `true` when the game is running on Windows. |
 
+## GUI navigation
+
+`SelectedObject` (`GuiObject?`, read/write) identifies the selected GUI object. Assign `nil` to clear selection. `GuiNavigationEnabled` (`boolean`, read/write) controls directional GUI navigation; disabling it clears the current selection.
+
 ## Methods
+
+### Select
+
+```lua
+Select(root: GuiObject): ()
+```
+
+Selects an eligible visible GUI object within the given object or its descendants. The lowest `SelectionOrder` wins, with tree traversal order breaking ties. If no candidate is eligible, the current selection is unchanged.
 
 ### GetGuiInset
 
@@ -45,7 +57,7 @@ Use it when you need a full-screen element to fill the visible area rather than 
 IsTenFootInterface(): boolean
 ```
 
-Reports whether the game is running in a TV-style ten-foot interface. The current implementation always returns `false`.
+Reports whether the game is running in a TV-style ten-foot interface. Currently always returns `false`.
 
 ## Notes
 

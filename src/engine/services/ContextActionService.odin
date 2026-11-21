@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -81,7 +80,12 @@ context_action_get :: proc(
 	key: string,
 ) -> bool {
 	switch key {
-	case "BindAction", "BindActionAtPriority", "UnbindAction":
+	case "BindAction",
+	     "BindActionAtPriority",
+	     "UnbindAction",
+	     "UnbindAllActions",
+	     "GetBoundActionInfo",
+	     "GetAllBoundActionInfo":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
@@ -100,6 +104,24 @@ context_action_namecall :: proc(
 ) {
 	service := cast(^ContextActionService)object
 	switch method {
+	case "UnbindAllActions":
+		for action in service.actions {context_action_release(L, action)}
+		clear(&service.actions)
+		return 0, true
+	case "GetBoundActionInfo":
+		name := vm.ArgString(L, 2)
+		for action in service.actions {
+			if action.name == name {context_action_push_info(L, en, action); return 1, true}
+		}
+		vm.NewTable(L, 0, 0)
+		return 1, true
+	case "GetAllBoundActionInfo":
+		vm.NewTable(L, 0, len(service.actions))
+		for action in service.actions {
+			context_action_push_info(L, en, action)
+			vm.SetField(L, -2, action.name)
+		}
+		return 1, true
 	case "BindAction", "BindActionAtPriority":
 		name := vm.ArgString(L, 2)
 		if !vm.IsFunction(
@@ -160,6 +182,27 @@ context_action_namecall :: proc(
 	return 0, false
 }
 
+context_action_push_info :: proc(L: ^vm.State, en: ^enums.Registry, action: Context_Action) {
+	vm.NewTable(L, 0, 3)
+	vm.PushNumber(L, action.priority)
+	vm.SetField(L, -2, "priorityLevel")
+	vm.PushBoolean(L, false)
+	vm.SetField(L, -2, "createTouchButton")
+	vm.NewTable(L, len(action.inputs))
+	for input, i in action.inputs {
+		switch key in input {
+		case enums.KeyCode:
+			_ = enums.Push_Item_By_Value(L, en, "KeyCode", i64(key))
+		case enums.UserInputType:
+			_ = enums.Push_Item_By_Value(L, en, "UserInputType", i64(key))
+		case enums.PlayerActions:
+			_ = enums.Push_Item_By_Value(L, en, "PlayerActions", i64(key))
+		}
+		vm.SetArrayValue(L, -2, i + 1)
+	}
+	vm.SetField(L, -2, "inputTypes")
+}
+
 context_action_matches :: proc(
 	input: Context_Action_Input,
 	value: classes.InputObject_Value,
@@ -199,8 +242,8 @@ context_action_dispatch :: proc(
 	service := cast(^ContextActionService)descriptor.object
 	if len(service.actions) == 0 {return false}
 	en := model.registry.classes.enums
-	// The callback may change the bindings. IDs identify the original matching
-	// actions without keeping pointers into a list that can be reallocated.
+
+
 	matches: [dynamic]u64
 	defer delete(matches)
 	for action in service.actions {
@@ -252,6 +295,13 @@ Register_ContextActionService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = context_action_get,
 		namecall = context_action_namecall,
-		methods = []string{"BindAction", "BindActionAtPriority", "UnbindAction"},
+		methods = []string {
+			"BindAction",
+			"BindActionAtPriority",
+			"UnbindAction",
+			"UnbindAllActions",
+			"GetBoundActionInfo",
+			"GetAllBoundActionInfo",
+		},
 	)
 }

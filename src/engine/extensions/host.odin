@@ -125,6 +125,9 @@ host_state_create :: proc(ctx: ^Context) -> ^Host_State {
 		register_function         = kne_vm_register_function,
 		register_library_function = kne_vm_register_library_function,
 		register_global_datatype  = kne_vm_register_global_datatype,
+		execute                   = kne_vm_execute,
+		get_buffer                = kne_vm_get_buffer,
+		push_buffer               = kne_vm_push_buffer,
 	}
 
 	host.datatypes = KNE_Datatypes_Api {
@@ -335,7 +338,7 @@ push_kne_value :: proc(L: ^vm.State, registry: ^datatypes.Registry, value: ^KNE_
 		callback := cast(^Retained_Callback)value.data.callback
 		if callback == nil ||
 		   callback.ref <= 0 {vm.PushNil(L)} else {vm.PushRegistryReference(L, callback.ref)}
-	case .Table, .Function:
+	case .Table, .Function, .Buffer, .Thread, .Opaque:
 		source := cast(^vm.State)value.data.stack.vm
 		if source ==
 		   nil {vm.PushNil(L)} else {vm.CopyValueToThread(source, L, int(value.data.stack.index))}
@@ -418,17 +421,25 @@ stack_kne_value :: proc(L: ^vm.State, registry: ^datatypes.Registry, index: int)
 		}
 	case .Table:
 		value.kind = .Table
-		value.data.stack = KNE_Stack_Value {
-			vm    = L,
-			index = i32(index if index > 0 else vm.StackTop(L) + index + 1),
-		}
 	case .Function:
 		value.kind = .Function
+	case .Buffer:
+		value.kind = .Buffer
+	case .Thread:
+		value.kind = .Thread
+	case:
+		value.kind = .Opaque
+	}
+	if value.kind == .Nil && vm.TypeOf(L, index) == .Userdata {value.kind = .Opaque}
+	if value.kind == .Table ||
+	   value.kind == .Function ||
+	   value.kind == .Buffer ||
+	   value.kind == .Thread ||
+	   value.kind == .Opaque {
 		value.data.stack = KNE_Stack_Value {
 			vm    = L,
 			index = i32(index if index > 0 else vm.StackTop(L) + index + 1),
 		}
-	case:
 	}
 	return value
 }
@@ -986,76 +997,12 @@ kne_instances_get_property :: proc "c" (
 	out: ^KNE_Value,
 ) -> i32 {
 	context = tracy.DefaultContext()
-	record := record_of(ext)
-	if record == nil || instance == nil || out == nil {
-		return 0
+	if instance == nil || out == nil {return 0}
+	value := KNE_Value {
+		kind = .Instance,
 	}
-	state := record.ctx
-	object := cast(^classes.Object)instance
-	if object.destroyed {
-		return 0
-	}
-
-	name := KNE_String_To(key)
-	switch name {
-	case "Name":
-		out.kind = .String
-		out.data.string = KNE_String_From(classes.Get_Name(object))
-		return 1
-	case "ClassName":
-		out.kind = .String
-		out.data.string = KNE_String_From(classes.Get_Class_Name(object))
-		return 1
-	case "Parent":
-		if parent := classes.Get_Parent(object); parent != nil {
-			out.kind = .Instance
-			out.data.instance = rawptr(parent)
-		} else {
-			out.kind = .Nil
-		}
-		return 1
-	}
-
-	if registration := class_registrations[object.class];
-	   registration != nil && registration.desc.get != nil {
-		value := kne_value_nil()
-		if registration.desc.get(
-			   rawptr(registration.extension),
-			   instance,
-			   KNE_String_From(name),
-			   &value,
-		   ) !=
-		   0 {
-			out^ = value
-			return 1
-		}
-	}
-
-
-	if state == nil ||
-	   state.class_registry == nil ||
-	   state.vm_state == nil ||
-	   state.vm_state.L == nil {
-		return 0
-	}
-	descriptor := classes.Find_Class(state.class_registry, classes.Get_Class_Name(object))
-	if descriptor == nil || descriptor.get == nil {
-		return 0
-	}
-
-	L := state.vm_state.L
-	top := vm.StackTop(L)
-	defer vm.SetStackTop(L, top)
-
-	if !descriptor.get(L, object, state.datatype_registry, state.enum_registry, name) {
-		return 0
-	}
-	if vm.StackTop(L) <= top {
-		return 0
-	}
-
-	out^ = stack_kne_value(L, state.datatype_registry, vm.StackTop(L))
-	return 1
+	value.data.instance = instance
+	return kne_datatypes_get_field(ext, &value, key, out)
 }
 
 kne_instances_set_property :: proc "c" (
@@ -1065,68 +1012,12 @@ kne_instances_set_property :: proc "c" (
 	value: ^KNE_Value,
 ) -> i32 {
 	context = tracy.DefaultContext()
-	record := record_of(ext)
-	if record == nil || instance == nil || value == nil {
-		return 0
+	if instance == nil || value == nil {return 0}
+	object := KNE_Value {
+		kind = .Instance,
 	}
-	state := record.ctx
-	object := cast(^classes.Object)instance
-	if object.destroyed {
-		return 0
-	}
-
-	name := KNE_String_To(key)
-	switch name {
-	case "Name":
-		classes.Set_Name(object, KNE_String_To(value.data.string))
-		return 1
-	case "Parent":
-		classes.Set_Parent(object, cast(^classes.Object)value.data.instance)
-		return 1
-	case "ClassName":
-		return 0
-	}
-
-	if registration := class_registrations[object.class];
-	   registration != nil && registration.desc.set != nil {
-		if registration.desc.set(
-			   rawptr(registration.extension),
-			   instance,
-			   KNE_String_From(name),
-			   value,
-		   ) !=
-		   0 {
-			return 1
-		}
-	}
-
-	if state == nil ||
-	   state.class_registry == nil ||
-	   state.vm_state == nil ||
-	   state.vm_state.L == nil {
-		return 0
-	}
-	descriptor := classes.Find_Class(state.class_registry, classes.Get_Class_Name(object))
-	if descriptor == nil || descriptor.set == nil {
-		return 0
-	}
-
-	L := state.vm_state.L
-	top := vm.StackTop(L)
-	defer vm.SetStackTop(L, top)
-
-	push_kne_value(L, state.datatype_registry, value)
-	if !descriptor.set(
-		L,
-		object,
-		state.datatype_registry,
-		state.enum_registry,
-		name,
-		vm.StackTop(L),
-	) {
-		return 0
-	}
-	return 1
+	object.data.instance = instance
+	return kne_datatypes_set_field(ext, &object, key, value)
 }
 
 kne_instances_get_user_data :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> rawptr {
@@ -1291,13 +1182,17 @@ kne_vm_kind :: proc "c" (L: KNE_VM, index: i32) -> KNE_Value_Kind {
 		if classes.Object_From_Argument(state, int(index)) != nil {
 			return .Instance
 		}
-		return .Nil
+		return .Opaque
 	case .Table:
 		return .Table
 	case .Function:
 		return .Function
+	case .Buffer:
+		return .Buffer
+	case .Thread:
+		return .Thread
 	case:
-		return .Nil
+		return .Opaque
 	}
 }
 

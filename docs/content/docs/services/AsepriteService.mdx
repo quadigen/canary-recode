@@ -1,6 +1,6 @@
 ---
 title: AsepriteService
-description: Convert Aseprite sprites and animation frames into native ImageLabel instances.
+description: Convert Aseprite sprites and animation frames into ImageLabel instances.
 ---
 
 `AsepriteService` decodes binary `.ase` and `.aseprite` files using the engine's built-in parser. Aseprite does not need to be installed.
@@ -8,13 +8,13 @@ description: Convert Aseprite sprites and animation frames into native ImageLabe
 ## Methods
 
 ```lua
-CreateImageLabel(source: buffer | string | Animated, frameIndex: number?): (ImageLabel, number)
-CreateImageLabels(source: buffer | string | Animated): ({ImageLabel}, SpriteInfo, Animated)
-CreateAnimated(source: buffer | string | Animated): (Animated, SpriteInfo)
-GetInfo(source: buffer | string | Animated): SpriteInfo
+CreateImageLabel(source: buffer | string | Image, frameIndex: number?): (ImageLabel, number)
+CreateImageLabels(source: buffer | string | Image): ({ImageLabel}, SpriteInfo, Image)
+CreateImage(source: buffer | string | Image): (Image, SpriteInfo)
+GetInfo(source: buffer | string | Image): SpriteInfo
 ```
 
-Source may be an Animated handle, a Luau buffer, a binary string, an embedded asset URI, or a `project://` asset URI. Arbitrary filesystem paths are not supported. Frame indices start at 1, and durations are in seconds.
+Source may be an Image handle, a Luau buffer, a binary string, an embedded asset URI, or a `project://` asset URI. Arbitrary filesystem paths are not supported. Frame indices start at 1, and durations are in seconds.
 
 ```lua
 local service = game:GetService("AsepriteService")
@@ -27,19 +27,19 @@ Generated labels are unparented, have the original canvas dimensions, transparen
 
 ## Animation
 
-Use the native Animated datatype to play the entire sprite automatically:
+Use an `Image` instance to play the entire sprite automatically:
 
 ```lua
-local animated, info = service:CreateAnimated("project://sprites/player.aseprite")
+local animated, info = service:CreateImage("project://sprites/player.aseprite")
 local sprite = Instance.new("ImageLabel")
-sprite.AnimatedContent = animated
+sprite.Image = animated
 sprite.ResampleMode = Enum.ResampleMode.Nearest
 sprite.BackgroundTransparency = 1
 sprite.Size = UDim2.fromOffset(info.Size.X, info.Size.Y)
 sprite.Parent = script.Parent
 ```
 
-`CreateImageLabels` retains its original first two return values and returns the complete animation as a third value. For automatic playback only, use `CreateAnimated` to avoid constructing individual frame labels.
+`CreateImageLabels` retains its original first two return values and returns the complete animation as a third value. For automatic playback only, use `CreateImage` to avoid constructing individual frame labels.
 
 ## SpriteInfo
 
@@ -51,4 +51,4 @@ sprite.Parent = script.Parent
 
 ## Limitations
 
-Imports are synchronous. The parser supports normal compositing of RGBA, grayscale, and indexed sprites, including linked and compressed cels. Non-normal blend modes are treated as normal; tilemap cels and color profile transformations are not supported. Native Animated playback loops through all frames in file order; animation tags are metadata, not playback controls. Resource limits include a 32 MiB source, 4096 pixels per canvas axis, 1024 frames, 16 million total canvas pixels, and 64 MiB of decoded cel data. Project file reads aren't available in browser builds; use buffers or embedded assets.
+Imports are synchronous. Imports support normal compositing of RGBA, grayscale, and indexed sprites, including linked and compressed cels. Non-normal blend modes are treated as normal; tilemap cels and color profile transformations are not supported. `Image` playback loops through all frames in file order; animation tags are metadata, not playback controls. Resource limits include a 32 MiB source, 4096 pixels per canvas axis, 1024 frames, 16 million total canvas pixels, and 64 MiB of decoded cel data. Project file reads aren't available in browser builds; use buffers or embedded assets.

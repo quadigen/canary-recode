@@ -1,0 +1,114 @@
+---
+title: IconService
+description: Register custom icon packs and switch between them without changing your UI.
+---
+
+Use `IconService` to customize the icons used by Kinemium's editor and your own UI. You don't need to change an existing `ImageLabel` or `ImageButton` to switch its icon.
+
+You need the Internals capability to read the service's properties or call its methods.
+
+## Getting started
+
+Create a folder containing your replacement icons. Use the same filenames as the bundled icons, such as `Folder.svg`, `Part.svg`, and `Play.svg`.
+
+```lua
+local IconService = game:GetService("IconService")
+
+if IconService:LoadIconPack("Custom", "/path/to/icons") then
+    IconService:SetIconPack("Custom")
+end
+
+local label = Instance.new("ImageLabel")
+label.Image = "builtin://icons/Folder.svg"
+```
+
+When the label is drawn, it uses the folder icon from the active pack. If your pack doesn't include that icon or the replacement can't be decoded, Kinemium uses the original icon if one exists.
+
+You only need to provide the icons you want to replace. Images that don't use built-in icon URLs are unaffected.
+
+## Properties
+
+### ActiveIconPack
+
+```lua
+ActiveIconPack: string
+```
+
+Read-only. Returns the name of the selected icon pack. Defaults to `"Default"`.
+
+## Methods
+
+### RegisterIconPack
+
+```lua
+RegisterIconPack(name: string, icons: {[string]: string}): boolean
+```
+
+Registers a pack from a table of icon names and raw image data. Use this when your icons come from another library or when their filenames don't match Kinemium's.
+
+Each value is the contents of an SVG or supported raster image, not a file path. A filename such as `Folder.svg` refers to `builtin://icons/Folder.svg`. You can also use a complete `builtin://icons/` or `builtin://global-icons/` URL as the key.
+
+```lua
+local IconService = game:GetService("IconService")
+
+local folderIcon = [[
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+     viewBox="0 0 24 24">
+    <path fill="#f5a623" d="M2 5h8l2 2h10v13H2z"/>
+</svg>
+]]
+
+assert(IconService:RegisterIconPack("Orange", {
+    ["Folder.svg"] = folderIcon,
+}))
+
+IconService:SetIconPack("Orange")
+```
+
+Returns `true` on success, or `false` if the pack name is empty, the name is reserved (`"Default"`), or the table is empty. Invalid entries, empty image data, or duplicate icon keys raise an error. Image data isn't checked for decoding errors until the icon is loaded.
+
+Registering an existing custom pack replaces its contents. If it's already active, its icons update the next time they're drawn. Registering a new pack doesn't activate it.
+
+### LoadIconPack
+
+```lua
+LoadIconPack(name: string, directory: string): boolean
+```
+
+Loads a pack from a local directory. Files must match the names of Kinemium's bundled icons in `builtin://icons/`, including their extensions. Missing, unreadable, and empty files are skipped.
+
+Returns `true` if at least one matching, non-empty file was loaded and the pack was registered. Returns `false` if no files could be loaded, the directory or name is empty, or the name is `"Default"`.
+
+Loading a pack replaces any existing custom pack with the same name, but doesn't activate it unless that pack was already active. Directory loading isn't supported on the web; use `RegisterIconPack()` instead.
+
+### SetIconPack
+
+```lua
+SetIconPack(name: string): boolean
+```
+
+Selects a registered pack. Use `"Default"` to restore Kinemium's original icons. Returns `true` if the selection succeeds, including when the pack is already active, or `false` if the pack doesn't exist.
+
+Existing labels and buttons using built-in icon URLs update when they're drawn. Their `Image` properties stay the same.
+
+### ResetIconPack
+
+```lua
+ResetIconPack(): boolean
+```
+
+Switches back to the default icons and returns `true`. Custom packs remain registered, so you can switch back to them later.
+
+### UnregisterIconPack
+
+```lua
+UnregisterIconPack(name: string): boolean
+```
+
+Removes a registered custom pack. If the removed pack is active, Kinemium switches back to the default icons.
+
+Returns `true` if a pack was removed, or `false` if the name doesn't refer to a registered custom pack. You can't remove the default pack.
+
+## Notes
+
+Pack names and icon keys are case-sensitive. Packs are shared within the running Kinemium process; they're not replicated or saved between engine restarts. Register your packs again when the editor starts if you want to keep using them.

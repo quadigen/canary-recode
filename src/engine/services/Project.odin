@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 package services
 import assetstore "../assetstore"
 import kineffi "../bindings"
@@ -61,8 +61,7 @@ KinemiumProjectList :: struct {
 
 PROJECT_ENGINE_VERSION :: "1.19.0-dev"
 
-// Call once from editor bootstrap with a stable, live VM state.
-// Do not bind a short-lived coroutine; use Project_Set_State_Provider for that.
+
 Project_Bind_State :: proc(service: ^ProjectService, state: ^vm.State) {
 	if service != nil {service.vm_state = state}
 }
@@ -135,8 +134,7 @@ Project_CreateFolders :: proc(project: KinemiumProject) -> bool {
 	return true
 }
 
-// Native Odin API. No Lua state needs to be passed by the caller.
-// A live VM is only needed when replacing an already-loaded editor scene.
+
 Project_Create :: proc(
 	service: ^ProjectService,
 	name: string,
@@ -266,7 +264,7 @@ Project_Get_Active :: proc(service: ^ProjectService) -> ^KinemiumProject {
 	return nil
 }
 
-// SetActive only changes the active project/root. Use Project_Open to load its scene.
+
 Project_Set_Active :: proc(service: ^ProjectService, path: string) -> bool {
 	if service == nil {return false}
 	index, found := Project_Find_By_Path(service, path)
@@ -293,7 +291,7 @@ Project_Normalize_Path :: proc(path: string) -> (string, bool) {
 		return absolute, true
 	}
 	delete(absolute)
-	// On Linux filepath.abs opens the target. A project base may not exist yet.
+
 	when ODIN_OS == .Linux {
 		if err == nil || err == .Not_Exist {
 			if filepath.is_abs(path) {
@@ -336,7 +334,7 @@ Project_Find_By_Path :: proc(service: ^ProjectService, path: string) -> (int, bo
 		   os.are_paths_identical(project.path, normalized) {
 			return index, true
 		}
-		// Older registries can contain a symlink spelling of the project path.
+
 		if stored, valid := Project_Normalize_Path(project.path); valid {
 			defer delete(stored)
 			if os.are_paths_identical(stored, normalized) {
@@ -513,7 +511,7 @@ Project_Is_Directory :: proc(path: string) -> bool {
 	return os.is_directory(path)
 }
 
-// The returned entries own their strings; call Project_Free_Entries when done.
+
 Project_Get_Entries :: proc(path: string) -> ([]Project_Entry, bool) {
 	dir, open_err := os.open(path)
 	if open_err != nil {return nil, false}
@@ -557,9 +555,7 @@ Project_Copy_Path_Window :: proc(path: string) -> bool {
 	return sdl3.SetClipboardText(text)
 }
 
-// Requests editor shutdown. When skip_exit_save is true, the surrounding
-// editor shutdown routine can skip its final autosave. This does not skip
-// joining an already-running autosave worker during destruction.
+
 Project_Exit_Editor :: proc(service: ^ProjectService, skip_exit_save: bool = false) -> bool {
 	if service == nil || service.data_model.registry.mode != .Editor {return false}
 	event: sdl3.Event
@@ -570,12 +566,12 @@ Project_Exit_Editor :: proc(service: ^ProjectService, skip_exit_save: bool = fal
 	return ok
 }
 
-// Explicit naming for Odin callers that initiate the editor close flow.
+
 Project_Request_Exit :: proc(service: ^ProjectService, skip_exit_save: bool = false) -> bool {
 	return Project_Exit_Editor(service, skip_exit_save)
 }
 
-// Call this if a previously accepted exit event gets cancelled elsewhere.
+
 Project_Reset_Exit_Request :: proc(service: ^ProjectService) {
 	if service == nil {return}
 	service.exit_approved = false
@@ -695,7 +691,7 @@ Project_Load :: proc(service: ^ProjectService) -> bool {
 	return true
 }
 
-// Destructive delete: removes the project directory and then its registry entry.
+
 Project_Delete :: proc(service: ^ProjectService, path: string) -> bool {
 	if service == nil {return false}
 	normalized, valid := Project_Normalize_Path(path)
@@ -707,7 +703,7 @@ Project_Delete :: proc(service: ^ProjectService, path: string) -> bool {
 	was_active :=
 		len(service.active_project_path) > 0 &&
 		os.are_paths_identical(project_to_delete.path, service.active_project_path)
-	// Finish a pending write before deleting the directory it targets.
+
 	if service.autosave_worker != nil {
 		job := cast(^Project_Autosave_Job)service.autosave_worker.data
 		if os.are_paths_identical(job.path, project_to_delete.path) {
@@ -914,8 +910,10 @@ Project_get :: proc(
 	enum_registry: ^enums.Registry,
 	key: string,
 ) -> bool {
-	// These two methods are exposed through namecalls only.
-	if !project_is_method(key) || key == "GetProject" || key == "OpenProjectWindow" ||
+
+	if !project_is_method(key) ||
+	   key == "GetProject" ||
+	   key == "OpenProjectWindow" ||
 	   !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 		return false
 	}
@@ -937,7 +935,18 @@ Project_New_Window_With_Project :: proc(
 		return 1, true
 	}
 	command := []string{executable, "--project", projectPath}
-	process, stderr_pipe, failure, failed := playtest_spawn(command)
+	_, spawn_error := os.process_start(
+		os.Process_Desc {
+			command = command,
+			stdin = os.stdin,
+			stdout = os.stdout,
+			stderr = os.stderr,
+		},
+	)
+	if spawn_error != nil {
+		fmt.eprintf("[Project] failed to open project window: %s\n", os.error_string(spawn_error))
+	}
+	vm.PushBoolean(L, spawn_error == nil)
 	return 1, true
 }
 
@@ -1108,8 +1117,7 @@ Project_Update :: proc(service: ^ProjectService, path, name, description, icon: 
 	return true
 }
 
-// Native scene API; uses the state registered with Project_Bind_State /
-// Project_Set_State_Provider, or fails rather than touching a null VM.
+
 Project_Clear_Map :: proc(service: ^ProjectService) -> bool {
 	L := Project_Resolve_State(service)
 	if L == nil {return false}
@@ -1142,8 +1150,7 @@ project_clear_map_impl :: proc(service: ^ProjectService, L: ^vm.State) {
 	}
 }
 
-// Opens a registered project from any Odin caller without a Lua argument.
-// Must run on the editor/main thread; the snapshot deserializer uses the VM.
+
 Project_Open :: proc(service: ^ProjectService, path: string) -> bool {
 	return project_open_impl(service, Project_Resolve_State(service), path)
 }
@@ -1205,7 +1212,7 @@ project_open_impl :: proc(service: ^ProjectService, L: ^vm.State, path: string) 
 	return Project_Activate(service, index)
 }
 
-// Saves the active scene, not the YAML registry (Project_Save does that).
+
 Project_Save_To_File :: proc(service: ^ProjectService) -> bool {
 	return project_save_to_file_impl(service, Project_Resolve_State(service))
 }
@@ -1291,8 +1298,7 @@ Register_Project_Class :: proc(registry: ^classes.Registry) {
 	)
 }
 
-// Odin-native counterpart of Project:HasUnsavedChanges(). On an active project
-// lacking a live VM, return true: we cannot establish that changes were saved.
+
 Project_Has_Unsaved_Changes :: proc(service: ^ProjectService) -> bool {
 	if service == nil || Project_Get_Active(service) == nil {return false}
 	L := Project_Resolve_State(service)
@@ -1300,14 +1306,14 @@ Project_Has_Unsaved_Changes :: proc(service: ^ProjectService) -> bool {
 	return project_has_unsaved_changes(service, L)
 }
 
-// This signature is kept for existing native callers that supply their VM.
+
 project_has_unsaved_changes :: proc(service: ^ProjectService, L: ^vm.State) -> bool {
 	if service == nil {return false}
 	current := Project_Get_Active(service)
 	if current == nil {return false}
 	if L == nil {return true}
 
-	// Finish pending writes before comparing with the committed snapshot.
+
 	_ = project_finish_autosave(service, true)
 	data, snapshot_ok := project_snapshot(service, L)
 	defer delete(data)
@@ -1322,10 +1328,7 @@ project_has_unsaved_changes :: proc(service: ^ProjectService, L: ^vm.State) -> b
 	return !bytes.equal(previous, data)
 }
 
-// Called for OS window-close requests. The optional L preserves the original
-// (registry, L) calls while allowing Odin code to call it with just registry.
-// If no VM is available, we ask the Studio frontend to confirm rather than
-// silently treating an active project as saved.
+
 Project_Request_Window_Close :: proc(registry: ^Registry, L: ^vm.State = nil) -> bool {
 	if registry == nil || registry.mode != .Editor {return true}
 	studio := cast(^Studio)DataModel_Get_Service(registry.data_model, "Studio")

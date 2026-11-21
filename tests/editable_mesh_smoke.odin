@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
@@ -101,6 +101,26 @@ local root = batch:AddBone("root", -1, CFrame.identity, false)
 assert(root == 0)
 assert(batch:GetBoneByName("root") == 0)
 assert(#batch:GetBones() == 1)
+assert(batch:GetBoneName(root) == "root")
+assert(batch:GetBoneParent(root) == -1)
+assert(batch:GetBoneCFrame(root) == CFrame.identity)
+batch:SetBoneIsVirtual(root, true)
+assert(batch:GetBoneIsVirtual(root))
+assert(#batch:GetVertices() == 3)
+assert(#batch:GetFaceVertices(0) == 3)
+local normal = batch:AddNormal(Vector3.new(0, 1, 0))
+batch:SetNormal(normal, Vector3.new(0, 0, 1))
+assert(batch:GetNormal(normal) == Vector3.new(0, 0, 1))
+local color = batch:AddColor(Color3.new(1, 0, 0), 1)
+batch:SetColor(color, Color3.new(0, 1, 0))
+batch:SetColorAlpha(color, 0.5)
+assert(batch:GetColor(color) == Color3.new(0, 1, 0))
+assert(batch:GetColorAlpha(color) == 0.5)
+local uv = batch:AddUV(Vector2.zero)
+batch:SetUV(uv, Vector2.one)
+assert(batch:GetUV(uv) == Vector2.one)
+assert(game:GetService("AssetService"):CreateEditableMesh():IsA("EditableMesh"))
+
 
 local part = Instance.new("MeshPart")
 local content = Content.fromObject(mesh)

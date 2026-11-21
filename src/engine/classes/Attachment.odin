@@ -297,6 +297,47 @@ Attachment_GetPhysicsBody :: proc(
 	}
 }
 
+attachment_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "CFrame",
+	     "WorldCFrame",
+	     "WorldPosition",
+	     "WorldOrientation",
+	     "WorldAxis",
+	     "WorldSecondaryAxis",
+	     "Position",
+	     "Orientation",
+	     "Axis",
+	     "SecondaryAxis",
+	     "GetConstraints":
+		return Attachment_get(L, object, d, e, key)
+	}
+	return false
+}
+
+attachment_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "GetConstraints":
+		return attachment_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_Attachment :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -304,9 +345,11 @@ Register_Attachment :: proc(registry: ^Registry) {
 		Attachment_construct,
 		Attachment_destroy,
 		get = Attachment_get,
+		parallel_get = attachment_parallel_get,
 		set = Attachment_set,
 		clone = Attachment_clone,
 		namecall = attachment_namecall,
+		parallel_namecall = attachment_parallel_namecall,
 		properties = []string {
 			"Position",
 			"Orientation",

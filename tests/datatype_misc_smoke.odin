@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
@@ -49,6 +49,13 @@ assert(BrickColor["Bright red"].Number == red.Number)
 assert(BrickColor["Bright blue"].Number ~= white.Number)
 assert(BrickColor["Bright green"].Number ~= white.Number)
 assert(BrickColor["Medium stone grey"].Number ~= white.Number)
+assert(BrickColor.palette(87).Number == 1, "palette 87: " .. tostring(BrickColor.palette(87).Number))
+assert(BrickColor.palette(3).Number == 26, "palette 3: " .. tostring(BrickColor.palette(3).Number))
+assert(BrickColor.new("Dark stone grey").Number == BrickColor.DarkGray().Number)
+assert(BrickColor.Green().Number == 28 and BrickColor.Yellow().Number == 24)
+assert(BrickColor.new(BrickColor.Red().Color).Number == 21)
+assert(BrickColor.new(242/255,243/255,243/255).Number == 1)
+for i = 0,127 do assert(typeof(BrickColor.palette(i)) == "BrickColor") end
 assert(not pcall(function() BrickColor.extra = true end))
 
 -- Faces

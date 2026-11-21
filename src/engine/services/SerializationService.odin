@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -78,7 +77,13 @@ serialization_service_namecall :: proc(
 		return 1, true
 	case "DeserializeInstancesAsync":
 		data := vm.ArgBuffer(L, 2)
-		root, err := serializer.Deserialize(registry, L, nil, data)
+		root, err := serializer.Deserialize(
+			registry,
+			L,
+			nil,
+			data,
+			fresh_unique_ids = vm.ArgOptionalBoolean(L, 3, false),
+		)
 		if !serializer.Error_Is_None(err) {
 			return serialization_service_error(L, &err), true
 		}

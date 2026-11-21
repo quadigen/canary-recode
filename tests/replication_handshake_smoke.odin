@@ -183,6 +183,8 @@ auth_rejection :: proc() {
 		&server_vm,
 		`
 local r = game:GetService("ReplicatorService")
+r.RequireJoinToken = true
+assert(not r:StartServer("127.0.0.1", 39243))
 assert(r:SetJoinToken("correct-horse"))
 assert(r:StartServer("127.0.0.1", 39243))
 `,
@@ -297,7 +299,8 @@ reserved_kinds :: proc() {
 	malformed_before := server_service.malformed_packets
 	rejected_before := server_service.rejected_packets
 	_ = client_service
-
+	assert(len(server_service.peers) == 1 && server_service.peers[0].handshake_complete)
+	peer := server_service.peers[0].peer
 
 	frame: [dynamic]u8
 	defer delete(frame)
@@ -307,7 +310,7 @@ reserved_kinds :: proc() {
 		append(&frame, 1, 2, 3, 4)
 
 
-		services.replication_receive(server_service, server_vm.L, nil, frame[:])
+		services.replication_receive(server_service, server_vm.L, peer, frame[:])
 	}
 	assert(
 		server_service.rejected_packets == rejected_before + 4,
@@ -348,6 +351,13 @@ reserved_kinds :: proc() {
 		"an ancient protocol revision was not refused at the framing layer",
 	)
 
+
+	before := server_service.rejected_packets
+	clear(&frame)
+	append(&frame, 'K', 'R', 'P', u8(services.Replication_Protocol_Version), 12)
+	for _ in 0 ..< 250 {services.replication_receive(server_service, server_vm.L, peer, frame[:])}
+	assert(server_service.peers[0].rpc_rate_count == 240)
+	assert(server_service.rejected_packets >= before + 10)
 	run_script(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "reserved_client_stop")
 	run_script(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "reserved_server_stop")
 	vm.Close(&server_vm)

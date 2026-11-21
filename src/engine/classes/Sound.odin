@@ -8,6 +8,7 @@ import guilib "../gui"
 import signals "../signals"
 import vm "../vm"
 import fmt "core:fmt"
+import "core:math"
 import "core:strings"
 
 Sound_Class := Class_Info {
@@ -37,6 +38,8 @@ Sound :: struct {
 	time_position:            f64,
 	length:                   f64,
 	sound:                    audio.Sound,
+	editable_revision:        u64,
+	editable_sample_rate:     int,
 	ended:                    ^signals.Signal,
 }
 
@@ -78,6 +81,11 @@ Sound_get :: proc(
 	case "Ended":
 		if sound.ended == nil {sound.ended = Object_Create_Hierarchy_Signal(object)}
 		signals.Push(L, sound.ended)
+		return true
+
+	case "EditableSound":
+		if source := Sound_Editable_Source(sound);
+		   source != nil {Push_Object(L, &source.object)} else {vm.PushNil(L)}
 		return true
 
 	case "AudioContent":
@@ -157,17 +165,27 @@ Sound_get :: proc(
 }
 
 Sound_update :: proc(object: ^Object, ctx: ^Class_Step_Context) {
-	when ODIN_OS != .JS {
-		sound := cast(^Sound)object
-		if sound.is_playing && !sound.looped && audio.at_end(&sound.sound) {
-			sound.is_playing = false
-			sound.playing = false
-			signals.Fire(ctx.L, sound.ended)
-		}
+	sound := cast(^Sound)object
+	if sound.editable_sample_rate > 0 && audio.is_loaded(&sound.sound) {
+		sound.time_position =
+			f64(audio.get_cursor_frames(&sound.sound)) / f64(sound.editable_sample_rate)
+	}
+	if sound.is_playing && !sound.looped && audio.at_end(&sound.sound) {
+		sound.is_playing = false
+		sound.playing = false
+		if sound.ended != nil {signals.Fire(ctx.L, sound.ended)}
 	}
 }
 
 Sound_Play :: proc(sound: ^Sound) -> bool {
+	if sound.content.object_kind == 2 &&
+	   sound.sound_path == "" &&
+	   !audio.is_playing(&sound.sound) {
+		source := Sound_Editable_Source(sound)
+		if source == nil || source.revision != sound.editable_revision {
+			Sound_Reload(sound)
+		}
+	}
 	if !audio.is_loaded(&sound.sound) {
 		if !Sound_Load_Source(sound) {
 			sound.is_loaded = false
@@ -178,6 +196,8 @@ Sound_Play :: proc(sound: ^Sound) -> bool {
 	}
 
 	if !audio.is_playing(&sound.sound) {
+		if sound.editable_sample_rate > 0 &&
+		   audio.at_end(&sound.sound) {_ = audio.seek_frames(&sound.sound, 0)}
 		if !audio.play(&sound.sound) {
 			return false
 		}
@@ -205,7 +225,7 @@ Sound_Resume :: proc(sound: ^Sound) {
 		return
 	}
 
-	audio.play(&sound.sound)
+	if !audio.play(&sound.sound) {return}
 	sound.is_playing = true
 	sound.is_paused = false
 	sound.playing = true
@@ -256,7 +276,31 @@ Sound_namecall :: proc(
 }
 
 
+Sound_Editable_Source :: proc(sound: ^Sound) -> ^EditableSound {
+	if sound.content.object_kind != 2 || sound.sound_path != "" {return nil}
+	return EditableSound_Of_Handle(sound.content.object_id)
+}
+
 Sound_Load_Source :: proc(sound: ^Sound) -> bool {
+	if sound.sound_path == "" && sound.content.object_kind == 2 {
+		source := Sound_Editable_Source(sound)
+		if source == nil {return false}
+		if !audio.load_pcm(
+			&sound.sound,
+			source.samples,
+			source.sample_rate,
+			source.channels,
+		) {return false}
+		sound.editable_revision = source.revision
+		sound.editable_sample_rate = source.sample_rate
+		sound.length = f64(len(source.samples) / source.channels) / f64(source.sample_rate)
+		sound.is_loaded = true
+		audio.set_volume(&sound.sound, f32(sound.volume))
+		audio.set_pitch(&sound.sound, f32(sound.playback_speed))
+		audio.set_looping(&sound.sound, b32(sound.looped))
+		return true
+	}
+
 	path := sound.sound_path
 	if path == "" {path = sound.content.uri}
 	if path == "" {return false}
@@ -282,6 +326,8 @@ Sound_Reload :: proc(sound: ^Sound) {
 		audio.unload_sound(&sound.sound)
 	}
 	sound.is_loaded = false
+	sound.editable_revision = 0
+	sound.editable_sample_rate = 0
 	sound.is_playing = false
 	sound.is_paused = true
 	sound.playing = false
@@ -314,12 +360,33 @@ Sound_set :: proc(
 		Sound_Reload(sound)
 		return true
 
+	case "EditableSound":
+		content := datatypes.Content{}
+		if !vm.IsNoneOrNil(L, value_index) {
+			source := object_from_argument(L, value_index)
+			if source == nil || !Is_A_Class(source, &EditableSound_Class) {
+				_ = vm.RaiseError(L, "expected EditableSound or nil")
+				return true
+			}
+			content = datatypes.Content_From_Object(source)
+		}
+		delete(sound.sound_path)
+		sound.sound_path = ""
+		delete(sound.content.uri)
+		sound.content = content
+		Sound_Reload(sound)
+		return true
+
 	case "AudioContent":
 		content := datatypes.Content_Clone(
 			datatypes.Arg_Content(L, value_index, datatype_registry),
 		)
 		delete(sound.content.uri)
 		sound.content = content
+		if content.object_kind == 2 {
+			delete(sound.sound_path)
+			sound.sound_path = ""
+		}
 		if sound.sound_path == "" {
 			Sound_Reload(sound)
 		}
@@ -379,28 +446,24 @@ Sound_set :: proc(
 		return true
 
 	case "TimePosition":
-		sound.time_position = max(0.0, vm.ArgNumber(L, value_index))
-
+		position := vm.ArgNumber(L, value_index)
+		if math.is_nan(position) || math.is_inf(position) {return true}
+		sound.time_position = max(0, position)
+		if sound.editable_sample_rate > 0 && audio.is_loaded(&sound.sound) {
+			sound.time_position = clamp(sound.time_position, 0, sound.length)
+			_ = audio.seek_frames(
+				&sound.sound,
+				u64(sound.time_position * f64(sound.editable_sample_rate)),
+			)
+		}
 		return true
 
 	case "Playing":
 		sound.playing = vm.ArgBoolean(L, value_index)
 
 		if sound.playing {
-			if !audio.is_loaded(&sound.sound) {
-				if !Sound_Load_Source(sound) {
-					sound.is_loaded = false
-					sound.is_playing = false
-					return true
-				}
-			}
-
-			if !audio.is_playing(&sound.sound) {
-				if audio.play(&sound.sound) {
-					sound.is_playing = true
-					sound.is_paused = false
-				}
-			}
+			_ = Sound_Play(sound)
+			return true
 		} else {
 			if audio.is_loaded(&sound.sound) {
 				audio.stop_sound(&sound.sound)
@@ -408,6 +471,7 @@ Sound_set :: proc(
 
 			sound.is_playing = false
 			sound.is_paused = true
+			sound.time_position = 0
 		}
 
 		return true
@@ -468,6 +532,14 @@ Sound_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.volume = src.volume
 	dst.time_position = src.time_position
 	dst.length = src.length
+	if src.content.object_kind == 2 && src.sound_path == "" {
+		dst.is_loaded = false
+		dst.is_playing = false
+		dst.is_paused = true
+		dst.playing = false
+		dst.time_position = 0
+		dst.length = 0
+	}
 }
 
 Register_Sound :: proc(registry: ^Registry) {
@@ -483,6 +555,7 @@ Register_Sound :: proc(registry: ^Registry) {
 		set = Sound_set,
 		properties = []string {
 			"AudioContent",
+			"EditableSound",
 			"SoundId",
 			"IsLoaded",
 			"IsPaused",

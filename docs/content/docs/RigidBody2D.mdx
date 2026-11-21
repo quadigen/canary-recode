@@ -1,0 +1,50 @@
+---
+title: RigidBody2D
+description: Assemble multiple Part2D objects and move them together.
+---
+
+`RigidBody2D` keeps its descendant parts together as a welded assembly. They do not collide with one another, but they can collide with other assemblies and individual parts. An anchored member pins the dynamic members in place. Nested assemblies participate in the outer assembly.
+
+## Getting started
+
+```lua
+workspace.Dimension = Enum.Dimension.D2
+
+local body = Instance.new("RigidBody2D", workspace)
+for i = 1, 2 do
+    local part = Instance.new("Part2D", body)
+    part.Size = UDim2.fromOffset(32, 32)
+    part.Position = UDim2.fromOffset(100 + i * 32, 60)
+    part.Anchored = false
+end
+
+body:PivotTo(CFrame.new(200, 120, 0))
+```
+
+## Methods
+
+### GetPivot
+
+```lua
+GetPivot(): CFrame
+```
+
+Returns the center of the assembly bounds until you set an explicit pivot. The explicit pivot follows the dynamic root as the assembly moves.
+
+### PivotTo
+
+```lua
+PivotTo(target: CFrame): ()
+```
+
+Moves and rotates the assembly. The target must lie in the XY plane. Use Z-axis rotation to turn the assembly on screen.
+
+```lua
+body:PivotTo(CFrame.new(200, 120, 0) * CFrame.Angles(0, 0, math.rad(30)))
+```
+
+## Notes
+
+- Each member retains its own size, mass, and material properties.
+- Welds hold the assembly together within the limits of the physics solver.
+- Use flat physics part hierarchies inside the assembly.

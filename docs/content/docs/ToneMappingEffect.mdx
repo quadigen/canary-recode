@@ -3,7 +3,7 @@ title: ToneMappingEffect
 description: Control highlight rolloff, exposure, and white balance for the final image.
 ---
 
-`ToneMappingEffect` maps the renderer's high-dynamic-range output into displayable colors. It controls how bright values roll off, plus exposure and color temperature adjustments.
+`ToneMappingEffect` maps high-dynamic-range lighting into displayable colors. It controls how bright values roll off, plus exposure and color temperature adjustments.
 
 `ToneMappingEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
 
@@ -37,7 +37,7 @@ tone.Tint = 0
 | `Temperature` | `number` | Read/write | `0` | Warm/cool balance, clamped between `-1` and `1`. |
 | `Tint` | `number` | Read/write | `0` | Green/magenta balance, clamped between `-1` and `1`. |
 
-`Mode` is a numeric switch passed to the renderer, not an enum. The available modes are defined by the renderer; the class only guarantees the `0`-`3` range. Values outside it clamp.
+`Mode` is a number, not an enum. Its accepted values are in the `0`-`3` range. Values outside it clamp.
 
 `ExposureCompensation` is separate from `Lighting.ExposureCompensation`. Both affect the final image, so adjust one at a time when you're matching a look.
 

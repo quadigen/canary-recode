@@ -73,6 +73,16 @@ Zip_Extract_All :: proc(
 	}
 
 	file_count := zip.mz_zip_reader_get_num_files(&handle.archive)
+	if file_count > 100_000 {return false}
+	total: u64
+	for index := zip.mz_uint(0); index < file_count; index += 1 {
+		stat: zip.mz_zip_archive_file_stat
+		if zip.mz_zip_reader_file_stat(&handle.archive, index, &stat) ==
+		   zip.MZ_FALSE {return false}
+		if stat.m_uncomp_size > 1024 * 1024 * 1024 ||
+		   stat.m_uncomp_size > 4 * u64(1024 * 1024 * 1024) - total {return false}
+		total += stat.m_uncomp_size
+	}
 
 	for index := zip.mz_uint(0); index < file_count; index += 1 {
 		filename_size := zip.mz_zip_reader_get_filename(&handle.archive, index, nil, 0)

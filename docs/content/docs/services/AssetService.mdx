@@ -1,18 +1,18 @@
 ---
 title: AssetService
-description: Create editable images, blank or loaded from an existing asset.
+description: Create editable images, meshes, and sounds.
 ---
 
-`AssetService` is how you get an `EditableImage`. You can start with a blank canvas at a size you choose, or decode an existing image file into pixels you can modify.
+`AssetService` is how you get an `Image`. You can start with a blank canvas at a size you choose, or decode an existing image file into pixels you can modify.
 
-The service has no other public members. It doesn't load models or arbitrary assets.
+It also creates blank editable meshes and audio clips. It doesn't load models or arbitrary assets.
 
 ## Getting started
 
 ```lua
 local AssetService = game:GetService("AssetService")
 
-local icon = AssetService:CreateEditableImage({
+local icon = AssetService:CreateImage({
     Size = Vector2.new(32, 32),
 })
 
@@ -21,55 +21,78 @@ print(icon.Size) -- 32, 32
 
 ## Methods
 
-### CreateEditableImage
+### CreateImage
 
 ```lua
-CreateEditableImage(options: { Size: Vector2 }?): EditableImage
+CreateImage(options: { Size: Vector2?, Source: string?, Buffer: buffer? }?): Image
 ```
 
 Creates a blank image. Without `options`, or without a `Size` field, the result is `1` by `1`.
 
 ```lua
-local image = AssetService:CreateEditableImage({
+local image = AssetService:CreateImage({
     Size = Vector2.new(256, 128),
 })
 ```
 
-`Size` must be between `1` and `1024` on each axis. Fractional components are truncated to whole pixels, so `Vector2.new(64.9, 32.2)` gives you a 64 by 32 image. A missing, zero, negative, or oversized dimension raises `invalid EditableImage size`.
+`Size` must be between `1` and `1024` on each axis. Fractional components are truncated to whole pixels, so `Vector2.new(64.9, 32.2)` gives you a 64 by 32 image. A missing, zero, negative, or oversized dimension raises `invalid Image size`.
 
 Passing something other than a table raises `expected image options`.
 
 The new pixels are transparent black. If you need a starting color, fill the buffer yourself with `WritePixelsBuffer()`.
 
-### CreateEditableImageAsync
+### CreateEditableImage
+
+`CreateEditableImage(options)` accepts the same options as `CreateImage` and returns an `EditableImage` instance. Assign it directly to a visual object's `.Image` property.
+
+### CreateImageAsync
 
 ```lua
-CreateEditableImageAsync(content: Content): EditableImage
+CreateImageAsync(source: string | Content): Image
 ```
 
-Decodes an image into a new `EditableImage`, keeping its pixel dimensions.
+Decodes a static image into a new `Image`, keeping its pixel dimensions. GIF and Aseprite sources return an `Animated` instance.
 
 ```lua
-local image = AssetService:CreateEditableImageAsync(
-    Content.fromUri("textures/checker.png")
-)
+local image = AssetService:CreateImageAsync("textures/checker.png")
 ```
 
-The argument is a `Content`, not a plain string. Wrap a path with `Content.fromUri()` before calling. The URI can point at an asset the engine can resolve locally, at an image currently used by an `ImageLabel`, or at a file inside the project.
+Pass a URI string or a `Content` value. The URI can point at a local asset, a registered runtime image, or an image file inside the project.
 
-The source must be a decodable image no larger than 64 MB, and its width and height must each be between `1` and `1024`. Anything else raises `image is unavailable or exceeds the editable image size limit`. A file that reports valid dimensions but fails to decode raises `could not decode editable image`.
+Static sources must be decodable images no larger than 64 MB with dimensions between `1` and `1024`. If a file reports valid dimensions and decoding fails, the method raises `could not decode editable image`.
 
 Images are decoded to RGBA8, so a grayscale or palette PNG comes back with four channels per pixel.
 
+### CreateEditableSound
+
+```lua
+CreateEditableSound(options: { SampleRate: number?, Channels: number?, FrameCount: number? }?): EditableSound
+```
+
+Creates a silent clip. The defaults are 44100 Hz, one channel, and one frame. Set `FrameCount` to choose the initial duration. Sample rates must be whole numbers from 8000 to 96000; channels must be 1 or 2. The frame count must be a positive integer, and the total across all channels cannot exceed 8,388,608 samples. Invalid options raise an error.
+
+```lua
+local audio = AssetService:CreateEditableSound({
+    SampleRate = 48000,
+    Channels = 2,
+    FrameCount = 48000,
+})
+```
+
+See `EditableSound` for generating and modifying samples.
+
+## Encoded and animated sources
+
+Pass Source to CreateImage to reference an image URI, including GIF or Aseprite animation. Pass Buffer to create an image from encoded PNG/GIF/Aseprite bytes. For PNG, the image exposes editable RGBA pixels; for GIF/Aseprite, the image holds the source URI and renders with its native frame timing.
+
 ## Notes
 
-- Creation is synchronous, including the decode in `CreateEditableImageAsync()`. A large PNG will block the calling script while it loads.
+- Creation is synchronous, including the decode in `CreateImageAsync()`. A large PNG will block the calling script while it loads.
 - The 64 MB limit applies to the encoded file, not the decoded pixel buffer.
-- Both methods return an `EditableImage` that you own. Save a reference to it; the service doesn't keep one for you.
-- `Instance.new("EditableImage")` isn't supported. Always go through this service.
+- Both image methods return an `Image` that you own. Save a reference to it; the service doesn't keep one for you.
 
 ## See also
 
-- `EditableImage` for reading and writing the pixels.
+- `Image` for reading and writing the pixels.
 - `ContentProvider` for downloading image packs before decoding them.
 - `GPUCompute` for processing pixel buffers on the GPU.

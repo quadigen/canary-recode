@@ -3,7 +3,6 @@ package main
 import "core:bytes"
 import "core:fmt"
 import "core:net"
-import "core:os"
 import "core:strconv"
 import "core:strings"
 import "core:sync"
@@ -40,13 +39,12 @@ dblcrlf := "\r\n\r\n"
 Server_State :: struct {
 	listener: net.TCP_Socket,
 	mutex:    sync.Mutex,
-	stopped:  bool,
 	requests: [dynamic]Captured_Request,
 }
 
 test_server: Server_State
 
-// Recv until the full request (headers + Content-Length body) has arrived.
+
 read_request :: proc(socket: net.TCP_Socket) -> (request_text: string, ok: bool) {
 	buf := make([dynamic]u8, 0, 4096)
 	defer delete(buf)
@@ -93,8 +91,11 @@ read_request :: proc(socket: net.TCP_Socket) -> (request_text: string, ok: bool)
 request_content_length :: proc(headers_text: string) -> int {
 	remaining := headers_text
 
-	for line, ok := strings.split_lines_iterator(&remaining); ok; line, ok = strings.split_lines_iterator(&remaining) {
+	for line, ok := strings.split_lines_iterator(&remaining);
+	    ok;
+	    line, ok = strings.split_lines_iterator(&remaining) {
 		lower, _ := strings.to_lower(line)
+		defer delete(lower)
 		if strings.has_prefix(lower, "content-length:") {
 			value_text := strings.trim_prefix(lower, "content-length:")
 			if value, parsed := strconv.parse_int(strings.trim_space(value_text), 10); parsed {
@@ -149,14 +150,15 @@ respond :: proc(client: net.TCP_Socket, request: Captured_Request) {
 		extra_headers = "Content-Type: application/json\r\n"
 
 	case request.path == "/chunked":
-		response := "HTTP/1.1 200 OK\r\n" +
+		response :=
+			"HTTP/1.1 200 OK\r\n" +
 			"Transfer-Encoding: chunked\r\n" +
 			"Connection: close\r\n" +
 			"\r\n" +
 			"10\r\nHello chunk one!\r\n" +
 			"5\r\n-done\r\n" +
 			"0\r\n\r\n"
-		// Deliberately NOT deleted: `response` is a compile-time constant.
+
 		net.send_tcp(client, transmute([]byte)response)
 		return
 
@@ -164,7 +166,7 @@ respond :: proc(client: net.TCP_Socket, request: Captured_Request) {
 		body = request.body
 
 	case strings.has_prefix(request.path, "/hello"):
-		// default 200 with "Hello, HTTP!"
+
 
 	case:
 		status = "404 Not Found"
@@ -184,35 +186,40 @@ respond :: proc(client: net.TCP_Socket, request: Captured_Request) {
 	net.send_tcp(client, transmute([]byte)response)
 }
 
-serve_connection :: proc(client: net.TCP_Socket) {
+serve_connection :: proc(client: net.TCP_Socket) -> bool {
 	request_text, ok := read_request(client)
 	if !ok {
 		response := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 		net.send_tcp(client, transmute([]byte)response)
-		return
+		return true
 	}
 	defer delete(request_text)
 
+
+	if strings.has_prefix(request_text, "GET /__shutdown HTTP/") {
+		return false
+	}
 	request := capture_request(request_text)
-	// Deliberately NOT deleting the captured strings here: they are owned by
-	// test_server.requests and freed once during teardown after thread.join.
+
 
 	sync.mutex_lock(&test_server.mutex)
 	append(&test_server.requests, request)
 	sync.mutex_unlock(&test_server.mutex)
 
 	respond(client, request)
+	return true
 }
 
 test_http_server_main :: proc(t: ^thread.Thread) {
 	for {
 		client, _, err := net.accept_tcp(test_server.listener)
-		if err != nil || test_server.stopped {
+		if err != nil {
 			break
 		}
 
-		serve_connection(client)
+		keep_running := serve_connection(client)
 		net.close(client)
+		if !keep_running {break}
 	}
 }
 
@@ -235,12 +242,12 @@ main :: proc() {
 	listener, port, server_ok := listen_local()
 	expect(server_ok, "failed to open local HTTP listener")
 
-test_server.listener = listener
+	test_server.listener = listener
 
 	server_thread := thread.create(test_http_server_main)
 	thread.start(server_thread)
 
-	base_url := fmt.tprintf("http://127.0.0.1:%d", port)
+	base_url := fmt.aprintf("http://127.0.0.1:%d", port)
 	defer delete(base_url)
 
 	script_vm := vm.New()
@@ -248,6 +255,8 @@ test_server.listener = listener
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
 	base_lua := strings.concatenate({"local base = \"", base_url, "\"\n\n"})
+
+	defer delete(base_lua)
 
 	const_lua := `
 local http = game:GetService("HttpService")
@@ -297,7 +306,7 @@ assert(failed.StatusMessage == "Not Found")
 assert(failed.Body == "nope")
 
 -- UrlEncode
-assert(http:UrlEncode("a b&c=d") == "a%20b%26c%3dd")
+assert(string.lower(http:UrlEncode("a b&c=d")) == "a%20b%26c%3dd")
 
 -- Argument validation
 assert(not pcall(function() http:RequestAsync("not-a-table") end))
@@ -305,45 +314,100 @@ assert(not pcall(function() http:RequestAsync({ Method = "GET" }) end))
 assert(not pcall(function() http:RequestAsync({ Url = base .. "/hello", Method = "FETCH" }) end))
 `
 
-		run_script(&script_vm, strings.concatenate({base_lua, const_lua}), "http_service_lua")
+	source := strings.concatenate({base_lua, const_lua})
+	defer delete(source)
+	run_script(
+		&script_vm,
+		`local h=game:GetService("HttpService"); assert(not h.HttpEnabled); assert(not pcall(function() h.HttpEnabled=true end)); assert(not pcall(function() h:GetAsync("http://127.0.0.1") end))`,
+		"http_security_default",
+	)
+	config_ok, config_err := vm.RunInternal(
+		&script_vm,
+		`local h=game:GetService("HttpService"); h.HttpEnabled=true`,
+		"http_security_config",
+	)
+	expect(config_ok, config_err)
+	run_script(
+		&script_vm,
+		`local h=game:GetService("HttpService"); assert(h.HttpEnabled); assert(not h.AllowPrivateNetwork); assert(not pcall(function() h:GetAsync("http://127.0.0.1") end))`,
+		"http_security_private_denied",
+	)
+	config_ok, config_err = vm.RunInternal(
+		&script_vm,
+		`game:GetService("HttpService").AllowPrivateNetwork=true`,
+		"http_security_allow_private",
+	)
+	expect(config_ok, config_err)
+	run_script(&script_vm, source, "http_service_lua")
 
-	// Direct Odin-level helpers against the same local server.
+
 	http_descriptor := services.Find_Service(&environment.services, "HttpService")
-	expect(http_descriptor != nil && http_descriptor.object != nil, "HttpService descriptor missing")
+	expect(
+		http_descriptor != nil && http_descriptor.object != nil,
+		"HttpService descriptor missing",
+	)
 	http_service := cast(^services.HttpService)http_descriptor.object
 
 	hello_url := fmt.aprintf("%s/hello?direct=1", base_url)
 	defer delete(hello_url)
-	direct_body, direct_ok := services.HttpService_GetAsync(http_service, hello_url, context.allocator)
-	expect(direct_ok && direct_body == "Hello, HTTP!", "HttpService_GetAsync returned unexpected body")
+	direct_body, direct_ok := services.HttpService_GetAsync(
+		http_service,
+		hello_url,
+		context.allocator,
+	)
+	expect(
+		direct_ok && direct_body == "Hello, HTTP!",
+		"HttpService_GetAsync returned unexpected body",
+	)
 	delete(direct_body)
 
 	json_url := fmt.aprintf("%s/json", base_url)
 	defer delete(json_url)
 	payload: Json_Payload
-	expect(services.HttpService_GetJSON(http_service, json_url, &payload), "HttpService_GetJSON failed to decode")
+	expect(
+		services.HttpService_GetJSON(http_service, json_url, &payload),
+		"HttpService_GetJSON failed to decode",
+	)
 	expect(payload.ok && payload.count == 3, "HttpService_GetJSON decoded wrong payload")
 
-	// The /fail endpoint is not a success status, GetAsync must report failure.
+
 	fail_url := fmt.aprintf("%s/fail", base_url)
 	defer delete(fail_url)
 	fail_body, fail_ok := services.HttpService_GetAsync(http_service, fail_url, context.allocator)
 	expect(!fail_ok, "HttpService_GetAsync must fail for non-success status")
 
-	// Odin-level chunked decode probe against the in-process server.
+
 	chunked_url := fmt.aprintf("%s/chunked", base_url)
 	defer delete(chunked_url)
-	chunked_body, chunked_ok := services.HttpService_GetAsync(http_service, chunked_url, context.allocator)
-	expect(chunked_ok && chunked_body == "Hello chunk one!-done", "HttpService_GetAsync chunked body mismatch")
+	chunked_body, chunked_ok := services.HttpService_GetAsync(
+		http_service,
+		chunked_url,
+		context.allocator,
+	)
+	expect(
+		chunked_ok && chunked_body == "Hello chunk one!-done",
+		"HttpService_GetAsync chunked body mismatch",
+	)
 	delete(chunked_body)
 
-	// Shut the server down and stop the server thread.
-	net.close(test_server.listener)
+
+	shutdown_socket, shutdown_err := net.dial_tcp(
+		net.Endpoint{address = net.IP4_Loopback, port = port},
+	)
+	expect(shutdown_err == nil, "failed to wake HTTP test server")
+	shutdown_payload := "GET /__shutdown HTTP/1.1\r\nHost: localhost\r\n\r\n"
+	_, shutdown_send_err := net.send_tcp(shutdown_socket, transmute([]byte)shutdown_payload)
+	expect(shutdown_send_err == nil, "failed to send HTTP test shutdown request")
+	net.close(shutdown_socket)
 	thread.join(server_thread)
+	net.close(test_server.listener)
 	thread.destroy(server_thread)
 
 	sync.mutex_lock(&test_server.mutex)
-	expect(len(test_server.requests) == 11, fmt.aprintf("unexpected number of captured requests: %d", len(test_server.requests)))
+	expect(
+		len(test_server.requests) == 11,
+		fmt.tprintf("unexpected number of captured requests: %d", len(test_server.requests)),
+	)
 	captured := test_server.requests
 	defer sync.mutex_unlock(&test_server.mutex)
 
@@ -362,7 +426,10 @@ assert(not pcall(function() http:RequestAsync({ Url = base .. "/hello", Method =
 	expect(captured[4].method == "POST", "request 4 method")
 	expect(captured[4].path == "/echo", "request 4 path")
 	expect(captured[4].body == "payload-data", "request 4 body")
-	expect(strings.contains(captured[4].headers, "content-type: application/json"), "request 4 content type")
+	expect(
+		strings.contains(captured[4].headers, "content-type: application/json"),
+		"request 4 content type",
+	)
 
 	expect(captured[5].path == "/fail", "request 5 path")
 	expect(captured[6].path == "/fail", "request 6 path")
@@ -383,14 +450,5 @@ assert(not pcall(function() http:RequestAsync({ Url = base .. "/hello", Method =
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 
-	finalize_and_exit()
-}
-
-// Prints the pass marker, then exits cleanly. After main() returns, the
-// CRT/engine teardown raises an access violation (0xC0000005) whenever this
-// process has exercised HttpService. The corruption is engine-internal
-// (HttpService teardown); the smoke test itself is complete at this point.
-finalize_and_exit :: proc() {
 	fmt.println("HTTP_SERVICE_SMOKE_PASSED")
-	os.exit(0)
 }

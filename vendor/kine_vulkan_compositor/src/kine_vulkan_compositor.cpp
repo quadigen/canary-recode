@@ -650,6 +650,8 @@ static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
     return true;
 }
 
+static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command);
+
 static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
 {
     auto vkAllocateCommandBuffers = kine_vk_device_proc<PFN_vkAllocateCommandBuffers>(
@@ -674,14 +676,20 @@ static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
             bufferInfo.commandPool = compositor->commandPool;
             bufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             bufferInfo.commandBufferCount = 3;
-            if (vkAllocateCommandBuffers(compositor->device, &bufferInfo, buffers) != VK_SUCCESS ||
-                vkCreateFence(compositor->device, &fenceInfo, nullptr, &slot.finished) != VK_SUCCESS) {
-                kine_vk_set_error(compositor, "failed creating swapchain image frame resources");
+            if (vkAllocateCommandBuffers(compositor->device, &bufferInfo, buffers) != VK_SUCCESS) {
+                kine_vk_set_error(compositor, "failed allocating swapchain image command buffers");
                 return false;
             }
             slot.acquire = buffers[0];
             slot.handoff = buffers[1];
             slot.present = buffers[2];
+            // This memory barrier has no image- or frame-dependent operands.
+            // Record once per slot; its final fence gates reuse.
+            if (vkCreateFence(compositor->device, &fenceInfo, nullptr, &slot.finished) != VK_SUCCESS ||
+                !kine_vk_record_skia_handoff(compositor, slot.handoff)) {
+                kine_vk_set_error(compositor, "failed creating swapchain image frame resources");
+                return false;
+            }
         }
     }
     return true;
@@ -1390,35 +1398,29 @@ static bool kine_vk_wait_for_filament(
     return true;
 }
 
-static bool kine_vk_submit_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
+static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
 {
-    auto reset = kine_vk_device_proc<PFN_vkResetCommandBuffer>(compositor, "vkResetCommandBuffer");
     auto begin = kine_vk_device_proc<PFN_vkBeginCommandBuffer>(compositor, "vkBeginCommandBuffer");
     auto barrier = kine_vk_device_proc<PFN_vkCmdPipelineBarrier>(compositor, "vkCmdPipelineBarrier");
     auto end = kine_vk_device_proc<PFN_vkEndCommandBuffer>(compositor, "vkEndCommandBuffer");
-    auto submit = kine_vk_device_proc<PFN_vkQueueSubmit>(compositor, "vkQueueSubmit");
-    if (!reset || !begin || !barrier || !end || !submit) {
-        return false;
-    }
-
+    if (!begin || !barrier || !end) return false;
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (reset(command, 0) != VK_SUCCESS || begin(command, &beginInfo) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Skia and Filament submit to the same queue. Order the swapchain color,
-    // viewport atlas, and shared depth accesses across both renderers.
+    // Reusable recording; not ONE_TIME_SUBMIT. Slot fence prevents overlap.
+    if (begin(command, &beginInfo) != VK_SUCCESS) return false;
     VkMemoryBarrier memory{};
     memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memory.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
         0, 1, &memory, 0, nullptr, 0, nullptr);
-    if (end(command) != VK_SUCCESS) {
-        return false;
-    }
+    return end(command) == VK_SUCCESS;
+}
+
+static bool kine_vk_submit_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
+{
+    auto submit = kine_vk_device_proc<PFN_vkQueueSubmit>(compositor, "vkQueueSubmit");
+    if (!submit) return false;
     VkSubmitInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     info.commandBufferCount = 1;

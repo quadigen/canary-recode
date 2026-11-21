@@ -23,7 +23,98 @@ end
 activateEffect(effect, shaderSource)
 ```
 
-The shader source must use Kinemium's supported post-processing shader format. A Luau function is not a shader. The exact shader entry point and available scene inputs are not specified by this class, so this page does not assume a particular shader template.
+The source uses a Filament material with an unlit fragment shader. Declare `sampler2d inputTexture` to read the rendered color. Declare `depthTexture` only if you need scene depth; this enables an extra scene capture when no compatible capture is already available.
+
+## Built-in scene uniforms
+
+Declare any of these parameters with the exact type shown. The engine fills them before drawing your effect.
+
+| Name | Shader type | Meaning |
+| --- | --- | --- |
+| `inputTexture` | sampler2d | Rendered scene color, including built-in screen effects. |
+| `depthTexture` | sampler2d | Reversed-Z depth of depth-writing scene geometry. |
+| `time` | float | Elapsed renderer time in seconds. |
+| `deltaTime` | float | Render-frame time step in seconds. |
+| `resolution` | float2 | Viewport width and height in pixels. |
+| `texelSize` | float2 | Reciprocal viewport dimensions. |
+| `focal` | float2 | Perspective projection scale on X and Y. |
+| `nearPlane` | float | Camera near distance. |
+| `farPlane` | float | Camera culling distance. |
+| `cameraPosition` | float3 | World position of the scene camera. |
+| `cameraRight` | float3 | World-space camera right vector. |
+| `cameraUp` | float3 | World-space camera up vector. |
+| `cameraForward` | float3 | World-space camera forward vector. |
+| `sunDirection` | float3 | Direction toward the sun. |
+| `sunIntensity` | float | Configured sun intensity. |
+| `sunLightIntensity` | float | Effective directional light intensity after horizon attenuation. |
+| `sunColor` | float3 | Directional sunlight color. |
+| `skyColor` | float3 | Renderer sky color. |
+| `viewMatrix` | mat4 | Scene camera view matrix. |
+| `projectionMatrix` | mat4 | Scene camera projection matrix. |
+| `inverseViewMatrix` | mat4 | Camera-to-world matrix. |
+| `inverseProjectionMatrix` | mat4 | Inverse camera projection. |
+| `viewProjectionMatrix` | mat4 | Combined projection and view matrix. |
+| `inverseViewProjectionMatrix` | mat4 | Inverse combined projection and view transform. |
+| `viewportOrigin` | float2 | Viewport origin in surface pixels, using top-left coordinates. |
+
+These scene values are supplied automatically. Their names are reserved; `SetUniform()` and `SetTexture()` reject them. With the perspective camera, the positive view-space depth is nearPlane divided by the sampled depth. A sample near zero represents sky or very distant geometry. Use focal and the camera basis to reconstruct a world-space ray for raymarching.
+
+### Example: custom raymarched height fog
+
+```lua
+local post = Instance.new("PostProcess", workspace)
+post.Source = [[
+material {
+    name : "CustomFog",
+    shadingModel : unlit,
+    requires : [uv0],
+    culling : none,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        {type : sampler2d, name : inputTexture},
+        {type : sampler2d, name : depthTexture},
+        {type : float, name : nearPlane},
+        {type : float2, name : focal},
+        {type : float3, name : cameraPosition},
+        {type : float3, name : cameraRight},
+        {type : float3, name : cameraUp},
+        {type : float3, name : cameraForward},
+        {type : float, name : time},
+        {type : float, name : density},
+        {type : float3, name : fogColor}
+    ]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec2 uv = getUV0();
+        vec3 color = texture(materialParams_inputTexture, uv).rgb;
+        float z = materialParams.nearPlane /
+            max(texture(materialParams_depthTexture, uv).r, 0.000001);
+        vec3 ray = vec3((uv * 2.0 - 1.0) / materialParams.focal, -1.0);
+        float distance = min(z * length(ray), 200.0);
+        vec3 worldRay = normalize(materialParams.cameraRight * ray.x +
+            materialParams.cameraUp * ray.y + materialParams.cameraForward);
+        float stepSize = distance / 48.0;
+        float transmission = 1.0;
+        for (int i = 0; i < 48; ++i) {
+            vec3 p = materialParams.cameraPosition +
+                worldRay * ((float(i) + 0.5) * stepSize);
+            float heightDensity = exp(-max(p.y - 4.0, 0.0) * 0.12);
+            float variation = 0.6 + 0.4 * sin(p.x * 0.12 + materialParams.time * 0.2)
+                * sin(p.z * 0.15 + p.y * 0.2);
+            transmission *= exp(-materialParams.density * heightDensity * variation * stepSize);
+        }
+        material.baseColor = vec4(mix(materialParams.fogColor, color, transmission), 1.0);
+    }
+}
+]]
+post:SetUniform("density", 0.025)
+post:SetUniform("fogColor", Color3.new(0.6, 0.7, 0.8))
+```
+
+This shader integrates an animated, height-dependent density along each camera ray, stopping at the first depth-writing surface or 200 studs. It models extinction and a constant fog color; it does not calculate shadowed light scattering. Use `VolumetricFogEffect` when you want the prebuilt effect.
 
 ## Switching effects
 
@@ -75,20 +166,46 @@ Treat `Compiled` and `LastError` as status values rather than settings.
 ### SetUniform
 
 ```lua
-SetUniform(name: string, value: any)
+SetUniform(name: string, value: number | {number} | Vector2 | Vector3 | Color3): ()
 ```
 
 Supplies a named value to the shader. Uniforms let you adjust an effect from Luau without having to rewrite its source for each change. For example, a shader that declares an `intensity` uniform could use it to control the strength of a distortion.
 
-The uniform name and value must match what the shader expects. This class shares its uniform API with `MaterialVariant`; the precise supported Luau value types and return values are not specified here.
+Pass a number or an array of one to four numbers for float and float-vector parameters. For `mat3` and `mat4`, supply an array of exactly nine or sixteen numbers in column-major order. Vector2, Vector3 and Color3 can also be passed directly and are converted to component arrays. The name and number of components must match the shader declaration. An incompatible declaration is reported in LastError after preparation.
 
 ### GetUniform
 
 ```lua
-GetUniform(name: string)
+GetUniform(name: string): number | {number} | nil
 ```
 
-Reads a uniform value through the shader's uniform API. The exact return type and the behavior for a missing name are not specified here.
+Returns the last value supplied with SetUniform, or nil if no value was set. It does not read back automatic scene uniforms.
+
+### SetTexture
+
+```lua
+SetTexture(name: string, image: Image, srgb: boolean?): ()
+```
+
+Binds a copy of an editable image to a custom `sampler2d` declared in your shader. This is useful for noise, distortion, masks, lookup tables, and other data. The optional `srgb` flag defaults to false; leave it false for data textures, or enable it for color images that should be interpreted as sRGB.
+
+```lua
+local assets = game:GetService("AssetService")
+local noise = assets:CreateImage({Size = Vector2.new(64, 64)})
+local pixels = buffer.create(64 * 64 * 4)
+local random = Random.new(42)
+for i = 0, 64 * 64 - 1 do
+    local value = random:NextInteger(0, 255)
+    buffer.writeu8(pixels, i * 4, value)
+    buffer.writeu8(pixels, i * 4 + 1, value)
+    buffer.writeu8(pixels, i * 4 + 2, value)
+    buffer.writeu8(pixels, i * 4 + 3, 255)
+end
+noise:WritePixelsBuffer(Vector2.zero, noise.Size, pixels)
+post:SetTexture("noiseTexture", noise)
+```
+
+Call the method again to upload a changed image. The shader owns a snapshot, so you can destroy the original image after assigning it. Up to 16 distinct custom sampler names are supported. Custom textures and uniform values are runtime settings and aren't saved in project files. Declare the matching sampler in `Source`; incompatible parameters are reported through `LastError` when the shader is prepared.
 
 ## Things to keep in mind
 
@@ -97,3 +214,4 @@ Reads a uniform value through the shader's uniform API. The exact return type an
 - Use uniforms for changing parameters rather than assigning a new shader source every frame.
 - Check `LastError` if the effect doesn't appear, and make sure another eligible `PostProcess` is not taking its place.
 - Screen-space effects change the rendered image, not the underlying geometry or physics of objects.
+- Depth is captured from depth-writing geometry; transparent surfaces may be absent. Native Filament support is provided; the web and raytracing paths are not verified.

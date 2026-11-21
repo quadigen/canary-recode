@@ -1,9 +1,9 @@
 ---
 title: Procedural images and GPU compute
-description: Generate and process RGBA pixels with EditableImage, then run bulk float32 operations with GPUCompute.
+description: Generate and process RGBA pixels with Image, then run bulk float32 operations with GPUCompute.
 ---
 
-`EditableImage` gives you a pixel buffer you can generate or modify from Luau. `GPUCompute` runs large float32 buffer operations on the GPU. They cover different halves of the same workflow: pixels are RGBA8, compute is float32, and there is no direct bridge between the two in the current API.
+`Image` gives you a pixel buffer you can generate or modify from Luau. `GPUCompute` runs large float32 buffer operations on the GPU. They cover different halves of the same workflow: pixels are RGBA8, compute is float32, and there is no direct bridge between the two in the current API.
 
 This guide shows both independently, then explains how to move data between them yourself.
 
@@ -14,7 +14,7 @@ Images come from `AssetService`, not `Instance.new()`:
 ```lua
 local AssetService = game:GetService("AssetService")
 
-local image = AssetService:CreateEditableImage({
+local image = AssetService:CreateImage({
     Size = Vector2.new(64, 64),
 })
 ```
@@ -24,7 +24,7 @@ The default is `1` by `1`. Each axis may be `1` through `1024`, and fractional s
 To load an existing image, wrap the path in `Content`:
 
 ```lua
-local loaded = AssetService:CreateEditableImageAsync(
+local loaded = AssetService:CreateImageAsync(
     Content.fromUri("textures/checker.png")
 )
 ```
@@ -85,7 +85,7 @@ A simple vertical gradient:
 
 ```lua
 local width, height = 64, 128
-local image = AssetService:CreateEditableImage({
+local image = AssetService:CreateImage({
     Size = Vector2.new(width, height),
 })
 local pixels = buffer.create(width * height * 4)
@@ -105,7 +105,7 @@ end
 image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
 ```
 
-The result is a data buffer. The current API has no verified way to bind an `EditableImage` to an `ImageLabel`, `Decal`, or material, so don't assume it appears on screen. Use images to prepare or process data until a display binding exists.
+The result is a data buffer. Assign the resulting Image directly to an ImageLabel.Image property to preview generated pixels.
 
 ## Resize safely
 
@@ -198,7 +198,7 @@ The two formats don't share a buffer:
 
 | Type | Layout |
 | --- | --- |
-| `EditableImage` | RGBA8, four bytes per pixel |
+| `Image` | RGBA8, four bytes per pixel |
 | `GPUCompute` | float32, four bytes per number |
 
 To process an image on the GPU, convert it yourself. For example, read RGBA8 pixels, compute a luminance value per pixel, and write that value into a float32 buffer:
@@ -227,29 +227,29 @@ Converting the result back to RGBA8 is the same process in reverse. Keep dimensi
 
 ## Limits and performance
 
-- `EditableImage` dimensions are limited to `1024` per axis.
+- `Image` dimensions are limited to `1024` per axis.
 - Loaded image files are limited to 64 MB.
 - GPU buffers are limited to 4,000,000 elements for element-wise work.
 - Matrix products are limited by the output element count and a 256,000,000-product cap.
-- `CreateEditableImageAsync()` decodes synchronously and can stall the calling script on a large file.
+- `CreateImageAsync()` decodes synchronously and can stall the calling script on a large file.
 - A Luau loop over a megapixel image is expensive. Prefer processing smaller regions or moving float work to the GPU.
 
 ## Common failures
 
 | Symptom | Likely cause |
 | --- | --- |
-| `Instance.new("EditableImage")` fails | Create it through `AssetService` instead. |
+| `Instance.new("Image")` fails | Create it through `AssetService` instead. |
 | `WritePixelsBuffer` errors | The region is outside the image, or the buffer isn't exactly `width * height * 4` bytes. |
 | Pixels look shifted or scrambled | The buffer index is byte-based and zero-based, and rows are tightly packed. |
 | Image changes disappear after resizing | Assigning `Size` clears the pixel buffer. |
-| Nothing appears on screen | `EditableImage` has no verified display binding yet. |
-| `Dispatch` returns `false` | The operation name is wrong, buffer lengths don't match, or the backend is unsupported. |
+| Nothing appears on screen | `Image` has no verified display binding yet. |
+| `Dispatch` returns `false` | The operation name is wrong, buffer lengths don't match, or GPU compute is unavailable. |
 | `Poll` always returns `nil` | The operation is still running, or the result was already collected. |
 | GPU result is wrong | Buffers were written at the wrong element offset; each float32 occupies four bytes. |
 
 ## Next steps
 
-- `EditableImage` for pixel buffer methods.
+- `Image` for pixel buffer methods.
 - `AssetService` for creating and loading images.
 - `GPUCompute` for the complete operation list and limits.
 - [Asset paths and references](/docs/guides/asset-paths) for resolving local image files.

@@ -1301,6 +1301,15 @@ KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
 	}
 
 	Kine_Skia_Surface_Flush(backdrop);
+	if (surface == backdrop && backdrop->vulkanContext) {
+		SkBitmap pixels;
+		if (!pixels.tryAllocPixels(backdrop->surface->imageInfo()) ||
+		    !backdrop->surface->readPixels(pixels.pixmap(), 0, 0)) {
+			return;
+		}
+		surface->backdrop = SkImages::RasterFromPixmapCopy(pixels.pixmap());
+		return;
+	}
 	surface->backdrop = backdrop->surface->makeImageSnapshot();
 }
 

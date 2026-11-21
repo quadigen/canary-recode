@@ -4,6 +4,7 @@ import assetstore "../assetstore"
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
+import jolt "../physics"
 import "core:c"
 import "core:math"
 import "core:math/rand"
@@ -93,6 +94,66 @@ particle_emitter_emit :: proc(emitter: ^ParticleEmitter, count: int) {
 	particle_emitter_spawn(emitter, frame, size, count)
 }
 
+
+particle_emitter_shape_sample :: proc(
+	emitter: ^ParticleEmitter,
+	size: datatypes.Vector3,
+) -> (
+	datatypes.Vector3,
+	datatypes.Vector3,
+) {
+	if datatypes.Vec3_Magnitude(size) < 0.000001 {return {}, {}}
+	half := datatypes.Vec3_Multiply(size, 0.5)
+	theta := f64(rand.float32()) * 2 * math.PI
+	y := f64(rand.float32()) * 2 - 1
+	radial := math.sqrt(max(0.0, 1 - y * y))
+	surface := emitter.shape_style == .Surface
+	radius := f64(1)
+	switch emitter.shape {
+	case .Sphere:
+		if !surface {radius = math.pow(f64(rand.float32()), 1.0 / 3.0)}
+		normal := datatypes.Vector3{radial * math.cos(theta), y, radial * math.sin(theta)}
+		return {
+				normal.x * half.x * radius,
+				normal.y * half.y * radius,
+				normal.z * half.z * radius,
+			},
+			normal
+	case .Cylinder, .Disc:
+		if !surface {radius = math.sqrt(f64(rand.float32()))}
+		normal := datatypes.Vector3{math.cos(theta), 0, math.sin(theta)}
+		point := datatypes.Vector3 {
+			normal.x * half.x * radius,
+			y * half.y,
+			normal.z * half.z * radius,
+		}
+		if emitter.shape == .Disc {point.y = 0}
+		return point, normal
+	case .Box:
+		point := datatypes.Vector3 {
+			(f64(rand.float32()) * 2 - 1) * half.x,
+			y * half.y,
+			(f64(rand.float32()) * 2 - 1) * half.z,
+		}
+		if surface {
+			axis := rand.int_max(3)
+			sign := f64(1) if rand.float32() >= 0.5 else f64(-1)
+			normal: datatypes.Vector3
+			switch axis {
+			case 0:
+				point.x = half.x * sign; normal.x = sign
+			case 1:
+				point.y = half.y * sign; normal.y = sign
+			case:
+				point.z = half.z * sign; normal.z = sign
+			}
+			return point, normal
+		}
+		return point, {}
+	}
+	return {}, {}
+}
+
 particle_emitter_spawn :: proc(
 	emitter: ^ParticleEmitter,
 	frame: datatypes.CFrame,
@@ -102,12 +163,19 @@ particle_emitter_spawn :: proc(
 	for _ in 0 ..< min(count, PARTICLE_EMITTER_LIMIT - len(emitter.particles)) {
 		lifetime := particle_emitter_sample(emitter.lifetime)
 		if lifetime <= 0 {continue}
-		local_position := datatypes.Vector3 {
-			f64((rand.float32() - 0.5)) * size.x,
-			f64((rand.float32() - 0.5)) * size.y,
-			f64((rand.float32() - 0.5)) * size.z,
-		}
+		local_position, normal := particle_emitter_shape_sample(emitter, size)
 		direction := particle_emitter_direction(emitter.emission_direction, emitter.spread_angle)
+
+
+		if emitter.shape != .Box || emitter.shape_style == .Surface {
+			if datatypes.Vec3_Magnitude(normal) > 0.000001 {
+				if emitter.shape_in_out == .Inward ||
+				   (emitter.shape_in_out == .InAndOut && rand.float32() < 0.5) {
+					normal = datatypes.Vec3_Multiply(normal, -1)
+				}
+				direction = normal
+			}
+		}
 		append(
 			&emitter.particles,
 			Emitter_Particle {
@@ -129,10 +197,20 @@ particle_emitter_spawn :: proc(
 	if len(emitter.particles) > 0 {Render_3D_Mark_Dirty()}
 }
 
-ParticleEmitter_Step :: proc(registry: ^Registry, delta_time: f32, wind: datatypes.Vector3) {
+ParticleEmitter_Step :: proc(
+	registry: ^Registry,
+	delta_time: f32,
+	wind: datatypes.Vector3,
+	system: ^jolt.System = nil,
+	body_ids: []kineffi.JPH_BodyID = nil,
+	exclusions: []kineffi.JPH_BodyID = nil,
+) {
 	descriptor := Find_Class(registry, "ParticleEmitter")
 	if descriptor == nil || !(delta_time > 0) {return}
 	dt := min(delta_time, 0.1)
+	excluded: [dynamic]kineffi.JPH_BodyID
+	defer delete(excluded)
+	for id in exclusions {append(&excluded, id)}
 	for object in descriptor.instances {
 		if object == nil || object.destroyed {continue}
 		emitter := cast(^ParticleEmitter)object
@@ -140,6 +218,24 @@ ParticleEmitter_Step :: proc(registry: ^Registry, delta_time: f32, wind: datatyp
 			Render_3D_Mark_Dirty()
 			target := wind if emitter.wind_affects_drag else datatypes.Vector3{}
 			retention := math.exp(-emitter.drag * dt)
+			sphere: kineffi.JPH_ShapeRef
+			if system != nil && system.handle != nil && emitter.collision_enabled {
+				_, _, in_world := particle_emitter_frame(emitter)
+				if in_world {
+					sphere = kineffi.JPH_SphereShape_Create(emitter.collision_radius)
+					source := emitter.parent
+					if Is_A_Class(source, &Attachment_Class) {source = source.parent}
+					if source != nil && Is_A_Class(source, &Part_Class) {
+						part := cast(^Part)source
+						if part.can_collide &&
+						   part.part_index >= 0 &&
+						   part.part_index < len(body_ids) {
+							id := body_ids[part.part_index]
+							if id != kineffi.JPH_BODY_ID_INVALID {append(&excluded, id)}
+						}
+					}
+				}
+			}
 			survivors := 0
 			for current in emitter.particles {
 				particle := current
@@ -156,14 +252,20 @@ ParticleEmitter_Step :: proc(registry: ^Registry, delta_time: f32, wind: datatyp
 						f64(retention),
 					),
 				)
-				particle.position = datatypes.Vec3_Add(
-					particle.position,
-					datatypes.Vec3_Multiply(particle.velocity, f64(dt)),
-				)
+				if sphere != nil {
+					particle_emitter_collide(emitter, &particle, system, sphere, excluded[:], dt)
+				} else {
+					particle.position = datatypes.Vec3_Add(
+						particle.position,
+						datatypes.Vec3_Multiply(particle.velocity, f64(dt)),
+					)
+				}
 				emitter.particles[survivors] = particle
 				survivors += 1
 			}
 			resize(&emitter.particles, survivors)
+			if sphere != nil {kineffi.JPH_Shape_Destroy(sphere)}
+			resize(&excluded, len(exclusions))
 		}
 		if !emitter.enabled || emitter.rate <= 0 {continue}
 		frame, size, in_world := particle_emitter_frame(emitter)
@@ -292,15 +394,41 @@ ParticleEmitter_Render :: proc(registry: ^Registry, renderer: ^Renderer_Object) 
 			)
 			if !(size > 0) || math.is_inf(size) || alpha == 0 {continue}
 			tint := datatypes.ColorSequence_At(emitter.color, age)
+			billboard_right, billboard_up, billboard_back := right, up, back
+			switch emitter.orientation {
+			case .FacingCamera:
+			case .FacingCameraWorldUp:
+				horizontal := datatypes.Vector3{back.x, 0, back.z}
+				if datatypes.Vec3_Magnitude(horizontal) > 0.000001 {
+					billboard_back = datatypes.Vec3_Unit(horizontal)
+					billboard_up = datatypes.Vector3_YAxis
+					billboard_right = datatypes.Vec3_Unit(
+						datatypes.Vec3_Cross(billboard_up, billboard_back),
+					)
+				}
+			case .VelocityParallel, .VelocityPerpendicular:
+				projected := datatypes.Vec3_Subtract(
+					particle.velocity,
+					datatypes.Vec3_Multiply(back, datatypes.Vec3_Dot(particle.velocity, back)),
+				)
+				if datatypes.Vec3_Magnitude(projected) > 0.000001 {
+					billboard_up = datatypes.Vec3_Unit(projected)
+					billboard_right = datatypes.Vec3_Unit(datatypes.Vec3_Cross(billboard_up, back))
+					if emitter.orientation == .VelocityPerpendicular {
+						billboard_right, billboard_up =
+							billboard_up, datatypes.Vec3_Multiply(billboard_right, -1)
+					}
+				}
+			}
 			angle := particle.rotation + particle.spin * particle.age
 			sin, cos := math.sin(angle) * size, math.cos(angle) * size
 			x_axis := datatypes.Vec3_Add(
-				datatypes.Vec3_Multiply(right, f64(cos)),
-				datatypes.Vec3_Multiply(up, f64(sin)),
+				datatypes.Vec3_Multiply(billboard_right, f64(cos)),
+				datatypes.Vec3_Multiply(billboard_up, f64(sin)),
 			)
 			y_axis := datatypes.Vec3_Add(
-				datatypes.Vec3_Multiply(right, f64(-sin)),
-				datatypes.Vec3_Multiply(up, f64(cos)),
+				datatypes.Vec3_Multiply(billboard_right, f64(-sin)),
+				datatypes.Vec3_Multiply(billboard_up, f64(cos)),
 			)
 			position := datatypes.Vec3_Add(
 				particle.position,
@@ -308,28 +436,28 @@ ParticleEmitter_Render :: proc(registry: ^Registry, renderer: ^Renderer_Object) 
 			)
 			item := kineffi.KineFilamentParticleItem {
 				worldPosition = {position.x, position.y, position.z},
-				transform = {
+				transform     = {
 					f32(x_axis.x),
 					f32(y_axis.x),
-					f32(back.x),
+					f32(billboard_back.x),
 					0,
 					f32(x_axis.y),
 					f32(y_axis.y),
-					f32(back.y),
+					f32(billboard_back.y),
 					0,
 					f32(x_axis.z),
 					f32(y_axis.z),
-					f32(back.z),
+					f32(billboard_back.z),
 					0,
 					0,
 					0,
 					0,
 					1,
 				},
-				r         = particle_emitter_channel(tint.R * emitter.brightness),
-				g         = particle_emitter_channel(tint.G * emitter.brightness),
-				b         = particle_emitter_channel(tint.B * emitter.brightness),
-				a         = alpha,
+				r             = particle_emitter_channel(tint.R * emitter.brightness),
+				g             = particle_emitter_channel(tint.G * emitter.brightness),
+				b             = particle_emitter_channel(tint.B * emitter.brightness),
+				a             = alpha,
 			}
 			if grid == 1 {
 				append(&emitter.draw_items, item)

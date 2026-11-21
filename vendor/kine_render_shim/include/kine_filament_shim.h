@@ -272,6 +272,9 @@ KINE_API void Kine_Filament_Viewport_Draw(KineFilamentViewport *viewport, KineSk
     float x, float y, float width, float height, float r, float g, float b, float opacity);
 KINE_API bool Kine_Filament_Viewport_HasWork(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_Viewport_RenderFrame(KineFilamentContext *ctx, float dt, bool renderWorld);
+typedef void (*KineFrameCpuWork)(void *user);
+KINE_API void Kine_Filament_Viewport_RenderFrameWithCpuWork(KineFilamentContext *ctx,
+    float dt, bool renderWorld, KineFrameCpuWork work, void *user);
 typedef void (*KineFrameProfileCallback)(void *user, const char *phase, bool begin);
 KINE_API void Kine_Filament_SetFrameProfileCallback(KineFilamentContext *ctx, KineFrameProfileCallback callback, void *user);
 // Diagnostics for stress / resource-lifetime tests, not a script property.
@@ -376,7 +379,10 @@ typedef enum KineAdvancedEffect {
     KINE_EFFECT_TAA = 4,
     KINE_EFFECT_DYNAMIC_RESOLUTION = 5,
     KINE_EFFECT_TONE_MAPPING = 6,
-    KINE_EFFECT_COUNT = 7
+    KINE_EFFECT_VOLUMETRIC_FOG = 7,
+    KINE_EFFECT_CHROMATIC_ABERRATION = 8,
+    KINE_EFFECT_FILM_GRAIN = 9,
+    KINE_EFFECT_COUNT = 10
 } KineAdvancedEffect;
 KINE_API void Kine_Filament_SetAdvancedEffect(KineFilamentContext *ctx, int effect, bool enabled, const float *values, int count);
 KINE_API bool Kine_Filament_GetAdvancedEffect(KineFilamentContext *ctx, int effect, bool *enabled, float *values, int capacity);
@@ -432,6 +438,7 @@ KINE_API KineFilamentTex *Kine_Filament_CreatePbrTexFromPixels(
 	int heightRowBytes,
 	const void *heightRGBA8,
 	float heightScale);
+// A texture set retains each supplied layer until the set is destroyed.
 KINE_API KineFilamentTex *Kine_Filament_CreateTerrainTextureSet(
 	KineFilamentContext *ctx,
 	KineFilamentTex *layer0,
@@ -511,6 +518,8 @@ KINE_API KineFilamentTex *Kine_Filament_GetMeshMaterialTexture(const KineFilamen
 KINE_API const char *Kine_Filament_GetMeshBoneName(const KineFilamentMesh *mesh, int boneIndex);
 KINE_API int Kine_Filament_GetMeshBoneParent(const KineFilamentMesh *mesh, int boneIndex);
 KINE_API bool Kine_Filament_CopyMeshBoneBindTransform(
+	const KineFilamentMesh *mesh, int boneIndex, float *outTransform16);
+KINE_API bool Kine_Filament_CopyMeshBoneGlobalTransform(
 	const KineFilamentMesh *mesh, int boneIndex, float *outTransform16);
 KINE_API bool Kine_Filament_SetMeshBoneTransforms(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh,
@@ -592,6 +601,19 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateTerrainMesh(
 	int vertexCount,
 	const uint16_t *indices,
 	int indexCount);
+// Samples are RGBA floats in x-fastest order: occupancy and occupancy-weighted
+// linear RGB. The brick bounds and sample origin are relative to the mesh
+// origin, in voxel units. The mesh owns the uploaded field.
+KINE_API bool Kine_Filament_UploadTerrainField(
+	KineFilamentContext *ctx,
+	KineFilamentMesh *mesh,
+	const float *samples,
+	const int32_t sampleSize[3],
+	const int32_t sampleOrigin[3],
+	const int32_t boundsMin[3],
+	const int32_t boundsMax[3],
+	float voxelSize,
+	float isoLevel);
 KINE_API bool Kine_Filament_UpdateCustomMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
@@ -736,6 +758,7 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 // Takes 6 OpenGL texture descriptors and builds a cubemap skybox from them.
 // Faces must all be square and have identical dimensions.
 // ---------------------------------------------------------------------------
+KINE_API int32_t Kine_Filament_CreateSkyboxPixels(KineFilamentContext *ctx, int32_t size, const uint8_t *rgba, bool showSun);
 KINE_API void Kine_Filament_CreateSkyboxCubemap(
 	KineFilamentContext *ctx,
 	const KineGLTextureInfo *texPosX, const KineGLTextureInfo *texNegX,

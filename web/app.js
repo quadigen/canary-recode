@@ -166,11 +166,42 @@
     , host_debug_phase: code => {stats.startup["native-"+code]=Math.round(performance.now()-bootStart);console.info("[Kinemium native]",code);}
   };
 
-  // Minimal audio host: the web engine's audio backend forwards each fire-and-
-  // forget play to a one-shot HTMLAudioElement. Autoplay policies may reject
-  // until the user interacts, so failures are swallowed.
+  // File playback retains its existing behavior. Generated PCM uses an owned
+  // WAV Blob and a per-sound element so transport and cleanup remain independent.
+  const pcmSounds = new Map();
+  let nextPcmId = 1;
   const audio = {
-    host_play_sound: ptr => { try { const a = new Audio(cstr(ptr)); a.play?.().catch?.(() => { }); } catch { } }
+    host_play_sound: ptr => { try { const a = new Audio(cstr(ptr)); a.play?.().catch?.(() => { }); } catch { } },
+    host_pcm_load: (ptr, frames, rate, channels) => {
+      try {
+        const bytes = frames * channels * 4;
+        const wave = new ArrayBuffer(44 + bytes), view = new DataView(wave);
+        const tag = (offset, value) => { for (let i = 0; i < 4; i++) view.setUint8(offset+i, value.charCodeAt(i)); };
+        tag(0, "RIFF"); view.setUint32(4, 36 + bytes, true); tag(8, "WAVE");
+        tag(12, "fmt "); view.setUint32(16, 16, true);
+        view.setUint16(20, 3, true); view.setUint16(22, channels, true);
+        view.setUint32(24, rate, true); view.setUint32(28, rate*channels*4, true);
+        view.setUint16(32, channels*4, true); view.setUint16(34, 32, true);
+        tag(36, "data"); view.setUint32(40, bytes, true);
+        new Uint8Array(wave, 44).set(new Uint8Array(memory.buffer, ptr, bytes));
+        const url = URL.createObjectURL(new Blob([wave], {type:"audio/wav"}));
+        const element = new Audio(url);
+        element.preservesPitch = false;
+        const id = nextPcmId++;
+        pcmSounds.set(id, {element, url});
+        return id;
+      } catch { return 0; }
+    },
+    host_pcm_destroy: id => { const s = pcmSounds.get(id); if (!s) return; s.element.pause(); s.element.removeAttribute("src"); s.element.load(); URL.revokeObjectURL(s.url); pcmSounds.delete(id); },
+    host_pcm_play: id => { const a = pcmSounds.get(id)?.element; if (!a) return 0; try { a.play().catch(() => {}); return 1; } catch { return 0; } },
+    host_pcm_pause: id => pcmSounds.get(id)?.element.pause(),
+    host_pcm_playing: id => { const a = pcmSounds.get(id)?.element; return a && !a.paused && !a.ended ? 1 : 0; },
+    host_pcm_ended: id => pcmSounds.get(id)?.element.ended ? 1 : 0,
+    host_pcm_volume: (id,v) => {const a=pcmSounds.get(id)?.element; if(a) a.volume=Math.max(0,Math.min(1,v));},
+    host_pcm_pitch: (id,v) => {const a=pcmSounds.get(id)?.element; if(a) {try {a.playbackRate=v;} catch {}}},
+    host_pcm_loop: (id,v) => {const a=pcmSounds.get(id)?.element; if(a) a.loop=!!v;},
+    host_pcm_cursor: id => pcmSounds.get(id)?.element.currentTime || 0,
+    host_pcm_seek: (id,v) => {const a=pcmSounds.get(id)?.element; if(a) {try {a.currentTime=v;} catch {}}},
   };
 
   // Browser-backed key/value store for services that would otherwise touch a

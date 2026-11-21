@@ -147,6 +147,9 @@ ownership_links :: proc(
 		"BallSocketConstraint",
 		"HingeConstraint",
 		"PrismaticConstraint",
+		"PlaneConstraint",
+		"CylindricalConstraint",
+		"UniversalConstraint",
 		"RodConstraint",
 		"RopeConstraint",
 		"SpringConstraint",
@@ -290,6 +293,7 @@ replication_reclaim_disconnected_owner :: proc(service: ^ReplicatorService, owne
 		   entity.object.destroyed ||
 		   !classes.Is_A(entity.object, "Part") {continue}
 		entity.owner_locked = false
+		entity.owner_client_locked = false
 		append(&parts, entity)
 	}
 	replication_transfer_group(service, parts[:], 0)
@@ -483,6 +487,7 @@ replication_send_ownership_request :: proc(
 	if service == nil ||
 	   entity == nil ||
 	   service.mode != .Client ||
+	   !service.remote_allow_client_ownership_requests ||
 	   service.remote == nil {return false}
 	entity.owned_request_pending = true
 	bytes: [dynamic]u8
@@ -500,30 +505,56 @@ replication_receive_ownership_request :: proc(
 	if service == nil || service.mode != .Server {reader.valid = false; return}
 	id := replication_read_u32(reader)
 	if reader.offset >= len(reader.data) {reader.valid = false; return}
+	if reader.data[reader.offset] > 1 {reader.valid = false; return}
 	automatic := reader.data[reader.offset] != 0
 	reader.offset += 1
 	connection: ^Replication_Peer
 	for &candidate in service.peers {if candidate.peer == peer {connection = &candidate; break}}
-	if !reader.valid || connection == nil || connection.player == nil {return}
+	if !reader.valid ||
+	   reader.offset != len(reader.data) ||
+	   connection == nil ||
+	   !connection.handshake_complete ||
+	   connection.player == nil {return}
 	entity := replication_entity_by_id(service, id)
 	if entity == nil ||
 	   entity.object == nil ||
 	   entity.object.destroyed ||
 	   !classes.Is_A(entity.object, "Part") ||
+	   connection.known[id] == 0 ||
+	   !replication_visible(service, connection, entity.object) ||
 	   !replication_in_scope(service, entity.object) {return}
 	part := cast(^classes.Part)entity.object
-	if classes.PhysicsModel_Server_Authoritative(entity.object) {
-		// Correct an optimistic client claim even if it hasn't received settings yet.
-		replication_broadcast_ownership(service, entity)
+	dx := part.cframe.x - connection.focus_x
+	dy := part.cframe.y - connection.focus_y
+	dz := part.cframe.z - connection.focus_z
+	radius := f64(service.auto_ownership_acquire_radius)
+	owns := entity.owner_id == connection.player.user_id
+	if !service.allow_client_ownership_requests ||
+	   classes.PhysicsModel_Server_Authoritative(entity.object) ||
+	   part.anchored ||
+	   (entity.owner_locked && (!owns || !entity.owner_client_locked)) ||
+	   (entity.owner_id != 0 && !owns) ||
+	   (automatic && !owns) ||
+	   (!automatic &&
+			   !owns &&
+			   (!connection.focus_ok || dx * dx + dy * dy + dz * dz > radius * radius)) {
+
+		if connection.known[entity.id] != 0 {
+			bytes: [dynamic]u8
+			defer delete(bytes)
+			replication_encode_ownership(service, entity, &bytes)
+			_ = replication_send(service, connection.peer, 10, bytes[:])
+		}
 		return
 	}
-	if part.anchored && !automatic {return}
 	if automatic {
 		entity.owner_locked = false
+		entity.owner_client_locked = false
 		replication_set_ownership(service, entity, replication_auto_owner(entity.object))
 		return
 	}
 	entity.owner_locked = true
+	entity.owner_client_locked = true
 	replication_set_ownership(service, entity, connection.player.user_id)
 }
 
@@ -617,6 +648,9 @@ network_ownership_set :: proc(
 	object: ^classes.Object,
 ) -> i32 {
 	if replicator.mode == .Stopped {return vm.RaiseError(L, "Replication is not running")}
+	if replicator.mode == .Client && !replicator.remote_allow_client_ownership_requests {
+		return vm.RaiseError(L, "SetNetworkOwner: client ownership requests are disabled")
+	}
 	if object == nil ||
 	   object.destroyed {return vm.RaiseError(L, "SetNetworkOwner requires a live instance")}
 	target: ^Player = nil
@@ -670,6 +704,7 @@ network_ownership_set :: proc(
 				if entity != nil {
 					entity.owned_as_model = true
 					entity.owner_locked = true
+					entity.owner_client_locked = false
 					append(&entities, entity)
 				}
 			}
@@ -680,6 +715,7 @@ network_ownership_set :: proc(
 		if entity != nil {
 			entity.owned_as_model = false
 			entity.owner_locked = true
+			entity.owner_client_locked = false
 			replication_set_ownership(replicator, entity, owner_id)
 		}
 		return 0
@@ -746,6 +782,9 @@ network_ownership_auto :: proc(
 	object: ^classes.Object,
 ) -> i32 {
 	if replicator.mode == .Stopped {return vm.RaiseError(L, "Replication is not running")}
+	if replicator.mode == .Client && !replicator.remote_allow_client_ownership_requests {
+		return vm.RaiseError(L, "SetNetworkOwnershipAuto: client ownership requests are disabled")
+	}
 	if object == nil || object.destroyed {return 0}
 	if replicator.mode == .Server {
 		if classes.Is_A(object, "Model") {
@@ -759,6 +798,7 @@ network_ownership_auto :: proc(
 				if entity != nil {
 					entity.owned_as_model = false
 					entity.owner_locked = false
+					entity.owner_client_locked = false
 					append(&entities, entity)
 				}
 			}
@@ -770,6 +810,7 @@ network_ownership_auto :: proc(
 			if entity != nil {
 				entity.owned_as_model = false
 				entity.owner_locked = false
+				entity.owner_client_locked = false
 				replication_set_ownership(replicator, entity, replication_auto_owner(object))
 			}
 		}

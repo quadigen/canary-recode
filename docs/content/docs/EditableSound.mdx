@@ -1,0 +1,81 @@
+---
+title: EditableSound
+description: Generate and edit audio samples in Luau, then play them through a Sound.
+---
+
+Use `EditableSound` to create audio without an external sound file. You can synthesize effects, generate tones, or build your own audio-processing tools by reading and writing samples.
+
+## Getting started
+
+Create a short sine wave with a fade at both ends to avoid clicks:
+
+```lua
+local assets = game:GetService("AssetService")
+local rate = 44100
+local frames = math.floor(rate * 0.25)
+local clip = assets:CreateEditableSound({
+    SampleRate = rate,
+    Channels = 1,
+    FrameCount = frames,
+})
+
+local samples = buffer.create(frames * 4)
+for i = 0, frames - 1 do
+    local envelope = math.min(1, i / 220, (frames - 1 - i) / 220)
+    local value = math.sin(2 * math.pi * 440 * i / rate)
+    buffer.writef32(samples, i * 4, value * envelope * 0.3)
+end
+clip:WriteSamplesBuffer(0, frames, samples)
+
+local sound = Instance.new("Sound")
+sound.EditableSound = clip
+sound.Parent = workspace
+sound:Play()
+```
+
+You can also assign `sound.AudioContent = Content.fromObject(clip)`. Both forms select the generated audio and clear the previous `SoundId`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `SampleRate` | `number` | Read-only | 44100 | Sample frames per second. |
+| `Channels` | `number` | Read-only | 1 | Mono (1) or stereo (2). |
+| `FrameCount` | `number` | Read-only | 1 | Number of sample frames. |
+| `TimeLength` | `number` | Read-only | 1 / 44100 | Duration in seconds. |
+
+Choose the sample rate and channel count when you create the clip. Use `Resize()` to change its duration.
+
+## Methods
+
+| Signature | Description |
+| --- | --- |
+| `ReadSamplesBuffer(startFrame: number, frameCount: number): buffer` | Returns a copy of the selected frames. |
+| `WriteSamplesBuffer(startFrame: number, frameCount: number, samples: buffer): ()` | Replaces the selected frames. |
+| `GetSample(frame: number, channel: number): number` | Reads a single sample. |
+| `SetSample(frame: number, channel: number, value: number): ()` | Replaces a single sample. |
+| `Resize(frameCount: number): ()` | Changes the duration, keeping existing samples that fit. Added frames are silent. |
+| `Clear(): ()` | Sets every sample to zero without changing the duration. |
+
+### Sample buffers
+
+A frame contains one sample per channel. All frame and channel indices start at zero. Buffers contain little-endian 32-bit floating-point samples, interleaved in channel order. For stereo, the left sample comes first, then the right sample.
+
+For example, reading 100 stereo frames returns 800 bytes. The first left sample is at byte offset 0, the first right sample at 4, and the second left sample at 8.
+
+Samples must be finite numbers between -1 and 1. A write with invalid samples, an incorrect buffer length, or an out-of-range frame region raises an error without modifying the clip. Zero-length reads and writes are allowed. Use whole numbers for frame and channel indices.
+
+Prefer buffers to individual sample calls when generating long clips.
+
+## Playback and lifetime
+
+A playing `Sound` uses a snapshot of the samples. Editing the clip doesn't interrupt ongoing playback. Stop the sound and call `Play()` again to hear changes; `Resume()` continues the existing snapshot instead. Playback supports the usual volume, speed, looping and transport controls. Browser autoplay restrictions still apply.
+
+Keep the editable clip alive for as long as you need to play it again. Destroying it invalidates its object-backed content; an already loaded playback snapshot can finish, but a subsequent `Play()` cannot reload the destroyed clip. Set `sound.EditableSound = nil` to clear the source.
+
+The sample rate must be a whole number between 8000 and 96000. A clip holds at most 8,388,608 samples across all channels (32 MiB of sample data). Playback needs additional memory for its snapshot. Generated clips are intended for runtime use; saving their sample data in project files or replicating it across the network isn't supported by this API. Generate the samples in the environment where you want to play them.
+
+## See also
+
+- `AssetService` for creating clips.
+- `Sound` for playback.

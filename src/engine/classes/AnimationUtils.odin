@@ -6,6 +6,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
 import vm "../vm"
+import "core:math"
 import "core:strings"
 
 Animation_Native_Priority :: proc(value: i64) -> i32 {
@@ -385,11 +386,16 @@ Animation_MeshPart_Bone_World_CFrame :: proc(
 	datatypes.CFrame,
 	bool,
 ) {
-	globals := Animation_MeshPart_Bone_Globals(part)
-	if globals == nil || index < 0 || index >= len(globals) {return {}, false}
-	defer delete(globals)
-
-	local := Animation_Matrix_To_CFrame(globals[index])
+	if part == nil {return {}, false}
+	transform: [16]f32
+	if !kineffi.Kine_Filament_CopyMeshBoneGlobalTransform(
+		part.native_mesh,
+		i32(index),
+		&transform[0],
+	) {
+		return {}, false
+	}
+	local := Animation_Matrix_To_CFrame(transform)
 	scale := datatypes.Vector3{part.size.x * 0.5, part.size.y * 0.5, part.size.z * 0.5}
 	position := datatypes.CFrame_PointToWorldSpace(
 		part.cframe,
@@ -438,6 +444,95 @@ Animation_MeshPart_Namecall :: proc(
 		} else {
 			vm.PushNil(L)
 		}
+		return 1, true
+	case "GetBoneWorldCFrames":
+		vm.NewTable(L, 0)
+		if mesh_part == nil || mesh_part.native_mesh == nil {return 1, true}
+		count := kineffi.Kine_Filament_GetMeshBoneCount(mesh_part.native_mesh)
+		for i in 0 ..< count {
+			name := kineffi.Kine_Filament_GetMeshBoneName(mesh_part.native_mesh, i)
+			if name == nil {continue}
+			if world, ok := Animation_MeshPart_Bone_World_CFrame(mesh_part, int(i)); ok {
+				datatypes.Push_CFrame(L, datatype_registry, world)
+				vm.SetField(L, -2, string(name))
+			}
+		}
+		return 1, true
+	case "GetBoneBindTransform":
+		if mesh_part == nil || mesh_part.native_mesh == nil {vm.PushNil(L); return 1, true}
+		index := Animation_MeshPart_Find_Bone(mesh_part.native_mesh, vm.ArgString(L, 2))
+		bind: [16]f32
+		if index < 0 ||
+		   !kineffi.Kine_Filament_CopyMeshBoneBindTransform(
+				   mesh_part.native_mesh,
+				   index,
+				   &bind[0],
+			   ) {
+			vm.PushNil(L)
+		} else {
+			datatypes.Push_CFrame(L, datatype_registry, Animation_Matrix_To_CFrame(bind))
+		}
+		return 1, true
+	case "SetBoneTransforms":
+		if !vm.IsTable(
+			L,
+			2,
+		) {return vm.RaiseError(L, "expected a table of bone names and CFrames"), true}
+		transforms := Animation_MeshPart_Bone_Transforms(mesh_part)
+		if len(transforms) == 0 {vm.PushBoolean(L, false); return 1, true}
+
+		updated := make([][16]f32, len(transforms), context.temp_allocator)
+		copy(updated, transforms)
+		vm.PushNil(L)
+		for vm.Next(L, 2) {
+			if vm.TypeOf(L, -2) != .String ||
+			   !vm.IsUserdataType(L, -1, &datatype_registry.c_frame) {
+				vm.Pop(L, 2)
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+			index := Animation_MeshPart_Find_Bone(mesh_part.native_mesh, vm.ArgString(L, -2))
+			if index < 0 || int(index) >= len(updated) {
+				vm.Pop(L, 2)
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+			updated[index] = Animation_CFrame_To_Matrix(
+				datatypes.Arg_CFrame(L, -1, datatype_registry),
+			)
+			for component in updated[index] {
+				if math.is_nan(component) || math.is_inf(component) {
+					vm.Pop(L, 2)
+					vm.PushBoolean(L, false)
+					return 1, true
+				}
+			}
+			vm.Pop(L)
+		}
+		globals := make([][16]f32, len(updated), context.temp_allocator)
+		states := make([]u8, len(updated), context.temp_allocator)
+		for index in 0 ..< len(updated) {
+			if !Animation_Eval_Bone_Global(
+				index,
+				updated,
+				globals,
+				states,
+				mesh_part.native_mesh,
+			) {
+				vm.PushBoolean(L, false)
+				return 1, true
+			}
+		}
+		ok :=
+			mesh_part.native_context != nil &&
+			kineffi.Kine_Filament_SetMeshBoneTransforms(
+				mesh_part.native_context,
+				mesh_part.native_mesh,
+				&globals[0][0],
+				i32(len(globals)),
+			)
+		if ok {copy(transforms, updated)}
+		vm.PushBoolean(L, ok)
 		return 1, true
 	case "GetBoneTransform":
 		if mesh_part == nil || mesh_part.native_mesh == nil {

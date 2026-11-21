@@ -1,0 +1,69 @@
+---
+title: LocalizationTable
+description: Store source strings, lookup keys, contexts, and translations in a project.
+---
+
+Create a `LocalizationTable` when you want to keep translation entries together as an instance. Parent it directly to the [LocalizationService](/docs/services/LocalizationService) to let the service use its translations when rendering text.
+
+## Getting started
+
+```lua
+local localization = game:GetService("LocalizationService")
+local translations = Instance.new("LocalizationTable", localization)
+
+translations:SetEntries({
+    {
+        Key = "play",
+        Source = "Play",
+        Values = {
+            ["fr-fr"] = "Jouer",
+            ["de-de"] = "Spielen",
+        },
+    },
+})
+
+localization:SetLocale("fr-fr")
+print(localization:Translate("Play")) -- Jouer
+```
+
+## Properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `SourceLocaleId` | `string` | Read/write | Source language, initially `en-us`. Locale IDs are stored in lowercase. |
+| `SerializedEntries` | `string` | Read/write | Kinemium-specific JSON representation used to save the entries with the instance. Prefer the table methods for ordinary edits. |
+
+## Entries
+
+Each entry has `Key`, `Source`, `Context`, `Example`, and `Values` fields. The first four are strings; `Values` maps locale IDs to translated strings. You can omit fields, but every entry needs a nonempty key or source.
+
+When a key is supplied, the methods identify the entry by that unique key. Otherwise, they match an unkeyed entry by its source and context. Keys and source strings are case-sensitive; locale IDs aren't.
+
+## Methods
+
+| Method | Description |
+| --- | --- |
+| `GetEntries(): {any}` | Returns a copy of the entries and their translation dictionaries. |
+| `SetEntries(entries: {any}): ()` | Replaces all entries after validating the new array. Invalid or duplicate entries raise an error without changing the table. |
+| `RemoveEntry(key: string, source: string, context: string): ()` | Deletes the matching entry, if present. |
+| `RemoveEntryValue(key: string, source: string, context: string, localeId: string): ()` | Removes one translation from the matching entry. |
+| `RemoveTargetLocale(localeId: string): ()` | Removes translations for this locale from every entry. |
+| `SetEntryContext(key: string, source: string, context: string, newContext: string): ()` | Changes the context path. |
+| `SetEntryExample(key: string, source: string, context: string, example: string): ()` | Updates an entry's example text. |
+| `SetEntryKey(key: string, source: string, context: string, newKey: string): ()` | Changes the key. Nonempty keys must be unique. |
+| `SetEntrySource(key: string, source: string, context: string, newSource: string): ()` | Changes the original text. |
+| `SetEntryValue(key: string, source: string, context: string, localeId: string, text: string): ()` | Sets or replaces a translation. Empty text removes that locale's translation. |
+
+The setters create an entry if they can't find one, provided the final key or source is nonempty and doesn't conflict with an existing entry.
+
+## Contextual translations
+
+When an entry has a context path, it applies to text rendered at that full instance name or below it. Kinemium prefers the most specific matching path. An entry with an empty context is a fallback.
+
+```lua
+translations:SetEntryValue("", "Play", button:GetFullName(), "fr-fr", "Lancer")
+```
+
+This doesn't change the original `Text` property. Tables parented directly to LocalizationService are considered before its loaded JSON dictionaries. For a literal source match, the existing translation is displayed when available.
+
+This class currently handles literal strings. Parameterized translation expressions and `GetTranslator()` aren't implemented yet.

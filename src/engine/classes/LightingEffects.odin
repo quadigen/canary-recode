@@ -749,6 +749,7 @@ lighting_effect_clone :: proc(source: ^Object, destination: ^Object) {
 
 Register_Lighting_Effect :: proc(registry: ^Registry) {
 	Register_Advanced_Lighting_Effects(registry)
+	Register_Volumetric_Lighting_Effects(registry)
 	Register_Class(
 		registry,
 		&LightingEffect_Class,

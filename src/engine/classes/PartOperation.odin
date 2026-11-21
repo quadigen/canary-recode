@@ -80,6 +80,8 @@ Register_Part_Operations :: proc(registry: ^Registry) {
 		mesh_part_destroy,
 		creatable = false,
 		get = mesh_part_get,
+		parallel_get = mesh_part_parallel_get,
+		parallel_namecall = part_parallel_namecall,
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 	)
@@ -90,6 +92,8 @@ Register_Part_Operations :: proc(registry: ^Registry) {
 		mesh_part_destroy,
 		creatable = false,
 		get = mesh_part_get,
+		parallel_get = mesh_part_parallel_get,
+		parallel_namecall = part_parallel_namecall,
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 	)
@@ -100,6 +104,8 @@ Register_Part_Operations :: proc(registry: ^Registry) {
 		mesh_part_destroy,
 		creatable = false,
 		get = mesh_part_get,
+		parallel_get = mesh_part_parallel_get,
+		parallel_namecall = part_parallel_namecall,
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 	)
@@ -161,7 +167,7 @@ part_csg_input :: proc(part: ^Part) -> (input: kineffi.Csg_Input, valid: bool) {
 	return input, true
 }
 
-// The caller owns the resulting unparented instance. Source instances are unchanged.
+
 Part_Csg :: proc(
 	L: ^vm.State,
 	source: ^Object,

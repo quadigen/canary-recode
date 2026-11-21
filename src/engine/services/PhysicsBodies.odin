@@ -93,8 +93,8 @@ physics_shape_for_part :: proc(
 		mesh = physics_mesh_part_of(part)
 	}
 	if mesh != nil {
-		// Wait for the embedded solid geometry instead of colliding with a
-		// placeholder that fills cutouts while the asset is unavailable.
+
+
 		if physics_is_mesh_operation(mesh) {
 			return physics_meshpart_shape(service, mesh, scale)
 		}
@@ -103,13 +103,73 @@ physics_shape_for_part :: proc(
 		}
 	}
 
-	#partial switch part.shape {
+	return physics_cached_primitive_shape(service, part.shape, part.size)
+}
+
+physics_cached_primitive_shape :: proc(
+	service: ^Physics,
+	shape_kind: enums.PartType,
+	size: datatypes.Vector3,
+) -> kineffi.JPH_ShapeRef {
+	if service == nil ||
+	   !physics_finite_f64(size.x) ||
+	   !physics_finite_f64(size.y) ||
+	   !physics_finite_f64(size.z) {
+		return physics_create_primitive_shape(shape_kind, size)
+	}
+	key := Physics_Primitive_Shape_Key {
+		shape_kind,
+		{max(size.x, 0.002), max(size.y, 0.002), max(size.z, 0.002)},
+	}
+	h := u64(shape_kind)
+	dimensions := [3]f64{key.size.x, key.size.y, key.size.z}
+	for dimension in dimensions {
+		bits := transmute(u64)dimension
+		h ~= bits + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
+	}
+	h ~= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ~= h >> 33
+	if service.primitive_shape_cache == nil {
+		service.primitive_shape_cache = make(
+			[]Physics_Primitive_Shape_Entry,
+			PHYSICS_PRIMITIVE_CACHE_CAPACITY,
+		)
+	}
+	entry := &service.primitive_shape_cache[int(h & (PHYSICS_PRIMITIVE_CACHE_CAPACITY - 1))]
+	if entry.shape != nil && entry.key == key {
+		kineffi.JPH_Shape_AddRef(entry.shape)
+		return entry.shape
+	}
+	shape := physics_create_primitive_shape(shape_kind, key.size)
+	if shape == nil {return nil}
+	if entry.shape != nil {kineffi.JPH_Shape_Destroy(entry.shape)}
+	entry^ = Physics_Primitive_Shape_Entry{key, shape}
+	kineffi.JPH_Shape_AddRef(shape)
+	return shape
+}
+
+physics_create_primitive_shape :: proc(
+	shape_kind: enums.PartType,
+	size: datatypes.Vector3,
+) -> kineffi.JPH_ShapeRef {
+	half := datatypes.Vector3 {
+		max(size.x * 0.5, 0.001),
+		max(size.y * 0.5, 0.001),
+		max(size.z * 0.5, 0.001),
+	}
+	scale := half
+	#partial switch shape_kind {
 	case .Ball:
 		return kineffi.JPH_SphereShape_Create(f32(max(min(half.x, min(half.y, half.z)), 0.001)))
 	case .Cylinder:
-		return kineffi.JPH_CylinderShape_Create(f32(half.y), f32(max(min(half.x, half.z), 0.001)), 0)
+		return kineffi.JPH_CylinderShape_Create(
+			f32(half.y),
+			f32(max(min(half.x, half.z), 0.001)),
+			0,
+		)
 	case .Capsule:
-		return physics_capsule_shape(part.size)
+		return physics_capsule_shape(size)
 	case .Wedge:
 		return physics_convex_hull_shape(physics_wedge_verts[:], scale)
 	case .CornerWedge:
@@ -174,7 +234,11 @@ physics_convex_hull_shape :: proc(
 	points := make([]kineffi.JPH_Vec3, len(unit_verts))
 	defer delete(points)
 	for vert, i in unit_verts {
-		points[i] = kineffi.JPH_Vec3{f32(vert.x * scale.x), f32(vert.y * scale.y), f32(vert.z * scale.z)}
+		points[i] = kineffi.JPH_Vec3 {
+			f32(vert.x * scale.x),
+			f32(vert.y * scale.y),
+			f32(vert.z * scale.z),
+		}
 	}
 	return kineffi.JPH_ConvexHullShape_Create(raw_data(points), u32(len(points)), 0)
 }
@@ -187,7 +251,11 @@ physics_cone_shape :: proc(scale: datatypes.Vector3) -> kineffi.JPH_ShapeRef {
 		angle := f32(i) * 2.0 * math.PI / SEGMENTS
 		append(
 			&points,
-			kineffi.JPH_Vec3{f32(f64(math.cos(angle)) * scale.x), f32(-scale.y), f32(f64(math.sin(angle)) * scale.z)},
+			kineffi.JPH_Vec3 {
+				f32(f64(math.cos(angle)) * scale.x),
+				f32(-scale.y),
+				f32(f64(math.sin(angle)) * scale.z),
+			},
 		)
 	}
 	append(&points, kineffi.JPH_Vec3{0, f32(scale.y), 0})
@@ -230,13 +298,7 @@ physics_meshpart_shape :: proc(
 		}
 		#partial switch fidelity {
 		case .Box:
-			half := datatypes.Vector3 {
-				max(mesh_part.size.x * 0.5, 0.001),
-				max(mesh_part.size.y * 0.5, 0.001),
-				max(mesh_part.size.z * 0.5, 0.001),
-			}
-			value := kineffi.JPH_Vec3{f32(half.x), f32(half.y), f32(half.z)}
-			return kineffi.JPH_BoxShape_Create(&value, 0)
+			return physics_cached_primitive_shape(service, .Block, mesh_part.size)
 		case .Hull, .Default:
 			return physics_cached_mesh_shape(service, mesh_part, scale, .Hull)
 		case .PreciseConvexDecomposition:
@@ -632,8 +694,7 @@ physics_create_body :: proc(
 
 	motion_type: kineffi.JPH_MotionType = static ? .Static : .Dynamic
 
-	layer: kineffi.JPH_ObjectLayer =
-		static ? jolt.OBJECT_LAYER_NON_MOVING : jolt.OBJECT_LAYER_MOVING
+	layer := physics_group_layer(service, part, !static)
 
 	settings := kineffi.JPH_BodyCreationSettings_Create3(
 		shape,
@@ -735,6 +796,7 @@ physics_create_body :: proc(
 	return Physics_Body {
 			object = &part.object,
 			body_id = body_id,
+			layer = layer,
 			size = part.size,
 			shape = part.shape,
 			material = part.material,
@@ -890,7 +952,11 @@ physics_rebuild_chunk_body :: proc(service: ^Physics, terrain: ^Terrain, key: Te
 	if shape == nil {return}
 	defer kineffi.JPH_Shape_Destroy(shape)
 
-	body_id := physics_create_terrain_body(service, shape, terrain_chunk_world_origin(terrain, key))
+	body_id := physics_create_terrain_body(
+		service,
+		shape,
+		terrain_chunk_world_origin(terrain, key),
+	)
 	if body_id == kineffi.JPH_BODY_ID_INVALID {return}
 
 	service.terrain_bodies[key] = body_id
@@ -1120,7 +1186,7 @@ physics_collect_parts :: proc(object: ^classes.Object, parts: ^[dynamic]^classes
 		if classes.Is_A_Class(child, &classes.Part_Class) {
 			append(parts, cast(^classes.Part)child)
 		}
-		physics_collect_parts(child, parts)
+		if len(child.children) != 0 {physics_collect_parts(child, parts)}
 	}
 }
 
@@ -1133,6 +1199,9 @@ Physics_Collect_Service_Parts :: proc(
 	physics_reset_scratch_parts(&parts)
 	physics_collect_parts(workspace, &parts)
 	service.scratch_parts = parts
+
+
+	service.scratch_parts_workspace = nil
 	return parts
 }
 
@@ -1152,7 +1221,11 @@ Physics_Sync_Needed :: proc(service: ^Physics) -> bool {
 	epoch := classes.Hierarchy_Epoch()
 
 
-	if service.has_synced && service.synced_epoch == epoch && !service.sync_bumped {
+	if service.has_synced &&
+	   service.synced_epoch == epoch &&
+	   service.synced_structure_epoch == classes.Hierarchy_Structure_Epoch() &&
+	   service.scratch_parts_workspace != nil &&
+	   !service.sync_bumped {
 		return false
 	}
 	service.sync_epoch = epoch
@@ -1191,7 +1264,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 	tracy.ZoneNC("Jolt Terrain Synchronize", 0xE06C75)
 	Physics_Synchronize_Terrain(service)
 
-	if !Physics_Sync_Needed(service) {
+	if !Physics_Sync_Needed(service) && service.scratch_parts_workspace == workspace {
 
 
 		if service.broadphase_dirty {
@@ -1203,6 +1276,11 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 		return
 	}
 	sync_epoch := service.sync_epoch
+	structure_epoch := classes.Hierarchy_Structure_Epoch()
+	structure_changed :=
+		!service.has_synced ||
+		service.synced_structure_epoch != structure_epoch ||
+		service.scratch_parts_workspace != workspace
 	service.weld_groups_dirty = true
 
 
@@ -1211,10 +1289,14 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 	ownership := physics_ownership_context(service)
 
 
+	if structure_changed || service.scratch_parts_workspace != workspace {
+		parts := service.scratch_parts
+		physics_reset_scratch_parts(&parts)
+		physics_collect_parts(workspace, &parts)
+		service.scratch_parts = parts
+		service.scratch_parts_workspace = workspace
+	}
 	parts := service.scratch_parts
-	physics_reset_scratch_parts(&parts)
-	physics_collect_parts(workspace, &parts)
-	service.scratch_parts = parts
 
 	topology_changed := false
 
@@ -1227,7 +1309,11 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 
 		body := service.bodies[i]
 		part := cast(^classes.Part)body.object
-		if part != nil && part.part_index == i && !part.destroyed && part.material != .Water {
+		if part != nil &&
+		   part.part_index == i &&
+		   !part.destroyed &&
+		   part.material != .Water &&
+		   (!structure_changed || workspace_contains_physics_object(workspace, &part.object)) {
 			continue
 		}
 		physics_destroy_body(service, body)
@@ -1313,6 +1399,16 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 			continue
 		}
 
+		layer := physics_group_layer(service, part, !part.anchored && !remote)
+		if body.layer != layer {
+			kineffi.JPH_BodyInterface_SetObjectLayer(
+				service.system.body_interface,
+				body.body_id,
+				layer,
+			)
+			body.layer = layer
+			service.broadphase_dirty = true
+		}
 		physics_update_body_material(service, body, part.material)
 		if body.can_collide != part.can_collide {
 			kineffi.JPH_PhysicsSystem_SetBodyIsSensor(
@@ -1399,6 +1495,7 @@ Physics_Synchronize :: proc(service: ^Physics, workspace: ^classes.Object) {
 
 	tracy.ZoneNC("Jolt Sync Complete", 0xE06C75)
 
+	service.synced_structure_epoch = structure_epoch
 	Physics_Sync_Complete(service, sync_epoch)
 }
 
@@ -1838,7 +1935,7 @@ Physics_Character_Report_Overlaps :: proc(
 		coll.shape,
 		kineffi.JPH_RVec3{f64(position.x), f64(position.y), f64(position.z)},
 		kineffi.JPH_Quat{0, 0, 0, 1},
-		classes.COLLISION_SKIN,
+		coll.skin_width,
 		results[:],
 	)
 	for i in 0 ..< count {
@@ -1867,8 +1964,8 @@ Physics_Character_Touch_End :: proc(
 		if coll.touching_prev[body_id] {continue}
 		append(&new_contacts, body_id)
 	}
-	// Finish the set swap before running any script callbacks. Touched runs
-	// Lua, which may unload the character and delete these maps re-entrantly.
+
+
 	coll.touching_prev, coll.touching_now = coll.touching_now, coll.touching_prev
 	clear(&coll.touching_now)
 	for body_id in new_contacts {
@@ -1933,11 +2030,7 @@ physics_character_sweep :: proc(
 		.Include,
 	)
 	if !did_hit {return}
-	position = datatypes.Vector3 {
-		native.position.x,
-		native.position.y,
-		native.position.z,
-	}
+	position = datatypes.Vector3{native.position.x, native.position.y, native.position.z}
 	normal = datatypes.Vector3{f64(native.normal.x), f64(native.normal.y), f64(native.normal.z)}
 	body_id = native.bodyID
 	fraction = native.fraction

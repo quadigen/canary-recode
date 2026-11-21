@@ -1,8 +1,10 @@
 package datatypes
 
+import enums "../enum"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 push_cframe :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: CFrame) {
 	push_value(L, binding, value)
@@ -104,6 +106,68 @@ cframe_angles :: proc "c" (L: ^vm.State) -> i32 {
 		binding_from_upvalue(L),
 		CFrame_Angles(f64(vm.ArgNumber(L, 1)), f64(vm.ArgNumber(L, 2)), f64(vm.ArgNumber(L, 3))),
 	)
+	return 1
+}
+
+cframe_arg_rotation_order :: proc(
+	L: ^vm.State,
+	index: int,
+	binding: ^vm.Userdata_Binding,
+) -> RotationOrder {
+	if vm.IsNoneOrNil(L, index) {return .XYZ}
+	registry := registry_from_binding(binding)
+	item := enums.Arg_Item(L, index, registry.enums, "RotationOrder")
+	switch enums.RotationOrder(item.value) {
+	case .XYZ:
+		return .XYZ
+	case .XZY:
+		return .XZY
+	case .YXZ:
+		return .YXZ
+	case .YZX:
+		return .YZX
+	case .ZXY:
+		return .ZXY
+	case .ZYX:
+		return .ZYX
+	}
+	return .XYZ
+}
+cframe_from_euler_order :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	binding := binding_from_upvalue(L)
+	order := cframe_arg_rotation_order(L, 4, binding)
+	push_cframe(
+		L,
+		binding,
+		CFrame_FromEulerAngles_Order(
+			vm.ArgNumber(L, 1),
+			vm.ArgNumber(L, 2),
+			vm.ArgNumber(L, 3),
+			order,
+		),
+	)
+	return 1
+}
+cframe_from_rotation_between_vectors :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	a, b := arg_vector3(L, 1), arg_vector3(L, 2)
+	if Vec3_Magnitude(a) < 1e-12 || Vec3_Magnitude(b) < 1e-12 {
+		return vm.RaiseError(L, "rotation requires nonzero directions")
+	}
+	a, b = Vec3_Unit(a), Vec3_Unit(b)
+	cross := Vec3_Cross(a, b)
+	dot := clamp(Vec3_Dot(a, b), -1, 1)
+	length := Vec3_Magnitude(cross)
+	value := CFrame_Identity
+	if length > 1e-10 {
+		value = CFrame_FromAxisAngle(Vec3_Unit(cross), math.atan2(length, dot))
+	} else if dot < 0 {
+		axis := Vector3{1, 0, 0}
+		if abs(a.x) > 0.8 {axis = Vector3{0, 1, 0}}
+		value = CFrame_FromAxisAngle(Vec3_Unit(Vec3_Cross(a, axis)), math.PI)
+	}
+	push_cframe(L, binding_from_upvalue(L), value)
 	return 1
 }
 
@@ -229,6 +293,7 @@ cframe_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	     "Orthonormalize",
 	     "GetComponents",
 	     "components",
+	     "ToEulerAngles",
 	     "ToEulerAnglesXYZ",
 	     "ToEulerAnglesYXZ",
 	     "ToOrientation",
@@ -263,23 +328,41 @@ cframe_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		)
 		return 1, true
 	case "ToWorldSpace":
-		push_cframe(L, binding, CFrame_ToWorldSpace(cf^, require_cframe(L, 2, binding)^))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_cframe(L, binding, CFrame_ToWorldSpace(cf^, require_cframe(L, i, binding)^))
+		}
+		return i32(count - 1), true
 	case "ToObjectSpace":
-		push_cframe(L, binding, CFrame_ToObjectSpace(cf^, require_cframe(L, 2, binding)^))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_cframe(L, binding, CFrame_ToObjectSpace(cf^, require_cframe(L, i, binding)^))
+		}
+		return i32(count - 1), true
 	case "PointToWorldSpace":
-		push_vector3(L, CFrame_PointToWorldSpace(cf^, arg_vector3(L, 2)))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_vector3(L, CFrame_PointToWorldSpace(cf^, arg_vector3(L, i)))
+		}
+		return i32(count - 1), true
 	case "PointToObjectSpace":
-		push_vector3(L, CFrame_PointToObjectSpace(cf^, arg_vector3(L, 2)))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_vector3(L, CFrame_PointToObjectSpace(cf^, arg_vector3(L, i)))
+		}
+		return i32(count - 1), true
 	case "VectorToWorldSpace":
-		push_vector3(L, CFrame_VectorToWorldSpace(cf^, arg_vector3(L, 2)))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_vector3(L, CFrame_VectorToWorldSpace(cf^, arg_vector3(L, i)))
+		}
+		return i32(count - 1), true
 	case "VectorToObjectSpace":
-		push_vector3(L, CFrame_VectorToObjectSpace(cf^, arg_vector3(L, 2)))
-		return 1, true
+		count := vm.StackTop(L)
+		for i in 2 ..= count {
+			push_vector3(L, CFrame_VectorToObjectSpace(cf^, arg_vector3(L, i)))
+		}
+		return i32(count - 1), true
 	case "Orthonormalize":
 		push_cframe(L, binding, CFrame_Orthonormalize(cf^))
 		return 1, true
@@ -290,6 +373,11 @@ cframe_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		vm.PushNumber(L, f64(r10)); vm.PushNumber(L, f64(r11)); vm.PushNumber(L, f64(r12))
 		vm.PushNumber(L, f64(r20)); vm.PushNumber(L, f64(r21)); vm.PushNumber(L, f64(r22))
 		return 12, true
+	case "ToEulerAngles":
+		order := cframe_arg_rotation_order(L, 2, binding)
+		x, y, z := CFrame_ToEulerAngles_Order(cf^, order)
+		push_angles(L, x, y, z)
+		return 3, true
 	case "ToEulerAnglesXYZ":
 		x, y, z := CFrame_ToEulerAnglesXYZ(cf^)
 		push_angles(L, x, y, z)
@@ -409,6 +497,13 @@ CFrame_Luau_Binding :: proc() -> vm.Userdata_Binding {
 CFrame_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", cframe_new)
 	add_library_function(L, binding, "Angles", cframe_angles)
+	add_library_function(L, binding, "fromEulerAngles", cframe_from_euler_order)
+	add_library_function(
+		L,
+		binding,
+		"fromRotationBetweenVectors",
+		cframe_from_rotation_between_vectors,
+	)
 	add_library_function(L, binding, "fromEulerAnglesXYZ", cframe_from_euler_xyz)
 	add_library_function(L, binding, "fromEulerAnglesYXZ", cframe_from_euler_yxz)
 	add_library_function(L, binding, "fromOrientation", cframe_from_orientation)

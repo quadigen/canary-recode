@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import "core:fmt"
@@ -51,6 +50,8 @@ Lighting :: struct {
 	shadow_cascades:       i64,
 	shadow_map_size:       i64,
 	applied_fingerprint:   u64,
+	sky_hash:              u64,
+	sky_uploaded:          bool,
 }
 
 
@@ -75,6 +76,9 @@ Lighting_Default_Effects :: []struct {
 	{"ReflectionProbeEffect", "ReflectionProbeEffect", true},
 	{"SSGIEffect", "SSGIEffect", false},
 	{"FogEffect", "FogEffect", false},
+	{"VolumetricFogEffect", "VolumetricFogEffect", false},
+	{"ChromaticAberrationEffect", "ChromaticAberrationEffect", false},
+	{"FilmGrainEffect", "FilmGrainEffect", false},
 	{"ScreenSpaceConeTracingEffect", "ScreenSpaceConeTracingEffect", false},
 	{"TemporalAntiAliasingEffect", "TemporalAntiAliasingEffect", false},
 	{"DynamicResolutionEffect", "DynamicResolutionEffect", false},
@@ -462,7 +466,11 @@ lighting_collect_effects :: proc(service: ^Lighting) -> Lighting_Effect_Set {
 	return effects
 }
 
-Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object, fast_viewport := false) {
+Lighting_Apply :: proc(
+	service: ^Lighting,
+	renderer: ^classes.Renderer_Object,
+	fast_viewport := false,
+) {
 	if service == nil || renderer == nil || renderer.Filament == nil {
 		return
 	}
@@ -502,6 +510,18 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object, f
 	fingerprint := lighting_effects_fingerprint(service, effects)
 	fingerprint = lighting_hash_mix(fingerprint, lighting_advanced_fingerprint(service))
 	fingerprint = lighting_hash_bool(fingerprint, fast_viewport)
+	sky: ^classes.Sky
+	for child in service.children {
+		if child != nil &&
+		   !child.destroyed &&
+		   child.class == &classes.Sky_Class {sky = cast(^classes.Sky)child; break}
+	}
+	sky_hash := lighting_hash_ptr(0, rawptr(sky))
+	if sky != nil {
+		sky_hash = lighting_hash_mix(sky_hash, sky.revision)
+		for path in sky.faces {for byte_value in transmute([]u8)path {sky_hash = lighting_hash_mix(sky_hash, u64(byte_value))}}
+	}
+	fingerprint = lighting_hash_mix(fingerprint, sky_hash)
 	if fingerprint == service.applied_fingerprint && service.applied_context == filament {
 		return
 	}
@@ -530,22 +550,36 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object, f
 
 	profile := lighting_sun_profile(service, atmosphere)
 
-	_ = kineffi.Kine_Filament_SetSkyAtmosphere(
-		filament,
-		f32(profile.direction.x),
-		f32(profile.direction.y),
-		f32(profile.direction.z),
-		f32(profile.sky_color.R),
-		f32(profile.sky_color.G),
-		f32(profile.sky_color.B),
-		f32(profile.horizon_color.R),
-		f32(profile.horizon_color.G),
-		f32(profile.horizon_color.B),
-		f32(profile.ground_color.R),
-		f32(profile.ground_color.G),
-		f32(profile.ground_color.B),
-		f32(profile.intensity),
-	)
+	if service.sky_hash != sky_hash || service.applied_context != filament {
+		service.sky_uploaded = classes.Sky_Upload(sky, filament)
+		service.sky_hash = sky_hash
+	}
+	if !service.sky_uploaded {
+		_ = kineffi.Kine_Filament_SetSkyAtmosphere(
+			filament,
+			f32(profile.direction.x),
+			f32(profile.direction.y),
+			f32(profile.direction.z),
+			f32(profile.sky_color.R),
+			f32(profile.sky_color.G),
+			f32(profile.sky_color.B),
+			f32(profile.horizon_color.R),
+			f32(profile.horizon_color.G),
+			f32(profile.horizon_color.B),
+			f32(profile.ground_color.R),
+			f32(profile.ground_color.G),
+			f32(profile.ground_color.B),
+			f32(profile.intensity),
+		)
+	} else {
+		_ = kineffi.Kine_Filament_SetSun(
+			filament,
+			f32(profile.direction.x),
+			f32(profile.direction.y),
+			f32(profile.direction.z),
+			f32(profile.intensity),
+		)
+	}
 
 
 	_ = kineffi.Kine_Filament_SetShadowOptions(
@@ -719,7 +753,8 @@ Lighting_Apply :: proc(service: ^Lighting, renderer: ^classes.Renderer_Object, f
 	}
 
 
-	if reflections := effects.reflections; reflections != nil && reflections.enabled && !fast_viewport {
+	if reflections := effects.reflections;
+	   reflections != nil && reflections.enabled && !fast_viewport {
 		_ = kineffi.Kine_Filament_SetScreenSpaceReflections(
 			filament,
 			true,
@@ -777,7 +812,10 @@ lighting_get :: proc(
 
 	case "TimeOfDay":
 		seconds := int(math.round(service.clock_time * 3600)) % 86400
-		vm.PushString(L, fmt.tprintf("%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60))
+		vm.PushString(
+			L,
+			fmt.tprintf("%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60),
+		)
 
 	case "Brightness":
 		vm.PushNumber(L, service.brightness)
@@ -812,7 +850,7 @@ lighting_get :: proc(
 	case "ShadowMapSize":
 		vm.PushNumber(L, f64(service.shadow_map_size))
 
-	case "GetSunDirection":
+	case "GetSunDirection", "GetMinutesAfterMidnight", "SetMinutesAfterMidnight":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -848,8 +886,15 @@ lighting_set :: proc(
 		hour, hour_ok := strconv.parse_int(time[:2], 10)
 		minute, minute_ok := strconv.parse_int(time[3:5], 10)
 		second, second_ok := strconv.parse_int(time[6:], 10)
-		if !hour_ok || !minute_ok || !second_ok || hour < 0 || hour > 23 ||
-		   minute < 0 || minute > 59 || second < 0 || second > 59 {
+		if !hour_ok ||
+		   !minute_ok ||
+		   !second_ok ||
+		   hour < 0 ||
+		   hour > 23 ||
+		   minute < 0 ||
+		   minute > 59 ||
+		   second < 0 ||
+		   second > 59 {
 			_ = vm.RaiseError(L, "TimeOfDay must be in HH:MM:SS format")
 			return true
 		}
@@ -907,6 +952,15 @@ lighting_namecall :: proc(
 ) {
 	service := cast(^Lighting)object
 	switch method {
+	case "GetMinutesAfterMidnight":
+		vm.PushNumber(L, service.clock_time * 60)
+		return 1, true
+	case "SetMinutesAfterMidnight":
+		minutes := vm.ArgNumber(L, 2)
+		if math.is_nan(minutes) ||
+		   math.is_inf(minutes) {return vm.RaiseError(L, "minutes must be finite"), true}
+		service.clock_time = lighting_wrap_clock_time(minutes / 60)
+		return 0, true
 	case "GetSunDirection":
 		datatypes.Push_Vector3(L, lighting_sun_direction(service.clock_time))
 		return 1, true
@@ -929,6 +983,11 @@ Register_Lighting_Class :: proc(registry: ^classes.Registry) {
 		get = lighting_get,
 		set = lighting_set,
 		namecall = lighting_namecall,
+		methods = []string {
+			"GetSunDirection",
+			"GetMinutesAfterMidnight",
+			"SetMinutesAfterMidnight",
+		},
 		properties = []string {
 			"Ambient",
 			"Brightness",

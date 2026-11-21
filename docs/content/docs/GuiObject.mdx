@@ -136,6 +136,14 @@ This is a geometry check, not a guarantee that the element would receive a click
 
 ## Events
 
+`SelectionGained` and `SelectionLost` fire without arguments when GUI navigation selects or deselects this object.
+
+```lua
+button.SelectionGained:Connect(function()
+    print("Selected")
+end)
+```
+
 `GuiObject` exposes input events and mouse events. Connect to them with `:Connect()`.
 
 | Event | Callback arguments | Description |
@@ -194,6 +202,8 @@ end
 The release is delivered to the original pressed target even if the pointer has moved outside its bounds. This is useful for drag interactions. The input objects are temporary; read or copy the values you need inside the callback rather than retaining the input object for later use.
 
 The base GUI event dispatcher shown here handles mouse movement, mouse buttons, and mouse wheel input. Keyboard, touch, and gamepad delivery through these particular events are not established by this class. `InputBegan`, `InputChanged`, and `InputEnded` pass one argument, not a second processed-input flag.
+
+`SelectionOrder` (number, read/write, default 0) sets priority when `GuiService:Select()` searches for an eligible object. Lower values have higher priority.
 
 ## See also
 

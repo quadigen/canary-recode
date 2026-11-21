@@ -25,9 +25,11 @@ track:Play(0.2, 1, 1)
 | `EvaluationThrottled` | `boolean` | Read-only | `false` | Always reports `false`. |
 | `AnimationPlayed` | signal | Read-only | | Fires with each track when playback starts. |
 
-`MeshPart` accepts a `MeshPart` or `nil`. When it's `nil`, the animator looks for a rigged mesh in its ancestors. Assigning another instance type is ignored, and changing the mesh releases existing native tracks.
+`MeshPart` accepts a `MeshPart` or `nil`. When it's `nil`, the animator looks for a rigged mesh in its ancestors. Assigning another instance type is ignored, and changing the mesh releases existing animation tracks.
 
 ## Methods
+
+`GetPlayingAnimationTracks(): {AnimationTrack}` returns the active tracks associated with this animator. `StepAnimations(deltaTime: number): ()` advances animations manually and disables automatic animation stepping. It raises an error if the rig isn't ready or stepping fails.
 
 | Signature | Description |
 | --- | --- |

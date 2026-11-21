@@ -7,6 +7,7 @@ import miniaudio "vendor:miniaudio"
 Sound :: struct {
 	source: miniaudio.sound,
 	loaded: bool,
+	pcm:    ^miniaudio.audio_buffer,
 }
 
 Sound_Flags :: miniaudio.sound_flags
@@ -138,12 +139,50 @@ load_sound :: proc(sound: ^Sound, path: string, flags: Sound_Flags = {}) -> bool
 	return true
 }
 
+load_pcm :: proc(sound: ^Sound, samples: []f32, rate, channels: int) -> bool {
+	if sound == nil ||
+	   channels < 1 ||
+	   rate < 1 ||
+	   len(samples) == 0 ||
+	   len(samples) % channels != 0 {return false}
+	unload_sound(sound)
+	engine := get_engine()
+	if engine == nil {return false}
+	config := miniaudio.audio_buffer_config_init(
+		.f32,
+		u32(channels),
+		u64(len(samples) / channels),
+		raw_data(samples),
+		nil,
+	)
+	config.sampleRate = u32(rate)
+	if miniaudio.audio_buffer_alloc_and_init(&config, &sound.pcm) != .SUCCESS {return false}
+	if miniaudio.sound_init_from_data_source(
+		   engine,
+		   cast(^miniaudio.data_source)sound.pcm,
+		   {},
+		   nil,
+		   &sound.source,
+	   ) !=
+	   .SUCCESS {
+		miniaudio.audio_buffer_uninit_and_free(sound.pcm)
+		sound.pcm = nil
+		return false
+	}
+	sound.loaded = true
+	return true
+}
+
 unload_sound :: proc(sound: ^Sound) {
 	if sound == nil || !sound.loaded {
 		return
 	}
 
 	miniaudio.sound_uninit(&sound.source)
+	if sound.pcm != nil {
+		miniaudio.audio_buffer_uninit_and_free(sound.pcm)
+		sound.pcm = nil
+	}
 	sound.loaded = false
 }
 
@@ -164,7 +203,7 @@ pause :: proc(sound: ^Sound) -> bool {
 }
 
 is_loaded :: proc(sound: ^Sound) -> bool {
-    return sound != nil && sound.loaded
+	return sound != nil && sound.loaded
 }
 
 stop_sound :: proc(sound: ^Sound) -> bool {
@@ -172,7 +211,8 @@ stop_sound :: proc(sound: ^Sound) -> bool {
 		return false
 	}
 
-	return miniaudio.sound_stop(&sound.source) == .SUCCESS
+	if miniaudio.sound_stop(&sound.source) != .SUCCESS {return false}
+	return miniaudio.sound_seek_to_pcm_frame(&sound.source, 0) == .SUCCESS
 }
 
 is_playing :: proc(sound: ^Sound) -> b32 {

@@ -2,7 +2,6 @@
 
 package services
 
-// wire:service global="Filesystem"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -51,12 +50,16 @@ Filesystem_get :: proc(
 	     "MovePath",
 	     "CopyPath",
 	     "ReadFile",
-	     "WriteFile", "WriteFileAtomic", "DeleteFile":
+	     "WriteFile",
+	     "WriteFileAtomic",
+	     "DeleteFile":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return false
 		}
 
 		vm.PushUserdataMethod(L, key)
+	case:
+		return false
 	}
 	return true
 }

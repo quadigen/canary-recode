@@ -3,7 +3,7 @@ title: ReflectionProbeEffect
 description: Capture reflections from a point in the world for reflective surfaces.
 ---
 
-`ReflectionProbeEffect` gives reflective materials something to reflect. It captures a view from a position in the scene and feeds that capture to the renderer, either following the camera or staying at a fixed point.
+`ReflectionProbeEffect` gives reflective materials something to reflect. It captures a view from a position in the scene and uses it for reflections, either following the camera or staying at a fixed point.
 
 `ReflectionProbeEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
 
@@ -41,7 +41,7 @@ probe.Intensity = 1
 | `NearPlane` | `number` | Read/write | `0.1` | Near clipping plane, clamped between `0.01` and `10`. |
 | `MaxDistance` | `number` | Read/write | `1000` | Maximum capture distance, clamped between `1` and `10000`. |
 
-`Resolution` and `UpdateInterval` are numeric even though they describe discrete values. Fractions are passed through; the renderer may quantize them.
+`Resolution` and `UpdateInterval` are numeric even though they describe discrete values. Fractional values may be rounded during rendering.
 
 ## Choosing a position
 

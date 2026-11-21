@@ -217,7 +217,7 @@ SetUniform(name: string, value: any)
 
 Sets a named shader parameter. Use it for custom shader inputs that you want to control from Luau without replacing the shader source.
 
-The default material stores `baseColor`, `roughness`, and `metallic` as shader parameters. Prefer their dedicated properties `Color`, `Roughness`, and `Metalness` when using the built-in shader. The exact accepted Luau value types and return behavior for the shared uniform API are not specified here.
+The default material stores `baseColor`, `roughness`, and `metallic` as shader parameters. Prefer their dedicated properties `Color`, `Roughness`, and `Metalness` when using the built-in shader. For a custom float or vector, pass a number or an array of one to four numbers. For `mat3` or `mat4`, pass nine or sixteen numbers in column-major order. This method returns no values.
 
 ### GetUniform
 
@@ -225,7 +225,7 @@ The default material stores `baseColor`, `roughness`, and `metallic` as shader p
 GetUniform(name: string)
 ```
 
-Reads a shader parameter through the uniform API. The exact return type and behavior for missing names are not specified here.
+Reads a shader parameter through the uniform API. Returns the stored number or component array, or `nil` for an unset name.
 
 ### ResetShader
 

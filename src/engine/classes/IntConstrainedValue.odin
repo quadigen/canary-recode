@@ -4,21 +4,20 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-IntConstrainedValue_Class := Class_Info{
+IntConstrainedValue_Class := Class_Info {
 	name   = "IntConstrainedValue",
 	parent = &ValueBase_Class,
 }
 
 IntConstrainedValue :: struct {
 	using object: Object,
-
-	value:     i64,
-	min_value: i64,
-	max_value: i64,
+	value:        i64,
+	min_value:    i64,
+	max_value:    i64,
 }
 
 IntConstrainedValue_Init :: proc() -> IntConstrainedValue {
-	return IntConstrainedValue{
+	return IntConstrainedValue {
 		object = Object_Init(&IntConstrainedValue_Class),
 		value = 0,
 		min_value = min(i64),
@@ -101,6 +100,7 @@ Register_IntConstrainedValue :: proc(registry: ^Registry) {
 		IntConstrainedValue_construct,
 		IntConstrainedValue_destroy,
 		get = IntConstrainedValue_get,
+		parallel_get = IntConstrainedValue_get,
 		set = IntConstrainedValue_set,
 		clone = IntConstrainedValue_clone,
 		properties = []string{"Value", "ConstrainedValue", "MinValue", "MaxValue"},

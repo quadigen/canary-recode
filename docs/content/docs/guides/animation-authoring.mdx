@@ -58,6 +58,8 @@ end
 
 Meshes load asynchronously. If a query comes back empty immediately after assigning `MeshId`, give the mesh a frame to finish importing before treating the rig as static.
 
+In Studio’s Animator, click a joint or bone line in the viewport to select its timeline channel. Click overlapping joint markers again to cycle through them. Choose **Move** or **Rotate**, then drag the corresponding 3D handle. Releasing the handle keys the current frame. Press **Esc** during a drag to cancel it.
+
 ## Choose a clip
 
 `Animation` can select a clip by name or index:
@@ -295,10 +297,10 @@ Build a sequence when its parameters change, not on every frame. If you only nee
 
 ## Performance
 
-- Load each track once and reuse it. Repeated `LoadAnimation()` calls create new native tracks.
+- Load each track once and reuse it. Repeated `LoadAnimation()` calls create new animation tracks.
 - Build or edit a `KeyframeSequence` only when its inputs change, not every frame.
 - Keep the number of animated bones and simultaneous high-priority tracks reasonable.
-- Stop or destroy animators you no longer need; a destroyed animator releases its native tracks and the rig.
+- Stop or destroy animators you no longer need; a destroyed animator releases its animation tracks and the rig.
 - For imported animation files, the first load pays the import cost. Later loads reuse the clips already on the rig.
 
 ## Where to go next

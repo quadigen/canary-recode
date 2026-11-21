@@ -1,0 +1,231 @@
+---
+title: Parallel Luau
+description: Use Actors to organize work, switch between execution phases, and send messages between scripts.
+---
+
+Some scripts spend most of their time working out what to do before they actually change anything in the game. Think of an NPC deciding where to move, or a terrain generator calculating a height map.
+
+Parallel Luau gives you a way to keep that work separate from changes to the world. You do this by placing scripts inside [Actors](/docs/Actor) and choosing when they run in the serial or parallel phase.
+
+> Parallel Luau currently supports execution phases and Actor messaging, but doesn't yet run scripts across multiple CPU cores. You can write scripts using these APIs today, though you won't see a parallel performance gain yet.
+
+## Your first Actor
+
+Create an Actor in Workspace, name it Worker, and put a Script inside it.
+
+```text
+Workspace
+└── Worker (Actor)
+    └── Script
+```
+
+Put the following code in the Script:
+
+```lua
+local actor = script:GetActor()
+
+task.desynchronize()
+
+local height = 0
+
+for x = 1, 100 do
+    height += math.noise(x * 0.1, 0)
+end
+
+task.synchronize()
+actor:SetAttribute("Height", height)
+```
+
+When the script starts, it's running in serial. Calling `task.desynchronize()` moves it into the parallel phase, where it calculates the height. Once the calculation is finished, `task.synchronize()` brings the script back into serial so it can save the result.
+
+You can use `script:GetActor()` even if there are folders between the script and its Actor. It returns the nearest ancestor Actor, or `nil` if there isn't one.
+
+## Switching between phases
+
+There are two functions in the task library for changing how a script runs.
+
+| Function | What it does |
+| --- | --- |
+| `task.desynchronize()` | Yields until the script can resume in the parallel phase. |
+| `task.synchronize()` | Yields until the script can resume in the serial phase. |
+
+Both functions require a script belonging to a live Actor. Calling one when you're already in that phase does nothing.
+
+You can still use `task.wait()`, `task.spawn()`, `task.defer()`, and `task.delay()`. Scheduled work keeps the current execution phase unless you explicitly change it.
+
+Try to do as much of your calculation as you can before synchronizing. If you need to update several properties, calculate their new values first and apply them together once you're back in serial.
+
+## Sending work to an Actor
+
+Actors can receive messages from other scripts. This is useful when you want one script to decide what needs doing while another script performs the calculation.
+
+In your Worker script, replace the previous example with a message handler:
+
+```lua
+local actor = script:GetActor()
+
+actor:BindToMessageParallel("CalculateHeight", function(x, z)
+    local height = math.noise(x * 0.05, z * 0.05) * 64
+
+    task.synchronize()
+    actor:SetAttribute("Height", height)
+end)
+```
+
+From a separate script in the same runtime, send a message once the worker has bound its handler:
+
+```lua
+local worker = workspace:WaitForChild("Worker")
+
+worker:SendMessage("CalculateHeight", 120, 80)
+```
+
+`SendMessage()` doesn't wait for the callback to finish or return its result. In this example, the worker saves the result in an attribute instead.
+
+You can bind more than one topic to an Actor. Messages sent to a topic that hasn't been bound are ignored.
+
+| Method | When to use it |
+| --- | --- |
+| `Actor:SendMessage(topic, ...)` | Send arguments to a named topic. Can be called in either phase. |
+| `Actor:BindToMessage(topic, callback)` | Receive messages in the serial phase. |
+| `Actor:BindToMessageParallel(topic, callback)` | Receive messages in the parallel phase. |
+
+Only scripts inside the receiving Actor can bind its topics, and binding must happen in serial. Both binding methods return a connection, which you can disconnect when you no longer need it.
+
+For now, Actors share the same runtime, including module caches and mutable values. Passing a table or buffer in a message doesn't give the receiver an independent copy. Prefer passing numbers, strings, and other simple values when dividing up work.
+
+## Connecting to events
+
+You don't always need to send a message to start parallel work. A `KinemiumScriptSignal` also has a `ConnectParallel()` method.
+
+For example, you can calculate a value every time Heartbeat fires:
+
+```lua
+local actor = script:GetActor()
+local RunService = game:GetService("RunService")
+
+local elapsed = 0
+
+local connection = RunService.Heartbeat:ConnectParallel(function(dt)
+    elapsed += dt
+    local height = math.sin(elapsed) * 5
+
+    task.synchronize()
+    actor:SetAttribute("Height", height)
+end)
+```
+
+Call `ConnectParallel()` while in serial, from a script inside an Actor. Its callback starts in the parallel phase, so you don't need to call `task.desynchronize()` inside it.
+
+A regular `Connect()` or `Once()` callback starts in serial. If you're waiting for a signal with `Wait()`, the script resumes in the phase it was waiting in. Disconnect a connection in serial.
+
+## What you can access in parallel
+
+Not every engine API can be used in both phases. An unsupported read, write, or method call raises an error rather than automatically moving your script back to serial.
+
+| Operation | Parallel access |
+| --- | --- |
+| Luau calculations and local tables or buffers | Allowed |
+| Reading an Instance's Name or Parent | Allowed |
+| Finding children, ancestors, or the owning Actor | Allowed |
+| Reading attributes and tags | Allowed |
+| Sending Actor messages | Allowed |
+| Creating or destroying Instances | Serial only |
+| Changing an ordinary Instance property or attribute | Serial only |
+| Loading modules with require | Serial only |
+| Looking up existing, accessible services | Allowed |
+| Workspace raycasts and overlap queries | Allowed |
+| Reading terrain cells and converting coordinates | Allowed |
+| Reading CollectionService tags and RunService state | Allowed |
+| Generating or editing terrain | Serial only |
+
+Load your modules and obtain signals before entering the parallel phase. You can look up services that already exist, but parallel code cannot create a missing service. For example, if you need to generate terrain based on a calculation, switch back to serial before calling `Terrain:GenerateChunk()`.
+
+### Querying the world
+
+You can cast rays and check for overlapping parts without switching back to serial. Put this example inside an Actor:
+
+```lua
+local actor = script:GetActor()
+
+local params = RaycastParams.new()
+params.FilterDescendantsInstances = {actor}
+params.FilterType = Enum.RaycastFilterType.Exclude
+
+task.desynchronize()
+
+local hit = workspace:Raycast(
+    Vector3.new(0, 100, 0),
+    Vector3.new(0, -200, 0),
+    params
+)
+
+task.synchronize()
+
+if hit then
+    actor:SetAttribute("GroundHeight", hit.Position.Y)
+end
+```
+
+`GetPartBoundsInBox()`, `GetPartBoundsInRadius()`, and `GetPartsInPart()` are also available during parallel execution. The physics state used by these queries is synchronized before each parallel phase. You can read ordinary Part properties like Position, Size, and CFrame, but you'll need to synchronize before changing them.
+
+If you use CollectionService, you can read tags with `GetTagged()`, `HasTag()`, `GetTags()`, and `GetAllTags()`. RunService's runtime-state methods, such as `IsServer()` and `IsClient()`, are available too. Keep operations that add or remove tags, connect to signals, or edit terrain in serial.
+
+Some APIs explicitly allow more operations in parallel. The ExampleService, for instance, supports reading its call count, reading and writing an integer value, and calling its Add and Echo methods:
+
+```lua
+local example = game:GetService("ExampleService")
+
+task.desynchronize()
+
+local result = example:Add(20, 22)
+example.ParallelValue = result
+
+print(example.ParallelValue) -- 42
+print(example.CallCount)
+```
+
+`ParallelValue` accepts whole numbers in Luau's safe integer range; `CallCount` is read-only. Updating `ParallelValue` in the parallel phase doesn't automatically fire a property-change signal. Other ExampleService methods, including `MakeColor()` and `GetService()`, still require serial execution.
+
+### Working with data and objects
+
+You can use several utility services without leaving the parallel phase:
+
+| Service | Available operations |
+| --- | --- |
+| `HttpService` | JSONEncode, JSONDecode, UrlEncode, UrlDecode |
+| `EncodingService` | EncodeBase64, DecodeBase64 |
+| `TweenService` | GetValue, SmoothDamp |
+| `LocalizationService` | Translate and locale reads |
+| `PhysicsService` | Collision group lookup and listing |
+| `Players` | GetPlayers, GetPlayerByUserId, GetPlayerFromCharacter, LocalPlayer |
+
+For example, an Actor can calculate an eased value and encode it as JSON before returning to serial:
+
+```lua
+local actor = script:GetActor()
+
+task.desynchronize()
+
+local tween = game:GetService("TweenService")
+local http = game:GetService("HttpService")
+
+local alpha = tween:GetValue(
+    0.5,
+    Enum.EasingStyle.Quad,
+    Enum.EasingDirection.Out
+)
+
+local result = http:JSONEncode({alpha = alpha})
+
+task.synchronize()
+actor:SetAttribute("Result", result)
+```
+
+You can also read the values of common value objects, selected Player properties, MeshPart properties, and Attachment transforms. Model and Actor bounds, pivots, and scale can be read in parallel, as can selected Camera properties and projection methods. Ordinary writes, HTTP requests, tween creation, collision-group registration, and locale changes still need the serial phase.
+
+## Where to go next
+
+Start by separating calculations from changes to the world. Actors are useful for organizing independent pieces of work, but creating more of them doesn't make a script faster in the current release.
+
+If your work is already suited to GPU calculations, see [Procedural images and GPU compute](/docs/guides/procedural-images-and-gpu). For terrain generation, see [Terrain and environment](/docs/guides/terrain-and-environment).

@@ -39,7 +39,7 @@ print(Config.MaxPlayers)
 - The module runs the first time it's required.
 - Its return value is cached on the instance, so subsequent requires return the same value.
 - `nil` is a valid return value and is cached like any other.
-- Each runtime has its own VM and instances, so a module required on the server and on a client runs separately and doesn't share state.
+- A module required on the server and on a client runs separately and doesn't share state.
 - Assigning `Source` invalidates the cache and clears any running thread. The next require runs the new source.
 
 ```lua

@@ -1,0 +1,25 @@
+---
+title: Camera2D
+description: Pan and zoom the 2D world with one camera object.
+---
+
+A Camera2D moves the view around the 2D world. It doesn't move the objects or affect ScreenGui elements.
+
+```lua
+workspace.Dimension = Enum.Dimension.D2
+
+local camera = Instance.new("Camera2D", workspace)
+camera.Position = UDim2.fromOffset(200, 150)
+camera.Zoom = 2
+```
+
+## Properties
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Position` | UDim2 | 0 | Which world point appears at the middle of the screen. Inherited. |
+| `Rotation` | number | 0 | Rotation of the camera, in degrees. Inherited. |
+| `Zoom` | number | 1 | Uniform zoom, clamped from 0.01 to 100. |
+| `Enabled` | boolean | true | Whether this camera can control the view. |
+
+The first enabled camera in the active scene wins. Disable it to use another camera or the default untransformed view. To follow a player, parent the camera to their Part2D and adjust its Position.

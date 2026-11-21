@@ -22,6 +22,7 @@ Scroll_Bar_Image :: struct {
 ScrollingFrame :: struct {
 	using gui_object:       GuiObject,
 	canvas_position:        datatypes.Vector2,
+	scroll_velocity:        datatypes.Vector2,
 	target_position:        datatypes.Vector2,
 	canvas_size:            datatypes.UDim2,
 	virtualized_scrolling:  bool,
@@ -34,9 +35,9 @@ ScrollingFrame :: struct {
 	scrollbar_thickness:    f32,
 	scrollbar_color:        datatypes.Color3,
 	scrollbar_transparency: f32,
-	vertical_bar_inset:    enums.ScrollBarInset,
-	horizontal_bar_inset:  enums.ScrollBarInset,
-	scrollbar_images:      [3]Scroll_Bar_Image,
+	vertical_bar_inset:     enums.ScrollBarInset,
+	horizontal_bar_inset:   enums.ScrollBarInset,
+	scrollbar_images:       [3]Scroll_Bar_Image,
 	scrollbar_auto_hide:    bool,
 	scrollbar_fade_delay:   f32,
 	scrollbar_fade_speed:   f32,
@@ -184,13 +185,22 @@ scrolling_frame_resolve_canvas :: proc(
 	return max(width, f32(0)), max(height, f32(0))
 }
 
-scrolling_frame_window_size :: proc(frame: ^ScrollingFrame, width, height: f32) -> (window_width, window_height: f32) {
+scrolling_frame_window_size :: proc(
+	frame: ^ScrollingFrame,
+	width, height: f32,
+) -> (
+	window_width, window_height: f32,
+) {
 	window_width, window_height = width, height
 	if frame.vertical_bar_inset == .None && frame.horizontal_bar_inset == .None {return}
 	allow_x := frame.scrolling_direction != .Y
 	allow_y := frame.scrolling_direction != .X
 	for _ in 0 ..< 2 {
-		canvas_width, canvas_height := scrolling_frame_resolve_canvas(frame, window_width, window_height)
+		canvas_width, canvas_height := scrolling_frame_resolve_canvas(
+			frame,
+			window_width,
+			window_height,
+		)
 		if frame.vertical_bar_inset == .Always ||
 		   (frame.vertical_bar_inset == .ScrollBar && allow_y && canvas_height > window_height) {
 			window_width = max(0, width - frame.scrollbar_thickness)
@@ -268,6 +278,7 @@ ScrollingFrame_update_animation :: proc(
 	scrolling_frame_update_bounds(frame, rect)
 
 	dt := clamp(delta_time, f32(0), f32(0.1))
+	old_position := frame.canvas_position
 
 	if frame.smooth_scrolling {
 		t := min(dt * max(frame.smoothness, f32(0)), f32(1))
@@ -287,6 +298,13 @@ ScrollingFrame_update_animation :: proc(
 		frame.canvas_position = frame.target_position
 	}
 
+	frame.scroll_velocity = {}
+	if dt > 0 && frame.smooth_scrolling {
+		frame.scroll_velocity = datatypes.Vec2_Divide_Scalar(
+			datatypes.Vec2_Subtract(frame.canvas_position, old_position),
+			dt,
+		)
+	}
 	frame.idle_time += dt
 
 	alpha_target: f32 = 1
@@ -426,17 +444,29 @@ scrolling_frame_point_in_rect :: proc(rect: guilib.Rect, x, y: f32) -> bool {
 }
 
 scrolling_frame_set_bar_image :: proc(image: ^Scroll_Bar_Image, path: string) {
-	label := ImageLabel{image = image.path, owned_image = image.path, stored_image = image.handle}
+	label := ImageLabel {
+		image        = image.path,
+		owned_image  = image.path,
+		stored_image = image.handle,
+	}
 	ImageLabel_Set_Image(&label, path)
 	image^ = {label.owned_image, label.stored_image}
 }
 
-scrolling_frame_draw_bar :: proc(frame: ^ScrollingFrame, ctx: ^Class_Step_Context, rect: guilib.Rect, transparency: f32, horizontal: bool) {
+scrolling_frame_draw_bar :: proc(
+	frame: ^ScrollingFrame,
+	ctx: ^Class_Step_Context,
+	rect: guilib.Rect,
+	transparency: f32,
+	horizontal: bool,
+) {
 	surface := ctx.renderer.SkiaSurface
 	handle := rect
 	handle.color = frame.scrollbar_color
 	handle.bgTransparency = transparency
-	if frame.scrollbar_images[0].handle == nil && frame.scrollbar_images[1].handle == nil && frame.scrollbar_images[2].handle == nil {
+	if frame.scrollbar_images[0].handle == nil &&
+	   frame.scrollbar_images[1].handle == nil &&
+	   frame.scrollbar_images[2].handle == nil {
 		guilib.drawRoundedRect(surface, handle, min(handle.width, handle.height) * 0.5)
 		return
 	}
@@ -453,10 +483,23 @@ scrolling_frame_draw_bar :: proc(frame: ^ScrollingFrame, ctx: ^Class_Step_Contex
 		if heights[i] <= 0 {continue}
 		handle.height = heights[i]
 		if image.handle != nil {
-			label := ImageLabel{stored_image = image.handle, image_transparency = transparency, image_color3 = frame.scrollbar_color}
-			ImageLabel_Draw_Image_Patch(&label, ctx, 0, 0,
-				f32(kineffi.Kine_Skia_Image_GetWidth(image.handle)), f32(kineffi.Kine_Skia_Image_GetHeight(image.handle)),
-				handle.x, handle.y, handle.width, handle.height)
+			label := ImageLabel {
+				stored_image       = image.handle,
+				image_transparency = transparency,
+				image_color3       = frame.scrollbar_color,
+			}
+			ImageLabel_Draw_Image_Patch(
+				&label,
+				ctx,
+				0,
+				0,
+				f32(kineffi.Kine_Skia_Image_GetWidth(image.handle)),
+				f32(kineffi.Kine_Skia_Image_GetHeight(image.handle)),
+				handle.x,
+				handle.y,
+				handle.width,
+				handle.height,
+			)
 		} else {
 			guilib.drawRoundedRect(surface, handle, 0)
 		}
@@ -523,6 +566,9 @@ ScrollingFrame_get :: proc(
 	frame := cast(^ScrollingFrame)object
 
 	switch key {
+	case "GetScrollVelocity", "ResetScrollVelocity":
+		vm.PushUserdataMethod(L, key)
+		return true
 	case "CanvasPosition":
 		if datatype_registry == nil {
 			return false
@@ -558,17 +604,19 @@ ScrollingFrame_get :: proc(
 			return false
 		}
 
-		width, height := scrolling_frame_window_size(frame, frame.absolute_size.X, frame.absolute_size.Y)
-		if key == "AbsoluteCanvasSize" {width, height = scrolling_frame_resolve_canvas(frame, width, height)}
-
-		datatypes.Push_Vector2(
-			L,
-			datatype_registry,
-			datatypes.Vector2{width, height},
+		width, height := scrolling_frame_window_size(
+			frame,
+			frame.absolute_size.X,
+			frame.absolute_size.Y,
 		)
+		if key ==
+		   "AbsoluteCanvasSize" {width, height = scrolling_frame_resolve_canvas(frame, width, height)}
+
+		datatypes.Push_Vector2(L, datatype_registry, datatypes.Vector2{width, height})
 		return true
 	case "VerticalScrollBarInset", "HorizontalScrollBarInset":
-		value := frame.vertical_bar_inset if key == "VerticalScrollBarInset" else frame.horizontal_bar_inset
+		value :=
+			frame.vertical_bar_inset if key == "VerticalScrollBarInset" else frame.horizontal_bar_inset
 		return enums.Push_Item_By_Value(L, enum_registry, "ScrollBarInset", i64(value))
 	case "TopImage", "MidImage", "BottomImage":
 		index := 0 if key == "TopImage" else (1 if key == "MidImage" else 2)
@@ -765,8 +813,11 @@ ScrollingFrame_set :: proc(
 
 		return true
 	case "VerticalScrollBarInset", "HorizontalScrollBarInset":
-		value := enums.ScrollBarInset(enums.Arg_Item(L, value_index, enum_registry, "ScrollBarInset").value)
-		if key == "VerticalScrollBarInset" {frame.vertical_bar_inset = value} else {frame.horizontal_bar_inset = value}
+		value := enums.ScrollBarInset(
+			enums.Arg_Item(L, value_index, enum_registry, "ScrollBarInset").value,
+		)
+		if key ==
+		   "VerticalScrollBarInset" {frame.vertical_bar_inset = value} else {frame.horizontal_bar_inset = value}
 		Gui_Layout_Mark_Dirty()
 		return true
 	case "TopImage", "MidImage", "BottomImage":
@@ -827,10 +878,11 @@ ScrollingFrame_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	if frame.canvas_position != old_position {
 		gui_apply_transforms(&frame.gui_object, rect.x, rect.y, rect.width, rect.height)
 	}
-	ctx.gui_dynamic = ctx.gui_dynamic ||
+	ctx.gui_dynamic =
+		ctx.gui_dynamic ||
 		frame.target_position != frame.canvas_position ||
-		(frame.scrollbar_auto_hide && (frame.idle_time < frame.scrollbar_fade_delay ||
-			frame.scrollbar_alpha > 0.001))
+		(frame.scrollbar_auto_hide &&
+				(frame.idle_time < frame.scrollbar_fade_delay || frame.scrollbar_alpha > 0.001))
 
 	fade_top, fade_bottom, fade_left, fade_right: f32
 
@@ -1180,6 +1232,29 @@ ScrollingFrame_Handle_Event :: proc(registry: ^Registry, event: sdl3.Event) {
 }
 
 
+ScrollingFrame_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	frame := cast(^ScrollingFrame)object
+	switch method {
+	case "GetScrollVelocity":
+		datatypes.Push_Vector2(L, d, frame.scroll_velocity)
+		return 1, true
+	case "ResetScrollVelocity":
+		frame.target_position = frame.canvas_position
+		frame.scroll_velocity = {}
+		return 0, true
+	}
+	return 0, false
+}
+
 Register_ScrollingFrame :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -1188,6 +1263,8 @@ Register_ScrollingFrame :: proc(registry: ^Registry) {
 		ScrollingFrame_destroy,
 		get = ScrollingFrame_get,
 		set = ScrollingFrame_set,
+		namecall = ScrollingFrame_namecall,
+		methods = []string{"GetScrollVelocity", "ResetScrollVelocity"},
 		clone = ScrollingFrame_clone,
 		properties = []string {
 			"CanvasPosition",

@@ -3,9 +3,21 @@ title: PlaytestService
 description: Internal editor APIs for launching and inspecting local playtest processes.
 ---
 
-PlaytestService runs local desktop playtests. The editor and each playtest process own separate DataModels. The tree inspection API sends requests to the active runtime process and applies edits on its engine thread.
+PlaytestService runs local desktop playtests. The editor and each playtest process own separate DataModels. Use tree inspection to read and edit the running game without changing your original map.
 
 These methods require the Internals capability, in addition to the existing Studio access restriction. They are not game script APIs.
+
+## Launching and stopping playtests
+
+These methods return `true` if the operation succeeds, or `false` otherwise. Optional boolean arguments default to `false` unless shown otherwise.
+
+| Method | Description |
+| --- | --- |
+| `Start(mapPath: string?, singlePlayer: boolean?, headless: boolean?, clientHeadless: boolean?, pauseOnError: boolean?): boolean` | Starts a server/client pair or a singleplayer run. |
+| `StartServer(mapPath: string?, headless: boolean?, pauseOnError: boolean?): boolean` | Starts just the server; headless defaults to `true`. |
+| `StartClient(address: string?, port: number?, clientHeadless: boolean?, pauseOnError: boolean?): boolean` | Connects a client; defaults to `127.0.0.1` and port `1234`. |
+| `StartSinglePlayer(mapPath: string?, clientHeadless: boolean?, pauseOnError: boolean?): boolean` | Starts a singleplayer run. |
+| `Stop(): boolean` | Stops the current playtest. |
 
 ## Live inspection
 
@@ -51,6 +63,50 @@ The operation runs through the normal engine property setter, so gameplay and re
 
 Service/root destruction and reparenting, security property changes, and hierarchy cycles are blocked. Create objects beneath a service or existing instance, not the DataModel itself.
 
-## Transport and limits
+## Inspecting a running game without blocking the editor
 
-The local desktop launcher creates a per-session filesystem channel with separate server and client mailboxes, and removes it when the session ends. No network port is opened. The native host pumps requests even when simulation is paused on an error. Calls are synchronous with a two-second timeout; avoid invoking them every render frame. On a timeout the operation may still execute, so refresh before retrying a mutation. A tree response is limited to 50,000 nodes and messages to 16 MiB. Android and browser playtests do not currently expose this channel.
+Use the request methods for tools that need to stay responsive while a playtest runs. Each method returns a request ID immediately, or nil and an error if the request could not be sent. Only one request per target can be outstanding at a time.
+
+| Method | Request |
+| --- | --- |
+| `RequestGameTree(target, version?)` | Game tree, optionally skipping an unchanged snapshot. |
+| `RequestInstanceProperties(target, id)` | Supported properties of an instance. |
+| `RequestCopyInstance(target, id)` | A serialized buffer containing an instance and its descendants. |
+| `RequestSetInstanceProperty(target, id, property, value)` | Change a property. |
+| `RequestSetInstanceReference(target, id, property, referenceId?)` | Change or clear an instance reference. |
+
+Call `PollTreeRequest(target, requestId)` on a later frame. It returns nil, nil while waiting. A completed request returns the result, or nil and an error on failure. A tree request also returns an opaque version string; pass it to the next request for the same target to avoid receiving an identical tree. If nothing changed, the result is false and the same version string.
+
+```lua
+local playtest = game:GetService("PlaytestService")
+local runService = game:GetService("RunService")
+local request, err = playtest:RequestGameTree("Server")
+if not request then
+    warn(err)
+    return
+end
+
+local connection
+connection = runService.Heartbeat:Connect(function()
+    local tree, versionOrError = playtest:PollTreeRequest("Server", request)
+    if tree == nil and versionOrError == nil then
+        return
+    end
+    connection:Disconnect()
+    if tree == nil then
+        warn(versionOrError)
+    elseif tree ~= false then
+        print(#tree, "instances")
+    end
+end)
+```
+
+For a copy request, the result is a buffer. Keep it in the editor even after the playtest stops. To paste it, call `SerializationService:DeserializeInstancesAsync(data, true)` and parent the returned instances to the desired destination. Passing true assigns fresh unique IDs to the copy.
+
+The Explorer exposes this workflow through Copy to Editor and Paste. References to objects outside the copied subtree cannot be restored. Root instances and services cannot be copied.
+
+Poll a request until it completes, even if its result is no longer needed. After the playtest stops, outstanding requests become invalid.
+
+## Restrictions and limits
+
+Live inspection works on local desktop playtests, even when simulation is paused on an error. The original inspection methods are synchronous with a two-second timeout. Prefer the request and poll methods in editor tools. On a timeout the operation may still execute, so refresh before retrying a mutation. A tree response is limited to 50,000 nodes and messages to 16 MiB. Android and browser playtests do not currently expose this channel.

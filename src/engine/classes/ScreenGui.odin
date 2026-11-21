@@ -135,6 +135,7 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	surface := ctx.renderer.SkiaSurface
 	if gui.draw_picture != nil &&
 	   gui.draw_picture_revision == revision &&
+	   gui.draw_picture_icon_revision == IconPack_Revision() &&
 	   gui.draw_picture_rect == bounds {
 		kineffi.Kine_Skia_Surface_DrawPicture(surface, gui.draw_picture)
 		return
@@ -159,6 +160,7 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 			if !ctx.gui_dynamic && gui.draw_revision == revision {
 				gui.draw_picture = picture
 				gui.draw_picture_revision = revision
+				gui.draw_picture_icon_revision = IconPack_Revision()
 			} else {
 				kineffi.Kine_Skia_Picture_Destroy(picture)
 			}
@@ -200,8 +202,8 @@ screen_gui_draw_child :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	shader_layer :=
 		shader_ready && shader.samples_content && UIShader_Apply(shader, ctx, rect, true)
 	defer if shader_layer {
-		guilib.restore(ctx.renderer.SkiaSurface) // Composite the shaded layer.
-		guilib.restore(ctx.renderer.SkiaSurface) // Restore the parent's transform and clip.
+		guilib.restore(ctx.renderer.SkiaSurface)
+		guilib.restore(ctx.renderer.SkiaSurface)
 	}
 
 	switch {
@@ -226,6 +228,12 @@ screen_gui_draw_child :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	case Is_A_Class(child, &Frame_Class):
 		Frame_render(child, ctx)
 
+	case Is_A_Class(child, &Sprite2D_Class):
+		Sprite2D_render(child, ctx)
+
+	case Is_A_Class(child, &Shape2D_Class):
+		Shape2D_render(child, ctx)
+
 	case Is_A_Class(child, &ImageLabel_Class):
 		ImageLabel_render(child, ctx)
 
@@ -244,7 +252,29 @@ ScreenGui_RenderChildren :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 	defer if root {ctx.gui_transform = {}}
 	for child in object.children {
+		if ctx.world2d_scene {
+			screen_gui_render_world_child(child, ctx)
+		} else {
+			ScreenGui_RenderChild(child, ctx)
+		}
+	}
+}
+
+
+screen_gui_render_world_child :: proc(child: ^Object, ctx: ^Class_Step_Context) {
+	if child == nil || child.destroyed {return}
+	if Is_A_Class(child, &World2D_Class) && !(cast(^World2D)child).enabled {return}
+	if Is_A_Class(child, &ScreenGui_Class) || Is_A_Class(child, &SurfaceGui_Class) {return}
+	if Is_A_Class(child, &GuiObject_Class) {
 		ScreenGui_RenderChild(child, ctx)
+		return
+	}
+
+	if Is_A_Class(child, &Folder_Class) ||
+	   Is_A_Class(child, &World2D_Class) ||
+	   Is_A_Class(child, &RigidBody2D_Class) ||
+	   Is_A_Class(child, &Model_Class) {
+		for descendant in child.children {screen_gui_render_world_child(descendant, ctx)}
 	}
 }
 
@@ -288,6 +318,40 @@ ScreenGui_clip_rect :: proc(gui: ^ScreenGui) -> (guilib.Rect, bool) {
 		true
 }
 
+
+screen_gui_is_editor_ui :: proc(object: ^Object) -> bool {
+	for parent := object.parent; parent != nil; parent = parent.parent {
+		if parent.name == "CoreGui" {return true}
+	}
+	return false
+}
+
+ScreenGui_Render_After_Editor_2D :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	width, height: i32,
+	dt: f32,
+	cache_gui: bool,
+) {
+	if registry == nil || registry.renderer == nil || L == nil {return}
+	descriptor := Find_Class(registry, "ScreenGui")
+	if descriptor == nil {return}
+	Sort_ScreenGui_Instances(descriptor)
+	ctx := Class_Step_Context {
+		L                        = L,
+		renderer                 = registry.renderer,
+		data_model               = registry.data_model,
+		viewport_width           = width,
+		viewport_height          = height,
+		delta_time               = dt,
+		cache_gui                = cache_gui,
+		editor_2d_gui_foreground = true,
+	}
+	for object in descriptor.instances {
+		if object != nil && !object.destroyed {ScreenGui_render(object, &ctx)}
+	}
+}
+
 ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	gui := cast(^ScreenGui)object
 
@@ -296,6 +360,8 @@ ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	if gui_object_is_overlay_pass(gui) != ctx.gui_overlay {return}
+	if ctx.editor_2d_gui_background && !screen_gui_is_editor_ui(object) {return}
+	if ctx.editor_2d_gui_foreground && screen_gui_is_editor_ui(object) {return}
 
 	if ctx.renderer == nil || ctx.renderer.SkiaSurface == nil {return}
 

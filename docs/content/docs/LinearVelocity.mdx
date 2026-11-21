@@ -1,0 +1,23 @@
+---
+title: LinearVelocity
+description: Apply force to maintain a target velocity.
+---
+
+Apply force to maintain a target velocity.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("LinearVelocity", part)
+constraint.Attachment0 = attachment
+constraint.VectorVelocity = Vector3.new(10, 0, 0)
+constraint.MaxForce = 1500
+```
+
+## Properties
+
+VectorVelocity, LineVelocity, PlaneVelocity, VelocityConstraintMode, RelativeTo and force limits configure the feedback controller.
+
+## Notes
+
+The force-feedback implementation is not a byte-for-byte equivalent of Roblox's constraint solver.

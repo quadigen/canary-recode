@@ -1,9 +1,9 @@
 ---
 title: PhysicsService
-description: Register collision groups and query the collision-group list.
+description: Register collision groups and configure which parts collide.
 ---
 
-`PhysicsService` manages named collision groups. In the current engine, group registration works, but the raycast and overlap methods are placeholders that return empty tables. Use `Workspace` for real spatial queries.
+`PhysicsService` manages named collision groups and controls which groups of parts can collide. Assign a registered name to a part’s `CollisionGroup` property. Use `Workspace` for spatial queries.
 
 ## Getting started
 
@@ -30,7 +30,7 @@ Adds a collision group name to the service's list. Registering the same name twi
 PhysicsService:RegisterCollisionGroup("Debris")
 ```
 
-Registration only records the name. The current API doesn't expose collision masks, so this doesn't by itself change which parts collide.
+New groups collide with every group by default. You can register up to 32 groups, including `Default`.
 
 ### IsCollisionGroupRegistered
 
@@ -60,6 +60,25 @@ for _, group in PhysicsService:GetRegisteredCollisionGroups() do
 end
 ```
 
+### Collision filtering
+
+| Signature | Description |
+| --- | --- |
+| `CollisionGroupSetCollidable(a: string, b: string, collidable: boolean): ()` | Enables or disables physical collisions between two registered groups. |
+| `CollisionGroupsAreCollidable(a: string, b: string): boolean` | Reads the symmetric collision rule for two registered groups. |
+| `GetMaxCollisionGroups(): number` | Returns the supported limit (32). |
+| `RenameCollisionGroup(oldName: string, newName: string): ()` | Renames a group, updates assigned parts, and keeps the collision rules. |
+| `UnregisterCollisionGroup(name: string): ()` | Removes a group and moves its assigned parts back to `Default`. |
+
+```lua
+local physics = game:GetService("PhysicsService")
+physics:RegisterCollisionGroup("Ghosts")
+physics:CollisionGroupSetCollidable("Ghosts", "Default", false)
+part.CollisionGroup = "Ghosts"
+```
+
+The two group names must be registered before setting or reading a rule. `Default` can't be renamed or unregistered. These rules control rigid-body collisions; character-controller and deformable-body filtering and collision-group-aware spatial queries aren't covered by this implementation.
+
 ### Collision group predicates
 
 These methods are exposed but don't implement collision filtering:
@@ -79,7 +98,7 @@ RaycastParams(): {}
 OverlapParams(): {}
 ```
 
-All three return an empty table in the current implementation. They don't perform a query and don't accept meaningful parameters.
+All three return an empty table currently. They don't perform a query and don't accept meaningful parameters.
 
 ```lua
 local hits = PhysicsService:Raycast(origin, direction)
@@ -92,8 +111,8 @@ Use `Workspace:Raycast()` and the corresponding `Workspace` query methods instea
 
 - The service starts with a single `Default` group.
 - Group names are case-sensitive.
-- Destroying or unregistering a group isn't exposed.
-- There's no way to assign a part to a group through this service yet.
+- Changing a part's collision group takes effect on its next physics synchronization.
+- An unregistered name currently falls back to the default collision layer.
 
 ## See also
 

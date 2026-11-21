@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -318,11 +317,13 @@ studio_theme_set_coordinates :: proc(
 
 	service.dock.slots[.Output].visible = service.show_output
 
+	all_panels: [gui.Dock_Panel]gui.Layout_Coordinate
 	coordinates, _ := gui.Editor_Layout_Compute_Docked(
 		&config,
 		&service.dock,
 		service.layout_width,
 		service.layout_height,
+		&all_panels,
 	)
 
 	studio_theme_set_coordinate(L, registry, "TopbarCoordinates", coordinates.TopbarCoordinates)
@@ -356,6 +357,15 @@ studio_theme_set_coordinates :: proc(
 		"InspectorCoordinates",
 		coordinates.InspectorCoordinates,
 	)
+
+	vm.NewTable(L, 0, 16)
+	for panel in gui.Dock_Panel {
+		if panel < .Custom_0 ||
+		   service.dock.names[panel] == "" ||
+		   !service.dock.slots[panel].visible {continue}
+		studio_theme_set_coordinate(L, registry, service.dock.names[panel], all_panels[panel])
+	}
+	vm.SetField(L, -2, "DockedWindows")
 
 }
 
@@ -1176,6 +1186,8 @@ studio_theme_service_get :: proc(
 	     "LoadThemeJson",
 	     "DockWindow",
 	     "GetWindowDock",
+	     "UndockWindow",
+	     "SetDockWindowVisible",
 	     "ResetDocking":
 		vm.PushUserdataMethod(L, key)
 
@@ -1243,6 +1255,7 @@ studio_theme_service_namecall :: proc(
 
 		service.show_output = true
 
+		gui.dock_release_names(&service.dock)
 		service.dock = gui.Dock_Default_State()
 
 		studio_theme_reset_default(L, service, datatype_registry)
@@ -1350,14 +1363,7 @@ studio_theme_service_namecall :: proc(
 		return vm.RaiseError(L, "LoadThemeJson requires the native JSON/filesystem bridge"), true
 
 	case "DockWindow":
-		panel, ok := studio_theme_dock_target(vm.ArgString(L, 2))
-
-		if !ok {
-
-			return vm.RaiseError(L, "DockWindow: unknown window"), true
-
-		}
-
+		name := vm.ArgString(L, 2)
 		anchor, anchor_ok := studio_theme_parse_anchor(vm.ArgString(L, 3))
 
 		if !anchor_ok {
@@ -1367,6 +1373,9 @@ studio_theme_service_namecall :: proc(
 		}
 
 		full_span := vm.ArgOptionalBoolean(L, 4, false)
+		panel, ok := studio_theme_dock_target(name)
+		if !ok {panel, ok = gui.dock_find_named(&service.dock, name, true)}
+		if !ok {return vm.RaiseError(L, "DockWindow: invalid name or tool dock limit reached"), true}
 
 		gui.dock_move_panel(&service.dock, panel, anchor, full_span)
 
@@ -1381,19 +1390,30 @@ studio_theme_service_namecall :: proc(
 		return 0, true
 
 	case "GetWindowDock":
-		panel, ok := studio_theme_dock_target(vm.ArgString(L, 2))
-
-		if !ok {
-
-			return vm.RaiseError(L, "GetWindowDock: unknown window"), true
-
-		}
+		name := vm.ArgString(L, 2)
+		panel, ok := studio_theme_dock_target(name)
+		if !ok {panel, ok = gui.dock_find_named(&service.dock, name)}
+		if !ok {vm.PushNil(L); return 1, true}
 
 		vm.PushString(L, studio_theme_anchor_name(service.dock.slots[panel].anchor))
 
 		return 1, true
 
+	case "UndockWindow", "SetDockWindowVisible":
+		panel, ok := gui.dock_find_named(&service.dock, vm.ArgString(L, 2))
+		if !ok {return 0, true}
+		if method == "UndockWindow" {
+			gui.dock_remove_named(&service.dock, panel)
+		} else {
+			visible := vm.ArgBoolean(L, 3)
+			if service.dock.slots[panel].visible == visible {return 0, true}
+			gui.dock_set_visible(&service.dock, panel, visible)
+		}
+		studio_theme_refresh_layout(L, service, datatype_registry)
+		return 0, true
+
 	case "ResetDocking":
+		gui.dock_release_names(&service.dock)
 		service.dock = gui.Dock_Default_State()
 
 		service.show_output = true
@@ -1456,6 +1476,7 @@ StudioThemeService_construct :: proc(
 StudioThemeService_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 
 	service := cast(^StudioThemeService)object
+	gui.dock_release_names(&service.dock)
 
 	if studio_theme_native_is_live(service) {
 

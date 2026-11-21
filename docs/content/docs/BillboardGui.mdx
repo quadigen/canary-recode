@@ -1,0 +1,26 @@
+---
+title: BillboardGui
+description: Draw camera-facing GUI children relative to a part or attachment.
+---
+
+Draw camera-facing GUI children relative to a part or attachment.
+
+## Getting started
+
+```lua
+local gui = Instance.new("BillboardGui", part)
+gui.Size = UDim2.fromOffset(200, 50)
+gui.StudsOffset = Vector3.new(0, 3, 0)
+
+local text = Instance.new("TextLabel", gui)
+text.Size = UDim2.fromScale(1, 1)
+text.Text = "Hello"
+```
+
+## Properties
+
+Adornee, Size, SizeOffset, StudsOffset, StudsOffsetWorldSpace, ExtentsOffset, ExtentsOffsetWorldSpace, Enabled and MaxDistance configure projection.
+
+## Notes
+
+AlwaysOnTop and its Kinemium alias RenderOnTop control occlusion. When disabled, a center ray against opaque rigid-body colliders hides the whole label if blocked. This is an approximation; per-pixel depth occlusion, world-space interaction, player-specific hiding and lighting influence are not implemented.

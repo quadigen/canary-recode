@@ -37,6 +37,7 @@ main :: proc() {
 	run_own_events(
 		&server_vm,
 		`
+game:GetService("ReplicatorService").AllowClientOwnershipRequests = true
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39239))
 local floor = Instance.new("Part", workspace)
 floor.Name = "Floor"
@@ -91,6 +92,7 @@ assert(game:GetService("ReplicatorService"):ConnectClient("127.0.0.1", 39239))
 	run_own_events(
 		&client_vm,
 		`
+assert(game:GetService("ReplicatorService").AllowClientOwnershipRequests == true)
 client_crate_events = 0
 client_crate_owner = "none"
 client_group_events = 0

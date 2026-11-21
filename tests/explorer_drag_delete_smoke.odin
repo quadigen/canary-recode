@@ -1,21 +1,21 @@
 package main
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
 	renderer_object: renderer.RendererObject
 
-	sandbox.init(&script_vm, &environment, &renderer_object)
-	defer sandbox.shutdown()
-	defer vm.Close(&script_vm)
+	engine_runtime.Environment_Init(&environment, &script_vm, &renderer_object)
+	defer {vm.Close(&script_vm); engine_runtime.Environment_Destroy(&environment)}
 
-	ok, err := vm.Run(&script_vm, `
+	ok, err := vm.Run(
+		&script_vm,
+		`
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
@@ -107,7 +107,9 @@ tween.Completed:Once(function()
 	completed = true
 end)
 tween:Play()
-`, "explorer_drag_setup")
+`,
+		"explorer_drag_setup",
+	)
 
 	if !ok {
 		fmt.eprintln(err)
@@ -115,11 +117,12 @@ tween:Play()
 		panic("explorer drag/delete probe failed")
 	}
 
-	// Step far enough for the 0.1s fade to finish, then confirm the tween both
-	// completed and actually drove the property to its goal.
+
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, 0.5)
 
-	settled, settled_err := vm.Run(&script_vm, `
+	settled, settled_err := vm.Run(
+		&script_vm,
+		`
 local ghost = game:GetService("TweenService")
 assert(ghost ~= nil)
 
@@ -143,7 +146,9 @@ end
 local frame = findGui(game.CoreGui)
 assert(frame ~= nil, "animated frame not found")
 assert(math.abs(frame.BackgroundTransparency - 1) < 0.01, "tween did not reach its goal, got " .. tostring(frame.BackgroundTransparency))
-`, "explorer_drag_tween_settled")
+`,
+		"explorer_drag_tween_settled",
+	)
 
 	if !settled {
 		fmt.eprintln(settled_err)

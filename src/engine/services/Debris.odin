@@ -1,6 +1,5 @@
 package services
 
-// wire:service global="debris"
 
 import "core:math"
 
@@ -9,20 +8,20 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-Debris_Class := classes.Class_Info{
+Debris_Class := classes.Class_Info {
 	name   = "Debris",
 	parent = &Service_Class,
 }
 
 Debris :: struct {
 	using service: Service,
-	elapsed: f64,
-	items: [dynamic]Debris_Item,
+	elapsed:       f64,
+	items:         [dynamic]Debris_Item,
 }
 
 Debris_Item :: struct {
 	reference: i32,
-	deadline: f64,
+	deadline:  f64,
 }
 
 debris_construct :: proc(
@@ -30,20 +29,14 @@ debris_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(Debris)
-	service.service = Service_Init(
-		&Debris_Class,
-		"Debris",
-		data_model,
-	)
+	service.service = Service_Init(&Debris_Class, "Debris", data_model)
 	return &service.object
 }
 
-debris_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+debris_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	debris := cast(^Debris)object
-	if registry := object.signal_registry; registry != nil && registry.vm_state != nil && registry.vm_state.L != nil {
+	if registry := object.signal_registry;
+	   registry != nil && registry.vm_state != nil && registry.vm_state.L != nil {
 		for item in debris.items {
 			vm.ReleaseValue(registry.vm_state.L, item.reference)
 		}
@@ -76,7 +69,10 @@ debris_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method_name: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	switch method_name {
 	case "AddItem":
 		item := classes.Object_From_Argument(L, 2)
@@ -105,9 +101,7 @@ Register_Debris_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		_step = debris_step,
 		_step_phase = .Update,
-		namecall  = debris_namecall,
-		properties = []string{
-			"AddItem",
-		},
+		namecall = debris_namecall,
+		methods = []string{"AddItem"},
 	)
 }

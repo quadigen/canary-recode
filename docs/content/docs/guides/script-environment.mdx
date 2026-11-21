@@ -29,7 +29,7 @@ These are present in every Luau runtime, including the editor.
 | `Enum` | table | Enum lookup, such as `Enum.Material.Plastic` or `Enum.KeyCode.E`. |
 | `EnumItem` | table | Enum item helpers. `EnumItem.fromValue()` resolves a numeric value. |
 | `require` | function | Loads a `ModuleScript` by object. Results are cached per runtime. |
-| `task` | table | Scheduling library, including `task.wait(seconds)`. |
+| `task` | table | Scheduling library, including `task.wait(seconds)` and [parallel execution phases](/docs/guides/parallel-luau). |
 | `print` | function | Writes an ordinary log line. |
 | `warn` | function | Writes a warning without stopping the thread. |
 | `shared` | table | A table shared by scripts in the same runtime. |
@@ -37,7 +37,7 @@ These are present in every Luau runtime, including the editor.
 | `time` | function | Returns the engine runtime time in seconds. |
 | `version` | function | Returns the engine version string. |
 | `os` | table | Time helpers. `os.clock()`, `os.time()`, and `os.date()` are installed. |
-| `Signal` | table | Signal constructor. `KinemiumSignal` is an alias. |
+| `Signal` | table | Signal constructor. `KinemiumScriptSignal` is the canonical alias; `KinemiumSignal` remains available for compatibility. |
 
 `tick()` and `time()` are engine globals, not the Luau standard library versions. Neither is tied to wall-clock time.
 
@@ -133,7 +133,7 @@ Luau standard functions such as `pcall`, `pairs`, `ipairs`, `type`, `typeof`, an
 
 The supported scheduler is `task`. Prefer `task.wait()` over a legacy `wait()` global, which is not part of the documented environment.
 
-`renderer`, `ishared`, `_RUNTIME`, and `_LUAU` exist but are engine internals. Don't build game code against them.
+Only rely on documented globals in game scripts.
 
 ## Checking what exists
 

@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -23,12 +23,14 @@ Scheduled_Task :: struct {
 	wake_frame:          u64,
 	wait_started_at:     f64,
 	resume_with_elapsed: bool,
+	parallel:            bool,
 }
 
 TaskScheduler :: struct {
 	using service: Service,
 	L:             ^vm.State,
 	tasks:         [dynamic]Scheduled_Task,
+	ready_scratch: [dynamic]Scheduled_Task,
 	elapsed:       f64,
 	frame:         u64,
 }
@@ -133,11 +135,17 @@ task_scheduler_namecall :: proc(
 task_scheduler_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	scheduler := cast(^TaskScheduler)object
 	cancel_all_tasks(scheduler)
-	if registry := object.signal_registry; registry != nil && registry.require_retry_ctx == scheduler {
+	if registry := object.signal_registry;
+	   registry != nil && registry.require_retry_ctx == scheduler {
 		registry.require_schedule_retry = nil
 		registry.require_retry_ctx = nil
+		if registry.signal_registry != nil {
+			registry.signal_registry.schedule_callback = nil
+			registry.signal_registry.schedule_ctx = nil
+		}
 	}
 	delete(scheduler.tasks)
+	delete(scheduler.ready_scratch)
 	classes.Object_Destroy(object)
 	free(scheduler)
 }
@@ -207,11 +215,12 @@ queue_function :: proc(
 	}
 
 	task := Scheduled_Task {
-		thread = thread,
-		thread_ref = thread_ref,
+		thread         = thread,
+		thread_ref     = thread_ref,
 		argument_count = i32(argument_count),
-		wake_time = scheduler.elapsed + max(delay, 0),
-		wake_frame = wake_frame,
+		wake_time      = scheduler.elapsed + max(delay, 0),
+		wake_frame     = wake_frame,
+		parallel       = vm.ThreadIsParallel(L),
 	}
 	if immediate {
 		task_resume(scheduler, task, L)
@@ -224,7 +233,15 @@ queue_function :: proc(
 
 task_spawn :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
-	return queue_function(cast(^TaskScheduler)vm.UpvaluePointer(L), L, 1, 2, 0, false, immediate = true)
+	return queue_function(
+		cast(^TaskScheduler)vm.UpvaluePointer(L),
+		L,
+		1,
+		2,
+		0,
+		false,
+		immediate = true,
+	)
 }
 
 task_defer :: proc "c" (L: ^vm.State) -> i32 {
@@ -266,6 +283,7 @@ task_wait :: proc "c" (L: ^vm.State) -> i32 {
 			wake_frame = scheduler.frame,
 			wait_started_at = scheduler.elapsed,
 			resume_with_elapsed = true,
+			parallel = vm.ThreadIsParallel(L),
 		},
 	)
 	return vm.YieldThread(L)
@@ -285,24 +303,84 @@ schedule_require_retry :: proc(ctx: rawptr, L: ^vm.State) {
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L)
-	append(&scheduler.tasks, Scheduled_Task {
-		thread = L,
-		thread_ref = thread_ref,
-		wake_frame = scheduler.frame,
-	})
+	append(
+		&scheduler.tasks,
+		Scheduled_Task {
+			thread = L,
+			thread_ref = thread_ref,
+			wake_frame = scheduler.frame,
+			parallel = vm.ThreadIsParallel(L),
+		},
+	)
 }
 
+task_change_phase :: proc(L: ^vm.State, parallel: bool) -> i32 {
+	scheduler := cast(^TaskScheduler)vm.UpvaluePointer(L)
+	if scheduler == nil ||
+	   scheduler.destroyed {return vm.RaiseError(L, "TaskScheduler is unavailable")}
+	if vm.ThreadActor(L) == 0 || !classes.Actor_Is_Alive(vm.ThreadActor(L)) {
+		return vm.RaiseError(L, "parallel Luau requires a script under a live Actor")
+	}
+	if vm.ThreadIsParallel(L) == parallel {return 0}
+	if !vm.IsYieldable(
+		L,
+	) {return vm.RaiseError(L, "task phase transition requires a yieldable coroutine")}
+	vm.PushCurrentThread(L)
+	ref := vm.RetainValue(L)
+	vm.Pop(L)
+	append(
+		&scheduler.tasks,
+		Scheduled_Task {
+			thread = L,
+			thread_ref = ref,
+			wake_frame = scheduler.frame,
+			parallel = parallel,
+		},
+	)
+	return vm.YieldThread(L)
+}
+task_desynchronize :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	return task_change_phase(L, true)
+}
+task_synchronize :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	return task_change_phase(L, false)
+}
+schedule_signal_callback :: proc(
+	ctx: rawptr,
+	thread: ^vm.State,
+	ref: i32,
+	arguments: int,
+	parallel: bool,
+) {
+	scheduler := cast(^TaskScheduler)ctx
+	append(
+		&scheduler.tasks,
+		Scheduled_Task {
+			thread = thread,
+			thread_ref = ref,
+			argument_count = i32(arguments),
+			wake_frame = scheduler.frame,
+			parallel = parallel,
+		},
+	)
+}
 Install_Task_Library :: proc(scheduler: ^TaskScheduler, vm_state: ^vm.VM) {
 	scheduler.L = vm_state.L
 	scheduler.signal_registry.require_schedule_retry = schedule_require_retry
 	scheduler.signal_registry.require_retry_ctx = scheduler
-	vm.NewTable(vm_state.L, 0, 5)
+	scheduler.signal_registry.signal_registry.schedule_callback = schedule_signal_callback
+	scheduler.signal_registry.signal_registry.schedule_ctx = scheduler
+	vm.NewTable(vm_state.L, 0, 7)
 	entries := [?]Task_Library_Entry {
 		Task_Library_Entry{name = "spawn", callback = task_spawn},
 		Task_Library_Entry{name = "defer", callback = task_defer},
 		Task_Library_Entry{name = "delay", callback = task_delay},
 		Task_Library_Entry{name = "wait", callback = task_wait},
 		Task_Library_Entry{name = "cancel", callback = task_cancel},
+		Task_Library_Entry{name = "synchronize", callback = task_synchronize},
+		Task_Library_Entry{name = "desynchronize", callback = task_desynchronize},
 	}
 	for entry in entries {
 		vm.PushLightUserdata(vm_state.L, scheduler)
@@ -322,32 +400,70 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 		return
 	}
 
-	ready: [dynamic]Scheduled_Task
-	pending: [dynamic]Scheduled_Task
+
+	ready := scheduler.ready_scratch
+	scheduler.ready_scratch = nil
+	clear(&ready)
+	pending_count := 0
 	for task in scheduler.tasks {
 		if task.wake_time <= scheduler.elapsed && task.wake_frame <= current_frame {
 			append(&ready, task)
 		} else {
-			append(&pending, task)
+			scheduler.tasks[pending_count] = task
+			pending_count += 1
 		}
 	}
-	delete(scheduler.tasks)
-	scheduler.tasks = pending
+	resize(&scheduler.tasks, pending_count)
+
 
 	for task in ready {
-		task_resume(scheduler, task, scheduler.L)
+		if !task.parallel {task_resume(scheduler, task, scheduler.L)}
 	}
-	delete(ready)
+
+	parallel_count := 0
+	for task in ready {if task.parallel {parallel_count += 1}}
+	if parallel_count > 0 {
+		phase := tracy.ZoneNC("Parallel Luau Phase", 0x56B6C2)
+		tracy.ZoneValue(phase, u64(parallel_count))
+		if model := scheduler.service.data_model; model != nil && model.registry != nil {
+			physics := Find_Service(model.registry, "Physics")
+			workspace := Find_Service(model.registry, "Workspace")
+			if physics != nil &&
+			   physics.object != nil &&
+			   workspace != nil &&
+			   workspace.object != nil {
+				Physics_Synchronize(cast(^Physics)physics.object, workspace.object)
+			}
+		}
+		for task in ready {
+			if task.parallel {task_resume(scheduler, task, scheduler.L)}
+		}
+	}
+
+	clear(&ready)
+	if cap(ready) > cap(scheduler.ready_scratch) {
+		delete(scheduler.ready_scratch)
+		scheduler.ready_scratch = ready
+	} else {
+		delete(ready)
+	}
 }
 
 task_resume :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task, from: ^vm.State) {
 	tracy.ZoneNC("Scheduled Task Resume", 0xD19A66)
+	actor := vm.ThreadActor(task.thread)
+	if actor != 0 && !classes.Actor_Is_Alive(actor) {
+		classes.Require_Forget_Thread(scheduler.signal_registry, task.thread)
+		vm.ReleaseValue(scheduler.L, task.thread_ref)
+		return
+	}
+	vm.SetThreadActorPhase(task.thread, actor, task.parallel)
 	argument_count := int(task.argument_count)
 	if task.resume_with_elapsed {
 		vm.PushNumber(task.thread, scheduler.elapsed - task.wait_started_at)
 		argument_count = 1
 	}
-	finished, _, err, traceback := vm.ResumeThreadTraceback(task.thread, from, argument_count)
+	finished, err, traceback := task_resume_profiled(task, from, argument_count, actor)
 	defer vm.ReleaseValue(scheduler.L, task.thread_ref)
 	if finished || err != "" {
 		classes.Require_Forget_Thread(scheduler.signal_registry, task.thread)
@@ -375,6 +491,31 @@ task_resume :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task, from: ^vm.S
 		delete(err)
 		delete(traceback)
 	}
+}
+
+
+task_resume_profiled :: proc(
+	task: Scheduled_Task,
+	from: ^vm.State,
+	argument_count: int,
+	actor_id: u64,
+) -> (
+	bool,
+	string,
+	string,
+) {
+	if task.parallel {
+		zone := tracy.ZoneNC("Parallel Luau Actor", 0x56B6C2)
+		when tracy.TRACY_ENABLE {
+			name := classes.Actor_Profile_Name(actor_id)
+			tracy.ZoneName(zone, fmt.tprintf("Parallel Actor #%d: %s", actor_id, name))
+			tracy.ZoneValue(zone, actor_id)
+		}
+		finished, _, err, traceback := vm.ResumeThreadTraceback(task.thread, from, argument_count)
+		return finished, err, traceback
+	}
+	finished, _, err, traceback := vm.ResumeThreadTraceback(task.thread, from, argument_count)
+	return finished, err, traceback
 }
 
 Register_TaskScheduler_Class :: proc(registry: ^classes.Registry) {

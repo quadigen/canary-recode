@@ -1,0 +1,22 @@
+---
+title: PlaneConstraint
+description: Constrain relative translation to the plane of an attachment.
+---
+
+Constrain relative translation to the plane of an attachment.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("PlaneConstraint", partA)
+constraint.Attachment0 = attachmentA
+constraint.Attachment1 = attachmentB
+```
+
+## Properties
+
+Attachment0, Attachment1, Enabled and Active are inherited from Constraint.
+
+## Notes
+
+The first attachment axis defines the plane normal. The solver leaves the other translation axes and rotations free.

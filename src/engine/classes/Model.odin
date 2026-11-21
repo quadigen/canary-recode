@@ -357,6 +357,44 @@ model_namecall :: proc(
 	return 0, false
 }
 
+model_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "Pivot",
+	     "WorldPivot",
+	     "PrimaryPart",
+	     "GetPivot",
+	     "GetBoundingBox",
+	     "GetExtentsSize",
+	     "GetScale",
+	     "GetPrimaryPartCFrame":
+		return model_get(L, object, d, e, key)
+	}
+	return false
+}
+
+model_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "GetPivot", "GetBoundingBox", "GetExtentsSize", "GetScale", "GetPrimaryPartCFrame":
+		return model_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_Model :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -365,8 +403,10 @@ Register_Model :: proc(registry: ^Registry) {
 		Model_destroy,
 		clone = Model_clone,
 		get = model_get,
+		parallel_get = model_parallel_get,
 		set = model_set,
 		namecall = model_namecall,
+		parallel_namecall = model_parallel_namecall,
 		properties = []string{"Pivot", "WorldPivot", "PrimaryPart"},
 		methods = []string {
 			"PivotTo",

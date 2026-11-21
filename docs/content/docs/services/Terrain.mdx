@@ -39,6 +39,7 @@ Generation runs in the background. Large areas take time to appear, and the serv
 | `MaterialColors` | `{[string]: Color3}` | Read-only | Per-material defaults | Map of material names to their terrain colors. |
 | `MaterialVariant` | `string` | Read/write | `""` | Material variant applied to terrain surfaces. |
 | `MaxExtents` | `Region3int16` | Read-only | `-16000` to `16000` on each axis | Allowed cell extents. |
+| `Raymarching` | `boolean` | Read/write | `false` | Raymarches the solid voxel surface and blends its material colors. Saved in `.kine` maps. |
 | `WaterColor` | `Color3` | Read/write | `Color3.new(0.05, 0.29, 0.55)` | Water color. |
 | `WaterReflectance` | `number` | Read/write | `1` | Water reflectance, clamped between `0` and `1`. |
 | `WaterTransparency` | `number` | Read/write | `0.3` | Water transparency, clamped between `0` and `1`. |
@@ -49,7 +50,7 @@ Generation runs in the background. Large areas take time to appear, and the serv
 | `ChunkSize` | `number` | Read-only | `16` | Cells per chunk edge. |
 | `QueuedChunkCount` | `number` | Read-only | `0` | Chunks waiting to be processed. |
 
-Changing `VoxelSize`, `IsoLevel`, or `FlatShading` invalidates all terrain meshes and rebuilds them. `WaterWaveSize` and `WaterWaveSpeed` are stored per service; the renderer uses them for the water surface.
+Changing `VoxelSize`, `IsoLevel`, `FlatShading`, or `Raymarching` queues a terrain rebuild. `FlatShading` and a resolved custom material variant select mesh rendering. `WaterWaveSize` and `WaterWaveSpeed` control the water surface.
 
 `MaterialColors` returns a new table. Changing that table doesn't change the terrain; use `SetMaterialColor()` instead.
 
@@ -96,7 +97,8 @@ Starts generation for a rectangular volume. The position defaults to `0, 0, 0`; 
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `detail` | none | Preset: `"lowpoly"`, `"medium"`, `"high"`, or `"ultra"`. |
+| `detail` | none | Preset such as `"lowpoly"`, `"medium"`, `"high"`, `"smooth"`, or `"ultra"`. |
+| `style` | none | `"sdf"` enables volumetric generation and raymarching. |
 | `voxelSize` | current `VoxelSize` | Overrides the preset. Clamped to `1`-`64`. |
 | `flatShading` | current setting | Overrides the preset. |
 | `seed` | `49297` | Whole-number seed. |
@@ -161,6 +163,8 @@ ReplaceMaterial(region: Region3, resolution: number?, source: Enum.Material?, ta
 ```
 
 All material arguments default to `Grass`. `FillRegion()` and `ReplaceMaterial()` default `resolution` to the current `VoxelSize`.
+
+With raymarching enabled, block, wedge, and cylinder edits to solid terrain store fractional samples around their boundaries. This preserves the slope of tilted faces between voxels.
 
 `FillBlock()` raises an error when the shape exceeds the terrain bounds or the voxel limit at the current `VoxelSize`. The other fill methods don't report that failure.
 

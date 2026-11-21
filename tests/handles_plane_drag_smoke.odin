@@ -23,7 +23,7 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	}
 }
 
-expect_close :: proc(actual, expected: f32, message: string) {
+expect_close :: proc(actual, expected: f64, message: string) {
 	assert(abs(actual - expected) < 1e-3, message)
 }
 
@@ -51,7 +51,7 @@ spawn_in_model :: proc(
 	return object
 }
 
-reset_part :: proc(object: ^classes.Object, x, y, z: f32) {
+reset_part :: proc(object: ^classes.Object, x, y, z: f64) {
 	part := cast(^classes.Part)object
 	part.cframe = datatypes.CFrame_New_XYZ(x, y, z)
 }
@@ -240,8 +240,8 @@ main :: proc() {
 					expected := datatypes.Vec3_Add(
 						datatypes.CFrame_Position(start),
 						datatypes.Vec3_Add(
-							datatypes.Vec3_Multiply(a, expected_a),
-							datatypes.Vec3_Multiply(b, expected_b),
+							datatypes.Vec3_Multiply(a, f64(expected_a)),
+							datatypes.Vec3_Multiply(b, f64(expected_b)),
 						),
 					)
 					actual := datatypes.CFrame_Position(part.cframe)

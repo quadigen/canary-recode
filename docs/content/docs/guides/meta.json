@@ -5,6 +5,7 @@
     "getting-started",
     "scripting",
     "script-environment",
+    "parallel-luau",
     "networking",
     "network-ownership",
     "saving-player-data",

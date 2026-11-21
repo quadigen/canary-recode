@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -392,6 +392,51 @@ Run_Service_Post_Simulation :: proc(service: ^RunService, L: ^vm.State, delta_ti
 	run_service_fire_signal(L, &service.post_simulation_ref, f64(delta_time))
 }
 
+run_service_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "IsRunning",
+	     "IsServer",
+	     "IsClient",
+	     "IsStudio",
+	     "IsEdit",
+	     "IsStandalone",
+	     "IsSingleplayer",
+	     "IsRunningAsync":
+		return run_service_get(L, object, d, e, key)
+	}
+	return false
+}
+
+run_service_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "IsRunning",
+	     "IsServer",
+	     "IsClient",
+	     "IsStudio",
+	     "IsEdit",
+	     "IsStandalone",
+	     "IsSingleplayer",
+	     "IsRunningAsync":
+		return run_service_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_RunService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
@@ -401,6 +446,8 @@ Register_RunService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = run_service_get,
 		namecall = run_service_namecall,
+		parallel_get = run_service_parallel_get,
+		parallel_namecall = run_service_parallel_namecall,
 		events = []string {
 			"RenderStepped",
 			"Stepped",

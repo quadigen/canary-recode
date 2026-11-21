@@ -2244,6 +2244,11 @@ IXPLoadingStatus :: enum {
 	ErrorTimedOut    = 6,
 }
 
+AntiAliasing :: enum {
+	Disabled = 0,
+	Enabled  = 1,
+}
+
 ImageAlphaType :: enum {
 	Default         = 1,
 	LockCanvasAlpha = 2,
@@ -5184,4 +5189,52 @@ WrapTargetDebugMode :: enum {
 	Rbf                       = 7,
 	OuterCageDetail           = 8,
 	PreWrapDeformerCage       = 9,
+}
+
+InputSink :: enum {
+	Activate = 1,
+	All      = 100,
+	None     = 0,
+}
+
+ProjectionType :: enum {
+	Orthographic = 1,
+	Perspective  = 0,
+}
+
+OrthographicMode :: enum {
+	Diagonal   = 2,
+	Horizontal = 1,
+	MaxAxis    = 3,
+	Vertical   = 0,
+}
+
+GradientTileMode :: enum {
+	Clamp  = 0,
+	Mirror = 2,
+	Repeat = 1,
+}
+
+GradientType :: enum {
+	Conical    = 2,
+	Elliptical = 3,
+	Linear     = 0,
+	Radial     = 1,
+}
+
+LightAttenuationMode :: enum {
+	Legacy    = 0,
+	Realistic = 1,
+}
+
+GameAvatarType :: enum {
+	PlayerChoice = 2,
+	R15          = 1,
+	R6           = 0,
+}
+
+PredictiveStreamingMode :: enum {
+	Default  = 0,
+	Disabled = 2,
+	Enabled  = 1,
 }

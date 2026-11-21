@@ -183,4 +183,4 @@ end
 
 If nothing appears, make sure the shader is enabled, has a non-empty source, and is a direct child of the intended GUI object. Check that your shader's output alpha is not zero and that your input types match their declarations.
 
-`Compiled` and `LastError` describe different things. A compiled shader can still report an invalid uniform. UI shaders currently require a native renderer; they are not supported by the JavaScript/web build.
+`Compiled` and `LastError` describe different things. A compiled shader can still report an invalid uniform. UI shaders currently require a supported desktop build and aren't supported in the browser.

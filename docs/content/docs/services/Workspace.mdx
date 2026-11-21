@@ -1,9 +1,9 @@
 ---
 title: Workspace
-description: Manage the 3D world's physics settings, active camera, and spatial queries.
+description: Manage the active 2D or 3D scene, physics, camera, and spatial queries.
 ---
 
-`Workspace` is the service that holds the 3D scene. Parts, models, terrain, and other 3D objects live under it, and it owns the physics settings and world queries that act on them.
+`Workspace` holds the active game scene. It renders 3D parts by default; set `Dimension` to `Enum.Dimension.D2` to render and simulate descendant `Part2D` objects instead.
 
 If an object has a position in the world, it's usually parented to Workspace. Reparenting a part away from Workspace removes it from the simulated world. Rigid-body gravity is configured on each part through `Part.Gravity`.
 
@@ -41,9 +41,20 @@ end
 
 Turning `SimulatePhysics` off stops the simulation but keeps the world rendered. Cloth objects on screen switch to their preview pose while simulation is off, and switching it back on resumes from the current configuration.
 
+### 2D scenes
+
+```lua
+workspace.Dimension = Enum.Dimension.D2
+local level = Instance.new("World2D", workspace)
+local physics = game:GetService("Workspace2D")
+physics.Gravity = Vector2.new(0, 130)
+```
+
+Use Workspace2D for 2D gravity and raycasts. The 3D spatial query methods do not query 2D bodies.
+
 ### Camera
 
-Assigning `CurrentCamera` takes a `Camera` and makes it the renderer's active camera. Only a `Camera` object is accepted; other values aren't applied.
+Assigning `CurrentCamera` takes a `Camera` and makes it the active camera. Only a `Camera` object is accepted; other values aren't applied.
 
 ```lua
 local Workspace = game:GetService("Workspace")
@@ -111,6 +122,18 @@ end)
 ```
 
 If the event fires before you connect, your callback won't run. Treat it as a one-time readiness notification rather than a persistent state query, and check the objects you need with `FindFirstChild()`.
+
+## Overlap queries and joining parts
+
+| Method | Description |
+| --- | --- |
+| `GetPartBoundsInBox(frame: CFrame, size: Vector3, params: OverlapParams?): {BasePart}` | Returns intersecting part bounds for an oriented box. |
+| `GetPartBoundsInRadius(position: Vector3, radius: number, params: OverlapParams?): {BasePart}` | Returns part bounds intersecting a sphere. |
+| `GetPartsInPart(part: BasePart, params: OverlapParams?): {BasePart}` | Returns overlapping collision shapes, excluding the queried part. The part must belong to this Workspace. |
+| `JoinToOutsiders(parts: {BasePart}, mode: Enum.JointCreationMode?): ()` | Joins eligible contacting parts outside the selected set; defaults to `Enum.JointCreationMode.All`. |
+| `UnjoinFromOutsiders(parts: {BasePart}): ()` | Removes applicable welds between the selection and other parts. |
+
+Box sizes and radii must be finite and nonnegative. Pass `OverlapParams` to filter results. The bounds queries use part bounds rather than exact collision geometry.
 
 ## See also
 

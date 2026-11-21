@@ -4,21 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-Vector2Value_Class := Class_Info{
+Vector2Value_Class := Class_Info {
 	name   = "Vector2Value",
 	parent = &ValueBase_Class,
 }
 
 Vector2Value :: struct {
 	using object: Object,
-
-	value: datatypes.Vector2,
+	value:        datatypes.Vector2,
 }
 
 Vector2Value_Init :: proc() -> Vector2Value {
-	return Vector2Value{
-		object = Object_Init(&Vector2Value_Class),
-	}
+	return Vector2Value{object = Object_Init(&Vector2Value_Class)}
 }
 
 Vector2Value_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -44,7 +41,7 @@ Vector2Value_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Vector2(L, datatype_registry, val.value)
 	case:
 		return false
@@ -64,7 +61,7 @@ Vector2Value_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_Vector2(L, value_index, datatype_registry)
 	case:
 		return false
@@ -86,6 +83,7 @@ Register_Vector2Value :: proc(registry: ^Registry) {
 		Vector2Value_construct,
 		Vector2Value_destroy,
 		get = Vector2Value_get,
+		parallel_get = Vector2Value_get,
 		set = Vector2Value_set,
 		clone = Vector2Value_clone,
 		properties = []string{"Value"},

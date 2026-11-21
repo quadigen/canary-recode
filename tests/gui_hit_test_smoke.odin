@@ -118,8 +118,7 @@ button.MouseLeave:Connect(function() _G.hitLog = _G.hitLog .. "L:button;" end)
 
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
 
-	// Point (120, 80) overlaps both guis but the button is painted after the
-	// textbox, so it is on top. Clicking it must NOT focus the textbox below.
+
 	down := make_mouse_down(120, 80)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, down)
 
@@ -130,7 +129,7 @@ button.MouseLeave:Connect(function() _G.hitLog = _G.hitLog .. "L:button;" end)
 	up := make_mouse_up(120, 80)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, up)
 
-	// Hovering the point over the button must only hover the button.
+
 	motion := make_mouse_motion(120, 80)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, motion)
 
@@ -142,7 +141,7 @@ button.MouseLeave:Connect(function() _G.hitLog = _G.hitLog .. "L:button;" end)
 	}
 	assert_hit_log(&script_vm, "E:button;", "after hovering button")
 
-	// Clicking the uncovered part of the textbox focuses it.
+
 	down2 := make_mouse_down(55, 55)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, down2)
 
@@ -153,7 +152,7 @@ button.MouseLeave:Connect(function() _G.hitLog = _G.hitLog .. "L:button;" end)
 	up2 := make_mouse_up(55, 55)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, up2)
 
-	// Hovering the uncovered part of the textbox moves hover onto the box.
+
 	motion2 := make_mouse_motion(55, 55)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, motion2)
 
@@ -163,25 +162,18 @@ button.MouseLeave:Connect(function() _G.hitLog = _G.hitLog .. "L:button;" end)
 	if button.mouse_inside {
 		panic("button should lose hover when the textbox is topmost")
 	}
-	assert_hit_log(&script_vm, "E:button;E:box;L:button;", "after hovering textbox")
+	assert_hit_log(&script_vm, "E:button;L:button;E:box;", "after hovering textbox")
 
-	// Moving off everything clears hover.
+
 	motion3 := make_mouse_motion(400, 400)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, motion3)
 
 	if box.mouse_inside || button.mouse_inside {
 		panic("hover should clear when moving off the guis")
 	}
-	assert_hit_log(&script_vm, "E:button;E:box;L:button;L:box;", "after leaving all guis")
+	assert_hit_log(&script_vm, "E:button;L:button;E:box;L:box;", "after leaving all guis")
 
-	// ------------------------------------------------------------------
-	// Prompt/overlay regression: an overlay ScreenGui hosts a full-screen
-	// backdrop and a raised ZIndex panel whose children carry default ZIndex.
-	// Painting draws children on top of parents regardless of ZIndex, so an
-	// input inside the panel must receive clicks/hover (ZIndex must not gate
-	// hit testing), and a normal (non-overlay) screen underneath the overlay
-	// must not receive hover.
-	// ------------------------------------------------------------------
+
 	run_script(
 		&script_vm,
 		`
@@ -267,10 +259,7 @@ _G.promptField = field
 
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
 
-	// (300, 175) is inside the prompt input AND inside a TextBox that lives
-	// directly under the host (behind the panel). The input is painted last,
-	// so it must win even though the panel carries ZIndex 200001 while the
-	// input itself stays at ZIndex 0.
+
 	down3 := make_mouse_down(300, 175)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, down3)
 	up3 := make_mouse_up(300, 175)
@@ -280,7 +269,7 @@ _G.promptField = field
 		panic("input inside raised-ZIndex panel failed to focus")
 	}
 
-	// The sibling TextBox behind the panel must not receive the click.
+
 	behind_tracker: ^classes.TextBox = nil
 	for object in prompt_descriptor.instances {
 		textbox := cast(^classes.TextBox)object
@@ -306,7 +295,7 @@ _G.promptField = field
 		panic("UnderBox TextBox not found")
 	}
 
-	// Hover over the input: only the input hovers, not the covered sibling.
+
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_motion(300, 175))
 
 	if !field_tracker.mouse_inside {
@@ -317,8 +306,7 @@ _G.promptField = field
 	}
 	assert_hit_log(&script_vm, "E:field;", "after hovering prompt input")
 
-	// Hover over open backdrop space: the overlay screen beats the normal
-	// screen underneath, and nothing behind it hovers.
+
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_motion(50, 50))
 
 	if under_tracker.mouse_inside {
@@ -329,8 +317,7 @@ _G.promptField = field
 	}
 	assert_hit_log(&script_vm, "E:field;L:field;", "after hovering overlay backdrop")
 
-	// Click the dim backdrop (outside the panel): no TextBox is hit, so the
-	// focused input must blur.
+
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_down(160, 80))
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_up(160, 80))
 
@@ -341,7 +328,7 @@ _G.promptField = field
 		panic("clicking backdrop should not focus a covered textbox")
 	}
 
-	// Teardown mirrors textbox_type_undo_smoke.
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("GUI_HIT_TEST_SMOKE_PASSED")

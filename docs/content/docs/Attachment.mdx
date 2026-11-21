@@ -13,29 +13,47 @@ attachment.Position = Vector3.new(0, 2, 0)
 attachment.Parent = part
 ```
 
-Parent the attachment to the part it belongs to. Moving or rotating the part moves the attachment with it, and the attachment's `CFrame` reports the resulting world-space frame.
+Parent the attachment to the part it belongs to. Moving or rotating the part moves the attachment with it, and the attachment's `WorldCFrame` reports the resulting world-space frame.
 
 ## Properties
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
 | `Position` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Offset from the parent part's origin. |
-| `Orientation` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Stored orientation in degrees. |
+| `Orientation` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Local orientation in degrees. |
 | `Axis` | `Vector3` | Read/write | `Vector3.new(1, 0, 0)` | Primary axis of the attachment frame. |
 | `SecondaryAxis` | `Vector3` | Read/write | `Vector3.new(0, 1, 0)` | Secondary axis, used with `Axis` to build the frame. |
-| `CFrame` | `CFrame` | Read/write | Identity | The attachment's world-space frame. |
+| `CFrame` | `CFrame` | Read/write | Identity | The attachment's local-space frame. |
 
 ### CFrame
 
-`CFrame` combines the position and axes into one value. Assigning it updates `Position`, `Axis`, and `SecondaryAxis` to match, and clears `Orientation`.
+`CFrame` combines the position and axes into one value. Assigning it updates the local position and rotation.
 
 ```lua
 attachment.CFrame = CFrame.new(0, 2, 0) * CFrame.Angles(0, math.rad(90), 0)
 ```
 
-Reading `CFrame` builds the frame from `Position`, `Axis`, and `SecondaryAxis`. Because `Orientation` is stored separately and isn't folded into the frame, set `CFrame` or the axes when you need the orientation to affect the result.
+`Orientation`, `Axis`, and `SecondaryAxis` describe that same local rotation.
 
 Keep the two axes non-parallel so they define a stable frame. A frame built from parallel axes has no usable rotation.
+
+## World-space properties
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `WorldCFrame` | `CFrame` | Read/write | Position and rotation in world space. |
+| `WorldPosition` | `Vector3` | Read/write | World position. Setting it changes the local offset. |
+| `WorldOrientation` | `Vector3` | Read/write | World rotation in degrees. |
+| `WorldAxis` | `Vector3` | Read-only | World-space right direction. |
+| `WorldSecondaryAxis` | `Vector3` | Read-only | World-space up direction. |
+
+### GetConstraints
+
+```lua
+GetConstraints(): {Constraint}
+```
+
+Returns the accessible constraints that reference this attachment as either endpoint, or an empty array if there are none.
 
 ## Working with attachments
 
@@ -70,10 +88,9 @@ Beam-like effects, handles, and other objects that need a local point accept an 
 
 ## Notes
 
-- Attachments inherit the part's transform. Their `CFrame` is always in world space, so use it when you need the actual position in the scene.
+- Read `WorldPosition` or `WorldCFrame` for the actual position in the scene.
 - An attachment without a parent still stores its properties but has no meaningful world frame.
 - Cloning a part copies its attachments and their property values.
-- `Orientation` is kept as a separate stored value rather than being applied to the frame; use `Axis` and `SecondaryAxis` when the orientation matters.
 
 ## See also
 

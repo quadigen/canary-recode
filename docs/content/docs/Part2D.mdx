@@ -1,79 +1,74 @@
 ---
 title: Part2D
-description: A rectangular 2D physics body for the Workspace2D simulation.
+description: Create a visible box or circular physics body in a 2D scene.
 ---
 
-`Part2D` is a 2D physics body used by the `Workspace2D` service. It has a screen-space position and size, a few physics settings, and participates in a Box2D-style world with gravity pulling downward.
-
-`Part2D` inherits from `GuiObject`, so it also has the usual GUI properties such as `Position`, `Size`, `AnchorPoint`, `Rotation`, `BackgroundColor3`, and visibility controls.
+`Part2D` is a 2D physics object that uses the familiar `GuiObject` layout and appearance properties. Use the usual `Position`, `Size`, `AnchorPoint`, `Rotation`, and `BackgroundColor3` properties to lay out your scene.
 
 ## Getting started
 
-`Part2D` bodies belong under `Workspace2D`, not under a `ScreenGui`:
-
 ```lua
-local Workspace2D = game:GetService("Workspace2D")
+workspace.Dimension = Enum.Dimension.D2
 
-local floor = Instance.new("Part2D")
-floor.Name = "Floor"
-floor.Size = UDim2.fromOffset(600, 40)
-floor.Position = UDim2.fromOffset(100, 500)
-floor.AnchorPoint = Vector2.new(0, 0)
-floor.Anchored = true
-floor.Parent = Workspace2D
-
-local box = Instance.new("Part2D")
-box.Name = "Box"
-box.Size = UDim2.fromOffset(40, 40)
-box.Position = UDim2.fromOffset(320, 100)
-box.AnchorPoint = Vector2.new(0, 0)
-box.Anchored = false
-box.Parent = Workspace2D
+local ball = Instance.new("Part2D", workspace)
+ball.Size = UDim2.fromOffset(32, 32)
+ball.Position = UDim2.fromOffset(120, 40)
+ball.IsBall = true
+ball.Anchored = false
+ball.BackgroundColor3 = Color3.fromRGB(255, 140, 60)
+ball.Velocity = Vector2.new(100, 0)
 ```
 
-The world steps at `1/60` second with gravity `(0, 130)`, so positive Y moves down the screen.
+Parent parts to Workspace directly, or use a `World2D`, `Folder`, or `RigidBody2D` container. The older Workspace2D parenting convention still works in D2 mode. Positive Y points down.
 
 ## Properties
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
-| `Anchored` | `boolean` | Read/write | `true` | Keeps the body static. |
-| `CanCollide` | `boolean` | Read/write | `true` | Stored collision flag. Not currently read by the simulation. |
-| `IsBall` | `boolean` | Read/write | `false` | Stored shape flag. The current body is always a box. |
-| `Density` | `number` | Read/write | `1` | Stored density. Negative values clamp to `0`. |
-| `Friction` | `number` | Read/write | `0.3` | Stored friction. Negative values clamp to `0`. |
-| `Elasticity` | `number` | Read/write | `0` | Stored bounce, clamped between `0` and `1`. |
-| `VelocityX` | `number` | Read/write | `0` | Stored horizontal velocity in pixels per second. |
-| `VelocityY` | `number` | Read/write | `0` | Stored vertical velocity in pixels per second. |
+| `Anchored` | boolean | Read/write | true | Keeps the body static. |
+| `CanCollide` | boolean | Read/write | true | Controls collision response. |
+| `IsBall` | boolean | Read/write | false | Uses a circular shape with diameter equal to the shorter size dimension. |
+| `Density` | number | Read/write | 1 | Material density, clamped at zero. |
+| `Friction` | number | Read/write | 0.3 | Surface friction, clamped at zero. |
+| `Elasticity` | number | Read/write | 0 | Bounce coefficient, clamped between zero and one. |
+| `Velocity` | Vector2 | Read/write | Vector2.new(0, 0) | Linear velocity in logical pixels per second. |
+| `VelocityX` | number | Read/write | 0 | X component of Velocity. |
+| `VelocityY` | number | Read/write | 0 | Y component of Velocity. |
+| `AngularVelocity` | number | Read/write | 0 | Angular velocity in degrees per second. |
 
-## Current limitations
+Position, size, rotation, and physical material changes synchronize on the next update. Physics updates the position offsets without discarding the scale components or anchor point.
 
-The physics body is built from `AbsolutePosition` and `AbsoluteSize` the first time the part is rendered. The current `Workspace2D` implementation creates a box fixture with fixed density `1` and friction `0.3`. It does not consume the part's `Density`, `Friction`, `Elasticity`, `CanCollide`, `IsBall`, `VelocityX`, or `VelocityY` values.
+## Methods
 
-In practice:
+### ApplyImpulse
 
-- Every body is a rectangle, even when `IsBall` is true.
-- Changing `Density`, `Friction`, `Elasticity`, or `CanCollide` after creation doesn't change the simulation.
-- Setting `VelocityX` or `VelocityY` doesn't push the body.
-- Resizing or rotating a part after its body exists doesn't rebuild the fixture.
-- For anchored parts, the body stays where it was created and the part's position is overwritten from the body each step.
+```lua
+ApplyImpulse(impulse: Vector2): ()
+```
 
-The properties are stored and cloned because they're part of the class, but don't build gameplay around them until the simulation consumes them. `Anchored` and the initial position and size do work.
+Queues a linear impulse for the next physics step, in mass times logical pixels per second. It has no effect on an anchored part.
 
-## Movement and collisions
+```lua
+ball:ApplyImpulse(Vector2.new(0, -120))
+```
 
-Unanchored bodies fall under gravity and collide with other boxes in the `Workspace2D` world. The simulation writes the body's position back into the part's `Position` as a `UDim2` with zero scale and offset components.
+### ApplyAngularImpulse
 
-Because the body is created from the part's absolute size and position, set `Size`, `Position`, and `AnchorPoint` before parenting the part or before the first frame in which it's rendered.
+```lua
+ApplyAngularImpulse(impulse: number): ()
+```
+
+Queues a rotational impulse in mass times squared logical pixels per second. Positive values rotate clockwise on screen.
 
 ## Notes
 
-- `Workspace2D` is a separate service from `Workspace`; 2D bodies don't interact with 3D parts.
-- Only one `Workspace2D` world exists per session.
-- The world enables sleeping and uses four worker threads.
-- Cloning copies the eight physics properties and marks the copy's shape dirty, but the copied body still uses the current simulation's fixed fixture settings.
+- 2D parts do not collide with 3D geometry.
+- Destroying a part removes its body. Detaching it removes its body on the next update.
+- Use offset-based sizes for consistent physical dimensions across displays.
+- Use a RigidBody2D container for compound objects rather than nesting physics bodies inside GUI objects.
 
 ## See also
 
-- `GuiObject` for the inherited position, size, and appearance properties.
-- `Workspace2D` for the 2D world.
+- `World2D` — organize and activate scenes.
+- `RigidBody2D` — hold multiple parts together.
+- `Workspace2D` — gravity and physics queries.

@@ -1,6 +1,5 @@
 package services
 
-// wire:service global="TweenService"
 
 import "core:fmt"
 import "core:math"
@@ -167,7 +166,7 @@ tween_play :: proc(tween: ^Tween) {
 		tween.time_position = 0
 		tween.state = .Playing
 	case .Playing, .Delayed:
-	// already running
+
 	}
 }
 
@@ -256,11 +255,7 @@ apply_goal :: proc(tween: ^Tween, L: ^vm.State, eased: f64) {
 
 	vm.PushRegistryReference(L, tween.instance_ref)
 
-	// The target can be destroyed while this tween is still playing. That
-	// detaches the userdata, so the retained reference no longer yields a usable
-	// Instance even though the stack slot is non-nil. Re-validating the binding
-	// and the underlying object keeps a finished-and-freed target from
-	// corrupting the VM stack, which shows up as a hard crash on the next step.
+
 	if vm.TypeOf(L, -1) == .Nil {
 		return
 	}
@@ -483,39 +478,31 @@ tween_ease_in :: proc(alpha: f64, style: i64) -> f64 {
 
 	switch style {
 	case 0:
-		// Linear
 		return t
 
 	case 1:
-		// Sine
 		return 1 - math.cos((t * math.PI) / 2)
 
 	case 2:
-		// Back
 		c1: f64 = 1.70158
 		c3 := c1 + 1
 		return c3 * t * t * t - c1 * t * t
 
 	case 3:
-		// Quad
 		return t * t
 
 	case 4:
-		// Quart
 		t2 := t * t
 		return t2 * t2
 
 	case 5:
-		// Quint
 		t2 := t * t
 		return t2 * t2 * t
 
 	case 6:
-		// Bounce
 		return 1 - tween_bounce_out(1 - t)
 
 	case 7:
-		// Elastic
 		if t == 0 || t == 1 {
 			return t
 		}
@@ -523,18 +510,15 @@ tween_ease_in :: proc(alpha: f64, style: i64) -> f64 {
 		return -math.pow(2.0, 10 * t - 10) * math.sin((t * 10 - 10.75) * c4)
 
 	case 8:
-		// Exponential
 		if t == 0 {
 			return 0
 		}
 		return math.pow(2.0, 10 * t - 10)
 
 	case 9:
-		// Circular
 		return 1 - math.sqrt(max(0.0, 1 - t * t))
 
 	case 10:
-		// Cubic
 		return t * t * t
 	}
 
@@ -546,15 +530,12 @@ tween_get_value :: proc(alpha: f64, style: i64, direction: i64) -> f64 {
 
 	switch direction {
 	case 0:
-		// In
 		return tween_ease_in(t, style)
 
 	case 1:
-		// Out
 		return 1 - tween_ease_in(1 - t, style)
 
 	case 2:
-		// InOut
 		if t < 0.5 {
 			return tween_ease_in(t * 2, style) / 2
 		}
@@ -793,6 +774,37 @@ tween_create :: proc(
 	return 1, true
 }
 
+tween_service_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "GetValue", "SmoothDamp":
+		return tween_service_get(L, object, d, e, key)
+	}
+	return false
+}
+
+tween_service_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "GetValue", "SmoothDamp":
+		return tween_service_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_TweenService_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
@@ -801,7 +813,10 @@ Register_TweenService_Class :: proc(registry: ^classes.Registry) {
 		tween_service_destroy,
 		creatable = false,
 		get = tween_service_get,
+		parallel_get = tween_service_parallel_get,
 		namecall = tween_service_namecall,
+		parallel_namecall = tween_service_parallel_namecall,
+		methods = []string{"Create", "GetValue", "SmoothDamp"},
 	)
 }
 

@@ -151,20 +151,20 @@ KINE_FILAMENT_DRAW_CULLING :: (1 << 2)
 KINE_FILAMENT_DRAW_WORLD_POSITION :: (1 << 3)
 
 KineFilamentDrawItem :: struct {
-	mesh:         ^KineFilamentMesh,
-	tex:          ^KineFilamentTex,
-	transform:    [16]f32,
-	r:            f32,
-	g:            f32,
-	b:            f32,
-	param1:       f32,
-	param2:       f32,
-	param3:       f32,
-	transmission: f32,
-	materialKind: i32,
-	flags:        u32,
-	reserved:     u32,
-	shader:       ^KineFilamentShader,
+	mesh:          ^KineFilamentMesh,
+	tex:           ^KineFilamentTex,
+	transform:     [16]f32,
+	r:             f32,
+	g:             f32,
+	b:             f32,
+	param1:        f32,
+	param2:        f32,
+	param3:        f32,
+	transmission:  f32,
+	materialKind:  i32,
+	flags:         u32,
+	reserved:      u32,
+	shader:        ^KineFilamentShader,
 	worldPosition: [3]f64,
 }
 
@@ -199,11 +199,11 @@ KineFilamentWaterParams :: struct {
 
 
 KineFilamentParticleItem :: struct {
-	transform: [16]f32,
-	r:         u8,
-	g:         u8,
-	b:         u8,
-	a:         u8,
+	transform:     [16]f32,
+	r:             u8,
+	g:             u8,
+	b:             u8,
+	a:             u8,
 	worldPosition: [3]f64,
 }
 
@@ -620,6 +620,8 @@ foreign kine_filament {
 
 	Kine_Filament_CopyMeshBoneBindTransform :: proc(mesh: ^KineFilamentMesh, boneIndex: i32, outTransform16: ^f32) -> bool ---
 
+	Kine_Filament_CopyMeshBoneGlobalTransform :: proc(mesh: ^KineFilamentMesh, boneIndex: i32, outTransform16: ^f32) -> bool ---
+
 
 	Kine_Filament_SetMeshBoneTransforms :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, boneTransforms16: ^f32, boneCount: i32) -> bool ---
 
@@ -763,6 +765,7 @@ foreign kine_filament {
 
 	Kine_Filament_CreateTerrainMesh :: proc(ctx: ^KineFilamentContext, vertexData: ^f32, materialWeights: ^f32, vertexCount: i32, indices: ^u16, indexCount: i32) -> ^KineFilamentMesh ---
 
+	Kine_Filament_UploadTerrainField :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, samples: ^f32, sampleSize, sampleOrigin, boundsMin, boundsMax: ^i32, voxelSize, isoLevel: f32) -> bool ---
 
 	Kine_Filament_CreateTerrainTextureSet :: proc(ctx: ^KineFilamentContext, layer0: ^KineFilamentTex, layer1: ^KineFilamentTex, layer2: ^KineFilamentTex, layer3: ^KineFilamentTex, layer4: ^KineFilamentTex, layer5: ^KineFilamentTex) -> ^KineFilamentTex ---
 
@@ -779,6 +782,7 @@ foreign kine_filament {
 	Kine_Filament_SetSkyAtmosphere :: proc(ctx: ^KineFilamentContext, sunDirX: f32, sunDirY: f32, sunDirZ: f32, skyR: f32, skyG: f32, skyB: f32, horizonR: f32, horizonG: f32, horizonB: f32, groundR: f32, groundG: f32, groundB: f32, sunIntensity: f32) -> i32 ---
 
 
+	Kine_Filament_CreateSkyboxPixels :: proc(ctx: ^KineFilamentContext, size: i32, rgba: [^]u8, showSun: bool) -> i32 ---
 	Kine_Filament_CreateSkyboxCubemap :: proc(ctx: ^KineFilamentContext, texPosX: ^KineGLTextureInfo, texNegX: ^KineGLTextureInfo, texPosY: ^KineGLTextureInfo, texNegY: ^KineGLTextureInfo, texPosZ: ^KineGLTextureInfo, texNegZ: ^KineGLTextureInfo) -> i32 ---
 
 
@@ -897,6 +901,8 @@ foreign kine_filament {
 
 
 	Kine_Filament_Viewport_RenderFrame :: proc(ctx: ^KineFilamentContext, dt: f32, renderWorld: bool) ---
+
+	Kine_Filament_Viewport_RenderFrameWithCpuWork :: proc(ctx: ^KineFilamentContext, dt: f32, renderWorld: bool, work: proc "c" (user: rawptr), user: rawptr) ---
 
 
 	Kine_Filament_SetFrameProfileCallback :: proc(ctx: ^KineFilamentContext, callback: proc "c" (user: rawptr, phase: cstring, begin: bool), user: rawptr) ---

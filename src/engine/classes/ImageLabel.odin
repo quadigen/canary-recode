@@ -32,6 +32,7 @@ ImageLabel :: struct {
 	image:              string,
 	owned_image:        string,
 	stored_image:       ^kineffi.KineSkiaImage,
+	icon_pack_revision: u64,
 	aseprite_playback:  ^Aseprite_Image_Playback,
 	animated_source:    bool,
 	editable_image:     ^EditableImage,
@@ -80,7 +81,7 @@ ImageLabel_Find_Global_Icon :: proc(name: string) -> ([]u8, bool) {
 	}
 	return nil, false
 }
-ImageLabel_Resolve_Builtin_Image :: proc(path: string) -> ([]u8, bool) {
+ImageLabel_Resolve_Default_Builtin_Image :: proc(path: string) -> ([]u8, bool) {
 	if strings.has_prefix(path, BUILTIN_ICON_PREFIX) {
 		name := path[len(BUILTIN_ICON_PREFIX):]
 		return ImageLabel_Find_Class_Icon(name)
@@ -91,6 +92,19 @@ ImageLabel_Resolve_Builtin_Image :: proc(path: string) -> ([]u8, bool) {
 	}
 	return nil, false
 }
+ImageLabel_Resolve_Builtin_Image :: proc(path: string) -> ([]u8, bool) {
+	if data, found := IconPack_Resolve(path); found {return data, true}
+	return ImageLabel_Resolve_Default_Builtin_Image(path)
+}
+
+ImageLabel_Refresh_Icon_Pack :: proc(label: ^ImageLabel) {
+	if label.editable_image == nil &&
+	   IconPack_Is_URI(label.image) &&
+	   label.icon_pack_revision != IconPack_Revision() {
+		ImageLabel_Load_Image(label, label.image)
+	}
+}
+
 ImageLabel_Destroy_Stored_Image :: proc(image_label: ^ImageLabel) {
 	if image_label == nil {
 		return
@@ -111,14 +125,20 @@ ImageLabel_Load_Image :: proc(image_label: ^ImageLabel, path: string) {
 		return
 	}
 	ImageLabel_Destroy_Stored_Image(image_label)
+	image_label.icon_pack_revision = IconPack_Revision()
 	if len(path) == 0 {
 		return
 	}
 	if strings.has_prefix(path, "builtin://") {
-		data, found := ImageLabel_Resolve_Builtin_Image(path)
-		if !found || len(data) == 0 {
-			return
+		if override, found := IconPack_Resolve(path); found {
+			image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
+				raw_data(override),
+				uintptr(len(override)),
+			)
+			if image_label.stored_image != nil {return}
 		}
+		data, found := ImageLabel_Resolve_Default_Builtin_Image(path)
+		if !found || len(data) == 0 {return}
 		if ImageLabel_Load_Animated_Bytes(image_label, transmute([]u8)data) {return}
 		image_label.stored_image = kineffi.Kine_Skia_Image_LoadFromMemory(
 			&data[0],
@@ -199,12 +219,25 @@ ImageLabel_Set_Editable :: proc(label: ^ImageLabel, source: ^EditableImage) {
 	if label == nil || label.editable_image == source {return}
 	ImageLabel_Unbind_Editable(label)
 	if source == nil {return}
+	label.editable_image = source
+	append(&source.attached_labels, label)
+	ImageLabel_Refresh_Bound_Image(label)
+}
+
+ImageLabel_Refresh_Bound_Image :: proc(label: ^ImageLabel) {
+	if label == nil || label.editable_image == nil {return}
 	ImageLabel_Destroy_Stored_Image(label)
 	delete(label.owned_image)
 	label.owned_image = ""
 	label.image = ""
-	label.editable_image = source
-	append(&source.attached_labels, label)
+	if label.editable_image.source != "" {
+		label.owned_image = assetstore.Resolve_Ugc_Asset(label.editable_image.source, .Texture)
+		label.image = label.owned_image
+		ImageLabel_Load_Image(label, label.image)
+	}
+	gui_invalidate_draw(&label.object)
+	surfacegui_mark_dirty_for(&label.object)
+	Gui_Render_Mark_Dirty()
 }
 
 ImageLabel_Set_Image :: proc(image_label: ^ImageLabel, path: string) {
@@ -279,21 +312,20 @@ ImageLabel_get :: proc(
 	image_label := cast(^ImageLabel)object
 	switch key {
 	case "Image":
-		vm.PushString(L, image_label.image)
-	case "EditableImage":
-		if image_label.editable_image == nil {
-			vm.PushNil(L)
-		} else {
+		if image_label.editable_image != nil {
 			Push_Object(L, &image_label.editable_image.object)
+		} else {
+			vm.PushString(L, image_label.image)
 		}
-	case "AnimatedContent":
-		if datatype_registry == nil {return false}
-		if image_label.animated_source {datatypes.Push_Animated(L, datatype_registry, datatypes.Animated{uri = image_label.image})} else {vm.PushNil(L)}
 	case "ImageContent":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Content(L, datatype_registry, datatypes.Content_From_URI(image_label.image))
 	case "IsLoaded":
-		vm.PushBoolean(L, image_label.stored_image != nil || image_label.editable_image != nil)
+		source := image_label.editable_image
+		vm.PushBoolean(
+			L,
+			image_label.stored_image != nil || (source != nil && source.source == ""),
+		)
 	case "ImageTransparency":
 		vm.PushNumber(L, f64(image_label.image_transparency))
 	case "ImageColor3":
@@ -334,32 +366,16 @@ ImageLabel_set :: proc(
 ) -> bool {
 	image_label := cast(^ImageLabel)object
 	switch key {
-	case "EditableImage":
-		if vm.IsNoneOrNil(L, value_index) {
-			ImageLabel_Set_Editable(image_label, nil)
-		} else {
-			source := object_from_argument(L, value_index)
-			if source == nil || !Is_A_Class(source, &EditableImage_Class) {
-				_ = vm.RaiseError(L, "EditableImage must be an EditableImage Instance or nil")
+	case "Image", "ImageContent":
+		if key == "Image" {
+			if source := object_from_argument(L, value_index); source != nil {
+				if !Is_A_Class(source, &EditableImage_Class) {
+					_ = vm.RaiseError(L, "expected an Image instance or an image URI")
+					return true
+				}
+				ImageLabel_Set_Editable(image_label, cast(^EditableImage)source)
 				return true
 			}
-			ImageLabel_Set_Editable(image_label, cast(^EditableImage)source)
-		}
-	case "Image", "ImageContent", "AnimatedContent":
-		if key == "AnimatedContent" && vm.IsNoneOrNil(L, value_index) {
-			ImageLabel_Set_Image(image_label, "")
-			return true
-		}
-		if datatype_registry != nil &&
-		   vm.IsUserdataType(L, value_index, &datatype_registry.animated) {
-			animated := datatypes.Arg_Animated(L, value_index, datatype_registry)
-			ImageLabel_Set_Image(image_label, animated.uri)
-			image_label.animated_source = animated.uri != ""
-			return true
-		}
-		if key == "AnimatedContent" {
-			_ = vm.RaiseError(L, "expected Animated or nil")
-			return true
 		}
 		if datatype_registry != nil &&
 		   vm.IsUserdataType(L, value_index, &datatype_registry.content) {
@@ -368,7 +384,7 @@ ImageLabel_set :: proc(
 		} else if key == "Image" {
 			ImageLabel_Set_Image(image_label, vm.ArgString(L, value_index))
 		} else {
-			_ = vm.RaiseError(L, "expected Content or Animated")
+			_ = vm.RaiseError(L, "expected Content")
 		}
 	case "IsLoaded":
 		_ = vm.RaiseError(L, "IsLoaded is read-only")
@@ -522,11 +538,12 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 	image_label := cast(^ImageLabel)object
+	ImageLabel_Refresh_Icon_Pack(image_label)
 	if image_label.aseprite_playback != nil {
 		ImageLabel_Tick_Aseprite(image_label)
 		if len(image_label.aseprite_playback.images) > 1 {ctx.gui_dynamic = true}
 	}
-	if image_label.editable_image != nil {
+	if image_label.editable_image != nil && image_label.editable_image.source == "" {
 		ctx.gui_dynamic = true
 	}
 	if image_label.stored_image != nil &&
@@ -577,7 +594,7 @@ ImageLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		}
 	}
 	GuiObject_render(object, ctx, image_shadow)
-	if image_label.editable_image != nil {
+	if image_label.editable_image != nil && image_label.editable_image.source == "" {
 		source := image_label.editable_image
 		if source.width > 0 &&
 		   source.height > 0 &&
@@ -704,9 +721,7 @@ Register_ImageLabel :: proc(registry: ^Registry) {
 		clone = ImageLabel_clone,
 		properties = []string {
 			"Image",
-			"EditableImage",
 			"ImageContent",
-			"AnimatedContent",
 			"IsLoaded",
 			"ImageTransparency",
 			"ImageColor3",

@@ -68,9 +68,7 @@ replication_encode_metadata :: proc(
 	return bytes, len(bytes) <= REPLICATION_METADATA_MAX
 }
 
-// Reliable chunks share the snapshot budget and become visible only when the
-// whole revision has arrived. Finish a revision even if the object changes
-// while it is in flight, then send the new revision on a subsequent tick.
+
 replication_send_metadata :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
@@ -158,7 +156,7 @@ replication_send_entity_metadata :: proc(
 	if !classes.Is_A_Class(item.object, &classes.CharacterModel_Class) {return true}
 	model := cast(^classes.CharacterModel)item.object
 	if connection.player == nil || model.owner_user_id == connection.player.user_id {return true}
-	// The root's spawn creates the remote Player before metadata can target it.
+
 	root := classes.Find_First_Child(item.object, "HumanoidRootPart")
 	player: ^Player
 	if root != nil && connection.known[replication_entity_id(service, root)] != 0 {
@@ -276,9 +274,7 @@ replication_clear_root_metadata :: proc(service: ^ReplicatorService, L: ^vm.Stat
 	)
 	for name in REPLICATION_ROOT_NAMES {
 		object := DataModel_Get_Service(service.data_model, name)
-		if object == nil ||
-		   object.destroyed ||
-		   (len(object.server_attributes) == 0 && len(object.server_tags) == 0) {continue}
+		if object == nil || object.destroyed || object.server_metadata == nil {continue}
 		_ = replication_apply_metadata(L, service.signal_registry, object, empty[:])
 	}
 }
@@ -334,29 +330,33 @@ replication_apply_metadata :: proc(
 	}
 	if reader.offset != len(bytes) {return false}
 
-	// Remove keys previously supplied by the server while preserving unrelated
-	// metadata created by client scripts.
+
+	if object.server_metadata == nil {
+		if len(attributes) == 0 && len(tag_names) == 0 {return true}
+		object.server_metadata = new(classes.Object_Server_Metadata)
+	}
+	state := object.server_metadata
 	vm.PushNil(L)
-	for name in object.server_attributes {
+	for name in state.attributes {
 		if !attribute_names[name] {_ = classes.Set_Attribute(L, object, name, -1)}
 		delete(name)
 	}
 	vm.Pop(L)
-	clear(&object.server_attributes)
+	clear(&state.attributes)
 	for attribute in attributes {
 		vm.PushRegistryReference(L, attribute.value_ref)
 		_ = classes.Set_Attribute(L, object, attribute.name, -1)
 		vm.Pop(L)
-		append(&object.server_attributes, strings.clone(attribute.name))
+		append(&state.attributes, strings.clone(attribute.name))
 	}
-	for tag in object.server_tags {
+	for tag in state.tags {
 		if !tags[tag] {classes.Object_Remove_Tag(object, tag)}
 		delete(tag)
 	}
-	clear(&object.server_tags)
+	clear(&state.tags)
 	for tag in tag_names {
 		classes.Object_Add_Tag(object, tag)
-		append(&object.server_tags, strings.clone(tag))
+		append(&state.tags, strings.clone(tag))
 	}
 	return true
 }

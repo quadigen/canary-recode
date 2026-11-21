@@ -48,10 +48,7 @@ Class_Namecall :: proc(
 Class_Clone :: proc(source: ^Object, destination: ^Object)
 Require_Resolver :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
 
-// Class_Export is an opt-in method published to KNE extensions. The engine
-// calls `handler` when one is provided; a nil handler means "run this class's
-// normal namecall" (the generic invoke path). Arguments are on `ctx.L` starting
-// at index 2, exactly like a Luau namecall.
+
 Class_Export_Context :: struct {
 	L:         ^vm.State,
 	object:    ^Object,
@@ -89,17 +86,20 @@ Gui_Render_Transform :: struct {
 }
 
 Class_Step_Context :: struct {
-	L:               ^vm.State,
-	delta_time:      f32,
-	renderer:        ^Renderer_Object,
-	data_model:      rawptr,
-	viewport_width:  i32,
-	viewport_height: i32,
-	gui_overlay:     bool,
-	gui_transform:   Gui_Render_Transform,
-	cache_gui:       bool,
-	gui_dynamic:     bool,
-	gui_recording:   bool,
+	L:                        ^vm.State,
+	delta_time:               f32,
+	renderer:                 ^Renderer_Object,
+	data_model:               rawptr,
+	viewport_width:           i32,
+	viewport_height:          i32,
+	gui_overlay:              bool,
+	editor_2d_gui_background: bool,
+	editor_2d_gui_foreground: bool,
+	gui_transform:            Gui_Render_Transform,
+	cache_gui:                bool,
+	gui_dynamic:              bool,
+	gui_recording:            bool,
+	world2d_scene:            bool,
 }
 
 Class_Step :: proc(object: ^Object, ctx: ^Class_Step_Context)
@@ -148,6 +148,9 @@ Class_Descriptor :: struct {
 	get:                 Class_Getter,
 	set:                 Class_Setter,
 	namecall:            Class_Namecall,
+	parallel_get:        Class_Getter,
+	parallel_set:        Class_Setter,
+	parallel_namecall:   Class_Namecall,
 	_step:               Class_Step,
 	_step_phase:         Class_Step_Phase,
 	creatable:           bool,
@@ -191,11 +194,27 @@ Remote_Call_Dispatch :: proc(
 )
 
 Part_Body_Access :: struct {
-	get_linear_velocity:  proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
-	set_linear_velocity:  proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
-	get_angular_velocity: proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
-	set_angular_velocity: proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
-	apply_impulse:        proc(ctx: rawptr, part: ^Object, impulse: datatypes.Vector3) -> bool,
+	get_linear_velocity:       proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
+	set_linear_velocity:       proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
+	get_angular_velocity:      proc(ctx: rawptr, part: ^Object) -> (datatypes.Vector3, bool),
+	set_angular_velocity:      proc(ctx: rawptr, part: ^Object, velocity: datatypes.Vector3),
+	apply_impulse:             proc(
+		ctx: rawptr,
+		part: ^Object,
+		impulse: datatypes.Vector3,
+	) -> bool,
+	get_mass:                  proc(ctx: rawptr, part: ^Object) -> f64,
+	can_collide_with:          proc(ctx: rawptr, part, other: ^Object) -> bool,
+	apply_angular_impulse:     proc(
+		ctx: rawptr,
+		part: ^Object,
+		impulse: datatypes.Vector3,
+	) -> bool,
+	apply_impulse_at_position: proc(
+		ctx: rawptr,
+		part: ^Object,
+		impulse, position: datatypes.Vector3,
+	) -> bool,
 }
 
 Part_Linear_Velocity :: proc(registry: ^Registry, part: ^Object) -> datatypes.Vector3 {
@@ -237,14 +256,43 @@ Part_Apply_Impulse :: proc(
 	return registry.part_body.apply_impulse(registry.part_body_ctx, part, impulse)
 }
 
+Part_Apply_Angular_Impulse :: proc(
+	registry: ^Registry,
+	part: ^Object,
+	impulse: datatypes.Vector3,
+) -> bool {
+	if registry == nil ||
+	   part == nil ||
+	   registry.part_body.apply_angular_impulse == nil {return false}
+	return registry.part_body.apply_angular_impulse(registry.part_body_ctx, part, impulse)
+}
+
+Part_Apply_Impulse_At_Position :: proc(
+	registry: ^Registry,
+	part: ^Object,
+	impulse, position: datatypes.Vector3,
+) -> bool {
+	if registry == nil ||
+	   part == nil ||
+	   registry.part_body.apply_impulse_at_position == nil {return false}
+	return registry.part_body.apply_impulse_at_position(
+		registry.part_body_ctx,
+		part,
+		impulse,
+		position,
+	)
+}
+
 Registry :: struct {
 	active_post_process:     ^Object,
 	gui_selected:            ^GuiObject,
+	input_modifiers:         bit_set[enums.ModifierKey],
 	gui_gamepad_pressed:     ^GuiObject,
 	gui_gamepad_owner:       u32,
 	gui_navigation_disabled: bool,
 	gui_gamepad_direction:   [2]i32,
 	classes:                 [dynamic]^Class_Descriptor,
+	classes_by_name:         map[string]^Class_Descriptor,
 	datatypes:               ^datatypes.Registry,
 	enums:                   ^enums.Registry,
 	renderer:                ^Renderer_Object,
@@ -260,6 +308,8 @@ Registry :: struct {
 	require_retry_ctx:       rawptr,
 	mode:                    target.Mode,
 	screen_gui_can_display:  proc(object: ^Object, data_model: rawptr) -> bool,
+	localize_text:           proc(data_model: rawptr, source: string, object: ^Object) -> string,
+	localization_revision:   u64,
 	pending_destroy:         [dynamic]Pending_Destroy,
 	tagged_objects:          map[^Object]bool,
 	tag_added_signals:       map[string]^signals.Signal,
@@ -269,6 +319,11 @@ Registry :: struct {
 	network_ownership:       Network_Ownership_Dispatch,
 	network_ownership_ctx:   rawptr,
 	model_pivoted:           proc(ctx: rawptr, model: ^Model),
+	billboard_occluded:      proc(
+		ctx: rawptr,
+		part: ^Object,
+		origin, target: datatypes.Vector3,
+	) -> bool,
 	camera_obstruction:      proc(
 		ctx: rawptr,
 		camera: ^Camera,
@@ -354,6 +409,58 @@ Can_Access_Member :: proc(
 	return true
 }
 
+
+parallel_base_method :: proc(method: string) -> bool {
+	switch method {
+	case "GetActor",
+	     "IsA",
+	     "IsAncestorOf",
+	     "IsDescendantOf",
+	     "GetChildren",
+	     "GetDescendants",
+	     "GetFullName",
+	     "FindFirstChild",
+	     "FindFirstAncestor",
+	     "FindFirstChildOfClass",
+	     "FindFirstChildWhichIsA",
+	     "FindFirstAncestorOfClass",
+	     "FindFirstAncestorWhichIsA",
+	     "GetAttribute",
+	     "GetAttributes",
+	     "HasTag",
+	     "GetTags":
+		return true
+	}
+	return false
+}
+
+parallel_base_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
+	object := cast(^Object)value
+	switch key {
+	case "ClassName",
+	     "Name",
+	     "Archivable",
+	     "CanReplicate",
+	     "Parent",
+	     "NetworkId",
+	     "ReplicationGroup",
+	     "ReplicationMode",
+	     "UniqueId",
+	     "Sandboxed",
+	     "IsInSandbox":
+		return Object_Get_Property(L, value, ctx, key)
+	}
+	if child := Find_First_Child(object, key); child != nil && Object_Is_Accessible(L, child) {
+		Push_Object(L, child)
+		return true
+	}
+	if parallel_base_method(key) {
+		vm.PushUserdataMethod(L, key)
+		return true
+	}
+	return false
+}
+
 descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
@@ -370,6 +477,23 @@ descriptor_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 
 	if !Can_Access_Member(L, descriptor, key, .Read) {
 		_ = vm.RaiseError(L, "insufficient security capabilities to read this member")
+		return true
+	}
+
+	if vm.ThreadIsParallel(L) {
+		if descriptor != nil &&
+		   descriptor.parallel_get != nil &&
+		   descriptor.parallel_get(
+			   L,
+			   object,
+			   descriptor.registry.datatypes,
+			   descriptor.registry.enums,
+			   key,
+		   ) {
+			return true
+		}
+		if parallel_base_get(L, value, ctx, key) {return true}
+		_ = vm.RaiseError(L, "property read requires task.synchronize()")
 		return true
 	}
 
@@ -402,8 +526,26 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		return true
 	}
 
-	// A Changed listener may keep Visible in sync with another property.
-	// Reassigning the current value must not reenter that listener.
+	if vm.ThreadIsParallel(L) {
+
+
+		if descriptor != nil &&
+		   descriptor.parallel_set != nil &&
+		   descriptor.parallel_set(
+			   L,
+			   object,
+			   descriptor.registry.datatypes,
+			   descriptor.registry.enums,
+			   key,
+			   value_index,
+		   ) {
+			return true
+		}
+		_ = vm.RaiseError(L, "Instance writes require task.synchronize()")
+		return true
+	}
+
+
 	if key == "Visible" &&
 	   Is_A_Class(object, &GuiObject_Class) &&
 	   (cast(^GuiObject)object).visible ==
@@ -422,17 +564,15 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		   key,
 		   value_index,
 	   ) {
-		// These setters notify listeners when the exposed value actually changes.
+
 		if (key == "Text" && Is_A_Class(object, &TextBox_Class)) ||
 		   (key == "CanvasPosition" && Is_A_Class(object, &ScrollingFrame_Class)) {
 			return true
 		}
 
-		// The write succeeded, so notify subscribers of this exact property.
-		// Funnelling here means every class gets change signals for free,
-		// without each setter having to remember to fire its own.
+
 		surfacegui_mark_dirty_for(object)
-		// These setters bump the revision only when the value changes.
+
 		switch key {
 		case "Position",
 		     "Size",
@@ -528,23 +668,20 @@ Class_Property_List :: proc(
 	return result
 }
 
-// Class_Member_Entry pairs a reflected member with the class that declares it.
-// Owner is what ReflectedProperty/Method/Event report, and it is the declaring
-// class rather than the queried one, so an inherited member keeps pointing at
-// its original owner.
+
 Class_Member_Entry :: struct {
 	name:  string,
 	owner: string,
 }
 
-// Class_Member_List selects which declared-member list a reflection query reads.
+
 Class_Member_List :: enum {
 	Properties,
 	Methods,
 	Events,
 }
 
-// descriptor_member_list returns the requested list for a class.
+
 descriptor_member_list :: proc(
 	descriptor: ^Class_Descriptor,
 	list: Class_Member_List,
@@ -560,11 +697,7 @@ descriptor_member_list :: proc(
 	return nil
 }
 
-// Collect_Class_Members gathers the members a class declares in `list`, plus
-// those it inherits, base class first, so callers see members in inheritance
-// order. A name redeclared by a subclass keeps the subclass as its owner while
-// the base declaration is dropped, matching how a real lookup would resolve the
-// shadowed member.
+
 Collect_Class_Members :: proc(
 	registry: ^Registry,
 	class_name: string,
@@ -581,7 +714,7 @@ Collect_Class_Members :: proc(
 		return result
 	}
 
-	// Walk root -> leaf so subclasses can shadow inherited names.
+
 	chain: [dynamic]^Class_Info
 	class := descriptor.info
 	for class != nil {
@@ -616,12 +749,13 @@ Collect_Class_Members :: proc(
 }
 
 descriptor_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
+
 	descriptor := cast(^Class_Descriptor)ctx
 	object := cast(^Object)value
 
 	if object == nil {
-		// A detached userdata still has its class descriptor. This lets
-		// callers finish iterating snapshots after destroying a subtree.
+
+
 		if method == "IsA" && descriptor != nil {
 			vm.PushBoolean(L, class_has_name(descriptor.info, vm.ArgString(L, 2)))
 			return 1, true
@@ -635,6 +769,24 @@ descriptor_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) ->
 
 	if !Can_Access_Member(L, descriptor, method, .Call) {
 		return vm.RaiseError(L, "insufficient security capabilities to call this member"), true
+	}
+
+
+	if vm.ThreadIsParallel(L) {
+		if descriptor != nil && descriptor.parallel_namecall != nil {
+			count, handled := descriptor.parallel_namecall(
+				L,
+				object,
+				descriptor.registry.datatypes,
+				descriptor.registry.enums,
+				method,
+			)
+			if handled {return count, true}
+		}
+		if parallel_base_method(method) {
+			return Object_Namecall(L, value, ctx, method)
+		}
+		return vm.RaiseError(L, "method requires task.synchronize()"), true
 	}
 
 	if descriptor.registry != nil && descriptor.registry.network_ownership != nil {
@@ -742,6 +894,9 @@ Register_Class :: proc(
 	construct_with_ctx: Class_Constructor_With_Context = nil,
 	construct_ctx: rawptr = nil,
 	exports: []Class_Export = nil,
+	parallel_get: Class_Getter = nil,
+	parallel_set: Class_Setter = nil,
+	parallel_namecall: Class_Namecall = nil,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
@@ -758,6 +913,9 @@ Register_Class :: proc(
 		get                = get,
 		set                = set,
 		namecall           = namecall,
+		parallel_get       = parallel_get,
+		parallel_set       = parallel_set,
+		parallel_namecall  = parallel_namecall,
 		_step              = _step,
 		_step_phase        = _step_phase,
 		creatable          = creatable,
@@ -799,6 +957,8 @@ Register_Class :: proc(
 
 	append(&registry.classes, descriptor)
 
+	if info.name not_in registry.classes_by_name {registry.classes_by_name[info.name] = descriptor}
+
 	Class_Register_Ancestors(info)
 }
 
@@ -825,19 +985,10 @@ Find_Class :: proc(registry: ^Registry, name: string) -> ^Class_Descriptor {
 		return nil
 	}
 
-	for descriptor in registry.classes {
-		if descriptor.info.name == name {
-			return descriptor
-		}
-	}
-
-	return nil
+	return registry.classes_by_name[name]
 }
 
-// Unregister_Class removes a descriptor registered by Register_Class and frees
-// it. Native extension host code calls this when it unloads a library: every
-// callback stored in the descriptor points into that library, so the descriptor
-// cannot outlive it. Instances of the class must already be destroyed.
+
 Unregister_Class :: proc(registry: ^Registry, descriptor: ^Class_Descriptor) {
 	if registry == nil || descriptor == nil {
 		return
@@ -847,6 +998,16 @@ Unregister_Class :: proc(registry: ^Registry, descriptor: ^Class_Descriptor) {
 		if entry == descriptor {
 			ordered_remove(&registry.classes, index)
 			break
+		}
+	}
+	name := descriptor.info.name
+	if registry.classes_by_name[name] == descriptor {
+		delete_key(&registry.classes_by_name, name)
+		for entry in registry.classes {
+			if entry.info.name == name {
+				registry.classes_by_name[entry.info.name] = entry
+				break
+			}
 		}
 	}
 
@@ -877,7 +1038,7 @@ Clone_Class_State :: proc(
 		return
 	}
 
-	// Copy base-class state first.
+
 	if info.parent != nil {
 		Clone_Class_State(registry, info.parent, source, destination)
 	}
@@ -949,10 +1110,7 @@ Push_New :: proc(
 	return object, true
 }
 
-// Flush_Pending_Destroy frees the native memory of every destroyed Instance.
-// Destroyed objects are kept alive until the next Step so in-flight code that
-// still holds a pointer (guand by the destroyed flag) never reads freed
-// memory.
+
 Flush_Pending_Destroy :: proc(registry: ^Registry) {
 	if registry == nil || len(registry.pending_destroy) == 0 {
 		return
@@ -1004,12 +1162,7 @@ Flush_Pending_Destroy :: proc(registry: ^Registry) {
 	delete(pending)
 }
 
-// ScreenGui.RenderOnTop and StarterGui residency already decide which pass a
-// screen draws in, but nothing ordered screens *within* a pass: they rendered in
-// creation order, so DisplayOrder was accepted, stored, and then ignored. Sort
-// the ScreenGui instances by it so the editor's chrome can be layered above
-// game GUIs. Insertion sort keeps this stable, preserving creation order for
-// equal DisplayOrder values.
+
 Sort_ScreenGui_Instances :: proc(descriptor: ^Class_Descriptor) {
 	if descriptor == nil || len(descriptor.instances) < 2 {
 		return
@@ -1050,6 +1203,7 @@ Step :: proc(
 	phase: Class_Step_Phase = .Render_2D,
 	gui_overlay: bool = false,
 	cache_gui: bool = false,
+	editor_2d_gui_background: bool = false,
 ) {
 	if registry == nil || L == nil {return}
 
@@ -1072,14 +1226,15 @@ Step :: proc(
 	}
 
 	step_context := Class_Step_Context {
-		L               = L,
-		delta_time      = delta_time,
-		renderer        = registry.renderer,
-		data_model      = registry.data_model,
-		viewport_width  = viewport_width,
-		viewport_height = viewport_height,
-		gui_overlay     = gui_overlay,
-		cache_gui       = cache_gui,
+		L                        = L,
+		delta_time               = delta_time,
+		renderer                 = registry.renderer,
+		data_model               = registry.data_model,
+		viewport_width           = viewport_width,
+		viewport_height          = viewport_height,
+		gui_overlay              = gui_overlay,
+		cache_gui                = cache_gui,
+		editor_2d_gui_background = editor_2d_gui_background,
 	}
 
 	for target in targets {
@@ -1106,6 +1261,7 @@ Object_From_Argument :: proc "c" (L: ^vm.State, index: int) -> ^Object {
 
 instance_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
+	if vm.ThreadIsParallel(L) {return vm.RaiseError(L, "Instance.new requires task.synchronize()")}
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 	class_name := vm.ArgString(L, 1)
 
@@ -1149,19 +1305,7 @@ Script_Require_Context_Of :: proc(object: ^Object, mode: target.Mode) -> bool {
 	return false
 }
 
-// A require frame records the ModuleScript whose chunk is currently running on
-// a given thread. Frames are keyed by lua_State because a yield suspends the
-// whole thread, so execution within one thread is strictly nested: the frame a
-// require pushes is always the frame popped when it completes.
-// Require_Frame_Stack is a per-thread stack of the ModuleScripts whose chunks
-// are currently running. Frames are keyed by lua_State because a yield suspends
-// the whole thread, so execution within one thread is strictly nested: the frame
-// a require pushes is the frame popped when that require completes.
-//
-// The registry holds a *pointer* to this struct. Holding the struct inline would
-// let a map rehash copy it, leaving two owners of one backing array. `owner` and
-// `thread` are kept here so that popping needs nothing but the stack itself --
-// require's continuation cannot rely on the registry upvalue.
+
 Require_Frame_Stack :: struct {
 	items:  [dynamic]^Object,
 	depth:  int,
@@ -1169,7 +1313,7 @@ Require_Frame_Stack :: struct {
 	thread: ^vm.State,
 }
 
-// Require_Frame_Stack_For returns the thread's stack, creating it on first use.
+
 Require_Frame_Stack_For :: proc(registry: ^Registry, L: ^vm.State) -> ^Require_Frame_Stack {
 	if stack, ok := registry.require_frames[L]; ok {
 		return stack
@@ -1181,7 +1325,7 @@ Require_Frame_Stack_For :: proc(registry: ^Registry, L: ^vm.State) -> ^Require_F
 	return stack
 }
 
-// Require_Frame_Push records `object` as the module running on this thread.
+
 Require_Frame_Push :: proc(
 	registry: ^Registry,
 	L: ^vm.State,
@@ -1203,7 +1347,7 @@ Require_Frame_Push :: proc(
 	}
 }
 
-// Require_Frame_Pop drops the top frame of the thread's stack.
+
 Require_Frame_Pop :: proc(registry: ^Registry, L: ^vm.State) {
 	if registry == nil {
 		return
@@ -1215,7 +1359,7 @@ Require_Frame_Pop :: proc(registry: ^Registry, L: ^vm.State) {
 	Require_Frame_Pop_Stack(stack)
 }
 
-// Require_Frame_Pop_Stack drops the top frame and releases the stack when empty.
+
 Require_Frame_Pop_Stack :: proc(stack: ^Require_Frame_Stack) {
 	if stack == nil || stack.depth == 0 {
 		return
@@ -1228,12 +1372,7 @@ Require_Frame_Pop_Stack :: proc(stack: ^Require_Frame_Stack) {
 	stack.items[stack.depth] = nil
 }
 
-// Require_Frame_Pop_Owned pops the frame pushed for `object`, if it is on top.
-//
-// The owning stack is reached through the module's own script state, which the
-// continuation already holds, so no registry upvalue is needed. Popping only when
-// the frame is on top keeps this harmless for the cached-result path, which
-// returns before pushing a frame of its own.
+
 Require_Frame_Pop_Owned :: proc(common: ^Script_Common, object: ^Object) {
 	if common == nil || object == nil {
 		return
@@ -1266,7 +1405,7 @@ require_invalidate_object :: proc(common: ^Script_Common, object: ^Object) {
 	common.require_frame_stack = nil
 }
 
-// Forget suspended requires when their owning task is cancelled.
+
 Require_Forget_Thread :: proc(registry: ^Registry, thread: ^vm.State) {
 	if registry == nil || thread == nil {return}
 	delete_key(&registry.require_waiting, thread)
@@ -1286,7 +1425,7 @@ Require_Forget_Thread :: proc(registry: ^Registry, thread: ^vm.State) {
 	free(stack)
 }
 
-// require_walk_children resolves `path` as a chain of child names below `root`.
+
 require_walk_children :: proc(root: ^Object, path: string, relative := false) -> ^Object {
 	target := root
 	remaining := path
@@ -1309,24 +1448,15 @@ require_walk_children :: proc(root: ^Object, path: string, relative := false) ->
 	return target
 }
 
-// require_replace_arg1 swaps the require argument for the resolved Instance.
-//
-// The alias path resolves to an object rather than a string, but require's
-// continuation re-reads argument 1 to identify the module, so the slot has to be
-// overwritten in place instead of pushing a second value.
+
 require_replace_arg1 :: proc(L: ^vm.State, object: ^Object) {
-	// A require invoked from Lua sees only its arguments on the stack, so the
-	// alias slot is the only occupied one here. Clearing and re-pushing overwrites
-	// it in place, which avoids lua_replace -- the vendored Luau build does not
-	// export it.
+
+
 	luauh.lua_settop(L, 0)
 	Push_Object(L, object)
 }
 
-// require_resolve_alias implements the documented require-by-string aliases:
-// `@self/X` names a child of the script that is calling require, and `@game/X`
-// names a child of the DataModel root. Returns false when the alias does not
-// apply or does not resolve, letting the caller fall back.
+
 require_resolve_alias :: proc(L: ^vm.State, registry: ^Registry, path: string) -> bool {
 	if strings.has_prefix(path, "@self/") {
 		caller := Require_Current_Script(registry, L)
@@ -1374,12 +1504,7 @@ require_fallback :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 
 REQUIRE_RESULT_COUNT_ERROR :: "Module code did not return exactly one value"
 
-// require_continuation completes a require that may have suspended.
-//
-// Luau invokes this after the protected call started by require_script
-// finishes, either immediately (the module did not yield) or when the calling
-// thread is resumed (the module yielded via task.wait and friends). It caches
-// the module result and produces require's return value.
+
 require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 	context = tracy.DefaultContext()
 
@@ -1399,7 +1524,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 	common := Script_Common_Of(object)
 	if object == nil || common == nil || !Script_Is_Script(object) {
 		if status != 0 {
-			// Preserve the original error rather than masking it.
+
 			return vm.Reraise(L)
 		}
 		return 1
@@ -1412,7 +1537,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 		return vm.Reraise(L)
 	}
 
-	// Stack layout is [argument 1 (the ModuleScript), ...results].
+
 	result_count := vm.StackTop(L) - 1
 	if result_count != 1 {
 		common.module_state = .Unloaded
@@ -1422,8 +1547,7 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 		)
 	}
 
-	// Retain the module's return value. `lua_ref` returns 0 for nil, which is
-	// still a valid cached result and pushed back as nil on later requires.
+
 	common.module_ref = vm.RetainValue(L)
 	common.module_state = .Loaded
 	return 1
@@ -1431,9 +1555,12 @@ require_continuation :: proc "c" (L: ^vm.State, status: i32) -> i32 {
 
 require_script :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
+	if vm.ThreadIsParallel(
+		L,
+	) {return vm.RaiseError(L, "require must be called in the serial phase")}
 	registry := cast(^Registry)vm.UpvaluePointer(L)
 
-	// Engine-internal modules are addressed by string path ("@internal/...").
+
 	if vm.IsString(L, 1) {
 		path := vm.ArgString(L, 1)
 		if strings.has_prefix(path, "./") || strings.has_prefix(path, "../") {
@@ -1489,9 +1616,7 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 		return vm.RaiseError(L, "require: the script has no script state")
 	}
 
-	// A Script may only be required by a server runtime and a LocalScript only by
-	// a client runtime; ModuleScripts work in both. The check is skipped when the
-	// class registry has no runtime role attached (bare VM harnesses).
+
 	if registry != nil && !Script_Require_Context_Of(object, registry.mode) {
 		describe := Script_Describe(object)
 		defer delete(describe)
@@ -1507,7 +1632,6 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 
 	switch common.module_state {
 	case .Loaded:
-		// Cached result; register 0 represents a cached nil.
 		if common.module_ref > 0 {
 			vm.PushRegistryReference(L, common.module_ref)
 		} else {
@@ -1544,13 +1668,10 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 		return vm.RaiseError(L, "require: the script runtime is unavailable")
 	}
 
-	// Mark as loading before executing so a nested require of the same module
-	// is reported as a circular dependency instead of recursing forever.
+
 	common.module_state = .Loading
 
-	// Luau formats a chunk name that does not start with '=' as
-	// [string "<name"]:<line>; using the instance name keeps required-module
-	// errors readable while the surrounding report names the full path.
+
 	chunk_name := Get_Name(object)
 
 	ok, err := vm.LoadSource(registry.vm_state, L, common.source, chunk_name)
@@ -1564,11 +1685,7 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 		return vm.RaiseError(L, "require: failed to create the ModuleScript environment")
 	}
 
-	// [argument 1 (the ModuleScript), module chunk]
-	//
-	// The frame makes this module the `@self` target while its chunk runs.
-	// require_continuation pops it once the chunk completes, including after a
-	// yield resumes the thread.
+
 	Require_Frame_Push(registry, L, common, object)
 	return vm.CallYieldableProtected(L, 0, vm.MULTIPLE_RESULTS)
 }
@@ -1582,8 +1699,7 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.SetField(vm_state.L, -2, "new")
 	vm.SetGlobalFromStack(vm_state, "Instance")
 
-	// Preserve the stock Luau require (used by the engine's internal module
-	// loader) before replacing the global with the script-aware version.
+
 	_ = vm.GetGlobal(vm_state.L, "require")
 	registry.fallback_require_ref = vm.RetainValue(vm_state.L)
 	vm.Pop(vm_state.L)
@@ -1595,9 +1711,11 @@ Install_Instance_Library :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 
 
 Register_Default_Classes :: proc(registry: ^Registry) {
-	// wire:begin classes
+
 	Register_Instance(registry)
+	Register_Actor(registry)
 	Register_Advanced_Lighting_Effects(registry)
+	Register_AlignOrientation(registry)
 	Register_Animation(registry)
 	Register_AnimationAuthoring(registry)
 	Register_AnimationController(registry)
@@ -1605,9 +1723,11 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Animator(registry)
 	Register_ArcHandles(registry)
 	Register_Attachment(registry)
+	Register_Attachment2D(registry)
 	Register_BallSocketConstraint(registry)
 	Register_BasePart(registry)
 	Register_BaseScript(registry)
+	Register_BillboardGui(registry)
 	Register_BindableEvent(registry)
 	Register_BindableFunction(registry)
 	Register_BlurImageFilter(registry)
@@ -1615,10 +1735,12 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_BoxHandleAdornment(registry)
 	Register_BrickColorValue(registry)
 	Register_Camera(registry)
+	Register_Camera2D(registry)
 	Register_CanvasGroup(registry)
 	Register_CFrameValue(registry)
 	Register_CharacterAnimator(registry)
 	Register_CharacterController(registry)
+	Register_CharacterController2D(registry)
 	Register_CharacterInput(registry)
 	Register_CharacterModel(registry)
 	Register_CharacterMotor(registry)
@@ -1630,10 +1752,12 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Configuration(registry)
 	Register_Constraint(registry)
 	Register_CylinderHandleAdornment(registry)
+	Register_CylindricalConstraint(registry)
 	Register_Decal(registry)
 	Register_DoubleConstrainedValue(registry)
 	Register_EditableImage(registry)
 	Register_EditableMesh(registry)
+	Register_EditableSound(registry)
 	Register_Folder(registry)
 	Register_Frame(registry)
 	Register_GetTextBoundsParams(registry)
@@ -1653,14 +1777,16 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_IntValue(registry)
 	Register_Light(registry)
 	Register_Lighting_Effect(registry)
+	Register_LinearVelocity(registry)
 	Register_LineHandleAdornment(registry)
+	Register_LocalizationTable(registry)
 	Register_LocalScript(registry)
 	Register_MaterialVariant(registry)
 	Register_MeshPart(registry)
 	Register_Model(registry)
-	Register_PhysicsModel(registry)
 	Register_ModuleScript(registry)
 	Register_MovementController(registry)
+	Register_NoCollisionConstraint(registry)
 	Register_NumberRangeValue(registry)
 	Register_NumberSequenceValue(registry)
 	Register_NumberValue(registry)
@@ -1669,12 +1795,13 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Part_Operations(registry)
 	Register_Part2D(registry)
 	Register_ParticleEmitter(registry)
+	Register_PhysicsModel(registry)
+	Register_PlaneConstraint(registry)
 	Register_PointLight(registry)
 	Register_PostProcess(registry)
 	Register_PrismaticConstraint(registry)
 	Register_RayValue(registry)
 	Register_RemoteEvent(registry)
-	Register_UnreliableRemoteEvent(registry)
 	Register_RemoteFunction(registry)
 	Register_RigidBody2D(registry)
 	Register_RodConstraint(registry)
@@ -1683,12 +1810,16 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_ScreenGui(registry)
 	Register_Script(registry)
 	Register_ScrollingFrame(registry)
+	Register_Shape2D(registry)
+	Register_Sky(registry)
 	Register_SoftBody(registry)
 	Register_Sound(registry)
 	Register_SpawnLocation(registry)
+	Register_SpecialMesh(registry)
 	Register_SphereHandleAdornment(registry)
 	Register_SpotLight(registry)
 	Register_SpringConstraint(registry)
+	Register_Sprite2D(registry)
 	Register_StateMachine(registry)
 	Register_StringValue(registry)
 	Register_StudioTheme(registry)
@@ -1698,6 +1829,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_TextBox(registry)
 	Register_TextButton(registry)
 	Register_TextLabel(registry)
+	Register_Trigger2D(registry)
 	Register_UIBackdrop(registry)
 	Register_UICorner(registry)
 	Register_UIDragDetector(registry)
@@ -1714,14 +1846,19 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_UISizeConstraint(registry)
 	Register_UISquircle(registry)
 	Register_UIStroke(registry)
+	Register_UniversalConstraint(registry)
+	Register_UnreliableRemoteEvent(registry)
 	Register_ValueBase(registry)
 	Register_Vector2Value(registry)
 	Register_Vector3Value(registry)
 	Register_VectorForce(registry)
 	Register_ViewportFrame(registry)
+	Register_Volumetric_Lighting_Effects(registry)
 	Register_Water(registry)
 	Register_WeldConstraint(registry)
-	// wire:end classes
+	Register_World2D(registry)
+	Register_WorldObject2D(registry)
+
 }
 
 Registry_Destroy :: proc(registry: ^Registry) {
@@ -1733,6 +1870,8 @@ Registry_Destroy :: proc(registry: ^Registry) {
 		Gui_Layout_Mark_Dirty()
 	}
 
+	delete(registry.classes_by_name)
+	registry.classes_by_name = nil
 	for descriptor in registry.classes {
 		delete(descriptor.instances)
 		delete(descriptor.properties)
@@ -1760,9 +1899,7 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil
 
-	// Require frame stacks are released here rather than when a frame is popped:
-	// a stack can still be referenced by a script that has not finished, so
-	// freeing it eagerly is a use-after-free.
+
 	for _, stack in registry.require_frames {
 		if stack != nil {
 			delete(stack.items)

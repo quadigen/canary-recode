@@ -42,7 +42,8 @@ sound.Playing = false
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
 | `SoundId` | `string` | Read/write | `""` | Asset path of the audio to play. Changing it reloads the sound. |
-| `AudioContent` | `Content` | Read/write | Empty | Inline audio content, used when `SoundId` is empty. |
+| `AudioContent` | `Content` | Read/write | Empty | Audio URI or object-backed editable sound content. |
+| `EditableSound` | `EditableSound?` | Read/write | `nil` | Generated audio source. Assigning one clears `SoundId`. |
 | `IsLoaded` | `boolean` | Read-only | `false` | Whether the audio stream has loaded. |
 | `IsPlaying` | `boolean` | Read-only | `false` | Whether the stream is actively playing. |
 | `IsPaused` | `boolean` | Read-only | `true` | Whether playback is paused. |
@@ -70,7 +71,7 @@ sound.Playing = false
 
 If loading fails, `Play()` returns without starting playback and `IsPlaying` stays `false`. Treat a silent sound as a missing or unreadable asset rather than assuming the call worked.
 
-`AudioContent` is an alternative for audio that ships inline. It's only consulted when `SoundId` is empty.
+`AudioContent` accepts a URI when `SoundId` is empty. To play generated audio, assign `EditableSound` or `AudioContent = Content.fromObject(clip)`; either clears the previous `SoundId`. After modifying a clip, stop and play again to use its latest samples.
 
 ## Methods
 
@@ -108,11 +109,11 @@ Looped sounds don't fire `Ended` when they wrap around; they keep playing until 
 
 ## Notes
 
-- The class metadata also lists `DidLoop`, `Loaded`, `Paused`, `Played`, `Resumed`, and `Stopped`, but those signals aren't exposed by the current implementation.
+- The following events are not currently available in Luau: `DidLoop`, `Loaded`, `Paused`, `Played`, `Resumed`, and `Stopped`.
 - `RollOffMode` appears in the property metadata but isn't readable or writable through the current property accessors.
-- Assigning `TimePosition` stores a new position but doesn't seek the loaded stream in this implementation. Restart the sound instead if you need to jump.
-- `PlayOnRemove` is stored and readable, but nothing acts on it when the sound is removed in the current implementation.
-- Cloning a sound copies its path, volume, speed, looping, and region settings, and it starts in the same playback state as the original.
+- Assigning `TimePosition` seeks a loaded editable sound. For file-backed audio it only stores a position.
+- `PlayOnRemove` is stored and readable, but removing a sound doesn't trigger playback.
+- Cloning a sound copies its path, volume, speed, looping, and region settings, and it starts in the same playback state as the original. An editable source is shared by a cloned Sound, but the clone starts stopped.
 
 ## See also
 

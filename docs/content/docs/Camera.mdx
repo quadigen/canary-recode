@@ -37,7 +37,7 @@ The default camera uses free-cam movement while it has no subject. Set `CameraSu
 
 `FieldOfView` clamps instead of raising, so assigning `200` stores `120`. `Pitch` clamps to roughly ±1.553 radians, which keeps the camera from flipping over.
 
-Setting `CFrame` also updates `Pitch` and `Yaw` from the rotation. Reading `CFrame` returns the transform the renderer will use, so it's the authoritative position even when the camera is following a subject.
+Setting `CFrame` also updates `Pitch` and `Yaw` from the rotation. Reading `CFrame` returns the transform used to display the scene, so it's the authoritative position even when the camera is following a subject.
 
 ## Camera types
 
@@ -55,6 +55,8 @@ camera.CameraType = Enum.CameraType.Shoulder
 `InputEnabled = false` stops built-in mouse look and movement. That's the usual choice when you drive `CFrame` yourself each frame.
 
 ## Methods
+
+`GetRenderCFrame(): CFrame` returns the camera's current `CFrame`.
 
 | Signature | Description |
 | --- | --- |

@@ -4,21 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-ObjectValue_Class := Class_Info{
+ObjectValue_Class := Class_Info {
 	name   = "ObjectValue",
 	parent = &ValueBase_Class,
 }
 
 ObjectValue :: struct {
 	using object: Object,
-
-	value: ^Object,
+	value:        ^Object,
 }
 
 ObjectValue_Init :: proc() -> ObjectValue {
-	return ObjectValue{
-		object = Object_Init(&ObjectValue_Class),
-	}
+	return ObjectValue{object = Object_Init(&ObjectValue_Class)}
 }
 
 ObjectValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -95,6 +92,7 @@ Register_ObjectValue :: proc(registry: ^Registry) {
 		ObjectValue_construct,
 		ObjectValue_destroy,
 		get = ObjectValue_get,
+		parallel_get = ObjectValue_get,
 		set = ObjectValue_set,
 		clone = ObjectValue_clone,
 		properties = []string{"Value"},

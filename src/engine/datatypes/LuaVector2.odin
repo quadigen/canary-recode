@@ -3,6 +3,7 @@ package datatypes
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 push_vector2 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Vector2) {
 	push_value(L, binding, value)
@@ -45,7 +46,7 @@ vector2_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushNumber(L, f64(Vec2_Magnitude(vector^)))
 	case "Unit":
 		push_vector2(L, cast(^vm.Userdata_Binding)ctx, Vec2_Unit(vector^))
-	case "Cross", "Dot", "FuzzyEq", "Lerp":
+	case "Cross", "Dot", "FuzzyEq", "Lerp", "Abs", "Ceil", "Floor", "Sign", "Angle", "Max", "Min":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -57,6 +58,43 @@ vector2_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i
 	vector := cast(^Vector2)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	switch method {
+	case "Abs":
+		push_vector2(L, binding, Vector2{math.abs(vector.X), math.abs(vector.Y)})
+		return 1, true
+	case "Ceil":
+		push_vector2(L, binding, Vector2{math.ceil(vector.X), math.ceil(vector.Y)})
+		return 1, true
+	case "Floor":
+		push_vector2(L, binding, Vector2{math.floor(vector.X), math.floor(vector.Y)})
+		return 1, true
+	case "Sign":
+		push_vector2(
+			L,
+			binding,
+			Vector2 {
+				f32(int(vector.X > 0) - int(vector.X < 0)),
+				f32(int(vector.Y > 0) - int(vector.Y < 0)),
+			},
+		)
+		return 1, true
+	case "Angle":
+		other := require_vector2(L, 2, binding)^
+		angle := math.atan2(Vec2_Cross(vector^, other), Vec2_Dot(vector^, other))
+		if !vm.ArgOptionalBoolean(L, 3, false) {angle = math.abs(angle)}
+		vm.PushNumber(L, f64(angle))
+		return 1, true
+	case "Max", "Min":
+		result := vector^
+		for i in 2 ..= vm.StackTop(L) {
+			other := require_vector2(L, i, binding)^
+			if method == "Max" {
+				result = Vector2{max(result.X, other.X), max(result.Y, other.Y)}
+			} else {
+				result = Vector2{min(result.X, other.X), min(result.Y, other.Y)}
+			}
+		}
+		push_vector2(L, binding, result)
+		return 1, true
 	case "Cross":
 		other := require_vector2(L, 2, binding)
 		vm.PushNumber(L, f64(Vec2_Cross(vector^, other^)))

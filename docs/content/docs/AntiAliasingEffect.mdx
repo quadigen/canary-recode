@@ -37,9 +37,9 @@ aa.SampleCount = 4
 | `MSAA` | `boolean` | Read/write | `false` | Enables multisample anti-aliasing. |
 | `SampleCount` | `number` | Read/write | `4` | Multisample count, clamped between `1` and `8`. |
 
-The flags are independent. Enabling more than one asks the renderer to combine them; the visual result and cost depend on the backend. `SampleCount` is truncated to a whole number before use.
+The flags are independent. You can enable more than one, but the visual result and performance cost vary by platform. `SampleCount` is truncated to a whole number before use.
 
-When `Enabled` is false, the renderer receives all three flags as false and a sample count of `1`, regardless of the stored values.
+When `Enabled` is false, all three effects are disabled and rendering uses a single sample, regardless of the stored values.
 
 ## Choosing a technique
 

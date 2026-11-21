@@ -2,6 +2,7 @@ package datatypes
 
 import tracy "../util/odin-tracy"
 import "core:fmt"
+import "core:math"
 
 import vm "../vm"
 
@@ -19,6 +20,22 @@ Arg_Content :: proc(L: ^vm.State, index: int, registry: ^Registry) -> Content {
 		return Content{}
 	}
 	return (cast(^Content)vm.UserdataValue(L, index))^
+}
+
+content_from_asset_id :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	id := vm.ArgNumber(L, 1)
+	if math.is_nan(id) || math.is_inf(id) {return vm.RaiseError(L, "asset ID must be finite")}
+	if id == 0 {push_content(L, binding_from_upvalue(L), {}); return 1}
+	if id != math.floor(id) ||
+	   id < 0 ||
+	   id >= 9.223372036854776e18 {return vm.RaiseError(L, "invalid asset ID")}
+	push_content(
+		L,
+		binding_from_upvalue(L),
+		Content_From_URI(fmt.tprintf("rbxassetid://%d", i64(id))),
+	)
+	return 1
 }
 
 content_from_uri :: proc "c" (L: ^vm.State) -> i32 {
@@ -113,6 +130,7 @@ Content_Luau_Binding :: proc() -> vm.Userdata_Binding {
 }
 
 Content_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
+	add_library_function(L, binding, "fromAssetId", content_from_asset_id)
 	add_library_function(L, binding, "fromUri", content_from_uri)
 	add_library_function(L, binding, "fromObject", content_from_object)
 }

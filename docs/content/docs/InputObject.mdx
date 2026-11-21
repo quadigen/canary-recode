@@ -32,6 +32,24 @@ end)
 
 `Position` and `Delta` are `Vector3` values. Using the x and y components is correct for screen input; the z component isn't meaningful for pointer events.
 
+## Methods
+
+### IsModifierKeyDown
+
+```lua
+IsModifierKeyDown(modifier: Enum.ModifierKey): boolean
+```
+
+Checks whether Shift, Ctrl, Alt, or Meta was down when this input object was created.
+
+```lua
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.S and input:IsModifierKeyDown(Enum.ModifierKey.Ctrl) then
+        print("Save")
+    end
+end)
+```
+
 ## Notes
 
 - `InputObject` isn't creatable with `Instance.new()`; the engine creates it for input events.

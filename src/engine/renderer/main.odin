@@ -2,8 +2,8 @@
 package renderer
 
 import "core:fmt"
-import "core:time"
 import "core:strings"
+import "core:time"
 
 import kineffi "../bindings"
 import sdl3 "../platform"
@@ -35,6 +35,22 @@ when !KINE_RENDERER_GL {
 			state.depth -= 1
 			tracy.ZoneEnd(state.zones[state.depth])
 		}
+	}
+
+
+	Overlay_Backdrop_Preparation :: struct {
+		renderer: ^RendererObject,
+		required: bool,
+	}
+
+	prepare_overlay_backdrop :: proc "c" (user: rawptr) {
+		context = tracy.DefaultContext()
+		state := cast(^Overlay_Backdrop_Preparation)user
+		tracy.ZoneNC("Overlay Backdrop Preparation", 0x56B6C2)
+		state.required =
+			state.renderer.DrawOverlay != nil &&
+			(state.renderer.OverlayNeedsBackdrop == nil ||
+					state.renderer.OverlayNeedsBackdrop(state.renderer.UserData))
 	}
 
 	Filament_Context :: kineffi.KineFilamentContext
@@ -233,7 +249,10 @@ when !KINE_RENDERER_GL {
 			return
 		}
 		defer sdl3.DestroyWindow(window)
-		fmt.eprintf("[Startup] SDL window created: %.1f ms after renderer entry\n", time.duration_milliseconds(time.tick_since(startup_started)))
+		fmt.eprintf(
+			"[Startup] SDL window created: %.1f ms after renderer entry\n",
+			time.duration_milliseconds(time.tick_since(startup_started)),
+		)
 		_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
 
 		filament := kineffi.Kine_Filament_CreateForVulkanCompositorWindow(window, width, height)
@@ -281,7 +300,7 @@ when !KINE_RENDERER_GL {
 					has_event = false
 					coalesce_motion := event.type == .MOUSE_MOTION && target.is_editor()
 					if coalesce_motion {
-						// Preserve total relative motion and stop at intervening input.
+
 						for poll_sdl_event(&next) {
 							if next.type != .MOUSE_MOTION ||
 							   next.motion.windowID != event.motion.windowID ||
@@ -305,9 +324,14 @@ when !KINE_RENDERER_GL {
 					renderer.CurrentEvent = &event
 					defer renderer.CurrentEvent = nil
 					#partial switch event.type {
-					case .QUIT, .WINDOW_CLOSE_REQUESTED:
+					case .QUIT:
 						if renderer.CanClose == nil ||
 						   renderer.CanClose(renderer.UserData) {running = false}
+					case .WINDOW_CLOSE_REQUESTED:
+						if event.window.windowID == sdl3.GetWindowID(window) &&
+						   (renderer.CanClose == nil || renderer.CanClose(renderer.UserData)) {
+							running = false
+						}
 					case .KEY_DOWN:
 						if renderer.KeyDown != nil {
 							renderer.KeyDown(event.key.scancode)
@@ -317,7 +341,7 @@ when !KINE_RENDERER_GL {
 							renderer.KeyUp(event.key.scancode)
 						}
 					case .WINDOW_DESTROYED:
-						running = false
+						if event.window.windowID == sdl3.GetWindowID(window) {running = false}
 					case .MOUSE_BUTTON_DOWN:
 						if renderer.MouseClick != nil {
 							renderer.MouseClick(event.button)
@@ -450,7 +474,7 @@ when !KINE_RENDERER_GL {
 				}
 			}
 
-			// The compositor submits Skia before handing off to Filament or presenting.
+
 			renderer.SkiaSurface = nil
 			apply_viewport_rect(renderer)
 
@@ -461,13 +485,16 @@ when !KINE_RENDERER_GL {
 			   !renderer.Render3DCheck(renderer.UserData) {
 				world_3d = false
 			}
-			// An active XR session alone does not guarantee Filament will draw
-			// anything to the desktop swapchain (e.g. the project picker).
+
+
 			rendered_3d := world_3d || kineffi.Kine_Filament_Viewport_HasWork(filament)
 			when ODIN_OS == .Linux && !#config(KINE_ANDROID, false) {
 				if xr_active && !rendered_3d {
 					kineffi.Kine_Filament_XR_IdleFrame(filament)
 				}
+			}
+			backdrop_preparation := Overlay_Backdrop_Preparation {
+				renderer = renderer,
 			}
 			if rendered_3d {
 				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
@@ -479,10 +506,22 @@ when !KINE_RENDERER_GL {
 						filament_profile_callback,
 						&frame_profile,
 					)
-					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+					kineffi.Kine_Filament_Viewport_RenderFrameWithCpuWork(
+						filament,
+						delta_time,
+						world_3d,
+						prepare_overlay_backdrop,
+						&backdrop_preparation,
+					)
 					kineffi.Kine_Filament_SetFrameProfileCallback(filament, nil, nil)
 				} else {
-					kineffi.Kine_Filament_Viewport_RenderFrame(filament, delta_time, world_3d)
+					kineffi.Kine_Filament_Viewport_RenderFrameWithCpuWork(
+						filament,
+						delta_time,
+						world_3d,
+						prepare_overlay_backdrop,
+						&backdrop_preparation,
+					)
 				}
 			}
 
@@ -498,13 +537,10 @@ when !KINE_RENDERER_GL {
 				if overlay_surface != nil {
 					skia_overlay := cast(^kineffi.KineSkiaSurface)overlay_surface
 					needs_backdrop :=
-						overlay_surface != base_surface &&
-						(renderer.OverlayNeedsBackdrop == nil ||
-								renderer.OverlayNeedsBackdrop(renderer.UserData))
+						backdrop_preparation.required if rendered_3d else (renderer.OverlayNeedsBackdrop == nil || renderer.OverlayNeedsBackdrop(renderer.UserData))
 					if needs_backdrop {
-						// The overlay wraps the swapchain image after Filament has
-						// rendered the 3D scene. Snapshot it before UI draws so
-						// UIBackdrop effects can sample the scene behind them.
+
+
 						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
 							skia_overlay,
 							skia_overlay if rendered_3d else cast(^kineffi.KineSkiaSurface)base_surface,
@@ -560,18 +596,21 @@ when !KINE_RENDERER_GL {
 			if !present_ok {
 				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 				fmt.eprintf("Vulkan presentation failed: %s\n", error)
-				// Check if this is a resize request, otherwise delay and retry
+
 				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
 					continue
 				}
-				// Don't immediately exit - try to recover for transient errors
+
 				previous_ticks = sdl3.GetTicksNS()
 				sdl3.Delay(10)
 				continue
 			}
 			if first_frame {
 				first_frame = false
-				fmt.eprintf("[Startup] first frame presented: %.1f ms after renderer entry\n", time.duration_milliseconds(time.tick_since(startup_started)))
+				fmt.eprintf(
+					"[Startup] first frame presented: %.1f ms after renderer entry\n",
+					time.duration_milliseconds(time.tick_since(startup_started)),
+				)
 			}
 			renderer.Ready = true
 			renderer.SkiaSurface = nil

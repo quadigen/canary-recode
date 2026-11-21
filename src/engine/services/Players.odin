@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -432,6 +432,74 @@ Players_Remove :: proc(service: ^Players, L: ^vm.State, player: ^Player) {
 	classes.Destroy_Hierarchy(&player.object)
 }
 
+players_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "LocalPlayer", "GetPlayers", "GetPlayerByUserId", "GetPlayerFromCharacter":
+		return players_get(L, object, d, e, key)
+	}
+	return false
+}
+
+players_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "GetPlayers", "GetPlayerByUserId", "GetPlayerFromCharacter":
+		return players_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
+player_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "UserId",
+	     "DisplayName",
+	     "WalkSpeed",
+	     "JumpPower",
+	     "Character",
+	     "DistanceFromCharacter",
+	     "GetNetworkPing":
+		return player_get(L, object, d, e, key)
+	}
+	return false
+}
+
+player_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "DistanceFromCharacter", "GetNetworkPing":
+		return player_namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_Players_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
@@ -440,8 +508,10 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		player_destroy,
 		creatable = false,
 		get = player_get,
+		parallel_get = player_parallel_get,
 		set = player_set,
 		namecall = player_namecall,
+		parallel_namecall = player_parallel_namecall,
 		methods = []string {
 			"LoadCharacter",
 			"GetMouse",
@@ -468,7 +538,9 @@ Register_Players_Class :: proc(registry: ^classes.Registry) {
 		players_destroy,
 		creatable = false,
 		get = players_get,
+		parallel_get = players_parallel_get,
 		namecall = players_namecall,
+		parallel_namecall = players_parallel_namecall,
 		events = []string{"PlayerAdded", "PlayerRemoving"},
 		methods = []string{"GetPlayers", "GetPlayerByUserId", "GetPlayerFromCharacter"},
 		properties = []string{"LocalPlayer"},

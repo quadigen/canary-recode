@@ -1,0 +1,82 @@
+---
+title: MemoryStoreService
+description: Store temporary data and coordinate jobs within a running Kinemium game.
+---
+
+`MemoryStoreService` provides in-memory hash maps, sorted maps, and priority queues. Data expires automatically after its configured lifetime and is discarded when the runtime closes. Use it for temporary caches, scores, and work queues.
+
+```lua
+local MemoryStoreService = game:GetService("MemoryStoreService")
+local cache = MemoryStoreService:GetHashMap("PlayerCache")
+
+cache:SetAsync("player:42", { coins = 100 }, 60)
+local data = cache:GetAsync("player:42")
+```
+
+This is a local implementation: data is shared by handles in the same running game, not between independent server processes. It is not persistent. Access from client or editor runtimes is denied. Call it from the synchronized Luau execution phase.
+
+## Service methods
+
+| Method | Returns |
+| --- | --- |
+| `GetHashMap(name)`, `GetMap(name)` | Named hash map |
+| `GetSortedMap(name)` | Named sorted map |
+| `GetQueue(name, invisibilityTimeout?)` | Named queue; default timeout is 30 seconds |
+
+The legacy aliases `CreateHashMap`, `CreateMemoryStore`, `CreateSortedMap`, `CreateMemoryQueue`, and `CreateQueue` are also supported. Containers of different kinds do not share data, even when their names match. You cannot change a queue's invisibility timeout after its creation.
+
+## Maps
+
+| Method | Behavior |
+| --- | --- |
+| `GetAsync(key)` | Returns a copy of the value, or nil if missing or expired. Sorted maps also return the sort key when present. |
+| `SetAsync(key, value, expiration, sortKey?)` | Stores a value and returns true. The optional sort key applies only to sorted maps. |
+| `UpdateAsync(key, transform, expiration)` | Invokes a synchronous transform with the current value (and sort key for sorted maps), then stores and returns its results. Returning nil cancels the update. |
+| `RemoveAsync(key)` | Removes a live entry and returns whether it existed. |
+| `GetSizeAsync()` | Returns the live entry count. |
+
+Transform callbacks must not yield or access the same container recursively, including through other handles. Values are copied at write and read time, so mutating a table outside a transform does not change stored data.
+
+### Sorted maps
+
+```lua
+local scores = game:GetService("MemoryStoreService"):GetSortedMap("RoundScores")
+
+scores:SetAsync("player:42", { wins = 5 }, 120, 500)
+local top = scores:GetRangeAsync(Enum.SortDirection.Descending, 10)
+```
+
+`GetRangeAsync(direction, count, exclusiveLowerBound?, exclusiveUpperBound?)` returns an array of records containing `key`, `value`, and `sortKey` when set. Count must be between 1 and 200. Sort keys may be finite numbers or strings; unset keys sort before numbers, numbers before strings. Equal sort keys are ordered by entry key. Bounds are tables containing `key` and optional `sortKey`; they exclude the matching position in ascending order regardless of traversal direction.
+
+## Queues
+
+```lua
+local jobs = game:GetService("MemoryStoreService"):GetQueue("Jobs", 30)
+jobs:AddAsync({ name = "generate" }, 120, 10)
+
+local batch, receipt = jobs:ReadAsync(1, false, 0)
+if receipt then
+    -- Successfully process the batch before acknowledging it.
+    jobs:RemoveAsync(receipt)
+end
+```
+
+| Method | Behavior |
+| --- | --- |
+| `AddAsync(value, expiration, priority?)` | Enqueues a copy of the value. Higher priority is read first, with FIFO ordering for equal priorities. |
+| `ReadAsync(count, allOrNothing?, waitTimeout?)` | Returns an array of up to 100 values and a receipt, or an empty array and nil when unavailable. Reads are nonblocking; the wait timeout must be zero. |
+| `RemoveAsync(receipt)` | Acknowledges a batch. Returns false for invalid, wrong-queue, or expired receipts. |
+| `GetSizeAsync()` | Returns the live item count, including invisible items. |
+
+Read items are temporarily invisible to other readers; unacknowledged items can be read again when that timeout expires, until the item's expiration. A zero invisibility timeout allows immediate redelivery. A receipt from a previous delivery becomes invalid after the item is delivered again.
+
+## Limits and errors
+
+- Up to 128 named containers per runtime and 4,096 entries per container.
+- A 32 KiB per-value accounting budget and a 32 MiB aggregate accounting budget, including approximate in-memory entry overhead. These are not exact process-RAM limits.
+- Names and keys must be nonempty strings of at most 128 bytes.
+- Expiration is a positive number of seconds, at most 45 days. Queue invisibility is between 0 and 43,200 seconds.
+- Supported values include finite numbers, strings, booleans, and nested tables with string (no NUL bytes) or signed 32-bit integer keys. Unsupported values, excessively deep or cyclic tables, and requests exceeding limits raise errors.
+- Expired entries are reclaimed during container access and under memory pressure; there is no background expiration worker.
+
+Cross-server storage and blocking queue reads are not implemented.

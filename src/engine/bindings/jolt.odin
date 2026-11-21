@@ -6,8 +6,10 @@ when ODIN_OS == .JS {
 	foreign import lib {"../../../vendor/build/lib/kine_jolt.lib", "../../../vendor/build/lib/kine_jolt_core.lib"}
 } else when #config(KINE_ANDROID, false) {
 	foreign import lib "../../../build/android-native/lib/libJoltWrapper.a"
+} else when ODIN_OS == .Linux {
+	foreign import lib {"../../../vendor/build/lib/KinemiumLibs.a", "system:stdc++", "system:m", "system:pthread"}
 } else {
-	foreign import lib "../../../vendor/build/lib/KinemiumLibs.a"
+	foreign import lib {"../../../vendor/build/lib/KinemiumLibs.a", "system:c++"}
 }
 
 JPH_Vec3 :: struct {
@@ -410,7 +412,7 @@ foreign lib {
 	JPH_MeshSoftBody_Read :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, vertices: [^]JPH_Vec3, vertex_count: u32, position: ^JPH_RVec3, rotation: ^JPH_Quat) -> i32 ---
 	JPH_MeshSoftBody_ApplyImpulse :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, impulse: ^JPH_Vec3) ---
 	JPH_MeshSoftBody_RetainShape :: proc(system: JPH_PhysicsSystemRef, body_id: JPH_BodyID, strength, delta_time: f32) ---
-	JPH_MeshSoftBody_Collide :: proc(system: JPH_PhysicsSystemRef, bodies: [^]JPH_SoftBodyCollider, count: u32, rigid_bodies: [^]JPH_BodyID, rigid_count: u32, delta_time: f32, deformable_capsule_layer: JPH_ObjectLayer, on_contact: proc "c" (u32, JPH_BodyID, rawptr), user_data: rawptr) ---
+	JPH_MeshSoftBody_Collide :: proc(system: JPH_PhysicsSystemRef, bodies: [^]JPH_SoftBodyCollider, count: u32, rigid_bodies: [^]JPH_BodyID, rigid_count: u32, delta_time: f32, deformable_capsule_layer: JPH_ObjectLayer, on_contact: proc "c" (_: u32, _: JPH_BodyID, _: rawptr), user_data: rawptr) ---
 	JPH_PhysicsSystem_SetContactListener :: proc(system: JPH_PhysicsSystemRef, listener: JPH_ContactListenerRef) ---
 	JPH_PhysicsSystem_GetMaxBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
 	JPH_PhysicsSystem_GetNumBodies :: proc(system: JPH_PhysicsSystemRef) -> u32 ---
@@ -578,6 +580,7 @@ foreign lib {
 	JPH_MotionProperties_GetInverseMass :: proc(motionProperties: JPH_MotionPropertiesRef) -> f32 ---
 
 
+	JPH_ContactListener_SetExcludedPairs :: proc(listener: JPH_ContactListenerRef, bodyInterface: JPH_BodyInterfaceRef, pairs: ^JPH_BodyID, count: u32) ---
 	JPH_ContactListener_Create :: proc() -> JPH_ContactListenerRef ---
 	JPH_ContactListener_Destroy :: proc(listener: JPH_ContactListenerRef) ---
 	JPH_ContactListener_PollEvents :: proc(listener: JPH_ContactListenerRef, procs: ^JPH_ContactListener_Procs, maxEvents: u32) -> u32 ---

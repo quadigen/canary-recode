@@ -15,7 +15,27 @@ material {
         { type : float, name : radius },
         { type : float, name : bias },
         { type : int, name : sampleCount },
-        { type : float, name : maxDistance }
+        { type : float, name : maxDistance },
+        { type : float3, name : cameraPosition },
+        { type : float3, name : cameraRight },
+        { type : float3, name : cameraUp },
+        { type : float3, name : cameraForward },
+        { type : float3, name : sunDirection },
+        { type : float, name : sunStrength },
+        { type : float, name : fogDensity },
+        { type : float, name : fogHeight },
+        { type : float, name : fogFalloff },
+        { type : float, name : fogDistance },
+        { type : float, name : fogAnisotropy },
+        { type : float, name : fogScattering },
+        { type : float, name : fogNoise },
+        { type : float, name : fogNoiseScale },
+        { type : int, name : fogSteps },
+        { type : float3, name : fogColor },
+        { type : float, name : chromatic },
+        { type : float, name : grain },
+        { type : float, name : grainSize },
+        { type : float, name : effectTime }
     ]
 }
 fragment {
@@ -32,6 +52,19 @@ fragment {
         vec3 d = p - viewPosition(uv - vec2(0.0,t.y));
         vec3 n = normalize(cross(dot(a,a) < dot(b,b) ? a : b, dot(c,c) < dot(d,d) ? c : d));
         return dot(n,-p) < 0.0 ? -n : n;
+    }
+    float fogHash(vec3 p) {
+        p = fract(p * 0.1031);
+        p += dot(p, p.yzx + 33.33);
+        return fract((p.x + p.y) * p.z);
+    }
+    float fogNoiseAt(vec3 p) {
+        vec3 i=floor(p), f=fract(p);
+        f=f*f*(3.0-2.0*f);
+        return mix(mix(mix(fogHash(i),fogHash(i+vec3(1,0,0)),f.x),
+                       mix(fogHash(i+vec3(0,1,0)),fogHash(i+vec3(1,1,0)),f.x),f.y),
+                   mix(mix(fogHash(i+vec3(0,0,1)),fogHash(i+vec3(1,0,1)),f.x),
+                       mix(fogHash(i+vec3(0,1,1)),fogHash(i+vec3(1,1,1)),f.x),f.y),f.z);
     }
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
@@ -73,6 +106,39 @@ fragment {
             // not a blur of neighboring display pixels.
             color += bounce * sqrt(max(color,vec3(0.0)));
         }
-        material.baseColor = vec4(color,1.0);
+        if (materialParams.fogDensity > 0.0) {
+            vec3 d = normalize(p);
+            vec3 ray = normalize(materialParams.cameraRight*d.x + materialParams.cameraUp*d.y - materialParams.cameraForward*d.z);
+            float distance = min(length(p), materialParams.fogDistance);
+            float stepLen = distance / float(materialParams.fogSteps);
+            float transmittance = 1.0;
+            vec3 inscatter = vec3(0.0);
+            float g = materialParams.fogAnisotropy;
+            float cosTheta = dot(ray, normalize(materialParams.sunDirection));
+            float phase = (1.0-g*g) / pow(max(0.01, 1.0+g*g-2.0*g*cosTheta), 1.5);
+            for (int i=0;i<64;i++) {
+                if (i>=materialParams.fogSteps || transmittance<0.005) break;
+                vec3 world = materialParams.cameraPosition + ray * (float(i)+0.5)*stepLen;
+                float heightDensity = exp(-max(world.y-materialParams.fogHeight,0.0)*materialParams.fogFalloff);
+                float n = fogNoiseAt(world*materialParams.fogNoiseScale + vec3(materialParams.effectTime*0.04,0,0));
+                float density = materialParams.fogDensity*heightDensity*mix(1.0, n*1.6, materialParams.fogNoise);
+                float extinction = exp(-density*stepLen);
+                vec3 lighting = materialParams.fogColor*(0.45+materialParams.fogScattering*materialParams.sunStrength*phase*0.25);
+                inscatter += transmittance*(1.0-extinction)*lighting;
+                transmittance *= extinction;
+            }
+            color = color*transmittance + inscatter;
+        }
+        if (materialParams.chromatic > 0.0) {
+            vec2 offset = (uv-0.5)*dot(uv-0.5,uv-0.5)*materialParams.chromatic*0.12;
+            vec3 center = texture(materialParams_inputTexture,uv).rgb;
+            color.r += texture(materialParams_inputTexture,clamp(uv+offset,0.0,1.0)).r-center.r;
+            color.b += texture(materialParams_inputTexture,clamp(uv-offset,0.0,1.0)).b-center.b;
+        }
+        if (materialParams.grain > 0.0) {
+            vec2 pixel = floor(uv/materialParams.texel/materialParams.grainSize);
+            color += (fogHash(vec3(pixel, floor(materialParams.effectTime*24.0)))-0.5)*materialParams.grain;
+        }
+        material.baseColor = vec4(max(color,vec3(0.0)),1.0);
     }
 }

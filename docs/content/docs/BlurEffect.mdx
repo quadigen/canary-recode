@@ -3,7 +3,7 @@ title: BlurEffect
 description: Soften the whole scene with a controllable blur.
 ---
 
-`BlurEffect` blurs the rendered scene. In the current renderer its settings feed the bloom pass rather than a separate blur pass, which makes it useful as a low-cost soft-focus effect when you don't want a full bloom setup.
+`BlurEffect` blurs the rendered scene. It currently produces a bloom-like soft focus rather than a separate full-screen blur.
 
 `BlurEffect` inherits from `LightingEffect`, so it has `Enabled`. It has to be a child of `Lighting`.
 

@@ -302,7 +302,8 @@ TextLabel_Set_Font_Memory :: proc(label: ^TextLabel, data: []u8) -> bool {
 	return true
 }
 
-TextLabel_Set_Font_Family :: proc(label: ^TextLabel, family: string) {
+TextLabel_Set_Font_Family :: proc(label: ^TextLabel, requested_family: string) {
+	family := TextLabel_Normalize_Font_Family(requested_family)
 	if label == nil {
 		return
 	}
@@ -471,8 +472,104 @@ TextLabel_Font_Enum_To_Family :: proc(font: enums.Font) -> string {
 	}
 }
 
-TextLabel_Font_Enum_From_Family :: proc(family: string) -> enums.Font {
+
+TextLabel_Normalize_Font_Family :: proc(family: string) -> string {
 	switch family {
+	case "Montserrat-Regular", "Montserrat-Regular.ttf":
+		return "builtin://fonts/Montserrat-Regular.ttf"
+	case "Montserrat-Bold", "Montserrat-Bold.ttf":
+		return "builtin://fonts/Montserrat-Bold.ttf"
+	case "Montserrat-Medium", "Montserrat-Medium.ttf":
+		return "builtin://fonts/Montserrat-Medium.ttf"
+	case "Montserrat-Black", "Montserrat-Black.ttf":
+		return "builtin://fonts/Montserrat-Black.ttf"
+	case "SourceSans3-Regular", "SourceSans3-Regular.ttf":
+		return "builtin://fonts/SourceSans3-Regular.ttf"
+	case "SourceSans3-Bold", "SourceSans3-Bold.ttf":
+		return "builtin://fonts/SourceSans3-Bold.ttf"
+	case "SourceSans3-Light", "SourceSans3-Light.ttf":
+		return "builtin://fonts/SourceSans3-Light.ttf"
+	case "SourceSans3-Italic", "SourceSans3-Italic.ttf":
+		return "builtin://fonts/SourceSans3-Italic.ttf"
+	case "SourceSans3-SemiBold", "SourceSans3-SemiBold.ttf":
+		return "builtin://fonts/SourceSans3-SemiBold.ttf"
+	case "Bembo", "Bembo.otf":
+		return "builtin://fonts/Bembo.otf"
+	case "ComicNeue-Angular-Bold", "ComicNeue-Angular-Bold.ttf":
+		return "builtin://fonts/ComicNeue-Angular-Bold.ttf"
+	case "GoogleSansCode-Regular", "GoogleSansCode-Regular.ttf":
+		return "builtin://fonts/GoogleSansCode-Regular.ttf"
+	case "HWYGOTH", "HWYGOTH.ttf":
+		return "builtin://fonts/HWYGOTH.ttf"
+	case "Zekton", "Zekton.ttf":
+		return "builtin://fonts/Zekton.ttf"
+	case "VCR", "VCR.ttf":
+		return "builtin://fonts/VCR.ttf"
+	case "Duskfall_Gothic", "Duskfall_Gothic.ttf":
+		return "builtin://fonts/Duskfall_Gothic.ttf"
+	case "RomanAntique", "RomanAntique.otf":
+		return "builtin://fonts/RomanAntique.otf"
+	case "AmaticSC-Regular", "AmaticSC-Regular.ttf":
+		return "builtin://fonts/AmaticSC-Regular.ttf"
+	case "Bangers-Regular", "Bangers-Regular.ttf":
+		return "builtin://fonts/Bangers-Regular.ttf"
+	case "Creepster-Regular", "Creepster-Regular.ttf":
+		return "builtin://fonts/Creepster-Regular.ttf"
+	case "DenkOne-Regular", "DenkOne-Regular.ttf":
+		return "builtin://fonts/DenkOne-Regular.ttf"
+	case "Fondamento-Regular", "Fondamento-Regular.ttf":
+		return "builtin://fonts/Fondamento-Regular.ttf"
+	case "FredokaOne-Regular", "FredokaOne-Regular.ttf":
+		return "builtin://fonts/FredokaOne-Regular.ttf"
+	case "GrenzeGotisch-Regular", "GrenzeGotisch-Regular.ttf":
+		return "builtin://fonts/GrenzeGotisch-Regular.ttf"
+	case "IndieFlower-Regular", "IndieFlower-Regular.ttf":
+		return "builtin://fonts/IndieFlower-Regular.ttf"
+	case "JosefinSans-Regular", "JosefinSans-Regular.ttf":
+		return "builtin://fonts/JosefinSans-Regular.ttf"
+	case "Jura-Regular", "Jura-Regular.ttf":
+		return "builtin://fonts/Jura-Regular.ttf"
+	case "Kalam-Regular", "Kalam-Regular.ttf":
+		return "builtin://fonts/Kalam-Regular.ttf"
+	case "LuckiestGuy-Regular", "LuckiestGuy-Regular.ttf":
+		return "builtin://fonts/LuckiestGuy-Regular.ttf"
+	case "Merriweather-Regular", "Merriweather-Regular.ttf":
+		return "builtin://fonts/Merriweather-Regular.ttf"
+	case "Michroma-Regular", "Michroma-Regular.ttf":
+		return "builtin://fonts/Michroma-Regular.ttf"
+	case "Nunito-Regular", "Nunito-Regular.ttf":
+		return "builtin://fonts/Nunito-Regular.ttf"
+	case "Oswald-Regular", "Oswald-Regular.ttf":
+		return "builtin://fonts/Oswald-Regular.ttf"
+	case "PatrickHand-Regular", "PatrickHand-Regular.ttf":
+		return "builtin://fonts/PatrickHand-Regular.ttf"
+	case "PermanentMarker-Regular", "PermanentMarker-Regular.ttf":
+		return "builtin://fonts/PermanentMarker-Regular.ttf"
+	case "Roboto-Regular", "Roboto-Regular.ttf":
+		return "builtin://fonts/Roboto-Regular.ttf"
+	case "Roboto_Condensed-Regular", "Roboto_Condensed-Regular.ttf":
+		return "builtin://fonts/Roboto_Condensed-Regular.ttf"
+	case "RobotoMono-Regular", "RobotoMono-Regular.ttf":
+		return "builtin://fonts/RobotoMono-Regular.ttf"
+	case "Sarpanch-Regular", "Sarpanch-Regular.ttf":
+		return "builtin://fonts/Sarpanch-Regular.ttf"
+	case "SpecialElite-Regular", "SpecialElite-Regular.ttf":
+		return "builtin://fonts/SpecialElite-Regular.ttf"
+	case "TitilliumWeb-Regular", "TitilliumWeb-Regular.ttf":
+		return "builtin://fonts/TitilliumWeb-Regular.ttf"
+	case "Ubuntu-Regular", "Ubuntu-Regular.ttf":
+		return "builtin://fonts/Ubuntu-Regular.ttf"
+	case "Arimo-Regular", "Arimo-Regular.ttf":
+		return "builtin://fonts/Arimo-Regular.ttf"
+	case "Arimo-Bold", "Arimo-Bold.ttf":
+		return "builtin://fonts/Arimo-Bold.ttf"
+	case:
+		return family
+	}
+}
+
+TextLabel_Font_Enum_From_Family :: proc(family: string) -> enums.Font {
+	switch TextLabel_Normalize_Font_Family(family) {
 	case DEFAULT_FONT:
 		return .Legacy
 	case "builtin://fonts/Montserrat-Bold.ttf":
@@ -744,6 +841,36 @@ TextLabel_Append_Paragraph :: proc(
 }
 
 
+localized_text :: proc(label: ^TextLabel) -> string {
+	registry := label.object.signal_registry
+	if registry == nil || registry.localize_text == nil {return label.text}
+	return registry.localize_text(registry.data_model, label.text, &label.object)
+}
+
+Invalidate_Localized_Text :: proc(registry: ^Registry) {
+	if registry == nil {return}
+	registry.localization_revision += 1
+	for descriptor in registry.classes {
+		if descriptor == nil ||
+		   descriptor.info == nil ||
+		   !Is_Class_A(descriptor.info, &GuiObject_Class) {continue}
+		for object in descriptor.instances {
+			if object == nil || object.destroyed {continue}
+			gui := cast(^GuiObject)object
+			gui.draw_revision += 1
+			if Is_A(
+				object,
+				"TextLabel",
+			) {text_render_layout_clear(&(cast(^TextLabel)object).render_layout)}
+			if Is_A(
+				object,
+				"TextButton",
+			) {text_render_layout_clear(&(cast(^TextButton)object).render_layout)}
+		}
+	}
+	Gui_Layout_Mark_Dirty()
+}
+
 TextLabel_Build_Lines :: proc(
 	label: ^TextLabel,
 	max_width: f32,
@@ -752,7 +879,7 @@ TextLabel_Build_Lines :: proc(
 ) -> [dynamic]Text_Line {
 	lines := make([dynamic]Text_Line)
 
-	text := label.text
+	text := localized_text(label)
 
 
 	if len(text) == 0 {
@@ -821,7 +948,7 @@ TextLabel_Measure_Content :: proc(
 	available_width: f32,
 	measure: ^Text_Measure_Cache = nil,
 ) -> datatypes.Vector2 {
-	if label == nil || label.stored_typeface == nil || len(label.text) == 0 {
+	if label == nil || label.stored_typeface == nil || len(localized_text(label)) == 0 {
 		return datatypes.Vector2_Zero
 	}
 
@@ -881,7 +1008,7 @@ TextLabel_Get_Effective_Font_Size :: proc(
 		return label.text_size
 	}
 
-	if len(label.text) == 0 || max_width <= 0 || max_height <= 0 {
+	if len(localized_text(label)) == 0 || max_width <= 0 || max_height <= 0 {
 		return label.text_size
 	}
 
@@ -1144,9 +1271,7 @@ TextLabel_set :: proc(
 ) -> bool {
 	label := cast(^TextLabel)object
 
-	// Only the properties that feed measurement invalidate the layout; colour,
-	// transparency and alignment are render-only and are often tweened every
-	// frame, so dirtying on them would defeat the clean-layout skip.
+
 	if key != "Text" && text_label_affects_layout(key) {
 		gui_mark_layout_for(object)
 	}
@@ -1156,7 +1281,7 @@ TextLabel_set :: proc(
 	case "Text":
 		value := vm.ArgString(L, value_index)
 		if label.owned_text == value {return true}
-		// Text only changes geometry when this label measures its own text.
+
 		if label.automatic_size != .None {
 			gui_mark_layout_for(object)
 		} else {
@@ -1394,6 +1519,7 @@ text_label_render :: proc(
 		)
 		for &line in layout.lines {
 			line.draw_text = strings.clone_to_cstring(line.text, layout.lines.allocator)
+			line.text = ""
 		}
 		layout.bounds = TextLabel_Get_Bounds(label, layout.lines[:], layout.font_size)
 		layout.line_height =
@@ -1582,8 +1708,6 @@ Register_TextLabel :: proc(registry: ^Registry) {
 }
 
 
-// A lazily loaded web font replaces its fallback; discard only layouts
-// measured against that typeface.
 TextLabel_Web_Font_Ready :: proc(registry: ^Registry, face: ^kineffi.KineSkiaTypeface) {
 	if registry == nil || face == nil {return}
 	for d in registry.classes {

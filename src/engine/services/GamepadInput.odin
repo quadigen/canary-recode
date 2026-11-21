@@ -88,9 +88,9 @@ when ODIN_OS != .JS {
 			   len(service.gamepad_buttons[slot]) {service.gamepad_buttons[slot][button] = down}
 			service.last_input_type = input_type
 			processed := false
-			if key == .ButtonA {
+			if !service.navigation_disabled[slot] && key == .ButtonA {
 				processed = classes.Gui_Gamepad_Confirm(registry, L, id, input_type, down)
-			} else if down {
+			} else if down && !service.navigation_disabled[slot] {
 				#partial switch key {
 				case .DPadUp:
 					processed = classes.Gui_Navigate(registry, 0, -1)
@@ -128,7 +128,7 @@ when ODIN_OS != .JS {
 			axes[axis] = clamp(f32(event.gaxis.value) / 32767.0, -1, 1)
 			input_type := enums.UserInputType(i64(enums.UserInputType.Gamepad1) + i64(slot))
 			processed := false
-			if axis < 2 {
+			if axis < 2 && !service.navigation_disabled[slot] {
 				x, y := axes[0], axes[1]
 				direction: [2]i32
 				if max(abs(x), abs(y)) >= 0.60 {

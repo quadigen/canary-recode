@@ -276,6 +276,185 @@ IMPORTED_PROPERTY_GROUPS := [?]struct {
 			{"WindDirection", datatypes.Vector3{}},
 		},
 	},
+	{
+		{"BasePart"},
+		{
+			{"BackSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"BottomSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"FrontSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"LeftSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"RightSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"TopSurfaceInput", Imported_Enum{"InputType", -1}},
+		},
+	},
+	{{"Part"}, {{"formFactorRaw", Imported_Enum{"FormFactor", 3}}}},
+	{{"MeshPart"}, {{"FluidFidelityInternal", Imported_Enum{"FluidFidelity", -1}}}},
+	{{"PartOperation"}, {{"FluidFidelityInternal", Imported_Enum{"FluidFidelity", -1}}}},
+	{
+		{"Camera"},
+		{
+			{"OrthographicMode", Imported_Enum{"OrthographicMode", 0}},
+			{"ProjectionType", Imported_Enum{"ProjectionType", 0}},
+		},
+	},
+	{{"Frame"}, {{"Style", Imported_Enum{"FrameStyle", -1}}}},
+	{{"GuiObject"}, {{"Sink", Imported_Enum{"InputSink", 0}}}},
+	{{"ScreenGui"}, {{"InputSinkEnabled", Imported_Enum{"RolloutState", 0}}}},
+	{
+		{"SurfaceGui"},
+		{
+			{"InputSinkEnabled", Imported_Enum{"RolloutState", 0}},
+			{"SizingMode", Imported_Enum{"SurfaceGuiSizingMode", -1}},
+		},
+	},
+	{{"TextLabel"}, {{"TextDirection", Imported_Enum{"TextDirection", -1}}}},
+	{
+		{"Lighting"},
+		{
+			{"ExtendLightRangeTo120", Imported_Enum{"RolloutState", 0}},
+			{"LightAttenuationMode", Imported_Enum{"LightAttenuationMode", -1}},
+			{"LightingStyle", Imported_Enum{"LightingStyle", -1}},
+		},
+	},
+	{
+		{"MaterialVariant"},
+		{
+			{"AlphaMode", Imported_Enum{"AlphaMode", 0}},
+			{"BaseMaterial", Imported_Enum{"Material", 12}},
+			{"MaterialPattern", Imported_Enum{"MaterialPattern", 0}},
+		},
+	},
+	{
+		{"Model"},
+		{
+			{"LevelOfDetail", Imported_Enum{"ModelLevelOfDetail", 0}},
+			{"ModelStreamingMode", Imported_Enum{"ModelStreamingMode", 0}},
+		},
+	},
+	{
+		{"Terrain"},
+		{
+			{"AcquisitionMethod", Imported_Enum{"TerrainAcquisitionMethod", 0}},
+			{"BackSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"BottomSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"FrontSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"LeftSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"RightSurfaceInput", Imported_Enum{"InputType", -1}},
+			{"TopSurfaceInput", Imported_Enum{"InputType", -1}},
+		},
+	},
+	{
+		{"SoundService"},
+		{
+			{"AmbientReverb", Imported_Enum{"ReverbType", -1}},
+			{"AudioApiByDefault", Imported_Enum{"RolloutState", 0}},
+			{"CharacterSoundsUseNewApi", Imported_Enum{"RolloutState", 0}},
+			{"DefaultListenerLocation", Imported_Enum{"ListenerLocation", 0}},
+			{"ListenerType", Imported_Enum{"ListenerType", -1}},
+			{"VolumetricAudio", Imported_Enum{"VolumetricAudio", -1}},
+		},
+	},
+	{
+		{"CylinderHandleAdornment"},
+		{
+			{"AdornCullingMode", Imported_Enum{"AdornCullingMode", -1}},
+			{"Shading", Imported_Enum{"AdornShading", 0}},
+		},
+	},
+	{
+		{"SphereHandleAdornment"},
+		{
+			{"AdornCullingMode", Imported_Enum{"AdornCullingMode", -1}},
+			{"Shading", Imported_Enum{"AdornShading", 0}},
+		},
+	},
+	{
+		{"StarterGui"},
+		{
+			{"ClipsDescendantsSupportsRotation", Imported_Enum{"RolloutState", 0}},
+			{"RtlTextSupport", Imported_Enum{"RtlTextSupport", 0}},
+			{"ScreenOrientation", Imported_Enum{"ScreenOrientation", -1}},
+			{"VirtualCursorMode", Imported_Enum{"VirtualCursorMode", 0}},
+		},
+	},
+	{
+		{"StarterPlayer"},
+		{
+			{"AvatarJointUpgrade_SerializedRollout", Imported_Enum{"RolloutState", 0}},
+			{"CameraMode", Imported_Enum{"CameraMode", -1}},
+			{"DevCameraOcclusionMode", Imported_Enum{"DevCameraOcclusionMode", -1}},
+			{"DevComputerCameraMovementMode", Imported_Enum{"DevComputerCameraMovementMode", -1}},
+			{"DevComputerMovementMode", Imported_Enum{"DevComputerMovementMode", -1}},
+			{"DevTouchCameraMovementMode", Imported_Enum{"DevTouchCameraMovementMode", -1}},
+			{"DevTouchMovementMode", Imported_Enum{"DevTouchMovementMode", -1}},
+			{"EnableDynamicHeads", Imported_Enum{"LoadDynamicHeads", 0}},
+			{"GameSettingsAvatar", Imported_Enum{"GameAvatarType", -1}},
+			{"GameSettingsR15Collision", Imported_Enum{"R15CollisionType", -1}},
+			{"LoadCharacterLayeredClothing", Imported_Enum{"LoadCharacterLayeredClothing", 0}},
+			{"LuaCharacterController", Imported_Enum{"CharacterControlMode", 0}},
+			{"UseImprovedCharacterEvents", Imported_Enum{"RolloutState", 0}},
+		},
+	},
+	{
+		{"UIGradient"},
+		{
+			{"TileMode", Imported_Enum{"GradientTileMode", 0}},
+			{"Type", Imported_Enum{"GradientType", 0}},
+		},
+	},
+	{
+		{"UIStroke"},
+		{
+			{"BorderStrokePosition", Imported_Enum{"BorderStrokePosition", -1}},
+			{"StrokeSizingMode", Imported_Enum{"StrokeSizingMode", -1}},
+		},
+	},
+	{
+		{"Workspace"},
+		{
+			{"AuthorityMode", Imported_Enum{"AuthorityMode", -1}},
+			{"AvatarUnificationMode", Imported_Enum{"AvatarUnificationMode", 0}},
+			{"ClientAnimatorThrottling", Imported_Enum{"ClientAnimatorThrottlingMode", 0}},
+			{"EnableSLIMAvatars", Imported_Enum{"RolloutState", 0}},
+			{"ExpandedTerrain", Imported_Enum{"RolloutState", 0}},
+			{"IKControlConstraintSupport", Imported_Enum{"IKControlConstraintSupport", 0}},
+			{"ImprovedPhysicsReplication", Imported_Enum{"RolloutState", 0}},
+			{"InputSinkEnabled", Imported_Enum{"RolloutState", 0}},
+			{"LayeredClothingCacheOptimizations", Imported_Enum{"RolloutState", 0}},
+			{"LevelOfDetail", Imported_Enum{"ModelLevelOfDetail", 0}},
+			{"LuauTypeCheckMode", Imported_Enum{"LuauTypeCheckMode", 0}},
+			{"MapTVRemoteToGamepadKeycodes", Imported_Enum{"RolloutState", 0}},
+			{"MeshPartHeadsAndAccessories", Imported_Enum{"MeshPartHeadsAndAccessories", 0}},
+			{"MeshStreamingAndImprovedLods", Imported_Enum{"RolloutState", 0}},
+			{"ModelStreamingBehavior", Imported_Enum{"ModelStreamingBehavior", 0}},
+			{"ModelStreamingMode", Imported_Enum{"ModelStreamingMode", 0}},
+			{"NextGenerationPhysicsSolver", Imported_Enum{"RolloutState", 0}},
+			{"NextGenerationReplication", Imported_Enum{"RolloutState", 0}},
+			{"ParticlesUseDynamicWind", Imported_Enum{"RolloutState", 0}},
+			{"PathfindingUseImprovedSearch", Imported_Enum{"PathfindingUseImprovedSearch", 0}},
+			{"PhysicsSteppingMethod", Imported_Enum{"PhysicsSteppingMethod", 0}},
+			{"PlayerCharacterDestroyBehavior", Imported_Enum{"PlayerCharacterDestroyBehavior", 0}},
+			{"PlayerScriptsUseInputActionSystem", Imported_Enum{"RolloutState", 0}},
+			{"PredictiveStreamingMode", Imported_Enum{"PredictiveStreamingMode", 0}},
+			{"RejectCharacterDeletions", Imported_Enum{"RejectCharacterDeletions", 0}},
+			{"RenderingCacheOptimizations", Imported_Enum{"RenderingCacheOptimizationMode", 0}},
+			{
+				"ReplicateInstanceDestroySetting",
+				Imported_Enum{"ReplicateInstanceDestroySetting", 0},
+			},
+			{"ReplicationFrequency", Imported_Enum{"ReplicationMode", -1}},
+			{"ReplicationThroughput", Imported_Enum{"ReplicationMode", -1}},
+			{"Retargeting", Imported_Enum{"AnimatorRetargetingMode", 0}},
+			{"SandboxedInstanceMode", Imported_Enum{"SandboxedInstanceMode", 0}},
+			{"SignalBehavior2", Imported_Enum{"SignalBehavior", 0}},
+			{"StreamOutBehavior", Imported_Enum{"StreamOutBehavior", 0}},
+			{"StreamingIntegrityMode", Imported_Enum{"StreamingIntegrityMode", 0}},
+			{"TouchEventsUseCollisionGroups", Imported_Enum{"RolloutState", 0}},
+			{"UseFixedSimulation", Imported_Enum{"RolloutState", 0}},
+			{"UseNewLuauTypeSolver", Imported_Enum{"RolloutState", 0}},
+			{"ValidateEnabledProximityPrompt", Imported_Enum{"RolloutState", 0}},
+		},
+	},
 }
 
 register_imported_properties :: proc(descriptor: ^Class_Descriptor) {
@@ -295,6 +474,18 @@ register_imported_properties :: proc(descriptor: ^Class_Descriptor) {
 	}
 }
 
+
+Object_Ensure_Imported_Values :: proc(object: ^Object) -> ^map[string]i32 {
+	if object.imported_values == nil {object.imported_values = new(map[string]i32)}
+	return object.imported_values
+}
+
+object_imported_value :: proc(object: ^Object, name: string) -> (i32, bool) {
+	if object.imported_values == nil {return 0, false}
+	value, found := object.imported_values^[name]
+	return value, found
+}
+
 imported_property_get :: proc(
 	L: ^vm.State,
 	descriptor: ^Class_Descriptor,
@@ -304,7 +495,7 @@ imported_property_get :: proc(
 	if descriptor == nil {return false}
 	property, found := descriptor.imported_properties[key]
 	if !found {return false}
-	if value_ref, stored := object.imported_values[key]; stored {
+	if value_ref, stored := object_imported_value(object, key); stored {
 		vm.PushRegistryReference(L, value_ref)
 		if _, is_reference := property.default_value.(Imported_Instance); is_reference {
 			value := object_from_argument(L, -1)
@@ -389,11 +580,21 @@ imported_property_set :: proc(
 		}
 	}
 
-	vm.ReleaseValue(L, object.imported_values[property.name])
+	if previous, found := object_imported_value(object, property.name); found {
+		vm.ReleaseValue(L, previous)
+	}
 	if is_default {
-		delete_key(&object.imported_values, property.name)
+		if values := object.imported_values; values != nil {
+			delete_key(values, property.name)
+			if len(values^) == 0 {
+				delete(values^)
+				free(values)
+				object.imported_values = nil
+			}
+		}
 	} else {
-		object.imported_values[property.name] = vm.RetainValue(L, index)
+		values := Object_Ensure_Imported_Values(object)
+		values^[property.name] = vm.RetainValue(L, index)
 	}
 	return true
 }
@@ -403,7 +604,10 @@ Imported_Property_Is_Unset :: proc(
 	object: ^Object,
 	key: string,
 ) -> bool {
-	return Is_Imported_Property(descriptor, key) && key not_in object.imported_values
+	return(
+		Is_Imported_Property(descriptor, key) &&
+		(object.imported_values == nil || key not_in object.imported_values^) \
+	)
 }
 
 imported_remap_references :: proc(
@@ -412,7 +616,8 @@ imported_remap_references :: proc(
 	object: ^Object,
 	clones: map[^Object]^Object,
 ) {
-	for name, &value_ref in object.imported_values {
+	if object.imported_values == nil {return}
+	for name, &value_ref in object.imported_values^ {
 		if _, reference := descriptor.imported_properties[name].default_value.(Imported_Instance);
 		   !reference {continue}
 		vm.PushRegistryReference(L, value_ref)

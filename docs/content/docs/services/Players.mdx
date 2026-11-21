@@ -141,6 +141,14 @@ end)
 - Player objects are created by the engine. `Instance.new("Player")` isn't supported.
 - Character loading depends on the runtime; `LoadCharacter()` is where that shows up in this API.
 
+### GetPlayerFromCharacter
+
+```lua
+GetPlayerFromCharacter(character: Instance): Player?
+```
+
+Returns the player whose current character is the supplied instance, or `nil` if no player matches.
+
 ## See also
 
 - `RunService`, detect whether you're running on the server or the client.

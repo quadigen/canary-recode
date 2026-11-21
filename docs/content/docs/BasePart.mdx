@@ -3,7 +3,7 @@ title: BasePart
 description: Abstract parent of Part and MeshPart.
 ---
 
-`BasePart` is the shared parent of physical parts. It adds no members of its own and can't be created; use `Part` or `MeshPart` for actual geometry.
+`BasePart` is the shared parent of physical parts. It can't be created directly; use `Part` or `MeshPart` for actual geometry.
 
 ## Getting started
 
@@ -16,7 +16,42 @@ print(part:IsA("Part"))     -- true
 
 ## Members
 
-None. Size, position, color, material, collision, and physics properties are declared on the concrete part classes.
+Concrete parts expose the following shared pivot and gravity API:
+
+| Property | Type | Access | Description |
+| --- | --- | --- | --- |
+| `PivotOffset` | `CFrame` | Read/write | Transform relative to the part's frame used as its pivot. |
+| `Gravity` | `Vector3` | Read/write | World-space gravitational acceleration. |
+| `Mass` | `number` | Read-only | Mass of the current physics body or collision shape. |
+
+| Method | Description |
+| --- | --- |
+| `GetPivot(): CFrame` | Returns the world-space pivot. |
+| `PivotTo(target: CFrame): ()` | Moves the part so its pivot matches the target. |
+| `GetVelocityAtPosition(position: Vector3): Vector3` | Returns the velocity at a world-space point, including angular motion. |
+| `ApplyImpulse(impulse: Vector3): ()` | Applies an impulse at the center of mass. |
+| `ApplyAngularImpulse(impulse: Vector3): ()` | Changes angular momentum. |
+| `ApplyImpulseAtPosition(impulse: Vector3, position: Vector3): ()` | Applies an impulse at a world-space point, which can also rotate the part. |
+| `GetMass(): number` | Returns the same value as `Mass`. |
+| `CanCollideWith(other: BasePart): boolean` | Checks both parts' collision flags and collision-group rule; it doesn't test for overlap. |
+| `GetConnectedParts(recursive: boolean?): {BasePart}` | Lists directly welded parts, or the full rigid assembly when recursive is true. |
+| `IsGrounded(): boolean` | Checks whether the part itself or a rigidly welded neighbor is anchored. |
+| `GetJoints(): {Instance}` | Lists enabled welds and two-part attachment constraints connecting the part in Workspace. |
+| `GetNoCollisionConstraints(): {Instance}` | Lists enabled no-collision constraints connecting the part in Workspace. |
+
+Joint queries use enabled links whose endpoints and constraint are in the same Workspace; they don't wait for a physics step. Connection and grounding queries follow enabled welds. They exclude the calling part from the results and don't treat movable constraints, contact, or no-collision constraints as rigid connections.
+
+```lua
+for _, connectedPart in part:GetConnectedParts(true) do
+    print(connectedPart.Name)
+end
+
+print(part:IsGrounded())
+```
+
+Impulse methods require a simulated local body; calls on anchored parts or parts without a body do nothing.
+
+See [Part](/docs/Part) for the other physical properties and defaults.
 
 ## Notes
 

@@ -64,14 +64,22 @@ The part stays server-owned until something calls `SetNetworkOwnershipAuto()` or
 
 ## Requesting ownership from a client
 
-A client can claim a part for itself:
+Client ownership requests are disabled by default. Enable them from a server script (or configure the service before starting the server):
+
+```lua
+game:GetService("ReplicatorService").AllowClientOwnershipRequests = true
+```
+
+This boolean property is synchronized to clients and read-only on a connected client. Setting it back to `false` blocks further client ownership changes, including requests to resume automatic ownership; existing ownership assignments remain intact. Automatic assignment and server scripts are unaffected.
+
+When enabled, a client can claim a part for itself:
 
 ```lua
 local crate = workspace:WaitForChild("Crate")
 crate:SetNetworkOwner(game.Players.LocalPlayer)
 ```
 
-The client applies the change optimistically, then sends a request to the server. The server validates the request against its own replicated copy, applies it, and broadcasts the new owner. Until that round trip finishes, other clients still see the old owner.
+The client applies the change optimistically, then sends a request to the server. The server checks visibility, proximity for new claims, current ownership, and server locks before applying a request. A client cannot steal another client’s object or release a server lock. Requests are rate limited. Until that round trip finishes, other clients still see the old owner.
 
 A client may only name its own `Player`. Passing another player or a non-`Player` value raises an error. Every client also has the reverse call:
 

@@ -4,8 +4,8 @@ import kne "../../bindings/odin"
 import "base:runtime"
 import "core:strings"
 
-host: ^kne.KNE_Host
-desc: kne.KNE_Extension_Desc
+host: ^kne.Host
+desc: kne.Extension_Descriptor
 
 Item :: struct {
 	label:   string,
@@ -39,7 +39,7 @@ greeting :: proc "c" (ext: kne.KNE_Extension, L: kne.KNE_VM) -> i32 {
 	return 1
 }
 
-item_of :: proc (ext: kne.KNE_Extension, instance: kne.KNE_Instance) -> ^Item {
+item_of :: proc(ext: kne.KNE_Extension, instance: kne.KNE_Instance) -> ^Item {
 	context = runtime.default_context()
 	if host == nil || host.instances == nil {
 		return nil
@@ -213,11 +213,7 @@ vector_set :: proc "c" (
 	return 0
 }
 
-vector_equal :: proc "c" (
-	ext: kne.KNE_Extension,
-	ctx, other: rawptr,
-	out: ^i32,
-) -> i32 {
+vector_equal :: proc "c" (ext: kne.KNE_Extension, ctx, other: rawptr, out: ^i32) -> i32 {
 	if ctx == nil || other == nil || out == nil {
 		return 0
 	}
@@ -227,11 +223,7 @@ vector_equal :: proc "c" (
 	return 1
 }
 
-vector_add :: proc "c" (
-	ext: kne.KNE_Extension,
-	ctx, other: rawptr,
-	out: ^kne.KNE_Value,
-) -> i32 {
+vector_add :: proc "c" (ext: kne.KNE_Extension, ctx, other: rawptr, out: ^kne.KNE_Value) -> i32 {
 	if ctx == nil || other == nil || out == nil {
 		return 0
 	}
@@ -247,21 +239,29 @@ vector_add :: proc "c" (
 }
 
 vector_negate :: proc "c" (ext: kne.KNE_Extension, ctx: rawptr, out: ^kne.KNE_Value) -> i32 {
- context = runtime.default_context()
- if ctx == nil || out == nil {return 0}
- value := cast(^Vector)ctx
- args: [2]kne.KNE_Value
- args[0].kind = .Number; args[0].data.number = -value.x
- args[1].kind = .Number; args[1].data.number = -value.y
- return host.datatypes.construct(ext, kne.str("HelloVector"), &args[0], 2, out)
+	context = runtime.default_context()
+	if ctx == nil || out == nil {return 0}
+	value := cast(^Vector)ctx
+	args: [2]kne.KNE_Value
+	args[0].kind = .Number; args[0].data.number = -value.x
+	args[1].kind = .Number; args[1].data.number = -value.y
+	return host.datatypes.construct(ext, kne.str("HelloVector"), &args[0], 2, out)
 }
 
-vector_namecall :: proc "c" (ext: kne.KNE_Extension, ctx: rawptr, method: kne.KNE_String, args: ^kne.KNE_Value, count: i32, out: ^kne.KNE_Value, capacity: i32) -> i32 {
- context = runtime.default_context()
- if ctx == nil || out == nil || capacity < 1 || kne.string_to(method) != "Sum" {return 0}
- value := cast(^Vector)ctx
- out.kind = .Number; out.data.number = value.x + value.y
- return 1
+vector_namecall :: proc "c" (
+	ext: kne.KNE_Extension,
+	ctx: rawptr,
+	method: kne.KNE_String,
+	args: ^kne.KNE_Value,
+	count: i32,
+	out: ^kne.KNE_Value,
+	capacity: i32,
+) -> i32 {
+	context = runtime.default_context()
+	if ctx == nil || out == nil || capacity < 1 || kne.string_to(method) != "Sum" {return 0}
+	value := cast(^Vector)ctx
+	out.kind = .Number; out.data.number = value.x + value.y
+	return 1
 }
 
 vector_encode :: proc "c" (
@@ -387,61 +387,154 @@ export_count :: proc "c" (ext: kne.KNE_Extension, L: kne.KNE_VM) -> i32 {
 
 native_signal_calls: i32
 native_signal :: proc "c" (ext: kne.KNE_Extension, L: kne.KNE_VM) {
- context = runtime.default_context()
- native_signal_calls += 1
+	context = runtime.default_context()
+	native_signal_calls += 1
 }
 
 exercise :: proc "c" (ext: kne.KNE_Extension, L: kne.KNE_VM) -> i32 {
- context = runtime.default_context()
- object, signal: kne.KNE_Value
- host.vm.get_value(ext, L, 1, &object)
- host.vm.get_value(ext, L, 2, &signal)
- args: [2]kne.KNE_Value
- args[0].kind = .Number; args[0].data.number = 3
- args[1].kind = .Number; args[1].data.number = 4
- vector, out: kne.KNE_Value
- if host.datatypes.construct(ext, kne.str("Vector2"), &args[0], 2, &vector) == 0 {return host.vm.raise(L, kne.str("engine construct"))}
- if host.datatypes.get_field(ext, &vector, kne.str("Magnitude"), &out) == 0 || out.data.number != 5 {return host.vm.raise(L, kne.str("engine get field"))}
- if host.datatypes.call(ext, &vector, kne.str("Dot"), &vector, 1, &out, 1) != 1 || out.data.number != 25 {return host.vm.raise(L, kne.str("engine method"))}
- if host.instances.invoke(ext, cast(kne.KNE_Instance)object.data.instance, kne.str("GetFullName"), nil, 0, &out, 1) != 1 || out.kind != .String {return host.vm.raise(L, kne.str("invoke"))}
- if host.instances.invoke(ext, cast(kne.KNE_Instance)object.data.instance, kne.str("MissingMethod"), nil, 0, &out, 1) >= 0 {return host.vm.raise(L, kne.str("invoke error"))}
- if host.exports.call(ext, cast(kne.KNE_Instance)object.data.instance, kne.str("Destroy"), nil, 0, &out, 1) >= 0 {return host.vm.raise(L, kne.str("export gate"))}
- params, flag: kne.KNE_Value
- if host.datatypes.construct(ext, kne.str("RaycastParams"), nil, 0, &params) == 0 {return host.vm.raise(L, kne.str("handle construct"))}
- flag.kind = .Boolean; flag.data.boolean = 1
- if host.datatypes.set_field(ext, &params, kne.str("IgnoreWater"), &flag) == 0 {return host.vm.raise(L, kne.str("handle set field"))}
- if host.datatypes.get_field(ext, &params, kne.str("IgnoreWater"), &out) == 0 || out.data.boolean != 1 {return host.vm.raise(L, kne.str("handle mutation"))}
- ray_args: [2]kne.KNE_Value
- ray_args[0].kind = .Vector3; ray_args[0].data.vector3 = kne.KNE_Vector3{0,10000,0}
- ray_args[1].kind = .Vector3; ray_args[1].data.vector3 = kne.KNE_Vector3{0,1,0}
- if host.exports.call(ext, cast(kne.KNE_Instance)object.data.instance, kne.str("Raycast"), &ray_args[0], 2, &out, 1) != 1 {return host.vm.raise(L, kne.str("typed raycast"))}
- if host.exports.call(ext, cast(kne.KNE_Instance)object.data.instance, kne.str("Raycast"), nil, 0, &out, 1) >= 0 {return host.vm.raise(L, kne.str("typed raycast error"))}
- callback := host.callbacks.retain(ext, L, 3)
- if callback == nil {return 0}
- native_signal_calls = 0
- native := host.signals.connect_native(ext, signal.data.signal, native_signal)
- once := host.signals.once_native(ext, signal.data.signal, native_signal)
- luau := host.signals.connect_callback(ext, signal.data.signal, callback)
- host.signals.fire(ext, signal.data.signal, &args[0], 1)
- host.signals.fire(ext, signal.data.signal, &args[1], 1)
- if native_signal_calls != 3 {return host.vm.raise(L, kne.str("native signals"))}
- host.signals.disconnect(ext, native)
- host.signals.disconnect(ext, once)
- host.signals.disconnect(ext, luau)
- host.callbacks.release(ext, callback)
- if host.callbacks.is_valid(ext, callback) != 0 {return host.vm.raise(L, kne.str("released callback"))}
- callback = host.callbacks.retain(ext, L, 3)
- host.signals.connect_callback(ext, signal.data.signal, callback)
- host.signals.connect_native(ext, signal.data.signal, native_signal)
- host.vm.push_boolean(L, 1)
- return 1
+	context = runtime.default_context()
+	object, signal: kne.KNE_Value
+	host.vm.get_value(ext, L, 1, &object)
+	host.vm.get_value(ext, L, 2, &signal)
+	args: [2]kne.KNE_Value
+	args[0].kind = .Number; args[0].data.number = 3
+	args[1].kind = .Number; args[1].data.number = 4
+	vector, out: kne.KNE_Value
+	if host.datatypes.construct(ext, kne.str("Vector2"), &args[0], 2, &vector) ==
+	   0 {return host.vm.raise(L, kne.str("engine construct"))}
+	if host.datatypes.get_field(ext, &vector, kne.str("Magnitude"), &out) == 0 ||
+	   out.data.number != 5 {return host.vm.raise(L, kne.str("engine get field"))}
+	if host.datatypes.call(ext, &vector, kne.str("Dot"), &vector, 1, &out, 1) != 1 ||
+	   out.data.number != 25 {return host.vm.raise(L, kne.str("engine method"))}
+	if host.instances.invoke(
+		   ext,
+		   cast(kne.KNE_Instance)object.data.instance,
+		   kne.str("GetFullName"),
+		   nil,
+		   0,
+		   &out,
+		   1,
+	   ) !=
+		   1 ||
+	   out.kind != .String {return host.vm.raise(L, kne.str("invoke"))}
+	if host.instances.invoke(
+		   ext,
+		   cast(kne.KNE_Instance)object.data.instance,
+		   kne.str("MissingMethod"),
+		   nil,
+		   0,
+		   &out,
+		   1,
+	   ) >=
+	   0 {return host.vm.raise(L, kne.str("invoke error"))}
+	if host.exports.call(
+		   ext,
+		   cast(kne.KNE_Instance)object.data.instance,
+		   kne.str("Destroy"),
+		   nil,
+		   0,
+		   &out,
+		   1,
+	   ) >=
+	   0 {return host.vm.raise(L, kne.str("export gate"))}
+	params, flag: kne.KNE_Value
+	if host.datatypes.construct(ext, kne.str("RaycastParams"), nil, 0, &params) ==
+	   0 {return host.vm.raise(L, kne.str("handle construct"))}
+	flag.kind = .Boolean; flag.data.boolean = 1
+	if host.datatypes.set_field(ext, &params, kne.str("IgnoreWater"), &flag) ==
+	   0 {return host.vm.raise(L, kne.str("handle set field"))}
+	if host.datatypes.get_field(ext, &params, kne.str("IgnoreWater"), &out) == 0 ||
+	   out.data.boolean != 1 {return host.vm.raise(L, kne.str("handle mutation"))}
+	ray_args: [2]kne.KNE_Value
+	ray_args[0].kind = .Vector3; ray_args[0].data.vector3 = kne.KNE_Vector3{0, 10000, 0}
+	ray_args[1].kind = .Vector3; ray_args[1].data.vector3 = kne.KNE_Vector3{0, 1, 0}
+	if host.exports.call(
+		   ext,
+		   cast(kne.KNE_Instance)object.data.instance,
+		   kne.str("Raycast"),
+		   &ray_args[0],
+		   2,
+		   &out,
+		   1,
+	   ) !=
+	   1 {return host.vm.raise(L, kne.str("typed raycast"))}
+	if host.exports.call(
+		   ext,
+		   cast(kne.KNE_Instance)object.data.instance,
+		   kne.str("Raycast"),
+		   nil,
+		   0,
+		   &out,
+		   1,
+	   ) >=
+	   0 {return host.vm.raise(L, kne.str("typed raycast error"))}
+	callback := host.callbacks.retain(ext, L, 3)
+	if callback == nil {return 0}
+	native_signal_calls = 0
+	native := host.signals.connect_native(ext, signal.data.signal, native_signal)
+	once := host.signals.once_native(ext, signal.data.signal, native_signal)
+	luau := host.signals.connect_callback(ext, signal.data.signal, callback)
+	host.signals.fire(ext, signal.data.signal, &args[0], 1)
+	host.signals.fire(ext, signal.data.signal, &args[1], 1)
+	if native_signal_calls != 3 {return host.vm.raise(L, kne.str("native signals"))}
+	host.signals.disconnect(ext, native)
+	host.signals.disconnect(ext, once)
+	host.signals.disconnect(ext, luau)
+	host.callbacks.release(ext, callback)
+	if host.callbacks.is_valid(ext, callback) !=
+	   0 {return host.vm.raise(L, kne.str("released callback"))}
+	callback = host.callbacks.retain(ext, L, 3)
+	host.signals.connect_callback(ext, signal.data.signal, callback)
+	host.signals.connect_native(ext, signal.data.signal, native_signal)
+	host.vm.push_boolean(L, 1)
+	return 1
+}
+
+bridge_exercise :: proc "c" (ext: kne.Extension_Handle, L: kne.Lua_State) -> i32 {
+	context = runtime.default_context()
+	p := kne.plugin(host, ext)
+	arg, ok := kne.get_argument(p, L, 1)
+	if !ok || arg.kind != .Buffer {return kne.raise_error(p, L, "buffer argument")}
+	bytes, buffer_ok := kne.get_buffer(p, L, 1)
+	if !buffer_ok ||
+	   len(bytes) != 4 ||
+	   bytes[0] != 7 {return kne.raise_error(p, L, "buffer access")}
+	bytes[1] = 42
+	args := []kne.Value{arg}
+	results: [1]kne.Value
+	if kne.run_luau(p, "local b=...; return buffer.readu8(b,1)", args, results[:]) != 1 ||
+	   results[0].data.number != 42 {return kne.raise_error(p, L, "execute buffer")}
+	if kne.run_luau(p, "error('native bridge test')") >=
+	   0 {return kne.raise_error(p, L, "protected error")}
+	workspace := kne.get_service(p, "Workspace")
+	if workspace == nil {return kne.raise_error(p, L, "get service")}
+	object := kne.new_instance(p, "Folder")
+	if object == nil {return kne.raise_error(p, L, "create instance")}
+	if !kne.set_property(
+		p,
+		object,
+		"Name",
+		kne.value_string("NativeBridge"),
+	) {return kne.raise_error(p, L, "property set")}
+	value, found := kne.get_property(p, object, "Name")
+	name, is_string := kne.as_string(value)
+	if !found ||
+	   !is_string ||
+	   name != "NativeBridge" {return kne.raise_error(p, L, "property get")}
+	if kne.call_method(p, object, "GetFullName", nil, results[:]) !=
+	   1 {return kne.raise_error(p, L, "call method")}
+	missing, _ := kne.get_property(p, object, "NoSuchMember")
+	if missing.kind != .Nil {return kne.raise_error(p, L, "missing property")}
+	kne.destroy_instance(p, object)
+	if !kne.push_buffer(p, L, bytes) {return kne.raise_error(p, L, "buffer output")}
+	return 1
 }
 
 roundtrip :: proc "c" (ext: kne.KNE_Extension, L: kne.KNE_VM) -> i32 {
- context = runtime.default_context()
- value: kne.KNE_Value
- if host.vm.get_value(ext, L, 1, &value) == 0 {return 0}
- return host.datatypes.push(ext, L, &value)
+	context = runtime.default_context()
+	value: kne.KNE_Value
+	if host.vm.get_value(ext, L, 1, &value) == 0 {return 0}
+	return host.datatypes.push(ext, L, &value)
 }
 
 on_load :: proc "c" (ext: kne.KNE_Extension) -> i32 {
@@ -450,10 +543,12 @@ on_load :: proc "c" (ext: kne.KNE_Extension) -> i32 {
 	if api == nil || api.register_library_function == nil {
 		return 0
 	}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Calculate"), calculate) == 0 {
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Calculate"), calculate) ==
+	   0 {
 		return 0
 	}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Greeting"), greeting) == 0 {
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Greeting"), greeting) ==
+	   0 {
 		return 0
 	}
 
@@ -461,24 +556,61 @@ on_load :: proc "c" (ext: kne.KNE_Extension) -> i32 {
 		return 0
 	}
 
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Exercise"), exercise) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Roundtrip"), roundtrip) == 0 {return 0}
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Exercise"), exercise) ==
+	   0 {return 0}
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("Roundtrip"), roundtrip) ==
+	   0 {return 0}
+	if !kne.register_library_function(
+		kne.plugin(host, ext),
+		"HelloKNE",
+		"BridgeExercise",
+		bridge_exercise,
+	) {return 0}
 	vector := kne.KNE_Datatype_Desc {
-		size = u32(size_of(kne.KNE_Datatype_Desc)), version = kne.ABI_MAJOR,
-		library = kne.str("HelloVector"), type_name = kne.str("HelloVector"),
-		value_size = u32(size_of(Vector)), wire_version = 1,
-		flags = kne.DATATYPE_PERSISTABLE | kne.DATATYPE_REPLICATED,
-		construct = vector_construct, get = vector_get, set = vector_set,
-		equal = vector_equal, add = vector_add, negate = vector_negate, namecall = vector_namecall,
-		encode = vector_encode, decode = vector_decode,
+		size         = u32(size_of(kne.KNE_Datatype_Desc)),
+		version      = kne.ABI_MAJOR,
+		library      = kne.str("HelloVector"),
+		type_name    = kne.str("HelloVector"),
+		value_size   = u32(size_of(Vector)),
+		wire_version = 1,
+		flags        = kne.DATATYPE_PERSISTABLE | kne.DATATYPE_REPLICATED,
+		construct    = vector_construct,
+		get          = vector_get,
+		set          = vector_set,
+		equal        = vector_equal,
+		add          = vector_add,
+		negate       = vector_negate,
+		namecall     = vector_namecall,
+		encode       = vector_encode,
+		decode       = vector_decode,
 	}
 	if host.datatypes.register_datatype(ext, &vector) == 0 {return 0}
 	if api.register_global_datatype(ext, nil, kne.str("HelloVector")) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("NewVector"), new_vector) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("ApplyCallback"), apply_callback) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("FireSignal"), fire_signal) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("HasExport"), has_export) == 0 {return 0}
-	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("ExportCount"), export_count) == 0 {return 0}
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("NewVector"), new_vector) ==
+	   0 {return 0}
+	if api.register_library_function(
+		   ext,
+		   kne.str("HelloKNE"),
+		   kne.str("ApplyCallback"),
+		   apply_callback,
+	   ) ==
+	   0 {return 0}
+	if api.register_library_function(
+		   ext,
+		   kne.str("HelloKNE"),
+		   kne.str("FireSignal"),
+		   fire_signal,
+	   ) ==
+	   0 {return 0}
+	if api.register_library_function(ext, kne.str("HelloKNE"), kne.str("HasExport"), has_export) ==
+	   0 {return 0}
+	if api.register_library_function(
+		   ext,
+		   kne.str("HelloKNE"),
+		   kne.str("ExportCount"),
+		   export_count,
+	   ) ==
+	   0 {return 0}
 
 	counter := kne.KNE_Class_Desc {
 		size         = u32(size_of(kne.KNE_Class_Desc)),
@@ -528,21 +660,11 @@ on_update :: proc "c" (ext: kne.KNE_Extension, delta_time: f64) {}
 kne_extension_entry :: proc "c" (new_host: ^kne.KNE_Host) -> ^kne.KNE_Extension_Desc {
 	context = runtime.default_context()
 	host = new_host
-	desc = kne.KNE_Extension_Desc {
-		size      = u32(size_of(kne.KNE_Extension_Desc)),
-		abi_major = kne.ABI_MAJOR,
-		abi_minor = kne.ABI_MINOR,
-		id        = kne.str("kne.hello"),
-		name      = kne.str("Hello KNE"),
-		version   = kne.str("1.0.0"),
-		author    = kne.str("Kinemium"),
-		on_load   = on_load,
-		on_start  = on_start,
-		on_stop   = on_stop,
-		on_unload = on_unload,
-		on_update = on_update,
-	}
+	desc = kne.extension_descriptor("kne.hello", "Hello KNE", "1.0.0", "Kinemium")
+	desc.on_load = on_load
+	desc.on_start = on_start
+	desc.on_stop = on_stop
+	desc.on_unload = on_unload
+	desc.on_update = on_update
 	return &desc
 }
-
-

@@ -37,6 +37,12 @@ list.Parent = frame
 
 Per-side padding properties mirror `Padding` for edges the layout needs.
 
+## Additional layout properties
+
+All three edge paddings (`PaddingRight`, `PaddingTop`, and `PaddingBottom`) are read/write `UDim` values and default to zero. `AbsoluteContentSize` is a read-only `Vector2` giving the calculated content size in pixels.
+
+Set `PositionCallback` to a function or `nil` (the default) to customize item positions. The callback receives `(item: GuiObject, index: number, defaultPosition: Vector2, deltaTime: number)` and can return a `Vector2` to override the position. A failed callback or a different return type leaves the default position unchanged.
+
 ## Notes
 
 - `Wraps` requires a line limit or a container size to determine when to break.

@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "Disable C++ module scanning for cross builds" FORCE)
+set(CMAKE_CXX_MODULE_STD OFF)
 project(KinemiumAndroidNative LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)

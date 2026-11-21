@@ -7,21 +7,18 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
-BindableEvent_Class := Class_Info{
+BindableEvent_Class := Class_Info {
 	name   = "BindableEvent",
 	parent = &Instance_Class,
 }
 
 BindableEvent :: struct {
 	using object: Object,
-
-	event: ^signals.Signal,
+	event:        ^signals.Signal,
 }
 
 BindableEvent_Init :: proc() -> BindableEvent {
-	return BindableEvent{
-		object = Object_Init(&BindableEvent_Class),
-	}
+	return BindableEvent{object = Object_Init(&BindableEvent_Class)}
 }
 
 bindable_event_get :: proc(
@@ -35,8 +32,7 @@ bindable_event_get :: proc(
 	switch key {
 	case "Event":
 		if event.event == nil {
-			if object.signal_registry == nil ||
-			   object.signal_registry.signal_registry == nil {
+			if object.signal_registry == nil || object.signal_registry.signal_registry == nil {
 				return false
 			}
 			event.event = signals.Create(object.signal_registry.signal_registry)
@@ -53,7 +49,10 @@ bindable_event_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	event := cast(^BindableEvent)object
 	switch method {
 	case "Fire":
@@ -87,24 +86,20 @@ bindable_event_clone :: proc(source: ^Object, destination: ^Object) {
 	_ = destination
 }
 
-BindableFunction_Class := Class_Info{
+BindableFunction_Class := Class_Info {
 	name   = "BindableFunction",
 	parent = &Instance_Class,
 }
 
 BindableFunction :: struct {
-	using object: Object,
-
+	using object:  Object,
 	function:      ^signals.Signal,
 	event_name:    string,
 	returns_event: bool,
 }
 
 BindableFunction_Init :: proc() -> BindableFunction {
-	return BindableFunction{
-		object    = Object_Init(&BindableFunction_Class),
-		returns_event = true,
-	}
+	return BindableFunction{object = Object_Init(&BindableFunction_Class), returns_event = true}
 }
 
 bindable_function_get :: proc(
@@ -118,12 +113,10 @@ bindable_function_get :: proc(
 	switch key {
 	case "Event":
 		if function.function == nil {
-			if object.signal_registry == nil ||
-			   object.signal_registry.signal_registry == nil {
+			if object.signal_registry == nil || object.signal_registry.signal_registry == nil {
 				return false
 			}
-			function.function =
-				signals.Create(object.signal_registry.signal_registry)
+			function.function = signals.Create(object.signal_registry.signal_registry)
 		}
 		signals.Push(L, function.function)
 		return true
@@ -160,7 +153,10 @@ bindable_function_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	function := cast(^BindableFunction)object
 	switch method {
 	case "Invoke":
@@ -203,10 +199,11 @@ Register_BindableFunction :: proc(registry: ^Registry) {
 		&BindableFunction_Class,
 		bindable_function_construct,
 		bindable_function_destroy,
-		get      = bindable_function_get,
-		set      = bindable_function_set,
+		get = bindable_function_get,
+		set = bindable_function_set,
 		namecall = bindable_function_namecall,
-		clone    = bindable_function_clone,
+		methods = []string{"Invoke"},
+		clone = bindable_function_clone,
 	)
 }
 
@@ -216,8 +213,9 @@ Register_BindableEvent :: proc(registry: ^Registry) {
 		&BindableEvent_Class,
 		bindable_event_construct,
 		bindable_event_destroy,
-		get      = bindable_event_get,
+		get = bindable_event_get,
 		namecall = bindable_event_namecall,
-		clone    = bindable_event_clone,
+		methods = []string{"Fire"},
+		clone = bindable_event_clone,
 	)
 }

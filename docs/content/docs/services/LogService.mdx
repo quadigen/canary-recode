@@ -88,6 +88,8 @@ Only the most recent 1,000 entries are kept. Older entries are dropped from the 
 - `print()` and `warn()` in Luau are routed through this service, so they contribute to the counters and history.
 - The timestamp is captured when the entry is written, in seconds, not milliseconds.
 
+`ClearOutput(): ()` is an alias of `Clear()`; both clear the log history and reset its counts.
+
 ## See also
 
 - `RunService`, frame context for diagnostics.

@@ -4,6 +4,7 @@ import engine_enums "../enum"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 push_font :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Font) {
 	push_value(L, binding, Font_Clone(value))
@@ -51,6 +52,30 @@ font_new :: proc "c" (L: ^vm.State) -> i32 {
 	value := Font_New(family, weight, style)
 	defer Font_Destroy(&value)
 
+	push_font(L, binding, value)
+	return 1
+}
+
+font_from_id :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	binding := binding_from_upvalue(L)
+	registry := registry_from_binding(binding)
+	id := vm.ArgNumber(L, 1)
+	if !(id >= 0 &&
+		   id < 9.223372036854776e18 &&
+		   id == math.floor(id)) {return vm.RaiseError(L, "invalid font asset ID")}
+	weight := engine_enums.FontWeight.Regular
+	style := engine_enums.FontStyle.Normal
+	if !vm.IsNoneOrNil(
+		L,
+		2,
+	) {weight = engine_enums.FontWeight(engine_enums.Arg_Item(L, 2, registry.enums, "FontWeight").value)}
+	if !vm.IsNoneOrNil(
+		L,
+		3,
+	) {style = engine_enums.FontStyle(engine_enums.Arg_Item(L, 3, registry.enums, "FontStyle").value)}
+	value := Font_New(fmt.tprintf("rbxassetid://%d", i64(id)), weight, style)
+	defer Font_Destroy(&value)
 	push_font(L, binding, value)
 	return 1
 }
@@ -223,6 +248,7 @@ Font_Luau_Binding :: proc() -> vm.Userdata_Binding {
 Font_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", font_new)
 	add_library_function(L, binding, "fromEnum", font_from_enum)
+	add_library_function(L, binding, "fromId", font_from_id)
 	add_library_function(L, binding, "fromName", font_from_name)
 	add_library_function(L, binding, "fromMemory", font_from_memory)
 }

@@ -3,7 +3,7 @@ title: VRService
 description: Enable experimental OpenXR stereo rendering and read headset and controller poses.
 ---
 
-`VRService` exposes the desktop OpenXR session to local scripts. The first implementation targets Linux with the Vulkan renderer. A normal desktop launch does not require OpenXR or a headset.
+`VRService` exposes the desktop OpenXR session to local scripts. VR is currently experimental and supported on Linux with Vulkan. A normal desktop launch does not require OpenXR or a headset.
 
 ## Running a VR game
 
@@ -14,7 +14,7 @@ sudo pacman -S openxr
 yay -S monado-git
 ```
 
-Rebuild the native libraries and the engine after installing the headers:
+If you are building Kinemium from source, rebuild after installing the headers:
 
 ```bash
 just deps
@@ -53,9 +53,61 @@ If your package installs the manifest elsewhere, use that path instead. The runt
 
 Tracking poses are available for `Head`, `LeftHand`, `RightHand`, and `Floor` (if the runtime supports stage space). Hands represent controller grip poses, not individual fingers. One tracking meter is one engine world unit.
 
+## Controller input and haptics
+
+| Method | Return |
+| --- | --- |
+| `GetControllerState(hand: Enum.UserCFrame): table` | Current controller input. |
+| `SetControllerHaptic(hand: Enum.UserCFrame, amplitude: number, seconds: number, frequency: number?): boolean` | Whether vibration was accepted. |
+
+Use `Enum.UserCFrame.LeftHand` or `Enum.UserCFrame.RightHand` for these methods; other enum values raise an error.
+
+### Controller state
+
+| Field | Type | Description |
+| --- | --- | --- |
+| Active | boolean | At least one input action is active |
+| Trigger | number | Analog value from 0 to 1, or select button as 0/1 |
+| Grip | number | Analog squeeze or digital grip from 0 to 1 |
+| Thumbstick | Vector2 | Stick or trackpad axes |
+| TriggerAvailable | boolean | Trigger/select action active |
+| GripAvailable | boolean | Squeeze action active |
+| ThumbstickAvailable | boolean | Stick/trackpad action active |
+
+Unavailable input reads as zero; use availability flags to distinguish this from a released control.
+Input is sampled once per XR frame; scripts may read the previous completed sample.
+The simple controller profile exposes select (mapped to Trigger) but not necessarily grip or stick actions.
+
+### Haptics
+
+Amplitude is between 0 and 1. Duration is specified in seconds (0 to 10).
+The optional frequency is expressed in Hz; zero selects the runtime's default.
+Zero amplitude or duration stops that hand's vibration. The call returns false
+when the session is inactive/unfocused or the request is rejected. Actual
+vibration depends on controller/runtime support.
+
+```lua
+local VR = game:GetService("VRService")
+local RunService = game:GetService("RunService")
+local hand = Enum.UserCFrame.RightHand
+local held = false
+
+RunService.RenderStepped:Connect(function()
+    local state = VR:GetControllerState(hand)
+    local pressed = state.TriggerAvailable and state.Trigger > 0.7
+    if pressed and not held then
+        VR:SetControllerHaptic(hand, 0.5, 0.1)
+    end
+    held = pressed
+end)
+```
+
+This is an experimental Kinemium-specific input API. It does not yet dispatch
+VR button events via UserInputService or ContextActionService.
+
 ## Example: visualize controller tracking
 
-Place this code in a local script in a map. The two anchored parts follow controller grip poses relative to the base camera. Do not multiply the headset pose into the base camera yourself: the stereo renderer already applies the tracked eye transforms.
+Place this code in a local script in a map. The two anchored parts follow controller grip poses relative to the base camera. Do not multiply the headset pose into the base camera yourself: the VR view already follows the headset.
 
 ```lua
 local VR = game:GetService("VRService")
@@ -90,6 +142,6 @@ RunService.RenderStepped:Connect(function()
 end)
 ```
 
-## Implementation status
+## Limitations
 
-This is an experimental raster-rendered stereo path. It renders separate eye cameras and copies their images on the Vulkan GPU to runtime swapchains. It uses synchronous GPU completion initially; performance, image layouts, physical headset compatibility and runtime behavior still need validation on a real build. Desktop 2D GUI, path tracing, custom post-processes, controller buttons, haptics, skeleton hand tracking, mobile/Windows VR, and automatic locomotion are not included. VR startup failures fall back to normal desktop rendering.
+VR is experimental. Physical headset compatibility and performance still need validation. Windows and mobile VR, skeletal hand tracking, and automatic locomotion aren't supported. VR startup failures fall back to normal desktop rendering.

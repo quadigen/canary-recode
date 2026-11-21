@@ -1,0 +1,26 @@
+---
+title: Sky
+description: Use six square texture faces as a native cubemap skybox.
+---
+
+Use six square texture faces as a native cubemap skybox.
+
+## Getting started
+
+```lua
+local sky = Instance.new("Sky", game:GetService("Lighting"))
+sky.SkyboxRt = "right.png"
+sky.SkyboxLf = "left.png"
+sky.SkyboxUp = "up.png"
+sky.SkyboxDn = "down.png"
+sky.SkyboxBk = "back.png"
+sky.SkyboxFt = "front.png"
+```
+
+## Properties
+
+SkyboxRt, SkyboxLf, SkyboxUp, SkyboxDn, SkyboxBk and SkyboxFt specify images. Each face must have the same square dimensions.
+
+## Notes
+
+The native backend uploads CPU image data directly, with a procedural sky fallback. Modern Roblox Content properties are converted into legacy URI properties by the porter. Unembedded Roblox IDs require their actual image payloads before rendering; pass authorized asset credentials to the porter to embed images. SkyboxOrientation, custom sun and moon images, angular sizes and star count are preserved, but not fully rendered. Web cubemaps currently fall back to the procedural sky.

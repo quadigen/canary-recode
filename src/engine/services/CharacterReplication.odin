@@ -235,9 +235,6 @@ character_client_authoritative :: proc(
 }
 
 
-CHARACTER_SWEEP_ITERATIONS :: 4
-
-
 CharacterController_Walkable_Cos :: proc(max_slope_angle: f32) -> f32 {
 	return math.cos(math.to_radians(clamp(max_slope_angle, 0, 89.9)))
 }
@@ -258,8 +255,8 @@ CharacterController_Ground_Cast :: proc(
 	normal = datatypes.Vector3{0, 1, 0}
 	body_id = kineffi.JPH_BODY_ID_INVALID
 	if physics == nil || coll == nil || !coll.body_created || coll.shape == nil {return}
-	distance := max(snap_distance, 0) + classes.COLLISION_SKIN
-	origin := datatypes.Vector3{position.x, position.y + classes.COLLISION_SKIN, position.z}
+	distance := max(snap_distance, 0) + coll.skin_width
+	origin := datatypes.Vector3{position.x, position.y + f64(coll.skin_width), position.z}
 	contact, contact_normal, contact_body, _, did_hit := physics_character_sweep(
 		physics,
 		coll,
@@ -289,7 +286,7 @@ CharacterController_Sweep :: proc(
 	position := origin
 	remaining := displacement
 	walkable_cos := CharacterController_Walkable_Cos(max_slope_angle)
-	for _ in 0 ..< CHARACTER_SWEEP_ITERATIONS {
+	for _ in 0 ..< coll.sweep_iterations {
 		length := datatypes.Vec3_Magnitude(remaining)
 		if length <= 0.0001 {break}
 		direction := datatypes.Vec3_Divide(remaining, length)
@@ -308,7 +305,7 @@ CharacterController_Sweep :: proc(
 		normal_length := datatypes.Vec3_Magnitude(contact_normal)
 		if normal_length <= 0.0001 {break}
 		normal := datatypes.Vec3_Divide(contact_normal, normal_length)
-		advance := max(f64(fraction) * length - classes.COLLISION_SKIN, 0)
+		advance := max(f64(fraction) * length - f64(coll.skin_width), 0)
 		position = datatypes.Vec3_Add(position, datatypes.Vec3_Multiply(direction, advance))
 		remaining = datatypes.Vec3_Multiply(direction, length - advance)
 		if normal.y >= f64(walkable_cos) {
@@ -405,7 +402,6 @@ CharacterController_Tick :: proc(
 	)
 	if movement != nil {
 		movement.walk_speed = cc.walk_speed
-		movement.acceleration = 10 * cc.walk_speed
 	}
 	if sm != nil && sm.state == "Dead" {
 		cc.vertical_speed = 0
@@ -415,7 +411,6 @@ CharacterController_Tick :: proc(
 	if humanoid != nil {
 		classes.Humanoid_Sync(humanoid, cc, L, dt)
 	}
-	move_dir, jump := classes.MovementController_Step(movement, dt)
 	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
 	if collision != nil {
 		Physics_Ensure_Character_Capsule(physics, collision, root, position)
@@ -439,18 +434,29 @@ CharacterController_Tick :: proc(
 			Physics_Character_Report_Contact(physics, collision, root, ground_body)
 		}
 	}
+	if cc.vertical_speed > 0 {
+		grounded = false
+		if ground != nil {ground.grounded = false}
+	}
+	if !cc.jump_enabled && movement != nil {
+		movement.jump_buffered = false
+		movement.jump_buffer_time = 0
+	}
+	move_dir, jump := classes.MovementController_Step(movement, dt, grounded)
 	was_grounded := grounded || cc.coyote_time > 0
 	if grounded {
-		cc.coyote_time = classes.CHARACTER_COYOTE_TIME
+		cc.coyote_time = cc.coyote_duration
 	} else if cc.coyote_time > 0 {
 		cc.coyote_time -= dt
 	}
-	jumped := jump && was_grounded
+	jumped := jump && was_grounded && cc.jump_enabled && cc.gravity > 0 && cc.jump_height > 0
 	if jumped {
-		cc.vertical_speed = math.sqrt(2 * cc.jump_height * classes.CHARACTER_GRAVITY)
+		cc.vertical_speed = math.sqrt(2 * cc.jump_height * cc.gravity)
 		cc.coyote_time = 0
+		if movement != nil {movement.jump_buffered = false; movement.jump_buffer_time = 0}
 	}
-	cc.vertical_speed -= classes.CHARACTER_GRAVITY * dt
+	cc.vertical_speed -= cc.gravity * dt
+	if cc.max_fall_speed > 0 {cc.vertical_speed = max(cc.vertical_speed, -cc.max_fall_speed)}
 	water := Water_Context_Create(physics)
 	half_height := collision != nil ? collision.half_height + collision.radius : f32(2.5)
 	wet, wave_speed := Water_Submersion(&water, position, half_height)
@@ -460,7 +466,7 @@ CharacterController_Tick :: proc(
 			cc.vertical_speed,
 			wave_speed,
 			wet,
-			classes.CHARACTER_GRAVITY,
+			cc.gravity,
 			dt,
 		)
 	}
@@ -479,7 +485,7 @@ CharacterController_Tick :: proc(
 
 		cast_origin := datatypes.Vector3 {
 			position.x,
-			position.y + classes.COLLISION_SKIN,
+			position.y + f64(collision.skin_width),
 			position.z,
 		}
 		blocked := kineffi.JPH_BODY_ID_INVALID
@@ -492,13 +498,13 @@ CharacterController_Tick :: proc(
 			cc.max_slope_angle,
 			&blocked,
 		)
-		if grounded {
+		if grounded && !jumped && collision.step_height > 0 {
 			wanted := math.abs(move.x) + math.abs(move.z)
 			gained := math.abs(applied.x) + math.abs(applied.z)
 			if gained < wanted - 0.001 {
 				elevated := datatypes.Vector3 {
 					position.x,
-					position.y + classes.COLLISION_STEP_HEIGHT + classes.COLLISION_SKIN,
+					position.y + f64(collision.step_height + collision.skin_width),
 					position.z,
 				}
 				step_blocked := kineffi.JPH_BODY_ID_INVALID
@@ -514,7 +520,7 @@ CharacterController_Tick :: proc(
 				if math.abs(step.x) + math.abs(step.z) > gained + 0.001 {
 					applied = step
 					blocked = step_blocked
-					position.y += classes.COLLISION_STEP_HEIGHT
+					position.y += f64(collision.step_height)
 				}
 			}
 		}
@@ -533,7 +539,8 @@ CharacterController_Tick :: proc(
 				nil,
 			)
 			position = datatypes.Vec3_Add(position, applied_vertical)
-			if cc.vertical_speed < 0 && applied_vertical.y > vertical.y + 0.0001 {
+			if (cc.vertical_speed < 0 && applied_vertical.y > vertical.y + 0.0001) ||
+			   (cc.vertical_speed > 0 && applied_vertical.y < vertical.y - 0.0001) {
 				cc.vertical_speed = 0
 			}
 		}
@@ -545,6 +552,7 @@ CharacterController_Tick :: proc(
 			ground != nil ? ground.snap_distance : 0.6,
 			position,
 		)
+		if ground != nil {ground.grounded = false}
 		if settle_hit {
 			if tracking_contacts {
 				Physics_Character_Report_Contact(physics, collision, root, settle_body)
@@ -556,7 +564,9 @@ CharacterController_Tick :: proc(
 				if ground != nil {
 					ground.grounded = true
 					ground.rest_y = settle_y
-					ground.slope_angle = f32(math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1))))
+					ground.slope_angle = f32(
+						math.to_degrees(math.acos(clamp(settle_normal.y, -1, 1))),
+					)
 				}
 			}
 		}
@@ -568,8 +578,10 @@ CharacterController_Tick :: proc(
 	yaw: f32
 	_, current_yaw, _ := datatypes.CFrame_ToEulerAnglesYXZ(root.cframe)
 	yaw = f32(math.to_degrees(current_yaw))
+	if rotation != nil {rotation.yaw = yaw}
 	if rotation != nil && cc.auto_rotate {
-		if move_dir.x != 0 || move_dir.z != 0 {
+		if !rotation.face_movement {rotation.target_yaw = rotation.manual_target_yaw}
+		if rotation.face_movement && (move_dir.x != 0 || move_dir.z != 0) {
 			classes.RotationController_Set_Target(rotation, move_dir)
 		}
 		yaw = classes.RotationController_Step(rotation, dt)
@@ -580,7 +592,7 @@ CharacterController_Tick :: proc(
 	cf.z = position.z
 	character_set_root_frame(root, cf)
 
-	knockback_damping := math.exp(-classes.CHARACTER_KNOCKBACK_DAMPING * dt)
+	knockback_damping := math.exp(-cc.knockback_damping * dt)
 	cc.knockback.x *= f64(knockback_damping)
 	cc.knockback.z *= f64(knockback_damping)
 	if math.abs(cc.knockback.x) < 0.0001 {cc.knockback.x = 0}

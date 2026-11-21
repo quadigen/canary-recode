@@ -45,14 +45,14 @@ A `Distance` of `0` leaves distance fog unconstrained; use `Density` to control 
 
 ## How it's applied
 
-Fog is one of the advanced lighting effects. `Lighting` sends its values to the renderer once per frame, and the effect doesn't run in the editor's fast viewport.
+Fog is one of the advanced lighting effects. The effect updates each frame, but isn't visible in the editor's fast viewport.
 
 Only one `FogEffect` is used. If you add several, the last one in `Lighting`'s child list wins.
 
 ## Notes
 
 - Disabling the effect leaves no fog from this class.
-- The values are passed through as configured; the renderer decides the exact visual falloff.
+- The exact visual falloff can vary.
 - Cloning copies every property above.
 
 ## See also

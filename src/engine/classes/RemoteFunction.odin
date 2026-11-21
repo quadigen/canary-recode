@@ -10,8 +10,7 @@ RemoteFunction_Class := Class_Info {
 }
 
 RemoteFunction :: struct {
-	using object: Object,
-
+	using object:     Object,
 	on_server_invoke: i32,
 	on_client_invoke: i32,
 }
@@ -139,5 +138,6 @@ Register_RemoteFunction :: proc(registry: ^Registry) {
 		get = RemoteFunction_get,
 		set = RemoteFunction_set,
 		events = []string{"OnServerInvoke", "OnClientInvoke"},
+		methods = []string{"InvokeServer", "InvokeClient", "InvokeClients"},
 	)
 }

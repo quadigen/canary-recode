@@ -1,0 +1,16 @@
+---
+title: Attachment2D
+description: A position marker for 2D scenes.
+---
+
+Use an Attachment2D to mark a location in a 2D level. It's a lightweight point with the usual Position and Rotation properties, and doesn't create a collider.
+
+```lua
+local spawn = Instance.new("Attachment2D", workspace)
+spawn.Position = UDim2.fromOffset(120, 80)
+
+local player = Instance.new("Part2D", workspace)
+player.Position = spawn.Position
+```
+
+It works under World2D and Folder containers. Use a regular Folder for organization; you don't need an extra grouping node.

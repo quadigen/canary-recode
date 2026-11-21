@@ -7,14 +7,16 @@ import vm "../vm"
 import "core:fmt"
 
 REMOTE_FUNCTION_TIMEOUT_MS :: 10_000
+REMOTE_MAX_ARGS :: 256
 UNRELIABLE_REMOTE_MAX_PAYLOAD :: 1000
 
 Remote_Invoke_Pending :: struct {
-	entity_id:  u32,
-	invoke_id:  u32,
-	thread:     ^vm.State,
-	thread_ref: i32,
-	deadline:   u32,
+	entity_id:       u32,
+	request_user_id: u32,
+	invoke_id:       u32,
+	thread:          ^vm.State,
+	thread_ref:      i32,
+	deadline:        u32,
 }
 
 remote_find_player_peer :: proc(
@@ -63,6 +65,7 @@ remote_encode_args :: proc(
 	bytes: ^[dynamic]u8,
 	capabilities: u32,
 ) -> bool {
+	if last - first + 1 > REMOTE_MAX_ARGS {return false}
 	for index := first; index <= last; index += 1 {
 		if !replication_encode_value(L, index, bytes, 0, remote_capabilities = capabilities) {
 			return false
@@ -157,6 +160,7 @@ remote_yield_for_invoke :: proc(
 	L: ^vm.State,
 	entity_id: u32,
 	invoke_id: u32,
+	request_user_id: u32 = 0,
 ) {
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
@@ -165,6 +169,7 @@ remote_yield_for_invoke :: proc(
 		&service.invoke_pending,
 		Remote_Invoke_Pending {
 			entity_id = entity_id,
+			request_user_id = request_user_id,
 			invoke_id = invoke_id,
 			thread = L,
 			thread_ref = thread_ref,
@@ -303,13 +308,13 @@ remote_call_dispatch :: proc(
 				}
 				invoke_id := replicator.next_invoke_id
 				entity_id := replication_entity_id(replicator, instance)
-				_ = remote_send_invoke_request(
+				if !remote_send_invoke_request(
 					replicator,
 					replicator.remote,
 					entity_id,
 					invoke_id,
 					bytes[:],
-				)
+				) {return vm.RaiseError(L, "Failed to send RemoteFunction request"), true}
 				remote_yield_for_invoke(replicator, L, entity_id, invoke_id)
 				return vm.YieldThread(L), true
 			case .Server:
@@ -324,7 +329,7 @@ remote_call_dispatch :: proc(
 			first_arg := 2
 			if method == "InvokeClient" {
 				if !vm.IsNoneOrNil(L, 2) {
-					target = cast(^classes.Object)vm.UserdataValue(L, 2)
+					target = classes.Object_From_Argument(L, 2)
 				}
 				if target == nil || !classes.Is_A(target, "Player") {
 					return vm.RaiseError(L, "InvokeClient expects a Player as the first argument"),
@@ -377,7 +382,13 @@ remote_call_dispatch :: proc(
 				if !sent {
 					return vm.RaiseError(L, "No client is connected to InvokeClient"), true
 				}
-				remote_yield_for_invoke(replicator, L, entity_id, invoke_id)
+				remote_yield_for_invoke(
+					replicator,
+					L,
+					entity_id,
+					invoke_id,
+					(cast(^Player)target).user_id if target != nil else 0,
+				)
 				return vm.YieldThread(L), true
 			case .Client:
 				return vm.RaiseError(L, "InvokeClient can only be called from the server"), true
@@ -462,7 +473,7 @@ remote_receive_fire :: proc(
 		reader.valid = false
 		return
 	}
-	if unreliable && service.mode == .Server {
+	if service.mode == .Server {
 		connection := replication_peer_of(service, peer)
 		if connection == nil ||
 		   !connection.handshake_complete ||
@@ -493,7 +504,8 @@ remote_receive_fire :: proc(
 
 	arg_count := offset_before
 	for reader.valid && reader.offset < len(reader.data) {
-		if !vm.CheckStack(L, 16) {reader.valid = false; return}
+		if arg_count - offset_before >= REMOTE_MAX_ARGS ||
+		   !vm.CheckStack(L, 16) {reader.valid = false; return}
 		replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 		if !reader.valid {
 			return
@@ -527,6 +539,16 @@ remote_run_invoke :: proc(
 		reader.valid = false
 		return
 	}
+	if service.mode == .Server {
+		connection := replication_peer_of(service, request_peer)
+		if connection == nil ||
+		   !connection.handshake_complete ||
+		   connection.known[entity_id] == 0 ||
+		   !replication_visible(service, connection, entity.object) {
+			reader.offset = len(reader.data)
+			return
+		}
+	}
 	remote_function := cast(^classes.RemoteFunction)entity.object
 
 	handler: i32
@@ -556,6 +578,7 @@ remote_run_invoke :: proc(
 
 	arg_count := 0
 	for reader.valid && reader.offset < len(reader.data) {
+		if arg_count >= REMOTE_MAX_ARGS || !vm.CheckStack(L, 16) {reader.valid = false; return}
 		replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
 		if !reader.valid {
 			reader.valid = false
@@ -563,6 +586,7 @@ remote_run_invoke :: proc(
 		}
 		arg_count += 1
 	}
+	if !vm.CheckStack(L, arg_count + 2) {reader.valid = false; return}
 	arg_base := top + 1
 
 	base := vm.StackTop(L)
@@ -605,6 +629,7 @@ remote_run_invoke :: proc(
 remote_receive_invoke_response :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
+	peer: ^Replication_Transport_Peer,
 	reader: ^Replication_Reader,
 ) {
 	entity_id := replication_read_u32(reader)
@@ -622,6 +647,18 @@ remote_receive_invoke_response :: proc(
 	pending_index := -1
 	for pending, index in service.invoke_pending {
 		if pending.invoke_id == invoke_id && pending.entity_id == entity_id {
+			if service.mode == .Server {
+				connection := replication_peer_of(service, peer)
+				entity := replication_entity_by_id(service, entity_id)
+				if connection == nil ||
+				   connection.player == nil ||
+				   (pending.request_user_id != 0 &&
+						   pending.request_user_id != connection.player.user_id) ||
+				   entity == nil ||
+				   entity.object == nil ||
+				   connection.known[entity_id] == 0 ||
+				   !replication_visible(service, connection, entity.object) {continue}
+			}
 			pending_index = index
 			break
 		}
@@ -639,28 +676,32 @@ remote_receive_invoke_response :: proc(
 	value_count := 0
 	if status == 1 {
 		for reader.valid && reader.offset < len(reader.data) {
+			if value_count >= REMOTE_MAX_ARGS ||
+			   !vm.CheckStack(L, 16) {reader.valid = false; break}
 			replication_decode_value(L, reader, service.signal_registry.datatypes, 0, service)
-			if !reader.valid {
-				value_count = 0
-				vm.PushNil(L)
-				vm.PushString(L, "RemoteFunction invocation failed")
-				value_count = 2
-				reader.valid = true
-				reader.offset = len(reader.data)
-				break
-			}
-			value_count += 1
+			if reader.valid {value_count += 1}
+		}
+		if !reader.valid {
+			vm.SetStackTop(L, top)
+			vm.PushNil(L)
+			vm.PushString(L, "RemoteFunction invocation failed")
+			value_count = 2
 		}
 	} else {
 		err_text := replication_read_string(reader)
-		reader.offset = len(reader.data)
+		if reader.offset != len(reader.data) {reader.valid = false}
 		vm.PushNil(L)
-		vm.PushString(L, err_text == "" ? "RemoteFunction invocation failed" : err_text)
+		vm.PushString(
+			L,
+			err_text if reader.valid && err_text != "" else "RemoteFunction invocation failed",
+		)
 		value_count = 2
 	}
-
-	for index := top + 1; index <= top + value_count; index += 1 {
-		vm.CopyValueToThread(L, pending.thread, index)
+	if !vm.CheckStack(pending.thread, value_count) {
+		vm.SetStackTop(L, top)
+		vm.PushNil(L)
+		vm.PushString(L, "RemoteFunction response exceeds stack capacity")
+		value_count = 2
 	}
 	for index := top + 1; index <= top + value_count; index += 1 {
 		vm.CopyValueToThread(L, pending.thread, index)

@@ -156,7 +156,50 @@ replication_schema :: proc(
 	   service.data_model.registry.classes == nil {
 		return nil
 	}
-	if replication_builtin_class(class_name) {
+
+	controller_properties: []string
+	switch class_name {
+	case "CharacterController":
+		controller_properties = []string {
+			"WalkSpeed",
+			"JumpHeight",
+			"AutoRotate",
+			"MaxSlopeAngle",
+			"Gravity",
+			"CoyoteTime",
+			"KnockbackMass",
+			"KnockbackDamping",
+			"MaxFallSpeed",
+			"JumpEnabled",
+		}
+	case "MovementController":
+		controller_properties = []string {
+			"Acceleration",
+			"UseAutomaticAcceleration",
+			"DecelerationMultiplier",
+			"AirControl",
+			"SpeedMultiplier",
+			"JumpBufferTime",
+			"AnalogInput",
+		}
+	case "RotationController":
+		controller_properties = []string{"TurnRate", "FaceMovement", "TargetYaw"}
+	case "CollisionController":
+		controller_properties = []string{"StepHeight", "SkinWidth", "SweepIterations"}
+	case "GroundDetector":
+		controller_properties = []string{"SnapDistance"}
+	case "CharacterMotor":
+		controller_properties = []string{"StepsPerSecond", "MaxFrameTime"}
+	}
+	if len(controller_properties) > 0 {
+		schema := Replication_Schema {
+			class_name = strings.clone(class_name),
+		}
+		for property in controller_properties {append(&schema.properties, strings.clone(property))}
+		append(&service.schemas, schema)
+		return &service.schemas[len(service.schemas) - 1]
+	}
+	if replication_builtin_class(class_name) || class_name == "EditableSound" {
 		return nil
 	}
 	properties := classes.Class_Property_List(
@@ -168,6 +211,9 @@ replication_schema :: proc(
 	schema.class_name = strings.clone(class_name)
 	descriptor := classes.Find_Class(service.data_model.registry.classes, class_name)
 	for property in properties {
+
+		if class_name == "Camera" &&
+		   (property == "ViewportSize" || property == "DiagonalFieldOfView") {continue}
 		if class_name == "PhysicsModel" &&
 		   (property == "Pivot" || property == "WorldPivot") {continue}
 		if class_name == "Attachment" && property == "CFrame" {continue}
@@ -186,6 +232,7 @@ replication_schema :: proc(
 			continue
 		}
 		if class_name == "SoftBody" && property == "LastError" {continue}
+		if class_name == "Sound" && property == "EditableSound" {continue}
 		switch property {
 		case "Parent",
 		     "Name",
@@ -289,7 +336,8 @@ character_subtree_class :: proc(class_name: string) -> bool {
 replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
 	return(
 		object != nil &&
-		((classes.Is_A_Class(object, &classes.Part_Class) && (property == "CanTouch" || property == "Gravity")) ||
+		((classes.Is_A_Class(object, &classes.Part_Class) &&
+					(property == "CanTouch" || property == "Gravity")) ||
 				(classes.Is_A_Class(object, &classes.PartOperation_Class) &&
 						(property == "UsePartColor" ||
 								property == "CanQuery" ||
@@ -327,8 +375,7 @@ replication_group_contains :: proc(
 	return false
 }
 
-// PlayerGui containers are local to each runtime. Only their contents are
-// network entities, with the owning Player used as the visibility boundary.
+
 replication_player_gui_owner :: proc(
 	service: ^ReplicatorService,
 	object: ^classes.Object,
@@ -440,7 +487,10 @@ replication_lod_tier :: proc(
 ) {
 	if service.lod_near_fraction >= 1 {return false}
 	if service.relevancy_distance <= 0 {return false}
-	near_sq := f64(service.relevancy_distance) * f64(service.relevancy_distance) * f64(service.lod_near_fraction)
+	near_sq :=
+		f64(service.relevancy_distance) *
+		f64(service.relevancy_distance) *
+		f64(service.lod_near_fraction)
 	return replication_distance_sq(fx, fy, fz, part) > near_sq
 }
 
@@ -493,15 +543,13 @@ replication_relevant_to :: proc(
 	has_focus: bool,
 ) -> bool {
 	if object == nil {return false}
-	// Parts in an owned PlayerGui belong to its viewports.
+
 	if _, owner := replication_scope(service, object); owner != nil {return true}
-	// A joined player without an owned spatial focus still needs the world,
-	// e.g. a lobby, spectator or a game using custom character controllers.
-	// Visibility, ownership, groups and suppression are checked separately.
-	// Once a focus exists, normal distance streaming resumes.
+
+
 	if !has_focus {return connection != nil && connection.handshake_complete && connection.player != nil}
 	distance_sq := f64(service.relevancy_distance) * f64(service.relevancy_distance)
-	// An entity cannot arrive before its ancestors, including streamed-out parts.
+
 	for current := object;
 	    current != nil && !classes.Is_A(current, "Service");
 	    current = current.parent {
@@ -615,7 +663,7 @@ replication_send_owned_state :: proc(
 		for value in values[:12] {
 			hash = (hash ~ transmute(u64)value) * 1099511628211
 		}
-		// Refresh unchanged resting poses twice a second in case an upload was lost.
+
 		if entity.owned_rest_upload_tick != 0 &&
 		   service.tick - entity.owned_rest_upload_tick < 15 &&
 		   entity.owned_rest_upload_hash == hash {return true}
@@ -627,7 +675,16 @@ replication_send_owned_state :: proc(
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity.id)
 	replication_put_u32(&bytes, service.tick)
-	for value in values {replication_put_f64(&bytes, value)}
+	if (service.client_capabilities &
+		   service.server_capabilities &
+		   Replication_Capability_Compact_Physics) !=
+	   0 {
+		replication_put_compact_f64s(&bytes, values[:])
+	}
+	if len(bytes) == 8 || len(bytes) >= 152 {
+		resize(&bytes, 8)
+		for value in values {replication_put_f64(&bytes, value)}
+	}
 	if !replication_send(
 		service,
 		service.remote,
@@ -647,13 +704,12 @@ replication_peer_snapshot_tick :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 ) -> u32 {
-	// Changing the send cadence must not change the clock used for packet ordering.
+
 	if connection.snapshot_clock_rate <= 0 {return service.tick}
 	return u32(f64(service.clock) * f64(connection.snapshot_clock_rate))
 }
 
-// Read the actual rigid-body velocities from Jolt or the current network owner.
-// A missing body falls back to the existing position-derived prediction.
+
 replication_body_velocity :: proc(
 	service: ^ReplicatorService,
 	part: ^classes.Part,
@@ -728,10 +784,28 @@ replication_send_part_state :: proc(
 	replication_put_u32(&bytes, replication_entity_id(service, &part.object))
 	replication_put_u32(&bytes, tick)
 	replication_put_string(&bytes, part.name)
-	replication_put_cframe(&bytes, part.cframe)
-	replication_put_f64(&bytes, part.size.x)
-	replication_put_f64(&bytes, part.size.y)
-	replication_put_f64(&bytes, part.size.z)
+	compact := false
+	if (connection.client_capabilities &
+		   service.server_capabilities &
+		   Replication_Capability_Compact_Physics) !=
+	   0 {
+		values: [15]f64
+		frame_values := replication_frame_values(part.cframe)
+		copy(values[:12], frame_values[:])
+		values[12] = part.size.x
+		values[13] = part.size.y
+		values[14] = part.size.z
+		start := len(bytes)
+		replication_put_compact_f64s(&bytes, values[:])
+		compact = len(bytes) - start + 1 < 120
+		if compact {bytes[0] = 3} else {resize(&bytes, start)}
+	}
+	if !compact {
+		replication_put_cframe(&bytes, part.cframe)
+		replication_put_f64(&bytes, part.size.x)
+		replication_put_f64(&bytes, part.size.y)
+		replication_put_f64(&bytes, part.size.z)
+	}
 	replication_put_f32(&bytes, part.color.R)
 	replication_put_f32(&bytes, part.color.G)
 	replication_put_f32(&bytes, part.color.B)
@@ -740,17 +814,17 @@ replication_send_part_state :: proc(
 	append(&bytes, part.can_collide ? u8(1) : u8(0))
 	append(&bytes, u8(part.material))
 	append(&bytes, u8(part.shape))
-	if (connection.client_capabilities &
-		   service.server_capabilities &
-		   Replication_Capability_Body_Velocity) !=
-	   0 {
-		linear, angular, valid := replication_body_velocity(service, part)
-		if valid {
-			values := [6]f64{linear.x, linear.y, linear.z, angular.x, angular.y, angular.z}
-			for value in values {
-				replication_put_f64(&bytes, value)
-			}
-		}
+	linear, angular, valid := replication_body_velocity(service, part)
+	valid =
+		valid &&
+		(connection.client_capabilities &
+				service.server_capabilities &
+				Replication_Capability_Body_Velocity) !=
+			0
+	if compact {append(&bytes, u8(1) if valid else u8(0))}
+	if valid {
+		values := [6]f64{linear.x, linear.y, linear.z, angular.x, angular.y, angular.z}
+		if compact {replication_put_compact_f64s(&bytes, values[:])} else {for value in values {replication_put_f64(&bytes, value)}}
 	}
 
 	hash: u64 = 14695981039346656037
@@ -884,7 +958,7 @@ replication_encode_property_value :: proc(
 	return replication_encode_pushed_property(L, object, property, bytes, connection)
 }
 
-// The caller keeps the instance on top of the stack across property reads.
+
 replication_encode_pushed_property :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -914,7 +988,7 @@ replication_property_stream_extra: u8 = 1
 
 replication_property_batch_limit: u8 = 63
 
-// A packet header, a script or metadata chunk header, and one payload byte.
+
 REPLICATION_MIN_INITIAL_FRAME_BYTES :: 5 + REPLICATION_SCRIPT_SOURCE_HEADER + 1
 
 
@@ -970,7 +1044,7 @@ replication_send_property_batch :: proc(
 		classes.Push_Object(L, item.object)
 		for name in names {
 			clear(&value)
-			// A primary part must be known to this peer before sending its ID.
+
 			property_peer := connection if name == "PrimaryPart" else nil
 			if !replication_encode_pushed_property(
 				L,
@@ -1002,7 +1076,7 @@ replication_send_property_batch :: proc(
 	if remaining >= 0 && len(packet) + 5 * len(ends) > remaining {return false, confirmed}
 
 	wide := len(ends) > int(replication_property_batch_limit)
-	// A different update supersedes the reliably queued startup value.
+
 	if queued {delete_key(&connection.reliable_join_properties, key)}
 	all_sent := true
 	start := 0
@@ -1262,7 +1336,7 @@ replication_initialise_entity :: proc(
 		sent = property_sent
 		connection.property_hashes[item.id] = property_token
 	}
-	// Queue every initial property reliably before announcing a complete scene.
+
 	extra_sent := replication_send_extra_properties(service, connection, item, true)
 	sent = sent && extra_sent
 	if sent && script != nil {
@@ -1374,7 +1448,7 @@ replication_peer_spawn_ready :: proc(
 ) -> bool {
 	if service == nil || connection == nil || connection.player == nil {return false}
 	character := connection.player.character
-	// Spectators and manually spawned players can finish joining with no character.
+
 	if character != nil && !character.destroyed {
 		for child in character.children {
 			if child == nil || child.destroyed || !classes.Is_A(child, "Part") {continue}
@@ -1454,7 +1528,6 @@ replication_sync :: proc(service: ^ReplicatorService) {
 	}
 
 
-	// A server-authoritative PhysicsModel cannot retain a previous client owner.
 	for entity in service.entity_list {
 		if entity.owner_id != 0 &&
 		   classes.Is_A(entity.object, "Part") &&
@@ -1462,9 +1535,10 @@ replication_sync :: proc(service: ^ReplicatorService) {
 			replication_set_ownership(service, entity, 0)
 		}
 	}
-	// A new owner must see the same gravity before it starts simulating.
+
 	replication_send_gravity_updates(service)
 	replication_send_character_settings(service)
+	replication_send_ownership_policy(service)
 	if service.auto_ownership_enabled &&
 	   service.clock - service.auto_ownership_clock >= REPLICATION_AUTO_OWNERSHIP_INTERVAL {
 		service.auto_ownership_clock = service.clock
@@ -1589,7 +1663,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 		fast_join :=
 			!service.bandwidth_budget_configured &&
 			replication_initial_snapshot_pending(&connection)
-		// Resume in-flight reliable chunks before other objects can use the budget.
+
 		if fast_join {
 			if item := replication_entity_by_id(service, u32(connection.metadata_send.key));
 			   item != nil && u64(item.id) == connection.metadata_send.key {
@@ -1651,8 +1725,8 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				spawned,
 			)
 		}
-		// A full startup budget leaves no room for an update packet. Avoid
-		// rescanning every initialized object to attempt sends that cannot fit.
+
+
 		if fast_join &&
 		   replication_initial_snapshot_pending(&connection) &&
 		   replication_remaining_budget(service, &connection, 5) <
@@ -1710,7 +1784,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 				last := connection.part_states[item.id]
 				settled := last.token == confirmed
 				tick := replication_peer_snapshot_tick(service, &connection)
-				// A second sample of the final pose tells observers its inferred velocity is zero.
+
 				repeat_acknowledged := !last.rest_sent && tick != last.tick
 				if replication_model_state_due(
 					service,

@@ -4,7 +4,7 @@ package extensions
 import "core:strings"
 
 KNE_ABI_MAJOR :: u32(3)
-KNE_ABI_MINOR :: u32(0)
+KNE_ABI_MINOR :: u32(1)
 
 
 KNE_ABI_VERSION :: KNE_ABI_MAJOR
@@ -57,6 +57,9 @@ KNE_Value_Kind :: enum i32 {
 	Instance                = 5,
 	Table                   = 6,
 	Function                = 7,
+	Buffer                  = 8,
+	Thread                  = 9,
+	Opaque                  = 10,
 	Vector2                 = 20,
 	Vector3                 = 21,
 	Vector2Int16            = 22,
@@ -523,6 +526,16 @@ KNE_VM_Api :: struct {
 	register_function:         KNE_VM_Register_Function_Fn,
 	register_library_function: KNE_VM_Register_Library_Function_Fn,
 	register_global_datatype:  KNE_VM_Register_Global_Datatype_Fn,
+	execute:                   proc "c" (
+		ext: KNE_Extension,
+		source: KNE_String,
+		args: ^KNE_Value,
+		arg_count: i32,
+		out: ^KNE_Value,
+		out_capacity: i32,
+	) -> i32,
+	get_buffer:                proc "c" (L: KNE_VM, index: i32, out_size: ^uintptr) -> rawptr,
+	push_buffer:               proc "c" (L: KNE_VM, data: rawptr, size: uintptr) -> i32,
 }
 
 

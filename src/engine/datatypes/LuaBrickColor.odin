@@ -25,6 +25,13 @@ Arg_BrickColor :: proc(L: ^vm.State, index: int, registry: ^Registry) -> BrickCo
 brick_color_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
+	registry := registry_from_binding(binding)
+	if vm.StackTop(L) == 3 {
+		color := Color3{f32(vm.ArgNumber(L, 1)), f32(vm.ArgNumber(L, 2)), f32(vm.ArgNumber(L, 3))}
+		push_brick_color(L, binding, BrickColor_From_Color(color))
+		return 1
+	}
+	if vm.IsNoneOrNil(L, 1) {push_brick_color(L, binding, BrickColor_Gray); return 1}
 
 	#partial switch vm.TypeOf(L, 1) {
 	case .String:
@@ -32,7 +39,11 @@ brick_color_new :: proc "c" (L: ^vm.State) -> i32 {
 	case .Number, .Integer:
 		push_brick_color(L, binding, BrickColor_From_Number(i32(vm.ArgNumber(L, 1))))
 	case .Userdata:
-		push_brick_color(L, binding, Arg_BrickColor(L, 1, registry_from_binding(binding)))
+		if vm.IsUserdataType(
+			L,
+			1,
+			&registry.color3,
+		) {push_brick_color(L, binding, BrickColor_From_Color(Arg_Color3(L, 1, registry)))} else {push_brick_color(L, binding, Arg_BrickColor(L, 1, registry))}
 	case:
 		return vm.RaiseError(L, "BrickColor.new expects a number, name, or BrickColor")
 	}
@@ -41,11 +52,49 @@ brick_color_new :: proc "c" (L: ^vm.State) -> i32 {
 
 brick_color_random :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
-	palette := [?]BrickColor{
-		BrickColor_White, BrickColor_Black, BrickColor_Red, BrickColor_Blue,
-		BrickColor_Green, BrickColor_Gray, BrickColor_Lemon_Metalic,
-	}
-	push_brick_color(L, binding_from_upvalue(L), palette[rand.int_max(len(palette))])
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_From_Palette(rand.int_max(128)))
+	return 1
+}
+
+brick_color_palette :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_From_Palette(int(vm.ArgNumber(L, 1))))
+	return 1
+}
+
+brick_color_gray :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_Gray)
+	return 1
+}
+
+brick_color_darkgray :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_DarkGray)
+	return 1
+}
+
+brick_color_red :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_Red)
+	return 1
+}
+
+brick_color_yellow :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_Yellow)
+	return 1
+}
+
+brick_color_green :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_Dark_Green)
+	return 1
+}
+
+brick_color_blue :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	push_brick_color(L, binding_from_upvalue(L), BrickColor_Blue)
 	return 1
 }
 
@@ -55,9 +104,15 @@ brick_color_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 
 	switch key {
 	case "Number":
-		vm.PushInteger(L, i64(brick_color.number))
+		vm.PushNumber(L, f64(brick_color.number))
 	case "Name":
 		vm.PushString(L, brick_color.name)
+	case "R", "r":
+		vm.PushNumber(L, f64(brick_color.color.R))
+	case "G", "g":
+		vm.PushNumber(L, f64(brick_color.color.G))
+	case "B", "b":
+		vm.PushNumber(L, f64(brick_color.color.B))
 	case "Color":
 		if registry == nil {return false}
 		Push_Color3(L, registry, brick_color.color)
@@ -92,6 +147,14 @@ BrickColor_Luau_Binding :: proc() -> vm.Userdata_Binding {
 BrickColor_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	add_library_function(L, binding, "new", brick_color_new)
 	add_library_function(L, binding, "random", brick_color_random)
+	add_library_function(L, binding, "palette", brick_color_palette)
+	add_library_function(L, binding, "Gray", brick_color_gray)
+	add_library_function(L, binding, "DarkGray", brick_color_darkgray)
+	add_library_function(L, binding, "Red", brick_color_red)
+	add_library_function(L, binding, "Yellow", brick_color_yellow)
+	add_library_function(L, binding, "Green", brick_color_green)
+	add_library_function(L, binding, "Blue", brick_color_blue)
+
 
 	push_brick_color(L, binding, BrickColor_White)
 	vm.SetField(L, -2, "White")
@@ -101,7 +164,7 @@ BrickColor_Install_Fields :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding) {
 	vm.SetField(L, -2, "Bright red")
 	push_brick_color(L, binding, BrickColor_Blue)
 	vm.SetField(L, -2, "Bright blue")
-	push_brick_color(L, binding, BrickColor_Green)
+	push_brick_color(L, binding, BrickColor_Bright_Green)
 	vm.SetField(L, -2, "Bright green")
 	push_brick_color(L, binding, BrickColor_Gray)
 	vm.SetField(L, -2, "Medium stone grey")

@@ -88,6 +88,7 @@ Object_Class := Class_Info {
 
 
 hierarchy_epoch: u64
+hierarchy_structure_epoch: u64
 
 
 Hierarchy_Epoch :: proc() -> u64 {
@@ -97,6 +98,13 @@ Hierarchy_Epoch :: proc() -> u64 {
 
 Hierarchy_Touched :: proc() {
 	hierarchy_epoch += 1
+}
+
+
+Hierarchy_Structure_Epoch :: proc() -> u64 {return hierarchy_structure_epoch}
+
+Hierarchy_Structure_Touched :: proc() {
+	hierarchy_structure_epoch += 1
 }
 
 Object_Attribute :: struct {
@@ -110,7 +118,28 @@ Object_Property_Signal :: struct {
 	signal: ^signals.Signal,
 }
 
+
+Object_Signal_State :: struct {
+	property_signals:    [dynamic]Object_Property_Signal,
+	attribute_signals:   [dynamic]Object_Property_Signal,
+	attribute_changed:   ^signals.Signal,
+	child_added:         ^signals.Signal,
+	child_removed:       ^signals.Signal,
+	descendant_added:    ^signals.Signal,
+	descendant_removing: ^signals.Signal,
+	destroying:          ^signals.Signal,
+	ancestry_changed:    ^signals.Signal,
+	changed:             ^signals.Signal,
+}
+
+
+Object_Server_Metadata :: struct {
+	attributes: [dynamic]string,
+	tags:       [dynamic]string,
+}
+
 Object :: struct {
+	event_state:          ^Object_Signal_State,
 	class:                ^Class_Info,
 	name:                 string,
 	owned_name:           string,
@@ -118,14 +147,10 @@ Object :: struct {
 	children:             [dynamic]^Object,
 	signal_registry:      ^Registry,
 	attributes:           [dynamic]Object_Attribute,
-	attribute_signals:    [dynamic]Object_Property_Signal,
-	attribute_changed:    ^signals.Signal,
 	tags:                 [dynamic]string,
 	metadata_revision:    u64,
-	server_attributes:    [dynamic]string,
-	server_tags:          [dynamic]string,
-	imported_values:      map[string]i32,
-	property_signals:     [dynamic]Object_Property_Signal,
+	server_metadata:      ^Object_Server_Metadata,
+	imported_values:      ^map[string]i32,
 	unique_id:            datatypes.UniqueId,
 	capabilities:         datatypes.SecurityCapabilities,
 	security_requirement: vm.Security_Requirement,
@@ -138,13 +163,6 @@ Object :: struct {
 	replication_mode:     enums.ReplicationMode,
 	replication_group:    string,
 	network_id:           u32,
-	child_added:          ^signals.Signal,
-	child_removed:        ^signals.Signal,
-	descendant_added:     ^signals.Signal,
-	descendant_removing:  ^signals.Signal,
-	destroying:           ^signals.Signal,
-	ancestry_changed:     ^signals.Signal,
-	changed:              ^signals.Signal,
 }
 
 Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object {
@@ -166,12 +184,22 @@ Object_Init :: proc(class: ^Class_Info = nil, name: string = "Object") -> Object
 }
 
 
+Object_Ensure_Event_State :: proc(self: ^Object) -> ^Object_Signal_State {
+	if self == nil {return nil}
+	if self.event_state == nil {self.event_state = new(Object_Signal_State)}
+	return self.event_state
+}
+
+Object_Has_Changed_Signal :: proc(self: ^Object) -> bool {
+	return self != nil && self.event_state != nil && self.event_state.changed != nil
+}
+
 Object_Find_Property_Signal :: proc(self: ^Object, name: string) -> ^signals.Signal {
-	if self == nil || len(self.property_signals) == 0 {
+	if self == nil || self.event_state == nil || len(self.event_state.property_signals) == 0 {
 		return nil
 	}
 
-	for entry in self.property_signals {
+	for entry in self.event_state.property_signals {
 		if entry.name == name {
 			return entry.signal
 		}
@@ -200,8 +228,9 @@ Object_Get_Or_Create_Property_Signal :: proc(self: ^Object, name: string) -> ^si
 	}
 
 
+	state := Object_Ensure_Event_State(self)
 	append(
-		&self.property_signals,
+		&state.property_signals,
 		Object_Property_Signal{name = strings.clone(name), signal = signal},
 	)
 
@@ -213,10 +242,7 @@ Object_Changed_Signal :: proc(self: ^Object) -> ^signals.Signal {
 	if self == nil {
 		return nil
 	}
-	if self.changed == nil {
-		self.changed = Object_Create_Hierarchy_Signal(self)
-	}
-	return self.changed
+	return Object_Get_Named_Signal(self, .Changed)
 }
 
 
@@ -233,7 +259,8 @@ Object_Fire_Property_Changed :: proc(self: ^Object, name: string, L: ^vm.State =
 		signals.Fire(L, signal, 0)
 	}
 
-	if changed := self.changed; changed != nil {
+	if Object_Has_Changed_Signal(self) {
+		changed := self.event_state.changed
 		vm.PushString(L, name)
 		signals.Fire(L, changed, 1)
 		vm.Pop(L, 1)
@@ -248,57 +275,69 @@ Hierarchy_Signal_Kind :: enum {
 	Ancestry_Changed,
 }
 
+Object_Named_Signal_Kind :: enum {
+	Child_Added,
+	Child_Removed,
+	Descendant_Added,
+	Descendant_Removing,
+	Ancestry_Changed,
+	Attribute_Changed,
+	Destroying,
+	Changed,
+}
+
+Object_Get_Named_Signal :: proc(self: ^Object, kind: Object_Named_Signal_Kind) -> ^signals.Signal {
+	if self == nil ||
+	   self.signal_registry == nil ||
+	   self.signal_registry.signal_registry == nil {return nil}
+	state := Object_Ensure_Event_State(self)
+	slot: ^^signals.Signal
+	switch kind {
+	case .Child_Added:
+		slot = &state.child_added
+	case .Child_Removed:
+		slot = &state.child_removed
+	case .Descendant_Added:
+		slot = &state.descendant_added
+	case .Descendant_Removing:
+		slot = &state.descendant_removing
+	case .Ancestry_Changed:
+		slot = &state.ancestry_changed
+	case .Attribute_Changed:
+		slot = &state.attribute_changed
+	case .Destroying:
+		slot = &state.destroying
+	case .Changed:
+		slot = &state.changed
+	}
+	if slot^ == nil {slot^ = Object_Create_Hierarchy_Signal(self)}
+	return slot^
+}
+
 Object_Hierarchy_Signal :: proc(self: ^Object, kind: Hierarchy_Signal_Kind) -> ^signals.Signal {
 	if vm.Is_Closing() {return nil}
-	if self == nil {
-		return nil
-	}
-	if kind == .Child_Added {
-		if self.child_added == nil {
-			self.child_added = Object_Create_Hierarchy_Signal(self)
-		}
-		return self.child_added
-	}
-	if kind == .Child_Removed {
-		if self.child_removed == nil {
-			self.child_removed = Object_Create_Hierarchy_Signal(self)
-		}
-		return self.child_removed
-	}
-	if kind == .Descendant_Added {
-		if self.descendant_added == nil {
-			self.descendant_added = Object_Create_Hierarchy_Signal(self)
-		}
-		return self.descendant_added
-	}
-	if kind == .Ancestry_Changed {
-		if self.ancestry_changed == nil {
-			self.ancestry_changed = Object_Create_Hierarchy_Signal(self)
-		}
-		return self.ancestry_changed
-	}
-	if self.descendant_removing == nil {
-		self.descendant_removing = Object_Create_Hierarchy_Signal(self)
-	}
-	return self.descendant_removing
+	return Object_Get_Named_Signal(self, Object_Named_Signal_Kind(kind))
 }
 
 Object_Fire_Destroying :: proc(self: ^Object) {
-	if self == nil || self.destroying == nil || vm.Is_Closing() {
+	if self == nil ||
+	   self.event_state == nil ||
+	   self.event_state.destroying == nil ||
+	   vm.Is_Closing() {
 		return
 	}
 	L := self.signal_registry.signal_registry.L
 	if L == nil {
 		return
 	}
-	signals.Fire(L, self.destroying, 0)
+	signals.Fire(L, self.event_state.destroying, 0)
 }
 
 Object_Fire_Ancestry_Changed :: proc(self: ^Object, parent: ^Object) {
-	if self == nil {
+	if self == nil || self.event_state == nil {
 		return
 	}
-	signal := self.ancestry_changed
+	signal := self.event_state.ancestry_changed
 	if signal == nil {
 		return
 	}
@@ -320,10 +359,10 @@ Object_Create_Hierarchy_Signal :: proc(self: ^Object) -> ^signals.Signal {
 }
 
 Object_Fire_Descendant_Added :: proc(self: ^Object, child: ^Object) {
-	if self == nil || child == nil {
+	if self == nil || self.event_state == nil || child == nil {
 		return
 	}
-	signal := self.descendant_added
+	signal := self.event_state.descendant_added
 	if signal == nil {
 		return
 	}
@@ -337,10 +376,10 @@ Object_Fire_Descendant_Added :: proc(self: ^Object, child: ^Object) {
 }
 
 Object_Fire_Descendant_Removing :: proc(self: ^Object, child: ^Object) {
-	if self == nil || child == nil {
+	if self == nil || self.event_state == nil || child == nil {
 		return
 	}
-	signal := self.descendant_removing
+	signal := self.event_state.descendant_removing
 	if signal == nil {
 		return
 	}
@@ -354,10 +393,10 @@ Object_Fire_Descendant_Removing :: proc(self: ^Object, child: ^Object) {
 }
 
 Object_Fire_Child_Added :: proc(self: ^Object, child: ^Object) {
-	if self == nil || child == nil {
+	if self == nil || self.event_state == nil || child == nil {
 		return
 	}
-	signal := self.child_added
+	signal := self.event_state.child_added
 	if signal == nil {
 		return
 	}
@@ -371,10 +410,10 @@ Object_Fire_Child_Added :: proc(self: ^Object, child: ^Object) {
 }
 
 Object_Fire_Child_Removed :: proc(self: ^Object, child: ^Object) {
-	if self == nil || child == nil {
+	if self == nil || self.event_state == nil || child == nil {
 		return
 	}
-	signal := self.child_removed
+	signal := self.event_state.child_removed
 	if signal == nil {
 		return
 	}
@@ -388,19 +427,19 @@ Object_Fire_Child_Removed :: proc(self: ^Object, child: ^Object) {
 }
 
 Object_Free_Property_Signals :: proc(self: ^Object) {
-	if self == nil {
+	if self == nil || self.event_state == nil {
 		return
 	}
 
-	for entry in self.property_signals {
+	for entry in self.event_state.property_signals {
 		if entry.signal != nil {
 			signals.Destroy(entry.signal)
 		}
 		delete(entry.name)
 	}
 
-	delete(self.property_signals)
-	self.property_signals = nil
+	delete(self.event_state.property_signals)
+	self.event_state.property_signals = nil
 }
 
 Object_Destroy :: proc(self: ^Object) {
@@ -432,58 +471,69 @@ Object_Destroy :: proc(self: ^Object) {
 	}
 	for tag in self.tags {delete(tag)}
 	delete(self.tags)
-	for name in self.server_attributes {delete(name)}
-	delete(self.server_attributes)
-	for name in self.server_tags {delete(name)}
-	delete(self.server_tags)
-	if self.signal_registry != nil && self.signal_registry.vm_state != nil {
-		L := self.signal_registry.vm_state.L
-		if L != nil {
-			for _, value_ref in self.imported_values {vm.ReleaseValue(L, value_ref)}
+	if state := self.server_metadata; state != nil {
+		for name in state.attributes {delete(name)}
+		delete(state.attributes)
+		for name in state.tags {delete(name)}
+		delete(state.tags)
+		free(state)
+		self.server_metadata = nil
+	}
+	if values := self.imported_values; values != nil {
+		if self.signal_registry != nil && self.signal_registry.vm_state != nil {
+			L := self.signal_registry.vm_state.L
+			if L != nil {
+				for _, value_ref in values^ {vm.ReleaseValue(L, value_ref)}
+			}
 		}
-	}
-	delete(self.imported_values)
-	self.imported_values = nil
-
-	Object_Free_Property_Signals(self)
-	for entry in self.attribute_signals {
-		if entry.signal != nil {signals.Destroy(entry.signal)}
-		delete(entry.name)
-	}
-	delete(self.attribute_signals)
-	self.attribute_signals = nil
-	if self.attribute_changed != nil {
-		signals.Destroy(self.attribute_changed)
-		self.attribute_changed = nil
+		delete(values^)
+		free(values)
+		self.imported_values = nil
 	}
 
-	if self.child_added != nil {
-		signals.Destroy(self.child_added)
-		self.child_added = nil
-	}
-	if self.child_removed != nil {
-		signals.Destroy(self.child_removed)
-		self.child_removed = nil
-	}
-	if self.descendant_added != nil {
-		signals.Destroy(self.descendant_added)
-		self.descendant_added = nil
-	}
-	if self.descendant_removing != nil {
-		signals.Destroy(self.descendant_removing)
-		self.descendant_removing = nil
-	}
-	if self.ancestry_changed != nil {
-		signals.Destroy(self.ancestry_changed)
-		self.ancestry_changed = nil
-	}
-	if self.changed != nil {
-		signals.Destroy(self.changed)
-		self.changed = nil
-	}
-	if self.destroying != nil {
-		signals.Destroy(self.destroying)
-		self.destroying = nil
+	if self.event_state != nil {
+		Object_Free_Property_Signals(self)
+		for entry in self.event_state.attribute_signals {
+			if entry.signal != nil {signals.Destroy(entry.signal)}
+			delete(entry.name)
+		}
+		delete(self.event_state.attribute_signals)
+		self.event_state.attribute_signals = nil
+		if self.event_state.attribute_changed != nil {
+			signals.Destroy(self.event_state.attribute_changed)
+			self.event_state.attribute_changed = nil
+		}
+
+		if self.event_state.child_added != nil {
+			signals.Destroy(self.event_state.child_added)
+			self.event_state.child_added = nil
+		}
+		if self.event_state.child_removed != nil {
+			signals.Destroy(self.event_state.child_removed)
+			self.event_state.child_removed = nil
+		}
+		if self.event_state.descendant_added != nil {
+			signals.Destroy(self.event_state.descendant_added)
+			self.event_state.descendant_added = nil
+		}
+		if self.event_state.descendant_removing != nil {
+			signals.Destroy(self.event_state.descendant_removing)
+			self.event_state.descendant_removing = nil
+		}
+		if self.event_state.ancestry_changed != nil {
+			signals.Destroy(self.event_state.ancestry_changed)
+			self.event_state.ancestry_changed = nil
+		}
+		if self.event_state.changed != nil {
+			signals.Destroy(self.event_state.changed)
+			self.event_state.changed = nil
+		}
+		if self.event_state.destroying != nil {
+			signals.Destroy(self.event_state.destroying)
+			self.event_state.destroying = nil
+		}
+		free(self.event_state)
+		self.event_state = nil
 	}
 
 	Set_Parent(self, nil)
@@ -510,7 +560,7 @@ Get_Name :: proc(self: ^Object) -> string {
 }
 
 Set_Name :: proc(self: ^Object, name: string) {
-	if self == nil {
+	if self == nil || self.name == name {
 		return
 	}
 
@@ -571,11 +621,13 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 	}
 
 	self.parent = new_parent
+	Hierarchy_Structure_Touched()
 
 	if new_parent != nil {
 		append(&new_parent.children, self)
 	}
 
+	if self.class == &LocalizationTable_Class {Invalidate_Localized_Text(self.signal_registry)}
 	gui_invalidate_draw(self)
 	if Is_A_Class(previous, &GuiObject_Class) {
 		gui_invalidate_draw(previous)
@@ -628,7 +680,17 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 	surfacegui_mark_dirty_for(self)
 
 	self.destroyed = true
+	if Is_A_Class(self, &Part2D_Class) {
+		part := cast(^Part2D)self
+		if part.physics_owner != nil && part.physics_release != nil {
+			part.physics_release(part.physics_owner, part)
+		}
+	}
+	Hierarchy_Structure_Touched()
 	Object_Fire_Destroying(self)
+	if Is_A_Class(self, &EditableImage_Class) {
+		editable_image_detach_consumers(cast(^EditableImage)self)
+	}
 
 	Render_3D_Mark_Dirty()
 	Hierarchy_Touched()
@@ -777,7 +839,8 @@ object_from_argument :: proc(L: ^vm.State, index: int) -> ^Object {
 
 is_object_method :: proc(name: string) -> bool {
 	switch name {
-	case "Clone",
+	case "GetActor",
+	     "Clone",
 	     "Destroy",
 	     "ClearAllChildren",
 	     "FindFirstChild",
@@ -833,7 +896,7 @@ object_method :: proc "c" (L: ^vm.State) -> i32 {
 		method_ctx = binding.ctx
 	}
 
-	result_count, handled := Object_Namecall(L, object, method_ctx, method)
+	result_count, handled := descriptor_namecall(L, object, method_ctx, method)
 
 	if handled {
 		return result_count
@@ -910,16 +973,11 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 	case "AncestryChanged":
 		signals.Push(L, Object_Hierarchy_Signal(object, .Ancestry_Changed))
 	case "AttributeChanged":
-		if object.attribute_changed ==
-		   nil {object.attribute_changed = Object_Create_Hierarchy_Signal(object)}
-		signals.Push(L, object.attribute_changed)
+		signals.Push(L, Object_Get_Named_Signal(object, .Attribute_Changed))
 	case "Changed":
 		signals.Push(L, Object_Changed_Signal(object))
 	case "Destroying":
-		if object.destroying == nil {
-			object.destroying = Object_Create_Hierarchy_Signal(object)
-		}
-		signals.Push(L, object.destroying)
+		signals.Push(L, Object_Get_Named_Signal(object, .Destroying))
 	case:
 		child := Find_First_Child(object, key)
 		if child != nil {
@@ -1071,13 +1129,16 @@ Attribute_Value_Is_Supported :: proc(L: ^vm.State, index: int) -> bool {
 
 Object_Attribute_Signal :: proc(object: ^Object, name: string) -> ^signals.Signal {
 	if object == nil || object.destroyed {return nil}
-	for entry in object.attribute_signals {
-		if entry.name == name {return entry.signal}
+	if object.event_state != nil {
+		for entry in object.event_state.attribute_signals {
+			if entry.name == name {return entry.signal}
+		}
 	}
 	signal := Object_Create_Hierarchy_Signal(object)
 	if signal != nil {
+		state := Object_Ensure_Event_State(object)
 		append(
-			&object.attribute_signals,
+			&state.attribute_signals,
 			Object_Property_Signal{name = strings.clone(name), signal = signal},
 		)
 	}
@@ -1085,18 +1146,24 @@ Object_Attribute_Signal :: proc(object: ^Object, name: string) -> ^signals.Signa
 }
 
 Object_Fire_Attribute_Changed :: proc(L: ^vm.State, object: ^Object, name: string) {
-	if L == nil || object == nil || object.destroyed || vm.Is_Closing() {return}
+	if L == nil ||
+	   object == nil ||
+	   object.destroyed ||
+	   object.event_state == nil ||
+	   vm.Is_Closing() {return}
 	stable_name := strings.clone(name)
 	defer delete(stable_name)
-	for entry in object.attribute_signals {
+	for entry in object.event_state.attribute_signals {
 		if entry.name == stable_name {
 			signals.Fire(L, entry.signal, 0)
 			break
 		}
 	}
-	if !object.destroyed && object.attribute_changed != nil {
+	if !object.destroyed &&
+	   object.event_state != nil &&
+	   object.event_state.attribute_changed != nil {
 		vm.PushString(L, stable_name)
-		signals.Fire(L, object.attribute_changed, 1)
+		signals.Fire(L, object.event_state.attribute_changed, 1)
 		vm.Pop(L)
 	}
 }
@@ -1277,10 +1344,13 @@ clone_base_state :: proc(L: ^vm.State, source: ^Object, destination: ^Object) {
 
 
 	Object_Copy_Metadata(L, source, destination)
-	for name, value_ref in source.imported_values {
-		vm.PushRegistryReference(L, value_ref)
-		destination.imported_values[name] = vm.RetainValue(L)
-		vm.Pop(L)
+	if source.imported_values != nil {
+		for name, value_ref in source.imported_values^ {
+			vm.PushRegistryReference(L, value_ref)
+			values := Object_Ensure_Imported_Values(destination)
+			values^[name] = vm.RetainValue(L)
+			vm.Pop(L)
+		}
 	}
 }
 
@@ -1301,7 +1371,7 @@ remap_cloned_instance_refs :: proc(
 	clones: map[^Object]^Object,
 ) {
 	for original, copy in clones {
-		if len(copy.imported_values) != 0 {
+		if copy.imported_values != nil && len(copy.imported_values^) != 0 {
 			descriptor := Find_Class(registry, original.class.name)
 			if descriptor != nil {imported_remap_references(L, descriptor, copy, clones)}
 		}
@@ -1323,6 +1393,17 @@ remap_cloned_instance_refs :: proc(
 			if endpoint := clones[constraint.attachment1]; endpoint != nil {
 				constraint.attachment1 = endpoint
 			}
+		}
+		if original.class == &BillboardGui_Class {
+			g := cast(^BillboardGui)copy
+			if endpoint := clones[g.adornee]; endpoint != nil {g.adornee = endpoint}
+			if endpoint := clones[g.player_to_hide_from];
+			   endpoint != nil {g.player_to_hide_from = endpoint}
+		}
+		if original.class == &NoCollisionConstraint_Class {
+			c := cast(^NoCollisionConstraint)copy
+			if endpoint := clones[c.part0]; endpoint != nil {c.part0 = endpoint}
+			if endpoint := clones[c.part1]; endpoint != nil {c.part1 = endpoint}
 		}
 		if Is_A_Class(original, &WeldConstraint_Class) {
 			weld := cast(^WeldConstraint)copy
@@ -1410,6 +1491,10 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	}
 
 	switch method {
+	case "GetActor":
+		actor := Actor_Ancestor(object)
+		if actor == nil {vm.PushNil(L)} else {Push_Object(L, &actor.object)}
+		return 1, true
 	case "ContainsPoint":
 		if !Is_A_Class(object, &GuiObject_Class) {return 0, false}
 		x := f32(vm.ArgNumber(L, 2))

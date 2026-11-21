@@ -1,5 +1,6 @@
 
 #include "jph_api.h"
+#include <unordered_set>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
@@ -404,12 +405,37 @@ class ManagedContactListener final : public JPH::ContactListener {
 	static constexpr size_t kMaxQueuedEvents = 8192;
 
 	JPH::ValidateResult OnContactValidate(
-		const JPH::Body &,
-		const JPH::Body &,
+		const JPH::Body &a,
+		const JPH::Body &b,
 		JPH::RVec3Arg,
 		const JPH::CollideShapeResult &) override {
-		return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+		return excluded.count(Pair(a.GetID().GetIndexAndSequenceNumber(), b.GetID().GetIndexAndSequenceNumber()))
+			? JPH::ValidateResult::RejectAllContactsForThisBodyPair
+			: JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
 	}
+
+	static uint64_t Pair(uint32_t a, uint32_t b) {
+		return (uint64_t(std::min(a,b)) << 32) | std::max(a,b);
+	}
+	// Called on the simulation thread between updates (no contact callbacks running).
+	void SetExcluded(JPH::BodyInterface &bi, const uint32_t *pairs, uint32_t count) {
+		std::unordered_set<uint64_t> next;
+		for (uint32_t i = 0; i < count; ++i) next.insert(Pair(pairs[i*2],pairs[i*2+1]));
+		if (next == excluded) return;
+		auto invalidate = [&](uint64_t key) {
+			for (uint32_t raw : {uint32_t(key >> 32),uint32_t(key)}) {
+				JPH::BodyID id(raw);
+				if (bi.IsAdded(id)) {
+					bi.InvalidateContactCache(id);
+					if (bi.GetMotionType(id) == JPH::EMotionType::Dynamic) bi.ActivateBody(id);
+				}
+			}
+		};
+		for (auto key : excluded) if (!next.count(key)) invalidate(key);
+		for (auto key : next) if (!excluded.count(key)) invalidate(key);
+		excluded.swap(next);
+	}
+	std::unordered_set<uint64_t> excluded;
 
 	void OnContactAdded(
 		const JPH::Body &inBody1,
@@ -1841,6 +1867,11 @@ void JPH_MotionProperties_ScaleToMass(JPH_MotionPropertiesRef motionProperties, 
 	mp->SetInverseInertia(
 		scaledInvInertia.GetDiagonal3(),
 		JPH::Quat::sIdentity());
+}
+
+void JPH_ContactListener_SetExcludedPairs(JPH_ContactListenerRef listener, JPH_BodyInterfaceRef interface, const JPH_BodyID *pairs, uint32_t count) {
+	if (listener && interface)
+		reinterpret_cast<ManagedContactListener *>(listener)->SetExcluded(*ToBodyInterface(interface), pairs, count);
 }
 
 JPH_ContactListenerRef JPH_ContactListener_Create(void) {

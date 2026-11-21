@@ -5,6 +5,7 @@ import classes "../src/engine/classes"
 import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
+import tracy "../src/engine/util/odin-tracy"
 import vm "../src/engine/vm"
 import "core:fmt"
 import "core:os"
@@ -12,6 +13,40 @@ import "core:slice"
 import "core:strconv"
 import "core:time"
 import sdl "vendor:sdl3"
+
+Native_Profile :: struct {
+	zones: [16]tracy.ZoneCtx,
+	depth: int,
+}
+
+native_profile_callback :: proc "c" (user: rawptr, phase: cstring, begin: bool) {
+	context = tracy.DefaultContext()
+	state := cast(^Native_Profile)user
+	if begin {
+		if state.depth < len(state.zones) {
+			state.zones[state.depth] = tracy.ZoneBegin(true, 0, string(phase), 0xC678DD)
+		}
+		state.depth += 1
+	} else if state.depth > 0 {
+		state.depth -= 1
+		if state.depth < len(state.zones) {tracy.ZoneEnd(state.zones[state.depth])}
+	}
+}
+
+Bench_Overlay_Preparation :: struct {
+	registry: ^classes.Registry,
+	backdrop: int,
+	required: bool,
+	calls:    int,
+}
+
+prepare_overlay :: proc "c" (user: rawptr) {
+	context = tracy.DefaultContext()
+	p := cast(^Bench_Overlay_Preparation)user
+	p.required =
+		p.backdrop == 1 || (p.backdrop == -1 && classes.Gui_Overlay_Needs_Backdrop(p.registry))
+	p.calls += 1
+}
 
 FRAMES :: 600
 WARMUP :: 120
@@ -37,6 +72,8 @@ bench_int :: proc(key: string, fallback, minimum: int) -> int {
 }
 
 main :: proc() {
+	when tracy.TRACY_ENABLE {context.allocator = tracy.InitDefaultAllocator(callstack_size = 0)}
+	tracy.SetThreadName("Desktop benchmark")
 	assert(sdl.Init({.VIDEO}))
 	defer sdl.Quit()
 	width := i32(bench_int("BENCH_WIDTH", 640, 1))
@@ -45,7 +82,10 @@ main :: proc() {
 	frames := bench_int("BENCH_FRAMES", FRAMES, 1)
 	render_world := bench_int("BENCH_WORLD", 1, 0) != 0
 	backdrop := bench_int("BENCH_BACKDROP", -1, -1)
+	overlap := bench_int("BENCH_HANDOFF_OVERLAP", 1, 0) != 0
+	preparation: Bench_Overlay_Preparation
 	animate := bench_int("BENCH_ANIMATE", 1, 0) != 0
+	diverse := bench_int("BENCH_DIVERSE", 0, 0) != 0
 	shadows := bench_int("BENCH_SHADOWS", 1, 0) != 0
 	post_processing := bench_int("BENCH_POST_PROCESS", 1, 0) != 0
 	effects_off := os.get_env_alloc("BENCH_EFFECTS_OFF", context.allocator)
@@ -85,8 +125,14 @@ for i = 1, %d do
     part.Anchored = true
     part.Size = Vector3.new(2, 2, 2)
     part.CFrame = CFrame.new((i %% 32) * 3, (i %% 7) * 2, math.floor(i / 32) * 3)
+    if %v then
+        part.Material = Enum.Material.Glass
+        part.Transparency = i / (%d + 1)
+    end
 end
 `,
+		part_count,
+		diverse,
 		part_count,
 	)
 	ok, err := vm.Run(&v, setup, "3d_bench")
@@ -142,6 +188,11 @@ end
 	view.Compositor = compositor
 	samples := make([]time.Duration, frames)
 	defer delete(samples)
+	native_profile: Native_Profile
+	when tracy.TRACY_ENABLE {
+		k.Kine_Filament_SetFrameProfileCallback(ctx, native_profile_callback, &native_profile)
+		defer k.Kine_Filament_SetFrameProfileCallback(ctx, nil, nil)
+	}
 	totals: [Phase]time.Duration
 	total: time.Duration
 	previous := time.tick_now()
@@ -158,9 +209,9 @@ end
 		}
 		ticks[int(Phase.Update)] = time.tick_now()
 		if animate {
-			// Move the render transforms directly to isolate submission from script costs.
+
 			for part, index in parts {
-				part.cframe.x += f32(index % 3 - 1) * 0.005 * f32(1 - 2 * (frame & 1))
+				part.cframe.x += f64(index % 3 - 1) * 0.005 * f64(1 - 2 * (frame & 1))
 			}
 		}
 		engine_runtime.Environment_Update_Step(&env, &v, dt)
@@ -179,13 +230,30 @@ end
 		renderer.apply_viewport_rect(&view)
 		ticks[int(Phase.Filament)] = time.tick_now()
 		rendered_3d := render_world || k.Kine_Filament_Viewport_HasWork(ctx)
-		if rendered_3d {k.Kine_Filament_Viewport_RenderFrame(ctx, dt, render_world)}
+		if rendered_3d {
+			preparation = {
+				registry = &env.classes,
+				backdrop = backdrop,
+			}
+			if overlap {
+				k.Kine_Filament_Viewport_RenderFrameWithCpuWork(
+					ctx,
+					dt,
+					render_world,
+					prepare_overlay,
+					&preparation,
+				)
+				assert(preparation.calls == 1)
+			} else {
+				k.Kine_Filament_Viewport_RenderFrame(ctx, dt, render_world)
+			}
+		}
 		ticks[int(Phase.Overlay)] = time.tick_now()
 		overlay := cast(^k.KineSkiaSurface)k.Kine_VulkanCompositor_BeginOverlay(compositor)
 		assert(overlay != nil, string(k.Kine_VulkanCompositor_GetLastError(compositor)))
 		needs_backdrop :=
 			rendered_3d &&
-			(backdrop == 1 || (backdrop == -1 && classes.Gui_Overlay_Needs_Backdrop(&env.classes)))
+			(preparation.required if overlap else (backdrop == 1 || (backdrop == -1 && classes.Gui_Overlay_Needs_Backdrop(&env.classes))))
 		if needs_backdrop {k.Kine_Skia_Surface_SetBackdropFromSurface(overlay, overlay)}
 		engine_runtime.Environment_Render_Overlay(&env, &v, overlay, width, height, dt)
 		if needs_backdrop {k.Kine_Skia_Surface_ClearBackdrop(overlay)}
@@ -195,6 +263,7 @@ end
 			string(k.Kine_VulkanCompositor_GetLastError(compositor)),
 		)
 		ticks[len(Phase)] = time.tick_now()
+		tracy.FrameMark()
 
 		if frame >= 0 {
 			samples[frame] = time.tick_diff(ticks[0], ticks[len(Phase)])

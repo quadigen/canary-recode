@@ -74,8 +74,17 @@ assert(pool.CFrame.Position.Y == -6,"water volume moved")
 	for i in 0 ..< 20 {
 		x, z, t := f32(i) * 1.7, f32(i) * (-0.9), f32(i) * 0.2
 		displacement := datatypes.Water_Wave_Displacement(x, z, t, 1, 1, 1, 1, 6)
-		h := datatypes.Water_Wave_Height(x + displacement.x, z + displacement.z, t, 1, 1, 1, 1, 6)
-		assert(abs(h - displacement.y) < 0.0001, "wave sampler missed displaced crest")
+		h := datatypes.Water_Wave_Height(
+			x + f32(displacement.x),
+			z + f32(displacement.z),
+			t,
+			1,
+			1,
+			1,
+			1,
+			6,
+		)
+		assert(abs(f64(h) - displacement.y) < 0.0001, "wave sampler missed displaced crest")
 		_, velocity := datatypes.Water_Wave_Sample(x, z, t, 1, 1, 1, 1, 6)
 		derivative :=
 			(datatypes.Water_Wave_Height(x, z, t + 0.001, 1, 1, 1, 1, 6) -

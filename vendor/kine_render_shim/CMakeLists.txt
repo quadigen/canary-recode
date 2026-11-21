@@ -247,6 +247,7 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_gizmo)
     kine_add_material(kine_particle)
     kine_add_material(kine_terrain)
+    kine_add_material(kine_terrain_raymarch)
     # Highlight needs four materials rather than one: the fill and the outline
     # shell already need different geometry paths, and DepthMode doubles each of
     # them because Filament bakes depthCulling into the material.
@@ -389,6 +390,7 @@ if(KINE_WITH_FILAMENT)
         ${kine_gizmo_GEN_CPP}
         ${kine_particle_GEN_CPP}
         ${kine_terrain_GEN_CPP}
+        ${kine_terrain_raymarch_GEN_CPP}
         ${kine_hl_outline_GEN_CPP}
         ${kine_hl_outline_top_GEN_CPP}
         ${kine_hl_fill_GEN_CPP}
@@ -580,5 +582,17 @@ if(KINE_WITH_FILAMENT AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
     add_executable(kine_viewport_smoke EXCLUDE_FROM_ALL test/viewport_gpu_smoke.cpp)
     target_include_directories(kine_viewport_smoke PRIVATE ${FILAMENT_DIR}/include ../kine_vulkan_compositor/include ../kine_skia/include)
     target_link_libraries(kine_viewport_smoke PRIVATE kine_filament_shim ${KINE_SDL3_TARGET})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Prebuilt Filament uses libc++; the native Skia archive uses Fontconfig.
+        # Keep the shared dependencies even when listed before static archives.
+        find_library(KINE_VIEWPORT_LIBCXX NAMES c++)
+        find_library(KINE_VIEWPORT_LIBCXXABI NAMES c++abi)
+        find_library(KINE_VIEWPORT_FONTCONFIG NAMES fontconfig)
+        if(KINE_VIEWPORT_LIBCXX AND KINE_VIEWPORT_LIBCXXABI AND KINE_VIEWPORT_FONTCONFIG)
+            target_link_libraries(kine_viewport_smoke PRIVATE
+                "-Wl,--no-as-needed" "${KINE_VIEWPORT_LIBCXX}"
+                "${KINE_VIEWPORT_LIBCXXABI}" "${KINE_VIEWPORT_FONTCONFIG}" "-Wl,--as-needed")
+        endif()
+    endif()
     target_compile_features(kine_viewport_smoke PRIVATE cxx_std_20)
 endif()

@@ -1,0 +1,25 @@
+---
+title: FilmGrainEffect
+description: Add animated film-like noise to the rendered scene.
+---
+
+Use film grain to give the rendered 3D scene a photographic or cinematic texture. The noise changes over time and doesn't affect scene geometry or UI.
+
+```lua
+local grain = game:GetService("Lighting").FilmGrainEffect
+grain.Enabled = true
+grain.Intensity = 0.12
+grain.GrainSize = 2
+```
+
+Lighting creates a disabled instance by default. Creating one with `Instance.new("FilmGrainEffect", lighting)` gives you an enabled effect.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | Read/write | true | Turns the effect on or off. |
+| `Intensity` | number | Read/write | 0.08 | Noise strength, clamped to 0–1. |
+| `GrainSize` | number | Read/write | 1 | Approximate size of a grain in pixels, clamped to 1–8. |
+
+Non-finite numbers raise an error. Only the last instance in Lighting is used. The effect runs on native Filament and is disabled in fast viewport mode.

@@ -53,6 +53,7 @@ SetAppMetadata :: sdl.SetAppMetadata
 Quit :: sdl.Quit
 CreateWindow :: sdl.CreateWindow
 DestroyWindow :: sdl.DestroyWindow
+GetWindowID :: sdl.GetWindowID
 GetWindowSizeInPixels :: sdl.GetWindowSizeInPixels
 GetWindowSize :: sdl.GetWindowSize
 PollEvent :: sdl.PollEvent
@@ -67,6 +68,9 @@ GetSystemTheme :: sdl.GetSystemTheme
 GetMouseState :: sdl.GetMouseState
 GetRelativeMouseState :: sdl.GetRelativeMouseState
 GetKeyboardState :: sdl.GetKeyboardState
+Keyboard_Name :: proc(scan: Scancode) -> string {
+	return string(sdl.GetKeyName(sdl.GetKeyFromScancode(scan, {}, false)))
+}
 GetModState :: sdl.GetModState
 SetWindowRelativeMouseMode :: sdl.SetWindowRelativeMouseMode
 ShowCursor :: sdl.ShowCursor

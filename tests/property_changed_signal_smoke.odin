@@ -3,7 +3,6 @@ package main
 import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
-import sandbox "../src/sandboxed"
 import "core:fmt"
 
 main :: proc() {
@@ -11,9 +10,8 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	renderer_object: renderer.RendererObject
 
-	sandbox.init(&script_vm, &environment, &renderer_object)
-	defer sandbox.shutdown()
-	defer vm.Close(&script_vm)
+	engine_runtime.Environment_Init(&environment, &script_vm, &renderer_object)
+	defer {vm.Close(&script_vm); engine_runtime.Environment_Destroy(&environment)}
 
 	ok, err := vm.Run(
 		&script_vm,

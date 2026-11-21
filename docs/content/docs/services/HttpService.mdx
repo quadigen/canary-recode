@@ -19,13 +19,14 @@ local decoded = HttpService:JSONDecode(body)
 print(decoded.ok)
 ```
 
-`HttpEnabled` is `true` by default and read-only in the current API. If requests are disabled, methods that contact the network raise an error.
+`HttpEnabled` is disabled by default for ordinary scripts. Trusted engine/editor code can enable it or grant the Network capability. Private destinations require a separate `AllowPrivateNetwork` grant. Script responses are limited to 16 MiB. HTTPS verifies certificate trust and hostname.
 
 ## Properties
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
-| `HttpEnabled` | `boolean` | Read-only | `true` | Whether HTTP requests are allowed. |
+| `HttpEnabled` | `boolean` | Trusted write | `false` | Whether HTTP requests are allowed for the calling script. |
+| `AllowPrivateNetwork` | `boolean` | Trusted write | `false` | Allow non-public network destinations. |
 
 ## Methods
 
@@ -219,6 +220,14 @@ The returned client has `ConnectionState`, `Send()`, `Close()`, and the `Opened`
 - `RequestAsync()` is the only method that gives you the status code and headers without raising on an HTTP error.
 - JSON depth is limited; very deep or cyclic tables fail to encode.
 - Response bodies are strings, including JSON. Use `JSONDecode()` yourself.
+
+### UrlDecode
+
+```lua
+UrlDecode(value: string): string
+```
+
+Decodes valid percent escapes such as `%20`. Invalid escape sequences and literal plus signs remain unchanged.
 
 ## See also
 

@@ -577,6 +577,99 @@ editable_mesh_namecall :: proc(
 		editable_mesh_push_ids(L, ids[:])
 		return 1, true
 
+	case "GetBoneCFrame", "GetBoneIsVirtual", "GetBoneName", "GetBoneParent", "SetBoneIsVirtual":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_bone(mesh, id) {return vm.RaiseError(L, "invalid bone id"), true}
+		bone := &mesh.bones[id]
+		switch method {
+		case "GetBoneCFrame":
+			datatypes.Push_CFrame(L, datatype_registry, bone.cframe)
+		case "GetBoneIsVirtual":
+			vm.PushBoolean(L, bone.is_virtual)
+		case "GetBoneName":
+			vm.PushString(L, bone.name)
+		case "GetBoneParent":
+			vm.PushNumber(L, f64(bone.parent))
+		case "SetBoneIsVirtual":
+			bone.is_virtual = vm.ArgBoolean(L, 3)
+			EditableMesh_Touch(mesh)
+			return 0, true
+		}
+		return 1, true
+	case "GetColorAlpha":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_color(
+			mesh,
+			id,
+		) {vm.PushNil(L)} else {vm.PushNumber(L, f64(mesh.colors[id].alpha))}
+		return 1, true
+	case "GetFaceColors", "GetFaceNormals", "GetFaceUVs", "GetFaceVertices":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_face(mesh, id) {return vm.RaiseError(L, "invalid face id"), true}
+		face := &mesh.faces[id]
+		switch method {
+		case "GetFaceColors":
+			editable_mesh_push_ids(L, face.colors[:])
+		case "GetFaceNormals":
+			editable_mesh_push_ids(L, face.normals[:])
+		case "GetFaceUVs":
+			editable_mesh_push_ids(L, face.uvs[:])
+		case "GetFaceVertices":
+			editable_mesh_push_ids(L, face.vertices[:])
+		}
+		return 1, true
+	case "GetNormal":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_normal(
+			mesh,
+			id,
+		) {vm.PushNil(L)} else {datatypes.Push_Vector3(L, mesh.normals[id])}
+		return 1, true
+	case "GetNormals", "GetVertices":
+		count := len(mesh.normals) if method == "GetNormals" else len(mesh.vertices)
+		vm.NewTable(L, count)
+		for i in 0 ..< count {
+			vm.PushNumber(L, f64(i))
+			vm.SetArrayValue(L, -2, i + 1)
+		}
+		return 1, true
+	case "GetVertexBoneWeights", "GetVertexBones":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_vertex(
+			mesh,
+			id,
+		) {return vm.RaiseError(L, "invalid vertex id"), true}
+		EditableMesh_Ensure_Vertex_Index(mesh)
+		if method ==
+		   "GetVertexBones" {editable_mesh_push_ids(L, mesh.vertex_bones[id][:])} else {editable_mesh_push_numbers(L, mesh.vertex_weights[id][:])}
+		return 1, true
+	case "SetColor", "SetColorAlpha":
+		id := editable_mesh_arg_id(L, 2)
+		if !editable_mesh_valid_color(mesh, id) {return vm.RaiseError(L, "invalid color id"), true}
+		color := mesh.colors[id]
+		if method ==
+		   "SetColor" {color.color = datatypes.Arg_Color3(L, 3, datatype_registry)} else {color.alpha = f32(vm.ArgNumber(L, 3))}
+		if !EditableMesh_Set_Color(
+			mesh,
+			id,
+			color.color,
+			color.alpha,
+		) {return vm.RaiseError(L, "invalid color"), true}
+		return 0, true
+	case "SetNormal":
+		if !EditableMesh_Set_Normal(
+			mesh,
+			editable_mesh_arg_id(L, 2),
+			datatypes.Arg_Vector3(L, 3),
+		) {return vm.RaiseError(L, "invalid normal"), true}
+		return 0, true
+	case "SetUV":
+		if !EditableMesh_Set_UV(
+			mesh,
+			editable_mesh_arg_id(L, 2),
+			datatypes.Arg_Vector2(L, 3, datatype_registry),
+		) {return vm.RaiseError(L, "invalid UV"), true}
+		return 0, true
 	case "GetBoneByName":
 		name := vm.ArgString(L, 2)
 		vm.PushNumber(L, f64(EditableMesh_Get_Bone_By_Name(mesh, name)))
@@ -910,7 +1003,7 @@ editable_mesh_namecall :: proc(
 		_ = EditableMesh_Reset_Normal(mesh, normal_id)
 		return 0, true
 
-	case "SetBoneCframe":
+	case "SetBoneCframe", "SetBoneCFrame":
 		bone_id := i32(editable_mesh_arg_id(L, 2))
 		cframe := datatypes.Arg_CFrame(L, 3, datatype_registry)
 		_ = EditableMesh_Set_Bone_Cframe(mesh, bone_id, cframe)
@@ -1136,6 +1229,9 @@ delete_vertex :: proc(mesh: ^EditableMesh, vertex_id: i32) {
 
 editable_mesh_resolve_content :: proc(object: rawptr) -> (u32, u8) {
 	instance := cast(^Object)object
+	if instance != nil && Is_A(instance, "EditableSound") {
+		return (cast(^EditableSound)instance).handle, 2
+	}
 	if instance == nil || !Is_A(instance, "EditableMesh") {
 		return 0, 0
 	}
@@ -1144,6 +1240,10 @@ editable_mesh_resolve_content :: proc(object: rawptr) -> (u32, u8) {
 }
 
 editable_mesh_content_of_id :: proc(id: u32, kind: u8) -> rawptr {
+	if kind == 2 {
+		if sound := EditableSound_Of_Handle(id); sound != nil {return &sound.object}
+		return nil
+	}
 	if kind != 1 {
 		return nil
 	}
@@ -1180,6 +1280,26 @@ Register_EditableMesh :: proc(registry: ^Registry) {
 		namecall = editable_mesh_namecall,
 		properties = []string{"FixedSize"},
 		methods = []string {
+			"GetBoneCFrame",
+			"GetBoneIsVirtual",
+			"GetBoneName",
+			"GetBoneParent",
+			"SetBoneIsVirtual",
+			"GetColorAlpha",
+			"GetFaceColors",
+			"GetFaceNormals",
+			"GetFaceUVs",
+			"GetFaceVertices",
+			"GetNormal",
+			"GetNormals",
+			"GetVertexBoneWeights",
+			"GetVertexBones",
+			"GetVertices",
+			"SetColor",
+			"SetColorAlpha",
+			"SetNormal",
+			"SetUV",
+			"SetBoneCFrame",
 			"AddBone",
 			"AddColor",
 			"AddFace",

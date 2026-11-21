@@ -1,0 +1,51 @@
+---
+title: VolumetricFogEffect
+description: Add raymarched, height-dependent fog with directional scattering and animated density.
+---
+
+`VolumetricFogEffect` adds a volume of mist between the camera and visible geometry. Use it for low-lying fog, dusty interiors, or hazy outdoor scenes. Unlike simple distance fog, density can vary in three dimensions.
+
+```lua
+local lighting = game:GetService("Lighting")
+local fog = lighting:FindFirstChild("VolumetricFogEffect")
+fog.Enabled = true
+fog.Density = 0.035
+fog.Height = 4
+fog.HeightFalloff = 0.12
+fog.Color = Color3.fromRGB(175, 195, 220)
+fog.MaxDistance = 120
+fog.StepCount = 24
+```
+
+Lighting creates a disabled instance by default. You can also create one with `Instance.new("VolumetricFogEffect", lighting)`; a newly created instance is enabled.
+
+## Properties
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | boolean | true | Turns the effect on or off. |
+| `Density` | number | 0.025 | Extinction per world unit, 0–2. |
+| `Height` | number | 0 | Height below which density is constant, -10000–10000. |
+| `HeightFalloff` | number | 0.05 | How rapidly density decreases above Height, 0–5. |
+| `MaxDistance` | number | 150 | Maximum distance to march, 1–10000. |
+| `Anisotropy` | number | 0.35 | Direction of scattering, -0.9–0.9. Positive values brighten the mist toward the sun. |
+| `Scattering` | number | 0.8 | Strength of directional sunlight scattering, 0–5. |
+| `NoiseStrength` | number | 0.35 | Amount of animated density variation, 0–1. Zero produces smooth fog. |
+| `NoiseScale` | number | 0.08 | Spatial frequency of the density variation, 0.001–10. |
+| `StepCount` | number | 24 | Number of samples per pixel, 4–64, rounded down. |
+| `Color` | Color3 | (0.7, 0.8, 0.9) | Tint of the scattered light. |
+
+All properties are read/write. Numeric values are clamped to the listed ranges; non-finite numbers raise an error.
+
+## Rendering and performance
+
+The fog stops marching at visible depth-writing geometry or MaxDistance, whichever comes first. Sunlight scattering is directional, not a full shadow-map or local-light volume integration; occluded light shafts and point-light scattering aren't implemented. Transparent objects that don't write depth may not occlude the fog.
+
+Increase StepCount if long rays produce visible sampling artifacts; reduce it for performance. The effect uses a full-resolution screen pass and a depth capture. Keep ordinary FogEffect and SunRaysEffect disabled when you don't want their fog to combine with this one.
+
+Only the last instance of this class in Lighting is used. The effect is disabled in fast viewport mode. Native Filament is the supported renderer; web and raytracing behavior are not verified.
+
+## See also
+
+- `FogEffect` for simpler height and distance fog.
+- `PostProcess` for writing your own depth-aware effect.

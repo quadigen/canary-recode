@@ -1,0 +1,34 @@
+---
+title: Actor
+description: Groups scripts into a Parallel Luau execution domain and provides asynchronous message passing.
+---
+
+Inherits [Model](/docs/Model).
+
+An Actor is a container for scripts that participate in Parallel Luau execution phases. See the [Parallel Luau guide](/docs/guides/parallel-luau) for a working example and current limitations.
+
+## Methods
+
+### SendMessage
+
+```lua
+SendMessage(topic: string, ...: any): ()
+```
+
+Schedules callbacks bound to the named topic on this Actor. Returns immediately. Unbound topics are ignored.
+
+### BindToMessage
+
+```lua
+BindToMessage(topic: string, callback: (...any) -> ()): KinemiumConnection
+```
+
+Connects a message handler that starts in the serial phase. Must be called in serial execution by a script belonging to this Actor.
+
+### BindToMessageParallel
+
+```lua
+BindToMessageParallel(topic: string, callback: (...any) -> ()): KinemiumConnection
+```
+
+Like BindToMessage, but callbacks begin in the parallel phase. Use task.synchronize() before changing ordinary Instance properties.

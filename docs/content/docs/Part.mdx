@@ -5,7 +5,7 @@ description: Create and configure the basic 3D building block, including size, s
 
 `Part` is the basic piece of 3D geometry. It has a size, a shape, a material, a position in the world, and a set of collision and physics flags. Most visible objects in a game are parts or models made of parts.
 
-`Part` inherits from `BasePart`, which adds no members of its own. All the properties below are available on every part.
+`Part` inherits from `BasePart`, which defines the shared pivot and gravity API. All the properties below are available on every part.
 
 ## Getting started
 
@@ -26,6 +26,7 @@ Parts default to anchored, so they stay where you put them until you turn `Ancho
 | --- | --- | --- | --- | --- |
 | `Size` | `Vector3` | Read/write | `Vector3.new(4, 1, 2)` | Dimensions in studs. Every component must be greater than zero. |
 | `CFrame` | `CFrame` | Read/write | Identity | Position and rotation. |
+| `PivotOffset` | `CFrame` | Read/write | Identity | Local transform of the part's pivot. |
 | `Position` | `Vector3` | Read/write | `Vector3.new(0, 0, 0)` | Position shorthand; writing it preserves the current rotation. |
 | `Color` | `Color3` | Read/write | White | The part's tint. |
 | `Transparency` | `number` | Read/write | `0` | `0` is opaque, `1` is invisible. |
@@ -49,6 +50,8 @@ Parts default to anchored, so they stay where you put them until you turn `Ancho
 `Anchored` and `CanCollide` are independent. An anchored part can still collide with moving bodies, and an unanchored part with `CanCollide` off will fall through the world.
 
 ## Methods
+
+See [BasePart](/docs/BasePart) for `GetPivot()`, `PivotTo()`, and `GetVelocityAtPosition()`.
 
 ### ApplyImpulse
 

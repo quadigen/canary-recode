@@ -40,7 +40,6 @@ Registry :: struct {
 	enums:                       ^engine_enums.Registry,
 	extension_codecs:            [dynamic]Extension_Codec,
 	extension_tags:              [EXTENSION_TAG_MAX - EXTENSION_TAG_BASE + 1]bool,
-	// wire:begin datatype-fields
 	axes:                        vm.Userdata_Binding,
 	brick_color:                 vm.Userdata_Binding,
 	c_frame:                     vm.Userdata_Binding,
@@ -77,13 +76,12 @@ Registry :: struct {
 	vector3:                     vm.Userdata_Binding,
 	vector3int16:                vm.Userdata_Binding,
 	animated:                    vm.Userdata_Binding,
-	// wire:end datatype-fields
 }
 
 Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry = nil) {
 	assert(registry != nil)
 	registry.enums = enum_registry
-	// wire:begin datatype-bindings
+
 	registry.axes = Axes_Luau_Binding()
 	registry.brick_color = BrickColor_Luau_Binding()
 	registry.c_frame = CFrame_Luau_Binding()
@@ -120,9 +118,8 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector3 = Vector3_Luau_Binding()
 	registry.vector3int16 = Vector3int16_Luau_Binding()
 	registry.animated = Animated_Luau_Binding()
-	// wire:end datatype-bindings
 
-	// wire:begin datatype-tags
+
 	registry.axes.tag = DATATYPE_TAG_BASE + 0
 	registry.brick_color.tag = DATATYPE_TAG_BASE + 1
 	registry.c_frame.tag = DATATYPE_TAG_BASE + 2
@@ -159,9 +156,8 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector3.tag = DATATYPE_TAG_BASE + 33
 	registry.vector3int16.tag = DATATYPE_TAG_BASE + 34
 	registry.animated.tag = DATATYPE_TAG_BASE + 35
-	// wire:end datatype-tags
 
-	// wire:begin datatype-contexts
+
 	registry.axes.ctx = &registry.axes
 	registry.axes.owner = registry
 	registry.brick_color.ctx = &registry.brick_color
@@ -234,7 +230,7 @@ Registry_Init :: proc(registry: ^Registry, enum_registry: ^engine_enums.Registry
 	registry.vector3int16.owner = registry
 	registry.animated.ctx = &registry.animated
 	registry.animated.owner = registry
-	// wire:end datatype-contexts
+
 }
 
 push_value :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: $T) {
@@ -280,8 +276,7 @@ install_library :: proc(
 	vm.SetGlobalFromStack(vm_state, name)
 }
 
-// Allocate_Extension_Tag returns the lowest free tag in the extension range, or
-// 0 when the range is exhausted.
+
 Allocate_Extension_Tag :: proc(registry: ^Registry) -> i32 {
 	if registry == nil {
 		return 0
@@ -391,7 +386,7 @@ Extension_Codec_Decode_Value :: proc(
 }
 
 Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
-	// wire:begin datatype-libraries
+
 	install_library(vm_state, "Axes", &registry.axes, Axes_Install_Fields)
 	install_library(vm_state, "BrickColor", &registry.brick_color, BrickColor_Install_Fields)
 	install_library(vm_state, "CFrame", &registry.c_frame, CFrame_Install_Fields)
@@ -482,8 +477,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	install_library(vm_state, "Vector2int16", &registry.vector2int16, Vector2int16_Install_Fields)
 	install_library(vm_state, "Vector3", &registry.vector3, Vector3_Install_Fields)
 	install_library(vm_state, "Vector3int16", &registry.vector3int16, Vector3int16_Install_Fields)
-	install_library(vm_state, "Animated", &registry.animated, Animated_Install_Fields)
-	// wire:end datatype-libraries
+
 }
 
 

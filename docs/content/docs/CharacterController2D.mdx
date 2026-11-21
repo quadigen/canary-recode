@@ -1,0 +1,28 @@
+---
+title: CharacterController2D
+description: Move a scripted character using Part2D physics.
+---
+
+CharacterController2D is a script-controlled Part2D designed for moving players. It uses `Velocity` for movement and adds a single `Move()` method for collision and sliding.
+
+```lua
+local player = Instance.new("CharacterController2D", workspace)
+player.Size = UDim2.fromOffset(28, 40)
+
+game:GetService("RunService").Heartbeat:Connect(function(dt)
+    player.Velocity += Vector2.new(0, 300 * dt)
+    player:Move(dt)
+    if player.Grounded then
+        -- The player is standing on a surface.
+    end
+end)
+```
+
+## Added members
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `Grounded` | boolean, read-only | Whether the last movement check detected floor contact. |
+| `Move(deltaTime?: number): boolean` | method | Move using Velocity, stopping or sliding against other colliders. Returns true when a blocking collision occurred. |
+
+This is not a gravity-driven rigid body. Apply gravity through your own script, as shown. It doesn't support ApplyImpulse; use Velocity instead. `Move()` takes a step up to 0.25 seconds and needs a body initialized by the world's first update. Initial overlaps and automatic moving-platform following remain unsupported.

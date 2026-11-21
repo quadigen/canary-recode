@@ -1,21 +1,21 @@
 package main
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
-import sandbox "../src/sandboxed"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
 	environment: engine_runtime.Environment
 	renderer_object: renderer.RendererObject
 
-	sandbox.init(&script_vm, &environment, &renderer_object)
-	defer sandbox.shutdown()
-	defer vm.Close(&script_vm)
+	engine_runtime.Environment_Init(&environment, &script_vm, &renderer_object)
+	defer {vm.Close(&script_vm); engine_runtime.Environment_Destroy(&environment)}
 
-	ok, err := vm.Run(&script_vm, `
+	ok, err := vm.Run(
+		&script_vm,
+		`
 local parent = Instance.new("Folder")
 parent.Name = "Parent"
 parent.Parent = game
@@ -54,7 +54,9 @@ end
 -- Destroy the tween's target while those tweens are still playing.
 ghost:Destroy()
 print("STEP destroyed target")
-`, "reparent_same_parent_setup")
+`,
+		"reparent_same_parent_setup",
+	)
 
 	if !ok {
 		fmt.eprintln(err)
@@ -62,7 +64,7 @@ print("STEP destroyed target")
 		panic("setup failed")
 	}
 
-	// Step several frames: this is where a use-after-free would surface.
+
 	for i := 0; i < 8; i += 1 {
 		engine_runtime.Environment_Update_Step(&environment, &script_vm, 0.1)
 		engine_runtime.Environment_Render_2D(&environment, &script_vm, nil, 0, 0, 0.1)

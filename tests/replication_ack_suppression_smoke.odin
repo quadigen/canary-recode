@@ -134,10 +134,10 @@ assert(idle_packets < rate * 2 + 20, "idle window sent " .. tostring(idle_packet
 
 
 	state_packets :=
-		service.diag_subtype_counts[1][5] -
-		subtype_before[1][5] +
-		service.diag_subtype_counts[1][6] -
-		subtype_before[1][6]
+		(service.diag_subtype_counts[1][5] + service.diag_subtype_counts[3][5]) -
+		(subtype_before[1][5] + subtype_before[3][5]) +
+		(service.diag_subtype_counts[1][6] + service.diag_subtype_counts[3][6]) -
+		(subtype_before[1][6] + subtype_before[3][6])
 	property_packets :=
 		service.diag_subtype_counts[2][5] -
 		subtype_before[2][5] +
@@ -158,7 +158,9 @@ assert(idle_packets < rate * 2 + 20, "idle window sent " .. tostring(idle_packet
 	)
 
 
-	moved_before := service.diag_subtype_counts[1][5] + service.diag_subtype_counts[1][6]
+	moved_before :=
+		(service.diag_subtype_counts[1][5] + service.diag_subtype_counts[3][5]) +
+		(service.diag_subtype_counts[1][6] + service.diag_subtype_counts[3][6])
 	run_script(
 		&server_vm,
 		`
@@ -169,7 +171,9 @@ game:GetService("ReplicatedStorage"):FindFirstChild("Score").Value = 9
 	)
 	settle(&server, &server_vm, &client, &client_vm, 90)
 	assert(
-		service.diag_subtype_counts[1][5] + service.diag_subtype_counts[1][6] > moved_before,
+		(service.diag_subtype_counts[1][5] + service.diag_subtype_counts[3][5]) +
+			(service.diag_subtype_counts[1][6] + service.diag_subtype_counts[3][6]) >
+		moved_before,
 		"a moved part produced no transform updates at all",
 	)
 	run_script(
@@ -195,10 +199,10 @@ settled_packets_before = game:GetService("ReplicatorService"):GetStats().packets
 	)
 	settle(&server, &server_vm, &client, &client_vm, 120)
 	resettled_state :=
-		service.diag_subtype_counts[1][5] -
-		subtype_before[1][5] +
-		service.diag_subtype_counts[1][6] -
-		subtype_before[1][6]
+		(service.diag_subtype_counts[1][5] + service.diag_subtype_counts[3][5]) -
+		(subtype_before[1][5] + subtype_before[3][5]) +
+		(service.diag_subtype_counts[1][6] + service.diag_subtype_counts[3][6]) -
+		(subtype_before[1][6] + subtype_before[3][6])
 	resettled_property :=
 		service.diag_subtype_counts[2][5] -
 		subtype_before[2][5] +

@@ -167,6 +167,60 @@ data_model_namecall :: proc(
 	return 0, false
 }
 
+data_model_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	model := cast(^DataModel)object
+	if descriptor := Find_Service(model.registry, key); descriptor != nil {
+		if !Service_Access_Allowed(L, descriptor) {
+			_ = vm.RaiseError(L, "insufficient security capabilities to access this service")
+			return true
+		}
+		if descriptor.object == nil || descriptor.object.destroyed {
+			_ = vm.RaiseError(L, "service is unavailable in parallel")
+			return true
+		}
+		classes.Push_Object(L, descriptor.object)
+		return true
+	}
+	switch key {
+	case "GetService", "FindService":
+		vm.PushUserdataMethod(L, key)
+		return true
+	case "PlaceId", "PlaceVersion", "GameId", "JobId", "PrivateServerId", "PrivateServerOwnerId":
+		return data_model_get(L, object, d, e, key)
+	}
+	return false
+}
+
+data_model_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	if method != "GetService" && method != "FindService" {return 0, false}
+	model := cast(^DataModel)object
+	descriptor := Find_Service(model.registry, vm.ArgString(L, 2))
+	if descriptor == nil ||
+	   !Service_Access_Allowed(L, descriptor) ||
+	   descriptor.object == nil ||
+	   descriptor.object.destroyed {
+		if method == "FindService" {vm.PushNil(L); return 1, true}
+		return vm.RaiseError(L, "service is unavailable or inaccessible in parallel"), true
+	}
+	classes.Push_Object(L, descriptor.object)
+	return 1, true
+}
+
 Register_DataModel_Class :: proc(registry: ^classes.Registry) {
 	classes.Register_Class(
 		registry,
@@ -175,7 +229,9 @@ Register_DataModel_Class :: proc(registry: ^classes.Registry) {
 		data_model_destroy,
 		creatable = false,
 		get = data_model_get,
+		parallel_get = data_model_parallel_get,
 		namecall = data_model_namecall,
+		parallel_namecall = data_model_parallel_namecall,
 		methods = []string{"GetService", "FindService", "BindToClose"},
 		properties = []string {
 			"PlaceId",

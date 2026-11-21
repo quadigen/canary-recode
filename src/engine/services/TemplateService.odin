@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 
 package services
 
@@ -42,8 +42,10 @@ Template_Checkpoint_Destroy :: proc(checkpoint: ^Template_Checkpoint) {
 	delete(checkpoint.tag)
 	delete(checkpoint.server_asset.name)
 	delete(checkpoint.server_asset.browser_download_url)
+	delete(checkpoint.server_asset.digest)
 	delete(checkpoint.client_asset.name)
 	delete(checkpoint.client_asset.browser_download_url)
+	delete(checkpoint.client_asset.digest)
 	checkpoint^ = {}
 }
 
@@ -209,6 +211,7 @@ Template_Fetch_Latest :: proc(p: Target_Platform) -> (checkpoint: Template_Check
 				name                 = strings.clone(asset.name),
 				browser_download_url = strings.clone(asset.browser_download_url),
 				size                 = asset.size,
+				digest               = strings.clone(asset.digest),
 			}
 		}
 		if asset.name == client_archive ||
@@ -217,6 +220,7 @@ Template_Fetch_Latest :: proc(p: Target_Platform) -> (checkpoint: Template_Check
 				name                 = strings.clone(asset.name),
 				browser_download_url = strings.clone(asset.browser_download_url),
 				size                 = asset.size,
+				digest               = strings.clone(asset.digest),
 			}
 		}
 	}
@@ -323,7 +327,9 @@ template_install_bundle :: proc(
 		return false
 	}
 	defer delete(data)
-	if asset.size > 0 && i64(len(data)) != asset.size {
+	if asset.size <= 0 ||
+	   i64(len(data)) != asset.size ||
+	   !update_asset_digest_valid(data, asset.digest) {
 		return false
 	}
 
@@ -364,7 +370,7 @@ template_install_bundle :: proc(
 	if !Template_Validate(staged_exe, format) {
 		return false
 	}
-	// Another export may have installed this release while we were downloading.
+
 	return(
 		os.rename(staged_bundle, bundle_dir) == nil ||
 		Template_Validate(template_bundle_path(bundle_dir, asset_file_name), format) \
@@ -457,7 +463,7 @@ Export_Console :: enum {
 	Hide,
 }
 
-// Both PE32 and PE32+ put Subsystem at offset 68 of the optional header.
+
 export_set_windows_console :: proc(image: []u8, console: Export_Console) -> bool {
 	if len(image) < 64 || string(image[:2]) != "MZ" {
 		return false
@@ -481,8 +487,10 @@ export_set_windows_console :: proc(image: []u8, console: Export_Console) -> bool
 
 template_supports_export :: proc(template: []u8, mode: target.Mode, path_assets: bool) -> bool {
 	image := transmute(string)template
-	return (mode != .Singleplayer || strings.contains(image, SINGLEPLAYER_EXPORT_MARKER)) &&
-	       (!path_assets || strings.contains(image, PROJECT_ASSET_EXPORT_MARKER))
+	return(
+		(mode != .Singleplayer || strings.contains(image, SINGLEPLAYER_EXPORT_MARKER)) &&
+		(!path_assets || strings.contains(image, PROJECT_ASSET_EXPORT_MARKER)) \
+	)
 }
 
 ExportToExecutable :: proc(
@@ -518,7 +526,8 @@ ExportToExecutable :: proc(
 	if !template_supports_export(template, mode, path_assets) {
 		host := Template_Host_Platform()
 		if p.os_name != host.os_name || p.arch_name != host.arch_name {
-			return false, "This export requires an updated runtime template for the target platform"
+			return false,
+				"This export requires an updated runtime template for the target platform"
 		}
 		libraries_only = true
 		delete(template)

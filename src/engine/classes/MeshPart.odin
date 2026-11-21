@@ -233,7 +233,10 @@ mesh_part_namecall :: proc(
 	case "GetBoneNames",
 	     "GetAnimationClips",
 	     "GetBoneWorldCFrame",
+	     "GetBoneWorldCFrames",
 	     "GetBoneTransform",
+	     "GetBoneBindTransform",
+	     "SetBoneTransforms",
 	     "SetBoneTransform",
 	     "GetBoneParent":
 		return Animation_MeshPart_Namecall(L, mesh_part, datatype_registry, method)
@@ -266,6 +269,20 @@ mesh_part_clone :: proc(source: ^Object, destination: ^Object) {
 	MeshPart_Reset_Bone_Transforms(dst)
 }
 
+mesh_part_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "MeshId", "MeshIndex", "TextureId", "TextureID", "CollisionFidelity", "UsePartColor":
+		return mesh_part_get(L, object, d, e, key)
+	}
+	return part_parallel_get(L, object, d, e, key)
+}
+
 Register_MeshPart :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -273,6 +290,8 @@ Register_MeshPart :: proc(registry: ^Registry) {
 		mesh_part_construct,
 		mesh_part_destroy,
 		get = mesh_part_get,
+		parallel_get = mesh_part_parallel_get,
+		parallel_namecall = part_parallel_namecall,
 		set = mesh_part_set,
 		namecall = mesh_part_namecall,
 		clone = mesh_part_clone,
@@ -290,7 +309,10 @@ Register_MeshPart :: proc(registry: ^Registry) {
 			"GetBoneNames",
 			"GetAnimationClips",
 			"GetBoneWorldCFrame",
+			"GetBoneWorldCFrames",
 			"GetBoneTransform",
+			"GetBoneBindTransform",
+			"SetBoneTransforms",
 			"SetBoneTransform",
 			"GetBoneParent",
 		},

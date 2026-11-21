@@ -61,6 +61,8 @@ Changing fidelity rebuilds the part's collision geometry, so set it when you cre
 | `GetBoneWorldCFrame(boneName: string): CFrame?` | Returns the bone's world-space CFrame, or `nil` if the bone does not exist. |
 | `GetBoneTransform(boneName: string): CFrame?` | Returns the bone's local transform, relative to its parent bone. |
 | `SetBoneTransform(boneName: string, transform: CFrame): ()` | Sets a bone's local transform. |
+| `GetBoneBindTransform(boneName: string): CFrame?` | Returns the imported rest transform in parent space. |
+| `SetBoneTransforms(transforms: {[string]: CFrame}): boolean` | Applies multiple local transforms together. Returns whether the pose was applied. |
 | `GetBoneParent(boneName: string): string?` | Returns the parent bone's name, or `nil` for a root bone or unknown bone. |
 | `GetAnimationClips(): {{ Index: number, Name: string, Length: number }}` | Returns the clips imported with the mesh. `Length` is in seconds. |
 
@@ -80,7 +82,7 @@ local content = meshPart:GetMeshContent()
 
 ### Bone transforms
 
-`GetBoneTransform()` and `SetBoneTransform()` work in the bone's parent space. Moving one bone moves its children with it, and a root bone uses the mesh's own space. `GetBoneWorldCFrame()` combines the bone hierarchy with the part's `CFrame` and `Size`, so you can attach other objects to a bone:
+`GetBoneTransform()` and `SetBoneTransform()` work in the bone's parent space. Moving one bone moves its children with it, and a root bone uses the mesh's own space. `GetBoneWorldCFrame(name)` reads the rendered pose in world space, including during animation playback. Use `GetBoneWorldCFrames()` to get a table of those transforms keyed by bone name.
 
 ```lua
 local head = meshPart:GetBoneParent("Neck")
@@ -89,7 +91,9 @@ local world = meshPart:GetBoneWorldCFrame("Head")
 meshPart:SetBoneTransform("Head", meshPart:GetBoneTransform("Head") * CFrame.Angles(0, 0, math.rad(15)))
 ```
 
-All three getters return `nil` when the bone does not exist or the mesh has no bones. `SetBoneTransform()` is ignored in those cases, and it is also ignored while an `Animator` owns the mesh, because the animator owns the pose.
+The bone transform and parent getters return `nil` when the bone does not exist or the mesh has no bones. `SetBoneTransform()` is ignored in those cases, and it is also ignored while an `Animator` owns the mesh, because the animator owns the pose.
+
+Use the bind transform to apply an offset relative to the imported rest pose. `SetBoneTransforms()` takes a table keyed by bone names, with CFrame values in parent space. It returns false if a name or value is invalid, the mesh has no bones, or the pose cannot be applied. Bones not included in the table keep their current local transforms.
 
 ## UsePartColor
 
@@ -99,7 +103,7 @@ All three getters return `nil` when the bone does not exist or the mesh has no b
 
 - Mesh assets load asynchronously. A part can exist and simulate before its mesh is ready, so don't measure or query the visual geometry immediately after assignment.
 - `Size` and the mesh's authored dimensions can disagree. Scale the part, or the asset, deliberately; physics follows `Size`.
-- Cloning copies the mesh path, index, texture, fidelity, and inline content, but not any loaded renderer resources.
+- Cloning copies the mesh path, index, texture, fidelity, and inline content, but loads its own resources when needed.
 - A missing mesh asset still leaves a usable physics part.
 
 ## See also

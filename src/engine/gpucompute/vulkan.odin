@@ -5,24 +5,33 @@ import "core:dynlib"
 import vk "vendor:vulkan"
 
 ALLOW_SOFTWARE :: #config(KINE_GPU_COMPUTE_ALLOW_SOFTWARE, false)
+QUEUE_LIMIT :: clamp(
+	#config(KINE_GPU_COMPUTE_MAX_QUEUES, MAX_COMPUTE_QUEUES),
+	1,
+	MAX_COMPUTE_QUEUES,
+)
 KERNEL :: #load("kernels.spv")
 
 Device :: struct {
-	library:    dynlib.Library,
-	instance:   vk.Instance,
-	destroy:    vk.ProcDestroyInstance,
-	handle:     vk.Device,
-	procs:      vk.Device_VTable,
-	queue:      vk.Queue,
-	memory:     vk.PhysicalDeviceMemoryProperties,
-	set_layout: vk.DescriptorSetLayout,
-	layout:     vk.PipelineLayout,
-	pipeline:   vk.Pipeline,
-	commands:   vk.CommandPool,
-	job:        Job,
-	custom:     Custom_State,
-	limits:     vk.PhysicalDeviceLimits,
-	robust_access: bool,
+	library:           dynlib.Library,
+	instance:          vk.Instance,
+	destroy:           vk.ProcDestroyInstance,
+	handle:            vk.Device,
+	procs:             vk.Device_VTable,
+	queue:             vk.Queue,
+	parallel:          Parallel_State,
+	memory:            vk.PhysicalDeviceMemoryProperties,
+	set_layout:        vk.DescriptorSetLayout,
+	layout:            vk.PipelineLayout,
+	pipeline:          vk.Pipeline,
+	commands:          vk.CommandPool,
+	job:               Job,
+	custom:            Custom_State,
+	limits:            vk.PhysicalDeviceLimits,
+	robust_access:     bool,
+	physical:          vk.PhysicalDevice,
+	capabilities:      Capabilities,
+	format_properties: vk.ProcGetPhysicalDeviceFormatProperties,
 }
 
 Storage :: struct {
@@ -62,10 +71,18 @@ open :: proc(device: ^Device) -> (err: string) {
 	if resolve == nil {return "Vulkan loader is missing vkGetInstanceProcAddr"}
 	create_instance := cast(vk.ProcCreateInstance)resolve(nil, "vkCreateInstance")
 	if create_instance == nil {return "Vulkan loader is missing vkCreateInstance"}
+	api_version: u32 = vk.API_VERSION_1_0
+	if enumerate_version := cast(vk.ProcEnumerateInstanceVersion)resolve(
+		   nil,
+		   "vkEnumerateInstanceVersion",
+	   ); enumerate_version != nil {
+		version: u32
+		if enumerate_version(&version) == .SUCCESS {api_version = min(version, vk.API_VERSION_1_2)}
+	}
 	app := vk.ApplicationInfo {
 		sType            = .APPLICATION_INFO,
 		pApplicationName = "Kinemium GPUCompute",
-		apiVersion       = vk.API_VERSION_1_0,
+		apiVersion       = api_version,
 	}
 	instance_info := vk.InstanceCreateInfo {
 		sType            = .INSTANCE_CREATE_INFO,
@@ -76,29 +93,84 @@ open :: proc(device: ^Device) -> (err: string) {
 	}
 	device.destroy = cast(vk.ProcDestroyInstance)resolve(device.instance, "vkDestroyInstance")
 
-	physical, family := select_device(device.instance, resolve)
+	physical, family, available_queues := select_device(device.instance, resolve)
 	if physical == nil {return "no compatible Vulkan compute GPU is available"}
+	device.physical = physical
+	device.format_properties = auto_cast resolve(
+		device.instance,
+		"vkGetPhysicalDeviceFormatProperties",
+	)
 	get_memory := cast(vk.ProcGetPhysicalDeviceMemoryProperties)resolve(
 		device.instance,
 		"vkGetPhysicalDeviceMemoryProperties",
 	)
 	get_memory(physical, &device.memory)
-	get_properties := cast(vk.ProcGetPhysicalDeviceProperties)resolve(device.instance, "vkGetPhysicalDeviceProperties")
+	get_properties := cast(vk.ProcGetPhysicalDeviceProperties)resolve(
+		device.instance,
+		"vkGetPhysicalDeviceProperties",
+	)
 	properties: vk.PhysicalDeviceProperties
 	get_properties(physical, &properties)
 	device.limits = properties.limits
-	get_features := cast(vk.ProcGetPhysicalDeviceFeatures)resolve(device.instance, "vkGetPhysicalDeviceFeatures")
+	get_features := cast(vk.ProcGetPhysicalDeviceFeatures)resolve(
+		device.instance,
+		"vkGetPhysicalDeviceFeatures",
+	)
 	available_features: vk.PhysicalDeviceFeatures
 	get_features(physical, &available_features)
-	features := vk.PhysicalDeviceFeatures{robustBufferAccess = available_features.robustBufferAccess}
+	features := vk.PhysicalDeviceFeatures {
+		robustBufferAccess                = available_features.robustBufferAccess,
+		shaderStorageImageExtendedFormats = available_features.shaderStorageImageExtendedFormats,
+		shaderFloat64                     = available_features.shaderFloat64,
+		shaderInt64                       = available_features.shaderInt64,
+		shaderInt16                       = available_features.shaderInt16,
+	}
+	l := properties.limits
+	device.capabilities = {
+		name                  = properties.deviceName,
+		buffer_size           = min(l.maxStorageBufferRange, MAX_CUSTOM_BUFFER_BYTES),
+		uniform_size          = l.maxUniformBufferRange,
+		texture_1d            = min(l.maxImageDimension1D, 16384),
+		texture_2d            = min(l.maxImageDimension2D, 16384),
+		texture_3d            = min(l.maxImageDimension3D, 16384),
+		texture_layers        = min(l.maxImageArrayLayers, 2048),
+		shared_memory         = l.maxComputeSharedMemorySize,
+		workgroup_invocations = l.maxComputeWorkGroupInvocations,
+		workgroup_size        = l.maxComputeWorkGroupSize,
+		workgroup_count       = l.maxComputeWorkGroupCount,
+		float64               = bool(features.shaderFloat64),
+		int64                 = bool(features.shaderInt64),
+		int16                 = bool(features.shaderInt16),
+		storage_extended      = bool(features.shaderStorageImageExtendedFormats),
+	}
 	device.robust_access = bool(features.robustBufferAccess)
 	create_device := cast(vk.ProcCreateDevice)resolve(device.instance, "vkCreateDevice")
-	priority: f32 = 1
+	timeline := vk.PhysicalDeviceTimelineSemaphoreFeatures {
+		sType = .PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
+	}
+	if api_version >= vk.API_VERSION_1_2 && properties.apiVersion >= vk.API_VERSION_1_2 {
+		query := cast(vk.ProcGetPhysicalDeviceFeatures2)resolve(
+			device.instance,
+			"vkGetPhysicalDeviceFeatures2",
+		)
+		if query != nil {
+			f2 := vk.PhysicalDeviceFeatures2 {
+				sType = .PHYSICAL_DEVICE_FEATURES_2,
+				pNext = &timeline,
+			}
+			query(physical, &f2)
+		}
+	}
+	queue_count: u32 = 1
+	if timeline.timelineSemaphore {queue_count = min(available_queues, u32(QUEUE_LIMIT))}
+	device.capabilities.compute_queues = queue_count
+	device.capabilities.timeline_semaphores = bool(timeline.timelineSemaphore)
+	priorities := [MAX_COMPUTE_QUEUES]f32{0.5, 0.5, 0.5, 0.5}
 	queue_info := vk.DeviceQueueCreateInfo {
 		sType            = .DEVICE_QUEUE_CREATE_INFO,
 		queueFamilyIndex = family,
-		queueCount       = 1,
-		pQueuePriorities = &priority,
+		queueCount       = queue_count,
+		pQueuePriorities = &priorities[0],
 	}
 	info := vk.DeviceCreateInfo {
 		sType                = .DEVICE_CREATE_INFO,
@@ -106,15 +178,20 @@ open :: proc(device: ^Device) -> (err: string) {
 		pQueueCreateInfos    = &queue_info,
 		pEnabledFeatures     = &features,
 	}
+	if timeline.timelineSemaphore {info.pNext = &timeline}
 	if create_device(physical, &info, nil, &device.handle) != .SUCCESS {
 		return "could not create a Vulkan compute device"
 	}
-	// Load device functions into this instance's table. The renderer can use
-	// a different loader/device and keeps its own dispatch table.
+
+
 	get_proc := cast(vk.ProcGetDeviceProcAddr)resolve(device.instance, "vkGetDeviceProcAddr")
 	load_procs(device.handle, get_proc, &device.procs)
 	d := &device.procs
 	d.GetDeviceQueue(device.handle, family, 0, &device.queue)
+	for i in 0 ..< queue_count {d.GetDeviceQueue(device.handle, family, i, &device.parallel.queues[i])}
+	if queue_count > 1 {
+		if err = parallel_init(device); err != "" {return err}
+	}
 	pool := vk.CommandPoolCreateInfo {
 		sType            = .COMMAND_POOL_CREATE_INFO,
 		flags            = {.TRANSIENT},
@@ -132,6 +209,7 @@ select_device :: proc(
 ) -> (
 	vk.PhysicalDevice,
 	u32,
+	u32,
 ) {
 	enumerate := cast(vk.ProcEnumeratePhysicalDevices)resolve(
 		instance,
@@ -146,13 +224,13 @@ select_device :: proc(
 		"vkGetPhysicalDeviceQueueFamilyProperties",
 	)
 	count: u32
-	if enumerate(instance, &count, nil) != .SUCCESS || count == 0 {return nil, 0}
+	if enumerate(instance, &count, nil) != .SUCCESS || count == 0 {return nil, 0, 0}
 	devices := make([]vk.PhysicalDevice, count)
 	defer delete(devices)
-	if enumerate(instance, &count, raw_data(devices)) != .SUCCESS {return nil, 0}
+	if enumerate(instance, &count, raw_data(devices)) != .SUCCESS {return nil, 0, 0}
 
 	best: vk.PhysicalDevice
-	best_family: u32
+	best_family, best_queue_count: u32
 	best_rank := 0
 	for physical in devices[:count] {
 		properties: vk.PhysicalDeviceProperties
@@ -175,14 +253,19 @@ select_device :: proc(
 		queues := make([]vk.QueueFamilyProperties, queue_count)
 		defer delete(queues)
 		get_queues(physical, &queue_count, raw_data(queues))
+		family_score: u32
 		for queue, index in queues[:queue_count] {
-			if .COMPUTE in queue.queueFlags && queue.queueCount > 0 {
-				best, best_family, best_rank = physical, u32(index), rank
-				break
-			}
+			if .COMPUTE not_in queue.queueFlags || queue.queueCount == 0 {continue}
+
+			score := min(queue.queueCount, u32(QUEUE_LIMIT)) * 2
+			if .GRAPHICS not_in queue.queueFlags {score += 1}
+			if score <= family_score {continue}
+			family_score = score
+			best, best_family, best_rank, best_queue_count =
+				physical, u32(index), rank, queue.queueCount
 		}
 	}
-	return best, best_family
+	return best, best_family, best_queue_count
 }
 
 create_pipeline :: proc(device: ^Device) -> string {
@@ -220,7 +303,7 @@ create_pipeline :: proc(device: ^Device) -> string {
 		return "could not create GPUCompute's pipeline layout"
 	}
 
-	// The Vulkan shader module requires a word-aligned SPIR-V buffer.
+
 	code := make([]u32, len(KERNEL) / size_of(u32))
 	defer delete(code)
 	copy((cast([^]u8)raw_data(code))[:len(KERNEL)], KERNEL)
@@ -257,7 +340,7 @@ create_storage :: proc(device: ^Device, storage: ^Storage, bytes: int) -> bool {
 	info := vk.BufferCreateInfo {
 		sType = .BUFFER_CREATE_INFO,
 		size  = vk.DeviceSize(bytes),
-		usage = {.STORAGE_BUFFER},
+		usage = {.STORAGE_BUFFER, .UNIFORM_BUFFER, .TRANSFER_SRC, .TRANSFER_DST},
 	}
 	if d.CreateBuffer(handle, &info, nil, &storage.buffer) != .SUCCESS {return false}
 	requirements: vk.MemoryRequirements
@@ -286,7 +369,10 @@ create_storage :: proc(device: ^Device, storage: ^Storage, bytes: int) -> bool {
 }
 
 dispatch :: proc(device: ^Device, params: Parameters, a, b: []u8) -> (err: string) {
-	if device.job.submitted || device.custom.submitted {return "a GPUCompute job is already pending"}
+	if device.job.submitted ||
+	   device.custom.submitted ||
+	   device.custom.recording ||
+	   device.parallel.count != 0 {return "a GPUCompute job or batch is already pending"}
 	if reason := open(device); reason != "" {return reason}
 	defer {
 		if err != "" {clear_result(device)}
@@ -335,7 +421,7 @@ dispatch :: proc(device: ^Device, params: Parameters, a, b: []u8) -> (err: strin
 			buffer = storage.buffer,
 			range  = vk.DeviceSize(sizes[i]),
 		}
-		// Unary operations keep the same descriptor layout and never read binding 1.
+
 		if i == 1 && len(b) == 0 {buffers[i] = buffers[0]}
 		writes[i] = {
 			sType           = .WRITE_DESCRIPTOR_SET,
@@ -438,6 +524,7 @@ close :: proc(device: ^Device) {
 			_ = d.WaitForFences(handle, 1, &device.job.fence, true, max(u64))
 		}
 		clear_result(device)
+		parallel_close(device)
 		custom_close(device)
 		if device.pipeline != 0 {d.DestroyPipeline(handle, device.pipeline, nil)}
 		if device.layout != 0 {d.DestroyPipelineLayout(handle, device.layout, nil)}
@@ -451,6 +538,20 @@ close :: proc(device: ^Device) {
 }
 
 load_procs :: proc(device: vk.Device, get: vk.ProcGetDeviceProcAddr, table: ^vk.Device_VTable) {
+	table.CreateSemaphore = auto_cast get(device, "vkCreateSemaphore")
+	table.DestroySemaphore = auto_cast get(device, "vkDestroySemaphore")
+	table.DeviceWaitIdle = auto_cast get(device, "vkDeviceWaitIdle")
+	table.CreateImage = auto_cast get(device, "vkCreateImage")
+	table.DestroyImage = auto_cast get(device, "vkDestroyImage")
+	table.GetImageMemoryRequirements = auto_cast get(device, "vkGetImageMemoryRequirements")
+	table.BindImageMemory = auto_cast get(device, "vkBindImageMemory")
+	table.CreateImageView = auto_cast get(device, "vkCreateImageView")
+	table.DestroyImageView = auto_cast get(device, "vkDestroyImageView")
+	table.CreateSampler = auto_cast get(device, "vkCreateSampler")
+	table.DestroySampler = auto_cast get(device, "vkDestroySampler")
+	table.CmdCopyBufferToImage = auto_cast get(device, "vkCmdCopyBufferToImage")
+	table.CmdCopyBuffer = auto_cast get(device, "vkCmdCopyBuffer")
+	table.CmdFillBuffer = auto_cast get(device, "vkCmdFillBuffer")
 	table.AllocateCommandBuffers = auto_cast get(device, "vkAllocateCommandBuffers")
 	table.AllocateDescriptorSets = auto_cast get(device, "vkAllocateDescriptorSets")
 	table.AllocateMemory = auto_cast get(device, "vkAllocateMemory")
@@ -489,4 +590,10 @@ load_procs :: proc(device: vk.Device, get: vk.ProcGetDeviceProcAddr, table: ^vk.
 	table.UnmapMemory = auto_cast get(device, "vkUnmapMemory")
 	table.UpdateDescriptorSets = auto_cast get(device, "vkUpdateDescriptorSets")
 	table.WaitForFences = auto_cast get(device, "vkWaitForFences")
+}
+
+
+get_capabilities :: proc(device: ^Device) -> (Capabilities, string) {
+	if err := open(device); err != "" {return {}, err}
+	return device.capabilities, ""
 }

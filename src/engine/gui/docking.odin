@@ -1,6 +1,7 @@
 package gui
 
 import datatypes "../datatypes"
+import "core:strings"
 
 Dock_Column :: enum {
 	Left,
@@ -44,6 +45,70 @@ Dock_Panel :: enum {
 	Explorer,
 	Inspector,
 	Output,
+	Custom_0,
+	Custom_1,
+	Custom_2,
+	Custom_3,
+	Custom_4,
+	Custom_5,
+	Custom_6,
+	Custom_7,
+	Custom_8,
+	Custom_9,
+	Custom_10,
+	Custom_11,
+	Custom_12,
+	Custom_13,
+	Custom_14,
+	Custom_15,
+	Custom_16,
+	Custom_17,
+	Custom_18,
+	Custom_19,
+	Custom_20,
+	Custom_21,
+	Custom_22,
+	Custom_23,
+	Custom_24,
+	Custom_25,
+	Custom_26,
+	Custom_27,
+	Custom_28,
+	Custom_29,
+	Custom_30,
+	Custom_31,
+	Custom_32,
+	Custom_33,
+	Custom_34,
+	Custom_35,
+	Custom_36,
+	Custom_37,
+	Custom_38,
+	Custom_39,
+	Custom_40,
+	Custom_41,
+	Custom_42,
+	Custom_43,
+	Custom_44,
+	Custom_45,
+	Custom_46,
+	Custom_47,
+	Custom_48,
+	Custom_49,
+	Custom_50,
+	Custom_51,
+	Custom_52,
+	Custom_53,
+	Custom_54,
+	Custom_55,
+	Custom_56,
+	Custom_57,
+	Custom_58,
+	Custom_59,
+	Custom_60,
+	Custom_61,
+	Custom_62,
+	Custom_63,
 }
 
 Dock_Slot :: struct {
@@ -56,6 +121,7 @@ Dock_Slot :: struct {
 
 Dock_State :: struct {
 	slots:         [Dock_Panel]Dock_Slot,
+	names:         [Dock_Panel]string,
 	column_weight: [Dock_Column]f32,
 	band_size:     [Dock_Row]f32,
 }
@@ -108,8 +174,8 @@ Dock_Default_State :: proc() -> Dock_State {
 	return s
 }
 
-dock_panel_id :: proc(p: Dock_Panel) -> string {
-	switch p {
+dock_panel_id :: proc(state: ^Dock_State, p: Dock_Panel) -> string {
+	#partial switch p {
 	case .Topbar:
 		return "Topbar"
 	case .Viewport:
@@ -120,6 +186,8 @@ dock_panel_id :: proc(p: Dock_Panel) -> string {
 		return "Inspector"
 	case .Output:
 		return "Output"
+	case:
+		return state.names[p]
 	}
 	return ""
 }
@@ -196,12 +264,12 @@ dock_layout_group :: proc(
 		if vertical {
 			if fixed > 0 {
 				cfg.flex_grow = 0
-				items[n] = layout_create_item(dock_panel_id(p), w, fixed, cfg)
+				items[n] = layout_create_item(dock_panel_id(state, p), w, fixed, cfg)
 			} else {
-				items[n] = layout_create_item(dock_panel_id(p), w, 0, cfg)
+				items[n] = layout_create_item(dock_panel_id(state, p), w, 0, cfg)
 			}
 		} else {
-			items[n] = layout_create_item(dock_panel_id(p), 0, h, cfg)
+			items[n] = layout_create_item(dock_panel_id(state, p), 0, h, cfg)
 		}
 		n += 1
 	}
@@ -219,7 +287,7 @@ dock_layout_group :: proc(
 
 
 	for p in members {
-		if it := layout_find(items[:n], dock_panel_id(p)); it != nil {
+		if it := layout_find(items[:n], dock_panel_id(state, p)); it != nil {
 			out[p] = layout_to_coordinate(it, x, y)
 		}
 	}
@@ -229,6 +297,7 @@ Editor_Layout_Compute_Docked :: proc(
 	config: ^Editor_Layout_Config,
 	dock: ^Dock_State,
 	width, height: f32,
+	all_panels: ^[Dock_Panel]Layout_Coordinate = nil,
 ) -> (
 	coords: Editor_Layout_Coordinates,
 	bounds: Layout_Coordinate,
@@ -389,6 +458,7 @@ Editor_Layout_Compute_Docked :: proc(
 		}
 	}
 
+	if all_panels != nil {all_panels^ = panels}
 	coords = Editor_Layout_Coordinates {
 		TopbarCoordinates     = panels[.Topbar],
 		ViewportCoordinates   = panels[.Viewport],
@@ -405,6 +475,35 @@ Editor_Layout_Compute_Docked :: proc(
 	return
 }
 
+
+dock_find_named :: proc(state: ^Dock_State, name: string, create := false) -> (Dock_Panel, bool) {
+	for p in Dock_Panel {
+		if p < .Custom_0 {continue}
+		if state.names[p] == name && name != "" {return p, true}
+	}
+	if create && name != "" && len(name) <= 128 {
+		for p in Dock_Panel {
+			if p < .Custom_0 || state.names[p] != "" {continue}
+			state.names[p] = strings.clone(name)
+			state.slots[p] = Dock_Slot {
+				weight = 0.5,
+			}
+			return p, true
+		}
+	}
+	return .Custom_0, false
+}
+
+dock_remove_named :: proc(state: ^Dock_State, p: Dock_Panel) {
+	if p < .Custom_0 {return}
+	delete(state.names[p])
+	state.names[p] = ""
+	state.slots[p] = {}
+}
+
+dock_release_names :: proc(state: ^Dock_State) {
+	for p in Dock_Panel {if p >= .Custom_0 {dock_remove_named(state, p)}}
+}
 
 dock_move_panel :: proc(
 	state: ^Dock_State,

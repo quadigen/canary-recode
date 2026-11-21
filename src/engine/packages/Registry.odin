@@ -560,6 +560,39 @@ hook_new :: proc "c" (L: ^vm.State) -> i32 {
 @(private)
 set_3d_last_logged: [4]i32
 
+
+renderer_set_viewport_rect :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	registry := registry_from_upvalue(L)
+	if registry == nil || registry.renderer == nil {return 0}
+
+	offset := function_offset(L)
+	x := i32(vm.ArgNumber(L, 1 + offset))
+	y := i32(vm.ArgNumber(L, 2 + offset))
+	width := i32(vm.ArgNumber(L, 3 + offset))
+	height := i32(vm.ArgNumber(L, 4 + offset))
+	if width < 0 || height < 0 {
+		return vm.RaiseError(
+			L,
+			"renderer:SetViewportRect(x, y, width, height): dimensions cannot be negative",
+		)
+	}
+
+	scale := sdl3.UI_Scale
+	px, py, pw, ph := x, y, width, height
+	if abs(scale - 1) > 0.0001 {
+		px = i32(f32(x) * scale)
+		py = i32(f32(y) * scale)
+		pw = i32(f32(width) * scale)
+		ph = i32(f32(height) * scale)
+	}
+	px += i32(sdl3.UI_Safe_Left)
+	py += i32(sdl3.UI_Safe_Top)
+	renderer.set_viewport_rect(registry.renderer, px, py, pw, ph, true)
+	renderer.apply_viewport_rect(registry.renderer)
+	return 0
+}
+
 renderer_set_3d_tex_props :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 
@@ -1080,6 +1113,7 @@ install_renderer_global :: proc(registry: ^Registry) {
 	set_registry_function(L, "SyncWindowSize", renderer_sync_window_size, registry)
 	set_registry_function(L, "Stop", renderer_stop, registry)
 	set_registry_function(L, "Set3DTexProps", renderer_set_3d_tex_props, registry)
+	set_registry_function(L, "SetViewportRect", renderer_set_viewport_rect, registry)
 
 	for name in ([?]string{"MakeDepthBuffer", "SetGlobalShader", "SetIcon", "SetResizable", "Include", "InitAudioDevice", "Render3D", "Render2D", "Render2DAbove", "Step", "Run"}) {
 		install_noop_function(L, name, registry)

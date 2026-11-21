@@ -11,37 +11,54 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $outputPath = Join-Path $repoRoot $OutputDirectory
 $nativeBuild = Join-Path $repoRoot "build/web-native"
 $nativeLib = Join-Path $nativeBuild "lib"
-$configuredEmsdk = if ($env:EMSDK) { $env:EMSDK } else { "" }
-$emsdkRoot = if ($configuredEmsdk -and (Test-Path -LiteralPath (Join-Path $configuredEmsdk "upstream/emscripten/emcc.bat"))) {
-    $configuredEmsdk
-} else {
-    Join-Path $repoRoot ".tools/emsdk"
+# Emscripten 7 ships native Windows .exe launchers instead of .bat files.
+# Keep support for older SDKs while resolving every tool from the same SDK.
+function Find-EmscriptenTool([string]$Root, [string]$Name) {
+    foreach ($extension in @(".exe", ".bat", ".cmd")) {
+        $candidate = Join-Path $Root "upstream/emscripten/$Name$extension"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
 }
-$emcc = Join-Path $emsdkRoot "upstream/emscripten/emcc.bat"
-$emcmake = Join-Path $emsdkRoot "upstream/emscripten/emcmake.bat"
-
-if (!(Test-Path -LiteralPath $emcc) -or !(Test-Path -LiteralPath $emcmake)) {
+$emsdkRoot = $null
+foreach ($candidate in @($env:EMSDK, (Join-Path $repoRoot ".tools/emsdk"))) {
+    if ($candidate -and (Find-EmscriptenTool $candidate "emcc") -and
+        (Find-EmscriptenTool $candidate "emcmake")) {
+        $emsdkRoot = (Resolve-Path -LiteralPath $candidate).Path
+        break
+    }
+}
+if (!$emsdkRoot) {
     throw "Emscripten is required. Set EMSDK or install it at .tools/emsdk."
 }
 $env:EMSDK_QUIET = "1"
 $emsdkEnvironment = & cmd.exe /d /c "call `"$(Join-Path $emsdkRoot 'emsdk_env.bat')`" >nul && set"
+if ($LASTEXITCODE -ne 0) { throw "Failed to initialize Emscripten environment" }
 foreach ($line in $emsdkEnvironment) {
     if ($line -match '^([^=]+)=(.*)$') {
         [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
     }
 }
+$emcc = Find-EmscriptenTool $emsdkRoot "emcc"
+$emcmake = Find-EmscriptenTool $emsdkRoot "emcmake"
+$emconfig = Find-EmscriptenTool $emsdkRoot "em-config"
+$embuilder = Find-EmscriptenTool $emsdkRoot "embuilder"
+if (!$emconfig -or !$embuilder) { throw "Emscripten SDK is missing em-config or embuilder" }
 
 $odinCommand = Get-Command odin -ErrorAction Stop
-$odinRoot = Split-Path -Parent $odinCommand.Source
+$odinRoot = (& $odinCommand.Source root).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not locate Odin SDK" }
 $odinRuntime = Join-Path $odinRoot "core/sys/wasm/js/odin.js"
-$systemLib = Join-Path $emsdkRoot "upstream/emscripten/cache/sysroot/lib/wasm32-emscripten"
+$cacheRoot = (& $emconfig CACHE).Trim()
+if ($LASTEXITCODE -ne 0 -or !$cacheRoot) { throw "Could not locate Emscripten cache" }
+$systemLib = Join-Path $cacheRoot "sysroot/lib/wasm32-emscripten"
 New-Item -ItemType Directory -Force $outputPath, $nativeBuild, $nativeLib | Out-Null
 
 # Build the real native engine dependencies for wasm32 and combine each wrapper
 # with its implementation so Odin consumes normal relocatable wasm objects.
 & $emcmake cmake -S (Join-Path $repoRoot "cmake/web-native") -B $nativeBuild -G Ninja -DCMAKE_BUILD_TYPE=Release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-cmake --build $nativeBuild --config Release
+cmake --build $nativeBuild --config Release --target kine_luau JoltWrapper RecastWrapper
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $emcc -r "-Wl,--whole-archive" (Join-Path $nativeLib "libkine_luau.a") "-Wl,--no-whole-archive" `
@@ -57,7 +74,9 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/luacode_link.c") -o (Join-Path $nativeLib "kine_luacode_link.o")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/lualib_link.c") -o (Join-Path $nativeLib "kine_lualib_link.o")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/lexer_link.c") -o (Join-Path $nativeLib "kine_lexer_link.o")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/webview_link.c") -o (Join-Path $nativeLib "kine_webview_link.o")
@@ -65,9 +84,26 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $emcc -c (Join-Path $repoRoot "cmake/web-native/web_allocator.c") -o (Join-Path $nativeLib "web_allocator.o")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$runtimeArchives = @("libc++.a", "libc++abi.a", "libc.a", "libcompiler_rt.a")
+# Explicitly build the non-threaded JS-exception runtime used by Odin's
+# custom browser host. A default em++ link may select noexcept archives.
+$versionText = (& $emcc --version | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '\b(\d+)\.\d+\.\d+\b') {
+    throw "Could not determine Emscripten version: $versionText"
+}
+$runtimeNames = @("libc++", "libc++abi", "libc")
+if ([int]$matches[1] -ge 7) {
+    # Emscripten 7 split compiler_rt into builtins and low-level runtime.
+    $runtimeNames += @("libemcc", "libclang_rt.builtins")
+} else {
+    $runtimeNames += "libcompiler_rt"
+}
+& $embuilder build @runtimeNames
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$runtimeArchives = @($runtimeNames | ForEach-Object { "$_.a" })
 foreach ($archive in $runtimeArchives) {
-    Copy-Item -LiteralPath (Join-Path $systemLib $archive) -Destination (Join-Path $nativeLib $archive) -Force
+    $source = Join-Path $systemLib $archive
+    if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing Emscripten runtime archive: $source" }
+    Copy-Item -LiteralPath $source -Destination (Join-Path $nativeLib $archive) -Force
 }
 $linkFlags = @(
     "--allow-multiple-definition", "--export-table", "--strip-debug", "--export=__wasm_call_ctors",
@@ -80,10 +116,10 @@ $linkFlags = @(
     "--undefined=__cxa_can_catch", "--undefined=__cxa_get_exception_ptr",
     "--undefined=emscripten_stack_get_current", "--undefined=_emscripten_stack_restore",
     "--wrap=malloc", "--wrap=free", "--wrap=calloc", "--wrap=realloc",
-    "--wrap=posix_memalign", "--wrap=strcmp", (Join-Path $nativeLib "web_allocator.o"),
-    (Join-Path $nativeLib "libc++.a"), (Join-Path $nativeLib "libc++abi.a"),
-    (Join-Path $nativeLib "libc.a"), (Join-Path $nativeLib "libcompiler_rt.a")
-) -join " "
+    "--wrap=posix_memalign", "--wrap=strcmp", "build/web-native/lib/web_allocator.o"
+)
+$linkFlags += @($runtimeArchives | ForEach-Object { "build/web-native/lib/$_" })
+$linkFlags = $linkFlags -join " "
 
 # Embed the editor UI for the browser. The Web target cannot fetch the desktop
 # editor ZIP at runtime, so pack a kinemium-editor checkout's internal tree into
@@ -100,25 +136,27 @@ $odinArguments = @(
 if ($BuildTarget -eq "editor" -and (Test-Path -LiteralPath $editorModules)) {
     $resolvedEditor = (Resolve-Path -LiteralPath $editorModules).Path
     Write-Host "Embedding editor modules from $resolvedEditor"
-    $odinArguments += "-define:EDITOR_MODULES=$resolvedEditor"
-
-    $editorComponents = Join-Path $editorModules "Components"
-    if (Test-Path -LiteralPath $editorComponents) {
-        $resolvedComponents = (Resolve-Path -LiteralPath $editorComponents).Path
-        Write-Host "Embedding editor components from $resolvedComponents"
-        $odinArguments += "-define:EDITOR_COMPONENTS=$resolvedComponents"
-    }
+    $editorPackage = Join-Path $repoRoot "build/web-native/editor-modules.kemp"
+    & python (Join-Path $repoRoot "tools/pack_editor_modules.py") $resolvedEditor $editorPackage
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $odinArguments += "-define:EDITOR_PACKAGE=$editorPackage"
 } elseif ($BuildTarget -eq "editor") {
-    Write-Host "No kinemium-editor checkout found; building without the embedded editor UI"
+    throw "Editor modules not found at $editorModules. Set KINEMIUM_EDITOR_MODULES or clone kinemium-editor next to this repository."
 }
 if ($ClientAddress) { $odinArguments += "-define:KINE_ADDRESS=$ClientAddress" }
 if ($ClientPort) { $odinArguments += "-define:KINE_PORT=$ClientPort" }
 
-& $odinCommand.Source @odinArguments
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Push-Location $repoRoot
+try {
+    & $odinCommand.Source @odinArguments
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally { Pop-Location }
 
 # Stage the desktop shell and official CanvasKit/Babylon.js browser distributions.
-Copy-Item -LiteralPath (Join-Path $repoRoot "web/$Shell") -Destination $outputPath -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "web/$Shell") -Destination (Join-Path $outputPath "index.html") -Force
+if ($Shell -ne "index.html") {
+    Copy-Item -LiteralPath (Join-Path $repoRoot "web/$Shell") -Destination $outputPath -Force
+}
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.css") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/app.js") -Destination $outputPath -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "web/babylon_backend.js") -Destination $outputPath -Force

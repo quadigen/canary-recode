@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 main :: proc() {
 	script_vm := vm.New()
@@ -33,6 +33,33 @@ assert(v:Cross(Vector2.one) == -1)
 assert(v + Vector2.new(1, 2) == Vector2.new(4, 6))
 assert(2 * v == Vector2.new(6, 8))
 assert(v:Lerp(Vector2.zero, 0.5) == Vector2.new(1.5, 2))
+
+local a = Vector2.new(-1.5, 2.5)
+assert(a:Abs() == Vector2.new(1.5, 2.5))
+assert(a:Ceil() == Vector2.new(-1, 3))
+assert(a:Floor() == Vector2.new(-2, 2))
+assert(a:Sign() == Vector2.new(-1, 1))
+assert(close(Vector2.xAxis:Angle(Vector2.yAxis), math.pi / 2))
+assert(close(Vector2.yAxis:Angle(Vector2.xAxis, true), -math.pi / 2))
+assert(a:Max(Vector2.zero, Vector2.new(5, -1)) == Vector2.new(5, 2.5))
+assert(a:Min(Vector2.zero, Vector2.new(5, -1)) == Vector2.new(-1.5, -1))
+assert(Vector3.zero:Max(Vector3.new(1, -1, 2), Vector3.new(-1, 3, 1)) == Vector3.new(1, 3, 2))
+assert(Vector3.zero:Min(Vector3.new(1, -1, 2), Vector3.new(-1, 3, 1)) == Vector3.new(-1, -1, 0))
+local p1, p2 = CFrame.new(1, 2, 3):PointToWorldSpace(Vector3.zero, Vector3.one)
+assert(p1 == Vector3.new(1, 2, 3) and p2 == Vector3.new(2, 3, 4))
+local c1, c2 = CFrame.new(1, 2, 3):ToWorldSpace(CFrame.identity, CFrame.new(2, 0, 0))
+assert(c1.Position == Vector3.new(1, 2, 3) and c2.Position == Vector3.new(3, 2, 3))
+local lighting = game:GetService("Lighting")
+lighting:SetMinutesAfterMidnight(90)
+assert(lighting.ClockTime == 1.5 and lighting:GetMinutesAfterMidnight() == 90)
+lighting:SetMinutesAfterMidnight(-30)
+assert(lighting:GetMinutesAfterMidnight() == 1410)
+local scroll = Instance.new("ScrollingFrame")
+assert(scroll:GetScrollVelocity() == Vector2.zero)
+scroll:ResetScrollVelocity()
+assert(scroll:GetScrollVelocity() == Vector2.zero)
+local animator = Instance.new("Animator")
+assert(animator:GetTrackByAnimationId("missing") == nil)
 
 assert(typeof(UDim2.new()) == "UDim2")
 local dim = UDim2.new(0.5, 10, 1, -5)
@@ -70,6 +97,15 @@ local invalidPartValue = pcall(function()
     part.CFrame = Vector2.zero
 end)
 assert(not invalidPartValue)
+
+local encoding = game:GetService("EncodingService")
+local input = buffer.fromstring("hello")
+assert(buffer.tostring(encoding:Base64Encode(input)) == "aGVsbG8=")
+assert(buffer.tostring(encoding:Base64Decode(encoding:Base64Encode(input))) == "hello")
+assert(encoding:ComputeStringHash("hello", Enum.HashAlgorithm.Sha256) == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+local compressed = encoding:CompressBuffer(input, Enum.CompressionAlgorithm.Zstd)
+assert(encoding:GetDecompressedBufferSize(compressed, Enum.CompressionAlgorithm.Zstd) == 5)
+assert(buffer.tostring(encoding:DecompressBuffer(compressed, Enum.CompressionAlgorithm.Zstd)) == "hello")
 
 local writableValue = pcall(function()
     v.X = 9

@@ -3,7 +3,7 @@ title: UnreliableRemoteEvent
 description: Send disposable, unordered, unreliable messages between server and clients.
 ---
 
-`UnreliableRemoteEvent` is an `Instance` with the same firing API as [RemoteEvent](/docs/RemoteEvent). It is a separate class. Native ENet connections send these events as unreliable, unsequenced packets. Messages may be dropped or arrive out of order. No response is returned and lost events are not retried.
+`UnreliableRemoteEvent` is an `Instance` with the same firing API as [RemoteEvent](/docs/RemoteEvent). It is a separate class. On desktop network connections, these events have no delivery or ordering guarantees. Messages may be dropped or arrive out of order. No response is returned and lost events are not retried.
 
 ## Example
 
@@ -41,7 +41,7 @@ remote:FireServer(1, 0.5)
 ## Delivery
 
 - The serialized arguments may total at most 1,000 bytes, excluding protocol headers; oversized messages are discarded. Encoding overhead counts toward the limit.
-- Native ENet sends without reliability or ordering guarantees. Events before replication/handshake completion may be discarded; the remote must already exist on the receiving side.
+- Events before replication/handshake completion may be discarded; the remote must already exist on the receiving side.
 - Browser WebSocket connections use TCP, so they remain ordered and reliable once sent. Disposable events are dropped instead of being queued when the local WebSocket send backlog exceeds 16 KiB.
 - Offline runtimes use the normal local loopback behavior, without network serialization.
 - Treat all client input as untrusted; validate types, ownership, ranges, frequency and sequence numbers on the server.

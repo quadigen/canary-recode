@@ -1,0 +1,23 @@
+---
+title: NoCollisionConstraint
+description: Disable collisions between two specific parts.
+---
+
+Disable collisions between two specific parts.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("NoCollisionConstraint", partA)
+constraint.Part0 = partA
+constraint.Part1 = partB
+constraint.Enabled = true
+```
+
+## Properties
+
+Part0 and Part1 reference the two parts. Enabled toggles the exclusion; Active indicates whether it is applied to two simulated bodies.
+
+## Notes
+
+The exclusion affects Jolt rigid-body contacts, not raycasts or character-controller queries.

@@ -1,39 +1,47 @@
 package classes
 
-import "core:math"
-import "core:strings"
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:math"
+import "core:strings"
 
 ParticleEmitter_Class := Class_Info {
-	name = "ParticleEmitter",
+	name   = "ParticleEmitter",
 	parent = &Instance_Class,
 }
 
 ParticleEmitter_Settings :: struct {
-	enabled:             bool,
-	rate:                f32,
-	lifetime:            datatypes.NumberRange,
-	speed:               datatypes.NumberRange,
-	rotation:            datatypes.NumberRange,
-	rot_speed:           datatypes.NumberRange,
-	spread_angle:        datatypes.Vector2,
-	acceleration:        datatypes.Vector3,
-	drag:                f32,
-	wind_affects_drag:   bool,
-	color:               datatypes.ColorSequence,
-	size:                datatypes.NumberSequence,
-	transparency:        datatypes.NumberSequence,
-	light_emission:      f32,
-	brightness:          f32,
-	z_offset:            f32,
-	texture:             string,
-	emission_direction:  enums.NormalId,
-	flipbook_layout:     enums.ParticleFlipbookLayout,
-	flipbook_mode:       enums.ParticleFlipbookMode,
-	flipbook_framerate:  datatypes.NumberRange,
+	enabled:               bool,
+	rate:                  f32,
+	lifetime:              datatypes.NumberRange,
+	speed:                 datatypes.NumberRange,
+	rotation:              datatypes.NumberRange,
+	rot_speed:             datatypes.NumberRange,
+	spread_angle:          datatypes.Vector2,
+	acceleration:          datatypes.Vector3,
+	drag:                  f32,
+	wind_affects_drag:     bool,
+	collision_enabled:     bool,
+	collision_radius:      f32,
+	collision_restitution: f32,
+	collision_friction:    f32,
+	color:                 datatypes.ColorSequence,
+	size:                  datatypes.NumberSequence,
+	transparency:          datatypes.NumberSequence,
+	light_emission:        f32,
+	brightness:            f32,
+	z_offset:              f32,
+	texture:               string,
+	emission_direction:    enums.NormalId,
+	orientation:           enums.ParticleOrientation,
+	shape:                 enums.ParticleEmitterShape,
+	shape_in_out:          enums.ParticleEmitterShapeInOut,
+	shape_style:           enums.ParticleEmitterShapeStyle,
+	flipbook_layout:       enums.ParticleFlipbookLayout,
+	flipbook_mode:         enums.ParticleFlipbookMode,
+	flipbook_framerate:    datatypes.NumberRange,
 }
 
 ParticleEmitter :: struct {
@@ -50,16 +58,19 @@ particle_emitter_construct :: proc(renderer: ^Renderer_Object, data_model: rawpt
 	emitter := new(ParticleEmitter)
 	emitter.object = Object_Init(&ParticleEmitter_Class, "ParticleEmitter")
 	emitter.settings = {
-		enabled              = true,
-		rate                 = 20,
-		lifetime             = {5, 10},
-		speed                = {5, 5},
-		color                = datatypes.ColorSequence_New({1, 1, 1}),
-		size                 = datatypes.NumberSequence_New(1),
-		transparency         = datatypes.NumberSequence_New(0),
-		brightness           = 1,
-		emission_direction   = .Top,
-		flipbook_framerate   = {1, 30},
+		enabled               = true,
+		rate                  = 20,
+		lifetime              = {5, 10},
+		speed                 = {5, 5},
+		color                 = datatypes.ColorSequence_New({1, 1, 1}),
+		size                  = datatypes.NumberSequence_New(1),
+		transparency          = datatypes.NumberSequence_New(0),
+		brightness            = 1,
+		collision_radius      = 0.1,
+		collision_restitution = 0.3,
+		collision_friction    = 0.2,
+		emission_direction    = .Top,
+		flipbook_framerate    = {1, 30},
 	}
 	return &emitter.object
 }
@@ -91,7 +102,11 @@ particle_emitter_clone :: proc(source, destination: ^Object) {
 }
 
 particle_emitter_get :: proc(
-	L: ^vm.State, object: ^Object, types: ^datatypes.Registry, enum_registry: ^enums.Registry, key: string,
+	L: ^vm.State,
+	object: ^Object,
+	types: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
 ) -> bool {
 	emitter := cast(^ParticleEmitter)object
 	switch key {
@@ -115,6 +130,14 @@ particle_emitter_get :: proc(
 		vm.PushNumber(L, f64(emitter.drag))
 	case "WindAffectsDrag":
 		vm.PushBoolean(L, emitter.wind_affects_drag)
+	case "CollisionEnabled":
+		vm.PushBoolean(L, emitter.collision_enabled)
+	case "CollisionRadius":
+		vm.PushNumber(L, f64(emitter.collision_radius))
+	case "CollisionRestitution":
+		vm.PushNumber(L, f64(emitter.collision_restitution))
+	case "CollisionFriction":
+		vm.PushNumber(L, f64(emitter.collision_friction))
 	case "Color":
 		datatypes.Push_ColorSequence(L, types, emitter.color)
 	case "Size":
@@ -129,12 +152,45 @@ particle_emitter_get :: proc(
 		vm.PushNumber(L, f64(emitter.z_offset))
 	case "Texture":
 		vm.PushString(L, emitter.texture)
+	case "Orientation":
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ParticleOrientation",
+			i64(emitter.orientation),
+		)
+	case "Shape":
+		_ = enums.Push_Item_By_Value(L, enum_registry, "ParticleEmitterShape", i64(emitter.shape))
+	case "ShapeInOut":
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ParticleEmitterShapeInOut",
+			i64(emitter.shape_in_out),
+		)
+	case "ShapeStyle":
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ParticleEmitterShapeStyle",
+			i64(emitter.shape_style),
+		)
 	case "EmissionDirection":
 		enums.Push_Item_By_Value(L, enum_registry, "NormalId", i64(emitter.emission_direction))
 	case "FlipbookLayout":
-		enums.Push_Item_By_Value(L, enum_registry, "ParticleFlipbookLayout", i64(emitter.flipbook_layout))
+		enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ParticleFlipbookLayout",
+			i64(emitter.flipbook_layout),
+		)
 	case "FlipbookMode":
-		enums.Push_Item_By_Value(L, enum_registry, "ParticleFlipbookMode", i64(emitter.flipbook_mode))
+		enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ParticleFlipbookMode",
+			i64(emitter.flipbook_mode),
+		)
 	case "FlipbookFramerate":
 		datatypes.Push_NumberRange(L, types, emitter.flipbook_framerate)
 	case "VelocitySpread":
@@ -148,8 +204,12 @@ particle_emitter_get :: proc(
 }
 
 particle_emitter_set :: proc(
-	L: ^vm.State, object: ^Object, types: ^datatypes.Registry, enum_registry: ^enums.Registry,
-	key: string, index: int,
+	L: ^vm.State,
+	object: ^Object,
+	types: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	index: int,
 ) -> bool {
 	emitter := cast(^ParticleEmitter)object
 	switch key {
@@ -178,8 +238,10 @@ particle_emitter_set :: proc(
 		emitter.spread_angle = {clamp(value.X, 0, 360), clamp(value.Y, 0, 360)}
 	case "Acceleration":
 		value := datatypes.Arg_Vector3(L, index)
-		if math.is_nan(value.x + value.y + value.z) || math.is_inf(value.x) ||
-		   math.is_inf(value.y) || math.is_inf(value.z) {
+		if math.is_nan(value.x + value.y + value.z) ||
+		   math.is_inf(value.x) ||
+		   math.is_inf(value.y) ||
+		   math.is_inf(value.z) {
 			_ = vm.RaiseError(L, "Acceleration must be finite")
 			return true
 		}
@@ -188,6 +250,14 @@ particle_emitter_set :: proc(
 		emitter.drag = particle_emitter_number(L, index, 0, 1000)
 	case "WindAffectsDrag":
 		emitter.wind_affects_drag = vm.ArgBoolean(L, index)
+	case "CollisionEnabled":
+		emitter.collision_enabled = vm.ArgBoolean(L, index)
+	case "CollisionRadius":
+		emitter.collision_radius = particle_emitter_number(L, index, 0.001, 1000)
+	case "CollisionRestitution":
+		emitter.collision_restitution = particle_emitter_number(L, index, 0, 1)
+	case "CollisionFriction":
+		emitter.collision_friction = particle_emitter_number(L, index, 0, 1)
 	case "Color":
 		value := datatypes.ColorSequence_Clone(datatypes.Arg_ColorSequence(L, index, types))
 		datatypes.ColorSequence_Destroy(emitter.color)
@@ -213,6 +283,18 @@ particle_emitter_set :: proc(
 			delete(emitter.texture)
 			emitter.texture = strings.clone(texture)
 		}
+	case "Orientation":
+		item := enums.Arg_Item(L, index, enum_registry, "ParticleOrientation")
+		emitter.orientation = enums.ParticleOrientation(item.value)
+	case "Shape":
+		item := enums.Arg_Item(L, index, enum_registry, "ParticleEmitterShape")
+		emitter.shape = enums.ParticleEmitterShape(item.value)
+	case "ShapeInOut":
+		item := enums.Arg_Item(L, index, enum_registry, "ParticleEmitterShapeInOut")
+		emitter.shape_in_out = enums.ParticleEmitterShapeInOut(item.value)
+	case "ShapeStyle":
+		item := enums.Arg_Item(L, index, enum_registry, "ParticleEmitterShapeStyle")
+		emitter.shape_style = enums.ParticleEmitterShapeStyle(item.value)
 	case "EmissionDirection":
 		item := enums.Arg_Item(L, index, enum_registry, "NormalId")
 		emitter.emission_direction = enums.NormalId(item.value)
@@ -244,8 +326,15 @@ particle_emitter_number :: proc(L: ^vm.State, index: int, minimum, maximum: f32)
 }
 
 particle_emitter_namecall :: proc(
-	L: ^vm.State, object: ^Object, types: ^datatypes.Registry, enum_registry: ^enums.Registry, method: string,
-) -> (i32, bool) {
+	L: ^vm.State,
+	object: ^Object,
+	types: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
 	emitter := cast(^ParticleEmitter)object
 	switch method {
 	case "Emit":
@@ -265,10 +354,15 @@ particle_emitter_namecall :: proc(
 
 Register_ParticleEmitter :: proc(registry: ^Registry) {
 	Register_Class(
-		registry, &ParticleEmitter_Class, particle_emitter_construct, particle_emitter_destroy,
-		get = particle_emitter_get, set = particle_emitter_set,
-		namecall = particle_emitter_namecall, clone = particle_emitter_clone,
-		properties = []string{
+		registry,
+		&ParticleEmitter_Class,
+		particle_emitter_construct,
+		particle_emitter_destroy,
+		get = particle_emitter_get,
+		set = particle_emitter_set,
+		namecall = particle_emitter_namecall,
+		clone = particle_emitter_clone,
+		properties = []string {
 			"Enabled",
 			"Rate",
 			"Lifetime",
@@ -279,6 +373,10 @@ Register_ParticleEmitter :: proc(registry: ^Registry) {
 			"Acceleration",
 			"Drag",
 			"WindAffectsDrag",
+			"CollisionEnabled",
+			"CollisionRadius",
+			"CollisionRestitution",
+			"CollisionFriction",
 			"Color",
 			"Size",
 			"Transparency",
@@ -287,6 +385,10 @@ Register_ParticleEmitter :: proc(registry: ^Registry) {
 			"ZOffset",
 			"Texture",
 			"EmissionDirection",
+			"Orientation",
+			"Shape",
+			"ShapeInOut",
+			"ShapeStyle",
 			"FlipbookLayout",
 			"FlipbookMode",
 			"FlipbookFramerate",

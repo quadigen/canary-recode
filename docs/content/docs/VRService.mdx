@@ -3,13 +3,13 @@ title: VRService
 description: Read OpenXR head and hand tracking, controller input, and trigger haptic feedback.
 ---
 
-`VRService` is a client-side service for Kinemium's experimental Linux Vulkan/OpenXR backend. Start the application with `KINE_VR=1` and an active OpenXR runtime. Normal desktop and server execution return inactive values.
+`VRService` is a client-side service for Kinemium's experimental OpenXR support on Linux. Start the application with `KINE_VR=1` and an active OpenXR runtime. Normal desktop and server execution return inactive values.
 
 ## Properties
 
 | Property | Type | Description |
 | --- | --- | --- |
-| VREnabled | boolean | The native XR session is running. |
+| VREnabled | boolean | The VR session is running. |
 | VRAvailable | boolean | The XR session was initialized successfully. |
 
 ## Methods

@@ -7,6 +7,7 @@ import serializer "../serializer"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:hash"
 import "core:os"
 import "core:strconv"
 import "core:time"
@@ -24,6 +25,14 @@ Playtest_Tree_Op :: enum u8 {
 	Destroy,
 	Reparent,
 	Reference,
+	Tree_Versioned,
+	Copy,
+}
+
+Playtest_Tree_Pending :: struct {
+	sequence: u32,
+	op:       Playtest_Tree_Op,
+	deadline: time.Tick,
 }
 
 Playtest_Tree_Reader :: struct {
@@ -172,7 +181,7 @@ pt_set_protected :: proc "c" (L: ^vm.State) -> i32 {
 	return 0
 }
 
-// Kind 0: serialized native value. Kind 1: live instance reference by ID.
+
 pt_encode_value :: proc(out: ^[dynamic]u8, L: ^vm.State, registry: ^Registry) -> bool {
 	if binding := vm.UserdataBindingOf(L, -1); binding != nil && binding.name == "Instance" {
 		object := cast(^classes.Object)vm.UserdataValue(L, -1)
@@ -292,9 +301,37 @@ pt_execute :: proc(
 		if !pt_snapshot(out, registry) {return "game tree exceeds snapshot limit"}
 		return ""
 	}
+	if op == .Tree_Versioned {
+		snapshot: [dynamic]u8
+		defer delete(snapshot)
+		if !pt_snapshot(&snapshot, registry) {return "game tree exceeds snapshot limit"}
+		version := fmt.tprintf("%016x", hash.fnv64a(snapshot[:]))
+		pt_put_string(out, version)
+		changed := id != version
+		append(out, u8(1) if changed else u8(0))
+		if changed {append(out, ..snapshot[:])}
+		return ""
+	}
 	object := pt_find(registry, id)
 	if object == nil {return "instance no longer exists in this game tree"}
 	switch op {
+	case .Copy:
+		if pt_protected_object(object) {return "cannot copy a game service or DataModel"}
+
+
+		container := classes.Object_Init(&classes.Folder_Class, "SerializedInstances")
+		roots: [dynamic]^classes.Object
+		append(&roots, object)
+		defer delete(roots)
+		container.children = roots
+		data, err := serializer.Serialize(registry.classes, L, &container)
+		defer delete(data)
+		if !serializer.Error_Is_None(err) {
+			serializer.Error_Delete(&err)
+			return "could not serialize the live instance"
+		}
+		if len(data) >= PLAYTEST_TREE_LIMIT - 8 {return "instance exceeds clipboard size limit"}
+		pt_put_bytes(out, data)
 	case .Properties:
 		properties := classes.Get_Properties(registry.classes, object)
 		defer delete(properties)
@@ -383,13 +420,12 @@ pt_execute :: proc(
 		   classes.Is_Descendant_Of(parent, object) {return "invalid parent or hierarchy cycle"}
 		classes.Set_Parent(object, parent)
 		if object.destroyed || object.parent != parent {return "reparenting was rejected"}
-	case .Tree:
+	case .Tree, .Tree_Versioned:
 	}
 	return ""
 }
 
-// Only launched playtest hosts receive an IPC directory. All work happens on
-// their engine thread, between simulation steps, with no network listener.
+
 Playtest_Tree_Pump :: proc(dir: string, registry: ^Registry, L: ^vm.State) {
 	if dir == "" || registry == nil || registry.data_model == nil || L == nil {return}
 	request, path_err := os.join_path({dir, "request.bin"}, context.allocator)
@@ -412,7 +448,7 @@ Playtest_Tree_Pump :: proc(dir: string, registry: ^Registry, L: ^vm.State) {
 	   r.pos != len(data) ||
 	   sequence == 0 ||
 	   raw_op < 1 ||
-	   raw_op > u32(Playtest_Tree_Op.Reference) {return}
+	   raw_op > u32(Playtest_Tree_Op.Copy) {return}
 	top := vm.StackTop(L)
 	security := vm.GetThreadSecurityCapabilities(L)
 	vm.SetThreadSecurityCapabilities(L, vm.THREAD_SECURITY_ALL)
@@ -445,11 +481,15 @@ playtest_tree_method :: proc(method: string) -> (Playtest_Tree_Op, bool) {
 	switch method {
 	case "GetGameTree":
 		return .Tree, true
-	case "GetInstanceProperties":
+	case "RequestCopyInstance":
+		return .Copy, true
+	case "RequestGameTree":
+		return .Tree_Versioned, true
+	case "GetInstanceProperties", "RequestInstanceProperties":
 		return .Properties, true
 	case "GetInstanceProperty":
 		return .Get, true
-	case "SetInstanceProperty":
+	case "SetInstanceProperty", "RequestSetInstanceProperty":
 		return .Set, true
 	case "CreateInstance":
 		return .Create, true
@@ -457,7 +497,7 @@ playtest_tree_method :: proc(method: string) -> (Playtest_Tree_Op, bool) {
 		return .Destroy, true
 	case "ReparentInstance":
 		return .Reparent, true
-	case "SetInstanceReference":
+	case "SetInstanceReference", "RequestSetInstanceReference":
 		return .Reference, true
 	}
 	return {}, false
@@ -484,8 +524,22 @@ pt_decode_result :: proc(
 	}
 	if data[0] == 0 {return pt_fail(L, pt_get_string(&r))}
 	top := vm.StackTop(L)
+	version: string
 	switch op {
-	case .Tree:
+	case .Tree, .Tree_Versioned:
+		if op == .Tree_Versioned {
+			version = pt_get_string(&r)
+			if r.bad || r.pos >= len(r.data) {return pt_fail(L, "invalid versioned tree response")}
+			changed := r.data[r.pos]
+			r.pos += 1
+			if changed == 0 {
+				if r.pos != len(r.data) {return pt_fail(L, "invalid unchanged tree response")}
+				vm.PushBoolean(L, false)
+				vm.PushString(L, version)
+				return 2, true
+			}
+			if changed != 1 {return pt_fail(L, "invalid versioned tree response")}
+		}
 		count := pt_get_u32(&r)
 		if count > PLAYTEST_TREE_NODE_LIMIT {return pt_fail(L, "invalid tree response")}
 		vm.NewTable(L, int(count), 0)
@@ -500,6 +554,8 @@ pt_decode_result :: proc(
 			vm.PushString(L, class_name); vm.SetField(L, -2, "ClassName")
 			vm.RawSetIndex(L, -2, i + 1)
 		}
+	case .Copy:
+		vm.PushBuffer(L, pt_get_bytes(&r))
 	case .Properties:
 		count := pt_get_u32(&r)
 		if count > 10000 {return pt_fail(L, "invalid property response")}
@@ -520,6 +576,10 @@ pt_decode_result :: proc(
 		vm.SetStackTop(L, top)
 		return pt_fail(L, "invalid playtest response")
 	}
+	if op == .Tree_Versioned {
+		vm.PushString(L, version)
+		return 2, true
+	}
 	return 1, true
 }
 
@@ -527,6 +587,7 @@ playtest_tree_namecall :: proc(
 	L: ^vm.State,
 	service: ^PlaytestService,
 	op: Playtest_Tree_Op,
+	asynchronous := false,
 ) -> (
 	i32,
 	bool,
@@ -537,7 +598,8 @@ playtest_tree_namecall :: proc(
 	) {return vm.RaiseError(L, "Playtest tree APIs require Internals capability"), true}
 	role := vm.ArgString(L, 2)
 	id, key, aux: string
-	if op != .Tree {id = vm.ArgString(L, 3)}
+	if op ==
+	   .Tree_Versioned {id = vm.ArgOptionalString(L, 3)} else if op != .Tree {id = vm.ArgString(L, 3)}
 	switch op {
 	case .Get, .Set, .Reference:
 		key = vm.ArgString(L, 4)
@@ -546,10 +608,10 @@ playtest_tree_namecall :: proc(
 		aux = vm.ArgOptionalString(L, 5)
 	case .Reparent:
 		aux = vm.ArgString(L, 4)
-	case .Tree, .Properties, .Destroy:
+	case .Tree, .Tree_Versioned, .Properties, .Destroy, .Copy:
 	}
 	if op == .Reference {aux = vm.ArgOptionalString(L, 5)}
-	playtest_refresh(service)
+	if !asynchronous {playtest_refresh(service)}
 	if !service.running ||
 	   service.tree_dir == "" {return pt_fail(L, "no inspectable local playtest is running")}
 	if service.singleplayer && (role == "Server" || role == "Client") {role = "Client"}
@@ -559,10 +621,13 @@ playtest_tree_namecall :: proc(
 				   service.client_process,
 			   ) {return pt_fail(L, "requested playtest process is not running")}
 	if role != "Server" && role != "Client" {return pt_fail(L, "target must be Server or Client")}
+	slot := 0 if role == "Server" else 1
+	if service.tree_pending[slot].sequence !=
+	   0 {return pt_fail(L, "previous playtest request is still pending")}
 	dir := pt_path(service.tree_dir, role)
 	request := pt_path(dir, "request.bin")
 	if os.exists(request) {return pt_fail(L, "previous playtest request is still pending")}
-	// Stale timed-out responses are scoped to this session and sequence number.
+
 	wire: [dynamic]u8
 	defer delete(wire)
 	if op == .Set {
@@ -585,6 +650,11 @@ playtest_tree_namecall :: proc(
 	if !pt_atomic_write(request, packet[:]) {return pt_fail(L, "could not send playtest request")}
 	response := pt_path(dir, fmt.tprintf("response-%d.bin", sequence))
 	deadline := time.tick_add(time.tick_now(), PLAYTEST_TREE_TIMEOUT)
+	if asynchronous {
+		service.tree_pending[slot] = {sequence, op, deadline}
+		vm.PushNumber(L, f64(sequence))
+		return 1, true
+	}
 	for time.tick_diff(time.tick_now(), deadline) > 0 {
 		if data, ok := pt_read_file(response); ok {
 			defer delete(data)
@@ -594,4 +664,41 @@ playtest_tree_namecall :: proc(
 		time.sleep(5 * time.Millisecond)
 	}
 	return pt_fail(L, "playtest request timed out; edit outcome is unknown")
+}
+
+
+playtest_tree_poll :: proc(L: ^vm.State, service: ^PlaytestService) -> (i32, bool) {
+	if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+		return vm.RaiseError(L, "Playtest tree APIs require Internals capability"), true
+	}
+	role := vm.ArgString(L, 2)
+	expected := vm.ArgNumber(L, 3)
+	if role != "Server" && role != "Client" {return pt_fail(L, "target must be Server or Client")}
+	if service.singleplayer {role = "Client"}
+	slot := 0 if role == "Server" else 1
+	pending := service.tree_pending[slot]
+	if pending.sequence == 0 ||
+	   expected != f64(pending.sequence) ||
+	   !service.running ||
+	   service.tree_dir == "" {
+		return pt_fail(L, "playtest request is no longer active")
+	}
+	dir := pt_path(service.tree_dir, role)
+	response := pt_path(dir, fmt.tprintf("response-%d.bin", pending.sequence))
+	if data, ok := pt_read_file(response); ok {
+		defer delete(data)
+		_ = os.remove(response)
+		service.tree_pending[slot] = {}
+		return pt_decode_result(L, service.data_model.registry.classes, pending.op, data)
+	}
+	if time.tick_diff(time.tick_now(), pending.deadline) <= 0 {
+		service.tree_pending[slot] = {}
+
+
+		_ = os.remove(pt_path(dir, "request.bin"))
+		return pt_fail(L, "playtest request timed out; edit outcome is unknown")
+	}
+	vm.PushNil(L)
+	vm.PushNil(L)
+	return 2, true
 }

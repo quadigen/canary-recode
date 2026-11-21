@@ -24,22 +24,10 @@ Service_Descriptor :: struct {
 Registry :: struct {
 	classes:              ^classes.Registry,
 	services:             [dynamic]Service_Descriptor,
-	// service_index maps a service name to its position in `services`, so
-	// Find_Service is a hash lookup instead of a walk over every registered
-	// service. Physics alone asks for Workspace, Terrain, ReplicatorService and
-	// Players once per Part per frame, which made the walk a per-frame cost
-	// proportional to the whole service list times the Part count.
-	//
-	// It holds an index rather than a pointer on purpose: `services` is
-	// append-only after registration, so an index stays valid where a pointer
-	// would dangle on the next Register_Service.
 	service_index:        map[string]int,
 	data_model:           ^DataModel,
 	vm_state:             ^vm.VM,
 	signal_registry:      ^signals.Registry,
-	// mode is the role of the runtime this registry drives. It scopes script
-	// execution: a Server runtime runs Scripts, a Client runtime runs
-	// LocalScripts, and an Editor runtime hosts either side.
 	mode:                 target.Mode,
 	fast_editor_viewport: bool,
 }
@@ -60,8 +48,8 @@ Registry_Init :: proc(
 Register_Service :: proc(registry: ^Registry, name, class_name: string, global_name: string = "") {
 	assert(registry != nil)
 	assert(Find_Service(registry, name) == nil)
-	// Keyed before the append so that the index and the array cannot disagree if
-	// the append reallocates.
+
+
 	registry.service_index[name] = len(registry.services)
 	append(
 		&registry.services,
@@ -80,10 +68,7 @@ Find_Service :: proc(registry: ^Registry, name: string) -> ^Service_Descriptor {
 	return &registry.services[index]
 }
 
-// Unregister_Service removes a service so its name can be registered again.
-// Extension classes are registered and unregistered with their extension, so
-// this has to exist: without it a reload would find the old service in the
-// index and refuse to re-register the class.
+
 Unregister_Service :: proc(registry: ^Registry, name: string) {
 	if registry == nil {
 		return
@@ -95,8 +80,7 @@ Unregister_Service :: proc(registry: ^Registry, name: string) {
 
 	ordered_remove(&registry.services, index)
 
-	// service_index holds positions, so rebuild it rather than leave every
-	// entry after the hole pointing at the wrong descriptor.
+
 	clear(&registry.service_index)
 	for descriptor, position in registry.services {
 		registry.service_index[descriptor.name] = position
@@ -173,6 +157,8 @@ MAP_CONTENT_SERVICES := [?]string {
 	"CharacterService",
 	"ServerScriptService",
 	"ServerStorage",
+	"MaterialService",
+	"Teams",
 }
 
 Map_Content_Service :: proc(name: string) -> bool {
@@ -194,7 +180,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 			),
 		)
 	}
-	// wire:begin service-classes
+
 	Register_DataModel_Class(registry.classes)
 	Register_Service_Class(registry.classes)
 	when ODIN_OS != .JS {Register_AccountService_Class(registry.classes)}
@@ -219,6 +205,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS {Register_Filesystem_Class(registry.classes)}
 	Register_GuiService_Class(registry.classes)
 	when ODIN_OS != .JS {Register_HttpService_Class(registry.classes)}
+	Register_IconService_Class(registry.classes)
 	Register_InsertService_Class(registry.classes)
 	when ODIN_OS != .JS {Register_KinemiumService_Class(registry.classes)}
 	Register_Lighting_Class(registry.classes)
@@ -285,8 +272,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Workspace_Class(registry.classes)
 	Register_Workspace2D_Class(registry.classes)
 	when ODIN_OS != .JS {Register_ZipService_Class(registry.classes)}
-	// wire:end service-classes
-	// wire:begin services
+
+
 	when ODIN_OS != .JS {Register_Service(registry, "AccountService", "AccountService", "accountService")}
 	Register_Service(registry, "Aerodynamics", "Aerodynamics")
 	Register_Service(registry, "AsepriteService", "AsepriteService")
@@ -309,6 +296,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS {Register_Service(registry, "Filesystem", "Filesystem", "Filesystem")}
 	Register_Service(registry, "GuiService", "GuiService")
 	when ODIN_OS != .JS {Register_Service(registry, "HttpService", "HttpService")}
+	Register_Service(registry, "IconService", "IconService")
 	Register_Service(registry, "InsertService", "InsertService")
 	when ODIN_OS != .JS {Register_Service(registry, "KinemiumService", "KinemiumService")}
 	Register_Service(registry, "Lighting", "Lighting")
@@ -317,7 +305,7 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "LuauService", "LuauService")
 	Register_Service(registry, "MarketplaceService", "MarketplaceService", "marketplaceService")
 	Register_Service(registry, "MaterialService", "MaterialService")
-	when ODIN_OS != .JS {Register_Service(registry, "MatrixService", "MatrixService", "matrix")}
+	when ODIN_OS != .JS {Register_Service(registry, "MatrixService", "MatrixService")}
 	Register_Service(registry, "MemoryStoreService", "MemoryStoreService", "memoryStoreService")
 	Register_Service(registry, "MessagingService", "MessagingService", "messagingService")
 	when ODIN_OS != .JS {Register_Service(registry, "Packages", "Packages")}
@@ -367,10 +355,8 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	Register_Service(registry, "Workspace", "Workspace", "workspace")
 	Register_Service(registry, "Workspace2D", "Workspace2D")
 	when ODIN_OS != .JS {Register_Service(registry, "ZipService", "ZipService")}
-	// wire:end services
-	// Web registers browser stand-ins for the desktop-only services the embedded
-	// editor UI needs (see web_services.odin). They live outside the wire region
-	// because the wire tool cannot express a Web-only variant of a native service.
+
+
 	when ODIN_OS == .JS {
 		Register_Web_Service_Classes(registry.classes)
 		Register_Web_Services(registry)
@@ -425,13 +411,6 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 	if workspace := Find_Service(registry, "Workspace");
 	   workspace != nil && workspace.object != nil {
 		(cast(^Workspace)workspace.object).water_time += f64(max(delta_time, 0))
-		if registry.classes.renderer != nil {
-			classes.ParticleEmitter_Step(
-				registry.classes,
-				delta_time,
-				(cast(^Workspace)workspace.object).global_wind,
-			)
-		}
 	}
 	Install_Part_Body_Access(registry)
 	{
@@ -463,9 +442,32 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 		   run_service != nil && run_service.object != nil {
 			Run_Service_Stepped(cast(^RunService)run_service.object, L, delta_time)
 		}
-		physics := Find_Service(registry, "Physics")
-		if physics != nil && physics.object != nil {
-			Physics_Step(cast(^Physics)physics.object, delta_time)
+		workspace := Find_Service(registry, "Workspace")
+		world2d := Find_Service(registry, "Workspace2D")
+		is_2d :=
+			workspace != nil &&
+			workspace.object != nil &&
+			(cast(^Workspace)workspace.object).dimension == .D2
+		if is_2d && world2d != nil && world2d.object == nil {
+			_ = DataModel_Get_Service(registry.data_model, "Workspace2D")
+			world2d = Find_Service(registry, "Workspace2D")
+		}
+		if world2d != nil && world2d.object != nil {
+			world := cast(^Workspace2D)world2d.object
+			if is_2d {
+				Workspace2D_Step(world, cast(^Workspace)workspace.object, delta_time)
+			} else {
+				Workspace2D_Clear(world)
+			}
+		}
+		if !is_2d {
+			physics := Find_Service(registry, "Physics")
+			if physics != nil && physics.object != nil {
+				Physics_Step(cast(^Physics)physics.object, delta_time)
+			}
+		}
+		if registry.classes.renderer != nil {
+			ParticleEmitter_Physics_Step(registry, delta_time)
 		}
 		if run_service := Find_Service(registry, "RunService");
 		   run_service != nil && run_service.object != nil {
@@ -519,6 +521,12 @@ Set_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
 
 Prepare_3D :: proc(registry: ^Registry, renderer: ^classes.Renderer_Object) {
 	if registry == nil || renderer == nil || renderer.Filament == nil {return}
+	if workspace := Find_Service(registry, "Workspace");
+	   workspace != nil && workspace.object != nil {
+		ws := cast(^Workspace)workspace.object
+		renderer.RenderFilament = ws.dimension == .D3 && ws.enable_3d
+		if !renderer.RenderFilament {return}
+	}
 	{
 		tracy.ZoneNC("Lighting Apply", 0xC586C0)
 		z := profiling.Begin("Lighting Apply", 0xC586C0)
@@ -560,12 +568,17 @@ Render_3D :: proc(
 	workspace_service := Find_Service(registry, "Workspace")
 	terrain_service := Find_Service(registry, "Terrain")
 	if workspace_service == nil || workspace_service.object == nil {return}
+	ws := cast(^Workspace)workspace_service.object
+	renderer.RenderFilament = ws.dimension == .D3 && ws.enable_3d
+	if !renderer.RenderFilament {return}
 	ctx := classes.Class_Step_Context {
 		L          = L,
 		delta_time = delta_time,
 		renderer   = renderer,
 	}
-	Terrain_Render_3D(cast(^Terrain)terrain_service.object, ctx.renderer)
+	if terrain_service != nil && terrain_service.object != nil {
+		Terrain_Render_3D(cast(^Terrain)terrain_service.object, ctx.renderer)
+	}
 	workspace_render(workspace_service.object, &ctx)
 	classes.ParticleEmitter_Render(registry.classes, renderer)
 }
@@ -608,18 +621,17 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	registry.classes.destroy_hook = services_destroy_hook
 	registry.classes.destroy_hook_ctx = registry
 	registry.classes.screen_gui_can_display = PlayerGui_Can_Display
+	registry.classes.localize_text = localization_render_text
 	model_object, model_ok := classes.Push_New(registry.classes, vm_state, "DataModel", false)
 	assert(model_ok && model_object != nil)
 	registry.data_model = cast(^DataModel)model_object
 	registry.data_model.registry = registry
 	classes.Set_Data_Model(registry.classes, registry.data_model)
-	// Mirror the runtime role into the class registry so `require()` can enforce
-	// the server/client boundary without classes importing services.
+
+
 	classes.Set_Mode(registry.classes, registry.mode)
-	// The network ownership and remote-call dispatchers are part of the
-	// replication stack, which now compiles for both native and Web, so they are
-	// installed on every target: SetNetworkOwner, FireClient and friends remain
-	// namecallable in the browser client.
+
+
 	classes.Set_Network_Ownership(
 		registry.classes,
 		network_ownership_namecall,
@@ -654,8 +666,8 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 		}
 	}
 	Install_Log_Globals(registry, vm_state)
-	// Per-thread profiling callbacks must be installed while the VM is
-	// quiescent, before any script can create or resume a thread.
+
+
 	profiling.install_thread_hooks(vm_state.L)
 	Register_ProfilerOverlay(registry, vm_state)
 }
@@ -663,6 +675,9 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 Registry_Destroy :: proc(registry: ^Registry) {
 	if registry == nil {
 		return
+	}
+	if service := Find_Service(registry, "Workspace2D"); service != nil && service.object != nil {
+		Workspace2D_Clear(cast(^Workspace2D)service.object)
 	}
 	{
 		replicator := Find_Service(registry, "ReplicatorService")
@@ -681,16 +696,14 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	registry.vm_state = nil
 }
 
-// services_destroy_hook runs right before a destroyed Instance's native memory
-// is freed. Services drop their references to the object here so they never
-// read a dangling pointer afterwards.
+
 services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 	if object == nil || ctx == nil {
 		return
 	}
 	registry := cast(^Registry)ctx
 	if classes.Is_A_Class(object, &classes.Part_Class) {
-		// Replication may serialize a weld after either of its parts is freed.
+
 		if descriptor := classes.Find_Class(registry.classes, "WeldConstraint");
 		   descriptor != nil {
 			for instance in descriptor.instances {
@@ -736,8 +749,7 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 		if descriptor.object == object {descriptor.object = nil; break}
 	}
 
-	// A destroyed script must not leave a thread behind: cancel any pending
-	// scheduler resume and drop the context's bookkeeping for it.
+
 	if classes.Script_Is_Script(object) {
 		descriptor := Find_Service(registry, "ScriptContext")
 		if descriptor != nil && descriptor.object != nil {
@@ -748,8 +760,7 @@ services_destroy_hook :: proc(object: ^classes.Object, ctx: rawptr) {
 		}
 	}
 
-	// Player-owned client containers must not leave a dangling reference on the
-	// Player that owns them.
+
 	{
 		replicator := Find_Service(registry, "ReplicatorService")
 		if replicator != nil && replicator.object != nil {

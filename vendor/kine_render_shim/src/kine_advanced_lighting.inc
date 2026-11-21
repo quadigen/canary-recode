@@ -129,6 +129,10 @@ static void kine_capture_reflection_probe(KineFilamentContext *ctx) {
 
 static void kine_destroy_ssgi(KineFilamentContext *ctx) {
     auto *s=ctx->ssgi;if(!s)return;
+    if(ctx->postMaterialInstance && ctx->postSampleDepth) {
+        TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
+        ctx->postMaterialInstance->setParameter("depthTexture",ctx->postSampleDepth,nearest);
+    }
     ctx->view->setRenderTarget(ctx->postSceneTarget ? ctx->postSceneTarget : ctx->renderTarget);
     const int width=ctx->viewportWidth>0?ctx->viewportWidth:ctx->width;
     const int height=ctx->viewportHeight>0?ctx->viewportHeight:ctx->height;
@@ -151,7 +155,7 @@ static void kine_destroy_ssgi(KineFilamentContext *ctx) {
 }
 
 static void kine_prepare_ssgi(KineFilamentContext *ctx) {
-    if(!ctx->advancedEffects[1].enabled){if(ctx->ssgi)kine_destroy_ssgi(ctx);return;}
+    if(!ctx->advancedEffects[1].enabled && !ctx->advancedEffects[7].enabled && !ctx->advancedEffects[8].enabled && !ctx->advancedEffects[9].enabled){if(ctx->ssgi)kine_destroy_ssgi(ctx);return;}
     int width=ctx->viewportWidth>0?ctx->viewportWidth:ctx->width;
     int height=ctx->viewportHeight>0?ctx->viewportHeight:ctx->height;
     if(ctx->ssgi && (ctx->ssgi->width!=width || ctx->ssgi->height!=height))kine_destroy_ssgi(ctx);
@@ -189,9 +193,26 @@ static void kine_prepare_ssgi(KineFilamentContext *ctx) {
     const auto projection=ctx->camera->getProjectionMatrix();
     s->mi->setParameter("focal",math::float2{float(projection[0].x),float(projection[1].y)});
     s->mi->setParameter("nearPlane",float(ctx->camera->getNear()));
-    s->mi->setParameter("intensity",std::clamp(v[0],0.0f,5.0f));s->mi->setParameter("radius",std::max(v[1],0.1f));
+    s->mi->setParameter("intensity",ctx->advancedEffects[1].enabled?std::clamp(v[0],0.0f,5.0f):0.0f);s->mi->setParameter("radius",std::max(v[1],0.1f));
     s->mi->setParameter("bias",std::max(v[2],0.001f));s->mi->setParameter("sampleCount",std::clamp(int(v[3]),4,64));
     s->mi->setParameter("maxDistance",std::max(v[4],1.0f));
+    const auto &fog=ctx->advancedEffects[7];const float *f=fog.values;
+    const auto model=ctx->camera->getModelMatrix();
+    s->mi->setParameter("cameraPosition",math::float3(model[3].xyz));
+    s->mi->setParameter("cameraRight",math::float3(model[0].xyz));
+    s->mi->setParameter("cameraUp",math::float3(model[1].xyz));
+    s->mi->setParameter("cameraForward",-math::float3(model[2].xyz));
+    s->mi->setParameter("sunDirection",ctx->sunDirection);
+    s->mi->setParameter("sunStrength",std::clamp(ctx->sunIntensity/100000.0f,0.0f,2.0f));
+    s->mi->setParameter("fogDensity",fog.enabled?f[0]:0.0f);
+    s->mi->setParameter("fogHeight",f[1]);s->mi->setParameter("fogFalloff",f[2]);
+    s->mi->setParameter("fogDistance",std::max(1.0f,f[3]));s->mi->setParameter("fogAnisotropy",f[4]);
+    s->mi->setParameter("fogScattering",f[5]);s->mi->setParameter("fogNoise",f[6]);s->mi->setParameter("fogNoiseScale",f[7]);
+    s->mi->setParameter("fogSteps",std::clamp(int(f[8]),4,64));s->mi->setParameter("fogColor",math::float3{f[9],f[10],f[11]});
+    s->mi->setParameter("chromatic",ctx->advancedEffects[8].enabled?ctx->advancedEffects[8].values[0]:0.0f);
+    s->mi->setParameter("grain",ctx->advancedEffects[9].enabled?ctx->advancedEffects[9].values[0]:0.0f);
+    s->mi->setParameter("grainSize",std::max(1.0f,ctx->advancedEffects[9].values[1]));
+    s->mi->setParameter("effectTime",ctx->time);
     const bool custom=ctx->postProcessShader && ctx->postSceneTarget;
     s->view->setRenderTarget(custom?ctx->postSceneTarget:ctx->renderTarget);
     float l,r,b,t;
@@ -204,8 +225,8 @@ static void kine_prepare_ssgi(KineFilamentContext *ctx) {
 } // C++ helpers
 
 KINE_API void Kine_Filament_SetAdvancedEffect(KineFilamentContext *ctx,int effect,bool enabled,const float *values,int count) {
-    static const int counts[]={9,5,8,7,4,4,4};
-    if(!ctx || !ctx->engine || !ctx->view || effect<0 || effect>=7 || !values || count!=counts[effect])return;
+    static const int counts[]={9,5,8,7,4,4,4,12,1,2};
+    if(!ctx || !ctx->engine || !ctx->view || effect<0 || effect>=10 || !values || count!=counts[effect])return;
     auto &state=ctx->advancedEffects[effect];
     const bool changed=state.enabled!=enabled || !std::equal(values,values+count,state.values);
     state.enabled=enabled;std::copy(values,values+count,state.values);
@@ -214,7 +235,7 @@ KINE_API void Kine_Filament_SetAdvancedEffect(KineFilamentContext *ctx,int effec
         if(!enabled)kine_destroy_reflection_probe(ctx);
         else if(changed && ctx->reflectionProbe)ctx->reflectionProbe->nextCapture=0;
         break;
-    case 1: if(!enabled)kine_destroy_ssgi(ctx);break;
+    case 1: case 7: case 8: case 9: break; // Shared screen pass is reconciled once per frame.
     case 2: if(enabled){auto o=ctx->view->getFogOptions();o.enabled=true;o.density=std::max(values[0],0.0f);o.distance=std::max(values[1],0.0f);
         o.height=values[2];o.heightFalloff=std::max(values[3],0.0f);o.maximumOpacity=std::clamp(values[4],0.0f,1.0f);o.color={values[5],values[6],values[7]};ctx->view->setFogOptions(o);}break;
     case 3: {auto o=ctx->view->getAmbientOcclusionOptions();o.ssct.enabled=enabled;
@@ -237,8 +258,8 @@ KINE_API void Kine_Filament_SetAdvancedEffect(KineFilamentContext *ctx,int effec
 }
 
 KINE_API bool Kine_Filament_GetAdvancedEffect(KineFilamentContext *ctx,int effect,bool *enabled,float *values,int capacity) {
-    static const int counts[]={9,5,8,7,4,4,4};
-    if(!ctx || effect<0 || effect>=7 || !enabled || !values || capacity<counts[effect])return false;
+    static const int counts[]={9,5,8,7,4,4,4,12,1,2};
+    if(!ctx || effect<0 || effect>=10 || !enabled || !values || capacity<counts[effect])return false;
     *enabled=ctx->advancedEffects[effect].enabled;std::copy_n(ctx->advancedEffects[effect].values,counts[effect],values);return true;
 }
 

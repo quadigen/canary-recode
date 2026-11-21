@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -49,7 +48,7 @@ gui_service_get :: proc(
 	case "IsWindows":
 		vm.PushBoolean(L, ODIN_OS == .Windows)
 		return true
-	case "GetGuiInset", "IsTenFootInterface":
+	case "GetGuiInset", "IsTenFootInterface", "Select":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
@@ -93,6 +92,17 @@ gui_service_namecall :: proc(
 	bool,
 ) {
 	switch method {
+	case "Select":
+		service := cast(^Service)object
+		target := classes.Object_From_Argument(L, 2)
+		if target == nil ||
+		   !classes.Is_A(
+				   target,
+				   "GuiObject",
+			   ) {return vm.RaiseError(L, "Select expects a GuiObject"), true}
+		if service.data_model == nil || service.data_model.registry == nil {return 0, true}
+		classes.Gui_Select_Within(service.data_model.registry.classes, target)
+		return 0, true
 	case "GetGuiInset":
 		scale := platform.UI_Scale
 		datatypes.Push_Vector2(
@@ -123,7 +133,7 @@ Register_GuiService_Class :: proc(registry: ^classes.Registry) {
 		get = gui_service_get,
 		set = gui_service_set,
 		namecall = gui_service_namecall,
-		methods = []string{"GetGuiInset", "IsTenFootInterface"},
+		methods = []string{"GetGuiInset", "IsTenFootInterface", "Select"},
 		properties = []string{"IsWindows", "SelectedObject", "GuiNavigationEnabled"},
 	)
 }

@@ -1,0 +1,104 @@
+---
+title: CharacterController
+description: Configure character movement, jumping, collision, rotation, and simulation timing.
+---
+
+A `CharacterController` coordinates movement, ground detection, collision, rotation, and the character motor. Configure its child controllers to make movement feel responsive, heavy, slippery, or floaty without replacing the simulation.
+
+## Example: custom movement
+
+```lua
+local controller = character:FindFirstChildOfClass("CharacterController")
+local movement = controller:FindFirstChildOfClass("MovementController")
+local collision = controller:FindFirstChildOfClass("CollisionController")
+local rotation = controller:FindFirstChildOfClass("RotationController")
+
+controller.WalkSpeed = 20
+controller.JumpHeight = 8
+controller.Gravity = 100
+controller.CoyoteTime = 0.15
+movement.UseAutomaticAcceleration = false
+movement.Acceleration = 80
+movement.DecelerationMultiplier = 0.5
+movement.AirControl = 0.25
+movement.JumpBufferTime = 0.15
+collision.StepHeight = 0.75
+rotation.TurnRate = 360
+```
+
+In multiplayer, set shared tuning on the server. The configuration is replicated; instantaneous simulation measurements are local. Values marked read-only are observations, not controls.
+
+## CharacterController
+
+| Property | Default | Description |
+| --- | --- | --- |
+| WalkSpeed | 16 | Base movement speed. |
+| JumpHeight | 7.2 | Target jump height. |
+| AutoRotate | true | Allow the rotation controller to turn the character. |
+| MaxSlopeAngle | 89 | Maximum walkable slope, in degrees (0–89.9). |
+| Gravity | 196.2 | Downward acceleration. Zero disables gravity and height-based jumping. |
+| CoyoteTime | 0.1 | Seconds after leaving the ground during which a jump may start. |
+| KnockbackMass | 10 | Effective mass used to convert impulses into velocity. |
+| KnockbackDamping | 6 | Exponential horizontal knockback damping per second. |
+| MaxFallSpeed | 0 | Maximum downward speed under gravity; zero means unlimited. |
+| JumpEnabled | true | Whether new jumps can start. |
+| VerticalSpeed | 0 | Current vertical velocity (read-only). |
+
+`Move(direction: Vector3): boolean` submits a horizontal direction to the movement controller. Player input may replace this direction on a subsequent simulation update.
+
+`Jump(): boolean` queues a jump request. Applications should not interpret its return value as confirmation that a jump occurred.
+
+## MovementController
+
+| Property | Default | Description |
+| --- | --- | --- |
+| Acceleration | 160 | Custom acceleration rate when automatic acceleration is disabled. |
+| UseAutomaticAcceleration | true | Use ten times the base walk speed for acceleration. |
+| DecelerationMultiplier | 1 | Acceleration multiplier applied when movement input is released. |
+| AirControl | 1 | Acceleration multiplier in the air, between 0 and 1. |
+| SpeedMultiplier | 1 | Multiplies the base walk speed. |
+| JumpBufferTime | 0.1 | Seconds a jump request remains buffered; zero allows one update. |
+| AnalogInput | false | Preserve input magnitudes below one rather than normalize them. |
+
+## RotationController
+
+| Property | Default | Description |
+| --- | --- | --- |
+| TurnRate | 720 | Maximum turn speed, in degrees per second. |
+| FaceMovement | true | Turn toward movement; false uses TargetYaw. |
+| TargetYaw | 0 | Manual target angle, in degrees. |
+| Yaw | 0 | Current yaw in degrees (read-only). |
+
+Set `FaceMovement` to false and `TargetYaw` to change facing independently of movement. Keep `AutoRotate` enabled on the parent controller.
+
+## CollisionController
+
+| Property | Default | Description |
+| --- | --- | --- |
+| StepHeight | 0.5 | Height used when attempting to step over obstacles; zero disables stepping. |
+| SkinWidth | 0.05 | Collision clearance used by sweeps and contact queries. |
+| SweepIterations | 4 | Number of sweep iterations, clamped to 1–16. |
+| Radius | 0 | Current capsule radius (read-only). |
+| HalfHeight | 0 | Current capsule cylinder half-height (read-only). |
+
+The capsule dimensions are observations of the generated character collider, not editable resizing controls.
+
+## GroundDetector
+
+| Property | Default | Description |
+| --- | --- | --- |
+| SnapDistance | 0.6 | Ground probe and snap distance. |
+| Grounded | false | Whether the detector currently sees supporting ground (read-only). |
+| SlopeAngle | 0 | Most recently detected slope angle (read-only). |
+| RestY | 0 | Last detected valid resting height (read-only). |
+
+## CharacterMotor
+
+The motor is a child of the character, rather than a child of its controller.
+
+| Property | Default | Description |
+| --- | --- | --- |
+| StepsPerSecond | 120 | Fixed simulation frequency, clamped to 15–480. |
+| MaxFrameTime | 0.25 | Maximum frame time accumulated by the motor, in seconds (0.001–0.25). |
+
+Higher frequencies increase simulation work. Choose a moderate rate unless your game needs finer steps. Numeric tuning values must be finite and are clamped to their supported ranges.

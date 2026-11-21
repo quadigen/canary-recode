@@ -30,13 +30,19 @@ folder.Name = WorkerRole .. "Only"
 local part = Instance.new("Part", folder)
 part.Name = "Original"
 part.Anchored = true
+part:SetAttribute("RuntimeOnly", WorkerRole)
+local attachment = Instance.new("Attachment", part)
+attachment.Name = "CopyChild"
+local ref = Instance.new("ObjectValue", part)
+ref.Name = "CopyReference"
+ref.Value = attachment
 `,
 			"worker",
 		)
 		if !ok {fmt.eprintln(err); os.exit(1)}
 		for {
 			services.Playtest_Tree_Pump(directory, &env.services, v.L)
-			time.sleep(5 * time.Millisecond)
+			time.sleep(100 * time.Millisecond)
 		}
 	}
 	dir, dir_err := os.make_directory_temp("", "kinemium-tree-test-*", context.allocator)
@@ -58,6 +64,9 @@ part.Anchored = true
 local p = game:GetService("PlaytestService")
 assert(p)
 assert(not pcall(function() p:GetGameTree("Server") end))
+assert(not pcall(function() p:RequestGameTree("Server") end))
+assert(not pcall(function() p:RequestCopyInstance("Server", "invalid") end))
+assert(not pcall(function() p:PollTreeRequest("Server", 1) end))
 `,
 		caps,
 		"permission_check",
@@ -105,10 +114,120 @@ assert(not p:SetInstanceProperty("Server", original.Id, "Size", "invalid"))
 assert(p:DestroyInstance("Server", model))
 assert(not p:GetInstanceProperty("Server", original.Id, "Name"))
 assert(not p:DestroyInstance("Server", s.ParentId))
-assert(p:Stop())
+-- Leave the two workers running for nonblocking tests.
+AsyncService = p
+ServerToken = assert(p:RequestGameTree("Server"))
+ClientToken = assert(p:RequestGameTree("Client"))
+assert(not p:RequestGameTree("Server"))
+AsyncStage = 0
 `,
 		"editor",
 	)
 	if !ok {fmt.eprintln(err); panic("playtest tree smoke failed")}
-	fmt.println("PLAYTEST_TREE_SMOKE PASSED")
+
+
+	deadline := time.tick_add(time.tick_now(), 8 * time.Second)
+	for time.tick_diff(time.tick_now(), deadline) > 0 {
+		started := time.tick_now()
+		ready, poll_err := vm.RunInternal(
+			&v,
+			`
+local p = AsyncService
+if AsyncStage == 0 then
+    if ServerToken then
+        local rows, version = p:PollTreeRequest("Server", ServerToken)
+        if rows ~= nil or version then
+            assert(type(rows) == "table", version)
+            ServerToken = nil
+            ServerVersion = version
+        end
+    end
+    if ClientToken then
+        local rows, version = p:PollTreeRequest("Client", ClientToken)
+        if rows ~= nil or version then
+            assert(type(rows) == "table", version)
+            ClientToken = nil
+            for _, node in ipairs(rows) do
+                if node.Name == "Original" then ClientId = node.Id end
+            end
+        end
+    end
+    if not ServerToken and not ClientToken then
+        assert(ClientId)
+        ServerToken = assert(p:RequestGameTree("Server", ServerVersion))
+        ClientToken = assert(p:RequestSetInstanceProperty("Client", ClientId, "Name", "AsyncChanged"))
+        AsyncStage = 1
+    end
+elseif AsyncStage == 1 then
+    if ServerToken then
+        local result, version = p:PollTreeRequest("Server", ServerToken)
+        if result ~= nil or version then
+            assert(result == false and version == ServerVersion)
+            ServerToken = nil
+        end
+    end
+    if ClientToken then
+        local result, err = p:PollTreeRequest("Client", ClientToken)
+        if result ~= nil or err then assert(result == true, err); ClientToken = nil end
+    end
+    if not ServerToken and not ClientToken then
+        ClientToken = assert(p:RequestInstanceProperties("Client", ClientId))
+        AsyncStage = 2
+    end
+elseif AsyncStage == 2 then
+    local props, err = p:PollTreeRequest("Client", ClientToken)
+    if props ~= nil or err then
+        assert(props and props.Name == "AsyncChanged", err)
+        ClientToken = assert(p:RequestCopyInstance("Client", ClientId))
+        AsyncStage = 3
+    end
+elseif AsyncStage == 3 then
+    local data, err = p:PollTreeRequest("Client", ClientToken)
+    if data ~= nil or err then
+        assert(typeof(data) == "buffer", err)
+        ClipboardData = data
+        AsyncStage = 4
+    end
+end
+`,
+			"async_poll",
+		)
+		if !ready {fmt.eprintln(poll_err); panic("async polling failed")}
+		assert(
+			time.tick_since(started) < 100 * time.Millisecond,
+			"poll blocked waiting for a playtest process",
+		)
+		_ = vm.GetGlobal(v.L, "AsyncStage")
+		stage := vm.ArgNumber(v.L, -1)
+		vm.Pop(v.L)
+		if stage == 4 {break}
+		time.sleep(5 * time.Millisecond)
+	}
+	ok, err = vm.RunInternal(
+		&v,
+		`
+assert(AsyncStage == 4, "async test timed out")
+assert(AsyncService:Stop())
+local serializer = game:GetService("SerializationService")
+local copy1 = serializer:DeserializeInstancesAsync(ClipboardData, true)[1]
+local copy2 = serializer:DeserializeInstancesAsync(ClipboardData, true)[1]
+assert(copy1.Name == "AsyncChanged" and copy1.Anchored)
+assert(copy1:GetAttribute("RuntimeOnly") == "Client")
+assert(copy1.CopyChild:IsA("Attachment"))
+assert(copy1.CopyReference.Value == copy1.CopyChild)
+assert(copy2.CopyReference.Value == copy2.CopyChild)
+assert(copy1.UniqueId ~= copy2.UniqueId)
+assert(copy1.CopyChild.UniqueId ~= copy2.CopyChild.UniqueId)
+copy1.Parent = workspace
+copy2.Parent = workspace
+assert(copy1.Parent == workspace and copy2.Parent == workspace)
+copy1:Destroy()
+copy2:Destroy()
+`,
+		"async_done",
+	)
+	if !ok {fmt.eprintln(err); panic("async inspection failed")}
+	fmt.println(
+		"PLAYTEST_TREE_SMOKE PASSED (nonblocking reads, unchanged snapshots, writes and clipboard round trip)",
+	)
 }

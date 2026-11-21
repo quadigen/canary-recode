@@ -4,22 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-NumberValue_Class := Class_Info{
+NumberValue_Class := Class_Info {
 	name   = "NumberValue",
 	parent = &ValueBase_Class,
 }
 
 NumberValue :: struct {
 	using object: Object,
-
-	value: f64,
+	value:        f64,
 }
 
 NumberValue_Init :: proc() -> NumberValue {
-	return NumberValue{
-		object = Object_Init(&NumberValue_Class),
-		value = 1,
-	}
+	return NumberValue{object = Object_Init(&NumberValue_Class), value = 1}
 }
 
 NumberValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -85,6 +81,7 @@ Register_NumberValue :: proc(registry: ^Registry) {
 		NumberValue_construct,
 		NumberValue_destroy,
 		get = NumberValue_get,
+		parallel_get = NumberValue_get,
 		set = NumberValue_set,
 		clone = NumberValue_clone,
 		properties = []string{"Value"},

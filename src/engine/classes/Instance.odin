@@ -25,7 +25,7 @@ instance_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 }
 
 instance_clone :: proc(source: ^Object, destination: ^Object) {
-	// No extra properties
+
 }
 
 INSTANCE_PROPERTIES := []string {
@@ -63,6 +63,7 @@ INSTANCE_METHODS := []string {
 	"GetChildren",
 	"GetDescendants",
 	"GetFullName",
+	"GetActor",
 	"GetProperties",
 	"IsA",
 	"IsAncestorOf",

@@ -1,0 +1,34 @@
+---
+title: Trigger2D
+description: Detect parts entering or leaving a 2D area.
+---
+
+Trigger2D detects Part2D bodies passing through an area, without physically blocking them. It uses familiar Roblox-style touch events.
+
+```lua
+local trigger = Instance.new("Trigger2D", workspace)
+trigger.Position = UDim2.fromOffset(300, 100)
+trigger.Size = UDim2.fromOffset(80, 80)
+
+trigger.Touched:Connect(function(part)
+    print("Entered trigger:", part.Name)
+end)
+
+trigger.TouchEnded:Connect(function(part)
+    print("Left trigger:", part and part.Name)
+end)
+```
+
+## Properties
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | boolean | true | Whether to detect bodies. |
+| `IsBall` | boolean | false | Use a circular rather than rectangular area. |
+| `Position`, `Size`, `Rotation` | inherited GUI properties | — | Define the detection area. |
+
+## Method
+
+`GetTouchingParts(): {Part2D}` returns the currently overlapping parts. The trigger does not collide, and it excludes its closest parent Part2D.
+
+Touch notifications run on simulation updates, not necessarily at the precise instant of contact. Destroyed parts can produce `nil` in `TouchEnded`.

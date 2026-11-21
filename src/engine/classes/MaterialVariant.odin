@@ -51,8 +51,8 @@ MaterialVariant_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr
 	variant.displacement_subdivisions = 2
 	append(
 		&variant.uniforms,
-		Runtime_Shader_Uniform{strings.clone("baseColor"), {1, 1, 1, 1}, 4, true},
-		Runtime_Shader_Uniform{strings.clone("roughness"), {0.5, 0, 0, 0}, 1, true},
+		Runtime_Shader_Uniform{strings.clone("baseColor"), {0 = 1, 1 = 1, 2 = 1, 3 = 1}, 4, true},
+		Runtime_Shader_Uniform{strings.clone("roughness"), {0 = 0.5}, 1, true},
 		Runtime_Shader_Uniform{strings.clone("metallic"), {}, 1, true},
 	)
 	return &variant.object
@@ -169,7 +169,12 @@ MaterialVariant_set :: proc(
 	if key == "Color" {
 		if datatype_registry == nil {return false}
 		color := datatypes.Arg_Color3(L, index, datatype_registry)
-		variant.uniforms[0].values = {color.R, color.G, color.B, 1}
+		variant.uniforms[0].values = {
+			0 = color.R,
+			1 = color.G,
+			2 = color.B,
+			3 = 1,
+		}
 		variant.uniforms[0].count = 4
 		variant.uniforms[0].optional = true
 		variant.uniforms_dirty = true
@@ -362,11 +367,19 @@ MaterialVariant_Prepare :: proc(
 				width, height, channels: i32
 				pixels: [^]u8
 				if data, found := Texture_Resolve_Bytes(path); found && len(data) > 0 {
-					pixels = image.load_from_memory(raw_data(data), i32(len(data)), &width, &height, &channels, 4)
+					pixels = image.load_from_memory(
+						raw_data(data),
+						i32(len(data)),
+						&width,
+						&height,
+						&channels,
+						4,
+					)
 				} else {
 					resolved := assetstore.Resolve_C_Path(path)
 					defer delete(resolved)
-					if resolved != nil {pixels = image.load(resolved, &width, &height, &channels, 4)}
+					if resolved !=
+					   nil {pixels = image.load(resolved, &width, &height, &channels, 4)}
 				}
 				if pixels != nil {
 					defer image.image_free(pixels)
@@ -387,8 +400,8 @@ MaterialVariant_Prepare :: proc(
 				}
 			}
 		}
-		// Bind every declared sampler even without a map. A failed replacement
-		// keeps its previous texture; a cleared slot gets a neutral fallback.
+
+
 		if !loaded && (len(path) == 0 || !variant.maps_loaded[i]) {
 			pixel := [4]u8{255, 255, 255, 255}
 			if i == 1 {pixel = {128, 128, 255, 255}}
@@ -487,8 +500,7 @@ MaterialVariant_Prepare :: proc(
 	}
 }
 
-// Resolve at submission time so edits, renames, destruction and reparenting
-// cannot leave cached native shader pointers in parts or terrain.
+
 MaterialVariant_Resolve :: proc(
 	registry: ^Registry,
 	name: string,

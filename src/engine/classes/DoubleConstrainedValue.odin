@@ -4,21 +4,20 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-DoubleConstrainedValue_Class := Class_Info{
+DoubleConstrainedValue_Class := Class_Info {
 	name   = "DoubleConstrainedValue",
 	parent = &ValueBase_Class,
 }
 
 DoubleConstrainedValue :: struct {
 	using object: Object,
-
-	value:     f64,
-	min_value: f64,
-	max_value: f64,
+	value:        f64,
+	min_value:    f64,
+	max_value:    f64,
 }
 
 DoubleConstrainedValue_Init :: proc() -> DoubleConstrainedValue {
-	return DoubleConstrainedValue{
+	return DoubleConstrainedValue {
 		object = Object_Init(&DoubleConstrainedValue_Class),
 		value = 0,
 		min_value = min(f64),
@@ -26,7 +25,10 @@ DoubleConstrainedValue_Init :: proc() -> DoubleConstrainedValue {
 	}
 }
 
-DoubleConstrainedValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
+DoubleConstrainedValue_construct :: proc(
+	renderer: ^Renderer_Object,
+	data_model: rawptr,
+) -> ^Object {
 	value := new(DoubleConstrainedValue)
 	value^ = DoubleConstrainedValue_Init()
 	value.name = "DoubleConstrainedValue"
@@ -101,6 +103,7 @@ Register_DoubleConstrainedValue :: proc(registry: ^Registry) {
 		DoubleConstrainedValue_construct,
 		DoubleConstrainedValue_destroy,
 		get = DoubleConstrainedValue_get,
+		parallel_get = DoubleConstrainedValue_get,
 		set = DoubleConstrainedValue_set,
 		clone = DoubleConstrainedValue_clone,
 		properties = []string{"Value", "ConstrainedValue", "MinValue", "MaxValue"},

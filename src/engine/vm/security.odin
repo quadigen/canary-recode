@@ -13,10 +13,12 @@ Security_Requirement :: struct {
 }
 
 THREAD_SECURITY_NONE :: Thread_Security_Capabilities{}
-THREAD_SECURITY_ALL  :: Thread_Security_Capabilities{~u64(0), ~u64(0)}
+THREAD_SECURITY_ALL :: Thread_Security_Capabilities{~u64(0), ~u64(0)}
 SECURITY_REQUIREMENT_NONE :: Security_Requirement{}
 
-SecurityRequirementFromCapabilities :: proc(capabilities: Thread_Security_Capabilities) -> Security_Requirement {
+SecurityRequirementFromCapabilities :: proc(
+	capabilities: Thread_Security_Capabilities,
+) -> Security_Requirement {
 	return Security_Requirement{capabilities = capabilities}
 }
 
@@ -28,7 +30,7 @@ SecurityRequirementFromValue :: proc(capability: i64) -> Security_Requirement {
 	if capability < 64 {
 		result.capabilities.bits_low = u64(1) << u64(capability)
 	} else {
-		result.capabilities.bits_high = u64(1) << u64(capability-64)
+		result.capabilities.bits_high = u64(1) << u64(capability - 64)
 	}
 	return result
 }
@@ -37,7 +39,10 @@ SecurityRequirementIsNone :: proc(requirement: Security_Requirement) -> bool {
 	return requirement.capabilities.bits_low == 0 && requirement.capabilities.bits_high == 0
 }
 
-ThreadSecurityAddCapability :: proc(capabilities: Thread_Security_Capabilities, capability: i64) -> Thread_Security_Capabilities {
+ThreadSecurityAddCapability :: proc(
+	capabilities: Thread_Security_Capabilities,
+	capability: i64,
+) -> Thread_Security_Capabilities {
 	result := capabilities
 	if capability < 0 || capability > 127 {
 		return result
@@ -45,26 +50,35 @@ ThreadSecurityAddCapability :: proc(capabilities: Thread_Security_Capabilities, 
 	if capability < 64 {
 		result.bits_low |= u64(1) << u64(capability)
 	} else {
-		result.bits_high |= u64(1) << u64(capability-64)
+		result.bits_high |= u64(1) << u64(capability - 64)
 	}
 	return result
 }
 
 ThreadHasSecurityCapabilities :: proc(L: ^State, required: Thread_Security_Capabilities) -> bool {
 	current := GetThreadSecurityCapabilities(L)
-	return current.bits_low & required.bits_low == required.bits_low &&
-	       current.bits_high & required.bits_high == required.bits_high
+	return(
+		current.bits_low & required.bits_low == required.bits_low &&
+		current.bits_high & required.bits_high == required.bits_high \
+	)
 }
 
 ThreadMeetsSecurityRequirement :: proc(L: ^State, requirement: Security_Requirement) -> bool {
 	return ThreadHasSecurityCapabilities(L, requirement.capabilities)
 }
 
-thread_security_context :: proc(L: ^State) -> ^Thread_Security_Capabilities {
+
+Thread_Execution_Context :: struct {
+	capabilities: Thread_Security_Capabilities,
+	actor_id:     u64,
+	parallel:     bool,
+}
+
+thread_security_context :: proc(L: ^State) -> ^Thread_Execution_Context {
 	if L == nil {
 		return nil
 	}
-	return cast(^Thread_Security_Capabilities)luauh.lua_getthreaddata(L)
+	return cast(^Thread_Execution_Context)luauh.lua_getthreaddata(L)
 }
 
 GetThreadSecurityCapabilities :: proc(L: ^State) -> Thread_Security_Capabilities {
@@ -72,7 +86,7 @@ GetThreadSecurityCapabilities :: proc(L: ^State) -> Thread_Security_Capabilities
 	if security == nil {
 		return THREAD_SECURITY_NONE
 	}
-	return security^
+	return security.capabilities
 }
 
 SetThreadSecurityCapabilities :: proc(L: ^State, capabilities: Thread_Security_Capabilities) {
@@ -82,22 +96,18 @@ SetThreadSecurityCapabilities :: proc(L: ^State, capabilities: Thread_Security_C
 
 	security := thread_security_context(L)
 	if security == nil {
-		// A missing context already reads as NONE, so threads inheriting no
-		// capabilities need no allocation at all.
+
+
 		if capabilities.bits_low == 0 && capabilities.bits_high == 0 {
 			return
 		}
 
-		// The destroy callback in thread_security_userthread runs under the
-		// default context, so the allocation must come from the same
-		// allocator. Allocating under the caller's context pairs the free
-		// with a foreign allocator whenever the caller runs on a tracking or
-		// arena allocator.
+
 		ctx := tracy.DefaultContext()
-		security = new(Thread_Security_Capabilities, ctx.allocator)
+		security = new(Thread_Execution_Context, ctx.allocator)
 		luauh.lua_setthreaddata(L, security)
 	}
-	security^ = capabilities
+	security.capabilities = capabilities
 }
 
 ThreadHasSecurityCapability :: proc(L: ^State, capability: i64) -> bool {
@@ -109,7 +119,29 @@ ThreadHasSecurityCapability :: proc(L: ^State, capability: i64) -> bool {
 	if capability < 64 {
 		return capabilities.bits_low & (u64(1) << u64(capability)) != 0
 	}
-	return capabilities.bits_high & (u64(1) << u64(capability-64)) != 0
+	return capabilities.bits_high & (u64(1) << u64(capability - 64)) != 0
+}
+
+ThreadActor :: proc(L: ^State) -> u64 {
+	if ctx := thread_security_context(L); ctx != nil {return ctx.actor_id}
+	return 0
+}
+
+ThreadIsParallel :: proc(L: ^State) -> bool {
+	if ctx := thread_security_context(L); ctx != nil {return ctx.parallel}
+	return false
+}
+
+SetThreadActorPhase :: proc(L: ^State, actor_id: u64, parallel: bool) {
+	if L == nil {return}
+	ctx := thread_security_context(L)
+	if ctx == nil {
+		if actor_id == 0 && !parallel {return}
+		ctx = new(Thread_Execution_Context, tracy.DefaultContext().allocator)
+		luauh.lua_setthreaddata(L, ctx)
+	}
+	ctx.actor_id = actor_id
+	ctx.parallel = parallel && actor_id != 0
 }
 
 thread_security_userthread :: proc "c" (parent, thread: ^State) {
@@ -128,6 +160,7 @@ thread_security_userthread :: proc "c" (parent, thread: ^State) {
 	}
 
 	SetThreadSecurityCapabilities(thread, GetThreadSecurityCapabilities(parent))
+	SetThreadActorPhase(thread, ThreadActor(parent), ThreadIsParallel(parent))
 }
 
 InitializeThreadSecurity :: proc(L: ^State) {
@@ -145,8 +178,8 @@ ShutdownThreadSecurity :: proc(L: ^State) {
 	security := thread_security_context(L)
 	if security != nil {
 		luauh.lua_setthreaddata(L, nil)
-		// Pinned to the default context: allocations in
-		// SetThreadSecurityCapabilities always use it.
+
+
 		free(security, tracy.DefaultContext().allocator)
 	}
 }
@@ -156,7 +189,10 @@ RunWithSecurityCapabilities :: proc(
 	source: string,
 	capabilities: Thread_Security_Capabilities,
 	chunk_name: string = "Kinemium",
-) -> (ok: bool, err: string) {
+) -> (
+	ok: bool,
+	err: string,
+) {
 	assert_open(vm)
 	previous := GetThreadSecurityCapabilities(vm.L)
 	SetThreadSecurityCapabilities(vm.L, capabilities)
@@ -168,6 +204,9 @@ RunInternal :: proc(
 	vm: ^VM,
 	source: string,
 	chunk_name: string = "KinemiumInternal",
-) -> (ok: bool, err: string) {
+) -> (
+	ok: bool,
+	err: string,
+) {
 	return RunWithSecurityCapabilities(vm, source, THREAD_SECURITY_ALL, chunk_name)
 }

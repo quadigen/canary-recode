@@ -1,0 +1,25 @@
+---
+title: CylindricalConstraint
+description: Allow sliding and rotation along one attachment axis.
+---
+
+Allow sliding and rotation along one attachment axis.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("CylindricalConstraint", partA)
+constraint.Attachment0 = attachmentA
+constraint.Attachment1 = attachmentB
+constraint.LimitsEnabled = true
+constraint.LowerLimit = -5
+constraint.UpperLimit = 5
+```
+
+## Properties
+
+LimitsEnabled, LowerLimit, UpperLimit, AngularLimitsEnabled, LowerAngle and UpperAngle configure motion bounds.
+
+## Notes
+
+Uses a SixDOF joint with two free axes. Bounds currently include zero. Motor and servo controls are not implemented.

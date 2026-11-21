@@ -36,7 +36,7 @@ local after = Stats:GetTotalMemoryUsageMb()
 print("Growth:", after - before, "MB")
 ```
 
-This measures the scripting heap, not the renderer, physics world, textures, or audio buffers. A low number doesn't mean the process is using little memory overall.
+This measures the Luau memory, not graphics, physics, textures, or audio. A low number doesn't mean the process is using little memory overall.
 
 ## Notes
 

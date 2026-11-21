@@ -1,0 +1,32 @@
+---
+title: World2D
+description: Group and activate a 2D scene under Workspace.
+---
+
+`World2D` is a scene container. Put the parts, folders, and rigid-body groups for a level inside it. Enabled scenes share the Workspace 2D simulation.
+
+## Getting started
+
+```lua
+workspace.Dimension = Enum.Dimension.D2
+
+local level = Instance.new("World2D", workspace)
+level.Name = "Level1"
+
+local floor = Instance.new("Part2D", level)
+floor.Size = UDim2.fromOffset(600, 32)
+floor.Position = UDim2.fromOffset(0, 400)
+```
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | Read/write | true | Whether this scene renders and participates in 2D physics. |
+
+Turn `Enabled` off to hide the scene and remove its physics bodies on the next update without destroying its instances. Turning it back on rebuilds them from their existing properties.
+
+## See also
+
+- `Part2D` — visible physics bodies.
+- `Workspace2D` — shared simulation settings.

@@ -8,7 +8,7 @@ import "core:strings"
 
 Runtime_Shader_Uniform :: struct {
 	name:     string,
-	values:   [4]f32,
+	values:   [16]f32,
 	count:    i32,
 	optional: bool,
 }
@@ -96,11 +96,9 @@ Runtime_Shader_Prepare :: proc(
 				when RUNTIME_SHADER_ASYNC {
 					shader.compile_job = kineffi.Kine_Filament_Shader_CompileStart(source)
 					if shader.compile_job != nil {return false}
-					delete(source)
 				} else {
 					tracy.ZoneNC("Runtime Shader Compile", 0xB48EAD)
 					compiled = kineffi.Kine_Filament_Shader_Create(filament, source)
-					delete(source)
 				}
 			}
 		} else {
@@ -199,7 +197,7 @@ Runtime_Shader_Namecall :: proc(
 	i32,
 	bool,
 ) {
-	result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method)
+	result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method, allow_matrices = true)
 	if method == "SetUniform" {
 		shader.uniforms_dirty = true
 	}
@@ -210,6 +208,7 @@ Shader_Uniform_Namecall :: proc(
 	L: ^vm.State,
 	uniforms: ^[dynamic]Runtime_Shader_Uniform,
 	method: string,
+	allow_matrices := false,
 ) -> (
 	i32,
 	bool,
@@ -221,8 +220,13 @@ Shader_Uniform_Namecall :: proc(
 		uniform: Runtime_Shader_Uniform
 		if vm.IsTable(L, 3) {
 			count := vm.RawLen(L, 3)
-			if count < 1 ||
-			   count > 4 {return vm.RaiseError(L, "Uniform requires 1 to 4 numbers"), true}
+			if !(count >= 1 && count <= 4) && !(allow_matrices && (count == 9 || count == 16)) {
+				return vm.RaiseError(
+						L,
+						"Uniform requires 1 to 4 numbers, or 9/16 for a matrix" if allow_matrices else "Uniform requires 1 to 4 numbers",
+					),
+					true
+			}
 			uniform.count = i32(count)
 			for i in 0 ..< count {
 				vm.RawGetIndex(L, 3, i + 1)

@@ -10,9 +10,9 @@ import "core:thread"
 
 TERRAIN_GEN_COLUMN_DIM :: TERRAIN_CHUNK_SIZE + 2
 TERRAIN_GEN_COMMIT_PER_FRAME :: 48
-// Noise frequencies below were tuned at 4 studs per unit; this keeps them world-space.
+
 TERRAIN_GEN_REF :: f32(4)
-// Swap for your platform's core count (e.g. os.get_processor_core_count()) if you prefer.
+
 TERRAIN_GEN_DEFAULT_WORKERS :: #config(KINE_TERRAIN_GEN_WORKERS, 4)
 
 Terrain_Biome :: enum u8 {
@@ -27,18 +27,18 @@ Terrain_Biome :: enum u8 {
 	Snow,
 }
 
-// Heights and levels are in STUDS.
+
 Terrain_Chunk_Gen_Options :: struct {
 	seed:             i64,
-	voxel_size:       f32, // studs per voxel; <= 0 keeps the service's current size
-	flat_shading:     Maybe(bool), // unset keeps the service's current setting
+	voxel_size:       f32,
+	flat_shading:     Maybe(bool),
 	sea_level:        f32,
-	base_height:      f32, // continent relief: ocean floor .. inland plateau
+	base_height:      f32,
 	mountain_height:  f32,
 	hill_height:      f32,
-	snow_line:        f32, // studs above sea level at temperature 0.5
-	min_y, max_y:     f32, // vertical extent generated
-	feature_scale:    f32, // frequency multiplier (bigger = smaller features)
+	snow_line:        f32,
+	min_y, max_y:     f32,
+	feature_scale:    f32,
 	cave_size:        f32,
 	caves:            bool,
 	overhangs:        bool,
@@ -54,14 +54,12 @@ Terrain_Chunk_Gen_Options :: struct {
 	sdf_material:     enums.Material,
 	sdf_rock_size:    f32,
 	sdf_rock_density: f32,
-
-	// Filled in by Terrain_Generate_Chunks (don't set).
 	min_chunk_y:      int,
 	max_chunk_y:      int,
 }
 
 Terrain_Gen_Column :: struct {
-	height:    f32, // reference units (studs / TERRAIN_GEN_REF)
+	height:    f32,
 	mountain:  f32,
 	temp:      f32,
 	moist:     f32,
@@ -75,16 +73,16 @@ Terrain_Gen_Columns :: [TERRAIN_GEN_COLUMN_DIM * TERRAIN_GEN_COLUMN_DIM]Terrain_
 Terrain_Gen_Column_Job :: struct {
 	cx, cz: int,
 	dist2:  int,
-	ready:  int, // atomic; 1 once `chunks` is final
-	chunks: [dynamic]^Terrain_Chunk_Data, // index = cy - min_chunk_y, nil = empty air
+	ready:  int,
+	chunks: [dynamic]^Terrain_Chunk_Data,
 }
 
 Terrain_Chunk_Generation :: struct {
 	options:      Terrain_Chunk_Gen_Options,
 	jobs:         []Terrain_Gen_Column_Job,
 	workers:      [dynamic]^thread.Thread,
-	next_job:     int, // atomic
-	cancel:       int, // atomic
+	next_job:     int,
+	cancel:       int,
 	commit_job:   int,
 	commit_chunk: int,
 }
@@ -117,9 +115,6 @@ terrain_default_chunk_gen_options :: proc() -> Terrain_Chunk_Gen_Options {
 	}
 }
 
-// ---------------------------------------------------------------------------------------------
-// Noise helpers
-// ---------------------------------------------------------------------------------------------
 
 terrain_value_noise_2d :: proc(x, z: f32, seed: i64) -> f32 {
 	ix, iz := int(math.floor(x)), int(math.floor(z))
@@ -129,7 +124,7 @@ terrain_value_noise_2d :: proc(x, z: f32, seed: i64) -> f32 {
 	return terrain_lerp(a, b, uz)
 }
 
-// Normalised 0..1 fractal noise, lacunarity 2.
+
 terrain_fbm2 :: proc(x, z: f32, octaves: int, frequency: f32, seed: i64) -> f32 {
 	sum, total: f32
 	freq, amp := frequency, f32(1)
@@ -142,7 +137,7 @@ terrain_fbm2 :: proc(x, z: f32, octaves: int, frequency: f32, seed: i64) -> f32 
 	return sum / total
 }
 
-// Ridged multifractal with softened creases (no hard V at the crest). 0..1.
+
 terrain_ridged2 :: proc(x, z: f32, octaves: int, frequency: f32, seed: i64) -> f32 {
 	sum, total: f32
 	freq, amp := frequency, f32(1)
@@ -167,9 +162,6 @@ terrain_smoothstep :: proc(edge0, edge1, v: f32) -> f32 {
 	return t * t * (3 - 2 * t)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Heightfield + biome model (world-space in, reference units out)
-// ---------------------------------------------------------------------------------------------
 
 terrain_gen_sample_column :: proc(
 	o: ^Terrain_Chunk_Gen_Options,
@@ -179,13 +171,13 @@ terrain_gen_sample_column :: proc(
 	x, z := world_x * k, world_z * k
 	s := o.feature_scale
 	sea := o.sea_level * k
-	vref := o.voxel_size * k // reference units per voxel
+	vref := o.voxel_size * k
 	if o.sdf_style {
 		h := Terrain_SDF_Height(o, world_x, world_z) * k
 		return Terrain_Gen_Column{height = h, mountain = 0.5, temp = 0.5, moist = 0.5}
 	}
 
-	// Fade out features the voxel grid can't represent, so coarse grids don't alias.
+
 	detail_fade := terrain_smoothstep(2.5, 6, (1 / (0.09 * s)) / vref)
 	ridge_octaves := vref <= 2 ? 4 : (vref <= 4 ? 3 : 2)
 
@@ -257,9 +249,7 @@ terrain_gen_pick_biome :: proc(
 	return .Plains
 }
 
-// `dist` = distance below the surface in reference units. The whole near-surface shell gets one
-// material (no per-voxel-row flipping), and `steep` is decided per column by the caller.
-// Snow uses SmoothPlastic; return .Snow here if your Material enum has it.
+
 terrain_gen_material :: proc(biome: Terrain_Biome, dist: f32, steep: bool) -> enums.Material {
 	if dist > 28 {return .Basalt}
 	if dist > 6 {
@@ -287,19 +277,16 @@ terrain_gen_material :: proc(biome: Terrain_Biome, dist: f32, steep: bool) -> en
 	return .Grass
 }
 
-// ---------------------------------------------------------------------------------------------
-// Chunk filling (runs on worker threads)
-// ---------------------------------------------------------------------------------------------
 
 terrain_gen_fill_chunk :: proc(
 	o: ^Terrain_Chunk_Gen_Options,
 	cols: ^Terrain_Gen_Columns,
-	max_h: f32, // reference units
+	max_h: f32,
 	key: Terrain_Chunk_Key,
 ) -> ^Terrain_Chunk_Data {
 	S :: TERRAIN_CHUNK_SIZE
 	vs := o.voxel_size
-	scale := vs / TERRAIN_GEN_REF // reference units per voxel
+	scale := vs / TERRAIN_GEN_REF
 	x0, y0, z0 := key.x * S, key.y * S, key.z * S
 	margin: f32 = o.overhangs ? 12 : 2
 	if o.sdf_style {margin = terrain_sdf_band(o) / TERRAIN_GEN_REF}
@@ -307,18 +294,18 @@ terrain_gen_fill_chunk :: proc(
 	if f32(y0) * scale > max(max_h + margin, sea_ref) {return nil}
 
 	sea_vox := o.sea_level / vs
-	caves := o.caves && scale <= 2.5 // tunnels thinner than a voxel are just noise
+	caves := o.caves && scale <= 2.5
 	data := new(Terrain_Chunk_Data)
 	for lx in 0 ..< S {
 		for lz in 0 ..< S {
 			col := cols[(lx + 1) * TERRAIN_GEN_COLUMN_DIM + lz + 1]
 			wx, wz := x0 + lx, z0 + lz
-			hv := col.height / scale // surface height in voxels
+			hv := col.height / scale
 			slope := math.sqrt(col.gx * col.gx + col.gz * col.gz)
-			// Dividing by |grad| approximates a true distance field: smooth steep slopes.
+
 			norm := 1 / math.sqrt(1 + slope * slope)
 
-			// Cliff decision per column, jittered so the boundary is patchy, not contour lines.
+
 			jitter :=
 				(terrain_value_noise_2d(
 						f32(wx) * scale * 0.08,
@@ -331,7 +318,7 @@ terrain_gen_fill_chunk :: proc(
 
 			for ly in 0 ..< S {
 				wy := y0 + ly
-				depth := hv - f32(wy) // voxels below the heightfield
+				depth := hv - f32(wy)
 				d := depth * norm
 
 				if o.sdf_style {
@@ -376,7 +363,7 @@ terrain_gen_fill_chunk :: proc(
 				level := clamp(sea_vox - f32(wy), 0, 1)
 				at_sea_surface := f32(wy) + 1 >= sea_vox && hv < sea_vox
 				if level > 0 && ((occ < 1 && depth < 1) || at_sea_surface) {
-					water = level // Fill the surface to sea level without flooding underground caves.
+					water = level
 				}
 				if occ <= 0 && water <= 0 {continue}
 
@@ -425,7 +412,7 @@ terrain_gen_run_column :: proc(o: ^Terrain_Chunk_Gen_Options, job: ^Terrain_Gen_
 		}
 	}
 
-	// Sobel gradient (rise/run, dimensionless): smoother than a plain central difference.
+
 	inv := 0.125 / scale
 	max_h := f32(-1.0e9)
 	for i in 1 ..< DIM - 1 {
@@ -487,12 +474,7 @@ terrain_chunk_gen_worker :: proc(t: ^thread.Thread) {
 	}
 }
 
-// ---------------------------------------------------------------------------------------------
-// Main-thread side: start / poll / release
-// ---------------------------------------------------------------------------------------------
 
-// Applies voxel size / shading to the service and derives the chunk-space vertical range.
-// Changing the voxel size rescales the world, so existing terrain is cleared first.
 terrain_gen_apply_resolution :: proc(service: ^Terrain, o: ^Terrain_Chunk_Gen_Options) {
 	if o.voxel_size > 0 {
 		o.voxel_size = clamp(o.voxel_size, 1, 64)
@@ -507,12 +489,13 @@ terrain_gen_apply_resolution :: proc(service: ^Terrain, o: ^Terrain_Chunk_Gen_Op
 		service.flat_shading = fs
 		terrain_mark_all_dirty(service)
 	}
+	if o.sdf_style {terrain_set_raymarching(service, true)}
 	span := f32(TERRAIN_CHUNK_SIZE) * o.voxel_size
 	o.min_chunk_y = int(math.floor(o.min_y / span))
 	o.max_chunk_y = max(int(math.floor(o.max_y / span)), o.min_chunk_y)
 }
 
-// World-space entry point: generate everything within `radius` studs of (x, z).
+
 Terrain_Generate_Area :: proc(
 	service: ^Terrain,
 	x, z, radius: f32,
@@ -532,8 +515,7 @@ Terrain_Generate_Area :: proc(
 	)
 }
 
-// Chunk-space entry point: columns [min_cx..max_cx] x [min_cz..max_cz]. One chunk spans
-// 16 * VoxelSize studs, so the same chunk range covers more world at lower detail.
+
 Terrain_Generate_Chunks :: proc(
 	service: ^Terrain,
 	min_cx, min_cz, max_cx, max_cz: int,
@@ -609,7 +591,7 @@ terrain_commit_gen_chunk :: proc(
 	}
 }
 
-// True while generation is pending (Prepare_3D holds off meshing until the region is in).
+
 terrain_poll_chunk_generation :: proc(service: ^Terrain) -> bool {
 	gen := service.chunk_gen
 	if gen == nil {return false}
@@ -675,9 +657,6 @@ terrain_release_chunk_generation :: proc(service: ^Terrain) {
 	service.chunk_gen = nil
 }
 
-// ---------------------------------------------------------------------------------------------
-// Luau binding helper
-// ---------------------------------------------------------------------------------------------
 
 terrain_read_chunk_gen_options :: proc(
 	L: ^vm.State,
@@ -687,7 +666,7 @@ terrain_read_chunk_gen_options :: proc(
 	o := terrain_default_chunk_gen_options()
 	if !vm.IsTable(L, table_index) {return o}
 
-	// Presets first; explicit voxelSize / flatShading below override them.
+
 	if preset, ok := terrain_table_string(L, table_index, "detail"); ok {
 		switch {
 		case terrain_equal_fold(preset, "lowpoly"):

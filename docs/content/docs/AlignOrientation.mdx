@@ -1,0 +1,23 @@
+---
+title: AlignOrientation
+description: Apply torque to approach a target orientation.
+---
+
+Apply torque to approach a target orientation.
+
+## Getting started
+
+```lua
+local constraint = Instance.new("AlignOrientation", part)
+constraint.Attachment0 = attachment
+constraint.Mode = Enum.OrientationAlignmentMode.OneAttachment
+constraint.CFrame = CFrame.Angles(0, math.rad(45), 0)
+```
+
+## Properties
+
+Mode, CFrame, Attachment0, Attachment1, MaxTorque, MaxAngularVelocity and Responsiveness configure torque feedback.
+
+## Notes
+
+The controller is approximate. PrimaryAxis and SecondaryAxis compatibility values are retained but do not fully configure the solver.

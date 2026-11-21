@@ -1,0 +1,51 @@
+---
+title: Sprite2D
+description: Display images and animate sprite sheets with one instance.
+---
+
+Sprite2D draws a texture in the 2D world. It inherits the existing ImageLabel API, so you use `Image`, `Size`, `Position`, `ImageTransparency`, and `ImageColor3` instead of learning a second image system.
+
+```lua
+local sprite = Instance.new("Sprite2D", workspace)
+sprite.Image = "project://sprites/player.png"
+sprite.Position = UDim2.fromOffset(100, 100)
+sprite.Size = UDim2.fromOffset(32, 32)
+```
+
+## Sprite sheets
+
+A Sprite2D can display a frame from an image and animate it without a separate class.
+
+```lua
+sprite.FrameGrid = Vector2.new(4, 2) -- columns, rows
+sprite.Frame = 0
+sprite.FrameRate = 12
+sprite:Play()
+```
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `FrameGrid` | Vector2 | (1, 1) | Number of columns and rows in the image. |
+| `Frame` | number | 0 | Zero-based frame index, left to right then top to bottom. |
+| `FrameRate` | number | 12 | Animation frames per second. |
+| `Playing` | boolean | false | Whether to advance frames. |
+| `Looped` | boolean | true | Restart at the beginning after the last frame. |
+
+`Play()` starts or resumes; `Stop()` resets to the first frame. Set `Playing = false` to pause.
+
+A Sprite2D is visual only. Parent it under a Part2D to attach artwork to a physics object.
+
+
+## Animated images
+
+Use the same Image instance for static images, GIFs, and Aseprite animations.
+
+```lua
+local sprite = Instance.new("Sprite2D", workspace)
+sprite.Size = UDim2.fromOffset(64, 64)
+sprite.Image = game:GetService("AssetService"):CreateImage({
+    Source = "project://sprites/walk.aseprite",
+})
+```
+
+Image instances can also be created from GIF or Aseprite buffers with AssetService:CreateImage({Buffer = bytes}). Playback follows encoded frame timing independently of manual sprite-sheet controls. FrameGrid, FrameRate, Play, and Stop continue to control static sprite sheets.

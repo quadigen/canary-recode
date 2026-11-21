@@ -16,6 +16,8 @@ Listener :: struct {
 	connected:    bool,
 	once:         bool,
 	capabilities: vm.Thread_Security_Capabilities,
+	actor_id:     u64,
+	parallel:     bool,
 	native:       Native_Listener_Fn,
 	native_ctx:   rawptr,
 	connection:   ^KinemiumConnection,
@@ -25,11 +27,15 @@ Waiter :: struct {
 	thread:       ^vm.State,
 	thread_ref:   i32,
 	capabilities: vm.Thread_Security_Capabilities,
+	actor_id:     u64,
+	parallel:     bool,
 }
 
 Pending_Callback :: struct {
 	callback_ref: i32,
 	capabilities: vm.Thread_Security_Capabilities,
+	actor_id:     u64,
+	parallel:     bool,
 }
 
 Signal :: struct {
@@ -53,6 +59,14 @@ Registry :: struct {
 	signal_binding:     vm.Userdata_Binding,
 	connection_binding: vm.Userdata_Binding,
 	free_signals:       [dynamic]^Signal,
+	schedule_callback:  proc(
+		ctx: rawptr,
+		thread: ^vm.State,
+		ref: i32,
+		arguments: int,
+		parallel: bool,
+	),
+	schedule_ctx:       rawptr,
 }
 
 signal_has_internal_fire_capability :: proc(L: ^vm.State) -> bool {
@@ -110,6 +124,9 @@ connection_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 }
 
 connection_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
+	if vm.ThreadIsParallel(
+		L,
+	) {return vm.RaiseError(L, "Disconnect requires the serial phase"), true}
 	if method != "Disconnect" {
 		return 0, false
 	}
@@ -130,7 +147,7 @@ connection_string :: proc(value, ctx: rawptr) -> string {
 
 signal_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	switch key {
-	case "Connect", "Once", "Wait":
+	case "Connect", "ConnectParallel", "Once", "Wait":
 		vm.PushUserdataMethod(L, key)
 	case "Fire", "DisconnectAll":
 		if !signal_has_internal_fire_capability(L) {
@@ -143,10 +160,22 @@ signal_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	return true
 }
 
-signal_connect :: proc(L: ^vm.State, signal: ^Signal, once: bool) -> i32 {
+Connect_Lua :: proc(
+	L: ^vm.State,
+	signal: ^Signal,
+	once: bool,
+	parallel := false,
+	callback_index := 2,
+) -> i32 {
 	if signal == nil || signal.destroyed {return vm.RaiseError(L, "Signal is destroyed")}
-	if !vm.IsFunction(L, 2) {return vm.RaiseError(L, "Connect expects a function")}
-	vm.PushValue(L, 2)
+	if vm.ThreadIsParallel(
+		L,
+	) {return vm.RaiseError(L, "connect must be called in the serial phase")}
+	if parallel &&
+	   vm.ThreadActor(L) ==
+		   0 {return vm.RaiseError(L, "ConnectParallel requires a script under an Actor")}
+	if !vm.IsFunction(L, callback_index) {return vm.RaiseError(L, "Connect expects a function")}
+	vm.PushValue(L, callback_index)
 	callback_ref := vm.RetainValue(L)
 	vm.Pop(L)
 	signal.next_id += 1
@@ -158,6 +187,8 @@ signal_connect :: proc(L: ^vm.State, signal: ^Signal, once: bool) -> i32 {
 			connected = true,
 			once = once,
 			capabilities = vm.GetThreadSecurityCapabilities(L),
+			actor_id = vm.ThreadActor(L),
+			parallel = parallel,
 		},
 	)
 
@@ -181,17 +212,34 @@ fire_callback :: proc(
 	capabilities: vm.Thread_Security_Capabilities,
 	first_argument: int,
 	argument_count: int,
+	actor_id: u64,
+	parallel, deferred: bool,
 ) {
 	vm.PushRegistryReference(L, callback_ref)
 	callback_index := vm.StackTop(L)
 	thread := vm.NewThread(L)
 	vm.SetThreadSecurityCapabilities(thread, capabilities)
+	vm.SetThreadActorPhase(thread, actor_id, parallel)
 	vm.CopyValueToThread(L, thread, callback_index)
 	for offset := 0; offset < argument_count; offset += 1 {
 		vm.CopyValueToThread(L, thread, first_argument + offset)
 	}
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L, 2)
+	if parallel || deferred {
+		if signal.registry.schedule_callback != nil {
+			signal.registry.schedule_callback(
+				signal.registry.schedule_ctx,
+				thread,
+				thread_ref,
+				argument_count,
+				parallel,
+			)
+		} else {
+			vm.ReleaseValue(signal.registry.L, thread_ref)
+		}
+		return
+	}
 	_, _, err := vm.ResumeThread(thread, L, argument_count)
 	vm.ReleaseValue(signal.registry.L, thread_ref)
 	if err != "" {
@@ -205,6 +253,7 @@ signal_fire_arguments :: proc(
 	signal: ^Signal,
 	first_argument: int,
 	argument_count: int,
+	deferred := false,
 ) {
 	if vm.Is_Closing() ||
 	   signal == nil ||
@@ -231,6 +280,8 @@ signal_fire_arguments :: proc(
 			Pending_Callback {
 				callback_ref = vm.RetainValue(L),
 				capabilities = listener.capabilities,
+				actor_id = listener.actor_id,
+				parallel = listener.parallel,
 			},
 		)
 		vm.Pop(L)
@@ -250,6 +301,17 @@ signal_fire_arguments :: proc(
 			vm.CopyValueToThread(L, waiter.thread, first_argument + offset)
 		}
 		vm.SetThreadSecurityCapabilities(waiter.thread, waiter.capabilities)
+		vm.SetThreadActorPhase(waiter.thread, waiter.actor_id, waiter.parallel)
+		if (waiter.parallel || deferred) && signal.registry.schedule_callback != nil {
+			signal.registry.schedule_callback(
+				signal.registry.schedule_ctx,
+				waiter.thread,
+				waiter.thread_ref,
+				argument_count,
+				waiter.parallel,
+			)
+			continue
+		}
 		_, _, err := vm.ResumeThread(waiter.thread, L, argument_count)
 		vm.ReleaseValue(signal.registry.L, waiter.thread_ref)
 		if err != "" {
@@ -267,6 +329,9 @@ signal_fire_arguments :: proc(
 			callback.capabilities,
 			first_argument,
 			argument_count,
+			callback.actor_id,
+			callback.parallel,
+			deferred,
 		)
 		vm.ReleaseValue(signal.registry.L, callback.callback_ref)
 	}
@@ -283,6 +348,10 @@ signal_fire_arguments :: proc(
 	delete(native_listeners)
 }
 
+
+Signal_Fire_Deferred :: proc(L: ^vm.State, signal: ^Signal, first_argument, argument_count: int) {
+	signal_fire_arguments(L, signal, first_argument, argument_count, true)
+}
 
 Signal_Fire :: proc(L: ^vm.State, signal: ^Signal) {
 	signal_fire_arguments(L, signal, 0, 0)
@@ -330,9 +399,11 @@ signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 	signal := cast(^Signal)value
 	switch method {
 	case "Connect":
-		return signal_connect(L, signal, false), true
+		return Connect_Lua(L, signal, false), true
+	case "ConnectParallel":
+		return Connect_Lua(L, signal, false, true), true
 	case "Once":
-		return signal_connect(L, signal, true), true
+		return Connect_Lua(L, signal, true), true
 	case "Wait":
 		if !vm.IsYieldable(
 			L,
@@ -346,10 +417,13 @@ signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 				thread = L,
 				thread_ref = thread_ref,
 				capabilities = vm.GetThreadSecurityCapabilities(L),
+				actor_id = vm.ThreadActor(L),
+				parallel = vm.ThreadIsParallel(L),
 			},
 		)
 		return vm.YieldThread(L), true
 	case "Fire":
+		if vm.ThreadIsParallel(L) {return vm.RaiseError(L, "Fire requires the serial phase"), true}
 		if !signal_has_internal_fire_capability(L) {
 			return vm.RaiseError(L, "Signal:Fire is restricted to internal scripts"), true
 		}
@@ -357,6 +431,9 @@ signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		signal_fire_arguments(L, signal, 2, argument_count)
 		return 0, true
 	case "DisconnectAll":
+		if vm.ThreadIsParallel(
+			L,
+		) {return vm.RaiseError(L, "DisconnectAll requires the serial phase"), true}
 		if !signal_has_internal_fire_capability(L) {
 			return vm.RaiseError(L, "Signal:DisconnectAll is restricted to internal scripts"), true
 		}
@@ -537,7 +614,7 @@ Fire_From_Stack :: proc(L: ^vm.State, signal: ^Signal, argument_count: int) {
 
 Registry_Init :: proc(registry: ^Registry) {
 	registry.signal_binding = vm.Userdata_Binding {
-		name     = "KinemiumSignal",
+		name     = "KinemiumScriptSignal",
 		tag      = SIGNAL_TAG,
 		ctx      = registry,
 		get      = signal_get,
@@ -563,6 +640,8 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 	vm.PushFunction(vm_state.L, "Signal.new", signal_new, 1)
 	vm.SetField(vm_state.L, -2, "new")
 	vm.SetReadOnly(vm_state.L, -1)
+	vm.PushValue(vm_state.L, -1)
+	vm.SetGlobalFromStack(vm_state, "KinemiumScriptSignal")
 	vm.PushValue(vm_state.L, -1)
 	vm.SetGlobalFromStack(vm_state, "KinemiumSignal")
 	vm.SetGlobalFromStack(vm_state, "Signal")

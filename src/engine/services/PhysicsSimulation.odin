@@ -9,20 +9,44 @@ import tracy "../util/odin-tracy"
 
 DEFAULT_COLLISION_SUBSTEPS :: 1
 
-Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics, delta_time: f32) {
+Physics_Cached_Constraint :: struct {
+	object: ^classes.Object,
+	step:   classes.Constraint_Step,
+}
+
+
+physics_collect_constraint_steps :: proc(
+	object: ^classes.Object,
+	steps: ^[dynamic]Physics_Cached_Constraint,
+) {
 	for child in object.children {
 		if child == nil ||
 		   child.destroyed ||
 		   classes.Is_A_Class(child, &classes.ViewportFrame_Class) {continue}
-
-		for entry in classes.Constraint_Steps {
-			if classes.Is_A_Class(child, entry.class) {
-				entry.step(child, service.system.handle, service.body_ids[:], delta_time)
-				break
+		if classes.Is_A_Class(child, &classes.Constraint_Class) {
+			for entry in classes.Constraint_Steps {
+				if classes.Is_A_Class(child, entry.class) {
+					append(steps, Physics_Cached_Constraint{child, entry.step})
+					break
+				}
 			}
 		}
-		if len(child.children) != 0 {
-			Physics_StepConstraints(child, service, delta_time)
+		if len(child.children) != 0 {physics_collect_constraint_steps(child, steps)}
+	}
+}
+
+Physics_StepConstraints :: proc(object: ^classes.Object, service: ^Physics, delta_time: f32) {
+	if object == nil || service == nil {return}
+	epoch := classes.Hierarchy_Structure_Epoch()
+	if service.constraint_workspace != object || service.constraint_epoch != epoch {
+		clear(&service.constraint_steps)
+		physics_collect_constraint_steps(object, &service.constraint_steps)
+		service.constraint_workspace = object
+		service.constraint_epoch = epoch
+	}
+	for entry in service.constraint_steps {
+		if !entry.object.destroyed {
+			entry.step(entry.object, service.system.handle, service.body_ids[:], delta_time)
 		}
 	}
 }
@@ -62,13 +86,15 @@ Physics_Apply_Aerodynamics :: proc(
 	}
 }
 
-// Gravity is expressed in world coordinates, independently for each rigid part.
-// Use Jolt's native Y acceleration when possible (including sleeping contacts),
-// and apply any remaining acceleration as a center-of-mass force.
+
 physics_part_gravity :: proc(part: ^classes.Part) -> datatypes.Vector3 {
 	gravity := part.gravity
 	if model := classes.PhysicsModel_For(&part.object); model != nil {
-		gravity = datatypes.Vector3{gravity.x * f64(model.gravity_scale), gravity.y * f64(model.gravity_scale), gravity.z * f64(model.gravity_scale)}
+		gravity = datatypes.Vector3 {
+			gravity.x * f64(model.gravity_scale),
+			gravity.y * f64(model.gravity_scale),
+			gravity.z * f64(model.gravity_scale),
+		}
 	}
 	return gravity
 }
@@ -82,7 +108,10 @@ physics_part_gravity_factor :: proc(service: ^Physics, gravity: datatypes.Vector
 physics_apply_part_gravity :: proc(service: ^Physics) {
 	bi := service.system.body_interface
 	for &body in service.bodies {
-		if body.object == nil || body.object.destroyed || body.anchored || body.remote ||
+		if body.object == nil ||
+		   body.object.destroyed ||
+		   body.anchored ||
+		   body.remote ||
 		   body.body_id == kineffi.JPH_BODY_ID_INVALID {continue}
 		gravity := physics_part_gravity(cast(^classes.Part)body.object)
 		factor := physics_part_gravity_factor(service, gravity)
@@ -94,16 +123,26 @@ physics_apply_part_gravity :: proc(service: ^Physics) {
 			body.gravity = gravity
 			kineffi.JPH_BodyInterface_ActivateBody(bi, body.body_id)
 		}
-		remaining := datatypes.Vector3{gravity.x, gravity.y + f64(factor * service.gravity), gravity.z}
+		remaining := datatypes.Vector3 {
+			gravity.x,
+			gravity.y + f64(factor * service.gravity),
+			gravity.z,
+		}
 		if remaining.x == 0 && abs(remaining.y) < 0.00001 && remaining.z == 0 {continue}
-		// Don't reactivate resting bodies every frame. Motion properties remain
-		// valid until the body is recreated, and reflect material/mass changes.
+
+
 		if kineffi.JPH_BodyInterface_IsActive(bi, body.body_id) == 0 ||
 		   body.motion_properties == nil {continue}
 		inverse_mass := kineffi.JPH_MotionProperties_GetInverseMass(body.motion_properties)
 		if inverse_mass <= 0 || !physics_finite_f32(inverse_mass) {continue}
-		force := kineffi.JPH_Vec3{f32(remaining.x / f64(inverse_mass)), f32(remaining.y / f64(inverse_mass)), f32(remaining.z / f64(inverse_mass))}
-		if physics_finite_f32(force.x) && physics_finite_f32(force.y) && physics_finite_f32(force.z) {
+		force := kineffi.JPH_Vec3 {
+			f32(remaining.x / f64(inverse_mass)),
+			f32(remaining.y / f64(inverse_mass)),
+			f32(remaining.z / f64(inverse_mass)),
+		}
+		if physics_finite_f32(force.x) &&
+		   physics_finite_f32(force.y) &&
+		   physics_finite_f32(force.z) {
 			kineffi.JPH_BodyInterface_AddForce(bi, body.body_id, &force)
 		}
 	}
@@ -119,8 +158,8 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 
 	tracy.ZoneNC("Jolt Synchronize", 0xE06C75)
 	Physics_Synchronize(service, workspace)
-	// The hierarchy epoch doesn't change for interpolated poses. Update remote
-	// colliders directly, so raycasts and local physics see the streamed pose.
+
+
 	for &body in service.bodies {
 		if body.object == nil ||
 		   body.object.destroyed ||
@@ -182,6 +221,7 @@ Physics_Step :: proc(service: ^Physics, delta_time: f32) {
 	}
 	Physics_StepConstraints(workspace, service, clamp(delta_time, 0, 0.1))
 	physics_sync_weld_groups(service, &workspace.object)
+	physics_sync_excluded_pairs(service, &workspace.object)
 	Physics_Apply_Water(service, step_time)
 	if step_time > 0 {physics_apply_part_gravity(service)}
 

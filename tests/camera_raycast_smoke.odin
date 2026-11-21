@@ -1,32 +1,14 @@
 package main
 
-// Smoke test for Camera screen<->world projection. The camera projection
-// helpers are the script-visible counterpart of the render viewport: a ray
-// built from ScreenPointToRay has to agree with what the renderer actually
-// drew, and WorldToViewportPoint has to invert it.
-//
-// These used to be broken in three independent ways, all invisible until the
-// viewport was non-square or non-default:
-//   - viewport_width/viewport_height were never assigned from the renderer, so
-//     every projection divided by a clamped half-extent of 1.
-//   - the normalized-device offsets were used as raw camera-space deltas,
-//     dropping the field-of-view tangent and the aspect ratio.
-//   - ScreenPointToRay based its ray on the camera's backward axis, so rays
-//     pointed away from whatever the camera was looking at.
-//
-// The headless environment has no Filament context, so nothing here can assert
-// pixels; what it can prove is that the projection contract matches the
-// renderer's 60-degree perspective and that the viewport tracks the renderer.
 
-import "core:fmt"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 STEP_DT :: f32(1.0 / 60.0)
 
-// Deliberately non-square: an aspect-blind projection passes at 800x600 and
-// fails here.
+
 VIEWPORT_WIDTH :: i32(1600)
 VIEWPORT_HEIGHT :: i32(900)
 
@@ -51,22 +33,27 @@ main :: proc() {
 	view.HasViewportRect = true
 	view.ViewportRect = {0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT}
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local camera = workspace.CurrentCamera
 assert(camera and camera:IsA("Camera"), "workspace must provide a CurrentCamera")
 -- Identity CFrame looks down -Z, which is the axis every expectation below is
 -- written against.
 camera.CFrame = CFrame.new(0, 0, 0)
 camera.CameraType = Enum.CameraType.Scriptable
-`, "camera_raycast_setup")
+`,
+		"camera_raycast_setup",
+	)
 
-	// The viewport dimensions are refreshed by Camera_Step. Scriptable returns
-	// early, but only after the viewport sync, so this still has to take effect.
+
 	for _ in 0 ..< 3 {
 		engine_runtime.Environment_Render_3D(&environment, &script_vm, STEP_DT)
 	}
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local camera = workspace.CurrentCamera
 
 local TOLERANCE = 1.0e-4
@@ -153,8 +140,10 @@ local sample_points = {
 for _, point in ipairs(sample_points) do
 	local ray = camera:ScreenPointToRay(point.X, point.Y)
 	local world = ray.Origin + ray.Direction * 250
-	local on_screen, sx, sy = camera:WorldToViewportPoint(world)
-	assert(on_screen, "a point cast from inside the frustum must project on screen")
+	local projected, on_screen = camera:WorldToViewportPoint(world)
+	local sx, sy = projected.X, projected.Y
+	assert(on_screen == true and typeof(projected) == "Vector3", "expected (Vector3, boolean) for a point inside the frustum")
+	assert(math.abs(projected.Z - (-world.Z)) < 1.0e-2, "projection must report camera-space depth")
 	assert(
 		math.abs(sx - point.X) < 1.0e-2 and math.abs(sy - point.Y) < 1.0e-2,
 		"round trip drifted: cast " .. point.X .. "," .. point.Y ..
@@ -163,28 +152,32 @@ for _, point in ipairs(sample_points) do
 end
 
 -- Anything behind the camera, or past the frustum edges, is off screen.
-local behind = camera:WorldToViewportPoint(Vector3.new(0, 0, 10))
-assert(not behind, "a point behind the camera must not project on screen")
+local behind_position, behind = camera:WorldToViewportPoint(Vector3.new(0, 0, 10))
+assert(behind == false and behind_position == Vector3.zero, "a point behind the camera must return zero and false")
 
-local far_behind = camera:WorldToViewportPoint(Vector3.new(0, 0, 1000))
-assert(not far_behind, "a point well behind the camera is off screen")
+local far_behind_position, far_behind = camera:WorldToViewportPoint(Vector3.new(0, 0, 1000))
+assert(far_behind == false and far_behind_position == Vector3.zero, "a point well behind the camera is off screen")
 
-local wide_off = camera:WorldToViewportPoint(Vector3.new(10000, 0, -250))
-assert(not wide_off, "a point far outside the horizontal frustum is off screen")
+local wide_off_position, wide_off = camera:WorldToViewportPoint(Vector3.new(10000, 0, -250))
+assert(wide_off == false and wide_off_position.X > width, "a point far outside the horizontal frustum is off screen")
 
-local tall_off = camera:WorldToViewportPoint(Vector3.new(0, 10000, -250))
-assert(not tall_off, "a point far outside the vertical frustum is off screen")
+local tall_off_position, tall_off = camera:WorldToViewportPoint(Vector3.new(0, 10000, -250))
+assert(tall_off == false and tall_off_position.Y < 0, "a point far outside the vertical frustum is off screen")
 
 print("RAYCAST_VIEWPORT_OK")
-`, "camera_raycast_projection")
+`,
+		"camera_raycast_projection",
+	)
 
-	// Shrink the window and confirm the camera picks the new size up.
+
 	view.ViewportRect = {0, 0, RESIZED_WIDTH, RESIZED_HEIGHT}
 	for _ in 0 ..< 3 {
 		engine_runtime.Environment_Render_3D(&environment, &script_vm, STEP_DT)
 	}
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local camera = workspace.CurrentCamera
 local TOLERANCE = 1.0e-4
 local TANGENT = 0.5773502691896258
@@ -211,14 +204,17 @@ assert(
 )
 
 local world = center.Origin + center.Direction * 100
-local on_screen, sx, sy = camera:WorldToViewportPoint(world)
+local projected, on_screen = camera:WorldToViewportPoint(world)
+local sx, sy = projected.X, projected.Y
 assert(
-	on_screen and math.abs(sx - 320) < 1.0e-2 and math.abs(sy - 240) < 1.0e-2,
+	on_screen == true and math.abs(projected.Z - 100) < 1.0e-2 and math.abs(sx - 320) < 1.0e-2 and math.abs(sy - 240) < 1.0e-2,
 	"round trip drifted after resize: " .. sx .. "," .. sy
 )
 
 print("RAYCAST_RESIZE_OK")
-`, "camera_raycast_resize")
+`,
+		"camera_raycast_resize",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

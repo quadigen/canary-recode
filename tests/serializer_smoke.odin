@@ -6,6 +6,7 @@ import engine_runtime "../src/engine/runtime"
 import serializer "../src/engine/serializer"
 import vm "../src/engine/vm"
 import "core:fmt"
+import "core:strings"
 
 run_script_or_fail :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -28,9 +29,7 @@ assert_no_error :: proc(err: ^serializer.Error, what: string) {
 	panic(detail)
 }
 
-// assert_kind fails unless the stream was rejected for exactly the expected
-// reason, which is the point of returning a structured error: a rejected file
-// has to say which rule caught it, and where.
+
 @(private = "file")
 assert_kind :: proc(err: ^serializer.Error, expected: serializer.Error_Kind, what: string) {
 	message := serializer.Error_String(err^)
@@ -42,8 +41,8 @@ assert_kind :: proc(err: ^serializer.Error, expected: serializer.Error_Kind, wha
 		delete(message)
 		panic(detail)
 	}
-	// A useful diagnosis names where it happened; an error with no position is
-	// the failure mode this whole change exists to remove.
+
+
 	if offset < 0 {
 		detail := fmt.tprintf("%s: no stream offset was reported (%s)", what, message)
 		delete(message)
@@ -92,6 +91,10 @@ text.BackgroundColor3 = Color3.fromRGB(10, 20, 30)
 text.Position = UDim2.fromScale(0.25, 0.5)
 text.Visible = true
 
+local camera = Instance.new("Camera", model)
+camera.Name = "SavedCamera"
+camera.FieldOfView = 73
+
 model.Parent = game.Workspace
 KineRoot = model
 `,
@@ -105,11 +108,7 @@ KineRoot = model
 		panic("KineRoot global missing")
 	}
 
-	// An asset reference makes the writer own a list of content ids. That list is
-	// handed from the tree writer to the output writer, and the ids have to be
-	// freed before the array that holds them. Regression: saving a map with
-	// embedded assets crashed with a use-after-free while the cleanup walked a
-	// list whose backing array had already been deleted.
+
 	asset_id := assetstore.Register([]u8{1, 2, 3, 4, 5, 6, 7, 8}, "smoke-texture.png", .Texture)
 	if asset_id == "" {
 		panic("could not register the test asset")
@@ -129,13 +128,15 @@ mesh.TextureId = KineAssetUri
 		"serializer_asset",
 	)
 
-	// In-memory round trip.
+
 	data, serialize_err := serializer.Serialize(&environment.classes, script_vm.L, root)
 	assert_no_error(&serialize_err, "serialize")
 	if data == nil {
 		panic("serialize reported success but produced no bytes")
 	}
 	defer delete(data)
+	assert(!strings.contains(string(data), "ViewportSize"))
+	assert(!strings.contains(string(data), "DiagonalFieldOfView"))
 	fmt.printf("serialized KINE v%d %d bytes\n", serializer.KINE_VERSION, len(data))
 	data[4] = 1
 	rejected, rejected_err := serializer.Deserialize(&environment.classes, script_vm.L, nil, data)
@@ -213,6 +214,7 @@ end
 
 assert(LoadedRoot:IsA("Model"))
 assert(LoadedRoot.Name == "Car")
+assert(LoadedRoot.SavedCamera.FieldOfView == 73)
 
 local part = LoadedRoot:FindFirstChild("Block")
 assert(part ~= nil)
@@ -253,7 +255,7 @@ assert(text:IsDescendantOf(LoadedRoot))
 		"serializer_verify",
 	)
 
-	// File round trip.
+
 	save_err := serializer.Serialize_To_File(
 		&environment.classes,
 		script_vm.L,
@@ -273,8 +275,7 @@ assert(text:IsDescendantOf(LoadedRoot))
 		panic("loading a .kine file reported success but produced no object")
 	}
 
-	// A path that does not exist is reported as a file read failure rather than a
-	// bare false, so a mistyped path says so.
+
 	missing_file, missing_err := serializer.Deserialize_From_File(
 		&environment.classes,
 		script_vm.L,

@@ -39,7 +39,6 @@ Environment :: struct {
 }
 
 
-// True when the 3D scene changed since the last time the renderer drew it.
 Environment_3D_Dirty :: proc(environment: ^Environment) -> bool {
 	if environment == nil {return true}
 	revision := classes.Render_3D_Revision()
@@ -418,6 +417,25 @@ Environment_Render_2D :: proc(
 		classes.Update_GUI_Layout(&environment.classes, virtual_width, virtual_height, delta_time)
 	}
 
+
+	editor_2d := false
+	if environment.mode == .Editor {
+		if workspace := services.Find_Service(&environment.services, "Workspace");
+		   workspace != nil && workspace.object != nil {
+			editor_2d = (cast(^services.Workspace)workspace.object).dimension == .D2
+		}
+	}
+	if !editor_2d {
+		services.Render_2D(
+			&environment.services,
+			vm_state.L,
+			environment.renderer,
+			virtual_width,
+			virtual_height,
+			delta_time,
+		)
+	}
+
 	{
 		tracy.ZoneNC("Classes Step .Render2D", 0xD08770)
 		z := profiling.Begin("Classes Step .Render2D", 0xD08770)
@@ -435,6 +453,26 @@ Environment_Render_2D :: proc(
 			virtual_width,
 			virtual_height,
 			cache_gui = gui_cache_enabled(environment.renderer),
+			editor_2d_gui_background = editor_2d,
+		)
+	}
+
+	if editor_2d {
+		services.Render_2D(
+			&environment.services,
+			vm_state.L,
+			environment.renderer,
+			virtual_width,
+			virtual_height,
+			delta_time,
+		)
+		classes.ScreenGui_Render_After_Editor_2D(
+			&environment.classes,
+			vm_state.L,
+			virtual_width,
+			virtual_height,
+			delta_time,
+			gui_cache_enabled(environment.renderer),
 		)
 	}
 
@@ -482,8 +520,7 @@ Environment_Render_Overlay :: proc(
 	classes.Gui_Draw_Selection(&environment.classes)
 }
 
-// Re-render ScreenGui roots into the transparent XR target using the
-// desktop layout's logical coordinates. No second layout or script step.
+
 Environment_Render_VR_UI :: proc(
 	environment: ^Environment,
 	vm_state: ^vm.VM,

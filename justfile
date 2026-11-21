@@ -77,10 +77,15 @@ run: build
 
 # Use the sibling editor checkout directly while developing, without GitHub or the remote archive.
 build-local-editor editor_dir="../kinemium-editor/internal":
-    odin build src -o:speed -out:build/kinemium{{exe}} -define:EDITOR_MODULES="{{editor_dir}}" -define:EDITOR_COMPONENTS="{{editor_dir}}/Components"
+    odin build src -o:speed -out:build/kinemium{{exe}}
 
+# Select the editor at runtime, not at engine compilation.
 run-local-editor editor_dir="../kinemium-editor/internal": (build-local-editor editor_dir)
-    ./build/kinemium{{exe}}
+    {{python}} tools/run_local_editor.py "{{absolute_path(editor_dir)}}" "./build/kinemium{{exe}}"
+
+# Reuse an existing engine binary when changing only Luau editor code.
+run-editor-source editor_dir="../kinemium-editor/internal":
+    {{python}} tools/run_local_editor.py "{{absolute_path(editor_dir)}}" "./build/kinemium{{exe}}"
 
 run-debug: debug
     ./build/kinemium-debug{{exe}}
@@ -98,20 +103,33 @@ tests_services := '''
     physics_collider_smoke
     capsule_part_smoke
     workspace_physics_smoke
+    world2d_smoke
+    world2d_editor_smoke
+    instances2d_smoke
     part_gravity_smoke
     aerodynamics_service_smoke
     aseprite_service_smoke
+    editable_sound_smoke
+    icon_service_smoke
+    localization_smoke
+    localization_table_smoke
     playtest_tree_smoke
+    editor_docking_smoke
     vr_service_smoke
     hinge_constraint_smoke
     spring_constraint_smoke
     rope_constraint_smoke
     attachment_joint_smoke
     attachment_joint_weld_smoke
+    imported_constraints_smoke
+    imported_constraint_assembly_smoke
+    local_collision_group_smoke
     gpu_compute_smoke
+    roblox_parity_smoke
     luau_typecheck_smoke
-    constraint_car_turn_smoke
+    parallel_luau_smoke
     character_controller_smoke
+    character_tuning_smoke
     character_cancollide_smoke
     cloth_collision_smoke
     cloth_rigid_collision_smoke
@@ -130,14 +148,14 @@ tests_services := '''
     terrain_service_smoke
     terrain_sdf_smoke
     terrain_collision_smoke
-    singleplayer_smoke
-    playtest_launch_smoke
     playtest_output_smoke
     webview_service_smoke
     template_platform_smoke
     platform_export_smoke
     filesystem_copy_smoke
     datastore_smoke
+    messaging_service_smoke
+    memory_store_smoke
     plugin_api_smoke
     marketplace_plugin_smoke
 '''
@@ -146,7 +164,6 @@ tests_gui := '''
     gif_image_smoke
     gui_component_smoke
     player_gui_smoke
-    ui_shader_smoke
     viewport_frame_smoke
     gui_hit_smoke
     gui_hit_test_smoke
@@ -159,6 +176,7 @@ tests_gui := '''
 
 tests_serializer := '''
     serializer_smoke
+    kine_format_scale_smoke
     asset_portability_smoke
     part_operation_smoke
     kine_map_smoke
@@ -170,6 +188,7 @@ tests_replication := '''
     replication_constraint_smoke
     replicator_multi_peer_smoke
     replication_remote_smoke
+    replication_compact_codec_smoke
     replication_unreliable_remote_smoke
     replication_breadth_smoke
     character_replication_smoke
@@ -232,7 +251,7 @@ _run-tests label tests:
     #!/usr/bin/env bash
     set -uo pipefail
     failed=()
-    for t in {{tests}}; do
+    for t in $(printf '%s' '{{tests}}'); do
         output=$(odin run "tests/$t.odin" -file 2>&1)
         if grep -q PASSED <<< "$output"; then
             echo "PASS  $t"
@@ -259,21 +278,18 @@ test-services: (_run-tests "service" tests_services)
 
 test-gui: (_run-tests "gui" tests_gui)
 
+# Native visual regressions require a Vulkan-capable display/device.
+test-imported-visuals: (_run-tests "imported visuals" "sky_render_smoke billboard_gui_render_smoke special_mesh_render_smoke")
+
+# Effects require a native Vulkan-capable display/device.
+test-lighting-effects: (_run-tests "lighting effects" "volumetric_lighting_smoke advanced_lighting_smoke material_shader_render_smoke")
+
+test-porter-content:
+    {{python}} tests/porter_content_test.py
+
 test-serializer: (_run-tests "serializer" tests_serializer)
 
 test-replication: (_run-tests "replication" tests_replication)
-
-# Requires the local tools/construct_rbxl.kine fixture.
-test-construct-rbxl:
-    odin run tests/construct_rbxl_smoke.odin -file -out:build/construct-rbxl-smoke{{exe}}
-
-# Requires a Construct import with KINE v8 constraint endpoints.
-test-construct-motor map="build/construct-with-motor.kine":
-    odin run tests/construct_motor_smoke.odin -file -out:build/construct-motor-smoke{{exe}} -- "{{map}}"
-
-# Requires a Construct save with the original block catalog welds.
-test-construct-block-welds map="build/construct-with-block-welds.kine":
-    odin run tests/construct_block_weld_smoke.odin -file -out:build/construct-block-weld-smoke{{exe}} -- "{{map}}"
 
 # Usage: just bench-surface-gui [elements] [frames]
 bench-surface-gui elements="1000" frames="120":

@@ -1,6 +1,5 @@
 package services
 
-// wire:service global="team"
 
 import "core:strings"
 
@@ -10,22 +9,21 @@ import enums "../enum"
 import signals "../signals"
 import vm "../vm"
 
-Team_Class := classes.Class_Info{
+Team_Class := classes.Class_Info {
 	name   = "Team",
 	parent = &classes.Instance_Class,
 }
 
 Team :: struct {
-	using object: classes.Object,
-
-	team_color:     datatypes.Color3,
-	auto_assign:    bool,
-	neutral:        bool,
+	using object:               classes.Object,
+	team_color:                 datatypes.Color3,
+	auto_assign:                bool,
+	neutral:                    bool,
 	allow_team_change_on_touch: bool,
-	team_order:     i32,
+	team_order:                 i32,
 }
 
-Teams_Class := classes.Class_Info{
+Teams_Class := classes.Class_Info {
 	name   = "Teams",
 	parent = &Service_Class,
 }
@@ -39,11 +37,7 @@ teams_service_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(Teams)
-	service.service = Service_Init(
-		&Teams_Class,
-		"Teams",
-		data_model,
-	)
+	service.service = Service_Init(&Teams_Class, "Teams", data_model)
 	return &service.object
 }
 
@@ -68,7 +62,10 @@ teams_service_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	service := cast(^Teams)object
 	switch method {
 	case "GetTeams":
@@ -95,10 +92,7 @@ teams_service_namecall :: proc(
 	return 0, false
 }
 
-teams_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+teams_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^Teams)object)
 }
@@ -182,8 +176,9 @@ Register_Teams_Class :: proc(registry: ^classes.Registry) {
 		teams_service_construct,
 		teams_service_destroy,
 		creatable = false,
-		get       = teams_service_get,
-		namecall  = teams_service_namecall,
+		get = teams_service_get,
+		namecall = teams_service_namecall,
+		methods = []string{"GetTeams", "GetTeamFromName", "FindChildByName"},
 	)
 }
 
@@ -195,7 +190,7 @@ Register_Team_Class :: proc(registry: ^classes.Registry) {
 		team_destroy,
 		get = team_get,
 		set = team_set,
-		properties = []string{
+		properties = []string {
 			"TeamColor",
 			"AutoAssignable",
 			"Neutral",

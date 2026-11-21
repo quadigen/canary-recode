@@ -1,4 +1,4 @@
-#include "kne.h"
+#include "kne_plugin.h"
 
 #include <string.h>
 
@@ -7,12 +7,13 @@
 static const kne_host *g_host = NULL;
 
 static int32_t KNE_CALL calculate(kne_extension ext, kne_vm vm) {
-	const kne_vm_api *api = g_host->vm;
-	if (api == NULL) {
-		return 0;
-	}
-	api->push_number(vm, api->get_number(vm, 1) + api->get_number(vm, 2));
-	return 1;
+    kne_plugin plugin = kne_make_plugin(g_host, ext);
+    kne_value a, b;
+    if (!kne_get_argument(plugin, vm, 1, &a) || !kne_get_argument(plugin, vm, 2, &b)) return 0;
+    if (a.kind != KNE_VALUE_NUMBER || b.kind != KNE_VALUE_NUMBER)
+        return kne_raise_error(plugin, vm, "Expected two numbers");
+    kne_push_result(plugin, vm, kne_value_number(a.data.number + b.data.number));
+    return 1;
 }
 
 static int32_t KNE_CALL greeting(kne_extension ext, kne_vm vm) {
@@ -61,20 +62,10 @@ static int32_t KNE_CALL apply_callback(kne_extension ext, kne_vm vm) {
 }
 
 static int32_t KNE_CALL on_load(kne_extension ext) {
-	const kne_vm_api *api = g_host->vm;
-
-	if (!g_host->callbacks || !g_host->datatypes) return 0;
-	if (api == NULL || api->register_library_function == NULL) {
-		return 0;
-	}
-	if (!api->register_library_function(ext, (kne_string)KS("HelloKNEC"), (kne_string)KS("ApplyCallback"), apply_callback)) return 0;
-	if (!api->register_library_function(ext, (kne_string)KS("HelloKNEC"), (kne_string)KS("Calculate"), calculate)) {
-		return 0;
-	}
-	if (!api->register_library_function(ext, (kne_string)KS("HelloKNEC"), (kne_string)KS("Greeting"), greeting)) {
-		return 0;
-	}
-	return 1;
+    kne_plugin plugin = kne_make_plugin(g_host, ext);
+    return kne_register_library_function(plugin, "HelloKNEC", "ApplyCallback", apply_callback)
+        && kne_register_library_function(plugin, "HelloKNEC", "Calculate", calculate)
+        && kne_register_library_function(plugin, "HelloKNEC", "Greeting", greeting);
 }
 
 static void KNE_CALL on_update(kne_extension ext, double delta_time) {

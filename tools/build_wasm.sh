@@ -22,7 +22,7 @@ if ! command -v emcc >/dev/null || ! command -v emcmake >/dev/null; then
     set -u
   fi
 fi
-for tool in odin emcc em++ emcmake cmake ninja npm python3; do
+for tool in odin emcc em++ emcmake em-config embuilder cmake ninja npm python3; do
   if ! command -v "$tool" >/dev/null; then
     echo "Missing $tool. For Emscripten, run: just wasm-setup" >&2
     exit 1
@@ -44,7 +44,7 @@ for dep in jolt vhacd recastnavigation; do
   fi
 done
 emcmake cmake -S "$repo/cmake/web-native" -B "$native" -G Ninja -DCMAKE_BUILD_TYPE=Release "${cmake_args[@]}"
-cmake --build "$native" --config Release --parallel "${KINE_WEB_JOBS:-4}"
+cmake --build "$native" --config Release --parallel "${KINE_WEB_JOBS:-4}" --target kine_luau JoltWrapper RecastWrapper
 
 emcc -r -Wl,--whole-archive "$lib/libkine_luau.a" -Wl,--no-whole-archive \
   "$native/luau/libLuau.VM.a" "$native/luau/libLuau.Compiler.a" \
@@ -60,12 +60,23 @@ for source in luacode_link lualib_link lexer_link webview_link web_allocator; do
   emcc -c "$repo/cmake/web-native/$source.c" -o "$lib/$name.o"
 done
 
-# A tiny link initializes a fresh Emscripten sysroot and its system libraries.
-printf 'int main() { return 0; }\n' > "$native/prime.cpp"
-em++ "$native/prime.cpp" -o "$native/prime.js"
+# Build the exact JS-exception runtime variants used by the custom host.
+version="$(emcc --version)"
+if [[ ! "$version" =~ ([0-9]+)\.[0-9]+\.[0-9]+ ]]; then
+  echo "Could not determine Emscripten version" >&2
+  exit 1
+fi
+runtime_names=(libc++ libc++abi libc)
+if (( BASH_REMATCH[1] >= 7 )); then
+  runtime_names+=(libemcc libclang_rt.builtins)
+else
+  runtime_names+=(libcompiler_rt)
+fi
+embuilder build "${runtime_names[@]}"
 cache_root="$(em-config CACHE)"
 syslib="$cache_root/sysroot/lib/wasm32-emscripten"
-for archive in libc++.a libc++abi.a libc.a libcompiler_rt.a; do
+for name in "${runtime_names[@]}"; do
+  archive="$name.a"
   if [[ ! -f "$syslib/$archive" ]]; then
     echo "Missing Emscripten runtime archive: $syslib/$archive" >&2
     exit 1
@@ -79,15 +90,18 @@ for symbol in setThrew _emscripten_tempret_set _emscripten_tempret_get __cxa_inc
 done
 for symbol in malloc free calloc realloc posix_memalign strcmp; do flags+=("--wrap=$symbol"); done
 # Linker flags use relative paths to avoid splitting repository paths with spaces.
-flags+=(build/web-native/lib/web_allocator.o build/web-native/lib/libc++.a build/web-native/lib/libc++abi.a build/web-native/lib/libc.a build/web-native/lib/libcompiler_rt.a)
+flags+=(build/web-native/lib/web_allocator.o)
+for name in "${runtime_names[@]}"; do flags+=("build/web-native/lib/$name.a"); done
 args=(build src -target:js_wasm32 -o:speed "-define:BUILD_TARGET=$target" "-out:$output/kinemium_engine.wasm" "-extra-linker-flags:${flags[*]}")
 modules="${KINEMIUM_EDITOR_MODULES:-$repo/../kinemium-editor/internal}"
 if [[ "$target" == editor && -d "$modules" ]]; then
   modules="$(cd "$modules" && pwd)"
-  args+=("-define:EDITOR_MODULES=$modules")
-  [[ ! -d "$modules/Components" ]] || args+=("-define:EDITOR_COMPONENTS=$modules/Components")
+  package="$repo/build/web-native/editor-modules.kemp"
+  python3 "$repo/tools/pack_editor_modules.py" "$modules" "$package"
+  args+=("-define:EDITOR_PACKAGE=$package")
 elif [[ "$target" == editor ]]; then
-  echo "No kinemium-editor checkout found; building without embedded editor UI."
+  echo "Editor modules not found at $modules. Set KINEMIUM_EDITOR_MODULES or clone kinemium-editor next to this repository." >&2
+  exit 1
 fi
 [[ -z "$address" ]] || args+=("-define:KINE_ADDRESS=$address")
 [[ -z "$port" ]] || args+=("-define:KINE_PORT=$port")

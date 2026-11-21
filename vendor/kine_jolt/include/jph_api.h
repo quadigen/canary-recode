@@ -616,6 +616,7 @@ JPH_API void JPH_Body_SetFriction(JPH_BodyRef body, float friction);
 
 JPH_API void JPH_MotionProperties_ScaleToMass(JPH_MotionPropertiesRef motionProperties, float mass);
 
+JPH_API void JPH_ContactListener_SetExcludedPairs(JPH_ContactListenerRef listener, JPH_BodyInterfaceRef interface, const JPH_BodyID *pairs, uint32_t count);
 JPH_API JPH_ContactListenerRef JPH_ContactListener_Create(void);
 JPH_API void JPH_ContactListener_Destroy(JPH_ContactListenerRef listener);
 JPH_API uint32_t JPH_ContactListener_PollEvents(

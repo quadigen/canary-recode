@@ -1,6 +1,5 @@
 package services
 
-// wire:service
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -95,8 +94,7 @@ text_chat_service_construct :: proc(
 	service.max_message_bytes = 200
 	service.next_message_id = 1
 
-	// These are native channel records. The corresponding TextChannel
-	// instances must be created by the engine's Instance lifecycle bridge.
+
 	_ = TextChatService_Create_Channel(service, "RBXGeneral")
 	_ = TextChatService_Create_Channel(service, "RBXSystem")
 	return &service.object
@@ -211,7 +209,7 @@ TextChatService_Add_User :: proc(
 }
 
 TextChatService_Remove_User :: proc(service: ^TextChatService, user_id: i64) {
-	// Collect channel names first to avoid altering a map during iteration.
+
 	channels_to_remove: [dynamic]string
 	defer delete(channels_to_remove)
 	for _, channel in service.channels {
@@ -253,9 +251,7 @@ TextChatService_Create_Whisper :: proc(
 	return channel
 }
 
-// SERVER SIDE: validates sender and channel membership, checks recipient
-// permissions, and filters independently for every recipient. It never routes
-// raw unfiltered text through deliver_to_client.
+
 TextChatService_Send :: proc(
 	service: ^TextChatService,
 	channel: ^Chat_Channel,
@@ -314,8 +310,7 @@ TextChatService_Send :: proc(
 	return .Success
 }
 
-// CLIENT SIDE: invoke this only after receipt of a server-approved, filtered
-// message. Host callbacks should dispatch RBXScriptSignals and UI updates.
+
 TextChatService_Receive :: proc(service: ^TextChatService, message: Chat_Message) {
 	if message.status != .Success {return}
 	if service.hooks.message_received != nil {
@@ -326,15 +321,14 @@ TextChatService_Receive :: proc(service: ^TextChatService, message: Chat_Message
 	}
 }
 
-// CLIENT SIDE: call immediately after locally invoking TextChannel:SendAsync.
+
 TextChatService_Sending :: proc(service: ^TextChatService, message: Chat_Message) {
 	if service.hooks.sending_message != nil {
 		service.hooks.sending_message(service.hooks.ctx, message)
 	}
 }
 
-// CLIENT SIDE: Roblox-style local-only system messages must not be sent over
-// the network and must not be mistaken for filtered messages from a player.
+
 TextChatService_Display_System_Message :: proc(
 	service: ^TextChatService,
 	channel_name: string,
@@ -364,9 +358,7 @@ TextChatService_Display_Bubble :: proc(
 	return true
 }
 
-// Luau registration. Simple permission methods are connected here. Table-
-// returning APIs, Instance-typed arguments, properties, callbacks and
-// RBXScriptSignals need the corresponding VM helpers from your codebase.
+
 text_chat_service_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,

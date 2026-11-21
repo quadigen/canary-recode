@@ -12,7 +12,7 @@ Animator_Class := Class_Info {
 }
 Animator :: struct {
 	using object:       Object,
-	mesh_part:          ^Object, // weak MeshPart reference; nil means discover in ancestry
+	mesh_part:          ^Object,
 	native_animator:    ^kineffi.KineFilamentAnimator,
 	native_mesh:        ^kineffi.KineFilamentMesh,
 	native_context:     ^kineffi.KineFilamentContext,
@@ -163,11 +163,22 @@ animator_namecall :: proc(
 	switch method {
 	case "LoadAnimation":
 		return Animation_Load_Track(L, a, object_from_argument(L, 2))
+	case "GetTrackByAnimationId":
+		id := vm.ArgString(L, 2)
+		for t in a.tracks {
+			if t == nil || t.object.destroyed || t.native_track == nil {continue}
+			if Animation_Is_Live(object.signal_registry, "Animation", t.animation) &&
+			   (cast(^Animation)t.animation).animation_id == id {
+				Push_Object(L, &t.object)
+				return 1, true
+			}
+		}
+		vm.PushNil(L)
+		return 1, true
 	case "GetPlayingAnimationTracks":
 		Animation_Push_Track_Array(L, a)
 		return 1, true
 	case "StepAnimations":
-		// Manual stepping is mutually exclusive with the native render-frame autostep.
 		if !Animation_Animator_Ready(
 			a,
 		) {return vm.RaiseError(L, "Animator has no ready mesh"), true}
@@ -208,7 +219,12 @@ Register_Animator :: proc(registry: ^Registry) {
 		_step_phase = .Update,
 		clone = animator_clone,
 		properties = []string{"MeshPart", "EvaluationThrottled", "PreferLodEnabled"},
-		methods = []string{"LoadAnimation", "GetPlayingAnimationTracks", "StepAnimations"},
+		methods = []string {
+			"LoadAnimation",
+			"GetPlayingAnimationTracks",
+			"GetTrackByAnimationId",
+			"StepAnimations",
+		},
 		events = []string{"AnimationPlayed"},
 	)
 }

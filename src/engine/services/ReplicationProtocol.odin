@@ -1,6 +1,7 @@
 package services
 
 import "core:fmt"
+import "core:math"
 
 import assetstore "../assetstore"
 import classes "../classes"
@@ -18,7 +19,7 @@ replication_put_u64 :: proc(bytes: ^[dynamic]u8, value: u64) {
 
 replication_put_string :: proc(bytes: ^[dynamic]u8, value: string) {
 	replication_put_u32(bytes, u32(len(value)))
-	for byte in transmute([]u8)value {append(bytes, byte)}
+	append(bytes, ..transmute([]u8)value)
 }
 
 replication_put_f32 :: proc(bytes: ^[dynamic]u8, value: f32) {
@@ -43,10 +44,92 @@ replication_put_cframe :: proc(bytes: ^[dynamic]u8, frame: datatypes.CFrame) {
 	for value in values {replication_put_f64(bytes, value)}
 }
 
+
+replication_put_compact_f64s :: proc(bytes: ^[dynamic]u8, values: []f64) {
+	mask_offset := len(bytes^)
+	mask_size := (len(values) + 3) / 4
+	for _ in 0 ..< mask_size {append(bytes, 0)}
+	for value, i in values {
+		bits := transmute(u64)value
+		tag: u8
+		if bits == 0 {
+			tag = 0
+		} else if value == 1 {
+			tag = 1
+		} else if !math.is_nan(value) && f64(f32(value)) == value {
+			tag = 2
+			replication_put_f32(bytes, f32(value))
+		} else {
+			tag = 3
+			replication_put_f64(bytes, value)
+		}
+		bytes^[mask_offset + i / 4] |= tag << u8((i % 4) * 2)
+	}
+}
+
+replication_read_compact_f64s :: proc(reader: ^Replication_Reader, values: []f64) {
+	mask_size := (len(values) + 3) / 4
+	if !reader.valid || mask_size > len(reader.data) - reader.offset {
+		reader.valid = false
+		return
+	}
+	tags := reader.data[reader.offset:reader.offset + mask_size]
+	reader.offset += mask_size
+	for &value, i in values {
+		tag := (tags[i / 4] >> u8((i % 4) * 2)) & 3
+		switch tag {
+		case 0:
+			value = 0
+		case 1:
+			value = 1
+		case 2:
+			value = f64(replication_read_f32(reader))
+		case 3:
+			value = replication_read_f64(reader)
+		}
+	}
+}
+
+replication_frame_values :: proc(frame: datatypes.CFrame) -> [12]f64 {
+	return {
+		frame.x,
+		frame.y,
+		frame.z,
+		frame.r00,
+		frame.r01,
+		frame.r02,
+		frame.r10,
+		frame.r11,
+		frame.r12,
+		frame.r20,
+		frame.r21,
+		frame.r22,
+	}
+}
+
+replication_frame_from_values :: proc(values: []f64) -> datatypes.CFrame {
+	return {
+		x = values[0],
+		y = values[1],
+		z = values[2],
+		r00 = values[3],
+		r01 = values[4],
+		r02 = values[5],
+		r10 = values[6],
+		r11 = values[7],
+		r12 = values[8],
+		r20 = values[9],
+		r21 = values[10],
+		r22 = values[11],
+	}
+}
+
 Replication_Reader :: struct {
-	data:   []u8,
-	offset: int,
-	valid:  bool,
+	data:         []u8,
+	offset:       int,
+	valid:        bool,
+	capabilities: u32,
+	peer:         ^Replication_Transport_Peer,
 }
 
 replication_read_u8 :: proc(reader: ^Replication_Reader) -> u8 {
@@ -223,6 +306,7 @@ decode_terrain_batch :: proc(
 
 	reserve := int(count)
 	cells = make([dynamic]Terrain_Cell_Record, 0, reserve)
+	defer if !ok {delete(cells); cells = nil}
 	for _ in 0 ..< int(count) {
 		cell: Terrain_Cell_Record
 		cell.x = replication_read_i32(reader)
@@ -424,12 +508,28 @@ replication_encode_value :: proc(
 	case .Boolean:
 		append(bytes, vm.ArgBoolean(L, index) ? u8(2) : u8(1))
 	case .Number, .Integer:
+		value := vm.ArgNumber(L, index)
+		if (remote_capabilities & Replication_Capability_Compact_Values) != 0 {
+			if value >= -128 &&
+			   value <= 127 &&
+			   f64(i8(value)) == value &&
+			   transmute(u64)value != 0x8000000000000000 {
+				append(bytes, 22, transmute(u8)i8(value))
+				return true
+			}
+			if !math.is_nan(value) && f64(f32(value)) == value {
+				append(bytes, 23)
+				replication_put_f32(bytes, f32(value))
+				return true
+			}
+		}
 		append(bytes, 3)
-		bits := transmute(u64)vm.ArgNumber(L, index)
+		bits := transmute(u64)value
 		for shift := 0; shift < 64; shift += 8 {append(bytes, u8(bits >> u64(shift)))}
 	case .String:
 		append(bytes, 4)
 		value, _ := vm.ToString(L, index)
+		if len(value) > int(Replication_Max_Frame_Payload) - len(bytes^) - 4 {return false}
 		replication_put_string(bytes, value)
 	case .Buffer:
 		if (remote_capabilities & Replication_Capability_Buffer) == 0 {return false}
@@ -453,6 +553,11 @@ replication_encode_value :: proc(
 				vm.Pop(L)
 				vm.Pop(L)
 				return false
+			}
+			if vm.IsNumber(L, -2) && vm.TypeOf(L, -2) != .String {
+				key := vm.ArgNumber(L, -2)
+				if !(key >= 1 && key <= 65535) ||
+				   f64(i64(key)) != key {vm.Pop(L); vm.Pop(L); return false}
 			}
 			if !replication_encode_value(
 				   L,
@@ -654,7 +759,10 @@ replication_decode_value :: proc(
 		vm.PushString(L, replication_read_string(reader))
 	case 5:
 		count := replication_read_u32(reader)
-		if count > 256 {reader.valid = false; vm.PushNil(L); return}
+		if !reader.valid ||
+		   count > 256 ||
+		   int(count) > (len(reader.data) - reader.offset) / 2 ||
+		   !vm.CheckStack(L, 32) {reader.valid = false; vm.PushNil(L); return}
 		vm.NewTable(L, 0, int(count))
 		for _ in 0 ..< int(count) {
 			replication_decode_value(L, reader, datatype_registry, depth + 1, service)
@@ -666,7 +774,9 @@ replication_decode_value :: proc(
 				vm.SetField(L, -4, key)
 			} else if vm.IsNumber(L, -2) {
 				key, valid := vm.ToNumber(L, -2)
-				if !valid || key < 1 || key > 65535 || f64(i64(key)) != key {reader.valid = false}
+				if !valid ||
+				   !(key >= 1 && key <= 65535) ||
+				   f64(i64(key)) != key {reader.valid = false}
 				if reader.valid {
 					vm.PushValue(L, -1)
 					vm.RawSetIndex(L, -4, int(key))
@@ -798,8 +908,16 @@ replication_decode_value :: proc(
 	case 17:
 		id := replication_read_u32(reader)
 		entity := replication_entity_by_id(service, id)
-		if entity == nil || entity.object == nil {
+		if entity == nil || entity.object == nil || entity.object.destroyed {
 			reader.valid = false; vm.PushNil(L); return
+		}
+		if service != nil && service.mode == .Server && reader.peer != nil {
+			connection := replication_peer_of(service, reader.peer)
+			if connection == nil ||
+			   connection.known[id] == 0 ||
+			   !replication_visible(service, connection, entity.object) {
+				reader.valid = false; vm.PushNil(L); return
+			}
 		}
 		classes.Push_Object(L, entity.object)
 	case 18:
@@ -847,6 +965,11 @@ replication_decode_value :: proc(
 			player = Players_Find_By_User_Id(players, id)
 		}
 		classes.Push_Object(L, &player.object if player != nil else nil)
+	case 22, 23:
+		if (reader.capabilities & Replication_Capability_Compact_Values) ==
+		   0 {reader.valid = false; vm.PushNil(L); return}
+		if tag ==
+		   22 {vm.PushNumber(L, f64(transmute(i8)replication_read_u8(reader)))} else {vm.PushNumber(L, f64(replication_read_f32(reader)))}
 	case 21:
 		size := replication_read_u32(reader)
 		if !reader.valid ||
@@ -866,8 +989,8 @@ replication_decode_value :: proc(
 
 
 replication_put_f64 :: proc(bytes: ^[dynamic]u8, value: f64) {
- replication_put_u64(bytes, transmute(u64)value)
+	replication_put_u64(bytes, transmute(u64)value)
 }
 replication_read_f64 :: proc(reader: ^Replication_Reader) -> f64 {
- return transmute(f64)replication_read_u64(reader)
+	return transmute(f64)replication_read_u64(reader)
 }

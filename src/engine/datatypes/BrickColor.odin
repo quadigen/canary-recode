@@ -1,71 +1,404 @@
 package datatypes
 
+import "core:strings"
+
 BrickColor :: struct {
 	number: i32,
 	color:  Color3,
 	name:   string,
 }
 
-BrickColor_White :: BrickColor{1, Color3{0.9725, 0.9725, 0.9725}, "White"}
-BrickColor_Black :: BrickColor{26, Color3{0.1059, 0.1647, 0.2078}, "Black"}
-BrickColor_Red :: BrickColor{21, Color3{0.7686, 0.1569, 0.1098}, "Bright red"}
-BrickColor_Blue :: BrickColor{23, Color3{0.05098, 0.4118, 0.6745}, "Bright blue"}
-BrickColor_Green :: BrickColor{37, Color3{0.1961, 0.5882, 0.3373}, "Bright green"}
-BrickColor_Gray :: BrickColor{194, Color3{0.6314, 0.6353, 0.6471}, "Medium stone grey"}
+
+BrickColor_White :: BrickColor{1, Color3{242.0 / 255, 243.0 / 255, 243.0 / 255}, "White"}
+BrickColor_Black :: BrickColor{26, Color3{27.0 / 255, 42.0 / 255, 53.0 / 255}, "Black"}
+BrickColor_Red :: BrickColor{21, Color3{196.0 / 255, 40.0 / 255, 28.0 / 255}, "Bright red"}
+BrickColor_Blue :: BrickColor{23, Color3{13.0 / 255, 105.0 / 255, 172.0 / 255}, "Bright blue"}
+BrickColor_Dark_Green :: BrickColor{28, Color3{40.0 / 255, 127.0 / 255, 71.0 / 255}, "Dark green"}
+BrickColor_Green :: BrickColor{37, Color3{75.0 / 255, 151.0 / 255, 75.0 / 255}, "Bright green"}
+BrickColor_Gray :: BrickColor {
+	194,
+	Color3{163.0 / 255, 162.0 / 255, 165.0 / 255},
+	"Medium stone grey",
+}
+BrickColor_DarkGray :: BrickColor {
+	199,
+	Color3{99.0 / 255, 95.0 / 255, 98.0 / 255},
+	"Dark stone grey",
+}
+BrickColor_Yellow :: BrickColor{24, Color3{245.0 / 255, 205.0 / 255, 48.0 / 255}, "Bright yellow"}
 BrickColor_Lemon_Metalic :: BrickColor {
 	200,
 	Color3{130.0 / 255, 138.0 / 255, 93.0 / 255},
 	"Lemon metalic",
 }
 
+BrickColor_Bright_Green :: BrickColor_Green
+
+brick_color_catalog := [?]BrickColor {
+	{1, Color3{242.0 / 255, 243.0 / 255, 243.0 / 255}, "White"},
+	{2, Color3{161.0 / 255, 165.0 / 255, 162.0 / 255}, "Grey"},
+	{3, Color3{249.0 / 255, 233.0 / 255, 153.0 / 255}, "Light yellow"},
+	{5, Color3{215.0 / 255, 197.0 / 255, 154.0 / 255}, "Brick yellow"},
+	{6, Color3{194.0 / 255, 218.0 / 255, 184.0 / 255}, "Light green (Mint)"},
+	{9, Color3{232.0 / 255, 186.0 / 255, 200.0 / 255}, "Light reddish violet"},
+	{11, Color3{128.0 / 255, 187.0 / 255, 219.0 / 255}, "Pastel Blue"},
+	{12, Color3{203.0 / 255, 132.0 / 255, 66.0 / 255}, "Light orange brown"},
+	{18, Color3{204.0 / 255, 142.0 / 255, 105.0 / 255}, "Nougat"},
+	{21, Color3{196.0 / 255, 40.0 / 255, 28.0 / 255}, "Bright red"},
+	{22, Color3{196.0 / 255, 112.0 / 255, 160.0 / 255}, "Med. reddish violet"},
+	{23, Color3{13.0 / 255, 105.0 / 255, 172.0 / 255}, "Bright blue"},
+	{24, Color3{245.0 / 255, 205.0 / 255, 48.0 / 255}, "Bright yellow"},
+	{25, Color3{98.0 / 255, 71.0 / 255, 50.0 / 255}, "Earth orange"},
+	{26, Color3{27.0 / 255, 42.0 / 255, 53.0 / 255}, "Black"},
+	{27, Color3{109.0 / 255, 110.0 / 255, 108.0 / 255}, "Dark grey"},
+	{28, Color3{40.0 / 255, 127.0 / 255, 71.0 / 255}, "Dark green"},
+	{29, Color3{161.0 / 255, 196.0 / 255, 140.0 / 255}, "Medium green"},
+	{36, Color3{243.0 / 255, 207.0 / 255, 155.0 / 255}, "Lig. Yellowich orange"},
+	{37, Color3{75.0 / 255, 151.0 / 255, 75.0 / 255}, "Bright green"},
+	{38, Color3{160.0 / 255, 95.0 / 255, 53.0 / 255}, "Dark orange"},
+	{39, Color3{193.0 / 255, 202.0 / 255, 222.0 / 255}, "Light bluish violet"},
+	{40, Color3{236.0 / 255, 236.0 / 255, 236.0 / 255}, "Transparent"},
+	{41, Color3{205.0 / 255, 84.0 / 255, 75.0 / 255}, "Tr. Red"},
+	{42, Color3{193.0 / 255, 223.0 / 255, 240.0 / 255}, "Tr. Lg blue"},
+	{43, Color3{123.0 / 255, 182.0 / 255, 232.0 / 255}, "Tr. Blue"},
+	{44, Color3{247.0 / 255, 241.0 / 255, 141.0 / 255}, "Tr. Yellow"},
+	{45, Color3{180.0 / 255, 210.0 / 255, 228.0 / 255}, "Light blue"},
+	{47, Color3{217.0 / 255, 133.0 / 255, 108.0 / 255}, "Tr. Flu. Reddish orange"},
+	{48, Color3{132.0 / 255, 182.0 / 255, 141.0 / 255}, "Tr. Green"},
+	{49, Color3{248.0 / 255, 241.0 / 255, 132.0 / 255}, "Tr. Flu. Green"},
+	{50, Color3{236.0 / 255, 232.0 / 255, 222.0 / 255}, "Phosph. White"},
+	{100, Color3{238.0 / 255, 196.0 / 255, 182.0 / 255}, "Light red"},
+	{101, Color3{218.0 / 255, 134.0 / 255, 122.0 / 255}, "Medium red"},
+	{102, Color3{110.0 / 255, 153.0 / 255, 202.0 / 255}, "Medium blue"},
+	{103, Color3{199.0 / 255, 193.0 / 255, 183.0 / 255}, "Light grey"},
+	{104, Color3{107.0 / 255, 50.0 / 255, 124.0 / 255}, "Bright violet"},
+	{105, Color3{226.0 / 255, 155.0 / 255, 64.0 / 255}, "Br. yellowish orange"},
+	{106, Color3{218.0 / 255, 133.0 / 255, 65.0 / 255}, "Bright orange"},
+	{107, Color3{0.0 / 255, 143.0 / 255, 156.0 / 255}, "Bright bluish green"},
+	{108, Color3{104.0 / 255, 92.0 / 255, 67.0 / 255}, "Earth yellow"},
+	{110, Color3{67.0 / 255, 84.0 / 255, 147.0 / 255}, "Bright bluish violet"},
+	{111, Color3{191.0 / 255, 183.0 / 255, 177.0 / 255}, "Tr. Brown"},
+	{112, Color3{104.0 / 255, 116.0 / 255, 172.0 / 255}, "Medium bluish violet"},
+	{113, Color3{229.0 / 255, 173.0 / 255, 200.0 / 255}, "Tr. Medi. reddish violet"},
+	{115, Color3{199.0 / 255, 210.0 / 255, 60.0 / 255}, "Med. yellowish green"},
+	{116, Color3{85.0 / 255, 165.0 / 255, 175.0 / 255}, "Med. bluish green"},
+	{118, Color3{183.0 / 255, 215.0 / 255, 213.0 / 255}, "Light bluish green"},
+	{119, Color3{164.0 / 255, 189.0 / 255, 71.0 / 255}, "Br. yellowish green"},
+	{120, Color3{217.0 / 255, 228.0 / 255, 167.0 / 255}, "Lig. yellowish green"},
+	{121, Color3{231.0 / 255, 172.0 / 255, 88.0 / 255}, "Med. yellowish orange"},
+	{123, Color3{211.0 / 255, 111.0 / 255, 76.0 / 255}, "Br. reddish orange"},
+	{124, Color3{146.0 / 255, 57.0 / 255, 120.0 / 255}, "Bright reddish violet"},
+	{125, Color3{234.0 / 255, 184.0 / 255, 146.0 / 255}, "Light orange"},
+	{126, Color3{165.0 / 255, 165.0 / 255, 203.0 / 255}, "Tr. Bright bluish violet"},
+	{127, Color3{220.0 / 255, 188.0 / 255, 129.0 / 255}, "Gold"},
+	{128, Color3{174.0 / 255, 122.0 / 255, 89.0 / 255}, "Dark nougat"},
+	{131, Color3{156.0 / 255, 163.0 / 255, 168.0 / 255}, "Silver"},
+	{133, Color3{213.0 / 255, 115.0 / 255, 61.0 / 255}, "Neon orange"},
+	{134, Color3{216.0 / 255, 221.0 / 255, 86.0 / 255}, "Neon green"},
+	{135, Color3{116.0 / 255, 134.0 / 255, 157.0 / 255}, "Sand blue"},
+	{136, Color3{135.0 / 255, 124.0 / 255, 144.0 / 255}, "Sand violet"},
+	{137, Color3{224.0 / 255, 152.0 / 255, 100.0 / 255}, "Medium orange"},
+	{138, Color3{149.0 / 255, 138.0 / 255, 115.0 / 255}, "Sand yellow"},
+	{140, Color3{32.0 / 255, 58.0 / 255, 86.0 / 255}, "Earth blue"},
+	{141, Color3{39.0 / 255, 70.0 / 255, 45.0 / 255}, "Earth green"},
+	{143, Color3{207.0 / 255, 226.0 / 255, 247.0 / 255}, "Tr. Flu. Blue"},
+	{145, Color3{121.0 / 255, 136.0 / 255, 161.0 / 255}, "Sand blue metallic"},
+	{146, Color3{149.0 / 255, 142.0 / 255, 163.0 / 255}, "Sand violet metallic"},
+	{147, Color3{147.0 / 255, 135.0 / 255, 103.0 / 255}, "Sand yellow metallic"},
+	{148, Color3{87.0 / 255, 88.0 / 255, 87.0 / 255}, "Dark grey metallic"},
+	{149, Color3{22.0 / 255, 29.0 / 255, 50.0 / 255}, "Black metallic"},
+	{150, Color3{171.0 / 255, 173.0 / 255, 172.0 / 255}, "Light grey metallic"},
+	{151, Color3{120.0 / 255, 144.0 / 255, 130.0 / 255}, "Sand green"},
+	{153, Color3{149.0 / 255, 121.0 / 255, 119.0 / 255}, "Sand red"},
+	{154, Color3{123.0 / 255, 46.0 / 255, 47.0 / 255}, "Dark red"},
+	{157, Color3{255.0 / 255, 246.0 / 255, 123.0 / 255}, "Tr. Flu. Yellow"},
+	{158, Color3{225.0 / 255, 164.0 / 255, 194.0 / 255}, "Tr. Flu. Red"},
+	{168, Color3{117.0 / 255, 108.0 / 255, 98.0 / 255}, "Gun metallic"},
+	{176, Color3{151.0 / 255, 105.0 / 255, 91.0 / 255}, "Red flip/flop"},
+	{178, Color3{180.0 / 255, 132.0 / 255, 85.0 / 255}, "Yellow flip/flop"},
+	{179, Color3{137.0 / 255, 135.0 / 255, 136.0 / 255}, "Silver flip/flop"},
+	{180, Color3{215.0 / 255, 169.0 / 255, 75.0 / 255}, "Curry"},
+	{190, Color3{249.0 / 255, 214.0 / 255, 46.0 / 255}, "Fire Yellow"},
+	{191, Color3{232.0 / 255, 171.0 / 255, 45.0 / 255}, "Flame yellowish orange"},
+	{192, Color3{105.0 / 255, 64.0 / 255, 40.0 / 255}, "Reddish brown"},
+	{193, Color3{207.0 / 255, 96.0 / 255, 36.0 / 255}, "Flame reddish orange"},
+	{194, Color3{163.0 / 255, 162.0 / 255, 165.0 / 255}, "Medium stone grey"},
+	{195, Color3{70.0 / 255, 103.0 / 255, 164.0 / 255}, "Royal blue"},
+	{196, Color3{35.0 / 255, 71.0 / 255, 139.0 / 255}, "Dark Royal blue"},
+	{198, Color3{142.0 / 255, 66.0 / 255, 133.0 / 255}, "Bright reddish lilac"},
+	{199, Color3{99.0 / 255, 95.0 / 255, 98.0 / 255}, "Dark stone grey"},
+	{200, Color3{130.0 / 255, 138.0 / 255, 93.0 / 255}, "Lemon metalic"},
+	{208, Color3{229.0 / 255, 228.0 / 255, 223.0 / 255}, "Light stone grey"},
+	{209, Color3{176.0 / 255, 142.0 / 255, 68.0 / 255}, "Dark Curry"},
+	{210, Color3{112.0 / 255, 149.0 / 255, 120.0 / 255}, "Faded green"},
+	{211, Color3{121.0 / 255, 181.0 / 255, 181.0 / 255}, "Turquoise"},
+	{212, Color3{159.0 / 255, 195.0 / 255, 233.0 / 255}, "Light Royal blue"},
+	{213, Color3{108.0 / 255, 129.0 / 255, 183.0 / 255}, "Medium Royal blue"},
+	{216, Color3{144.0 / 255, 76.0 / 255, 42.0 / 255}, "Rust"},
+	{217, Color3{124.0 / 255, 92.0 / 255, 70.0 / 255}, "Brown"},
+	{218, Color3{150.0 / 255, 112.0 / 255, 159.0 / 255}, "Reddish lilac"},
+	{219, Color3{107.0 / 255, 98.0 / 255, 155.0 / 255}, "Lilac"},
+	{220, Color3{167.0 / 255, 169.0 / 255, 206.0 / 255}, "Light lilac"},
+	{221, Color3{205.0 / 255, 98.0 / 255, 152.0 / 255}, "Bright purple"},
+	{222, Color3{228.0 / 255, 173.0 / 255, 200.0 / 255}, "Light purple"},
+	{223, Color3{220.0 / 255, 144.0 / 255, 149.0 / 255}, "Light pink"},
+	{224, Color3{240.0 / 255, 213.0 / 255, 160.0 / 255}, "Light brick yellow"},
+	{225, Color3{235.0 / 255, 184.0 / 255, 127.0 / 255}, "Warm yellowish orange"},
+	{226, Color3{253.0 / 255, 234.0 / 255, 141.0 / 255}, "Cool yellow"},
+	{232, Color3{125.0 / 255, 187.0 / 255, 221.0 / 255}, "Dove blue"},
+	{268, Color3{52.0 / 255, 43.0 / 255, 117.0 / 255}, "Medium lilac"},
+	{301, Color3{80.0 / 255, 109.0 / 255, 84.0 / 255}, "Slime green"},
+	{302, Color3{91.0 / 255, 93.0 / 255, 105.0 / 255}, "Smoky grey"},
+	{303, Color3{0.0 / 255, 16.0 / 255, 176.0 / 255}, "Dark blue"},
+	{304, Color3{44.0 / 255, 101.0 / 255, 29.0 / 255}, "Parsley green"},
+	{305, Color3{82.0 / 255, 124.0 / 255, 174.0 / 255}, "Steel blue"},
+	{306, Color3{51.0 / 255, 88.0 / 255, 130.0 / 255}, "Storm blue"},
+	{307, Color3{16.0 / 255, 42.0 / 255, 220.0 / 255}, "Lapis"},
+	{308, Color3{61.0 / 255, 21.0 / 255, 133.0 / 255}, "Dark indigo"},
+	{309, Color3{52.0 / 255, 142.0 / 255, 64.0 / 255}, "Sea green"},
+	{310, Color3{91.0 / 255, 154.0 / 255, 76.0 / 255}, "Shamrock"},
+	{311, Color3{159.0 / 255, 161.0 / 255, 172.0 / 255}, "Fossil"},
+	{312, Color3{89.0 / 255, 34.0 / 255, 89.0 / 255}, "Mulberry"},
+	{313, Color3{31.0 / 255, 128.0 / 255, 29.0 / 255}, "Forest green"},
+	{314, Color3{159.0 / 255, 173.0 / 255, 192.0 / 255}, "Cadet blue"},
+	{315, Color3{9.0 / 255, 137.0 / 255, 207.0 / 255}, "Electric blue"},
+	{316, Color3{123.0 / 255, 0.0 / 255, 123.0 / 255}, "Eggplant"},
+	{317, Color3{124.0 / 255, 156.0 / 255, 107.0 / 255}, "Moss"},
+	{318, Color3{138.0 / 255, 171.0 / 255, 133.0 / 255}, "Artichoke"},
+	{319, Color3{185.0 / 255, 196.0 / 255, 177.0 / 255}, "Sage green"},
+	{320, Color3{202.0 / 255, 203.0 / 255, 209.0 / 255}, "Ghost grey"},
+	{321, Color3{167.0 / 255, 94.0 / 255, 155.0 / 255}, "Lilac"},
+	{322, Color3{123.0 / 255, 47.0 / 255, 123.0 / 255}, "Plum"},
+	{323, Color3{148.0 / 255, 190.0 / 255, 129.0 / 255}, "Olivine"},
+	{324, Color3{168.0 / 255, 189.0 / 255, 153.0 / 255}, "Laurel green"},
+	{325, Color3{223.0 / 255, 223.0 / 255, 222.0 / 255}, "Quill grey"},
+	{327, Color3{151.0 / 255, 0.0 / 255, 0.0 / 255}, "Crimson"},
+	{328, Color3{177.0 / 255, 229.0 / 255, 166.0 / 255}, "Mint"},
+	{329, Color3{152.0 / 255, 194.0 / 255, 219.0 / 255}, "Baby blue"},
+	{330, Color3{255.0 / 255, 152.0 / 255, 220.0 / 255}, "Carnation pink"},
+	{331, Color3{255.0 / 255, 89.0 / 255, 89.0 / 255}, "Persimmon"},
+	{332, Color3{117.0 / 255, 0.0 / 255, 0.0 / 255}, "Maroon"},
+	{333, Color3{239.0 / 255, 184.0 / 255, 56.0 / 255}, "Gold"},
+	{334, Color3{248.0 / 255, 217.0 / 255, 109.0 / 255}, "Daisy orange"},
+	{335, Color3{231.0 / 255, 231.0 / 255, 236.0 / 255}, "Pearl"},
+	{336, Color3{199.0 / 255, 212.0 / 255, 228.0 / 255}, "Fog"},
+	{337, Color3{255.0 / 255, 148.0 / 255, 148.0 / 255}, "Salmon"},
+	{338, Color3{190.0 / 255, 104.0 / 255, 98.0 / 255}, "Terra Cotta"},
+	{339, Color3{86.0 / 255, 36.0 / 255, 36.0 / 255}, "Cocoa"},
+	{340, Color3{241.0 / 255, 231.0 / 255, 199.0 / 255}, "Wheat"},
+	{341, Color3{254.0 / 255, 243.0 / 255, 187.0 / 255}, "Buttermilk"},
+	{342, Color3{224.0 / 255, 178.0 / 255, 208.0 / 255}, "Mauve"},
+	{343, Color3{212.0 / 255, 144.0 / 255, 189.0 / 255}, "Sunrise"},
+	{344, Color3{150.0 / 255, 85.0 / 255, 85.0 / 255}, "Tawny"},
+	{345, Color3{143.0 / 255, 76.0 / 255, 42.0 / 255}, "Rust"},
+	{346, Color3{211.0 / 255, 190.0 / 255, 150.0 / 255}, "Cashmere"},
+	{347, Color3{226.0 / 255, 220.0 / 255, 188.0 / 255}, "Khaki"},
+	{348, Color3{237.0 / 255, 234.0 / 255, 234.0 / 255}, "Lily white"},
+	{349, Color3{233.0 / 255, 218.0 / 255, 218.0 / 255}, "Seashell"},
+	{350, Color3{136.0 / 255, 62.0 / 255, 62.0 / 255}, "Burgundy"},
+	{351, Color3{188.0 / 255, 155.0 / 255, 93.0 / 255}, "Cork"},
+	{352, Color3{199.0 / 255, 172.0 / 255, 120.0 / 255}, "Burlap"},
+	{353, Color3{202.0 / 255, 191.0 / 255, 163.0 / 255}, "Beige"},
+	{354, Color3{187.0 / 255, 179.0 / 255, 178.0 / 255}, "Oyster"},
+	{355, Color3{108.0 / 255, 88.0 / 255, 75.0 / 255}, "Pine Cone"},
+	{356, Color3{160.0 / 255, 132.0 / 255, 79.0 / 255}, "Fawn brown"},
+	{357, Color3{149.0 / 255, 137.0 / 255, 136.0 / 255}, "Hurricane grey"},
+	{358, Color3{171.0 / 255, 168.0 / 255, 158.0 / 255}, "Cloudy grey"},
+	{359, Color3{175.0 / 255, 148.0 / 255, 131.0 / 255}, "Linen"},
+	{360, Color3{150.0 / 255, 103.0 / 255, 102.0 / 255}, "Copper"},
+	{361, Color3{86.0 / 255, 66.0 / 255, 54.0 / 255}, "Medium brown"},
+	{362, Color3{126.0 / 255, 104.0 / 255, 63.0 / 255}, "Bronze"},
+	{363, Color3{105.0 / 255, 102.0 / 255, 92.0 / 255}, "Flint"},
+	{364, Color3{90.0 / 255, 76.0 / 255, 66.0 / 255}, "Dark taupe"},
+	{365, Color3{106.0 / 255, 57.0 / 255, 9.0 / 255}, "Burnt Sienna"},
+	{1001, Color3{248.0 / 255, 248.0 / 255, 248.0 / 255}, "Institutional white"},
+	{1002, Color3{205.0 / 255, 205.0 / 255, 205.0 / 255}, "Mid gray"},
+	{1003, Color3{17.0 / 255, 17.0 / 255, 17.0 / 255}, "Really black"},
+	{1004, Color3{255.0 / 255, 0.0 / 255, 0.0 / 255}, "Really red"},
+	{1005, Color3{255.0 / 255, 176.0 / 255, 0.0 / 255}, "Deep orange"},
+	{1006, Color3{180.0 / 255, 128.0 / 255, 255.0 / 255}, "Alder"},
+	{1007, Color3{163.0 / 255, 75.0 / 255, 75.0 / 255}, "Dusty Rose"},
+	{1008, Color3{193.0 / 255, 190.0 / 255, 66.0 / 255}, "Olive"},
+	{1009, Color3{255.0 / 255, 255.0 / 255, 0.0 / 255}, "New Yeller"},
+	{1010, Color3{0.0 / 255, 0.0 / 255, 255.0 / 255}, "Really blue"},
+	{1011, Color3{0.0 / 255, 32.0 / 255, 96.0 / 255}, "Navy blue"},
+	{1012, Color3{33.0 / 255, 84.0 / 255, 185.0 / 255}, "Deep blue"},
+	{1013, Color3{4.0 / 255, 175.0 / 255, 236.0 / 255}, "Cyan"},
+	{1014, Color3{170.0 / 255, 85.0 / 255, 0.0 / 255}, "CGA brown"},
+	{1015, Color3{170.0 / 255, 0.0 / 255, 170.0 / 255}, "Magenta"},
+	{1016, Color3{255.0 / 255, 102.0 / 255, 204.0 / 255}, "Pink"},
+	{1017, Color3{255.0 / 255, 175.0 / 255, 0.0 / 255}, "Deep orange"},
+	{1018, Color3{18.0 / 255, 238.0 / 255, 212.0 / 255}, "Teal"},
+	{1019, Color3{0.0 / 255, 255.0 / 255, 255.0 / 255}, "Toothpaste"},
+	{1020, Color3{0.0 / 255, 255.0 / 255, 0.0 / 255}, "Lime green"},
+	{1021, Color3{58.0 / 255, 125.0 / 255, 21.0 / 255}, "Camo"},
+	{1022, Color3{127.0 / 255, 142.0 / 255, 100.0 / 255}, "Grime"},
+	{1023, Color3{140.0 / 255, 91.0 / 255, 159.0 / 255}, "Lavender"},
+	{1024, Color3{175.0 / 255, 221.0 / 255, 255.0 / 255}, "Pastel light blue"},
+	{1025, Color3{255.0 / 255, 201.0 / 255, 201.0 / 255}, "Pastel orange"},
+	{1026, Color3{177.0 / 255, 167.0 / 255, 255.0 / 255}, "Pastel violet"},
+	{1027, Color3{159.0 / 255, 243.0 / 255, 233.0 / 255}, "Pastel blue-green"},
+	{1028, Color3{204.0 / 255, 255.0 / 255, 204.0 / 255}, "Pastel green"},
+	{1029, Color3{255.0 / 255, 255.0 / 255, 204.0 / 255}, "Pastel yellow"},
+	{1030, Color3{255.0 / 255, 204.0 / 255, 153.0 / 255}, "Pastel brown"},
+	{1031, Color3{98.0 / 255, 37.0 / 255, 209.0 / 255}, "Royal purple"},
+	{1032, Color3{255.0 / 255, 0.0 / 255, 191.0 / 255}, "Hot pink"},
+}
+
+brick_color_palette_ids := [128]i32 {
+	141,
+	301,
+	107,
+	26,
+	1012,
+	303,
+	1011,
+	304,
+	28,
+	1018,
+	302,
+	305,
+	306,
+	307,
+	308,
+	1021,
+	309,
+	310,
+	1019,
+	135,
+	102,
+	23,
+	1010,
+	312,
+	313,
+	37,
+	1022,
+	1020,
+	1027,
+	311,
+	315,
+	1023,
+	1031,
+	316,
+	151,
+	317,
+	318,
+	319,
+	1024,
+	314,
+	1013,
+	1006,
+	321,
+	322,
+	104,
+	1008,
+	119,
+	323,
+	324,
+	325,
+	320,
+	11,
+	1026,
+	1016,
+	1032,
+	1015,
+	327,
+	1005,
+	1009,
+	29,
+	328,
+	1028,
+	208,
+	45,
+	329,
+	330,
+	331,
+	1004,
+	21,
+	332,
+	333,
+	24,
+	334,
+	226,
+	1029,
+	335,
+	336,
+	342,
+	343,
+	338,
+	1007,
+	339,
+	133,
+	106,
+	340,
+	341,
+	1001,
+	1,
+	9,
+	1025,
+	337,
+	344,
+	345,
+	1014,
+	105,
+	346,
+	347,
+	348,
+	349,
+	1030,
+	125,
+	101,
+	350,
+	192,
+	351,
+	352,
+	353,
+	354,
+	1002,
+	5,
+	18,
+	217,
+	355,
+	356,
+	153,
+	357,
+	358,
+	359,
+	360,
+	38,
+	361,
+	362,
+	199,
+	194,
+	363,
+	364,
+	365,
+	1003,
+}
+
 BrickColor_From_Number :: proc(number: i32) -> BrickColor {
-	switch number {
-	case BrickColor_White.number:
-		return BrickColor_White
-	case BrickColor_Black.number:
-		return BrickColor_Black
-	case BrickColor_Red.number:
-		return BrickColor_Red
-	case BrickColor_Blue.number:
-		return BrickColor_Blue
-	case BrickColor_Green.number:
-		return BrickColor_Green
-	case BrickColor_Gray.number:
-		return BrickColor_Gray
-	case BrickColor_Lemon_Metalic.number:
-		return BrickColor_Lemon_Metalic
-	}
-	return BrickColor{number, BrickColor_Gray.color, BrickColor_Gray.name}
+	for entry in brick_color_catalog {if entry.number == number {return entry}}
+	return BrickColor_Gray
 }
 
 BrickColor_From_Name :: proc(name: string) -> BrickColor {
-	switch name {
-	case "white":
-		return BrickColor_White
-	case "White":
-		return BrickColor_White
-	case "black":
-		return BrickColor_Black
-	case "Black":
-		return BrickColor_Black
-	case "bright red":
-		return BrickColor_Red
-	case "Bright red":
-		return BrickColor_Red
-	case "bright blue":
-		return BrickColor_Blue
-	case "Bright blue":
-		return BrickColor_Blue
-	case "bright green":
-		return BrickColor_Green
-	case "Bright green":
-		return BrickColor_Green
-	case "lemon metalic", "Lemon metalic":
-		return BrickColor_Lemon_Metalic
-	case "medium stone grey", "medium stone gray":
-		return BrickColor_Gray
-	case "Medium stone grey", "Medium stone gray":
-		return BrickColor_Gray
-	}
+	if strings.equal_fold(name, "medium stone gray") {return BrickColor_Gray}
+	for entry in brick_color_catalog {if strings.equal_fold(entry.name, name) {return entry}}
 	return BrickColor_Gray
+}
+
+BrickColor_From_Palette :: proc(index: int) -> BrickColor {
+	if index < 0 || index >= len(brick_color_palette_ids) {return BrickColor_Gray}
+	return BrickColor_From_Number(brick_color_palette_ids[index])
+}
+
+BrickColor_From_Color :: proc(color: Color3) -> BrickColor {
+	best := BrickColor_Gray
+	best_dist := f32(1e30)
+	for entry in brick_color_catalog {
+		r, g, b := color.R - entry.color.R, color.G - entry.color.G, color.B - entry.color.B
+		d := r * r + g * g + b * b
+		if d < best_dist {best, best_dist = entry, d}
+	}
+	return best
 }

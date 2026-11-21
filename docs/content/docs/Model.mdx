@@ -25,7 +25,9 @@ Parts parented to the model are still independent physics bodies; the model does
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
-| `Pivot` | `CFrame` | Read/write | Identity | The model's pivot. Assigning it moves the model the same way `PivotTo()` does. |
+| `Pivot` | `CFrame` | Read/write | Identity | The model's pivot. Assigning it moves the model. |
+| `WorldPivot` | `CFrame` | Read/write | Identity | Reads the model pivot; assigning stores a pivot without moving the model. |
+| `PrimaryPart` | `BasePart?` | Read/write | `nil` | A descendant part used as the model's reference. Assign `nil` to clear it. |
 
 When the pivot hasn't been set explicitly, reading `Pivot` returns the center of the model's bounding box. For a character model, it returns the root part's `CFrame` instead, which keeps the pivot at the character's feet rather than at the middle of its geometry.
 
@@ -47,6 +49,17 @@ end
 ```
 
 Unlike setting a part's `CFrame`, moving a model keeps the parts in the same relative arrangement. The parts' own property-change signals still fire for `CFrame` and `Position`, so anything watching an individual part sees the move.
+
+### Moving by position or offset
+
+| Method | Description |
+| --- | --- |
+| `MoveTo(position: Vector3): ()` | Moves the pivot to a world position, preserving its rotation. |
+| `TranslateBy(offset: Vector3): ()` | Moves the model by a world-space offset. |
+| `GetPrimaryPartCFrame(): CFrame` | Returns the primary part's frame. |
+| `SetPrimaryPartCFrame(target: CFrame): ()` | Moves the model so its primary part matches the target. |
+
+The primary-part methods raise an error when no primary part is set. Setting `PrimaryPart` to an object outside the model or an unsupported class also raises an error.
 
 ### GetBoundingBox and GetExtentsSize
 
@@ -85,7 +98,7 @@ The scale must be finite and greater than `0`; anything else raises an error. Sc
 
 ## Notes
 
-- `Pivot` is the only model property. Scale is set through `ScaleTo()`, not assigned directly.
+- Scale is set through `ScaleTo()`, not assigned directly.
 - Models can nest. Moving or scaling a parent model affects every model inside it.
 - The bounding box follows the current part geometry, so it changes when parts are added, removed, or resized.
 - Cloning a model copies its pivot and scale along with its children, subject to the usual archivable rules.

@@ -29,8 +29,8 @@ p.Position = Vector3.new(0, 50, 0)
 	run_script(&script_vm, `p.Shape = Enum.PartType.Capsule`)
 	engine_runtime.Environment_Update_Step(&env, &script_vm, 1.0 / 60.0)
 	assert(len(physics.bodies) == 1 && physics.bodies[0].shape == .Capsule)
-	// The native factory must also safely handle degenerate capsules when
-	// called directly (including character-controller users of the binding).
+
+
 	shape := kineffi.JPH_CapsuleShape_Create(0, 1, 0)
 	assert(shape != nil)
 	lo, hi: kineffi.JPH_Vec3
@@ -50,7 +50,7 @@ p.Position = Vector3.new(0, 50, 0)
 		collider := kineffi.JPH_BodyInterface_GetShape(physics.system.body_interface, body.body_id)
 		assert(collider != nil)
 		kineffi.JPH_Shape_GetLocalBounds(collider, &lo, &hi)
-		assert(hi.y > 0 && abs(hi.y - body.size.y * 0.5) < 0.001)
+		assert(hi.y > 0 && abs(f64(hi.y) - body.size.y * 0.5) < 0.001)
 		assert(kineffi.JPH_Shape_GetVolume(collider) > 0)
 	}
 	run_script(&script_vm, `p.Size = Vector3.new(2, 2, 2); p.Anchored = false`)

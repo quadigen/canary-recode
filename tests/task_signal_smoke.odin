@@ -1,10 +1,10 @@
 package main
 
-import "core:fmt"
 import platform "../src/engine/platform"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
+import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.RunInternal(script_vm, source, name)
@@ -21,10 +21,13 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm, &renderer_object)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(type(task) == "table")
 assert(type(task.spawn) == "function")
-assert(typeof(Signal.new()) == "KinemiumSignal")
+assert(typeof(Signal.new()) == "KinemiumScriptSignal")
+assert(KinemiumScriptSignal == Signal and KinemiumSignal == Signal)
 assert(game:GetService("TaskScheduler").PendingTaskCount == 0)
 assert(type(settings()) == "table")
 assert(type(game.PrivateServerId) == "string")
@@ -134,10 +137,14 @@ end)
 task.spawn(function()
     waitA, waitB = signal:Wait()
 end)
-`, "task_signal_setup")
+`,
+		"task_signal_setup",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 0.1)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(spawned)
 assert(not deferred and not delayed and not waited and not cancelledRan)
 signal:Fire(2, 3)
@@ -150,23 +157,35 @@ connection:Disconnect()
 assert(not connection.Connected)
 signal:Fire(10, 10)
 assert(signalTotal == 7)
-`, "task_signal_fire")
+`,
+		"task_signal_fire",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 0.1)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(deferred)
 assert(listenerFinished)
 assert(not delayed and waited and not cancelledRan)
-`, "task_signal_second_frame")
+`,
+		"task_signal_second_frame",
+	)
 
 	engine_runtime.Environment_Render_Step(&environment, &script_vm, 0.1)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(delayed and waited and not cancelledRan)
 assert(required == 2 and firstResult == secondResult and firstResult.token)
 assert(game:GetService("TaskScheduler").PendingTaskCount == 0)
-`, "task_signal_third_frame")
+`,
+		"task_signal_third_frame",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local gui = game:GetService("GuiService")
 local topLeft, bottomRight = gui:GetGuiInset()
 assert(topLeft == Vector2.zero and bottomRight == Vector2.zero)
@@ -185,18 +204,32 @@ actions:BindActionAtPriority("first", function(name, state, event)
     actions:UnbindAction(name)
     return Enum.ContextActionResult.Pass
 end, false, 3000, Enum.PlayerActions.CharacterLeft)
-`, "context_action_setup")
+`,
+		"context_action_setup",
+	)
 
 	key_down: platform.Event
 	key_down.type = .KEY_DOWN
 	key_down.key.scancode = .A
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, key_down)
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, key_down)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(table.concat(actionOrder, ",") == "high,normal,normal")
-`, "context_action_dispatch")
+local actions = game:GetService("ContextActionService")
+assert(actions:GetBoundActionInfo("keyboard").inputTypes[1] == Enum.KeyCode.A)
+assert(actions:GetAllBoundActionInfo().keyboard ~= nil)
+actions:UnbindAllActions()
+assert(next(actions:GetAllBoundActionInfo()) == nil)
 
-	run_script(&script_vm, `
+`,
+		"context_action_dispatch",
+	)
+
+	run_script(
+		&script_vm,
+		`
 local storage = game:GetService("ReplicatedStorage")
 local legacy = Instance.new("Script", game:GetService("ServerStorage"))
 legacy.Source = "_G.hiddenScriptRan = true"
@@ -206,17 +239,27 @@ client.Source = "_G.clientContextRan = true"
 local server = Instance.new("Script", storage)
 server.RunContext = Enum.RunContext.Server
 server.Source = "_G.serverContextRan = true"
-`, "run_context_setup")
+`,
+		"run_context_setup",
+	)
 	engine_runtime.Environment_Set_Mode(&environment, .Server)
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, 0.1)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(_G.serverContextRan and not _G.clientContextRan and not _G.hiddenScriptRan)
-`, "server_run_context")
+`,
+		"server_run_context",
+	)
 	engine_runtime.Environment_Set_Mode(&environment, .Client)
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, 0.1)
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(_G.clientContextRan and not _G.hiddenScriptRan)
-`, "client_run_context")
+`,
+		"client_run_context",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

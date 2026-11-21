@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import assetstore "../assetstore"
 import classes "../classes"
@@ -35,6 +35,7 @@ Replication_Entity :: struct {
 	object:                   ^classes.Object,
 	owner_id:                 u32,
 	owner_locked:             bool,
+	owner_client_locked:      bool,
 	recipients:               map[u32]bool,
 	last_state_tick:          u32,
 	last_property_tick:       u32,
@@ -117,6 +118,8 @@ Replication_Peer :: struct {
 	finished_replicating_sent: bool,
 	gravity_sent:              bool,
 	last_gravity:              f32,
+	ownership_policy_sent:     bool,
+	last_ownership_policy:     bool,
 	character_settings_sent:   bool,
 	last_character_settings:   u8,
 	focus_x:                   f64,
@@ -124,6 +127,10 @@ Replication_Peer :: struct {
 	focus_z:                   f64,
 	focus_ok:                  bool,
 	client_capabilities:       u32,
+	rpc_rate_window:           f32,
+	rpc_rate_count:            u32,
+	rpc_rate_bytes:            u32,
+	ownership_rate_count:      u32,
 	snapshot_clock_rate:       f32,
 	client_nonce:              u32,
 	server_nonce:              u32,
@@ -184,114 +191,118 @@ Replication_Schema :: struct {
 }
 
 ReplicatorService :: struct {
-	using service:                 Service,
-	mode:                          Replication_Mode,
-	host:                          ^Replication_Transport_Host,
-	remote:                        ^Replication_Transport_Peer,
-	peers:                         [dynamic]Replication_Peer,
-	entity_list:                   [dynamic]^Replication_Entity,
-	entity_by_id:                  map[u32]^Replication_Entity,
-	entity_ids:                    map[^classes.Object]u32,
-	suppressed:                    map[^classes.Object]bool,
-	next_id:                       u32,
-	next_user_id:                  u32,
-	client_capabilities:           u32,
-	server_capabilities:           u32,
-	handshake_complete:            bool,
-	handshake_status:              u8,
-	handshake_elapsed:             f32,
-	join_token:                    string,
-	username:                      string,
-	join_address:                  string,
-	server_nonce:                  u32,
-	time_offset:                   f32,
-	time_offset_measured:          bool,
-	time_sync_sequence:            u32,
-	time_sync_elapsed:             f32,
-	handshake_rejections:          u64,
-	tick:                          u32,
-	elapsed:                       f32,
-	clock:                         f32,
-	snapshot_rate:                 f32,
-	snapshot_clock_rate:           f32,
-	interpolation_delay_ticks:     f32,
-	teleport_threshold:            f32,
-	relevancy_distance:            f32,
-	lod_near_fraction:             f32,
-	lod_far_interval:              int,
-	bandwidth_budget:              u32,
-	connected:                     bool,
-	transport_initialized:         bool,
-	scene_ready:                   bool,
-	replication_finished:          bool,
-	script_receive:                Replication_Script_Receive,
-	metadata_receive:              Replication_Metadata_Receive,
-	event_signal:                  ^signals.Signal,
-	event_callbacks:               [dynamic]Replication_Event_Callback,
-	group_members:                 [dynamic]Replication_Group_Member,
-	schemas:                       [dynamic]Replication_Schema,
-	packets_sent:                  u64,
-	bytes_sent:                    u64,
-	packets_received:              u64,
-	bytes_received:                u64,
-	malformed_packets:             u64,
-	rejected_packets:              u64,
-	version_mismatches:            u64,
-	schema_mismatches:             u64,
-	auth_failures:                 u64,
-	bandwidth_drops:               u64,
-	unchanged_states_skipped:      u64,
-	owned_states_accepted:         u64,
-	owned_states_rejected:         u64,
-	acks_received:                 u64,
-	char_acks_received:            u64,
-	acks_sent:                     u64,
-	states_applied:                u64,
-	assets_sent:                   u64,
-	assets_received:               u64,
-	asset_bytes_received:          u64,
-	asset_rejections:              u64,
-	asset_table_complete:          bool,
-	asset_pending_id:              string,
-	asset_pending_path:            string,
-	asset_pending_kind:            assetstore.Asset_Kind,
-	asset_pending_total:           u32,
-	asset_pending_next:            u32,
-	asset_pending_bytes:           [dynamic]u8,
-	terrain_batches_received:      int,
-	terrain_cells_received:        int,
-	terrain_cells_declared:        u32,
-	terrain_draw_version:          u32,
-	terrain_rejections:            u64,
-	terrain_header_seen:           bool,
-	terrain_table_complete:        bool,
-	terrain_receiving:             bool,
-	terrain_pending:               map[Terrain_Voxel_Key]Terrain_Cell_Record,
-	terrain_pending_voxel_size:    f32,
-	terrain_pending_iso_level:     f32,
-	terrain_sync_tick:             u32,
-	terrain_sync_due:              bool,
-	ack_elapsed:                   f32,
-	ack_full_elapsed:              f32,
-	diag_kind_counts:              [34]u64,
-	diag_kind_bytes:               [34]u64,
-	diag_subtype_counts:           [16][34]u64,
-	invoke_pending:                [dynamic]Remote_Invoke_Pending,
-	next_invoke_id:                u32,
-	drops_window:                  u64,
-	drop_pressure:                 f32,
-	adaptive_scale:                f32,
-	base_bandwidth_budget:         u32,
-	bandwidth_budget_configured:   bool,
-	base_snapshot_rate:            f32,
-	adaptive_min_scale:            f32,
-	owned_teleport_tolerance:      f32,
-	owned_max_speed:               f32,
-	owned_max_updates_per_second:  u32,
-	auto_ownership_enabled:        bool,
-	auto_ownership_acquire_radius: f32,
-	auto_ownership_release_radius: f32,
-	auto_ownership_clock:          f32,
+	using service:                          Service,
+	mode:                                   Replication_Mode,
+	host:                                   ^Replication_Transport_Host,
+	remote:                                 ^Replication_Transport_Peer,
+	peers:                                  [dynamic]Replication_Peer,
+	entity_list:                            [dynamic]^Replication_Entity,
+	entity_by_id:                           map[u32]^Replication_Entity,
+	entity_ids:                             map[^classes.Object]u32,
+	suppressed:                             map[^classes.Object]bool,
+	next_id:                                u32,
+	next_user_id:                           u32,
+	client_capabilities:                    u32,
+	server_capabilities:                    u32,
+	handshake_complete:                     bool,
+	handshake_status:                       u8,
+	handshake_elapsed:                      f32,
+	join_token:                             string,
+	require_join_token:                     bool,
+	username:                               string,
+	join_address:                           string,
+	server_nonce:                           u32,
+	time_offset:                            f32,
+	time_offset_measured:                   bool,
+	time_sync_sequence:                     u32,
+	time_sync_elapsed:                      f32,
+	handshake_rejections:                   u64,
+	tick:                                   u32,
+	elapsed:                                f32,
+	clock:                                  f32,
+	snapshot_rate:                          f32,
+	snapshot_clock_rate:                    f32,
+	interpolation_delay_ticks:              f32,
+	teleport_threshold:                     f32,
+	relevancy_distance:                     f32,
+	lod_near_fraction:                      f32,
+	lod_far_interval:                       int,
+	bandwidth_budget:                       u32,
+	connected:                              bool,
+	transport_initialized:                  bool,
+	scene_ready:                            bool,
+	replication_finished:                   bool,
+	script_receive:                         Replication_Script_Receive,
+	metadata_receive:                       Replication_Metadata_Receive,
+	event_signal:                           ^signals.Signal,
+	event_callbacks:                        [dynamic]Replication_Event_Callback,
+	client_event_policy:                    map[string]bool,
+	group_members:                          [dynamic]Replication_Group_Member,
+	schemas:                                [dynamic]Replication_Schema,
+	packets_sent:                           u64,
+	bytes_sent:                             u64,
+	packets_received:                       u64,
+	bytes_received:                         u64,
+	malformed_packets:                      u64,
+	rejected_packets:                       u64,
+	version_mismatches:                     u64,
+	schema_mismatches:                      u64,
+	auth_failures:                          u64,
+	bandwidth_drops:                        u64,
+	unchanged_states_skipped:               u64,
+	owned_states_accepted:                  u64,
+	owned_states_rejected:                  u64,
+	acks_received:                          u64,
+	char_acks_received:                     u64,
+	acks_sent:                              u64,
+	states_applied:                         u64,
+	assets_sent:                            u64,
+	assets_received:                        u64,
+	asset_bytes_received:                   u64,
+	asset_rejections:                       u64,
+	asset_table_complete:                   bool,
+	asset_pending_id:                       string,
+	asset_pending_path:                     string,
+	asset_pending_kind:                     assetstore.Asset_Kind,
+	asset_pending_total:                    u32,
+	asset_pending_next:                     u32,
+	asset_pending_bytes:                    [dynamic]u8,
+	terrain_batches_received:               int,
+	terrain_cells_received:                 int,
+	terrain_cells_declared:                 u32,
+	terrain_draw_version:                   u32,
+	terrain_rejections:                     u64,
+	terrain_header_seen:                    bool,
+	terrain_table_complete:                 bool,
+	terrain_receiving:                      bool,
+	terrain_pending:                        map[Terrain_Voxel_Key]Terrain_Cell_Record,
+	terrain_pending_voxel_size:             f32,
+	terrain_pending_iso_level:              f32,
+	terrain_sync_tick:                      u32,
+	terrain_sync_due:                       bool,
+	ack_elapsed:                            f32,
+	ack_full_elapsed:                       f32,
+	diag_kind_counts:                       [35]u64,
+	diag_kind_bytes:                        [35]u64,
+	diag_subtype_counts:                    [16][35]u64,
+	invoke_pending:                         [dynamic]Remote_Invoke_Pending,
+	next_invoke_id:                         u32,
+	drops_window:                           u64,
+	drop_pressure:                          f32,
+	adaptive_scale:                         f32,
+	base_bandwidth_budget:                  u32,
+	bandwidth_budget_configured:            bool,
+	base_snapshot_rate:                     f32,
+	adaptive_min_scale:                     f32,
+	owned_teleport_tolerance:               f32,
+	owned_max_speed:                        f32,
+	owned_max_updates_per_second:           u32,
+	allow_client_ownership_requests:        bool,
+	remote_allow_client_ownership_requests: bool,
+	auto_ownership_enabled:                 bool,
+	auto_ownership_acquire_radius:          f32,
+	auto_ownership_release_radius:          f32,
+	auto_ownership_clock:                   f32,
 }
 
 replication_construct :: proc(
@@ -343,8 +354,8 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	service.terrain_batches_received = 0
 	service.terrain_cells_received = 0
 	L: ^vm.State
-	// A VM finalizer can run after Players or a replicated character is gone.
-	// During lua_close, release transport state and let the VM destroy its objects.
+
+
 	if !vm.Is_Closing() &&
 	   service.signal_registry != nil &&
 	   service.signal_registry.vm_state != nil {
@@ -416,6 +427,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	delete(service.suppressed)
 	service.suppressed = nil
 	service.remote = nil
+	service.remote_allow_client_ownership_requests = false
 	service.mode = .Stopped
 	service.connected = false
 	service.scene_ready = false
@@ -473,6 +485,8 @@ replication_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer
 		delete(callback.name)
 	}
 	delete(service.event_callbacks)
+	for name in service.client_event_policy {delete(name)}
+	delete(service.client_event_policy)
 
 
 	if len(service.join_token) > 0 {delete(service.join_token)}
@@ -492,6 +506,13 @@ replication_get :: proc(
 ) -> bool {
 	service := cast(^ReplicatorService)object
 	switch key {
+	case "RequireJoinToken":
+		vm.PushBoolean(L, service.require_join_token)
+	case "AllowClientOwnershipRequests":
+		vm.PushBoolean(
+			L,
+			service.remote_allow_client_ownership_requests if service.mode == .Client else service.allow_client_ownership_requests,
+		)
 	case "SnapshotRate":
 		vm.PushNumber(L, f64(service.snapshot_rate))
 	case "BandwidthBudget":
@@ -520,6 +541,7 @@ replication_get :: proc(
 	     "SendEvent",
 	     "SendEventTo",
 	     "OnEvent",
+	     "SetClientEventAllowed",
 	     "Register",
 	     "Unregister",
 	     "RegisterSchema",
@@ -548,6 +570,27 @@ replication_set :: proc(
 	value_index: int,
 ) -> bool {
 	service := cast(^ReplicatorService)object
+	if key == "RequireJoinToken" {
+		if service.mode == .Client || !vm.IsBoolean(L, value_index) {
+			_ = vm.RaiseError(L, "RequireJoinToken is a server-only boolean")
+			return true
+		}
+		service.require_join_token = vm.ArgBoolean(L, value_index)
+		return true
+	}
+	if key == "AllowClientOwnershipRequests" {
+		if service.mode == .Client {
+			_ = vm.RaiseError(L, "AllowClientOwnershipRequests can only be changed on the server")
+			return true
+		}
+		if !vm.IsBoolean(L, value_index) {
+			_ = vm.RaiseError(L, "AllowClientOwnershipRequests expects a boolean")
+			return true
+		}
+		service.allow_client_ownership_requests = vm.ArgBoolean(L, value_index)
+		if service.mode == .Server {replication_send_ownership_policy(service)}
+		return true
+	}
 	if key == "SnapshotRate" {
 		rate := vm.ArgNumber(L, value_index)
 		if !(rate >= 1 && rate <= 120) {
@@ -627,7 +670,7 @@ replication_namecall :: proc(
 	service := cast(^ReplicatorService)object
 	switch method {
 	case "StartServer", "ConnectClient":
-		address := vm.ArgOptionalString(L, 2, method == "StartServer" ? "0.0.0.0" : "127.0.0.1")
+		address := vm.ArgOptionalString(L, 2, "127.0.0.1")
 		port := vm.ArgOptionalNumber(L, 3, 1234)
 		if port < 1 ||
 		   port > 65535 ||
@@ -650,6 +693,17 @@ replication_namecall :: proc(
 		return 1, true
 	case "Stop":
 		replication_stop(service); return 0, true
+	case "SetClientEventAllowed":
+		if service.mode ==
+		   .Client {return vm.RaiseError(L, "client event policy is server-only"), true}
+		name := vm.ArgString(L, 2)
+		if len(name) == 0 || len(name) > 256 || !vm.IsBoolean(L, 3) {
+			return vm.RaiseError(L, "expected an event name and boolean"), true
+		}
+		if service.client_event_policy == nil {service.client_event_policy = make(map[string]bool)}
+		if _, exists := service.client_event_policy[name];
+		   exists {service.client_event_policy[name] = vm.ArgBoolean(L, 3)} else {service.client_event_policy[strings.clone(name)] = vm.ArgBoolean(L, 3)}
+		return 0, true
 	case "OnEvent":
 		name := vm.ArgString(L, 2)
 		if len(name) == 0 ||
@@ -786,6 +840,7 @@ replication_namecall :: proc(
 			owner_id = (cast(^Player)player_object).user_id
 		}
 		entity.owner_locked = true
+		entity.owner_client_locked = false
 		replication_set_ownership(service, entity, owner_id)
 		vm.NewTable(L, 0, 2)
 		vm.PushNumber(L, f64(owner_id)); vm.SetField(L, -2, "owner")
@@ -868,6 +923,7 @@ replication_namecall :: proc(
 		if len(token) >
 		   256 {return vm.RaiseError(L, "join token must be 256 characters or fewer"), true}
 		if len(service.join_token) > 0 {delete(service.join_token)}
+		service.join_token = ""
 		if len(token) > 0 {service.join_token = strings.clone(token)}
 		vm.PushBoolean(L, true)
 		return 1, true
@@ -971,6 +1027,8 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 		set = replication_set,
 		namecall = replication_namecall,
 		properties = []string {
+			"AllowClientOwnershipRequests",
+			"RequireJoinToken",
 			"SnapshotRate",
 			"BandwidthBudget",
 			"InterpolationDelayTicks",
@@ -990,6 +1048,7 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 			"SendEvent",
 			"SendEventTo",
 			"OnEvent",
+			"SetClientEventAllowed",
 			"Register",
 			"Unregister",
 			"RegisterSchema",

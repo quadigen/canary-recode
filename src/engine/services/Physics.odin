@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -16,6 +16,7 @@ Physics_Class := classes.Class_Info {
 Physics_Body :: struct {
 	object:                ^classes.Object,
 	body_id:               kineffi.JPH_BodyID,
+	layer:                 kineffi.JPH_ObjectLayer,
 	size:                  datatypes.Vector3,
 	shape:                 enums.PartType,
 	material:              enums.Material,
@@ -44,6 +45,7 @@ Physics :: struct {
 	previous_deformable_contacts: map[Deformable_Contact_Key]Deformable_Contact,
 	gravity:                      f32,
 	mesh_shape_cache:             map[Physics_Shape_Cache_Key]kineffi.JPH_ShapeRef,
+	primitive_shape_cache:        []Physics_Primitive_Shape_Entry,
 	terrain_valid:                bool,
 	terrain_bodies:               map[Terrain_Chunk_Key]kineffi.JPH_BodyID,
 	terrain_chunk_triangles:      map[Terrain_Chunk_Key]int,
@@ -55,9 +57,16 @@ Physics :: struct {
 	weld_groups_dirty:            bool,
 	weld_groups:                  map[kineffi.JPH_BodyID]kineffi.JPH_BodyID,
 	scratch_parts:                [dynamic]^classes.Part,
+	scratch_parts_workspace:      ^classes.Object,
+	constraint_steps:             [dynamic]Physics_Cached_Constraint,
+	constraint_epoch:             u64,
+	constraint_workspace:         ^classes.Object,
+	scratch_excluded_pairs:       [dynamic]kineffi.JPH_BodyID,
+	applied_excluded_pairs:       [dynamic]kineffi.JPH_BodyID,
 	scratch_ray_candidates:       [dynamic]kineffi.JPH_BodyID,
 	scratch_sweep_candidates:     [dynamic]kineffi.JPH_BodyID,
 	sync_epoch:                   u64,
+	synced_structure_epoch:       u64,
 	synced_epoch:                 u64,
 	has_synced:                   bool,
 	sync_bumped:                  bool,
@@ -66,6 +75,20 @@ Physics :: struct {
 }
 
 MAX_COLLISION_SUBSTEPS :: 8
+
+
+PHYSICS_PRIMITIVE_CACHE_CAPACITY :: 128
+
+Physics_Primitive_Shape_Key :: struct {
+	shape: enums.PartType,
+	size:  datatypes.Vector3,
+}
+
+Physics_Primitive_Shape_Entry :: struct {
+	key:   Physics_Primitive_Shape_Key,
+	shape: kineffi.JPH_ShapeRef,
+}
+
 
 Physics_Shape_Cache_Key :: struct {
 	mesh_id:               string,
@@ -128,6 +151,7 @@ physics_construct :: proc(
 	service.collision_steps = DEFAULT_COLLISION_SUBSTEPS
 	service.system, service.initialized = jolt.System_Create_3D()
 	if service.initialized {
+		physics_groups_apply(service)
 		jolt.System_Set_Gravity(&service.system, service.gravity)
 		service.contact_listener = kineffi.JPH_ContactListener_Create()
 		if service.contact_listener != nil {
@@ -156,8 +180,12 @@ physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obj
 	delete(service.deformable_contacts)
 	delete(service.previous_deformable_contacts)
 	delete(service.bodies)
+	delete(service.body_ids)
 
 	delete(service.scratch_parts)
+	delete(service.constraint_steps)
+	delete(service.scratch_excluded_pairs)
+	delete(service.applied_excluded_pairs)
 	delete(service.scratch_ray_candidates)
 	delete(service.scratch_sweep_candidates)
 	for key, shape in service.mesh_shape_cache {
@@ -165,6 +193,10 @@ physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Obj
 		kineffi.JPH_Shape_Destroy(shape)
 	}
 	delete(service.mesh_shape_cache)
+	for entry in service.primitive_shape_cache {
+		if entry.shape != nil {kineffi.JPH_Shape_Destroy(entry.shape)}
+	}
+	delete(service.primitive_shape_cache)
 	jolt.System_Destroy_3D(&service.system)
 	if service.contact_listener != nil {
 		kineffi.JPH_ContactListener_Destroy(service.contact_listener)

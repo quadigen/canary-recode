@@ -4,19 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-Color3Value_Class := Class_Info{
+Color3Value_Class := Class_Info {
 	name   = "Color3Value",
 	parent = &ValueBase_Class,
 }
 
 Color3Value :: struct {
 	using object: Object,
-
-	value: datatypes.Color3,
+	value:        datatypes.Color3,
 }
 
 Color3Value_Init :: proc() -> Color3Value {
-	return Color3Value{
+	return Color3Value {
 		object = Object_Init(&Color3Value_Class),
 		value = datatypes.Color3{R = 1, G = 1, B = 1},
 	}
@@ -45,7 +44,7 @@ Color3Value_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, val.value)
 	case:
 		return false
@@ -65,7 +64,7 @@ Color3Value_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_Color3(L, value_index, datatype_registry)
 	case:
 		return false
@@ -87,6 +86,7 @@ Register_Color3Value :: proc(registry: ^Registry) {
 		Color3Value_construct,
 		Color3Value_destroy,
 		get = Color3Value_get,
+		parallel_get = Color3Value_get,
 		set = Color3Value_set,
 		clone = Color3Value_clone,
 		properties = []string{"Value"},

@@ -3,6 +3,7 @@
 #include "kine_vulkan_compositor.h"
 #include <SDL3/SDL.h>
 #include <filament/Engine.h>
+#include <filament/Scene.h>
 #include <math/mat4.h>
 #include <array>
 #include <chrono>
@@ -34,6 +35,75 @@ int main() {
     auto *mesh=Kine_Filament_CreateMesh(ctx,1);
     KineFilamentDrawItem item{}; item.mesh=mesh; item.r=1;item.g=0.05f;item.b=0.05f;item.transmission=1;
     item.transform[0]=item.transform[5]=item.transform[10]=item.transform[15]=1;
+    // A retained stream can disappear and return with the same version.
+    // Both one-frame detachment and eviction must honor the unchanged data.
+    auto *scene=static_cast<filament::Scene *>(Kine_Filament_GetScene(ctx));
+    check(scene,"world scene");
+    const auto worldCount=scene->getRenderableCount();
+    constexpr uint64_t stream=0x12345678;
+    auto worldFrame=[&](bool submit,const KineFilamentDrawItem *items,uint32_t count,uint64_t version) {
+        auto *surface=static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
+        check(surface,"begin retained world frame");
+        Kine_Skia_Surface_Clear(surface,20,30,40,255);
+        Kine_Filament_Viewport_Begin(ctx);
+        if(submit) Kine_Filament_DrawMeshListVersioned(ctx,items,count,stream,version);
+        Kine_Filament_Viewport_RenderFrame(ctx,1.0f/60.0f,true);
+        check(Kine_VulkanCompositor_BeginOverlay(compositor),"retained world overlay");
+        check(Kine_VulkanCompositor_EndFrame(compositor)!=0,"present retained world frame");
+    };
+    std::vector<KineFilamentDrawItem> diverse(80,item);
+    for(size_t i=0;i<diverse.size();++i) {
+        diverse[i].materialKind=KINE_MAT_GLASS;
+        diverse[i].transmission=float(i+1)/float(diverse.size()+1);
+        diverse[i].transform[3]=float(i%10)*3;
+        diverse[i].transform[7]=float(i/10)*3;
+    }
+    worldFrame(true,diverse.data(),uint32_t(diverse.size()),1);
+    check(scene->getRenderableCount()==worldCount+diverse.size(),"distinct retained keys build exactly once");
+    worldFrame(false,nullptr,0,1);
+    check(scene->getRenderableCount()==worldCount,"omitted retained keys detach");
+    worldFrame(true,diverse.data(),uint32_t(diverse.size()),1);
+    check(scene->getRenderableCount()==worldCount+diverse.size(),"unchanged retained keys reattach");
+    for(int i=0;i<4;++i) worldFrame(false,nullptr,0,1);
+    check(scene->getRenderableCount()==worldCount,"omitted retained keys stay absent after eviction");
+    worldFrame(true,diverse.data(),uint32_t(diverse.size()),1);
+    check(scene->getRenderableCount()==worldCount+diverse.size(),"evicted stream rebuilds on unchanged version");
+    worldFrame(true,nullptr,0,2);
+    check(scene->getRenderableCount()==worldCount,"empty retained stream clears geometry");
+    std::puts("RETAINED_BATCH_REGRESSION_PASSED");
+
+    const float terrainVertices[] = {
+        -4, 0, -4, 0, 1, 0, 0, 0,
+        -4, 0,  4, 0, 1, 0, 0, 1,
+         4, 0, -4, 0, 1, 0, 1, 0,
+    };
+    const float terrainWeights[3][8] = {{1}, {1}, {1}};
+    const uint16_t terrainIndices[] = {0, 1, 2};
+    auto *terrain = Kine_Filament_CreateTerrainMesh(ctx, terrainVertices, terrainWeights[0],
+        3, terrainIndices, 3);
+    const uint8_t grassPixel[] = {70, 130, 45, 255};
+    auto *grassTexture = Kine_Filament_CreateTexFromPixels(ctx, 1, 1, 4, grassPixel);
+    check(terrain && grassTexture, "create textured grass terrain");
+    auto *terrainTextures = Kine_Filament_CreateTerrainTextureSet(ctx, grassTexture, grassTexture,
+        nullptr, nullptr, nullptr, nullptr);
+    check(terrainTextures, "create terrain texture set");
+    const auto textureCount = engine->getTextureCount();
+    Kine_Filament_DestroyTex(ctx, grassTexture);
+    check(engine->getTextureCount() == textureCount, "terrain set keeps its grass texture alive");
+
+    KineFilamentDrawItem terrainItem = item;
+    terrainItem.mesh = terrain;
+    terrainItem.tex = terrainTextures;
+    terrainItem.materialKind = KINE_MAT_TERRAIN;
+    worldFrame(true, &terrainItem, 1, 3);
+    check(scene->getRenderableCount() == worldCount + 2, "terrain and grass both render after layer release");
+    const auto texturesBeforeSetRelease = engine->getTextureCount();
+    Kine_Filament_DestroyTex(ctx, terrainTextures);
+    check(engine->getTextureCount() + 1 == texturesBeforeSetRelease, "terrain set releases its final layer references");
+    worldFrame(true, nullptr, 0, 4);
+    Kine_Filament_DestroyMesh(ctx, terrain);
+    std::puts("TERRAIN_GRASS_TEXTURE_LIFETIME_PASSED");
+
     KineViewportSettings settings{};
     settings.camera[0]=settings.camera[5]=settings.camera[10]=settings.camera[15]=1;
     settings.camera[11]=6;settings.fieldOfView=60;settings.width=settings.height=64;

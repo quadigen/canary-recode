@@ -4,22 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-BoolValue_Class := Class_Info{
+BoolValue_Class := Class_Info {
 	name   = "BoolValue",
 	parent = &ValueBase_Class,
 }
 
 BoolValue :: struct {
 	using object: Object,
-
-	value: bool
+	value:        bool,
 }
 
 BoolValue_Init :: proc() -> BoolValue {
-	return BoolValue{
-		object = Object_Init(&BoolValue_Class),
-		value = true,
-	}
+	return BoolValue{object = Object_Init(&BoolValue_Class), value = true}
 }
 
 BoolValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -85,6 +81,7 @@ Register_BoolValue :: proc(registry: ^Registry) {
 		BoolValue_construct,
 		BoolValue_destroy,
 		get = BoolValue_get,
+		parallel_get = BoolValue_get,
 		set = BoolValue_set,
 		clone = BoolValue_clone,
 		properties = []string{"Value"},

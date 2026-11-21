@@ -94,10 +94,15 @@ local distant = Instance.new("Part")
 distant.Name = "DistantPart"
 distant.CFrame = CFrame.new(2000, 0, 0)
 distant.Parent = game:GetService("Workspace")
-r.EventReceived:Connect(function(name, data)
-    if name == "client-test" then received = data end
+r:SetClientEventAllowed("client-test", true)
+r.EventReceived:Connect(function(name, data, sender)
+    if name == "client-test" then
+        assert(sender and sender:IsA("Player"))
+        received = data
+    end
 end)
-r:OnEvent("structured", function(data)
+r:OnEvent("structured", function(data, sender)
+    assert(sender and sender:IsA("Player"))
     structured = data
 end)
 `,
@@ -168,7 +173,11 @@ assert(r:SendEvent("structured", { count = 4, point = Vector3.new(1, 2, 3), tint
 `,
 		"replicator_client_verify",
 	)
-	run_script(&server_vm, `game:GetService("Physics").Gravity = 85; workspace.ReplicatedPart.Gravity = Vector3.new(0, 40, 0)`, "server_changes_gravity")
+	run_script(
+		&server_vm,
+		`game:GetService("Physics").Gravity = 85; workspace.ReplicatedPart.Gravity = Vector3.new(0, 40, 0)`,
+		"server_changes_gravity",
+	)
 	for _ in 0 ..< 8 {
 		step_network(&server, &server_vm)
 		step_network(&client, &client_vm)

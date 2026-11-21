@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -18,14 +18,17 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local physics = game:GetService("Physics")
 assert(physics:IsA("Service"))
 assert(physics.Enabled)
 assert(math.abs(physics.Gravity - 196.2) < 0.001)
 physics.Gravity = 100
 assert(physics.Gravity == 100)
-assert(not pcall(function() return workspace.Gravity end))
+assert(workspace.Gravity == nil)
+assert(not pcall(function() workspace.Gravity = 100 end))
 assert(workspace.FallenPartsDestroyHeight == -500)
 assert(workspace.FallHeightEnabled)
 
@@ -167,10 +170,14 @@ falling = Instance.new("Part", workspace)
 falling.Anchored = false
 falling.Size = vector.create(2, 2, 2)
 falling.CFrame = CFrame.new(0, 10, 0)
-`, "workspace_physics")
+`,
+		"workspace_physics",
+	)
 
-	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
-	run_script(&script_vm, `
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
+	run_script(
+		&script_vm,
+		`
 assert(game:GetService("Physics").BodyCount == 1)
 assert(falling.CFrame.Y < 10)
 assert(workspace.DistributedGameTime > 0)
@@ -178,11 +185,19 @@ assert(workspace:GetPhysicsThrottling() == 0)
 assert(workspace:GetRealPhysicsFPS() == 60)
 assert(workspace:PGSIsEnabled())
 	falling:Destroy()
-`, "workspace_physics_after_step")
-	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
-	run_script(&script_vm, `assert(game:GetService("Physics").BodyCount == 0)`, "workspace_physics_cleanup")
+`,
+		"workspace_physics_after_step",
+	)
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
+	run_script(
+		&script_vm,
+		`assert(game:GetService("Physics").BodyCount == 0)`,
+		"workspace_physics_cleanup",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local root = Instance.new("Part", workspace)
 root.Anchored = true
 local hitbox = Instance.new("Part", workspace)
@@ -193,14 +208,20 @@ weld.Part1 = hitbox
 rope = Instance.new("RopeConstraint", root)
 rope.Attachment0 = Instance.new("Attachment", root)
 rope.Attachment1 = Instance.new("Attachment", hitbox)
-`, "launch constraints")
-	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
+`,
+		"launch constraints",
+	)
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
 	run_script(&script_vm, `weld.Part1:Destroy()`, "remove launch hitbox")
-	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0/60.0)
-	run_script(&script_vm, `
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
+	run_script(
+		&script_vm,
+		`
 assert(weld.Part0 == weld.Parent and weld.Part1 == nil)
 assert(rope.Attachment0.Parent == rope.Parent and rope.Attachment1 == nil)
-`, "constraints cleared before endpoint storage is freed")
+`,
+		"constraints cleared before endpoint storage is freed",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

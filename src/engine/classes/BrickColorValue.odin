@@ -4,19 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-BrickColorValue_Class := Class_Info{
+BrickColorValue_Class := Class_Info {
 	name   = "BrickColorValue",
 	parent = &ValueBase_Class,
 }
 
 BrickColorValue :: struct {
 	using object: Object,
-
-	value: datatypes.BrickColor,
+	value:        datatypes.BrickColor,
 }
 
 BrickColorValue_Init :: proc() -> BrickColorValue {
-	return BrickColorValue{
+	return BrickColorValue {
 		object = Object_Init(&BrickColorValue_Class),
 		value = datatypes.BrickColor_Gray,
 	}
@@ -45,7 +44,7 @@ BrickColorValue_get :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_BrickColor(L, datatype_registry, val.value)
 	case:
 		return false
@@ -65,7 +64,7 @@ BrickColorValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		val.value = datatypes.Arg_BrickColor(L, value_index, datatype_registry)
 	case:
 		return false
@@ -87,6 +86,7 @@ Register_BrickColorValue :: proc(registry: ^Registry) {
 		BrickColorValue_construct,
 		BrickColorValue_destroy,
 		get = BrickColorValue_get,
+		parallel_get = BrickColorValue_get,
 		set = BrickColorValue_set,
 		clone = BrickColorValue_clone,
 		properties = []string{"Value"},

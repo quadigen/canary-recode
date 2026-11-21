@@ -1,0 +1,23 @@
+---
+title: ChromaticAberrationEffect
+description: Split red and blue color channels toward the edges of the rendered scene.
+---
+
+Use this effect to simulate color fringing from a camera lens. The distortion grows toward the corners, leaving the center largely unchanged.
+
+```lua
+local effect = game:GetService("Lighting").ChromaticAberrationEffect
+effect.Enabled = true
+effect.Intensity = 0.2
+```
+
+Lighting creates a disabled instance by default. You can also create an enabled instance with `Instance.new("ChromaticAberrationEffect", lighting)`.
+
+## Properties
+
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | Read/write | true | Enables the effect. |
+| `Intensity` | number | Read/write | 0.15 | Channel separation strength, clamped to 0–1. |
+
+Non-finite intensity values raise an error. Only the last instance in Lighting is used. It runs on the native Filament scene, not the UI, and is disabled in fast viewport mode.

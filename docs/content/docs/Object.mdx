@@ -5,7 +5,7 @@ description: The root class for engine objects, with shared identity, metadata, 
 
 `Object` is the root of Kinemium's class hierarchy. An `Instance` is an `Object`, but not every `Object` is necessarily an `Instance`. Classes that derive directly from `Object`, such as `EditableMesh`, do not have to inherit from `Instance`.
 
-The shared object API gives you a consistent way to identify objects, organize them, attach metadata, and manage their lifetime. You don't need to work with the engine's implementation to use it.
+The shared object API gives you a consistent way to identify objects, organize them, attach metadata, and manage their lifetime.
 
 ## Working with objects
 
@@ -77,7 +77,7 @@ An object isn't considered its own ancestor or descendant. `GetFullName()` is us
 | `FindFirstChildWhichIsA(className: string, recursive: boolean?): Object?` | Finds a child by class or inheritance, optionally searching descendants. |
 | `FindFirstAncestor(name: string): Object?` | Searches upward for the nearest ancestor with the given name. |
 | `FindFirstAncestorOfClass(className: string): Object?` | Searches upward for an ancestor whose class matches or inherits from the requested class. |
-| `FindFirstAncestorWhichIsA(className: string): Object?` | Searches upward for an ancestor with exactly the requested class name in the current implementation. |
+| `FindFirstAncestorWhichIsA(className: string): Object?` | Searches upward for an ancestor with exactly the requested class name currently. |
 | `WaitForChild(name: string, timeout: number?): Object?` | Checks for a direct child by name. See the limitation below. |
 | `WaitForChildOfClass(className: string, timeout: number?): Object?` | Checks for a direct child by class or inheritance. See the limitation below. |
 
@@ -176,7 +176,7 @@ Connect to these events to respond to changes without repeatedly searching the o
 | `AncestryChanged` | `object: Object, parent: Object?` | This object's direct parent changes. |
 | `Destroying` | None | Destruction begins, before the object is detached. |
 
-Hierarchy events describe the current implementation: during a reparent operation the parent change has already been applied when removal notifications fire. Moving a whole subtree does not automatically emit a separate event for every nested descendant, and `AncestryChanged` is emitted for the moved object itself, not every descendant.
+When you reparent an object, its parent has already changed by the time removal notifications fire. Moving a whole subtree does not automatically emit a separate event for every nested descendant, and `AncestryChanged` is emitted for the moved object itself, not every descendant.
 
 `Changed` and property-specific signals describe notifications, not a guarantee that every runtime or metadata change emits one.
 

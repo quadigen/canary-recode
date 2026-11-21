@@ -1,11 +1,11 @@
 ---
 title: ImageLabel
-description: Display images, icons, sprites, and live EditableImage pixel buffers in a user interface.
+description: Display images, icons, sprites, and live Image pixel buffers in a user interface.
 ---
 
-`ImageLabel` is a `GuiObject` that displays an image without providing button-specific input behavior. It can load image assets from a URI or display a live `EditableImage` created by a script.
+`ImageLabel` is a `GuiObject` that displays an image without providing button-specific input behavior. It can load image assets from a URI or display a live `Image` created by a script.
 
-Use it for icons, HUD graphics, inventory previews, sprite sheets, scalable backgrounds, procedural textures, and custom renderer output.
+Use it for icons, HUD graphics, inventory previews, sprite sheets, scalable backgrounds, procedural textures, and custom rendering output.
 
 ## Displaying an image
 
@@ -25,7 +25,7 @@ You can also assign a `Content` URI:
 label.ImageContent = Content.fromUri("textures/icon.png")
 ```
 
-`Image` and `ImageContent` refer to the same URI-based source. Both accept Animated values as well. Assigning either one replaces the current editable-image attachment, if any.
+`Image` accepts URI strings and `Image` instances, including `Animated` and `EditableImage`. It also accepts existing `Content` values. Use `ImageContent` to read or assign a source URI as `Content`.
 
 ## Image sources
 
@@ -40,15 +40,15 @@ label.ImageContent = Content.fromUri("textures/icon.png")
 
 Runtime image IDs must have been registered through the engine's asset infrastructure before use. An arbitrary `memory://` URI does not allocate an image. Asset availability and decoding depend on the resolved source; inspect `IsLoaded` if an image fails to display.
 
-## Displaying an EditableImage
+## Displaying an Image
 
-For an image generated or modified at runtime, assign the `EditableImage` object directly to the label. There is no need to encode the pixels as a PNG or create a temporary file.
+For an image generated or modified at runtime, assign the `Image` instance directly to the label. There is no need to encode the pixels as a PNG or create a temporary file.
 
 ```lua
 local AssetService = game:GetService("AssetService")
 local screenGui = script.Parent
 
-local image = AssetService:CreateEditableImage({
+local image = AssetService:CreateImage({
     Size = Vector2.new(128, 128),
 })
 image.Parent = screenGui
@@ -56,7 +56,7 @@ image.Parent = screenGui
 local label = Instance.new("ImageLabel")
 label.Size = UDim2.fromOffset(256, 256)
 label.BackgroundTransparency = 1
-label.EditableImage = image
+label.Image = image
 label.Parent = screenGui
 
 local pixels = buffer.create(128 * 128 * 4)
@@ -70,27 +70,27 @@ end
 image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
 ```
 
-The label automatically displays the latest pixels whenever it renders. This makes it useful for GPU-generated previews, dynamic canvases, and progressive renderers. You can attach the same EditableImage to multiple labels without copying its pixel data yourself.
+When the source URI is empty, the label automatically displays the latest pixels whenever it renders. This makes it useful for GPU-generated previews, dynamic canvases, and progressive renderers. You can attach the same Image to multiple labels without copying its pixel data yourself.
 
 The label's size controls how large the image appears on screen; it does not change the source image's resolution.
 
 ### Switching image sources
 
 ```lua
-label.EditableImage = image       -- display the live pixel buffer
-label.EditableImage = nil         -- detach it and leave the label empty
+label.Image = image       -- display the live pixel buffer
+label.Image = ""         -- detach it and leave the label empty
 label.Image = "textures/icon.png" -- display an ordinary image instead
 ```
 
-Attaching an EditableImage clears the previous URI and releases the decoded image. Detaching does not restore the previous URI. While an editable image is attached, `Image` is empty and `ImageContent` returns an empty URI rather than an object-backed Content value.
+Assigning an Image instance makes the Image getter return that same instance; assigning an empty string detaches it. ImageContent exposes the URI, or an empty URI for a raw pixel canvas.
 
-Cloning an ImageLabel that has an EditableImage attached gives the clone a reference to the same source, not a separate copy of the pixels. Destroying a label detaches its source without destroying it. In the bridge implementation, destroying the source detaches every label referencing it.
+Cloning an ImageLabel that has an Image attached gives the clone a reference to the same source, not a separate copy of the pixels. Destroying a label detaches its source without destroying it. Destroying the source detaches every label that references it.
 
 ### Current editable-image limitations
 
-The editable-image rendering branch uses a raw-pixel draw operation instead of the ordinary decoded-image renderer.
+Editable images support fewer display options than ordinary images.
 
-| Feature | Ordinary image | EditableImage |
+| Feature | Ordinary image | Image |
 | --- | --- | --- |
 | Stretch to label bounds | Yes | Yes |
 | `ImageTransparency` | Yes | Yes |
@@ -100,7 +100,7 @@ The editable-image rendering branch uses a raw-pixel draw operation instead of t
 | Explicit `ResampleMode` selection | Yes | Not applied |
 | Stored-image shadow, blur, and motion blur | Supported by the ordinary path | Not applied |
 
-Inherited GUI rendering and layout still run normally before the editable image is drawn. The editable source is treated as dynamic GUI content.
+Inherited GUI styling and layout still work normally.
 
 ## Sprite sheets
 
@@ -112,7 +112,7 @@ label.ImageRectOffset = Vector2.new(64, 0)
 label.ImageRectSize = Vector2.new(32, 32)
 ```
 
-The rectangle is expressed in source-image pixels. A zero size component lets the renderer use the remaining extent on that axis. Use nonnegative offsets within the source image.
+The rectangle is expressed in source-image pixels. A zero size component uses the remaining extent on that axis. Use nonnegative offsets within the source image.
 
 ## Scaling and nine-slicing
 
@@ -125,7 +125,7 @@ label.SliceCenter = Rect.new(12, 12, 52, 52)
 label.SliceScale = 1
 ```
 
-Choose a slice center that lies within the selected image region and has a positive width and height. If the center is invalid, the renderer falls back to stretch. The border sizes are reduced proportionally when the label is smaller than their combined dimensions.
+Choose a slice center that lies within the selected image region and has a positive width and height. If the center is invalid, the image stretches instead. The border sizes are reduced proportionally when the label is smaller than their combined dimensions.
 
 When tiled scaling is selected, `TileSize` controls the tile dimensions relative to the displayed label. `ResampleMode` selects the sampling behavior for ordinary images; nearest-neighbor sampling is useful for pixel art.
 
@@ -141,10 +141,8 @@ All properties below are specific to ImageLabel; inherited properties such as `S
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `Image` | `string` | `""` | URI of an ordinary image. The setter also accepts a URI-based Content value. |
-| `ImageContent` | `Content` | Empty URI | Content representation of the image URI; setter also accepts Animated. |
-| `AnimatedContent` | `Animated?` | nil | Animated image handle. Assign nil to clear the image. |
-| `EditableImage` | `EditableImage?` | `nil` | Live reference to the editable source, mutually exclusive with ordinary image sources. |
+| `Image` | `string or Image or Content` | `""` | URI or bound Image instance. |
+| `ImageContent` | `Content` | Empty URI | URI-based image source and getter. |
 | `IsLoaded` | `boolean` | `false` | Read-only. True if an ordinary image was decoded or an editable image is attached. |
 | `ImageTransparency` | `number` | `0` | Image opacity expressed as transparency: `0` opaque, `1` invisible. Clamped to 0–1. |
 | `ImageColor3` | `Color3` | `Color3.new(1, 1, 1)` | Color tint for an ordinary image. |
@@ -165,15 +163,15 @@ ImageLabel currently introduces no class-specific methods. It inherits the stand
 ## Things to keep in mind
 
 - Set `BackgroundTransparency` separately from `ImageTransparency` if you want a transparent background behind your image.
-- Use `EditableImage` for raw pixels and `Image` or `ImageContent` for encoded image assets.
-- Assign the EditableImage once, then update its pixels directly. Reassigning it every frame is unnecessary.
+- Use Image instances for generated pixels or animation, and URI strings or ImageContent for encoded image assets.
+- Assign the Image once, then update its pixels directly. Reassigning it every frame is unnecessary.
 - If an ordinary image is not loading, check its URI and `IsLoaded` before changing its rendering properties.
-- A label can be larger than its image, but stretching cannot add source detail. Increase the EditableImage resolution when needed.
+- A label can be larger than its image, but stretching cannot add source detail. Increase the Image resolution when needed.
 
 ## Animated images
 
 ```lua
-label.AnimatedContent = Animated.fromUri("project://sprites/player.aseprite")
+label.Image = game:GetService("AssetService"):CreateImage({Source = "project://sprites/player.aseprite"})
 label.ResampleMode = Enum.ResampleMode.Nearest
 ```
 

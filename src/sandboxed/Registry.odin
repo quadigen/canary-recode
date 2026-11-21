@@ -24,17 +24,10 @@ when HAS_LUAU_STARTUP {
 }
 
 
-CONFIG_EDITOR_MODULES :: #config(EDITOR_MODULES, "")
-CONFIG_EDITOR_COMPONENTS :: #config(EDITOR_COMPONENTS, "")
-HAS_EDITOR_MODULES :: CONFIG_EDITOR_MODULES != ""
-HAS_EDITOR_COMPONENTS :: CONFIG_EDITOR_COMPONENTS != ""
-
-when HAS_EDITOR_MODULES {
-	EDITOR_MODULE_FILES := #load_directory(CONFIG_EDITOR_MODULES)
-}
-
-when HAS_EDITOR_COMPONENTS {
-	EDITOR_COMPONENT_FILES := #load_directory(CONFIG_EDITOR_COMPONENTS)
+CONFIG_EDITOR_PACKAGE :: #config(EDITOR_PACKAGE, "")
+HAS_EDITOR_PACKAGE :: CONFIG_EDITOR_PACKAGE != ""
+when HAS_EDITOR_PACKAGE {
+	EDITOR_PACKAGE_BYTES :: #load(CONFIG_EDITOR_PACKAGE)
 }
 
 init_runtime :: proc(
@@ -104,7 +97,8 @@ run_internal_module :: proc(module_name: string) {
 	run_code(source, module_name)
 	when ODIN_OS != .JS {
 		elapsed := time.duration_milliseconds(time.tick_since(started))
-		if elapsed >= 50 {fmt.eprintf("[Startup] editor module %s: %.1f ms (including dependencies)\n", module_name, elapsed)}
+		if elapsed >=
+		   50 {fmt.eprintf("[Startup] editor module %s: %.1f ms (including dependencies)\n", module_name, elapsed)}
 	}
 }
 
@@ -141,33 +135,14 @@ run_custom_startup :: proc() -> int {
 
 
 register_embedded_editor_modules :: proc() {
-	when HAS_EDITOR_MODULES {
-		if len(environment.packages.internal_modules) > 0 {
-			return
+	when HAS_EDITOR_PACKAGE {
+		if len(environment.packages.internal_modules) > 0 {return}
+		if !packages.Load_Internal_Modules_From_Package(
+			&environment.packages,
+			EDITOR_PACKAGE_BYTES,
+		) {
+			fmt.eprintln("[EditorStartup] invalid embedded editor package")
 		}
-		loaded := 0
-		for file in EDITOR_MODULE_FILES {
-			if !strings.has_suffix(file.name, ".luau") {
-				continue
-			}
-			name := file.name[:len(file.name) - len(".luau")]
-			packages.Register_Internal_Module(&environment.packages, name, string(file.data))
-			loaded += 1
-		}
-		when HAS_EDITOR_COMPONENTS {
-			for file in EDITOR_COMPONENT_FILES {
-				if !strings.has_suffix(file.name, ".luau") {
-					continue
-				}
-				name := strings.concatenate(
-					{"Components/", file.name[:len(file.name) - len(".luau")]},
-					context.temp_allocator,
-				)
-				packages.Register_Internal_Module(&environment.packages, name, string(file.data))
-				loaded += 1
-			}
-		}
-		fmt.eprintf("[EditorStartup] embedded %d editor modules\n", loaded)
 	}
 }
 
@@ -197,7 +172,7 @@ init :: proc(
 ) {
 	init_runtime(vm_state, environment_state, renderer_object)
 
-	when HAS_EDITOR_MODULES {
+	when HAS_EDITOR_PACKAGE {
 		if editor_available() {
 			init_scripts()
 			return
@@ -206,6 +181,21 @@ init :: proc(
 
 	when ODIN_OS != .JS {
 		if editor_available() {
+			local_dir := local_editor_directory()
+			if local_dir != "" {
+				if packages.Load_Internal_Modules_From_Directory(
+					&environment.packages,
+					local_dir,
+				) {
+					init_scripts()
+				} else {
+					fmt.eprintf(
+						"[EditorStartup] could not load local editor directory: %s\n",
+						local_dir,
+					)
+				}
+				return
+			}
 			editor_object := services.Ensure_Service(&environment.services, "EditorService")
 			if editor_object == nil {
 				fmt.eprintln(

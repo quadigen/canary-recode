@@ -50,6 +50,9 @@ Replication_Capability_Join_Batch :: u32(1 << 17)
 Replication_Capability_Character_Settings :: u32(1 << 18)
 Replication_Capability_Body_Velocity :: u32(1 << 19)
 Replication_Capability_Unreliable_Remote :: u32(1 << 20)
+Replication_Capability_Ownership_Policy :: u32(1 << 21)
+Replication_Capability_Compact_Values :: u32(1 << 22)
+Replication_Capability_Compact_Physics :: u32(1 << 23)
 REPLICATION_SNAPSHOT_CLOCK_RATE :: 120
 
 
@@ -74,7 +77,10 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Join_Batch |
 	Replication_Capability_Character_Settings |
 	Replication_Capability_Body_Velocity |
-	Replication_Capability_Unreliable_Remote
+	Replication_Capability_Unreliable_Remote |
+	Replication_Capability_Ownership_Policy |
+	Replication_Capability_Compact_Values |
+	Replication_Capability_Compact_Physics
 
 Replication_Handshake_Ok: u8 = 0
 Replication_Handshake_Version_Mismatch: u8 = 1
@@ -103,6 +109,7 @@ Replication_Kind_Metadata :: u8(30)
 Replication_Kind_Join_Batch :: u8(31)
 Replication_Kind_Character_Settings :: u8(32)
 Replication_Kind_Unreliable_Remote :: u8(33)
+Replication_Kind_Ownership_Policy :: u8(34)
 
 Replication_Deformable_Cloth :: u8(0)
 Replication_Deformable_SoftBody :: u8(1)
@@ -302,6 +309,9 @@ replication_receive_hello :: proc(
 	if reader.offset < len(reader.data) {
 		username = replication_read_string(reader)
 		if !reader.valid || len(username) > 32 {reader.valid = false; return}
+		for ch in transmute([]u8)username {
+			if ch < 32 || ch == 127 {reader.valid = false; return}
+		}
 	}
 	connection: ^Replication_Peer
 	for &candidate in service.peers {if candidate.peer == peer {connection = &candidate; break}}
@@ -321,6 +331,7 @@ replication_receive_hello :: proc(
 		)
 		return
 	}
+	if reader.offset != len(reader.data) {reader.valid = false; return}
 	if version != Replication_Protocol_Version {
 		service.version_mismatches += 1
 		service.handshake_rejections += 1
@@ -368,7 +379,8 @@ replication_receive_hello :: proc(
 	}
 
 
-	if len(service.join_token) > 0 && !replication_tokens_equal(token, service.join_token) {
+	if (service.require_join_token && len(service.join_token) == 0) ||
+	   (len(service.join_token) > 0 && !replication_tokens_equal(token, service.join_token)) {
 		service.auth_failures += 1
 		service.handshake_rejections += 1
 		fmt.eprintln("[Replication] refused a client with an invalid join token")
@@ -389,10 +401,18 @@ replication_receive_hello :: proc(
 	id := service.next_user_id
 	service.next_user_id += 1
 	name := username
-	if name == "" {
-		name = fmt.tprintf("Player%d", id)
-	}
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+
+
+	if name == "" {name = fmt.tprintf("Player%d", id)}
+	if players != nil {
+		for child in players.children {
+			if child != nil && !child.destroyed && strings.equal_fold(child.name, name) {
+				name = fmt.tprintf("Player%d#%d", id, id)
+				break
+			}
+		}
+	}
 	player := Players_Add(players, L, id, name)
 	character_service := cast(^CharacterService)Ensure_Service(
 		service.data_model.registry,
@@ -446,7 +466,7 @@ replication_receive_welcome :: proc(
 	name := replication_read_string(reader)
 	nonce := replication_read_u32(reader)
 	snapshot_rate_bits := replication_read_u32(reader)
-	if !reader.valid {return}
+	if !reader.valid || reader.offset != len(reader.data) {reader.valid = false; return}
 	service.server_capabilities = capabilities
 	if status != Replication_Handshake_Ok {
 		service.handshake_status = status
@@ -612,6 +632,7 @@ replication_start :: proc(
 	mode: Replication_Mode,
 	username: string = "",
 ) -> bool {
+	if mode == .Server && service.require_join_token && service.join_token == "" {return false}
 	replication_stop(service)
 	if mode == .Client && (address == "" || address == "0.0.0.0") {
 		fmt.eprintln(
@@ -673,6 +694,7 @@ replication_budgeted :: proc(service: ^ReplicatorService, kind: u8) -> bool {
 		kind != Replication_Kind_Model_Pivot &&
 		kind != Replication_Kind_Group_Ownership &&
 		kind != Replication_Kind_World_Gravity &&
+		kind != Replication_Kind_Ownership_Policy &&
 		kind != Replication_Kind_Scene_Ready \
 	)
 }
@@ -690,7 +712,7 @@ replication_peer_bandwidth_budget :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
 ) -> u32 {
-	// A join is a queued snapshot. Deferring part of it to the next tick is expected.
+
 	if replication_initial_snapshot_pending(connection) {
 		if service.bandwidth_budget_configured {return service.base_bandwidth_budget}
 		return REPLICATION_DEFAULT_JOIN_BUDGET
@@ -756,17 +778,25 @@ replication_send :: proc(
 	append(&bytes, ..payload)
 	channel :=
 		reliable ? Replication_Transport_Channel_Reliable : Replication_Transport_Channel_Unreliable
-	if !transport_peer_send(peer, channel, bytes[:], reliable, kind == Replication_Kind_Unreliable_Remote) {return false}
+	if !transport_peer_send(
+		peer,
+		channel,
+		bytes[:],
+		reliable,
+		kind == Replication_Kind_Unreliable_Remote,
+	) {return false}
 	service.packets_sent += 1
 	service.bytes_sent += u64(len(bytes))
 	if budgeted {connection.bytes_this_tick += u32(wire_size)}
 	return true
 }
 
-// Send saved/server defaults separately from character entities so a player
-// can receive them even when automatic character loading is disabled.
+
 replication_send_character_settings :: proc(service: ^ReplicatorService) {
-	characters := cast(^CharacterService)DataModel_Get_Service(service.data_model, "CharacterService")
+	characters := cast(^CharacterService)DataModel_Get_Service(
+		service.data_model,
+		"CharacterService",
+	)
 	if characters == nil {return}
 	flags := u8(0)
 	if characters.character_auto_loads {flags |= 1}
@@ -774,11 +804,33 @@ replication_send_character_settings :: proc(service: ^ReplicatorService) {
 	payload := [1]u8{flags}
 	for &peer in service.peers {
 		if !peer.handshake_complete ||
-		   (peer.client_capabilities & service.server_capabilities & Replication_Capability_Character_Settings) == 0 ||
+		   (peer.client_capabilities &
+				   service.server_capabilities &
+				   Replication_Capability_Character_Settings) ==
+			   0 ||
 		   (peer.character_settings_sent && peer.last_character_settings == flags) {continue}
 		if replication_send(service, peer.peer, Replication_Kind_Character_Settings, payload[:]) {
 			peer.character_settings_sent = true
 			peer.last_character_settings = flags
+		}
+	}
+}
+
+
+replication_send_ownership_policy :: proc(service: ^ReplicatorService) {
+	if service == nil || service.mode != .Server {return}
+	allowed := service.allow_client_ownership_requests
+	payload := [1]u8{allowed ? u8(1) : u8(0)}
+	for &peer in service.peers {
+		if !peer.handshake_complete ||
+		   (peer.client_capabilities &
+				   service.server_capabilities &
+				   Replication_Capability_Ownership_Policy) ==
+			   0 ||
+		   (peer.ownership_policy_sent && peer.last_ownership_policy == allowed) {continue}
+		if replication_send(service, peer.peer, Replication_Kind_Ownership_Policy, payload[:]) {
+			peer.ownership_policy_sent = true
+			peer.last_ownership_policy = allowed
 		}
 	}
 }
@@ -1046,7 +1098,11 @@ replication_receive_deformable :: proc(
 	case Replication_Deformable_Cloth:
 		if !classes.Is_A(object, "Cloth") {reader.valid = false; return}
 		cloth := cast(^classes.Cloth)object
-		new_origin := datatypes.Vector3{replication_read_f64(reader), replication_read_f64(reader), replication_read_f64(reader)}
+		new_origin := datatypes.Vector3 {
+			replication_read_f64(reader),
+			replication_read_f64(reader),
+			replication_read_f64(reader),
+		}
 		if !reader.valid || !replication_vector3_finite(new_origin) {reader.valid = false; return}
 		cloth.simulation_origin = new_origin
 		for &particle in cloth.particles {
@@ -1491,6 +1547,7 @@ replication_receive :: proc(
 	data: []u8,
 ) {
 	if len(data) < 5 ||
+	   len(data) > int(Replication_Max_Frame_Payload) + 5 ||
 	   data[0] != 'K' ||
 	   data[1] != 'R' ||
 	   data[2] != 'P' ||
@@ -1498,9 +1555,41 @@ replication_receive :: proc(
 		service.malformed_packets += 1
 		return
 	}
+
+	if service.mode == .Server {
+		connection := replication_peer_of(service, peer)
+		if connection == nil ||
+		   (!connection.handshake_complete && data[4] != 1) {service.rejected_packets += 1; return}
+
+		if service.clock - connection.rpc_rate_window >= 1 {
+			connection.rpc_rate_window = service.clock
+			connection.rpc_rate_count = 0
+			connection.rpc_rate_bytes = 0
+			connection.ownership_rate_count = 0
+		}
+		switch data[4] {
+		case 12, 16, 17, 18, Replication_Kind_Unreliable_Remote:
+			if connection.rpc_rate_count >= 240 ||
+			   u32(len(data)) > 2 * 1024 * 1024 - connection.rpc_rate_bytes {
+				service.rejected_packets += 1
+				return
+			}
+			connection.rpc_rate_count += 1
+			connection.rpc_rate_bytes += u32(len(data))
+		case 13:
+			if connection.ownership_rate_count >= 60 {service.rejected_packets += 1; return}
+			connection.ownership_rate_count += 1
+		}
+	} else if service.mode == .Client {
+		if peer == nil ||
+		   peer != service.remote ||
+		   (!service.handshake_complete && data[4] != 3) {service.rejected_packets += 1; return}
+	} else {return}
 	reader := Replication_Reader {
-		data  = data[5:],
-		valid = true,
+		capabilities = remote_common_capabilities(service, peer),
+		peer         = peer,
+		data         = data[5:],
+		valid        = true,
 	}
 
 
@@ -1535,15 +1624,27 @@ replication_receive :: proc(
 			CharacterService_Flush_Pending_Binds(service.data_model)
 			fmt.println("Network scene ready; client may now build its character")
 		}
+	case Replication_Kind_Ownership_Policy:
+		if service.mode != .Client ||
+		   peer != service.remote ||
+		   !service.handshake_complete {return}
+		if len(reader.data) != 1 || reader.data[0] > 1 {reader.valid = false; break}
+		service.remote_allow_client_ownership_requests = reader.data[0] != 0
+		reader.offset = 1
 	case Replication_Kind_Character_Settings:
-		if service.mode != .Client || peer != service.remote || !service.handshake_complete {return}
+		if service.mode != .Client ||
+		   peer != service.remote ||
+		   !service.handshake_complete {return}
 		if len(reader.data) != 1 || reader.data[0] > 3 {
 			reader.valid = false
 			break
 		}
 		flags := reader.data[0]
 		reader.offset = 1
-		characters := cast(^CharacterService)DataModel_Get_Service(service.data_model, "CharacterService")
+		characters := cast(^CharacterService)DataModel_Get_Service(
+			service.data_model,
+			"CharacterService",
+		)
 		if characters != nil {
 			characters.character_auto_loads = (flags & 1) != 0
 			if !characters.native_input_overridden {
@@ -1594,7 +1695,9 @@ replication_receive :: proc(
 		for &candidate in service.peers {if candidate.peer == peer {connection = &candidate; break}}
 		if connection == nil {return}
 		count := replication_read_u32(&reader)
-		if !reader.valid || count > 8192 {reader.valid = false; break}
+		if !reader.valid ||
+		   count > 8192 ||
+		   int(count) * 16 != len(reader.data) - reader.offset {reader.valid = false; break}
 		for _ in 0 ..< int(count) {
 			id := replication_read_u32(&reader)
 			state_token := replication_read_u32(&reader)
@@ -1649,6 +1752,19 @@ replication_receive :: proc(
 			classes.Push_Object(L, object)
 			replication_decode_value(L, &reader, service.signal_registry.datatypes, 0, service)
 			if !reader.valid {break}
+			stream := replication_read_u8(&reader)
+			batch_token := replication_read_u32(&reader)
+			member_index := replication_read_u8(&reader)
+			member_count := replication_read_u8(&reader)
+			if !reader.valid ||
+			   reader.offset != len(reader.data) ||
+			   stream > replication_property_stream_extra ||
+			   member_count == 0 ||
+			   member_count > replication_property_batch_limit ||
+			   member_index >= member_count {
+				reader.valid = false
+				break
+			}
 			if ok, err := vm.ProtectedCall(L, 2, 0); !ok {
 				fmt.eprintf(
 					"[Replication] failed to apply property %q to %s: %s\n",
@@ -1656,22 +1772,10 @@ replication_receive :: proc(
 					classes.Get_Class_Name(object),
 					err,
 				)
-				vm.Pop(L)
-			}
-			entity.last_property_tick = tick
-
-
-			stream := replication_read_u8(&reader)
-			batch_token := replication_read_u32(&reader)
-			member_index := replication_read_u8(&reader)
-			member_count := replication_read_u8(&reader)
-			if stream > replication_property_stream_extra ||
-			   member_count == 0 ||
-			   member_count > replication_property_batch_limit ||
-			   member_index >= member_count {
-				reader.valid = false
+				if err != "" {delete(err)}
 				break
 			}
+			entity.last_property_tick = tick
 			channel := int(stream)
 			if entity.property_batch_token[channel] != batch_token ||
 			   entity.property_batch_size[channel] != member_count {
@@ -1699,13 +1803,27 @@ replication_receive :: proc(
 		}
 		if entity.last_state_tick != 0 &&
 		   transmute(i32)(tick - entity.last_state_tick) < 0 {return}
-		if subtype != 1 || !classes.Is_A(object, "Part") {reader.valid = false; break}
+		compact := subtype == 3
+		if (subtype != 1 && !compact) ||
+		   !classes.Is_A(object, "Part") ||
+		   (compact &&
+				   (reader.capabilities & Replication_Capability_Compact_Physics) ==
+					   0) {reader.valid = false; break}
 		part := cast(^classes.Part)object
-		frame := replication_read_cframe(&reader)
-		size := datatypes.Vector3 {
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
+		frame: datatypes.CFrame
+		size: datatypes.Vector3
+		if compact {
+			values: [15]f64
+			replication_read_compact_f64s(&reader, values[:])
+			frame = replication_frame_from_values(values[:12])
+			size = {values[12], values[13], values[14]}
+		} else {
+			frame = replication_read_cframe(&reader)
+			size = {
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+			}
 		}
 		color := datatypes.Color3 {
 			R = replication_read_f32(&reader),
@@ -1719,20 +1837,57 @@ replication_receive :: proc(
 		material := enums.Material(reader.data[reader.offset + 2])
 		shape := enums.PartType(reader.data[reader.offset + 3])
 		reader.offset += 4
-		sample := Replication_Sample{tick = tick, frame = frame}
+		sample := Replication_Sample {
+			tick  = tick,
+			frame = frame,
+		}
 		remaining := len(reader.data) - reader.offset
-		if remaining == 52 &&
-		   (service.client_capabilities & service.server_capabilities & Replication_Capability_Body_Velocity) != 0 {
-			sample.linear_velocity = {replication_read_f64(&reader), replication_read_f64(&reader), replication_read_f64(&reader)}
-			sample.angular_velocity = {replication_read_f64(&reader), replication_read_f64(&reader), replication_read_f64(&reader)}
-			sample.has_velocity = replication_vector3_finite(sample.linear_velocity) &&
-			                      replication_vector3_finite(sample.angular_velocity)
+		if compact {
+			flag := replication_read_u8(&reader)
+			if flag > 1 {reader.valid = false; break}
+			if flag == 1 {
+				if (reader.capabilities & Replication_Capability_Body_Velocity) ==
+				   0 {reader.valid = false; break}
+				velocity: [6]f64
+				replication_read_compact_f64s(&reader, velocity[:])
+				sample.linear_velocity = {velocity[0], velocity[1], velocity[2]}
+				sample.angular_velocity = {velocity[3], velocity[4], velocity[5]}
+				sample.has_velocity =
+					replication_vector3_finite(sample.linear_velocity) &&
+					replication_vector3_finite(sample.angular_velocity)
+				if !sample.has_velocity {reader.valid = false; break}
+			}
+			if !reader.valid || len(reader.data) - reader.offset != 4 {reader.valid = false; break}
+		} else if remaining == 52 &&
+		   (service.client_capabilities &
+				   service.server_capabilities &
+				   Replication_Capability_Body_Velocity) !=
+			   0 {
+			sample.linear_velocity = {
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+			}
+			sample.angular_velocity = {
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+				replication_read_f64(&reader),
+			}
+			sample.has_velocity =
+				replication_vector3_finite(sample.linear_velocity) &&
+				replication_vector3_finite(sample.angular_velocity)
 			if !sample.has_velocity {reader.valid = false; break}
 		} else if remaining != 4 {
 			reader.valid = false
 			break
 		}
-		if !replication_frame_finite(frame) || !replication_vector3_finite(size) {
+		if !reader.valid ||
+		   !replication_frame_finite(frame) ||
+		   !replication_vector3_finite(size) ||
+		   !physics_finite_f32(color.R) ||
+		   !physics_finite_f32(color.G) ||
+		   !physics_finite_f32(color.B) ||
+		   !physics_finite_f32(transparency) {
 			reader.valid = false
 			break
 		}
@@ -1820,8 +1975,8 @@ replication_receive :: proc(
 				}
 				entity.force_correction = false
 			}
-			body_changed := part.size != size || part.anchored != anchored ||
-			                part.can_collide != can_collide
+			body_changed :=
+				part.size != size || part.anchored != anchored || part.can_collide != can_collide
 			part.size = size
 			part.color = color
 			part.transparency = f64(transparency)
@@ -2011,33 +2166,21 @@ replication_receive :: proc(
 				   transmute(i32)(upload_tick - entity.pivot_upload_after) <= 0) {return}
 		if entity.last_upload_owner == entity.owner_id &&
 		   transmute(i32)(upload_tick - entity.last_upload_tick) <= 0 {return}
-		if reader.offset + 144 != len(reader.data) {
+		values: [18]f64
+		remaining := len(reader.data) - reader.offset
+		if remaining == 144 {
+			for &value in values {value = replication_read_f64(&reader)}
+		} else if remaining < 144 &&
+		   (reader.capabilities & Replication_Capability_Compact_Physics) != 0 {
+			replication_read_compact_f64s(&reader, values[:])
+		} else {reader.valid = false}
+		if !reader.valid || reader.offset != len(reader.data) {
 			service.owned_states_rejected += 1
 			return
 		}
-		frame := datatypes.CFrame{}
-		frame.x = replication_read_f64(&reader)
-		frame.y = replication_read_f64(&reader)
-		frame.z = replication_read_f64(&reader)
-		frame.r00 = replication_read_f64(&reader)
-		frame.r01 = replication_read_f64(&reader)
-		frame.r02 = replication_read_f64(&reader)
-		frame.r10 = replication_read_f64(&reader)
-		frame.r11 = replication_read_f64(&reader)
-		frame.r12 = replication_read_f64(&reader)
-		frame.r20 = replication_read_f64(&reader)
-		frame.r21 = replication_read_f64(&reader)
-		frame.r22 = replication_read_f64(&reader)
-		linear := datatypes.Vector3 {
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
-		}
-		angular := datatypes.Vector3 {
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
-			replication_read_f64(&reader),
-		}
+		frame := replication_frame_from_values(values[:12])
+		linear := datatypes.Vector3{values[12], values[13], values[14]}
+		angular := datatypes.Vector3{values[15], values[16], values[17]}
 
 
 		if !reader.valid ||
@@ -2075,6 +2218,18 @@ replication_receive :: proc(
 		}
 
 
+		accepted_ms := transport_time_get()
+		elapsed := min(f64(accepted_ms - entity.last_accepted_ms) / 1000.0, 1.0)
+		delta_x := frame.x - entity.last_accepted_position.x
+		delta_y := frame.y - entity.last_accepted_position.y
+		delta_z := frame.z - entity.last_accepted_position.z
+		max_displacement := f64(service.owned_max_speed) * elapsed + 2.0
+		if delta_x * delta_x + delta_y * delta_y + delta_z * delta_z >
+		   max_displacement * max_displacement {
+			service.owned_states_rejected += 1
+			replication_send_owned_correction(service, connection, id, part.cframe)
+			return
+		}
 		if entity.owned_window_time == 0 || now - entity.owned_window_time >= 1 {
 			entity.owned_window_time = now
 			entity.owned_window_origin = datatypes.Vector3 {
@@ -2086,7 +2241,8 @@ replication_receive :: proc(
 			ox := frame.x - entity.owned_window_origin.x
 			oy := frame.y - entity.owned_window_origin.y
 			oz := frame.z - entity.owned_window_origin.z
-			if ox * ox + oy * oy + oz * oz > f64(f64(service.owned_max_speed) * f64(service.owned_max_speed)) {
+			if ox * ox + oy * oy + oz * oz >
+			   f64(f64(service.owned_max_speed) * f64(service.owned_max_speed)) {
 				service.owned_states_rejected += 1
 				replication_send_owned_correction(service, connection, id, part.cframe)
 				return
@@ -2104,6 +2260,8 @@ replication_receive :: proc(
 		entity.owned_updates_window += 1
 		entity.last_upload_owner = entity.owner_id
 		entity.last_upload_tick = upload_tick
+		entity.last_accepted_ms = accepted_ms
+		entity.last_accepted_position = {frame.x, frame.y, frame.z}
 		character_set_root_frame(part, frame)
 		entity.owned_linear_velocity = linear
 		entity.owned_angular_velocity = angular
@@ -2132,7 +2290,7 @@ replication_receive :: proc(
 		   entity.object.destroyed ||
 		   !classes.Is_A_Class(entity.object, &classes.Part_Class) {return}
 		if reader.offset == len(reader.data) {
-			// Older servers send only a marker and expect a later state packet.
+
 			entity.force_correction = true
 			break
 		}
@@ -2155,8 +2313,15 @@ replication_receive :: proc(
 		Physics_Request_Sync_For_Data_Model(service.data_model)
 	case 12:
 		name := replication_read_string(&reader)
-		if !reader.valid || len(name) > 256 {break}
+		if !reader.valid || len(name) == 0 || len(name) > 256 {break}
 		if service.mode == .Server {
+			allowed, explicit := service.client_event_policy[name]
+			if !explicit {
+				for callback in service.event_callbacks {
+					if callback.name == name {allowed = true; break}
+				}
+			}
+			if !allowed {service.rejected_packets += 1; return}
 			known := false
 			for connection in service.peers {if connection.peer == peer {known = true; break}}
 			if !known {return}
@@ -2164,19 +2329,28 @@ replication_receive :: proc(
 		top := vm.StackTop(L)
 		defer vm.SetStackTop(L, top)
 		replication_decode_value(L, &reader, service.signal_registry.datatypes, 0, service)
-		if !reader.valid {break}
+		if !reader.valid || reader.offset != len(reader.data) {reader.valid = false; break}
 		payload_ref := vm.RetainValue(L)
 		vm.Pop(L)
+		sender: ^classes.Object
+		if service.mode == .Server {
+			connection := replication_peer_of(service, peer)
+			if connection == nil ||
+			   connection.player == nil {vm.ReleaseValue(L, payload_ref); return}
+			sender = &connection.player.object
+		}
 		if service.event_signal != nil {
 			vm.PushString(L, name)
 			vm.PushRegistryReference(L, payload_ref)
-			signals.Fire(L, service.event_signal, 2)
+			if sender != nil {classes.Push_Object(L, sender)}
+			signals.Fire(L, service.event_signal, 3 if sender != nil else 2)
 		}
 		for callback in service.event_callbacks {
 			if callback.name != name {continue}
 			vm.PushRegistryReference(L, callback.reference)
 			vm.PushRegistryReference(L, payload_ref)
-			ok, err := vm.ProtectedCall(L, 1, 0)
+			if sender != nil {classes.Push_Object(L, sender)}
+			ok, err := vm.ProtectedCall(L, 2 if sender != nil else 1, 0)
 			if !ok && err != "" {delete(err)}
 		}
 		vm.ReleaseValue(L, payload_ref)
@@ -2184,11 +2358,15 @@ replication_receive :: proc(
 		unreliable := data[4] == Replication_Kind_Unreliable_Remote
 		if unreliable {
 			if len(reader.data) > 4 + UNRELIABLE_REMOTE_MAX_PAYLOAD {reader.valid = false; break}
-			if (remote_common_capabilities(service, peer) & Replication_Capability_Unreliable_Remote) == 0 {return}
+			if (remote_common_capabilities(service, peer) &
+				   Replication_Capability_Unreliable_Remote) ==
+			   0 {return}
 			if service.mode == .Server {
 				connection := replication_peer_of(service, peer)
 				if connection == nil || !connection.handshake_complete {return}
-			} else if service.mode != .Client || !service.handshake_complete || peer != service.remote {return}
+			} else if service.mode != .Client ||
+			   !service.handshake_complete ||
+			   peer != service.remote {return}
 		}
 		if service.mode == .Server {
 			known := false
@@ -2216,7 +2394,7 @@ replication_receive :: proc(
 			for connection in service.peers {if connection.peer == peer {known = true; break}}
 			if !known {return}
 		} else if peer != service.remote {return}
-		remote_receive_invoke_response(service, L, &reader)
+		remote_receive_invoke_response(service, L, peer, &reader)
 		if !reader.valid {break}
 	case:
 		service.rejected_packets += 1
@@ -2331,7 +2509,9 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 					service.connected ? "Network client disconnected from the server" : "Network client could not connect to the server",
 				)
 				service.connected = false
+				service.handshake_complete = false
 				service.remote = nil
+				service.remote_allow_client_ownership_requests = false
 			}
 		case .RECEIVE:
 			service.packets_received += 1
@@ -2349,6 +2529,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 	   transport_peer_disconnected(service.remote) {
 		fmt.eprintln("Network client could not connect to the server")
 		service.remote = nil
+		service.remote_allow_client_ownership_requests = false
 	}
 	service.clock += delta_time
 	service.elapsed += delta_time
@@ -2374,6 +2555,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 		}
 		transport_peer_reset(service.remote)
 		service.remote = nil
+		service.remote_allow_client_ownership_requests = false
 		service.elapsed = 0
 		service.handshake_elapsed = 0
 	} else if service.mode == .Client && service.connected && service.elapsed >= 1.0 / 30.0 {

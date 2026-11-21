@@ -63,6 +63,13 @@ typedef struct kne_vm_api {
 	kne_vm_register_function_fn register_function;
 	kne_vm_register_library_function_fn register_library_function;
 	kne_vm_register_global_datatype_fn register_global_datatype;
+	/* ABI 3.1: synchronous protected Luau execution. Results are borrowed
+	 * for the current host callback. A negative result indicates an error. */
+	int32_t (KNE_CALL *execute)(kne_extension ext, kne_string source, const kne_value *args, int32_t arg_count, kne_value *out, int32_t out_capacity);
+	/* Direct access to a buffer on the VM stack; pointer is borrowed. */
+	void *(KNE_CALL *get_buffer)(kne_vm vm, int32_t index, size_t *out_size);
+	/* Copies bytes into a new Luau buffer. NULL is valid for a zero length. */
+	int32_t (KNE_CALL *push_buffer)(kne_vm vm, const void *data, size_t size);
 } kne_vm_api;
 
 #ifdef __cplusplus

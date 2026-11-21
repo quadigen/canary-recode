@@ -59,6 +59,14 @@ end
 
 ## Methods
 
+### GetActor
+
+```lua
+GetActor(): Actor?
+```
+
+Returns the nearest ancestor Actor, or nil when this instance is not under one. See [Parallel Luau](/docs/guides/parallel-luau).
+
 ### Searching and inspecting instances
 
 The following methods are available through the common object API. Searches return `nil` if a matching object cannot be returned. The `recursive` argument defaults to `false`.
@@ -91,7 +99,7 @@ local function showAllGuiObjects(container)
 end
 ```
 
-`WaitForChild()` and `WaitForChildOfClass()` have a default timeout argument of `10`, but the current implementation doesn't actually wait for elapsed time or yield to other scripts. For objects created later, prefer `ChildAdded` instead. Some shared methods are callable even though they are not listed in the Instance reflection metadata.
+`WaitForChild()` and `WaitForChildOfClass()` have a default timeout argument of `10`, but these methods don't actually wait for elapsed time or yield to other scripts. For objects created later, prefer `ChildAdded` instead.
 
 ### Clone
 

@@ -48,6 +48,28 @@ Gui_Set_Selected :: proc(registry: ^Registry, gui: ^GuiObject) -> bool {
 	return true
 }
 
+Gui_Select_Within :: proc(registry: ^Registry, root: ^Object) {
+	if registry == nil || root == nil || root.destroyed {return}
+	pending: [dynamic]^Object
+	defer delete(pending)
+	append(&pending, root)
+	best: ^GuiObject
+	best_order := max(int)
+	for len(pending) > 0 {
+		current := pop(&pending)
+		if current == nil || current.destroyed {continue}
+		if Is_A(current, "GuiObject") {
+			gui := cast(^GuiObject)current
+			if Gui_Selection_Valid(registry, gui) {
+				order := int(gui.selection_order)
+				if best == nil || order < best_order {best = gui; best_order = order}
+			}
+		}
+		for i := len(current.children) - 1; i >= 0; i -= 1 {append(&pending, current.children[i])}
+	}
+	if best != nil {_ = Gui_Set_Selected(registry, best)}
+}
+
 Gui_Navigate :: proc(registry: ^Registry, dx, dy: i32) -> bool {
 	if registry == nil || registry.gui_navigation_disabled || (dx == 0 && dy == 0) {return false}
 	current := Gui_Get_Selected(registry)

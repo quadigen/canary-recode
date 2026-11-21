@@ -44,7 +44,9 @@ terrain_material_at_world :: proc(
 	position: datatypes.Vector3,
 ) -> enums.Material {
 	if service.data_model == nil {return .Air}
-	terrain := cast(^Terrain)DataModel_Get_Service(service.data_model, "Terrain")
+	descriptor := Find_Service(service.data_model.registry, "Terrain")
+	if descriptor == nil {return .Air}
+	terrain := cast(^Terrain)descriptor.object
 	if terrain == nil {return .Air}
 	x, y, z := terrain_cell_from_world(terrain, position)
 	if cell, ok := terrain_get_cell(terrain, x, y, z); ok {
@@ -58,16 +60,21 @@ Physics_Raycast :: proc(
 	workspace: ^classes.Object,
 	origin, direction: datatypes.Vector3,
 	params: ^datatypes.RaycastParams = nil,
+	synchronize := true,
 ) -> (
 	result: datatypes.RaycastResult,
 	hit: bool,
 ) {
 	if service == nil || !service.initialized || datatypes.Vec3_Magnitude(direction) == 0 {return}
-	Physics_Synchronize(service, workspace)
 
-
-	candidates := &service.scratch_ray_candidates
-	physics_reset_scratch_ids(candidates)
+	local_candidates: [dynamic]kineffi.JPH_BodyID
+	defer delete(local_candidates)
+	candidates := &local_candidates
+	if synchronize {
+		Physics_Synchronize(service, workspace)
+		candidates = &service.scratch_ray_candidates
+		physics_reset_scratch_ids(candidates)
+	}
 
 
 	for _, terrain_body in service.terrain_bodies {
@@ -100,7 +107,11 @@ Physics_Raycast :: proc(
 		}
 		result = datatypes.RaycastResult {
 			Position    = hit_position,
-			Normal      = {f64(native_result.normal.x), f64(native_result.normal.y), f64(native_result.normal.z)},
+			Normal      = {
+				f64(native_result.normal.x),
+				f64(native_result.normal.y),
+				f64(native_result.normal.z),
+			},
 			Distance    = f32(datatypes.Vec3_Magnitude(direction) * f64(native_result.fraction)),
 			Material    = terrain_material_at_world(service, hit_position),
 			InstanceRef = 0,
@@ -118,7 +129,11 @@ Physics_Raycast :: proc(
 			native_result.position.y,
 			native_result.position.z,
 		},
-		Normal      = {f64(native_result.normal.x), f64(native_result.normal.y), f64(native_result.normal.z)},
+		Normal      = {
+			f64(native_result.normal.x),
+			f64(native_result.normal.y),
+			f64(native_result.normal.z),
+		},
 		Distance    = f32(datatypes.Vec3_Magnitude(direction) * f64(native_result.fraction)),
 		Material    = part.material,
 		InstanceRef = part.lua_ref,
@@ -140,7 +155,7 @@ physics_overlap_part :: proc(
 		return nil
 	}
 	body_id := service.bodies[index].body_id
-	// The body owns this shape. It remains valid for the duration of the query.
+
 	shape := kineffi.JPH_BodyInterface_GetShape(service.system.body_interface, body_id)
 	if shape == nil {return nil}
 	position: kineffi.JPH_RVec3

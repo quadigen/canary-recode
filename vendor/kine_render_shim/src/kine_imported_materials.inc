@@ -28,7 +28,9 @@ static void kine_bind_mesh_geometry(KineFilamentContext *ctx, RenderableManager:
     size_t count, bool inherit = true) {
     auto *mesh = key.mesh;
     if (!kine_uses_imported_materials(ctx,key,inherit)) {
-        builder.material(0,primary).geometry(0,RenderableManager::PrimitiveType::TRIANGLES,mesh->vb,mesh->ib,0,mesh->indexCount);
+        const auto *geometry = kine_render_geometry(ctx, mesh, base);
+        builder.material(0,primary).geometry(0,RenderableManager::PrimitiveType::TRIANGLES,
+            geometry->vb, geometry->ib, 0, geometry->indexCount);
         return;
     }
     for (size_t i = 0; i < mesh->primitives.size(); ++i) {

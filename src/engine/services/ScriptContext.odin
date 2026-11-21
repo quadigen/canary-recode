@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import "core:fmt"
@@ -236,7 +235,8 @@ script_context_should_run :: proc(
 			   !script_has_ancestor(object, "ServerScriptService") {
 				return false
 			}
-		case .Plugin: return false
+		case .Plugin:
+			return false
 		case .Client, .Server:
 			if script_has_ancestor(object, "ServerStorage") {return false}
 		}
@@ -244,21 +244,28 @@ script_context_should_run :: proc(
 	runs_on_client := classes.Script_Runs_On_Client(object, kind)
 	if runs_on_client &&
 	   (script_has_ancestor(object, "ServerScriptService") ||
-	    script_has_ancestor(object, "ServerStorage")) {
+			   script_has_ancestor(object, "ServerStorage")) {
 		return false
 	}
 	switch mode {
-	case .Server: return !runs_on_client
+	case .Server:
+		return !runs_on_client
 	case .Client:
 		if !runs_on_client {return false}
 		if script_has_ancestor(object, "ReplicatedFirst") {return true}
-		replicator := cast(^ReplicatorService)Service_Get_Service(&script_context.service, "ReplicatorService")
+		replicator := cast(^ReplicatorService)Service_Get_Service(
+			&script_context.service,
+			"ReplicatorService",
+		)
 		return !replication_uses_server_player_gui(replicator) || replicator.replication_finished
-	case .Standalone: return true
+	case .Standalone:
+		return true
 	case .Singleplayer:
-		return runs_on_client ? ScriptContext_Runs_Client_Scripts(script_context) :
-		                       ScriptContext_Runs_Server_Scripts(script_context)
-	case .Editor: return false
+		return(
+			runs_on_client ? ScriptContext_Runs_Client_Scripts(script_context) : ScriptContext_Runs_Server_Scripts(script_context) \
+		)
+	case .Editor:
+		return false
 	}
 	return false
 }
@@ -381,6 +388,7 @@ script_context_start :: proc(
 
 	common.thread = thread
 	common.thread_ref = thread_ref
+	vm.SetThreadActorPhase(thread, classes.Actor_Ancestor_ID(object), false)
 	script_context_remember_thread(script_context, object, thread)
 
 	chunk_name := classes.Get_Name(object)
@@ -634,11 +642,11 @@ ScriptContext_step :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Con
 	}
 
 	for descriptor in script_context.object_registry.classes {
-		// Only executable script classes can change state here. Avoid testing
-		// every instance in the DataModel for script ancestry on every frame.
+
+
 		if descriptor == nil ||
 		   (!classes.Is_Class_A(descriptor.info, &classes.Script_Class) &&
-		    !classes.Is_Class_A(descriptor.info, &classes.LocalScript_Class)) {
+				   !classes.Is_Class_A(descriptor.info, &classes.LocalScript_Class)) {
 			continue
 		}
 

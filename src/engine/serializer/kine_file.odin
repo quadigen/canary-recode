@@ -12,8 +12,7 @@ import "core:os"
 
 KINE_ZSTD_LEVEL :: kineffi.ZSTD_CLEVEL_DEFAULT
 
-KINE_TREE_HEADROOM_BYTES :: 64 * 1024 * 1024
-KINE_MAX_STREAM_BYTES :: assetstore.MAX_ASSET_TOTAL_BYTES + KINE_TREE_HEADROOM_BYTES
+// Stream budget is shared with the raw KINE parser (kine.odin).
 
 is_zstd_frame :: proc(data: []u8) -> bool {
 	if len(data) < 4 {

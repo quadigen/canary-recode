@@ -1,7 +1,6 @@
 package services
 
 import "core:reflect"
-// wire:service
 
 
 import "core:strings"
@@ -324,12 +323,20 @@ text_service_namecall :: proc(
 			return vm.RaiseError(L, "expected GetTextBoundsParams"), true
 		}
 		params := cast(^classes.GetTextBoundsParams)input
-		if len(params.text) >= 200_000 {return vm.RaiseError(L, "text exceeds the measurement limit"), true}
+		if len(params.text) >=
+		   200_000 {return vm.RaiseError(L, "text exceeds the measurement limit"), true}
 		typeface := classes.TextLabel_Load_Typeface_From_Font(params.font)
-		if typeface == nil {typeface = classes.TextLabel_Load_Typeface_From_Family(classes.DEFAULT_FONT)}
-		if typeface == nil {return vm.RaiseError(L, "failed to load a font for text measurement"), true}
+		if typeface ==
+		   nil {typeface = classes.TextLabel_Load_Typeface_From_Family(classes.DEFAULT_FONT)}
+		if typeface ==
+		   nil {return vm.RaiseError(L, "failed to load a font for text measurement"), true}
 		defer kineffi.Kine_Skia_Typeface_Destroy(typeface)
-		bounds := text_service_get_text_size(typeface, params.text, max(1, params.size), {max(0, params.width), 0})
+		bounds := text_service_get_text_size(
+			typeface,
+			params.text,
+			max(1, params.size),
+			{max(0, params.width), 0},
+		)
 		datatypes.Push_Vector2(L, datatype_registry, bounds)
 		return 1, true
 
@@ -465,5 +472,12 @@ Register_TextService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = text_service_get,
 		namecall = text_service_namecall,
+		methods = []string {
+			"GetTextSize",
+			"GetTextBoundsAsync",
+			"MeasureText",
+			"GetTextWidth",
+			"GetLineHeight",
+		},
 	)
 }

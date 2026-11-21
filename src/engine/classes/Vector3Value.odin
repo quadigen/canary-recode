@@ -4,21 +4,18 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-Vector3Value_Class := Class_Info{
+Vector3Value_Class := Class_Info {
 	name   = "Vector3Value",
 	parent = &ValueBase_Class,
 }
 
 Vector3Value :: struct {
 	using object: Object,
-
-	value: datatypes.Vector3,
+	value:        datatypes.Vector3,
 }
 
 Vector3Value_Init :: proc() -> Vector3Value {
-	return Vector3Value{
-		object = Object_Init(&Vector3Value_Class),
-	}
+	return Vector3Value{object = Object_Init(&Vector3Value_Class)}
 }
 
 Vector3Value_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -84,6 +81,7 @@ Register_Vector3Value :: proc(registry: ^Registry) {
 		Vector3Value_construct,
 		Vector3Value_destroy,
 		get = Vector3Value_get,
+		parallel_get = Vector3Value_get,
 		set = Vector3Value_set,
 		clone = Vector3Value_clone,
 		properties = []string{"Value"},

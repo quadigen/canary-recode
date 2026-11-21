@@ -84,10 +84,10 @@ assert(label:IsA("GuiObject"))
 -- ImageLabel
 local img = Instance.new("ImageLabel", frame)
 img.Name = "BackgroundImg"
-img.Image = "rbxasset:
+img.Image = "builtin://icons/Folder.svg"
 img.ImageTransparency = 0.5
 
-assert(img.Image == "rbxasset:
+assert(img.Image == "builtin://icons/Folder.svg")
 assert(img.ImageTransparency == 0.5)
 assert(img.ClassName == "ImageLabel")
 assert(img:IsA("ImageLabel"))
@@ -143,7 +143,7 @@ stroke.Transparency = 0.3
 stroke.Enabled = true
 assert(stroke.Color.R == 1)
 assert(stroke.Thickness == 2)
-assert(stroke.Transparency == 0.3)
+assert(close(stroke.Transparency, 0.3))
 assert(stroke.Enabled == true)
 
 -- UIGradient
@@ -162,9 +162,14 @@ assert(#frame:GetChildren() == 7)
 assert(screen:IsAncestorOf(label))
 assert(label:IsDescendantOf(screen))
 
+-- Read-only geometry must reject assignment while the instance is alive.
+assert(not pcall(function() frame.AbsolutePosition = Vector2.new() end))
+assert(not pcall(function() frame.AbsoluteSize = Vector2.new() end))
+
 -- Cleanup
 screen:Destroy()
-assert(not pcall(function() return frame.Parent end))
+assert(frame.Parent == nil)
+assert(not pcall(function() return frame.Name end))
 
 -- TextButton
 local btn = Instance.new("TextButton")
@@ -184,8 +189,6 @@ b.ZIndex = 5
 assert(a.ZIndex > b.ZIndex)
 container:Destroy()
 
-assert(not pcall(function() frame.AbsolutePosition = UDim2.new() end))
-assert(not pcall(function() frame.AbsoluteSize = UDim2.new() end))
 `,
 		"gui_component_properties",
 	)

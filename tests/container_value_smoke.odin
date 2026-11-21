@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -18,7 +18,9 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 -- Folder
 local folder = Instance.new("Folder")
 folder.Name = "MyFolder"
@@ -40,11 +42,15 @@ assert(child1:IsDescendantOf(folder))
 assert(folder:IsAncestorOf(child2))
 assert(child1:GetFullName() == "MyFolder.Part1")
 
--- Destroy folder
+-- Destroy removes the entire subtree and invalidates its handles.
+folder.Parent = workspace
+assert(workspace:FindFirstChild("MyFolder") == folder)
 folder:Destroy()
-assert(#folder:GetChildren() == 0)
-assert(child1.Parent == nil)
-assert(child2.Parent == nil)
+assert(workspace:FindFirstChild("MyFolder") == nil)
+assert(not pcall(function() return folder:GetChildren() end))
+assert(child1.Parent == nil and child2.Parent == nil)
+assert(not pcall(function() return child1.Name end))
+assert(not pcall(function() return child2.Name end))
 
 -- BoolValue
 local bv = Instance.new("BoolValue")
@@ -128,10 +134,15 @@ assert(cloned.Name == "Original")
 assert(cloned:IsA("Part"))
 original:Destroy()
 assert(original.Parent == nil)
+assert(not pcall(function() return original.Name end))
+assert(cloned.Size == Vector3.new(1, 2, 3), "destroying the original must not invalidate the clone")
+cloned:Destroy()
 
 root:Destroy()
 gui:Destroy()
-`, "container_value_properties")
+`,
+		"container_value_properties",
+	)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

@@ -16,6 +16,7 @@ InputObject :: struct {
 	KeyCode:        enums.KeyCode,
 	Position:       datatypes.Vector3,
 	Delta:          datatypes.Vector3,
+	modifiers:      bit_set[enums.ModifierKey],
 }
 
 InputObject_Value :: struct {
@@ -24,6 +25,7 @@ InputObject_Value :: struct {
 	KeyCode:        enums.KeyCode,
 	Position:       datatypes.Vector3,
 	Delta:          datatypes.Vector3,
+	modifiers:      bit_set[enums.ModifierKey],
 }
 
 input_object_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -46,6 +48,8 @@ input_object_get :: proc(
 ) -> bool {
 	input := cast(^InputObject)object
 	switch key {
+	case "IsModifierKeyDown":
+		vm.PushUserdataMethod(L, key)
 	case "UserInputType":
 		if enum_registry == nil {return false}
 		_ = enums.Push_Item_By_Value(L, enum_registry, "UserInputType", i64(input.UserInputType))
@@ -65,6 +69,23 @@ input_object_get :: proc(
 	return true
 }
 
+input_object_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	if method != "IsModifierKeyDown" {return 0, false}
+	input := cast(^InputObject)object
+	item := enums.Arg_Item(L, 2, e, "ModifierKey")
+	vm.PushBoolean(L, enums.ModifierKey(item.value) in input.modifiers)
+	return 1, true
+}
+
 Push_InputObject :: proc(
 	L: ^vm.State,
 	registry: ^Registry,
@@ -79,6 +100,7 @@ Push_InputObject :: proc(
 	input.KeyCode = value.KeyCode
 	input.Position = value.Position
 	input.Delta = value.Delta
+	input.modifiers = registry.input_modifiers | value.modifiers
 	return input
 }
 
@@ -90,6 +112,7 @@ input_object_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.KeyCode = src.KeyCode
 	dst.Position = src.Position
 	dst.Delta = src.Delta
+	dst.modifiers = src.modifiers
 }
 
 Register_InputObject :: proc(registry: ^Registry) {
@@ -100,6 +123,8 @@ Register_InputObject :: proc(registry: ^Registry) {
 		input_object_destroy,
 		creatable = false,
 		get = input_object_get,
+		namecall = input_object_namecall,
+		methods = []string{"IsModifierKeyDown"},
 		clone = input_object_clone,
 		properties = []string{"Position", "UserInputState", "Delta", "UserInputType", "KeyCode"},
 	)

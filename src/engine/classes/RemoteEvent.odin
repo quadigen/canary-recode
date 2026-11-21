@@ -97,5 +97,6 @@ Register_RemoteEvent :: proc(registry: ^Registry) {
 		RemoteEvent_destroy,
 		get = RemoteEvent_get,
 		events = []string{"OnServerEvent", "OnClientEvent"},
+		methods = []string{"FireServer", "FireClient", "FireAllClients"},
 	)
 }

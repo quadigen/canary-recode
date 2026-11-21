@@ -40,7 +40,7 @@ workspace_box_projection :: proc(box: Workspace_Query_Box, axis: datatypes.Vecto
 }
 
 workspace_boxes_overlap :: proc(a, b: Workspace_Query_Box) -> bool {
-	// Test the face normals and the axes perpendicular to each pair of edges.
+
 	delta := datatypes.Vec3_Subtract(b.center, a.center)
 	axes: [15]datatypes.Vector3
 	for axis_a, i in a.axes {
@@ -126,10 +126,13 @@ workspace_get_part_bounds :: proc(
 	parts: [dynamic]^classes.Part
 	defer delete(parts)
 	physics_collect_parts(workspace, &parts)
-	replicator := cast(^ReplicatorService)Service_Get_Service(
-		&(cast(^Workspace)workspace).service,
-		"ReplicatorService",
-	)
+	replicator: ^ReplicatorService
+	model := (cast(^Workspace)workspace).service.data_model
+	if model != nil {
+		if descriptor := Find_Service(model.registry, "ReplicatorService"); descriptor != nil {
+			replicator = cast(^ReplicatorService)descriptor.object
+		}
+	}
 	vm.NewTable(L)
 	count := 0
 	for part in parts {
@@ -168,10 +171,14 @@ workspace_get_parts_in_part :: proc(
 	params := workspace_optional_overlap_params(L, 3, registry)
 	vm.NewTable(L)
 	if physics == nil || !physics.initialized {return 1}
-	Physics_Synchronize(physics, workspace)
-
-	candidates := &physics.scratch_ray_candidates
-	physics_reset_scratch_ids(candidates)
+	local_candidates: [dynamic]kineffi.JPH_BodyID
+	defer delete(local_candidates)
+	candidates := &local_candidates
+	if !vm.ThreadIsParallel(L) {
+		Physics_Synchronize(physics, workspace)
+		candidates = &physics.scratch_ray_candidates
+		physics_reset_scratch_ids(candidates)
+	}
 	for body in physics.bodies {
 		part := cast(^classes.Part)body.object
 		if body.object != object &&

@@ -1,8 +1,8 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
+import "core:fmt"
 
 run_sm :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -17,7 +17,10 @@ main :: proc() {
 	script_vm := vm.New()
 	env: engine_runtime.Environment
 	engine_runtime.Environment_Init(&env, &script_vm)
-	run_sm(&script_vm, `
+	defer {vm.Close(&script_vm); engine_runtime.Environment_Destroy(&env)}
+	run_sm(
+		&script_vm,
+		`
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39186))
 local sm = Instance.new("StateMachine", workspace)
 assert(sm:GetState() == "Idle")
@@ -35,8 +38,11 @@ assert(sm.Name == "StateMachine" and sm.ClassName == "StateMachine")
 local sibling = Instance.new("Part", workspace)
 assert(sibling:IsA("Part"))
 sm:Destroy()
-`, "state_machine")
-	for _ in 0..<30 {
+`,
+		"state_machine",
+	)
+	for _ in 0 ..< 30 {
 		engine_runtime.Environment_Render_Step(&env, &script_vm, 1.0 / 60.0)
 	}
+	fmt.println("STATE_MACHINE_SMOKE_PASSED")
 }

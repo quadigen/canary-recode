@@ -5,7 +5,13 @@ import kineffi "../bindings"
 OBJECT_LAYER_NON_MOVING :: kineffi.JPH_ObjectLayer(0)
 OBJECT_LAYER_MOVING :: kineffi.JPH_ObjectLayer(1)
 OBJECT_LAYER_DEFORMABLE_CAPSULE :: kineffi.JPH_ObjectLayer(2)
-OBJECT_LAYER_COUNT :: u32(3)
+COLLISION_GROUP_COUNT :: 32
+OBJECT_LAYER_COUNT :: u32(3 + (COLLISION_GROUP_COUNT - 1) * 2)
+
+Group_Layer :: proc(group: int, moving: bool) -> kineffi.JPH_ObjectLayer {
+	if group <= 0 {return OBJECT_LAYER_MOVING if moving else OBJECT_LAYER_NON_MOVING}
+	return kineffi.JPH_ObjectLayer(3 + (group - 1) * 2 + int(moving))
+}
 
 BROAD_PHASE_LAYER_NON_MOVING :: kineffi.JPH_BroadPhaseLayer(0)
 BROAD_PHASE_LAYER_MOVING :: kineffi.JPH_BroadPhaseLayer(1)
@@ -73,16 +79,26 @@ System_Create_3D :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (result: System, 
 		return
 	}
 
-	kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
-		result.object_pair_filter,
-		OBJECT_LAYER_NON_MOVING,
-		OBJECT_LAYER_MOVING,
-	)
-	kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
-		result.object_pair_filter,
-		OBJECT_LAYER_MOVING,
-		OBJECT_LAYER_MOVING,
-	)
+
+	for a in 0 ..< COLLISION_GROUP_COUNT {
+		for b in a ..< COLLISION_GROUP_COUNT {
+			kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
+				result.object_pair_filter,
+				Group_Layer(a, true),
+				Group_Layer(b, true),
+			)
+			kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
+				result.object_pair_filter,
+				Group_Layer(a, true),
+				Group_Layer(b, false),
+			)
+			kineffi.JPH_ObjectLayerPairFilterTable_EnableCollision(
+				result.object_pair_filter,
+				Group_Layer(a, false),
+				Group_Layer(b, true),
+			)
+		}
+	}
 
 	result.broad_phase_interface = kineffi.JPH_BroadPhaseLayerInterfaceTable_Create(
 		OBJECT_LAYER_COUNT,
@@ -103,7 +119,20 @@ System_Create_3D :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (result: System, 
 		BROAD_PHASE_LAYER_MOVING,
 	)
 
-	// Remote capsules participate in custom deformable queries only.
+	for group in 1 ..< COLLISION_GROUP_COUNT {
+		kineffi.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
+			result.broad_phase_interface,
+			Group_Layer(group, false),
+			BROAD_PHASE_LAYER_NON_MOVING,
+		)
+		kineffi.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
+			result.broad_phase_interface,
+			Group_Layer(group, true),
+			BROAD_PHASE_LAYER_MOVING,
+		)
+	}
+
+
 	kineffi.JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
 		result.broad_phase_interface,
 		OBJECT_LAYER_DEFORMABLE_CAPSULE,
@@ -317,19 +346,21 @@ System_Overlap_Shape :: proc(
 	native_rotation := rotation
 	ids: ^kineffi.JPH_BodyID
 	if len(candidate_bodies) > 0 {ids = raw_data(candidate_bodies)}
-	return int(kineffi.JPH_PhysicsSystem_OverlapShapeEx(
-		system.handle,
-		shape,
-		&native_position,
-		&native_rotation,
-		max_separation,
-		0,
-		ids,
-		u32(len(candidate_bodies)),
-		filter_mode,
-		raw_data(out_bodies),
-		u32(len(out_bodies)),
-	))
+	return int(
+		kineffi.JPH_PhysicsSystem_OverlapShapeEx(
+			system.handle,
+			shape,
+			&native_position,
+			&native_rotation,
+			max_separation,
+			0,
+			ids,
+			u32(len(candidate_bodies)),
+			filter_mode,
+			raw_data(out_bodies),
+			u32(len(out_bodies)),
+		),
+	)
 }
 
 System_Create :: proc(config := DEFAULT_SYSTEM_SETTINGS) -> (System, bool) {

@@ -38,7 +38,7 @@ end
 ## Notes
 
 - The service exposes no methods, properties, or events beyond the shared `Instance` API.
-- The current implementation treats it as a plain container. Don't assume that parenting something here sends it to clients; replication behavior is separate from the container.
+- This is a container. Don't assume that parenting something here sends it to clients; replication behavior is separate from the container.
 - Content is visible to every client, so keep server-only values and credentials in `ServerStorage` or `ServerScriptService` instead.
 - Look objects up with `FindFirstChild()` when they might be missing, and handle `nil` rather than indexing straight into the container.
 

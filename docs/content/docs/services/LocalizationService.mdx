@@ -1,29 +1,43 @@
 ---
 title: LocalizationService
-description: Read and change the locale identifiers the game reports.
+description: Load translation dictionaries and switch the language of your UI.
 ---
 
-`LocalizationService` exposes the game's locale as two string identifiers: the locale the experience should present, and the locale of the machine it's running on. Today it stores those values and reports them back. It doesn't translate text on its own.
+Use `LocalizationService` to translate text in labels and buttons without changing their original `Text` properties.
 
 ## Getting started
 
+Create a JSON file called `fr-fr.json`:
+
+```json
+{
+  "Play": "Jouer",
+  "Settings": "Paramètres"
+}
+```
+
+Load the dictionary from an embedded asset or pass its JSON directly.
+
 ```lua
 local LocalizationService = game:GetService("LocalizationService")
+assert(LocalizationService:LoadTranslations("fr-fr", [[
+{"Play":"Jouer","Settings":"Paramètres"}
+]]))
+LocalizationService:SetLocale("fr-fr")
 
-print(LocalizationService.RobloxLocaleId)  -- en-us
-print(LocalizationService.SystemLocaleId)  -- en-us
+local label = Instance.new("TextLabel")
+label.Text = "Play"
+print(label.Text) -- Play (displayed as Jouer)
 ```
 
 ## Properties
 
-| Property | Type | Access | Default | Description |
-| --- | --- | --- | --- | --- |
-| `RobloxLocaleId` | `string` | Read-only | `"en-us"` | Locale identifier the game should use. |
-| `SystemLocaleId` | `string` | Read-only | `"en-us"` | Locale identifier of the host system. |
+| Property | Type | Access | Default |
+| --- | --- | --- | --- |
+| `RobloxLocaleId` | string | Read-only | `en-us` |
+| `SystemLocaleId` | string | Read-only | `en-us` |
 
-Both properties start as `"en-us"`, even if the operating system is set to something else. Platform locale detection isn't wired up yet, so don't rely on these values to reflect the player's machine until you set them.
-
-Assigning to either property has no effect. Use `SetLocale()` instead.
+The system locale initially defaults to English rather than detecting the OS language.
 
 ## Methods
 
@@ -33,21 +47,32 @@ Assigning to either property has no effect. Use `SetLocale()` instead.
 SetLocale(locale: string, systemLocale: string?): ()
 ```
 
-Sets `RobloxLocaleId` to `locale`. If you pass `systemLocale`, it also sets `SystemLocaleId`; otherwise the system identifier keeps its previous value.
+Selects the dictionary to display. Locale names are normalized to lowercase. An empty locale raises an error. The optional system locale changes the reported system identifier.
+
+### LoadTranslations
 
 ```lua
-LocalizationService:SetLocale("fr-fr", "fr-fr")
-
-print(LocalizationService.RobloxLocaleId)  -- fr-fr
-print(LocalizationService.SystemLocaleId)  -- fr-fr
+LoadTranslations(locale: string, source: string): boolean
 ```
 
-An empty `locale` raises `locale must not be empty`. The strings aren't validated beyond that: `"fr-fr"`, `"fr"`, and `"fr-FR"` are all stored as given, with no normalization.
+Loads a JSON object containing source strings and their translations. A successful load replaces the previous dictionary for that locale. Invalid JSON or non-string values return false without replacing it.
 
-The method returns nothing.
+### LoadTranslationFile
+
+```lua
+LoadTranslationFile(locale: string, path: string): boolean
+```
+
+Loads the same JSON format from an embedded asset URI or a local file. Local filesystem access requires Internals capability. Returns false if the file cannot be read or the dictionary is invalid.
+
+### Translate
+
+```lua
+Translate(source: string): string
+```
+
+Returns the matching translation for the current locale, or the original string when no entry exists.
 
 ## Notes
 
-- Changing the locale doesn't change any text by itself. There's no verified `LocalizationTable`, translator, or automatic UI translation in the current API, so you'll need to read these identifiers and pick your own strings.
-- There's no event for locale changes. If other code needs to know, call it from one place and pass the value along.
-- Values set here last for the session. Nothing persists them to disk or across runs.
+Matching is exact and case-sensitive for source strings. Labels and buttons update when you switch languages; editable text boxes are not translated. Dictionaries are held for the current session. There is no automatic translation, pluralization, or platform locale detection.

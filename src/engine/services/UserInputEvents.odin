@@ -43,6 +43,24 @@ user_input_key_index :: proc(service: ^UserInputService, key_code: enums.KeyCode
 	return -1
 }
 
+user_input_update_modifiers :: proc(service: ^UserInputService) {
+	if service.signal_registry == nil {return}
+	result: bit_set[enums.ModifierKey]
+	for key in service.keys_down {
+		#partial switch key {
+		case .LeftShift, .RightShift:
+			result += {.Shift}
+		case .LeftControl, .RightControl:
+			result += {.Ctrl}
+		case .LeftAlt, .RightAlt:
+			result += {.Alt}
+		case .LeftSuper, .RightSuper:
+			result += {.Meta}
+		}
+	}
+	service.signal_registry.input_modifiers = result
+}
+
 user_input_set_location :: proc(service: ^UserInputService, x, y: f32) {
 	service.mouse_location = {x, y}
 	Mouse_Set_Location(service.mouse, x, y)
@@ -125,6 +143,7 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 		if event.key.repeat {return}
 		key_code := user_input_key_code(event.key.scancode)
 		if user_input_key_index(service, key_code) < 0 {append(&service.keys_down, key_code)}
+		user_input_update_modifiers(service)
 		service.last_input_type = .Keyboard
 		Mouse_Handle_Key(L, service.mouse, key_code, true)
 		user_input_fire(
@@ -141,6 +160,7 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 		key_code := user_input_key_code(event.key.scancode)
 		index := user_input_key_index(service, key_code)
 		if index >= 0 {ordered_remove(&service.keys_down, index)}
+		user_input_update_modifiers(service)
 		service.last_input_type = .Keyboard
 		Mouse_Handle_Key(L, service.mouse, key_code, false)
 		user_input_fire(
@@ -209,7 +229,11 @@ user_input_service_step :: proc(service: ^UserInputService, L: ^vm.State, event:
 			classes.InputObject_Value {
 				UserInputType = .MouseWheel,
 				UserInputState = .Change,
-				Position = {f64(event.wheel.mouse_x), f64(event.wheel.mouse_y), f64(event.wheel.y)},
+				Position = {
+					f64(event.wheel.mouse_x),
+					f64(event.wheel.mouse_y),
+					f64(event.wheel.y),
+				},
 				Delta = {f64(event.wheel.x), 0, f64(event.wheel.y)},
 			},
 		)

@@ -9,120 +9,52 @@ import vm "../vm"
 import luauh "../vm/luauh"
 import "core:bytes"
 import "core:fmt"
+import "core:math"
 import "core:slice"
 import "core:sort"
 import "core:strings"
 
-// Kine is the Kinemium save-file format.
-//
-// Layout (all multi-byte values little-endian):
-//
-//   header:
-//     4 bytes   magic "KINE"
-//     1 byte    format version
-//   asset table (version 3 and later, absent in version 2):
-//     u32      asset count
-//     per asset:
-//       string   content id
-//       string   original path as authored
-//       u8       asset kind
-//       varuint  byte length
-//       bytes    raw file contents
-//   instance record (repeated recursively):
-//     string   class name
-//     string   instance name
-//     u8       archivable
-//     i64 + u32 + u32   unique id (Random, Time, Index)
-//     u32      property count
-//     per property:
-//       string   property key
-//       value    tagged value record
-//                Instance references (version 8+) hold a u32 preorder index.
-//                Index 1 is the root and index 0 is nil.
-//     u32      attribute count
-//     per attribute:
-//       string   attribute name
-//       value    tagged value record
-//     u32      child count
-//     per child:
-//       instance record
-//   terrain table (version 4 and later, absent before):
-//     u8       present flag (0 = no terrain in this map)
-//     u8       decoration
-//     f32      voxel size
-//     f32      iso level
-//     f32      grass length
-//     f32      water reflectance
-//     f32      water transparency
-//     f32      water wave size
-//     f32      water wave speed
-//     color3   water color (3 x f32)
-//     string   terrain material variant name (version 7 and later)
-//     u32      material colour count
-//     per material:
-//       u32     material
-//       color3  colour (3 x f32)
-//     u32      cell count
-//     per cell (17 bytes):
-//       i32     x voxel coordinate
-//       i32     y voxel coordinate
-//       i32     z voxel coordinate
-//       u8      material
-//       u16     occupancy, fixed point (value * 65535)
-//       u16     water level, fixed point (value * 65535)
-//
-//   string := varuint length + raw bytes
-//   value  := u8 tag + payload (see Value_Tag below)
-//
-// The asset table is read before the instance tree so that every property setter
-// runs with its referenced bytes already published. Asset-bearing property
-// values are stored as "kineasset://<content-id>", which round-trips losslessly:
-// the store keeps the original path so an editor can still show what was used.
-//
-// The terrain table comes last and is its own section because Terrain is a
-// singleton service rather than an Instance, so the tree walk cannot reach it.
-// Its cell record is deliberately byte-identical to a replicated terrain batch
-// cell, so one decoder shape serves both transports.
-//
-// Version 5 extends the Font datatype record with a u8 flag and, when set, the
-// face bytes, so a font created with Font.fromMemory survives a save. Version 4
-// and earlier stop the Font record after Style; they still decode, they simply
-// cannot carry a face that has no file behind it.
 
 KINE_MAGIC :: "KINE"
 
-// KINE_VERSION is the version written by this build.
-KINE_VERSION :: 9
+
+// Version 11 interns repeated instance metadata (class/property/attribute names).
+// Version 10 files remain readable, and asset/value/terrain records are unchanged.
+KINE_VERSION :: 11
+KINE_SYMBOL_VERSION :: 11
+KINE_TERRAIN_RAYMARCH_VERSION :: 10
 KINE_DOUBLE_COORDINATE_VERSION :: 9
 KINE_REFERENCE_VERSION :: 8
 KINE_MATERIAL_VARIANT_VERSION :: 7
 
-// Version 7 adds the terrain material variant; version 6 introduced extension
-// datatypes and remains readable without the new terrain setting.
+
 KINE_EXTENSION_VERSION :: 6
 
-// KINE_FONT_VERSION is the last layout before extension datatypes; it still
-// decodes, including the Font face-bytes flag.
+
 KINE_FONT_VERSION :: 5
 
-// KINE_TERRAIN_VERSION is the first layout with a terrain table.
+
 KINE_TERRAIN_VERSION :: 4
 
-// KINE_ASSET_VERSION is the first layout with an asset table and no terrain.
+
 KINE_ASSET_VERSION :: 3
 
-// KINE_LEGACY_VERSION is the last layout without an asset table. Those files
-// still decode; they just cannot carry embedded assets.
+
 KINE_LEGACY_VERSION :: 2
 
-// KINE_MAX_FONT_BYTES caps the face bytes a Font record may carry, so a corrupt
-// length cannot ask for an unbounded allocation on load.
+
 KINE_MAX_FONT_BYTES :: 32 * 1024 * 1024
 
-KINE_MAX_STRING_LENGTH :: 16 * 1024 * 1024
+KINE_MAX_STRING_LENGTH :: 64 * 1024 * 1024
+// Untrusted files cannot force an unbounded symbol dictionary allocation.
+KINE_MAX_SYMBOL_COUNT :: 1 << 20
+// Bounded separately from the embedded asset budget; large worlds must not
+// become unloadable just because their instance tree exceeds 64 MiB.
+KINE_MAX_TREE_BYTES :: 512 * 1024 * 1024
+KINE_MAX_STREAM_BYTES :: assetstore.MAX_ASSET_TOTAL_BYTES + KINE_MAX_TREE_BYTES
 
 READ_ONLY_PROPERTIES := [?]string {
-	"Parent", // The tree already records parentage.
+	"Parent",
 	"LastError",
 	"Compiled",
 	"AbsolutePosition",
@@ -135,7 +67,7 @@ READ_ONLY_PROPERTIES := [?]string {
 	"AbsoluteCellSize",
 	"PositionCallback",
 	"IsLoaded",
-	"AnimatedContent", // Alias of Image; the URI is serialized by Image.
+	"Grounded",
 }
 
 Value_Tag :: enum u8 {
@@ -181,8 +113,7 @@ Datatype_Id :: enum u16 {
 	Animated,
 }
 
-// Datatype_Id_Name is the label used in error messages, so a bad record names
-// the type a person recognises rather than an ordinal in the table above.
+
 Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 	switch id {
 	case .Axes:
@@ -245,34 +176,20 @@ Datatype_Id_Name :: proc(id: Datatype_Id) -> string {
 
 Writer :: struct {
 	data:               [dynamic]u8,
-	// Excludes a child during serialization. Called with the child and its
-	// immediate parent for every child that would otherwise be written; returning
-	// true skips that child and its subtree. The exporter uses it to strip
-	// editor-only services (CoreGui, EditorService, ...) from the DataModel root
-	// before writing a map file.
 	exclude_child:      proc(parent: ^classes.Object, object: ^classes.Object) -> bool,
-	// Ids this stream actually referenced, in first-use order. Only these are
-	// written to the asset table, so assets left in the store by an
-	// already-loaded map do not leak into the file being written.
 	used_ids:           [dynamic]string,
 	used_seen:          map[string]bool,
 	class_properties:   map[^classes.Class_Info][dynamic]string,
-	// embed_assets is false for a version 2 stream, where asset properties keep
-	// the author's bare paths and no table is written.
+	// Only metadata is interned. Script sources and asset contents remain raw.
+	symbol_indices:     map[string]u32,
+	symbols:            [dynamic]string,
 	embed_assets:       bool,
 	script_asset_root:  string,
 	project_files:      map[string]bool,
 	path_assets:        map[string]assetstore.Asset,
 	script_assets_seen: map[string]bool,
-	// version is the layout being written. A few value records changed shape
-	// between versions, so a record can consult it rather than guessing.
 	version:            u8,
 	replicated_value:   bool,
-	// warn carries the reason a record was left out of the stream, owned by the
-	// Writer. Writing never fails the whole file over one bad record: the call
-	// site that skipped the record takes this detail and logs it instead, which
-	// is what makes an incomplete map report itself rather than load as a
-	// mysteriously missing property.
 	warn:               string,
 	instance_indices:   map[^classes.Object]u32,
 	instance_patches:   [dynamic]Instance_Reference_Patch,
@@ -311,23 +228,16 @@ Loaded_Service_Properties_Destroy :: proc(L: ^vm.State, properties: Loaded_Servi
 Reader :: struct {
 	data:                []u8,
 	pos:                 int,
-	// version is the layout being read, so a record can tell which shape to
-	// expect instead of guessing.
 	version:             u8,
 	replicated_value:    bool,
-	// err is the failure that ended the decode, owned by the Reader. Reading
-	// cannot recover from a bad record: a tree whose stream disagrees with its
-	// writer is not a tree, so the first failure is recorded here with the byte
-	// offset that produced it and returned to the caller.
+	fresh_unique_ids:    bool,
 	err:                 Error,
 	instances:           [dynamic]^classes.Object,
 	instance_references: [dynamic]Pending_Instance_Reference,
 	service_properties:  ^Loaded_Service_Properties,
+	symbols:             [dynamic]string,
 }
 
-// ---------------------------------------------------------------------------
-// Primitive writers
-// ---------------------------------------------------------------------------
 
 write_u8 :: proc(w: ^Writer, value: u8) {
 	append(&w.data, value)
@@ -382,7 +292,47 @@ write_string :: proc(w: ^Writer, value: string) {
 	append(&w.data, ..transmute([]u8)value)
 }
 
-// Writes a u32 at a previously reserved offset (used for count patching).
+// Version 11 metadata symbols are self-describing: an even varuint is a
+// literal byte length followed by those bytes; an odd varuint references an
+// earlier symbol index. This avoids a separate prepass over the instance tree.
+write_symbol :: proc(w: ^Writer, value: string) {
+	if w.version < KINE_SYMBOL_VERSION {
+		write_string(w, value)
+		return
+	}
+	if index, exists := w.symbol_indices[value]; exists {
+		write_var_u32(w, index * 2 + 1)
+		return
+	}
+	if len(w.symbols) >= KINE_MAX_SYMBOL_COUNT {
+		// Explicit escape for additional unique names: store them without
+		// growing the dictionary or creating unreadable future references.
+		write_var_u32(w, max(u32))
+		write_string(w, value)
+		return
+	}
+	write_var_u32(w, u32(len(value)) * 2)
+	append(&w.data, ..transmute([]u8)value)
+	owned := strings.clone(value)
+	w.symbol_indices[owned] = u32(len(w.symbols))
+	append(&w.symbols, owned)
+}
+
+// A property or child can be skipped after writing its key. Removing the
+// corresponding symbols is essential; otherwise later records could reference
+// a symbol whose first definition was discarded.
+rollback_symbols :: proc(w: ^Writer, data_offset, symbol_count: int) {
+	resize(&w.data, data_offset)
+	for len(w.symbols) > symbol_count {
+		last := len(w.symbols) - 1
+		value := w.symbols[last]
+		delete_key(&w.symbol_indices, value)
+		delete(value)
+		resize(&w.symbols, last)
+	}
+}
+
+
 patch_u32 :: proc(w: ^Writer, offset: int, value: u32) {
 	bytes := transmute([4]u8)value
 	for i in 0 ..< 4 {
@@ -390,9 +340,6 @@ patch_u32 :: proc(w: ^Writer, offset: int, value: u32) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Primitive readers
-// ---------------------------------------------------------------------------
 
 read_bytes :: proc(r: ^Reader, count: int) -> ([]u8, bool) {
 	if r == nil {
@@ -401,8 +348,8 @@ read_bytes :: proc(r: ^Reader, count: int) -> ([]u8, bool) {
 	if count < 0 {
 		return nil, reader_fail(r, .Malformed_Record, "negative read of %d bytes", count)
 	}
-	// Every truncation funnels through here, so the one that reports it names the
-	// offset the reader actually stopped at rather than leaving a bare "failed".
+
+
 	available := len(r.data) - r.pos
 	if count > available {
 		return nil, reader_fail(
@@ -447,7 +394,7 @@ read_var_u32 :: proc(r: ^Reader) -> (u32, bool) {
 	for shift: u32 = 0; shift < 35; shift += 7 {
 		byte, ok := read_u8(r)
 		if !ok {
-			// read_u8 already recorded where the stream ended.
+
 			return 0, false
 		}
 		if shift == 28 && byte > 0x0f {
@@ -519,8 +466,8 @@ read_string :: proc(r: ^Reader) -> (string, bool) {
 			KINE_MAX_STRING_LENGTH,
 		)
 	}
-	// Checked against what is actually left before reading, so a bogus length
-	// cannot ask for a huge copy out of a short stream.
+
+
 	if u64(length) > u64(available) {
 		return "", reader_fail_at(
 			r,
@@ -536,6 +483,41 @@ read_string :: proc(r: ^Reader) -> (string, bool) {
 		return "", false
 	}
 	return strings.clone(string(bytes)), true
+}
+
+// Metadata symbols are resolved independently of value strings and the asset
+// table, which retain the original encoding for compatibility.
+read_symbol :: proc(r: ^Reader) -> (string, bool) {
+	if r.version < KINE_SYMBOL_VERSION {return read_string(r)}
+	start := r.pos
+	code, ok := read_var_u32(r)
+	if !ok {return "", false}
+	if code == max(u32) {
+		return read_string(r)
+	}
+	if code & 1 != 0 {
+		index := int(code >> 1)
+		if index >= len(r.symbols) {
+			return "", reader_fail_at(r, .Malformed_Record, start,
+				"metadata symbol index %d is undefined (only %d symbols precede it)",
+				index, len(r.symbols))
+		}
+		return strings.clone(r.symbols[index]), true
+	}
+	length := int(code >> 1)
+	if length > KINE_MAX_STRING_LENGTH {
+		return "", reader_fail_at(r, .Malformed_Record, start,
+			"metadata symbol exceeds the %d byte string limit", KINE_MAX_STRING_LENGTH)
+	}
+	if len(r.symbols) >= KINE_MAX_SYMBOL_COUNT {
+		return "", reader_fail_at(r, .Malformed_Record, start,
+			"metadata symbol dictionary exceeds %d entries", KINE_MAX_SYMBOL_COUNT)
+	}
+	bytes, valid := read_bytes(r, length)
+	if !valid {return "", false}
+	value := strings.clone(string(bytes))
+	append(&r.symbols, value)
+	return strings.clone(value), true
 }
 
 read_f32s :: proc(r: ^Reader, out: []f32) -> bool {
@@ -560,14 +542,7 @@ read_i16s :: proc(r: ^Reader, out: []i16) -> bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Asset embedding
-// ---------------------------------------------------------------------------
 
-// asset_kind_of reports whether a class property holds a reference to a file
-// that belongs inside the .kine file. Keeping this a table means adding a
-// consumer is one line, and a property that is not listed keeps its current
-// behaviour of storing a bare path.
 asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, bool) {
 	switch class_name {
 	case "MeshPart", "SoftBody", "UnionOperation", "NegateOperation", "IntersectOperation":
@@ -577,7 +552,7 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 		case "TextureId":
 			return .Texture, true
 		}
-	case "ImageLabel", "ImageButton":
+	case "ImageLabel", "ImageButton", "Sprite2D":
 		if property == "Image" {
 			return .Texture, true
 		}
@@ -614,8 +589,7 @@ asset_kind_of :: proc(class_name, property: string) -> (assetstore.Asset_Kind, b
 	return .Unknown, false
 }
 
-// note_asset records that this stream referenced an asset, so the asset table
-// carries it even when the store already held those bytes from an earlier map.
+
 note_asset :: proc(w: ^Writer, id: string) {
 	if w.used_seen == nil {
 		w.used_seen = make(map[string]bool)
@@ -627,11 +601,7 @@ note_asset :: proc(w: ^Writer, id: string) {
 	append(&w.used_ids, strings.clone(id))
 }
 
-// embed_path turns an authored file path into the value to serialize. When the
-// file can be read its bytes are registered and a "kineasset://" reference is
-// returned; otherwise the authored path is preserved, so a missing file
-// degrades to the current broken-in-the-editor behaviour rather than to nothing.
-// The result is owned by the caller.
+
 embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) -> string {
 	if !w.embed_assets || authored == "" {
 		return strings.clone(authored)
@@ -670,7 +640,7 @@ embed_path :: proc(w: ^Writer, authored: string, kind: assetstore.Asset_Kind) ->
 		return strings.clone(authored)
 	}
 
-	// Register consumes the bytes, so `data` must not be freed here.
+
 	id := assetstore.Register(data, authored, kind)
 	defer delete(id)
 	if id == "" {
@@ -733,8 +703,7 @@ serialize_script_asset :: proc "c" (text: [^]u8, length: uintptr, user_data: raw
 	}
 }
 
-// replace_stack_asset rewrites a string already on the Lua stack with its
-// embedded reference, keeping the value at the same stack index.
+
 replace_stack_asset :: proc(
 	w: ^Writer,
 	L: ^vm.State,
@@ -753,9 +722,6 @@ replace_stack_asset :: proc(
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Value encoding
-// ---------------------------------------------------------------------------
 
 datatype_id_of_binding :: proc(name: string) -> (Datatype_Id, bool) {
 	switch name {
@@ -867,17 +833,22 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		delete(uri)
 	case .Content:
 		value := cast(^datatypes.Content)ptr
-		// Content is the generic file handle, so a local path inside one is an
-		// asset like any other and embeds as data.
+
+
 		uri := embed_path(w, value.uri, .Data)
 		write_string(w, uri)
 		delete(uri)
-		// Version 3 added the object handle. Without it a Content pointing at a
-		// live engine object (an EditableMesh, say) silently degraded to a
-		// dangling empty reference on every reload.
+
+
 		if w.version >= 3 {
-			write_u32(w, value.object_id)
-			write_u8(w, value.object_kind)
+
+			if value.object_kind == 2 {
+				write_u32(w, 0)
+				write_u8(w, 0)
+			} else {
+				write_u32(w, value.object_id)
+				write_u8(w, value.object_kind)
+			}
 		}
 	case .DateTime:
 		value := cast(^datatypes.DateTime)ptr
@@ -901,10 +872,8 @@ write_datatype_value :: proc(w: ^Writer, L: ^vm.State, id: Datatype_Id, value_in
 		write_string(w, family)
 		write_i64(w, i64(value.Weight))
 		write_i64(w, i64(value.Style))
-		// A face built from downloaded bytes has no file or installed family to
-		// fall back on, so the bytes themselves have to travel with the record or
-		// the font is gone on reload. Older readers stop after Style, so this is
-		// only written by the layout that carries it.
+
+
 		if w.version >= KINE_FONT_VERSION {
 			write_u8(w, has_face_bytes ? 1 : 0)
 			if has_face_bytes {
@@ -1128,7 +1097,7 @@ write_value :: proc(
 	}
 }
 
-// Metadata replication uses the version 8 value layout independently of map versions.
+
 REPLICATED_VALUE_VERSION :: 8
 
 Append_Replicated_Value :: proc(
@@ -1171,14 +1140,7 @@ Read_Replicated_Value :: proc(
 	return r.pos, ok
 }
 
-// ---------------------------------------------------------------------------
-// Value decoding
-// ---------------------------------------------------------------------------
 
-// read_datatype_value decodes one typed payload and pushes it. Every failure
-// from the record itself is given the datatype's name here, so the detail the
-// record reported reads as "while reading a CFrame value: ..." rather than as a
-// bare offset with nothing attached to it.
 read_datatype_value :: proc(
 	r: ^Reader,
 	L: ^vm.State,
@@ -1376,8 +1338,8 @@ read_datatype_value_record :: proc(
 					delete(family)
 					return false
 				}
-				// read_bytes views the stream, so the face is copied before the
-				// record is handed to Lua.
+
+
 				owned := make([]u8, len(bytes))
 				if owned == nil {
 					delete(font.Family)
@@ -1429,7 +1391,7 @@ read_datatype_value_record :: proc(
 				Envelope = values[2],
 			}
 		}
-		// push_number_sequence clones Keypoints internally.
+
 		datatypes.Push_NumberSequence(L, registry, datatypes.NumberSequence{Keypoints = keypoints})
 		delete(keypoints)
 	case .PathWaypoint:
@@ -1443,11 +1405,15 @@ read_datatype_value_record :: proc(
 			return false
 		}
 		waypoint := datatypes.PathWaypoint {
-			Position = datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])},
+			Position = datatypes.Vector3 {
+				x = f64(values[0]),
+				y = f64(values[1]),
+				z = f64(values[2]),
+			},
 			Action = enums.PathWaypointAction(action),
 			Label = strings.clone(label),
 		}
-		// push_path_waypoint clones Label internally.
+
 		datatypes.Push_PathWaypoint(L, registry, waypoint)
 		delete(waypoint.Label)
 		delete(label)
@@ -1486,8 +1452,16 @@ read_datatype_value_record :: proc(
 			L,
 			registry,
 			datatypes.Region3 {
-				Min = datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])},
-				Max = datatypes.Vector3{x = f64(values[3]), y = f64(values[4]), z = f64(values[5])},
+				Min = datatypes.Vector3 {
+					x = f64(values[0]),
+					y = f64(values[1]),
+					z = f64(values[2]),
+				},
+				Max = datatypes.Vector3 {
+					x = f64(values[3]),
+					y = f64(values[4]),
+					z = f64(values[5]),
+				},
 			},
 		)
 	case .Region3int16:
@@ -1588,7 +1562,10 @@ read_datatype_value_record :: proc(
 		if !read_coordinates(r, values[:]) {
 			return false
 		}
-		datatypes.Push_Vector3(L, datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])})
+		datatypes.Push_Vector3(
+			L,
+			datatypes.Vector3{x = f64(values[0]), y = f64(values[1]), z = f64(values[2])},
+		)
 	case .Vector3int16:
 		values := [3]i16{}
 		if !read_i16s(r, values[:]) {
@@ -1621,9 +1598,7 @@ read_datatype_value_record :: proc(
 	return true
 }
 
-// read_value decodes one tagged value record and pushes exactly one value. The
-// tag is named on failure so a truncated payload is reported as "while reading a
-// Boolean value: ..." rather than as a bare offset.
+
 read_value :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry) -> bool {
 	if r == nil || L == nil || registry == nil {
 		return reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
@@ -1639,9 +1614,7 @@ read_value :: proc(r: ^Reader, L: ^vm.State, registry: ^classes.Registry) -> boo
 	return true
 }
 
-// value_tag_name labels a tag for messages. An unrecognised tag reports its own
-// raw byte, because the reader has already recorded the detailed complaint about
-// it and must not describe it a second time here.
+
 value_tag_name :: proc(tag_byte: u8) -> string {
 	switch Value_Tag(tag_byte) {
 	case .Nil:
@@ -1781,7 +1754,7 @@ read_value_record :: proc(
 			delete(enum_name)
 			return false
 		}
-		// Always pushes exactly one value (nil if the item is unknown).
+
 		_ = enums.Push_Item_By_Value(L, registry.enums, enum_name, value)
 		delete(enum_name)
 		return true
@@ -1801,13 +1774,7 @@ read_value_record :: proc(
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Property reading during serialization
-// ---------------------------------------------------------------------------
 
-// Getter calls can RaiseError (read-only members, security). Running them
-// inside a protected call keeps a single bad property from aborting the whole
-// serialization pass.
 serialize_read_context :: struct {
 	object:     ^classes.Object,
 	descriptor: ^classes.Class_Descriptor,
@@ -1859,9 +1826,18 @@ read_class_property :: proc(
 		return writer_skip(w, "property %s getter returned nothing", property)
 	}
 
-	// A declared asset property holding a local path is rewritten to point at
-	// the embedded copy. This has to happen before write_value runs, because
-	// that is what puts the value into the stream.
+	if property == "Image" &&
+	   (classes.Is_A_Class(object, &classes.ImageLabel_Class) ||
+			   classes.Is_A_Class(object, &classes.ImageButton_Class)) {
+		if source := classes.Object_From_Argument(L, base + 1);
+		   source != nil && classes.Is_A_Class(source, &classes.EditableImage_Class) {
+			uri := (cast(^classes.EditableImage)source).source
+			vm.SetStackTop(L, base)
+			vm.PushString(L, uri)
+		}
+	}
+
+
 	if kind, is_asset := asset_kind_of(class_name, property); is_asset {
 		_ = replace_stack_asset(w, L, base + 1, kind)
 	}
@@ -1879,7 +1855,8 @@ read_class_property :: proc(
 		}
 	}
 	offset := len(w.data)
-	write_string(w, property)
+	symbol_count := len(w.symbols)
+	write_symbol(w, property)
 	if w.version >= KINE_REFERENCE_VERSION && property_is_instance_reference(object, property) {
 		if target := classes.Object_From_Argument(L, base + 1); target != nil {
 			write_u8(w, u8(Value_Tag.InstanceReference))
@@ -1890,7 +1867,7 @@ read_class_property :: proc(
 		}
 	}
 	if !write_value(w, L, registry, base + 1) {
-		resize(&w.data, offset)
+		rollback_symbols(w, offset, symbol_count)
 		vm.SetStackTop(L, base)
 		return writer_skip_context(w, "property %s", property)
 	}
@@ -1898,11 +1875,11 @@ read_class_property :: proc(
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Instance records
-// ---------------------------------------------------------------------------
 
 property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
+	if object.class == &classes.ObjectValue_Class && property == "Value" {return true}
+	if object.class == &classes.BillboardGui_Class &&
+	   (property == "Adornee" || property == "PlayerToHideFrom") {return true}
 	if property == "PrimaryPart" &&
 	   classes.Is_A_Class(object, &classes.Model_Class) &&
 	   object.class != &classes.CharacterModel_Class {
@@ -1911,7 +1888,8 @@ property_is_instance_reference :: proc(object: ^classes.Object, property: string
 	if property == "SelectionImageObject" && classes.Is_A_Class(object, &classes.GuiObject_Class) {
 		return true
 	}
-	if object.class == &classes.WeldConstraint_Class &&
+	if (object.class == &classes.WeldConstraint_Class ||
+		   object.class == &classes.NoCollisionConstraint_Class) &&
 	   (property == "Part0" || property == "Part1") {
 		return true
 	}
@@ -1931,13 +1909,7 @@ property_is_saveable :: proc(property: string) -> bool {
 	return true
 }
 
-// instance_label names an object in a message even when it is only half built,
-// which is exactly when the writer needs to say what it could not write.
-//
-// The result is cloned out of context.temp_allocator so the caller owns it and
-// may delete it. fmt.tprintf alone allocates from the temp arena, and deleting
-// that memory corrupts the heap; read_instance frees this label twice (once
-// after the rename), so it must be a real allocation.
+
 instance_label :: proc(object: ^classes.Object) -> string {
 	if object == nil {
 		return strings.clone("(nil instance)")
@@ -1952,15 +1924,12 @@ instance_label :: proc(object: ^classes.Object) -> string {
 	return strings.clone(fmt.tprintf("%s %q", object.class.name, name))
 }
 
-// report_skip logs a record the writer left out. Nothing about a dropped
-// property or subtree invalidates the rest of the file, so the save continues,
-// but the gap has to be announced: a map that loads without a property the
-// author set looks identical to one that was never authored that way.
+
 report_skip :: proc(w: ^Writer, object: ^classes.Object, format: string, args: ..any) {
 	warning := writer_take_warning(w)
 	defer delete(warning)
-	// Cloned out of the temp arena for the same reason instance_label is:
-	// fmt.tprintf memory must not be handed to delete.
+
+
 	what := strings.clone(fmt.tprintf(format, ..args))
 	defer delete(what)
 	label := instance_label(object)
@@ -1989,8 +1958,8 @@ write_instance :: proc(
 	if w.version >= KINE_REFERENCE_VERSION {
 		w.instance_indices[object] = u32(len(w.instance_indices)) + 1
 	}
-	write_string(w, object.class.name)
-	write_string(w, object.name)
+	write_symbol(w, object.class.name)
+	write_symbol(w, object.name)
 	write_u8(w, object.archivable ? 1 : 0)
 	write_i64(w, object.unique_id.Random)
 	write_u32(w, object.unique_id.Time)
@@ -2002,14 +1971,14 @@ write_instance :: proc(
 		w.class_properties[object.class] = properties
 	}
 
-	// Property count is patched in once all decodable properties are written.
+
 	write_u32(w, 0)
 	property_count_offset := len(w.data) - 4
 	property_count: u32 = 0
-	// Tags use the same null-separated string representation as Roblox files.
+
 	if len(object.tags) > 0 {
 		tags := strings.join(object.tags[:], "\x00")
-		write_string(w, "Tags")
+		write_symbol(w, "Tags")
 		write_u8(w, u8(Value_Tag.String))
 		write_string(w, tags)
 		delete(tags)
@@ -2020,12 +1989,31 @@ write_instance :: proc(
 		   classes.Imported_Property_Is_Unset(descriptor, object, property) {
 			continue
 		}
+
+		if classes.Is_A_Class(object, &classes.Sprite2D_Class) &&
+		   property == "ImageContent" {continue}
+		if object.class.name == "Workspace2D" &&
+		   (property == "BodyCount" || property == "ViewportSize") {continue}
+
+
+		if property == "Points" && (object.class == &classes.Shape2D_Class) {
+			shape := cast(^classes.Shape2D)object
+			write_symbol(w, property)
+			write_u8(w, u8(Value_Tag.String))
+			write_var_u32(w, u32(len(shape.points) * 8))
+			for point in shape.points {write_f32(w, point.X); write_f32(w, point.Y)}
+			property_count += 1
+			continue
+		}
+
+		if object.class == &classes.Camera_Class &&
+		   (property == "ViewportSize" || property == "DiagonalFieldOfView") {continue}
 		if object.class.name == "Workspace" &&
 		   (property == "CurrentCamera" || property == "FinishedReplicating") {
 			continue
 		}
 		if object.class == &classes.Attachment_Class && property == "CFrame" {
-			// The component properties already preserve the attachment frame.
+
 			continue
 		}
 		if object.class == &classes.HingeConstraint_Class &&
@@ -2037,6 +2025,17 @@ write_instance :: proc(
 			continue
 		}
 		if object.class == &classes.RopeConstraint_Class && property == "Active" {continue}
+		if (object.class == &classes.NoCollisionConstraint_Class ||
+			   object.class == &classes.LinearVelocity_Class ||
+			   object.class == &classes.AlignOrientation_Class) &&
+		   property == "Active" {continue}
+		if object.class == &classes.BillboardGui_Class && property == "CurrentDistance" {continue}
+		if object.class == &classes.Sound_Class && property == "EditableSound" {continue}
+		if object.class == &classes.EditableSound_Class &&
+		   (property == "SampleRate" ||
+				   property == "Channels" ||
+				   property == "FrameCount" ||
+				   property == "TimeLength") {continue}
 		if classes.Is_Attachment_Joint(object.class) &&
 		   (property == "Active" || property == "CurrentPosition") {
 			continue
@@ -2050,7 +2049,7 @@ write_instance :: proc(
 	}
 	patch_u32(w, property_count_offset, property_count)
 
-	// Attributes.
+
 	write_u32(w, 0)
 	attribute_count_offset := len(w.data) - 4
 	attribute_count: u32 = 0
@@ -2059,20 +2058,21 @@ write_instance :: proc(
 		vm.PushRegistryReference(L, attribute.value_ref)
 
 		offset := len(w.data)
-		write_string(w, attribute.name)
+		symbol_count := len(w.symbols)
+		write_symbol(w, attribute.name)
 		if write_value(w, L, registry, base + 1) {
 			attribute_count += 1
 			vm.SetStackTop(L, base)
 			continue
 		}
-		resize(&w.data, offset)
+		rollback_symbols(w, offset, symbol_count)
 		vm.SetStackTop(L, base)
 		writer_skip_context(w, "%s", instance_label(object))
 		report_skip(w, object, "attribute %q", attribute.name)
 	}
 	patch_u32(w, attribute_count_offset, attribute_count)
 
-	// Children (non-archivable children are dropped, matching Clone).
+
 	write_u32(w, 0)
 	child_count_offset := len(w.data) - 4
 	child_count: u32 = 0
@@ -2084,11 +2084,12 @@ write_instance :: proc(
 			continue
 		}
 		offset := len(w.data)
+		symbol_count := len(w.symbols)
 		if write_instance(w, L, registry, child) {
 			child_count += 1
 			continue
 		}
-		resize(&w.data, offset)
+		rollback_symbols(w, offset, symbol_count)
 		writer_skip_context(w, "%s", instance_label(child))
 		report_skip(w, object, "child")
 	}
@@ -2097,13 +2098,7 @@ write_instance :: proc(
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Property application during deserialization
-// ---------------------------------------------------------------------------
 
-// Setters can RaiseError (wrong enum type, invalid parent, restricted member).
-// Every setter is applied through a protected call to keep a single bad value
-// from aborting the whole load.
 deserialize_apply_context :: struct {
 	registry:   ^classes.Registry,
 	object:     ^classes.Object,
@@ -2145,7 +2140,7 @@ apply_property :: proc(
 	}
 	vm.PushLightUserdata(L, &apply_context)
 	vm.PushFunction(L, "kine_apply_property", deserialize_apply_property, 1)
-	// lua_pcall expects the function below its arguments: push the value on top.
+
 	vm.PushValue(L, value_index)
 
 	ok, err = vm.ProtectedCall(L, 1, 0)
@@ -2153,8 +2148,7 @@ apply_property :: proc(
 	return ok, err
 }
 
-// Apply settings only after the map has parsed successfully. Live services
-// retain their identity, access rules, and engine-managed references.
+
 Apply_Loaded_Service_Properties :: proc(
 	L: ^vm.State,
 	registry: ^classes.Registry,
@@ -2239,7 +2233,7 @@ apply_attribute :: proc(
 	}
 	vm.PushLightUserdata(L, &apply_context)
 	vm.PushFunction(L, "kine_apply_attribute", deserialize_apply_attribute, 1)
-	// The closure expects (name, value) with the function below its arguments.
+
 	vm.PushString(L, name)
 	vm.PushValue(L, value_index)
 
@@ -2248,9 +2242,7 @@ apply_attribute :: proc(
 	return ok, err
 }
 
-// read_instance decodes one instance record and everything under it. Every
-// failure past the class name is reported against the instance it belonged to,
-// so the byte offset alone never has to carry the whole diagnosis.
+
 read_instance :: proc(
 	r: ^Reader,
 	L: ^vm.State,
@@ -2264,7 +2256,7 @@ read_instance :: proc(
 		return nil, reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
 	}
 
-	class_name, ok := read_string(r)
+	class_name, ok := read_symbol(r)
 	if !ok {
 		return nil, reader_context(r, "while reading an instance's class name")
 	}
@@ -2279,15 +2271,15 @@ read_instance :: proc(
 			class_name,
 		)
 	}
-	// These service constructors create templates for a new place. A saved
-	// service already includes its authored children, including those templates.
+
+
 	if class_name == "Lighting" || class_name == "StarterPlayer" {
 		for len(object.children) > 0 {
 			classes.Destroy_Hierarchy(object.children[len(object.children) - 1])
 		}
 	}
-	// Push_New leaves userdata on the stack; the object stays alive through
-	// the retained lua_ref, so we keep the native stack flat.
+
+
 	vm.Pop(L)
 	if r.version >= KINE_REFERENCE_VERSION {
 		append(&r.instances, object)
@@ -2297,18 +2289,17 @@ read_instance :: proc(
 		classes.Set_Parent(object, parent)
 	}
 
-	// From here the record belongs to a real object, so every later failure can
-	// be reported against it.
+
 	label := instance_label(object)
 
-	name, name_ok := read_string(r)
+	name, name_ok := read_symbol(r)
 	if !name_ok {
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_context(r, "while reading the name of %s", label)
 	}
 	classes.Set_Name(object, name)
 	delete(name)
-	// The record can rename the instance, so the label has to follow it.
+
 	delete(label)
 	label = instance_label(object)
 	defer delete(label)
@@ -2327,10 +2318,12 @@ read_instance :: proc(
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_context(r, "while reading the unique id of %s", label)
 	}
-	object.unique_id = datatypes.UniqueId {
-		Random = random,
-		Time   = time,
-		Index  = index,
+	if !r.fresh_unique_ids {
+		object.unique_id = datatypes.UniqueId {
+			Random = random,
+			Time   = time,
+			Index  = index,
+		}
 	}
 
 	descriptor := classes.Find_Class(registry, class_name)
@@ -2339,7 +2332,7 @@ read_instance :: proc(
 		return nil, reader_fail(r, .Unknown_Class, "class %q is not registered", class_name)
 	}
 
-	// Properties.
+
 	track_service :=
 		r.service_properties != nil &&
 		parent != nil &&
@@ -2352,7 +2345,7 @@ read_instance :: proc(
 		return nil, reader_context(r, "while reading the property count of %s", label)
 	}
 	for i in 0 ..< property_count {
-		key, ok := read_string(r)
+		key, ok := read_symbol(r)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading property %d name of %s", i, label)
@@ -2390,13 +2383,49 @@ read_instance :: proc(
 			)
 			continue
 		}
+		if key == "Points" && (object.class == &classes.Shape2D_Class) {
+			delete(key)
+			tag, tag_ok := read_u8(r)
+			length, length_ok := read_var_u32(r)
+			if !tag_ok ||
+			   !length_ok ||
+			   tag != u8(Value_Tag.String) ||
+			   length % 8 != 0 ||
+			   length > 65536 * 8 ||
+			   int(length) > len(r.data) - r.pos {
+				classes.Destroy_Hierarchy(object)
+				return nil, reader_fail(
+					r,
+					.Malformed_Record,
+					"invalid 2D point array in %s",
+					label,
+				)
+			}
+			shape := cast(^classes.Shape2D)object
+			clear(&shape.points)
+			for _ in 0 ..< int(length / 8) {
+				x, xok := read_f32(r)
+				y, yok := read_f32(r)
+				if !xok ||
+				   !yok ||
+				   math.is_nan(x) ||
+				   math.is_inf(x) ||
+				   math.is_nan(y) ||
+				   math.is_inf(y) {
+					classes.Destroy_Hierarchy(object)
+					return nil, reader_fail(r, .Malformed_Record, "invalid 2D point in %s", label)
+				}
+				append(&shape.points, datatypes.Vector2{x, y})
+			}
+			continue
+		}
 		if !read_value(r, L, registry) {
 			delete(key)
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading property %q of %s", key, label)
 		}
 		value_index := vm.StackTop(L)
-		// Older saves also recorded derived load state and unset imported properties.
+
 		if key == "IsLoaded" ||
 		   (vm.IsNil(L, value_index) && classes.Is_Imported_Property(descriptor, key)) {
 			vm.Pop(L)
@@ -2416,8 +2445,8 @@ read_instance :: proc(
 		}
 		applied, apply_err := apply_property(L, registry, object, descriptor, key, value_index)
 		if !applied {
-			// A setter the runtime refuses costs that one property, not the
-			// load, so the stream keeps going and the reason is announced.
+
+
 			fmt.eprintf(
 				"[kine] skipped property %s of %s: the setter refused the value%s%s\n",
 				key,
@@ -2430,14 +2459,14 @@ read_instance :: proc(
 		delete(key)
 	}
 
-	// Attributes.
+
 	attribute_count, attribute_count_ok := read_u32(r)
 	if !attribute_count_ok {
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_context(r, "while reading the attribute count of %s", label)
 	}
 	for i in 0 ..< attribute_count {
-		name, ok := read_string(r)
+		name, ok := read_symbol(r)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading attribute %d name of %s", i, label)
@@ -2464,7 +2493,7 @@ read_instance :: proc(
 		delete(name)
 	}
 
-	// Children.
+
 	child_count, child_count_ok := read_u32(r)
 	if !child_count_ok {
 		classes.Destroy_Hierarchy(object)
@@ -2482,9 +2511,6 @@ read_instance :: proc(
 	return object, true
 }
 
-// ---------------------------------------------------------------------------
-// Asset table
-// ---------------------------------------------------------------------------
 
 write_asset_table :: proc(w: ^Writer) -> bool {
 	count := len(w.used_ids)
@@ -2539,10 +2565,7 @@ write_asset_table :: proc(w: ^Writer) -> bool {
 	return true
 }
 
-// read_asset_table publishes every embedded blob before the instance tree is
-// walked, so a property setter that decodes an asset finds its bytes waiting.
-// Bytes are cloned out of the input buffer: Register_As takes ownership and
-// `data` outlives this call.
+
 read_asset_table :: proc(r: ^Reader) -> bool {
 	count, ok := read_u32(r)
 	if !ok {
@@ -2607,7 +2630,7 @@ read_asset_table :: proc(r: ^Reader) -> bool {
 			return reader_context(r, "while reading the %d bytes of asset %q", length, id)
 		}
 
-		// Register_As consumes the bytes, so hand it a copy it may own.
+
 		owned := slice.clone(bytes)
 		accepted := assetstore.Register_As(id, owned, path, assetstore.Asset_Kind(kind_byte))
 		if !accepted {
@@ -2624,30 +2647,18 @@ read_asset_table :: proc(r: ^Reader) -> bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Terrain table
-// ---------------------------------------------------------------------------
 
-// KINE_TERRAIN_MAX_CELLS bounds a single cell run. It matches the replication
-// snapshot cap so a map cannot hold terrain that a client would be unable to
-// receive anyway.
 KINE_TERRAIN_MAX_CELLS :: 4 * 1024 * 1024
 
-// KINE_TERRAIN_MAX_COORDINATE matches the replication bound. A file claiming a
-// coordinate beyond this is corrupt or hostile, and letting one through would
-// place voxels far outside any renderable or collidable range.
+
 KINE_TERRAIN_MAX_COORDINATE :: 16000
 
-// KINE_TERRAIN_MAX_MATERIAL_COLOURS bounds the per-map palette override table.
+
 KINE_TERRAIN_MAX_MATERIAL_COLOURS :: 4096
 
 KINE_TERRAIN_CELL_BYTES :: 17
 
-// KINE_TERRAIN_HEADER_BYTES is the fixed terrain section preamble: the presence
-// byte, the ten grid/water settings, and the material colour count. It is
-// checked up front so a stream cut inside the header is reported as
-// Terrain_Truncated rather than the generic truncation the first field read
-// would otherwise record (Error_Set keeps the first failure).
+
 KINE_TERRAIN_HEADER_BYTES :: 45
 
 Kine_Terrain_Cell :: struct {
@@ -2657,16 +2668,14 @@ Kine_Terrain_Cell :: struct {
 	water:     f32,
 }
 
-// Kine_Terrain is the serialized form of a map's voxel grid plus the terrain
-// settings a map owns. It is deliberately plain data with no reference to the
-// Terrain service, so the format stays independent of it and the service owns
-// the translation in both directions.
+
 Kine_Terrain :: struct {
 	material_variant:   string,
 	cells:              [dynamic]Kine_Terrain_Cell,
 	voxel_size:         f32,
 	iso_level:          f32,
 	decoration:         bool,
+	raymarching:        bool,
 	grass_length:       f32,
 	water_color:        datatypes.Color3,
 	water_reflectance:  f32,
@@ -2676,7 +2685,7 @@ Kine_Terrain :: struct {
 	material_colours:   map[u32]datatypes.Color3,
 }
 
-// Kine_Terrain_Destroy releases a table and everything it owns.
+
 Kine_Terrain_Destroy :: proc(terrain: ^Kine_Terrain) {
 	if terrain == nil {
 		return
@@ -2702,14 +2711,16 @@ kine_read_fixed16 :: proc(r: ^Reader) -> (f32, bool) {
 
 write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
 	if terrain == nil || !(terrain.voxel_size > 0) {
-		// A map with no terrain is a complete map, so this is a valid section
-		// rather than a missing one.
+
+
 		write_u8(w, 0)
 		return true
 	}
 
 	write_u8(w, 1)
-	write_u8(w, terrain.decoration ? 1 : 0)
+	flags := u8(terrain.decoration ? 1 : 0)
+	if w.version >= KINE_TERRAIN_RAYMARCH_VERSION && terrain.raymarching {flags |= 2}
+	write_u8(w, flags)
 	write_f32(w, terrain.voxel_size)
 	write_f32(w, terrain.iso_level)
 	write_f32(w, terrain.grass_length)
@@ -2730,8 +2741,8 @@ write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
 	}
 	write_u32(w, colour_count)
 	if colour_count > 0 {
-		// Sorted so the same palette always produces the same bytes, which keeps
-		// saving a map free of spurious differences from map iteration order.
+
+
 		keys := make([dynamic]u32, 0, int(colour_count))
 		defer delete(keys)
 		for material in terrain.material_colours {
@@ -2763,27 +2774,18 @@ write_terrain_table :: proc(w: ^Writer, terrain: ^Kine_Terrain) -> bool {
 	return true
 }
 
-// read_terrain_table parses the section into out, which must be an unowned
-// Kine_Terrain the caller already owns (see Kine_Terrain_Destroy).
-//
-// The section is always parsed and validated even when out is nil, so a caller
-// that ignores terrain still rejects a corrupt file instead of quietly accepting
-// one whose tail it never looked at.
+
 read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	present, ok := read_u8(r)
 	if !ok {
 		return reader_context(r, "while reading the terrain presence flag")
 	}
-	// A map with no terrain is a complete, valid map, so this is not a failure.
+
 	if present == 0 {
 		return true
 	}
 
-	// The fixed header must be fully present before any field is read. The field
-	// readers record a generic truncation on their own, and Error_Set keeps the
-	// first failure, so without this pre-check a stream cut inside the header
-	// would be reported as a plain truncated stream at the byte it died on
-	// instead of naming the terrain header that was cut.
+
 	if len(r.data) - r.pos < KINE_TERRAIN_HEADER_BYTES {
 		return reader_fail(
 			r,
@@ -2796,9 +2798,8 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 
 	table: Kine_Terrain
 	table.material_colours = make(map[u32]datatypes.Color3)
-	// Every early return below runs this, so no partial table is ever leaked.
-	// The success path clears the two owning fields after handing them over,
-	// which turns this into a no-op.
+
+
 	defer Kine_Terrain_Destroy(&table)
 
 	decoration, decoration_ok := read_u8(r)
@@ -2829,10 +2830,8 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 			"the terrain header needs 45 bytes but the stream ends partway through it",
 		)
 	}
-	// A zero or negative voxel size makes every world<->cell conversion divide by
-	// zero, and an iso level of zero makes the isosurface degenerate. Both are
-	// rejected rather than stored, the same rule the replication header decoder
-	// applies.
+
+
 	if !(voxel_size > 0) || !(iso_level > 0) {
 		return reader_fail(
 			r,
@@ -2846,6 +2845,10 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	table.voxel_size = voxel_size
 	table.iso_level = iso_level
 	table.decoration = decoration != 0
+	if r.version >= KINE_TERRAIN_RAYMARCH_VERSION {
+		table.decoration = decoration & 1 != 0
+		table.raymarching = decoration & 2 != 0
+	}
 	table.grass_length = grass_length
 	table.water_reflectance = reflectance
 	table.water_transparency = transparency
@@ -2900,9 +2903,8 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 			KINE_TERRAIN_MAX_CELLS,
 		)
 	}
-	// The count is a claim by the file, so it is checked against the bytes that
-	// are actually present before a single cell is allocated. Otherwise a short
-	// stream could ask for a multi-gigabyte reserve.
+
+
 	available := len(r.data) - r.pos
 	if i64(count) * KINE_TERRAIN_CELL_BYTES > i64(available) {
 		return reader_fail_at(
@@ -2958,8 +2960,7 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 		)
 	}
 
-	// Ownership moves to the caller, so the local is emptied to keep the deferred
-	// cleanup from releasing what was just handed over.
+
 	if out != nil {
 		out^ = table
 		table.cells = nil
@@ -2969,18 +2970,7 @@ read_terrain_table :: proc(r: ^Reader, out: ^Kine_Terrain) -> bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
-// Serialize writes an Instance hierarchy into a .KINE byte stream, embedding
-// every referenced asset so the file is portable. The returned slice is owned
-// by the caller (free it with delete).
-//
-// On failure the returned Error says which record could not be written and why.
-// Records that could not be written but were safely left out of the stream are
-// reported on stderr by the writer instead, because they cost the stream
-// nothing: check the log if a saved map comes back missing something.
 Serialize :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
@@ -2990,15 +2980,21 @@ Serialize :: proc(
 	script_asset_root := "",
 	project_output_file := "",
 	project_output_directory := "",
+	format_version: u8 = KINE_VERSION,
 ) -> (
 	[]u8,
 	Error,
 ) {
+	if format_version < KINE_LEGACY_VERSION || format_version > KINE_VERSION {
+		return nil, Error_Make(.Unsupported_Version, -1,
+			"cannot save KINE version %d (supported versions %d through %d)",
+			format_version, KINE_LEGACY_VERSION, KINE_VERSION)
+	}
 	return serialize(
 		registry,
 		L,
 		object,
-		KINE_VERSION,
+		format_version,
 		exclude_child,
 		terrain,
 		script_asset_root,
@@ -3007,10 +3003,7 @@ Serialize :: proc(
 	)
 }
 
-// Serialize_Legacy writes the version 2 layout: no asset table, and asset
-// properties keep the author's bare paths. It exists so the version 2 reader
-// stays exercised, and for saves that must stay small and diff-friendly. Such a
-// file only works on a machine that still has the referenced files.
+
 Serialize_Legacy :: proc(
 	registry: ^classes.Registry,
 	L: ^vm.State,
@@ -3051,9 +3044,7 @@ serialize :: proc(
 	defer vm.SetThreadSecurityCapabilities(L, previous)
 	defer vm.SetStackTop(L, base)
 
-	// The instance tree is built first because an asset reference is only
-	// discovered while properties are read, and the asset table has to precede
-	// the tree in the output. The tree buffer is then copied in one step.
+
 	tree := Writer {
 		data              = make([dynamic]u8, 0, 4096),
 		exclude_child     = exclude_child,
@@ -3061,10 +3052,10 @@ serialize :: proc(
 		script_asset_root = script_asset_root,
 		version           = version,
 		class_properties  = make(map[^classes.Class_Info][dynamic]string),
+		symbol_indices    = make(map[string]u32),
 	}
-	// Odin runs defers in reverse order, so every element cleanup has to be in
-	// the same block as the delete of the array that holds those elements.
-	// Separate defers would free the array first and then walk freed memory.
+
+
 	defer {
 		for _, properties in tree.class_properties {delete(properties)}
 		delete(tree.class_properties)
@@ -3087,6 +3078,9 @@ serialize :: proc(
 		delete(tree.warn)
 		delete(tree.instance_indices)
 		delete(tree.instance_patches)
+		for symbol in tree.symbols {delete(symbol)}
+		delete(tree.symbols)
+		delete(tree.symbol_indices)
 	}
 
 	if script_asset_root != "" && project_output_file != "" {
@@ -3118,12 +3112,14 @@ serialize :: proc(
 		patch_u32(&tree, patch.offset, tree.instance_indices[patch.target])
 	}
 
+	// The asset table and tree are built separately. Do not allocate a second
+	// tree-sized buffer merely to prepend the header and asset table.
 	writer := Writer {
-		data    = make([dynamic]u8, 0, len(tree.data) + 1024),
+		data    = make([dynamic]u8, 0, 1024),
 		version = version,
 	}
-	// The strings are owned by this writer after the transfer below, so free
-	// them before the array that holds them.
+
+
 	defer {
 		for id in writer.used_ids {
 			delete(id)
@@ -3134,8 +3130,7 @@ serialize :: proc(
 		delete(writer.warn)
 	}
 
-	// The tree walk is what discovered the assets, so its list is the one the
-	// table describes. Hand ownership to the output writer before writing it.
+
 	writer.path_assets = tree.path_assets
 	writer.used_ids = tree.used_ids
 	writer.used_seen = tree.used_seen
@@ -3149,33 +3144,38 @@ serialize :: proc(
 			return nil, writer_error(&writer, .Internal, "could not write the asset table")
 		}
 	}
-	// Copy the tree in one shot rather than element by element.
-	tree_start := len(writer.data)
-	resize(&writer.data, tree_start + len(tree.data))
-	copy(writer.data[tree_start:], tree.data[:])
 
-	// The terrain table trails the tree so a reader that only cares about
-	// instances can stop after the tree it already understands. Only the
-	// current layout carries one; the older layouts have no section to write.
+	// Terrain is the last section. Encoding it in a small separate buffer
+	// lets us allocate the final file exactly once and avoid a redundant
+	// full-file clone (important for hundreds of MiB of scene data).
+	terrain_writer := Writer {
+		data    = make([dynamic]u8, 0, 256),
+		version = version,
+	}
+	defer delete(terrain_writer.data)
 	if version >= KINE_TERRAIN_VERSION {
 		tracy.ZoneNC("KINE Encode Terrain Table", 0xD19A66)
-		if !write_terrain_table(&writer, terrain) {
-			return nil, writer_error(&writer, .Internal, "could not write the terrain table")
+		if !write_terrain_table(&terrain_writer, terrain) {
+			return nil, writer_error(&terrain_writer, .Internal, "could not write the terrain table")
 		}
 	}
 
-	return slice.clone(writer.data[:]), Error_None
+	total_size := len(writer.data) + len(tree.data) + len(terrain_writer.data)
+	if total_size > KINE_MAX_STREAM_BYTES {
+		return nil, Error_Make(.Stream_Too_Large, 0,
+			"serialized KINE is %d bytes, over the %d byte limit",
+			total_size, KINE_MAX_STREAM_BYTES)
+	}
+	result := make([]u8, total_size)
+	asset_end := len(writer.data)
+	tree_end := asset_end + len(tree.data)
+	copy(result[:asset_end], writer.data[:])
+	copy(result[asset_end:tree_end], tree.data[:])
+	copy(result[tree_end:], terrain_writer.data[:])
+	return result, Error_None
 }
 
-// Deserialize reads a .KINE byte stream and restores the Instance hierarchy
-// under parent (which may be nil for a standalone root).
-//
-// terrain may be nil, in which case a map's voxel grid is parsed and validated
-// but discarded. Pass an owned Kine_Terrain to also receive it.
-//
-// A failure returns a nil object and an Error naming the section, instance, or
-// property that went wrong along with the byte offset it was found at, so a bad
-// map can be diagnosed without a hex editor.
+
 read_kine_header :: proc(reader: ^Reader) -> bool {
 	if len(reader.data) < 5 {
 		Error_Set(
@@ -3208,14 +3208,14 @@ read_kine_header :: proc(reader: ^Reader) -> bool {
 	if !version_ok {
 		return false
 	}
-	// Now that the version is known and accepted, hand it to the reader so each
-	// value record knows which layout to expect.
+
+
 	reader.version = version
-	// Version 2 has no asset table and version 3 has no terrain table. Accepting
-	// both keeps older maps loadable; they simply have no embedded assets or no
-	// voxel grid to restore. Version 4 also decodes, but its Font records carry
-	// no face bytes, so a font that only existed in memory does not survive it.
+
+
 	if version != KINE_VERSION &&
+	   version != KINE_TERRAIN_RAYMARCH_VERSION &&
+	   version != KINE_DOUBLE_COORDINATE_VERSION &&
 	   version != KINE_REFERENCE_VERSION &&
 	   version != KINE_MATERIAL_VARIANT_VERSION &&
 	   version != KINE_EXTENSION_VERSION &&
@@ -3244,6 +3244,7 @@ Deserialize :: proc(
 	data: []u8,
 	terrain: ^Kine_Terrain = nil,
 	service_properties: ^Loaded_Service_Properties = nil,
+	fresh_unique_ids := false,
 ) -> (
 	^classes.Object,
 	Error,
@@ -3257,6 +3258,11 @@ Deserialize :: proc(
 	if data == nil {
 		return nil, Error_Make(.Invalid_Argument, -1, "the stream is nil")
 	}
+	if len(data) > KINE_MAX_STREAM_BYTES {
+		return nil, Error_Make(.Stream_Too_Large, 0,
+			"the KINE stream is %d bytes, over the %d byte limit",
+			len(data), KINE_MAX_STREAM_BYTES)
+	}
 
 	base := vm.StackTop(L)
 	previous := vm.GetThreadSecurityCapabilities(L)
@@ -3267,14 +3273,18 @@ Deserialize :: proc(
 	reader := Reader {
 		data               = data,
 		service_properties = service_properties,
+		fresh_unique_ids   = fresh_unique_ids,
 	}
 	defer Error_Delete(&reader.err)
+	defer {
+		for symbol in reader.symbols {delete(symbol)}
+		delete(reader.symbols)
+	}
 
 	if !read_kine_header(&reader) {return nil, reader_take(&reader)}
 	version := reader.version
 
-	// Publishing happens before the tree is walked so every property setter sees
-	// its bytes. A failure here means the file is unusable, not just degraded.
+
 	if version >= KINE_ASSET_VERSION && !read_asset_table(&reader) {
 		return nil, reader_take(&reader)
 	}
@@ -3292,8 +3302,8 @@ Deserialize :: proc(
 		classes.Destroy_Hierarchy(object)
 		return nil, reader_take(&reader)
 	}
-	// Anything still unconsumed means the reader and the writer disagree about the
-	// layout, so the stream is rejected rather than half-applied.
+
+
 	if reader.pos != len(reader.data) {
 		classes.Destroy_Hierarchy(object)
 		Error_Set(
@@ -3306,7 +3316,7 @@ Deserialize :: proc(
 		return nil, reader_take(&reader)
 	}
 
-	// Restore links after the whole tree exists so forward references work.
+
 	for reference in reader.instance_references {
 		if reference.index > u32(len(reader.instances)) {
 			classes.Destroy_Hierarchy(object)
@@ -3342,21 +3352,20 @@ Deserialize :: proc(
 }
 
 
-// v9 stores world coordinates as IEEE-754 binary64; old maps retain their layout.
 write_coordinate :: proc(w: ^Writer, value: f64) {
- if w.version >= KINE_DOUBLE_COORDINATE_VERSION {write_f64(w, value)}
- else {write_f32(w, f32(value))}
+	if w.version >=
+	   KINE_DOUBLE_COORDINATE_VERSION {write_f64(w, value)} else {write_f32(w, f32(value))}
 }
 read_coordinate :: proc(r: ^Reader) -> (f64, bool) {
- if r.version >= KINE_DOUBLE_COORDINATE_VERSION {return read_f64(r)}
- v, ok := read_f32(r)
- return f64(v), ok
+	if r.version >= KINE_DOUBLE_COORDINATE_VERSION {return read_f64(r)}
+	v, ok := read_f32(r)
+	return f64(v), ok
 }
 read_coordinates :: proc(r: ^Reader, values: []f64) -> bool {
- for &v in values {
-  value, ok := read_coordinate(r)
-  if !ok {return false}
-  v = value
- }
- return true
+	for &v in values {
+		value, ok := read_coordinate(r)
+		if !ok {return false}
+		v = value
+	}
+	return true
 }

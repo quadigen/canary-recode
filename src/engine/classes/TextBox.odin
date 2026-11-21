@@ -40,8 +40,6 @@ Undo_Entry :: struct {
 
 TextBox :: struct {
 	using gui_object:              GuiObject,
-	// The public string is a borrowed, zero-copy view of text_buffer.
-	// Never free text: the TextBox owns text_buffer for both editor modes.
 	text:                          string,
 	text_buffer:                   []u8,
 	line_starts:                   [dynamic]int,
@@ -316,7 +314,8 @@ TextBox_Destroy_Typeface :: proc(box: ^TextBox) {
 }
 
 
-TextBox_Set_Font_Family :: proc(box: ^TextBox, family: string) {
+TextBox_Set_Font_Family :: proc(box: ^TextBox, requested_family: string) {
+	family := TextLabel_Normalize_Font_Family(requested_family)
 	if box == nil {
 		return
 	}
@@ -398,8 +397,6 @@ text_box_replace_string :: proc(target: ^string, value: string) {
 }
 
 
-// Reusable capacity-backed UTF-8 storage. text is a read-only slice of this buffer.
-// The byte offsets used by the old API are unchanged; contents need no terminating NUL.
 text_box_buffer_reserve :: proc(box: ^TextBox, required: int) {
 	if required <= len(box.text_buffer) {return}
 	capacity := max(len(box.text_buffer), 256)
@@ -423,7 +420,7 @@ text_box_after_buffer_edit :: proc(box: ^TextBox) {
 	box.caret_needs_scroll = true
 }
 
-// Binary search over physical line starts (0-based line index).
+
 text_box_line_upper_bound :: proc(starts: []int, position: int) -> int {
 	low, high := 0, len(starts)
 	for low < high {
@@ -492,8 +489,7 @@ text_box_cached_line_count :: proc(box: ^TextBox) -> int {
 	return len(box.line_starts)
 }
 
-// Recalculate widths for only the physical lines changed by an edit. Widths for
-// unaffected lines remain valid even when their byte offsets move.
+
 text_box_line_widths_replace :: proc(box: ^TextBox, old_first, old_last: int) {
 	if !box.line_widths_valid {return}
 	first := clamp(old_first, 0, len(box.line_widths))
@@ -524,7 +520,7 @@ text_box_line_widths_replace :: proc(box: ^TextBox, old_first, old_last: int) {
 }
 
 text_box_buffer_set :: proc(box: ^TextBox, value: string) {
-	// Clone first: callers can pass a substring of the old, owned buffer.
+
 	source := strings.clone(value)
 	defer {if len(source) > 0 {delete(source)}}
 	text_box_buffer_reserve(box, len(source))
@@ -540,7 +536,7 @@ text_box_buffer_replace :: proc(box: ^TextBox, first, last: int, replacement: st
 	start := clamp(first, 0, len(box.text))
 	finish := clamp(last, start, len(box.text))
 	if finish == start && len(replacement) == 0 {return}
-	// Keep an owned copy so replacement may alias this buffer, including during growth.
+
 	inserted := strings.clone(replacement)
 	defer {if len(inserted) > 0 {delete(inserted)}}
 	old_length := len(box.text)
@@ -846,8 +842,7 @@ text_box_gutter_width :: proc(box: ^TextBox) -> f32 {
 	return f32(digits) * box.text_size * 0.62 + 24
 }
 
-// Display controls without changing the original text or its byte offsets.
-// For syntax runs, start skips the prefix while retaining its tab column.
+
 text_box_display_cstring :: proc(text: string, tab_size: int, start := 0) -> cstring {
 	bytes := transmute([]u8)text
 	has_control := false
@@ -1012,11 +1007,7 @@ text_box_set_cursor :: proc(box: ^TextBox, position: int, shift: bool) {
 	text_box_restart_caret(box)
 }
 
-// Move to a 1-based physical line and UTF-8 character column, optionally
-// selecting a number of characters from that position. The caret and viewport
-// are updated even when this textbox is not the currently focused input.
-// Call TextBox_focus before this procedure when the caller requests focus:
-// TextBox_focus resets the caret position as part of its focus lifecycle.
+
 TextBox_Go_To_Line :: proc(
 	box: ^TextBox,
 	line_number: int,
@@ -1032,7 +1023,7 @@ TextBox_Go_To_Line :: proc(
 	if line_index + 1 < len(box.line_starts) {
 		finish = box.line_starts[line_index + 1] - 1
 	}
-	// Treat CRLF as a single line ending instead of navigating into the CR.
+
 	if finish > start && box.text[finish - 1] == '\r' {finish -= 1}
 
 	line_text := box.text[start:finish]
@@ -1055,9 +1046,7 @@ TextBox_Go_To_Line :: proc(
 			viewport_height := max(box.absolute_size.Y - box.editor_padding * 2, f32(0))
 			max_scroll := max(f32(len(lines)) * line_height - viewport_height, f32(0))
 
-			// Center the destination when space permits; otherwise clamp to the
-			// nearest valid position. Move both target and current offsets so a
-			// search-result click is immediate even with smooth scrolling enabled.
+
 			center_offset := max((viewport_height - line_height) * 0.5, f32(0))
 			box.scroll_target_y = clamp(
 				f32(visual_index) * line_height - center_offset,
@@ -1346,7 +1335,6 @@ text_box_handle_text :: proc(box: ^TextBox, value: string) {
 }
 
 
-// Only ASCII case folding is used; Luau identifiers and typical queries are ASCII.
 text_box_find_byte_equal :: proc(a, b: u8, case_sensitive: bool) -> bool {
 	if case_sensitive {
 		return a == b
@@ -1852,7 +1840,7 @@ text_box_render_code_editor :: proc(
 		}
 		active_indent = active_indent / max(box.tab_size, 1) * max(box.tab_size, 1)
 	}
-	// Only draw the viewport's lines, and clip text independently of the gutter.
+
 	for index := first_visible; index < last_visible; index += 1 {
 		line := lines[index]
 		y := rect.y + padding + f32(index) * line_height - box.scroll_y
@@ -2044,7 +2032,7 @@ text_box_render_code_editor :: proc(
 		)
 		text_box_line_index_ensure(box)
 		physical_lines := len(box.line_starts)
-		// Sample directly from the line index: no O(document size) scan per frame.
+
 		row_step := max(int(f32(physical_lines) / max(rect.height * 0.7, f32(1))), 1)
 		for map_line := 0; map_line < physical_lines; map_line += row_step {
 			position := box.line_starts[map_line]
@@ -4197,8 +4185,7 @@ TextBox_set :: proc(
 ) -> bool {
 	box := cast(^TextBox)object
 
-	// Let inherited setters detect unchanged position and size before
-	// invalidating layout. Text metrics have their own invalidation below.
+
 	switch key {
 
 	case "KeyHandled":
@@ -4666,8 +4653,6 @@ TextBox_namecall :: proc(
 		text_box_close_find(box)
 		return 0, true
 	case "GoToLine":
-		// GoToLine(line, column?, selectionLength?, focus?)
-		// line/column are 1-based, selectionLength counts UTF-8 characters.
 		line := max(int(vm.ArgNumber(L, 2)), 1)
 		column := 1
 		selection_length := 0

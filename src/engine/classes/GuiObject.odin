@@ -27,6 +27,7 @@ GuiObject :: struct {
 	input_sink:                  bool,
 	position:                    datatypes.UDim2,
 	selectable:                  bool,
+	selection_order:             i32,
 	size:                        datatypes.UDim2,
 	automatic_size:              enums.AutomaticSize,
 	visible:                     bool,
@@ -77,6 +78,7 @@ GuiObject :: struct {
 	draw_revision:               u64,
 	draw_picture:                ^kineffi.KineSkiaPicture,
 	draw_picture_revision:       u64,
+	draw_picture_icon_revision:  u64,
 	draw_picture_rect:           [4]f32,
 	draw_observed_revision:      u64,
 	draw_observed:               bool,
@@ -304,6 +306,8 @@ GuiObject_get :: proc(
 	case "InputSink":
 		vm.PushBoolean(L, gui.input_sink)
 
+	case "SelectionOrder":
+		vm.PushNumber(L, f64(gui.selection_order))
 	case "Selectable":
 		vm.PushBoolean(L, gui.selectable)
 
@@ -509,6 +513,10 @@ GuiObject_get_absolute_transform :: proc(
 		return screen_gui.render_offset.X, screen_gui.render_offset.Y, width, height
 	}
 
+	if Is_A_Class(object, &BillboardGui_Class) {
+		x, y, w, h, _ := BillboardGui_Project(cast(^BillboardGui)object, ctx)
+		return x, y, w, h
+	}
 	if Is_A_Class(object, &SurfaceGui_Class) {
 		surface_gui := cast(^SurfaceGui)object
 		part := surfacegui_target_part(surface_gui)
@@ -1893,7 +1901,8 @@ gui_track_size_change :: proc(
 	previous: datatypes.Vector2,
 ) {
 	if changes == nil {return}
-	if object.changed == nil && Object_Find_Property_Signal(object, property) == nil {return}
+	if !Object_Has_Changed_Signal(object) &&
+	   Object_Find_Property_Signal(object, property) == nil {return}
 	if object in changes^ {return}
 	if changes^ == nil {changes^ = make(Gui_Layout_Size_Changes)}
 	changes^[object] = previous
@@ -2534,7 +2543,16 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 		case .Round:
 			guilib.drawRoundedRect(ctx.renderer.SkiaSurface, rect, shape.radius)
 		case .None:
-			guilib.drawRect(ctx.renderer.SkiaSurface, rect)
+			if Is_A_Class(object, &Part2D_Class) && (cast(^Part2D)object).is_ball {
+				circle := rect
+				diameter := min(rect.width, rect.height)
+				circle.x += (rect.width - diameter) * 0.5
+				circle.y += (rect.height - diameter) * 0.5
+				circle.width, circle.height = diameter, diameter
+				guilib.drawOval(ctx.renderer.SkiaSurface, circle)
+			} else {
+				guilib.drawRect(ctx.renderer.SkiaSurface, rect)
+			}
 		}
 	}
 
@@ -2665,6 +2683,8 @@ GuiObject_set :: proc(
 		if gui.input_sink == value {return true}
 		gui.input_sink = value
 		render_dirty = true
+	case "SelectionOrder":
+		gui.selection_order = i32(vm.ArgNumber(L, value_index))
 	case "Selectable":
 		value := vm.ArgBoolean(L, value_index)
 		if gui.selectable == value {return true}
@@ -2784,6 +2804,7 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.input_sink = src.input_sink
 	dst.position = src.position
 	dst.selectable = src.selectable
+	dst.selection_order = src.selection_order
 	dst.size = src.size
 	dst.automatic_size = src.automatic_size
 	dst.visible = src.visible
@@ -2834,6 +2855,7 @@ Register_GuiObject :: proc(registry: ^Registry) {
 			"BorderColor3",
 			"BorderSizePixel",
 			"Selectable",
+			"SelectionOrder",
 			"Active",
 			"GuiState",
 			"ClipsDescendants",

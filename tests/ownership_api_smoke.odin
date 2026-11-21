@@ -1,6 +1,7 @@
 package main
 
 import engine_runtime "../src/engine/runtime"
+import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
 
@@ -37,6 +38,7 @@ main :: proc() {
 	run_own(
 		&server_vm,
 		`
+assert(game:GetService("ReplicatorService").AllowClientOwnershipRequests == false)
 assert(game:GetService("ReplicatorService"):StartServer("127.0.0.1", 39233))
 local base = Instance.new("Part", workspace)
 base.Name = "Base"
@@ -85,6 +87,72 @@ assert(platform:GetNetworkOwner() == nil, "anchored platform has no owner")
 	run_own(
 		&client_vm,
 		`
+local r = game:GetService("ReplicatorService")
+local crate = workspace:FindFirstChild("Crate")
+assert(r.AllowClientOwnershipRequests == false)
+assert(not pcall(function() r.AllowClientOwnershipRequests = true end))
+for _, attempt in {
+	function() crate:SetNetworkOwner(game.Players.LocalPlayer) end,
+	function() crate:SetNetworkOwner(nil) end,
+	function() crate:SetNetworkOwnershipAuto() end,
+} do
+	local ok, err = pcall(attempt)
+	assert(not ok and string.find(tostring(err), "client ownership requests are disabled", 1, true), tostring(err))
+end
+assert(crate:GetNetworkOwner() == nil)
+`,
+		"own_disabled_client",
+	)
+
+
+	client_rep := cast(^services.ReplicatorService)services.Ensure_Service(
+		&client.services,
+		"ReplicatorService",
+	)
+	server_rep := cast(^services.ReplicatorService)services.Ensure_Service(
+		&server.services,
+		"ReplicatorService",
+	)
+	crate_id: u32
+	for entity in client_rep.entity_list {
+		if entity.object != nil && entity.object.name == "Crate" {crate_id = entity.id; break}
+	}
+	assert(crate_id != 0)
+	payload: [dynamic]u8
+	defer delete(payload)
+	services.replication_put_u32(&payload, crate_id)
+	append(&payload, u8(0))
+	assert(services.replication_send(client_rep, client_rep.remote, 13, payload[:]))
+	payload[4] = 1
+	assert(services.replication_send(client_rep, client_rep.remote, 13, payload[:]))
+	policy := [1]u8{1}
+	assert(
+		services.replication_send(
+			client_rep,
+			client_rep.remote,
+			services.Replication_Kind_Ownership_Policy,
+			policy[:],
+		),
+	)
+	own_step(&server, &server_vm, &client, &client_vm, 30)
+	assert(!server_rep.allow_client_ownership_requests)
+	for entity in server_rep.entity_list {
+		if entity.id == crate_id {
+			assert(entity.owner_id == 0 && entity.owner_locked)
+		}
+	}
+
+	run_own(
+		&server_vm,
+		`game:GetService("ReplicatorService").AllowClientOwnershipRequests = true`,
+		"own_enable_requests",
+	)
+	own_step(&server, &server_vm, &client, &client_vm, 30)
+
+	run_own(
+		&client_vm,
+		`
+assert(game:GetService("ReplicatorService").AllowClientOwnershipRequests == true)
 local local_player = game.Players.LocalPlayer
 assert(local_player ~= nil, "player should have a character owner id")
 local ok, err = pcall(function()
@@ -116,6 +184,25 @@ assert(workspace:FindFirstChild("Crate"):GetNetworkOwner() == game.Players.Local
 		"own_client_broadcast",
 	)
 
+
+	run_own(
+		&server_vm,
+		`game:GetService("ReplicatorService").AllowClientOwnershipRequests = false`,
+		"own_disable_requests",
+	)
+	own_step(&server, &server_vm, &client, &client_vm, 30)
+	run_own(
+		&client_vm,
+		`
+local r = game:GetService("ReplicatorService")
+local crate = workspace:FindFirstChild("Crate")
+assert(r.AllowClientOwnershipRequests == false)
+assert(crate:GetNetworkOwner() == game.Players.LocalPlayer)
+assert(not pcall(function() crate:SetNetworkOwner(nil) end))
+assert(not pcall(function() crate:SetNetworkOwnershipAuto() end))
+`,
+		"own_revoked_client",
+	)
 
 	run_own(
 		&client_vm,

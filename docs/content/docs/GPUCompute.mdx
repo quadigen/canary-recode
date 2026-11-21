@@ -11,7 +11,7 @@ Use it for procedural images, particle simulations, numerical calculations, imag
 
 ## Getting started
 
-Create a GPUCompute instance and check whether the backend is available:
+Create a `GPUCompute` instance and check whether your device supports it:
 
 ```lua
 local compute = Instance.new("GPUCompute")
@@ -24,16 +24,17 @@ if not supported then
 end
 ```
 
-The current backend uses Vulkan. Runtime GLSL compilation uses the native glslang compiler bundled with Filament in supported Kinemium builds. The current implementation has Linux and Windows backend code; availability depends on the build, driver, and device features. `IsSupported()` checks device initialization, not whether every custom shader can be compiled or run.
+GPU compute is available on supported Linux and Windows builds with a compatible Vulkan device and driver. `IsSupported()` checks device initialization, not whether every custom shader can be compiled or run.
 
-There are two ways to use GPUCompute:
+There are three ways to use GPUCompute:
 
 | Workflow | Methods | Data |
 | --- | --- | --- |
 | Built-in operations | `Dispatch()`, `Poll()` | Float32 arrays |
 | Programmable compute | `CompileShader()`, persistent buffer methods, `DispatchShader()`, `PollShader()` | Raw bytes interpreted according to the shader layout |
+| Parallel tasks | `SubmitTask()`, `BeginTask()`, `SubmitTaskBatch()`, `PollTask()` | Independent or automatically synchronized shader workloads |
 
-Both workflows submit GPU work asynchronously. Each instance supports one pending job at a time. Collect the result of the current job before dispatching another or modifying its resources.
+All dispatch workflows submit GPU work asynchronously. The legacy built-in and programmable dispatch methods support one pending job at a time. The parallel task API supports up to 32 uncollected tasks per instance, with independent completion IDs.
 
 ## Built-in mathematical operations
 
@@ -145,7 +146,7 @@ void main() {
 
 The second argument is the number of storage-buffer bindings in the shader's set `0` layout. Bindings are numbered from `0` to `bindingCount - 1`. Every slot in this layout needs a bound buffer before dispatch, even if the shader does not use that slot.
 
-A shader must define a compute entry point named `main`. The current compiler targets Vulkan 1.0 and SPIR-V 1.0. Custom compute exposes storage buffers and push constants, not sampled textures, storage images, or the engine's framebuffer.
+A shader must define a compute entry point named `main`. Write shaders compatible with Vulkan 1.0 and SPIR-V 1.0. Custom compute supports storage buffers, uniform buffers, sampled textures, storage textures and push constants when using a mixed binding layout, but not the engine framebuffer.
 
 ### Allocating and uploading buffers
 
@@ -211,7 +212,7 @@ Unlike `Poll()`, `PollShader()` returns a completion boolean, not a buffer. Once
 
 ## Generating an image with a shader
 
-One useful workflow is to write packed RGBA8 pixels into a GPU storage buffer and display them with an `EditableImage` attached to an `ImageLabel`.
+One useful workflow is to write packed RGBA8 pixels into a GPU storage buffer and display them with an `Image` attached to an `ImageLabel`.
 
 This complete example creates a gradient on the GPU. Place it in a LocalScript under a ScreenGui:
 
@@ -258,7 +259,7 @@ buffer.writeu32(params, 0, width)
 buffer.writeu32(params, 4, height)
 assert(compute:SetPushConstants(params))
 
-local image = AssetService:CreateEditableImage({
+local image = AssetService:CreateImage({
     Size = Vector2.new(width, height),
 })
 image.Parent = screenGui
@@ -266,7 +267,7 @@ image.Parent = screenGui
 local preview = Instance.new("ImageLabel")
 preview.Size = UDim2.fromScale(1, 1)
 preview.BackgroundTransparency = 1
-preview.EditableImage = image
+preview.Image = image
 preview.Parent = screenGui
 
 assert(compute:DispatchShader(math.ceil(width / 8), math.ceil(height / 8)))
@@ -290,7 +291,7 @@ connection = RunService.Heartbeat:Connect(function()
 end)
 ```
 
-Each invocation writes one pixel. On the current little-endian targets, the packed `uint` layout matches the four RGBA8 bytes expected by EditableImage. The image remains visible after the GPUCompute instance is destroyed because the pixels have already been copied into it.
+Each invocation writes one pixel. On the current little-endian targets, the packed `uint` layout matches the four RGBA8 bytes expected by Image. The image remains visible after the GPUCompute instance is destroyed because the pixels have already been copied into it.
 
 ## Progressive rendering and simulation
 
@@ -308,7 +309,7 @@ GPUCompute introduces no class-specific properties. It inherits the standard Ins
 
 ## Methods
 
-`string?` denotes an optional error message. Methods returning `(boolean, string?)` return `true` on success or `false` with a diagnostic on failure, except `PollShader()`, where `false` also means the job has not completed. Methods returning a buffer or ID return `nil` with a diagnostic on backend failure. Invalid argument types or out-of-range integer arguments may raise a script error instead.
+`string?` denotes an optional error message. Methods returning `(boolean, string?)` return `true` on success or `false` with a diagnostic on failure, except `PollShader()`, where `false` also means the job has not completed. Methods returning a buffer or ID return `nil` with a diagnostic if the GPU operation fails. Invalid argument types or out-of-range integer arguments may raise a script error instead.
 
 ### Device and built-in operations
 
@@ -348,16 +349,269 @@ Call the inherited `Destroy()` method to release the device, custom pipeline, an
 | Total persistent buffer storage per instance | 256 MiB |
 | Push constants | 128 bytes |
 | GLSL source length | 1 MiB |
-| Pending jobs per GPUCompute instance | 1 |
+| Pending legacy jobs per GPUCompute instance | 1 |
+| Uncollected parallel tasks per GPUCompute instance | 32 |
+| Compute queues per instance | Up to 4; device dependent |
 
-These are the engine limits in the supplied Vulkan backend. Device limits, storage-buffer range, available memory, and supported GLSL features can impose stricter restrictions. Custom compilation also requires Vulkan `robustBufferAccess` on this backend.
+These are the current GPUCompute limits. Device limits, storage-buffer range, available memory, and supported GLSL features can impose stricter restrictions. Custom compilation also requires Vulkan `robustBufferAccess`.
 
 ## Things to keep in mind
 
 - Use trusted local shaders. Bounds checks and allocation limits do not make arbitrary GPU programs safe; long-running or malformed workloads can stall a device.
 - Check the second return value on failure. Compile diagnostics are returned to Luau and often include a GLSL line number.
 - Keep the shader's `std430` storage layouts and push-constant layout consistent with the byte offsets in Luau. A GLSL `vec3` in a structure may require padding.
-- Wait for the corresponding poll method before reading or modifying persistent buffers, compiling another shader, or submitting more work on the same instance.
+- Wait for the corresponding poll method before reading or modifying a resource used by an outstanding job. The parallel task API can submit independent work without waiting for earlier tasks.
 - `IsSupported()` can succeed even when runtime compilation is missing or a particular shader exceeds the device's capabilities.
 - An execution error can reset the GPUCompute device and invalidate previously allocated buffers. Recreate the compute resources after a device failure.
-- GPU buffers are not automatically exposed as textures. Use `ReadBuffer()` and `EditableImage:WritePixelsBuffer()` for the current image-preview workflow.
+- GPU buffers are not automatically exposed as textures. Use `ReadBuffer()` and `Image:WritePixelsBuffer()` for the current image-preview workflow.
+
+
+## Luau buffers (recommended)
+
+GPUCompute accepts standard Luau buffers directly. The first successful binding creates and uploads the associated persistent GPU allocation. Rebinding the same buffer does not upload it again. Use the standard `buffer` library for reading, writing, copying and packing CPU data.
+
+```lua
+local gpu = Instance.new("GPUCompute")
+assert(gpu:IsSupported())
+local data = buffer.create(4)
+buffer.writef32(data, 0, 21)
+
+assert(gpu:CompileShader([[
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std430) buffer Data { float value; };
+void main() { value *= 2.0; }
+]], 1))
+
+assert(gpu:BindBuffer(0, data))
+assert(gpu:DispatchShader(1))
+while true do
+    local done, err = gpu:PollShader()
+    assert(not err, err)
+    if done then break end
+    task.wait()
+end
+assert(gpu:DownloadBuffer(data))
+print(buffer.readf32(data, 0)) -- 42
+assert(gpu:ReleaseBuffer(data))
+gpu:Destroy()
+```
+
+- `UploadBuffer(buffer)` copies edited CPU data to the existing GPU allocation.
+- `DownloadBuffer(buffer)` copies GPU data into the same Luau buffer after completion.
+- `UnbindBuffer(binding)` removes a binding from the selected shader.
+- `ReleaseBuffer(buffer)` releases GPU memory, retaining the ordinary Luau buffer.
+- `AllocateDeviceBuffer(bytes)` creates a numeric GPU allocation handle with no corresponding Luau buffer. The allocation isn't guaranteed to reside in dedicated GPU memory.
+- `CopyGPUBuffer(source, destination, size?, sourceOffset?, destinationOffset?)` and `FillGPUBuffer(destination, word, size?, offset?)` operate directly on GPU allocations. Size and offsets are aligned to four bytes; fill repeats an unsigned 32-bit word. They complete synchronously and cannot run during an active job or command recording.
+
+Each GPUCompute instance owns its resources. Buffers cannot be released, uploaded or downloaded while referenced by an outstanding job; the parallel task API allows CPU access to unrelated buffers between submissions. A buffer held by the GPU cache remains referenced until released or the compute instance is destroyed. Existing numeric buffer APIs continue to work.
+
+## Mixed descriptor layouts
+
+`CompileShader(source, bindingCount)` still creates storage-buffer bindings. Alternatively, pass a contiguous zero-based layout table:
+
+```lua
+assert(gpu:CompileShader(source, {
+    [0] = "StorageBuffer",
+    [1] = "UniformBuffer",
+    [2] = "SampledTexture",
+    [3] = "StorageTexture",
+}))
+```
+
+Uniform buffers also use `BindBuffer`. The shader's declared descriptors are checked against the layout before pipeline creation. Set 0 is supported, with one resource per binding and no bindless descriptor arrays. A 2D array texture is a single image, not an array of descriptors. Shaders use a `main` compute entry point and the existing GLSL/SPIR-V compilation path.
+
+## Persistent pipelines and command batches
+
+```lua
+local first = assert(gpu:CreatePipeline(passA, 1))
+local second = assert(gpu:CreatePipeline(passB, 1))
+assert(gpu:UsePipeline(first))
+assert(gpu:BindBuffer(0, data))
+assert(gpu:UsePipeline(second))
+assert(gpu:BindBuffer(0, data))
+
+assert(gpu:BeginCommands())
+assert(gpu:UsePipeline(first))
+assert(gpu:DispatchShader(64))
+assert(gpu:MemoryBarrier())
+assert(gpu:UsePipeline(second))
+assert(gpu:DispatchShader(64))
+assert(gpu:SubmitCommands())
+-- PollShader() completes the entire batch.
+```
+
+Each pipeline retains its bindings and push constants. `UsePipeline(0)` selects the legacy shader created by CompileShader. `DestroyPipeline(id)` destroys a pipeline; `CancelCommands()` discards a recorded batch without executing it. Allocate and initially bind Luau buffers before beginning a batch. Resource creation, destruction and CPU transfers are forbidden during recording. A compute barrier is automatically emitted between dispatches; `MemoryBarrier()` explicitly records one as well.
+
+## Images and textures
+
+Create textures from raw pixels, or leave the second argument absent for zero-filled images:
+
+```lua
+local voxels = assert(gpu:CreateTexture({
+    Dimension = "3D",
+    Width = 32, Height = 32, Depth = 32,
+    Format = "R32F",
+    Usage = {"Storage", "Sampled"},
+}))
+```
+
+The positional form is `CreateTexture(width, height, rgba8Buffer?, options?)`. Images can be 1D, 2D, 3D or 2DArray (use Layers for arrays). Supported format names: RGBA8, RGBA8_SRGB, R8, RG8, R32F, RG32F, RGBA16F, RGBA32F and R32UI. Device and format capabilities determine availability. Raw data is tightly packed, in x-major order, followed by rows, slices and array layers. The Storage flag or Storage usage permits imageStore; otherwise the texture is sampled-only. sRGB textures cannot be storage images.
+
+```lua
+local albedo = assert(gpu:LoadTexture("project://textures/grass.png", {
+    ColorSpace = "SRGB",
+    GenerateMipmaps = true,
+    Filter = "Linear",
+    AddressMode = "Repeat",
+}))
+local normal = assert(gpu:LoadTexture("project://textures/grass-normal.png", {
+    ColorSpace = "Linear",
+}))
+```
+
+LoadTexture also accepts an encoded image Luau buffer, a URI Content value, or an Image snapshot. It uses the existing engine image decoder for encoded images. Ordinary file paths are supported in editor builds; exported games must use project/embedded asset references or in-memory data. ColorSpace defaults to SRGB for loaded images. Filters are Linear or Nearest, address modes Repeat or ClampToEdge. GenerateMipmaps currently supports sampled 2D RGBA8 and RGBA8_SRGB images. Mips are generated once on the CPU, including sRGB-aware color averaging, then uploaded and retained on the GPU. Initial image uploads are synchronous. There is no independent sampler handle yet.
+
+Use `BindTexture(binding, texture)` with GLSL sampler1D, sampler2D, sampler3D, sampler2DArray (or unsigned equivalents for R32UI). Storage textures use the matching GLSL image type and explicit format. `GetTextureInfo(id)` reports dimensions, format, storage usage and mip count. `DestroyTexture(id)` releases the texture. Use textureLod or texelFetch for explicit sampling in compute shaders.
+
+## Built-in and custom materials
+
+```lua
+local grass = assert(gpu:GetMaterialTextures(Enum.Material.Grass, {
+    GenerateMipmaps = true,
+}))
+assert(gpu:BindTexture(1, grass.Albedo))
+assert(gpu:BindTexture(2, grass.Normal))
+assert(gpu:BindTexture(3, grass.ORM))
+```
+
+Use this method to load maps from built-in materials. The returned table contains handles for available maps and Roughness, Metallic, UVScale and HeightScale. Built-in ORM maps store occlusion, roughness and metallic in R, G and B respectively. MaterialVariant instances are also accepted and return separate maps when available. Missing maps are absent; callers handle their defaults. Each invocation creates separate texture resources owned by this GPUCompute instance; reuse the returned handles across frames and destroy them when no longer needed. These textures are separate from the game's rendered material textures.
+
+## Mesh geometry and spatial queries
+
+```lua
+local mesh = assert(gpu:LoadMesh("project://models/house.glb"))
+local bvh = assert(gpu:BuildBVH(mesh, {MaxLeafTriangles = 4}))
+
+assert(gpu:BindBuffer(0, mesh.Vertices))
+assert(gpu:BindBuffer(1, mesh.Indices))
+assert(gpu:BindBuffer(2, bvh.Nodes))
+assert(gpu:BindBuffer(3, bvh.Triangles))
+```
+
+`LoadMesh()` returns ordinary Luau buffers and `VertexCount`, `IndexCount`, `TriangleCount`, and `VertexStride`. It also accepts URI Content, with an optional mesh index (0 = whole imported asset). `GetMeshFromInstance(meshPartOrEditableMesh)` takes a CPU-side geometry snapshot from MeshPart or EditableMesh. Geometry is asset/local-space; apply instance transforms in your algorithm. The returned data includes positions, normals, UVs, and triangle indices, not material slots, bone weights, or tangents.
+
+Vertices occupy 32 bytes: 8 consecutive float32 values (px, py, pz, nx, ny, nz, u, v). Indices are zero-based uint32 values. Use a scalar-packed layout in GLSL:
+
+```glsl
+struct Vertex {
+    float px, py, pz;
+    float nx, ny, nz;
+    float u, v;
+};
+layout(set=0,binding=0,std430) readonly buffer Vertices { Vertex vertices[]; };
+layout(set=0,binding=1,std430) readonly buffer Indices { uint indices[]; };
+```
+
+BuildBVH creates a CPU-built binary hierarchy using centroid splits with balanced fallback. It returns Nodes and Triangles as Luau buffers, plus NodeCount and TriangleCount. The 32-byte node layout is:
+
+```glsl
+struct BVHNode {
+    vec3 minimum;
+    uint first;
+    vec3 maximum;
+    uint count;
+};
+```
+
+Root is node zero. If count is zero, first and first+1 are child node indices. Otherwise, first and count identify a range in the triangle-order uint32 buffer. Each entry in that buffer is an original triangle index, which refers to three indices in the mesh. Rebuild the BVH when geometry changes. No hardware ray query or scene acceleration API is required for software traversal.
+
+## Capabilities and limits
+
+GetCapabilities returns the device name, buffer and texture dimension limits, uniform range, workgroup limits, shared memory, and enabled optional numeric/storage image features. GPUCompute also imposes allocation limits (64 MiB per buffer or image upload, 256 MiB aggregate persistent resource budget, 16 bindings, 64 buffers, 64 textures, 32 custom pipelines and 64 dispatches per batch). Device support may impose lower limits. Descriptor indexing and hardware ray queries aren't supported. You can't directly share the game's rendered images or automatically export the scene.
+
+
+## Parallel compute tasks
+
+The task API allows multiple independent shader dispatches or command batches to be in flight on one GPUCompute instance. Each task snapshots its descriptors and push constants when its commands are recorded. You may switch pipelines or change bindings for another task without changing tasks already submitted.
+
+| Method | Description |
+| --- | --- |
+| `SubmitTask(x, y?, z?): (number?, string?)` | Submit the currently selected shader, returning a task ID without waiting for GPU execution. |
+| `BeginTask(): (boolean, string?)` | Begin recording a parallel task batch. |
+| `SubmitTaskBatch(): (number?, string?)` | Submit the recorded batch and return its task ID. |
+| `PollTask(id): (boolean, string?)` | Nonblocking completion check. Returns true once and collects the task. |
+| `GetTaskInfo(id): (table?, string?)` | Inspect Queue (zero-based), DispatchCount and Complete without collecting the task. |
+| `GetPendingTaskCount(): number` | Count submitted but uncollected tasks, including completed jobs. |
+
+For example, this processes four independent chunks of numerical data without waiting between dispatches:
+
+```lua
+local gpu = Instance.new("GPUCompute")
+assert(gpu:IsSupported())
+
+assert(gpu:CompileShader([[
+#version 450
+layout(local_size_x=64) in;
+layout(set=0,binding=0,std430) buffer Data { float values[]; };
+void main() {
+    uint i=gl_GlobalInvocationID.x;
+    if (i < uint(values.length())) values[i] *= 2.0;
+}
+]], 1))
+
+local count = 65536
+local pending = {}
+
+for chunk = 1, 4 do
+    local data = buffer.create(count * 4)
+    for i = 0, count - 1 do
+        buffer.writef32(data, i * 4, chunk + i)
+    end
+    assert(gpu:BindBuffer(0, data))
+    local id = assert(gpu:SubmitTask(math.ceil(count / 64)))
+    pending[id] = data
+end
+
+while next(pending) do
+    for id, data in pairs(pending) do
+        local done, err = gpu:PollTask(id)
+        assert(not err, err)
+        if done then
+            assert(gpu:DownloadBuffer(data))
+            print(buffer.readf32(data, 0))
+            assert(gpu:ReleaseBuffer(data))
+            pending[id] = nil
+        end
+    end
+    task.wait()
+end
+
+gpu:Destroy()
+```
+
+Tasks can also contain multiple dependent dispatches:
+
+```lua
+-- Allocate and bind both pipelines' resources before recording.
+assert(gpu:BeginTask())
+assert(gpu:UsePipeline(integrate))
+assert(gpu:DispatchShader(128))
+assert(gpu:UsePipeline(resolve))
+assert(gpu:DispatchShader(128))
+local job = assert(gpu:SubmitTaskBatch())
+-- PollTask(job) completes the entire batch.
+```
+
+A task batch runs on one compute queue; use separate tasks for independent workloads. As in a legacy batch, barriers are inserted between dispatches, and CancelCommands() discards an unsubmitted batch.
+
+### Scheduling, synchronization and resource lifetime
+
+- On supported Vulkan 1.2 devices, independent tasks can use up to four compute queues. On other supported devices, tasks remain asynchronous but execute on one queue.
+- Tasks that access a common resource are automatically ordered whenever at least one may write. Uniform buffers, sampled images and storage descriptors explicitly marked readonly in GLSL can be shared across independent tasks. A task batch is conservatively tracked as a whole. No manual CPU wait is required to enforce task-to-task dependencies.
+- Resource dependencies are tracked per allocation, not byte ranges. Independent regions of the same writable buffer are conservatively ordered; split workloads into separate buffers when overlap is desired.
+- A buffer or texture referenced by any uncollected task cannot be released or changed by the CPU. Buffers not referenced by other outstanding tasks may be uploaded, downloaded or released immediately after their own tasks are collected. New device buffer allocations can be made between submissions. Pipeline compilation, pipeline destruction, texture creation, synchronous GPU transfers and legacy dispatches must wait until tasks are collected. No CPU resource mutations are allowed while commands are being recorded.
+- The engine allows up to 32 uncollected tasks per instance (up to 64 dispatches per batch). Poll completed task IDs regularly; if the limit is reached, submission returns nil and an error rather than waiting for a free slot. PollTask returns false with an error for an invalid or already collected ID.
+- `GetCapabilities()` includes ComputeQueueCount, ParallelQueues, TimelineSemaphores and MaxPendingTasks. Multiple exposed Vulkan queues do not necessarily imply separate hardware compute engines or guaranteed speedup. GPU compute and scene rendering may still compete for processing time and memory bandwidth.
+
+For frame-sensitive work, preallocate resources, use smaller dispatches, keep a modest number of tasks outstanding (for example, two to four), and collect their results across frames. Parallel queues cannot preempt an arbitrary long shader or guarantee a frame rate. Use the original DispatchShader/PollShader and BeginCommands/SubmitCommands APIs when only one job is needed.

@@ -404,36 +404,72 @@ assert(info.Tags[1].FromFrame == 1 and info.Tags[1].ToFrame == 2)
 assert(info.Layers[1] == "Body")
 local frames, metadata, animated = service:CreateImageLabels(asepriteFixture)
 assert(#frames == 2 and metadata.FrameCount == 2)
-assert(typeof(animated) == "Animated")
-assert(animated == Animated.fromBuffer(asepriteFixture))
-assert(animated == service:CreateAnimated(asepriteFixture))
+assert(animated:IsA("Animated") and animated:IsA("Image") and animated.Source ~= "")
+local alternate = service:CreateImage(asepriteFixture)
+assert(alternate:IsA("Image") and alternate.Source == animated.Source)
 assert(service:GetInfo(animated).FrameCount == 2)
+alternate:Destroy()
 local animatedLabel = Instance.new("ImageLabel", workspace)
 animatedLabel.Name = "AnimatedLabelSmoke"
-animatedLabel.ImageContent = animated
-assert(animatedLabel.IsLoaded and animatedLabel.AnimatedContent == animated)
+animatedLabel.Image = animated
+assert(animatedLabel.IsLoaded and animatedLabel.Image == animated)
 local clone = animatedLabel:Clone()
-assert(clone.IsLoaded and clone.AnimatedContent == animated)
+assert(clone.IsLoaded and clone.Image == animated)
 clone:Destroy()
+-- Sprite2D accepts the same Image instance and uses the Aseprite decoder.
+local sprite = Instance.new("Sprite2D", workspace)
+sprite.Name = "AnimatedSpriteSmoke"
+sprite.Image = animated
+sprite.FrameGrid = Vector2.new(2, 2)
+sprite.FrameRate = 20
+sprite:Play()
+assert(sprite.IsLoaded and sprite.Image == animated)
+local spriteClone = sprite:Clone()
+assert(spriteClone.IsLoaded and spriteClone.Image == animated)
+spriteClone:Destroy()
 local button = Instance.new("ImageButton")
-button.AnimatedContent = animated
-assert(button.IsLoaded and button.AnimatedContent == animated)
+button.Image = animated
+assert(button.IsLoaded and button.Image == animated)
+local buttonClone = button:Clone()
+assert(buttonClone.IsLoaded and buttonClone.Image == animated)
+buttonClone:Destroy()
 button:Destroy()
-animatedLabel:SetAttribute("Animation", animated)
-local gif = Animated.fromBytes(buffer.tostring(gifFixture))
+animatedLabel:SetAttribute("AnimationUri", animated.Source)
+local asset = game:GetService("AssetService")
+local gif = asset:CreateImage({Buffer = gifFixture})
+assert(gif:IsA("Animated"))
 local gifLabel = Instance.new("ImageLabel", workspace)
 gifLabel.Name = "AnimatedGifSmoke"
 gifLabel.Image = gif
-assert(gifLabel.IsLoaded and gifLabel.AnimatedContent == gif)
-assert(not pcall(function() Animated.fromBuffer(buffer.create(8)) end))
+assert(gifLabel.IsLoaded and gifLabel.Image == gif)
+local editable = asset:CreateEditableImage({Size = Vector2.new(2, 2)})
+assert(editable:IsA("EditableImage") and editable:IsA("Image"))
+for _, class in {"ImageLabel", "ImageButton", "Sprite2D"} do
+    local consumer = Instance.new(class)
+    consumer.Image = editable
+    assert(consumer.Image == editable and consumer.IsLoaded)
+    assert(not pcall(function() consumer.Image = {} end))
+    assert(consumer.Image == editable and consumer.IsLoaded)
+    editable.Source = animated.Source
+    assert(consumer.IsLoaded)
+    consumer.Image = ""
+    assert(consumer.Image == "" and not consumer.IsLoaded)
+    editable.Source = ""
+    consumer:Destroy()
+end
+local consumer = Instance.new("ImageLabel")
+consumer.Image = editable
+editable:Destroy()
+assert(consumer.Image == "" and not consumer.IsLoaded)
+consumer:Destroy()
+assert(not pcall(function() asset:CreateImage({Buffer = buffer.create(8)}) end))
 assert(frames[1]:IsA("ImageLabel") and frames[2]:IsA("ImageLabel"))
 assert(frames[1].Parent == nil and frames[1].BackgroundTransparency == 1)
 assert(frames[1].Size.X.Offset == 2 and frames[1].Size.Y.Offset == 1)
 assert(frames[1].ResampleMode == Enum.ResampleMode.Nearest)
 assert(frames[1].Image ~= frames[2].Image)
-local asset = game:GetService("AssetService")
 for i, frame in frames do
-    local image = asset:CreateEditableImageAsync(Content.fromUri(frame.Image))
+    local image = asset:CreateImageAsync(frame.Image)
     local rgba = image:ReadPixelsBuffer(Vector2.new(0, 0), Vector2.new(2, 1))
     local offset = (i-1)*4
     assert(buffer.readu8(rgba, offset) == 233)
@@ -465,6 +501,11 @@ label:Destroy()
 	label := cast(^classes.ImageLabel)classes.Find_First_Child(root, "AnimatedLabelSmoke")
 	assert(label != nil && label.aseprite_playback != nil)
 	assert(label.aseprite_playback.frame == 0)
+	sprite := cast(^classes.Sprite2D)classes.Find_First_Child(root, "AnimatedSpriteSmoke")
+	assert(sprite != nil && sprite.animated_source)
+	assert(sprite.aseprite_playback != nil && sprite.aseprite_playback.frame == 0)
+	classes.ImageLabel_Advance_Aseprite(&sprite.label, 100)
+	assert(sprite.aseprite_playback.frame == 1)
 	surface := kineffi.Kine_Skia_Surface_Create(2, 1)
 	assert(surface != nil)
 	for i in 0 ..< 3 {
@@ -488,8 +529,9 @@ label:Destroy()
 	vm.SetGlobalFromStack(&v, "restoredAnimated")
 	ok, err = vm.Run(
 		&v,
-		`assert(typeof(restoredAnimated:GetAttribute("Animation")) == "Animated")
-assert(restoredAnimated:GetAttribute("Animation") == restoredAnimated.AnimatedContent)`,
+		`assert(typeof(restoredAnimated:GetAttribute("AnimationUri")) == "string")
+assert(restoredAnimated:GetAttribute("AnimationUri") ~= "")
+assert(restoredAnimated.IsLoaded and type(restoredAnimated.Image) == "string")`,
 		"animated_roundtrip",
 	)
 	if !ok {fmt.eprintln(err); panic("animated serializer failed")}

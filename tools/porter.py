@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 import threading
 import os
 import random
+from pathlib import Path
 import struct
 import sys
 import time
@@ -30,6 +31,15 @@ ASSET_PROPERTY_KINDS = {
     "MeshId": ASSET_MESH,
     "MeshContent": ASSET_MESH,
     "TextureId": ASSET_TEXTURE,
+    "SkyboxRt": ASSET_TEXTURE,
+    "SkyboxLf": ASSET_TEXTURE,
+    "SkyboxUp": ASSET_TEXTURE,
+    "SkyboxDn": ASSET_TEXTURE,
+    "SkyboxBk": ASSET_TEXTURE,
+    "SkyboxFt": ASSET_TEXTURE,
+    "SunTextureId": ASSET_TEXTURE,
+    "MoonTextureId": ASSET_TEXTURE,
+
     "Texture": ASSET_TEXTURE,
     "Image": ASSET_TEXTURE,
     "SoundId": ASSET_AUDIO,
@@ -225,10 +235,28 @@ DEFAULT_ENUMS = {
     "TextBox.Font": "Font",
 }
 PROP_RENAMES = {"size": "Size", "Color3uint8": "Color"}
+# Modern Roblox Content properties use a typed URI/object representation.
+# Normalize URI-backed content to the corresponding engine string property.
+CONTENT_URI_ALIASES = {
+    "Sky": {"SkyboxRightContent":"SkyboxRt", "SkyboxLeftContent":"SkyboxLf",
+            "SkyboxUpContent":"SkyboxUp", "SkyboxDownContent":"SkyboxDn",
+            "SkyboxBackContent":"SkyboxBk", "SkyboxFrontContent":"SkyboxFt",
+            "MoonTextureContent":"MoonTextureId", "SunTextureContent":"SunTextureId"},
+    "MeshPart": {"MeshContent":"MeshId", "TextureContent":"TextureId"},
+    "SpecialMesh": {"MeshContent":"MeshId", "TextureContent":"TextureId"},
+    "ImageLabel": {"ImageContent":"Image"}, "ImageButton": {"ImageContent":"Image"},
+    "ParticleEmitter": {"TextureContent":"Texture"},
+    "Decal": {"TextureContent":"Texture"}, "Texture": {"TextureContent":"Texture"},
+    "MaterialVariant": {"ColorMapContent":"ColorMap", "NormalMapContent":"NormalMap",
+                        "RoughnessMapContent":"RoughnessMap", "MetalnessMapContent":"MetalnessMap"},
+}
+
 REFERENCE_PROPERTIES = {
     **{cls: {"Attachment0": "Attachment0", "Attachment1": "Attachment1"}
        for cls in ("BallSocketConstraint", "HingeConstraint", "PrismaticConstraint",
-                   "RodConstraint", "RopeConstraint", "SpringConstraint")},
+                   "RodConstraint", "RopeConstraint", "SpringConstraint", "PlaneConstraint", "UniversalConstraint", "CylindricalConstraint", "LinearVelocity", "AlignOrientation")},
+    "BillboardGui": {"Adornee": "Adornee", "PlayerToHideFrom": "PlayerToHideFrom"},
+    "NoCollisionConstraint": {"Part0Internal": "Part0", "Part1Internal": "Part1", "Part0": "Part0", "Part1": "Part1"},
     "WeldConstraint": {"Part0Internal": "Part0", "Part1Internal": "Part1",
                        "Part0": "Part0", "Part1": "Part1"},
 }
@@ -298,6 +326,80 @@ def init_default_remaps():
                 remap[rvalue] = kmap[kname]
         ENUM_REMAP[enum] = remap
 init_default_remaps()
+
+# The checked-in schema is a compact public API dump subset. Read the actual
+# engine enum declarations rather than relying on historic integer values.
+SCHEMA_PATH = Path(__file__).with_name("roblox_porter_schema.json")
+ENGINE_ENUM_PATH = Path(__file__).resolve().parents[1] / "src/engine/enum/enum.odin"
+ROBLOX_SCHEMA = json.loads(SCHEMA_PATH.read_text()) if SCHEMA_PATH.exists() else {}
+def load_engine_enums():
+    if not ENGINE_ENUM_PATH.exists():
+        return {}
+    result = {}
+    for name, body in re.findall(r"(?m)^([A-Za-z_]\w*)\s*::\s*enum(?:\s+\w+)?\s*\{([^{}]*)\}", ENGINE_ENUM_PATH.read_text()):
+        items = {}
+        value = -1
+        for line in re.sub(r"//[^\n]*", "", body).split(","):
+            line = line.strip()
+            if not line:
+                continue
+            match = re.fullmatch(r"([A-Za-z_]\w*)(?:\s*=\s*(-?(?:0[xX][0-9a-fA-F]+|[0-9_]+)))?", line)
+            if not match:
+                items = {}
+                break
+            item, raw = match.groups()
+            value = int(raw.replace("_",""), 0) if raw is not None else value + 1
+            items[item] = value
+        if items:
+            result[name] = items
+    return result
+
+ENGINE_ENUMS = load_engine_enums()
+ROBLOX_ENUMS.update(ROBLOX_SCHEMA.get("enums", {}))
+for enum, roblox_items in ROBLOX_ENUMS.items():
+    if enum not in ENGINE_ENUMS:
+        continue
+    actual = ENGINE_ENUMS[enum]
+    aliases = ENUM_ITEM_ALIASES.get(enum, {})
+    ENUM_REMAP[enum] = {
+        value: actual[name if name in actual else aliases.get(name, name)]
+        for name, value in roblox_items.items()
+        if name in actual or aliases.get(name, name) in actual
+    }
+
+# Historical binary spellings sometimes differ from the public API.
+SERIALIZED_ENUM_ALIASES = {
+    "Part.formFactorRaw": "FormFactor",
+    "Seat.formFactorRaw": "FormFactor",
+    "WedgePart.formFactorRaw": "FormFactor",
+    "StarterPlayer.AvatarJointUpgrade_SerializedRollout": "RolloutState",
+    "StarterPlayer.LoadCharacterLayeredClothing": "LoadCharacterLayeredClothing",
+    "Workspace.SignalBehavior2": "SignalBehavior",
+    "Terrain.AcquisitionMethod": "TerrainAcquisitionMethod",
+    "MeshPart.FluidFidelityInternal": "FluidFidelity",
+    "UnionOperation.FluidFidelityInternal": "FluidFidelity",
+    "Workspace.LevelOfDetail": "ModelLevelOfDetail",
+    "Workspace.ModelStreamingMode": "ModelStreamingMode",
+    "CylinderHandleAdornment.AdornCullingMode": "AdornCullingMode",
+    "SphereHandleAdornment.AdornCullingMode": "AdornCullingMode",
+    "Frame.Sink": "InputSink",
+    "ImageLabel.Sink": "InputSink",
+    "TextLabel.Sink": "InputSink",
+    "BillboardGui.InputSinkEnabled": "RolloutState",
+    "ScreenGui.InputSinkEnabled": "RolloutState",
+    "SurfaceGui.InputSinkEnabled": "RolloutState",
+}
+def schema_enum_for(cls, prop):
+    classes = ROBLOX_SCHEMA.get("classes", {})
+    name = cls
+    while name in classes:
+        entry = classes[name]
+        value = entry["enums"].get(prop)
+        if value:
+            return value
+        name = entry["parent"]
+    return None
+
 # Classes registered by Register_Default_Classes in the Kinemium engine.
 # Services (Workspace, Lighting, ...) and anything registered elsewhere are NOT
 # here; extend with --allow-class / --classes-file or disable with --no-class-filter.
@@ -309,18 +411,19 @@ ColorCorrectionEffect ColorSequenceValue Configuration Decal DepthOfFieldEffect 
 EditableMesh Folder Frame GroundDetector GuiButton GuiObject Handles Highlight Humanoid
 ImageButton ImageLabel InputObject IntConstrainedValue IntValue Light LocalScript
 MeshPart Model ModuleScript MovementController NumberRangeValue NumberSequenceValue
-UnionOperation NegateOperation IntersectOperation HingeConstraint WeldConstraint RopeConstraint SpringConstraint
-BallSocketConstraint PrismaticConstraint RodConstraint
+UnionOperation NegateOperation IntersectOperation HingeConstraint WeldConstraint NoCollisionConstraint RopeConstraint SpringConstraint
+BallSocketConstraint PrismaticConstraint RodConstraint PlaneConstraint UniversalConstraint CylindricalConstraint LinearVelocity AlignOrientation
 NumberValue ObjectValue Part PointLight PostProcessShader RayValue RemoteEvent
 RemoteFunction RotationController SSAOEffect ScreenGui Script ScrollingFrame Sound
 SpotLight StarterCharacterScripts StateMachine StringValue SunRaysEffect
 SurfaceGui SurfaceLight SyntaxHighlighter TextBox TextButton TextLabel Tween UIBackdrop UICorner
 UIGradient UIGridLayout UIListLayout UIShadow UIStroke ValueBase Vector2Value
+ParticleEmitter Clouds MaterialVariant SpecialMesh BillboardGui Sky CylinderHandleAdornment SphereHandleAdornment BoxHandleAdornment ConeHandleAdornment LineHandleAdornment SpawnLocation
 Vector3Value PlayerScripts Attachment Terrain UISizeConstraint UIPadding
 """.split()
 MAP_CONTENT_SERVICES = set("""
 Workspace ReplicatedFirst ReplicatedStorage Lighting SoundService StarterGui
-StarterPack StarterPlayer ServerScriptService ServerStorage
+StarterPack StarterPlayer ServerScriptService ServerStorage MaterialService Teams
 """.split())
 def subtree_size(inst):
     total = 1
@@ -350,9 +453,10 @@ class Inst:
 class Options:
     def __init__(self):
         self.enum_map = dict(DEFAULT_ENUMS)
+        self.enum_overrides = {}
         self.allowed_classes = set(DEFAULT_CLASSES) | set(MAP_CONTENT_SERVICES)
         self.aliases = {
-            "SpawnLocation": "Part", "Seat": "Part", "VehicleSeat": "Part", "TrussPart": "Part",
+            "Texture": "Decal", "Seat": "Part", "VehicleSeat": "Part", "TrussPart": "Part",
             "StarterPlayerScripts": "PlayerScripts",
             "WedgePart": "Part", "CornerWedgePart": "Part",
         }
@@ -369,9 +473,11 @@ class Options:
         self.downloader = None
         self.root_class = "Model"
         self.debug = False
+        self.summary = False
         self.stats = {
             "unsupported_types": {},
             "unmapped_enums": set(),
+            "unmapped_enum_items": set(),
             "dropped_classes": {},
             "dropped_instances": 0,
             "kept_instances": 0,
@@ -520,6 +626,19 @@ def decode_prop(t, b, n, enum_name):
         return [E(enc_ud(DT_COLOR3, struct.pack("<fff", r[i] / 255.0, g[i] / 255.0, bl[i] / 255.0))) for i in range(n)]
     if t == 0x1B:  # Int64
         return [E(enc_number(float(v))) for v in b.ints64(n)]  # never emit the Integer tag: Luau has no integer type
+    if t == 0x22:  # Content (URI/object), distinct from the old ContentId string
+        # See https://dom.rojo.space/binary.html#content
+        types = b.ints(n)
+        uri_count = b.u32()
+        if uri_count != types.count(1):
+            raise ValueError("Content URI count does not match source types")
+        uris = iter([b.string() for _ in range(uri_count)])
+        object_count = b.u32()
+        b.refs(object_count)
+        external_count = b.u32()
+        b.take(external_count * 4)
+        # Object-backed Content cannot be translated into a URI.
+        return [("s", next(uris)) if source == 1 else None for source in types]
     if t == 0x20:  # Font
         out = []
         for _ in range(n):
@@ -1286,11 +1405,29 @@ def parse_rbxm(data, opts):
                     continue
             key = ("Shape" if pname == "shape" and cname in {"Part", "Seat", "VehicleSeat"}
                    else PROP_RENAMES.get(pname, pname))
-            enum_name = (opts.enum_map.get(cname + "." + pname)
+            if t == 0x22:
+                key = CONTENT_URI_ALIASES.get(cname, {}).get(pname)
+                if key is None:
+                    unsupported[t] = unsupported.get(t, 0) + 1
+                    continue
+            qualified = cname + "." + pname
+            enum_name = (opts.enum_overrides.get(qualified) or opts.enum_overrides.get(pname)
+                         or opts.enum_overrides.get(key)
+                         or SERIALIZED_ENUM_ALIASES.get(qualified)
+                         or schema_enum_for(cname, pname)
+                         or opts.enum_map.get(qualified)
                          or opts.enum_map.get(pname)
                          or opts.enum_map.get(key))
+            if t == 0x12 and ENGINE_ENUMS and enum_name not in ENGINE_ENUMS:
+                enum_name = None
             try:
-                vals = decode_prop(t, b, len(refs), enum_name)
+                if t == 0x12 and qualified == "Workspace.FluidForces":
+                    # Kinemium exposes an existing boolean toggle, not the Roblox enum.
+                    # The default is disabled; Experimental enables the local solver.
+                    vals = [("b", value == 1) if value in (0, 1) else None
+                            for value in b.raw_u32s(len(refs))]
+                else:
+                    vals = decode_prop(t, b, len(refs), enum_name)
             except (ValueError, struct.error, IndexError) as e:
                 print("  warning: %s.%s (type %#x) failed to decode: %s" % (cname, pname, t, e), file=sys.stderr)
                 continue
@@ -1302,6 +1439,8 @@ def parse_rbxm(data, opts):
                 continue
             for ref, v in zip(refs, vals):
                 if v is None:
+                    if t == 0x12:
+                        opts.stats["unmapped_enum_items"].add(qualified)
                     continue
                 inst = insts[ref]
                 tag, val = v
@@ -1455,7 +1594,7 @@ def convert(path, out_path, opts):
         f.write(blob)
     print("%s -> %s  (%d instances, %d bytes, %d unions)" %
           (path, out_path, count, len(blob), opts.stats["imported_unions"]))
-    if opts.debug or opts.download_assets:
+    if opts.debug or opts.download_assets or opts.summary:
         print_summary(opts)
 def print_summary(opts):
     s = opts.stats
@@ -1476,6 +1615,7 @@ def main():
     ap.add_argument("--alias", action="append", default=[], help="Old=New class substitution, e.g. WedgePart=Part; repeatable")
     ap.add_argument("--no-class-filter", action="store_true", help="keep every class (the loader fails on unknown ones)")
     ap.add_argument("--debug", action="store_true", help="print per-instance keep/drop decisions and a summary")
+    ap.add_argument("--summary", action="store_true", help="print conversion counts without per-instance debug output")
     ap.add_argument("--no-download-assets", action="store_true", help="keep rbxassetid:// references unchanged (default: download + embed)")
     ap.add_argument("--asset-timeout", type=float, default=8.0, help="timeout per Roblox network request (default 8s)")
     ap.add_argument("--asset-retries", type=int, default=1, help="retry transient network errors (default 1)")
@@ -1490,6 +1630,7 @@ def main():
     opts.kine_version = args.kine_version
     opts.root_class = args.root_class
     opts.debug = args.debug
+    opts.summary = args.summary
     opts.download_assets = not args.no_download_assets and opts.kine_version >= 3
     opts.asset_workers = max(1, min(args.asset_workers, 16))
     if args.kine_version == 2 and not args.no_download_assets:
@@ -1518,7 +1659,7 @@ def main():
         opts.allowed_classes.update(args.allow_class)
     if args.enum_map:
         with open(args.enum_map) as f:
-            opts.enum_map.update(json.load(f))
+            opts.enum_overrides.update(json.load(f))
     if args.enum_values:
         with open(args.enum_values) as f:
             build_enum_remap(json.load(f))
@@ -1552,6 +1693,8 @@ def main():
         print("dropped classes: " + ", ".join("%s x%d" % kv for kv in sorted(s["dropped_classes"].items())))
     if s["unmapped_enums"]:
         print("dropped enum properties with no enum name (use --enum-map): " + ", ".join(sorted(s["unmapped_enums"])))
+    if s["unmapped_enum_items"]:
+        print("skipped enum values with no compatible item: " + ", ".join(sorted(s["unmapped_enum_items"])))
     if s["unsupported_types"]:
         print("skipped properties of unsupported types: " + ", ".join("%#x x%d" % kv for kv in sorted(s["unsupported_types"].items())))
     sys.exit(1 if failures else 0)

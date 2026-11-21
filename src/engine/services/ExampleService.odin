@@ -1,10 +1,12 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
+import "core:math"
+import "core:sync"
 
 ExampleService_Class := classes.Class_Info {
 	name   = "ExampleService",
@@ -12,8 +14,9 @@ ExampleService_Class := classes.Class_Info {
 }
 
 ExampleService :: struct {
-	using service: Service,
-	call_count:    i64,
+	using service:  Service,
+	call_count:     i64,
+	parallel_value: i64,
 }
 
 example_service_construct :: proc(
@@ -35,7 +38,9 @@ example_service_get :: proc(
 	service := cast(^ExampleService)object
 	switch key {
 	case "CallCount":
-		vm.PushNumber(L, f64(service.call_count))
+		vm.PushNumber(L, f64(sync.atomic_load(&service.call_count)))
+	case "ParallelValue":
+		vm.PushNumber(L, f64(sync.atomic_load(&service.parallel_value)))
 	case "Add", "Echo", "MakeColor", "GetService":
 		vm.PushUserdataMethod(L, key)
 	case:
@@ -57,15 +62,15 @@ example_service_namecall :: proc(
 	service := cast(^ExampleService)object
 	switch method {
 	case "Add":
-		service.call_count += 1
+		_ = sync.atomic_add(&service.call_count, 1)
 		vm.PushNumber(L, vm.ArgNumber(L, 2) + vm.ArgNumber(L, 3))
 		return 1, true
 	case "Echo":
-		service.call_count += 1
+		_ = sync.atomic_add(&service.call_count, 1)
 		vm.PushValue(L, 2)
 		return 1, true
 	case "MakeColor":
-		service.call_count += 1
+		_ = sync.atomic_add(&service.call_count, 1)
 		if datatype_registry == nil {return 0, false}
 		datatypes.Push_Color3(
 			L,
@@ -84,6 +89,61 @@ example_service_namecall :: proc(
 	return 0, false
 }
 
+
+example_service_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "CallCount", "ParallelValue", "Add", "Echo":
+		return example_service_get(L, object, datatype_registry, enum_registry, key)
+	}
+	return false
+}
+
+example_service_parallel_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	value_index: int,
+) -> bool {
+	if key != "ParallelValue" {return false}
+	service := cast(^ExampleService)object
+	value := vm.ArgNumber(L, value_index)
+	if math.is_nan(value) ||
+	   math.is_inf(value) ||
+	   math.floor(value) != value ||
+	   abs(value) > 9007199254740991.0 {
+		_ = vm.RaiseError(L, "ParallelValue expects a safe integer")
+		return true
+	}
+	sync.atomic_store(&service.parallel_value, i64(value))
+	return true
+}
+
+example_service_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "Add", "Echo":
+		return example_service_namecall(L, object, datatype_registry, enum_registry, method)
+	}
+
+	return 0, false
+}
+
 example_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^ExampleService)object)
@@ -97,6 +157,12 @@ Register_ExampleService_Class :: proc(registry: ^classes.Registry) {
 		example_service_destroy,
 		creatable = false,
 		get = example_service_get,
+		set = example_service_parallel_set,
 		namecall = example_service_namecall,
+		parallel_get = example_service_parallel_get,
+		parallel_set = example_service_parallel_set,
+		parallel_namecall = example_service_parallel_namecall,
+		properties = []string{"CallCount", "ParallelValue"},
+		methods = []string{"Add", "Echo", "MakeColor", "GetService"},
 	)
 }

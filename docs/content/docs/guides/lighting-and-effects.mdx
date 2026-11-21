@@ -74,7 +74,7 @@ clouds.Color = Color3.fromRGB(245, 230, 220)
 
 ## Understand the effect stack
 
-`Lighting` already has effect children when the game starts. You can tune them in place, replace them, or add your own. Two rules decide what the renderer uses:
+`Lighting` already has effect children when the game starts. You can tune them in place, replace them, or add your own. Two rules decide which effects are active:
 
 1. **Last child wins.** For each effect class, only the last matching child of `Lighting` is applied. Adding a second `BloomEffect` silently disables the first.
 2. **Most effects are exclusive.** `ColorCorrectionEffect`, `BloomEffect`, `SunRaysEffect`, `SSAOEffect`, `DepthOfFieldEffect`, `VignetteEffect`, and `ScreenSpaceReflectionsEffect` each apply at most one instance.
@@ -94,7 +94,7 @@ local function getEffect(className)
 end
 ```
 
-`FindFirstChildOfClass()` returns the first match, not the last one the renderer will use. If your game adds effects dynamically, keep your own reference instead of searching by name every frame.
+`FindFirstChildOfClass()` returns the first match, not the last one used for rendering. If your game adds effects dynamically, keep your own reference instead of searching by name every frame.
 
 `BlurEffect` is a special case: it's only applied when `Lighting` has no `BloomEffect` child at all. If both exist, the bloom path wins and the blur is ignored. Don't combine them and expect a blurred image.
 

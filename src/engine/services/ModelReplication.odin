@@ -25,6 +25,11 @@ replication_pivot_barrier :: proc(
 		}
 		entity.pivot_upload_guard = !pending
 		entity.pivot_upload_after = tick
+		if classes.Is_A(object, "Part") {
+			part := cast(^classes.Part)object
+			entity.last_accepted_position = {part.cframe.x, part.cframe.y, part.cframe.z}
+			entity.last_accepted_ms = transport_time_get()
+		}
 		entity.owned_window_time = 0
 		entity.owned_rate_window_time = 0
 		entity.owned_updates_window = 0

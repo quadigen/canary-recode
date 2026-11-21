@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -24,6 +24,7 @@ UserInputService :: struct {
 	gamepad_axes:            [8][6]f32,
 	gamepad_buttons:         [8][15]bool,
 	gamepad_direction:       [8][2]i32,
+	navigation_disabled:     [8]bool,
 	mouse_icon_enabled:      bool,
 	mouse_behavior:          enums.MouseBehavior,
 	mouse_delta_sensitivity: f32,
@@ -120,7 +121,11 @@ user_input_service_get :: proc(
 		signals.Push(L, service.input_changed)
 	case "InputEnded":
 		signals.Push(L, service.input_ended)
-	case "GetMouseLocation",
+	case "GetStringForKeyCode",
+	     "GetNavigationGamepads",
+	     "IsNavigationGamepad",
+	     "SetNavigationGamepad",
+	     "GetMouseLocation",
 	     "GetImageForKeyCode",
 	     "GetMouseDelta",
 	     "GetLastInputType",
@@ -293,6 +298,56 @@ user_input_service_namecall :: proc(
 ) {
 	service := cast(^UserInputService)object
 	switch method {
+	case "GetStringForKeyCode":
+		item := enums.Arg_Item(L, 2, enum_registry, "KeyCode")
+		key := enums.KeyCode(item.value)
+
+		when ODIN_OS != .JS {
+			for i in 4 ..< 512 {
+				scan := sdl3.Scancode(i)
+				if enums.Key_Code_From_Scancode(scan) != key {continue}
+				if key != .None {
+					name := sdl3.Keyboard_Name(scan)
+					if name != "" {vm.PushString(L, name); return 1, true}
+				}
+				break
+			}
+		}
+		if item.value >= 32 && item.value <= 126 {
+			byte_value := [1]u8{u8(item.value)}
+			vm.PushString(L, string(byte_value[:]))
+		} else {vm.PushString(L, item.name)}
+		return 1, true
+	case "GetNavigationGamepads":
+		vm.NewTable(L, 8)
+		index := 1
+		for id, i in service.gamepad_ids {
+			if id == 0 || service.navigation_disabled[i] {continue}
+			_ = enums.Push_Item_By_Value(
+				L,
+				enum_registry,
+				"UserInputType",
+				i64(enums.UserInputType.Gamepad1) + i64(i),
+			)
+			vm.SetArrayValue(L, -2, index)
+			index += 1
+		}
+		return 1, true
+	case "IsNavigationGamepad", "SetNavigationGamepad":
+		slot := gamepad_input_index(L, enum_registry, 2)
+		if slot < 0 ||
+		   slot >=
+			   len(
+				   service.gamepad_ids,
+			   ) {return vm.RaiseError(L, "expected gamepad input type"), true}
+		if method ==
+		   "IsNavigationGamepad" {vm.PushBoolean(L, service.gamepad_ids[slot] != 0 && !service.navigation_disabled[slot]); return 1, true}
+		service.navigation_disabled[slot] = !vm.ArgBoolean(L, 3)
+		if service.navigation_disabled[slot] {
+			service.gamepad_direction[slot] = {}
+			classes.Gui_Gamepad_Disconnect(service.signal_registry, service.gamepad_ids[slot])
+		}
+		return 0, true
 	case "GetConnectedGamepads":
 		vm.NewTable(L, 8)
 		index := 1
@@ -363,7 +418,7 @@ user_input_service_namecall :: proc(
 		return 1, true
 	case "GetImageForKeyCode":
 		_ = enums.Arg_Item(L, 2, enum_registry, "KeyCode")
-		// This runtime ships no controller-specific key images.
+
 		vm.PushString(L, "")
 		return 1, true
 	case "GetFocusedTextBox":
@@ -473,7 +528,7 @@ user_input_service_namecall :: proc(
 
 user_input_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^UserInputService)object
-	// lua_close owns Mouse finalization and may have already freed it.
+
 	if !vm.Is_Closing() && service.mouse != nil {
 		classes.Destroy_Hierarchy(&service.mouse.object)
 	}
@@ -509,6 +564,10 @@ Register_UserInputService_Class :: proc(registry: ^classes.Registry) {
 		namecall = user_input_service_namecall,
 		methods = []string {
 			"GetFocusedTextBox",
+			"GetStringForKeyCode",
+			"GetNavigationGamepads",
+			"IsNavigationGamepad",
+			"SetNavigationGamepad",
 			"GetImageForKeyCode",
 			"GetKeysPressed",
 			"GetLastInputType",

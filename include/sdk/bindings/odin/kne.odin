@@ -3,10 +3,10 @@ package kne
 import "core:strings"
 
 ABI_MAJOR :: u32(3)
-ABI_MINOR :: u32(0)
+ABI_MINOR :: u32(1)
 ENTRY_SYMBOL :: "kne_extension_entry"
-// UNHANDLED is returned by a class namecall to decline a method; the host
-// then runs the engine's own Instance behaviour for it.
+
+
 UNHANDLED :: i32(-1)
 CLASS_CREATABLE :: u32(1)
 CLASS_SERVICE :: u32(1 << 1)
@@ -27,44 +27,45 @@ KNE_Log_Level :: enum i32 {
 }
 
 KNE_Value_Kind :: enum i32 {
-	Nil      = 0,
-	Boolean  = 1,
-	Number   = 2,
-	Integer  = 3,
-	String   = 4,
-	Instance = 5,
-	Table    = 6,
-	Function = 7,
-
-	Vector2                      = 20,
-	Vector3                      = 21,
-	Vector2Int16                 = 22,
-	Vector3Int16                 = 23,
-	CFrame                       = 24,
-	Color3                       = 25,
-	UDim                         = 26,
-	UDim2                        = 27,
-	Ray                          = 28,
-	Rect                         = 29,
-	Region3                      = 30,
-	Region3Int16                 = 31,
-	NumberRange                  = 32,
-	NumberSequenceKeypoint       = 33,
-	ColorSequenceKeypoint        = 34,
-	Axes                         = 35,
-	Faces                        = 36,
-	PhysicalProperties           = 37,
-	Quaternion                   = 38,
-	TweenInfo                    = 39,
-	DateTime                     = 40,
-	UniqueId                     = 41,
-	PathWaypoint                 = 42,
-	SecurityCapabilities         = 43,
-	DockWidgetPluginGuiInfo      = 44,
-
-	Datatype = 60,
-	Callback = 61,
-	Signal   = 62,
+	Nil                     = 0,
+	Boolean                 = 1,
+	Number                  = 2,
+	Integer                 = 3,
+	String                  = 4,
+	Instance                = 5,
+	Table                   = 6,
+	Function                = 7,
+	Buffer                  = 8,
+	Thread                  = 9,
+	Opaque                  = 10,
+	Vector2                 = 20,
+	Vector3                 = 21,
+	Vector2Int16            = 22,
+	Vector3Int16            = 23,
+	CFrame                  = 24,
+	Color3                  = 25,
+	UDim                    = 26,
+	UDim2                   = 27,
+	Ray                     = 28,
+	Rect                    = 29,
+	Region3                 = 30,
+	Region3Int16            = 31,
+	NumberRange             = 32,
+	NumberSequenceKeypoint  = 33,
+	ColorSequenceKeypoint   = 34,
+	Axes                    = 35,
+	Faces                   = 36,
+	PhysicalProperties      = 37,
+	Quaternion              = 38,
+	TweenInfo               = 39,
+	DateTime                = 40,
+	UniqueId                = 41,
+	PathWaypoint            = 42,
+	SecurityCapabilities    = 43,
+	DockWidgetPluginGuiInfo = 44,
+	Datatype                = 60,
+	Callback                = 61,
+	Signal                  = 62,
 }
 
 KNE_Vector2 :: struct {
@@ -154,12 +155,12 @@ KNE_Quaternion :: struct {
 }
 
 KNE_TweenInfo :: struct {
-	time:            f32,
-	easing_style:    int,
+	time:             f32,
+	easing_style:     int,
 	easing_direction: int,
-	repeat_count:    i32,
-	reverses:        u8,
-	delay_time:      f32,
+	repeat_count:     i32,
+	reverses:         u8,
+	delay_time:       f32,
 }
 
 KNE_DateTime :: struct {
@@ -184,68 +185,68 @@ KNE_SecurityCapabilities :: struct {
 }
 
 KNE_DockWidgetPluginGuiInfo :: struct {
-	initial_dock_state:      int,
-	initial_enabled:         u8,
+	initial_dock_state:       int,
+	initial_enabled:          u8,
 	override_enabled_restore: u8,
-	floating_x_size:         i32,
-	floating_y_size:         i32,
-	min_width:               i32,
-	min_height:              i32,
+	floating_x_size:          i32,
+	floating_y_size:          i32,
+	min_width:                i32,
+	min_height:               i32,
 }
 
 KNE_Datatype :: struct {
-	handle:    rawptr,
-	type_name: KNE_String,
-	tag:       u32,
-	reserved:  u32,
-	source_vm: rawptr,
-	source_index: i32,
+	handle:          rawptr,
+	type_name:       KNE_String,
+	tag:             u32,
+	reserved:        u32,
+	source_vm:       rawptr,
+	source_index:    i32,
 	source_reserved: i32,
 }
 
-// Borrowed VM stack slot, valid during the native callback that produced it.
+
 KNE_Stack_Value :: struct {
- vm: rawptr,
- index: i32,
- reserved: i32,
+	vm:       rawptr,
+	index:    i32,
+	reserved: i32,
 }
 
 KNE_Value_Data :: struct #raw_union {
- stack: KNE_Stack_Value,
-	boolean:                  i32,
-	number:                   f64,
-	integer:                  i64,
-	string:                   KNE_String,
-	instance:                 rawptr,
-	vector2:                  KNE_Vector2,
-	vector3:                  KNE_Vector3,
-	vector2int16:             KNE_Vector2Int16,
-	vector3int16:             KNE_Vector3Int16,
-	cframe:                   KNE_CFrame,
-	color3:                   KNE_Color3,
-	udim:                     KNE_UDim,
-	udim2:                    KNE_UDim2,
-	ray:                      KNE_Ray,
-	rect:                     KNE_Rect,
-	region3:                  KNE_Region3,
-	region3int16:             KNE_Region3Int16,
-	number_range:             KNE_NumberRange,
-	number_sequence_keypoint: KNE_NumberSequenceKeypoint,
-	color_sequence_keypoint:  KNE_ColorSequenceKeypoint,
-	axes:                     KNE_Axes,
-	faces:                    KNE_Faces,
-	physical_properties:      KNE_PhysicalProperties,
-	quaternion:               KNE_Quaternion,
-	tween_info:               KNE_TweenInfo,
-	date_time:                KNE_DateTime,
-	unique_id:                KNE_UniqueId,
-	path_waypoint:            KNE_PathWaypoint,
-	security_capabilities:    KNE_SecurityCapabilities,
+	stack:                       KNE_Stack_Value,
+	boolean:                     i32,
+	number:                      f64,
+	integer:                     i64,
+	string:                      KNE_String,
+	instance:                    rawptr,
+	vector2:                     KNE_Vector2,
+	vector3:                     KNE_Vector3,
+	vector2int16:                KNE_Vector2Int16,
+	vector3int16:                KNE_Vector3Int16,
+	cframe:                      KNE_CFrame,
+	color3:                      KNE_Color3,
+	udim:                        KNE_UDim,
+	udim2:                       KNE_UDim2,
+	ray:                         KNE_Ray,
+	rect:                        KNE_Rect,
+	region3:                     KNE_Region3,
+	region3int16:                KNE_Region3Int16,
+	number_range:                KNE_NumberRange,
+	number_sequence_keypoint:    KNE_NumberSequenceKeypoint,
+	color_sequence_keypoint:     KNE_ColorSequenceKeypoint,
+	axes:                        KNE_Axes,
+	faces:                       KNE_Faces,
+	physical_properties:         KNE_PhysicalProperties,
+	quaternion:                  KNE_Quaternion,
+	tween_info:                  KNE_TweenInfo,
+	date_time:                   KNE_DateTime,
+	unique_id:                   KNE_UniqueId,
+	path_waypoint:               KNE_PathWaypoint,
+	security_capabilities:       KNE_SecurityCapabilities,
 	dock_widget_plugin_gui_info: KNE_DockWidgetPluginGuiInfo,
-	datatype:                 KNE_Datatype,
-	callback:                 rawptr,
-	signal:                   rawptr,
-	alignment:                u64,
+	datatype:                    KNE_Datatype,
+	callback:                    rawptr,
+	signal:                      rawptr,
+	alignment:                   u64,
 }
 
 KNE_Value :: struct {
@@ -295,9 +296,25 @@ KNE_Services_Api :: struct {
 }
 
 KNE_Class_Construct_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance)
-KNE_Class_Get_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, key: KNE_String, out: ^KNE_Value) -> i32
-KNE_Class_Set_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, key: KNE_String, value: ^KNE_Value) -> i32
-KNE_Class_Namecall_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, method: KNE_String, L: KNE_VM, arg_count: i32) -> i32
+KNE_Class_Get_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	key: KNE_String,
+	out: ^KNE_Value,
+) -> i32
+KNE_Class_Set_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	key: KNE_String,
+	value: ^KNE_Value,
+) -> i32
+KNE_Class_Namecall_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	method: KNE_String,
+	L: KNE_VM,
+	arg_count: i32,
+) -> i32
 KNE_Class_Step_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, delta_time: f64)
 
 KNE_Class_Desc :: struct {
@@ -333,17 +350,55 @@ KNE_Destroy_Instance_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance)
 KNE_Instance_Name_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_String
 KNE_Instance_Set_Name_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, name: KNE_String)
 KNE_Instance_Parent_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_Instance
-KNE_Instance_Set_Parent_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, parent: KNE_Instance)
+KNE_Instance_Set_Parent_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	parent: KNE_Instance,
+)
 KNE_Instance_Child_Count_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> uintptr
-KNE_Instance_Child_At_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, index: uintptr) -> KNE_Instance
-KNE_Instance_Find_Child_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, name: KNE_String) -> KNE_Instance
-KNE_Instance_Is_A_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, class_name: KNE_String) -> i32
+KNE_Instance_Child_At_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	index: uintptr,
+) -> KNE_Instance
+KNE_Instance_Find_Child_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	name: KNE_String,
+) -> KNE_Instance
+KNE_Instance_Is_A_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	class_name: KNE_String,
+) -> i32
 KNE_Instance_Class_Name_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> KNE_String
-KNE_Instance_Get_Property_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, key: KNE_String, out: ^KNE_Value) -> i32
-KNE_Instance_Set_Property_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, key: KNE_String, value: ^KNE_Value) -> i32
+KNE_Instance_Get_Property_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	key: KNE_String,
+	out: ^KNE_Value,
+) -> i32
+KNE_Instance_Set_Property_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	key: KNE_String,
+	value: ^KNE_Value,
+) -> i32
 KNE_Instance_Get_User_Data_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> rawptr
-KNE_Instance_Set_User_Data_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, data: rawptr)
-KNE_Instance_Invoke_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, method: KNE_String, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value, out_capacity: i32) -> i32
+KNE_Instance_Set_User_Data_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	data: rawptr,
+)
+KNE_Instance_Invoke_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	method: KNE_String,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+	out_capacity: i32,
+) -> i32
 
 KNE_Instances_Api :: struct {
 	size:          u32,
@@ -390,9 +445,22 @@ KNE_VM_Set_Field_Fn :: proc "c" (L: KNE_VM, table_index: i32, key: KNE_String)
 KNE_VM_Set_Global_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, name: KNE_String)
 KNE_VM_Remove_Fn :: proc "c" (L: KNE_VM, index: i32)
 KNE_VM_Raise_Fn :: proc "c" (L: KNE_VM, message: KNE_String) -> i32
-KNE_VM_Register_Function_Fn :: proc "c" (ext: KNE_Extension, name: KNE_String, function: KNE_VM_Native_Fn) -> i32
-KNE_VM_Register_Library_Function_Fn :: proc "c" (ext: KNE_Extension, library: KNE_String, name: KNE_String, function: KNE_VM_Native_Fn) -> i32
-KNE_VM_Register_Global_Datatype_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, library: KNE_String) -> i32
+KNE_VM_Register_Function_Fn :: proc "c" (
+	ext: KNE_Extension,
+	name: KNE_String,
+	function: KNE_VM_Native_Fn,
+) -> i32
+KNE_VM_Register_Library_Function_Fn :: proc "c" (
+	ext: KNE_Extension,
+	library: KNE_String,
+	name: KNE_String,
+	function: KNE_VM_Native_Fn,
+) -> i32
+KNE_VM_Register_Global_Datatype_Fn :: proc "c" (
+	ext: KNE_Extension,
+	L: KNE_VM,
+	library: KNE_String,
+) -> i32
 
 KNE_VM_Api :: struct {
 	size:                      u32,
@@ -422,6 +490,16 @@ KNE_VM_Api :: struct {
 	register_function:         KNE_VM_Register_Function_Fn,
 	register_library_function: KNE_VM_Register_Library_Function_Fn,
 	register_global_datatype:  KNE_VM_Register_Global_Datatype_Fn,
+	execute:                   proc "c" (
+		ext: KNE_Extension,
+		source: KNE_String,
+		args: ^KNE_Value,
+		arg_count: i32,
+		out: ^KNE_Value,
+		out_capacity: i32,
+	) -> i32,
+	get_buffer:                proc "c" (L: KNE_VM, index: i32, out_size: ^uintptr) -> rawptr,
+	push_buffer:               proc "c" (L: KNE_VM, data: rawptr, size: uintptr) -> i32,
 }
 
 KNE_Push_Vector2_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: KNE_Vector2)
@@ -434,47 +512,120 @@ KNE_Arg_CFrame_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE
 KNE_Arg_Color3_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Color3
 
 KNE_Datatype_Push_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, value: ^KNE_Value) -> i32
-KNE_Datatype_Get_Value_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32, out: ^KNE_Value) -> i32
-KNE_Datatype_Construct_Value_Fn :: proc "c" (ext: KNE_Extension, type_name: KNE_String, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value) -> i32
-KNE_Datatype_Get_Field_Value_Fn :: proc "c" (ext: KNE_Extension, value: ^KNE_Value, field: KNE_String, out: ^KNE_Value) -> i32
-KNE_Datatype_Set_Field_Value_Fn :: proc "c" (ext: KNE_Extension, value: ^KNE_Value, field: KNE_String, input: ^KNE_Value) -> i32
-KNE_Datatype_Call_Value_Fn :: proc "c" (ext: KNE_Extension, value: ^KNE_Value, method: KNE_String, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value, out_capacity: i32) -> i32
+KNE_Datatype_Get_Value_Fn :: proc "c" (
+	ext: KNE_Extension,
+	L: KNE_VM,
+	index: i32,
+	out: ^KNE_Value,
+) -> i32
+KNE_Datatype_Construct_Value_Fn :: proc "c" (
+	ext: KNE_Extension,
+	type_name: KNE_String,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+) -> i32
+KNE_Datatype_Get_Field_Value_Fn :: proc "c" (
+	ext: KNE_Extension,
+	value: ^KNE_Value,
+	field: KNE_String,
+	out: ^KNE_Value,
+) -> i32
+KNE_Datatype_Set_Field_Value_Fn :: proc "c" (
+	ext: KNE_Extension,
+	value: ^KNE_Value,
+	field: KNE_String,
+	input: ^KNE_Value,
+) -> i32
+KNE_Datatype_Call_Value_Fn :: proc "c" (
+	ext: KNE_Extension,
+	value: ^KNE_Value,
+	method: KNE_String,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+	out_capacity: i32,
+) -> i32
 
-KNE_Ext_Datatype_Construct_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, args: ^KNE_Value, arg_count: i32) -> i32
+KNE_Ext_Datatype_Construct_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	args: ^KNE_Value,
+	arg_count: i32,
+) -> i32
 KNE_Ext_Datatype_Destroy_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr)
-KNE_Ext_Datatype_Get_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, key: KNE_String, out: ^KNE_Value) -> i32
-KNE_Ext_Datatype_Set_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, key: KNE_String, value: ^KNE_Value) -> i32
-KNE_Ext_Datatype_Namecall_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, method: KNE_String, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value, out_capacity: i32) -> i32
+KNE_Ext_Datatype_Get_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	key: KNE_String,
+	out: ^KNE_Value,
+) -> i32
+KNE_Ext_Datatype_Set_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	key: KNE_String,
+	value: ^KNE_Value,
+) -> i32
+KNE_Ext_Datatype_Namecall_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	method: KNE_String,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+	out_capacity: i32,
+) -> i32
 KNE_Ext_Datatype_ToString_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, out: ^KNE_String) -> i32
-KNE_Ext_Datatype_Equal_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, other: rawptr, out: ^i32) -> i32
-KNE_Ext_Datatype_Binary_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, other: rawptr, out: ^KNE_Value) -> i32
+KNE_Ext_Datatype_Equal_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	other: rawptr,
+	out: ^i32,
+) -> i32
+KNE_Ext_Datatype_Binary_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	other: rawptr,
+	out: ^KNE_Value,
+) -> i32
 KNE_Ext_Datatype_Negate_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, out: ^KNE_Value) -> i32
-KNE_Ext_Datatype_Encode_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, buffer: rawptr, capacity: uintptr, out_size: ^uintptr) -> i32
-KNE_Ext_Datatype_Decode_Fn :: proc "c" (ext: KNE_Extension, ctx: rawptr, data: rawptr, size: uintptr) -> i32
+KNE_Ext_Datatype_Encode_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	buffer: rawptr,
+	capacity: uintptr,
+	out_size: ^uintptr,
+) -> i32
+KNE_Ext_Datatype_Decode_Fn :: proc "c" (
+	ext: KNE_Extension,
+	ctx: rawptr,
+	data: rawptr,
+	size: uintptr,
+) -> i32
 
 KNE_Datatype_Desc :: struct {
-	size:          u32,
-	version:       u32,
-	library:       KNE_String,
-	type_name:     KNE_String,
-	flags:         u32,
-	value_size:    u32,
-	wire_version:  u32,
-	reserved:      u32,
-	construct:     KNE_Ext_Datatype_Construct_Fn,
-	destroy:       KNE_Ext_Datatype_Destroy_Fn,
-	get:           KNE_Ext_Datatype_Get_Fn,
-	set:           KNE_Ext_Datatype_Set_Fn,
-	namecall:      KNE_Ext_Datatype_Namecall_Fn,
-	tostring:      KNE_Ext_Datatype_ToString_Fn,
-	equal:         KNE_Ext_Datatype_Equal_Fn,
-	add:           KNE_Ext_Datatype_Binary_Fn,
-	subtract:      KNE_Ext_Datatype_Binary_Fn,
-	multiply:      KNE_Ext_Datatype_Binary_Fn,
-	divide:        KNE_Ext_Datatype_Binary_Fn,
-	negate:        KNE_Ext_Datatype_Negate_Fn,
-	encode:        KNE_Ext_Datatype_Encode_Fn,
-	decode:        KNE_Ext_Datatype_Decode_Fn,
+	size:         u32,
+	version:      u32,
+	library:      KNE_String,
+	type_name:    KNE_String,
+	flags:        u32,
+	value_size:   u32,
+	wire_version: u32,
+	reserved:     u32,
+	construct:    KNE_Ext_Datatype_Construct_Fn,
+	destroy:      KNE_Ext_Datatype_Destroy_Fn,
+	get:          KNE_Ext_Datatype_Get_Fn,
+	set:          KNE_Ext_Datatype_Set_Fn,
+	namecall:     KNE_Ext_Datatype_Namecall_Fn,
+	tostring:     KNE_Ext_Datatype_ToString_Fn,
+	equal:        KNE_Ext_Datatype_Equal_Fn,
+	add:          KNE_Ext_Datatype_Binary_Fn,
+	subtract:     KNE_Ext_Datatype_Binary_Fn,
+	multiply:     KNE_Ext_Datatype_Binary_Fn,
+	divide:       KNE_Ext_Datatype_Binary_Fn,
+	negate:       KNE_Ext_Datatype_Negate_Fn,
+	encode:       KNE_Ext_Datatype_Encode_Fn,
+	decode:       KNE_Ext_Datatype_Decode_Fn,
 }
 
 KNE_Register_Datatype_Fn :: proc "c" (ext: KNE_Extension, desc: ^KNE_Datatype_Desc) -> i32
@@ -482,31 +633,38 @@ KNE_Unregister_Datatype_Fn :: proc "c" (ext: KNE_Extension, type_name: KNE_Strin
 KNE_Datatype_Registered_Fn :: proc "c" (ext: KNE_Extension, type_name: KNE_String) -> i32
 
 KNE_Datatypes_Api :: struct {
-	size:               u32,
-	version:            u32,
-	push_vector2:       KNE_Push_Vector2_Fn,
-	push_vector3:       KNE_Push_Vector3_Fn,
-	push_cframe:        KNE_Push_CFrame_Fn,
-	push_color3:        KNE_Push_Color3_Fn,
-	get_vector2:        KNE_Arg_Vector2_Fn,
-	get_vector3:        KNE_Arg_Vector3_Fn,
-	get_cframe:         KNE_Arg_CFrame_Fn,
-	get_color3:         KNE_Arg_Color3_Fn,
-	push:               KNE_Datatype_Push_Fn,
-	get:                KNE_Datatype_Get_Value_Fn,
-	construct:          KNE_Datatype_Construct_Value_Fn,
-	get_field:          KNE_Datatype_Get_Field_Value_Fn,
-	set_field:          KNE_Datatype_Set_Field_Value_Fn,
-	call:               KNE_Datatype_Call_Value_Fn,
-	register_datatype:  KNE_Register_Datatype_Fn,
+	size:                u32,
+	version:             u32,
+	push_vector2:        KNE_Push_Vector2_Fn,
+	push_vector3:        KNE_Push_Vector3_Fn,
+	push_cframe:         KNE_Push_CFrame_Fn,
+	push_color3:         KNE_Push_Color3_Fn,
+	get_vector2:         KNE_Arg_Vector2_Fn,
+	get_vector3:         KNE_Arg_Vector3_Fn,
+	get_cframe:          KNE_Arg_CFrame_Fn,
+	get_color3:          KNE_Arg_Color3_Fn,
+	push:                KNE_Datatype_Push_Fn,
+	get:                 KNE_Datatype_Get_Value_Fn,
+	construct:           KNE_Datatype_Construct_Value_Fn,
+	get_field:           KNE_Datatype_Get_Field_Value_Fn,
+	set_field:           KNE_Datatype_Set_Field_Value_Fn,
+	call:                KNE_Datatype_Call_Value_Fn,
+	register_datatype:   KNE_Register_Datatype_Fn,
 	unregister_datatype: KNE_Unregister_Datatype_Fn,
-	is_registered:      KNE_Datatype_Registered_Fn,
+	is_registered:       KNE_Datatype_Registered_Fn,
 }
 
 KNE_Callbacks_Retain_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32) -> KNE_Callback
 KNE_Callbacks_Release_Fn :: proc "c" (ext: KNE_Extension, callback: KNE_Callback)
 KNE_Callbacks_Valid_Fn :: proc "c" (ext: KNE_Extension, callback: KNE_Callback) -> i32
-KNE_Callbacks_Call_Fn :: proc "c" (ext: KNE_Extension, callback: KNE_Callback, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value, out_capacity: i32) -> i32
+KNE_Callbacks_Call_Fn :: proc "c" (
+	ext: KNE_Extension,
+	callback: KNE_Callback,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+	out_capacity: i32,
+) -> i32
 
 KNE_Callbacks_Api :: struct {
 	size:     u32,
@@ -518,13 +676,38 @@ KNE_Callbacks_Api :: struct {
 }
 
 KNE_Signal_Native_Fn :: proc "c" (ext: KNE_Extension, L: KNE_VM)
-KNE_Get_Signal_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, property: KNE_String) -> KNE_Signal
-KNE_Signal_Connect_Native_Fn :: proc "c" (ext: KNE_Extension, signal: KNE_Signal, callback: KNE_Signal_Native_Fn) -> KNE_Connection
-KNE_Signal_Connect_Callback_Fn :: proc "c" (ext: KNE_Extension, signal: KNE_Signal, callback: KNE_Callback) -> KNE_Connection
-KNE_Signal_Once_Native_Fn :: proc "c" (ext: KNE_Extension, signal: KNE_Signal, callback: KNE_Signal_Native_Fn) -> KNE_Connection
-KNE_Signal_Once_Callback_Fn :: proc "c" (ext: KNE_Extension, signal: KNE_Signal, callback: KNE_Callback) -> KNE_Connection
+KNE_Get_Signal_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	property: KNE_String,
+) -> KNE_Signal
+KNE_Signal_Connect_Native_Fn :: proc "c" (
+	ext: KNE_Extension,
+	signal: KNE_Signal,
+	callback: KNE_Signal_Native_Fn,
+) -> KNE_Connection
+KNE_Signal_Connect_Callback_Fn :: proc "c" (
+	ext: KNE_Extension,
+	signal: KNE_Signal,
+	callback: KNE_Callback,
+) -> KNE_Connection
+KNE_Signal_Once_Native_Fn :: proc "c" (
+	ext: KNE_Extension,
+	signal: KNE_Signal,
+	callback: KNE_Signal_Native_Fn,
+) -> KNE_Connection
+KNE_Signal_Once_Callback_Fn :: proc "c" (
+	ext: KNE_Extension,
+	signal: KNE_Signal,
+	callback: KNE_Callback,
+) -> KNE_Connection
 KNE_Signal_Disconnect_Fn :: proc "c" (ext: KNE_Extension, connection: KNE_Connection)
-KNE_Signal_Fire_Fn :: proc "c" (ext: KNE_Extension, signal: KNE_Signal, args: ^KNE_Value, arg_count: i32) -> i32
+KNE_Signal_Fire_Fn :: proc "c" (
+	ext: KNE_Extension,
+	signal: KNE_Signal,
+	args: ^KNE_Value,
+	arg_count: i32,
+) -> i32
 KNE_Signal_Connected_Fn :: proc "c" (ext: KNE_Extension, connection: KNE_Connection) -> i32
 
 KNE_Signals_Api :: struct {
@@ -540,10 +723,26 @@ KNE_Signals_Api :: struct {
 	is_connected:     KNE_Signal_Connected_Fn,
 }
 
-KNE_Export_Exists_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, method: KNE_String) -> i32
-KNE_Export_Call_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, method: KNE_String, args: ^KNE_Value, arg_count: i32, out: ^KNE_Value, out_capacity: i32) -> i32
+KNE_Export_Exists_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	method: KNE_String,
+) -> i32
+KNE_Export_Call_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	method: KNE_String,
+	args: ^KNE_Value,
+	arg_count: i32,
+	out: ^KNE_Value,
+	out_capacity: i32,
+) -> i32
 KNE_Export_Count_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance) -> uintptr
-KNE_Export_Name_At_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, index: uintptr) -> KNE_String
+KNE_Export_Name_At_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instance: KNE_Instance,
+	index: uintptr,
+) -> KNE_String
 
 KNE_Exports_Api :: struct {
 	size:    u32,
@@ -596,18 +795,18 @@ KNE_Extension_Desc :: struct {
 
 KNE_Entry_Fn :: proc "c" (host: ^KNE_Host) -> ^KNE_Extension_Desc
 
-str :: proc (value: string) -> KNE_String {
+str :: proc(value: string) -> KNE_String {
 	if len(value) == 0 {
 		return KNE_String{data = cstring(""), length = 0}
 	}
 	return KNE_String{data = cstring(raw_data(value)), length = uintptr(len(value))}
 }
 
-string_from :: proc (value: string) -> KNE_String {
+string_from :: proc(value: string) -> KNE_String {
 	return str(value)
 }
 
-string_to :: proc (value: KNE_String) -> string {
+string_to :: proc(value: KNE_String) -> string {
 	if value.data == nil {
 		return ""
 	}
@@ -617,7 +816,6 @@ string_to :: proc (value: KNE_String) -> string {
 	return strings.string_from_ptr(cast(^u8)value.data, int(value.length))
 }
 
-string_clone :: proc (value: string) -> string {
+string_clone :: proc(value: string) -> string {
 	return strings.clone(value)
 }
-

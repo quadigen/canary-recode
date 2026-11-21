@@ -3,6 +3,7 @@ package datatypes
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 push_color3 :: proc(L: ^vm.State, binding: ^vm.Userdata_Binding, value: Color3) {
 	push_value(L, binding, value)
@@ -105,7 +106,10 @@ color3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushNumber(L, f64(color.G))
 	case "B":
 		vm.PushNumber(L, f64(color.B))
-	case "Lerp",
+	case "GetLuminance",
+	     "GetContrastRatio",
+	     "GetContrastingColor",
+	     "Lerp",
 	     "ToHSV",
 	     "ToHex",
 	     "ToRGB",
@@ -122,10 +126,49 @@ color3_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	return true
 }
 
+color3_linear_srgb :: proc(value: f32) -> f64 {
+	v := f64(clamp(value, 0, 1))
+	return v / 12.92 if v <= 0.04045 else math.pow((v + 0.055) / 1.055, 2.4)
+}
+color3_luminance :: proc(value: Color3) -> f64 {
+	return(
+		0.2126 * color3_linear_srgb(value.R) +
+		0.7152 * color3_linear_srgb(value.G) +
+		0.0722 * color3_linear_srgb(value.B) \
+	)
+}
+color3_contrast :: proc(a, b: Color3) -> f64 {
+	x, y := color3_luminance(a), color3_luminance(b)
+	return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+}
+
 color3_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i32, bool) {
 	color := cast(^Color3)value
 	binding := cast(^vm.Userdata_Binding)ctx
 	switch method {
+	case "GetLuminance":
+		vm.PushNumber(L, color3_luminance(color^))
+		return 1, true
+	case "GetContrastRatio":
+		other := require_color3(L, 2, binding)^
+		vm.PushNumber(L, color3_contrast(color^, other))
+		return 1, true
+	case "GetContrastingColor":
+		count := vm.StackTop(L)
+		best := Color3{0, 0, 0}
+		if count == 1 {
+			white := Color3{1, 1, 1}
+			if color3_contrast(color^, white) > color3_contrast(color^, best) {best = white}
+		} else {
+			best = require_color3(L, 2, binding)^
+			for i in 3 ..= count {
+				candidate := require_color3(L, i, binding)^
+				if color3_contrast(color^, candidate) >
+				   color3_contrast(color^, best) {best = candidate}
+			}
+		}
+		push_color3(L, binding, best)
+		return 1, true
 	case "Lerp", "lerp":
 		goal := require_color3(L, 2, binding)
 		push_color3(L, binding, Lerp(color^, goal^, f32(vm.ArgNumber(L, 3))))

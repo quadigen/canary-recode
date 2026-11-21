@@ -45,6 +45,18 @@ assert(workspace.CurrentCamera == replacement)
 		"Workspace",
 	)
 	assert(renderer_object.ActiveCamera == rawptr(workspace.current_camera))
+
+
+	replicator := cast(^services.ReplicatorService)services.Ensure_Service(
+		&environment.services,
+		"ReplicatorService",
+	)
+	schema := services.replication_schema(replicator, "Camera")
+	assert(schema != nil)
+	assert(services.replication_schema_has(schema, "FieldOfView"))
+	assert(!services.replication_schema_has(schema, "ViewportSize"))
+	assert(!services.replication_schema_has(schema, "DiagonalFieldOfView"))
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("CAMERA_VIEW_SMOKE_PASSED")

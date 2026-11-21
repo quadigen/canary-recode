@@ -35,6 +35,10 @@ emitter.Parent = part
 | `Acceleration` | `Vector3` | Read/write | Constant acceleration applied to particles. Must be finite. |
 | `Drag` | `number` | Read/write | Velocity damping, clamped to `0` through `1000`. |
 | `WindAffectsDrag` | `boolean` | Read/write | Whether wind influences drag. |
+| `CollisionEnabled` | `boolean` | Read/write | Whether particles collide with physics bodies. Defaults to `false`. |
+| `CollisionRadius` | `number` | Read/write | Radius of each particle's collision sphere in world units, independent of visual size. Defaults to `0.1`, clamped to `0.001` through `1000`. |
+| `CollisionRestitution` | `number` | Read/write | Bounciness, from `0` (no bounce) to `1` (full bounce). Defaults to `0.3`. |
+| `CollisionFriction` | `number` | Read/write | Fraction of sideways relative velocity lost at each impact, from `0` to `1`. Defaults to `0.2`. |
 | `Color` | `ColorSequence` | Read/write | Color over each particle's lifetime. |
 | `Size` | `NumberSequence` | Read/write | Size over each particle's lifetime. |
 | `Transparency` | `NumberSequence` | Read/write | Transparency over each particle's lifetime. |
@@ -43,10 +47,28 @@ emitter.Parent = part
 | `ZOffset` | `number` | Read/write | Depth offset, clamped to `-10000` through `10000`. |
 | `Texture` | `string` | Read/write | Particle texture URI. |
 | `EmissionDirection` | `Enum.NormalId` | Read/write | Face the particles emit from. |
+| `Shape` | `Enum.ParticleEmitterShape` | Read/write | Samples a box, sphere, cylinder, or disc within the parent part. |
+| `ShapeStyle` | `Enum.ParticleEmitterShapeStyle` | Read/write | Samples the volume or surface of the shape. |
+| `ShapeInOut` | `Enum.ParticleEmitterShapeInOut` | Read/write | Directs shape-based emission outward, inward, or both ways. |
+| `Orientation` | `Enum.ParticleOrientation` | Read/write | Faces the camera, stays upright, or aligns the billboard with projected velocity. |
 | `FlipbookLayout` | `Enum.ParticleFlipbookLayout` | Read/write | Flipbook grid layout. |
 | `FlipbookMode` | `Enum.ParticleFlipbookMode` | Read/write | Flipbook playback mode. |
 | `FlipbookFramerate` | `NumberRange` | Read/write | Flipbook frame rate, each bound clamped to `0` through `120`. |
 | `VelocitySpread` | `number` | Read/write | Convenience setter for both `SpreadAngle` axes, clamped to `0` through `360`. |
+
+## Particle collisions
+
+Enable collisions for effects like sparks bouncing off the floor. The emitting part is ignored, as are non-collidable parts.
+
+```lua
+emitter.CollisionEnabled = true
+emitter.CollisionRadius = 0.15
+emitter.CollisionRestitution = 0.6
+emitter.CollisionFriction = 0.2
+emitter.Acceleration = Vector3.new(0, -30, 0)
+```
+
+The particles react to physics bodies, but they don't push those bodies or collide with each other. Keep the emission rate modest when many emitters use collisions at once.
 
 ## Methods
 
@@ -59,7 +81,8 @@ emitter.Parent = part
 
 - Out-of-range numbers clamp rather than raise, except `NaN` and non-finite vectors, which raise an error for the affected property.
 - `VelocitySpread` writes the same value to both `SpreadAngle` components.
-- The parent must be a `Part`; the emitter uses the part transform for emission.
+- Parent the emitter to a part or an attachment on a part. Attachment emission starts at its origin.
+- Shape-based emission supports Kinemium’s current sampling and billboard rules; it may differ from Roblox’s exact particle distribution.
 - Changing `Texture` releases the previously loaded texture.
 - Color, size, and transparency sequences are copied on assignment.
 

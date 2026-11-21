@@ -47,6 +47,8 @@ Standalone and singleplayer count as both server and client, because one runtime
 
 | Signal | Callback arguments | When it fires |
 | --- | --- | --- |
+| `PreRender` | `deltaTime: number` | Before rendering. |
+| `PreSimulation` | `deltaTime: number` | Before simulation. |
 | `RenderStepped` | `deltaTime: number` | Once per render step, after bound render callbacks run. |
 | `Stepped` | `elapsedTime: number, deltaTime: number` | On each simulation step. |
 | `PostSimulation` | `deltaTime: number` | After simulation finishes for the frame. |
@@ -97,7 +99,6 @@ Bound callbacks and `RenderStepped` listeners run in the same render step, the n
 
 - Work bound to the render step runs on the rendering path. Keep it short, and prefer `Heartbeat` or `PostSimulation` for game logic that doesn't need to match the frame.
 - `IsServer()` and `IsClient()` describe the runtime, not permissions. A client can still call a server-authoritative API locally; the server decides what's replicated.
-- The reflection metadata for this class only lists `PostSimulation`, but all four step signals and the state methods above are callable.
 
 ## See also
 

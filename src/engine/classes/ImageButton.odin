@@ -1,5 +1,6 @@
 package classes
 
+import assetstore "../assetstore"
 import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
@@ -15,8 +16,10 @@ ImageButton :: struct {
 	image:              string,
 	owned_image:        string,
 	stored_image:       ^kineffi.KineSkiaImage,
+	icon_pack_revision: u64,
 	aseprite_playback:  ^Aseprite_Image_Playback,
 	animated_source:    bool,
+	source_image:       ^EditableImage,
 	image_transparency: f32,
 	image_color3:       datatypes.Color3,
 	image_rect_offset:  datatypes.Vector2,
@@ -54,8 +57,10 @@ ImageButton_to_image_label :: proc(button: ^ImageButton) -> ImageLabel {
 		image = button.image,
 		owned_image = button.owned_image,
 		stored_image = button.stored_image,
+		icon_pack_revision = button.icon_pack_revision,
 		aseprite_playback = button.aseprite_playback,
 		animated_source = button.animated_source,
+		editable_image = button.source_image,
 		image_transparency = button.image_transparency,
 		image_color3 = button.image_color3,
 		image_rect_offset = button.image_rect_offset,
@@ -74,6 +79,7 @@ ImageButton_sync_image_label :: proc(button: ^ImageButton, label: ^ImageLabel) {
 	button.owned_image = label.owned_image
 
 	button.stored_image = label.stored_image
+	button.icon_pack_revision = label.icon_pack_revision
 	button.aseprite_playback = label.aseprite_playback
 	button.animated_source = label.animated_source
 
@@ -98,7 +104,6 @@ ImageButton_is_image_property :: proc(key: string) -> bool {
 	switch key {
 	case "Image",
 	     "ImageContent",
-	     "AnimatedContent",
 	     "IsLoaded",
 	     "ImageTransparency",
 	     "ImageColor3",
@@ -115,6 +120,46 @@ ImageButton_is_image_property :: proc(key: string) -> bool {
 	return false
 }
 
+ImageButton_Unbind_Image :: proc(button: ^ImageButton) {
+	if button == nil || button.source_image == nil {return}
+	source := button.source_image
+	for i := 0; i < len(source.attached_buttons); {
+		if source.attached_buttons[i] == button {
+			source.attached_buttons[i] = source.attached_buttons[len(source.attached_buttons) - 1]
+			resize(&source.attached_buttons, len(source.attached_buttons) - 1)
+		} else {
+			i += 1
+		}
+	}
+	button.source_image = nil
+}
+
+ImageButton_Refresh_Bound_Image :: proc(button: ^ImageButton) {
+	if button == nil {return}
+	label := ImageButton_to_image_label(button)
+	ImageLabel_Destroy_Stored_Image(&label)
+	delete(label.owned_image)
+	label.owned_image = ""
+	label.image = ""
+	if button.source_image != nil && button.source_image.source != "" {
+		label.owned_image = assetstore.Resolve_Ugc_Asset(button.source_image.source, .Texture)
+		label.image = label.owned_image
+		ImageLabel_Load_Image(&label, label.image)
+	}
+	ImageButton_sync_image_label(button, &label)
+	gui_invalidate_draw(&button.object)
+	surfacegui_mark_dirty_for(&button.object)
+	Gui_Render_Mark_Dirty()
+}
+
+ImageButton_Bind_Image :: proc(button: ^ImageButton, source: ^EditableImage) {
+	if button == nil || button.source_image == source {return}
+	ImageButton_Unbind_Image(button)
+	button.source_image = source
+	if source != nil {append(&source.attached_buttons, button)}
+	ImageButton_Refresh_Bound_Image(button)
+}
+
 ImageButton_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
 	button := new(ImageButton)
 
@@ -127,6 +172,7 @@ ImageButton_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 
 ImageButton_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	button := cast(^ImageButton)object
+	ImageButton_Unbind_Image(button)
 
 	label := ImageButton_to_image_label(button)
 
@@ -176,6 +222,29 @@ ImageButton_set :: proc(
 	button := cast(^ImageButton)object
 
 	if ImageButton_is_image_property(key) {
+		if key == "Image" {
+			if source := Object_From_Argument(L, value_index); source != nil {
+				if !Is_A_Class(source, &EditableImage_Class) {
+					_ = vm.RaiseError(L, "expected an Image instance or an image URI")
+					return true
+				}
+				ImageButton_Bind_Image(button, cast(^EditableImage)source)
+				return true
+			}
+		}
+		if key == "Image" || key == "ImageContent" {
+			is_content :=
+				datatype_registry != nil &&
+				vm.IsUserdataType(L, value_index, &datatype_registry.content)
+			if !is_content {
+				if key == "ImageContent" {
+					_ = vm.RaiseError(L, "expected Content")
+					return true
+				}
+				_ = vm.ArgString(L, value_index)
+			}
+			ImageButton_Unbind_Image(button)
+		}
 		label := ImageButton_to_image_label(button)
 
 		result := ImageLabel_set(
@@ -224,6 +293,9 @@ ImageButton_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 	ImageLabel_render(&label.object, ctx)
 	button.stored_image = label.stored_image
+	button.icon_pack_revision = label.icon_pack_revision
+	button.aseprite_playback = label.aseprite_playback
+	button.animated_source = label.animated_source
 }
 
 ImageButton_clone :: proc(source: ^Object, destination: ^Object) {
@@ -237,9 +309,11 @@ ImageButton_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst_label := ImageButton_to_image_label(dst)
 
+	src_label.editable_image = nil
 	ImageLabel_clone(&src_label.object, &dst_label.object)
 
 	ImageButton_sync_image_label(dst, &dst_label)
+	if src.source_image != nil {ImageButton_Bind_Image(dst, src.source_image)}
 }
 
 Register_ImageButton :: proc(registry: ^Registry) {
@@ -254,7 +328,6 @@ Register_ImageButton :: proc(registry: ^Registry) {
 		properties = []string {
 			"Image",
 			"ImageContent",
-			"AnimatedContent",
 			"IsLoaded",
 			"ImageTransparency",
 			"ImageColor3",

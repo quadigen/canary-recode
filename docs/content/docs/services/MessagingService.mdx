@@ -1,0 +1,68 @@
+---
+title: MessagingService
+description: Publish messages and subscribe to named topics within a running game.
+---
+
+Use MessagingService when two server scripts need to communicate without directly referencing each other. Messages go to every current subscriber of the named topic in the same game runtime.
+
+MessagingService is available to server, standalone, and singleplayer runtimes in the serial phase. It doesn't currently send messages between separate server processes.
+
+## Getting started
+
+```lua
+local messaging = game:GetService("MessagingService")
+
+local connection = messaging:SubscribeAsync("rounds", function(message)
+    print("Round started:", message.Data.round)
+end)
+
+messaging:PublishAsync("rounds", { round = 1 })
+connection:Disconnect()
+```
+
+Each callback receives a read-only message table with these fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `Data` | any | Snapshot of the published payload. |
+| `Sent` | number | Unix timestamp in seconds. |
+| `topic` | string | Name of the topic. |
+
+## Methods
+
+| Method | Signature |
+| --- | --- |
+| `PublishAsync` | `PublishAsync(topic: string, data: any): ()` |
+| `Publish` | `Publish(topic: string, data: any): ()` |
+| `SubscribeAsync` | `SubscribeAsync(topic: string, callback: (message: any) -> ()): KinemiumConnection` |
+| `Subscribe` | `Subscribe(topic: string): Signal` or `Subscribe(topic: string, callback: (message: any) -> ()): KinemiumConnection` |
+| `Unsubscribe` | `Unsubscribe(topic: string, connection: KinemiumConnection?): ()` |
+| `UnsubscribeAll` | `UnsubscribeAll(topic: string?): ()` |
+| `GetTopics` | `GetTopics(): {string}` |
+| `GetSubscribers` | `GetSubscribers(topic: string): {number}` |
+
+### Publishing and subscribing
+
+Both publishing methods deliver a message to current subscribers. Publishing to an unknown topic doesn't create a subscription or store the message for future subscribers.
+
+Payloads support nil, booleans, finite numbers, strings, and nested tables with string or signed 32-bit integer keys. String keys cannot contain NUL characters. Tables are copied and frozen recursively, so changing the original table after publishing won't affect the delivered message. Functions, instances, cyclic tables, and unsupported types raise an error. The payload has a 64 KiB budget including estimated value overhead, and nesting is limited to 16 levels.
+
+`SubscribeAsync` and the callback overload of `Subscribe` return a connection. The original signal-style API remains available:
+
+```lua
+local signal = messaging:Subscribe("rounds")
+local connection = signal:Connect(function(message)
+    print(message.Data)
+end)
+connection:Disconnect()
+```
+
+Topic names must be nonempty strings of at most 128 bytes without NUL characters. A runtime can create up to 1,024 named topics. Topic handles stay alive for the lifetime of the runtime, so an existing signal can be reused.
+
+### Managing subscriptions
+
+Call `connection:Disconnect()` or pass the connection to `Unsubscribe` to disconnect that listener. If you omit the connection, `Unsubscribe` disconnects all callbacks on the specified topic. `UnsubscribeAll` does the same for one topic, or all topics when called without a name. Signal waiters aren't callbacks and aren't removed by these methods.
+
+`GetTopics` returns known topic names in unspecified order, including topics with no remaining callbacks. `GetSubscribers` returns the current listener IDs for a topic, or an empty array for an unknown topic.
+
+Callbacks already selected for a message may still run if another callback disconnects them during delivery. Nested publishing is supported up to 16 calls deep.

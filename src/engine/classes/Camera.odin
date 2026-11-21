@@ -601,6 +601,56 @@ Camera_Namecall :: proc(
 	return 0, false
 }
 
+camera_parallel_get :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	key: string,
+) -> bool {
+	switch key {
+	case "FieldOfView",
+	     "InputEnabled",
+	     "Sensitivity",
+	     "CFrame",
+	     "Focus",
+	     "CameraSubject",
+	     "CameraType",
+	     "Pitch",
+	     "Yaw",
+	     "ViewportSize",
+	     "DiagonalFieldOfView",
+	     "GetRenderCFrame",
+	     "ScreenPointToRay",
+	     "ViewportPointToRay",
+	     "WorldToViewportPoint",
+	     "WorldToScreenPoint":
+		return Camera_Get(L, object, d, e, key)
+	}
+	return false
+}
+
+camera_parallel_namecall :: proc(
+	L: ^vm.State,
+	object: ^Object,
+	d: ^datatypes.Registry,
+	e: ^enums.Registry,
+	method: string,
+) -> (
+	i32,
+	bool,
+) {
+	switch method {
+	case "GetRenderCFrame",
+	     "ScreenPointToRay",
+	     "ViewportPointToRay",
+	     "WorldToViewportPoint",
+	     "WorldToScreenPoint":
+		return Camera_Namecall(L, object, d, e, method)
+	}
+	return 0, false
+}
+
 Register_Camera :: proc(registry: ^Registry) {
 	Register_Class(
 		registry,
@@ -608,8 +658,10 @@ Register_Camera :: proc(registry: ^Registry) {
 		Camera_construct,
 		Camera_destroy,
 		get = Camera_Get,
+		parallel_get = camera_parallel_get,
 		set = Camera_Set,
 		namecall = Camera_Namecall,
+		parallel_namecall = camera_parallel_namecall,
 		clone = Camera_clone,
 		_step = Camera_Step,
 		_step_phase = .Render_3D,
@@ -751,7 +803,11 @@ Camera_Screen_Point_To_Ray :: proc(
 	normalized_y := 1 - (y / height) * 2
 
 
-	view := datatypes.Vector3{f64(normalized_x * aspect * tangent), f64(normalized_y * tangent), -1}
+	view := datatypes.Vector3 {
+		f64(normalized_x * aspect * tangent),
+		f64(normalized_y * tangent),
+		-1,
+	}
 
 	direction := datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(frame, view))
 

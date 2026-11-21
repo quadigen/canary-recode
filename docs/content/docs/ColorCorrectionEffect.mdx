@@ -33,7 +33,7 @@ grade.Saturation = -0.15
 | `Saturation` | `number` | Read/write | `0` | Saturation adjustment, clamped between `-1` and `1`. |
 | `TintColor` | `Color3` | Read/write | White | Color tint stored on the effect. |
 
-The renderer maps these values to multipliers: `Contrast` becomes `1 + Contrast` and `Saturation` becomes `1 + Saturation`. A value of `0` leaves that component alone; `-1` removes all contrast or color.
+These values act as multipliers: `Contrast` becomes `1 + Contrast` and `Saturation` becomes `1 + Saturation`. A value of `0` leaves that component alone; `-1` removes all contrast or color.
 
 `Brightness` is combined with `Lighting.ExposureCompensation` and a small night-time lift. A scene that already looks bright can become clipped quickly, so adjust exposure and brightness together.
 

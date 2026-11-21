@@ -23,7 +23,7 @@ base_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 }
 
 base_part_clone :: proc(source: ^Object, destination: ^Object) {
-	// No properties of its own to copy
+
 }
 
 Register_BasePart :: proc(registry: ^Registry) {
@@ -34,7 +34,26 @@ Register_BasePart :: proc(registry: ^Registry) {
 		base_part_destroy,
 		creatable = false,
 		clone = base_part_clone,
-		properties = []string{"PivotOffset", "Gravity"},
-		methods = []string{"GetPivot", "PivotTo", "GetVelocityAtPosition"},
+		properties = []string{"PivotOffset", "Gravity", "Mass"},
+		methods = []string {
+			"GetPivot",
+			"PivotTo",
+			"GetVelocityAtPosition",
+			"ApplyImpulse",
+			"ApplyAngularImpulse",
+			"ApplyImpulseAtPosition",
+			"GetMass",
+			"CanCollideWith",
+			"GetConnectedParts",
+			"IsGrounded",
+			"GetJoints",
+			"GetNoCollisionConstraints",
+			"UnionAsync",
+			"SubtractAsync",
+			"IntersectAsync",
+			"GetNetworkOwner",
+			"SetNetworkOwner",
+			"SetNetworkOwnershipAuto",
+		},
 	)
 }

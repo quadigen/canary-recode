@@ -158,13 +158,21 @@ vector3_lerp :: proc "c" (L: ^vm.State) -> i32 {
 
 vector3_max :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
-	push_vector3_native(L, Vec3_Max(Arg_Vector3(L, 1), Arg_Vector3(L, 2)))
+	result := Arg_Vector3(L, 1)
+	for i in 2 ..= vm.StackTop(L) {
+		result = Vec3_Max(result, Arg_Vector3(L, i))
+	}
+	push_vector3_native(L, result)
 	return 1
 }
 
 vector3_min :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
-	push_vector3_native(L, Vec3_Min(Arg_Vector3(L, 1), Arg_Vector3(L, 2)))
+	result := Arg_Vector3(L, 1)
+	for i in 2 ..= vm.StackTop(L) {
+		result = Vec3_Min(result, Arg_Vector3(L, i))
+	}
+	push_vector3_native(L, result)
 	return 1
 }
 

@@ -633,10 +633,14 @@ KINE_API bool Kine_Filament_Viewport_HasWork(KineFilamentContext *ctx) {
     }
     return false;
 }
-KINE_API void Kine_Filament_Viewport_RenderFrame(KineFilamentContext *ctx, float dt, bool world) {
-    if (!ctx) return;
+KINE_API void Kine_Filament_Viewport_RenderFrameWithCpuWork(KineFilamentContext *ctx, float dt, bool world,
+        KineFrameCpuWork work, void *user) {
+    if (!ctx) { if (work) work(user); return; }
     (void)Kine_Filament_Viewport_HasWork(ctx); // also refresh effects when a world frame already forces rendering.
-    ctx->renderWorld = world; Kine_Filament_RenderFrame(ctx, dt); ctx->renderWorld = true;
+    ctx->renderWorld = world; kine_render_frame(ctx, dt, work, user); ctx->renderWorld = true;
+}
+KINE_API void Kine_Filament_Viewport_RenderFrame(KineFilamentContext *ctx, float dt, bool world) {
+    Kine_Filament_Viewport_RenderFrameWithCpuWork(ctx, dt, world, nullptr, nullptr);
 }
 KINE_API void Kine_Filament_Viewport_Draw(KineFilamentViewport *vp, KineSkiaSurface *surface,
         float x, float y, float w, float h, float r, float g, float b, float opacity) {

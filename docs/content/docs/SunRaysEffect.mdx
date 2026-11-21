@@ -31,7 +31,7 @@ rays.Spread = 1
 | `Intensity` | `number` | Read/write | `0.1` | Brightness of the rays, clamped between `0` and `1`. |
 | `Spread` | `number` | Read/write | `1` | Angular spread of the rays, clamped between `0` and `1`. |
 
-`Spread` is converted to an angle for the renderer. Higher values fan the rays out more; lower values keep them tight around the sun.
+Higher values fan the rays out more; lower values keep them tight around the sun.
 
 The effective intensity is multiplied by daylight. If `Lighting.ClockTime` puts the sun below the horizon, the rays disappear even when `Enabled` is true.
 

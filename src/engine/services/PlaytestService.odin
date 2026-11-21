@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 package services
 
 import tracy "../util/odin-tracy"
@@ -48,6 +48,7 @@ PlaytestService :: struct {
 	temp_map_dir:      string,
 	tree_dir:          string,
 	tree_sequence:     u32,
+	tree_pending:      [2]Playtest_Tree_Pending,
 }
 
 PLAYTEST_ADDRESS :: "127.0.0.1"
@@ -67,6 +68,7 @@ playtest_set_error :: proc(service: ^PlaytestService, value: string) {
 
 playtest_cleanup_temp_map :: proc(service: ^PlaytestService) {
 	if service == nil {return}
+	service.tree_pending = {}
 	if service.tree_dir != "" {
 		_ = os.remove_all(service.tree_dir)
 		delete(service.tree_dir)
@@ -192,7 +194,7 @@ playtest_forward_line :: proc(
 playtest_pump_output :: proc(service: ^PlaytestService, source: string, output: ^Playtest_Output) {
 	if service == nil || output == nil || output.read == nil {return}
 
-	for {
+	for _ in 0 ..< 16 {
 		has_data, has_error := os.pipe_has_data(output.read)
 		if has_error != nil || !has_data {break}
 
@@ -216,7 +218,7 @@ playtest_pump_output :: proc(service: ^PlaytestService, source: string, output: 
 
 playtest_pump_outputs :: proc(service: ^PlaytestService) {
 	if service == nil || service.forwarding_output || vm.Is_Closing() {return}
-	// LogService listeners run synchronously and may query or control the playtest.
+
 	service.forwarding_output = true
 	defer service.forwarding_output = false
 	playtest_pump_output(service, "server", &service.server_output)
@@ -384,9 +386,9 @@ playtest_get :: proc(
 	key: string,
 ) -> bool {
 	service := cast(^PlaytestService)object
-	playtest_refresh(service)
 	switch key {
 	case "IsRunning":
+		playtest_pump_outputs(service)
 		vm.PushBoolean(L, service.running)
 	case "IsSingleplayer":
 		vm.PushBoolean(L, service.singleplayer)
@@ -409,7 +411,7 @@ playtest_get :: proc(
 	case "Start", "StartServer", "StartClient", "StartSinglePlayer", "Stop":
 		vm.PushUserdataMethod(L, key)
 	case:
-		if _, ok := playtest_tree_method(key); !ok {return false}
+		if _, ok := playtest_tree_method(key); !ok && key != "PollTreeRequest" {return false}
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {return false}
 		vm.PushUserdataMethod(L, key)
 	}
@@ -930,7 +932,9 @@ playtest_namecall :: proc(
 	bool,
 ) {
 	service := cast(^PlaytestService)object
-	if op, ok := playtest_tree_method(method); ok {return playtest_tree_namecall(L, service, op)}
+	if method == "PollTreeRequest" {return playtest_tree_poll(L, service)}
+	if op, ok := playtest_tree_method(method);
+	   ok {return playtest_tree_namecall(L, service, op, strings.has_prefix(method, "Request"))}
 	switch method {
 	case "Start":
 		launch := playtest_default_launch(.Pair)
@@ -1002,6 +1006,30 @@ Register_PlaytestService_Class :: proc(registry: ^classes.Registry) {
 		_step_phase = .Update,
 		member_security = []classes.Member_Security {
 			classes.Method_Security(
+				"RequestCopyInstance",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"PollTreeRequest",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"RequestSetInstanceReference",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"RequestSetInstanceProperty",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"RequestInstanceProperties",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
+				"RequestGameTree",
+				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
+			),
+			classes.Method_Security(
 				"GetGameTree",
 				vm.SecurityRequirementFromValue(PROJECT_INTERNALS_CAPABILITY),
 			),
@@ -1035,6 +1063,12 @@ Register_PlaytestService_Class :: proc(registry: ^classes.Registry) {
 			),
 		},
 		methods = []string {
+			"RequestCopyInstance",
+			"PollTreeRequest",
+			"RequestSetInstanceReference",
+			"RequestSetInstanceProperty",
+			"RequestInstanceProperties",
+			"RequestGameTree",
 			"Start",
 			"StartServer",
 			"StartClient",
