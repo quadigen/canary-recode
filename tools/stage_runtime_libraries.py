@@ -104,10 +104,22 @@ def stage_linux(folder: Path) -> None:
 
 def mac_dependencies(path: Path) -> list[str]:
     output = run("otool", "-L", str(path))
-    dependencies = [line.strip().split(" (compatibility version", 1)[0]
-                    .split(" (current version", 1)[0]
-                    for line in output.splitlines()[1:] if line.strip()]
-    return dependencies[1:] if path.name.endswith(".dylib") else dependencies
+    dependencies: list[str] = []
+    skip_install_name = path.name.endswith(".dylib")
+    for line in output.splitlines():
+        if not line[:1].isspace():
+            skip_install_name = path.name.endswith(".dylib")
+            continue
+        match = re.match(r"\s+(.+?) \((?:compatibility|current) version ", line)
+        if match is None:
+            continue
+        if skip_install_name:
+            skip_install_name = False
+            continue
+        dependency = match.group(1)
+        if dependency not in dependencies:
+            dependencies.append(dependency)
+    return dependencies
 
 
 def system_macos_dependency(value: str) -> bool:
