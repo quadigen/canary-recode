@@ -1,3 +1,4 @@
+#+build !js
 package sandboxed
 
 import target "../engine/target"

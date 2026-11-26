@@ -1,4 +1,4 @@
-package terminal
+package kine_terminal
 
 import "core:crypto"
 import "core:fmt"

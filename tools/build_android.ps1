@@ -73,7 +73,7 @@ foreach ($abi in $Abis) {
     $triplet = $VcpkgTriplets[$abi]
 
     [void]$vcpkgArgs.Add("openssl:$triplet")
-    [void]$vcpkgArgs.Add("gamenetworkingsockets[core,openssl]:$triplet")
+    [void]$vcpkgArgs.Add("gamenetworkingsockets:$triplet")
     [void]$vcpkgArgs.Add("curl[core,openssl,websockets]:$triplet")
 }
 

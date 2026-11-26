@@ -65,7 +65,6 @@
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
 #include "modules/skshaper/include/SkShaper_skunicode.h"
 #include "modules/skunicode/include/SkUnicode_icu.h"
-#include "src/core/SkUTF.h"
 #include <limits>
 #include <mutex>
 #include "modules/svg/include/SkSVGDOM.h"
@@ -2475,16 +2474,57 @@ static bool kine_skia_simple_text(const char *text) {
     return true;
 }
 
+static SkUnichar kine_skia_next_utf8(const char **cursor, const char *end) {
+    if (*cursor >= end) return -1;
+    const auto first = static_cast<unsigned char>(*(*cursor)++);
+    if (first < 0x80) return first;
+    int count;
+    SkUnichar cp;
+    if (first >= 0xc2 && first <= 0xdf) {
+        count = 1;
+        cp = first & 0x1f;
+    } else if (first >= 0xe0 && first <= 0xef) {
+        count = 2;
+        cp = first & 0x0f;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+        count = 3;
+        cp = first & 0x07;
+    } else {
+        return -1;
+    }
+    if (end - *cursor < count) return -1;
+    for (int i = 0; i < count; ++i) {
+        const auto byte = static_cast<unsigned char>((*cursor)[i]);
+        if ((byte & 0xc0) != 0x80) return -1;
+        cp = (cp << 6) | (byte & 0x3f);
+    }
+    if ((count == 2 && cp < 0x800) || (count == 3 && cp < 0x10000) ||
+        (cp >= 0xd800 && cp <= 0xdfff) || cp > 0x10ffff) return -1;
+    *cursor += count;
+    return cp;
+}
+
+static size_t kine_skia_to_utf16(SkUnichar cp, uint16_t *out) {
+    if (cp <= 0xffff) {
+        out[0] = static_cast<uint16_t>(cp);
+        return 1;
+    }
+    cp -= 0x10000;
+    out[0] = static_cast<uint16_t>(0xd800 + (cp >> 10));
+    out[1] = static_cast<uint16_t>(0xdc00 + (cp & 0x3ff));
+    return 2;
+}
+
 static uint8_t kine_skia_base_level(SkUnicode &unicode, const char *text, size_t size) {
     const char *end = text + size;
     for (const char *p = text; p < end;) {
-        SkUnichar cp = SkUTF::NextUTF8(&p, end);
+        SkUnichar cp = kine_skia_next_utf8(&p, end);
         if (cp < 0) break;
         if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || cp == 0x200e) return 0;
         if (cp == 0x200f || cp == 0x061c) return 1;
         if (cp < 0x80 || unicode.isControl(cp) || unicode.isDefaultIgnorable(cp)) continue;
         uint16_t probe[4] = {0x0627, 0, 0, 0};
-        size_t count = SkUTF::ToUTF16(cp, probe + 1);
+        size_t count = kine_skia_to_utf16(cp, probe + 1);
         probe[count + 1] = 0x0627;
         auto rtl = unicode.makeBidiIterator(probe, static_cast<int>(count + 2), SkBidiIterator::kLTR);
         if (rtl && rtl->getLevelAt(1) == 0) return 0;
@@ -2521,7 +2561,7 @@ public:
 
 private:
     sk_sp<SkTypeface> select(const char *&p, const sk_sp<SkTypeface> &previous) {
-        SkUnichar cp = SkUTF::NextUTF8(&p, end);
+        SkUnichar cp = kine_skia_next_utf8(&p, end);
         if (cp < 0 || unicode.isDefaultIgnorable(cp)) return previous;
         auto original = primary.refTypeface();
         if (original->unicharToGlyph(cp)) return original;

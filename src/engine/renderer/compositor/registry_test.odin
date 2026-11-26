@@ -1,3 +1,4 @@
+#+build !js
 package compositor
 
 import kineffi "../../bindings"

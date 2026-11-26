@@ -17,9 +17,7 @@ import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:math"
-import "core:os"
 import "core:strings"
-import "core:time"
 
 
 Workspace_Class := classes.Class_Info {
@@ -243,14 +241,7 @@ workspace_meshpart_mesh :: proc(
 	if resolved == "" {return nil}
 
 
-	revision: u64
-	file, stat_err := os.stat(resolved, context.allocator)
-	if stat_err == nil {
-		defer os.file_info_delete(file, context.allocator)
-		revision = u64(time.to_unix_nanoseconds(file.modification_time))
-		revision ~= u64(file.size) * 0x9e3779b97f4a7c15
-		revision ~= u64(file.inode) * 0xbf58476d1ce4e5b9
-	}
+	revision := workspace_mesh_file_revision(resolved)
 
 	if shared := classes.Shared_Mesh_Acquire(ctx, resolved, part.mesh_index, revision, false);
 	   shared != nil {

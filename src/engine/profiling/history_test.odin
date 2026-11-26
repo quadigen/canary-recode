@@ -1,3 +1,4 @@
+#+build !js
 package profiling
 
 import "core:testing"

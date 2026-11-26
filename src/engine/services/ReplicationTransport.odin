@@ -648,7 +648,9 @@ replication_get_send_rate :: proc(service: ^ReplicatorService) -> u32 {
 
 replication_set_send_rate :: proc(service: ^ReplicatorService, rate: u32) -> bool {
 	if service == nil || rate < 16 * 1024 || rate > 64 * 1024 * 1024 {return false}
-	if service.host != nil && !transport_host_set_send_rate(service.host, rate) {return false}
+	when ODIN_OS == .JS {return false} else {
+		if service.host != nil && !transport_host_set_send_rate(service.host, rate) {return false}
+	}
 	if replication_configured_send_rates == nil {
 		replication_configured_send_rates = make(map[^ReplicatorService]u32)
 	}
@@ -686,11 +688,13 @@ replication_start :: proc(
 	} else {
 		service.host = transport_host_create_client()
 	}
-	if service.host != nil &&
-	   !transport_host_set_send_rate(service.host, replication_get_send_rate(service)) {
-		fmt.eprintln("Could not configure SteamNetworkingSockets outgoing send rate")
-		replication_stop(service)
-		return false
+	when ODIN_OS != .JS {
+		if service.host != nil &&
+		   !transport_host_set_send_rate(service.host, replication_get_send_rate(service)) {
+			fmt.eprintln("Could not configure SteamNetworkingSockets outgoing send rate")
+			replication_stop(service)
+			return false
+		}
 	}
 	if mode == .Client && service.host != nil {
 		service.remote = transport_host_connect(service.host, address, port, 2)

@@ -261,7 +261,7 @@ jobs:
             throw "vcpkg executable not found at $vcpkg"
           }
           $installed = Join-Path $PWD 'build/vcpkg-gns-installed'
-          & $vcpkg install 'gamenetworkingsockets[core,openssl]:x64-windows' "--x-install-root=$installed"
+          & $vcpkg install 'gamenetworkingsockets:x64-windows' "--x-install-root=$installed"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force 'vendor/build/lib' | Out-Null
           $gnsImport = Join-Path $installed 'x64-windows/lib/GameNetworkingSockets.lib'

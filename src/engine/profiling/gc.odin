@@ -1,5 +1,6 @@
 package profiling
 
+import "base:runtime"
 import platform "../platform"
 import luauh "../vm/luauh"
 
@@ -19,6 +20,7 @@ gc_started_ns: u64
 gc_in_step: bool
 
 gc_interrupt :: proc "c" (L: ^luauh.lua_State, state: i32) {
+	context = runtime.default_context()
 	if state < 0 {return}
 	if !gc_in_step {
 		gc_started_ns = platform.GetTicksNS()
