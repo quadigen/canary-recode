@@ -2515,6 +2515,24 @@ static size_t kine_skia_to_utf16(SkUnichar cp, uint16_t *out) {
     return 2;
 }
 
+static bool kine_skia_is_default_ignorable(SkUnichar cp) {
+    return cp == 0x00ad || cp == 0x034f || cp == 0x061c ||
+           (cp >= 0x115f && cp <= 0x1160) ||
+           (cp >= 0x17b4 && cp <= 0x17b5) ||
+           (cp >= 0x180b && cp <= 0x180f) ||
+           (cp >= 0x200b && cp <= 0x200f) ||
+           (cp >= 0x202a && cp <= 0x202e) ||
+           (cp >= 0x2060 && cp <= 0x206f) ||
+           cp == 0x3164 ||
+           (cp >= 0xfe00 && cp <= 0xfe0f) ||
+           cp == 0xfeff || cp == 0xffa0 ||
+           (cp >= 0xfff0 && cp <= 0xfff8) ||
+           (cp >= 0x13430 && cp <= 0x1343f) ||
+           (cp >= 0x1bca0 && cp <= 0x1bca3) ||
+           (cp >= 0x1d173 && cp <= 0x1d17a) ||
+           (cp >= 0xe0000 && cp <= 0xe0fff);
+}
+
 static uint8_t kine_skia_base_level(SkUnicode &unicode, const char *text, size_t size) {
     const char *end = text + size;
     for (const char *p = text; p < end;) {
@@ -2522,7 +2540,7 @@ static uint8_t kine_skia_base_level(SkUnicode &unicode, const char *text, size_t
         if (cp < 0) break;
         if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || cp == 0x200e) return 0;
         if (cp == 0x200f || cp == 0x061c) return 1;
-        if (cp < 0x80 || unicode.isControl(cp) || unicode.isDefaultIgnorable(cp)) continue;
+        if (cp < 0x80 || unicode.isControl(cp) || kine_skia_is_default_ignorable(cp)) continue;
         uint16_t probe[4] = {0x0627, 0, 0, 0};
         size_t count = kine_skia_to_utf16(cp, probe + 1);
         probe[count + 1] = 0x0627;
@@ -2562,7 +2580,7 @@ public:
 private:
     sk_sp<SkTypeface> select(const char *&p, const sk_sp<SkTypeface> &previous) {
         SkUnichar cp = kine_skia_next_utf8(&p, end);
-        if (cp < 0 || unicode.isDefaultIgnorable(cp)) return previous;
+        if (cp < 0 || kine_skia_is_default_ignorable(cp)) return previous;
         auto original = primary.refTypeface();
         if (original->unicharToGlyph(cp)) return original;
         if (bundled && bundled->unicharToGlyph(cp)) return bundled;
