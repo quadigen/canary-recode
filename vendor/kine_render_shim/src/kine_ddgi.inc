@@ -1,3 +1,4 @@
+extern "C++" {
 struct KineDdgiGeometry {
     math::float3 minimum{}, maximum{}, color{};
     float emission = 0.0f;
@@ -416,6 +417,8 @@ static void kine_update_ddgi(KineFilamentContext* ctx) {
     if (!kine_ddgi_upload(ctx, state)) kine_destroy_ddgi(ctx);
 }
 
+
+}
 
 KINE_API bool Kine_Filament_GetDDGIStats(KineFilamentContext* ctx,
         uint32_t* total, uint32_t* initialized, uint64_t* updated) {

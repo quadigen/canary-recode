@@ -1,3 +1,4 @@
+extern "C++" {
 static std::array<float, 3> kine_sky_wicked_color(float dx, float dy, float dz,
         float sx, float sy, float sz, float intensity,
         float skyR, float skyG, float skyB,
@@ -86,4 +87,5 @@ static std::array<float, 3> kine_sky_wicked_color(float dx, float dy, float dz,
         }
     }
     return result;
+}
 }

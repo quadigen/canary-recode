@@ -151,6 +151,7 @@ jobs:
             libegl1-mesa-dev \
             libprotobuf-dev \
             protobuf-compiler \
+            patchelf \
             libssl-dev \
             libfontconfig1-dev \
             libgl1-mesa-dev \
@@ -623,7 +624,7 @@ jobs:
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path -Wl,-headerpad_max_install_names"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib "dist/${{ matrix.folder }}/"
           cp -a vendor/build/lib/libGameNetworkingSockets*.dylib "dist/${{ matrix.folder }}/"
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib "dist/${{ matrix.folder }}/"
@@ -637,7 +638,7 @@ jobs:
               -define:RUNTIME_GIT_ENABLED=true \
               -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
               -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+              -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path -Wl,-headerpad_max_install_names"
             if [[ $? -ne 0 ]]; then exit 1; fi
           done
       - name: Build Kinemium debug (macOS)
@@ -658,10 +659,28 @@ jobs:
             -define:RUNTIME_GIT_ENABLED=true \
             -define:RUNTIME_GIT_COMMIT="$GITHUB_SHA" \
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
-            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
+            -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path -Wl,-headerpad_max_install_names"
           cp -a "dist/${{ matrix.folder }}"/lib*.dylib "dist-debug/${{ matrix.folder }}/"
           chmod +x "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
           file "dist-debug/${{ matrix.folder }}/${{ matrix.executable }}"
+      - name: Bundle and verify runtime libraries (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_args=(
+            --platform "${{ runner.os }}"
+            --search-dir vendor/build/lib
+            --search-dir vendor/build/_deps/sdl3-build
+            --search-dir "${VULKAN_SDK:-/nonexistent}/lib"
+          )
+          python3 tools/stage_runtime_libraries.py "${runtime_args[@]}" --directory "dist/${{ matrix.folder }}"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            cp -L "dist/${{ matrix.folder }}"/lib*.so* "dist-debug/${{ matrix.folder }}/"
+          else
+            cp -L "dist/${{ matrix.folder }}"/lib*.dylib "dist-debug/${{ matrix.folder }}/"
+          fi
+          python3 tools/stage_runtime_libraries.py "${runtime_args[@]}" --directory "dist-debug/${{ matrix.folder }}"
       - name: Strip Linux executables
         if: runner.os == 'Linux'
         shell: bash
@@ -698,6 +717,14 @@ jobs:
           }
           if (!(Test-Path -LiteralPath "dist/${{ matrix.folder }}/SDL3.dll")) {
             throw 'SDL3.dll was not copied next to the executable'
+          }
+          $dependencyRoot = Join-Path $env:KINE_GNS_INSTALLED 'x64-windows/bin'
+          $dependencyDlls = @(Get-ChildItem -LiteralPath $dependencyRoot -Filter '*.dll' -File)
+          if ($dependencyDlls.Count -eq 0) { throw 'No vcpkg runtime DLLs were installed' }
+          foreach ($dll in $dependencyDlls) {
+            if (!(Test-Path -LiteralPath "dist/${{ matrix.folder }}/$($dll.Name)")) {
+              throw "Missing packaged Windows dependency: $($dll.Name)"
+            }
           }
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
@@ -1066,10 +1093,8 @@ jobs:
             cp "$src/$exe" "$stage/kinemium/"
             case "$os" in
               windows) cp "$src"/*.dll "$stage/kinemium/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
-                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "$stage/kinemium/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium/" ;;
+              linux) cp "$src"/lib*.so* "$stage/kinemium/" ;;
+              macos) cp "$src"/lib*.dylib "$stage/kinemium/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium/$exe"; fi
             (cd "$stage/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
@@ -1078,10 +1103,8 @@ jobs:
             cp "$src/$server" "$stage/kinemium-server/"
             case "$os" in
               windows) cp "$src"/*.dll "$stage/kinemium-server/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
-                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "$stage/kinemium-server/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-server/" ;;
+              linux) cp "$src"/lib*.so* "$stage/kinemium-server/" ;;
+              macos) cp "$src"/lib*.dylib "$stage/kinemium-server/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-server/$server"; fi
             (cd "$stage/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
@@ -1090,10 +1113,8 @@ jobs:
             cp "$src/$client" "$stage/kinemium-client/"
             case "$os" in
               windows) cp "$src"/*.dll "$stage/kinemium-client/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
-                       "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
-                       "$stage/kinemium-client/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-client/" ;;
+              linux) cp "$src"/lib*.so* "$stage/kinemium-client/" ;;
+              macos) cp "$src"/lib*.dylib "$stage/kinemium-client/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-client/$client"; fi
             (cd "$stage/kinemium-client" && zip -r "../../archives/kinemium-client-${os}-${arch}${ext}.zip" .)
