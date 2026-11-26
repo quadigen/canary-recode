@@ -1,0 +1,30 @@
+---
+title: Selection
+description: Read and modify the local editor selection.
+---
+
+Selection maintains a list of selected instances. Editor tools can use it to act on the same objects as the explorer or inspector.
+
+```lua
+local selection = game:GetService("Selection")
+local target = workspace:WaitForChild("Target")
+selection:Set({target})
+
+for _, item in ipairs(selection:Get()) do
+    print(item.Name)
+end
+```
+
+## Members
+
+| Signature | Behavior |
+| --- | --- |
+| `Get(): {Instance}` | Returns the selected instances as an array. |
+| `Set(items: {Instance}): ()` | Replaces the selection. |
+| `Add(items: {Instance}): ()` | Adds instances without duplicates. |
+| `Remove(items: {Instance}): ()` | Removes the specified instances. |
+| `Clear(): ()` | Clears the selection. |
+| `SelectionThickness: number` | Read-only compatibility property; returns 0.02. |
+| `SelectionChanged` | Read-only signal that fires with no arguments when selection changes; may be nil if the signal library is unavailable. |
+
+Set, Add and Remove require arrays of live instances and reject invalid entries. Selection is local to the runtime; it doesn't replicate player selections.

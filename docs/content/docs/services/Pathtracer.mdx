@@ -1,0 +1,43 @@
+---
+title: Pathtracer
+description: Enable path-traced rendering and configure light transport quality.
+---
+
+Pathtracer switches the local graphical runtime to path-traced rendering when supported. It traces light paths through the scene, trading rendering cost for lighting and reflection quality.
+
+```lua
+local ray = game:GetService("Pathtracer")
+ray.SamplesPerFrame = 1
+ray.MaxTotalDepth = 8
+ray:Enable()
+```
+
+Enabling can be deferred until a viewport is available. Not every graphics device or runtime supports path tracing. The engine reports initialization failures in its logs.
+
+## Properties
+
+| Property | Initial value | Access and meaning |
+| --- | --- | --- |
+| Attached | false | Read-only; path tracer has initialized. Does not guarantee it is the selected rendering mode. |
+| CallCount | 0 | Read-only diagnostic counter. |
+| MaxTotalDepth | 8 | Read/write maximum path depth. |
+| MaxDiffuseDepth | 4 | Read/write diffuse bounce limit. |
+| MaxSpecularDepth | 8 | Read/write specular bounce limit. |
+| MaxRefractionDepth | 8 | Read/write refraction bounce limit. |
+| SamplesPerFrame | 1 | Read/write samples per frame. |
+| MinSamples | 128 | Read/write minimum sample count. |
+| VarianceThreshold | 0 | Read/write variance threshold before renderer initialization. |
+| Exposure | 0 | Read/write exposure setting before renderer initialization. |
+| ClampDirect | 0 | Read/write direct light contribution clamp. |
+| ClampIndirect | 0 | Read/write indirect light contribution clamp. |
+
+All quality settings are numbers; depth and sample counts convert to integers. The renderer may normalize values after initialization. Use positive sample counts and sensible bounce limits.
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `Enable(): ()` | Requests path tracing. Returns no success flag. |
+| `Disable(): ()` | Cancels the request and selects the regular renderer. |
+
+Attach appears in reflected property metadata but isn't a usable property. Read Attached instead. Use [Lighting](/docs/services/Lighting) to configure scene lighting and [ProfilerService](/docs/services/ProfilerService) to measure rendering cost.

@@ -10,9 +10,7 @@ extern "C" {
 #define KNE_CLASS_CREATABLE 0x1u
 #define KNE_CLASS_SERVICE 0x2u
 
-/* Returned by a class namecall to say "I do not handle this method". The
- * host then runs the engine's own Instance behaviour, so IsA, Destroy,
- * Clone and the rest keep working on extension classes. */
+
 #define KNE_UNHANDLED (-1)
 
 typedef void (KNE_CALL *kne_class_construct_fn)(kne_extension ext, kne_instance instance);
@@ -20,6 +18,14 @@ typedef int32_t (KNE_CALL *kne_class_get_fn)(kne_extension ext, kne_instance ins
 typedef int32_t (KNE_CALL *kne_class_set_fn)(kne_extension ext, kne_instance instance, kne_string key, const kne_value *value);
 typedef int32_t (KNE_CALL *kne_class_namecall_fn)(kne_extension ext, kne_instance instance, kne_string method, kne_vm vm, int32_t arg_count);
 typedef void (KNE_CALL *kne_class_step_fn)(kne_extension ext, kne_instance instance, double delta_time);
+
+
+#define KNE_BATCH_MAX_INSTANCES 1024u
+typedef struct kne_batch_instance {
+ kne_instance instance;
+ void *user_data;
+} kne_batch_instance;
+typedef void (KNE_CALL *kne_class_batch_step_fn)(kne_extension ext, const kne_batch_instance *instances, uintptr_t count, double delta_time);
 
 typedef struct kne_class_desc {
 	uint32_t size;
@@ -37,6 +43,7 @@ typedef struct kne_class_desc {
 	kne_class_set_fn set;
 	kne_class_namecall_fn namecall;
 	kne_class_step_fn step;
+	kne_class_batch_step_fn step_batch;
 } kne_class_desc;
 
 typedef int32_t (KNE_CALL *kne_register_class_fn)(kne_extension ext, const kne_class_desc *desc);

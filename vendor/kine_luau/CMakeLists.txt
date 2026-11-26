@@ -27,6 +27,19 @@ target_include_directories(kine_luau PRIVATE
 target_link_libraries(kine_luau PUBLIC Luau.Compiler Luau.VM Luau.Ast)
 
 if(NOT ANDROID AND NOT EMSCRIPTEN)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    get_filename_component(KINE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+    file(GLOB_RECURSE KINE_API_SOURCES CONFIGURE_DEPENDS "${KINE_SOURCE_ROOT}/src/engine/classes/*.odin" "${KINE_SOURCE_ROOT}/src/engine/services/*.odin" "${KINE_SOURCE_ROOT}/src/engine/datatypes/*.odin" "${KINE_SOURCE_ROOT}/src/engine/enum/*.odin")
+    file(GLOB KINE_API_GENERATORS CONFIGURE_DEPENDS "${KINE_SOURCE_ROOT}/tools/vscode-kinemium/*.py")
+    set(KINE_API_HEADER "${CMAKE_CURRENT_BINARY_DIR}/kinemium_api_generated.h")
+    add_custom_command(
+        OUTPUT "${KINE_API_HEADER}"
+        COMMAND "${Python3_EXECUTABLE}" "${KINE_SOURCE_ROOT}/tools/vscode-kinemium/generate_definitions.py" --studio-header --output "${KINE_API_HEADER}"
+        DEPENDS ${KINE_API_SOURCES} ${KINE_API_GENERATORS}
+        VERBATIM
+    )
+    target_sources(kine_luau PRIVATE "${KINE_API_HEADER}")
+    target_include_directories(kine_luau PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 	target_sources(kine_luau PRIVATE src/kine_luau_analysis.cpp)
 	target_link_libraries(kine_luau PUBLIC Luau.Analysis)
 endif()

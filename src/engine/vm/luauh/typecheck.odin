@@ -12,6 +12,8 @@ when TYPECHECK_AVAILABLE {
 	foreign analysis {
 		@(link_name = "kine_luau_typecheck")
 		luau_typecheck :: proc "c" (L: ^lua_State, source: cstring, size: uintptr, resolver: i32) -> i32 ---
+		@(link_name = "kine_luau_api_definitions")
+		luau_api_definitions :: proc "c" (L: ^lua_State) -> i32 ---
 		@(link_name = "kine_luau_exported_types")
 		luau_exported_types :: proc "c" (L: ^lua_State, source: cstring, size: uintptr) -> i32 ---
 		@(link_name = "kine_luau_lint_rules")

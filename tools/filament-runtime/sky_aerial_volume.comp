@@ -1,0 +1,117 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_sky_atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+layout(set = 0, binding = 0, std140) uniform AerialParameters {
+    vec4 radii;
+    vec4 rayleigh;
+    vec4 mieScattering;
+    vec4 mieExtinction;
+    vec4 absorption;
+    vec4 absorptionTerms;
+    vec4 groundAlbedo;
+    vec4 lut;
+    vec4 camera;
+    vec4 controls;
+} aerial;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D transmittanceLut;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D multiScatteringLut;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image3D aerialVolume;
+
+vec3 sampleLut(bool multi, vec2 uv) {
+    ivec2 size = multi ? imageSize(multiScatteringLut) : imageSize(transmittanceLut);
+    vec2 px = clamp(uv, 0.0, 1.0) * vec2(size) - 0.5;
+    ivec2 base = ivec2(floor(px));
+    vec2 weight = fract(px);
+    vec3 values[4];
+    for (int i = 0; i < 4; ++i) {
+        ivec2 p = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), size - 1);
+        values[i] = multi ? imageLoad(multiScatteringLut, p).rgb :
+                imageLoad(transmittanceLut, p).rgb;
+    }
+    return mix(mix(values[0], values[1], weight.x),
+            mix(values[2], values[3], weight.x), weight.y);
+}
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+    ivec3 dimensions = imageSize(aerialVolume);
+    if (any(greaterThanEqual(coord, dimensions))) return;
+
+    KineAtmosphereParameters a = KineAtmosphereParameters(
+            aerial.radii.x, aerial.radii.y, aerial.radii.z, aerial.radii.w,
+            aerial.rayleigh.rgb, aerial.mieScattering.rgb, aerial.mieExtinction.rgb,
+            aerial.absorption.rgb, aerial.groundAlbedo.rgb, aerial.absorption.w,
+            aerial.absorptionTerms.x, aerial.absorptionTerms.y,
+            aerial.absorptionTerms.z, aerial.absorptionTerms.w);
+    vec2 ndc = ((vec2(coord.xy) + 0.5) / vec2(dimensions.xy)) * 2.0 - 1.0;
+    float pitch = aerial.camera.x;
+    float yaw = aerial.camera.y;
+    float tanHalfFov = aerial.camera.z;
+    float cp = cos(pitch);
+    float sp = sin(pitch);
+    float cy = cos(yaw);
+    float sy = sin(yaw);
+    vec3 forward = vec3(cp * cy, cp * sy, sp);
+    vec3 right = vec3(-sy, cy, 0.0);
+    vec3 up = cross(forward, right);
+    vec3 direction = normalize(forward +
+            right * (ndc.x * tanHalfFov) + up * (ndc.y * tanHalfFov));
+    vec3 origin = vec3(0.0, 0.0, a.bottomRadius + aerial.camera.w);
+
+    float depth = (float(coord.z) + 0.5) / float(dimensions.z);
+    float maxDistance = max(aerial.controls.y, 0.001) * depth * depth;
+    float top = kineRaySphereIntersectNearest(origin, direction, a.topRadius);
+    float ground = kineRaySphereIntersectNearest(origin, direction, a.bottomRadius);
+    float tMax = maxDistance;
+    if (top >= 0.0) tMax = min(tMax, top);
+    if (ground >= 0.0) tMax = min(tMax, ground);
+    if (tMax <= 0.0) {
+        imageStore(aerialVolume, coord, vec4(0.0));
+        return;
+    }
+    float sunCos = clamp(aerial.controls.x, -1.0, 1.0);
+    vec3 sun = vec3(sqrt(max(0.0, 1.0 - sunCos * sunCos)), 0.0, sunCos);
+    float phaseCos = clamp(dot(direction, sun), -1.0, 1.0);
+    float phaseRay = kineRayleighPhase(phaseCos);
+    float phaseMie = kineCornetteShanksMiePhase(aerial.lut.w, phaseCos);
+    vec3 totalLight = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    float steps = 2.0 * float(coord.z + 1);
+    float previous = 0.0;
+    for (float s = 0.0; s < steps; s += 1.0) {
+        float t = tMax * (s + 0.3) / steps;
+        float segment = t - previous;
+        previous = t;
+        vec3 position = origin + direction * t;
+        float height = length(position);
+        vec3 normal = position / height;
+        float altitude = max(0.0, height - a.bottomRadius);
+        KineMediumSample medium = kineSampleMedium(a, position);
+        vec3 transmittance = exp(-medium.extinction * segment * aerial.controls.z);
+        vec3 ray = a.rayleighScattering * exp(a.rayleighDensityExpScale * altitude);
+        vec3 mie = a.mieScattering * exp(a.mieDensityExpScale * altitude);
+        float solarCos = clamp(dot(normal, sun), -1.0, 1.0);
+        vec2 transUv;
+        kineLutTransmittanceParamsToUv(a.bottomRadius, a.topRadius, height, solarCos, transUv);
+        float earthShadow = kineRaySphereIntersectNearest(
+                position - normal * KINE_PLANET_RADIUS_OFFSET, sun, a.bottomRadius) >= 0.0 ? 0.0 : 1.0;
+        vec2 msUv = clamp(vec2(solarCos * 0.5 + 0.5,
+                altitude / (a.topRadius - a.bottomRadius)), 0.0, 1.0);
+        vec2 msSize = vec2(imageSize(multiScatteringLut));
+        msUv = vec2(kineFromUnitToSubUvs(msUv.x, msSize.x),
+                kineFromUnitToSubUvs(msUv.y, msSize.y));
+        vec3 source = aerial.controls.w * (
+                earthShadow * sampleLut(false, transUv) * (ray * phaseRay + mie * phaseMie) +
+                sampleLut(true, msUv) * medium.scattering);
+        vec3 integrated = (vec3(1.0) - transmittance) /
+                max(medium.extinction * aerial.controls.z, vec3(1e-8));
+        integrated = mix(vec3(segment), integrated,
+                greaterThan(medium.extinction * aerial.controls.z, vec3(1e-8)));
+        totalLight += throughput * source * integrated;
+        throughput *= transmittance;
+    }
+    float opacity = clamp(1.0 - dot(throughput, vec3(1.0 / 3.0)), 0.0, 1.0);
+    imageStore(aerialVolume, coord, vec4(max(totalLight, vec3(0.0)), opacity));
+}

@@ -419,13 +419,9 @@ Project_Unique_Child_Path :: proc(parent, name: string) -> (string, bool) {
 	return "", false
 }
 
+
 Project_Copy_File_Bytes :: proc(from, to: string) -> bool {
-	data, err := os.read_entire_file(from, context.allocator)
-	if err != nil {
-		return false
-	}
-	defer delete(data, context.allocator)
-	return fsutil.Write_File(to, data) == nil
+	return os.copy_file(to, from) == nil
 }
 
 Project_Copy_Entry :: proc(from, to: string) -> bool {
@@ -625,11 +621,20 @@ Project_Yaml_Get :: proc(
 	return nil
 }
 
+
+project_file_size_bounded :: proc(path: string, limit: u64) -> bool {
+	info, err := os.stat(path, context.allocator)
+	if err != nil {return false}
+	defer os.file_info_delete(info, context.allocator)
+	return info.type == .Regular && info.size >= 0 && u64(info.size) <= limit
+}
+
 Project_Load :: proc(service: ^ProjectService) -> bool {
 	if service == nil || len(service.registry_path) == 0 {return false}
 	if !os.is_file(service.registry_path) {
 		return Project_Save(service)
 	}
+	if !project_file_size_bounded(service.registry_path, 16 * 1024 * 1024) {return false}
 	data, err := os.read_entire_file(service.registry_path, context.allocator)
 	if err != nil {
 		return false
@@ -786,11 +791,12 @@ project_write_atomic :: proc(path, data: string) -> bool {
 		fmt.eprintf("[Project] could not write %q: %v\n", pending, write_err)
 		return false
 	}
+	if !project_sync_file(pending) {return false}
 	if rename_err := os.rename(pending, path); rename_err != nil {
 		fmt.eprintf("[Project] could not replace %q: %v\n", path, rename_err)
 		return false
 	}
-	return true
+	return project_sync_directory(directory)
 }
 
 Project_Add :: proc(service: ^ProjectService, project: KinemiumProject) -> bool {
@@ -1195,6 +1201,13 @@ project_open_impl :: proc(service: ^ProjectService, L: ^vm.State, path: string) 
 	}
 	snapshot := fmt.tprintf("%s/autosave.kine", normalized)
 	if os.exists(snapshot) {
+		if !project_file_size_bounded(snapshot, serializer.KINE_MAX_STREAM_BYTES) {
+			fmt.eprintf(
+				"[Project] open failed: snapshot is not a bounded regular file: %q\n",
+				snapshot,
+			)
+			return false
+		}
 		data, read_err := os.read_entire_file(snapshot, context.allocator)
 		if read_err != nil {
 			fmt.eprintf("[Project] open failed: reading %q: %v\n", snapshot, read_err)
@@ -1271,6 +1284,7 @@ project_write_snapshot :: proc(path: string, data: []u8) -> bool {
 		serializer.Error_Print(err, "Could not save project: ")
 		return false
 	}
+	if !project_sync_file(pending) {return false}
 	snapshot := fmt.tprintf("%s/autosave.kine", path)
 	backed_up, unchanged := project_backup_previous(path, snapshot, pending)
 	if !backed_up {
@@ -1282,6 +1296,7 @@ project_write_snapshot :: proc(path: string, data: []u8) -> bool {
 			fmt.eprintf("[Project] save failed: replacing %q: %v\n", snapshot, rename_err)
 			return false
 		}
+		if !project_sync_directory(path) {return false}
 	}
 	return true
 }
@@ -1319,10 +1334,9 @@ project_has_unsaved_changes :: proc(service: ^ProjectService, L: ^vm.State) -> b
 	defer delete(data)
 	if !snapshot_ok {return true}
 
-	previous, read_err := os.read_entire_file(
-		fmt.tprintf("%s/autosave.kine", current.path),
-		context.allocator,
-	)
+	previous_path := fmt.tprintf("%s/autosave.kine", current.path)
+	if !project_file_size_bounded(previous_path, serializer.KINE_MAX_STREAM_BYTES) {return true}
+	previous, read_err := os.read_entire_file(previous_path, context.allocator)
 	if read_err != nil {return true}
 	defer delete(previous)
 	return !bytes.equal(previous, data)

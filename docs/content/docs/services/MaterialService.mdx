@@ -1,0 +1,15 @@
+---
+title: MaterialService
+description: The material service container.
+---
+
+MaterialService is a built-in service that you can obtain from the DataModel:
+
+```lua
+local materials = game:GetService("MaterialService")
+print(materials.Name)
+```
+
+The service has no material-specific Luau properties, methods, or events beyond its inherited object API. It does not expose material creation, lookup, or override methods.
+
+Use [MaterialVariant](/docs/MaterialVariant) and the material properties on [Part](/docs/Part) to configure surface appearance. See the [lighting and effects guide](/docs/guides/lighting-and-effects) for related visual settings.

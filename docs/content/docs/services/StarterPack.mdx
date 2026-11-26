@@ -1,0 +1,15 @@
+---
+title: StarterPack
+description: A replicated container for authored player equipment templates.
+---
+
+StarterPack is a built-in container whose eligible descendants are replicated to clients.
+
+```lua
+local pack = game:GetService("StarterPack")
+for _, item in ipairs(pack:GetChildren()) do
+    print(item.Name)
+end
+```
+
+StarterPack has no dedicated properties, methods or events beyond its inherited instance API. The service does not implement automatic equipment cloning into a player's backpack, so do not assume that parenting an item here grants it to a player. Implement equipment assignment explicitly in your game.

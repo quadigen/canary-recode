@@ -205,6 +205,7 @@ EventType :: enum i32 {
 	FINGER_MOTION,
 	FINGER_UP,
 	FINGER_CANCELED,
+	WINDOW_MOUSE_LEAVE,
 }
 
 KeyboardEvent :: struct {
@@ -301,7 +302,7 @@ event_text: [4096]u8
 clipboard_text: [4096]u8
 
 Init :: proc(flags: u32) -> bool {return true}
-Quit :: proc() {}
+Quit :: proc() {Set_GUI_Cursor(.DEFAULT)}
 CreateWindow :: proc(title: cstring, width, height: i32, flags: u64) -> ^Window {return &window}
 DestroyWindow :: proc(value: ^Window) {}
 GetWindowSizeInPixels :: proc(value: ^Window, width, height: ^i32) -> bool {
@@ -366,7 +367,8 @@ PollEvent :: proc(event: ^Event) -> bool {
 	     .FINGER_DOWN,
 	     .FINGER_MOTION,
 	     .FINGER_UP,
-	     .FINGER_CANCELED:
+	     .FINGER_CANCELED,
+	     .WINDOW_MOUSE_LEAVE:
 	}
 	return true
 }
@@ -404,6 +406,14 @@ WarpMouseInWindow :: proc(value: ^Window, x, y: f32) {host_warp_mouse(x, y)}
 CreateSystemCursor :: proc(kind: SystemCursor) -> ^Cursor {cursor.kind = kind; return &cursor}
 SetCursor :: proc(value: ^Cursor) -> bool {if value != nil {host_set_cursor(i32(value.kind))}
 	return true}
+gui_cursor_kind: SystemCursor
+
+Set_GUI_Cursor :: proc(kind: SystemCursor) {
+	if gui_cursor_kind == kind {return}
+	host_set_cursor(i32(kind))
+	gui_cursor_kind = kind
+}
+
 StartTextInput :: proc(value: ^Window) -> bool {host_text_input(true); return true}
 StopTextInput :: proc(value: ^Window) -> bool {host_text_input(false); return true}
 SetClipboardText :: proc(text: cstring) -> bool {return host_set_clipboard(text)}

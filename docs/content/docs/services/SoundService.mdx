@@ -1,0 +1,22 @@
+---
+title: SoundService
+description: Play a Sound in the local runtime.
+---
+
+SoundService exposes a local playback helper. Use it for sounds that belong to the runtime running your script, such as interface feedback.
+
+```lua
+local sounds = game:GetService("SoundService")
+
+local function playClick(sound)
+    sounds:PlayLocalSound(sound)
+end
+```
+
+Pass a configured [Sound](/docs/Sound) instance to the function.
+
+## Methods
+
+`PlayLocalSound(sound: Sound): ()`
+
+Starts playback on the supplied Sound through the same playback operation used by the Sound class. A missing or non-Sound argument raises an error. The method returns no playback status and does not itself send a remote message.

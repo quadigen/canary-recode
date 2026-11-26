@@ -101,7 +101,9 @@ Evaluate_Propulsor :: proc(
 		area := f32(PI) * prop.disk_radius * prop.disk_radius * m * m
 
 		u := max(axial, 0)
-		result.induced_speed = (math.sqrt(u * u + 2 * thrust / (density * area)) - u) / (2 * m)
+
+		load_speed2 := 2 * thrust / (density * area)
+		result.induced_speed = load_speed2 / (2 * m * (math.sqrt(u * u + load_speed2) + u))
 	}
 	if !finite(result.induced_speed) ||
 	   !finite(thrust) ||
@@ -126,10 +128,12 @@ Prop_Wash_At :: proc(prop: Propulsor, result: Propulsion_Result, point: Vec3) ->
 	delta := point - prop.center
 	axial := dot(delta, result.exhaust_direction)
 	if axial < 0 || axial > 12 * prop.disk_radius {return Vec3{}}
-	radial := length3(delta - result.exhaust_direction * axial)
+	radial_vector := delta - result.exhaust_direction * axial
+	radial2 := dot(radial_vector, radial_vector)
 	radius := prop.disk_radius + 0.12 * axial
-	if radial >= radius {return Vec3{}}
-	radial_fade := 1 - (radial / radius) * (radial / radius)
+	radius2 := radius * radius
+	if radial2 >= radius2 {return Vec3{}}
+	radial_fade := 1 - radial2 / radius2
 	axial_fade := 1 / (1 + 0.15 * axial / prop.disk_radius)
 	return result.exhaust_direction * (2 * result.induced_speed * radial_fade * axial_fade)
 }

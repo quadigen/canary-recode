@@ -1,8 +1,10 @@
 package main
 
 
+import enums "../src/engine/enum"
 import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
+import services "../src/engine/services"
 import vm "../src/engine/vm"
 import "core:fmt"
 
@@ -94,6 +96,102 @@ main :: proc() {
 	assert(lighting.ShadowSoftness == 1, "ShadowSoftness must clamp high")
 	lighting.ShadowSoftness = -3
 	assert(lighting.ShadowSoftness == 0, "ShadowSoftness must clamp low")
+
+	-- ShadowType is an EnumItem, not a string or numeric value.
+	assert(typeof(lighting.ShadowType) == "EnumItem")
+	assert(lighting.ShadowType == Enum.ShadowType.Auto)
+	assert(lighting.ShadowType.EnumType == Enum.ShadowType)
+	assert(Enum.ShadowType:FromName("PCSS") == Enum.ShadowType.PCSS)
+	assert(Enum.ShadowType:FromValue(Enum.ShadowType.PCF.Value) == Enum.ShadowType.PCF)
+	for _, mode in ipairs({Enum.ShadowType.PCF, Enum.ShadowType.DPCF,
+		Enum.ShadowType.VSM, Enum.ShadowType.PCSS, Enum.ShadowType.Auto}) do
+		lighting.ShadowType = mode
+		assert(lighting.ShadowType == mode)
+	end
+	for _, invalid in ipairs({"PCSS", 3, Enum.NormalId.Top}) do
+		assert(not pcall(function() lighting.ShadowType = invalid end),
+			"ShadowType must reject values other than Enum.ShadowType")
+		assert(lighting.ShadowType == Enum.ShadowType.Auto,
+			"Invalid ShadowType assignment must not change its value")
+	end
+
+	lighting.ShadowSoftness = 0.5
+	assert(lighting.ShadowContactShadows, "Automatic contact shadows must follow softness")
+	lighting.ShadowContactShadows = false
+	lighting.ShadowSoftness = 1
+	assert(not lighting.ShadowContactShadows, "Explicit contact setting must override softness")
+	lighting.ShadowContactShadows = true
+	assert(lighting.ShadowContactShadows)
+
+	-- Field, below minimum, above maximum, expected min, expected max, ordinary value.
+	local numeric = {
+		{"ShadowDistance", -1, 9000, 0, 4096, 230},
+		{"ShadowNearHint", -1, 9000, 0.001, 4096, 0.75},
+		{"ShadowFarHint", -1, 9000, 0.01, 8192, 300},
+		{"ShadowCascadeSplitLambda", -1, 2, 0, 1, 0.45},
+		{"ShadowContactSteps", -10, 1000, 1, 64, 32},
+		{"ShadowContactDistance", -10, 500, 0, 100, 1.5},
+		{"ShadowBias", -1, 2, 0, 1, 0.003},
+		{"ShadowNormalBias", -1, 100, 0, 16, 0.5},
+		{"ShadowPolygonOffsetConstant", -1, 100, 0, 16, 1.0},
+		{"ShadowPolygonOffsetSlope", -1, 100, 0, 16, 3.0},
+		{"ShadowBulbRadius", -100, 500, -1, 100, 0.4},
+		{"ShadowPenumbraScale", -1, 200, 0, 20, 1.5},
+		{"ShadowPenumbraRatioScale", -1, 200, 0, 20, 2.0},
+		{"ShadowVSMBlur", -1, 200, 0, 125, 4},
+		{"ShadowVSMBleedReduction", -1, 2, 0, 1, 0.3},
+        {"ShadowPCSSMaxPenumbraRatio", -1, 150, 0.01, 100, 4.0},
+        {"ShadowPCSSMaxSearchRadius", -1, 150, 0.001, 100, 0.25},
+        {"ShadowVSMAnisotropy", -2, 40, 0, 4, 2},
+        {"SunAngularRadius", -10, 20, 0, 10, 0.55},
+        {"SunHaloSize", -10, 200, 0, 100, 8},
+        {"SunHaloFalloff", -10, 3000, 0, 1000, 65},
+	}
+	for _, c in ipairs(numeric) do
+		local name, low, high, minVal, maxVal, middle = table.unpack(c)
+		lighting[name] = low
+		assert(lighting[name] == minVal, name .. " minimum clamp failed")
+		lighting[name] = high
+		assert(lighting[name] == maxVal, name .. " maximum clamp failed")
+		lighting[name] = middle
+		assert(lighting[name] == middle, name .. " round trip failed")
+	end
+    assert(lighting.ShadowVSMMSAASamples == 1)
+    for _, samples in ipairs({1, 2, 4, 8}) do
+        lighting.ShadowVSMMSAASamples = samples
+        assert(lighting.ShadowVSMMSAASamples == samples)
+    end
+    assert(not pcall(function()
+        lighting.ShadowVSMMSAASamples = 3
+    end), "non-power-of-two VSM sample counts must be rejected")
+    assert(lighting.ShadowVSMMSAASamples == 8)
+    assert(not pcall(function() lighting.ShadowVSMMSAASamples = 1.5 end),
+        "fractional VSM sample counts must be rejected")
+    assert(lighting.ShadowVSMMSAASamples == 8)
+    lighting.ShadowVSMMSAASamples = 1
+
+    for _, name in ipairs({"ShadowPCSSMaxSearchRadius", "SunAngularRadius",
+        "ShadowVSMAnisotropy"}) do
+        local before = lighting[name]
+        assert(not pcall(function() lighting[name] = math.huge end),
+            name .. " must reject infinite values")
+        assert(lighting[name] == before, name .. " must be unchanged on invalid input")
+    end
+	for _, name in ipairs({"ShadowStable", "ShadowLiSPSM",
+		"ShadowVSMHighPrecision", "ShadowVSMELVSM", "ShadowVSMMipmapping"}) do
+		lighting[name] = true
+		assert(lighting[name] == true, name .. " true round trip failed")
+		lighting[name] = false
+		assert(lighting[name] == false, name .. " false round trip failed")
+	end
+	lighting.ShadowMapSize = 8192
+	assert(lighting.ShadowMapSize == 8192)
+	lighting.ShadowCascades = 4
+	assert(lighting.ShadowCascades == 4)
+	lighting.ShadowMapSize = 2048
+	lighting.ShadowCascades = 2
+	lighting.ShadowType = Enum.ShadowType.Auto
+	lighting.ShadowSoftness = 0
 
 	lighting.Brightness = 1.5
 	assert(lighting.Brightness == 1.5, "Brightness round trip failed")
@@ -336,5 +434,94 @@ main :: proc() {
 		"lighting_no_replication",
 	)
 
+	lighting := cast(^services.Lighting)services.Find_Service(&environment.services, "Lighting").object
+	run_script(
+		&script_vm,
+		`
+local l = game:GetService("Lighting")
+assert(l.QualityPreset == Enum.QualityPreset.Custom)
+assert(typeof(l.QualityPreset) == "EnumItem")
+assert(#Enum.QualityPreset:GetEnumItems() == 5)
+l.DynamicResolution = true
+l.AdaptiveShadowResolution = false
+l.ResolutionScale = 0.625
+l.ShadowMapSize = 3072
+l.ShadowCascades = 2
+l.ShadowType = Enum.ShadowType.VSM
+l.Clouds.ResolutionScale = 0.5
+l.DynamicResolutionEffect.Enabled = true
+l.RenderQualityEffect.Enabled = true
+l.RenderQualityEffect.Quality = 1
+for _, p in Enum.QualityPreset:GetEnumItems() do
+    l.QualityPreset = p
+    assert(l.QualityPreset == p)
+    assert(l.DynamicResolution and not l.AdaptiveShadowResolution)
+    assert(l.ResolutionScale == 0.625 and l.ShadowMapSize == 3072 and l.ShadowCascades == 2)
+    assert(l.Clouds.ResolutionScale == 0.5 and l.ShadowType == Enum.ShadowType.VSM)
+    assert(l.DynamicResolutionEffect.Enabled and l.RenderQualityEffect.Quality == 1)
+end
+l.QualityPreset = Enum.QualityPreset.Ultra
+for _, invalid in {"Ultra", 4, Enum.ShadowType.PCF} do
+    assert(not pcall(function() l.QualityPreset = invalid end))
+    assert(l.QualityPreset == Enum.QualityPreset.Ultra)
+end
+`,
+		"quality_preset_api",
+	)
+	assert(lighting.quality_preset == .Ultra)
+	for p in enums.QualityPreset {
+		lighting.quality_preset = p
+		s := services.Lighting_Get_Quality_Settings(lighting)
+		switch p {
+		case .Custom:
+			assert(s.dynamic_resolution && !s.adaptive_shadows && s.min_scale == 0.625)
+			assert(s.shadow_size == 3072 && s.shadow_cascades == 2 && s.shadow_filter == 1)
+		case .Low:
+			assert(
+				s.dynamic_resolution &&
+				s.adaptive_shadows &&
+				s.min_scale == 0.5 &&
+				s.shadow_size == 512 &&
+				s.shadow_cascades == 1 &&
+				s.cloud_scale == 0.25 &&
+				s.hdr_quality == 0,
+			)
+		case .Medium:
+			assert(
+				s.dynamic_resolution &&
+				s.adaptive_shadows &&
+				s.min_scale == 0.75 &&
+				s.shadow_size == 1024 &&
+				s.shadow_cascades == 2 &&
+				s.cloud_scale == 0.5 &&
+				s.hdr_quality == 1,
+			)
+		case .High:
+			assert(
+				!s.dynamic_resolution &&
+				!s.adaptive_shadows &&
+				s.min_scale == 1 &&
+				s.shadow_size == 2048 &&
+				s.shadow_cascades == 3 &&
+				s.cloud_scale == 0.75 &&
+				s.hdr_quality == 2,
+			)
+		case .Ultra:
+			assert(
+				!s.dynamic_resolution &&
+				!s.adaptive_shadows &&
+				s.min_scale == 1 &&
+				s.shadow_size == 4096 &&
+				s.shadow_cascades == 4 &&
+				s.cloud_scale == 1 &&
+				s.hdr_quality == 3,
+			)
+		}
+	}
+	run_script(
+		&script_vm,
+		`game.Lighting.QualityPreset = Enum.QualityPreset.Custom; assert(game.Lighting.ShadowMapSize == 3072)`,
+		"quality_preset_restore",
+	)
 	fmt.println("lighting_smoke: PASSED")
 }

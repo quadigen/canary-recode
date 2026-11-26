@@ -329,6 +329,49 @@ _G.promptField = field
 	}
 
 
+	run_script(
+		&script_vm,
+		`
+local screen = Instance.new("ScreenGui")
+screen.DisplayOrder = 500000
+screen.RenderOnTop = true
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+local card = Instance.new("CanvasGroup", screen)
+card.Size = UDim2.fromOffset(80, 80)
+card.Position = UDim2.fromOffset(500, 400)
+local clicker = Instance.new("TextButton", card)
+clicker.Name = "ConstructClickDetector"
+clicker.Size = UDim2.fromScale(1, 1)
+clicker.BackgroundTransparency = 1
+clicker.TextTransparency = 1
+clicker.Active = false
+clicker.ZIndex = 3
+local preview = Instance.new("ViewportFrame", card)
+preview.Size = UDim2.fromScale(1, 1)
+preview.Active = true
+preview.ZIndex = 1
+local disabled = Instance.new("TextButton", card)
+disabled.Size = UDim2.fromScale(1, 1)
+disabled.ZIndex = 4
+disabled.Interactable = false
+constructClicks = 0
+clicker.MouseButton1Click:Connect(function()
+    constructClicks += 1
+end)
+`,
+		"construct_click_detector_setup",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	hit := classes.GuiObject_find_topmost(&environment.classes, 540, 440)
+	assert(hit != nil && hit.name == "ConstructClickDetector")
+	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_down(540, 440))
+	engine_runtime.Environment_SetEvent(&environment, &script_vm, make_mouse_up(540, 440))
+	run_script(
+		&script_vm,
+		`assert(constructClicks == 1, tostring(constructClicks))`,
+		"construct_click_detector_result",
+	)
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("GUI_HIT_TEST_SMOKE_PASSED")

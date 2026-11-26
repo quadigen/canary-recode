@@ -26,6 +26,7 @@ end)
 | Property | Type | Access | Description |
 | --- | --- | --- | --- |
 | `Text` | `string` | Read/write | Button caption. Defaults to `"Button"`. |
+| `ContentText` | `string` | Read-only | Displayed text with rich-text markup removed. |
 | `TextBounds` | `Vector2` | Read-only | Measured size of the text in pixels. |
 | `Font` | `Enum.Font` | Read/write | Legacy font selector. |
 | `FontFace` | `Font` | Read/write | Font object. |
@@ -43,6 +44,8 @@ end)
 | `LineHeight` | `number` | Read/write | Line spacing multiplier. |
 | `TextPadding` | `number` | Read/write | Inner padding in pixels. |
 | `RichText` | `boolean` | Read/write | Parse inline rich text tags. |
+
+Rich text uses the same inline formatting engine as TextLabel.
 
 ## Button behavior
 

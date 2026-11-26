@@ -1,0 +1,81 @@
+---
+title: Players and Part physics
+description: Use native C handles to query Players, load characters, and manipulate Part physics.
+---
+
+The unified native SDK exposes direct helpers for Players and Part physics. These APIs work in standalone applications and native plugins, using the same engine registries and physics bodies as Luau.
+
+## Player discovery
+
+~~~c
+uint64_t player_count = Kinemium_PlayersGetCount(ctx);
+for (uint64_t i = 0; i < player_count; ++i) {
+    Kinemium_Handle player = Kinemium_PlayersGetAt(ctx, i);
+    uint32_t user_id = 0;
+    double ping = 0;
+
+    if (Kinemium_PlayerGetUserId(ctx, player, &user_id)) {
+        Kinemium_PlayerGetPing(ctx, player, &ping);
+        printf("Player %u: ping %.3f\n", user_id, ping);
+    }
+}
+~~~
+
+Kinemium_PlayersGetLocalPlayer returns zero if the current context has no local player, such as a dedicated server. Kinemium_PlayersFindByUserId looks up a connected Player, while Kinemium_PlayersFindByCharacter resolves the owner of a CharacterModel.
+
+Kinemium_PlayerGetCharacter returns zero if the character has not yet spawned. Kinemium_PlayerLoadCharacter creates a character through CharacterService only when the existing engine networking rules allow it.
+
+## Character movement
+
+~~~c
+double walk_speed = 0;
+if (Kinemium_PlayerGetWalkSpeed(ctx, player, &walk_speed)) {
+    Kinemium_PlayerSetWalkSpeed(ctx, player, 22.5);
+}
+Kinemium_PlayerSetJumpPower(ctx, player, 34.5);
+~~~
+
+Kinemium_PlayerGetWalkSpeed and Kinemium_PlayerGetJumpPower read current movement settings. The setters use the standard Luau property validation (0–100). They reject out-of-range values rather than bypassing character-controller updates.
+
+Handles belong to their context. A Player handle returned by a server cannot be used with a client context.
+
+## Part physics
+
+Part helpers accept Part and derived classes including MeshPart. They reject invalid handles and unrelated Instance classes.
+
+~~~c
+Kinemium_Handle part = Kinemium_HandleCreateInstance(ctx, "Part");
+Kinemium_Handle workspace = Kinemium_HandleService(ctx, "Workspace");
+Kinemium_HandleSetParent(ctx, part, workspace);
+Kinemium_HandleSetDynamicBoolean(ctx, part, "Anchored", false);
+Kinemium_Tick(ctx, 1.0f / 60.0f);
+
+double mass = 0;
+Kinemium_PhysicsGetPartMass(ctx, part, &mass);
+Kinemium_PhysicsSetLinearVelocity(
+    ctx, part, (Kinemium_Vector3){5, 0, 0}
+);
+Kinemium_PhysicsSetAngularVelocity(
+    ctx, part, (Kinemium_Vector3){0, 0, 0.5}
+);
+
+Kinemium_Vector3 linear = {0}, angular = {0};
+Kinemium_PhysicsGetLinearVelocity(ctx, part, &linear);
+Kinemium_PhysicsGetAngularVelocity(ctx, part, &angular);
+
+Kinemium_Vector3 world_position = {0, 10, 0};
+Kinemium_Vector3 velocity_at_position = {0};
+Kinemium_PhysicsGetVelocityAtPosition(
+    ctx, part, world_position, &velocity_at_position
+);
+
+Kinemium_PhysicsApplyImpulseAtPosition(
+    ctx, part, (Kinemium_Vector3){1, 0, 0}, world_position
+);
+~~~
+
+Kinemium_PhysicsGetVelocityAtPosition includes tangential motion from angular velocity. Mass and impulses depend on the part having a suitable physics body. Non-finite velocity/impulse/position arguments are rejected.
+
+## Validation
+
+Test your integration with valid and invalid Part handles, non-finite vectors, and real server/client Player connections. Physics operations require a compatible physical body.

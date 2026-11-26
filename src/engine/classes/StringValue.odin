@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 import "core:strings"
 
@@ -13,6 +14,7 @@ StringValue_Class := Class_Info {
 StringValue :: struct {
 	using object: Object,
 	value:        string,
+	changed:      ^signals.Signal,
 }
 
 StringValue_Init :: proc() -> StringValue {
@@ -31,6 +33,7 @@ StringValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 
 	delete(val.value)
 
+	ValueBase_Destroy_Changed_Signal(&(cast(^StringValue)object).changed)
 	Object_Destroy(object)
 	free(val)
 }
@@ -45,6 +48,8 @@ StringValue_get :: proc(
 	val := cast(^StringValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		vm.PushString(L, val.value)
 	case:
@@ -65,8 +70,14 @@ StringValue_set :: proc(
 
 	switch key {
 	case "Value":
+		new_value := vm.ArgString(L, value_index)
+		if val.value == new_value {return true}
 		delete(val.value)
-		val.value = strings.clone(vm.ArgString(L, value_index))
+		val.value = strings.clone(new_value)
+		if val.changed != nil {
+			vm.PushString(L, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

@@ -3,9 +3,11 @@ title: AlignOrientation
 description: Apply torque to approach a target orientation.
 ---
 
-Apply torque to approach a target orientation.
+Use `AlignOrientation` to rotate a body toward an orientation without directly setting its transform. For example, you can stabilize a vehicle or turn a prop toward a target.
 
 ## Getting started
+
+This example assumes `part` is an unanchored part in Workspace and `attachment` is an Attachment parented to it.
 
 ```lua
 local constraint = Instance.new("AlignOrientation", part)
@@ -16,8 +18,23 @@ constraint.CFrame = CFrame.Angles(0, math.rad(45), 0)
 
 ## Properties
 
-Mode, CFrame, Attachment0, Attachment1, MaxTorque, MaxAngularVelocity and Responsiveness configure torque feedback.
+All properties below are read/write. See [Constraint](/docs/Constraint) for the shared attachment and activation properties.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Mode` | `Enum.OrientationAlignmentMode` | `TwoAttachment` | Selects an attachment or explicit orientation target. |
+| `AlignType` | `Enum.AlignType` | `AllAxes` | Selects the alignment mode. |
+| `CFrame` | `CFrame` | Identity | Target orientation in one-attachment mode. |
+| `LookAtPosition` | `Vector3` | Zero | World-space point to face when `AlignType` is `PrimaryAxisLookAt`. |
+| `MaxTorque` | `number` | `10000` | Torque limit. |
+| `MaxAngularVelocity` | `number` | `100` | Angular velocity limit. |
+| `Responsiveness` | `number` | `10` | How quickly the body approaches the target. |
+| `RigidityEnabled` | `boolean` | `false` | Uses a stronger response when enabled. |
+| `ReactionTorqueEnabled` | `boolean` | `false` | Allows reaction torque on the second attached body. |
+| `PrimaryAxis` | `Vector3` | `(1, 0, 0)` | Stored primary axis. |
+| `SecondaryAxis` | `Vector3` | `(0, 1, 0)` | Stored secondary axis. |
+| `PrimaryAxisOnly` | `boolean` | `false` | Restricts alignment to the primary axis. |
 
 ## Notes
 
-The controller is approximate. PrimaryAxis and SecondaryAxis compatibility values are retained but do not fully configure the solver.
+Alignment is approximate. `Responsiveness` is limited to 1–200 during simulation; enabling `RigidityEnabled` uses a response of 100 instead. `PrimaryAxis` and `SecondaryAxis` are stored but currently don't change the axes used for alignment.

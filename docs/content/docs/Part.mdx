@@ -33,6 +33,12 @@ Parts default to anchored, so they stay where you put them until you turn `Ancho
 | `Shape` | `Enum.PartType` | Read/write | `Enum.PartType.Block` | Block, ball, cylinder, wedge, and other supported shapes. |
 | `Material` | `Enum.Material` | Read/write | `Enum.Material.SmoothPlastic` | Surface material. |
 | `MaterialVariant` | `string` | Read/write | `""` | Name of a material variant to use. |
+| `TopSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the top face. |
+| `BottomSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the bottom face. |
+| `FrontSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the front face. |
+| `BackSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the back face. |
+| `LeftSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the left face. |
+| `RightSurface` | `Enum.SurfaceType` | Read/write | `Enum.SurfaceType.Smooth` | Surface pattern on the right face. |
 | `Gravity` | `Vector3` | Read/write | `Vector3.new(0, -196.2, 0)` | World-space acceleration in studs/s², independent for each part. |
 | `Anchored` | `boolean` | Read/write | `true` | Whether the part is fixed in place. |
 | `CanCollide` | `boolean` | Read/write | `true` | Whether the part collides with other bodies. |
@@ -48,6 +54,17 @@ Parts default to anchored, so they stay where you put them until you turn `Ancho
 `Position` and `CFrame` describe the same transform. Writing `Position` keeps the rotation; writing `CFrame` replaces both. Reading `Position` after a physics step gives the simulated position.
 
 `Anchored` and `CanCollide` are independent. An anchored part can still collide with moving bodies, and an unanchored part with `CanCollide` off will fall through the world.
+
+## Face surfaces
+
+```lua
+part.TopSurface = Enum.SurfaceType.Studs
+part.BottomSurface = Enum.SurfaceType.Inlet
+part.FrontSurface = Enum.SurfaceType.Glue
+part.BackSurface = Enum.SurfaceType.Smooth
+```
+
+`Studs`, `Inlet`, `Glue`, and `Universal` display repeating, color-tinted normal-mapped patterns on opaque block parts using the default lit material path in Workspace. Patterns repeat once per stud in local face space. `Smooth` and `SmoothNoOutlines` have no pattern. Other surface enum values are stored but do not create joints or motors. Surface settings are saved, cloned, and replicated.
 
 ## Methods
 
@@ -95,7 +112,7 @@ The part must have `CanTouch` enabled and participate in the simulation for cont
 
 ## Cloning
 
-A cloned part copies its gravity, size, shape, color, transparency, material, variant, collision settings, collision group, anchors, and transform. It does not copy its live velocity or its `Touched` connections. The clone starts with no parent, like any other cloned instance.
+A cloned part copies its gravity, size, shape, color, transparency, material, variant, face surfaces, collision settings, collision group, anchors, and transform. It does not copy its live velocity or its `Touched` connections. The clone starts with no parent, like any other cloned instance.
 
 ## Notes
 

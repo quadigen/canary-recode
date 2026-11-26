@@ -1,0 +1,80 @@
+---
+title: World cell streaming
+description: Keep large static scenes within a resident memory budget by streaming model cells.
+---
+
+World cell streaming lets the authoritative runtime unload static models that are far from active areas and restore them when needed. Unlike network relevancy, which controls what each client receives, cell streaming changes which objects are resident in the authoritative world itself.
+
+Use this for large static maps. Keep gameplay scripts, moving objects, characters, sound and constraints outside streamable cells.
+
+## Configure streaming
+
+Run this on the authoritative main thread of a supported native runtime:
+
+```lua
+workspace:ConfigureCellStreaming({
+    CellSize = 256,
+    LoadRadius = 512,
+    UnloadRadius = 640,
+    MemoryBudgetBytes = 256 * 1024 * 1024,
+    FrameBudgetMs = 2,
+    CacheBudgetBytes = 512 * 1024 * 1024,
+    Enabled = true,
+})
+```
+
+These values are also the defaults when omitted. LoadRadius must be nonnegative, UnloadRadius must be larger, and CellSize cannot change while cells are registered. The frame budget is a target for streaming work rather than a guarantee that a frame cannot exceed it.
+
+## Register static models
+
+Split the map into uniquely named Models parented directly to Workspace. Each must have at most 512 instances including the root, a serialized snapshot no larger than 1 MiB, and a bounding sphere radius no larger than CellSize.
+
+```lua
+local cell = workspace:WaitForChild("MarketDistrict")
+local index = workspace:RegisterWorldCell(cell)
+print(index)
+```
+
+The model must contain only eligible static content. Unanchored parts, BaseScripts, Humanoids, Players, Constraints, ObjectValues, Sounds and 2D world objects are rejected. The optional memory estimate must be at least the engine's calculated estimate and fit within the resident budget.
+
+Registration begins with the model resident. As the engine unloads and restores models, old instance references can become invalid. Find the model by name again after it returns instead of keeping a permanent reference to its descendants.
+
+## Streaming focus
+
+The engine considers connected players' replication focus points. You can add an explicit focus for a scripted camera or a controlled preview:
+
+```lua
+workspace:SetCellStreamingFocus(Vector3.new(0, 0, 0))
+```
+
+Pass nil to clear the explicit focus. When no explicit or player focus exists, the current camera is used if available.
+
+## Workspace methods
+
+| Signature | Behavior |
+| --- | --- |
+| `ConfigureCellStreaming(options: table): boolean` | Configures streaming, creates the cache, and returns true. Invalid settings raise errors. |
+| `RegisterWorldCell(model: Model, estimatedBytes: number?): number` | Registers a static model and returns its current one-based registration index. |
+| `SetCellStreamingFocus(position: Vector3?): ()` | Adds or clears an explicit focus. |
+| `GetCellStreamingStats(): table` | Returns aggregate residency and I/O metrics. |
+| `GetWorldCells(): {table}` | Returns records with Name, Resident, Failed, CellX, CellY and CellZ. |
+| `RetryWorldCell(name: string): boolean` | Clears the failure flag for a known cell. |
+| `UnregisterWorldCell(name: string): boolean` | Removes a resident cell from streaming management. Requires no pending cell I/O. |
+
+Unknown cell names and attempts to unregister nonresident cells raise errors. Load a cell before unregistering it to preserve its content.
+
+## Inspect residency
+
+```lua
+local stats = workspace:GetCellStreamingStats()
+print(stats.Cells, stats.EstimatedResidentBytes, stats.CacheBytes)
+print(stats.Loads, stats.Unloads, stats.Failures)
+
+for _, cell in ipairs(workspace:GetWorldCells()) do
+    print(cell.Name, cell.Resident, cell.Failed)
+end
+```
+
+Stats also include Cancelled, BytesRead, BytesWritten, LastStepMs, MaxStepMs, BudgetOverruns and IOPending. The resident byte count is an estimate, not the process's full memory usage.
+
+Cell cache data is temporary runtime storage, not a substitute for saving your original map. The APIs raise errors on browser builds and when called on a connected client or from parallel Luau. See [networking](/docs/guides/networking) for per-client replication visibility.

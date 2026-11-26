@@ -1,0 +1,22 @@
+---
+title: Texture
+description: Tile an image across a part face with controllable tile size and offsets.
+---
+
+Texture inherits [Decal](/docs/Decal) and uses the same surface image properties. Parent it to a part to display an image on its face.
+
+```lua
+local part = workspace:WaitForChild("Wall")
+local texture = Instance.new("Texture")
+texture.Texture = "project://textures/brick.png"
+texture.Face = Enum.NormalId.Front
+texture.StudsPerTileU = 4
+texture.StudsPerTileV = 4
+texture.Parent = part
+```
+
+Replace the path with an image in your project. The same Decal rendering behavior and defaults apply.
+
+## Properties
+
+Texture exposes Texture, Color3, Transparency, Face, StudsPerTileU, StudsPerTileV, OffsetStudsU, OffsetStudsV, ZOffset, Enabled, Culling, CastShadows and ReceiveShadows. See [Decal](/docs/Decal) for the types, defaults and limitations of each property. Texture does not add separate methods or events.

@@ -1,0 +1,64 @@
+---
+title: CharacterAnimator
+description: Blend embedded locomotion animations as a character moves, jumps and lands.
+---
+
+Use `CharacterAnimator` to play movement animations automatically on a rigged `MeshPart`. It changes the visual pose, not the character's movement or collisions. For direct control of animation tracks, use [Animator](/docs/Animator) instead.
+
+## Getting started
+
+Attach the animator to a character's existing `CharacterController`. The example assumes the character has a rig named XBot containing the default locomotion clips.
+
+```lua
+local character = script.Parent
+local controller = character:WaitForChild("CharacterController")
+local animator = Instance.new("CharacterAnimator")
+
+animator.RigMeshName = "XBot"
+animator.WalkClip = "Locomotion_Walk"
+animator.FadeTime = 0.2
+animator.Parent = controller
+animator.Enabled = true
+```
+
+Idle, walk and run clips are required. Sprint, jump, fall and landing clips are optional. Use in-place clips that match the rig's skeleton and scale; the controller still moves the character.
+
+Don't use a separate Animator to play tracks on the same rig while this component is enabled. Disable it if you want to manage track selection and blending yourself.
+
+## Properties
+
+All configuration properties below are read-write.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | boolean | false | Plays locomotion clips when enabled. Disabling releases playback. |
+| `RigMeshName` | string | "" | Selects a named descendant mesh. An empty name selects the first suitable mesh. |
+| `IdleClip` | string | "Locomotion_Idle" | Clip for standing still. |
+| `WalkClip` | string | "Locomotion_Walk" | Clip for walking. |
+| `RunClip` | string | "Locomotion_Run" | Clip for running. |
+| `SprintClip` | string | "Locomotion_Sprint" | Optional sprint clip. |
+| `JumpClip` | string | "Locomotion_Jump" | Optional jump clip. |
+| `FallClip` | string | "Locomotion_Fall" | Optional falling clip. |
+| `LandClip` | string | "Locomotion_Land" | Optional landing clip. |
+| `FadeTime` | number | 0.14 | Fade duration in seconds, clamped to 0–2. |
+| `WalkAnimationSpeed` | number | 5.5 | Travel speed represented by the walk clip at normal playback speed. |
+| `RunAnimationSpeed` | number | 24 | Reference travel speed for the run clip. |
+| `SprintAnimationSpeed` | number | 36 | Reference travel speed for the sprint clip. |
+
+The three reference speeds are clamped to 0.1–200. Adjust them if the feet slide as the character moves. They don't change physical movement speed; use the controller's `WalkSpeed` for that.
+
+### Playback diagnostics
+
+These properties are read-only and aren't saved or replicated.
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `Status` | string | Current playback status. |
+| `State` | string | Current locomotion state. |
+| `HorizontalSpeed` | number | Measured horizontal travel speed. |
+
+If the character doesn't animate, check `Status`. `WaitingForMesh` means the rig isn't ready, `MissingLocomotionClips` means a required clip is absent, and `AnimatorBusy` means another animator already controls the rig.
+
+## Limitations
+
+This component uses clips embedded in the selected mesh. For animations stored in separate files, use [Animation](/docs/Animation) and [Animator](/docs/Animator) with your own Luau state selection. It doesn't provide root-motion movement, automatic retargeting, climbing or vaulting.

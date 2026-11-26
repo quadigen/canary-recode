@@ -48,9 +48,6 @@ ViewportFrame :: struct {
 	update_rate:              f32,
 	shadows, post_processing: bool,
 	elapsed:                  f32,
-
-	// Adaptive scheduling is on by default; ContinuousUpdate restores the old
-	// always-render-due behaviour for shader/mesh animations.
 	adaptive_quality:         bool,
 	continuous_update:        bool,
 	hidden_elapsed:           f32,
@@ -213,13 +210,28 @@ viewport_frame_set :: proc(
 		frame.image_color = datatypes.Arg_Color3(L, index, types)
 
 	case "ImageTransparency":
-		frame.image_transparency = clamp(f32(vm.ArgNumber(L, index)), 0, 1)
+		value := vm.ArgNumber(L, index)
+		if math.is_nan(value) || math.is_inf(value) {
+			_ = vm.RaiseError(L, "ViewportFrame.ImageTransparency must be finite")
+			return true
+		}
+		frame.image_transparency = f32(clamp(value, f64(0), f64(1)))
 
 	case "ResolutionScale":
-		frame.resolution_scale = clamp(f32(vm.ArgNumber(L, index)), 0.25, 2)
+		value := vm.ArgNumber(L, index)
+		if math.is_nan(value) || math.is_inf(value) {
+			_ = vm.RaiseError(L, "ViewportFrame.ResolutionScale must be finite")
+			return true
+		}
+		frame.resolution_scale = f32(clamp(value, f64(0.25), f64(2)))
 
 	case "UpdateRate":
-		frame.update_rate = clamp(f32(vm.ArgNumber(L, index)), 0, 240)
+		value := vm.ArgNumber(L, index)
+		if math.is_nan(value) || math.is_inf(value) {
+			_ = vm.RaiseError(L, "ViewportFrame.UpdateRate must be finite")
+			return true
+		}
+		frame.update_rate = f32(clamp(value, f64(0), f64(240)))
 
 	case "AdaptiveQuality":
 		frame.adaptive_quality = vm.ArgBoolean(L, index)
@@ -238,7 +250,7 @@ viewport_frame_set :: proc(
 
 	}
 
-	// GUI-only tint/alpha changes need no 3D render target update.
+
 	if key != "ImageColor3" && key != "ImageTransparency" {frame.elapsed = 10}
 	return true
 
@@ -354,9 +366,16 @@ viewport_frame_collect :: proc(
 
 				if part.material == .Water {
 					when ODIN_OS == .JS {
-						mesh = kineffi.Kine_Filament_Viewport_Primitive(ctx, kineffi.KINE_MESH_WATER_GRID)
+						mesh = kineffi.Kine_Filament_Viewport_Primitive(
+							ctx,
+							kineffi.KINE_MESH_WATER_GRID,
+						)
 					} else {
-						mesh = kineffi.Kine_Filament_GetWaterGrid(ctx, f32(part.size.x), f32(part.size.z))
+						mesh = kineffi.Kine_Filament_GetWaterGrid(
+							ctx,
+							f32(part.size.x),
+							f32(part.size.z),
+						)
 					}
 
 				} else if Is_A_Class(child, &MeshPart_Class) &&
@@ -462,7 +481,10 @@ viewport_frame_collect :: proc(
 
 					for value in ([3]f32{item.param1, item.param2, item.param3}) {hash^ = viewport_frame_hash(hash^, u64(transmute(u32)value))}
 
-					item.flags = u32(kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS | kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION)
+					item.flags = u32(
+						kineffi.KINE_FILAMENT_DRAW_RECEIVE_SHADOWS |
+						kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION,
+					)
 					item.worldPosition = {cf.x, cf.y, cf.z}
 					for v in item.worldPosition {hash^ = viewport_frame_hash(hash^, transmute(u64)v)}
 
@@ -609,7 +631,7 @@ ViewportFrame_Is_Visible :: proc(frame: ^ViewportFrame, width, height: f32) -> b
 	   position.X >= width ||
 	   position.Y >= height {return false}
 
-	// Most scrolling-grid thumbnails are rejected before walking GUI parents.
+
 	if !GuiObject_effectively_visible(&frame.gui_object) {return false}
 
 	left, top, right, bottom :=
@@ -648,8 +670,7 @@ ViewportFrame_Is_Visible :: proc(frame: ^ViewportFrame, width, height: f32) -> b
 
 }
 
-// Hash every piece of inexpensive, non-effect render state. Effect parameters
-// are intentionally not cached: effects may be animated without object changes.
+
 viewport_frame_settings_hash :: proc(settings: ^kineffi.KineViewportSettings) -> u64 {
 	hash: u64 = 14695981039346656037
 	for value in settings.camera {
@@ -669,11 +690,25 @@ viewport_frame_settings_hash :: proc(settings: ^kineffi.KineViewportSettings) ->
 	hash = viewport_frame_hash(hash, u64(settings.height))
 	hash = viewport_frame_hash(hash, u64(settings.shadows))
 	hash = viewport_frame_hash(hash, u64(settings.postProcessing))
+	hash = viewport_frame_hash(hash, u64(settings.effectMask))
+	effect_values := [?][]f32 {
+		settings.bloom[:],
+		settings.ao[:],
+		settings.dof[:],
+		settings.color[:],
+		settings.vignette[:],
+		settings.reflections[:],
+		settings.antialiasing[:],
+	}
+	for values in effect_values {
+		for value in values {hash = viewport_frame_hash(hash, u64(transmute(u32)value))}
+	}
+	hash = viewport_frame_hash(hash, u64(settings.dithering))
+	hash = viewport_frame_hash(hash, u64(settings.quality))
 	return hash
 }
 
-// Only build a scene and issue a GPU submission when the global scheduler
-// actually grants this ViewportFrame a slot.
+
 viewport_frame_submit :: proc(
 	frame: ^ViewportFrame,
 	ctx: ^kineffi.KineFilamentContext,
@@ -688,26 +723,31 @@ viewport_frame_submit :: proc(
 		if frame.native == nil {return false}
 	}
 
-	// Dynamic arrays keep capacity between submits: no alloc on steady-state.
+
 	_ = resize(&frame.items, 0)
 	scene_hash: u64 = 14695981039346656037
 	viewport_frame_collect(frame, &frame.object, ctx, &scene_hash)
-    origin := [3]f64{math.floor(camera.CFrame.x / 1024) * 1024, math.floor(camera.CFrame.y / 1024) * 1024, math.floor(camera.CFrame.z / 1024) * 1024}
-    for v in origin {scene_hash = viewport_frame_hash(scene_hash, transmute(u64)v)}
-    for &item in frame.items {
-        for axis in 0..<3 {
-            offset := axis*4+3
-            world := item.worldPosition[axis] if (item.flags & kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION) != 0 else f64(item.transform[offset])
-            item.transform[offset] = f32(world-origin[axis])
-        }
-        item.flags &= ~u32(kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION)
-    }
+	origin := [3]f64 {
+		math.floor(camera.CFrame.x / 1024) * 1024,
+		math.floor(camera.CFrame.y / 1024) * 1024,
+		math.floor(camera.CFrame.z / 1024) * 1024,
+	}
+	for v in origin {scene_hash = viewport_frame_hash(scene_hash, transmute(u64)v)}
+	for &item in frame.items {
+		for axis in 0 ..< 3 {
+			offset := axis * 4 + 3
+			world :=
+				item.worldPosition[axis] if (item.flags & kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION) != 0 else f64(item.transform[offset])
+			item.transform[offset] = f32(world - origin[axis])
+		}
+		item.flags &= ~u32(kineffi.KINE_FILAMENT_DRAW_WORLD_POSITION)
+	}
 
 	size := frame.absolute_size
 	density := max(f32(1), sdl3.UI_Scale) * frame.resolution_scale
 	if frame.adaptive_quality && visible_count > 16 {
-		// More than 16 live viewports: reduce thumbnail render-target area,
-		// not the 2D destination rectangle's on-screen dimensions.
+
+
 		density *= max(f32(0.5), math.sqrt(f32(16) / f32(visible_count)))
 	}
 	factor := min(f32(1), f32(1024) / max(size.X * density, size.Y * density))
@@ -752,8 +792,7 @@ viewport_frame_submit :: proc(
 	camera.viewport_width = f32(settings.width)
 	camera.viewport_height = f32(settings.height)
 
-	// Re-render on scene/camera/light/resolution changes. For static scenes,
-	// keep the existing target and poll slowly for time-dependent resources.
+
 	hash := viewport_frame_hash(scene_hash, viewport_frame_settings_hash(&settings))
 	is_temporal := settings.effectMask != 0 || frame.continuous_update
 	if !is_temporal {
@@ -769,13 +808,18 @@ viewport_frame_submit :: proc(
 		return false
 	}
 
-	_ = kineffi.Kine_Filament_Viewport_Update(
+	if !kineffi.Kine_Filament_Viewport_Update(
 		frame.native,
 		&settings,
 		raw_data(frame.items),
 		u32(len(frame.items)),
 		scene_hash,
-	)
+	) {
+
+
+		frame.has_presented = false
+		return false
+	}
 	frame.last_submission_hash = hash
 	frame.has_presented = true
 	frame.idle_elapsed = 0
@@ -786,8 +830,8 @@ ViewportFrame_Prepare_All :: proc(registry: ^Registry, width, height: i32, dt: f
 	if registry == nil || registry.renderer == nil || registry.renderer.Filament == nil {return}
 	ctx := registry.renderer.Filament
 	materials.init(registry.renderer)
-	// Begin is required even when no viewports are updated: it advances native
-	// render-target retention/eviction bookkeeping.
+
+
 	kineffi.Kine_Filament_Viewport_Begin(ctx)
 	descriptor := Find_Class(registry, "ViewportFrame")
 	if descriptor == nil || len(descriptor.instances) == 0 {return}
@@ -822,7 +866,7 @@ ViewportFrame_Prepare_All :: proc(registry: ^Registry, width, height: i32, dt: f
 				frame.has_presented = false
 				frame.elapsed = 10
 			} else {
-				// Never let a budget-skipped visible viewport lose its texture.
+
 				kineffi.Kine_Filament_Viewport_Touch(frame.native)
 			}
 		}
@@ -852,8 +896,7 @@ ViewportFrame_Prepare_All :: proc(registry: ^Registry, width, height: i32, dt: f
 		}
 		if effective_rate > 0 && frame.elapsed < f32(1) / effective_rate {continue}
 
-		// Enforce a separate pixel-work cap so large panels cannot each
-		// consume a full offscreen render in the same GUI frame.
+
 		size := frame.absolute_size
 		pixel_estimate := i64(
 			max(
@@ -878,8 +921,8 @@ ViewportFrame_Prepare_All :: proc(registry: ^Registry, width, height: i32, dt: f
 			submitted += 1
 		}
 	}
-	// Walk the candidate ring even when the GPU is saturated, so every frame
-	// eventually receives a slot rather than the first few monopolizing it.
+
+
 	advance := inspected
 	if inspected == count {advance = max(1, min(attempted, ViewportFrame_Max_Checks_Per_Frame))}
 	viewport_frame_scheduler_cursor = (start + max(1, advance)) % count

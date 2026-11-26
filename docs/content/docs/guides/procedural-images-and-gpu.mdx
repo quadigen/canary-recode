@@ -105,7 +105,17 @@ end
 image:WritePixelsBuffer(Vector2.new(0, 0), image.Size, pixels)
 ```
 
-The result is a data buffer. Assign the resulting Image directly to an ImageLabel.Image property to preview generated pixels.
+To display the pixels, assign the `Image` directly to an `ImageLabel`. This example assumes the script is inside a visible `ScreenGui`:
+
+```lua
+local preview = Instance.new("ImageLabel")
+preview.Size = UDim2.fromOffset(128, 256)
+preview.BackgroundTransparency = 1
+preview.Image = image
+preview.Parent = script.Parent
+```
+
+The label updates when you write new pixels to the image. You don't need to save a PNG or reload a texture.
 
 ## Resize safely
 
@@ -242,14 +252,15 @@ Converting the result back to RGBA8 is the same process in reverse. Keep dimensi
 | `WritePixelsBuffer` errors | The region is outside the image, or the buffer isn't exactly `width * height * 4` bytes. |
 | Pixels look shifted or scrambled | The buffer index is byte-based and zero-based, and rows are tightly packed. |
 | Image changes disappear after resizing | Assigning `Size` clears the pixel buffer. |
-| Nothing appears on screen | `Image` has no verified display binding yet. |
+| Nothing appears on screen | Assign the image to `ImageLabel.Image`, check that the label is visible, and make sure the pixels have nonzero alpha. |
 | `Dispatch` returns `false` | The operation name is wrong, buffer lengths don't match, or GPU compute is unavailable. |
 | `Poll` always returns `nil` | The operation is still running, or the result was already collected. |
 | GPU result is wrong | Buffers were written at the wrong element offset; each float32 occupies four bytes. |
 
 ## Next steps
 
-- `Image` for pixel buffer methods.
+- [Image](/docs/Image) for pixel buffer methods.
+- [ImageLabel](/docs/ImageLabel) for displaying generated images.
 - `AssetService` for creating and loading images.
 - `GPUCompute` for the complete operation list and limits.
 - [Asset paths and references](/docs/guides/asset-paths) for resolving local image files.

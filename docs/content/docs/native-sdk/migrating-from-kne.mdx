@@ -1,0 +1,58 @@
+---
+title: Migrating from KNE to the Native SDK
+description: Replace KNE ABI 3.x host tables with the unified Kinemium C API.
+---
+
+The **Kinemium Native SDK ABI 2** is the canonical interface for embedded applications **and** native plugins. KNE ABI 3.2 plugins use the legacy interface. To migrate a plugin to ABI 2, use **kinemium.h** and **kinemium_plugin.h**.
+
+## Entry point
+
+KNE 3.x used **kne_extension_entry(const kne_host*)** and separate module tables such as host->instances, host->vm, and host->datatypes.
+
+The unified SDK instead exports **Kinemium_PluginEntry()**, returning a Kinemium_PluginDescriptor. Lifecycle callbacks receive a Kinemium_Context pointer referencing the **host's existing engine**. The plugin does not call Kinemium_Create() or take ownership of the runtime.
+
+## Common replacements
+
+| KNE 3.x | Unified Native SDK ABI 2 |
+| --- | --- |
+| host->services->get | Kinemium_HandleService |
+| host->services->exists | Kinemium_ServiceExists |
+| host->instances->create | Kinemium_HandleCreateInstance |
+| host->instances->get_property | Typed Kinemium_HandleGetDynamic functions |
+| host->instances->invoke | Kinemium_Invoke |
+| host->classes->register_class | Kinemium_RegisterClass |
+| host->vm->register_function | Kinemium_RegisterNativeFunction |
+| host->vm->register_library_function | Kinemium_RegisterLibraryFunction |
+| host->vm->execute | Kinemium_RunLuau |
+| host->datatypes->register_datatype | Kinemium_RegisterDatatype |
+| host->signals->connect_native | Kinemium_ConnectSignal |
+| host->callbacks->retain | Kinemium_RetainLuauCallback |
+| host->core->log | Kinemium_Log |
+
+Classes and datatypes use native descriptors with typed struct-offset properties, optional methods, constructors and teardown hooks. Native datatypes can also provide serialization, replication, arithmetic, equality, and string-conversion callbacks.
+
+## Manifest conversion
+
+Change the extension manifest's ABI major and entry point:
+
+~~~json
+{
+  "id": "example.native",
+  "name": "Example Native Plugin",
+  "version": "1.0.0",
+  "api": 2,
+  "api_minor": 0,
+  "library": "example_native.so",
+  "entry": "Kinemium_PluginEntry"
+}
+~~~
+
+Keep the binary filename appropriate to the target OS and architecture. The host must export Kinemium symbols for plugins. On Linux, the editor must export the SDK symbols required by the plugin.
+
+## Compatibility limits
+
+The unified SDK supports common class, datatype, callback, service, and signal operations. KNE 3.x compatibility is incomplete for generic Luau stack/buffer access, the full range of KNE datatype values, arbitrary custom class property getter/setter callbacks, all legacy export enumeration operations, and migration of the separate **kine_game.h** ABI.
+
+See **docs/native-sdk-parity-matrix.md** in the repository for the compatibility matrix. Plugins that depend on unsupported functionality require the KNE headers and ABI-3 loader.
+
+For plugin authoring, see [Plugin authoring](/docs/native-sdk/plugin-authoring) and [Custom classes and services](/docs/native-sdk/classes-and-services).

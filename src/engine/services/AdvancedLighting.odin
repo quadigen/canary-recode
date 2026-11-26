@@ -26,6 +26,8 @@ lighting_advanced_fingerprint :: proc(service: ^Lighting) -> u64 {hash := u64(14
 			hash = lighting_hash_f64(hash, f64(value.bias))
 			hash = lighting_hash_f64(hash, f64(value.sample_count))
 			hash = lighting_hash_f64(hash, f64(value.max_distance))
+			hash = lighting_hash_f64(hash, f64(value.color_bleeding))
+			hash = lighting_hash_f64(hash, f64(value.visibility_steps))
 		case "VolumetricFogEffect":
 			v := cast(^classes.VolumetricFogEffect)object
 			hash = lighting_hash_ptr(hash, rawptr(v))
@@ -100,7 +102,28 @@ lighting_advanced_fingerprint :: proc(service: ^Lighting) -> u64 {hash := u64(14
 			hash = lighting_hash_f64(hash, f64(value.temperature))
 			hash = lighting_hash_f64(hash, f64(value.tint))
 		}}
-	return hash}
+	for definition in classes.Scene_Lighting_Effects {
+		value := lighting_scene_effect(service, definition.class)
+		if value == nil {continue}
+		hash = lighting_hash_ptr(hash, rawptr(value))
+		hash = lighting_hash_bool(hash, value.enabled)
+		for parameter in value.values {hash = lighting_hash_f64(hash, f64(parameter))}
+	}
+	return hash
+}
+
+lighting_scene_effect :: proc(
+	service: ^Lighting,
+	class: ^classes.Class_Info,
+) -> ^classes.Scene_Lighting_Effect {
+	result: ^classes.Scene_Lighting_Effect
+	for object in service.children {
+		if object != nil && !object.destroyed && object.class == class {
+			result = cast(^classes.Scene_Lighting_Effect)object
+		}
+	}
+	return result
+}
 lighting_apply_advanced :: proc(
 	service: ^Lighting,
 	ctx: ^k.KineFilamentContext,
@@ -135,12 +158,14 @@ lighting_apply_advanced :: proc(
 		fallback := classes.SSGIEffect_Init()
 		fallback.enabled = false
 		if value == nil {value = &fallback}
-		values := [5]f32 {
+		values := [7]f32 {
 			f32(value.intensity),
 			f32(value.radius),
 			f32(value.bias),
 			f32(value.sample_count),
 			f32(value.max_distance),
+			f32(value.color_bleeding),
+			f32(value.visibility_steps),
 		}
 		k.Kine_Filament_SetAdvancedEffect(
 			ctx,
@@ -228,7 +253,7 @@ lighting_apply_advanced :: proc(
 		k.Kine_Filament_SetAdvancedEffect(
 			ctx,
 			5,
-			value.enabled && !fast_viewport,
+			value.enabled && !fast_viewport && service.quality_preset == .Custom,
 			&values[0],
 			i32(len(values)),
 		)
@@ -305,6 +330,24 @@ lighting_apply_advanced :: proc(
 			v.enabled && !fast_viewport,
 			&values[0],
 			i32(len(values)),
+		)
+	}
+
+	for definition in classes.Scene_Lighting_Effects {
+		values := definition.defaults
+		enabled := false
+		if value := lighting_scene_effect(service, definition.class); value != nil {
+			values = value.values
+			enabled =
+				value.enabled &&
+				(!fast_viewport || definition.class == &classes.SunLightEffect_Class)
+		}
+		k.Kine_Filament_SetAdvancedEffect(
+			ctx,
+			definition.renderer_id,
+			enabled,
+			&values[0],
+			definition.parameter_count,
 		)
 	}
 }

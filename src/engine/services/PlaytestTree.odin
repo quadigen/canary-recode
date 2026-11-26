@@ -427,6 +427,7 @@ pt_execute :: proc(
 
 
 Playtest_Tree_Pump :: proc(dir: string, registry: ^Registry, L: ^vm.State) {
+	Playtest_Debugger_Pump(dir, registry, L)
 	if dir == "" || registry == nil || registry.data_model == nil || L == nil {return}
 	request, path_err := os.join_path({dir, "request.bin"}, context.allocator)
 	if path_err != nil {return}

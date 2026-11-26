@@ -111,6 +111,9 @@ New :: proc(open_libraries := true) -> VM {
 		panic("Failed to create Luau VM")
 	}
 
+
+	InitializeThreadSecurity(L)
+
 	if open_libraries {
 
 		luauh.luaL_openlibs(L)
@@ -119,7 +122,38 @@ New :: proc(open_libraries := true) -> VM {
 
 		luauh.lua_pushnil(L)
 		luauh.lua_setfield(L, luauh.LUA_GLOBALSINDEX, "os")
+
+
+		libraries := [8]cstring {
+			"math",
+			"string",
+			"table",
+			"coroutine",
+			"utf8",
+			"bit32",
+			"debug",
+			"buffer",
+		}
+		for library in libraries {
+			if Value_Type(luauh.lua_getfield(L, luauh.LUA_GLOBALSINDEX, library)) == .Table {
+				luauh.lua_setreadonly(L, -1, 1)
+			}
+			luauh.lua_settop(L, -2)
+		}
+
+
+		if Value_Type(luauh.lua_getfield(L, luauh.LUA_GLOBALSINDEX, "getmetatable")) == .Function {
+			PushString(L, "")
+			if luauh.lua_pcall(L, 1, 1, 0) == 0 {
+				if Value_Type(luauh.lua_type(L, -1)) == .Table {
+					luauh.lua_setreadonly(L, -1, 1)
+				}
+			}
+		}
+		luauh.lua_settop(L, -2)
 	}
+
+	Debugger_Init(L)
 
 	return VM {
 		L = L,
@@ -152,7 +186,7 @@ debug_set_memory_category :: proc "c" (L: ^State) -> i32 {
 	for byte in transmute([]u8)name {
 		hash = (hash ~ u32(byte)) * 16777619
 	}
-	// Luau accounts for allocations by numeric category.
+
 	luauh.lua_setmemcat(L, i32(hash % 255) + 1)
 	return 0
 }
@@ -162,7 +196,7 @@ debug_reset_memory_category :: proc "c" (L: ^State) -> i32 {
 	return 0
 }
 
-// Script profiling hints are accepted independently of the native profiler.
+
 debug_profile_begin :: proc "c" (L: ^State) -> i32 {
 	context = tracy.DefaultContext()
 	_ = ArgString(L, 1)
@@ -188,6 +222,8 @@ Close :: proc(vm: ^VM) {
 	previously_closing := closing
 	closing = true
 	defer closing = previously_closing
+	Debugger_Shutdown(vm.L)
+	ShutdownThreadSecurity(vm.L)
 	luauh.lua_close(vm.L)
 	vm.L = nil
 }
@@ -477,10 +513,7 @@ PushBoolean :: proc(L: ^State, value: bool) {
 }
 
 PushString :: proc(L: ^State, value: string) {
-	c_value := strings.clone_to_cstring(value)
-	defer delete(c_value)
-
-	luauh.lua_pushstring(L, c_value)
+	PushBytes(L, transmute([]u8)value)
 }
 
 PushBytes :: proc(L: ^State, value: []u8) {
@@ -561,7 +594,23 @@ Pop :: proc(L: ^State, count: int = 1) {
 }
 
 NewThread :: proc(L: ^State) -> ^State {
-	return luauh.lua_newthread(L)
+	if L == nil {return nil}
+	thread := luauh.lua_newthread(L)
+	if thread != nil {
+
+
+		luauh.lua_createtable(L, 0, 1)
+		luauh.lua_createtable(L, 0, 1)
+		luauh.lua_pushvalue(L, luauh.LUA_GLOBALSINDEX)
+		luauh.lua_setfield(L, -2, "__index")
+		luauh.lua_setreadonly(L, -1, 1)
+		_ = luauh.lua_setmetatable(L, -2)
+
+		luauh.lua_pushvalue(L, -1)
+		luauh.lua_setfield(L, -2, "_G")
+		_ = luauh.lua_setfenv(L, -2)
+	}
+	return thread
 }
 
 ThreadFromArgument :: proc(L: ^State, index: int) -> ^State {
@@ -594,12 +643,14 @@ ResumeThread :: proc(
 	status := luauh.lua_Status(luauh.lua_resume(thread, from, i32(argument_count)))
 	#partial switch status {
 	case .OK:
+		Debugger_ForgetThread(thread)
 		luauh.lua_resetthread(thread)
 		return true, false, ""
-	case .YIELD:
+	case .YIELD, .BREAK:
 		return false, true, ""
 	case:
 		err = get_stack_error(thread)
+		Debugger_ForgetThread(thread)
 		luauh.lua_resetthread(thread)
 		return false, false, err
 	}
@@ -621,13 +672,15 @@ ResumeThreadTraceback :: proc(
 	status := luauh.lua_Status(luauh.lua_resume(thread, from, i32(argument_count)))
 	#partial switch status {
 	case .OK:
+		Debugger_ForgetThread(thread)
 		luauh.lua_resetthread(thread)
 		return true, false, "", ""
-	case .YIELD:
+	case .YIELD, .BREAK:
 		return false, true, "", ""
 	case:
 		err = get_stack_error(thread)
 		traceback = Traceback(thread, err)
+		Debugger_ForgetThread(thread)
 		luauh.lua_resetthread(thread)
 		return false, false, err, traceback
 	}
@@ -896,6 +949,10 @@ RawLen :: proc(L: ^State, index: int) -> int {
 
 RawGetIndex :: proc(L: ^State, table_index, array_index: int) -> Value_Type {
 	return Value_Type(luauh.lua_rawgeti(L, i32(table_index), i32(array_index)))
+}
+
+RawSet :: proc(L: ^State, table_index: int) {
+	luauh.lua_rawset(L, i32(table_index))
 }
 
 RawSetIndex :: proc(L: ^State, table_index, array_index: int) {
@@ -1395,6 +1452,7 @@ LoadSource :: proc(
 		luauh.lua_settop(L, -2)
 		return false, err
 	}
+	Debugger_ApplyBreakpoints(L, chunk_name)
 	return true, ""
 }
 

@@ -30,7 +30,7 @@ overlay.RenderOnTop = true
 local glass = Instance.new("Frame", overlay)
 glass.BackgroundTransparency = 1
 glass.Size = UDim2.fromOffset(120, 120)
-local effect = Instance.new("UIBackdrop", glass)
+effect = Instance.new("UIBackdrop", glass)
 effect.BlurRadius = 0
 effect.TintColor3 = Color3.new(1, 0, 0)
 effect.TintTransparency = 0.5
@@ -48,13 +48,18 @@ effect.Transparency = 1
 	defer kineffi.Kine_Skia_Surface_Destroy(surface)
 	kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 255)
 	runtime.Environment_Render_2D(&env, &state, surface, 120, 120, 1.0 / 60.0)
-	assert(classes.Gui_Overlay_Needs_Backdrop(&env.classes))
-	kineffi.Kine_Skia_Surface_SetBackdropFromSurface(surface, surface)
+	assert(!classes.Gui_Overlay_Needs_Backdrop(&env.classes))
 	runtime.Environment_Render_Overlay(&env, &state, surface, 120, 120, 1.0 / 60.0)
 	kineffi.Kine_Skia_Surface_ClearBackdrop(surface)
 	kineffi.Kine_Skia_Surface_Flush(surface)
 	r, g, b, a: u8
 	kineffi.Kine_Skia_Surface_GetPixel(surface, 60, 60, &r, &g, &b, &a)
 	assert(r > 30 && b > 30 && a == 255)
+	ok, err = vm.Run(&state, `effect.BlurRadius = 18`, "tint_only_blur")
+	assert(ok, err)
+	assert(!classes.Gui_Overlay_Needs_Backdrop(&env.classes))
+	ok, err = vm.Run(&state, `effect.Transparency = 0`, "active_blur")
+	assert(ok, err)
+	assert(classes.Gui_Overlay_Needs_Backdrop(&env.classes))
 	fmt.println("UI_BACKDROP_2D_SMOKE_PASSED")
 }

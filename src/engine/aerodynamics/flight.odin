@@ -67,8 +67,20 @@ Evaluate_Flight :: proc(
 		)
 	}
 
-	for prop in body.propulsors {
+
+	stack_results: [16]Propulsion_Result
+	prop_results: []Propulsion_Result
+	if body.prop_wash && len(body.surfaces) > 0 {
+		if len(body.propulsors) <= len(stack_results) {
+			prop_results = stack_results[:len(body.propulsors)]
+		} else {
+			prop_results = make([]Propulsion_Result, len(body.propulsors))
+		}
+	}
+	defer {if len(prop_results) > len(stack_results) {delete(prop_results)}}
+	for prop, i in body.propulsors {
 		p := Evaluate_Propulsor(prop, relative_v, angular_v, air_state.density, s)
+		if len(prop_results) > 0 {prop_results[i] = p}
 		if p.load.samples == 0 {continue}
 		result.propulsors += 1
 		result.thrust_newtons += p.thrust_newtons
@@ -80,8 +92,8 @@ Evaluate_Flight :: proc(
 		surface := value
 		if surface.options.sound_speed <= 0 {surface.options.sound_speed = air_state.sound_speed}
 		if body.prop_wash {
-			for prop in body.propulsors {
-				p := Evaluate_Propulsor(prop, relative_v, angular_v, air_state.density, s)
+			for prop, i in body.propulsors {
+				p := prop_results[i]
 				surface.extra_wind += Prop_Wash_At(
 					prop,
 					p,

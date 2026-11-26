@@ -1,0 +1,25 @@
+---
+title: TaskScheduler
+description: Inspect the local runtime's pending scheduled tasks.
+---
+
+The task scheduler runs deferred and sleeping Luau threads. Most gameplay code uses the global task library rather than accessing this service directly.
+
+```lua
+local scheduler = game:GetService("TaskScheduler")
+
+task.delay(2, function()
+    print("Finished")
+end)
+
+print(scheduler.PendingTaskCount)
+```
+
+## Members
+
+| Member | Behavior |
+| --- | --- |
+| `PendingTaskCount: number` | Read-only count of queued tasks in the local scheduler. |
+| `CancelAll(): ()` | Clears the entire pending scheduler queue. Does not stop code already executing. |
+
+Avoid CancelAll in normal game code because it can cancel work scheduled by other scripts. Use the task library's individual cancellation when you own a specific thread. See [scripting with Luau](/docs/guides/scripting) and [parallel Luau](/docs/guides/parallel-luau).

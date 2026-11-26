@@ -331,12 +331,33 @@ text_service_namecall :: proc(
 		if typeface ==
 		   nil {return vm.RaiseError(L, "failed to load a font for text measurement"), true}
 		defer kineffi.Kine_Skia_Typeface_Destroy(typeface)
-		bounds := text_service_get_text_size(
-			typeface,
-			params.text,
-			max(1, params.size),
-			{max(0, params.width), 0},
-		)
+		bounds: datatypes.Vector2
+		if params.rich_text && len(params.text) > 0 {
+			label := classes.TextLabel {
+				text            = params.text,
+				font_face       = params.font,
+				stored_typeface = typeface,
+				text_size       = max(1, params.size),
+				line_height     = 1,
+				rich_text       = true,
+				text_wrapped    = params.width > 0,
+			}
+			lines := classes.TextLabel_Build_Lines(
+				&label,
+				max(0, params.width),
+				label.text_size,
+				label.text_wrapped,
+			)
+			bounds = classes.TextLabel_Get_Bounds(&label, lines[:], label.text_size)
+			classes.TextLabel_Free_Lines(&lines)
+		} else {
+			bounds = text_service_get_text_size(
+				typeface,
+				params.text,
+				max(1, params.size),
+				{max(0, params.width), 0},
+			)
+		}
 		datatypes.Push_Vector2(L, datatype_registry, bounds)
 		return 1, true
 
@@ -414,6 +435,19 @@ text_service_namecall :: proc(
 		text_size := f32(vm.ArgNumber(L, 3))
 		font_path := vm.ArgString(L, 4)
 
+		if strings.has_prefix(font_path, "builtin://fonts/") {
+			typeface := classes.TextLabel_Load_Typeface_From_Family(font_path)
+			if typeface != nil {
+				defer kineffi.Kine_Skia_Typeface_Destroy(typeface)
+				c_text := strings.clone_to_cstring(text)
+				defer delete(c_text)
+				vm.PushNumber(
+					L,
+					f64(kineffi.Kine_Skia_Typeface_MeasureText(typeface, c_text, text_size)),
+				)
+				return 1, true
+			}
+		}
 		c_font := strings.clone_to_cstring(font_path)
 		defer delete(c_font)
 
@@ -427,6 +461,17 @@ text_service_namecall :: proc(
 		text_size := f32(vm.ArgNumber(L, 2))
 		font_path := vm.ArgString(L, 3)
 
+		if strings.has_prefix(font_path, "builtin://fonts/") {
+			typeface := classes.TextLabel_Load_Typeface_From_Family(font_path)
+			if typeface != nil {
+				defer kineffi.Kine_Skia_Typeface_Destroy(typeface)
+				vm.PushNumber(
+					L,
+					f64(kineffi.Kine_Skia_Typeface_GetLineHeight(typeface, text_size)),
+				)
+				return 1, true
+			}
+		}
 		c_font := strings.clone_to_cstring(font_path)
 		defer delete(c_font)
 

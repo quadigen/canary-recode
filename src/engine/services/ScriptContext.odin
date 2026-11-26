@@ -2,6 +2,7 @@ package services
 
 
 import "core:fmt"
+import "core:time"
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -16,6 +17,16 @@ ScriptContext_Class := classes.Class_Info {
 	parent = &Service_Class,
 }
 
+Debug_Remote_Pending :: struct {
+	sequence: u32,
+	deadline: time.Tick,
+}
+
+Script_Debug_Source_Thread :: struct {
+	thread:    ^vm.State,
+	reference: i32,
+}
+
 Script_Thread :: struct {
 	object:      ^classes.Object,
 	thread:      ^vm.State,
@@ -27,7 +38,15 @@ ScriptContext :: struct {
 	vm_state:                 ^vm.VM,
 	object_registry:          ^classes.Registry,
 	threads:                  [dynamic]Script_Thread,
+	thread_descriptions:      map[^vm.State]string,
+	thread_objects:           map[^classes.Object]bool,
+	debug_source_threads:     [dynamic]Script_Debug_Source_Thread,
 	singleplayer_script_mode: enums.SingleplayerScriptMode,
+	debugger_options_saved:   bool,
+	debugger_saved_options:   vm.Compile_Options,
+	debug_bootstrap_dir:      string,
+	debug_remote_sequence:    u32,
+	debug_remote_pending:     [2]Debug_Remote_Pending,
 }
 
 
@@ -96,13 +115,17 @@ ScriptContext_Mode :: proc(script_context: ^ScriptContext) -> target.Mode {
 }
 
 script_context_forget_thread :: proc(script_context: ^ScriptContext, object: ^classes.Object) {
-	if script_context == nil {
+	if script_context == nil || object not_in script_context.thread_objects {
 		return
 	}
 	for index := len(script_context.threads) - 1; index >= 0; index -= 1 {
 		if script_context.threads[index].object == object {
-			delete(script_context.threads[index].description)
+			entry := script_context.threads[index]
+			delete_key(&script_context.thread_descriptions, entry.thread)
+			delete_key(&script_context.thread_objects, object)
+			delete(entry.description)
 			ordered_remove(&script_context.threads, index)
+			return
 		}
 	}
 }
@@ -121,6 +144,8 @@ script_context_remember_thread :: proc(
 		&script_context.threads,
 		Script_Thread{object = object, thread = thread, description = description},
 	)
+	script_context.thread_descriptions[thread] = description
+	script_context.thread_objects[object] = true
 	profiling.set_thread_name(thread, description)
 }
 
@@ -131,12 +156,7 @@ ScriptContext_Describe_Thread :: proc(
 	if script_context == nil || thread == nil {
 		return ""
 	}
-	for entry in script_context.threads {
-		if entry.thread == thread {
-			return entry.description
-		}
-	}
-	return ""
+	return script_context.thread_descriptions[thread]
 }
 
 script_context_task_scheduler :: proc(script_context: ^ScriptContext) -> ^TaskScheduler {
@@ -167,21 +187,16 @@ script_context_report_error :: proc(
 	message: string,
 	traceback: string,
 ) {
-	_ = script_context
 	name := classes.Get_Full_Name(object)
 	class_name := classes.Get_Class_Name(object)
 	detail := message
 	if len(traceback) > 0 {
 		detail = traceback
 	}
-	if target.is_playtest() {
-		log_service_emit_tagged(
-			"ERROR",
-			fmt.tprintf("Script error in %s %s:\n%s", class_name, name, detail),
-		)
-		return
-	}
-	fmt.eprintf("Script error in %s %s:\n%s\n", class_name, name, detail)
+	log_service_report_runtime_error(
+		&script_context.service,
+		fmt.tprintf("Script error in %s %s:\n%s", class_name, name, detail),
+	)
 }
 
 script_context_is_active :: proc(object: ^classes.Object) -> bool {
@@ -297,6 +312,8 @@ ScriptContext_Forget_Script :: proc(script_context: ^ScriptContext, object: ^cla
 	}
 
 	if script_context.vm_state != nil && script_context.vm_state.L != nil {
+		vm.Debugger_ForgetThread(common.thread)
+		classes.Require_Forget_Thread(script_context.object_registry, common.thread)
 		classes.Script_Release_Thread(script_context.vm_state.L, common)
 	}
 	common.execution_state = .Stopped
@@ -318,6 +335,8 @@ ScriptContext_Stop_All :: proc(script_context: ^ScriptContext) {
 		if scheduler != nil {
 			TaskScheduler_Cancel_Thread(scheduler, entry.thread)
 		}
+		vm.Debugger_ForgetThread(entry.thread)
+		classes.Require_Forget_Thread(script_context.object_registry, entry.thread)
 		if entry.object == nil || entry.object.destroyed {
 			continue
 		}
@@ -334,6 +353,13 @@ ScriptContext_Stop_All :: proc(script_context: ^ScriptContext) {
 		delete(entry.description)
 	}
 	clear(&script_context.threads)
+	clear(&script_context.thread_descriptions)
+	clear(&script_context.thread_objects)
+	for held in script_context.debug_source_threads {
+		vm.Debugger_ForgetThread(held.thread)
+		if L != nil {vm.ReleaseValue(L, held.reference)}
+	}
+	clear(&script_context.debug_source_threads)
 }
 
 script_context_fail_script :: proc(
@@ -343,6 +369,8 @@ script_context_fail_script :: proc(
 ) {
 	L := script_context.vm_state.L
 	common.execution_state = .Errored
+	vm.Debugger_ForgetThread(common.thread)
+	classes.Require_Forget_Thread(script_context.object_registry, common.thread)
 	classes.Script_Release_Thread(L, common)
 	script_context_forget_thread(script_context, object)
 }
@@ -354,6 +382,8 @@ script_context_finish_script :: proc(
 ) {
 	L := script_context.vm_state.L
 	common.execution_state = .Stopped
+	vm.Debugger_ForgetThread(common.thread)
+	classes.Require_Forget_Thread(script_context.object_registry, common.thread)
 	classes.Script_Release_Thread(L, common)
 	script_context_forget_thread(script_context, object)
 }
@@ -391,7 +421,7 @@ script_context_start :: proc(
 	vm.SetThreadActorPhase(thread, classes.Actor_Ancestor_ID(object), false)
 	script_context_remember_thread(script_context, object, thread)
 
-	chunk_name := classes.Get_Name(object)
+	chunk_name := classes.Get_Full_Name(object)
 
 	ok, load_error := vm.LoadSource(script_context.vm_state, thread, common.source, chunk_name)
 	if !ok {
@@ -452,17 +482,18 @@ ScriptContext_Run_Source :: proc(
 
 	thread_ref := vm.RetainValue(main_thread)
 	vm.Pop(main_thread)
-	_ = thread_ref
+
+	retain_for_debugger := false
+	defer if !retain_for_debugger {vm.ReleaseValue(main_thread, thread_ref)}
 
 	ok, load_error := vm.LoadSource(script_context.vm_state, thread, source, chunk_name)
 
 	if !ok {
 		if len(load_error) > 0 {
-			if target.is_playtest() {
-				log_service_emit_tagged("ERROR", fmt.tprintf("RunSource error:\n%s", load_error))
-			} else {
-				fmt.eprintf("RunSource error:\n%s\n", load_error)
-			}
+			log_service_report_runtime_error(
+				&script_context.service,
+				fmt.tprintf("RunSource error:\n%s", load_error),
+			)
 			delete(load_error)
 		}
 		return false
@@ -470,14 +501,21 @@ ScriptContext_Run_Source :: proc(
 
 	finished, yielded, resume_error, traceback := vm.ResumeThreadTraceback(thread, main_thread, 0)
 
-	_ = yielded
+	if yielded && vm.Debugger_IsPaused(thread) {
+		append(
+			&script_context.debug_source_threads,
+			Script_Debug_Source_Thread{thread = thread, reference = thread_ref},
+		)
+		retain_for_debugger = true
+		return false
+	}
 
 	if resume_error != "" {
-		if target.is_playtest() {
-			log_service_emit_tagged("ERROR", fmt.tprintf("RunSource error:\n%s", traceback))
-		} else {
-			fmt.eprintf("RunSource error:\n%s\n", traceback)
-		}
+		detail := traceback if len(traceback) > 0 else resume_error
+		log_service_report_runtime_error(
+			&script_context.service,
+			fmt.tprintf("RunSource error:\n%s", detail),
+		)
 
 		delete(resume_error)
 		delete(traceback)
@@ -511,6 +549,22 @@ ScriptContext_get :: proc(
 		)
 	case "IsSingleplayer":
 		vm.PushBoolean(L, ScriptContext_Mode(script_context) == .Singleplayer)
+	case "DebuggerEnabled":
+		vm.PushBoolean(
+			L,
+			script_context.vm_state != nil && vm.Debugger_Enabled(script_context.vm_state.L),
+		)
+	case "DebugEnable",
+	     "DebugSetBreakpoint",
+	     "DebugGetBreakpoints",
+	     "DebugGetPausedThreads",
+	     "DebugRemoteSend",
+	     "DebugRemotePoll",
+	     "DebugGetFrames",
+	     "DebugGetLocals",
+	     "DebugResume",
+	     "DebugPause":
+		vm.PushUserdataMethod(L, key)
 	case:
 		return false
 	}
@@ -552,14 +606,29 @@ ScriptContext_namecall :: proc(
 	i32,
 	bool,
 ) {
-	service := cast(^ExampleService)object
+	when ODIN_OS != .JS {
+		if count, handled := Playtest_Debugger_Namecall(L, cast(^ScriptContext)object, method);
+		   handled {
+			return count, true
+		}
+	}
+	if count, handled := script_debugger_namecall(L, cast(^ScriptContext)object, method); handled {
+		return count, true
+	}
 	switch method {
 	case "Run":
-		ScriptContext_Run_Source(
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_CONTEXT,
+		) {
+			return vm.RaiseError(L, "ScriptContext:Run requires internal privileges"), true
+		}
+		success := ScriptContext_Run_Source(
 			cast(^ScriptContext)object,
 			vm.ArgString(L, 2),
 			vm.ArgString(L, 3),
 		)
+		vm.PushBoolean(L, success)
 		return 1, true
 	}
 	return 0, false
@@ -706,6 +775,17 @@ ScriptContext_destroy :: proc(object: ^classes.Object, renderer: ^classes.Render
 
 
 		ScriptContext_Stop_All(script_context)
+		when ODIN_OS != .JS {Playtest_Debugger_Clear_Boot(script_context)}
+		if script_context.vm_state != nil && script_context.vm_state.L != nil {
+			_ = vm.Debugger_Enable(script_context.vm_state.L, false)
+			if script_context.debugger_options_saved {
+				vm.SetCompileOptions(
+					script_context.vm_state,
+					script_context.debugger_saved_options,
+				)
+				script_context.debugger_options_saved = false
+			}
+		}
 
 		for entry in script_context.threads {
 			delete(entry.description)
@@ -713,7 +793,10 @@ ScriptContext_destroy :: proc(object: ^classes.Object, renderer: ^classes.Render
 
 
 		delete(script_context.threads)
+		delete(script_context.thread_descriptions)
+		delete(script_context.thread_objects)
 		script_context.threads = nil
+		delete(script_context.debug_source_threads)
 	}
 
 	script_context.vm_state = nil
@@ -733,7 +816,20 @@ Register_ScriptContext_Class :: proc(registry: ^classes.Registry) {
 		set = ScriptContext_set,
 		namecall = ScriptContext_namecall,
 		creatable = false,
-		properties = []string{"SingleplayerScriptMode", "IsSingleplayer"},
+		properties = []string{"SingleplayerScriptMode", "IsSingleplayer", "DebuggerEnabled"},
+		methods = []string {
+			"Run",
+			"DebugEnable",
+			"DebugSetBreakpoint",
+			"DebugGetBreakpoints",
+			"DebugGetPausedThreads",
+			"DebugGetFrames",
+			"DebugGetLocals",
+			"DebugResume",
+			"DebugPause",
+			"DebugRemoteSend",
+			"DebugRemotePoll",
+		},
 		_step = ScriptContext_step,
 		_step_phase = .Update,
 	)

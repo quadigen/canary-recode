@@ -4,7 +4,7 @@ package extensions
 import "core:strings"
 
 KNE_ABI_MAJOR :: u32(3)
-KNE_ABI_MINOR :: u32(1)
+KNE_ABI_MINOR :: u32(2)
 
 
 KNE_ABI_VERSION :: KNE_ABI_MAJOR
@@ -350,6 +350,18 @@ KNE_Class_Namecall_Fn :: proc "c" (
 ) -> i32
 KNE_Class_Step_Fn :: proc "c" (ext: KNE_Extension, instance: KNE_Instance, delta_time: f64)
 
+KNE_BATCH_MAX_INSTANCES :: 1024
+KNE_Batch_Instance :: struct {
+	instance:  KNE_Instance,
+	user_data: rawptr,
+}
+KNE_Class_Batch_Step_Fn :: proc "c" (
+	ext: KNE_Extension,
+	instances: [^]KNE_Batch_Instance,
+	count: uintptr,
+	delta_time: f64,
+)
+
 KNE_Class_Desc :: struct {
 	size:         u32,
 	version:      u32,
@@ -366,6 +378,7 @@ KNE_Class_Desc :: struct {
 	set:          KNE_Class_Set_Fn,
 	namecall:     KNE_Class_Namecall_Fn,
 	step:         KNE_Class_Step_Fn,
+	step_batch:   KNE_Class_Batch_Step_Fn,
 }
 
 KNE_Register_Class_Fn :: proc "c" (ext: KNE_Extension, desc: ^KNE_Class_Desc) -> i32

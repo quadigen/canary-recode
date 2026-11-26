@@ -1,0 +1,145 @@
+---
+title: Networking and service APIs
+description: Configure replication, monitor connections, route native events and access registered engine services from C.
+---
+
+The unified native C SDK exposes the engine's existing ReplicatorService and service registry through typed functions. These APIs work for standalone embedding and plugins attached to the host's existing context.
+
+## Discover and access services
+
+~~~c
+uint64_t count = Kinemium_GetServiceCount(ctx);
+for (uint64_t i = 0; i < count; ++i) {
+    char name[128] = {0};
+    Kinemium_CopyServiceName(ctx, i, name, sizeof(name));
+
+    Kinemium_Handle instance = Kinemium_ServiceGetHandleAt(ctx, i);
+    // instance is a normal SDK handle when the service can be created.
+}
+
+char type[128] = {0};
+Kinemium_ServiceCopyClassName(ctx, "ReplicatorService", type, sizeof(type));
+bool ready = Kinemium_ServiceIsInitialized(ctx, "Workspace");
+~~~
+
+**Kinemium_ServiceCopyClassName** returns the registered implementation class name; **Kinemium_ServiceCopyGlobalName** returns a service's global alias, which may be empty. Both report the untruncated string length or -1 for an unknown service. **Kinemium_ServiceGetHandleAt** uses the same registered service-instance lifecycle as **Kinemium_HandleService**, and may initialize a lazy service.
+
+### Typed service properties
+
+~~~c
+Kinemium_Value previous = {0};
+if (Kinemium_ServiceGetProperty(ctx, "ReplicatorService",
+                                "SnapshotRate", &previous, NULL, 0)) {
+    // A supported numeric property is KINEMIUM_VALUE_NUMBER.
+}
+
+Kinemium_Value rate = {
+    .kind = KINEMIUM_VALUE_NUMBER,
+    .number = 30.0
+};
+bool accepted = Kinemium_ServiceSetProperty(
+    ctx, "ReplicatorService", "SnapshotRate", &rate
+);
+~~~
+
+Getters and setters use protected Luau property access so the service's native validation and side effects are preserved. Supported value kinds are nil, boolean, number, string, Vector3 and Instance; unsupported types fail. Supply a text buffer for string results. Service access and callback lifetimes remain scoped to the SDK context.
+
+## Network state and diagnostics
+
+~~~c
+int32_t mode = Kinemium_NetworkGetMode(ctx);
+uint32_t protocol = Kinemium_NetworkGetProtocolVersion();
+
+Kinemium_NetworkDiagnostics diag = {0};
+if (Kinemium_NetworkGetDiagnostics(ctx, &diag)) {
+    printf("mode=%d, handshake=%d, packets rejected=%llu\n",
+           diag.mode, diag.handshake_complete,
+           (unsigned long long)diag.rejected_packets);
+}
+~~~
+
+The mode values are **KINEMIUM_NETWORK_STOPPED**, **KINEMIUM_NETWORK_SERVER** and **KINEMIUM_NETWORK_CLIENT**. Invalid contexts return -1. The diagnostics structure includes handshake completion/status, scene readiness, rejected or malformed packets, version/schema mismatches, authentication failures, bandwidth drops and applied state counts.
+
+The older **Kinemium_NetworkGetStats** API remains available and unchanged.
+
+## Configure replication behavior
+
+~~~c
+Kinemium_NetworkSetSetting(ctx, "SnapshotRate", 30.0);
+Kinemium_NetworkSetSetting(ctx, "BandwidthBudget", 131072.0);
+
+double actual_rate = 0.0;
+Kinemium_NetworkGetSetting(ctx, "SnapshotRate", &actual_rate);
+~~~
+
+Supported numeric properties are SnapshotRate, BandwidthBudget, SendRate, InterpolationDelayTicks, TeleportThreshold, RelevancyDistance, LODNearFraction and LODFarInterval. Every setter is checked by the existing ReplicatorService implementation; invalid names or out-of-range values are rejected.
+
+## Server peer discovery and targeted events
+
+~~~c
+uint64_t peers = Kinemium_NetworkGetPeerCount(ctx);
+for (uint64_t i = 0; i < peers; ++i) {
+    Kinemium_Handle player = Kinemium_NetworkGetPeerPlayer(ctx, i);
+
+    uint32_t user_id = 0;
+    if (player && Kinemium_NetworkGetPeerUserId(ctx, i, &user_id)) {
+        Kinemium_NetworkSendStringEventTo(
+            ctx, player, "ServerGreeting", "Welcome!", true
+        );
+    }
+}
+~~~
+
+Peer discovery and targeted send are server-only. Player handles use the SDK's normal generation checks. The peer index can change as clients connect or disconnect; do not cache an index indefinitely.
+
+### Receive network events natively
+
+~~~c
+static void on_network_event(Kinemium_Context *ctx, void *user,
+                             uint32_t count, const Kinemium_Value *args) {
+    if (count >= 2 && args[0].kind == KINEMIUM_VALUE_STRING) {
+        printf("event=%s\n", args[0].text);
+    }
+}
+
+Kinemium_Connection link = Kinemium_NetworkConnectEvent(
+    ctx, on_network_event, NULL, false
+);
+
+// Server: allow a named event from clients.
+Kinemium_NetworkSetClientEventAllowed(ctx, "PlayerReady", true);
+
+// Later, before the plugin unloads:
+Kinemium_DisconnectSignal(ctx, link);
+~~~
+
+An incoming EventReceived signal supplies event name, payload, and on the server an optional sender Player handle. String arguments passed to a native callback are only valid for that callback invocation: copy them if they must be kept.
+
+Network events use the existing replication transport, size checks and server-side event allowlist. A client cannot change the server's allowlist or send a targeted event to another player.
+
+## Register replication entities
+
+~~~c
+Kinemium_Handle part = Kinemium_HandleCreateInstance(ctx, "Part");
+
+uint32_t entity_id = 0;
+bool registered = Kinemium_NetworkRegisterInstance(ctx, part, &entity_id);
+
+uint32_t current_id = Kinemium_NetworkGetInstanceId(ctx, part);
+bool removed = Kinemium_NetworkUnregisterInstance(ctx, part);
+~~~
+
+Manual registration and unregistration are server-only. Registering a previously registered Instance returns its existing replication ID. Removing registration does not destroy the Instance; its server-side replication status changes.
+
+## Handshake policy
+
+~~~c
+Kinemium_NetworkSetJoinToken(ctx, "your-session-token");
+Kinemium_NetworkSetRequireJoinToken(ctx, true);
+~~~
+
+These operations are rejected on client contexts. Configure them on the server before allowing clients to connect. The token is write-only through these functions; no token-reading API is provided. Avoid storing secrets in plugin source or console logs.
+
+## Validation
+
+When you validate networking behavior, use separate server and client contexts. Verify that permission checks, targeted events, Player lookup, and service metadata match the actual runtime.

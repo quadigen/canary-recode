@@ -1,0 +1,45 @@
+---
+title: ChangeHistoryService
+description: Organize editor actions into undo and redo waypoints and recordings.
+---
+
+ChangeHistoryService stores named undo and redo waypoints and emits events when they are traversed. Use it in editor tools to coordinate history with the editor's change tracking.
+
+```lua
+local history = game:GetService("ChangeHistoryService")
+local recording = history:TryBeginRecording("MovePart", "Move part")
+
+if recording then
+    history:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+end
+```
+
+The service manages waypoint metadata. A waypoint alone doesn't capture arbitrary instance mutations; the editor or tool must integrate actual change restoration. Cancel does not automatically roll back changes.
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `SetWaypoint(name: string): ()` | Adds a waypoint when enabled and clears redo history. |
+| `Undo(): ()` | Moves the last undo waypoint to redo and fires OnUndo; no-op if empty. |
+| `Redo(): ()` | Moves the last redo waypoint back to undo and fires OnRedo; no-op if empty. |
+| `GetCanUndo(): (boolean, string?)` | Returns false alone when empty, otherwise true and the next waypoint name. |
+| `GetCanRedo(): (boolean, string?)` | Same for redo history. |
+| `ResetWaypoints(): ()` | Clears both stacks. |
+| `SetEnabled(enabled: boolean): ()` | Enables or disables waypoint creation; enabled by default. |
+| `TryBeginRecording(name: string, displayName: string?): string?` | Starts a recording and returns its identifier, or nil if disabled or already recording. |
+| `FinishRecording(id: string, operation: Enum.FinishRecordingOperation, options: table?): ()` | Finishes the active recording; invalid identifiers or operations raise errors. |
+| `IsRecordingInProgress(id: string?): boolean` | Checks whether any recording, or the named recording ID, is active. |
+
+Only one recording can be active. Commit creates a waypoint, Cancel discards the recording, and Append keeps the previous waypoint if one exists (otherwise it creates one). The operation also accepts the strings Commit, Cancel and Append. An omitted or empty display name defaults to the recording name.
+
+## Events
+
+| Event | Callback arguments |
+| --- | --- |
+| OnUndo | waypoint name |
+| OnRedo | waypoint name |
+| OnRecordingStarted | name, display name or nil |
+| OnRecordingFinished | name, display name or nil, recording ID, operation string, options table or nil |
+
+Options are passed to the event; they do not define a separate change restoration mechanism.

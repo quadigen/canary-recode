@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 BoolValue_Class := Class_Info {
@@ -12,10 +13,11 @@ BoolValue_Class := Class_Info {
 BoolValue :: struct {
 	using object: Object,
 	value:        bool,
+	changed:      ^signals.Signal,
 }
 
 BoolValue_Init :: proc() -> BoolValue {
-	return BoolValue{object = Object_Init(&BoolValue_Class), value = true}
+	return BoolValue{object = Object_Init(&BoolValue_Class), value = false}
 }
 
 BoolValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -26,6 +28,7 @@ BoolValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 }
 
 BoolValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^BoolValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^BoolValue)object)
 }
@@ -40,6 +43,8 @@ BoolValue_get :: proc(
 	val := cast(^BoolValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		vm.PushBoolean(L, val.value)
 	case:
@@ -60,7 +65,13 @@ BoolValue_set :: proc(
 
 	switch key {
 	case "Value":
-		val.value = vm.ArgBoolean(L, value_index)
+		new_value := vm.ArgBoolean(L, value_index)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			vm.PushBoolean(L, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

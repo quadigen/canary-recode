@@ -1,0 +1,121 @@
+---
+title: Runtime library loading
+description: Load Kinemium from a shared library at runtime without linking it into your C or C++ executable.
+---
+
+Load the Kinemium Native SDK **at runtime** to avoid linking against the shared library at build time.
+
+Supported loader implementations:
+
+- Linux: dlopen / dlsym (libkinemium.so)
+- macOS: dlopen / dlsym (libkinemium.dylib)
+- Windows: LoadLibraryA / GetProcAddress (kinemium.dll)
+
+The Linux implementation is tested. macOS and Windows source paths have not yet been validated on their native platforms.
+
+## C usage
+
+Compile **kinemium_runtime.c** into your application and include **kinemium_runtime.h**. No linker flag for the Kinemium shared library is needed.
+
+~~~c
+#include "kinemium_runtime.h"
+#include <stdio.h>
+
+int main(void) {
+    Kinemium_Runtime sdk = {0};
+    char error[512] = {0};
+
+    if (!Kinemium_RuntimeOpen(
+            &sdk, "./dist/kinemium/lib/libkinemium.so",
+            error, sizeof(error))) {
+        fprintf(stderr, "Load failed: %s\n", error);
+        return 1;
+    }
+
+    printf("Loaded ABI %u (%zu symbols)\n",
+           sdk.abi_version, sdk.resolved_count);
+
+    Kinemium_Context *ctx = sdk.Create();
+    if (!ctx) {
+        Kinemium_RuntimeClose(&sdk);
+        return 1;
+    }
+
+    Kinemium_Handle workspace = sdk.HandleService(ctx, "Workspace");
+    Kinemium_Handle part = sdk.HandleCreateInstance(ctx, "Part");
+    sdk.HandleSetParent(ctx, part, workspace);
+
+    sdk.Destroy(ctx);
+    Kinemium_RuntimeClose(&sdk);
+    return 0;
+}
+~~~
+
+All 215 currently declared C functions have type-safe function pointers in Kinemium_Runtime, generated from kinemium.h. Call them as sdk.Create, sdk.HandleService, sdk.RunLuau, etc. The original Kinemium exports and ABI 2 remain unchanged.
+
+## Build without linking to Kinemium
+
+Linux:
+
+~~~sh
+cc -std=c11 -Iinclude \
+  src/kinemium_runtime.c examples/kinemium_sdk/dynamic.c \
+  -ldl -o build/kinemium_sdk_dynamic
+
+./build/kinemium_sdk_dynamic \
+  "$PWD/dist/kinemium/lib/libkinemium.so"
+~~~
+
+CMake:
+
+~~~sh
+cmake -S examples/kinemium_sdk -B build/sdk-example
+cmake --build build/sdk-example --target kinemium_sdk_dynamic
+./build/sdk-example/kinemium_sdk_dynamic \
+  "$PWD/dist/kinemium/lib/libkinemium.so"
+~~~
+
+The **kinemium_sdk_dynamic_windowed** target is also provided when SDL3 is installed. It loads the library at runtime, attaches to an SDL3 Vulkan window, and runs the normal event and render loop.
+
+The dynamic examples do not have a link-time libkinemium dependency. The OS still loads Kinemium's own dependent libraries when Kinemium_RuntimeOpen is called. Missing dependencies will cause the runtime loader to fail with an error.
+
+## ABI checks and optional exports
+
+Kinemium_RuntimeOpen checks ABI major version 2 and requires Kinemium_GetABIVersion, Kinemium_Create and Kinemium_Destroy. It then resolves every known symbol. Missing additive functions remain null and are reported in missing_count.
+
+~~~c
+if (Kinemium_RuntimeHasSymbol(&sdk, "Kinemium_PhysicsGetPartMass")) {
+    double mass = 0;
+    sdk.PhysicsGetPartMass(ctx, part, &mass);
+}
+~~~
+
+For an exact match with the current headers, use **Kinemium_RuntimeOpenStrict**. It fails if any expected SDK function is missing.
+
+After adding functions to kinemium.h, regenerate and check the symbol list:
+
+~~~sh
+python3 tools/generate_kinemium_runtime_loader.py
+python3 tools/generate_kinemium_runtime_loader.py --check
+~~~
+
+The generation step fails on unrecognized or duplicate exported signatures; it must not silently create incomplete tables.
+
+## Library lifetime and security
+
+**Always destroy every Kinemium context, stop callbacks and unload native plugins before calling Kinemium_RuntimeClose.** Closing the library while any instance, callback, thread or function pointer from the library is still active can crash the process.
+
+Do not call cached sdk functions after Kinemium_RuntimeClose. The table is cleared on close. To load a new version of the library, shut down the old context completely, close the module, then open the new library.
+
+Dynamic library loading executes native code within the current process. Only load binaries you trust; loading a library is not a security sandbox.
+
+## Verify runtime loading
+
+Build the SDK, then run the runtime-loaded C example. It uses the dynamic loader rather than linking directly to the engine library:
+
+```sh
+python3 tools/build_kinemium_sdk.py
+dist/kinemium/bin/kinemium_sdk_dynamic   "$PWD/dist/kinemium/lib/libkinemium.so"
+```
+
+Check ABI compatibility and optional symbols before distributing a native integration.

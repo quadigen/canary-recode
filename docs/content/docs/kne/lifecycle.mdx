@@ -1,0 +1,67 @@
+---
+title: Extension lifecycle and ABI
+description: How Kinemium loads native extensions and validates their host ABI.
+---
+
+The engine discovers a folder containing `extension.json`, opens the declared shared library, and resolves `kne_extension_entry` (or the manifest's alternate `entry` symbol).
+
+## The entry point
+
+```c
+#include "kne_plugin.h"
+
+static const kne_host *host;
+
+static int32_t KNE_CALL on_load(kne_extension ext) {
+    kne_plugin plugin = kne_make_plugin(host, ext);
+    kne_log(plugin, KNE_LOG_INFO, "KNE extension loaded");
+    return 1;
+}
+
+static const kne_extension_desc descriptor = {
+    sizeof(kne_extension_desc),
+    KNE_ABI_MAJOR,
+    KNE_ABI_MINOR,
+    0,
+    {"my.extension", 12},
+    {"My Extension", 12},
+    {"1.0.0", 5},
+    {"Example", 7},
+    on_load,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+};
+
+KNE_EXPORT const kne_extension_desc *KNE_CALL kne_extension_entry(const kne_host *api) {
+    host = api;
+    return &descriptor;
+}
+```
+
+The host supplies a `kne_host` table that contains module pointers for the engine services, instance model, scripting VM, and more. The `kne_extension` argument to callbacks identifies the currently loaded extension and must be passed to API functions.
+
+## Available lifecycle callbacks
+
+| Callback | Purpose |
+| --- | --- |
+| `on_load` | Register libraries, classes, datatypes and other features. |
+| `on_start` | Initialize when the extension starts. |
+| `on_update` | Receive engine update ticks with `delta_time`. |
+| `on_stop` | Stop active work before shutdown. |
+| `on_unload` | Release resources before the shared library is unloaded. |
+
+The descriptor is returned by `kne_extension_entry`. Its `size`, `abi_major`, and `abi_minor` let the engine validate structure compatibility.
+
+## ABI compatibility
+
+The KNE header declares `KNE_ABI_MAJOR = 3` and `KNE_ABI_MINOR = 2`. The loader rejects extensions whose **major ABI differs** or whose requested **minor ABI is newer** than the host.
+
+Check both `host->abi_minor` and the module `size` before accessing optional fields. Synchronous `vm->execute` and Luau buffer helpers require KNE 3.1 or later; class batch-step callbacks require KNE 3.2 or later.
+
+## Ownership
+
+Host references and VM values generally belong to the running engine; they are not independent heap objects the plugin can free. Execute VM work on its owning engine thread, and release any memory, callbacks, connections, or user state your extension owns at the appropriate lifecycle phase.
+
+See [Distribution and safety](/docs/kne/distribution) for manifest details and [signals/callbacks](/docs/kne/signals-and-callbacks) for lifetime management.

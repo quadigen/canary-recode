@@ -64,7 +64,7 @@ foreach ($vcpkgRoot in @($env:VCPKG_INSTALLATION_ROOT, "C:\vcpkg")) {
     }
 }
 if (-not $vcpkgExecutable) {
-    throw "vcpkg is required to build the Android OpenSSL and ENet libraries"
+    throw "vcpkg is required to build the Android OpenSSL, SteamNetworkingSockets, and compatible transport libraries"
 }
 $vcpkgInstalled = Join-Path $repo "build\vcpkg-installed"
 $vcpkgArgs = New-Object System.Collections.ArrayList
@@ -73,7 +73,7 @@ foreach ($abi in $Abis) {
     $triplet = $VcpkgTriplets[$abi]
 
     [void]$vcpkgArgs.Add("openssl:$triplet")
-    [void]$vcpkgArgs.Add("enet:$triplet")
+    [void]$vcpkgArgs.Add("gamenetworkingsockets[core,openssl]:$triplet")
     [void]$vcpkgArgs.Add("curl[core,openssl,websockets]:$triplet")
 }
 

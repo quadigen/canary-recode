@@ -56,6 +56,7 @@ replication_entity_insert :: proc(service: ^ReplicatorService, entity: ^Replicat
 
 
 replication_forget_peer_entity :: proc(connection: ^Replication_Peer, id: u32) {
+	delete_key(&connection.pose_sent, id)
 	delete_key(&connection.known, id)
 	delete_key(&connection.initialized, id)
 	delete_key(&connection.part_states, id)
@@ -103,6 +104,7 @@ replication_entity_remove :: proc(service: ^ReplicatorService, id: u32) -> bool 
 	}
 	delete(entity.recipients)
 	delete(entity.samples)
+	delete(entity.pose)
 	free(entity)
 	return true
 }
@@ -159,6 +161,39 @@ replication_schema :: proc(
 
 	controller_properties: []string
 	switch class_name {
+	case "CharacterAnimator":
+		controller_properties = []string {
+			"Enabled",
+			"RigMeshName",
+			"FadeTime",
+			"WalkAnimationSpeed",
+			"RunAnimationSpeed",
+			"SprintAnimationSpeed",
+			"IdleClip",
+			"WalkClip",
+			"RunClip",
+			"SprintClip",
+			"JumpClip",
+			"FallClip",
+			"LandClip",
+		}
+	case "CharacterPhysicsSolver":
+		controller_properties = []string {
+			"Enabled",
+			"RigMeshName",
+			"FootIKEnabled",
+			"BalanceEnabled",
+			"PoseBlend",
+			"StrideLength",
+			"FootLift",
+			"StepDuration",
+			"HandIKEnabled",
+			"ArmSwingEnabled",
+			"HeadStabilizationEnabled",
+			"BalanceStrength",
+			"ContactReach",
+			"ReactionStrength",
+		}
 	case "CharacterController":
 		controller_properties = []string {
 			"WalkSpeed",
@@ -216,7 +251,15 @@ replication_schema :: proc(
 		   (property == "ViewportSize" || property == "DiagonalFieldOfView") {continue}
 		if class_name == "PhysicsModel" &&
 		   (property == "Pivot" || property == "WorldPivot") {continue}
-		if class_name == "Attachment" && property == "CFrame" {continue}
+
+
+		if (class_name == "Attachment" || class_name == "BoneAttachment") &&
+		   (property == "CFrame" ||
+				   property == "WorldCFrame" ||
+				   property == "WorldPosition" ||
+				   property == "WorldOrientation" ||
+				   property == "WorldAxis" ||
+				   property == "WorldSecondaryAxis") {continue}
 		if class_name == "HingeConstraint" &&
 		   (property == "Active" || property == "CurrentAngle") {
 			continue
@@ -241,8 +284,12 @@ replication_schema :: proc(
 		     "AbsolutePosition",
 		     "AbsoluteSize",
 		     "TextBounds",
+		     "ContentText",
 		     "SelectedText",
 		     "LineCount",
+		     "TextByteLength",
+		     "DiagnosticCount",
+		     "CaretScreenPosition",
 		     "AbsoluteCellCount",
 		     "AbsoluteCellSize",
 		     "AbsoluteContentSize",
@@ -318,6 +365,7 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 character_subtree_class :: proc(class_name: string) -> bool {
 	switch class_name {
 	case "CharacterController",
+	     "CharacterPhysicsSolver",
 	     "Humanoid",
 	     "CharacterMotor",
 	     "MovementController",
@@ -337,7 +385,10 @@ replication_builtin_property :: proc(object: ^classes.Object, property: string) 
 	return(
 		object != nil &&
 		((classes.Is_A_Class(object, &classes.Part_Class) &&
-					(property == "CanTouch" || property == "Gravity")) ||
+					(property == "CanTouch" || property == "Gravity" ||
+						property == "TopSurface" || property == "BottomSurface" ||
+						property == "FrontSurface" || property == "BackSurface" ||
+						property == "LeftSurface" || property == "RightSurface")) ||
 				(classes.Is_A_Class(object, &classes.PartOperation_Class) &&
 						(property == "UsePartColor" ||
 								property == "CanQuery" ||
@@ -465,7 +516,8 @@ replication_focus :: proc(
 	ok: bool,
 ) {
 	if connection.player == nil {return 0, 0, 0, false}
-	part := replication_peer_focus_part(service, connection.player.user_id)
+	part := classes.CharacterModel_Root(connection.player.character)
+	if part == nil {part = replication_peer_focus_part(service, connection.player.user_id)}
 	if part != nil {
 		connection.focus_x = part.cframe.x
 		connection.focus_y = part.cframe.y
@@ -633,6 +685,15 @@ replication_send_owned_state :: proc(
 	   entity.object.destroyed ||
 	   !classes.Is_A(entity.object, "Part") {return false}
 	part := cast(^classes.Part)entity.object
+	if part.parent != nil && classes.Is_A(part.parent, "CharacterModel") {
+		model := cast(^classes.CharacterModel)part.parent
+		players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
+		if !service.scene_ready ||
+		   !entity.has_transform ||
+		   players == nil ||
+		   players.local_player == nil ||
+		   players.local_player.character != model {return false}
+	}
 	if part.anchored &&
 	   (part.parent == nil || !classes.Is_A(part.parent, "CharacterModel")) {return false}
 	linear := classes.Part_Linear_Velocity(service.signal_registry, &part.object)
@@ -918,6 +979,7 @@ replication_send_character_ack :: proc(
 	if entity == nil {return}
 	owner_id := (cast(^classes.CharacterModel)object.parent).owner_user_id
 	if owner_id == 0 || owner_id != connection.player.user_id {return}
+	if entity.owner_id == owner_id {return}
 	players := cast(^Players)DataModel_Get_Service(service.data_model, "Players")
 	if players == nil {return}
 	ack: u32
@@ -1394,7 +1456,13 @@ replication_terrain_complete :: proc(
 	if (connection.client_capabilities & Replication_Capability_Terrain) == 0 {return true}
 	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
 	if terrain_object == nil {return true}
-	return connection.terrain_initial_sent
+	terrain := cast(^Terrain)terrain_object
+	return(
+		connection.terrain_initial_sent &&
+		!connection.terrain_snapshot_active &&
+		connection.terrain_epoch == terrain.dirty_epoch &&
+		connection.terrain_cursor >= terrain.change_serial \
+	)
 }
 
 
@@ -1441,6 +1509,25 @@ replication_peer_support_ready :: proc(
 }
 
 
+replication_character_tree_ready :: proc(
+	service: ^ReplicatorService,
+	connection: ^Replication_Peer,
+	object: ^classes.Object,
+) -> bool {
+	if object == nil ||
+	   object.destroyed ||
+	   !replication_visible(service, connection, object) ||
+	   service.suppressed[object] {return true}
+	item := replication_entity(service, object)
+	if item == nil ||
+	   connection.known[item.id] == 0 ||
+	   !connection.initialized[item.id] {return false}
+	for child in object.children {
+		if !replication_character_tree_ready(service, connection, child) {return false}
+	}
+	return true
+}
+
 replication_peer_spawn_ready :: proc(
 	service: ^ReplicatorService,
 	connection: ^Replication_Peer,
@@ -1450,18 +1537,14 @@ replication_peer_spawn_ready :: proc(
 	character := connection.player.character
 
 	if character != nil && !character.destroyed {
-		for child in character.children {
-			if child == nil || child.destroyed || !classes.Is_A(child, "Part") {continue}
-			item := replication_entity(service, child)
-			if item == nil || !connection.initialized[item.id] {return false}
-		}
+		if !replication_character_tree_ready(service, connection, &character.object) {return false}
 	}
 	if spawn_part != nil {
 		item := replication_entity(service, &spawn_part.object)
 		if item == nil || !connection.initialized[item.id] {return false}
 	}
 	if !replication_peer_support_ready(service, connection) {return false}
-	return replication_terrain_complete(service, connection)
+	return connection.asset_table_sent && replication_terrain_complete(service, connection)
 }
 
 
@@ -1558,6 +1641,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 					Replication_Capability_Join_Batch) !=
 				0
 
+		replication_send_asset_table(service, &connection)
 		root_metadata_ready := replication_send_root_metadata(service, &connection)
 
 		if service.mode == .Server && service.terrain_sync_due {
@@ -1695,6 +1779,7 @@ replication_sync :: proc(service: ^ReplicatorService) {
 
 		if !connection.finished_replicating_sent &&
 		   (connection.client_capabilities & Replication_Capability_Finished_Replicating) != 0 &&
+		   connection.asset_table_sent &&
 		   root_metadata_ready &&
 		   replication_peer_scene_complete(
 			   service,
@@ -1937,7 +2022,7 @@ replication_send_extra_properties :: proc(
 	script := replication_peer_script(service, connection, item.object)
 	defer delete(sendable)
 	if replication_builtin_property(item.object, "CanTouch") {
-		append(&sendable, "CanTouch", "Gravity")
+		append(&sendable, "CanTouch", "Gravity", "TopSurface", "BottomSurface", "FrontSurface", "BackSurface", "LeftSurface", "RightSurface")
 	}
 	if replication_builtin_property(item.object, "MeshId") {
 		append(&sendable, "MeshId")

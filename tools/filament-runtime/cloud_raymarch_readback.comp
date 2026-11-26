@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D clouds;
+layout(set = 0, binding = 1, std430) buffer Readback { uint values[]; };
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(clouds);
+    if (any(greaterThanEqual(coord, size))) return;
+    vec4 value = imageLoad(clouds, coord);
+    uint i = uint(coord.x + coord.y * size.x) * 2u;
+    values[i] = packHalf2x16(value.rg);
+    values[i + 1u] = packHalf2x16(value.ba);
+}

@@ -4,6 +4,7 @@ import kineffi "../bindings"
 import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
+import profiling "../profiling"
 import renderer "../renderer"
 import tracy "../util/odin-tracy"
 import vm "../vm"
@@ -17,6 +18,7 @@ ScreenGui :: struct {
 	using object:             Object,
 	clip_to_device_safe_area: bool,
 	displayorder:             f64,
+	zindex_behavior:          enums.ZIndexBehavior,
 	ignore_gui_inset:         bool,
 	safe_area_compat:         enums.SafeAreaCompatibility,
 	screen_insets:            enums.ScreenInsets,
@@ -33,6 +35,7 @@ ScreenGui_Init :: proc() -> ScreenGui {
 	return ScreenGui {
 		object = Object_Init(&ScreenGui_Class),
 		displayorder = 0,
+		zindex_behavior = .Sibling,
 		clip_to_device_safe_area = true,
 		ignore_gui_inset = false,
 		safe_area_compat = enums.SafeAreaCompatibility.None,
@@ -73,6 +76,13 @@ ScreenGui_get :: proc(
 		vm.PushBoolean(L, ScreenGui.ignore_cursor_inset)
 	case "DisplayOrder":
 		vm.PushNumber(L, ScreenGui.displayorder)
+	case "ZIndexBehavior":
+		_ = enums.Push_Item_By_Value(
+			L,
+			enum_registry,
+			"ZIndexBehavior",
+			i64(ScreenGui.zindex_behavior),
+		)
 	case "ClipToDeviceSafeArea":
 		vm.PushBoolean(L, ScreenGui.clip_to_device_safe_area)
 	case "SafeAreaCompatibility":
@@ -137,6 +147,7 @@ ScreenGui_RenderChild :: proc(child: ^Object, ctx: ^Class_Step_Context) {
 	   gui.draw_picture_revision == revision &&
 	   gui.draw_picture_icon_revision == IconPack_Revision() &&
 	   gui.draw_picture_rect == bounds {
+		zone := profiling.Begin("GUI Cached Picture", 0x61AFEF)
 		kineffi.Kine_Skia_Surface_DrawPicture(surface, gui.draw_picture)
 		return
 	}
@@ -251,7 +262,9 @@ ScreenGui_RenderChildren :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		ctx.gui_transform = {object, x, y, width, height}
 	}
 	defer if root {ctx.gui_transform = {}}
-	for child in object.children {
+	children, allocated := gui_children_in_draw_order(object)
+	defer if allocated {delete(children)}
+	for child in children {
 		if ctx.world2d_scene {
 			screen_gui_render_world_child(child, ctx)
 		} else {
@@ -283,7 +296,9 @@ ScreenGui_RenderChildren_Visible :: proc(
 	ctx: ^Class_Step_Context,
 	viewport: guilib.Rect,
 ) {
-	for child in object.children {
+	children, allocated := gui_children_in_draw_order(object)
+	defer if allocated {delete(children)}
+	for child in children {
 		if !Is_A_Class(child, &GuiObject_Class) {
 			continue
 		}
@@ -365,6 +380,7 @@ ScreenGui_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 	if ctx.renderer == nil || ctx.renderer.SkiaSurface == nil {return}
 
+	zone := profiling.Begin("GUI Screen Draw", 0x61AFEF)
 	clip, clipped := ScreenGui_clip_rect(gui)
 	if clipped {
 		guilib.save(ctx.renderer.SkiaSurface)
@@ -437,6 +453,13 @@ ScreenGui_set :: proc(
 	case "IgnoreCursorInset":
 		screen_gui.ignore_cursor_inset = vm.ArgBoolean(L, value_index)
 
+	case "ZIndexBehavior":
+		if enum_registry == nil {return false}
+		screen_gui.zindex_behavior = enums.ZIndexBehavior(
+			enums.Arg_Item(L, value_index, enum_registry, "ZIndexBehavior").value,
+		)
+		Gui_Render_Mark_Dirty()
+
 	case "DisplayOrder":
 		order := vm.ArgNumber(L, value_index)
 		if screen_gui.displayorder != order {
@@ -502,6 +525,7 @@ ScreenGui_clone :: proc(source: ^Object, destination: ^Object) {
 
 	dst.clip_to_device_safe_area = src.clip_to_device_safe_area
 	dst.displayorder = src.displayorder
+	dst.zindex_behavior = src.zindex_behavior
 	dst.ignore_gui_inset = src.ignore_gui_inset
 	dst.safe_area_compat = src.safe_area_compat
 	dst.screen_insets = src.screen_insets
@@ -527,6 +551,7 @@ Register_ScreenGui :: proc(registry: ^Registry) {
 		properties = []string {
 			"ResetOnSpawn",
 			"DisplayOrder",
+			"ZIndexBehavior",
 			"ClipToDeviceSafeArea",
 			"SafeAreaCompatibility",
 			"ScreenInsets",

@@ -16,12 +16,24 @@ material {
         { type : float, name : bias },
         { type : int, name : sampleCount },
         { type : float, name : maxDistance },
+        { type : float, name : giColorBleeding },
+        { type : int, name : giVisibilitySteps },
         { type : float3, name : cameraPosition },
         { type : float3, name : cameraRight },
         { type : float3, name : cameraUp },
         { type : float3, name : cameraForward },
         { type : float3, name : sunDirection },
         { type : float, name : sunStrength },
+        { type : sampler2d, name : sunOcclusion },
+        { type : float3, name : sunRight },
+        { type : float3, name : sunUp },
+        { type : float2, name : sunDepthRange },
+        { type : float3, name : sunTint },
+        { type : float, name : rayIntensity },
+        { type : float, name : raySpread },
+        { type : float, name : dustAmount },
+        { type : float, name : rayDistance },
+        { type : int, name : raySteps },
         { type : float, name : fogDensity },
         { type : float, name : fogHeight },
         { type : float, name : fogFalloff },
@@ -35,7 +47,39 @@ material {
         { type : float, name : chromatic },
         { type : float, name : grain },
         { type : float, name : grainSize },
-        { type : float, name : effectTime }
+        { type : float, name : effectTime },
+        { type : float, name : cavityIntensity },
+        { type : float, name : cavityRadius },
+        { type : float, name : cavityBias },
+        { type : float, name : cavityMaxDistance },
+        { type : float, name : outlineIntensity },
+        { type : float, name : outlineThickness },
+        { type : float, name : outlineDepthThreshold },
+        { type : float, name : outlineNormalThreshold },
+        { type : float, name : emissiveGiIntensity },
+        { type : float, name : emissiveGiRadius },
+        { type : float, name : emissiveGiThreshold },
+        { type : float, name : emissiveGiFalloff },
+        { type : float, name : emissiveGiMaxDistance },
+        { type : int, name : emissiveGiSamples },
+        { type : sampler3d, name : ddgiL0 },
+        { type : sampler3d, name : ddgiL1X },
+        { type : sampler3d, name : ddgiL1Y },
+        { type : sampler3d, name : ddgiL1Z },
+        { type : float3, name : ddgiOrigin },
+        { type : float3, name : ddgiGridDimensions },
+        { type : float, name : ddgiSpacing },
+        { type : float, name : ddgiIntensity },
+        { type : sampler3d, name : cloudShadowNoise },
+        { type : float, name : cloudShadowIntensity },
+        { type : float, name : cloudShadowScale },
+        { type : float, name : cloudShadowSpeed },
+        { type : float, name : cloudShadowSoftness },
+        { type : float, name : cloudShadowMaxDistance },
+        { type : float, name : cloudShadowHeight },
+        { type : float, name : cloudShadowThickness },
+        { type : float, name : cloudShadowCover },
+        { type : float, name : cloudShadowDensity }
     ]
 }
 fragment {
@@ -66,13 +110,102 @@ fragment {
                    mix(mix(fogHash(i+vec3(0,0,1)),fogHash(i+vec3(1,0,1)),f.x),
                        mix(fogHash(i+vec3(0,1,1)),fogHash(i+vec3(1,1,1)),f.x),f.y),f.z);
     }
+    float sunVisibility(vec3 offset) {
+        vec2 uv = vec2(dot(offset, materialParams.sunRight), dot(offset, materialParams.sunUp)) + 0.5;
+        float depth = materialParams.sunDepthRange.x
+            + dot(offset, materialParams.sunDirection) * materialParams.sunDepthRange.y;
+        float blocker = texture(materialParams_sunOcclusion, uvToRenderTargetUV(uv)).r;
+        // Orthographic depth is reversed, so a nearer blocker has a larger value.
+        float margin = (depth - blocker) / materialParams.sunDepthRange.y;
+        return smoothstep(-0.12, 0.06, margin);
+    }
+
+    float litDustMotes(vec3 direction, float distance) {
+        const float spacing = 1.6;
+        vec3 eye = materialParams.cameraPosition;
+        vec3 gridEye = eye / spacing;
+        vec3 cell = floor(gridEye);
+        vec3 worldStep = sign(direction);
+        vec3 cellTime = spacing / max(abs(direction), vec3(0.00001));
+        vec3 boundaryTime = mix(fract(gridEye), 1.0 - fract(gridEye),
+            step(vec3(0.0), direction)) * cellTime;
+        float entry = 0.0;
+        float limit = min(distance, 15.0);
+        float motes = 0.0;
+
+        for (int i=0; i<24; ++i) {
+            if (entry >= limit) break;
+            int axis = boundaryTime.x <= boundaryTime.y ? 0 : 1;
+            if (boundaryTime.z < boundaryTime[axis]) axis = 2;
+            float exitTime = min(limit, boundaryTime[axis]);
+
+            float seed = fogHash(cell);
+            if (seed < materialParams.dustAmount) {
+                vec3 randomOffset = vec3(fogHash(cell + 3.7), fogHash(cell + 11.3), fogHash(cell + 23.1));
+                float time = materialParams.effectTime * 0.7 + seed * 6.2832;
+                vec3 drift = 0.11 * vec3(sin(time), cos(time * 0.71), sin(time * 0.83));
+                vec3 position = (cell + 0.22 + randomOffset * 0.56 + drift) * spacing - eye;
+                float alongRay = dot(position, direction);
+                if (alongRay >= max(entry, 0.18) && alongRay < exitTime) {
+                    float pixelRadius = alongRay * materialParams.texel.y / materialParams.focal.y;
+                    float radius = min(mix(0.006, 0.024, fogHash(cell + 6.1)), 2.2 * pixelRadius);
+                    float separation = length(position - direction * alongRay);
+                    float coverage = 1.0 - smoothstep(radius * 0.45, radius + pixelRadius, separation);
+                    if (coverage > 0.0) {
+                        float fade = smoothstep(0.6, 1.8, alongRay) * (1.0 - smoothstep(8.0, 15.0, alongRay));
+                        motes += coverage * fade * sunVisibility(position);
+                    }
+                }
+            }
+            entry = exitTime;
+            boundaryTime[axis] += cellTime[axis];
+            cell[axis] += worldStep[axis];
+        }
+        return motes;
+    }
+
+    vec3 sunShafts(vec3 viewPoint) {
+        vec3 d = normalize(viewPoint);
+        vec3 ray = normalize(materialParams.cameraRight*d.x + materialParams.cameraUp*d.y
+            - materialParams.cameraForward*d.z);
+        float distance = min(length(viewPoint), materialParams.rayDistance);
+        float stepLength = distance / float(materialParams.raySteps);
+        float towardSun = dot(ray, materialParams.sunDirection);
+        float forwardScatter = pow(max(0.0, 0.5 + 0.5 * towardSun), mix(12.0, 2.0, materialParams.raySpread));
+        float integrated = 0.0;
+        for (int i=0; i<48; ++i) {
+            if (i >= materialParams.raySteps) break;
+            vec3 offset = ray * (float(i) + 0.5) * stepLength;
+            float visibility = sunVisibility(offset);
+            if (visibility <= 0.0) continue;
+            float density = 1.0;
+            if (materialParams.dustAmount > 0.0) {
+                vec3 world = materialParams.cameraPosition + offset;
+                float noise = fogNoiseAt(world * 0.65 + vec3(0.06, 0.035, 0.02) * materialParams.effectTime);
+                density = mix(1.0, 0.42 + 1.16 * noise, materialParams.dustAmount);
+            }
+            integrated += visibility * density * stepLength;
+        }
+        float air = (1.0 - exp(-integrated * 0.035)) * mix(0.22, 0.65, forwardScatter);
+        float motes = materialParams.dustAmount > 0.0 ? litDustMotes(ray, distance) * 0.5 : 0.0;
+        return (air + motes) * materialParams.sunTint * materialParams.rayIntensity * materialParams.sunStrength;
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
         vec2 uv = getUV0();
-        vec3 color = texture(materialParams_inputTexture,uv).rgb;
-        vec3 p = viewPosition(uv);
+        vec3 center = texture(materialParams_inputTexture,uv).rgb;
+        vec3 color = center;
+        vec3 p = vec3(0.0);
+        if (materialParams.intensity > 0.0 || materialParams.fogDensity > 0.0 ||
+                materialParams.rayIntensity > 0.0 || materialParams.cavityIntensity > 0.0 ||
+                materialParams.outlineIntensity > 0.0 ||
+                materialParams.emissiveGiIntensity > 0.0 ||
+                materialParams.ddgiIntensity > 0.0 ||
+                materialParams.cloudShadowIntensity > 0.0) p = viewPosition(uv);
         vec3 bounce = vec3(0.0);
-        if (-p.z < materialParams.maxDistance && materialParams.intensity > 0.0) {
+        if (materialParams.intensity > 0.0 && -p.z < materialParams.maxDistance &&
+                texture(materialParams_depthTexture, uv).r > 0.00001) {
             vec3 normal = surfaceNormal(uv,p);
             vec2 projectedRadius = materialParams.radius * materialParams.focal / max(-p.z,0.1) * 0.5;
             // Deterministic low-discrepancy disk sampling. No per-frame sparkle.
@@ -86,25 +219,178 @@ fragment {
                 float distance2 = dot(delta,delta);
                 if (distance2 > materialParams.radius*materialParams.radius || distance2 < materialParams.bias*materialParams.bias) continue;
                 vec3 direction = normalize(delta);
+                float receiver = max(dot(normal,direction),0.0);
+                if (receiver <= 0.0) continue;
                 vec3 sourceNormal = surfaceNormal(qUV,q);
-                float form = max(dot(normal,direction),0.0) * max(dot(sourceNormal,-direction),0.0);
+                float form = receiver * max(dot(sourceNormal,-direction),0.0);
                 if (form < 0.001) continue;
                 // Reject samples whose connection crosses foreground geometry.
                 float visibility = 1.0;
-                for (int j=1;j<=3;j++) {
-                    float t = float(j)*0.25;
+                for (int j=1;j<=6;j++) {
+                    if (j > materialParams.giVisibilitySteps) break;
+                    float t = float(j) / float(materialParams.giVisibilitySteps + 1);
                     vec3 ray = mix(p,q,t);
                     vec2 rayUV = (ray.xy / max(-ray.z,0.001) * materialParams.focal + 1.0)*0.5;
                     float sceneZ = -viewPosition(rayUV).z;
-                    if (sceneZ + materialParams.bias < -ray.z) visibility = 0.0;
+                    if (sceneZ + materialParams.bias < -ray.z) { visibility = 0.0; break; }
                 }
+                if (visibility == 0.0) continue;
                 float falloff = 1.0-sqrt(distance2)/materialParams.radius;
-                bounce += texture(materialParams_inputTexture,qUV).rgb * form * falloff * visibility;
+                vec3 sourceRadiance = texture(materialParams_inputTexture, qUV).rgb;
+                float luminance = dot(sourceRadiance, vec3(0.2126, 0.7152, 0.0722));
+                sourceRadiance = mix(vec3(luminance), sourceRadiance,
+                        materialParams.giColorBleeding);
+                bounce += max(sourceRadiance, vec3(0.0)) * form * falloff * visibility;
             }
             bounce *= 6.2831853 * materialParams.intensity / float(materialParams.sampleCount);
             // Receiver color modulates diffuse bounce; this is indirect light,
             // not a blur of neighboring display pixels.
             color += bounce * sqrt(max(color,vec3(0.0)));
+        }
+        if (materialParams.emissiveGiIntensity > 0.0 && -p.z > 0.0 &&
+                -p.z < materialParams.emissiveGiMaxDistance &&
+                texture(materialParams_depthTexture, uv).r > 0.00001) {
+            vec3 receiverNormal = surfaceNormal(uv, p);
+            float radius = materialParams.emissiveGiRadius;
+            vec2 projectedRadius = radius * materialParams.focal * 0.5 /
+                    max(-p.z, 0.1);
+            vec3 radiance = vec3(0.0);
+            int samples = materialParams.emissiveGiSamples;
+            float pixelRotation = fogHash(vec3(
+                    floor(uv / materialParams.texel), 11.0)) * 6.283185307;
+            for (int i = 0; i < 32; ++i) {
+                if (i >= samples) break;
+                float angle = 2.399963229728653 * float(i) + pixelRotation;
+                float fraction = sqrt((float(i) + 0.5) / float(samples));
+                vec2 sampleUV = uv + vec2(cos(angle), sin(angle)) * projectedRadius * fraction;
+                if (any(lessThan(sampleUV, materialParams.texel)) ||
+                        any(greaterThan(sampleUV, 1.0 - materialParams.texel)))
+                    continue;
+                float depth = texture(materialParams_depthTexture, sampleUV).r;
+                if (depth <= 0.00001) continue;
+                vec3 sourceColor = texture(materialParams_inputTexture, sampleUV).rgb;
+                float luminance = dot(sourceColor, vec3(0.2126, 0.7152, 0.0722));
+                float threshold = materialParams.emissiveGiThreshold;
+                if (luminance < threshold) continue;
+                vec3 sourcePosition = viewPosition(sampleUV);
+                vec3 delta = sourcePosition - p;
+                float distance = length(delta);
+                if (distance < 0.05 || distance > radius) continue;
+                vec3 direction = delta / distance;
+                float facing = max(dot(receiverNormal, direction), 0.0);
+                if (facing < 0.0001) continue;
+                float visibility = 1.0;
+                for (int j = 1; j <= 2; ++j) {
+                    float fractionOfRay = float(j) / 3.0;
+                    vec3 intermediate = mix(p, sourcePosition, fractionOfRay);
+                    vec2 projectedUV = (intermediate.xy /
+                            max(-intermediate.z, 0.001) * materialParams.focal + 1.0) * 0.5;
+                    if (any(lessThan(projectedUV, vec2(0.0))) ||
+                            any(greaterThan(projectedUV, vec2(1.0)))) {
+                        visibility = 0.0;
+                        break;
+                    }
+                    float blocker = texture(materialParams_depthTexture, projectedUV).r;
+                    if (blocker > 0.00001) {
+                        float blockerDepth = materialParams.nearPlane / blocker;
+                        if (blockerDepth + 0.04 < -intermediate.z) {
+                            visibility = 0.0;
+                            break;
+                        }
+                    }
+                }
+                float emission = smoothstep(threshold,
+                        max(threshold + 0.12, 0.001), luminance);
+                float falloff = pow(max(1.0 - distance / radius, 0.0),
+                        materialParams.emissiveGiFalloff);
+                radiance += sourceColor * emission * facing * falloff * visibility;
+            }
+            color += radiance * (materialParams.emissiveGiIntensity * 3.0 /
+                    float(max(samples, 1)));
+        }
+        if (materialParams.ddgiIntensity > 0.0 && -p.z > 0.0 &&
+                texture(materialParams_depthTexture, uv).r > 0.00001) {
+            vec3 worldPosition = materialParams.cameraPosition +
+                    materialParams.cameraRight * p.x +
+                    materialParams.cameraUp * p.y -
+                    materialParams.cameraForward * p.z;
+            vec3 worldNormal = normalize(
+                    materialParams.cameraRight * surfaceNormal(uv, p).x +
+                    materialParams.cameraUp * surfaceNormal(uv, p).y -
+                    materialParams.cameraForward * surfaceNormal(uv, p).z);
+            vec3 gridPoint = (worldPosition + worldNormal *
+                    materialParams.ddgiSpacing * 0.18 -
+                    materialParams.ddgiOrigin) / materialParams.ddgiSpacing;
+            vec3 size = max(materialParams.ddgiGridDimensions, vec3(1.0));
+            vec3 fade = min(gridPoint + vec3(0.5),
+                    size - (gridPoint + vec3(0.5)));
+            float boundary = clamp(min(fade.x, min(fade.y, fade.z)), 0.0, 1.0);
+            if (boundary > 0.0) {
+                vec3 texcoord = (gridPoint + vec3(0.5)) / size;
+                vec4 l0 = texture(materialParams_ddgiL0, texcoord);
+                vec3 lx = texture(materialParams_ddgiL1X, texcoord).rgb;
+                vec3 ly = texture(materialParams_ddgiL1Y, texcoord).rgb;
+                vec3 lz = texture(materialParams_ddgiL1Z, texcoord).rgb;
+                vec3 irradiance = max(l0.rgb + lx * worldNormal.x +
+                        ly * worldNormal.y + lz * worldNormal.z, vec3(0.0));
+                color += irradiance * materialParams.ddgiIntensity *
+                        clamp(l0.a, 0.0, 1.0) * boundary;
+            }
+        }
+        if (materialParams.cloudShadowIntensity > 0.0 &&
+                texture(materialParams_depthTexture, uv).r > 0.00001 &&
+                -p.z < materialParams.cloudShadowMaxDistance &&
+                materialParams.sunDirection.y > 0.08) {
+            vec3 normal = surfaceNormal(uv, p);
+            vec3 worldNormal = normalize(
+                    materialParams.cameraRight * normal.x +
+                    materialParams.cameraUp * normal.y +
+                    materialParams.cameraForward * (-normal.z));
+            float sunFacing = clamp(dot(worldNormal,
+                    normalize(materialParams.sunDirection)), 0.0, 1.0);
+            if (sunFacing > 0.03) {
+                vec3 world = materialParams.cameraPosition +
+                        materialParams.cameraRight * p.x +
+                        materialParams.cameraUp * p.y -
+                        materialParams.cameraForward * p.z;
+                float height = max(materialParams.cloudShadowThickness, 1.0);
+                float scale = max(height * 4.0, 240.0) *
+                        materialParams.cloudShadowScale;
+                vec3 sun = normalize(materialParams.sunDirection);
+                float entry = (materialParams.cloudShadowHeight -
+                        0.35 * height - world.y) / sun.y;
+                float stepLength = height * 0.35 / sun.y;
+                float threshold = mix(0.72, 0.47,
+                        clamp(materialParams.cloudShadowCover, 0.0, 1.0));
+                float windTime = materialParams.effectTime *
+                        materialParams.cloudShadowSpeed;
+                vec3 wind = vec3(windTime * 0.030,
+                        windTime * 0.006, -windTime * 0.014);
+                float extinction = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    float travel = entry + stepLength * float(i);
+                    if (travel <= 0.0 || travel > 12000.0) continue;
+                    vec3 q = (world + sun * travel) / scale + wind;
+                    float lod = clamp(materialParams.cloudShadowSoftness, 0.0, 4.0);
+                    vec4 shape = textureLod(materialParams_cloudShadowNoise,
+                            fract(q), lod);
+                    float weather = textureLod(materialParams_cloudShadowNoise,
+                            fract(q * vec3(0.21, 0.10, 0.21) +
+                            vec3(0.11, 0.35, 0.17)),
+                            min(lod + 1.0, 5.0)).r;
+                    float base = mix(shape.r, weather, 0.38);
+                    float density = smoothstep(threshold,
+                            threshold + 0.18, base);
+                    extinction += density * materialParams.cloudShadowDensity;
+                }
+                float shadow = (1.0 - exp(-extinction * 1.15)) *
+                        materialParams.cloudShadowIntensity *
+                        smoothstep(0.03, 0.35, sunFacing);
+                float rangeFade = 1.0 - smoothstep(
+                        materialParams.cloudShadowMaxDistance * 0.75,
+                        materialParams.cloudShadowMaxDistance, -p.z);
+                color *= 1.0 - clamp(shadow * rangeFade, 0.0, 0.9);
+            }
         }
         if (materialParams.fogDensity > 0.0) {
             vec3 d = normalize(p);
@@ -116,24 +402,86 @@ fragment {
             float g = materialParams.fogAnisotropy;
             float cosTheta = dot(ray, normalize(materialParams.sunDirection));
             float phase = (1.0-g*g) / pow(max(0.01, 1.0+g*g-2.0*g*cosTheta), 1.5);
+            vec3 lighting = materialParams.fogColor*(0.45+materialParams.fogScattering*materialParams.sunStrength*phase*0.25);
             for (int i=0;i<64;i++) {
                 if (i>=materialParams.fogSteps || transmittance<0.005) break;
                 vec3 world = materialParams.cameraPosition + ray * (float(i)+0.5)*stepLen;
                 float heightDensity = exp(-max(world.y-materialParams.fogHeight,0.0)*materialParams.fogFalloff);
-                float n = fogNoiseAt(world*materialParams.fogNoiseScale + vec3(materialParams.effectTime*0.04,0,0));
+                float n = 0.0;
+                if (materialParams.fogNoise != 0.0) n = fogNoiseAt(world*materialParams.fogNoiseScale + vec3(materialParams.effectTime*0.04,0,0));
                 float density = materialParams.fogDensity*heightDensity*mix(1.0, n*1.6, materialParams.fogNoise);
                 float extinction = exp(-density*stepLen);
-                vec3 lighting = materialParams.fogColor*(0.45+materialParams.fogScattering*materialParams.sunStrength*phase*0.25);
                 inscatter += transmittance*(1.0-extinction)*lighting;
                 transmittance *= extinction;
             }
             color = color*transmittance + inscatter;
         }
+        if (materialParams.rayIntensity > 0.0) color += sunShafts(p);
         if (materialParams.chromatic > 0.0) {
             vec2 offset = (uv-0.5)*dot(uv-0.5,uv-0.5)*materialParams.chromatic*0.12;
-            vec3 center = texture(materialParams_inputTexture,uv).rgb;
             color.r += texture(materialParams_inputTexture,clamp(uv+offset,0.0,1.0)).r-center.r;
             color.b += texture(materialParams_inputTexture,clamp(uv-offset,0.0,1.0)).b-center.b;
+        }
+        float cameraDepth = texture(materialParams_depthTexture, uv).r;
+        if (cameraDepth > 0.0001 && cameraDepth < 0.99999) {
+            if (materialParams.cavityIntensity > 0.0 &&
+                    -p.z < materialParams.cavityMaxDistance) {
+                vec3 normal = surfaceNormal(uv, p);
+                vec2 pixelRadius = clamp(
+                    materialParams.cavityRadius * materialParams.focal /
+                    max(-p.z, 0.05) * 0.2 / materialParams.texel,
+                    vec2(1.0), vec2(6.0));
+                float cavity = 0.0;
+                for (int i = 0; i < 8; ++i) {
+                    float angle = float(i) * 0.7853981634;
+                    vec2 sampleUV = uv + vec2(cos(angle), sin(angle)) *
+                            pixelRadius * materialParams.texel;
+                    if (any(lessThan(sampleUV, materialParams.texel)) ||
+                            any(greaterThan(sampleUV, 1.0 - materialParams.texel)))
+                        continue;
+                    float sampleDepth = texture(materialParams_depthTexture, sampleUV).r;
+                    if (sampleDepth <= 0.0001) continue;
+                    vec3 delta = viewPosition(sampleUV) - p;
+                    float distance = length(delta);
+                    if (distance < 0.0001 || distance > materialParams.cavityRadius)
+                        continue;
+                    float visibility = max(dot(normal, delta / distance) -
+                            materialParams.cavityBias, 0.0);
+                    cavity += visibility * (1.0 - distance / materialParams.cavityRadius);
+                }
+                color *= 1.0 - clamp(cavity * materialParams.cavityIntensity * 0.4,
+                        0.0, 0.85);
+            }
+            if (materialParams.outlineIntensity > 0.0) {
+                vec3 centerNormal = surfaceNormal(uv, p);
+                float edge = 0.0;
+                for (int i = 0; i < 4; ++i) {
+                    vec2 direction = i == 0 ? vec2(1.0, 0.0) :
+                            i == 1 ? vec2(-1.0, 0.0) :
+                            i == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+                    vec2 sampleUV = uv + direction * materialParams.outlineThickness *
+                            materialParams.texel;
+                    if (any(lessThan(sampleUV, materialParams.texel)) ||
+                            any(greaterThan(sampleUV, 1.0 - materialParams.texel)))
+                        continue;
+                    float sampleDepth = texture(materialParams_depthTexture, sampleUV).r;
+                    if (sampleDepth <= 0.0001) {
+                        edge = 1.0;
+                        continue;
+                    }
+                    vec3 neighbor = viewPosition(sampleUV);
+                    float depthEdge = abs(neighbor.z - p.z) / max(-p.z, 0.1);
+                    vec3 neighborNormal = surfaceNormal(sampleUV, neighbor);
+                    float normalEdge = 1.0 - clamp(dot(centerNormal, neighborNormal), -1.0, 1.0);
+                    edge = max(edge, max(
+                        smoothstep(materialParams.outlineDepthThreshold * 0.5,
+                                materialParams.outlineDepthThreshold * 1.5, depthEdge),
+                        smoothstep(materialParams.outlineNormalThreshold * 0.5,
+                                max(materialParams.outlineNormalThreshold, 0.001),
+                                normalEdge)));
+                }
+                color *= 1.0 - edge * materialParams.outlineIntensity;
+            }
         }
         if (materialParams.grain > 0.0) {
             vec2 pixel = floor(uv/materialParams.texel/materialParams.grainSize);

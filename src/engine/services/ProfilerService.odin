@@ -1,21 +1,13 @@
 package services
 
-// wire:service
 
+import kineffi "../bindings"
 import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import profiling "../profiling"
 import vm "../vm"
 
-// ProfilerService exposes Kinemium's native profiler to Luau.
-//
-// Frame records are indexed newest-first: 1 = most recently captured frame.
-// GetFrameTimes and GetZoneHistory return their arrays oldest-first.
-// Time values are milliseconds, allocation values are bytes.
-//
-// Lua numbers are doubles in this VM. Always use ArgNumber, not ArgInteger,
-// for numeric Luau arguments. This fixes GetFrameRecord's argument #2 error.
 
 ProfilerService_Class := classes.Class_Info {
 	name   = "ProfilerService",
@@ -60,8 +52,7 @@ profiler_fps :: proc() -> f64 {
 	return 1_000_000_000.0 / f64(avg_ns)
 }
 
-// Reads a Luau floating-point number as a bounded count, defaulting if absent.
-// The bounds are applied BEFORE the conversion to an integer.
+
 profiler_count_arg :: proc(
 	L: ^vm.State,
 	arg: int,
@@ -70,7 +61,7 @@ profiler_count_arg :: proc(
 		return int(fallback)
 	}
 	value := vm.ArgNumber(L, arg)
-	if value != value { 	// NaN
+	if value != value {
 		return int(fallback)
 	}
 	value = max(1.0, min(value, f64(profiling.MAX_HISTORY)))
@@ -114,8 +105,7 @@ profiler_zones_base_ns :: proc(zones: []profiling.Zone_Record) -> u64 {
 	return base
 }
 
-// Zone record shape: {name, color, ms, startMs}.
-// startMs is relative to the earliest zone in that frame, not the frame boundary.
+
 profiler_push_zone :: proc(L: ^vm.State, zone: profiling.Zone_Record, base_ns: u64) {
 	vm.NewTable(L, 0, 4)
 	profiler_push_string(L, "name", zone.name)
@@ -151,6 +141,9 @@ profiler_push_frame :: proc(L: ^vm.State, frame: profiling.Frame_Data, index: i6
 		fps = 1000.0 / frame_ms
 	}
 	profiler_push_number(L, "fps", fps)
+	profiler_push_number(L, "gcMs", profiler_ns_ms(frame.gc.total_ns))
+	profiler_push_number(L, "gcMaxStepMs", profiler_ns_ms(frame.gc.max_ns))
+	profiler_push_number(L, "gcSteps", f64(frame.gc.steps))
 	profiler_push_zones(L, frame.zones[:])
 	vm.SetField(L, -2, "zones")
 }
@@ -165,8 +158,16 @@ profiler_push_frame_record :: proc(L: ^vm.State, index: i64) {
 	profiler_push_frame(L, frames[int(total - index)], index)
 }
 
-// Returns a single snapshot including a short, newest-first history.
-profiler_push_frame_stats :: proc(L: ^vm.State) {
+
+profiler_push_frame_stats :: proc(
+	L: ^vm.State,
+	display_refresh_hz: f32 = 0,
+	batch_stats: ^kineffi.KineFilamentBatchStats = nil,
+	render_scale: f32 = 1,
+	shadow_map_size: u32 = 0,
+	include_history := true,
+	pass_stats: ^kineffi.KineFilamentPassStats = nil,
+) {
 	frames := profiling.history_frames()
 	vm.NewTable(L, 0, 8)
 	profiler_push_bool(L, "enabled", profiling.is_enabled())
@@ -175,7 +176,82 @@ profiler_push_frame_stats :: proc(L: ^vm.State) {
 	profiler_push_number(L, "frameCount", f64(len(frames)))
 	profiler_push_number(L, "frameMs", profiler_frame_ms())
 	profiler_push_number(L, "fps", profiler_fps())
+	gpu_id, gpu_ns := profiling.latest_gpu_frame()
+	profiler_push_bool(L, "gpuFrameValid", gpu_ns > 0)
+	profiler_push_number(L, "gpuFrameMs", profiler_ns_ms(gpu_ns))
+	profiler_push_number(L, "gpuFrameId", f64(gpu_id))
+	queue_id, queue_ns := profiling.latest_queue_frame()
+	profiler_push_number(L, "queueFrameId", f64(queue_id))
+	profiler_push_number(L, "queueFrameMs", profiler_ns_ms(queue_ns))
+	profiler_push_bool(L, "queueFrameValid", queue_id != 0 && queue_ns != 0)
+	stages := profiling.latest_queue_stages
+	profiler_push_bool(L, "queueStagesValid", stages.id != 0 && stages.id == queue_id)
+	profiler_push_number(L, "queueBaseMs", profiler_ns_ms(stages.base_ns))
+	profiler_push_number(L, "queueRenderMs", profiler_ns_ms(stages.render_ns))
+	detail := profiling.latest_queue_detail
+	profiler_push_bool(L, "queueDetailValid", detail.id != 0 && detail.id == queue_id)
+	profiler_push_number(L, "queueFilamentMs", profiler_ns_ms(detail.filament_ns))
+	profiler_push_number(L, "queueOverlayMs", profiler_ns_ms(detail.overlay_ns))
+	present := profiling.latest_present_metrics
+	profiler_push_bool(L, "odinPresentActive", present.active)
+	profiler_push_bool(L, "odinPresentAsync", present.asynchronous)
+	profiler_push_number(L, "odinPresentFrameId", f64(present.completed))
+	profiler_push_number(L, "odinPresentCallMs", profiler_ns_ms(present.call_ns))
+	profiler_push_number(L, "odinPresentDrainMs", profiler_ns_ms(present.drain_ns))
+	profiler_push_number(L, "odinPrefetchHits", f64(present.prefetch_hits))
+	profiler_push_number(L, "odinPrefetchMisses", f64(present.prefetch_misses))
+	work := profiling.latest_render_work
+	profiler_push_number(L, "worldRenderFrames", f64(work.world_frames))
+	profiler_push_number(L, "worldSkippedFrames", f64(work.world_skips))
+	profiler_push_number(L, "viewportHandles", f64(work.viewport_handles))
+	profiler_push_number(L, "viewportAtlasPages", f64(work.viewport_pages))
+	profiler_push_number(L, "viewportRenders", f64(work.viewport_renders))
+	profiler_push_number(L, "viewportRendersFrame", f64(work.viewport_renders_frame))
+	profiler_push_number(L, "viewportReused", f64(work.viewport_reused))
+	profiler_push_number(L, "viewportPersistent", f64(work.viewport_persistent))
+	dirty := classes.Render_3D_Dirty_Counts()
+	profiler_push_number(L, "worldDirtyCamera", f64(dirty[.Camera]))
+	profiler_push_number(L, "worldDirtyPart", f64(dirty[.Part]))
+	profiler_push_number(L, "worldDirtyHierarchy", f64(dirty[.Hierarchy]))
+	profiler_push_number(L, "worldDirtyOther", f64(dirty[.Object] + dirty[.Other]))
+	profiler_push_number(L, "displayRefreshHz", f64(display_refresh_hz))
+	profiler_push_number(L, "renderScale", f64(render_scale))
+	profiler_push_number(L, "effectiveShadowMapSize", f64(shadow_map_size))
+	if pass_stats != nil {
+		vm.NewTable(L, 0, 15)
+		profiler_push_number(L, "world", f64(pass_stats.world))
+		profiler_push_number(L, "clouds", f64(pass_stats.clouds))
+		profiler_push_number(L, "waterDepth", f64(pass_stats.waterDepth))
+		profiler_push_number(L, "sharedDepth", f64(pass_stats.sharedDepth))
+		profiler_push_number(L, "customDepth", f64(pass_stats.customDepth))
+		profiler_push_number(L, "screenEffects", f64(pass_stats.screenEffects))
+		profiler_push_number(L, "customPost", f64(pass_stats.customPost))
+		profiler_push_number(L, "outlineMask", f64(pass_stats.outlineMask))
+		profiler_push_number(L, "outlineComposite", f64(pass_stats.outlineComposite))
+		profiler_push_number(L, "reflectionFaces", f64(pass_stats.reflectionFaces))
+		profiler_push_number(L, "viewportScene", f64(pass_stats.viewportScene))
+		profiler_push_number(L, "viewportClear", f64(pass_stats.viewportClear))
+		profiler_push_number(L, "viewportCopy", f64(pass_stats.viewportCopy))
+		profiler_push_number(L, "viewportShadow", f64(pass_stats.viewportShadow))
+		profiler_push_number(L, "viewportPresent", f64(pass_stats.viewportPresent))
+		vm.SetField(L, -2, "renderPasses")
+	}
+	if batch_stats != nil {
+		vm.NewTable(L, 0, 10)
+		profiler_push_number(L, "activeBatches", f64(batch_stats.activeBatches))
+		profiler_push_number(L, "activeChunks", f64(batch_stats.activeChunks))
+		profiler_push_number(L, "retainedChunks", f64(batch_stats.retainedChunks))
+		profiler_push_number(L, "createdChunks", f64(batch_stats.createdChunks))
+		profiler_push_number(L, "destroyedChunks", f64(batch_stats.destroyedChunks))
+		profiler_push_number(L, "unchangedBatches", f64(batch_stats.unchangedBatches))
+		profiler_push_number(L, "transformUploads", f64(batch_stats.transformUploads))
+		profiler_push_number(L, "colorUploads", f64(batch_stats.colorUploads))
+		profiler_push_number(L, "uvUploads", f64(batch_stats.uvUploads))
+		profiler_push_number(L, "boundsUpdates", f64(batch_stats.boundsUpdates))
+		vm.SetField(L, -2, "renderBatches")
+	}
 
+	if !include_history {return}
 	n := min(PROFILER_HISTORY_POINTS, len(frames))
 	vm.NewTable(L, 0, n)
 	for i in 0 ..< n {
@@ -194,7 +270,7 @@ profiler_push_frame_stats :: proc(L: ^vm.State) {
 	vm.SetField(L, -2, "zones")
 }
 
-// Oldest-to-newest frame durations.
+
 profiler_push_frame_times :: proc(L: ^vm.State, wanted: int) {
 	frames := profiling.history_frames()
 	n := min(wanted, len(frames))
@@ -206,7 +282,7 @@ profiler_push_frame_times :: proc(L: ^vm.State, wanted: int) {
 	}
 }
 
-// Oldest-to-newest total duration of all matching zones in each frame.
+
 profiler_push_zone_history :: proc(L: ^vm.State, name: string, wanted: int) {
 	frames := profiling.history_frames()
 	n := min(wanted, len(frames))
@@ -224,7 +300,7 @@ profiler_push_zone_history :: proc(L: ^vm.State, name: string, wanted: int) {
 	}
 }
 
-// Optional convenience API for per-zone summaries of the current capture ring.
+
 profiler_push_zone_stats :: proc(L: ^vm.State, name: string) {
 	frames := profiling.history_frames()
 	count: u64
@@ -289,7 +365,7 @@ profiler_thread_status :: proc(L: ^vm.State, record: ^profiling.Thread_Record) -
 	return "Unknown"
 }
 
-// Cumulative + current-frame fields, keeping the exact names the UI expects.
+
 profiler_push_thread_record :: proc(L: ^vm.State, record: ^profiling.Thread_Record) {
 	vm.NewTable(L, 0, 13)
 	profiler_push_number(L, "Id", f64(record.id))
@@ -400,9 +476,7 @@ profiler_push_scripts :: proc(L: ^vm.State) {
 	}
 }
 
-// Unlike GetThreads, historical rows represent per-frame counters.
-// History may contain retired threads; only retained IDs in the current VM
-// can be resolved to names by the native tracking backend.
+
 profiler_push_thread_history :: proc(L: ^vm.State, index: i64) {
 	frames := profiling.thread_history_frames()
 	total := i64(len(frames))
@@ -465,6 +539,9 @@ profiler_service_get :: proc(
 	case "GetService",
 	     "FindService",
 	     "GetFrameStats",
+	     "GetObjectStats",
+	     "GetGCStats",
+	     "SetGCProfilingEnabled",
 	     "GetFrameTimes",
 	     "GetFrameRecord",
 	     "GetZoneHistory",
@@ -484,6 +561,28 @@ profiler_service_get :: proc(
 	return true
 }
 
+profiler_push_object_stats :: proc(L: ^vm.State, registry: ^classes.Registry) {
+	vm.NewTable(L, 0, 2)
+	total := 0
+	vm.NewTable(L, 0, 0)
+	if registry != nil {
+		index := 1
+		for descriptor in registry.classes {
+			if descriptor == nil || descriptor.info == nil {continue}
+			count := len(descriptor.instances)
+			if count == 0 {continue}
+			total += count
+			vm.NewTable(L, 0, 2)
+			profiler_push_string(L, "name", descriptor.info.name)
+			profiler_push_number(L, "count", f64(count))
+			vm.RawSetIndex(L, -2, index)
+			index += 1
+		}
+	}
+	vm.SetField(L, -2, "classes")
+	profiler_push_number(L, "total", f64(total))
+}
+
 profiler_service_namecall :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -500,9 +599,53 @@ profiler_service_namecall :: proc(
 		classes.Push_Object(L, Service_Get_Service(&service.service, vm.ArgString(L, 2)))
 		return 1, true
 
+	case "GetGCStats":
+		gc := profiling.last_gc_stats()
+		vm.NewTable(L, 0, 4)
+		profiler_push_bool(L, "enabled", profiling.gc_profiling_enabled(L))
+		profiler_push_number(L, "totalMs", profiler_ns_ms(gc.total_ns))
+		profiler_push_number(L, "maxStepMs", profiler_ns_ms(gc.max_ns))
+		profiler_push_number(L, "steps", f64(gc.steps))
+		return 1, true
+	case "SetGCProfilingEnabled":
+		vm.PushBoolean(L, profiling.set_gc_profiling(L, vm.ArgBoolean(L, 2)))
+		return 1, true
+	case "GetObjectStats":
+		profiler_push_object_stats(L, object.signal_registry)
+		return 1, true
 	case "GetFrameStats":
-		profiling.set_collection_enabled(true)
-		profiler_push_frame_stats(L)
+		include_history := vm.StackTop(L) < 2 || vm.IsNil(L, 2) || vm.ArgBoolean(L, 2)
+		if include_history {profiling.set_collection_enabled(true)}
+		hz: f32
+		render_scale: f32 = 1
+		shadow_map_size: u32
+		batch_stats: kineffi.KineFilamentBatchStats
+		batch_stats_ptr: ^kineffi.KineFilamentBatchStats
+		pass_stats: kineffi.KineFilamentPassStats
+		pass_stats_ptr: ^kineffi.KineFilamentPassStats
+		when ODIN_OS != .JS {
+			if registry := object.signal_registry;
+			   registry != nil && registry.renderer != nil && registry.renderer.Filament != nil {
+				hz = kineffi.Kine_Filament_GetDisplayRefreshRate(registry.renderer.Filament)
+				render_scale = kineffi.Kine_Filament_GetResolutionScale(registry.renderer.Filament)
+				shadow_map_size = kineffi.Kine_Filament_GetEffectiveShadowMapSize(
+					registry.renderer.Filament,
+				)
+				kineffi.Kine_Filament_GetBatchStats(registry.renderer.Filament, &batch_stats)
+				batch_stats_ptr = &batch_stats
+				kineffi.Kine_Filament_GetPassStats(registry.renderer.Filament, &pass_stats)
+				pass_stats_ptr = &pass_stats
+			}
+		}
+		profiler_push_frame_stats(
+			L,
+			hz,
+			batch_stats_ptr,
+			render_scale,
+			shadow_map_size,
+			include_history,
+			pass_stats_ptr,
+		)
 		return 1, true
 	case "GetFrameTimes":
 		profiling.set_collection_enabled(true)
@@ -546,7 +689,7 @@ profiler_service_namecall :: proc(
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
 			return 0, false
 		}
-		// Do not turn off the fullscreen F2 profiler's active capture.
+
 		on := vm.ArgBoolean(L, 2)
 		profiling.set_collection_enabled(on || profiling.is_enabled())
 		return 0, true
@@ -578,698 +721,457 @@ Register_ProfilerService_Class :: proc(registry: ^classes.Registry) {
 	)
 }
 
-// Existing F2 fullscreen profiler overlay, kept for compatibility.
-
 PROFILER_OVERLAY_SOURCE :: `local profiler = game:GetService("ProfilerService")
+local coreGui = game:GetService("CoreGui")
+local white = Color3.new(1, 1, 1)
+local dim = Color3.new(0.72, 0.72, 0.72)
+local green = Color3.new(0.4, 0.92, 0.58)
+local blue = Color3.new(0.46, 0.75, 1)
+local amber = Color3.new(1, 0.72, 0.34)
+local points = 60
 
-local ROW_H = 18
-
-local MAX_ROWS = 16
-
-local GRAPH_POINTS = 60
-
-local PANEL_BG = Color3.new(0.055, 0.07, 0.10)
-
-local GRAPH_BG = Color3.new(0.09, 0.11, 0.14)
-
-local ROW_BG = Color3.new(0.13, 0.145, 0.18)
-
-local TEXT = Color3.new(0.82, 0.86, 0.92)
-
-local DIM = Color3.new(0.45, 0.50, 0.58)
-
-local ACCENT = Color3.new(0.337, 0.714, 0.761)
-
-local function colorFromRGB(c)
-
-    return Color3.new(
-
-        math.floor(c / 65536) / 255,
-
-        math.floor((c % 65536) / 256) / 255,
-
-        (c % 256) / 255
-
-    )
-
+local function make(class, name, parent)
+	local object = Instance.new(class)
+	object.Name = name
+	object.Archivable = false
+	object.CanReplicate = false
+	object.Parent = parent
+	return object
 end
 
-local function makeLabel(parent, text, size, color)
+local screen = make("ScreenGui", "ProfilerOverlay", coreGui)
+screen.Enabled = false
+screen.RenderOnTop = true
+screen.IgnoreGuiInset = true
+screen.ResetOnSpawn = false
+screen.DisplayOrder = 10000
 
-    local l = Instance.new("TextLabel")
+local panel = make("Frame", "Panel", screen)
+panel.Position = UDim2.fromOffset(10, 10)
+panel.Size = UDim2.fromOffset(460, 430)
+panel.BackgroundColor3 = Color3.new(0, 0, 0)
+panel.BackgroundTransparency = 0.5
+panel.BorderSizePixel = 0
+panel.Active = false
 
-    l.Parent = parent
+local backdrop = make("UIBackdrop", "Blur", panel)
 
-    l.Text = text or ""
-
-    l.TextSize = size or 12
-
-    l.TextColor3 = color or TEXT
-
-    l.BackgroundTransparency = 1
-
-    return l
-
+local function label(name, parent, text, size, color)
+	local l = make("TextLabel", name, parent)
+	l.BackgroundTransparency = 1
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextColor3 = color
+	l.TextSize = size
+	l.Text = text
+	return l
 end
-
-local screenGui = Instance.new("ScreenGui")
-
-screenGui.Name = "ProfilerOverlay"
-
-screenGui.RenderOnTop = true
-
-screenGui.IgnoreGuiInset = true
-
-screenGui.Enabled = profiler.Enabled
-
--- Panel fills the whole screen.
-
-local panel = Instance.new("Frame")
-
-panel.Name = "Panel"
-
-panel.Parent = screenGui
-
-panel.Position = UDim2.new(0, 0, 0, 0)
-
-panel.Size = UDim2.new(1, 0, 1, 0)
-
-panel.BackgroundColor3 = PANEL_BG
-
-panel.BackgroundTransparency = 0.06
-
-panel.ZIndex = 1
-
--- Header --------------------------------
-
-local headerBg = Instance.new("Frame")
-
-headerBg.Parent = panel
-
-headerBg.Position = UDim2.new(0, 0, 0, 0)
-
-headerBg.Size = UDim2.new(1, 0, 0, 34)
-
-headerBg.BackgroundColor3 = Color3.new(0.02, 0.025, 0.04)
-
-headerBg.ZIndex = 2
-
-local title = makeLabel(headerBg, "PROFILER", 15, ACCENT)
-
-title.Position = UDim2.new(0, 12, 0, 7)
-
-title.Size = UDim2.new(0, 120, 0, 20)
-
-title.ZIndex = 3
-
-local header = makeLabel(headerBg, "FPS --", 13, TEXT)
-
-header.Position = UDim2.new(0, 140, 0, 8)
-
-header.Size = UDim2.new(0, 260, 0, 20)
-
-header.ZIndex = 3
-
--- Pause / resume button.
-
-local pauseBtn = Instance.new("TextButton")
-
-pauseBtn.Name = "PauseButton"
-
-pauseBtn.Parent = headerBg
-
-pauseBtn.Position = UDim2.new(1, -110, 0, 5)
-
-pauseBtn.Size = UDim2.new(0, 100, 0, 24)
-
-pauseBtn.BackgroundColor3 = ACCENT
-
-pauseBtn.BackgroundTransparency = 0.15
-
-pauseBtn.Text = "Pause"
-
-pauseBtn.TextSize = 13
-
-pauseBtn.TextColor3 = Color3.new(1, 1, 1)
-
-pauseBtn.ZIndex = 3
-
--- Frame navigation (visible while paused).
-
-local nav = Instance.new("Frame")
-
-nav.Parent = headerBg
-
-nav.Position = UDim2.new(1, -360, 0, 5)
-
-nav.Size = UDim2.new(0, 240, 0, 24)
-
-nav.BackgroundTransparency = 1
-
-nav.ZIndex = 3
-
-nav.Visible = profiler.Paused
-
-local frameLabel = makeLabel(nav, "frame --/--", 13, TEXT)
-
-frameLabel.Position = UDim2.new(0, 0, 0, 2)
-
-frameLabel.Size = UDim2.new(0, 160, 0, 20)
-
-frameLabel.ZIndex = 4
-
-local prevBtn = Instance.new("TextButton")
-
-prevBtn.Parent = nav
-
-prevBtn.Position = UDim2.new(0, 165, 0, 0)
-
-prevBtn.Size = UDim2.new(0, 34, 0, 22)
-
-prevBtn.BackgroundColor3 = Color3.new(0.2, 0.25, 0.32)
-
-prevBtn.Text = "<"
-
-prevBtn.TextSize = 14
-
-prevBtn.TextColor3 = TEXT
-
-prevBtn.ZIndex = 4
-
-local nextBtn = Instance.new("TextButton")
-
-nextBtn.Parent = nav
-
-nextBtn.Position = UDim2.new(0, 204, 0, 0)
-
-nextBtn.Size = UDim2.new(0, 34, 0, 22)
-
-nextBtn.BackgroundColor3 = Color3.new(0.2, 0.25, 0.32)
-
-nextBtn.Text = ">"
-
-nextBtn.TextSize = 14
-
-nextBtn.TextColor3 = TEXT
-
-nextBtn.ZIndex = 4
-
--- Body layout ----------------------------
-
-local BODY_Y = 44
-
-local GRAPH_H = 92
-
--- Frame time graph.
-
-local graph = Instance.new("Frame")
-
-graph.Name = "FrameGraph"
-
-graph.Parent = panel
-
-graph.Position = UDim2.new(0, 12, 0, BODY_Y)
-
-graph.Size = UDim2.new(1, -24, 0, GRAPH_H)
-
-graph.BackgroundColor3 = GRAPH_BG
-
-graph.BackgroundTransparency = 0.25
-
-graph.ZIndex = 2
-
-local graphTitle = makeLabel(graph, "frame time (ms)", 11, DIM)
-
-graphTitle.Position = UDim2.new(0, 8, 0, 4)
-
-graphTitle.Size = UDim2.new(0, 180, 0, 16)
-
-graphTitle.ZIndex = 3
-
-local graphBars = {}
-
-local barWidth = math.max(math.floor((1280 - 24) / GRAPH_POINTS), 1)
-
-for i = 1, GRAPH_POINTS do
-
-    local bar = Instance.new("Frame")
-
-    bar.Parent = graph
-
-    bar.Name = "Bar"
-
-    bar.Size = UDim2.new(0, barWidth - 1, 0, 0)
-
-    bar.ZIndex = 3
-
-    graphBars[i] = bar
-
+local function place(object, x, y, w, h)
+	object.Position = UDim2.fromOffset(x, y)
+	object.Size = UDim2.fromOffset(w, h)
+	return object
 end
-
--- Bottom split: zone rows (left) + stats panel (right).
-
-local rowArea = Instance.new("Frame")
-
-rowArea.Parent = panel
-
-rowArea.Position = UDim2.new(0, 12, 0, BODY_Y + GRAPH_H + 8)
-
-rowArea.Size = UDim2.new(1, -340, 1, -(BODY_Y + GRAPH_H + 20))
-
-rowArea.BackgroundColor3 = GRAPH_BG
-
-rowArea.BackgroundTransparency = 0.25
-
-rowArea.ZIndex = 2
-
-local rowTitle = makeLabel(rowArea, "zones", 11, DIM)
-
-rowTitle.Position = UDim2.new(0, 8, 0, 4)
-
-rowTitle.Size = UDim2.new(0, 120, 0, 16)
-
-rowTitle.ZIndex = 3
-
--- Stats panel (right column).
-
-local statsPanel = Instance.new("Frame")
-
-statsPanel.Name = "StatsPanel"
-
-statsPanel.Parent = panel
-
-statsPanel.Position = UDim2.new(1, -316, 0, BODY_Y + GRAPH_H + 8)
-
-statsPanel.Size = UDim2.new(0, 296, 1, -(BODY_Y + GRAPH_H + 20))
-
-statsPanel.BackgroundColor3 = GRAPH_BG
-
-statsPanel.BackgroundTransparency = 0.25
-
-statsPanel.ZIndex = 2
-
-local statLabels = {}
-
-local function addStat(name)
-
-    local cap = makeLabel(statsPanel, name, 11, DIM)
-
-    cap.Position = UDim2.new(0, 10, 0, 8 + #statLabels * 22)
-
-    cap.Size = UDim2.new(0, 140, 0, 16)
-
-    cap.ZIndex = 3
-
-    local val = makeLabel(statsPanel, "--", 12, TEXT)
-
-    val.Position = UDim2.new(0, 150, 0, 8 + #statLabels * 22)
-
-    val.Size = UDim2.new(0, 136, 0, 16)
-
-    val.ZIndex = 3
-
-    statLabels[#statLabels + 1] = { cap = cap, val = val }
-
-    return val
-
-end
-
-local statFrame = addStat("frame")
-
-local statNumZones = addStat("zones")
-
-local statLast = addStat("last")
-
-local statMin = addStat("min")
-
-local statMax = addStat("max")
-
-local statAvg = addStat("avg")
-
--- Zone rows.
-
-local rowObjs = {}
-
-for i = 1, MAX_ROWS do
-
-    local row = Instance.new("Frame")
-
-    row.Parent = rowArea
-
-    row.Position = UDim2.new(0, 8, 0, 26 + (i - 1) * ROW_H)
-
-    row.Size = UDim2.new(1, -16, 0, ROW_H - 2)
-
-    row.BackgroundColor3 = ROW_BG
-
-    row.BackgroundTransparency = 0.2
-
-    row.ZIndex = 3
-
-    local bar = Instance.new("Frame")
-
-    bar.Parent = row
-
-    bar.Size = UDim2.new(0, 0, 1, 0)
-
-    bar.BackgroundColor3 = Color3.new(0.3, 0.6, 0.3)
-
-    bar.BackgroundTransparency = 0.1
-
-    bar.ZIndex = 4
-
-    local name = makeLabel(row, "", 12, TEXT)
-
-    name.Position = UDim2.new(0, 6, 0, 0)
-
-    name.Size = UDim2.new(1, -110, 1, 0)
-
-    name.TextXAlignment = Enum.TextXAlignment.Left
-
-    name.ZIndex = 4
-
-    local time = makeLabel(row, "", 12, DIM)
-
-    time.Position = UDim2.new(1, -76, 0, 0)
-
-    time.Size = UDim2.new(0, 70, 1, 0)
-
-    time.TextXAlignment = Enum.TextXAlignment.Right
-
-    time.ZIndex = 4
-
-    rowObjs[i] = { bar = bar, name = name, time = time }
-
-end
-
--- Pause / navigation logic ---------------
-
+local headline = place(label("Headline", panel, "-- FPS", 21, white), 10, 4, 180, 30)
+local frameLabel = label("FrameTime", panel, "-- ms", 17, white)
+frameLabel.Position = UDim2.new(1, -150, 0, 4)
+frameLabel.Size = UDim2.fromOffset(140, 30)
+frameLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+local tabs = {"Frame", "CPU", "Luau", "GPU", "Net", "Objects"}
+local current = "Frame"
+local elapsed = 0
 local selected = 1
-
-local function pauseSet(on)
-
-    if on then
-
-        profiler:Pause()
-
-    else
-
-        profiler:Resume()
-
-    end
-
-    nav.Visible = on
-
-    pauseBtn.Text = on and "Resume" or "Pause"
-
+local tabButtons = {}
+local function button(name, text, parent)
+	local b = make("TextButton", name, parent)
+	b.BackgroundTransparency = 1
+	b.TextColor3 = dim
+	b.TextSize = 12
+	b.Text = text
+	return b
+end
+for i, tab in ipairs(tabs) do
+	local b = button(tab .. "Tab", tab, panel)
+	b.Position = UDim2.new((i - 1) / #tabs, 0, 0, 36)
+	b.Size = UDim2.new(1 / #tabs, 0, 0, 24)
+	tabButtons[tab] = b
+end
+local historyTitle = label("HistoryTitle", panel, "Frame time", 12, dim)
+historyTitle.Position = UDim2.fromOffset(10, 64)
+historyTitle.Size = UDim2.new(1, -20, 0, 16)
+local graph = make("Frame", "FrameGraph", panel)
+graph.Position = UDim2.fromOffset(10, 84)
+graph.Size = UDim2.new(1, -20, 0, 52)
+graph.BackgroundTransparency = 1
+graph.BorderSizePixel = 0
+local bars = {}
+for i = 1, points do
+	local bar = make("Frame", "Sample" .. i, graph)
+	bar.AnchorPoint = Vector2.new(0, 1)
+	bar.Position = UDim2.new((i - 1) / points, 0, 1, 0)
+	bar.Size = UDim2.new(1 / points, -1, 0, 0)
+	bar.BorderSizePixel = 0
+	bar.Visible = false
+	bars[i] = bar
 end
 
-pauseBtn.MouseButton1Click:Connect(function()
+local body = make("ScrollingFrame", "Metrics", panel)
+body.BackgroundTransparency = 1
+body.BorderSizePixel = 0
+body.ScrollBarThickness = 4
+body.ScrollingDirection = Enum.ScrollingDirection.Y
+body.CanvasSize = UDim2.fromOffset(0, 0)
+local rows = {}
+local rowHeight = 20
+local metricData = {}
+local renderedStart = -1
+local function makeRow(i)
+	local row = make("Frame", "Row" .. i, body)
+	row.Position = UDim2.fromOffset(0, (i - 1) * rowHeight)
+	row.Size = UDim2.new(1, -8, 0, rowHeight)
+	row.BackgroundTransparency = 1
+	local bar = make("Frame", "Bar", row)
+	bar.Size = UDim2.new(0, 0, 1, -2)
+	bar.BackgroundColor3 = green
+	bar.BackgroundTransparency = 0.8
+	bar.BorderSizePixel = 0
+	local name = label("Name", row, "", 12, dim)
+	name.Position = UDim2.fromOffset(2, 0)
+	name.Size = UDim2.new(0.66, -4, 1, 0)
+	local value = label("Value", row, "", 12, white)
+	value.Position = UDim2.new(0.66, 0, 0, 0)
+	value.Size = UDim2.new(0.34, -2, 1, 0)
+	value.TextXAlignment = Enum.TextXAlignment.Right
+	return {row = row, bar = bar, name = name, value = value}
+end
+local footer = label("Footer", panel, "F2 hide", 11, dim)
+footer.Position = UDim2.new(0, 10, 1, -24)
+footer.Size = UDim2.new(1, -170, 0, 20)
+local pause = button("PauseButton", "Pause", panel)
+pause.Position = UDim2.new(1, -66, 1, -24)
+pause.Size = UDim2.fromOffset(56, 20)
+local older = button("Older", "<", panel)
+older.Position = UDim2.new(1, -116, 1, -24)
+older.Size = UDim2.fromOffset(24, 20)
+local newer = button("Newer", ">", panel)
+newer.Position = UDim2.new(1, -92, 1, -24)
+newer.Size = UDim2.fromOffset(24, 20)
+older.Visible = false
+newer.Visible = false
 
-    pauseSet(not profiler.Paused)
-
+for tab, b in pairs(tabButtons) do
+	b.MouseButton1Click:Connect(function()
+		current = tab
+		body.CanvasPosition = Vector2.new(0, 0)
+		elapsed = 0.2
+	end)
+end
+pause.MouseButton1Click:Connect(function()
+	if profiler.Paused then profiler:Resume() else profiler:Pause() end
+	selected = 1
+	elapsed = 0.2
+end)
+older.MouseButton1Click:Connect(function()
+	selected = math.min(selected + 1, math.max(profiler.FrameCount, 1))
+	elapsed = 0.2
+end)
+newer.MouseButton1Click:Connect(function()
+	selected = math.max(selected - 1, 1)
+	elapsed = 0.2
 end)
 
-prevBtn.MouseButton1Click:Connect(function()
+local function number(value, suffix, decimals)
+	if type(value) ~= "number" then return "--" end
+	return string.format("%." .. (decimals or 0) .. "f%s", value, suffix or "")
+end
+local function ms(value)
+	return number(value, " ms", 2)
+end
+local function memory(value)
+	if type(value) ~= "number" then return "--" end
+	if math.abs(value) >= 1048576 then return number(value / 1048576, " MiB", 2) end
+	if math.abs(value) >= 1024 then return number(value / 1024, " KiB", 1) end
+	return number(value, " B")
+end
+local function fields(data, values, add)
+	for _, field in ipairs(values) do
+		local value = data[field[2]]
+		if type(value) == "boolean" then
+			value = value and "Yes" or "No"
+		elseif field[3] then
+			value = field[3](value)
+		else
+			value = number(value)
+		end
+		add(field[1], value)
+	end
+end
 
-    -- Previous = older frame = larger index (1 = newest).
-
-    if selected < profiler.FrameCount then
-
-        selected = selected + 1
-
-    end
-
-end)
-
-nextBtn.MouseButton1Click:Connect(function()
-
-    -- Next = newer frame = smaller index.
-
-    if selected > 1 then
-
-        selected = selected - 1
-
-    end
-
-end)
+local function renderRows(force)
+	local first = math.max(1, math.floor(body.CanvasPosition.Y / rowHeight) + 1)
+	if not force and first == renderedStart then return end
+	renderedStart = first
+	for i = 1, 24 do
+		local index = first + i - 1
+		local entry = metricData[index]
+		local row = rows[i]
+		if entry then
+			if not row then
+				row = makeRow(i)
+				rows[i] = row
+			end
+			row.row.Position = UDim2.fromOffset(0, (index - 1) * rowHeight)
+			row.row.Visible = true
+			row.name.Text = entry[1]
+			row.name.TextColor3 = entry[2] == "" and blue or dim
+			row.value.Text = entry[2]
+			row.bar.Size = UDim2.new(math.clamp(entry[3], 0, 1), 0, 1, -2)
+			row.bar.BackgroundColor3 = entry[4]
+		elseif row then
+			row.row.Visible = false
+		end
+	end
+end
 
 local function update()
-
-    local enabled = profiler.Enabled
-
-    if screenGui.Enabled ~= enabled then
-
-        screenGui.Enabled = enabled
-
-    end
-
-    if not enabled then
-
-        return
-
-    end
-
-    local stats = profiler:GetFrameStats()
-
-    local paused = profiler.Paused
-
-    pauseBtn.Text = paused and "Resume" or "Pause"
-
-    nav.Visible = paused
-
-    -- Selected frame data. When live, use the newest frame; when paused,
-
-    -- drop down to the recorded frame and make it the newest selection.
-
-    local frameMs = stats.frameMs
-
-    local fps = stats.fps
-
-    local zones = stats.zones
-
-    if paused then
-
-        local count = profiler.FrameCount
-
-        if selected < 1 then
-
-            selected = 1
-
-        end
-
-        if selected > math.max(count, 1) then
-
-            selected = math.max(count, 1)
-
-        end
-
-        local rec = profiler:GetFrameRecord(selected)
-
-        if rec then
-
-            frameMs = rec.frameMs
-
-            fps = rec.fps
-
-            zones = rec.zones
-
-        end
-
-        frameLabel.Text = string.format("frame %d/%d", selected, count)
-
-    else
-
-        selected = 1
-
-        frameLabel.Text = "frame --/--"
-
-    end
-
-    -- Header / fps line.
-
-    if frameMs > 0 then
-
-        header.Text = string.format("FPS %.1f   frame %.3f ms", fps, frameMs)
-
-        statFrame.Text = string.format("%.2f ms / %.1f fps", frameMs, fps)
-
-    else
-
-        header.Text = "FPS --   frame --"
-
-        statFrame.Text = "--"
-
-    end
-
-    local zoneCount = 0
-
-    if zones then
-
-        for _ in ipairs(zones) do
-
-            zoneCount = zoneCount + 1
-
-        end
-
-    end
-
-    statNumZones.Text = tostring(zoneCount)
-
-    -- Graph of frame times.
-
-    local graphMax = 1
-
-    for _, ms in ipairs(stats.history) do
-
-        if ms > graphMax then
-
-            graphMax = ms
-
-        end
-
-    end
-
-    barWidth = math.max(math.floor((graph.AbsoluteSize.X - 16) / GRAPH_POINTS), 1)
-
-    for i = 1, GRAPH_POINTS do
-
-        local ms = stats.history[i]
-
-        local h = 0
-
-        if ms and ms > 0 then
-
-            h = math.floor(math.min(ms / graphMax, 1) * (GRAPH_H - 28))
-
-            if h < 1 then
-
-                h = 1
-
-            end
-
-        end
-
-        graphBars[i].Position = UDim2.new(0, 8 + (i - 1) * barWidth, 0, GRAPH_H - 8)
-
-        graphBars[i].AnchorPoint = Vector2.new(0, 1)
-
-        graphBars[i].BackgroundColor3 = ACCENT
-
-        graphBars[i].Size = UDim2.new(0, math.max(barWidth - 1, 1), 0, h)
-
-    end
-
-    -- Min/max/avg of the history window.
-
-    if stats.history and #stats.history > 0 then
-
-        local mn, mx, sum, n = math.huge, 0, 0, 0
-
-        for _, ms in ipairs(stats.history) do
-
-            if ms > 0 then
-
-                if ms < mn then mn = ms end
-
-                if ms > mx then mx = ms end
-
-                sum = sum + ms
-
-                n = n + 1
-
-            end
-
-        end
-
-        if n > 0 then
-
-            statMin.Text = string.format("%.3f ms", mn)
-
-            statMax.Text = string.format("%.3f ms", mx)
-
-            statAvg.Text = string.format("%.3f ms", sum / n)
-
-            statLast.Text = string.format("%.3f ms", stats.history[1])
-
-        else
-
-            statMin.Text = "--"
-
-            statMax.Text = "--"
-
-            statAvg.Text = "--"
-
-            statLast.Text = "--"
-
-        end
-
-    end
-
-    -- Zones sorted by time, rendered as bars.
-
-    table.sort(zones or {}, function(a, b)
-
-        return a.ms > b.ms
-
-    end)
-
-    for i = 1, MAX_ROWS do
-
-        local row = rowObjs[i]
-
-        local zone = zones and zones[i]
-
-        if zone then
-
-            row.name.Text = zone.name
-
-            row.time.Text = string.format("%.3f ms", zone.ms)
-
-            row.bar.Size = UDim2.new(0, math.floor(math.min(zone.ms / math.max(frameMs, 0.001), 1) * 280), 1, 0)
-
-            row.bar.BackgroundColor3 = colorFromRGB(zone.color)
-
-            row.Visible = true
-
-        else
-
-            row.name.Text = ""
-
-            row.time.Text = ""
-
-            row.bar.Size = UDim2.new(0, 0, 1, 0)
-
-            row.Visible = false
-
-        end
-
-    end
-
+	local stats = profiler:GetFrameStats()
+	local history = stats.history or {}
+	local zones = stats.zones or {}
+	local frameMs = stats.frameMs or 0
+	local fps = stats.fps or 0
+	local paused = profiler.Paused
+	local record
+	if paused then
+		selected = math.clamp(selected, 1, math.max(profiler.FrameCount, 1))
+		record = profiler:GetFrameRecord(selected)
+		if record then
+			frameMs = record.frameMs or 0
+			fps = record.fps or 0
+			zones = record.zones or {}
+		end
+	else
+		selected = 1
+	end
+	headline.Text = number(fps, " FPS", 1)
+	frameLabel.Text = ms(frameMs)
+	for tab, b in pairs(tabButtons) do
+		b.TextColor3 = tab == current and white or dim
+	end
+	local width = math.min(460, math.max(180, screen.AbsoluteSize.X - 20))
+	local height = math.min(430, math.max(150, screen.AbsoluteSize.Y - 20))
+	if screen.AbsoluteSize.X > 0 and screen.AbsoluteSize.Y > 0 then
+		panel.Size = UDim2.fromOffset(width, height)
+	end
+	local showGraph = current == "Frame"
+	graph.Visible = showGraph
+	historyTitle.Visible = showGraph
+	local bodyY = showGraph and 142 or 64
+	body.Position = UDim2.fromOffset(10, bodyY)
+	body.Size = UDim2.new(1, -20, 1, -(bodyY + 28))
+	local data = {}
+	local function add(name, value, fraction, color)
+		data[#data + 1] = {name, tostring(value or "--"), fraction or 0, color or green}
+	end
+	local function heading(name)
+		add(name, "", 0, blue)
+	end
+	if current == "Frame" then
+		local peak, minimum, total = 0, math.huge, 0
+		for _, t in ipairs(history) do
+			peak = math.max(peak, t)
+			minimum = math.min(minimum, t)
+			total += t
+		end
+		local average = #history > 0 and total / #history or nil
+		historyTitle.Text = "Frame time history    " .. tostring(#history) .. " samples"
+		for i, bar in ipairs(bars) do
+			local t = history[points - i + 1]
+			bar.Visible = t ~= nil and t > 0
+			if t and t > 0 then
+				bar.Size = UDim2.new(1 / points, -1, math.clamp(t / math.max(peak, 16.67), 0, 1), 0)
+				bar.BackgroundColor3 = t > 16.67 and amber or green
+			end
+		end
+		heading("FRAME STATISTICS")
+		add("Average", ms(average))
+		add("Minimum", ms(#history > 0 and minimum or nil))
+		add("Maximum", ms(#history > 0 and peak or nil))
+		add("Frame budget (display)", stats.displayRefreshHz > 0 and ms(1000 / stats.displayRefreshHz) or "--")
+		add("Display refresh", stats.displayRefreshHz > 0 and number(stats.displayRefreshHz, " Hz", 1) or "--")
+		add("GPU frame (live)", stats.gpuFrameValid and ms(stats.gpuFrameMs) or "--")
+		add("GPU queue (live)", stats.queueFrameValid and ms(stats.queueFrameMs) or "--")
+		add("Captured frames", number(stats.frameCount))
+		add("Capture", paused and "Paused" or "Live")
+		add("History collection", stats.collectionEnabled and "On" or "Off")
+		add("CPU zones", number(#zones))
+	elseif current == "CPU" then
+		heading("CPU ZONES (INCLUSIVE)")
+		local byName = {}
+		for _, zone in ipairs(zones) do
+			local item = byName[zone.name]
+			if not item then
+				item = {name = zone.name, ms = 0, count = 0}
+				byName[zone.name] = item
+			end
+			item.ms += zone.ms
+			item.count += 1
+		end
+		local sorted = {}
+		for _, item in pairs(byName) do sorted[#sorted + 1] = item end
+		table.sort(sorted, function(a, b) return a.ms > b.ms or (a.ms == b.ms and a.name < b.name) end)
+		for _, zone in ipairs(sorted) do
+			add(zone.name .. " (" .. zone.count .. ")", ms(zone.ms), zone.ms / math.max(frameMs, 0.001))
+		end
+		if #sorted == 0 then add("No captured zones", "--") end
+	elseif current == "Luau" then
+		heading("LUAU VM (LIVE)")
+		local threads = profiler:GetThreadStats()
+		fields(threads, {
+			{"Heap", "heapBytes", memory}, {"Tracked live allocations", "trackedLiveBytes", memory},
+			{"Allocation rate", "allocationRateBytesPerSecond", function(v) return memory(v) .. "/s" end},
+			{"Allocated this frame", "frameAllocatedBytes", memory}, {"Freed this frame", "frameFreedBytes", memory},
+			{"Active threads", "threads"}, {"Retired threads", "deadThreads"},
+			{"Frame CPU", "frameCpuMs", ms}, {"Inclusive frame CPU", "frameTotalCpuMs", ms},
+			{"Total CPU", "totalCpuMs", ms}, {"Frame resumes", "frameResumes"}, {"Tracking", "trackingEnabled"},
+		}, add)
+		heading("GARBAGE COLLECTION")
+		local gc = profiler:GetGCStats()
+		add("GC timing", gc.enabled and "On" or "Off")
+		add("Total", ms(record and record.gcMs or gc.totalMs))
+		add("Longest step", ms(record and record.gcMaxStepMs or gc.maxStepMs))
+		add("Steps", number(record and record.gcSteps or gc.steps))
+		heading("SCRIPTS (LIVE TOTAL CPU)")
+		local scripts = profiler:GetScripts()
+		table.sort(scripts, function(a, b) return a.CpuMs > b.CpuMs or (a.CpuMs == b.CpuMs and a.Name < b.Name) end)
+		for _, item in ipairs(scripts) do
+			add(item.Name, ms(item.CpuMs))
+			add("   Allocated / live", memory(item.AllocatedBytes) .. " / " .. memory(item.LiveBytes))
+			add("   Threads / resumes", number(item.AliveThreads) .. " / " .. number(item.Resumes))
+		end
+		heading(paused and "THREADS (SELECTED FRAME)" or "THREADS (LIVE FRAME CPU)")
+		local threadHistory = paused and profiler:GetThreadHistory(selected) or nil
+		local list = paused and (threadHistory and threadHistory.threads or {}) or profiler:GetThreads()
+		table.sort(list, function(a, b) return (a.FrameCpuMs or a.cpuMs or 0) > (b.FrameCpuMs or b.cpuMs or 0) end)
+		for _, item in ipairs(list) do
+			add(item.Name or item.name or "Thread", ms(item.FrameCpuMs or item.cpuMs))
+			add("   " .. (item.Status or "Captured") .. " / allocated", memory(item.FrameAllocatedBytes or item.allocatedBytes))
+		end
+	elseif current == "GPU" then
+		heading("RENDERER (LIVE)")
+		add("GPU frame", stats.gpuFrameValid and ms(stats.gpuFrameMs) or "--")
+		add("GPU queue", stats.queueFrameValid and ms(stats.queueFrameMs) or "--")
+		add("GPU frame ID", stats.gpuFrameValid and number(stats.gpuFrameId) or "--")
+		add("Queue frame ID", stats.queueFrameValid and number(stats.queueFrameId) or "--")
+		add("Queue base / Skia", stats.queueStagesValid and ms(stats.queueBaseMs) or "--")
+		add("Queue 3D + overlay", stats.queueStagesValid and ms(stats.queueRenderMs) or "--")
+		if stats.queueDetailValid then
+			add("Queue Filament", ms(stats.queueFilamentMs))
+			add("Queue overlay", ms(stats.queueOverlayMs))
+		end
+		if stats.odinPresentActive then
+			heading("ODIN PRESENTATION")
+			add("Mode", stats.odinPresentAsync and "Asynchronous" or "Synchronous")
+			add("WSI call (completed)", stats.odinPresentFrameId > 0 and ms(stats.odinPresentCallMs) or "--")
+			add("Main thread drain", ms(stats.odinPresentDrainMs))
+			add("Present frame ID", number(stats.odinPresentFrameId))
+			add("Prefetch hits", number(stats.odinPrefetchHits))
+			add("Prefetch misses", number(stats.odinPrefetchMisses))
+		end
+		add("Resolution scale", stats.renderBatches and number(stats.renderScale * 100, "%", 1) or "--")
+		add("Shadow map", stats.effectiveShadowMapSize > 0 and number(stats.effectiveShadowMapSize, " px") or "--")
+		heading("WORLD AND VIEWPORTS")
+		add("World rendered", number(stats.worldRenderFrames))
+		add("World skipped", number(stats.worldSkippedFrames))
+		add("Viewport renders / frame", number(stats.viewportRendersFrame))
+		add("Viewport renders total", number(stats.viewportRenders))
+		add("Viewport renders reused", number(stats.viewportReused))
+		add("Viewport cross-frame reuse", number(stats.viewportPersistent))
+		add("Dirty camera", number(stats.worldDirtyCamera))
+		add("Dirty part", number(stats.worldDirtyPart))
+		add("Dirty hierarchy", number(stats.worldDirtyHierarchy))
+		add("Dirty other", number(stats.worldDirtyOther))
+		add("Viewport handles", number(stats.viewportHandles))
+		add("Viewport atlas pages", number(stats.viewportAtlasPages))
+		heading("LAST FILAMENT FRAME / VIEW SUBMISSIONS")
+		fields(stats.renderPasses or {}, {
+			{"World views", "world"}, {"Cloud offscreen", "clouds"}, {"Water contact depth", "waterDepth"},
+			{"Shared depth", "sharedDepth"}, {"Custom depth", "customDepth"}, {"Screen effects", "screenEffects"},
+			{"Custom post", "customPost"}, {"Outline mask", "outlineMask"}, {"Outline composite", "outlineComposite"},
+			{"Reflection faces", "reflectionFaces"}, {"Preview scenes", "viewportScene"}, {"Preview clears", "viewportClear"},
+			{"Preview atlas copies", "viewportCopy"}, {"Shadowed previews", "viewportShadow"}, {"Preview present", "viewportPresent"},
+		}, add)
+		heading("RENDER BATCHES")
+		fields(stats.renderBatches or {}, {
+			{"Active batches", "activeBatches"}, {"Active chunks", "activeChunks"},
+			{"Retained chunks", "retainedChunks"}, {"Created chunks", "createdChunks"},
+			{"Destroyed chunks", "destroyedChunks"}, {"Unchanged batches", "unchangedBatches"},
+			{"Transform uploads", "transformUploads"}, {"Color uploads", "colorUploads"},
+			{"UV uploads", "uvUploads"}, {"Bounds updates", "boundsUpdates"},
+		}, add)
+	elseif current == "Net" then
+		heading("REPLICATION (LIVE)")
+		local ok, network = pcall(function() return game:GetService("ReplicatorService"):GetStats() end)
+		if ok and type(network) == "table" then
+			local keys = {}
+			for key in pairs(network) do keys[#keys + 1] = key end
+			table.sort(keys)
+			for _, key in ipairs(keys) do
+				local value = network[key]
+				if type(value) == "boolean" then value = value and "Yes" or "No"
+				elseif key == "bytesSent" or key == "bytesReceived" then value = memory(value)
+				elseif type(value) == "number" then value = number(value, "", value % 1 == 0 and 0 or 3) end
+				local caption = key:gsub("(%l)(%u)", "%1 %2")
+				add(caption:sub(1, 1):upper() .. caption:sub(2), value)
+			end
+		else
+			add("Replication metrics unavailable", "--")
+		end
+	elseif current == "Objects" then
+		heading("ENGINE OBJECTS (LIVE)")
+		local objects = profiler:GetObjectStats()
+		table.sort(objects.classes, function(a, b) return a.count > b.count or (a.count == b.count and a.name < b.name) end)
+		add("Registered instances", number(objects.total))
+		local ok, awake = pcall(function() return game:GetService("Workspace"):GetNumAwakeParts() end)
+		add("Awake physics parts", ok and number(awake) or "--")
+		heading("INSTANCES BY CLASS")
+		for _, item in ipairs(objects.classes) do add(item.name, number(item.count)) end
+	end
+	metricData = data
+	body.CanvasSize = UDim2.fromOffset(0, #metricData * rowHeight)
+	renderRows(true)
+	pause.Text = paused and "Resume" or "Pause"
+	older.Visible = paused
+	newer.Visible = paused
+	footer.Text = paused and string.format("Frame %d/%d     F2 hide", selected, profiler.FrameCount) or "F2 hide"
 end
 
 while true do
-
-    task.wait()
-
-    update()
-
+	local enabled = profiler.Enabled
+	if screen.Enabled ~= enabled then
+		screen.Enabled = enabled
+		elapsed = 0.2
+	end
+	if enabled and elapsed >= 0.2 then
+		update()
+		elapsed = 0
+	elseif enabled then
+		renderRows(false)
+	end
+	elapsed += task.wait()
 end
-
 `
 
 Register_ProfilerOverlay :: proc(registry: ^Registry, vm_state: ^vm.VM) {
-
+	if registry.classes.renderer == nil || registry.mode == .Server {return}
 	script_object, script_ok := classes.Push_New(registry.classes, vm_state, "Script", false)
-
 	assert(script_ok && script_object != nil)
-
 	defer vm.Pop(vm_state.L)
 
 	classes.Set_Name(script_object, "ProfilerOverlay")
-
-	classes.Script_Set_Source(cast(^classes.Script)script_object, PROFILER_OVERLAY_SOURCE)
-
+	script_object.archivable = false
+	classes.Set_Can_Replicate(script_object, false)
+	script := cast(^classes.Script)script_object
+	script.run_as_plugin = true
+	script.run_context = .Client
+	classes.Script_Set_Source(script, PROFILER_OVERLAY_SOURCE)
 	classes.Set_Parent(script_object, &registry.data_model.object)
-
 }

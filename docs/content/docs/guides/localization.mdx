@@ -1,156 +1,104 @@
 ---
 title: Localization
-description: Read and set locale identifiers, then drive your own translation table and interface text.
+description: Translate interface text using dictionaries and localization tables, and remember a player's language choice.
 ---
 
-`LocalizationService` exposes two locale identifiers: the locale the game should present and the locale of the host system. It stores and reports those strings, but it doesn't translate anything by itself. There's no `LocalizationTable`, translator, or automatic UI translation in the current API.
+Use [LocalizationService](/docs/services/LocalizationService) to change the language of your interface without replacing every label's `Text` property. You supply the translations; the service looks up the matching string for the selected locale.
 
-That makes localization a small, explicit system in your game: choose a locale, set it on the service, and look up your own strings.
+## Load a dictionary
 
-## Read the current locale
+Put this code in a LocalScript to select French for the local interface:
 
 ```lua
-local LocalizationService = game:GetService("LocalizationService")
+local localization = game:GetService("LocalizationService")
 
-print(LocalizationService.RobloxLocaleId)  -- en-us
-print(LocalizationService.SystemLocaleId)  -- en-us
+local loaded = localization:LoadTranslations("fr-fr", [[
+{
+    "Welcome": "Bienvenue",
+    "Play": "Jouer",
+    "Settings": "Paramètres"
+}
+]])
+
+if loaded then
+    localization:SetLocale("fr-fr")
+end
 ```
 
-Both default to `"en-us"`. Platform locale detection isn't wired up yet, so these values don't reflect the player's machine until something sets them. They also aren't persisted between runs.
+If you set a TextLabel or TextButton to `"Play"`, it displays `"Jouer"` when French is selected. Reading its `Text` property still returns `"Play"`.
 
-Assigning `RobloxLocaleId` or `SystemLocaleId` directly has no effect. Use `SetLocale()`.
-
-## Set a locale
+To translate a string yourself, call `Translate()`:
 
 ```lua
-LocalizationService:SetLocale("fr-fr", "fr-fr")
-
-print(LocalizationService.RobloxLocaleId)  -- fr-fr
-print(LocalizationService.SystemLocaleId)  -- fr-fr
+print(localization:Translate("Settings"))
 ```
 
-Pass the second argument only when you want to update the system identifier too. An empty locale raises an error. The strings aren't validated beyond that: `"fr"`, `"fr-fr"`, and `"fr-FR"` are stored exactly as given, so normalize them yourself if you accept user input.
+The service returns the original string if it can't find a translation. Matching source strings is case-sensitive.
 
-## Build a translation table
+## Organize translations in an instance
 
-Keep strings in one module keyed by locale, with a shared fallback:
+Use a [LocalizationTable](/docs/LocalizationTable) when you want your translations to live alongside your project rather than in a JSON dictionary.
 
 ```lua
-local strings = {
-    ["en-us"] = {
-        greeting = "Welcome",
-        play = "Play",
-        settings = "Settings",
+local localization = game:GetService("LocalizationService")
+local translations = Instance.new("LocalizationTable", localization)
+
+translations:SetEntries({
+    {
+        Key = "play",
+        Source = "Play",
+        Values = {
+            ["fr-fr"] = "Jouer",
+            ["de-de"] = "Spielen",
+        },
     },
-    ["fr-fr"] = {
-        greeting = "Bienvenue",
-        play = "Jouer",
-        settings = "Paramètres",
+    {
+        Key = "settings",
+        Source = "Settings",
+        Values = {
+            ["fr-fr"] = "Paramètres",
+            ["de-de"] = "Einstellungen",
+        },
     },
-}
+})
 
-local function translate(key)
-    local locale = LocalizationService.RobloxLocaleId
-    local language = strings[locale] or strings["en-us"]
-    return language[key] or key
-end
+localization:SetLocale("de-de")
+print(localization:Translate("Play"))
 ```
 
-Returning the key when a translation is missing makes a missing string visible instead of blank. If you prefer a louder failure, return a placeholder such as `"[missing: greeting]"`.
+Parent the table directly to the service so it can find the entries. Tables take precedence over loaded JSON dictionaries. You can also give an entry a context path to distinguish identical source strings used in different parts of the interface.
 
-## Apply it to the interface
-
-Create a refresh function and call it whenever the locale changes:
+## Switch languages
 
 ```lua
-local Players = game:GetService("Players")
-local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-local greetingLabel = playerGui:WaitForChild("Greeting")
-
-local function refresh()
-    greetingLabel.Text = translate("greeting")
+local function selectLanguage(locale)
+    if locale == "en-us" or locale == "fr-fr" or locale == "de-de" then
+        localization:SetLocale(locale)
+    end
 end
 
-LocalizationService:SetLocale("fr-fr", "fr-fr")
-refresh()
+selectLanguage("fr-fr")
 ```
 
-There's no locale-change event. If more than one script needs to react, give them one function to call or a `BindableEvent` that your settings screen fires after `SetLocale()`.
+The game locale is normalized to lowercase. An empty locale raises an error. Use `localization.RobloxLocaleId` to read the selected language. The optional second argument to `SetLocale()` changes `SystemLocaleId`; it isn't necessary when a player selects a language.
 
-Keep the refresh cheap. Reading the locale and assigning `Text` is fine; rebuilding whole screens on every frame is not.
+Existing labels and buttons update when the language changes. Editable text boxes aren't translated automatically.
 
-## Format numbers and dates yourself
+## Remember the language
 
-The locale identifier doesn't change how `string.format()` or numbers render. If a language uses different decimal separators, grouping, or date order, format those values in your own helpers:
+Locale settings and loaded dictionaries are held for the current session. Save a player's choice with [DataStoreService](/docs/services/DataStoreService) if you want to restore it on their next visit.
 
-```lua
-local formatters = {
-    ["en-us"] = function(value)
-        return string.format("%.1f", value)
-    end,
-    ["fr-fr"] = function(value)
-        return (string.format("%.1f", value):gsub("%.", ","))
-    end,
-}
+Validate the choice against your supported languages before saving it on the server. Send the saved preference to the client and apply it with `SetLocale()`. See [Saving player data](/docs/guides/saving-player-data) for the persistence workflow.
 
-local function formatNumber(value)
-    local locale = LocalizationService.RobloxLocaleId
-    local format = formatters[locale] or formatters["en-us"]
-    return format(value)
-end
-```
+## What isn't translated automatically?
 
-This is intentionally small. A full internationalization layer is your own module, not something the current service supplies.
+- The service doesn't detect the operating system's language yet. Both locale identifiers start at `en-us`.
+- Number and date formatting, plural forms, and parameterized translation expressions need your own formatting code.
+- Missing translations display the source string instead of falling back to another language's dictionary.
+- There is no locale-change event. If your scripts produce their own translated strings, call your refresh function when changing the locale.
 
-## Let the player choose
+## See also
 
-A settings menu can offer a short list and set the locale directly:
-
-```lua
-local options = {
-    { label = "English", locale = "en-us" },
-    { label = "Français", locale = "fr-fr" },
-}
-
-local function chooseLocale(locale)
-    LocalizationService:SetLocale(locale, locale)
-    refresh()
-end
-```
-
-The service lives on both server and client, but interface language is usually a client concern. Set it on the client that displays the text, unless you intentionally want a server-wide locale.
-
-## Persist the choice
-
-`SetLocale()` lasts for the session only. If the player should keep their language, save the locale string and apply it on join.
-
-Server-side persistence with `DataStoreService`:
-
-```lua
-local data = {
-    locale = "fr-fr",
-}
-
-saves:SetAsync(tostring(player.UserId), data)
-```
-
-On the client, read the saved value through whatever your game already replicates (a player attribute or a remote event), then call `SetLocale()` before building the interface. See [Saving player data](/docs/guides/saving-player-data) for the save/load flow.
-
-Don't set the locale from an unvalidated client string without checking it against your supported list. Unknown locales will simply fall back to your default table, but a typo is easier to diagnose if you reject it explicitly.
-
-## Common failures
-
-| Symptom | Likely cause |
-| --- | --- |
-| Text never changes | The service stores identifiers; your code still has to read them and swap strings. |
-| Assigning `RobloxLocaleId` does nothing | It's read-only. Call `SetLocale()`. |
-| Locale resets on rejoin | Nothing persists it. Save the choice and apply it on join. |
-| `SystemLocaleId` isn't the player's OS language | Detection isn't wired up; both fields start at `en-us`. |
-| Some strings show raw keys | The key is missing from the active language and the fallback table. |
-| A language switch updates one label only | There's no change event; call every refresh function from one place. |
-
-## Next steps
-
-- `LocalizationService` for the locale property and method reference.
-- [Saving player data](/docs/guides/saving-player-data) for persisting a language choice.
-- [Input and UI](/docs/guides/input-and-ui) for building the settings screen.
+- [LocalizationService](/docs/services/LocalizationService) for dictionary loading and locale selection.
+- [LocalizationTable](/docs/LocalizationTable) for entries and context-specific translations.
+- [Input and UI](/docs/guides/input-and-ui) for building a language settings screen.

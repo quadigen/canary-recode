@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D skyViewLut;
+layout(set = 0, binding = 1, std430) buffer Result { uint values[]; };
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(skyViewLut);
+    if (any(greaterThanEqual(p, size))) return;
+    uint index = uint(p.x + p.y * size.x) * 2u;
+    vec4 v = imageLoad(skyViewLut, p);
+    values[index] = packHalf2x16(v.rg);
+    values[index + 1u] = packHalf2x16(v.ba);
+}

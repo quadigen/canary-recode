@@ -245,11 +245,17 @@ Part2D_namecall :: proc(
 		impulse := datatypes.Arg_Vector2(L, 2, dr)
 		total := part.pending_impulse + [2]f32{impulse.X, impulse.Y}
 		if !part2d_finite(total[0]) ||
-		   !part2d_finite(total[1]) {return vm.RaiseError(L, "Impulse must be finite"), true}
+		   !part2d_finite(total[1]) ||
+		   abs(total[0]) > 1.0e8 ||
+		   abs(total[1]) > 1.0e8 {
+			return vm.RaiseError(L, "Impulse exceeds safe physics limits"), true
+		}
 		if !part.anchored {part.pending_impulse = total}
 	case "ApplyAngularImpulse":
 		total := part.pending_angular_impulse + f32(vm.ArgNumber(L, 2))
-		if !part2d_finite(total) {return vm.RaiseError(L, "Angular impulse must be finite"), true}
+		if !part2d_finite(total) || abs(total) > 1.0e8 {
+			return vm.RaiseError(L, "Angular impulse exceeds safe physics limits"), true
+		}
 		if !part.anchored {part.pending_angular_impulse = total}
 	case:
 		return 0, false

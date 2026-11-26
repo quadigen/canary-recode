@@ -2,6 +2,7 @@ package main
 
 import classes "../src/engine/classes"
 import guilib "../src/engine/gui"
+import profiling "../src/engine/profiling"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
 import "core:fmt"
@@ -101,6 +102,71 @@ main :: proc() {
 	environment: engine_runtime.Environment
 	engine_runtime.Environment_Init(&environment, &script_vm)
 
+
+	run_script(
+		&script_vm,
+		`
+PERF_ROOTS = {}
+for i=1,128 do
+    local screen=Instance.new("ScreenGui")
+    screen.Enabled = i==1
+    local root=Instance.new("Frame",screen)
+    root.Name="PerfRoot"..i
+    root.Size=UDim2.fromOffset(100,30)
+    local child=Instance.new("Frame",root)
+    child.Size=UDim2.fromScale(1,1)
+    PERF_ROOTS[i]=screen
+end
+`,
+		"layout_incremental_setup",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	profiling.set_collection_enabled(true)
+	profiling.frame_flush()
+	run_script(
+		&script_vm,
+		`PERF_ROOTS[1].PerfRoot1.Size=UDim2.fromOffset(120,30)`,
+		"layout_incremental_edit",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	measures: u64
+	for zone in profiling.accumulated_zones() {
+		assert(zone.name != "GUI Root Rebuild", "local size edit must not rebuild global roots")
+		if zone.name == "GUI Measure" {measures += zone.count}
+	}
+	assert(measures > 0 && measures <= 8, "only one root may be measured")
+	expect_close(
+		"incremental edited root width",
+		find_gui(&environment, "PerfRoot1").absolute_size.X,
+		120,
+	)
+	expect_close(
+		"inactive root retains geometry",
+		find_gui(&environment, "PerfRoot2").absolute_size.X,
+		100,
+	)
+	profiling.set_collection_enabled(false)
+	run_script(
+		&script_vm,
+		`
+PERF_ROOTS[2].PerfRoot2.Size=UDim2.fromOffset(150,30)
+`,
+		"layout_hidden_explicit_edit",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	expect_close(
+		"inactive explicit edit geometry",
+		find_gui(&environment, "PerfRoot2").absolute_size.X,
+		150,
+	)
+	run_script(
+		&script_vm,
+		`for _,screen in PERF_ROOTS do screen:Destroy() end PERF_ROOTS=nil`,
+		"layout_incremental_destroy",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+
 	run_script(
 		&script_vm,
 		`
@@ -179,12 +245,20 @@ refreshLayoutProperties(10)
 	revision = classes.gui_render_revision
 	run_script(&script_vm, "refreshLayoutAppearance()", "gui_layout_property_refresh_appearance")
 	assert(!classes.gui_layout_dirty, "appearance update invalidated GUI layout")
-	assert(classes.gui_render_revision > revision, "appearance update did not invalidate rendering")
+	assert(
+		classes.gui_render_revision > revision,
+		"appearance update did not invalidate rendering",
+	)
 	revision = classes.gui_render_revision
 	run_script(&script_vm, "refreshLayoutProperties(11)", "gui_layout_property_refresh_changed")
-	assert(classes.gui_render_revision > revision, "changed position did not invalidate GUI layout")
+	assert(
+		classes.gui_render_revision > revision,
+		"changed position did not invalidate GUI layout",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local screen = Instance.new("ScreenGui")
 screen.Size = Vector2.new(200, 100)
 layoutInput = Instance.new("TextBox", screen)
@@ -192,28 +266,42 @@ layoutInput.Name = "LayoutInput"
 layoutInput.Position = UDim2.fromOffset(10, 20)
 layoutInput.Size = UDim2.fromScale(0.5, 0.5)
 layoutScreen = screen
-`, "gui_layout_text_box_setup")
+`,
+		"gui_layout_text_box_setup",
+	)
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
 	input := find_gui(&environment, "LayoutInput")
 	expect_object("LayoutInput", input)
 	expect_close("text box width", input.absolute_size.X, 100)
 
 	revision = classes.Gui_Render_Revision()
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 layoutInput.Position = UDim2.fromOffset(10, 20)
 layoutInput.Size = UDim2.fromScale(0.5, 0.5)
 layoutInput.Text = layoutInput.Text
 layoutScreen.Size = Vector2.new(200, 100)
-`, "gui_layout_text_box_unchanged")
+`,
+		"gui_layout_text_box_unchanged",
+	)
 	assert(!classes.gui_layout_dirty && classes.Gui_Render_Revision() == revision)
 
-	run_script(&script_vm, `layoutInput.TextColor3 = Color3.new(1, 0, 0)`, "gui_layout_text_box_color")
+	run_script(
+		&script_vm,
+		`layoutInput.TextColor3 = Color3.new(1, 0, 0)`,
+		"gui_layout_text_box_color",
+	)
 	assert(!classes.gui_layout_dirty && classes.Gui_Render_Revision() > revision)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 layoutScreen.Size = Vector2.new(300, 100)
 layoutScreen.RenderOffset = Vector2.new(5, 7)
-`, "gui_layout_screen_changed")
+`,
+		"gui_layout_screen_changed",
+	)
 	classes.Update_GUI_Layout(&environment.classes, 800, 600)
 	expect_close("resized screen text box width", input.absolute_size.X, 150)
 	expect_close("offset screen text box x", input.absolute_position.X, 15)
@@ -750,6 +838,152 @@ IRIS_LAYOUT_SCROLL.CanvasSize = UDim2.fromOffset(0, 80)
 	expect_close("fill item shrinks on overflow", first_flex.absolute_size.X, 15)
 	expect_close("zero shrink ratio keeps basis", second_flex.absolute_size.X, 25)
 	expect_close("scrollbar inset clears", scroll_child.absolute_size.X, 120)
+
+	run_script(
+		&script_vm,
+		`
+local screen = Instance.new("ScreenGui")
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+assert(screen.ZIndexBehavior == Enum.ZIndexBehavior.Sibling)
+local row = Instance.new("Frame", screen)
+row.Size = UDim2.fromOffset(500, 300)
+local padding = Instance.new("UIPadding", row)
+padding.PaddingLeft = UDim.new(0, 10)
+padding.PaddingRight = UDim.new(0, 10)
+local layout = Instance.new("UIListLayout", row)
+layout.FillDirection = Enum.FillDirection.Horizontal
+layout.Padding = UDim.new(0, 5)
+local main = Instance.new("ScrollingFrame", row)
+main.Name = "ConstructMain"
+main.Size = UDim2.fromScale(1, 1)
+main.ScrollBarThickness = 0
+local fill = Instance.new("UIFlexItem", main)
+fill.FlexMode = Enum.UIFlexMode.Fill
+local sidebar = Instance.new("Frame", row)
+sidebar.Size = UDim2.new(0, 180, 1, 0)
+sidebar.LayoutOrder = 999
+local nested = Instance.new("Frame", main)
+nested.Name = "ConstructNested"
+nested.Size = UDim2.fromScale(1, 1)
+local inset = Instance.new("UIPadding", nested)
+inset.PaddingLeft = UDim.new(0, 12)
+inset.PaddingRight = UDim.new(0, 8)
+local field = Instance.new("TextBox", nested)
+field.Name = "ConstructField"
+field.Size = UDim2.fromScale(1, 1)
+constructRow = row
+constructPositionEvents = 0
+constructSizeEvents = 0
+field:GetPropertyChangedSignal("AbsolutePosition"):Connect(function()
+    constructPositionEvents += 1
+end)
+field:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+    constructSizeEvents += 1
+end)
+`,
+		"construct_nested_flex_setup",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	construct_main := find_gui(&environment, "ConstructMain")
+	construct_nested := find_gui(&environment, "ConstructNested")
+	construct_field := find_gui(&environment, "ConstructField")
+	expect_object("ConstructMain", construct_main)
+	expect_object("ConstructNested", construct_nested)
+	expect_object("ConstructField", construct_field)
+	expect_close("Construct flex panel width", construct_main.absolute_size.X, 295)
+	expect_close("Construct nested panel width", construct_nested.absolute_size.X, 295)
+	expect_close("Construct padded field width", construct_field.absolute_size.X, 275)
+	expect_close("Construct padded field x", construct_field.absolute_position.X, 22)
+	run_script(
+		&script_vm,
+		`
+constructPositionEvents = 0
+constructSizeEvents = 0
+constructRow.Position = UDim2.fromOffset(40, 30)
+constructRow.Size = UDim2.fromOffset(600, 300)
+`,
+		"construct_nested_flex_resize",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	expect_close("Construct resized nested width", construct_nested.absolute_size.X, 395)
+	expect_close("Construct resized field width", construct_field.absolute_size.X, 375)
+	expect_close("Construct moved field x", construct_field.absolute_position.X, 62)
+	run_script(
+		&script_vm,
+		`
+assert(constructPositionEvents == 1, tostring(constructPositionEvents))
+assert(constructSizeEvents == 1, tostring(constructSizeEvents))
+`,
+		"construct_layout_notifications",
+	)
+
+	run_script(
+		&script_vm,
+		`
+local screen = Instance.new("ScreenGui")
+screen.Size = Vector2.new(800, 600)
+local command = Instance.new("CanvasGroup", screen)
+command.Name = "CASContainer"
+command.AnchorPoint = Vector2.new(0.5, 1)
+command.Position = UDim2.fromScale(0.5, 1)
+command.Size = UDim2.new(1, 0, 0, 0)
+command.AutomaticSize = Enum.AutomaticSize.Y
+local list = Instance.new("UIListLayout", command)
+list.Padding = UDim.new(0, 5)
+list.VerticalAlignment = Enum.VerticalAlignment.Center
+local description = Instance.new("TextLabel", command)
+description.Size = UDim2.new(1, 0, 0, 0)
+description.AutomaticSize = Enum.AutomaticSize.XY
+description.Text = "Type a command"
+description.TextSize = 20
+description.TextWrapped = true
+local input = Instance.new("TextBox", command)
+input.Name = "CASInput"
+input.Size = UDim2.new(1, 0, 0, 300)
+input.AutomaticSize = Enum.AutomaticSize.Y
+CASRegressionInput = input
+input.TextSize = 20
+input.Text = ""
+input.LayoutOrder = 999
+local padding = Instance.new("UIPadding", input)
+padding.PaddingTop = UDim.new(0, 5)
+padding.PaddingBottom = UDim.new(0, 5)
+for _ = 1, 2 do
+	local overlay = Instance.new("TextLabel", input)
+	overlay.Name = "CASOverlay"
+	overlay.AnchorPoint = Vector2.new(0.5, 0.5)
+	overlay.Position = UDim2.fromScale(0.5, 0.5)
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.Text = ""
+	overlay.BackgroundTransparency = 1
+end
+`,
+		"construct_cas_setup",
+	)
+	classes.Update_GUI_Layout(&environment.classes, 800, 600)
+	run_script(
+		&script_vm,
+		`CASRegressionInput.Size = UDim2.new(1, 0, 0, 0)`,
+		"construct_cas_shrink",
+	)
+	for _ in 0 ..< 16 {classes.Update_GUI_Layout(&environment.classes, 800, 600)}
+	cas := find_gui(&environment, "CASContainer")
+	cas_input := find_gui(&environment, "CASInput")
+	fmt.printf(
+		"CAS container=%v input=%v dirty=%v\n",
+		cas.absolute_size,
+		cas_input.absolute_size,
+		classes.gui_layout_dirty,
+	)
+	assert(
+		cas.absolute_size.Y > 20 && cas.absolute_size.Y < 100,
+		"command bar expanded beyond its intrinsic content",
+	)
+	assert(
+		cas_input.absolute_size.Y > 10 && cas_input.absolute_size.Y < 60,
+		"command input expanded beyond its intrinsic content",
+	)
+	expect_close("command bar bottom anchor", cas.absolute_position.Y + cas.absolute_size.Y, 600)
 
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)

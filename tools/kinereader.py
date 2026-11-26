@@ -2,7 +2,7 @@
 """
 kine.py - browse Kinemium .kine save files.
 
-Reads format versions 2 through 8 (see serializer.odin) and lets you walk the
+Reads format versions 2 through 11 (see engine/serializer/kine.odin) and lets you walk the
 DataModel tree, read instance properties and attributes, search, inspect the
 embedded asset table and terrain section, extract assets, and export JSON.
 
@@ -19,6 +19,7 @@ Usage
   kine.py MAP.kine terrain [--cells N]   terrain settings / cells
   kine.py MAP.kine export [PATH] [-o F]  JSON dump of a subtree
   kine.py MAP.kine syncback OUT [PATH]   Rojo-style project folder + sourcemap.json
+  kine.py MAP.kine patch-source PATH --source NEW.luau --output NEW.kine
   kine.py MAP.kine sourcemap [PATH]      print the sourcemap.json syncback would write
 
 PATH syntax: Workspace/Model/Part  (leading "game" or the root's name is
@@ -27,6 +28,7 @@ In the shell, ".." and relative paths work too.
 """
 
 import argparse
+import subprocess
 import cmd
 import fnmatch
 import json
@@ -40,8 +42,11 @@ import sys
 sys.setrecursionlimit(20000)
 
 MAGIC = b"KINE"
-MIN_VERSION, MAX_VERSION = 2, 8
-MAX_STRING = 16 * 1024 * 1024
+MIN_VERSION, MAX_VERSION = 2, 11
+ZSTD_MAGIC = bytes.fromhex("28b52ffd")
+MAX_DECOMPRESSED_SIZE = 512 * 1024 * 1024
+MAX_SYMBOLS = 1 << 20
+MAX_STRING = 64 * 1024 * 1024
 MAX_FONT_BYTES = 32 * 1024 * 1024
 TERRAIN_CELL_BYTES = 17
 
@@ -179,6 +184,8 @@ class Instance:
         self.index = 0  # preorder index, 1-based
         self.properties = {}
         self.attributes = {}
+        self.property_spans = {}  # Raw value byte ranges for lossless property patching.
+        self.attribute_spans = {}
         self.tags = []
         self.children = []
 
@@ -264,6 +271,7 @@ SIMPLE_DATATYPES = {
     25: ("Rect", "<4f", ("MinX", "MinY", "MaxX", "MaxY"), ()),
 }
 DT_COLOR_SEQUENCE, DT_CONTENT, DT_FONT, DT_NUMBER_SEQUENCE, DT_PATH_WAYPOINT = 4, 5, 8, 10, 11
+DT_ANIMATED = 26
 
 
 class Reader:
@@ -271,6 +279,7 @@ class Reader:
         self.data = data
         self.pos = 0
         self.version = 0
+        self.symbols = []
 
     def take(self, n):
         if n < 0 or self.pos + n > len(self.data):
@@ -308,6 +317,25 @@ class Reader:
                 return value
         raise KineError("varuint did not terminate within 5 bytes", self.pos)
 
+    def symbol(self):
+        if self.version < 11:
+            return self.string()
+        at = self.pos
+        code = self.varuint()
+        if code == 0xFFFFFFFF:
+            return self.string()
+        if code & 1:
+            idx = code >> 1
+            if idx >= len(self.symbols):
+                raise KineError(f"undefined metadata symbol #{idx}", at)
+            return self.symbols[idx]
+        length = code >> 1
+        if length > MAX_STRING or len(self.symbols) >= MAX_SYMBOLS:
+            raise KineError(f"metadata symbol length/count exceeds limit", at)
+        value = self.take(length).decode("utf-8", errors="replace")
+        self.symbols.append(value)
+        return value
+
     def string(self):
         at = self.pos
         n = self.varuint()
@@ -323,6 +351,22 @@ class KineFile:
     def __init__(self, data, source="<memory>"):
         self.source = source
         self.size = len(data)
+        self.compressed = data.startswith(ZSTD_MAGIC)
+        if self.compressed:
+            try:
+                import zstandard
+                size = zstandard.frame_content_size(data)
+                if size < 0 or size > MAX_DECOMPRESSED_SIZE:
+                    raise KineError("zstd frame has an unknown or excessive uncompressed size")
+                data = zstandard.ZstdDecompressor().decompress(data, max_output_size=MAX_DECOMPRESSED_SIZE)
+            except ImportError:
+                try:
+                    result = subprocess.run(["zstd", "-d", "--stdout"], input=data, capture_output=True, check=True)
+                except (OSError, subprocess.CalledProcessError) as exc:
+                    raise KineError(f"zstd decompress failed: {exc}") from exc
+                data = result.stdout
+                if len(data) > MAX_DECOMPRESSED_SIZE:
+                    raise KineError("decompressed file is too large")
         self.data = data
         self.assets = []
         self.assets_by_id = {}
@@ -384,8 +428,8 @@ class KineFile:
         return bytes(self.data[asset.offset:asset.offset + asset.length])
 
     def _read_instance(self, r, parent):
-        cls = r.string()
-        name = r.string()
+        cls = r.symbol()
+        name = r.symbol()
         archivable = bool(r.u8())
         uid = (r.i64(), r.u32(), r.u32())
         inst = Instance(cls, name, archivable, uid, parent)
@@ -394,15 +438,19 @@ class KineFile:
             parent.children.append(inst)
         try:
             for _ in range(r.u32()):
-                key = r.string()
+                key = r.symbol()
+                start = r.pos
                 value = self._read_value(r)
+                inst.property_spans[key] = (start, r.pos)
                 if key == "Tags" and isinstance(value, str):
                     inst.tags.extend(tag for tag in value.split("\0") if tag)
                 else:
                     inst.properties[key] = value
             for _ in range(r.u32()):
-                key = r.string()
+                key = r.symbol()
+                start = r.pos
                 inst.attributes[key] = self._read_value(r)
+                inst.attribute_spans[key] = (start, r.pos)
             n = r.u32()
             if n > len(r.data) - r.pos:
                 raise KineError(f"child count {n} exceeds remaining bytes", r.pos)
@@ -425,7 +473,7 @@ class KineFile:
         if tag == TAG_STRING:
             return r.string()
         if tag == TAG_VECTOR3:
-            return Datatype("Vector3", dict(zip("xyz", r.unpack("<3f"))))
+            return Datatype("Vector3", dict(zip("xyz", r.unpack("<3d" if r.version >= 9 else "<3f"))))
         if tag == TAG_USERDATA:
             return self._read_datatype(r, r.u16())
         if tag == TAG_ENUM:
@@ -442,8 +490,12 @@ class KineFile:
     def _read_datatype(self, r, dt):
         if dt in SIMPLE_DATATYPES:
             name, f, names, bools = SIMPLE_DATATYPES[dt]
+            if r.version >= 9 and dt in (2, 14, 23):
+                f = {2: "<12d", 14: "<6d", 23: "<3d"}[dt]
             vals = r.unpack(f)
             return Datatype(name, {n: (bool(v) if n in bools else v) for n, v in zip(names, vals)})
+        if dt == DT_ANIMATED:
+            return Datatype("Animated", {"uri": r.string()})
         if dt == DT_COLOR_SEQUENCE:
             n = r.u32()
             if n > len(r.data):
@@ -470,7 +522,7 @@ class KineFile:
                 f["Data"] = r.take(n)
             return Datatype("Font", f)
         if dt == DT_PATH_WAYPOINT:
-            x, y, z = r.unpack("<3f")
+            x, y, z = r.unpack("<3d" if r.version >= 9 else "<3f")
             return Datatype("PathWaypoint",
                             {"Position": (x, y, z), "Action": r.i64(), "Label": r.string()})
         raise KineError(f"unknown datatype id {dt}", r.pos)
@@ -480,7 +532,9 @@ class KineFile:
             return
         self.terrain_present = True
         t = Terrain()
-        t.decoration = bool(r.u8())
+        flags = r.u8()
+        t.decoration = bool(flags & 1)
+        t.raymarching = bool(flags & 2) if r.version >= 10 else False
         (t.voxel_size, t.iso_level, t.grass_length, t.water_reflectance,
          t.water_transparency, t.water_wave_size, t.water_wave_speed,
          wr, wg, wb) = r.unpack("<10f")
@@ -557,7 +611,7 @@ def do_info(doc, out):
     for i in doc.all:
         kinds[i.class_name] = kinds.get(i.class_name, 0) + 1
     print(f"file:       {doc.source}", file=out)
-    print(f"size:       {doc.size:,} bytes", file=out)
+    print(f"size:       {doc.size:,} bytes" + (" (zstd)" if doc.compressed else ""), file=out)
     print(f"version:    {doc.version}", file=out)
     print(f"root:       {doc.root.class_name} {doc.root.name!r}", file=out)
     print(f"instances:  {len(doc.all):,}", file=out)
@@ -1106,6 +1160,68 @@ def do_syncback(doc, node, dest, out, src="src", collapse=False, scripts_only=Fa
         print(f"  warning: {w}", file=out)
 
 
+
+
+def _varuint_bytes(value):
+    if not 0 <= value <= 0xFFFFFFFF:
+        raise KineError(f"value {value} is outside the 32-bit varuint range")
+    result = bytearray()
+    while value >= 128:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value)
+    return bytes(result)
+
+
+def patch_script_source(doc, node, new_source, output):
+    """Replace a Script/LocalScript/ModuleScript Source field without
+    reserializing the world. All other records (including asset payloads,
+    metadata symbols, and instance-reference indices) remain byte-identical.
+    """
+    if node.class_name not in SCRIPT_EXT:
+        raise KineError(f"{node.path()} is not a script")
+    if not isinstance(node.properties.get("Source"), str) or "Source" not in node.property_spans:
+        raise KineError(f"{node.path()} has no serialized Source string")
+    start, end = node.property_spans["Source"]
+    if doc.data[start] != TAG_STRING:
+        raise KineError("source property has a non-string value tag")
+    contents = new_source.encode("utf-8")
+    if len(contents) > MAX_STRING:
+        raise KineError("script source exceeds the engine string limit")
+    replacement = bytes([TAG_STRING]) + _varuint_bytes(len(contents)) + contents
+    payload = doc.data[:start] + replacement + doc.data[end:]
+    if doc.compressed:
+        try:
+            import zstandard
+            payload = zstandard.ZstdCompressor(level=3).compress(payload)
+        except ImportError:
+            proc = subprocess.run(["zstd", "-q", "-3", "--stdout"],
+                                  input=payload, capture_output=True, check=True)
+            payload = proc.stdout
+    # Check *all* decoded records before writing anything to disk.
+    verify = KineFile(payload, source=output)
+    replaced = verify.resolve(f"#{node.index}")
+    if replaced.class_name != node.class_name or replaced.path() != node.path() or             replaced.properties.get("Source") != new_source or len(verify.all) != len(doc.all):
+        raise KineError("lossless source patch verification failed")
+    if len(verify.assets) != len(doc.assets) or any(
+        verify.asset_bytes(new) != doc.asset_bytes(old)
+        for old, new in zip(doc.assets, verify.assets)
+    ):
+        raise KineError("lossless source patch changed embedded assets")
+    import tempfile
+    directory = os.path.dirname(os.path.abspath(output)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".kine-patch-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, output)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return len(payload)
+
 # ---------------------------------------------------------------------------
 # Interactive shell
 # ---------------------------------------------------------------------------
@@ -1288,6 +1404,7 @@ def main(argv=None):
     p.add_argument("--scripts-only", action="store_true", help="sourcemap lists only scripts and their ancestors")
     p.add_argument("--no-extra", action="store_true"); p.add_argument("--no-assets", action="store_true")
     p.add_argument("--no-terrain", action="store_true")
+    p = sub.add_parser("patch-source"); p.add_argument("path"); p.add_argument("--source", required=True, help="UTF-8 source file"); p.add_argument("--output", required=True, help="new .kine output (can be input path after backing up)")
     p = sub.add_parser("sourcemap"); p.add_argument("path", nargs="?", default="")
     p.add_argument("--collapse-models", action="store_true"); p.add_argument("--scripts-only", action="store_true")
     ns = ap.parse_args(argv)
@@ -1311,6 +1428,11 @@ def main(argv=None):
         elif c == "syncback":
             do_syncback(doc, doc.resolve(ns.path), ns.out, out, ns.src, ns.collapse_models,
                         ns.scripts_only, ns.force, not ns.no_extra, not ns.no_assets, not ns.no_terrain)
+        elif c == "patch-source":
+            with open(ns.source, "r", encoding="utf-8") as f:
+                source = f.read()
+            n = patch_script_source(doc, doc.resolve(ns.path), source, ns.output)
+            print(f"Patched {ns.path} Source in {ns.output} ({n:,} bytes); all records and assets verified", file=out)
         elif c == "sourcemap": do_sourcemap(doc, doc.resolve(ns.path), ns.collapse_models, ns.scripts_only, out)
     except (KineError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)

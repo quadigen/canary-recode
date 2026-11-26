@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 Color3Value_Class := Class_Info {
@@ -12,6 +13,7 @@ Color3Value_Class := Class_Info {
 Color3Value :: struct {
 	using object: Object,
 	value:        datatypes.Color3,
+	changed:      ^signals.Signal,
 }
 
 Color3Value_Init :: proc() -> Color3Value {
@@ -29,6 +31,7 @@ Color3Value_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 }
 
 Color3Value_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^Color3Value)object).changed)
 	Object_Destroy(object)
 	free(cast(^Color3Value)object)
 }
@@ -43,6 +46,8 @@ Color3Value_get :: proc(
 	val := cast(^Color3Value)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Color3(L, datatype_registry, val.value)
@@ -65,7 +70,13 @@ Color3Value_set :: proc(
 	switch key {
 	case "Value":
 		if datatype_registry == nil {return false}
-		val.value = datatypes.Arg_Color3(L, value_index, datatype_registry)
+		new_value := datatypes.Arg_Color3(L, value_index, datatype_registry)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			datatypes.Push_Color3(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

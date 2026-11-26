@@ -15,6 +15,7 @@ shutdown :: proc() {
 
 reset_state :: proc() {
 	enabled = false
+	reset_gpu_frame()
 	set_collection_enabled(false)
 }
 

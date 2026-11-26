@@ -1,0 +1,70 @@
+---
+title: Creating a native plugin
+description: Load a native extension using the unified Kinemium C SDK.
+---
+
+A native plugin uses the **same `Kinemium_*` API** as embedded applications. It borrows the existing engine context, rather than creating another engine.
+
+## Entry point
+
+```c
+#include "kinemium_plugin.h"
+
+static bool on_load(Kinemium_Context *ctx) {
+    Kinemium_Handle workspace = Kinemium_HandleService(ctx, "Workspace");
+    Kinemium_Handle object = Kinemium_HandleCreateInstance(ctx, "Part");
+    return workspace && object &&
+        Kinemium_HandleSetParent(ctx, object, workspace);
+}
+
+static const Kinemium_PluginDescriptor descriptor = {
+    .size = sizeof(Kinemium_PluginDescriptor),
+    .abi_major = KINEMIUM_PLUGIN_ABI_MAJOR,
+    .abi_minor = KINEMIUM_PLUGIN_ABI_MINOR,
+    .id = "example.custom",
+    .name = "My Native Plugin",
+    .version = "1.0.0",
+    .on_load = on_load
+};
+
+KINEMIUM_PLUGIN_EXPORT
+const Kinemium_PluginDescriptor *Kinemium_PluginEntry(void) {
+    return &descriptor;
+}
+```
+
+The optional lifecycle callbacks are `on_start`, `on_update`, `on_stop`, and `on_unload`. Check `Kinemium_ContextIsBorrowed(ctx)` to distinguish an extension from an embedded application.
+
+## Build and install
+
+Compile the complete reference plugin on Linux:
+
+```sh
+cc -std=c11 -fPIC -shared -Iinclude \
+  examples/kinemium_sdk/plugin/main.c \
+  -o build/native-plugins/native.example/native_example.so
+```
+
+Put an `extension.json` manifest beside the shared library:
+
+```json
+{
+  "id": "native.example",
+  "name": "Native Example",
+  "version": "1.0.0",
+  "api": 2,
+  "api_minor": 0,
+  "library": "native_example.so",
+  "entry": "Kinemium_PluginEntry",
+  "enabled": true,
+  "capabilities": []
+}
+```
+
+An embedded host loads this folder using `Kinemium_PluginLoad(ctx, path, &handle)` and releases it using `Kinemium_PluginUnload(ctx, handle)`. `Kinemium_PluginReload` reloads an extension.
+
+## Lifetime and ownership
+
+The host invokes `on_load`, `on_start`, `on_update` repeatedly, then `on_stop` and `on_unload`. After unloading, the engine unregisters the extension's classes, services, datatypes, signals, and retained callbacks. A plugin must **never call `Kinemium_Destroy` on its borrowed context**.
+
+Use `kinemium_plugin.h` to author extensions with the unified SDK. The KNE ABI 3.x loader supports legacy extensions.

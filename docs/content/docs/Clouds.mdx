@@ -26,20 +26,37 @@ clouds.Density = 0.02
 clouds.Height = 750
 clouds.Thickness = 260
 clouds.Color = Color3.fromRGB(245, 245, 250)
+clouds.CastShadows = true
+clouds.ShadowIntensity = 0.75
+clouds.ShadowScale = 1
+clouds.ShadowSpeed = 1
+clouds.ShadowSoftness = 1
+clouds.ShadowMaxDistance = 1500
 ```
+
+## Rendering quality
+
+Desktop clouds support rendering at reduced resolution in each dimension. The engine composites them behind opaque geometry, retaining the normal HDR lighting and post-processing path. The default is half resolution (`0.5`). Set `clouds.ResolutionScale = 1` for full-resolution clouds, or `0.25` for lower resolution. Stationary camera frames can reuse the cloud texture for up to 1/60 second; moving cameras always refresh it. Reflection captures and XR use the full-resolution path.
 
 ## Properties
 
 | Property | Type | Access | Default | Description |
 | --- | --- | --- | --- | --- |
+| `ResolutionScale` | `number` | Read/write | `0.5` | Cloud render scale on supported desktop renderers, clamped to 0.25–1. |
 | `Enabled` | `boolean` | Read/write | `true` | Turns the cloud layer on or off. |
-| `Cover` | `number` | Read/write | `0.5` | Fraction of the sky covered. No clamping is applied. |
-| `Density` | `number` | Read/write | `0.01` | Cloud density. No clamping is applied. |
+| `Cover` | `number` | Read/write | `0.5` | Fraction of the sky covered, clamped to 0–1. |
+| `Density` | `number` | Read/write | `0.01` | Cloud density, clamped to 0–1. |
 | `Height` | `number` | Read/write | `700` | Height of the cloud layer in studs. No clamping is applied. |
 | `Thickness` | `number` | Read/write | `240` | Vertical thickness of the layer in studs. No clamping is applied. |
 | `Color` | `Color3` | Read/write | White | Cloud color. |
+| `CastShadows` | `boolean` | Read/write | `false` | Project moving cloud shadows onto opaque scene geometry when clouds and sunlight are active. |
+| `ShadowIntensity` | `number` | Read/write | `0.75` | Shadow strength, clamped to 0–1. |
+| `ShadowScale` | `number` | Read/write | `1` | Size of cloud shadow formations, clamped to 0.1–8. |
+| `ShadowSpeed` | `number` | Read/write | `1` | Speed of shadow movement, clamped to 0–5. |
+| `ShadowSoftness` | `number` | Read/write | `1` | Blurring of shadow features, clamped to 0–4. |
+| `ShadowMaxDistance` | `number` | Read/write | `1500` | Camera distance where cloud shadows fade, clamped to 1–10000. |
 
-The setter accepts any number for `Cover`, `Density`, `Height`, and `Thickness`, including negative values. Use sensible ranges; these properties aren't clamped.
+`Cover` and `Density` are clamped to 0–1. `Height` and `Thickness` should use sensible positive values; the native renderer enforces a minimum thickness. Shadow numeric properties are clamped to the ranges shown above and reject non-finite values.
 
 ## How it's applied
 
@@ -51,9 +68,25 @@ Clouds are skipped in the editor's fast viewport.
 
 - `Cover` is a fraction, not a percentage. `0.5` covers about half the sky.
 - `Density` values are small; the default is `0.01`, not `1`.
-- Cloning copies `Enabled`, `Cover`, `Density`, `Height`, `Thickness`, and `Color`.
+- Cloning copies all cloud properties, including `CastShadows`, shadow settings, and `ResolutionScale`.
 
 ## See also
 
 - `Atmosphere` for sky and horizon colors.
 - `Lighting` for time of day and sun direction.
+
+## Cloud appearance
+
+`Cover` controls how much of the sky is cloudy. A value around `0.5` gives scattered formations; higher values approach overcast. `Density` controls how solid they look. Change `Height` and `Thickness` to position and shape the layer.
+
+For sharper cloud edges, increase `ResolutionScale` to `1`. Lower values can improve performance at the cost of detail.
+
+## Projected cloud shadows
+
+Set `CastShadows` to `true` to let the clouds cast moving shadows over opaque world surfaces. The shadows follow cloud cover, density, height, and the sun's direction.
+
+`ShadowIntensity` controls how dark they become, `ShadowScale` changes their size, and `ShadowSpeed` controls their movement. Increase `ShadowSoftness` for gentler edges. `ShadowMaxDistance` limits how far from the camera the shadowing remains visible.
+
+Cloud shadows are disabled when the cloud layer is disabled, the cover or density is zero, or the sun is below the effective horizon. They don't affect transparent surfaces without usable depth, and they don't run in the fast editor viewport.
+
+Cloud shadows are off by default. Leave `CastShadows` disabled if you only want clouds in the sky.

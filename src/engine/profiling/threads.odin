@@ -25,11 +25,13 @@ Thread_Frame_Data :: struct {
 
 Thread_Record :: struct {
 	id:                 u64,
+	record_index:       int,
 	L:                  ^luauh.lua_State,
 	root:               ^luauh.lua_State,
 	alive:              bool,
 	name:               string,
 	script:             string,
+	callback_source:    string,
 	last_sample_serial: u64,
 	cpu_ns:             u64,
 	total_cpu_ns:       u64,
@@ -52,6 +54,11 @@ Block_Owner :: struct {
 	size:   u64,
 }
 
+
+Script_Total_Key :: struct {
+	root: ^luauh.lua_State,
+	name: string,
+}
 
 Script_Total :: struct {
 	root:         ^luauh.lua_State,
@@ -80,14 +87,22 @@ Script_Stat :: struct {
 
 thread_records: [dynamic]^Thread_Record
 record_by_ptr: map[^luauh.lua_State]^Thread_Record
+record_by_id: map[u64]^Thread_Record
+callback_sources: map[string]string
+Thread_Name_Entry :: struct {
+	value: string,
+	refs:  int,
+}
+thread_names: map[string]Thread_Name_Entry
+script_total_index: map[Script_Total_Key]int
+retirement_queue: [dynamic]^Thread_Record
+retirement_cursor: int
 block_owner: map[rawptr]Block_Owner
 active_stack: [dynamic]^Thread_Record
 frame_dirty_records: [dynamic]^Thread_Record
 thread_history: [dynamic]Thread_Frame_Data
 script_totals: [dynamic]Script_Total
 thread_frame_serial: u64
-retired_pending: int
-last_retired_sweep: u64
 next_thread_id: u64 = 1
 thread_state_ready: bool
 thread_tracking_on: bool = true
@@ -112,7 +127,7 @@ tracking_userthread :: proc "c" (parent, thread: ^luauh.lua_State) {
 			if rec, ok := record_by_ptr[thread]; ok {
 				rec.alive = false
 				rec.L = nil
-				retired_pending += 1
+				append(&retirement_queue, rec)
 				delete_key(&record_by_ptr, thread)
 			}
 		} else if _, ok := record_by_ptr[thread]; !ok {
@@ -122,14 +137,16 @@ tracking_userthread :: proc "c" (parent, thread: ^luauh.lua_State) {
 			}
 			record := new(Thread_Record)
 			record^ = Thread_Record {
-				id    = next_thread_id,
-				L     = thread,
-				root  = root,
-				alive = true,
+				id           = next_thread_id,
+				record_index = len(thread_records),
+				L            = thread,
+				root         = root,
+				alive        = true,
 			}
 			next_thread_id += 1
 			append(&thread_records, record)
 			record_by_ptr[thread] = record
+			record_by_id[record.id] = record
 		}
 	}
 	if chained_userthread != nil {
@@ -215,26 +232,15 @@ tracking_onallocate :: proc "c" (
 	}
 
 
+	if nsize == 0 {return}
+	record: ^Thread_Record
+	if len(active_stack) > 0 {
+		active := active_stack[len(active_stack) - 1]
+		if active.L == L {record = active}
+	}
+	if record == nil {record = record_by_ptr[L]}
+	if record == nil {return}
 	context = tracy.DefaultContext()
-
-	if previous, ok := block_owner[block]; ok {
-		if previous.record != nil {
-			previous.record.live_bytes -= i64(previous.size)
-			previous.record.free_bytes += previous.size
-			previous.record.frame_free_bytes += previous.size
-			thread_record_touch(previous.record)
-		}
-		delete_key(&block_owner, block)
-	}
-	if nsize == 0 {
-		return
-	}
-	record, tracked := record_by_ptr[L]
-	if !tracked {
-
-
-		return
-	}
 	record.live_bytes += i64(nsize)
 	size := u64(nsize)
 	record.alloc_bytes += size
@@ -300,18 +306,18 @@ shutdown_thread_state :: proc() {
 reset_thread_state :: proc() {
 	context = tracy.DefaultContext()
 	clear(&frame_dirty_records)
-	retired_pending = 0
+	clear(&retirement_queue)
+	retirement_cursor = 0
 	for record in thread_records {
-		if record.name != "" {
-			delete(record.name)
-		}
-		if record.script != "" {
-			delete(record.script)
-		}
 		free(record)
 	}
 	clear(&thread_records)
+	for name in thread_names {delete(name)}
+	clear(&thread_names)
 	clear(&record_by_ptr)
+	clear(&record_by_id)
+	for _, source in callback_sources {delete(source)}
+	clear(&callback_sources)
 	clear(&block_owner)
 	clear(&active_stack)
 	for frame in thread_history {
@@ -324,8 +330,8 @@ reset_thread_state :: proc() {
 		}
 	}
 	clear(&script_totals)
+	clear(&script_total_index)
 	thread_frame_serial = 0
-	last_retired_sweep = 0
 	next_thread_id = 1
 	thread_tracking_on = true
 }
@@ -336,6 +342,11 @@ thread_frame_flush :: proc() {
 	thread_frame_serial += 1
 	frame := Thread_Frame_Data {
 		serial = thread_frame_serial,
+	}
+	if len(thread_history) >= MAX_HISTORY {
+		frame.rows = thread_history[0].rows
+		clear(&frame.rows)
+		ordered_remove(&thread_history, 0)
 	}
 	for record in frame_dirty_records {
 		record.last_sample_serial = frame.serial
@@ -359,11 +370,6 @@ thread_frame_flush :: proc() {
 		record.frame_touched = false
 	}
 	clear(&frame_dirty_records)
-	if len(thread_history) >= MAX_HISTORY {
-		oldest := thread_history[0]
-		delete(oldest.rows)
-		ordered_remove(&thread_history, 0)
-	}
 	append(&thread_history, frame)
 	sweep_dead_thread_records()
 }
@@ -385,42 +391,37 @@ thread_frame_discard :: proc() {
 
 
 sweep_dead_thread_records :: proc() {
-	// Retire in batches. A busy editor creates short-lived signal threads
-	// every frame, and scanning their full history each time is expensive.
-	if retired_pending == 0 || thread_frame_serial - last_retired_sweep < 32 {
-		return
-	}
-	last_retired_sweep = thread_frame_serial
+	if len(retirement_queue) == 0 {return}
 	context = tracy.DefaultContext()
 	oldest := thread_frame_serial + 1
-	if len(thread_history) > 0 {
-		oldest = thread_history[0].serial
-	}
-	write := 0
-	for read in 0 ..< len(thread_records) {
-		record := thread_records[read]
-		retired :=
-			!record.alive &&
-			record.start_ns == 0 &&
-			record.live_bytes == 0 &&
-			record.last_sample_serial < oldest
-		if retired {
-			fold_into_script_totals(record)
-			if record.name != "" {
-				delete(record.name)
-			}
-			if record.script != "" {
-				delete(record.script)
-			}
-			free(record)
-			retired_pending -= 1
+	if len(thread_history) > 0 {oldest = thread_history[0].serial}
+	budget := min(1024, len(retirement_queue))
+	for _ in 0 ..< budget {
+		if len(retirement_queue) == 0 {break}
+		if retirement_cursor >= len(retirement_queue) {retirement_cursor = 0}
+		record := retirement_queue[retirement_cursor]
+		if record.alive ||
+		   record.start_ns != 0 ||
+		   record.live_bytes != 0 ||
+		   record.frame_touched ||
+		   record.last_sample_serial >= oldest {
+			retirement_cursor += 1
 			continue
 		}
-		thread_records[write] = record
-		write += 1
-	}
-	if write < len(thread_records) {
-		resize(&thread_records, write)
+		fold_into_script_totals(record)
+		delete_key(&record_by_id, record.id)
+		index := record.record_index
+		last := len(thread_records) - 1
+		if index != last {
+			moved := thread_records[last]
+			thread_records[index] = moved
+			moved.record_index = index
+		}
+		resize(&thread_records, last)
+		unordered_remove(&retirement_queue, retirement_cursor)
+		release_thread_name(record.name)
+		release_thread_name(record.script)
+		free(record)
 	}
 }
 
@@ -432,6 +433,7 @@ fold_into_script_totals :: proc(record: ^Thread_Record) {
 	if total == nil {
 		append(&script_totals, Script_Total{root = record.root, name = strings.clone(name)})
 		total = &script_totals[len(script_totals) - 1]
+		script_total_index[Script_Total_Key{record.root, total.name}] = len(script_totals) - 1
 	}
 	total.cpu_ns += record.cpu_ns
 	total.total_cpu_ns += record.total_cpu_ns
@@ -443,10 +445,8 @@ fold_into_script_totals :: proc(record: ^Thread_Record) {
 }
 
 find_script_total :: proc(root: ^luauh.lua_State, name: string) -> ^Script_Total {
-	for &total in script_totals {
-		if total.root == root && total.name == name {
-			return &total
-		}
+	if index, ok := script_total_index[Script_Total_Key{root, name}]; ok {
+		return &script_totals[index]
 	}
 	return nil
 }
@@ -461,12 +461,7 @@ thread_history_frames :: proc() -> []Thread_Frame_Data {
 }
 
 find_thread_record :: proc(id: u64) -> ^Thread_Record {
-	for record in thread_records {
-		if record.id == id {
-			return record
-		}
-	}
-	return nil
+	return record_by_id[id]
 }
 
 
@@ -542,6 +537,7 @@ thread_display_name :: proc(record: ^Thread_Record) -> string {
 	if record.name != "" {
 		return record.name
 	}
+	if record.callback_source != "" {return record.callback_source}
 	if record.L != nil {
 		info: luauh.lua_Debug
 		if luauh.lua_getinfo(record.L, 0, "nS", &info) != 0 {
@@ -557,27 +553,66 @@ thread_display_name :: proc(record: ^Thread_Record) -> string {
 }
 
 
-set_thread_name :: proc(L: ^luauh.lua_State, name: string, script: string = "") {
-	if L == nil || name == "" {
-		return
-	}
-	record, ok := record_by_ptr[L]
-	if !ok {
-		return
-	}
-	identity := script
-	if identity == "" {
-		identity = name
-	}
+callback_source :: proc(L: ^luauh.lua_State, index: int) -> string {
+	if L == nil {return ""}
+	relative := index
+	if index > 0 {relative = index - int(luauh.lua_gettop(L)) - 1}
+	if relative >= 0 {return ""}
+	info: luauh.lua_Debug
+	if luauh.lua_getinfo(L, i32(relative), "s", &info) == 0 || info.source == nil {return ""}
+	source := string(info.source)
+	if len(source) == 0 || source == "=[C]" {return ""}
+	if saved, ok := callback_sources[source]; ok {return saved}
 	context = tracy.DefaultContext()
-	if record.name != "" {
-		delete(record.name)
+	saved := strings.clone(source)
+	callback_sources[saved] = saved
+	return saved
+}
+
+set_callback_source :: proc(L: ^luauh.lua_State, source: string) {
+	if source == "" {return}
+	if record := record_by_ptr[L]; record != nil {record.callback_source = source}
+}
+
+retain_thread_name :: proc(name: string) -> string {
+	if name == "" {return ""}
+	if entry, ok := thread_names[name]; ok {
+		entry.refs += 1
+		thread_names[name] = entry
+		return entry.value
 	}
-	if record.script != "" {
-		delete(record.script)
+	saved := strings.clone(name)
+	thread_names[saved] = Thread_Name_Entry{saved, 1}
+	return saved
+}
+
+release_thread_name :: proc(name: string) {
+	if name == "" {return}
+	entry, ok := thread_names[name]
+	if !ok {return}
+	if entry.refs > 1 {
+		entry.refs -= 1
+		thread_names[name] = entry
+	} else {
+		delete_key(&thread_names, name)
+		delete(entry.value)
 	}
-	record.name = strings.clone(name)
-	record.script = strings.clone(identity)
+}
+
+set_thread_name :: proc(L: ^luauh.lua_State, name: string, script: string = "") {
+	if L == nil || name == "" {return}
+	record, ok := record_by_ptr[L]
+	if !ok {return}
+	identity := script
+	if identity == "" {identity = name}
+	if record.name == name && record.script == identity {return}
+	context = tracy.DefaultContext()
+	next_name := retain_thread_name(name)
+	next_script := retain_thread_name(identity)
+	release_thread_name(record.name)
+	release_thread_name(record.script)
+	record.name = next_name
+	record.script = next_script
 }
 
 
@@ -588,6 +623,7 @@ script_identity :: proc(record: ^Thread_Record) -> string {
 	if record.script != "" {
 		return record.script
 	}
+	if record.callback_source != "" {return record.callback_source}
 	if record.name != "" {
 		return record.name
 	}

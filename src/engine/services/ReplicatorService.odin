@@ -31,6 +31,14 @@ Replication_Sample :: struct {
 }
 
 Replication_Entity :: struct {
+	pose:                     [][16]f32,
+	pose_sequence:            u32,
+	pose_signature:           u64,
+	pose_received_at:         f32,
+	pose_applied_sequence:    u32,
+	pose_applied_valid:       bool,
+	pose_applied_mesh:        rawptr,
+	pose_sent_at:             f32,
 	id:                       u32,
 	object:                   ^classes.Object,
 	owner_id:                 u32,
@@ -93,6 +101,7 @@ Replication_Part_Send_State :: struct {
 }
 
 Replication_Peer :: struct {
+	pose_sent:                 map[u32]Character_Pose_Send_State,
 	peer:                      ^Replication_Transport_Peer,
 	player:                    ^Player,
 	known:                     map[u32]u64,
@@ -110,6 +119,23 @@ Replication_Peer :: struct {
 	join_batch_enabled:        bool,
 	reliable_join_properties:  map[u64]u32,
 	handshake_complete:        bool,
+	accepted_at_ms:            u32,
+	receive_rate_count:        u32,
+	receive_rate_bytes:        u32,
+	asset_table_started:       bool,
+	asset_table_sent:          bool,
+	asset_table_index:         int,
+	asset_table_limit:         int,
+	asset_table_count:         u32,
+	asset_transfer_id:         string,
+	asset_transfer_offset:     int,
+	terrain_snapshot_active:   bool,
+	terrain_snapshot_header:   bool,
+	terrain_snapshot_cells:    [dynamic]Terrain_Cell_Record,
+	terrain_snapshot_offset:   int,
+	terrain_snapshot_batches:  u32,
+	terrain_snapshot_serial:   u64,
+	terrain_snapshot_epoch:    u64,
 	terrain_initial_sent:      bool,
 	terrain_cursor:            u64,
 	terrain_epoch:             u64,
@@ -156,7 +182,10 @@ Replication_Group_Member :: struct {
 Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	if connection == nil {return}
 	delete(connection.known)
+	delete(connection.pose_sent)
 	delete(connection.join_batch)
+	delete(connection.asset_transfer_id)
+	delete(connection.terrain_snapshot_cells)
 	delete(connection.reliable_join_properties)
 	for id in connection.mesh_assets {delete(id)}
 	delete(connection.mesh_assets)
@@ -219,6 +248,7 @@ ReplicatorService :: struct {
 	handshake_rejections:                   u64,
 	tick:                                   u32,
 	elapsed:                                f32,
+	pose_elapsed:                           f32,
 	clock:                                  f32,
 	snapshot_rate:                          f32,
 	snapshot_clock_rate:                    f32,
@@ -282,9 +312,9 @@ ReplicatorService :: struct {
 	terrain_sync_due:                       bool,
 	ack_elapsed:                            f32,
 	ack_full_elapsed:                       f32,
-	diag_kind_counts:                       [35]u64,
-	diag_kind_bytes:                        [35]u64,
-	diag_subtype_counts:                    [16][35]u64,
+	diag_kind_counts:                       [36]u64,
+	diag_kind_bytes:                        [36]u64,
+	diag_subtype_counts:                    [16][36]u64,
 	invoke_pending:                         [dynamic]Remote_Invoke_Pending,
 	next_invoke_id:                         u32,
 	drops_window:                           u64,
@@ -401,6 +431,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 	for item in service.entity_list {
 		delete(item.recipients)
 		delete(item.samples)
+		delete(item.pose)
 		free(item)
 	}
 	delete(service.entity_list)
@@ -450,6 +481,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 		vm.AddGlobal_Boolean(service.signal_registry.vm_state, "IsClient", target.is_client())
 	}
 	service.elapsed = 0
+	service.pose_elapsed = 0
 	service.tick = 0
 
 
@@ -468,6 +500,7 @@ replication_stop :: proc(service: ^ReplicatorService) {
 replication_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^ReplicatorService)object
 	replication_stop(service)
+	replication_clear_send_rate(service)
 	for schema in service.schemas {
 		delete(schema.class_name)
 		for property in schema.properties {delete(property)}
@@ -517,6 +550,8 @@ replication_get :: proc(
 		vm.PushNumber(L, f64(service.snapshot_rate))
 	case "BandwidthBudget":
 		vm.PushNumber(L, f64(service.bandwidth_budget))
+	case "SendRate":
+		vm.PushNumber(L, f64(replication_get_send_rate(service)))
 	case "InterpolationDelayTicks":
 		vm.PushNumber(L, f64(service.interpolation_delay_ticks))
 	case "TeleportThreshold":
@@ -599,6 +634,25 @@ replication_set :: proc(
 		}
 		service.snapshot_rate = f32(rate)
 		service.base_snapshot_rate = f32(rate)
+		return true
+	}
+	if key == "SendRate" {
+		if !vm.IsNumber(L, value_index) {
+			_ = vm.RaiseError(L, "SendRate must be an integer number of bytes per second")
+			return true
+		}
+		rate := vm.ArgNumber(L, value_index)
+		if !(rate >= 16 * 1024 && rate <= 64 * 1024 * 1024) || f64(u32(rate)) != rate {
+			_ = vm.RaiseError(
+				L,
+				"SendRate must be an integer between 16384 and 67108864 bytes/second",
+			)
+			return true
+		}
+		if !replication_set_send_rate(service, u32(rate)) {
+			_ = vm.RaiseError(L, "SendRate could not be applied to SteamNetworkingSockets")
+			return true
+		}
 		return true
 	}
 	if key == "BandwidthBudget" {
@@ -1031,6 +1085,7 @@ Register_ReplicatorService_Class :: proc(registry: ^classes.Registry) {
 			"RequireJoinToken",
 			"SnapshotRate",
 			"BandwidthBudget",
+			"SendRate",
 			"InterpolationDelayTicks",
 			"TeleportThreshold",
 			"RelevancyDistance",

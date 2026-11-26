@@ -407,9 +407,14 @@ CharacterController_Tick :: proc(
 		cc.vertical_speed = 0
 		return
 	}
-	humanoid := cast(^classes.Humanoid)classes.Find_Child(cc.object.parent, "Humanoid")
-	if humanoid != nil {
-		classes.Humanoid_Sync(humanoid, cc, L, dt)
+
+
+	if cc.object.parent != nil {
+		for child in cc.object.parent.children {
+			if child == nil || child.destroyed || !classes.Is_A(child, "Humanoid") {continue}
+			classes.Humanoid_Sync(cast(^classes.Humanoid)child, cc, L, dt)
+			break
+		}
 	}
 	position := datatypes.Vector3{root.cframe.x, root.cframe.y, root.cframe.z}
 	if collision != nil {
@@ -591,6 +596,9 @@ CharacterController_Tick :: proc(
 	cf.y = position.y
 	cf.z = position.z
 	character_set_root_frame(root, cf)
+
+
+	CharacterPhysicsSolver_Advance(cc, physics, root, ground_normal, dt)
 
 	knockback_damping := math.exp(-cc.knockback_damping * dt)
 	cc.knockback.x *= f64(knockback_damping)

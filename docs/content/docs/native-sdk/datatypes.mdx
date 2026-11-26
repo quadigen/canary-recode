@@ -1,0 +1,59 @@
+---
+title: Native datatypes
+description: Register value types with typed fields, constructors, native methods, and codecs.
+---
+
+A datatype is a native **value type**, unlike an Instance: it has no parent and is not part of the DataModel. Use `Kinemium_RegisterDatatype` to expose it through Luau.
+
+## Example: damage information
+
+```c
+#include "kinemium_plugin.h"
+#include <stddef.h>
+
+typedef struct {
+    double amount;
+    bool critical;
+} DamageInfo;
+
+static bool damage_new(Kinemium_Context *ctx, void *data,
+                       uint32_t count, const Kinemium_Value *args) {
+    (void)ctx;
+    if (count < 2 || args[0].kind != KINEMIUM_VALUE_NUMBER ||
+        args[1].kind != KINEMIUM_VALUE_BOOLEAN) return false;
+    DamageInfo *damage = data;
+    damage->amount = args[0].number;
+    damage->critical = args[1].boolean;
+    return true;
+}
+
+static bool register_damage(Kinemium_Context *ctx) {
+    Kinemium_DatatypeDesc desc =
+        Kinemium_Datatype("NativeDamageInfo", sizeof(DamageInfo));
+    desc.on_construct = damage_new;
+    Kinemium_DatatypeField(&desc, "Amount", KINEMIUM_NUMBER,
+                           offsetof(DamageInfo, amount));
+    Kinemium_DatatypeField(&desc, "Critical", KINEMIUM_BOOLEAN,
+                           offsetof(DamageInfo, critical));
+    return Kinemium_RegisterDatatype(ctx, &desc);
+}
+```
+
+In Luau:
+
+```lua
+local damage = NativeDamageInfo.new(50, true)
+assert(damage.Amount == 50)
+assert(damage.Critical == true)
+assert(typeof(damage) == "NativeDamageInfo")
+```
+
+## Operators
+
+Set the optional datatype descriptor callbacks `on_add`, `on_subtract`, `on_multiply`, `on_divide`, `on_negate`, `on_equal`, and `on_string` to support Luau arithmetic, comparisons, and custom `tostring`. Binary callbacks receive two native storage pointers and write into a new engine-owned result buffer.
+
+## Serialization and replication
+
+For a serializable or replicated type, set `KINEMIUM_DATATYPE_PERSISTABLE` or `KINEMIUM_DATATYPE_REPLICATED`, provide a `wire_version`, and implement both `on_encode` and `on_decode`. Encoding reports required output size or writes a stable byte representation. Decoding should reject malformed or incompatible data.
+
+The reference plugin in `examples/kinemium_sdk/plugin/main.c` demonstrates a serializable `NativeDamageInfo` datatype with a native constructor and `Double()` method. The engine detaches datatype VM bindings before unloading a plugin library.

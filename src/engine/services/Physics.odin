@@ -26,6 +26,7 @@ Physics_Body :: struct {
 	gravity:               datatypes.Vector3,
 	gravity_factor:        f32,
 	motion_properties:     kineffi.JPH_MotionPropertiesRef,
+	max_linear_velocity:   f32,
 	last_cframe:           datatypes.CFrame,
 	mesh_id:               string,
 	mesh_index:            u32,
@@ -101,8 +102,10 @@ Physics_Shape_Cache_Key :: struct {
 
 Physics_Set_Gravity :: proc(service: ^Physics, gravity: f32) {
 	if service == nil {return}
-	service.gravity = max(gravity, 0)
-	jolt.System_Set_Gravity(&service.system, service.gravity)
+	value := max(gravity, 0)
+	if service.gravity == value {return}
+	service.gravity = value
+	if service.initialized {jolt.System_Set_Gravity(&service.system, value)}
 }
 
 

@@ -26,6 +26,8 @@ UIScaleDetector :: struct {
 	scale_continue:     ^signals.Signal,
 	scale_end:          ^signals.Signal,
 	scaling:            bool,
+	scale_parent:       ^Object,
+	start_rotation:     f32,
 	edge_left:          bool,
 	edge_right:         bool,
 	edge_top:           bool,
@@ -134,9 +136,15 @@ ui_scale_detector_zone :: proc(
 	left, right, top, bottom: bool,
 	ok: bool,
 ) {
+	if !GuiObject_contains_point(gui, x, y) ||
+	   gui.absolute_size.X <= 0 ||
+	   gui.absolute_size.Y <= 0 {
+		return false, false, false, false, false
+	}
 	if d.scale_style == .Uniform {
 		return false, false, false, false, true
 	}
+	if d.edge_thickness <= 0 {return false, false, false, false, false}
 
 	local_x, local_y := GuiObject_screen_to_local(gui, x, y)
 
@@ -166,6 +174,15 @@ ui_scale_detector_zone :: proc(
 	return
 }
 
+ui_scale_detector_cursor :: proc(left, right, top, bottom: bool) -> sdl3.SystemCursor {
+	if (left || right) && (top || bottom) {
+		return (left && top) || (right && bottom) ? .NWSE_RESIZE : .NESW_RESIZE
+	}
+	if left || right {return .EW_RESIZE}
+	if top || bottom {return .NS_RESIZE}
+	return .NWSE_RESIZE
+}
+
 ui_scale_detector_begin :: proc(
 	d: ^UIScaleDetector,
 	gui: ^GuiObject,
@@ -177,9 +194,12 @@ ui_scale_detector_begin :: proc(
 	basis_w, basis_h := ui_drag_detector_basis(gui)
 
 	d.scaling = true
+	d.scale_parent = &gui.object
+	d.start_rotation = f32(gui.rotation)
 	d.edge_left, d.edge_right, d.edge_top, d.edge_bottom = left, right, top, bottom
 
-	d.start_pointer = {x, y}
+	px, py := ui_detector_parent_point(gui, x, y)
+	d.start_pointer = {px, py}
 	d.start_abs_position = gui.absolute_position
 	d.start_abs_size = gui.absolute_size
 	d.start_position = gui.position
@@ -192,8 +212,8 @@ ui_scale_detector_begin :: proc(
 		gui.absolute_position.Y + gui.absolute_size.Y * 0.5,
 	}
 
-	dx := x - d.pivot.X
-	dy := y - d.pivot.Y
+	dx := px - d.pivot.X
+	dy := py - d.pivot.Y
 	d.start_distance = max(math.sqrt(dx * dx + dy * dy), 1)
 
 	UIScaleDetector_ensure_signals(d)
@@ -201,6 +221,8 @@ ui_scale_detector_begin :: proc(
 }
 
 ui_scale_detector_update :: proc(d: ^UIScaleDetector, gui: ^GuiObject, x, y: f32) {
+	x, y := ui_detector_parent_point(gui, x, y)
+	old_size, old_position := gui.size, gui.position
 	sw := d.start_abs_size.X
 	sh := d.start_abs_size.Y
 
@@ -219,6 +241,9 @@ ui_scale_detector_update :: proc(d: ^UIScaleDetector, gui: ^GuiObject, x, y: f32
 	} else {
 		dx := x - d.start_pointer.X
 		dy := y - d.start_pointer.Y
+		angle := math.to_radians(-d.start_rotation)
+		c, s := math.cos(angle), math.sin(angle)
+		dx, dy = dx * c - dy * s, dx * s + dy * c
 		mult: f32 = from_center ? 2 : 1
 
 		if d.edge_left {
@@ -288,8 +313,12 @@ ui_scale_detector_update :: proc(d: ^UIScaleDetector, gui: ^GuiObject, x, y: f32
 	}
 
 
-	shift_x := (new_x - d.start_abs_position.X) + gui.anchorpoint.X * (w - sw)
-	shift_y := (new_y - d.start_abs_position.Y) + gui.anchorpoint.Y * (h - sh)
+	center_dx := new_x - d.start_abs_position.X + (w - sw) * 0.5
+	center_dy := new_y - d.start_abs_position.Y + (h - sh) * 0.5
+	angle := math.to_radians(d.start_rotation)
+	c, s := math.cos(angle), math.sin(angle)
+	shift_x := center_dx * c - center_dy * s + (gui.anchorpoint.X - 0.5) * (w - sw)
+	shift_y := center_dx * s + center_dy * c + (gui.anchorpoint.Y - 0.5) * (h - sh)
 
 	pos := d.start_position
 
@@ -306,9 +335,10 @@ ui_scale_detector_update :: proc(d: ^UIScaleDetector, gui: ^GuiObject, x, y: f32
 	gui.position = pos
 	d.last_size = {w, h}
 
-	Gui_Layout_Mark_Dirty()
-	gui_invalidate_draw(&gui.object)
-	surfacegui_mark_dirty_for(&gui.object)
+	if gui.size != old_size || gui.position != old_position {
+		gui_mark_layout_for(&gui.object)
+		surfacegui_mark_dirty_for(&gui.object)
+	}
 }
 
 ui_scale_detector_end :: proc(d: ^UIScaleDetector, registry: ^Registry, L: ^vm.State) {
@@ -317,6 +347,7 @@ ui_scale_detector_end :: proc(d: ^UIScaleDetector, registry: ^Registry, L: ^vm.S
 	}
 
 	d.scaling = false
+	d.scale_parent = nil
 	UIScaleDetector_ensure_signals(d)
 	ui_scale_detector_fire(L, registry, d.scale_end, d.last_size)
 }
@@ -348,7 +379,13 @@ UIScaleDetector_Handle_Event :: proc(
 		defer delete(result.chain)
 
 
+		for object in descriptor.instances {
+			if object != nil &&
+			   !object.destroyed &&
+			   (cast(^UIScaleDetector)object).scaling {return true}
+		}
 		for gui in result.chain {
+			if !ui_detector_can_interact(gui) {continue}
 			detector_object := Find_First_Child_Of_Class(&gui.object, "UIScaleDetector")
 			if detector_object == nil || detector_object.destroyed {
 				continue
@@ -392,9 +429,13 @@ UIScaleDetector_Handle_Event :: proc(
 				continue
 			}
 
-			if d.object.parent == nil || !Is_A(d.object.parent, "GuiObject") {
-				d.scaling = false
-				continue
+			if !d.enabled ||
+			   d.object.parent != d.scale_parent ||
+			   d.scale_parent == nil ||
+			   !Is_A_Class(d.object.parent, &GuiObject_Class) ||
+			   !ui_detector_can_interact(cast(^GuiObject)d.object.parent) {
+				ui_scale_detector_end(d, registry, L)
+				return true
 			}
 
 			gui := cast(^GuiObject)d.object.parent
@@ -410,6 +451,7 @@ UIScaleDetector_Handle_Event :: proc(
 
 			UIScaleDetector_ensure_signals(d)
 			ui_scale_detector_fire(L, registry, d.scale_continue, d.last_size)
+			return true
 		}
 
 	case .MOUSE_BUTTON_UP:
@@ -426,7 +468,14 @@ UIScaleDetector_Handle_Event :: proc(
 
 			if d.scaling {
 				ui_scale_detector_end(d, registry, L)
+				return true
 			}
+		}
+	case .WINDOW_MINIMIZED:
+		for object in descriptor.instances {
+			if object == nil || object.destroyed {continue}
+			d := cast(^UIScaleDetector)object
+			ui_scale_detector_end(d, registry, L)
 		}
 	}
 
@@ -518,6 +567,7 @@ UIScaleDetector_set :: proc(
 		d.enabled = vm.ArgBoolean(L, value_index)
 		if !d.enabled {
 			d.scaling = false
+			d.scale_parent = nil
 		}
 
 	case "ScaleStyle":
@@ -570,6 +620,7 @@ UIScaleDetector_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.max_size = src.max_size
 
 	dst.scaling = false
+	dst.scale_parent = nil
 }
 
 Register_UIScaleDetector :: proc(registry: ^Registry) {

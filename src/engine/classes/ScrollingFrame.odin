@@ -706,10 +706,14 @@ ScrollingFrame_set :: proc(
 		}
 
 		position := datatypes.Arg_Vector2(L, value_index, datatype_registry)
-
+		old_position := frame.canvas_position
+		scrolling_frame_update_bounds(
+			frame,
+			guilib.Rect{width = frame.absolute_size.X, height = frame.absolute_size.Y},
+		)
 		position.X = clamp(position.X, f32(0), frame.max_scroll_x)
 		position.Y = clamp(position.Y, f32(0), frame.max_scroll_y)
-		changed := frame.canvas_position != position
+		changed := old_position != position
 		if !changed && frame.target_position == position {return true}
 		if changed {
 			gui_mark_layout_for(object, false)
@@ -809,7 +813,7 @@ ScrollingFrame_set :: proc(
 
 	case "ScrollBarThickness":
 		frame.scrollbar_thickness = max(f32(vm.ArgNumber(L, value_index)), f32(0))
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 
 		return true
 	case "VerticalScrollBarInset", "HorizontalScrollBarInset":
@@ -818,7 +822,7 @@ ScrollingFrame_set :: proc(
 		)
 		if key ==
 		   "VerticalScrollBarInset" {frame.vertical_bar_inset = value} else {frame.horizontal_bar_inset = value}
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 		return true
 	case "TopImage", "MidImage", "BottomImage":
 		index := 0 if key == "TopImage" else (1 if key == "MidImage" else 2)

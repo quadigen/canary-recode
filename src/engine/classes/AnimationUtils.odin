@@ -125,6 +125,8 @@ Animation_Native_Live :: proc(a: ^Animator) -> bool {
 }
 Animation_Invalidate_Tracks :: proc(a: ^Animator) {
 	if a == nil {return}
+	for source in a.imported_sources {delete(source)}
+	delete(a.imported_sources); a.imported_sources = nil
 	for t in a.tracks {
 		if t != nil {
 			t.native_track = nil

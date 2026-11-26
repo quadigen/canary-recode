@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 IntValue_Class := Class_Info {
@@ -12,6 +13,7 @@ IntValue_Class := Class_Info {
 IntValue :: struct {
 	using object: Object,
 	value:        i64,
+	changed:      ^signals.Signal,
 }
 
 IntValue_Init :: proc() -> IntValue {
@@ -26,6 +28,7 @@ IntValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^O
 }
 
 IntValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^IntValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^IntValue)object)
 }
@@ -40,6 +43,8 @@ IntValue_get :: proc(
 	val := cast(^IntValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		vm.PushNumber(L, f64(val.value))
 	case:
@@ -60,7 +65,13 @@ IntValue_set :: proc(
 
 	switch key {
 	case "Value":
-		val.value = i64(vm.ArgNumber(L, value_index))
+		new_value := i64(vm.ArgNumber(L, value_index))
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			vm.PushNumber(L, f64(val.value))
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

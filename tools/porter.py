@@ -466,6 +466,8 @@ class Options:
         self.mesh_assets = {}
         self.embedded_assets = {}
         self.resolved_assets = {}
+        self.script_image_occurrences = {}
+        self.script_image_uris = {}
         self.embedded_asset_bytes = 0
         self.asset_workers = 4
         self.asset_verbose = False
@@ -486,6 +488,8 @@ class Options:
             "imported_unions": 0,
             "downloaded_assets": 0,
             "asset_failures": 0,
+            "script_image_files": 0,
+            "script_image_references": 0,
         }
 # ---------------------------------------------------------------------------
 # Property decoders: each returns a list (len n) of (tag, value) or None
@@ -1105,10 +1109,325 @@ def resolve_asset(downloader, asset_id, kind):
     raise ValueError("nested asset references exceed four levels")
 
 
+# ---------------------------------------------------------------------------
+# Luau image asset references (static direct/indirect assignments)
+# ---------------------------------------------------------------------------
+# Only literal asset IDs that flow into image properties are rewritten. A small
+# lexical scanner skips comments and quoted text correctly; no code is eval'd.
+# Dynamic table keys/function results require runtime analysis and are left alone.
+LUA_IMAGE_PROPERTIES = {
+    "Image", "HoverImage", "PressedImage", "ImageContent",
+    "Texture", "TextureId", "TextureContent", "ColorMap", "AlbedoMap",
+    "NormalMap", "RoughnessMap", "MetalnessMap", "EmissiveMap",
+    "SkyboxRt", "SkyboxLf", "SkyboxUp", "SkyboxDn", "SkyboxBk", "SkyboxFt",
+    "SunTextureId", "MoonTextureId",
+}
+LUA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+LUA_LONG_OPEN = re.compile(r"\[(=*)\[")
+
+
+def luau_tokens(source):
+    """Yield (kind, text, start, end), excluding comments and whitespace."""
+    i, size = 0, len(source)
+    while i < size:
+        start = i
+        ch = source[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if source.startswith("--", i):
+            i += 2
+            long = LUA_LONG_OPEN.match(source, i)
+            if long:
+                i += len(long.group())
+                close = "]" + long.group(1) + "]"
+                end = source.find(close, i)
+                i = size if end < 0 else end + len(close)
+            else:
+                end = source.find("\n", i)
+                i = size if end < 0 else end
+            continue
+        long = LUA_LONG_OPEN.match(source, i) if ch == "[" else None
+        if long:
+            i += len(long.group())
+            close = "]" + long.group(1) + "]"
+            end = source.find(close, i)
+            i = size if end < 0 else end + len(close)
+            yield ("string", source[start:i], start, i)
+            continue
+        if ch in ("'", '"', chr(96)):
+            i += 1
+            while i < size:
+                if source[i] == "\\":
+                    i += 2
+                elif source[i] == ch:
+                    i += 1
+                    break
+                else:
+                    i += 1
+            # Interpolated strings are dynamic, not static asset paths.
+            yield ("template" if ch == chr(96) else "string", source[start:i], start, i)
+            continue
+        if ch.isalpha() or ch == "_":
+            i += 1
+            while i < size and (source[i].isalnum() or source[i] == "_"):
+                i += 1
+            yield ("ident", source[start:i], start, i)
+            continue
+        if ch.isdigit():
+            i += 1
+            while i < size and (source[i].isalnum() or source[i] in "._"):
+                i += 1
+            yield ("number", source[start:i], start, i)
+            continue
+        op = next((op for op in ("...", "==", "~=", "<=", ">=", "+=", "-=", "*=", "/=", "..", "::")
+                   if source.startswith(op, i)), None)
+        if op:
+            i += len(op)
+            yield ("op", op, start, i)
+        else:
+            i += 1
+            yield ("op", ch, start, i)
+
+
+def luau_literal_value(token):
+    """Decode ordinary string content only when escapes cannot change it."""
+    kind, raw, _, _ = token
+    if kind != "string":
+        return None
+    if raw.startswith(("'", '"')) and len(raw) >= 2 and raw[-1] == raw[0]:
+        value = raw[1:-1]
+        return value if "\\" not in value else None
+    match = re.match(r"^\[(=*)\[", raw)
+    if match:
+        close = "]" + match.group(1) + "]"
+        if raw.endswith(close):
+            return raw[len(match.group()):-len(close)]
+    return None
+
+
+def luau_path(tokens, pos):
+    """Parse a static identifier path: options.Car or options['Car']."""
+    if pos >= len(tokens) or tokens[pos][0] != "ident":
+        return None, pos
+    names = [tokens[pos][1]]
+    i = pos + 1
+    while i + 1 < len(tokens):
+        if tokens[i][1] == "." and tokens[i + 1][0] == "ident":
+            names.append(tokens[i + 1][1])
+            i += 2
+        elif (i + 2 < len(tokens) and tokens[i][1] == "["
+              and tokens[i + 2][1] == "]"):
+            key = luau_literal_value(tokens[i + 1])
+            if key is None or not LUA_NAME.fullmatch(key):
+                break
+            names.append(key)
+            i += 3
+        else:
+            break
+    return ".".join(names), i
+
+
+def luau_rhs(tokens, pos, source):
+    """Return an unambiguous string literal or a statically named reference."""
+    if pos >= len(tokens):
+        return None
+    token = tokens[pos]
+    if token[0] == "string":
+        value = luau_literal_value(token)
+        parsed = ("literal", value, token[2], token[3]) if value is not None else None
+        end = pos + 1
+    else:
+        path, end = luau_path(tokens, pos)
+        parsed = ("ref", path) if path is not None else None
+    if not parsed:
+        return None
+    if end < len(tokens):
+        next_token = tokens[end]
+        if next_token[1] not in (",", ";", "}", ")"):
+            # Subsequent statement on a later line is fine; a continuation
+            # operator is not a simple assignment (e.g. literal .. suffix).
+            between = source[tokens[end - 1][3]:next_token[2]]
+            if "\n" not in between or next_token[1] in ("..", ".", "+", "-", "*", "/", "%", "^"):
+                return None
+    return parsed
+
+
+def luau_table_fields(tokens, start, prefix, source, assignments):
+    """Collect constant fields in a table constructor, including nested ones."""
+    depth = 1
+    i = start + 1
+    while i < len(tokens) and depth:
+        if tokens[i][1] == "{":
+            depth += 1
+            i += 1
+            continue
+        if tokens[i][1] == "}":
+            depth -= 1
+            i += 1
+            continue
+        if depth != 1:
+            i += 1
+            continue
+        key = None
+        end = i + 1
+        if tokens[i][0] == "ident":
+            key = tokens[i][1]
+        elif (tokens[i][1] == "[" and i + 2 < len(tokens)
+              and tokens[i + 2][1] == "]"):
+            key = luau_literal_value(tokens[i + 1])
+            end = i + 3
+        if key and LUA_NAME.fullmatch(key) and end < len(tokens) and tokens[end][1] == "=":
+            lhs = prefix + "." + key
+            rhs_start = end + 1
+            if rhs_start < len(tokens) and tokens[rhs_start][1] == "{":
+                luau_table_fields(tokens, rhs_start, lhs, source, assignments)
+            else:
+                rhs = luau_rhs(tokens, rhs_start, source)
+                if rhs:
+                    assignments.setdefault(lhs, []).append(rhs)
+        i += 1
+
+
+def scan_luau_image_literals(source):
+    """Return unique (start, end, numeric_asset_id) spans for image-bound IDs.
+
+    Reverse dataflow resolves static references across order-independent
+    assignments, e.g. local a = options.Car; img.Image = a; and table fields.
+    Expressions, dynamic keys and scripts linked through require() are not
+    evaluated; unsupported patterns are preserved unchanged.
+    """
+    tokens = list(luau_tokens(source))
+    assignments = {}
+    for i, token in enumerate(tokens):
+        if token[0] != "ident" or (i and tokens[i - 1][1] in (".", ":")):
+            continue
+        lhs, end = luau_path(tokens, i)
+        if not lhs or end >= len(tokens) or tokens[end][1] != "=":
+            continue
+        rhs_start = end + 1
+        if rhs_start < len(tokens) and tokens[rhs_start][1] == "{":
+            luau_table_fields(tokens, rhs_start, lhs, source, assignments)
+        rhs = luau_rhs(tokens, rhs_start, source)
+        if rhs:
+            assignments.setdefault(lhs, []).append(rhs)
+
+    # Image property writes are sinks; traverse backward to the original
+    # constants, preserving the caller's aliases and table lookups.
+    pending = [lhs for lhs in assignments
+               if "." in lhs and lhs.rsplit(".", 1)[-1] in LUA_IMAGE_PROPERTIES]
+    visited, selected = set(), {}
+    while pending:
+        lhs = pending.pop()
+        if lhs in visited:
+            continue
+        visited.add(lhs)
+        for rhs in assignments.get(lhs, ()):
+            if rhs[0] == "ref":
+                pending.append(rhs[1])
+            elif rhs[0] == "literal":
+                match = RBX_ASSET_ID.fullmatch(rhs[1])
+                if match:
+                    selected[(rhs[2], rhs[3])] = match.group(1)
+    return [(start, end, asset_id) for (start, end), asset_id in sorted(selected.items())]
+
+
+def rewrite_luau_image_literals(source, occurrences, project_uris):
+    """Substitute only successfully downloaded image literal spans."""
+    for start, end, asset_id in reversed(occurrences):
+        uri = project_uris.get(asset_id)
+        if uri:
+            # A plain quoted string is safe for paths generated by this importer.
+            source = source[:start] + json.dumps(uri) + source[end:]
+    return source
+
+
+def iter_script_image_references(inst, opts):
+    if inst.cls not in ("Script", "LocalScript", "ModuleScript"):
+        return
+    if "Source" in opts.drop_props or inst.cls + ".Source" in opts.drop_props:
+        return
+    raw = encoded_string_bytes(inst.props.get("Source"))
+    if raw is None:
+        return
+    try:
+        source = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return
+    spans = scan_luau_image_literals(source)
+    if spans:
+        opts.script_image_occurrences[inst] = spans
+        for start, end, asset_id in spans:
+            yield asset_id
+
+
+def export_script_images(opts, out_path):
+    """Write image payloads under the output project root, deduped by ID."""
+    if not opts.script_image_occurrences:
+        return
+    root = Path(out_path).resolve().parent
+    image_dir = root / "assets" / "roblox" / "images"
+    requested = {asset_id for spans in opts.script_image_occurrences.values()
+                 for _, _, asset_id in spans}
+    for asset_id in sorted(requested):
+        result = opts.resolved_assets.get((asset_id, ASSET_TEXTURE))
+        if result is None or isinstance(result, Exception):
+            continue
+        payload, ext = result
+        if not ext or ext not in (".png", ".jpg", ".webp", ".gif"):
+            continue
+        # Include content hash to avoid overwriting user-authored files with
+        # the same Roblox ID and to keep repeated imports deterministic.
+        filename = f"{asset_id}-{content_id(payload)}{ext}"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        dest = image_dir / filename
+        if dest.exists():
+            if dest.read_bytes() != payload:
+                raise ValueError("existing exported image does not match its content hash: " + str(dest))
+        else:
+            import tempfile
+            fd, temp = tempfile.mkstemp(prefix=".porter-", dir=image_dir)
+            try:
+                with os.fdopen(fd, "wb") as file:
+                    file.write(payload)
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(temp, dest)
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+        opts.script_image_uris[asset_id] = f"project://assets/roblox/images/{filename}"
+    opts.stats["script_image_files"] = len(opts.script_image_uris)
+
+
+def rewrite_instance_script_images(inst, opts):
+    spans = opts.script_image_occurrences.get(inst)
+    if not spans:
+        return
+    raw = encoded_string_bytes(inst.props.get("Source"))
+    if raw is None:
+        return
+    source = raw.decode("utf-8")
+    converted = sum(asset_id in opts.script_image_uris for _, _, asset_id in spans)
+    if converted:
+        inst.props["Source"] = enc_string(
+            rewrite_luau_image_literals(source, spans, opts.script_image_uris)
+        )
+        opts.stats["script_image_references"] += converted
+
+
+
 def iter_retained_instances(root, opts):
     stack = [root]
     while stack:
         inst = stack.pop()
+        # build_root creates a synthetic DataModel for .rbxl service roots.
+        # It is always written, even though DataModel is not a creatable class
+        # in the default importer allowlist. Descend into its services too.
+        if inst.cls == "DataModel" and inst.ref < 0:
+            yield inst
+            stack.extend(reversed(inst.children))
+            continue
         if inst.cls in opts.drop_classes:
             continue
         if opts.kine_version < 8 and inst.cls in REFERENCE_PROPERTIES:
@@ -1140,6 +1459,8 @@ def prefetch_assets(root, opts):
     for inst in iter_retained_instances(root, opts):
         for key, value, asset_id, kind in iter_asset_properties(inst, opts):
             refs.setdefault((asset_id, kind), (inst.cls, key))
+        for asset_id in iter_script_image_references(inst, opts):
+            refs.setdefault((asset_id, ASSET_TEXTURE), (inst.cls, "Source.Image"))
     if not refs:
         return
     print(f"Fetching {len(refs)} unique Roblox assets ({opts.asset_workers} workers)...", flush=True)
@@ -1513,6 +1834,7 @@ def encode_instance(inst, opts, out, indices, references):
         import_csg_mesh(inst, opts)
     kids = [child for child in inst.children if keep(child, opts)]
     embed_downloaded_assets(inst, opts)
+    rewrite_instance_script_images(inst, opts)
     opts.stats["kept_instances"] += 1
     if inst.ref >= 0:
         indices[inst.ref] = opts.stats["kept_instances"]
@@ -1582,13 +1904,18 @@ def convert(path, out_path, opts):
     opts.mesh_assets.clear()
     opts.embedded_assets.clear()
     opts.resolved_assets.clear()
+    opts.script_image_occurrences.clear()
+    opts.script_image_uris.clear()
     opts.embedded_asset_bytes = 0
     opts.stats["downloaded_assets"] = 0
     opts.stats["asset_failures"] = 0
+    opts.stats["script_image_files"] = 0
+    opts.stats["script_image_references"] = 0
     roots = parse_rbxm(data, opts)
     stem = os.path.splitext(os.path.basename(path))[0]
     root = build_root(roots, opts, stem)
     prefetch_assets(root, opts)
+    export_script_images(opts, out_path)
     blob, count = write_kine(root, opts)
     with open(out_path, "wb") as f:
         f.write(blob)
@@ -1602,6 +1929,8 @@ def print_summary(opts):
     print("dropped instances: %d" % s["dropped_instances"])
     print("imported unions: %d (%d unique meshes)" % (s["imported_unions"], len(opts.mesh_assets)))
     print("embedded Roblox asset properties: %d (%d unique payloads), failed unique IDs: %d" % (s["downloaded_assets"], len(opts.embedded_assets), s["asset_failures"]))
+    print("Luau image references converted: %d (%d project image files)" %
+          (s["script_image_references"], s["script_image_files"]))
     print("services written: %s" % (", ".join(s["services"]) if s["services"] else "(none)"))
     print("dropped attributes: %d" % s["dropped_attributes"])
 def main():
@@ -1616,7 +1945,7 @@ def main():
     ap.add_argument("--no-class-filter", action="store_true", help="keep every class (the loader fails on unknown ones)")
     ap.add_argument("--debug", action="store_true", help="print per-instance keep/drop decisions and a summary")
     ap.add_argument("--summary", action="store_true", help="print conversion counts without per-instance debug output")
-    ap.add_argument("--no-download-assets", action="store_true", help="keep rbxassetid:// references unchanged (default: download + embed)")
+    ap.add_argument("--no-download-assets", action="store_true", help="preserve rbxassetid:// references in properties and Luau scripts (default: download, embed properties, export script images beside .kine)")
     ap.add_argument("--asset-timeout", type=float, default=8.0, help="timeout per Roblox network request (default 8s)")
     ap.add_argument("--asset-retries", type=int, default=1, help="retry transient network errors (default 1)")
     ap.add_argument("--asset-workers", type=int, default=4, help="parallel asset download workers (default 4)")

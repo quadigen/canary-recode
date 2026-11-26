@@ -14,7 +14,9 @@ main :: proc() {
 		engine_runtime.Environment_Destroy(&environment)
 	}
 
-	ok, err := vm.Run(&script_vm, `
+	ok, err := vm.Run(
+		&script_vm,
+		`
 local service = game:GetService("LuauService")
 local sourceOfModule = "return 1"
 local function resolve(context, operation, name)
@@ -74,6 +76,29 @@ check(import .. "local a: m.Box<number> = { value = 1 }", 0)
 check(import .. "local a: m.Box<number> = { value = true }", 1)
 check(import .. "local a: m.Private = 1", 1)
 
+sourceOfModule = [=[
+local M = {}
+function M.combine(x: string, y: unknown)
+    return x .. y
+end
+function M.wrap<T>(value: T): { value: T }
+    return { value = value }
+end
+return M
+]=]
+for _ = 1, 20 do
+    local results = service:TypeCheck(import .. "local value: number = m", resolve)
+    assert(type(results) == "table")
+    local mismatch = false
+    for _, diagnostic in ipairs(results) do
+        if diagnostic.Kind == "Type error" and diagnostic.Line == 2 then
+            assert(type(diagnostic.Message) == "string" and #diagnostic.Message > 0)
+            mismatch = true
+        end
+    end
+    assert(mismatch, "Imported type mismatch was not reported")
+end
+
 local function hasLint(source, rule)
 	for _, diagnostic in ipairs(service:TypeCheck(source, resolve)) do
 		if diagnostic.Kind == "Lint warning" and diagnostic.Rule == rule then
@@ -90,7 +115,9 @@ assert(hasLint("--!optimize 9\nreturn 1", "CommentDirective"))
 assert(hasLint("local x = 1\n--!native\nreturn x", "CommentDirective"))
 assert(not hasLint("--!strict\n--!optimize 2\n--!native\nreturn 1", "CommentDirective"))
 check("--!nolint\nlocal a: number = false", 1)
-`, "luau_typecheck_smoke")
+`,
+		"luau_typecheck_smoke",
+	)
 	assert(ok, err)
 	fmt.println("LUAU_TYPECHECK_SMOKE_PASSED")
 }

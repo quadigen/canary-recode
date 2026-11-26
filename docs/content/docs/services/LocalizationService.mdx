@@ -47,7 +47,7 @@ The system locale initially defaults to English rather than detecting the OS lan
 SetLocale(locale: string, systemLocale: string?): ()
 ```
 
-Selects the dictionary to display. Locale names are normalized to lowercase. An empty locale raises an error. The optional system locale changes the reported system identifier.
+Selects the dictionary to display. The first locale is normalized to lowercase, and an empty locale raises an error. The optional system locale changes the reported system identifier and is stored as supplied.
 
 ### LoadTranslations
 

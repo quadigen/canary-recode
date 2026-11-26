@@ -5,6 +5,7 @@ import "core:encoding/json"
 import "core:strings"
 
 MANIFEST_FILE :: "extension.json"
+MAX_MANIFEST_BYTES :: 1024 * 1024
 
 Manifest :: struct {
 	id:            string,
@@ -78,12 +79,12 @@ field_u32 :: proc(obj: json.Object, key: string, fallback: u32) -> u32 {
 	if value, ok := json_field(obj, key); ok {
 		#partial switch v in value {
 		case json.Integer:
-			if v < 0 {
+			if v < 0 || u64(v) > 0xffffffff {
 				return fallback
 			}
 			return u32(v)
 		case json.Float:
-			if v < 0 {
+			if !(v >= 0 && v <= 4294967295.0) {
 				return fallback
 			}
 			return u32(v)
@@ -113,7 +114,7 @@ field_string_list :: proc(obj: json.Object, key: string) -> []string {
 
 
 manifest_id_is_valid :: proc(id: string) -> bool {
-	if len(id) == 0 || len(id) > 96 {
+	if len(id) == 0 || len(id) > 96 || id == "." || id == ".." {
 		return false
 	}
 	for index in 0 ..< len(id) {
@@ -131,7 +132,27 @@ manifest_id_is_valid :: proc(id: string) -> bool {
 }
 
 
+manifest_library_name_valid :: proc(name: string) -> bool {
+	if len(name) == 0 || len(name) > 4096 {return false}
+	component_start := 0
+	for i in 0 ..< len(name) {
+		c := name[i]
+		if c == ':' || c == '\\' || c < 0x20 || c == 0x7f {return false}
+		if c == '/' {
+			if !manifest_library_component_valid(name[component_start:i]) {return false}
+			component_start = i + 1
+		}
+	}
+	return manifest_library_component_valid(name[component_start:])
+}
 
+@(private)
+manifest_library_component_valid :: proc(component: string) -> bool {
+	if component == "" || component == "." || component == ".." {return false}
+
+	if strings.has_suffix(component, ".") || strings.has_suffix(component, " ") {return false}
+	return true
+}
 
 manifest_has_capability :: proc(manifest: ^Manifest, capability: string) -> bool {
 	if manifest == nil {

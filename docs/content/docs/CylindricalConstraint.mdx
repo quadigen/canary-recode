@@ -3,9 +3,11 @@ title: CylindricalConstraint
 description: Allow sliding and rotation along one attachment axis.
 ---
 
-Allow sliding and rotation along one attachment axis.
+Use `CylindricalConstraint` for objects that need to slide and spin along the same axis, such as a telescoping shaft.
 
 ## Getting started
+
+This example assumes `partA` and `partB` are existing parts in Workspace, with `attachmentA` and `attachmentB` parented to them respectively.
 
 ```lua
 local constraint = Instance.new("CylindricalConstraint", partA)
@@ -18,8 +20,17 @@ constraint.UpperLimit = 5
 
 ## Properties
 
-LimitsEnabled, LowerLimit, UpperLimit, AngularLimitsEnabled, LowerAngle and UpperAngle configure motion bounds.
+All properties below are read/write. See [Constraint](/docs/Constraint) for the shared attachment and activation properties.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `LimitsEnabled` | `boolean` | `false` | Enables sliding limits. |
+| `LowerLimit` | `number` | `-5` | Lower sliding limit. |
+| `UpperLimit` | `number` | `5` | Upper sliding limit. |
+| `AngularLimitsEnabled` | `boolean` | `false` | Enables rotation limits. |
+| `LowerAngle` | `number` | `-45` | Lower rotation limit in degrees. |
+| `UpperAngle` | `number` | `45` | Upper rotation limit in degrees. |
 
 ## Notes
 
-Uses a SixDOF joint with two free axes. Bounds currently include zero. Motor and servo controls are not implemented.
+Both angle properties accept -180–180 degrees; values outside that range raise an error. The allowed range currently includes zero, even if you set both limits on the same side of zero. Motor and servo controls aren't implemented.

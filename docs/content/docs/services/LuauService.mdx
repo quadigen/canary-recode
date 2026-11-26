@@ -1,0 +1,53 @@
+---
+title: LuauService
+description: Tokenize and type-check Luau source and inspect engine API definitions.
+---
+
+LuauService provides the source analysis used by scripting tools. It can tokenize code for syntax highlighting and, on supported builds, report type and lint diagnostics without executing the supplied source.
+
+```lua
+local luau = game:GetService("LuauService")
+local source = "local speed: number = true"
+
+local diagnostics = luau:TypeCheck(source)
+if diagnostics then
+    for _, diagnostic in ipairs(diagnostics) do
+        print(diagnostic.Line, diagnostic.Kind, diagnostic.Message)
+    end
+end
+```
+
+## Methods
+
+| Signature | Result |
+| --- | --- |
+| `Tokenize(source: string): {table}` | Array of token records. |
+| `TypeCheck(source: string, resolver: function?): {table}?` | Syntax, type and lint diagnostics; nil if analysis is unavailable or fails. |
+| `GetExportedTypes(source: string): {string}?` | Names of exported type aliases and type functions, or nil if unavailable. |
+| `GetLintRules(): {string}?` | Supported lint warning names, or nil if unavailable. |
+| `GetApiDefinitions(): string?` | Engine Luau API definition text, or nil if unavailable. |
+
+Token records contain Type, Start, Finish and Text. Start and Finish are one-based byte positions inclusive. Type is one of Keyword, String, Number, Identifier, Comment, Attribute, Broken or Symbol.
+
+Diagnostics contain Line, Column, EndLine, EndColumn, Kind and Message. Positions are one-based; Kind is Syntax error, Type error or Lint warning. Lint warnings also have a Rule field. At most 100 diagnostics are returned for the analyzed root; unknown-require diagnostics are omitted. Type checking and exported-type extraction accept at most 512 KiB of source.
+
+## Resolve required modules
+
+An optional resolver function receives the requesting context name, an operation string and an argument string. It can return a module identifier and its source text, or nil for an unresolved dependency. Operations include member, path, GetService, FindFirstChild and WaitForChild.
+
+```lua
+local function resolve(context, operation, argument)
+    if operation == "path" and argument == "./Numbers" then
+        return "Numbers", "return 42"
+    end
+end
+
+local diagnostics = luau:TypeCheck(
+    'local value: number = require("./Numbers")',
+    resolve
+)
+```
+
+Use stable identifiers of at most 256 bytes. The resolver may be invoked multiple times. Return source text rather than running the module. The analysis does not execute required module code, although the resolver itself is a Luau callback.
+
+Type-checking support depends on the build. An empty diagnostic array is different from nil, which indicates that no usable analysis result was produced.

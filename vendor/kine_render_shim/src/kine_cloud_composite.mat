@@ -1,0 +1,15 @@
+material {
+    name : kine_cloud_composite,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    culling : none,
+    parameters : [{ type : sampler2d, name : cloudImage }]
+}
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = textureLod(materialParams_cloudImage,
+            uvToRenderTargetUV(getNormalizedViewportCoord().xy), 0.0);
+    }
+}

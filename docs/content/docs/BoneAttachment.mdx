@@ -1,0 +1,25 @@
+---
+title: BoneAttachment
+description: Attach a local transform to an animated mesh bone.
+---
+
+BoneAttachment inherits [Attachment](/docs/Attachment). Use it under a rigged MeshPart to read a transform that follows an evaluated skeleton bone.
+
+```lua
+local mesh = workspace:WaitForChild("RigMesh")
+local attachment = Instance.new("BoneAttachment")
+attachment.BoneName = "Hand"
+attachment.Parent = mesh
+
+print(attachment.WorldCFrame)
+```
+
+Replace Hand with the exact name of a bone in the mesh. BoneAttachment does not automatically weld an accessory or create a physical joint.
+
+## Properties
+
+`BoneName: string` is read/write and defaults to an empty string. It selects the named bone.
+
+The inherited attachment properties CFrame, Position, Orientation, Axis, SecondaryAxis, WorldCFrame, WorldPosition, WorldOrientation, WorldAxis and WorldSecondaryAxis use the [Attachment](/docs/Attachment) API. The inherited GetConstraints method is also available.
+
+See [CharacterService](/docs/services/CharacterService) for spawning characters with custom player rigs.

@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 #define KNE_ABI_MAJOR 3u
-#define KNE_ABI_MINOR 1u
+#define KNE_ABI_MINOR 2u
 #define KNE_ENTRY_SYMBOL "kne_extension_entry"
 
 typedef struct kne_host {

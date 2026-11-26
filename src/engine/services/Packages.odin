@@ -1,5 +1,5 @@
 #+build !js
-// wire:service
+
 package services
 
 
@@ -679,12 +679,9 @@ packages_store_downloaded :: proc(base, token, namespace, name, version, archive
 	handle, opened := kineffi.Zip_Open(download_archive)
 	if opened {
 		if !kineffi.Zip_Extract_All(handle, temp_dir, false) {
-			fmt.eprintf(
-				"[Packages] failed extracting %s/%s@%s; keeping the archive only\n",
-				namespace,
-				name,
-				version,
-			)
+			fmt.eprintf("[Packages] failed extracting %s/%s@%s\n", namespace, name, version)
+			_ = kineffi.Zip_Close(handle)
+			return false
 		}
 		_ = kineffi.Zip_Close(handle)
 	} else {
@@ -1056,6 +1053,13 @@ Packages_set :: proc(
 	service := cast(^Packages)object
 	switch key {
 	case "MarketplaceServer":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			_ = vm.RaiseError(L, "Marketplace configuration requires Studio capability")
+			return true
+		}
 		if service.marketplace_server != "" {
 			delete(service.marketplace_server)
 		}
@@ -1363,6 +1367,12 @@ Packages_namecall :: proc(
 		}
 
 	case "DownloadPackage":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Package installation requires Studio capability"), true
+		}
 		return packages_download_package(L, service), true
 
 	case "ListDownloadedPackages", "GetDownloadedPackages":
@@ -1447,7 +1457,7 @@ Packages_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Ob
 	if service.marketplace_server != "" {
 		delete(service.marketplace_server)
 	}
-	// lua_close finalizes the plugin roots itself and may already have freed them.
+
 	if !vm.Is_Closing() {
 		for root in service.plugin_roots {
 			if root != nil && !root.destroyed {

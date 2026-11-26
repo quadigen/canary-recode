@@ -3,12 +3,12 @@ import { createGetUrl } from 'fumadocs-core/source';
 export const appName = 'Kinemium Documentation';
 export const docsRoute = '/docs';
 export const docsImageRoute = '/og/docs';
+export const siteUrl = 'https://kinemium.docs.quadigen.com';
 
-// fill this with your actual GitHub info, for example:
 export const gitConfig = {
   user: 'quadigen',
-  repo: 'Kinemium-Engine',
-  branch: 'main',
+  repo: 'canary-recode',
+  branch: 'master',
 };
 
 const getImageUrl = createGetUrl(docsImageRoute);

@@ -2,21 +2,22 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
-NumberSequenceValue_Class := Class_Info{
+NumberSequenceValue_Class := Class_Info {
 	name   = "NumberSequenceValue",
 	parent = &ValueBase_Class,
 }
 
 NumberSequenceValue :: struct {
 	using object: Object,
-
-	value: datatypes.NumberSequence,
+	value:        datatypes.NumberSequence,
+	changed:      ^signals.Signal,
 }
 
 NumberSequenceValue_Init :: proc() -> NumberSequenceValue {
-	return NumberSequenceValue{
+	return NumberSequenceValue {
 		object = Object_Init(&NumberSequenceValue_Class),
 		value = datatypes.NumberSequence_New(1),
 	}
@@ -34,6 +35,7 @@ NumberSequenceValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object)
 
 	datatypes.NumberSequence_Destroy(val.value)
 
+	ValueBase_Destroy_Changed_Signal(&(cast(^NumberSequenceValue)object).changed)
 	Object_Destroy(object)
 	free(val)
 }
@@ -48,8 +50,10 @@ NumberSequenceValue_get :: proc(
 	val := cast(^NumberSequenceValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
 		datatypes.Push_NumberSequence(L, datatype_registry, val.value)
 	case:
 		return false
@@ -69,11 +73,18 @@ NumberSequenceValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if datatype_registry == nil { return false }
+		if datatype_registry == nil {return false}
+		incoming := datatypes.Arg_NumberSequence(L, value_index, datatype_registry)
+		if datatypes.NumberSequence_Equal(val.value, incoming) {return true}
+
+
+		replacement := datatypes.NumberSequence_Clone(incoming)
 		datatypes.NumberSequence_Destroy(val.value)
-		val.value = datatypes.NumberSequence_Clone(
-			datatypes.Arg_NumberSequence(L, value_index, datatype_registry),
-		)
+		val.value = replacement
+		if val.changed != nil {
+			datatypes.Push_NumberSequence(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

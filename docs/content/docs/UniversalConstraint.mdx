@@ -3,9 +3,11 @@ title: UniversalConstraint
 description: Join two attachments while allowing rotation about two axes.
 ---
 
-Join two attachments while allowing rotation about two axes.
+Use `UniversalConstraint` for a joint that bends in two directions, such as a vehicle coupling.
 
 ## Getting started
+
+This example assumes `partA` and `partB` are existing parts in Workspace, with `attachmentA` and `attachmentB` parented to them respectively.
 
 ```lua
 local constraint = Instance.new("UniversalConstraint", partA)
@@ -17,8 +19,15 @@ constraint.MaxAngle = 35
 
 ## Properties
 
-LimitsEnabled and MaxAngle configure approximate angular bounds. Radius and Restitution are retained compatibility properties.
+All properties below are read/write. See [Constraint](/docs/Constraint) for the shared attachment and activation properties.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `LimitsEnabled` | `boolean` | `false` | Enables angular limits. |
+| `MaxAngle` | `number` | `45` | Approximate angular bound in degrees. |
+| `Radius` | `number` | `0.1` | Compatibility property. |
+| `Restitution` | `number` | `0` | Stored but not applied to joint motion. |
 
 ## Notes
 
-Uses a SixDOF joint. The angular bounds are approximate and restitution is not applied by this implementation.
+`MaxAngle` accepts 0–180 degrees, `Radius` must be nonnegative, and `Restitution` accepts 0–1. Values outside these ranges raise an error. The angular bounds are approximate. Changing `Restitution` doesn't change how the joint rebounds.

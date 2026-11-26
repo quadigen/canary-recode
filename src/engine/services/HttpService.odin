@@ -4,6 +4,8 @@ package services
 
 import "core:bytes"
 import "core:fmt"
+import "core:io"
+import "core:slice"
 import "core:math"
 import "core:net"
 import "core:strings"
@@ -495,7 +497,7 @@ http_service_push_guid :: proc(L: ^vm.State, bracketed: bool) {
 	}
 
 	if bracketed {
-		vm.PushString(L, fmt.tprintf("{%s}", string(out[:])))
+		vm.PushString(L, fmt.tprintf("{{%s}}", string(out[:])))
 	} else {
 		vm.PushString(L, string(out[:]))
 	}
@@ -522,13 +524,64 @@ http_push_json_value :: proc(L: ^vm.State, value: json.Value) {
 	case json.Object:
 		vm.NewTable(L, 0, 0)
 		for key, item in v {
+			vm.PushString(L, string(key))
 			http_push_json_value(L, item)
-			vm.SetField(L, -2, string(key))
+			vm.RawSet(L, -3)
 		}
 	}
 }
 
-JSON_MAX_DEPTH :: 6
+JSON_MAX_DEPTH :: 64
+
+http_json_depth_valid :: proc(source: string) -> bool {
+	tokenizer := json.make_tokenizer(source, spec = .JSON)
+	depth := 0
+	for {
+		token, err := json.get_token(&tokenizer)
+		if token.kind == .EOF {return depth == 0 && token.offset >= len(source)}
+		if err != nil {return false}
+		#partial switch token.kind {
+		case .Open_Brace, .Open_Bracket:
+			depth += 1
+			if depth > JSON_MAX_DEPTH {return false}
+		case .Close_Brace, .Close_Bracket:
+			depth -= 1
+			if depth < 0 {return false}
+		case:
+		}
+	}
+}
+
+http_write_json :: proc(writer: io.Writer, value: json.Value) -> json.Marshal_Error {
+	#partial switch v in value {
+	case json.Array:
+		io.write_byte(writer, '[') or_return
+		for item, index in v {
+			if index > 0 {io.write_byte(writer, ',') or_return}
+			http_write_json(writer, item) or_return
+		}
+		io.write_byte(writer, ']') or_return
+	case json.Object:
+		keys := make([]string, len(v), context.temp_allocator)
+		index := 0
+		for key in v {
+			keys[index] = key
+			index += 1
+		}
+		slice.sort_by(keys, proc(a, b: string) -> bool {return a < b})
+		io.write_byte(writer, '{') or_return
+		for key, i in keys {
+			if i > 0 {io.write_byte(writer, ',') or_return}
+			json.write_quoted_json_string(writer, key) or_return
+			io.write_byte(writer, ':') or_return
+			http_write_json(writer, v[key]) or_return
+		}
+		io.write_byte(writer, '}') or_return
+	case:
+		return json.marshal_to_writer(writer, value)
+	}
+	return nil
+}
 
 http_lua_to_json :: proc(
 	L: ^vm.State,
@@ -538,7 +591,7 @@ http_lua_to_json :: proc(
 	value: json.Value,
 	err: string,
 ) {
-	if depth > JSON_MAX_DEPTH {
+	if depth > JSON_MAX_DEPTH || (depth == JSON_MAX_DEPTH && vm.IsTable(L, index)) {
 		return nil, "tables are nested too deeply (is there a cycle?)"
 	}
 
@@ -571,7 +624,7 @@ http_lua_to_json :: proc(
 		return http_lua_table_to_json(L, index, depth)
 	}
 
-	return nil, fmt.aprintf("cannot encode a %s value as JSON", vm.TypeName(L, index))
+	return nil, fmt.tprintf("cannot encode a %s value as JSON", vm.TypeName(L, index))
 }
 
 http_lua_table_to_json :: proc(
@@ -582,6 +635,8 @@ http_lua_table_to_json :: proc(
 	value: json.Value,
 	err: string,
 ) {
+	stack_top := vm.StackTop(L)
+	defer vm.SetStackTop(L, stack_top)
 	count := 0
 
 	vm.PushNil(L)
@@ -605,6 +660,7 @@ http_lua_table_to_json :: proc(
 			vm.Pop(L)
 
 			if item_err != "" {
+				json.destroy_value(array)
 				return nil, item_err
 			}
 
@@ -626,15 +682,15 @@ http_lua_table_to_json :: proc(
 
 		#partial switch vm.TypeOf(L, key_index) {
 		case .Integer:
-			key = fmt.tprintf("%d", vm.ArgInteger(L, key_index))
+			key = fmt.aprintf("%d", vm.ArgInteger(L, key_index))
 
 		case .Number:
 			number, _ := vm.ToNumber(L, key_index)
 
 			if number == math.floor(number) && abs(number) < 1e15 {
-				key = fmt.tprintf("%d", i64(number))
+				key = fmt.aprintf("%d", i64(number))
 			} else {
-				key = fmt.tprintf("%v", number)
+				key = fmt.aprintf("%v", number)
 			}
 
 		case .String:
@@ -644,16 +700,25 @@ http_lua_table_to_json :: proc(
 			key = strings.clone(raw_key)
 
 		case:
+			json.destroy_value(object)
 			return nil, "table keys must be strings or numbers"
 		}
 
 		item, item_err := http_lua_to_json(L, value_index, depth + 1)
 
 		if item_err != "" {
+			delete(key)
+			json.destroy_value(object)
 			return nil, item_err
 		}
 
-		object[key] = item
+		if previous, exists := object[key]; exists {
+			json.destroy_value(previous)
+			object[key] = item
+			delete(key)
+		} else {
+			object[key] = item
+		}
 
 		vm.Pop(L)
 	}
@@ -806,8 +871,15 @@ http_service_namecall :: proc(
 			true
 	case "JSONDecode":
 		value := vm.ArgString(L, 2)
+		if !http_json_depth_valid(value) {
+			return vm.RaiseError(L, "HttpService:JSONDecode: invalid JSON or nesting limit exceeded"), true
+		}
+		if !vm.CheckStack(L, JSON_MAX_DEPTH * 2 + 8) {
+			return vm.RaiseError(L, "HttpService:JSONDecode: insufficient stack space"), true
+		}
 		decoded, decode_err := json.parse_string(
 			value,
+			spec = .JSON,
 			parse_integers = false,
 			allocator = context.allocator,
 		)
@@ -825,27 +897,25 @@ http_service_namecall :: proc(
 			return 1, true
 		}
 
+		if !vm.CheckStack(L, JSON_MAX_DEPTH * 2 + 8) {
+			return vm.RaiseError(L, "HttpService:JSONEncode: insufficient stack space"), true
+		}
 		tree, convert_err := http_lua_to_json(L, 2, 0)
 
 		if convert_err != "" {
 			message := fmt.tprintf("HttpService:JSONEncode: %s", convert_err)
-			delete(convert_err)
 			return vm.RaiseError(L, message), true
 		}
-		defer json.destroy_value(tree)
+		encoded := strings.builder_make(context.temp_allocator)
+		marshal_err := http_write_json(strings.to_writer(&encoded), tree)
 
-		encoded, marshal_err := json.marshal(
-			tree,
-			json.Marshal_Options{sort_maps_by_key = true},
-			context.temp_allocator,
-		)
-
+		json.destroy_value(tree)
 		if marshal_err != nil {
 			return vm.RaiseError(L, fmt.tprintf("HttpService:JSONEncode failed: %v", marshal_err)),
 				true
 		}
 
-		vm.PushBytes(L, encoded)
+		vm.PushBytes(L, encoded.buf[:])
 
 		return 1, true
 

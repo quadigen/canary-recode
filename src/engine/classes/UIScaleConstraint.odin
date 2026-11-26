@@ -94,7 +94,7 @@ UISizeConstraint_set :: proc(
 		return false
 	}
 
-	Gui_Layout_Mark_Dirty()
+	gui_mark_layout_for(object)
 	return true
 }
 

@@ -1,0 +1,38 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_cloud_noise.glsl"
+
+// Port of WickedEngine/shaders/volumetricCloud_curlnoiseCS.hlsl. The generator writes a
+// 128x128 RGBA curl noise texture used to distort the detail erosion of the cloud march.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std140) uniform CloudNoiseParameters {
+    vec4 shapeParams;    // (perlinWorleyDifference, perlinDilateLow, perlinDilateHigh, totalSize)
+    vec4 worleyParams;   // (worleyDilateLow, worleyDilateHigh, totalWorleyLow, totalWorleyHigh)
+    vec4 shapeScales;    // (perlinScale, worleyDilateScale, worleyLargeScale, worleyMediumScale)
+    vec4 shapeSmall;     // (worleySmallScale, unused, unused, unused)
+    vec4 detailParams;   // (detailLarge, detailMedium, detailSmall, unused)
+    vec4 detailRemap;    // (detailLow, detailHigh, unused, unused)
+    vec4 curlParams;     // (totalCurlSize, curlLow, curlHigh, unused)
+    vec4 domainOffset;   // (x, y, z, unused)
+} params;
+
+layout(set = 0, binding = 1, rgba8) uniform image2D curlNoise;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(curlNoise);
+    if (any(greaterThanEqual(coord, size))) {
+        return;
+    }
+
+    vec2 pos = vec2(coord) / float(size.x);
+
+    vec3 noise = kineCurlNoise(vec3(pos * params.curlParams.x, 0.0));
+
+    // Wicked's unsaturated remap followed by the [0,1] encoding.
+    noise = (noise - params.curlParams.y) / (params.curlParams.z - params.curlParams.y);
+    noise = kineEncodeCurlNoise(noise);
+
+    imageStore(curlNoise, coord, vec4(noise, 1.0));
+}

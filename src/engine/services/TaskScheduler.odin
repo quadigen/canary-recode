@@ -5,7 +5,6 @@ import classes "../classes"
 import datatypes "../datatypes"
 import enums "../enum"
 import profiling "../profiling"
-import target "../target"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
@@ -27,12 +26,13 @@ Scheduled_Task :: struct {
 }
 
 TaskScheduler :: struct {
-	using service: Service,
-	L:             ^vm.State,
-	tasks:         [dynamic]Scheduled_Task,
-	ready_scratch: [dynamic]Scheduled_Task,
-	elapsed:       f64,
-	frame:         u64,
+	using service:  Service,
+	L:              ^vm.State,
+	tasks:          [dynamic]Scheduled_Task,
+	ready_scratch:  [dynamic]Scheduled_Task,
+	next_wake_time: f64,
+	elapsed:        f64,
+	frame:          u64,
 }
 
 Task_Library_Entry :: struct {
@@ -68,15 +68,24 @@ task_scheduler_get :: proc(
 	return true
 }
 
+queue_task :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task) {
+	if len(scheduler.tasks) == 0 || task.wake_time < scheduler.next_wake_time {
+		scheduler.next_wake_time = task.wake_time
+	}
+	append(&scheduler.tasks, task)
+}
+
 cancel_all_tasks :: proc(scheduler: ^TaskScheduler) {
 	if scheduler == nil {return}
 	if scheduler.L != nil {
 		for task in scheduler.tasks {
+			vm.Debugger_ForgetThread(task.thread)
 			classes.Require_Forget_Thread(scheduler.signal_registry, task.thread)
 			vm.ReleaseValue(scheduler.L, task.thread_ref)
 		}
 	}
 	clear(&scheduler.tasks)
+	scheduler.next_wake_time = 0
 }
 
 TaskScheduler_Owns_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State) -> bool {
@@ -99,6 +108,7 @@ TaskScheduler_Cancel_Thread :: proc(scheduler: ^TaskScheduler, thread: ^vm.State
 	cancelled := false
 	for index := len(scheduler.tasks) - 1; index >= 0; index -= 1 {
 		if scheduler.tasks[index].thread == thread {
+			vm.Debugger_ForgetThread(thread)
 			vm.ReleaseValue(scheduler.L, scheduler.tasks[index].thread_ref)
 			ordered_remove(&scheduler.tasks, index)
 			cancelled = true
@@ -185,7 +195,8 @@ queue_function :: proc(
 			thread_name = fmt.tprintf("%s @ %s", label, describe)
 		}
 
-		profiling.set_thread_name(thread, thread_name, describe)
+		source := profiling.callback_source(L, function_index)
+		profiling.set_thread_name(thread, thread_name, source if source != "" else describe)
 
 		vm.CopyValueToThread(L, thread, function_index)
 
@@ -225,7 +236,7 @@ queue_function :: proc(
 	if immediate {
 		task_resume(scheduler, task, L)
 	} else {
-		append(&scheduler.tasks, task)
+		queue_task(scheduler, task)
 	}
 
 	return 1
@@ -274,8 +285,8 @@ task_wait :: proc "c" (L: ^vm.State) -> i32 {
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L)
-	append(
-		&scheduler.tasks,
+	queue_task(
+		scheduler,
 		Scheduled_Task {
 			thread = L,
 			thread_ref = thread_ref,
@@ -303,8 +314,8 @@ schedule_require_retry :: proc(ctx: rawptr, L: ^vm.State) {
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L)
-	append(
-		&scheduler.tasks,
+	queue_task(
+		scheduler,
 		Scheduled_Task {
 			thread = L,
 			thread_ref = thread_ref,
@@ -328,8 +339,8 @@ task_change_phase :: proc(L: ^vm.State, parallel: bool) -> i32 {
 	vm.PushCurrentThread(L)
 	ref := vm.RetainValue(L)
 	vm.Pop(L)
-	append(
-		&scheduler.tasks,
+	queue_task(
+		scheduler,
 		Scheduled_Task {
 			thread = L,
 			thread_ref = ref,
@@ -355,8 +366,8 @@ schedule_signal_callback :: proc(
 	parallel: bool,
 ) {
 	scheduler := cast(^TaskScheduler)ctx
-	append(
-		&scheduler.tasks,
+	queue_task(
+		scheduler,
 		Scheduled_Task {
 			thread = thread,
 			thread_ref = ref,
@@ -396,24 +407,32 @@ Task_Scheduler_Step :: proc(scheduler: ^TaskScheduler, delta_time: f32) {
 	scheduler.elapsed += f64(max(delta_time, 0))
 	current_frame := scheduler.frame
 	scheduler.frame += 1
-	if len(scheduler.tasks) == 0 {
+	if len(scheduler.tasks) == 0 || scheduler.elapsed < scheduler.next_wake_time {
 		return
 	}
-
 
 	ready := scheduler.ready_scratch
 	scheduler.ready_scratch = nil
 	clear(&ready)
 	pending_count := 0
-	for task in scheduler.tasks {
-		if task.wake_time <= scheduler.elapsed && task.wake_frame <= current_frame {
+	next_wake_time: f64
+	for task, index in scheduler.tasks {
+		if task.wake_time <= scheduler.elapsed &&
+		   task.wake_frame <= current_frame &&
+		   !vm.Debugger_IsPaused(task.thread) {
 			append(&ready, task)
 		} else {
-			scheduler.tasks[pending_count] = task
+			if pending_count == 0 || task.wake_time < next_wake_time {
+				next_wake_time = task.wake_time
+			}
+			if pending_count != index {
+				scheduler.tasks[pending_count] = task
+			}
 			pending_count += 1
 		}
 	}
 	resize(&scheduler.tasks, pending_count)
+	scheduler.next_wake_time = next_wake_time
 
 
 	for task in ready {
@@ -464,6 +483,17 @@ task_resume :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task, from: ^vm.S
 		argument_count = 1
 	}
 	finished, err, traceback := task_resume_profiled(task, from, argument_count, actor)
+	if vm.Debugger_IsPaused(task.thread) {
+
+
+		waiting := task
+		waiting.argument_count = 0
+		waiting.resume_with_elapsed = false
+		waiting.wake_time = scheduler.elapsed
+		waiting.wake_frame = scheduler.frame
+		queue_task(scheduler, waiting)
+		return
+	}
 	defer vm.ReleaseValue(scheduler.L, task.thread_ref)
 	if finished || err != "" {
 		classes.Require_Forget_Thread(scheduler.signal_registry, task.thread)
@@ -474,19 +504,16 @@ task_resume :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task, from: ^vm.S
 		if len(traceback) > 0 {
 			detail = traceback
 		}
-		if target.is_playtest() {
-			if len(describe) > 0 {
-				log_service_emit_tagged(
-					"ERROR",
-					fmt.tprintf("Script error in %s:\n%s", describe, detail),
-				)
-			} else {
-				log_service_emit_tagged("ERROR", fmt.tprintf("Scheduled task failed: %s", err))
-			}
-		} else if len(describe) > 0 {
-			fmt.eprintf("Script error in %s:\n%s\n", describe, detail)
+		if len(describe) > 0 {
+			log_service_report_runtime_error(
+				&scheduler.service,
+				fmt.tprintf("Script error in %s:\n%s", describe, detail),
+			)
 		} else {
-			fmt.eprintf("Scheduled task failed: %s\n", err)
+			log_service_report_runtime_error(
+				&scheduler.service,
+				fmt.tprintf("Scheduled task failed: %s", detail),
+			)
 		}
 		delete(err)
 		delete(traceback)

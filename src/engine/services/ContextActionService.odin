@@ -21,12 +21,13 @@ Context_Action_Input :: union {
 }
 
 Context_Action :: struct {
-	id:           u64,
-	name:         string,
-	inputs:       []Context_Action_Input,
-	callback_ref: i32,
-	priority:     f64,
-	capabilities: vm.Thread_Security_Capabilities,
+	default_inputs: []Context_Action_Input,
+	id:             u64,
+	name:           string,
+	inputs:         []Context_Action_Input,
+	callback_ref:   i32,
+	priority:       f64,
+	capabilities:   vm.Thread_Security_Capabilities,
 }
 
 ContextActionService :: struct {
@@ -48,6 +49,7 @@ context_action_release :: proc(L: ^vm.State, action: Context_Action) {
 	if L != nil {vm.ReleaseValue(L, action.callback_ref)}
 	delete(action.name)
 	delete(action.inputs)
+	delete(action.default_inputs)
 }
 
 context_action_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
@@ -72,6 +74,210 @@ context_action_unbind :: proc(L: ^vm.State, service: ^ContextActionService, name
 	}
 }
 
+
+context_action_set_bindings :: proc(
+	L: ^vm.State,
+	service: ^ContextActionService,
+	en: ^enums.Registry,
+) -> i32 {
+	name := vm.ArgString(L, 2)
+	action: ^Context_Action
+	for &entry in service.actions {
+		if entry.name == name {action = &entry; break}
+	}
+	if action == nil {return vm.RaiseError(L, "action is not bound")}
+	count := vm.StackTop(L) - 2
+	if count < 1 || count > 32 {return vm.RaiseError(L, "expected 1 to 32 input EnumItems")}
+	inputs := make([]Context_Action_Input, count)
+	for &input, i in inputs {
+		index := i + 3
+		if !vm.IsUserdataType(L, index, &en.item_binding) {
+			delete(inputs)
+			return vm.RaiseError(L, "expected KeyCode, UserInputType, or PlayerActions")
+		}
+		item := cast(^enums.Enum_Item)vm.UserdataValue(L, index)
+		switch item.enum_type.name {
+		case "KeyCode":
+			input = enums.KeyCode(item.value)
+		case "UserInputType":
+			input = enums.UserInputType(item.value)
+		case "PlayerActions":
+			input = enums.PlayerActions(item.value)
+		case:
+			delete(inputs)
+			return vm.RaiseError(L, "expected KeyCode, UserInputType, or PlayerActions")
+		}
+	}
+	delete(action.inputs)
+	action.inputs = inputs
+	return 0
+}
+context_action_get_bindings :: proc(
+	L: ^vm.State,
+	service: ^ContextActionService,
+	en: ^enums.Registry,
+) -> i32 {
+	name := vm.ArgString(L, 2)
+	for action in service.actions {
+		if action.name != name {continue}
+		vm.NewTable(L, len(action.inputs))
+		for input, i in action.inputs {
+			switch key in input {
+			case enums.KeyCode:
+				_ = enums.Push_Item_By_Value(L, en, "KeyCode", i64(key))
+			case enums.UserInputType:
+				_ = enums.Push_Item_By_Value(L, en, "UserInputType", i64(key))
+			case enums.PlayerActions:
+				_ = enums.Push_Item_By_Value(L, en, "PlayerActions", i64(key))
+			}
+			vm.SetArrayValue(L, -2, i + 1)
+		}
+		return 1
+	}
+	vm.NewTable(L)
+	return 1
+}
+context_action_reset_bindings :: proc(L: ^vm.State, service: ^ContextActionService) -> i32 {
+	name := vm.ArgString(L, 2)
+	for &action in service.actions {
+		if action.name != name {continue}
+		delete(action.inputs)
+		action.inputs = slice.clone(action.default_inputs)
+		return 0
+	}
+	return vm.RaiseError(L, "action is not bound")
+}
+context_action_encode_binding :: proc(en: ^enums.Registry, input: Context_Action_Input) -> string {
+	kind: string
+	value: i64
+	switch key in input {
+	case enums.KeyCode:
+		kind, value = "KeyCode", i64(key)
+	case enums.UserInputType:
+		kind, value = "UserInputType", i64(key)
+	case enums.PlayerActions:
+		kind, value = "PlayerActions", i64(key)
+	}
+	for enum_type in en.types {
+		if enum_type.name != kind {continue}
+		for item in enum_type.items {
+			if item.value == value {return fmt.tprintf("%s.%s", kind, item.name)}
+		}
+	}
+	return ""
+}
+context_action_decode_binding :: proc(
+	en: ^enums.Registry,
+	token: string,
+) -> (
+	Context_Action_Input,
+	bool,
+) {
+	for enum_type in en.types {
+		switch enum_type.name {
+		case "KeyCode", "UserInputType", "PlayerActions":
+		case:
+			continue
+		}
+		prefix := fmt.tprintf("%s.", enum_type.name)
+		if !strings.has_prefix(token, prefix) {continue}
+		for item in enum_type.items {
+			if token[len(prefix):] != item.name {continue}
+			switch enum_type.name {
+			case "KeyCode":
+				return enums.KeyCode(item.value), true
+			case "UserInputType":
+				return enums.UserInputType(item.value), true
+			case "PlayerActions":
+				return enums.PlayerActions(item.value), true
+			}
+		}
+	}
+	return Context_Action_Input{}, false
+}
+context_action_export_map :: proc(
+	L: ^vm.State,
+	service: ^ContextActionService,
+	en: ^enums.Registry,
+) -> i32 {
+	vm.NewTable(L, 0, len(service.actions))
+	for action in service.actions {
+		vm.NewTable(L, len(action.inputs))
+		for input, i in action.inputs {
+			vm.PushString(L, context_action_encode_binding(en, input))
+			vm.SetArrayValue(L, -2, i + 1)
+		}
+		vm.SetField(L, -2, action.name)
+	}
+	return 1
+}
+Context_Action_Map_Update :: struct {
+	index:  int,
+	inputs: []Context_Action_Input,
+}
+
+
+context_action_import_map :: proc(
+	L: ^vm.State,
+	service: ^ContextActionService,
+	en: ^enums.Registry,
+) -> i32 {
+	if !vm.IsTable(L, 2) {return vm.RaiseError(L, "action map must be a table")}
+	updates: [dynamic]Context_Action_Map_Update
+	valid := true
+	vm.PushNil(L)
+	for vm.Next(L, 2) {
+		name, key_ok := vm.ToString(L, -2)
+		action_index := -1
+		if key_ok {
+			for action, i in service.actions {
+				if action.name == name {action_index = i; break}
+			}
+		}
+		if action_index < 0 || !vm.IsTable(L, -1) {
+			valid = false
+			vm.Pop(L)
+			break
+		}
+		count := vm.RawLen(L, -1)
+		if count < 1 || count > 32 {
+			valid = false
+			vm.Pop(L)
+			break
+		}
+		inputs := make([]Context_Action_Input, count)
+		for i in 0 ..< count {
+			_ = vm.RawGetIndex(L, -1, i + 1)
+			token, text_ok := vm.ToString(L, -1)
+			binding, found := context_action_decode_binding(en, token)
+			vm.Pop(L)
+			if !text_ok || !found {valid = false; break}
+			inputs[i] = binding
+		}
+		if !valid {
+			delete(inputs)
+			vm.Pop(L)
+			break
+		}
+		append(&updates, Context_Action_Map_Update{index = action_index, inputs = inputs})
+		vm.Pop(L)
+	}
+	if !valid {
+		for update in updates {delete(update.inputs)}
+		delete(updates)
+		return vm.RaiseError(
+			L,
+			"invalid action map: expected bound action names and EnumType.Item arrays",
+		)
+	}
+	for update in updates {
+		action := &service.actions[update.index]
+		delete(action.inputs)
+		action.inputs = update.inputs
+	}
+	delete(updates)
+	return 0
+}
 context_action_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -85,7 +291,12 @@ context_action_get :: proc(
 	     "UnbindAction",
 	     "UnbindAllActions",
 	     "GetBoundActionInfo",
-	     "GetAllBoundActionInfo":
+	     "GetAllBoundActionInfo",
+	     "SetActionBindings",
+	     "GetActionBindings",
+	     "ResetActionBindings",
+	     "ExportActionMap",
+	     "ImportActionMap":
 		vm.PushUserdataMethod(L, key)
 		return true
 	}
@@ -104,6 +315,16 @@ context_action_namecall :: proc(
 ) {
 	service := cast(^ContextActionService)object
 	switch method {
+	case "SetActionBindings":
+		return context_action_set_bindings(L, service, en), true
+	case "GetActionBindings":
+		return context_action_get_bindings(L, service, en), true
+	case "ResetActionBindings":
+		return context_action_reset_bindings(L, service), true
+	case "ExportActionMap":
+		return context_action_export_map(L, service, en), true
+	case "ImportActionMap":
+		return context_action_import_map(L, service, en), true
 	case "UnbindAllActions":
 		for action in service.actions {context_action_release(L, action)}
 		clear(&service.actions)
@@ -164,6 +385,7 @@ context_action_namecall :: proc(
 				id = service.next_id,
 				name = strings.clone(name),
 				inputs = slice.clone(inputs),
+				default_inputs = slice.clone(inputs),
 				callback_ref = vm.RetainValue(L, 3),
 				priority = priority,
 				capabilities = vm.GetThreadSecurityCapabilities(L),
@@ -302,6 +524,11 @@ Register_ContextActionService_Class :: proc(registry: ^classes.Registry) {
 			"UnbindAllActions",
 			"GetBoundActionInfo",
 			"GetAllBoundActionInfo",
+			"SetActionBindings",
+			"GetActionBindings",
+			"ResetActionBindings",
+			"ExportActionMap",
+			"ImportActionMap",
 		},
 	)
 }

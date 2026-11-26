@@ -344,6 +344,8 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "LeftRight", LeftRight)
 	Register_Reflected_Enum(registry, "LexemeType", LexemeType)
 	Register_Reflected_Enum(registry, "LightingStyle", LightingStyle)
+	Register_Reflected_Enum(registry, "QualityPreset", QualityPreset)
+	Register_Reflected_Enum(registry, "ShadowType", ShadowType)
 	Register_Reflected_Enum(registry, "Limb", Limb)
 	Register_Reflected_Enum(registry, "LineJoinMode", LineJoinMode)
 	Register_Reflected_Enum(registry, "ListDisplayMode", ListDisplayMode)

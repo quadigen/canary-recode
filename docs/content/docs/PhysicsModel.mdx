@@ -32,6 +32,7 @@ ship.PrimaryPart = hull
 | AerodynamicsEnabled | boolean | true | Allows the world aerodynamics solver to affect descendant bodies, when enabled globally. |
 | DragMultiplier | number | 1 | Multiplies aerodynamic drag coefficients. |
 | LiftMultiplier | number | 1 | Multiplies aerodynamic lift. |
+| MaxLinearVelocity | number | 500 | Descendant rigid-body velocity cap in world units/s (1–10000). New collidable bodies with a cap above 500 use swept collision detection. Set before body creation for swept collision detection. |
 | NetworkUpdateRate | number | 0 | Maximum transform snapshots per second (0 uses the global cadence). It cannot exceed the server's snapshot rate or override bandwidth/LOD limits. |
 | ReplicateVelocity | boolean | true | Includes measured linear and angular velocity in body snapshots when available. |
 | InterpolationEnabled | boolean | true | Smooth remote transforms; false uses the newest received transform directly. |

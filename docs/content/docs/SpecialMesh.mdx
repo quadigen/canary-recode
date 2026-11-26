@@ -3,9 +3,11 @@ title: SpecialMesh
 description: Override the visual mesh of a part without changing its physics collider.
 ---
 
-Override the visual mesh of a part without changing its physics collider.
+Use `SpecialMesh` to change a part's appearance without changing the shape used for physical collisions. For example, you can stretch a visible sphere while keeping its parent collider unchanged.
 
 ## Getting started
+
+This example assumes `part` is an existing part in Workspace.
 
 ```lua
 local mesh = Instance.new("SpecialMesh", part)
@@ -15,7 +17,16 @@ mesh.Scale = Vector3.new(1, 2, 1)
 
 ## Properties
 
-MeshType, MeshId, TextureId, Scale, Offset and VertexColor control rendering.
+All properties are read/write.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `MeshType` | `Enum.MeshType` | `Head` | Built-in shape or file mesh type. |
+| `MeshId` | `string` | `""` | Asset reference for a file mesh. |
+| `TextureId` | `string` | `""` | Texture asset reference. |
+| `Scale` | `Vector3` | `(1, 1, 1)` | Visual scale on each axis. |
+| `Offset` | `Vector3` | `(0, 0, 0)` | Visual offset from the parent part. |
+| `VertexColor` | `Vector3` | `(1, 1, 1)` | RGB tint multiplier. |
 
 ## Notes
 

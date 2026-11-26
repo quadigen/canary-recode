@@ -109,6 +109,8 @@ apply_body :: proc(
 	id: jolt.JPH_BodyID,
 	settings: Settings,
 	options: Body_Options,
+	delta_time: f32 = 0,
+	inverse_mass: f32 = 0,
 ) -> (
 	Load,
 	bool,
@@ -126,6 +128,15 @@ apply_body :: proc(
 	local_linear := rotate(state.inverse, state.linear - Wind_At(settings, state.position))
 	local_angular := rotate(state.inverse, state.angular)
 	load := Evaluate(geometry, local_linear, local_angular, air.density, settings, o)
+	if local_angular == (Vec3{}) {
+		load = stabilize_translation(
+			load,
+			local_linear,
+			geometry.center + o.pressure_offset,
+			delta_time,
+			inverse_mass,
+		)
+	}
 	return apply_load(bi, id, state, load)
 }
 
@@ -135,6 +146,8 @@ Apply_Body :: proc(
 	id: jolt.JPH_BodyID,
 	settings := DEFAULT_SETTINGS,
 	options := DEFAULT_BODY_OPTIONS,
+	delta_time: f32 = 0,
+	inverse_mass: f32 = 0,
 ) -> (
 	Load,
 	bool,
@@ -146,6 +159,8 @@ Apply_Body :: proc(
 		id,
 		settings,
 		options,
+		delta_time,
+		inverse_mass,
 	)
 }
 

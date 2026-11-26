@@ -1,10 +1,11 @@
 package main
 
-import "core:fmt"
 import classes "../src/engine/classes"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:time"
 
 run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -17,7 +18,14 @@ run_script :: proc(script_vm: ^vm.VM, source, name: string) {
 
 step_network :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM) {
 	descriptor := services.Find_Service(&environment.services, "ReplicatorService")
-	services.Replication_Step(cast(^services.ReplicatorService)descriptor.object, script_vm.L, 1.0 / 60.0)
+
+
+	time.sleep(2 * time.Millisecond)
+	services.Replication_Step(
+		cast(^services.ReplicatorService)descriptor.object,
+		script_vm.L,
+		1.0 / 60.0,
+	)
 }
 
 settle :: proc(
@@ -83,8 +91,7 @@ part.Anchored = false
 
 	settle(&server, &server_vm, &client, &client_vm, 30)
 
-	// A small, plausible move must still be accepted. Tightening the authority
-	// checks is only legitimate if honest clients keep working.
+
 	run_script(
 		&client_vm,
 		`
@@ -106,14 +113,23 @@ assert(math.abs(x - 4) < 1, "legitimate move did not take effect, x=" .. tostrin
 		"authority_server_legit",
 	)
 
-	client_rep := cast(^services.ReplicatorService)services.Ensure_Service(&client.services, "ReplicatorService")
+	client_rep := cast(^services.ReplicatorService)services.Ensure_Service(
+		&client.services,
+		"ReplicatorService",
+	)
 	uploads_before := client_rep.diag_kind_counts[services.Replication_Kind_Owned_State]
 	settle(&server, &server_vm, &client, &client_vm, 120)
-	idle_uploads := client_rep.diag_kind_counts[services.Replication_Kind_Owned_State] - uploads_before
-	assert(idle_uploads > 0 && idle_uploads <= 12,
-		fmt.tprintf("expected periodic refreshes while idle, got %d owned uploads in two seconds", idle_uploads))
+	idle_uploads :=
+		client_rep.diag_kind_counts[services.Replication_Kind_Owned_State] - uploads_before
+	assert(
+		idle_uploads > 0 && idle_uploads <= 12,
+		fmt.tprintf(
+			"expected periodic refreshes while idle, got %d owned uploads in two seconds",
+			idle_uploads,
+		),
+	)
 
-	// A delayed owner upload must not overwrite a more recent pose.
+
 	client_workspace := services.Ensure_Service(&client.services, "Workspace")
 	owned := classes.Find_First_Child(client_workspace, "OwnedPart")
 	entity := services.replication_entity(client_rep, owned)
@@ -129,16 +145,19 @@ assert(math.abs(x - 4) < 1, "legitimate move did not take effect, x=" .. tostrin
 	assert(services.replication_send_owned_state(client_rep, entity))
 	services.transport_host_flush(client_rep.host)
 	step_network(&server, &server_vm)
-	run_script(&server_vm, `assert(workspace.OwnedPart.CFrame.Position.X == 6, "a stale owner upload rewound the server pose")`, "stale_rejected")
+	run_script(
+		&server_vm,
+		`assert(workspace.OwnedPart.CFrame.Position.X == 6, "a stale owner upload rewound the server pose")`,
+		"stale_rejected",
+	)
 	client_rep.tick += 1
-	run_script(&client_vm, `workspace.OwnedPart.CFrame = CFrame.new(6, 0, 0)`, "restore_fresh_upload")
+	run_script(
+		&client_vm,
+		`workspace.OwnedPart.CFrame = CFrame.new(6, 0, 0)`,
+		"restore_fresh_upload",
+	)
 
-	// The accumulation attack: every single jump stays under the per-packet
-	// tolerance, so a validator that only looks at one packet at a time waves
-	// all of them through and the part ends up arbitrarily far away.
-	//
-	// 60 jumps of 100 studs over one simulated second is 6000 studs, six times
-	// the configured sustained-speed limit, so the two outcomes are far apart.
+
 	jump_script := `
 local part = game:GetService("Workspace"):FindFirstChild("OwnedPart")
 local base = part.CFrame.Position.X
@@ -165,7 +184,7 @@ assert(
 		"authority_server_sustained",
 	)
 
-	// A single oversized jump is still refused outright.
+
 	run_script(
 		&client_vm,
 		`
@@ -194,16 +213,8 @@ assert(part.CFrame.Position.X < 2000, "the owning client must recover from a rej
 		"authority_client_corrected",
 	)
 
-	run_script(
-		&client_vm,
-		`game:GetService("ReplicatorService"):Stop()`,
-		"authority_client_stop",
-	)
-	run_script(
-		&server_vm,
-		`game:GetService("ReplicatorService"):Stop()`,
-		"authority_server_stop",
-	)
+	run_script(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "authority_client_stop")
+	run_script(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "authority_server_stop")
 
 	vm.Close(&server_vm)
 	vm.Close(&client_vm)

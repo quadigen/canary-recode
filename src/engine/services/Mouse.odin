@@ -14,7 +14,6 @@ Mouse_Class := classes.Class_Info {
 	parent = &classes.Instance_Class,
 }
 
-MOUSE_FIELD_OF_VIEW :: f32(60)
 MOUSE_IDLE_INTERVAL :: f32(1)
 MOUSE_MISS_DISTANCE :: f32(1000)
 
@@ -230,9 +229,13 @@ Mouse_Direction :: proc(mouse: ^Mouse, camera: ^classes.Camera) -> datatypes.Vec
 	if mouse.view_size_x <= 0 || mouse.view_size_y <= 0 {return forward}
 	normalized_x := (mouse.x / mouse.view_size_x) * 2 - 1
 	normalized_y := 1 - (mouse.y / mouse.view_size_y) * 2
-	tangent := math.tan(math.to_radians(MOUSE_FIELD_OF_VIEW) * 0.5)
+	tangent := math.tan(math.to_radians(camera.field_of_view) * 0.5)
 	aspect := mouse.view_size_x / mouse.view_size_y
-	view := datatypes.Vector3{f64(normalized_x * aspect * tangent), f64(normalized_y * tangent), -1}
+	view := datatypes.Vector3 {
+		f64(normalized_x * aspect * tangent),
+		f64(normalized_y * tangent),
+		-1,
+	}
 	return datatypes.Vec3_Unit(datatypes.CFrame_VectorToWorldSpace(camera.CFrame, view))
 }
 
@@ -272,7 +275,7 @@ Mouse_Miss_Hit :: proc(origin, direction: datatypes.Vector3) -> datatypes.CFrame
 	)
 }
 
-Mouse_Begin_Frame :: proc(mouse: ^Mouse, L: ^vm.State, delta_time: f32) {
+Mouse_Refresh_Ray :: proc(mouse: ^Mouse) {
 	if mouse == nil || mouse.destroyed {return}
 
 	mouse.view_size_x, mouse.view_size_y = Mouse_Viewport(mouse)
@@ -319,6 +322,11 @@ Mouse_Begin_Frame :: proc(mouse: ^Mouse, L: ^vm.State, delta_time: f32) {
 		}
 	}
 
+}
+
+Mouse_Begin_Frame :: proc(mouse: ^Mouse, L: ^vm.State, delta_time: f32) {
+	if mouse == nil || mouse.destroyed {return}
+	Mouse_Refresh_Ray(mouse)
 	mouse.idle_elapsed += delta_time
 	if mouse.idle_elapsed >= MOUSE_IDLE_INTERVAL {
 		mouse.idle_elapsed = 0
@@ -350,6 +358,7 @@ Mouse_Handle_Button :: proc(
 ) {
 	if mouse == nil || mouse.destroyed {return}
 	mouse.idle_elapsed = 0
+	Mouse_Refresh_Ray(mouse)
 	#partial switch input_type {
 	case .MouseButton1:
 		Mouse_Fire(L, mouse, pressed ? "Button1Down" : "Button1Up")

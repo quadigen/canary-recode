@@ -17,7 +17,7 @@ Animation :: struct {
 	animation_id: string,
 	looped:       bool,
 	priority:     i32,
-	sequence:     ^Object, // weak reference; always validated before use
+	sequence:     ^Object,
 }
 
 animation_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -206,23 +206,32 @@ Animation_Find_Clip :: proc(mesh: ^kineffi.KineFilamentMesh, anim: ^Animation) -
 	if anim.clip_index < 0 || anim.clip_index >= count {return -1}
 	return anim.clip_index
 }
-Animation_Resolve_Clip :: proc(
-	mesh: ^kineffi.KineFilamentMesh,
-	ctx: ^kineffi.KineFilamentContext,
-	anim: ^Animation,
-) -> i32 {
+
+
+Animation_Resolve_Clip :: proc(a: ^Animator, anim: ^Animation) -> i32 {
+	mesh := a.native_mesh
 	if mesh == nil || anim == nil {return -1}
 	if Animation_Is_Live(anim.object.signal_registry, "KeyframeSequence", anim.sequence) {
 		return Animation_Compile_Sequence(mesh, anim.sequence)
 	}
-	// A clip already on the rig wins, so loading the same Animation twice does
-	// not duplicate the imported clip. Otherwise an AnimationId supplies the
-	// missing clip, imported by bone name.
-	if index := Animation_Find_Clip(mesh, anim); index >= 0 {return index}
-	if anim.animation_id != "" && Animation_Import_Clips(ctx, mesh, anim.animation_id) {
-		return Animation_Find_Clip(mesh, anim)
+	if anim.animation_id == "" {return Animation_Find_Clip(mesh, anim)}
+	if a.imported_sources == nil {a.imported_sources = make(map[string]Animation_Import_Range)}
+	span, found := a.imported_sources[anim.animation_id]
+	if !found {
+		first := kineffi.Kine_Filament_GetMeshAnimationCount(mesh)
+		if !Animation_Import_Clips(a.native_context, mesh, anim.animation_id) {return -1}
+		span = {first, kineffi.Kine_Filament_GetMeshAnimationCount(mesh) - first}
+		a.imported_sources[strings.clone(anim.animation_id)] = span
 	}
-	return -1
+	if anim.clip_name != "" {
+		for i := span.first; i < span.first + span.count; i += 1 {
+			name := kineffi.Kine_Filament_GetMeshAnimationName(mesh, i)
+			if name != nil && string(name) == anim.clip_name {return i}
+		}
+		return -1
+	}
+	if anim.clip_index < 0 || anim.clip_index >= span.count {return -1}
+	return span.first + anim.clip_index
 }
 Register_Animation :: proc(registry: ^Registry) {
 	Register_Class(
@@ -233,6 +242,13 @@ Register_Animation :: proc(registry: ^Registry) {
 		get = animation_get,
 		set = animation_set,
 		clone = animation_clone,
-		properties = []string{"ClipIndex", "ClipName", "AnimationId", "Looped", "Priority", "Source"},
+		properties = []string {
+			"ClipIndex",
+			"ClipName",
+			"AnimationId",
+			"Looped",
+			"Priority",
+			"Source",
+		},
 	)
 }

@@ -1,0 +1,47 @@
+---
+title: Water
+description: Configure the waves and surface appearance of water in the world.
+---
+
+Water is a settings object for the engine's water system. It does not create a water volume by itself. Use a Part with the Water material or water terrain to provide the liquid surface.
+
+```lua
+local water = Instance.new("Water")
+water.Speed = 1.5
+water.Strength = 0.8
+water.FoamAmount = 0.4
+water.Parent = workspace
+```
+
+The water physics settings use the last enabled, parented Water object. Use one active settings object when you want predictable global wave behavior.
+
+## Properties
+
+All properties are read/write.
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| Enabled | true | Enables this settings object. |
+| Speed | 1 | Wave speed, clamped to 0–10. |
+| Strength | 1 | Wave strength, clamped to 0–10. |
+| Octaves | 6 | Wave detail, clamped to 1–32. |
+| Height | 1.75 | Wave height setting, clamped to 0–10. |
+| Adornee | nil | Stored instance reference; does not restrict the global physics settings to that object. |
+| Roughness | 0.08 | Surface roughness, 0–1. |
+| IOR | 1.333 | Index of refraction, 1–3. |
+| Thickness | 0.12 | Optical thickness, 0–1. |
+| Transmission | 0.88 | Light transmission, 0–1. |
+| FoamAmount | 0.55 | Foam amount, 0–1. |
+| ClearCoat | 1 | Clear coat amount, 0–1. |
+| ClearCoatRoughness | 0.04 | Clear coat roughness, 0–1. |
+| Absorption | Color3.new(0.35, 0.09, 0.04) | RGB absorption coefficients. |
+
+Numeric optical settings are clamped to the indicated ranges. Water has no additional methods or events. See [Terrain](/docs/services/Terrain) and [Part](/docs/Part) for creating water geometry.
+
+## Surface appearance
+
+`Roughness` controls how sharp reflections look. `IOR`, `Transmission`, and `Thickness` affect how light passes through the surface, while `Absorption` changes which colors fade through the water. `FoamAmount` controls the foam around the waves.
+
+Wave speed and strength affect the animated surface and water behavior. You can change the optical properties independently of the wave settings.
+
+The renderer uses animated wave shading and foam, but `Water` doesn't simulate a full ocean. Add actual water geometry to see the result, and test your settings in the full rendered viewport.

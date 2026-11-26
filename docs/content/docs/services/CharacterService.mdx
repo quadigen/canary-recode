@@ -1,0 +1,51 @@
+---
+title: CharacterService
+description: Control character spawning, respawning, and movement input.
+---
+
+CharacterService manages player characters. Use it to choose when characters appear and whether Kinemium handles movement input automatically.
+
+## Manual spawning
+
+Set up the service in a server script before players join:
+
+```lua
+local characters = game:GetService("CharacterService")
+local players = game:GetService("Players")
+
+characters.CharacterAutoLoads = false
+
+players.PlayerAdded:Connect(function(player)
+    characters:LoadCharacter(player)
+end)
+```
+
+With automatic loading disabled, you can delay the call until the player selects a character or enters a round.
+
+## Properties
+
+| Property | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `CharacterAutoLoads` | boolean | true | Allows automatic spawning and respawning. |
+| `NativeInputEnabled` | boolean | true | Enables built-in character input; changing it clears queued movement and jump input. |
+| `RespawnTime` | number | 5 | Respawn delay in seconds; negative assignments become zero. |
+
+All three are read/write. A connected client can override its local native input setting.
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `LoadCharacter(player: Player): CharacterModel?` | Returns the existing live character or creates one. Returns nil if loading cannot proceed. |
+| `LoadPlayer(player: Player): CharacterModel?` | Alias of LoadCharacter. |
+| `UnloadCharacter(player: Player): boolean` | Clears the player's character and destroys the model; false if absent. |
+| `UnloadPlayer(player: Player): boolean` | Alias of UnloadCharacter. |
+| `GetCharacter(player: Player): CharacterModel?` | Returns the live character or nil. |
+| `SetMoveDirection(direction: Vector3): boolean` | Stores the movement input and returns true. |
+| `Jump(): boolean` | Queues a jump and returns true, not confirmation that the character actually jumped. |
+
+The load methods create characters on an authoritative network server or in a local singleplayer/standalone session, not on a connected client. All player-taking methods require a Player instance.
+
+## Custom characters
+
+Place a model named `StarterCharacter` directly inside `StarterPlayer` to supply a character template. The service creates a live `CharacterModel` from the template. See [network ownership](/docs/guides/network-ownership) for controlling which machine simulates character parts.

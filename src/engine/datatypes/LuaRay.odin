@@ -67,7 +67,7 @@ ray_equal :: proc(value, other, ctx: rawptr) -> bool {
 ray_string :: proc(value, ctx: rawptr) -> string {
 	ray := cast(^Ray)value
 	return fmt.tprintf(
-		"{%g, %g, %g}, {%g, %g, %g}",
+		"{{%g, %g, %g}}, {{%g, %g, %g}}",
 		ray.Origin.x,
 		ray.Origin.y,
 		ray.Origin.z,

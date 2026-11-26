@@ -232,6 +232,8 @@ lua_GCOp :: enum i32 {
 
 @(default_calling_convention = "c")
 foreign lib {
+	@(link_name = "lua_break")
+	lua_break_direct :: proc(L: ^lua_State) -> i32 ---
 	lua_gc :: proc(L: ^lua_State, what: i32, data: i32) -> i32 ---
 	lua_next :: proc(L: ^lua_State, idx: i32) -> i32 ---
 	lua_setmemcat :: proc(L: ^lua_State, category: i32) ---

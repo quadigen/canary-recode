@@ -54,6 +54,13 @@ LocalScript_get :: proc(
 	script := cast(^LocalScript)object
 	switch key {
 	case "Source":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_READ,
+		) {
+			_ = vm.RaiseError(L, "LocalScript.Source requires trusted read permission")
+			return true
+		}
 		vm.PushString(L, script.source)
 	case "Enabled":
 		vm.PushBoolean(L, script.enabled)
@@ -76,6 +83,13 @@ LocalScript_set :: proc(
 	script := cast(^LocalScript)object
 	switch key {
 	case "Source":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_WRITE,
+		) {
+			_ = vm.RaiseError(L, "LocalScript.Source requires trusted write permission")
+			return true
+		}
 		LocalScript_Set_Source(script, vm.ArgString(L, value_index))
 	case "Enabled":
 		Script_Common_Set_Enabled(&script.common, vm.ArgBoolean(L, value_index))

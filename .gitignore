@@ -35,6 +35,7 @@
 *.lib
 
 # Executables
+/*.bin
 *.exe
 *.out
 *.app
@@ -78,3 +79,4 @@ docs/notes.md
 tests/construct_block_weld_smoke.odin
 tests/construct_rbxl_smoke.odin
 tests/construct_motor_smoke.odin
+ols.json

@@ -1,0 +1,53 @@
+---
+title: Custom classes and datatypes
+description: Define custom Instance types, service classes, and Luau value types using KNE descriptors.
+---
+
+KNE supports registering native-backed Instance classes, services, and custom datatypes. The full descriptors are defined in `include/sdk/modules/classes.h` and `include/sdk/modules/datatypes.h`.
+
+## Native Instance classes
+
+The `kne_class_desc` descriptor includes:
+
+| Field | Meaning |
+| --- | --- |
+| `name`, `base` | The class name and parent class name. |
+| `flags` | `KNE_CLASS_CREATABLE` and/or `KNE_CLASS_SERVICE`. |
+| `properties`, `methods`, `events` | Names exposed through instance reflection. |
+| `on_construct`, `on_destroy` | Native object initialization and cleanup hooks. |
+| `get`, `set`, `namecall` | Custom property reads, writes, and method invocation. |
+| `step`, `step_batch` | Per-instance or batched updates. |
+
+To register a simple class descriptor:
+
+```c
+kne_plugin plugin = kne_make_plugin(host, ext);
+kne_class_desc desc = kne_make_class("MyNativeClass", "Instance", KNE_CLASS_CREATABLE);
+desc.properties = kne_text("Value");
+desc.methods = kne_text("Reset");
+desc.on_construct = my_construct;
+desc.on_destroy = my_destroy;
+desc.get = my_get;
+desc.set = my_set;
+desc.namecall = my_namecall;
+
+int32_t ok = kne_register_class(plugin, &desc);
+```
+
+The hook names here represent functions you implement using the signatures in `modules/classes.h`. An unhandled method can return `KNE_UNHANDLED`, allowing the engine's default Instance methods to run.
+
+### Batched updates (KNE 3.2)
+
+`step_batch` receives a read-only snapshot of up to `KNE_BATCH_MAX_INSTANCES` (1024) instances with their extension `user_data`. The batch is valid only during the callback; do not retain or structurally mutate the input array.
+
+## Native datatypes
+
+`kne_datatype_desc` can define type construction, field access, method calls, string conversion, equality, arithmetic, serialization, and destruction hooks. Important descriptor fields include `library`, `type_name`, `value_size`, `flags`, and `wire_version`.
+
+The flags `KNE_DATATYPE_PERSISTABLE` and `KNE_DATATYPE_REPLICATED` identify values intended to support persistence and replication; serialization hooks must be compatible with the engine's expectations.
+
+The bundled Odin example in `include/sdk/examples/odin/hello_kne.odin` demonstrates native class, service, and datatype registration.
+
+## Cleanup
+
+Pair native allocations in `on_construct` with cleanup in `on_destroy`. Treat Instance handles, native state, and datatype buffers according to their ownership; do not free host-owned memory.

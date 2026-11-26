@@ -76,6 +76,7 @@ physics_hook_set_linear_velocity :: proc(
 ) {
 	physics, body := physics_hook_body(ctx, object)
 	if physics == nil {return}
+	physics_update_body_speed_limit(body)
 	velocity := kineffi.JPH_Vec3{f32(value.x), f32(value.y), f32(value.z)}
 	kineffi.JPH_BodyInterface_SetLinearVelocity(
 		physics.system.body_interface,
@@ -276,4 +277,20 @@ Install_Part_Body_Access :: proc(registry: ^Registry) {
 		},
 		rawptr(registry),
 	)
+}
+
+physics_body_speed_limit :: proc(object: ^classes.Object) -> f32 {
+	if model := classes.PhysicsModel_For(object); model != nil && model.max_linear_velocity > 0 {
+		return model.max_linear_velocity
+	}
+	return 500
+}
+
+physics_update_body_speed_limit :: proc(body: ^Physics_Body) {
+	if body.motion_properties == nil {return}
+	limit := physics_body_speed_limit(body.object)
+	if limit != body.max_linear_velocity {
+		kineffi.JPH_MotionProperties_SetMaxLinearVelocity(body.motion_properties, limit)
+		body.max_linear_velocity = limit
+	}
 }

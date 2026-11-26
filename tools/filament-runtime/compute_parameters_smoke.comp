@@ -1,0 +1,24 @@
+#version 450
+layout(local_size_x = 4) in;
+layout(set = 0, binding = 0, std140) uniform Parameters {
+    uvec4 weight;
+} parameters;
+layout(set = 0, binding = 1, std430) buffer Output {
+    uint values[];
+};
+layout(push_constant) uniform PushConstants {
+    int addend;
+    int stride;
+} pc;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i < values.length()) {
+        uint w0 = parameters.weight.x;
+        uint w1 = parameters.weight.y;
+        uint w2 = parameters.weight.z;
+        uint w3 = parameters.weight.w;
+        uint a = uint(pc.addend);
+        uint s = uint(pc.stride);
+        values[i] = w0 + w1 * i + w2 * (i + 1u) + w3 * (i + 2u) + a * (i + 3u) + s * 7u;
+    }
+}

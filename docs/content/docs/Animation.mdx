@@ -22,7 +22,7 @@ track:Play()
 
 | Property | Type | Access | Description |
 | --- | --- | --- | --- |
-| `ClipIndex` | `number` | Read/write | Index of the clip in the rig's mesh. |
+| `ClipIndex` | `number` | Read/write | Zero-based index in AnimationId, or in the rig mesh when AnimationId is empty. |
 | `ClipName` | `string` | Read/write | Name of the clip. Takes precedence when set. |
 | `AnimationId` | `string` | Read/write | Asset path of an animation file whose clips can be applied to the rig. |
 | `Looped` | `boolean` | Read/write | Restart automatically when the clip ends. |
@@ -35,7 +35,7 @@ When `ClipName` is not empty, the animator looks up the clip by name. Otherwise 
 
 Assigning `Source` replaces the clip lookup with a keyframe sequence instance. Setting it to `nil` clears the source and returns to index or name lookup. Assigning an instance that isn't a keyframe sequence is ignored.
 
-`AnimationId` points at an animation file (FBX, glTF, DAE, and the other formats the mesh importer reads). If the rig has no matching clip, the animator imports the file's clips, matching channels to rig bones by name, and selects one with `ClipName` or `ClipIndex`. This lets a mesh and its animations be authored as separate files. A saved map embeds the file as a `kineasset://` entry, the same asset table executable builds carry, and re-exporting keeps that reference instead of turning it back into a disk path.
+`AnimationId` points at an animation file (FBX, glTF, DAE, and the other formats the mesh importer reads). When set, the animator imports that file's clips, matching channels to rig bones by name, and selects within that file using `ClipName` or zero-based `ClipIndex`. The explicit file takes precedence over same-named rig clips and other imported files. Repeated loads on the same Animator reuse the file's imported clips. An invalid file or selector raises an error rather than playing a different embedded clip. This lets a mesh and its animations be authored as separate files. A saved map embeds the file as a `kineasset://` entry, the same asset table executable builds carry, and re-exporting keeps that reference instead of turning it back into a disk path.
 
 ## Notes
 

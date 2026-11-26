@@ -1,7 +1,10 @@
 #+build linux, windows
 package gpucompute
 
+import kineffi "../bindings"
 import "core:dynlib"
+import "core:fmt"
+import "core:strings"
 import vk "vendor:vulkan"
 
 ALLOW_SOFTWARE :: #config(KINE_GPU_COMPUTE_ALLOW_SOFTWARE, false)
@@ -24,6 +27,8 @@ Device :: struct {
 	set_layout:        vk.DescriptorSetLayout,
 	layout:            vk.PipelineLayout,
 	pipeline:          vk.Pipeline,
+	pipeline_cache:    vk.PipelineCache,
+	cache_identity:    string,
 	commands:          vk.CommandPool,
 	job:               Job,
 	custom:            Custom_State,
@@ -111,6 +116,14 @@ open :: proc(device: ^Device) -> (err: string) {
 	)
 	properties: vk.PhysicalDeviceProperties
 	get_properties(physical, &properties)
+	device.cache_identity = fmt.aprintf(
+		"%d:%d:%d:%d:%v",
+		properties.vendorID,
+		properties.deviceID,
+		properties.driverVersion,
+		properties.apiVersion,
+		properties.pipelineCacheUUID,
+	)
 	device.limits = properties.limits
 	get_features := cast(vk.ProcGetPhysicalDeviceFeatures)resolve(
 		device.instance,
@@ -200,6 +213,7 @@ open :: proc(device: ^Device) -> (err: string) {
 	if d.CreateCommandPool(device.handle, &pool, nil, &device.commands) != .SUCCESS {
 		return "could not create the Vulkan compute command pool"
 	}
+	init_pipeline_cache(device)
 	return create_pipeline(device)
 }
 
@@ -328,7 +342,8 @@ create_pipeline :: proc(device: ^Device) -> string {
 			pName = "main",
 		},
 	}
-	if d.CreateComputePipelines(handle, 0, 1, &info, nil, &device.pipeline) != .SUCCESS {
+	if d.CreateComputePipelines(handle, device.pipeline_cache, 1, &info, nil, &device.pipeline) !=
+	   .SUCCESS {
 		return "could not create GPUCompute's pipeline"
 	}
 	return ""
@@ -368,7 +383,47 @@ create_storage :: proc(device: ^Device, storage: ^Storage, bytes: int) -> bool {
 	return false
 }
 
+
+validate_dispatch :: proc(params: Parameters, a, b: []u8) -> string {
+	if params.operation > .Sqrt || params.rows == 0 || params.columns == 0 {
+		return "invalid GPUCompute operation or dimensions"
+	}
+	rows, cols, inner := u64(params.rows), u64(params.columns), u64(params.inner)
+	if rows * cols > MAX_ELEMENTS ||
+	   len(a) == 0 ||
+	   len(a) > MAX_ELEMENTS * size_of(f32) ||
+	   len(a) % size_of(f32) != 0 ||
+	   len(b) > MAX_ELEMENTS * size_of(f32) ||
+	   len(b) % size_of(f32) != 0 {
+		return "GPUCompute input or output exceeds limits"
+	}
+	if params.operation == .MatrixMultiply {
+		if inner == 0 ||
+		   rows * inner > MAX_ELEMENTS ||
+		   inner * cols > MAX_ELEMENTS ||
+		   rows * inner * cols > MAX_MATRIX_PRODUCTS ||
+		   u64(len(a)) != rows * inner * size_of(f32) ||
+		   u64(len(b)) != inner * cols * size_of(f32) {
+			return "GPUCompute matrix dimensions do not match bounded inputs"
+		}
+		if rows > 65535 * 8 || cols > 65535 * 8 {
+			return "GPUCompute dispatch dimensions exceed device limits"
+		}
+	} else {
+		unary :=
+			params.operation == .Abs || params.operation == .Negate || params.operation == .Sqrt
+		if cols != 1 ||
+		   u64(len(a)) != rows * size_of(f32) ||
+		   (unary && len(b) != 0) ||
+		   (!unary && len(b) != len(a)) {
+			return "GPUCompute element-wise dimensions do not match buffers"
+		}
+	}
+	return ""
+}
+
 dispatch :: proc(device: ^Device, params: Parameters, a, b: []u8) -> (err: string) {
+	if reason := validate_dispatch(params, a, b); reason != "" {return reason}
 	if device.job.submitted ||
 	   device.custom.submitted ||
 	   device.custom.recording ||
@@ -530,14 +585,20 @@ close :: proc(device: ^Device) {
 		if device.layout != 0 {d.DestroyPipelineLayout(handle, device.layout, nil)}
 		if device.set_layout != 0 {d.DestroyDescriptorSetLayout(handle, device.set_layout, nil)}
 		if device.commands != 0 {d.DestroyCommandPool(handle, device.commands, nil)}
+		save_pipeline_cache(device)
+		if device.pipeline_cache != 0 {d.DestroyPipelineCache(handle, device.pipeline_cache, nil)}
 		d.DestroyDevice(handle, nil)
 	}
 	if device.instance != nil {device.destroy(device.instance, nil)}
 	if device.library != nil {_ = dynlib.unload_library(device.library)}
+	delete(device.cache_identity)
 	device^ = {}
 }
 
 load_procs :: proc(device: vk.Device, get: vk.ProcGetDeviceProcAddr, table: ^vk.Device_VTable) {
+	table.CreatePipelineCache = auto_cast get(device, "vkCreatePipelineCache")
+	table.GetPipelineCacheData = auto_cast get(device, "vkGetPipelineCacheData")
+	table.DestroyPipelineCache = auto_cast get(device, "vkDestroyPipelineCache")
 	table.CreateSemaphore = auto_cast get(device, "vkCreateSemaphore")
 	table.DestroySemaphore = auto_cast get(device, "vkDestroySemaphore")
 	table.DeviceWaitIdle = auto_cast get(device, "vkDeviceWaitIdle")

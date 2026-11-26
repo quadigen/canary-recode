@@ -1,0 +1,41 @@
+---
+title: SSGIEffect
+description: Approximate diffuse global illumination from visible scene geometry.
+---
+
+`SSGIEffect` provides screen-space diffuse global illumination by sampling colors and normals from visible surfaces, checking whether neighboring surfaces face each other, and testing approximate visibility through the scene depth buffer. It can add one-bounce indirect color transfer between nearby objects.
+
+This is distinct from `SSAOEffect`, which primarily darkens occluded regions. It is also distinct from `EmissiveGIEffect`, which focuses on bright visible sources. It does not provide off-screen GI or persistent irradiance probes.
+
+## Example
+
+```lua
+local lighting = game:GetService("Lighting")
+local gi = Instance.new("SSGIEffect")
+gi.Intensity = 1
+gi.Radius = 4
+gi.Bias = 0.05
+gi.SampleCount = 16
+gi.MaxDistance = 100
+gi.ColorBleeding = 1
+gi.VisibilitySteps = 3
+gi.Enabled = true
+gi.Parent = lighting
+```
+
+## Properties
+
+| Property | Type | Default | Range | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | true | Not applicable | Enables SSGI when parented to `Lighting`. |
+| `Intensity` | number | 1 | 0–5 | Strength of the diffuse bounce. |
+| `Radius` | number | 3 | 0.1–50 | World-space reach of the indirect lighting gather. |
+| `Bias` | number | 0.05 | 0.001–1 | Suppresses self-lighting and visibility artifacts. |
+| `SampleCount` | number | 16 | 4–64 | Diffuse color samples per receiver pixel. |
+| `MaxDistance` | number | 100 | 1–1000 | Maximum receiver distance from the camera. |
+| `ColorBleeding` | number | 1 | 0–2 | How much source hue is transferred. 0 is grayscale, 1 preserves the visible source color. |
+| `VisibilitySteps` | number | 3 | 1–6 | Number of depth tests on each receiver-to-source segment. |
+
+SSGI uses geometry normal tests and interpolated depth visibility. Larger radii and higher sample counts improve reach and coverage but can introduce light leaks or higher GPU cost. It only gathers lighting from surfaces visible to the camera. Surfaces outside the camera view cannot contribute.
+
+The fast editor viewport omits this effect. Use a full renderer or playtest viewport to inspect the indirect light.

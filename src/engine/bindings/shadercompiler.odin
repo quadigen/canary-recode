@@ -13,5 +13,8 @@ when KINE_SHADER_COMPILER_LINKED {
 	foreign kine_shader_compiler {
 		Kine_Shader_Compile :: proc(source: rawptr, length: uint, words: ^^u32, word_count: ^uint, error_data: ^u8, error_capacity: uint) -> i32 ---
 		Kine_Shader_Free :: proc(words: ^u32) ---
+		Kine_Shader_CacheRead :: proc(identity: cstring, bytes: ^rawptr) -> uint ---
+		Kine_Shader_CacheWrite :: proc(identity: cstring, bytes: rawptr, size: uint) ---
+		Kine_Shader_CacheStats :: proc(out: ^u64) ---
 	}
 }

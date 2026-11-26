@@ -40,9 +40,35 @@ label.Parent = screenGui
 | `TextPadding` | `number` | Read/write | Inner padding in pixels. |
 | `RichText` | `boolean` | Read/write | Parse inline rich text tags. |
 | `TruncateAtEnd` | `boolean` | Read/write | Cut off text that doesn't fit. |
+| `ContentText` | `string` | Read-only | Displayed text with rich-text markup removed. |
 | `TextBounds` | `Vector2` | Read-only | Measured size of the laid-out text. |
 
 `Font` and `FontFace` are two views of the same setting. Assigning a `Font` keeps the legacy enum; assigning a `FontFace` stores the font object. `FontSize` maps to the nearest named preset, while `TextSize` sets the pixel size directly.
+
+## Rich text
+
+Enable `RichText` to format individual spans. Tags can be nested; closing a tag restores the enclosing style.
+
+```lua
+label.RichText = true
+label.Text = '<b><font color="#82D4FF">System</font></b> <i>ready</i><br/>H<sub>2</sub>O'
+print(label.ContentText)
+```
+
+| Tag | Effect |
+| --- | --- |
+| `<b>…</b>`, `<i>…</i>` | Bold and italic. |
+| `<u>…</u>`, `<s>…</s>` | Underline and strikethrough. |
+| `<font color="#RRGGBB" size="24" transparency="0.2">…</font>` | Fill color, size and transparency. |
+| `<font face="Roboto" weight="700" style="Italic">…</font>` | Built-in font family, weight and style. |
+| `<stroke color="#000000" thickness="2" transparency="0">…</stroke>` | Per-span outline. |
+| `<mark color="#FFD54F" transparency="0.5">…</mark>` | Background highlight (Kinemium extension). |
+| `<sup>…</sup>`, `<sub>…</sub>` | Superscript and subscript (Kinemium extensions). |
+| `<br/>` | Line break. |
+
+Font face names include Roboto, SourceSans3, Montserrat, Gotham, Arial, RobotoMono, Code and Ubuntu. On native builds, exact bundled font filenames and `builtin://fonts/` paths are supported. Unavailable font variants fall back to a bundled face. Markup cannot load arbitrary file paths or remote fonts. Web font support is limited to a subset of bundled faces.
+
+Use `ContentText` to obtain the plain text, including decoded `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&apos;` entities. TextBounds and TextService.GetTextBoundsAsync with RichText enabled measure formatted glyphs rather than markup.
 
 ## Alignment
 

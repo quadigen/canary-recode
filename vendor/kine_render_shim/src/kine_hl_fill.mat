@@ -12,7 +12,9 @@ material {
     instanced : true,
     parameters : [
         { type : float4[64], name : instanceColors },
-        { type : float,  name : depthBias }
+        { type : float,  name : depthBias },
+        { type : bool, name : useInstanceDepthBias },
+        { type : float[64], name : instanceDepthBias }
     ]
 }
 
@@ -21,7 +23,9 @@ vertex {
         // The fill sits on the part's own surface, so without a push it z-fights
         // the geometry it covers. A small move along the normal is portable
         // across drivers in a way polygon offset is not.
-        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.depthBias;
+        float bias = materialParams.useInstanceDepthBias
+            ? materialParams.instanceDepthBias[getInstanceIndex()] : materialParams.depthBias;
+        material.worldPosition.xyz += normalize(material.worldNormal) * bias;
     }
 }
 

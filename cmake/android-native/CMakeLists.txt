@@ -78,6 +78,24 @@ set(KINE_ANDROID_VENDOR_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/android-vendo
 set(KINE_ANDROID_BOX2D_LIBRARY "${CMAKE_CURRENT_LIST_DIR}/../../build/android-box2d/src/libbox2d.a" CACHE FILEPATH "Android Box2D archive")
 set(KINE_ANDROID_VCPKG_DIR "${CMAKE_CURRENT_LIST_DIR}/../../build/vcpkg-installed/arm64-android" CACHE PATH "vcpkg Android dependency prefix")
 
+list(PREPEND CMAKE_PREFIX_PATH "${KINE_ANDROID_VCPKG_DIR}")
+find_package(GameNetworkingSockets CONFIG REQUIRED
+    PATHS "${KINE_ANDROID_VCPKG_DIR}/share/gamenetworkingsockets")
+add_library(kine_networking STATIC
+    "${CMAKE_CURRENT_LIST_DIR}/../../vendor/kine_networking/steam_sockets.cpp")
+target_compile_features(kine_networking PRIVATE cxx_std_20)
+target_include_directories(kine_networking PRIVATE "${KINE_ANDROID_VCPKG_DIR}/include")
+if(TARGET GameNetworkingSockets::static)
+    target_link_libraries(kine_networking PUBLIC GameNetworkingSockets::static)
+elseif(TARGET GameNetworkingSockets::shared)
+    target_link_libraries(kine_networking PUBLIC GameNetworkingSockets::shared)
+else()
+    message(FATAL_ERROR "GameNetworkingSockets library target not found for Android")
+endif()
+set_target_properties(kine_networking PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+
 file(GLOB KINE_ODIN_OBJECTS CONFIGURE_DEPENDS "${KINE_ODIN_OBJECT_DIR}/kinemium-*.o")
 if(KINE_ODIN_OBJECTS)
     set_source_files_properties(${KINE_ODIN_OBJECTS} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
@@ -109,6 +127,7 @@ if(KINE_ODIN_OBJECTS)
         Luau.Bytecode
         Luau.Common
         KinemiumLibs
+        kine_networking
         rocksdb
         libzstd_static
         miniz
@@ -120,7 +139,6 @@ if(KINE_ODIN_OBJECTS)
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_resize2.a"
         "${KINE_ANDROID_VENDOR_DIR}/stb_image_write.a"
         "${KINE_ANDROID_BOX2D_LIBRARY}"
-        "${KINE_ANDROID_VCPKG_DIR}/lib/libenet.a"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libcurl.a"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libssl.a"
         "${KINE_ANDROID_VCPKG_DIR}/lib/libcrypto.a"

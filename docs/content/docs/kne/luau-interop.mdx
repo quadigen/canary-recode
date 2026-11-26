@@ -1,0 +1,66 @@
+---
+title: Luau interop
+description: Register native Luau libraries, read arguments, push results, and execute script code from KNE.
+---
+
+KNE lets an extension expose native code to Kinemium scripts. Use `kne_register_library_function` to add a method to a Luau library, or `kne_register_function` to expose a global function.
+
+## A native numeric function
+
+```c
+#include "kne_plugin.h"
+
+static const kne_host *host;
+
+static int32_t KNE_CALL native_sum(kne_extension ext, kne_vm vm) {
+    kne_plugin plugin = kne_make_plugin(host, ext);
+    kne_value a, b;
+
+    if (!kne_get_argument(plugin, vm, 1, &a) ||
+        !kne_get_argument(plugin, vm, 2, &b)) {
+        return kne_raise_error(plugin, vm, "Expected two numbers");
+    }
+    if (a.kind != KNE_VALUE_NUMBER || b.kind != KNE_VALUE_NUMBER) {
+        return kne_raise_error(plugin, vm, "Expected two numbers");
+    }
+
+    kne_push_result(plugin, vm, kne_value_number(a.data.number + b.data.number));
+    return 1;
+}
+
+static int32_t KNE_CALL on_load(kne_extension ext) {
+    return kne_register_library_function(
+        kne_make_plugin(host, ext), "ExampleMath", "Sum", native_sum
+    );
+}
+```
+
+In Luau:
+
+```lua
+print(ExampleMath.Sum(10, 20))
+```
+
+The return value of a native VM function is the number of Luau results it pushes. **Luau argument positions start at 1.**
+
+## Working with values
+
+`kne_value` has a `kind` field and a tagged `data` union for booleans, numbers, strings, Instance references, and engine datatypes. Helpers include `kne_value_number`, `kne_value_string`, `kne_value_vector3`, and `kne_push_result`.
+
+The native `kne_string` type stores a pointer plus an explicit byte length. Don't assume strings returned by the host are null-terminated.
+
+## Executing Luau
+
+KNE 3.1+ exposes synchronous Luau execution:
+
+```c
+kne_plugin plugin = kne_make_plugin(host, ext);
+kne_value out = {0};
+int32_t count = kne_run_luau(plugin,
+    "return 2 + 3",
+    NULL, 0, &out, 1);
+```
+
+A nonnegative result is the number of returned values written; negative results indicate compilation or runtime errors. The wrapper checks for supported host/module versions. Inspect `kne_last_error(plugin)` on failure.
+
+Synchronous execution isn't a scheduler substitute: yielding APIs are not guaranteed to work through the bridge. Buffers and unknown userdata may be available only as borrowed callback-scoped stack references. For long-lived functions, use [retained callbacks](/docs/kne/signals-and-callbacks).

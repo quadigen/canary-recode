@@ -224,7 +224,11 @@ UIGridLayout_Apply :: proc(layout: ^UIGridLayout, registry: ^Registry, ctx: ^Cla
 	parent := cast(^GuiObject)layout.object.parent
 
 	_, _, parent_width, parent_height := GuiObject_get_absolute_transform(&parent.object, ctx)
-	parent_width, parent_height = scrolling_frame_content_size(&parent.object, parent_width, parent_height)
+	parent_width, parent_height = scrolling_frame_content_size(
+		&parent.object,
+		parent_width,
+		parent_height,
+	)
 
 	parent_width = max(f32(0), parent_width)
 	parent_height = max(f32(0), parent_height)
@@ -259,7 +263,7 @@ UIGridLayout_Apply :: proc(layout: ^UIGridLayout, registry: ^Registry, ctx: ^Cla
 		gui_layout_changed = true
 	}
 
-	// Grid items are only needed for this pass.
+
 	scratch := runtime.default_temp_allocator_temp_begin()
 	defer runtime.default_temp_allocator_temp_end(scratch)
 	allocator := context.temp_allocator if scratch.arena != nil else context.allocator
@@ -471,8 +475,6 @@ UIGridLayout_set :: proc(
 ) -> bool {
 	layout := cast(^UIGridLayout)object
 
-	Gui_Layout_Mark_Dirty()
-
 	switch key {
 	case "Enabled":
 		layout.enabled = vm.ArgBoolean(L, value_index)
@@ -546,7 +548,7 @@ UIGridLayout_set :: proc(
 		return false
 	}
 
-	Gui_Layout_Mark_Dirty()
+	gui_mark_layout_for(object)
 
 	return true
 }

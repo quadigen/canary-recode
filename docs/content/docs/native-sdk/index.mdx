@@ -1,0 +1,34 @@
+---
+title: Kinemium Native SDK
+description: One Kinemium_* C API for embedding and extending the engine.
+---
+
+The unified Kinemium Native SDK has **one C API and two ways to use it**.
+
+| Mode | Entry point | Context |
+| --- | --- | --- |
+| **Embedding** | Kinemium_CreateWithMode() | Your application owns an engine |
+| **Native plugins** | Kinemium_PluginEntry() | The plugin borrows an existing engine context |
+
+Both modes use the **same functions, types, handle validation and engine registries**, without separate KNE host tables.
+
+## Documentation
+
+- [Embedding quickstart](/docs/native-sdk/getting-started)
+- [Runtime library loading](/docs/native-sdk/runtime-loading)
+- [Creating a native plugin](/docs/native-sdk/plugin-authoring)
+- [Custom classes and services](/docs/native-sdk/classes-and-services)
+- [Instance attributes, tags, and queries](/docs/native-sdk/instance-metadata)
+- [Networking and services](/docs/native-sdk/networking-and-services)
+- [Players and Part physics](/docs/native-sdk/players-and-physics)
+- [GPUCompute for C/C++ renderers](/docs/native-sdk/gpu-compute)
+- [Custom datatypes](/docs/native-sdk/datatypes)
+- [Signals and callbacks](/docs/native-sdk/signals-and-callbacks)
+- [Full API reference](/docs/native-sdk/reference)
+- [Migration from KNE](/docs/native-sdk/migrating-from-kne)
+
+Include **include/kinemium.h**, and for native plugin entry-point helpers, also **include/kinemium_plugin.h**. Unified SDK ABI: **2.0**.
+
+The unified Native SDK is the public interface for embedding and plugin authoring. The KNE 3.x runtime supports legacy plugins; see the [legacy documentation](/docs/kne) for its API.
+
+Linux embedding, native plugin lifecycle, classes, services, datatypes, signals, and callbacks have integration tests. Editor executable linking and Windows/macOS packaging still require additional validation.

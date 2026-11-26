@@ -15,6 +15,9 @@ GPUCompute :: struct {
 	using object:   Object,
 	device:         gpu.Device,
 	native_buffers: [gpu.MAX_CUSTOM_BUFFERS]GPUCompute_Luau_Buffer,
+	warmup:         [16]GPUCompute_Warmup,
+	warmup_next:    u32,
+	warmup_bytes:   int,
 }
 
 GPUCompute_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -25,6 +28,7 @@ GPUCompute_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> 
 
 GPUCompute_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	compute := cast(^GPUCompute)object
+	for &job in compute.warmup {delete(job.source)}
 	gpu.close(&compute.device)
 	if compute.signal_registry != nil && compute.signal_registry.vm_state != nil {
 		if L := compute.signal_registry.vm_state.L; L != nil {gpu_compute_release_refs(L, compute)}
@@ -142,6 +146,8 @@ GPUCompute_namecall :: proc(
 ) {
 	compute := cast(^GPUCompute)object
 	device := &compute.device
+	if count, handled := GPUCompute_Render_Namecall(L, compute, method);
+	   handled {return count, true}
 	switch method {
 	case "IsSupported":
 		return gpu_compute_result(L, gpu.open(device))
@@ -316,6 +322,11 @@ Register_GPUCompute :: proc(registry: ^Registry) {
 		GPUCompute_destroy,
 		namecall = GPUCompute_namecall,
 		methods = []string {
+			"DispatchTexture",
+			"GetCacheStats",
+			"QueuePipeline",
+			"WarmupPipelines",
+			"GetWarmupPendingCount",
 			"IsSupported",
 			"Dispatch",
 			"Poll",

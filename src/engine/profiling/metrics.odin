@@ -24,6 +24,7 @@ Zone_Accum :: struct {
 Frame_Data :: struct {
 	delta_ns: u64,
 	zones:    [dynamic]Zone_Record,
+	gc:       GC_Frame_Stats,
 }
 
 Zone :: struct {
@@ -39,13 +40,78 @@ frame_zones: [dynamic]Zone_Record
 accum: [dynamic]Zone_Accum
 history: [dynamic]Frame_Data
 frame_delta_ns: u64
+
+latest_queue_frame_id: u64
+latest_queue_frame_ns: u64
+Queue_Stages :: struct {
+	id, base_ns, render_ns: u64,
+}
+latest_queue_stages: Queue_Stages
+Queue_Detail :: struct {
+	id, filament_ns, overlay_ns: u64,
+}
+latest_queue_detail: Queue_Detail
+record_queue_frame :: proc(id, ns: u64) {latest_queue_frame_id = id; latest_queue_frame_ns = ns}
+latest_queue_frame :: proc() -> (u64, u64) {return latest_queue_frame_id, latest_queue_frame_ns}
+
+Present_Metrics :: struct {
+	completed:       u64,
+	call_ns:         u64,
+	drain_ns:        u64,
+	prefetch_hits:   u64,
+	prefetch_misses: u64,
+	active:          bool,
+	asynchronous:    bool,
+}
+
+latest_present_metrics: Present_Metrics
+
+Render_Work_Metrics :: struct {
+	world_frames:           u64,
+	world_skips:            u64,
+	viewport_handles:       u32,
+	viewport_pages:         u32,
+	viewport_renders:       u64,
+	viewport_renders_frame: u64,
+	viewport_reused:        u64,
+	viewport_persistent:    u64,
+}
+
+latest_render_work: Render_Work_Metrics
+
+record_render_work :: proc(
+	world, eligible: bool,
+	handles, pages: u32,
+	renders, reused, persistent: u64,
+) {
+	if world {
+		latest_render_work.world_frames += 1
+	} else if eligible {
+		latest_render_work.world_skips += 1
+	}
+	latest_render_work.viewport_handles = handles
+	latest_render_work.viewport_pages = pages
+	latest_render_work.viewport_renders_frame =
+		renders - min(renders, latest_render_work.viewport_renders)
+	latest_render_work.viewport_renders = renders
+	latest_render_work.viewport_reused = reused
+	latest_render_work.viewport_persistent = persistent
+}
+
+record_present_metrics :: proc(value: Present_Metrics) {latest_present_metrics = value}
+
+latest_gpu_frame_id: u32
+latest_gpu_frame_ns: u64
+record_gpu_frame :: proc(id: u32, ns: u64) {latest_gpu_frame_id = id; latest_gpu_frame_ns = ns}
+latest_gpu_frame :: proc() -> (u32, u64) {return latest_gpu_frame_id, latest_gpu_frame_ns}
+reset_gpu_frame :: proc() {latest_gpu_frame_id = 0; latest_gpu_frame_ns = 0}
+
 capture_paused: bool
-// Recording zone/thread history costs work every frame, so it only runs once
-// something actually reads the history (the profiler overlay or ProfilerService).
+
+
 collecting: bool
 
-// FPS needs only the last few frame deltas, which is cheap enough to keep
-// always on so reading ProfilerService.FPS never forces full history capture.
+
 FPS_SAMPLES :: 64
 fps_deltas: [FPS_SAMPLES]u64
 fps_delta_count: int
@@ -65,17 +131,18 @@ average_frame_delta_ns :: proc(window: int) -> u64 {
 }
 
 
-/// Starts recording per-frame history. Consumers call this before reading it.
 set_collection_enabled :: proc(on: bool) {collecting = on}
 
 is_collection_enabled :: proc() -> bool {return collecting}
 
 
-@(deferred_out = End)
-Begin :: proc(name: string, color: u32) -> Zone {
+Begin_Manual :: proc(name: string, color: u32) -> Zone {
 	if !collecting || capture_paused {return {}}
 	return Zone{name, color, platform.GetTicksNS(), true}
 }
+
+@(deferred_out = End)
+Begin :: proc(name: string, color: u32) -> Zone {return Begin_Manual(name, color)}
 
 End :: proc(zone: Zone) {
 	if !zone.active {
@@ -115,6 +182,7 @@ frame_tick :: proc(delta_time: f32) {
 	if capture_paused {
 		return
 	}
+	gc_frame_tick()
 	frame_delta_ns = u64(max(f32(delta_time), 0.0) * 1_000_000_000.0)
 	fps_deltas[fps_delta_index] = frame_delta_ns
 	fps_delta_index = (fps_delta_index + 1) % FPS_SAMPLES
@@ -132,14 +200,16 @@ frame_flush :: proc() {
 	thread_frame_flush()
 	frame := Frame_Data {
 		delta_ns = frame_delta_ns,
+		gc       = gc_last_frame,
 	}
-	frame.zones = make([dynamic]Zone_Record, len(frame_zones))
-	copy(frame.zones[:], frame_zones[:])
 	if len(history) >= MAX_HISTORY {
-		oldest := history[0]
-		delete(oldest.zones)
+		frame.zones = history[0].zones
 		ordered_remove(&history, 0)
+		resize(&frame.zones, len(frame_zones))
+	} else {
+		frame.zones = make([dynamic]Zone_Record, len(frame_zones))
 	}
+	copy(frame.zones[:], frame_zones[:])
 	append(&history, frame)
 	clear(&frame_zones)
 	clear(&accum)

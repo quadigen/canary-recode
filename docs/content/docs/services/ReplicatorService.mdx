@@ -1,0 +1,104 @@
+---
+title: ReplicatorService
+description: Configure multiplayer replication, visibility, ownership and network diagnostics.
+---
+
+ReplicatorService manages a runtime's network session. The engine starts it automatically in networked server and client modes. Use it to inspect the connection or customize how state reaches players.
+
+```lua
+local replication = game:GetService("ReplicatorService")
+local stats = replication:GetStats()
+print(stats.connected, stats.replicatedEntities, stats.bytesSent)
+```
+
+## Properties
+
+| Property | Default | Access and behavior |
+| --- | --- | --- |
+| `Connected` | false | Read-only connection status. |
+| `SceneReady` | false | Read-only; client has received the scene-ready notification. |
+| `RequireJoinToken` | false | Server-only boolean setting; requires a configured join token before starting. |
+| `AllowClientOwnershipRequests` | false | Server-writable boolean; clients read the server's policy. |
+| `SnapshotRate` | 30 | Read/write; snapshots per second, 1–120. |
+| `BandwidthBudget` | 49152 | Read/write integer bytes per client per snapshot for budgeted traffic, 1024–16777216; the effective budget adapts to traffic. |
+| `SendRate` | 4194304 | Read/write integer bytes per second, 16384–67108864; transport must support the setting. |
+| `InterpolationDelayTicks` | 2 | Read/write; 0–8 snapshot intervals. |
+| `TeleportThreshold` | 12 | Read/write; 0–100000 world units. |
+| `RelevancyDistance` | 1024 | Read/write; 0–1000000 world units. |
+| `LODNearFraction` | 0.5 | Read/write; 0–1 fraction of squared relevancy distance. |
+| `LODFarInterval` | 4 | Read/write; 1–64 snapshot ticks, converted to an integer. |
+
+Out-of-range assignments raise errors. See [networking](/docs/guides/networking) for how the settings interact.
+
+## Connection management
+
+| Signature | Behavior |
+| --- | --- |
+| `StartServer(address: string?, port: number?): ReplicatorService?` | Starts server replication, returning the service or nil on failure. |
+| `ConnectClient(address: string?, port: number?): ReplicatorService?` | Starts a client connection, returning the service or nil on failure. |
+| `Stop(): ()` | Stops the current replication session. |
+| `GetActiveReplicator(): ReplicatorService?` | Returns the service unless stopped. |
+| `SetJoinToken(token: string): boolean` | Stores a token of at most 256 bytes; empty clears it. Returns true. |
+
+Address and port default to 127.0.0.1 and 1234. Port must be an integer from 1 to 65535. Starting a connection replaces the existing replication session, so don't call these methods just to obtain the service in a running game.
+
+## Visibility and ownership
+
+These methods are intended for the server. Use them with live, eligible instances and connected players.
+
+| Signature | Result |
+| --- | --- |
+| `Register(instance: Instance): number?` | Registers the instance, returning its network ID or nil. |
+| `Unregister(instance: Instance): boolean` | Suppresses a registered instance and removes its replicated representation. False if not registered. |
+| `AssignOwnership(instance: Instance, player: Player?): table?` | Locks ownership to the given player, or the server if omitted/nil; returns a table with numeric owner and id fields, or nil when unavailable. |
+| `AddPlayerToGroup(player: Player, name: string): boolean` | Adds group membership. |
+| `RemovePlayerFromGroup(player: Player, name: string): boolean` | Removes membership, false if absent. |
+| `IsPlayerInGroup(player: Player, name: string): boolean` | Tests membership. |
+| `ReplicateTo(instance: Instance, player: Player): boolean` | Adds a manual replication recipient. |
+| `StopReplicatingTo(instance: Instance, player: Player): boolean` | Removes a manual recipient. |
+
+Group names must be nonempty and at most 128 bytes. Manual recipients apply when the instance uses Manual replication mode. These methods do not bypass ancestry or other visibility restrictions. For physics assemblies prefer the Part and Model ownership methods in the [ownership guide](/docs/guides/network-ownership).
+
+`RegisterSchema(className: string, properties: {string}): {string}` replaces the custom property list for a registered class. It accepts at most 63 entries, deduplicates names, rejects Parent and empty or oversized names, and returns the list prefixed by Name, ReplicationMode and ReplicationGroup. Use matching schemas on both sides.
+
+## Named messages
+
+For games that use named messages rather than remote instances:
+
+```lua
+local replication = game:GetService("ReplicatorService")
+
+replication:OnEvent("Ready", function(payload, player)
+    if player and payload == true then
+        print(player.Name, "is ready")
+    end
+end)
+```
+
+| Signature | Behavior |
+| --- | --- |
+| `OnEvent(name: string, callback: function): ()` | Registers a callback for a named message. |
+| `SetClientEventAllowed(name: string, allowed: boolean): ()` | Sets the server's incoming event policy. |
+| `SendEvent(name: string, payload: any, reliable: boolean?): boolean` | Client sends to server; server broadcasts to peers. |
+| `SendEventTo(player: Player, name: string, payload: any, reliable: boolean?): boolean` | Server sends to a player. |
+
+Names must be 1–256 bytes. Reliable defaults to true. Send methods report whether a send was accepted, not whether a handler ran; unsupported payloads return false. The server accepts client event names with an explicit allow policy or a registered named callback unless explicitly denied.
+
+OnEvent callbacks receive payload, followed by the sending Player on the server. The `EventReceived` signal receives name, payload, and the sending Player on the server; on the client it receives only name and payload. Validate client payloads before changing gameplay state.
+
+## Diagnostics and local testing
+
+`GetStats(): table` returns a snapshot of counters and connection flags:
+
+| Fields | Meaning |
+| --- | --- |
+| connected, handshakeComplete, sceneReady, replicationFinished | Session and join progress. |
+| peers, replicatedEntities, tick, timeOffset | Peer/entity counts and synchronization state. |
+| packetsSent, bytesSent, packetsReceived, bytesReceived | Traffic totals. |
+| bandwidthDrops, adaptiveScale, effectiveBandwidthBudget, effectiveSnapshotRate, unchangedStatesSkipped | Replication workload and budget. |
+| malformedPackets, rejectedPackets, versionMismatches, schemaMismatches, authFailures, protocolVersion, handshakeStatus, serverCapabilities | Protocol and compatibility diagnostics. |
+| assetsSent, assetsReceived, assetRejections, assetTableComplete | Asset transfer progress. |
+| terrainHeaderSeen, terrainBatchesReceived, terrainCellsReceived, terrainCellsDeclared, terrainRejections, terrainTableComplete | Terrain transfer progress. |
+| statesApplied, acksSent, acksReceived, charAcksReceived, ownedStatesAccepted, ownedStatesRejected | State synchronization counters. |
+
+`CreateNetworkEmulator(options: table?): NetworkEmulator?` constructs a local test queue. Options are latency and jitter in seconds, and loss and reorder probabilities. Defaults are zero. See [NetworkEmulator](/docs/NetworkEmulator) for its methods and limitations.

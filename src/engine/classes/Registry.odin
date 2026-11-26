@@ -45,6 +45,7 @@ Class_Namecall :: proc(
 	i32,
 	bool,
 )
+Class_Render_State :: proc(object: ^Object, key: string) -> (state: [3]f64, known: bool)
 Class_Clone :: proc(source: ^Object, destination: ^Object)
 Require_Resolver :: proc(L: ^vm.State, path: string, ctx: rawptr) -> bool
 
@@ -104,9 +105,14 @@ Class_Step_Context :: struct {
 
 Class_Step :: proc(object: ^Object, ctx: ^Class_Step_Context)
 
-class_step_target :: struct {
-	object: ^Object,
-	_step:  Class_Step,
+class_step_batch :: struct {
+	first, end: int,
+	_step:      Class_Step,
+}
+
+class_step_snapshot :: struct {
+	objects: [dynamic]^Object,
+	batches: [dynamic]class_step_batch,
 }
 
 Member_Access :: enum {
@@ -147,6 +153,7 @@ Class_Descriptor :: struct {
 	destroy:             Class_Destructor,
 	get:                 Class_Getter,
 	set:                 Class_Setter,
+	render_state:        Class_Render_State,
 	namecall:            Class_Namecall,
 	parallel_get:        Class_Getter,
 	parallel_set:        Class_Setter,
@@ -311,6 +318,7 @@ Registry :: struct {
 	localize_text:           proc(data_model: rawptr, source: string, object: ^Object) -> string,
 	localization_revision:   u64,
 	pending_destroy:         [dynamic]Pending_Destroy,
+	step_snapshot:           class_step_snapshot,
 	tagged_objects:          map[^Object]bool,
 	tag_added_signals:       map[string]^signals.Signal,
 	tag_removed_signals:     map[string]^signals.Signal,
@@ -553,6 +561,18 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		return true
 	}
 
+	camera := cast(^Camera)object if Is_A_Class(object, &Camera_Class) else nil
+	camera_pose: datatypes.CFrame
+	camera_fov: f32
+	if camera != nil {
+		camera_pose = camera.CFrame
+		camera_fov = camera.field_of_view
+	}
+	render_before: [3]f64
+	render_known := false
+	if descriptor != nil && descriptor.render_state != nil {
+		render_before, render_known = descriptor.render_state(object, key)
+	}
 	gui_revision := Gui_Render_Revision()
 	if descriptor != nil &&
 	   descriptor.set != nil &&
@@ -570,6 +590,14 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 			return true
 		}
 
+
+		if render_known {
+			after, known := descriptor.render_state(object, key)
+			if known && after == render_before {
+				Object_Fire_Property_Changed(object, key, L)
+				return true
+			}
+		}
 
 		surfacegui_mark_dirty_for(object)
 
@@ -593,7 +621,13 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 		case:
 			gui_invalidate_draw(object)
 		}
-		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
+		if !Is_A(object, "GuiObject") &&
+		   !(key == "Value" && Is_A_Class(object, &ValueBase_Class)) &&
+		   !(camera != nil &&
+				   ((key == "CFrame" && camera.CFrame == camera_pose) ||
+						   (key == "FieldOfView" && camera.field_of_view == camera_fov))) {
+			Render_3D_Mark_Object_Dirty(object)
+		}
 
 		Object_Fire_Property_Changed(object, key, L)
 		return true
@@ -603,7 +637,13 @@ descriptor_set :: proc(L: ^vm.State, value, ctx: rawptr, key: string, value_inde
 	   Object_Set_Property(L, value, ctx, key, value_index) {
 		surfacegui_mark_dirty_for(object)
 		gui_invalidate_draw(object)
-		if !Is_A(object, "GuiObject") {Render_3D_Mark_Dirty()}
+		if !Is_A(object, "GuiObject") &&
+		   !(key == "Value" && Is_A_Class(object, &ValueBase_Class)) &&
+		   !(camera != nil &&
+				   ((key == "CFrame" && camera.CFrame == camera_pose) ||
+						   (key == "FieldOfView" && camera.field_of_view == camera_fov))) {
+			Render_3D_Mark_Object_Dirty(object)
+		}
 
 		Object_Fire_Property_Changed(object, key, L)
 		return true
@@ -897,6 +937,7 @@ Register_Class :: proc(
 	parallel_get: Class_Getter = nil,
 	parallel_set: Class_Setter = nil,
 	parallel_namecall: Class_Namecall = nil,
+	render_state: Class_Render_State = nil,
 ) {
 	assert(registry != nil)
 	assert(info != nil)
@@ -912,6 +953,7 @@ Register_Class :: proc(
 		destroy            = destroy,
 		get                = get,
 		set                = set,
+		render_state       = render_state,
 		namecall           = namecall,
 		parallel_get       = parallel_get,
 		parallel_set       = parallel_set,
@@ -1209,20 +1251,35 @@ Step :: proc(
 
 	Flush_Pending_Destroy(registry)
 
-	targets: [dynamic]class_step_target
+	snapshot := registry.step_snapshot
+	registry.step_snapshot = {}
+	clear(&snapshot.objects)
+	clear(&snapshot.batches)
+	defer {
+		clear(&snapshot.objects)
+		clear(&snapshot.batches)
+		if cap(snapshot.objects) >= cap(registry.step_snapshot.objects) {
+			delete(registry.step_snapshot.objects)
+			delete(registry.step_snapshot.batches)
+			registry.step_snapshot = snapshot
+		} else {
+			delete(snapshot.objects)
+			delete(snapshot.batches)
+		}
+	}
 
 	for descriptor in registry.classes {
-		if descriptor._step == nil || descriptor._step_phase != phase {continue}
+		if descriptor._step == nil ||
+		   descriptor._step_phase != phase ||
+		   len(descriptor.instances) == 0 {continue}
 
 		if descriptor.info != nil && descriptor.info.name == "ScreenGui" {
 			Sort_ScreenGui_Instances(descriptor)
 		}
 
-		for object in descriptor.instances {
-			if object != nil && !object.destroyed {
-				append(&targets, class_step_target{object, descriptor._step})
-			}
-		}
+		first := len(snapshot.objects)
+		append(&snapshot.objects, ..descriptor.instances[:])
+		append(&snapshot.batches, class_step_batch{first, len(snapshot.objects), descriptor._step})
 	}
 
 	step_context := Class_Step_Context {
@@ -1237,21 +1294,20 @@ Step :: proc(
 		editor_2d_gui_background = editor_2d_gui_background,
 	}
 
-	for target in targets {
-		if target.object != nil && !target.object.destroyed {
+	for batch in snapshot.batches {
+		for object in snapshot.objects[batch.first:batch.end] {
+			if object == nil || object.destroyed {continue}
 			when tracy.TRACY_ENABLE {
 				if phase == .Render_3D {
 					zone := tracy.ZoneNC("Render 3D Class Instance", 0xD08770)
-					tracy.ZoneText(zone, target.object.class.name)
-					target._step(target.object, &step_context)
+					tracy.ZoneText(zone, object.class.name)
+					batch._step(object, &step_context)
 					continue
 				}
 			}
-			target._step(target.object, &step_context)
+			batch._step(object, &step_context)
 		}
 	}
-
-	delete(targets)
 }
 
 Object_From_Argument :: proc "c" (L: ^vm.State, index: int) -> ^Object {
@@ -1672,7 +1728,7 @@ require_script_body :: proc(L: ^vm.State, registry: ^Registry) -> i32 {
 	common.module_state = .Loading
 
 
-	chunk_name := Get_Name(object)
+	chunk_name := Get_Full_Name(object)
 
 	ok, err := vm.LoadSource(registry.vm_state, L, common.source, chunk_name)
 	if !ok {
@@ -1715,6 +1771,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_Instance(registry)
 	Register_Actor(registry)
 	Register_Advanced_Lighting_Effects(registry)
+	Register_Scene_Lighting_Effects(registry)
 	Register_AlignOrientation(registry)
 	Register_Animation(registry)
 	Register_AnimationAuthoring(registry)
@@ -1729,6 +1786,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_BaseScript(registry)
 	Register_BillboardGui(registry)
 	Register_BindableEvent(registry)
+	Register_BoneAttachment(registry)
 	Register_BindableFunction(registry)
 	Register_BlurImageFilter(registry)
 	Register_BoolValue(registry)
@@ -1740,6 +1798,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_CFrameValue(registry)
 	Register_CharacterAnimator(registry)
 	Register_CharacterController(registry)
+	Register_CharacterPhysicsSolver(registry)
 	Register_CharacterController2D(registry)
 	Register_CharacterInput(registry)
 	Register_CharacterModel(registry)
@@ -1754,6 +1813,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_CylinderHandleAdornment(registry)
 	Register_CylindricalConstraint(registry)
 	Register_Decal(registry)
+	Register_Texture(registry)
 	Register_DoubleConstrainedValue(registry)
 	Register_EditableImage(registry)
 	Register_EditableMesh(registry)
@@ -1768,6 +1828,7 @@ Register_Default_Classes :: proc(registry: ^Registry) {
 	Register_GuiObject(registry)
 	Register_Handles(registry)
 	Register_Highlight(registry)
+	Register_SelectionBox(registry)
 	Register_HingeConstraint(registry)
 	Register_Humanoid(registry)
 	Register_ImageButton(registry)
@@ -1898,6 +1959,9 @@ Registry_Destroy :: proc(registry: ^Registry) {
 	registry.classes = nil
 	delete(registry.pending_destroy)
 	registry.pending_destroy = nil
+	delete(registry.step_snapshot.objects)
+	delete(registry.step_snapshot.batches)
+	registry.step_snapshot = {}
 
 
 	for _, stack in registry.require_frames {

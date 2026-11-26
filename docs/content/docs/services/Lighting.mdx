@@ -30,12 +30,31 @@ Lighting.Ambient = Color3.fromRGB(40, 45, 60)
 | `GlobalShadows` | `boolean` | Read/write | `true` | Whether shadows are rendered. |
 | `ShadowSoftness` | `number` | Read/write | `0` | Shadow blur, clamped between `0` and `1`. |
 | `ExposureCompensation` | `number` | Read/write | `0` | Exposure adjustment applied to the final image. |
+| `QualityPreset` | `Enum.QualityPreset` | Read/write | `Custom` | Runtime rendering quality override. See quality presets below. |
 | `DynamicResolution` | `boolean` | Read/write | `true` | Whether render resolution can drop under load. |
 | `ResolutionScale` | `number` | Read/write | `0.5` | Minimum resolution scale, clamped between `0.1` and `1`. |
 | `ShadowCascades` | `number` | Read/write | `2` | Number of shadow cascades, clamped between `1` and `4`. |
+| `AdaptiveShadowResolution` | `boolean` | Read/write | `true` | Allows the desktop refresh-rate budget to reduce shadow map resolution while dynamic resolution is active. Disable to retain the authored shadow map size. |
 | `ShadowMapSize` | `number` | Read/write | `2048` | Shadow map resolution, clamped between `256` and `8192`. |
 
 `ShadowCascades` and `ShadowMapSize` are stored as integers, so fractional values are truncated. Raising `ShadowMapSize` sharpens shadows at the cost of memory and fill rate.
+
+### Quality presets
+
+```lua
+local Lighting = game:GetService("Lighting")
+Lighting.QualityPreset = Enum.QualityPreset.Ultra
+```
+
+| Preset | Scene resolution | Shadow map / cascades | Shadow filter | Cloud resolution | HDR / SSAO quality |
+| --- | --- | --- | --- | --- | --- |
+| Custom (default) | Authored | Authored | Authored | Authored | Authored |
+| Low | Adaptive, 50–100% | 512 / 1, adaptive | PCF | 25% | Low |
+| Medium | Adaptive, 75–100% | 1024 / 2, adaptive | PCF | 50% | Medium |
+| High | Native, fixed | 2048 / 3, fixed | DPCF | 75% | High |
+| Ultra | Native, fixed | 4096 / 4, fixed | PCSS | 100% | Ultra |
+
+Presets are applied to the renderer without modifying authored properties. Switching back to `Custom` restores the manual Lighting and effect settings. The individual property getters still return authored values. A named preset takes precedence over `DynamicResolutionEffect` and `RenderQualityEffect` while active. It does not enable effects that were disabled, change artistic lighting settings, or override the editor's explicit fast viewport mode. Adaptive quality depends on the backend; a higher preset does not guarantee a particular frame rate.
 
 ### TimeOfDay
 
@@ -55,7 +74,7 @@ Reading `TimeOfDay` formats the current `ClockTime` back into a string, so it re
 GetSunDirection(): Vector3
 ```
 
-Returns the direction the sun's light travels, derived from `ClockTime`. The vector stays in sync with the time, so it's useful for aligning lens flares or custom sky elements.
+Returns a unit vector pointing toward the sun. The direction follows `ClockTime` or an enabled `SunLightEffect` under `Lighting`. Use it to align lens flares or custom sky elements.
 
 ```lua
 local sunDirection = Lighting:GetSunDirection()
@@ -63,7 +82,7 @@ local sunDirection = Lighting:GetSunDirection()
 
 ## Default effects
 
-When `Lighting` is created, it adds effect objects as children, including `Clouds`, `Atmosphere`, `BloomEffect`, `ColorCorrectionEffect`, `SunRaysEffect`, `SSAOEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect`. Several more exist but start disabled.
+When `Lighting` is created, it adds effect objects as children, including `Clouds`, `Atmosphere`, `BloomEffect`, `ColorCorrectionEffect`, `SunRaysEffect`, `SSAOEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect`. Optional indirect-lighting classes include `SSGIEffect`, `EmissiveGIEffect` and the experimental `DDGIEffect`. Several more exist but start disabled.
 
 ```lua
 local bloom = Lighting:FindFirstChild("BloomEffect")

@@ -16,14 +16,16 @@ resolve := if os() == "windows" { "Resolve-Path" } else { "realpath" }
 # MSVC-only linker flags; not applicable on Linux
 debug_linker := if os() == "windows" { '-extra-linker-flags:"/LTCG /IGNORE:4099"' } else { "" }
 
+gns_linker := if os() == "linux" { '-extra-linker-flags:"-L${PWD}/vendor/build/lib -Wl,-rpath,\$ORIGIN/../vendor/build/lib -Wl,-rpath,\$ORIGIN -Wl,--export-dynamic-symbol=Kinemium_*"' } else if os() == "macos" { '-extra-linker-flags:"-L${PWD}/vendor/build/lib -Wl,-rpath,@loader_path/../vendor/build/lib -Wl,-rpath,@loader_path"' } else { "" }
+
 default:
     @just --list
 
 build:
-    odin build src -o:speed -out:build/kinemium{{exe}}
+    odin build src -o:speed -out:build/kinemium{{exe}} {{gns_linker}}
 
 debug:
-    odin build src -debug -out:build/kinemium-debug{{exe}} {{debug_linker}} -define:TRACY_ENABLE=true
+    odin build src -debug -out:build/kinemium-debug{{exe}} {{debug_linker}} -define:TRACY_ENABLE=true {{gns_linker}}
 
 [windows]
 _kill:
@@ -34,7 +36,7 @@ _kill:
     @pkill -x kinemium || true
 
 release: _kill
-    odin build src -o:speed -out:build/kinemium{{exe}} -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}}
+    odin build src -o:speed -out:build/kinemium{{exe}} -define:BUILD_TARGET=editor -define:RUNTIME_VERSION_DISPLAY={{version}} -define:RUNTIME_GIT_ENABLED=true -define:RUNTIME_GIT_COMMIT={{git_commit}} -define:RUNTIME_GIT_BRANCH={{git_branch}} {{gns_linker}}
 
 [windows]
 wasm:
@@ -77,7 +79,7 @@ run: build
 
 # Use the sibling editor checkout directly while developing, without GitHub or the remote archive.
 build-local-editor editor_dir="../kinemium-editor/internal":
-    odin build src -o:speed -out:build/kinemium{{exe}}
+    odin build src -o:speed -out:build/kinemium{{exe}} {{gns_linker}}
 
 # Select the editor at runtime, not at engine compilation.
 run-local-editor editor_dir="../kinemium-editor/internal": (build-local-editor editor_dir)
@@ -107,6 +109,7 @@ tests_services := '''
     world2d_editor_smoke
     instances2d_smoke
     part_gravity_smoke
+    part_surface_smoke
     aerodynamics_service_smoke
     aseprite_service_smoke
     editable_sound_smoke
@@ -127,6 +130,7 @@ tests_services := '''
     gpu_compute_smoke
     roblox_parity_smoke
     luau_typecheck_smoke
+    reported_regressions
     parallel_luau_smoke
     character_controller_smoke
     character_tuning_smoke
@@ -185,6 +189,7 @@ tests_serializer := '''
 
 tests_replication := '''
     replicator_loopback_smoke
+    part_surface_network_smoke
     replication_constraint_smoke
     replicator_multi_peer_smoke
     replication_remote_smoke
@@ -252,7 +257,7 @@ _run-tests label tests:
     set -uo pipefail
     failed=()
     for t in $(printf '%s' '{{tests}}'); do
-        output=$(odin run "tests/$t.odin" -file 2>&1)
+        output=$(odin run "tests/$t.odin" -file {{gns_linker}} 2>&1)
         if grep -q PASSED <<< "$output"; then
             echo "PASS  $t"
         else
@@ -267,8 +272,8 @@ _run-tests label tests:
     fi
 
 test:
-    odin test src
-    odin test src/engine/assetstore
+    odin test src {{gns_linker}}
+    odin test src/engine/assetstore {{gns_linker}}
     @just test-serializer
     @just test-replication
     @just test-services
@@ -279,10 +284,19 @@ test-services: (_run-tests "service" tests_services)
 test-gui: (_run-tests "gui" tests_gui)
 
 # Native visual regressions require a Vulkan-capable display/device.
-test-imported-visuals: (_run-tests "imported visuals" "sky_render_smoke billboard_gui_render_smoke special_mesh_render_smoke")
+test-imported-visuals: (_run-tests "imported visuals" "sky_render_smoke billboard_gui_render_smoke special_mesh_render_smoke part_surface_render_smoke")
 
 # Effects require a native Vulkan-capable display/device.
 test-lighting-effects: (_run-tests "lighting effects" "volumetric_lighting_smoke advanced_lighting_smoke material_shader_render_smoke")
+
+[linux]
+test-odin-compositor:
+    cmake --build vendor/build --target kine_vulkan_compositor KinemiumLibs --parallel 6
+    odin check src
+    odin test src/engine/renderer/compositor '-extra-linker-flags:-Lvendor/build/lib -Wl,-rpath,$ORIGIN/../vendor/build/lib -Wl,-rpath,$ORIGIN -lvulkan -lstdc++ -lc++ -lc++abi -lEGL -lGL'
+    if [ "${KINE_SKIP_COMPOSITOR_GPU_TESTS:-0}" != "1" ]; then odin run tests/native_compositor_lifecycle_smoke.odin -file '-extra-linker-flags:-Lvendor/build/lib -Wl,-rpath,$ORIGIN/../vendor/build/lib -Wl,-rpath,$ORIGIN -lvulkan -lstdc++ -lc++ -lc++abi -lEGL -lGL'; fi
+    if [ "${KINE_SKIP_COMPOSITOR_GPU_TESTS:-0}" != "1" ]; then odin run tests/odin_compositor_smoke.odin -file '-extra-linker-flags:-Lvendor/build/lib -Wl,-rpath,$ORIGIN/../vendor/build/lib -Wl,-rpath,$ORIGIN -lvulkan -lstdc++ -lc++ -lc++abi -lEGL -lGL'; fi
+    odin build src -o:speed -out:build/kinemium-odin-release-verify -define:BUILD_TARGET=editor {{gns_linker}}
 
 test-porter-content:
     {{python}} tests/porter_content_test.py
@@ -324,15 +338,15 @@ fmt:
     odinfmt -w src
 
 editor:
-    odin build src -define:BUILD_TARGET=editor -out:build/kinemium-editor{{exe}}
+    odin build src -define:BUILD_TARGET=editor -out:build/kinemium-editor{{exe}} {{gns_linker}}
 
 client:
-    odin build src -define:BUILD_TARGET=client -out:build/kinemium-client{{exe}}
+    odin build src -define:BUILD_TARGET=client -out:build/kinemium-client{{exe}} {{gns_linker}}
 
 player: client
 
 server:
-    odin build src -define:BUILD_TARGET=server -out:build/kinemium-server{{exe}}
+    odin build src -define:BUILD_TARGET=server -out:build/kinemium-server{{exe}} {{gns_linker}}
 
 [windows]
 release-templates:
@@ -347,27 +361,27 @@ release-templates:
     cp build/kinemium-client rel/kinemium-client-{{os()}}-{{arch()}}
 
 server-bake map address="0.0.0.0" port="1234":
-    odin build src -define:BUILD_TARGET=server -define:KINE_MODE=server -define:KINE_ADDRESS={{address}} -define:KINE_PORT={{port}} -define:KINE_EMBED="$({{resolve}} '{{map}}')" -out:build/kinemium-server{{exe}}
+    odin build src -define:BUILD_TARGET=server -define:KINE_MODE=server -define:KINE_ADDRESS={{address}} -define:KINE_PORT={{port}} -define:KINE_EMBED="$({{resolve}} '{{map}}')" -out:build/kinemium-server{{exe}} {{gns_linker}}
 
 client-bake address="" map="" port="1234":
-    odin build src -define:BUILD_TARGET=client -define:KINE_MODE=client {{ if address != "" { "-define:KINE_ADDRESS=" + address + " " } else { "" } }}-define:KINE_PORT={{port}} {{ if map != "" { "-define:KINE_EMBED=\"$(" + resolve + " '" + map + "')\" " } else { "" } }}-out:build/kinemium-client{{exe}}
+    odin build src -define:BUILD_TARGET=client -define:KINE_MODE=client {{ if address != "" { "-define:KINE_ADDRESS=" + address + " " } else { "" } }}-define:KINE_PORT={{port}} {{ if map != "" { "-define:KINE_EMBED=\"$(" + resolve + " '" + map + "')\" " } else { "" } }}-out:build/kinemium-client{{exe}} {{gns_linker}}
 
 custom startup target="client" noedit="false":
-    odin build src -define:BUILD_TARGET={{target}} -define:LUAU_STARTUP="$({{resolve}} '{{startup}}')" -define:NOEDITOR={{noedit}} -out:build/kinemium-custom{{exe}}
+    odin build src -define:BUILD_TARGET={{target}} -define:LUAU_STARTUP="$({{resolve}} '{{startup}}')" -define:NOEDITOR={{noedit}} -out:build/kinemium-custom{{exe}} {{gns_linker}}
 
 run-editor:
-    odin run src -define:BUILD_TARGET=editor
+    odin run src -define:BUILD_TARGET=editor {{gns_linker}}
 
 playtest map: editor
     ./build/kinemium-editor{{exe}} "{{map}}"
 
 run-client:
-    odin run src -define:BUILD_TARGET=client
+    odin run src -define:BUILD_TARGET=client {{gns_linker}}
 
 run-player: run-client
 
 run-server:
-    odin run src -define:BUILD_TARGET=server
+    odin run src -define:BUILD_TARGET=server {{gns_linker}}
 
 [windows]
 clean:
@@ -412,4 +426,4 @@ kne-example:
     cp -f include/sdk/examples/odin/extension.json build/kne-extensions/hello_kne/extension.json
 
 kne-test: kne-example
-    odin run tests/kne_extension_smoke.odin -file
+    {{if os() == "windows" { "" } else { "LD_LIBRARY_PATH=${PWD}/vendor/build/lib:${LD_LIBRARY_PATH:-}" }}} odin run tests/kne_extension_smoke.odin -file {{gns_linker}}

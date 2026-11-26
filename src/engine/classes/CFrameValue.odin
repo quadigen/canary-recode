@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 CFrameValue_Class := Class_Info {
@@ -12,6 +13,7 @@ CFrameValue_Class := Class_Info {
 CFrameValue :: struct {
 	using object: Object,
 	value:        datatypes.CFrame,
+	changed:      ^signals.Signal,
 }
 
 CFrameValue_Init :: proc() -> CFrameValue {
@@ -26,6 +28,7 @@ CFrameValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 }
 
 CFrameValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^CFrameValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^CFrameValue)object)
 }
@@ -40,6 +43,8 @@ CFrameValue_get :: proc(
 	val := cast(^CFrameValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		if datatype_registry == nil {return false}
 		datatypes.Push_CFrame(L, datatype_registry, val.value)
@@ -62,7 +67,13 @@ CFrameValue_set :: proc(
 	switch key {
 	case "Value":
 		if datatype_registry == nil {return false}
-		val.value = datatypes.Arg_CFrame(L, value_index, datatype_registry)
+		new_value := datatypes.Arg_CFrame(L, value_index, datatype_registry)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			datatypes.Push_CFrame(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

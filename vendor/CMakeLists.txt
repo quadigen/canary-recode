@@ -108,6 +108,29 @@ endif()
 
 FetchContent_MakeAvailable(tracy)
 
+# Valve's standalone SteamNetworkingSockets runtime.  Prefer an installed
+# package; fetch the pinned open-source release on clean CI machines.
+find_package(GameNetworkingSockets CONFIG QUIET)
+if(NOT TARGET GameNetworkingSockets::shared AND NOT TARGET GameNetworkingSockets::static)
+    set(BUILD_STATIC_LIB OFF CACHE BOOL "Do not duplicate the GNS runtime" FORCE)
+    set(BUILD_SHARED_LIB ON CACHE BOOL "Build GNS as a distributable shared library" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(kine_gns
+        GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+        GIT_TAG v1.6.1
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(kine_gns)
+endif()
+# Keep Odin's link search path and the CI runtime staging path stable.
+if(TARGET GameNetworkingSockets AND NOT GameNetworkingSockets_FOUND)
+    set_target_properties(GameNetworkingSockets PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+endif()
+add_subdirectory(kine_networking)
+
 # Jolt Wrapper
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kine_jolt")
     add_subdirectory(kine_jolt)
@@ -202,6 +225,7 @@ endfunction()
 kine_add_odin_library_alias(kine_filament "$<TARGET_FILE:kine_filament_shim>")
 kine_add_odin_library_alias(kine_skia "$<TARGET_FILE:kine_skia>")
 kine_add_odin_library_alias(kine_vk "$<TARGET_FILE:kine_vulkan_compositor>")
+kine_add_odin_library_alias(kine_networking "$<TARGET_FILE:kine_networking>")
 kine_add_odin_library_alias(kine_jolt "$<TARGET_FILE:JoltWrapper>")
 kine_add_odin_library_alias(kine_jolt_core "$<TARGET_FILE:Jolt>")
 if(TARGET RecastWrapper)

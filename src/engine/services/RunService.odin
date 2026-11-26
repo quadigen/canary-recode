@@ -229,35 +229,39 @@ Run_Service_Render_Step :: proc(service: ^RunService, L: ^vm.State, delta_time: 
 		return
 	}
 
-	callback_refs: [dynamic]i32
 
-	for callback in service.callbacks {
-		vm.PushRegistryReference(L, callback.callback_ref)
-		append(&callback_refs, vm.RetainValue(L))
-		vm.Pop(L)
-	}
-
-	for callback_ref in callback_refs {
+	count := len(service.callbacks)
+	if count > 0 {
 		top := vm.StackTop(L)
+		if count <= 256 && vm.CheckStack(L, count + 8) {
+			for callback in service.callbacks {vm.PushRegistryReference(L, callback.callback_ref)}
+			for i in 0 ..< count {
+				vm.PushValue(L, top + i + 1)
+				vm.PushNumber(L, f64(delta_time))
+				ok, err := vm.ProtectedCall(L, 1)
+				vm.SetStackTop(L, top + count)
+				if !ok {fmt.eprintf("Render step callback failed: %s\n", err); delete(err)}
+			}
+			vm.SetStackTop(L, top)
+		} else {
 
-		vm.PushRegistryReference(L, callback_ref)
-		vm.PushNumber(L, f64(delta_time))
-
-		ok, err := vm.ProtectedCall(L, 1)
-
-		vm.SetStackTop(L, top)
-
-		if !ok {
-			fmt.eprintf("Render step callback failed: %s\n", err)
-			delete(err)
+			callback_refs := make([dynamic]i32, 0, count)
+			for callback in service.callbacks {
+				vm.PushRegistryReference(L, callback.callback_ref)
+				append(&callback_refs, vm.RetainValue(L))
+				vm.Pop(L)
+			}
+			for callback_ref in callback_refs {
+				vm.PushRegistryReference(L, callback_ref)
+				vm.PushNumber(L, f64(delta_time))
+				ok, err := vm.ProtectedCall(L, 1)
+				vm.SetStackTop(L, top)
+				if !ok {fmt.eprintf("Render step callback failed: %s\n", err); delete(err)}
+			}
+			for callback_ref in callback_refs {vm.ReleaseValue(L, callback_ref)}
+			delete(callback_refs)
 		}
 	}
-
-	for callback_ref in callback_refs {
-		vm.ReleaseValue(L, callback_ref)
-	}
-
-	delete(callback_refs)
 
 	if service.pre_render_ref >
 	   0 {run_service_fire_signal(L, &service.pre_render_ref, f64(delta_time))}
@@ -301,9 +305,7 @@ run_service_push_signal :: proc(L: ^vm.State, signal_ref: ^i32) {
 }
 
 run_service_fire_signal :: proc(L: ^vm.State, signal_ref: ^i32, values: ..f64) {
-	if !run_service_ensure_signal(L, signal_ref) {
-		return
-	}
+	if signal_ref^ <= 0 {return}
 
 	top := vm.StackTop(L)
 	defer vm.SetStackTop(L, top)
@@ -311,9 +313,9 @@ run_service_fire_signal :: proc(L: ^vm.State, signal_ref: ^i32, values: ..f64) {
 	vm.PushRegistryReference(L, signal_ref^)
 
 	signal := cast(^signals.Signal)vm.UserdataValue(L, -1)
-	if signal == nil {
-		return
-	}
+	if signal == nil ||
+	   signal.destroyed ||
+	   (len(signal.listeners) == 0 && len(signal.waiters) == 0) {return}
 
 	for value in values {vm.PushNumber(L, value)}
 	signals.Fire(L, signal, len(values))

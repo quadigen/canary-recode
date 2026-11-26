@@ -105,6 +105,11 @@ enum_type_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 		vm.PushUserdataMethod(L, key)
 	case:
 		item := find_item_by_name(enum_type, key)
+
+
+		if item == nil && enum_type.name == "KeyCode" && key == "BackSlash" {
+			item = find_item_by_name(enum_type, "Backslash")
+		}
 		if item == nil {
 			return false
 		}

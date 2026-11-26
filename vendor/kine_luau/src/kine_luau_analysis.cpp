@@ -3,6 +3,15 @@
 #include "Luau/Frontend.h"
 #include "Luau/Parser.h"
 #include "Luau/Type.h"
+#include "Luau/ConstraintSolver.h"
+#include "Luau/TypeInfer.h"
+#include "Luau/TypePack.h"
+#include "Luau/Scope.h"
+#include <algorithm>
+#include <span>
+#include <cstdio>
+#include <memory>
+#include "kinemium_api_generated.h"
 
 #include <string_view>
 #include <unordered_map>
@@ -15,6 +24,104 @@ constexpr size_t MaxTotalBytes = 2 * 1024 * 1024;
 constexpr size_t MaxModules = 64;
 constexpr size_t MaxResolutions = 512;
 
+const std::string& apiDefinitions()
+{
+    static const std::string text = [] {
+        std::string result;
+        for (auto chunk : KinemiumDefinitionChunks)
+            result.append(chunk);
+        return result;
+    }();
+    return text;
+}
+
+struct KinemiumClassLookup final : Luau::MagicFunction
+{
+    std::span<const std::string_view> names;
+    bool optional;
+
+    KinemiumClassLookup(std::span<const std::string_view> names, bool optional = false)
+        : names(names), optional(optional)
+    {
+    }
+
+    std::optional<Luau::WithPredicate<Luau::TypePackId>> handleOldSolver(
+        Luau::TypeChecker&, const Luau::ScopePtr&, const Luau::AstExprCall&, Luau::WithPredicate<Luau::TypePackId>) override
+    {
+        return std::nullopt;
+    }
+
+    bool infer(const Luau::MagicFunctionCallContext& context) override
+    {
+        if (context.callSite->args.size == 0)
+            return false;
+        const auto* literal = context.callSite->args.data[0]->as<Luau::AstExprConstantString>();
+        if (!literal)
+            return false;
+        const std::string_view name(literal->value.data, literal->value.size);
+        if (!names.empty() && std::find(names.begin(), names.end(), name) == names.end())
+            return false;
+        auto type = context.solver->rootScope->lookupType(name == "Animated" && !names.empty() ? "AnimatedImageInstance" : std::string(name));
+        if (!type || !type->typeParams.empty() || !type->typePackParams.empty())
+            return false;
+        auto ty = Luau::follow(type->type);
+        if (!Luau::get<Luau::ExternType>(ty))
+            return false;
+        if (optional)
+            ty = Luau::makeOption(context.solver->builtinTypes, *context.solver->arena, ty);
+        asMutable(context.result)->ty.emplace<Luau::BoundTypePack>(context.solver->arena->addTypePack({ty}));
+        return true;
+    }
+};
+
+void attachClassLookup(Luau::GlobalTypes& globals, const char* className, const char* member,
+    std::span<const std::string_view> names, bool optional = false)
+{
+    auto type = globals.globalScope->lookupType(className);
+    if (!type)
+        return;
+    if (auto* external = Luau::getMutable<Luau::ExternType>(type->type))
+    {
+        auto property = external->props.find(member);
+        if (property != external->props.end() && property->second.readTy && Luau::get<Luau::FunctionType>(*property->second.readTy))
+            Luau::attachMagicFunction(*property->second.readTy, std::make_shared<KinemiumClassLookup>(names, optional));
+    }
+}
+
+bool loadKinemiumApi(Luau::Frontend& frontend)
+{
+    auto result = frontend.loadDefinitionFile(frontend.globals, frontend.globals.globalScope, apiDefinitions(), "@kinemium", false);
+    if (!result.success)
+    {
+        for (const auto& error : result.parseResult.errors)
+            std::fprintf(stderr, "[Luau API] %u: %s\n", error.getLocation().begin.line + 1, error.what());
+        if (result.module)
+            for (const auto& error : result.module->errors)
+                std::fprintf(stderr, "[Luau API] %u: %s\n", error.location.begin.line + 1, Luau::toString(error).c_str());
+        return false;
+    }
+    if (auto binding = Luau::tryGetGlobalBinding(frontend.globals, "Instance"))
+        if (const auto* table = Luau::get<Luau::TableType>(binding->typeId))
+            if (auto it = table->props.find("new"); it != table->props.end() && it->second.readTy)
+                Luau::attachMagicFunction(*it->second.readTy, std::make_shared<KinemiumClassLookup>(CREATABLE_INSTANCES));
+    auto& globals = frontend.globals;
+    if (auto model = globals.globalScope->lookupType("DataModel"))
+        if (auto* external = Luau::getMutable<Luau::ExternType>(model->type))
+            for (auto name : SERVICES)
+                if (auto type = globals.globalScope->lookupType(std::string(name)))
+                    external->props.emplace(std::string(name), Luau::Property::readonly(type->type));
+    auto& enumTypes = globals.globalScope->importedTypeBindings["Enum"];
+    for (const auto& [name, type] : globals.globalScope->exportedTypeBindings)
+        if (name.starts_with("Enum") && name != "Enum" && name != "EnumItem" && !name.ends_with("_INTERNAL"))
+            if (Luau::get<Luau::ExternType>(type.type))
+                enumTypes.emplace(name.substr(4), type);
+    attachClassLookup(frontend.globals, "DataModel", "GetService", SERVICES);
+    attachClassLookup(frontend.globals, "DataModel", "FindService", SERVICES, true);
+    for (const char* method : {"FindFirstChildOfClass", "FindFirstChildWhichIsA", "FindFirstAncestorOfClass", "FindFirstAncestorWhichIsA", "WaitForChildOfClass"})
+        attachClassLookup(frontend.globals, "Instance", method, {}, true);
+    return true;
+}
+
 struct EditorResolver final : Luau::FileResolver
 {
     lua_State* state;
@@ -23,10 +130,27 @@ struct EditorResolver final : Luau::FileResolver
     size_t totalBytes;
     size_t resolutions = 0;
 
-    EditorResolver(lua_State* state, int callback, std::string_view source)
-        : state(state), callback(lua_absindex(state, callback)), totalBytes(source.size())
+    EditorResolver() : state(nullptr), callback(0), totalBytes(0)
     {
+    }
+
+    void reset(lua_State* nextState, int nextCallback, std::string_view source)
+    {
+        state = nextState;
+        callback = lua_absindex(state, nextCallback);
+        sources.clear();
+        totalBytes = source.size();
+        resolutions = 0;
         sources.emplace(RootName, Luau::SourceCode{std::string(source), Luau::SourceCode::Module});
+    }
+
+    void clear()
+    {
+        sources.clear();
+        state = nullptr;
+        callback = 0;
+        totalBytes = 0;
+        resolutions = 0;
     }
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override
@@ -115,6 +239,48 @@ struct EditorResolver final : Luau::FileResolver
     }
 };
 
+Luau::FrontendOptions analysisOptions()
+{
+    Luau::FrontendOptions options;
+    options.moduleTimeLimitSec = 0.1;
+    options.runLintChecks = true;
+    options.retainFullTypeGraphs = true;
+    return options;
+}
+
+struct AnalysisSession
+{
+    EditorResolver resolver;
+    Luau::NullConfigResolver config;
+    Luau::Frontend frontend;
+    bool initialized;
+
+    AnalysisSession()
+        : frontend(Luau::SolverMode::New, &resolver, &config, analysisOptions())
+    {
+        config.defaultConfig.mode = Luau::Mode::Strict;
+        Luau::registerBuiltinGlobals(frontend, frontend.globals);
+        initialized = loadKinemiumApi(frontend);
+        for (const char* name : {"game", "workspace", "script", "Instance", "Enum", "shared", "task",
+                 "Vector2", "Vector3", "CFrame", "Color3", "BrickColor", "UDim", "UDim2", "TweenInfo",
+                 "Ray", "Region3", "Rect", "Random", "DateTime", "NumberRange", "NumberSequence",
+                 "ColorSequence", "PhysicalProperties", "RaycastParams", "OverlapParams", "warn", "typeof",
+                 "IsClient", "IsServer", "IsPlaytest"})
+            if (!Luau::tryGetGlobalBinding(frontend.globals, name))
+                Luau::addGlobalBinding(frontend.globals, name, frontend.builtinTypes->anyType, "Kinemium");
+        Luau::freeze(frontend.globals.globalTypes);
+    }
+
+    void clear()
+    {
+        frontend.clear();
+        frontend.clearStats();
+        resolver.clear();
+    }
+};
+
+thread_local std::unique_ptr<AnalysisSession> cachedAnalysis;
+
 void setInteger(lua_State* state, const char* key, unsigned value)
 {
     lua_pushinteger(state, int(value));
@@ -133,7 +299,7 @@ void pushDiagnostic(lua_State* state, Luau::Location location, const char* kind,
     lua_pushlstring(state, message.data(), message.size());
     lua_setfield(state, -2, "Message");
 }
-} // namespace
+}
 
 extern "C" int kine_luau_typecheck(lua_State* state, const char* text, size_t size, int callback)
 {
@@ -143,23 +309,13 @@ extern "C" int kine_luau_typecheck(lua_State* state, const char* text, size_t si
     const int top = lua_gettop(state);
     try
     {
-        EditorResolver resolver(state, callback, std::string_view(text, size));
-        Luau::NullConfigResolver config;
-        config.defaultConfig.mode = Luau::Mode::Strict;
-        Luau::FrontendOptions options;
-        options.moduleTimeLimitSec = 0.1;
-        options.runLintChecks = true;
-        Luau::Frontend frontend(Luau::SolverMode::New, &resolver, &config, options);
-        Luau::registerBuiltinGlobals(frontend, frontend.globals);
-        for (const char* name : {"game", "workspace", "script", "Instance", "Enum", "shared", "task",
-                 "Vector2", "Vector3", "CFrame", "Color3", "BrickColor", "UDim", "UDim2", "TweenInfo",
-                 "Ray", "Region3", "Rect", "Random", "DateTime", "NumberRange", "NumberSequence",
-                 "ColorSequence", "PhysicalProperties", "RaycastParams", "OverlapParams", "warn", "typeof",
-                 "IsClient", "IsServer", "IsPlaytest"})
-            if (!Luau::tryGetGlobalBinding(frontend.globals, name))
-                Luau::addGlobalBinding(frontend.globals, name, frontend.builtinTypes->anyType, "Kinemium");
-        Luau::freeze(frontend.globals.globalTypes);
-
+        auto analysis = std::move(cachedAnalysis);
+        if (!analysis)
+            analysis = std::make_unique<AnalysisSession>();
+        if (!analysis->initialized)
+            return 0;
+        analysis->resolver.reset(state, callback, std::string_view(text, size));
+        auto& frontend = analysis->frontend;
         Luau::CheckResult result = frontend.check(std::string(RootName));
         lua_newtable(state);
         int index = 0;
@@ -181,6 +337,8 @@ extern "C" int kine_luau_typecheck(lua_State* state, const char* text, size_t si
             lua_setfield(state, -2, "Rule");
             lua_rawseti(state, -2, ++index);
         }
+        analysis->clear();
+        cachedAnalysis = std::move(analysis);
         return 1;
     }
     catch (...)
@@ -188,6 +346,13 @@ extern "C" int kine_luau_typecheck(lua_State* state, const char* text, size_t si
         lua_settop(state, top);
         return 0;
     }
+}
+
+extern "C" int kine_luau_api_definitions(lua_State* state)
+{
+    const auto& text = apiDefinitions();
+    lua_pushlstring(state, text.data(), text.size());
+    return 1;
 }
 
 extern "C" int kine_luau_exported_types(lua_State* state, const char* text, size_t size)

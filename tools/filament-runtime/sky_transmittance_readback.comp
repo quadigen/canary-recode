@@ -1,0 +1,20 @@
+#version 450
+
+// Packs the RGBA16F transmittance LUT into a storage buffer as two packed half pairs per texel.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D transmittanceLut;
+layout(set = 0, binding = 1, std430) buffer Result { uint values[]; };
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(transmittanceLut);
+    if (any(greaterThanEqual(coord, size))) {
+        return;
+    }
+
+    const vec4 texel = imageLoad(transmittanceLut, coord);
+    const uint index = uint(coord.x + size.x * coord.y);
+    values[2u * index] = packHalf2x16(texel.rg);
+    values[2u * index + 1u] = packHalf2x16(texel.ba);
+}

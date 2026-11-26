@@ -183,5 +183,70 @@ material.baseColor=vec4(mix(vec3(0,0,1),vec3(1,0,0),valid)+rgb*0.00001,1);
 	assert(center[0] > 180 && center[2] < 40, "shared depth path did not preserve geometry depth")
 	run(&state, `post:Destroy();fog.Enabled=false`)
 	_ = capture(&env, &state)
+	run(
+		&state,
+		`
+local lighting = game:GetService("Lighting")
+for _, child in workspace:GetChildren() do
+    if child:IsA("Part") then child:Destroy() end
+end
+
+local camera = workspace.CurrentCamera
+camera.CFrame = CFrame.new(0, 2, 7)
+camera.FieldOfView = 57
+
+local sun = Instance.new("SunLightEffect", lighting)
+sun.Elevation = 90
+lighting.GlobalShadows = false
+
+local function box(name, position, size)
+    local part = Instance.new("Part", workspace)
+    part.Name = name
+    part.Anchored = true
+    part.CastShadow = true
+    part.Color = Color3.fromRGB(70, 65, 60)
+    part.Position = position
+    part.Size = size
+    return part
+end
+
+box("CeilingLeft", Vector3.new(-10.9, 5, -8), Vector3.new(18.2, 0.35, 42))
+box("CeilingRight", Vector3.new(10.9, 5, -8), Vector3.new(18.2, 0.35, 42))
+box("BackWall", Vector3.new(0, 2.5, -15), Vector3.new(40, 5, 1))
+box("Floor", Vector3.new(0, -0.2, -8), Vector3.new(40, 0.4, 42))
+local rays = lighting.SunRaysEffect
+rays.Intensity = 1
+rays.DustAmount = 0
+rays.MaxDistance = 24
+rays.SampleCount = 32
+rays.Enabled = false
+`,
+	)
+	without_rays := capture(&env, &state)
+	run(&state, `game:GetService("Lighting").SunRaysEffect.Enabled = true`)
+	open_skylight := capture(&env, &state)
+	assert(
+		int(open_skylight[0]) > int(without_rays[0]) + 8,
+		"the skylight must produce a visible shaft",
+	)
+	run(
+		&state,
+		`
+local cover = Instance.new("Part", workspace)
+cover.Anchored = true
+cover.CastShadow = true
+cover.Color = Color3.fromRGB(70, 65, 60)
+cover.Position = Vector3.new(0, 5, -8)
+cover.Size = Vector3.new(3.6, 0.35, 42)
+`,
+	)
+	closed_skylight := capture(&env, &state)
+	run(&state, `game:GetService("Lighting").SunRaysEffect.Enabled = false`)
+	closed_without_rays := capture(&env, &state)
+	assert(
+		abs(int(closed_skylight[0]) - int(closed_without_rays[0])) < 3,
+		"closing the skylight must block the volumetric shaft",
+	)
+
 	fmt.println("VOLUMETRIC_LIGHTING_SMOKE_PASSED")
 }

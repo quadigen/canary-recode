@@ -166,6 +166,10 @@ playtest_forward_line :: proc(
 ) {
 	line := strings.trim_space(raw_line)
 	if line == "" {return}
+	if strings.has_prefix(line, "KINE_FILAMENT_PASS ") {
+		fmt.printf("[Playtest %s] %s\n", source, line)
+		return
+	}
 
 	kind := ""
 	message := line
@@ -932,6 +936,12 @@ playtest_namecall :: proc(
 	bool,
 ) {
 	service := cast(^PlaytestService)object
+	switch method {
+	case "Start", "StartServer", "StartClient", "StartSinglePlayer", "Stop":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Playtest process control requires Internals capability"), true
+		}
+	}
 	if method == "PollTreeRequest" {return playtest_tree_poll(L, service)}
 	if op, ok := playtest_tree_method(method);
 	   ok {return playtest_tree_namecall(L, service, op, strings.has_prefix(method, "Request"))}

@@ -50,7 +50,10 @@ ShowSimpleMessageBox :: sdl.ShowSimpleMessageBox
 
 Init :: sdl.Init
 SetAppMetadata :: sdl.SetAppMetadata
-Quit :: sdl.Quit
+Quit :: proc() {
+	Set_GUI_Cursor(.DEFAULT)
+	sdl.Quit()
+}
 CreateWindow :: sdl.CreateWindow
 DestroyWindow :: sdl.DestroyWindow
 GetWindowID :: sdl.GetWindowID
@@ -78,6 +81,28 @@ HideCursor :: sdl.HideCursor
 WarpMouseInWindow :: sdl.WarpMouseInWindow
 CreateSystemCursor :: sdl.CreateSystemCursor
 SetCursor :: sdl.SetCursor
+
+gui_cursor: ^Cursor
+gui_cursor_kind: SystemCursor
+
+Set_GUI_Cursor :: proc(kind: SystemCursor) {
+	if gui_cursor == nil && kind == .DEFAULT {return}
+	if gui_cursor != nil && kind == gui_cursor_kind && sdl.GetCursor() == gui_cursor {return}
+	next := sdl.GetDefaultCursor()
+	if kind != .DEFAULT {
+		if next == nil {return}
+		next = sdl.CreateSystemCursor(kind)
+	}
+	if next == nil {return}
+	if !sdl.SetCursor(next) {
+		if kind != .DEFAULT {sdl.DestroyCursor(next)}
+		return
+	}
+	if gui_cursor != nil {sdl.DestroyCursor(gui_cursor)}
+	gui_cursor = nil
+	if kind != .DEFAULT {gui_cursor = next}
+	gui_cursor_kind = kind
+}
 StartTextInput :: sdl.StartTextInput
 StopTextInput :: sdl.StopTextInput
 SetClipboardText :: sdl.SetClipboardText

@@ -1,0 +1,20 @@
+# Stable C ABI shim for Valve's standalone GameNetworkingSockets.
+add_library(kine_networking STATIC steam_sockets.cpp)
+target_compile_features(kine_networking PRIVATE cxx_std_20)
+target_include_directories(kine_networking PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+if(TARGET GameNetworkingSockets::shared)
+    target_link_libraries(kine_networking PUBLIC GameNetworkingSockets::shared)
+elseif(TARGET GameNetworkingSockets::static)
+    target_link_libraries(kine_networking PUBLIC GameNetworkingSockets::static)
+else()
+    message(FATAL_ERROR "GameNetworkingSockets is required")
+endif()
+
+
+option(KINE_GNS_BUILD_TESTS "Build the SteamNetworkingSockets loopback regression test" OFF)
+if(KINE_GNS_BUILD_TESTS)
+    enable_testing()
+    add_executable(kine_gns_loopback_test test_loopback.cpp)
+    target_link_libraries(kine_gns_loopback_test PRIVATE kine_networking)
+    add_test(NAME kine_gns_loopback COMMAND kine_gns_loopback_test)
+endif()

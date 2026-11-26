@@ -17,6 +17,7 @@ PhysicsModel :: struct {
 	aerodynamics_enabled:   bool,
 	drag_multiplier:        f32,
 	lift_multiplier:        f32,
+	max_linear_velocity:    f32,
 	network_update_rate:    f32,
 	replicate_velocity:     bool,
 	interpolation_enabled:  bool,
@@ -30,6 +31,7 @@ PHYSICS_MODEL_PROPERTIES := [?]string {
 	"AerodynamicsEnabled",
 	"DragMultiplier",
 	"LiftMultiplier",
+	"MaxLinearVelocity",
 	"NetworkUpdateRate",
 	"ReplicateVelocity",
 	"InterpolationEnabled",
@@ -60,6 +62,7 @@ physics_model_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) 
 	model.aerodynamics_enabled = true
 	model.drag_multiplier = 1
 	model.lift_multiplier = 1
+	model.max_linear_velocity = 500
 	model.replicate_velocity = true
 	model.interpolation_enabled = true
 	model.interpolation_delay = -1
@@ -79,6 +82,7 @@ physics_model_clone :: proc(source, destination: ^Object) {
 	dst.aerodynamics_enabled = src.aerodynamics_enabled
 	dst.drag_multiplier = src.drag_multiplier
 	dst.lift_multiplier = src.lift_multiplier
+	dst.max_linear_velocity = src.max_linear_velocity
 	dst.network_update_rate = src.network_update_rate
 	dst.replicate_velocity = src.replicate_velocity
 	dst.interpolation_enabled = src.interpolation_enabled
@@ -105,6 +109,8 @@ physics_model_get :: proc(
 		vm.PushNumber(L, f64(model.drag_multiplier))
 	case "LiftMultiplier":
 		vm.PushNumber(L, f64(model.lift_multiplier))
+	case "MaxLinearVelocity":
+		vm.PushNumber(L, f64(model.max_linear_velocity))
 	case "NetworkUpdateRate":
 		vm.PushNumber(L, f64(model.network_update_rate))
 	case "ReplicateVelocity":
@@ -150,6 +156,8 @@ physics_model_set :: proc(
 		physics_model_set_number(L, index, &model.drag_multiplier, 0, 100)
 	case "LiftMultiplier":
 		physics_model_set_number(L, index, &model.lift_multiplier, 0, 100)
+	case "MaxLinearVelocity":
+		physics_model_set_number(L, index, &model.max_linear_velocity, 1, 10000)
 	case "NetworkUpdateRate":
 		physics_model_set_number(L, index, &model.network_update_rate, 0, 120)
 		if model.network_update_rate >

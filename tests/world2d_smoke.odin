@@ -177,6 +177,77 @@ assert(w2.ViewportSize == Vector2.new(320, 240))
 assert(scaled.AbsolutePosition == Vector2.new(150, 110), tostring(scaled.AbsolutePosition))
 `,
 	)
+
+	run(
+		&v,
+		`
+oversized = Instance.new("Part2D", world)
+oversized.Anchored = false
+oversized.Size = UDim2.fromOffset(1e25, 25)
+`,
+	)
+	runtime.Environment_Update_Step(&e, &v, 1.0 / 60)
+	run(
+		&v,
+		`
+assert(w2.BodyCount == 2, "oversized collider entered physics")
+oversized.Size = UDim2.fromOffset(20, 20)
+oversized.Velocity = Vector2.new(1e25, 0)
+`,
+	)
+	runtime.Environment_Update_Step(&e, &v, 1.0 / 60)
+	run(
+		&v,
+		`
+assert(w2.BodyCount == 2, "unbounded velocity entered physics")
+oversized.Velocity = Vector2.zero
+oversized.Density = 1e25
+`,
+	)
+	runtime.Environment_Update_Step(&e, &v, 1.0 / 60)
+	run(
+		&v,
+		`
+assert(w2.BodyCount == 2, "unbounded density entered physics")
+oversized.Density = 1
+assert(not pcall(function() oversized:ApplyImpulse(Vector2.new(1e25, 0)) end))
+assert(not pcall(function() oversized:ApplyAngularImpulse(1e25) end))
+`,
+	)
+	runtime.Environment_Update_Step(&e, &v, 1.0 / 60)
+	run(
+		&v,
+		`
+assert(w2.BodyCount == 3, "corrected physical properties did not recover")
+oversized:Destroy()
+w2.Gravity = Vector2.new(0, 0)
+outerGroup = Instance.new("RigidBody2D", world)
+outerPart = Instance.new("Part2D", outerGroup)
+outerPart.Size = UDim2.fromOffset(20, 20)
+outerPart.Position = UDim2.fromOffset(60, -200)
+outerPart.Anchored = false
+outerPart.CanCollide = false
+innerGroup = Instance.new("RigidBody2D", outerGroup)
+innerPart = Instance.new("Part2D", innerGroup)
+innerPart.Size = UDim2.fromOffset(20, 20)
+innerPart.Position = UDim2.fromOffset(60, -1000)
+innerPart.Anchored = false
+innerPart.CanCollide = false
+workspace.SimulatePhysics = true
+outerPart:ApplyImpulse(Vector2.new(250, 0))
+`,
+	)
+	for _ in 0 ..< 20 {runtime.Environment_Update_Step(&e, &v, 1.0 / 60)}
+	run(
+		&v,
+		`
+assert(w2.BodyCount == 4, tostring(w2.BodyCount))
+assert(outerPart.Position.X.Offset > 61, "outer assembly did not move")
+assert(math.abs(innerPart.Position.X.Offset - 60) < 0.1,
+    "nested assembly was incorrectly welded to its parent")
+outerGroup:Destroy()
+`,
+	)
 	vm.Close(&v)
 	runtime.Environment_Destroy(&e)
 	fmt.println("WORLD2D_SMOKE_PASSED")

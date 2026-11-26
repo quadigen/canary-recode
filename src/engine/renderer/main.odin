@@ -2,6 +2,8 @@
 package renderer
 
 import "core:fmt"
+import "core:os"
+import "core:strconv"
 import "core:strings"
 import "core:time"
 
@@ -10,6 +12,7 @@ import sdl3 "../platform"
 import profiling "../profiling"
 import target "../target"
 import tracy "../util/odin-tracy"
+import native_compositor "compositor"
 
 
 KINE_RENDERER_GL :: #config(KINE_RENDERER_GL, false)
@@ -21,19 +24,28 @@ when !KINE_RENDERER_GL {
 	}
 
 	Filament_Profile_State :: struct {
-		zones: [8]tracy.ZoneCtx,
-		depth: int,
+		zones:   [8]tracy.ZoneCtx,
+		metrics: [8]profiling.Zone,
+		depth:   int,
 	}
 
 	filament_profile_callback :: proc "c" (user: rawptr, phase: cstring, begin: bool) {
 		context = tracy.DefaultContext()
 		state := cast(^Filament_Profile_State)user
+		if state == nil {return}
 		if begin {
-			state.zones[state.depth] = tracy.ZoneBegin(true, 0, string(phase), 0xC678DD)
+
+			if state.depth >= 0 && state.depth < len(state.zones) {
+				when tracy.TRACY_ENABLE {state.zones[state.depth] = tracy.ZoneBegin(true, 0, string(phase), 0xC678DD)}
+				state.metrics[state.depth] = profiling.Begin_Manual(string(phase), 0xC678DD)
+			}
 			state.depth += 1
-		} else {
+		} else if state.depth > 0 {
 			state.depth -= 1
-			tracy.ZoneEnd(state.zones[state.depth])
+			if state.depth < len(state.zones) {
+				when tracy.TRACY_ENABLE {tracy.ZoneEnd(state.zones[state.depth])}
+				profiling.End(state.metrics[state.depth])
+			}
 		}
 	}
 
@@ -51,6 +63,7 @@ when !KINE_RENDERER_GL {
 			state.renderer.DrawOverlay != nil &&
 			(state.renderer.OverlayNeedsBackdrop == nil ||
 					state.renderer.OverlayNeedsBackdrop(state.renderer.UserData))
+
 	}
 
 	Filament_Context :: kineffi.KineFilamentContext
@@ -100,7 +113,9 @@ when !KINE_RENDERER_GL {
 		ViewportRect_Host:    bool,
 		Cache2D:              bool,
 		Render3DCheck:        proc(user_data: rawptr) -> bool,
+		BackgroundPlaytest:   proc(user_data: rawptr) -> bool,
 		OverlayNeedsBackdrop: proc(user_data: rawptr) -> bool,
+		FrameMaintenance:     proc(user_data: rawptr, budget_ns: u64),
 		MouseScale:           [2]f32,
 		CurrentEvent:         ^sdl3.Event,
 		Window:               ^sdl3.Window,
@@ -255,7 +270,20 @@ when !KINE_RENDERER_GL {
 		)
 		_ = sdl3.GetWindowSizeInPixels(window, &width, &height)
 
+		use_native_compositor := !#config(KINE_ANDROID, false)
+		window_id := u32(sdl3.GetWindowID(window))
+		native_swapchain_registered :=
+			use_native_compositor &&
+			native_compositor.register_swapchain(
+				window_id,
+				os.get_env("KINE_VULKAN_OFFSCREEN", context.temp_allocator) == "1",
+			)
+		if use_native_compositor && !native_swapchain_registered {
+			show_fatal_error("Odin compositor registration failed", window)
+			return
+		}
 		filament := kineffi.Kine_Filament_CreateForVulkanCompositorWindow(window, width, height)
+		if native_swapchain_registered {native_compositor.unregister_swapchain(window_id)}
 		if filament == nil {
 			show_fatal_error("Failed to create the Filament Vulkan renderer", window)
 			return
@@ -280,13 +308,41 @@ when !KINE_RENDERER_GL {
 			show_fatal_error("Failed to create the Vulkan compositor", window)
 			return
 		}
+		if use_native_compositor &&
+		   kineffi.Kine_VulkanCompositor_UsesOdinBackend(compositor) == 0 {
+			show_fatal_error("The Vulkan renderer did not initialize the Odin compositor", window)
+			return
+		}
 		renderer.Compositor = compositor
+		wsi: native_compositor.Backend
+		if use_native_compositor {
+			if !native_compositor.attach(&wsi, compositor) {
+				show_fatal_error("Failed to attach Odin Vulkan presentation", window)
+				return
+			}
+			fmt.eprintln("[Kine] Odin compositor and Vulkan presentation enabled")
+		}
+		defer {
+			native_compositor.detach(&wsi)
+			profiling.record_present_metrics({})
+			profiling.latest_render_work = {}
+			profiling.latest_queue_stages = {}
+			profiling.latest_queue_detail = {}
+		}
 
 		running := true
 		drawable := true
 		frame_width, frame_height := width, height
 		requested_width, requested_height := width, height
 		previous_ticks := sdl3.GetTicksNS()
+		background_fps := 15
+		if value := os.get_env("KINE_PLAYTEST_BACKGROUND_FPS", context.temp_allocator);
+		   value != "" {
+			if parsed, ok := strconv.parse_int(value); ok && parsed >= 0 && parsed <= 240 {
+				background_fps = parsed
+			}
+		}
+		last_background_frame: u64
 
 		tracy.SetThreadName("Main/Render")
 
@@ -362,10 +418,41 @@ when !KINE_RENDERER_GL {
 				}
 			}
 
+			if kineffi.Kine_VulkanCompositor_IsDeviceLost(compositor) != 0 {
+				fmt.eprintln(
+					"[Kine] Vulkan device lost; stopping renderer to avoid repeated GPU submissions",
+				)
+				break
+			}
+
 			if !running || !drawable {
 				previous_ticks = sdl3.GetTicksNS()
 				sdl3.Delay(10)
 				continue
+			}
+
+			when !#config(KINE_ANDROID, false) {
+				background :=
+					background_fps > 0 &&
+					target.is_editor() &&
+					renderer.BackgroundPlaytest != nil &&
+					sdl3.GetKeyboardFocus() != window &&
+					renderer.BackgroundPlaytest(renderer.UserData)
+				if background {
+					now := sdl3.GetTicksNS()
+					delay := native_compositor.background_frame_delay(
+						now,
+						last_background_frame,
+						background_fps,
+					)
+					if delay > 0 {
+						sdl3.Delay(delay)
+						continue
+					}
+					last_background_frame = now
+				} else {
+					last_background_frame = 0
+				}
 			}
 
 			pixel_width, pixel_height: i32
@@ -375,6 +462,11 @@ when !KINE_RENDERER_GL {
 			   pixel_height != requested_height ||
 			   kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {
 				kineffi.Kine_Filament_Resize(filament, pixel_width, pixel_height)
+				if use_native_compositor &&
+				   kineffi.Kine_VulkanCompositor_UsesOdinBackend(compositor) == 0 {
+					show_fatal_error("Odin compositor unavailable after Vulkan resize", window)
+					break
+				}
 				if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 ||
 				   kineffi.Kine_VulkanCompositor_IsReady(compositor) == 0 {
 					fmt.eprintf(
@@ -423,12 +515,28 @@ when !KINE_RENDERER_GL {
 				}
 			}
 
+			frame_profile: Filament_Profile_State
+			capture_native := tracy.TRACY_ENABLE || profiling.is_collection_enabled()
+			if capture_native {
+				kineffi.Kine_VulkanCompositor_SetFrameProfileCallback(
+					compositor,
+					filament_profile_callback,
+					&frame_profile,
+				)
+			}
+			defer {if capture_native {kineffi.Kine_VulkanCompositor_SetFrameProfileCallback(compositor, nil, nil)}}
 			base_surface: rawptr
 			{
 				tracy.ZoneNC("Vulkan BeginFrame", 0x56B6C2)
 				z := profiling.Begin("Vulkan BeginFrame", 0x56B6C2)
 				base_surface = kineffi.Kine_VulkanCompositor_BeginFrame(compositor)
 				if base_surface == nil {
+					if kineffi.Kine_VulkanCompositor_IsDeviceLost(compositor) != 0 {
+						fmt.eprintln(
+							"[Kine] Vulkan device lost during acquisition; stopping renderer",
+						)
+						break
+					}
 					if kineffi.Kine_VulkanCompositor_NeedsResize(compositor) != 0 {continue}
 					error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 					fmt.eprintf("Vulkan frame acquisition failed: %s\n", error)
@@ -478,7 +586,8 @@ when !KINE_RENDERER_GL {
 			renderer.SkiaSurface = nil
 			apply_viewport_rect(renderer)
 
-			world_3d := renderer.RenderFilament && renderer.HasViewportRect
+			world_eligible := renderer.RenderFilament && renderer.HasViewportRect
+			world_3d := world_eligible
 			if world_3d &&
 			   !xr_active &&
 			   renderer.Render3DCheck != nil &&
@@ -499,29 +608,29 @@ when !KINE_RENDERER_GL {
 			if rendered_3d {
 				tracy.ZoneNC("Filament RenderFrame", 0xC678DD)
 				z := profiling.Begin("Filament RenderFrame", 0xC678DD)
-				when tracy.TRACY_ENABLE {
-					frame_profile: Filament_Profile_State
+				if capture_native {
 					kineffi.Kine_Filament_SetFrameProfileCallback(
 						filament,
 						filament_profile_callback,
 						&frame_profile,
 					)
-					kineffi.Kine_Filament_Viewport_RenderFrameWithCpuWork(
+				}
+				kineffi.Kine_Filament_Viewport_RenderFrameWithCpuWork(
+					filament,
+					delta_time,
+					world_3d,
+					prepare_overlay_backdrop,
+					&backdrop_preparation,
+				)
+				if capture_native {kineffi.Kine_Filament_SetFrameProfileCallback(filament, nil, nil)}
+				if profiling.is_collection_enabled() {
+					frame_id: u32
+					gpu_ns: u64
+					if kineffi.Kine_Filament_GetLatestGpuFrameTime(
 						filament,
-						delta_time,
-						world_3d,
-						prepare_overlay_backdrop,
-						&backdrop_preparation,
-					)
-					kineffi.Kine_Filament_SetFrameProfileCallback(filament, nil, nil)
-				} else {
-					kineffi.Kine_Filament_Viewport_RenderFrameWithCpuWork(
-						filament,
-						delta_time,
-						world_3d,
-						prepare_overlay_backdrop,
-						&backdrop_preparation,
-					)
+						&frame_id,
+						&gpu_ns,
+					) {profiling.record_gpu_frame(frame_id, gpu_ns)}
 				}
 			}
 
@@ -532,6 +641,7 @@ when !KINE_RENDERER_GL {
 				overlay_surface: rawptr
 				{
 					tracy.ZoneNC("Vulkan Overlay Acquire", 0x56B6C2)
+					zone := profiling.Begin("Vulkan Overlay Acquire", 0x56B6C2)
 					overlay_surface = kineffi.Kine_VulkanCompositor_BeginOverlay(compositor)
 				}
 				if overlay_surface != nil {
@@ -539,8 +649,7 @@ when !KINE_RENDERER_GL {
 					needs_backdrop :=
 						backdrop_preparation.required if rendered_3d else (renderer.OverlayNeedsBackdrop == nil || renderer.OverlayNeedsBackdrop(renderer.UserData))
 					if needs_backdrop {
-
-
+						zone := profiling.Begin("Vulkan Backdrop Snapshot", 0x56B6C2)
 						kineffi.Kine_Skia_Surface_SetBackdropFromSurface(
 							skia_overlay,
 							skia_overlay if rendered_3d else cast(^kineffi.KineSkiaSurface)base_surface,
@@ -588,12 +697,20 @@ when !KINE_RENDERER_GL {
 			}
 
 			present_ok: bool
+			present_started := sdl3.GetTicksNS()
+			begin_present_wait := kineffi.Kine_VulkanCompositor_GetPresentWaitNs(compositor)
 			{
 				tracy.ZoneNC("Vulkan Present", 0xD19A66)
 				z := profiling.Begin("Vulkan Present", 0xD19A66)
 				present_ok = kineffi.Kine_VulkanCompositor_EndFrame(compositor) != 0
 			}
 			if !present_ok {
+				if kineffi.Kine_VulkanCompositor_IsDeviceLost(compositor) != 0 {
+					fmt.eprintln(
+						"[Kine] Vulkan device lost during presentation; stopping renderer",
+					)
+					break
+				}
 				error := kineffi.Kine_VulkanCompositor_GetLastError(compositor)
 				fmt.eprintf("Vulkan presentation failed: %s\n", error)
 
@@ -604,6 +721,90 @@ when !KINE_RENDERER_GL {
 				previous_ticks = sdl3.GetTicksNS()
 				sdl3.Delay(10)
 				continue
+			}
+			if rendered_3d && world_3d && !xr_active {
+				finished := sdl3.GetTicksNS()
+				kineffi.Kine_Filament_ReportFrameTiming(
+					filament,
+					f32(finished - now) / 1_000_000_000.0,
+					f32(finished - present_started + begin_present_wait) / 1_000_000_000.0,
+				)
+			}
+			if rendered_3d && world_3d && !xr_active && renderer.FrameMaintenance != nil {
+				hz := kineffi.Kine_Filament_GetDisplayRefreshRate(filament)
+				if hz >= 20 && hz <= 1000 {
+					frame_budget := u64(1_000_000_000.0 / f64(hz))
+					elapsed := sdl3.GetTicksNS() - now
+					if elapsed + 500_000 < frame_budget {
+						budget := min(u64(450_000), (frame_budget - elapsed - 500_000) / 2)
+						renderer.FrameMaintenance(renderer.UserData, budget)
+					}
+				}
+			}
+			if profiling.is_collection_enabled() {
+				if wsi.attached {
+					completed, call_ns := native_compositor.present_latest(&wsi.presentation)
+					hits, misses: u64
+					kineffi.Kine_VulkanCompositor_GetPrefetchStats(compositor, &hits, &misses)
+					profiling.record_present_metrics(
+						{
+							completed = completed,
+							call_ns = call_ns,
+							drain_ns = kineffi.Kine_VulkanCompositor_GetPresentWaitNs(compositor),
+							prefetch_hits = hits,
+							prefetch_misses = misses,
+							active = true,
+							asynchronous = wsi.presentation.worker != nil,
+						},
+					)
+				}
+				queue_id, queue_ns: u64
+				if kineffi.Kine_VulkanCompositor_GetLatestQueueTiming(
+					   compositor,
+					   &queue_id,
+					   &queue_ns,
+				   ) !=
+				   0 {
+					profiling.record_queue_frame(queue_id, queue_ns)
+				}
+				stages: profiling.Queue_Stages
+				if kineffi.Kine_VulkanCompositor_GetLatestQueueStages(
+					   compositor,
+					   &stages.id,
+					   &stages.base_ns,
+					   &stages.render_ns,
+				   ) !=
+				   0 {
+					profiling.latest_queue_stages = stages
+				} else {
+					profiling.latest_queue_stages = {}
+				}
+				detail: profiling.Queue_Detail
+				if kineffi.Kine_VulkanCompositor_GetLatestQueueDetail(
+					   compositor,
+					   &detail.id,
+					   &detail.filament_ns,
+					   &detail.overlay_ns,
+				   ) !=
+				   0 {
+					profiling.latest_queue_detail = detail
+				} else {
+					profiling.latest_queue_detail = {}
+				}
+			}
+			if profiling.is_collection_enabled() {
+				handles, pages: u32
+				renders: u64
+				kineffi.Kine_Filament_Viewport_Stats(filament, &handles, &pages, &renders)
+				profiling.record_render_work(
+					world_3d,
+					world_eligible,
+					handles,
+					pages,
+					renders,
+					kineffi.Kine_Filament_Viewport_ReusedRenders(filament),
+					kineffi.Kine_Filament_Viewport_PersistentReuses(filament),
+				)
 			}
 			if first_frame {
 				first_frame = false

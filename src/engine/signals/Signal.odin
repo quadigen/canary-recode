@@ -1,6 +1,7 @@
 package signals
 
 import datatypes "../datatypes"
+import profiling "../profiling"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
@@ -11,16 +12,17 @@ CONNECTION_TAG :: 50
 Native_Listener_Fn :: proc "c" (ctx: rawptr, L: ^vm.State) -> i32
 
 Listener :: struct {
-	id:           u64,
-	callback_ref: i32,
-	connected:    bool,
-	once:         bool,
-	capabilities: vm.Thread_Security_Capabilities,
-	actor_id:     u64,
-	parallel:     bool,
-	native:       Native_Listener_Fn,
-	native_ctx:   rawptr,
-	connection:   ^KinemiumConnection,
+	id:              u64,
+	callback_ref:    i32,
+	callback_source: string,
+	connected:       bool,
+	once:            bool,
+	capabilities:    vm.Thread_Security_Capabilities,
+	actor_id:        u64,
+	parallel:        bool,
+	native:          Native_Listener_Fn,
+	native_ctx:      rawptr,
+	connection:      ^KinemiumConnection,
 }
 
 Waiter :: struct {
@@ -32,10 +34,11 @@ Waiter :: struct {
 }
 
 Pending_Callback :: struct {
-	callback_ref: i32,
-	capabilities: vm.Thread_Security_Capabilities,
-	actor_id:     u64,
-	parallel:     bool,
+	callback_ref:    i32,
+	callback_source: string,
+	capabilities:    vm.Thread_Security_Capabilities,
+	actor_id:        u64,
+	parallel:        bool,
 }
 
 Signal :: struct {
@@ -81,16 +84,34 @@ find_listener :: proc(signal: ^Signal, id: u64) -> ^Listener {
 	return nil
 }
 
+detach_listener :: proc(signal: ^Signal, listener: Listener) {
+	if listener.native == nil && signal.registry != nil && signal.registry.L != nil {
+		vm.ReleaseValue(signal.registry.L, listener.callback_ref)
+	}
+	if listener.connection != nil {
+		listener.connection.signal = nil
+	}
+}
+
+disconnect_matching_listeners :: proc(signal: ^Signal, once_only: bool) {
+	if signal == nil {return}
+	write := 0
+	for listener in signal.listeners {
+		if listener.connected && (!once_only || listener.once) {
+			detach_listener(signal, listener)
+		} else {
+			signal.listeners[write] = listener
+			write += 1
+		}
+	}
+	resize(&signal.listeners, write)
+}
+
 disconnect_listener :: proc(signal: ^Signal, id: u64) {
 	if signal == nil {return}
 	for listener, index in signal.listeners {
 		if listener.id == id && listener.connected {
-			if listener.native == nil && signal.registry != nil && signal.registry.L != nil {
-				vm.ReleaseValue(signal.registry.L, listener.callback_ref)
-			}
-			if listener.connection != nil {
-				listener.connection.signal = nil
-			}
+			detach_listener(signal, listener)
 			ordered_remove(&signal.listeners, index)
 			return
 		}
@@ -184,6 +205,7 @@ Connect_Lua :: proc(
 		Listener {
 			id = signal.next_id,
 			callback_ref = callback_ref,
+			callback_source = profiling.callback_source(L, callback_index),
 			connected = true,
 			once = once,
 			capabilities = vm.GetThreadSecurityCapabilities(L),
@@ -206,42 +228,42 @@ Connect_Lua :: proc(
 }
 
 fire_callback :: proc(
-	signal: ^Signal,
+	registry: ^Registry,
 	L: ^vm.State,
-	callback_ref: i32,
+	callback_index: int,
+	callback_source: string,
 	capabilities: vm.Thread_Security_Capabilities,
 	first_argument: int,
 	argument_count: int,
 	actor_id: u64,
 	parallel, deferred: bool,
 ) {
-	vm.PushRegistryReference(L, callback_ref)
-	callback_index := vm.StackTop(L)
+	top := vm.StackTop(L)
+	if !vm.CheckStack(L, 8) {return}
+	defer vm.SetStackTop(L, top)
 	thread := vm.NewThread(L)
+	if thread == nil {return}
+	profiling.set_callback_source(thread, callback_source)
 	vm.SetThreadSecurityCapabilities(thread, capabilities)
 	vm.SetThreadActorPhase(thread, actor_id, parallel)
 	vm.CopyValueToThread(L, thread, callback_index)
 	for offset := 0; offset < argument_count; offset += 1 {
 		vm.CopyValueToThread(L, thread, first_argument + offset)
 	}
-	thread_ref := vm.RetainValue(L)
-	vm.Pop(L, 2)
 	if parallel || deferred {
-		if signal.registry.schedule_callback != nil {
-			signal.registry.schedule_callback(
-				signal.registry.schedule_ctx,
+		if registry.schedule_callback != nil {
+			thread_ref := vm.RetainValue(L)
+			registry.schedule_callback(
+				registry.schedule_ctx,
 				thread,
 				thread_ref,
 				argument_count,
 				parallel,
 			)
-		} else {
-			vm.ReleaseValue(signal.registry.L, thread_ref)
 		}
 		return
 	}
 	_, _, err := vm.ResumeThread(thread, L, argument_count)
-	vm.ReleaseValue(signal.registry.L, thread_ref)
 	if err != "" {
 		fmt.eprintf("Signal callback failed: %s\n", err)
 		delete(err)
@@ -266,45 +288,71 @@ signal_fire_arguments :: proc(
 		return
 	}
 
-	callbacks: [dynamic]Pending_Callback
-	native_listeners: [dynamic]Listener
+	registry := signal.registry
+	top := vm.StackTop(L)
+	defer vm.SetStackTop(L, top)
+	argument_start := top + first_argument + 1 if first_argument < 0 else first_argument
+	listener_count := len(signal.listeners)
+	stack_snapshot := listener_count <= 256 && vm.CheckStack(L, listener_count + 8)
+	local_callbacks: [32]Pending_Callback
+	local_native: [8]Listener
+	callbacks := local_callbacks[:]
+	native_listeners := local_native[:]
+	callback_count, native_count: int
+	if listener_count > len(local_native) {
+		for listener in signal.listeners {
+			if !listener.connected {continue}
+			if listener.native != nil {native_count += 1} else {callback_count += 1}
+		}
+		if callback_count > len(callbacks) {callbacks = make([]Pending_Callback, callback_count)}
+		if native_count > len(native_listeners) {native_listeners = make([]Listener, native_count)}
+	}
+	defer {
+		if callback_count > len(local_callbacks) {delete(callbacks)}
+		if native_count > len(local_native) {delete(native_listeners)}
+	}
+	has_once := false
+	ci, ni: int
 	for listener in signal.listeners {
 		if !listener.connected {continue}
+		has_once = has_once || listener.once
 		if listener.native != nil {
-			append(&native_listeners, listener)
+			native_listeners[ni] = listener
+			ni += 1
 			continue
 		}
 		vm.PushRegistryReference(L, listener.callback_ref)
-		append(
-			&callbacks,
-			Pending_Callback {
-				callback_ref = vm.RetainValue(L),
-				capabilities = listener.capabilities,
-				actor_id = listener.actor_id,
-				parallel = listener.parallel,
-			},
-		)
-		vm.Pop(L)
-	}
-
-
-	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
-		if signal.listeners[index].once {
-			disconnect_listener(signal, signal.listeners[index].id)
+		ref: i32
+		if stack_snapshot {
+			ref = i32(vm.StackTop(L))
+		} else {
+			ref = vm.RetainValue(L)
+			vm.Pop(L)
 		}
+		callbacks[ci] = {
+			callback_ref    = ref,
+			callback_source = listener.callback_source,
+			capabilities    = listener.capabilities,
+			actor_id        = listener.actor_id,
+			parallel        = listener.parallel,
+		}
+		ci += 1
 	}
+
+
+	if has_once {disconnect_matching_listeners(signal, true)}
 
 	waiters := signal.waiters
 	signal.waiters = nil
 	for waiter in waiters {
 		for offset := 0; offset < argument_count; offset += 1 {
-			vm.CopyValueToThread(L, waiter.thread, first_argument + offset)
+			vm.CopyValueToThread(L, waiter.thread, argument_start + offset)
 		}
 		vm.SetThreadSecurityCapabilities(waiter.thread, waiter.capabilities)
 		vm.SetThreadActorPhase(waiter.thread, waiter.actor_id, waiter.parallel)
-		if (waiter.parallel || deferred) && signal.registry.schedule_callback != nil {
-			signal.registry.schedule_callback(
-				signal.registry.schedule_ctx,
+		if (waiter.parallel || deferred) && registry.schedule_callback != nil {
+			registry.schedule_callback(
+				registry.schedule_ctx,
 				waiter.thread,
 				waiter.thread_ref,
 				argument_count,
@@ -313,7 +361,7 @@ signal_fire_arguments :: proc(
 			continue
 		}
 		_, _, err := vm.ResumeThread(waiter.thread, L, argument_count)
-		vm.ReleaseValue(signal.registry.L, waiter.thread_ref)
+		vm.ReleaseValue(registry.L, waiter.thread_ref)
 		if err != "" {
 			fmt.eprintf("Signal waiter failed: %s\n", err)
 			delete(err)
@@ -321,31 +369,43 @@ signal_fire_arguments :: proc(
 	}
 	delete(waiters)
 
-	for callback, index in callbacks {
+	for callback in callbacks[:ci] {
+		callback_index := int(callback.callback_ref)
+		if !stack_snapshot {
+			vm.PushRegistryReference(L, callback.callback_ref)
+			callback_index = vm.StackTop(L)
+		}
 		fire_callback(
-			signal,
+			registry,
 			L,
-			callback.callback_ref,
+			callback_index,
+			callback.callback_source,
 			callback.capabilities,
-			first_argument,
+			argument_start,
 			argument_count,
 			callback.actor_id,
 			callback.parallel,
 			deferred,
 		)
-		vm.ReleaseValue(signal.registry.L, callback.callback_ref)
-	}
-	delete(callbacks)
-
-	for listener in native_listeners {
-		if listener.native == nil {continue}
-		thread := vm.NewThread(L)
-		for offset := 0; offset < argument_count; offset += 1 {
-			vm.CopyValueToThread(L, thread, first_argument + offset)
+		if !stack_snapshot {
+			vm.Pop(L)
+			vm.ReleaseValue(registry.L, callback.callback_ref)
 		}
-		listener.native(listener.native_ctx, thread)
 	}
-	delete(native_listeners)
+	for listener in native_listeners[:ni] {
+		if listener.native == nil {continue}
+		if !vm.CheckStack(L, 8) {continue}
+		native_top := vm.StackTop(L)
+		thread := vm.NewThread(L)
+		if thread != nil {
+			for offset := 0; offset < argument_count; offset += 1 {
+				vm.CopyValueToThread(L, thread, argument_start + offset)
+			}
+			listener.native(listener.native_ctx, thread)
+		}
+		vm.SetStackTop(L, native_top)
+	}
+
 }
 
 
@@ -437,9 +497,7 @@ signal_namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		if !signal_has_internal_fire_capability(L) {
 			return vm.RaiseError(L, "Signal:DisconnectAll is restricted to internal scripts"), true
 		}
-		for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
-			disconnect_listener(signal, signal.listeners[index].id)
-		}
+		disconnect_matching_listeners(signal, false)
 		return 0, true
 	}
 	return 0, false
@@ -451,12 +509,7 @@ signal_destroy :: proc(value, ctx: rawptr) {
 		return
 	}
 	signal.destroyed = true
-	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
-		if listener := &signal.listeners[index]; listener.connection != nil {
-			listener.connection.signal = nil
-		}
-		disconnect_listener(signal, signal.listeners[index].id)
-	}
+	disconnect_matching_listeners(signal, false)
 	if signal.registry != nil && signal.registry.L != nil {
 		for waiter in signal.waiters {vm.ReleaseValue(signal.registry.L, waiter.thread_ref)}
 	}
@@ -471,12 +524,7 @@ Destroy :: proc(signal: ^Signal) {
 		return
 	}
 	signal.destroyed = true
-	for index := len(signal.listeners) - 1; index >= 0; index -= 1 {
-		if listener := &signal.listeners[index]; listener.connection != nil {
-			listener.connection.signal = nil
-		}
-		disconnect_listener(signal, signal.listeners[index].id)
-	}
+	disconnect_matching_listeners(signal, false)
 	if signal.registry != nil && signal.registry.L != nil {
 		for waiter in signal.waiters {vm.ReleaseValue(signal.registry.L, waiter.thread_ref)}
 	}

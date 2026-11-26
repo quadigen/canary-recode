@@ -8,11 +8,11 @@ import classes "../classes"
 import vm "../vm"
 import "core:c"
 import "core:os"
+import "core:path/filepath"
 
 
 KINE_ZSTD_LEVEL :: kineffi.ZSTD_CLEVEL_DEFAULT
 
-// Stream budget is shared with the raw KINE parser (kine.odin).
 
 is_zstd_frame :: proc(data: []u8) -> bool {
 	if len(data) < 4 {
@@ -100,7 +100,9 @@ Has_Path_Assets :: proc(data: []u8) -> bool {
 		if !Error_Is_None(err) {return false}
 	}
 	defer if raw_data(raw) != raw_data(data) {delete(raw)}
-	reader := Reader{data = raw}
+	reader := Reader {
+		data = raw,
+	}
 	defer Error_Delete(&reader.err)
 	if !read_kine_header(&reader) || reader.version < KINE_ASSET_VERSION {return false}
 	count, ok := read_u32(&reader)
@@ -121,7 +123,7 @@ Has_Path_Assets :: proc(data: []u8) -> bool {
 	return false
 }
 
-// Network clients load the file bundle without instantiating the server's map.
+
 Load_Embedded_Assets :: proc(data: []u8) -> Error {
 	raw := data
 	if is_zstd_frame(data) {
@@ -130,7 +132,9 @@ Load_Embedded_Assets :: proc(data: []u8) -> Error {
 		if !Error_Is_None(err) {return err}
 	}
 	defer if raw_data(raw) != raw_data(data) {delete(raw)}
-	reader := Reader{data = raw}
+	reader := Reader {
+		data = raw,
+	}
 	defer Error_Delete(&reader.err)
 	if !read_kine_header(&reader) {return Error_Take(&reader.err)}
 	if reader.version >= KINE_ASSET_VERSION && !read_asset_table(&reader) {
@@ -184,74 +188,134 @@ Serialize_To_File :: proc(
 	return Write_File_Data(path, data)
 }
 
-// Write a complete snapshot without accessing the VM or the live asset store.
-Write_File_Data :: proc(path: string, data: []u8) -> Error {
-	compressed, compress_err := compress_kine(data)
-	defer Error_Delete(&compress_err)
-	defer delete(compressed)
-	if Error_Is_None(compress_err) && len(compressed) < len(data) {
-		write_err := os.write_entire_file(path, compressed)
-		if write_err != nil {
-			return Error_Make(
-				.File_Write_Failed,
-				-1,
-				"could not write %d compressed bytes to %s: %v",
-				len(compressed),
-				path,
-				write_err,
-			)
-		}
-		return Error_None
-	}
 
-	write_err := os.write_entire_file(path, data)
-	if write_err != nil {
-		return Error_Make(
-			.File_Write_Failed,
-			-1,
-			"could not write %d bytes to %s: %v",
-			len(data),
-			path,
-			write_err,
-		)
-	}
-	return Error_None
+Write_File_Data :: proc(path: string, data: []u8) -> Error {
+	return Write_File_Data_Progress(path, data, nil)
 }
 
+Kine_Write_Progress_Callback :: proc(value: f32, userdata: rawptr)
 
-Write_File_Data_Progress :: proc(path: string, data: []u8, progress: ^f32) -> Error {
-	if progress != nil {progress^ = 0.1}
+kine_write_progress :: proc(
+	progress: ^f32,
+	callback: Kine_Write_Progress_Callback,
+	userdata: rawptr,
+	value: f32,
+) {
+	if progress != nil {progress^ = value}
+	if callback != nil {callback(value, userdata)}
+}
+
+Write_File_Data_Progress :: proc(
+	path: string,
+	data: []u8,
+	progress: ^f32,
+	callback: Kine_Write_Progress_Callback = nil,
+	userdata: rawptr = nil,
+) -> Error {
+	if path == "" {return Error_Make(.Invalid_Argument, -1, "the destination path is empty")}
+	kine_write_progress(progress, callback, userdata, 0.1)
 	compressed, compress_err := compress_kine(data)
 	defer Error_Delete(&compress_err)
 	defer delete(compressed)
 	payload := data
 	if Error_Is_None(compress_err) && len(compressed) < len(data) {payload = compressed}
-	if progress != nil {progress^ = 0.55}
+	kine_write_progress(progress, callback, userdata, 0.55)
 
-	file, open_err := os.create(path)
-	if open_err != nil {
-		return Error_Make(.File_Write_Failed, -1, "could not create %s: %v", path, open_err)
+
+	staging, staging_err := os.make_directory_temp(
+		filepath.dir(path),
+		".kine-write-*",
+		context.allocator,
+	)
+	if staging_err != nil {
+		return Error_Make(.File_Write_Failed, -1, "could not stage %s: %v", path, staging_err)
 	}
-	defer os.close(file)
+	defer delete(staging)
+	defer os.remove_all(staging)
+	pending, join_err := filepath.join([]string{staging, "pending.kine"}, context.temp_allocator)
+	if join_err != nil {
+		return Error_Make(
+			.File_Write_Failed,
+			-1,
+			"could not form staging path for %s: %v",
+			path,
+			join_err,
+		)
+	}
 
-	total := len(payload)
-	written := 0
-	for written < total {
-		chunk := min(1 << 20, total - written)
-		count, write_err := os.write(file, payload[written:written + chunk])
-		if write_err != nil || count <= 0 {
+	{
+		file, open_err := os.create(pending)
+		if open_err != nil {
 			return Error_Make(
 				.File_Write_Failed,
 				-1,
-				"could not write %d bytes to %s",
-				total,
+				"could not create staging file for %s: %v",
+				path,
+				open_err,
+			)
+		}
+		defer os.close(file)
+		total := len(payload)
+		written := 0
+		for written < total {
+			chunk := min(1 << 20, total - written)
+			count, write_err := os.write(file, payload[written:written + chunk])
+			if write_err != nil || count <= 0 {
+				return Error_Make(
+					.File_Write_Failed,
+					-1,
+					"could not write %d bytes to staging file for %s",
+					total,
+					path,
+				)
+			}
+			written += count
+			kine_write_progress(
+				progress,
+				callback,
+				userdata,
+				0.55 + 0.44 * f32(written) / f32(total),
+			)
+		}
+
+
+		if sync_err := os.sync(file); sync_err != nil {
+			return Error_Make(
+				.File_Write_Failed,
+				-1,
+				"could not sync staging file for %s: %v",
+				path,
+				sync_err,
+			)
+		}
+	}
+	if rename_err := os.rename(pending, path); rename_err != nil {
+		return Error_Make(.File_Write_Failed, -1, "could not replace %s: %v", path, rename_err)
+	}
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+
+		directory, open_err := os.open(filepath.dir(path))
+		if open_err != nil {
+			return Error_Make(
+				.File_Write_Failed,
+				-1,
+				"could not open destination directory for %s: %v",
+				path,
+				open_err,
+			)
+		}
+		sync_err := os.sync(directory)
+		close_err := os.close(directory)
+		if sync_err != nil || close_err != nil {
+			return Error_Make(
+				.File_Write_Failed,
+				-1,
+				"could not sync destination directory for %s",
 				path,
 			)
 		}
-		written += count
-		if progress != nil {progress^ = 0.55 + 0.45 * f32(written) / f32(total)}
 	}
-	if progress != nil {progress^ = 1}
+	kine_write_progress(progress, callback, userdata, 1)
 	return Error_None
 }
 
@@ -299,11 +363,48 @@ Deserialize_From_File :: proc(
 		return nil, Error_Make(.Invalid_Argument, -1, "the source path is empty")
 	}
 
-	data, err := os.read_entire_file(path, context.allocator)
-	if err != nil {
-		return nil, Error_Make(.File_Read_Failed, -1, "could not read %s: %v", path, err)
-	}
-	defer delete(data)
 
+	file, open_err := os.open(path)
+	if open_err != nil {
+		return nil, Error_Make(.File_Read_Failed, -1, "could not open %s: %v", path, open_err)
+	}
+	defer os.close(file)
+	info, stat_err := os.fstat(file, context.allocator)
+	if stat_err != nil {
+		return nil, Error_Make(.File_Read_Failed, -1, "could not inspect %s: %v", path, stat_err)
+	}
+	defer os.file_info_delete(info, context.allocator)
+	if info.type != .Regular {
+		return nil, Error_Make(.File_Read_Failed, -1, "%s is not a regular file", path)
+	}
+	if info.size < 0 || u64(info.size) > u64(KINE_MAX_STREAM_BYTES) {
+		return nil, Error_Make(
+			.Stream_Too_Large,
+			0,
+			"file %s exceeds the %d byte stream limit",
+			path,
+			KINE_MAX_STREAM_BYTES,
+		)
+	}
+	data := make([]u8, int(info.size))
+	defer delete(data)
+	read := 0
+	for read < len(data) {
+		count, read_err := os.read(file, data[read:read + min(len(data) - read, 64 * 1024)])
+		if read_err != nil || count <= 0 {
+			return nil, Error_Make(
+				.File_Read_Failed,
+				-1,
+				"file %s was truncated during read",
+				path,
+			)
+		}
+		read += count
+	}
+	probe: [1]u8
+	n, probe_err := os.read(file, probe[:])
+	if n != 0 || (probe_err != nil && probe_err != .EOF) {
+		return nil, Error_Make(.Stream_Too_Large, 0, "file %s grew while it was being read", path)
+	}
 	return Deserialize_From_Data(registry, L, parent, data, terrain)
 }

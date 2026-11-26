@@ -1,0 +1,92 @@
+---
+title: Native classes and services
+description: Register Luau Instance descendants and singleton services with small C descriptors.
+---
+
+The unified SDK supports native Instance subclasses, typed properties, native methods, and singleton services. Inherited Instance functionality remains available without manually reimplementing Destroy, Clone, or parenting.
+
+## Register a class
+
+```c
+#include "kinemium_plugin.h"
+#include <stddef.h>
+
+typedef struct { double value; } Counter;
+
+static void counter_construct(Kinemium_Context *ctx, void *data) {
+    (void)ctx;
+    ((Counter *)data)->value = 10.0;
+}
+
+static bool increment(Kinemium_Context *ctx, void *data,
+                      uint32_t count, const Kinemium_Value *args,
+                      Kinemium_Value *output) {
+    (void)ctx;
+    double amount = count && args[0].kind == KINEMIUM_VALUE_NUMBER
+        ? args[0].number : 1.0;
+    Counter *counter = data;
+    counter->value += amount;
+    output->kind = KINEMIUM_VALUE_NUMBER;
+    output->number = counter->value;
+    return true;
+}
+
+static bool register_counter(Kinemium_Context *ctx) {
+    Kinemium_ClassDesc desc =
+        Kinemium_Class("NativeCounter", "Instance", sizeof(Counter));
+    desc.on_construct = counter_construct;
+    Kinemium_ClassProperty(&desc, "Value", KINEMIUM_NUMBER,
+                           offsetof(Counter, value));
+    Kinemium_ClassMethod(&desc, "Increment", increment);
+    return Kinemium_RegisterClass(ctx, &desc);
+}
+```
+
+The Luau API is a regular Instance:
+
+```lua
+local counter = Instance.new("NativeCounter")
+assert(counter.Value == 10)
+assert(counter:Increment(5) == 15)
+counter.Value = 20
+```
+
+The engine owns per-instance native storage. Constructor and destructor callbacks can initialize and release external resources. `Kinemium_HandleGetNativeData` returns native storage for instances owned by your plugin. The descriptor also accepts an `on_step` callback.
+
+## Singleton services
+
+Register a singleton under `game:GetService` with `Kinemium_RegisterService`:
+
+```c
+typedef struct { double temperature; } WeatherData;
+
+static bool register_weather(Kinemium_Context *ctx) {
+    Kinemium_ServiceDesc desc =
+        Kinemium_Service("NativeWeatherService", sizeof(WeatherData));
+    Kinemium_ClassProperty(&desc, "Temperature", KINEMIUM_NUMBER,
+                           offsetof(WeatherData, temperature));
+    return Kinemium_RegisterService(ctx, &desc);
+}
+```
+
+```lua
+local weather = game:GetService("NativeWeatherService")
+weather.Temperature = 26
+print(weather.Temperature)
+```
+
+Property types include boolean, number, integer, string, Vector3, Color3, and CFrame. Each field's offset and size are validated when registering. Classes and services are unregistered when their plugin unloads.
+
+## Custom properties
+
+`Kinemium_ClassDesc` supports `on_get` and `on_set` callbacks in addition to offset-based fields. The callback receives its owning context, native instance storage, the property name and a typed `Kinemium_Value`. Return `true` when the property was handled, or `false` to use the built-in field handler.
+
+For example, a custom getter can calculate `SquaredValue` from a counter's stored `Value` without allocating another field. A custom setter can validate or clamp `Value` before accepting it. A read-only offset property rejects writes before calling `on_set`.
+
+The descriptor's `size` is validated before reading appended callbacks so earlier ABI-2 plugins continue to work with the existing layout. The [sample plugin](/docs/native-sdk/plugin-authoring) exercises a computed property, a validating setter, a native method and batch stepping.
+
+## Native exports and introspection
+
+Native methods registered through `Kinemium_ClassMethod` can be invoked directly from C with `Kinemium_Invoke` or `Kinemium_InvokeExport`. Use `Kinemium_HandleGetMethodCount` and `Kinemium_HandleCopyMethodName` to discover registered methods, and `Kinemium_HandleGetExportCount`, `Kinemium_HandleCopyExportName`, and `Kinemium_HandleHasExport` to discover native exports.
+
+The export API also supports engine classes that register direct native export handlers. Invocation uses a protected Luau call so exported handler errors are reported through the context error API instead of escaping to the native host.

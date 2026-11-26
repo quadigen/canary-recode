@@ -1,0 +1,77 @@
+---
+title: Getting started with the Native SDK
+description: Package the unified Kinemium library and compile native applications or plugins.
+---
+
+## Build the SDK
+
+From the repository root, with the Odin compiler and native vendor dependencies already built:
+
+```bash
+python3 tools/build_kinemium_sdk.py
+```
+
+This creates a Linux SDK package at `dist/kinemium/` containing `include/kinemium.h`, `include/kinemium_plugin.h`, `lib/libkinemium.so`, bundled networking library, a compiled example plugin, example source, and a runnable C application.
+
+## Build a plugin too
+
+The package also contains `plugins/native.example/native_example.so`, which uses the same exported `Kinemium_*` interface inside an existing engine. Read [Creating a native plugin](/docs/native-sdk/plugin-authoring) for the manifest and lifecycle.
+
+## Run the example
+
+```bash
+dist/kinemium/bin/kinemium_sdk_example
+```
+
+Or build the native example using CMake:
+
+```bash
+cmake -S examples/kinemium_sdk -B build/sdk-example
+cmake --build build/sdk-example
+./build/sdk-example/kinemium_sdk_example
+```
+
+## Control a scene
+
+```c
+#include "kinemium.h"
+
+int main(void) {
+    Kinemium_Context *ctx = Kinemium_CreateWithMode(KINEMIUM_MODE_STANDALONE);
+    if (!ctx) return 1;
+
+    Kinemium_Handle workspace = Kinemium_HandleService(ctx, "Workspace");
+    Kinemium_Handle cube = Kinemium_HandleCreateInstance(ctx, "Part");
+
+    Kinemium_HandleSetParent(ctx, cube, workspace);
+    Kinemium_HandleSetDynamicString(ctx, cube, "Name", "NativeCube");
+    Kinemium_HandleSetDynamicVector3(ctx, cube, "Position",
+                                     (Kinemium_Vector3){0.0, 5.0, 0.0});
+
+    Kinemium_Tick(ctx, 1.0f / 60.0f);
+    Kinemium_Destroy(ctx);
+    return 0;
+}
+```
+
+## Native handles and callbacks
+
+Handles are context-owned generation-checked tokens. Prefer `Kinemium_Handle*` to the legacy pointer-based interface, which can become dangling after a native object is destroyed.
+
+To run script code or expose a native callback, use `Kinemium_RunLuau` and `Kinemium_RegisterNativeFunction`. The [full reference](/docs/native-sdk/reference) includes a native callback example, property types, rendering, and networking setup.
+
+## Verify the build
+
+Run the packaged headless example to check the exported SDK without opening a window:
+
+```bash
+dist/kinemium/bin/kinemium_sdk_headless
+```
+
+To check the C header's exported functions against the shared library:
+
+```bash
+python3 tests/sdk/verify_exports.py include/kinemium.h dist/kinemium/lib/libkinemium.so
+```
+
+GPU rendering can be checked separately with the compiled `kinemium_sdk_gpu_compute` example. System graphics and operating-system dependencies are required.

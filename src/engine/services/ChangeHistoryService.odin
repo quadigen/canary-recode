@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import classes "../classes"

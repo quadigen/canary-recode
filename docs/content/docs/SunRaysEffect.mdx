@@ -1,47 +1,32 @@
 ---
 title: SunRaysEffect
-description: Add visible light shafts radiating from the sun.
+description: Render volumetric sunlight shafts and drifting dust.
 ---
 
-`SunRaysEffect` draws shafts of light from the sun's position in the sky. The effect follows `Lighting.ClockTime`, so it fades out at night instead of glowing from below the horizon.
+`SunRaysEffect` renders sunlight scattered by the air between the camera and the surfaces it sees. Opaque shadow-casting geometry shapes the shafts, so a window, arch, or skylight can carve a beam into the room. Dust motes drift through the scene and are visible where sunlight reaches them.
 
-`SunRaysEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
-
-## Getting started
+Parent the effect to `Lighting`. The beam follows the sun direction from `ClockTime` or an authored `SunLightEffect` and fades with daylight.
 
 ```lua
-local Lighting = game:GetService("Lighting")
-
-local rays = Lighting:FindFirstChild("SunRaysEffect")
-if not rays then
-    rays = Instance.new("SunRaysEffect")
-    rays.Parent = Lighting
-end
+local lighting = game:GetService("Lighting")
+local rays = lighting:FindFirstChildOfClass("SunRaysEffect")
+    or Instance.new("SunRaysEffect", lighting)
 
 rays.Enabled = true
-rays.Intensity = 0.2
-rays.Spread = 1
+rays.Intensity = 0.55
+rays.Spread = 0.8
+rays.DustAmount = 0.7
+rays.MaxDistance = 30
+rays.SampleCount = 32
 ```
 
-## Properties
+| Property | Default | Description |
+| --- | --- | --- |
+| `Enabled` | `true` | Enables the effect. |
+| `Intensity` | `0.1` | Scattered light strength, from `0` to `1`. |
+| `Spread` | `1` | Controls how visible the beam is from the side. Lower values concentrate scattering toward the sun. Range `0` to `1`. |
+| `DustAmount` | `0.35` | Density variation and drifting motes, from `0` to `1`. The effect built into `Lighting` starts at `0`. |
+| `MaxDistance` | `48` | Maximum distance from the camera sampled by the pass, from `4` to `128` studs. |
+| `SampleCount` | `24` | Number of samples along each view ray, from `8` to `48`. Higher values make narrow shafts smoother and cost more GPU time. |
 
-| Property | Type | Access | Default | Description |
-| --- | --- | --- | --- | --- |
-| `Enabled` | `boolean` | Read/write | `true` | Turns the effect on or off. |
-| `Intensity` | `number` | Read/write | `0.1` | Brightness of the rays, clamped between `0` and `1`. |
-| `Spread` | `number` | Read/write | `1` | Angular spread of the rays, clamped between `0` and `1`. |
-
-Higher values fan the rays out more; lower values keep them tight around the sun.
-
-The effective intensity is multiplied by daylight. If `Lighting.ClockTime` puts the sun below the horizon, the rays disappear even when `Enabled` is true.
-
-## Notes
-
-- Only one sun-ray effect is used. The last `SunRaysEffect` child of `Lighting` wins.
-- Sun rays are skipped in the editor's fast viewport.
-- Cloning copies `Enabled`, `Intensity`, and `Spread`.
-
-## See also
-
-- `Lighting` for `ClockTime`, the sun direction, and ambient light.
-- `Atmosphere` for sky color and haze around the horizon.
+The last `SunRaysEffect` child of `Lighting` supplies the settings. Use the normal editor viewport or playtest to preview the effect. Keep `MaxDistance` sized to the space you want to light, since the sun occlusion map covers a local volume around the camera.

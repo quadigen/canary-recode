@@ -57,6 +57,21 @@ Attachment_Local_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
 }
 
 Attachment_Parent_Frame :: proc(attachment: ^Attachment) -> datatypes.CFrame {
+	if attachment != nil &&
+	   Is_A_Class(&attachment.object, &BoneAttachment_Class) &&
+	   attachment.parent != nil &&
+	   Is_A_Class(attachment.parent, &MeshPart_Class) {
+		mesh := cast(^MeshPart)attachment.parent
+		bone_name := (cast(^BoneAttachment)attachment).bone_name
+		if mesh.native_mesh != nil && bone_name != "" {
+			index := Animation_MeshPart_Find_Bone(mesh.native_mesh, bone_name)
+			if index >= 0 {
+				if frame, ok := Animation_MeshPart_Bone_World_CFrame(mesh, int(index)); ok {
+					return frame
+				}
+			}
+		}
+	}
 	for parent := attachment.parent; parent != nil; parent = parent.parent {
 		if parent.destroyed {continue}
 		if Is_A_Class(parent, &Part_Class) {return (cast(^Part)parent).cframe}
@@ -215,13 +230,21 @@ Attachment_set :: proc(
 		frame.x, frame.y, frame.z =
 			attachment.position.x, attachment.position.y, attachment.position.z
 		attachment_set_local_frame(attachment, frame)
-	case "Axis":
+	case "Axis", "WorldAxis":
 		attachment.secondary_axis = datatypes.CFrame_UpVector(Attachment_Local_Frame(attachment))
-		attachment.axis = datatypes.Arg_Vector3(L, value_index)
+		axis := datatypes.Arg_Vector3(L, value_index)
+		if key == "WorldAxis" {
+			axis = datatypes.CFrame_VectorToObjectSpace(Attachment_Parent_Frame(attachment), axis)
+		}
+		attachment.axis = axis
 		attachment.orientation = {}
-	case "SecondaryAxis":
+	case "SecondaryAxis", "WorldSecondaryAxis":
 		attachment.axis = datatypes.CFrame_RightVector(Attachment_Local_Frame(attachment))
-		attachment.secondary_axis = datatypes.Arg_Vector3(L, value_index)
+		axis := datatypes.Arg_Vector3(L, value_index)
+		if key == "WorldSecondaryAxis" {
+			axis = datatypes.CFrame_VectorToObjectSpace(Attachment_Parent_Frame(attachment), axis)
+		}
+		attachment.secondary_axis = axis
 		attachment.orientation = {}
 	case:
 		return false

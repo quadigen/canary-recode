@@ -574,3 +574,155 @@ dock_anchor_rect :: proc(anchor: Dock_Anchor, x, y, w, h: f32) -> (rx, ry, rw, r
 		cw,
 		ch
 }
+
+dock_resize_pair :: proc(
+	first, second: ^f32,
+	first_size, second_size, delta, minimum: f32,
+) -> bool {
+	total := first_size + second_size
+	if total <= 0 {return false}
+	limit := min(minimum, total * 0.5)
+	next := clamp(first_size + delta, limit, total - limit)
+	if abs(next - first_size) < 0.01 {return false}
+
+	weight := first^ + second^
+	first^ = weight * next / total
+	second^ = weight - first^
+	return true
+}
+
+dock_resize_panel :: proc(
+	state: ^Dock_State,
+	config: ^Editor_Layout_Config,
+	panel: Dock_Panel,
+	width, height, x, y, w, h: f32,
+	edges: int,
+) -> bool {
+	slot := state.slots[panel]
+	if !slot.visible || panel == .Topbar {return false}
+
+	rects: [Dock_Panel]Layout_Coordinate
+	Editor_Layout_Compute_Docked(config, state, width, height, &rects)
+	rect := rects[panel]
+	px, py := rect.Position.X_Offset, rect.Position.Y_Offset
+	pw, ph := rect.Size.X_Offset, rect.Size.Y_Offset
+	if pw <= 0 || ph <= 0 {return false}
+
+	col := dock_anchor_column(slot.anchor)
+	row := dock_anchor_row(slot.anchor)
+	band := slot.full_span && row != .Middle
+	changed := false
+
+	if edges & 3 != 0 {
+		left := edges & 1 != 0
+		delta := left ? x - px : x + w - px - pw
+		neighbor: Dock_Panel
+		found := false
+		distance: f32 = 1e9
+
+		for other in Dock_Panel {
+			if other == panel || !state.slots[other].visible {continue}
+			os := state.slots[other]
+			orow := dock_anchor_row(os.anchor)
+			ocol := dock_anchor_column(os.anchor)
+			oband := os.full_span && orow != .Middle
+			if band {
+				if !oband || orow != row {continue}
+			} else if oband || ocol == col {
+				continue
+			}
+
+			r := rects[other]
+			ox, ow := r.Position.X_Offset, r.Size.X_Offset
+			if ow <= 0 {continue}
+			gap := left ? px - ox - ow : ox - px - pw
+			if gap >= -0.01 && gap < distance {
+				neighbor, found, distance = other, true, gap
+			}
+		}
+
+		if found {
+			ow := rects[neighbor].Size.X_Offset
+			a, b: ^f32
+			if band {
+				a, b = &state.slots[panel].weight, &state.slots[neighbor].weight
+			} else {
+				a, b =
+					&state.column_weight[col],
+					&state.column_weight[dock_anchor_column(state.slots[neighbor].anchor)]
+			}
+			changed = dock_resize_pair(a, b, pw, ow, left ? -delta : delta, 160) || changed
+		}
+	}
+
+	if edges & 12 != 0 {
+		top := edges & 4 != 0
+		delta := top ? y - py : y + h - py - ph
+
+		if band {
+			if (row == .Top && !top) || (row == .Bottom && top) {
+				fixed := false
+				for other in Dock_Panel {
+					os := state.slots[other]
+					if os.visible &&
+					   os.full_span &&
+					   dock_anchor_row(os.anchor) == row &&
+					   dock_panel_fixed_height(other, config) > 0 {fixed = true}
+				}
+				if !fixed && height > 0 {
+					other_row := row == .Top ? Dock_Row.Bottom : Dock_Row.Top
+					reserved: f32
+					for other in Dock_Panel {
+						os := state.slots[other]
+						if os.visible && os.full_span && dock_anchor_row(os.anchor) == other_row {
+							reserved = max(reserved, rects[other].Size.Y_Offset)
+						}
+					}
+					available := max(0, height - reserved - config.P * 4)
+					limit := min(f32(94), available * 0.5)
+					next := clamp(
+						ph + (top ? -delta : delta),
+						limit,
+						max(limit, available - limit),
+					)
+					if abs(next - ph) >= 0.01 {
+						state.band_size[row] = next / height
+						changed = true
+					}
+				}
+			}
+		} else {
+			neighbor: Dock_Panel
+			found := false
+			distance: f32 = 1e9
+
+			for other in Dock_Panel {
+				if other == panel || !state.slots[other].visible {continue}
+				os := state.slots[other]
+				if os.full_span || dock_anchor_column(os.anchor) != col {continue}
+				if dock_panel_fixed_height(other, config) > 0 {continue}
+				r := rects[other]
+				oy, oh := r.Position.Y_Offset, r.Size.Y_Offset
+				if oh <= 0 {continue}
+				gap := top ? py - oy - oh : oy - py - ph
+				if gap >= -0.01 && gap < distance {
+					neighbor, found, distance = other, true, gap
+				}
+			}
+
+			if found {
+				changed =
+					dock_resize_pair(
+						&state.slots[panel].weight,
+						&state.slots[neighbor].weight,
+						ph,
+						rects[neighbor].Size.Y_Offset,
+						top ? -delta : delta,
+						94,
+					) ||
+					changed
+			}
+		}
+	}
+	return changed
+}

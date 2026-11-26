@@ -19,7 +19,14 @@ Replication_Protocol_Version: u32 = 13
 Replication_Max_Frame_Payload: u32 = 1048576
 
 
+Replication_Max_Native_Send_Payload: u32 = 512 * 1024 - 6
+
+
 Replication_Minimum_Framing_Version: u32 = 5
+
+REPLICATION_MAX_CLIENT_PACKETS_PER_SECOND :: 480
+REPLICATION_MAX_CLIENT_BYTES_PER_SECOND :: 4 * 1024 * 1024
+REPLICATION_HANDSHAKE_TIMEOUT_MS :: 10000
 
 Replication_Capability_Ack_Tokens: u32 = 1 << 0
 Replication_Capability_Batch_Properties: u32 = 1 << 1
@@ -53,6 +60,7 @@ Replication_Capability_Unreliable_Remote :: u32(1 << 20)
 Replication_Capability_Ownership_Policy :: u32(1 << 21)
 Replication_Capability_Compact_Values :: u32(1 << 22)
 Replication_Capability_Compact_Physics :: u32(1 << 23)
+Replication_Capability_Character_Pose :: u32(1 << 24)
 REPLICATION_SNAPSHOT_CLOCK_RATE :: 120
 
 
@@ -80,7 +88,8 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Unreliable_Remote |
 	Replication_Capability_Ownership_Policy |
 	Replication_Capability_Compact_Values |
-	Replication_Capability_Compact_Physics
+	Replication_Capability_Compact_Physics |
+	Replication_Capability_Character_Pose
 
 Replication_Handshake_Ok: u8 = 0
 Replication_Handshake_Version_Mismatch: u8 = 1
@@ -110,6 +119,7 @@ Replication_Kind_Join_Batch :: u8(31)
 Replication_Kind_Character_Settings :: u8(32)
 Replication_Kind_Unreliable_Remote :: u8(33)
 Replication_Kind_Ownership_Policy :: u8(34)
+Replication_Kind_Character_Pose :: u8(35)
 
 Replication_Deformable_Cloth :: u8(0)
 Replication_Deformable_SoftBody :: u8(1)
@@ -178,6 +188,7 @@ replication_schema_hash :: proc(service: ^ReplicatorService) -> u64 {
 			     "AbsolutePosition",
 			     "AbsoluteSize",
 			     "TextBounds",
+			     "ContentText",
 			     "SelectedText",
 			     "LineCount",
 			     "AbsoluteCellCount",
@@ -625,6 +636,31 @@ replication_receive_time_sync_reply :: proc(
 	service.time_offset = service.time_offset + f32((offset - f64(service.time_offset)) * 0.25)
 }
 
+
+REPLICATION_DEFAULT_SEND_RATE :: u32(4 * 1024 * 1024)
+replication_configured_send_rates: map[^ReplicatorService]u32
+
+replication_get_send_rate :: proc(service: ^ReplicatorService) -> u32 {
+	if service == nil {return REPLICATION_DEFAULT_SEND_RATE}
+	if value, found := replication_configured_send_rates[service]; found {return value}
+	return REPLICATION_DEFAULT_SEND_RATE
+}
+
+replication_set_send_rate :: proc(service: ^ReplicatorService, rate: u32) -> bool {
+	if service == nil || rate < 16 * 1024 || rate > 64 * 1024 * 1024 {return false}
+	if service.host != nil && !transport_host_set_send_rate(service.host, rate) {return false}
+	if replication_configured_send_rates == nil {
+		replication_configured_send_rates = make(map[^ReplicatorService]u32)
+	}
+	replication_configured_send_rates[service] = rate
+	return true
+}
+
+replication_clear_send_rate :: proc(service: ^ReplicatorService) {
+	if service == nil || replication_configured_send_rates == nil {return}
+	delete_key(&replication_configured_send_rates, service)
+}
+
 replication_start :: proc(
 	service: ^ReplicatorService,
 	address: string,
@@ -641,7 +677,7 @@ replication_start :: proc(
 		return false
 	}
 	if !transport_init() {
-		fmt.eprintln("Could not initialize ENet")
+		fmt.eprintln("Could not initialize SteamNetworkingSockets")
 		return false
 	}
 	service.transport_initialized = true
@@ -649,9 +685,15 @@ replication_start :: proc(
 		service.host = transport_host_create_server(address, port, 32, 2)
 	} else {
 		service.host = transport_host_create_client()
-		if service.host != nil {
-			service.remote = transport_host_connect(service.host, address, port, 2)
-		}
+	}
+	if service.host != nil &&
+	   !transport_host_set_send_rate(service.host, replication_get_send_rate(service)) {
+		fmt.eprintln("Could not configure SteamNetworkingSockets outgoing send rate")
+		replication_stop(service)
+		return false
+	}
+	if mode == .Client && service.host != nil {
+		service.remote = transport_host_connect(service.host, address, port, 2)
 	}
 	if service.host == nil || (mode == .Client && service.remote == nil) {
 		if service.host == nil {
@@ -729,7 +771,7 @@ replication_send :: proc(
 ) -> bool {
 	if peer == nil ||
 	   service.host == nil ||
-	   len(payload) > int(Replication_Max_Frame_Payload) {return false}
+	   len(payload) > int(Replication_Max_Native_Send_Payload) {return false}
 	if int(kind) < len(service.diag_kind_counts) {
 		service.diag_kind_counts[int(kind)] += 1
 		service.diag_kind_bytes[int(kind)] += u64(len(payload))
@@ -876,78 +918,130 @@ replication_apply_property :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 
+REPLICATION_ASSET_TICK_BYTES :: 512 * 1024
+
 replication_send_asset_entry :: proc(
 	service: ^ReplicatorService,
-	peer: ^Replication_Transport_Peer,
+	connection: ^Replication_Peer,
 	entry: ^assetstore.Asset,
+	budget: ^int,
 ) -> bool {
-
-
-	entry_overhead :=
-		1 + 4 + int(Replication_Asset_Max_Id_Length) + 4 + int(Replication_Asset_Max_Path) + 1 + 4
-	body := int(Replication_Max_Frame_Payload) - entry_overhead
-
-	if len(entry.bytes) <= body {
-		payload: [dynamic]u8
+	if len(connection.asset_transfer_id) > 0 &&
+	   connection.asset_transfer_id != entry.id {return false}
+	chunk_size := int(Replication_Asset_Max_Chunk)
+	payload: [dynamic]u8
+	defer delete(payload)
+	if len(entry.bytes) <= chunk_size {
 		encode_asset_entry(&payload, entry.id, entry.path, entry.kind, entry.bytes)
-		sent_ok := replication_send(service, peer, Replication_Kind_Asset, payload[:], true)
-
-
-		delete(payload)
-		return sent_ok
+		if len(payload) > budget^ {return false}
+		if !replication_send(
+			service,
+			connection.peer,
+			Replication_Kind_Asset,
+			payload[:],
+			true,
+		) {return false}
+		budget^ -= len(payload)
+		return true
 	}
-
-	header: [dynamic]u8
-	encode_asset_begin(&header, entry.id, entry.path, entry.kind, u32(len(entry.bytes)))
-	sent_ok := replication_send(service, peer, Replication_Kind_Asset, header[:], true)
-	delete(header)
-	if !sent_ok {return false}
-
-
-	chunk_size := min(int(Replication_Asset_Max_Chunk), body - 5)
-	if chunk_size <= 0 {return false}
-
-	for start := 0; start < len(entry.bytes); {
+	if connection.asset_transfer_id == "" {
+		encode_asset_begin(&payload, entry.id, entry.path, entry.kind, u32(len(entry.bytes)))
+		if len(payload) > budget^ {return false}
+		if !replication_send(
+			service,
+			connection.peer,
+			Replication_Kind_Asset,
+			payload[:],
+			true,
+		) {return false}
+		budget^ -= len(payload)
+		connection.asset_transfer_id = strings.clone(entry.id)
+		connection.asset_transfer_offset = 0
+	}
+	for connection.asset_transfer_offset < len(entry.bytes) {
+		start := connection.asset_transfer_offset
 		end := min(start + chunk_size, len(entry.bytes))
-		frame: [dynamic]u8
-		encode_asset_chunk(&frame, u32(start / chunk_size), entry.bytes[start:end])
-		sent_ok = replication_send(service, peer, Replication_Kind_Asset, frame[:], true)
-		delete(frame)
-		if !sent_ok {return false}
-		start = end
+		clear(&payload)
+		encode_asset_chunk(&payload, u32(start / chunk_size), entry.bytes[start:end])
+		if len(payload) > budget^ {return false}
+		if !replication_send(
+			service,
+			connection.peer,
+			Replication_Kind_Asset,
+			payload[:],
+			true,
+		) {return false}
+		budget^ -= len(payload)
+		connection.asset_transfer_offset = end
 	}
+	delete(connection.asset_transfer_id)
+	connection.asset_transfer_id = ""
+	connection.asset_transfer_offset = 0
 	return true
 }
 
-
 replication_send_asset_table :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
-	if (connection.client_capabilities & Replication_Capability_Asset_Transfer) == 0 {return}
-	peer := connection.peer
-	total := assetstore.Count()
-
-	sent := 0
-	for index := 0; index < total; index += 1 {
-
-
-		entry, ok := assetstore.At(index)
-		if !ok || entry == nil {continue}
+	if connection.asset_table_sent {
+		if connection.asset_transfer_id != "" {
+			entry, found := assetstore.Find(connection.asset_transfer_id)
+			if found && entry != nil {
+				budget := REPLICATION_ASSET_TICK_BYTES
+				if replication_send_asset_entry(service, connection, entry, &budget) {
+					if entry.kind == .Mesh && !connection.mesh_assets[entry.id] {
+						connection.mesh_assets[strings.clone(entry.id)] = true
+					}
+					service.assets_sent += 1
+				}
+			} else {
+				delete(connection.asset_transfer_id)
+				connection.asset_transfer_id = ""
+				connection.asset_transfer_offset = 0
+			}
+		}
+		return
+	}
+	if (connection.client_capabilities & Replication_Capability_Asset_Transfer) == 0 {
+		connection.asset_table_sent = true
+		return
+	}
+	if !connection.asset_table_started {
+		connection.asset_table_started = true
+		connection.asset_table_limit = assetstore.Count()
+	}
+	budget := REPLICATION_ASSET_TICK_BYTES
+	for connection.asset_table_index < connection.asset_table_limit {
+		entry, ok := assetstore.At(connection.asset_table_index)
+		if !ok || entry == nil {
+			connection.asset_table_index += 1
+			continue
+		}
 		if entry.kind == .Path_File &&
 		   strings.has_prefix(entry.path, assetstore.PROJECT_ASSET_SCHEME) &&
-		   !strings.has_prefix(entry.path, "project://assets/replicated/") {continue}
-		if !replication_send_asset_entry(service, peer, entry) {return}
-		if entry.kind == .Mesh {connection.mesh_assets[strings.clone(entry.id)] = true}
-		sent += 1
+		   !strings.has_prefix(entry.path, "project://assets/replicated/") {
+			connection.asset_table_index += 1
+			continue
+		}
+		if !replication_send_asset_entry(service, connection, entry, &budget) {return}
+		if entry.kind == .Mesh && !connection.mesh_assets[entry.id] {
+			connection.mesh_assets[strings.clone(entry.id)] = true
+		}
+		connection.asset_table_count += 1
+		connection.asset_table_index += 1
+		service.assets_sent += 1
 	}
-
-
 	footer: [dynamic]u8
+	defer delete(footer)
 	append(&footer, Replication_Asset_Subtype_End)
-	replication_put_u32(&footer, u32(sent))
-	replication_send(service, peer, Replication_Kind_Asset, footer[:], true)
-	delete(footer)
-
-	service.assets_sent += u64(sent)
-	fmt.printf("Sent %d embedded assets to a client\n", sent)
+	replication_put_u32(&footer, connection.asset_table_count)
+	if !replication_send(
+		service,
+		connection.peer,
+		Replication_Kind_Asset,
+		footer[:],
+		true,
+	) {return}
+	connection.asset_table_sent = true
+	fmt.printf("Sent %d embedded assets to a client\n", connection.asset_table_count)
 }
 
 
@@ -964,121 +1058,109 @@ replication_send_operation_mesh :: proc(
 	id, embedded := assetstore.Parse_Uri(uri)
 	if !embedded || connection.mesh_assets[id] {return true}
 	entry, found := assetstore.Find(id)
-	if !found || !replication_send_asset_entry(service, connection.peer, entry) {return false}
+	if !found || !connection.asset_table_sent {return false}
+	budget := REPLICATION_ASSET_TICK_BYTES
+	if !replication_send_asset_entry(service, connection, entry, &budget) {return false}
 	connection.mesh_assets[strings.clone(id)] = true
 	service.assets_sent += 1
 	return true
 }
 
+REPLICATION_TERRAIN_BATCHES_PER_TICK :: 2
+
 replication_send_terrain :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
-	client_capabilities := connection.client_capabilities
-	if (client_capabilities & Replication_Capability_Terrain) == 0 {return}
-
-	terrain_object := DataModel_Get_Service(service.data_model, "Terrain")
-	if terrain_object == nil {return}
-	terrain := cast(^Terrain)terrain_object
+	if (connection.client_capabilities & Replication_Capability_Terrain) == 0 {return}
+	terrain := cast(^Terrain)DataModel_Get_Service(service.data_model, "Terrain")
 	if terrain == nil {return}
-
-	header: [dynamic]u8
-	encode_terrain_header(&header, terrain)
-	sent_ok := replication_send(
-		service,
-		connection.peer,
-		Replication_Kind_Terrain,
-		header[:],
-		true,
-	)
-	delete(header)
-	if !sent_ok {return}
-
-
-	terrain.dirty_tracking = true
-
-
-	cells: [dynamic]Terrain_Cell_Record
-	entries := Terrain_Collect_Cells(terrain)
-	defer delete(entries)
-	sort.quick_sort_proc(entries[:], replication_cell_entry_compare)
-	reserve := min(len(entries), int(Replication_Terrain_Max_Cells))
-	cells = make([dynamic]Terrain_Cell_Record, 0, reserve)
-
-	batches := 0
-	sent_cells := 0
-	for entry in entries {
-		append(
-			&cells,
-			Terrain_Cell_Record {
-				x = i32(entry.x),
-				y = i32(entry.y),
-				z = i32(entry.z),
-				occupancy = entry.cell.occupancy,
-				water = entry.cell.water,
-				material = entry.cell.material,
-			},
-		)
-		if len(cells) < int(Replication_Terrain_Max_Cells) {continue}
-
-		payload: [dynamic]u8
-		encode_terrain_batch(&payload, cells[:])
-		batch_cells := len(cells)
-		ok := replication_send(
+	if !connection.terrain_snapshot_active {
+		connection.terrain_snapshot_active = true
+		connection.terrain_snapshot_header = false
+		connection.terrain_snapshot_offset = 0
+		connection.terrain_snapshot_batches = 0
+		connection.terrain_snapshot_serial = terrain.change_serial
+		connection.terrain_snapshot_epoch = terrain.dirty_epoch
+		terrain.dirty_tracking = true
+		entries := Terrain_Collect_Cells(terrain)
+		defer delete(entries)
+		sort.quick_sort_proc(entries[:], replication_cell_entry_compare)
+		connection.terrain_snapshot_cells = make([dynamic]Terrain_Cell_Record, 0, len(entries))
+		for entry in entries {
+			append(
+				&connection.terrain_snapshot_cells,
+				Terrain_Cell_Record {
+					x = i32(entry.x),
+					y = i32(entry.y),
+					z = i32(entry.z),
+					occupancy = entry.cell.occupancy,
+					water = entry.cell.water,
+					material = entry.cell.material,
+				},
+			)
+		}
+	}
+	if connection.terrain_snapshot_epoch != terrain.dirty_epoch {
+		delete(connection.terrain_snapshot_cells)
+		connection.terrain_snapshot_cells = nil
+		connection.terrain_snapshot_active = false
+		return
+	}
+	cells := connection.terrain_snapshot_cells[:]
+	payload: [dynamic]u8
+	defer delete(payload)
+	if !connection.terrain_snapshot_header {
+		append(&payload, Replication_Terrain_Subtype_Header)
+		replication_put_u32(&payload, u32(len(cells)))
+		replication_put_f32(&payload, terrain.voxel_size)
+		replication_put_f32(&payload, terrain.iso_level)
+		replication_put_u32(&payload, u32(terrain.draw_version))
+		if !replication_send(
 			service,
 			connection.peer,
 			Replication_Kind_Terrain,
 			payload[:],
 			true,
-		)
-		delete(payload)
-		clear(&cells)
-		if !ok {
-			delete(cells)
-			return
-		}
-		batches += 1
-		sent_cells += batch_cells
+		) {return}
+		connection.terrain_snapshot_header = true
 	}
-
-	if len(cells) > 0 {
-		payload: [dynamic]u8
-		encode_terrain_batch(&payload, cells[:])
-		batch_cells := len(cells)
-		ok := replication_send(
+	for _ in 0 ..< REPLICATION_TERRAIN_BATCHES_PER_TICK {
+		start := connection.terrain_snapshot_offset
+		if start >= len(cells) {break}
+		end := min(start + int(Replication_Terrain_Max_Cells), len(cells))
+		clear(&payload)
+		encode_terrain_batch(&payload, cells[start:end])
+		if !replication_send(
 			service,
 			connection.peer,
 			Replication_Kind_Terrain,
 			payload[:],
 			true,
-		)
-		delete(payload)
-		if !ok {
-			delete(cells)
-			return
-		}
-		batches += 1
-		sent_cells += batch_cells
+		) {return}
+		connection.terrain_snapshot_offset = end
+		connection.terrain_snapshot_batches += 1
 	}
-
-	footer: [dynamic]u8
-	append(&footer, Replication_Terrain_Subtype_End)
-	replication_put_u32(&footer, u32(batches))
-	replication_put_u32(&footer, u32(sent_cells))
-	footer_ok := replication_send(
+	if connection.terrain_snapshot_offset < len(cells) {return}
+	clear(&payload)
+	append(&payload, Replication_Terrain_Subtype_End)
+	replication_put_u32(&payload, connection.terrain_snapshot_batches)
+	replication_put_u32(&payload, u32(len(cells)))
+	if !replication_send(
 		service,
 		connection.peer,
 		Replication_Kind_Terrain,
-		footer[:],
+		payload[:],
 		true,
-	)
-	delete(footer)
-
-	delete(cells)
-	if !footer_ok {return}
-
-
+	) {return}
 	connection.terrain_initial_sent = true
-	connection.terrain_cursor = terrain.change_serial
-	connection.terrain_epoch = terrain.dirty_epoch
-	fmt.printf("Sent %d terrain cells in %d batches to a client\n", sent_cells, batches)
+	connection.terrain_cursor = connection.terrain_snapshot_serial
+	connection.terrain_epoch = connection.terrain_snapshot_epoch
+	connection.terrain_snapshot_active = false
+	fmt.printf(
+		"Sent %d terrain cells in %d batches to a client\n",
+		len(cells),
+		connection.terrain_snapshot_batches,
+	)
+	delete(connection.terrain_snapshot_cells)
+	connection.terrain_snapshot_cells = nil
 }
 
 
@@ -1281,10 +1363,12 @@ replication_trim_terrain_history :: proc(service: ^ReplicatorService) {
 	cursor := terrain.change_serial
 	for peer in service.peers {
 		if !peer.handshake_complete ||
-		   !peer.terrain_initial_sent ||
-		   peer.terrain_epoch != terrain.dirty_epoch ||
 		   (peer.client_capabilities & Replication_Capability_Terrain) == 0 {continue}
-		cursor = min(cursor, peer.terrain_cursor)
+		if peer.terrain_snapshot_active && peer.terrain_snapshot_epoch == terrain.dirty_epoch {
+			cursor = min(cursor, peer.terrain_snapshot_serial)
+		} else if peer.terrain_initial_sent && peer.terrain_epoch == terrain.dirty_epoch {
+			cursor = min(cursor, peer.terrain_cursor)
+		}
 	}
 
 
@@ -1318,49 +1402,44 @@ replication_send_terrain_delta :: proc(
 
 	if terrain.change_serial <= connection.terrain_cursor {return}
 
-	cells: [dynamic]Terrain_Cell_Record
-	defer delete(cells)
-	for key, dirty in terrain.replication_dirty {
-		if dirty.serial <= connection.terrain_cursor {continue}
-		append(&cells, dirty.record)
+	dirty_cells: [dynamic]Terrain_Dirty_Cell
+	defer delete(dirty_cells)
+	for _, dirty in terrain.replication_dirty {
+		if dirty.serial > connection.terrain_cursor {append(&dirty_cells, dirty)}
 	}
-	if len(cells) == 0 {
-
-
+	if len(dirty_cells) == 0 {
 		connection.terrain_cursor = terrain.change_serial
 		return
 	}
-
-
-	sort.quick_sort_proc(cells[:], replication_terrain_record_compare)
-
-	sent := 0
-	for start := 0; start < len(cells); {
-		end := min(start + int(Replication_Terrain_Max_Cells), len(cells))
-		payload: [dynamic]u8
-		encode_terrain_batch(&payload, cells[start:end])
-		ok := replication_send(
+	sort.quick_sort_proc(dirty_cells[:], proc(a, b: Terrain_Dirty_Cell) -> int {
+		if a.serial < b.serial {return -1}
+		if a.serial > b.serial {return 1}
+		return 0
+	})
+	cells := make([dynamic]Terrain_Cell_Record, 0, int(Replication_Terrain_Max_Cells))
+	defer delete(cells)
+	payload: [dynamic]u8
+	defer delete(payload)
+	start := 0
+	for _ in 0 ..< REPLICATION_TERRAIN_BATCHES_PER_TICK {
+		if start >= len(dirty_cells) {break}
+		end := min(start + int(Replication_Terrain_Max_Cells), len(dirty_cells))
+		clear(&cells)
+		for dirty in dirty_cells[start:end] {append(&cells, dirty.record)}
+		clear(&payload)
+		encode_terrain_batch(&payload, cells[:])
+		if !replication_send(
 			service,
 			connection.peer,
 			Replication_Kind_Terrain,
 			payload[:],
 			true,
-		)
-		delete(payload)
-		if !ok {return}
-		sent += end - start
+		) {return}
+		connection.terrain_cursor = dirty_cells[end - 1].serial
+		connection.terrain_deltas_sent += u64(end - start)
 		start = end
 	}
-
-	connection.terrain_cursor = terrain.change_serial
-	connection.terrain_deltas_sent += u64(sent)
-}
-
-replication_terrain_record_compare :: proc(a, b: Terrain_Cell_Record) -> int {
-	if a.y != b.y {return a.y < b.y ? -1 : 1}
-	if a.z != b.z {return a.z < b.z ? -1 : 1}
-	if a.x != b.x {return a.x < b.x ? -1 : 1}
-	return 0
+	if start == len(dirty_cells) {connection.terrain_cursor = terrain.change_serial}
 }
 
 
@@ -1566,7 +1645,17 @@ replication_receive :: proc(
 			connection.rpc_rate_count = 0
 			connection.rpc_rate_bytes = 0
 			connection.ownership_rate_count = 0
+			connection.receive_rate_count = 0
+			connection.receive_rate_bytes = 0
 		}
+		if connection.receive_rate_count >= REPLICATION_MAX_CLIENT_PACKETS_PER_SECOND ||
+		   u32(len(data)) >
+			   REPLICATION_MAX_CLIENT_BYTES_PER_SECOND - connection.receive_rate_bytes {
+			service.rejected_packets += 1
+			return
+		}
+		connection.receive_rate_count += 1
+		connection.receive_rate_bytes += u32(len(data))
 		switch data[4] {
 		case 12, 16, 17, 18, Replication_Kind_Unreliable_Remote:
 			if connection.rpc_rate_count >= 240 ||
@@ -1611,6 +1700,8 @@ replication_receive :: proc(
 		replication_receive_asset(service, peer, &reader)
 	case Replication_Kind_Terrain:
 		replication_receive_terrain(service, peer, &reader)
+	case Replication_Kind_Character_Pose:
+		replication_receive_character_pose(service, peer, &reader)
 	case Replication_Kind_Deformable:
 		replication_receive_deformable(service, peer, &reader)
 	case Replication_Kind_Script_Source:
@@ -1915,7 +2006,10 @@ replication_receive :: proc(
 				entity.server_frame = frame
 				entity.server_frame_valid = true
 			}
-			if local_root && owned {
+			if local_character && !service.scene_ready {
+				part.cframe = frame
+				part.position = datatypes.CFrame_Position(frame)
+			} else if local_root && owned {
 				characters := cast(^CharacterService)Ensure_Service(
 					service.data_model.registry,
 					"CharacterService",
@@ -2161,6 +2255,10 @@ replication_receive :: proc(
 			return
 		}
 		part := cast(^classes.Part)entity.object
+		if part.parent != nil &&
+		   classes.Is_A(part.parent, "CharacterModel") &&
+		   !connection.scene_ready_sent &&
+		   (connection.client_capabilities & Replication_Capability_Scene_Ready) != 0 {return}
 		if entity.pivot_pending ||
 		   (entity.pivot_upload_guard &&
 				   transmute(i32)(upload_tick - entity.pivot_upload_after) <= 0) {return}
@@ -2466,6 +2564,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 					&service.peers,
 					Replication_Peer {
 						peer = event.peer,
+						accepted_at_ms = transport_time_get(),
 						known = make(map[u32]u64),
 						initialized = make(map[u32]bool),
 						part_states = make(map[u32]Replication_Part_Send_State),
@@ -2521,6 +2620,16 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 			} else {service.malformed_packets += 1}
 			transport_event_dispose(&event)
 		case .NONE:
+		}
+	}
+	if service.mode == .Server {
+		now_ms := transport_time_get()
+		for &connection in service.peers {
+			if !connection.handshake_complete &&
+			   transmute(i32)(now_ms - connection.accepted_at_ms) >=
+				   REPLICATION_HANDSHAKE_TIMEOUT_MS {
+				transport_peer_disconnect_now(connection.peer)
+			}
 		}
 	}
 	if service.mode == .Client &&
@@ -2592,6 +2701,7 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 			}
 		}
 	}
+	replication_character_pose_step(service, delta_time)
 	replication_render_interpolated(service, delta_time)
 	transport_host_flush(service.host)
 }

@@ -12,11 +12,14 @@ import materials "../material"
 import platform "../platform"
 import profiling "../profiling"
 import renderer "../renderer"
+import serializer "../serializer"
 import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:math"
+import "core:os"
 import "core:strings"
+import "core:time"
 
 
 Workspace_Class := classes.Class_Info {
@@ -24,10 +27,21 @@ Workspace_Class := classes.Class_Info {
 	parent = &Service_Class,
 }
 
+Workspace_Streamed_Region :: struct {
+	name:    string,
+	payload: []u8,
+}
+
 Workspace :: struct {
 	using service:               Service,
+	streamed_regions:            [dynamic]Workspace_Streamed_Region,
+	cell_streaming:              World_Cell_Streaming,
+	rewind:                      Replication_Rewind_History,
+	input_replays:               Replication_Replay_Registry,
 	water_time:                  f64,
 	cube_mesh:                   ^kineffi.KineFilamentMesh,
+	surface_mesh:                ^kineffi.KineFilamentMesh,
+	surface_textures:            [4]^kineffi.KineFilamentTex,
 	water_grid_mesh:             ^kineffi.KineFilamentMesh,
 	sphere_mesh:                 ^kineffi.KineFilamentMesh,
 	cylinder_mesh:               ^kineffi.KineFilamentMesh,
@@ -156,22 +170,17 @@ workspace_meshpart_mesh :: proc(
 	part: ^classes.MeshPart,
 	ctx: ^kineffi.KineFilamentContext,
 ) -> ^kineffi.KineFilamentMesh {
-	if part == nil || ctx == nil {
-		return nil
-	}
+	if part == nil || ctx == nil {return nil}
 	if part.editable_mesh_id != 0 {
 		return workspace_editable_meshpart_mesh(part, ctx)
 	}
+
 	mesh_path := classes.MeshPart_Source_Path(part)
 	if mesh_path == "" {
-		if part.native_mesh != nil && part.native_context != nil {
-			_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
-			part.native_mesh = nil
-			part.native_context = nil
-			classes.MeshPart_Reset_Bone_Transforms(part)
-		}
+		classes.MeshPart_Release_Native_Mesh(part)
 		return nil
 	}
+
 	if part.native_mesh != nil &&
 	   part.native_context == ctx &&
 	   !part.native_is_editable &&
@@ -179,50 +188,93 @@ workspace_meshpart_mesh :: proc(
 	   part.native_mesh_index == part.mesh_index {
 		return part.native_mesh
 	}
-	if part.native_mesh != nil && part.native_context != nil {
-		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
-		part.native_mesh = nil
-		part.native_context = nil
-		classes.MeshPart_Reset_Bone_Transforms(part)
-	}
+
+	classes.MeshPart_Release_Native_Mesh(part)
 	tracy.ZoneNC("Workspace Load MeshPart", 0xB48EAD)
 	delete(part.native_mesh_id)
 	part.native_mesh_id = strings.clone(mesh_path)
 	part.native_mesh_index = part.mesh_index
+
 	if data, found := assetstore.Resolve_Bytes(mesh_path); found && len(data) > 0 {
+
+
+		if shared := classes.Shared_Mesh_Acquire(ctx, mesh_path, part.mesh_index, 0, true);
+		   shared != nil {
+			part.native_mesh = shared
+			part.native_context = ctx
+			return shared
+		}
+
 		hint := assetstore.Format_Hint(mesh_path)
 		defer delete(hint)
 		c_hint := hint == "" ? "glb" : strings.clone_to_cstring(hint)
 		defer delete(c_hint)
-		part.native_mesh = kineffi.Kine_Filament_CreateMeshFromMemoryIndexed(
+		loaded := kineffi.Kine_Filament_CreateMeshFromMemoryIndexed(
 			ctx,
 			raw_data(data),
 			uintptr(len(data)),
 			c_hint,
 			part.mesh_index,
 		)
-		if part.native_mesh != nil {
+		if loaded != nil {
+			if classes.Shared_Mesh_Can_Share(loaded) {
+				loaded = classes.Shared_Mesh_Register(
+					ctx,
+					mesh_path,
+					part.mesh_index,
+					0,
+					true,
+					loaded,
+				)
+			}
+			part.native_mesh = loaded
 			part.native_context = ctx
-			part.native_is_editable = false
 		}
 		return part.native_mesh
 	}
 
 	if assetstore.Is_Uri(mesh_path) {
 		assetstore.Report_Missing_Asset(mesh_path, "Part mesh")
+		return nil
 	}
+
 	resolved := assetstore.Resolve_Path(mesh_path)
 	defer delete(resolved)
+	if resolved == "" {return nil}
+
+
+	revision: u64
+	file, stat_err := os.stat(resolved, context.allocator)
+	if stat_err == nil {
+		defer os.file_info_delete(file, context.allocator)
+		revision = u64(time.to_unix_nanoseconds(file.modification_time))
+		revision ~= u64(file.size) * 0x9e3779b97f4a7c15
+		revision ~= u64(file.inode) * 0xbf58476d1ce4e5b9
+	}
+
+	if shared := classes.Shared_Mesh_Acquire(ctx, resolved, part.mesh_index, revision, false);
+	   shared != nil {
+		part.native_mesh = shared
+		part.native_context = ctx
+		return shared
+	}
+
 	c_path := strings.clone_to_cstring(resolved)
 	defer delete(c_path)
-	part.native_mesh = kineffi.Kine_Filament_CreateMeshFromPathIndexed(
-		ctx,
-		c_path,
-		part.mesh_index,
-	)
-	if part.native_mesh != nil {
+	loaded := kineffi.Kine_Filament_CreateMeshFromPathIndexed(ctx, c_path, part.mesh_index)
+	if loaded != nil {
+		if classes.Shared_Mesh_Can_Share(loaded) {
+			loaded = classes.Shared_Mesh_Register(
+				ctx,
+				resolved,
+				part.mesh_index,
+				revision,
+				false,
+				loaded,
+			)
+		}
+		part.native_mesh = loaded
 		part.native_context = ctx
-		part.native_is_editable = false
 	}
 	return part.native_mesh
 }
@@ -255,12 +307,7 @@ workspace_editable_meshpart_mesh :: proc(
 	   part.editable_mesh_version == mesh.version {
 		return part.native_mesh
 	}
-	if part.native_mesh != nil && part.native_context != nil {
-		_ = kineffi.Kine_Filament_DestroyMesh(part.native_context, part.native_mesh)
-		part.native_mesh = nil
-		part.native_context = nil
-		classes.MeshPart_Reset_Bone_Transforms(part)
-	}
+	classes.MeshPart_Release_Native_Mesh(part)
 
 	corners: [dynamic]classes.EditableMesh_Corner_Data
 	_ = classes.EditableMesh_Collect_Triangles(mesh, &corners)
@@ -466,6 +513,8 @@ Workspace_Draw_Params :: struct {
 	replicator:        ^ReplicatorService,
 	reflection_center: datatypes.Vector3,
 	reflection_radius: f32,
+	sun_caster_center: datatypes.Vector3,
+	sun_caster_radius: f32,
 	frustum:           ^Workspace_Frustum,
 	eye:               datatypes.Vector3,
 	max_distance:      f32,
@@ -639,9 +688,9 @@ workspace_append_draw_items :: proc(
 			if params != nil {
 				distance_sq = workspace_distance_squared(center, params.eye)
 				draw_distance := f64(params.max_distance) + radius
-				if params.max_distance > 0 && f64(distance_sq) > draw_distance * draw_distance {
-					visible = false
-				}
+				within_draw_distance :=
+					params.max_distance <= 0 || f64(distance_sq) <= draw_distance * draw_distance
+				visible = within_draw_distance
 				if visible &&
 				   params.frustum != nil &&
 				   !Workspace_Frustum_Contains_Sphere(params.frustum, center, f32(radius)) {
@@ -654,6 +703,15 @@ workspace_append_draw_items :: proc(
 					visible =
 						f64(workspace_distance_squared(center, params.reflection_center)) <=
 						capture_radius * capture_radius
+				}
+				if !visible &&
+				   within_draw_distance &&
+				   part.castshadow &&
+				   params.sun_caster_radius > 0 {
+					caster_radius := f64(params.sun_caster_radius) + radius
+					visible =
+						f64(workspace_distance_squared(center, params.sun_caster_center)) <=
+						caster_radius * caster_radius
 				}
 			}
 
@@ -774,10 +832,30 @@ workspace_append_draw_items :: proc(
 				}
 
 				append(items, item)
+				if !is_meshpart && special == nil && shape == .Block &&
+				   material_kind == kineffi.KINE_MAT_DEFAULT && part.transparency == 0 {
+					workspace_append_part_surfaces(workspace, renderer.Filament, part, item, items, params)
+				}
 			}
 		}
 
 		workspace_append_draw_items(workspace, child, renderer, items, params)
+	}
+}
+
+workspace_clear_draw_items :: proc(workspace: ^Workspace, renderer: ^classes.Renderer_Object) {
+	if !workspace.draw_hash_valid && len(workspace.draw_items) == 0 {return}
+	clear(&workspace.draw_items)
+	workspace.draw_version += 1
+	workspace.draw_hash_valid = false
+	if renderer != nil && renderer.Filament != nil {
+		_ = kineffi.Kine_Filament_DrawMeshListVersioned(
+			renderer.Filament,
+			nil,
+			0,
+			WORKSPACE_STREAM_ID,
+			workspace.draw_version,
+		)
 	}
 }
 
@@ -789,8 +867,11 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 
 	tracy.ZoneNC("Workspace Render 3D", 0xB48EAD)
 	z := profiling.Begin("Workspace Render 3D", 0xB48EAD)
-	if !workspace_has_parts(object) {return}
-	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
+	if ctx.renderer.Filament == nil {return}
+	if !workspace_has_parts(object) {
+		workspace_clear_draw_items(workspace, ctx.renderer)
+		return
+	}
 
 	{
 		tracy.ZoneNC("WS Mesh Setup", 0x9CDCFE)
@@ -828,6 +909,19 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 
 		if camera := cast(^classes.Camera)ctx.renderer.ActiveCamera; camera != nil {
 			params.eye = datatypes.Vector3{camera.CFrame.x, camera.CFrame.y, camera.CFrame.z}
+			lighting := cast(^Lighting)Service_Get_Service(&workspace.service, "Lighting")
+			if lighting != nil && lighting.sun_rays_distance > 0 {
+
+				half := f64(lighting.sun_rays_distance) * 1.05
+				direction := lighting_effective_sun_direction(lighting)
+				params.sun_caster_center = datatypes.Vec3_Add(
+					params.eye,
+					datatypes.Vec3_Multiply(direction, 24),
+				)
+				params.sun_caster_radius = f32(
+					math.sqrt(2 * half * half + (half + 25) * (half + 25)),
+				)
+			}
 			if camera.CameraType == .FirstPerson {
 				players := cast(^Players)Service_Get_Service(&workspace.service, "Players")
 				if players != nil && players.local_player != nil {
@@ -885,7 +979,7 @@ workspace_render :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Conte
 				workspace.draw_version,
 			)
 		} else {
-			workspace.draw_hash_valid = false
+			workspace_clear_draw_items(workspace, ctx.renderer)
 		}
 	}
 }
@@ -918,6 +1012,102 @@ Workspace_Fire_Finished_Replicating :: proc(L: ^vm.State, workspace: ^Workspace)
 	signals.Fire(L, signal, 0)
 }
 
+
+workspace_stream_error :: proc(L: ^vm.State, err: ^serializer.Error) -> i32 {
+	message := serializer.Error_String(err^)
+	owned := strings.clone(message, context.temp_allocator)
+	delete(message)
+	serializer.Error_Delete(err)
+	return vm.RaiseError(L, owned)
+}
+
+workspace_stream_unload :: proc(L: ^vm.State, workspace: ^Workspace) -> i32 {
+	if workspace.object.signal_registry == nil ||
+	   workspace.object.signal_registry.mode == .Client {
+		return vm.RaiseError(L, "only the server may unload world regions")
+	}
+	if vm.ThreadIsParallel(
+		L,
+	) {return vm.RaiseError(L, "region streaming is not allowed in parallel Luau")}
+	region := classes.Object_From_Argument(L, 2)
+	if region == nil ||
+	   region.destroyed ||
+	   !classes.Is_A(region, "Model") ||
+	   region.parent != &workspace.object {
+		return vm.RaiseError(L, "UnloadRegion expects a direct child Model of Workspace")
+	}
+	if region.name == "" {return vm.RaiseError(L, "region Model must have a name")}
+	for existing in workspace.streamed_regions {
+		if existing.name == region.name {return vm.RaiseError(L, "region already unloaded")}
+	}
+	data, err := serializer.Serialize(workspace.signal_registry, L, region)
+	if !serializer.Error_Is_None(err) {
+		delete(data)
+		return workspace_stream_error(L, &err)
+	}
+	if len(data) == 0 || len(data) > 128 * 1024 * 1024 {
+		delete(data)
+		return vm.RaiseError(L, "region snapshot must be between 1 byte and 128 MiB")
+	}
+	append(
+		&workspace.streamed_regions,
+		Workspace_Streamed_Region{name = strings.clone(region.name), payload = data},
+	)
+	classes.Destroy_Hierarchy(region)
+	vm.PushBoolean(L, true)
+	return 1
+}
+
+workspace_stream_load :: proc(L: ^vm.State, workspace: ^Workspace) -> i32 {
+	if workspace.object.signal_registry == nil ||
+	   workspace.object.signal_registry.mode == .Client {
+		return vm.RaiseError(L, "only the server may load world regions")
+	}
+	if vm.ThreadIsParallel(
+		L,
+	) {return vm.RaiseError(L, "region streaming is not allowed in parallel Luau")}
+	name := vm.ArgString(L, 2)
+	index := -1
+	for region, i in workspace.streamed_regions {
+		if region.name == name {index = i; break}
+	}
+	if index < 0 {return vm.RaiseError(L, "no unloaded region with that name")}
+	for child in workspace.object.children {
+		if child != nil && !child.destroyed && child.name == name {
+			return vm.RaiseError(L, "Workspace already has a child with that region name")
+		}
+	}
+	region := &workspace.streamed_regions[index]
+
+	model, err := serializer.Deserialize(
+		workspace.signal_registry,
+		L,
+		nil,
+		region.payload,
+		fresh_unique_ids = true,
+	)
+	if !serializer.Error_Is_None(err) {return workspace_stream_error(L, &err)}
+	if model == nil || !classes.Is_A(model, "Model") {
+		if model != nil {classes.Destroy_Hierarchy(model)}
+		return vm.RaiseError(L, "region snapshot is not a Model")
+	}
+	classes.Set_Parent(model, &workspace.object)
+	classes.Push_Object(L, model)
+	delete(region.name)
+	delete(region.payload)
+	ordered_remove(&workspace.streamed_regions, index)
+	return 1
+}
+
+workspace_stream_list :: proc(L: ^vm.State, workspace: ^Workspace) -> i32 {
+	vm.NewTable(L, len(workspace.streamed_regions))
+	for region, i in workspace.streamed_regions {
+		vm.PushString(L, region.name)
+		vm.SetArrayValue(L, -2, i + 1)
+	}
+	return 1
+}
+
 workspace_get :: proc(
 	L: ^vm.State,
 	object: ^classes.Object,
@@ -931,6 +1121,9 @@ workspace_get :: proc(
 		classes.Push_Object(L, cast(^classes.Object)workspace.current_camera)
 	case "Terrain":
 		classes.Push_Object(L, Service_Get_Service(&workspace.service, "Terrain"))
+	case "Gravity":
+		physics := cast(^Physics)Service_Get_Service(&workspace.service, "Physics")
+		vm.PushNumber(L, f64(physics.gravity) if physics != nil else 196.2)
 	case "FluidForces":
 		aerodynamics := cast(^Aerodynamics)Service_Get_Service(&workspace.service, "Aerodynamics")
 		vm.PushBoolean(L, aerodynamics != nil && aerodynamics.enabled)
@@ -968,12 +1161,41 @@ workspace_get :: proc(
 	     "GetRealPhysicsFPS",
 	     "Disable3D",
 	     "Enable3D",
-	     "PGSIsEnabled":
+	     "PGSIsEnabled",
+	     "UnloadRegion",
+	     "LoadRegion",
+	     "GetUnloadedRegions",
+	     "ConfigureCellStreaming",
+	     "RegisterWorldCell",
+	     "SetCellStreamingFocus",
+	     "GetCellStreamingStats",
+	     "GetWorldCells",
+	     "RetryWorldCell",
+	     "UnregisterWorldCell",
+	     "ConfigureRewind",
+	     "GetHistoricalTransform",
+	     "RaycastRewind",
+	     "GetRewindStats",
+	     "GetRewindTime",
+	     "CreateInputReplay",
+	     "PushReplayInput",
+	     "ReconcileInputReplay",
+	     "GetInputReplayState",
+	     "DestroyInputReplay":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
 	}
 	return true
+}
+
+workspace_render_state :: proc(object: ^classes.Object, key: string) -> ([3]f64, bool) {
+	switch key {
+	case "Gravity":
+		return {}, true
+	case:
+		return {}, false
+	}
 }
 
 workspace_set :: proc(
@@ -993,6 +1215,11 @@ workspace_set :: proc(
 		registry := cast(^DataModel)workspace.data_model
 		if registry != nil && registry.registry.classes.renderer != nil {
 			registry.registry.classes.renderer.ActiveCamera = camera
+		}
+	case "Gravity":
+		physics := cast(^Physics)Service_Get_Service(&workspace.service, "Physics")
+		if physics != nil {
+			Physics_Set_Gravity(physics, f32(vm.ArgNumber(L, value_index)))
 		}
 	case "FluidForces":
 		aerodynamics := cast(^Aerodynamics)Service_Get_Service(&workspace.service, "Aerodynamics")
@@ -1063,6 +1290,30 @@ workspace_namecall :: proc(
 	bool,
 ) {
 	workspace := cast(^Workspace)object
+	if count, handled := Replication_Replay_Namecall(&workspace.input_replays, L, method);
+	   handled {return count, true}
+
+	if count, handled := World_Cells_Namecall(workspace, L, datatype_registry, method);
+	   handled {return count, true}
+	switch method {
+	case "ConfigureRewind",
+	     "GetHistoricalTransform",
+	     "RaycastRewind",
+	     "GetRewindStats",
+	     "GetRewindTime":
+		replicator := cast(^ReplicatorService)Service_Get_Service(
+			&workspace.service,
+			"ReplicatorService",
+		)
+		return Replication_Rewind_Namecall(
+			&workspace.rewind,
+			replicator,
+			L,
+			datatype_registry,
+			method,
+		)
+	}
+
 	physics: ^Physics
 	if vm.ThreadIsParallel(L) {
 		if model := workspace.service.data_model; model != nil {
@@ -1074,6 +1325,12 @@ workspace_namecall :: proc(
 		physics = workspace_physics(workspace)
 	}
 	switch method {
+	case "UnloadRegion":
+		return workspace_stream_unload(L, workspace), true
+	case "LoadRegion":
+		return workspace_stream_load(L, workspace), true
+	case "GetUnloadedRegions":
+		return workspace_stream_list(L, workspace), true
 	case "Raycast":
 		if datatype_registry ==
 		   nil {return vm.RaiseError(L, "datatype registry is unavailable"), true}
@@ -1212,14 +1469,49 @@ workspace_parallel_namecall :: proc(
 	return 0, false
 }
 
+workspace_existing_service :: proc(workspace: ^Workspace, name: string) -> ^classes.Object {
+	if workspace == nil ||
+	   workspace.data_model == nil ||
+	   workspace.data_model.registry == nil {return nil}
+	descriptor := Find_Service(workspace.data_model.registry, name)
+	if descriptor == nil {return nil}
+	return descriptor.object
+}
+
+workspace_update :: proc(object: ^classes.Object, ctx: ^classes.Class_Step_Context) {
+	workspace := cast(^Workspace)object
+	if ctx == nil {return}
+	if ctx.renderer == nil ||
+	   ctx.renderer.Filament == nil ||
+	   !workspace.enable_3d ||
+	   workspace.dimension != .D3 {
+		terrain := cast(^Terrain)workspace_existing_service(workspace, "Terrain")
+		if terrain != nil {Terrain_Process_Background(terrain)}
+	}
+	World_Cells_Step(workspace, ctx.L)
+	if workspace.rewind.enabled {
+		replicator := cast(^ReplicatorService)workspace_existing_service(
+			workspace,
+			"ReplicatorService",
+		)
+		if replicator !=
+		   nil {Replication_Rewind_Capture(&workspace.rewind, replicator, f64(replicator.clock))}
+	}
+}
+
 workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	workspace := cast(^Workspace)object
+
+	World_Cells_Destroy(workspace)
+	Replication_Rewind_Destroy(&workspace.rewind)
+	Replication_Replay_Destroy_All(&workspace.input_replays)
 
 	materials.shutdown(renderer)
 
 	if renderer != nil && renderer.Filament != nil {
 		meshes := [?]^kineffi.KineFilamentMesh {
 			workspace.cube_mesh,
+			workspace.surface_mesh,
 			workspace.sphere_mesh,
 			workspace.cylinder_mesh,
 			workspace.cone_mesh,
@@ -1232,11 +1524,19 @@ workspace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_O
 			workspace.capsule_mesh,
 			workspace.water_grid_mesh,
 		}
+		for texture in workspace.surface_textures {
+			if texture != nil {_ = kineffi.Kine_Filament_DestroyTex(renderer.Filament, texture)}
+		}
 		for mesh in meshes {
 			if mesh != nil {_ = kineffi.Kine_Filament_DestroyMesh(renderer.Filament, mesh)}
 		}
 	}
 	delete(workspace.draw_items)
+	for region in workspace.streamed_regions {
+		delete(region.name)
+		delete(region.payload)
+	}
+	delete(workspace.streamed_regions)
 	classes.Object_Destroy(object)
 	free(workspace)
 }
@@ -1260,11 +1560,15 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = workspace_get,
 		set = workspace_set,
+		render_state = workspace_render_state,
 		namecall = workspace_namecall,
+		_step = workspace_update,
+		_step_phase = .Update,
 		parallel_get = workspace_parallel_get,
 		parallel_namecall = workspace_parallel_namecall,
 		properties = []string {
 			"CurrentCamera",
+			"Gravity",
 			"SimulatePhysics",
 			"GlobalWind",
 			"FallenPartsDestroyHeight",
@@ -1291,6 +1595,26 @@ Register_Workspace_Class :: proc(registry: ^classes.Registry) {
 			"Enable3D",
 			"GetRealPhysicsFPS",
 			"PGSIsEnabled",
+			"UnloadRegion",
+			"LoadRegion",
+			"GetUnloadedRegions",
+			"ConfigureCellStreaming",
+			"RegisterWorldCell",
+			"SetCellStreamingFocus",
+			"GetCellStreamingStats",
+			"GetWorldCells",
+			"RetryWorldCell",
+			"UnregisterWorldCell",
+			"ConfigureRewind",
+			"GetHistoricalTransform",
+			"RaycastRewind",
+			"GetRewindStats",
+			"GetRewindTime",
+			"CreateInputReplay",
+			"PushReplayInput",
+			"ReconcileInputReplay",
+			"GetInputReplayState",
+			"DestroyInputReplay",
 		},
 		events = []string{"FinishedReplicating"},
 		exports = []classes.Class_Export{{name = "Raycast", handler = workspace_kne_raycast}},

@@ -1,0 +1,41 @@
+---
+title: EmissiveGIEffect
+description: Approximate local indirect light from bright visible surfaces.
+---
+
+`EmissiveGIEffect` is an optional screen-space indirect lighting effect. It samples bright pixels in the existing scene color and uses the geometry depth buffer to estimate how their light could reach nearby surfaces, including colored bounce from visible luminous geometry.
+
+It is a distinct, bright-source-specific pass; `SSGIEffect` gathers broader diffuse indirect lighting from the visible scene. Both are Kinemium screen-space approximations, not full world-space GI or DDGI. Neither can see around corners or recover lighting from surfaces outside the camera view.
+
+## Example
+
+```lua
+local lighting = game:GetService("Lighting")
+local gi = Instance.new("EmissiveGIEffect")
+gi.Intensity = 1
+gi.Radius = 8
+gi.Threshold = 0.7
+gi.Falloff = 2
+gi.MaxDistance = 100
+gi.SampleCount = 16
+gi.Enabled = true
+gi.Parent = lighting
+```
+
+## Properties
+
+| Property | Type | Default | Range | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | true | Not applicable | Toggles the effect after parenting it to `Lighting`. |
+| `Intensity` | number | 1 | 0–5 | Strength of indirect bright-source light. |
+| `Radius` | number | 8 | 0–30 | Maximum approximate world-space reach of the light. |
+| `Threshold` | number | 0.7 | 0–1 | Minimum screen-color brightness to act as a light source. |
+| `Falloff` | number | 2 | 0–8 | Rate at which indirect light decays across the radius. |
+| `MaxDistance` | number | 100 | 0–1000 | Maximum receiver depth from the camera. |
+| `SampleCount` | number | 16 | 4–32 | Number of bright-source gathering directions per pixel. |
+
+The shader uses stable pixel-varying sample rotation, surface-normal facing tests and a two-point visibility estimate to reduce light leaking through foreground geometry. It only shades pixels with valid scene depth, and a matching depth surface is needed at a bright source to infer the emitter's position.
+
+**Current limitation:** standalone additive or transparent `Neon` surfaces may not write depth, so they might not contribute by themselves. A glowing surface over opaque geometry can contribute, since the underlying geometry supplies a depth position. This is a first-pass screen-space lighting approximation; it does not yet include a persistent radiance buffer, temporal denoiser, or spatial emitter/probe data. High sample counts can be expensive at large render resolutions.
+
+The fast editor viewport omits this effect. To view it, use the full rendered viewport or playtest scene.

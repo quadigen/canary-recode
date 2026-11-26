@@ -1,0 +1,22 @@
+---
+title: TeleportService
+description: Compatibility surface for teleporting between game sessions.
+---
+
+TeleportService is registered as a service but does not implement game-session teleportation.
+
+```lua
+local teleports = game:GetService("TeleportService")
+print(teleports.Name)
+```
+
+## Members
+
+| Member | Behavior |
+| --- | --- |
+| `TeleportAsync` | No-op; returns no values. |
+| `Teleport` | No-op; returns no values. |
+| `TeleportToPlaceInstance` | No-op; returns no values. |
+| `SetTeleportGui` | Returns nil without configuring a teleport interface. |
+
+Do not rely on these methods to connect to another server, move a player or display a loading screen. See [networking](/docs/guides/networking) for the supported process-based server and client setup.

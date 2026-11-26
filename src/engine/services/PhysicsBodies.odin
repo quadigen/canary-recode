@@ -721,7 +721,15 @@ physics_create_body :: proc(
 	kineffi.JPH_BodyCreationSettings_SetIsSensor(settings, part.can_collide ? 0 : 1)
 	gravity := physics_part_gravity(part)
 	gravity_factor := physics_part_gravity_factor(service, gravity)
-	if !static {kineffi.JPH_BodyCreationSettings_SetGravityFactor(settings, gravity_factor)}
+	speed_limit := physics_body_speed_limit(&part.object)
+	if !static {
+		kineffi.JPH_BodyCreationSettings_SetGravityFactor(settings, gravity_factor)
+		kineffi.JPH_BodyCreationSettings_SetMaxLinearVelocity(settings, speed_limit)
+
+		if speed_limit > 500 && part.can_collide {
+			kineffi.JPH_BodyCreationSettings_SetMotionQuality(settings, .LinearCast)
+		}
+	}
 
 	body := kineffi.JPH_BodyInterface_CreateBody(service.system.body_interface, settings)
 
@@ -806,6 +814,7 @@ physics_create_body :: proc(
 			gravity = gravity,
 			gravity_factor = gravity_factor,
 			motion_properties = motion_properties,
+			max_linear_velocity = speed_limit,
 			last_cframe = part.cframe,
 			mesh_id = mesh_id,
 			mesh_index = mesh_index,

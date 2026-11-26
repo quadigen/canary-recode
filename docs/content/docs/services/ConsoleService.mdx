@@ -1,0 +1,20 @@
+---
+title: ConsoleService
+description: Inspect runtime logs in the engine's read-only console overlay.
+---
+
+ConsoleService controls the built-in log viewer. Press F9 in a graphical runtime to toggle the console. It displays runtime logs and provides a search field; it isn't a command executor.
+
+```lua
+local console = game:GetService("ConsoleService")
+print(console.Enabled)
+```
+
+## Members
+
+| Member | Type | Behavior |
+| --- | --- | --- |
+| `Enabled` | boolean | Read-only; defaults to false. Reports whether the console is enabled. |
+| `SetEnabled(enabled: boolean): ()` | method | Toggles the console. Requires the Internals capability; ordinary game scripts cannot call it. |
+
+The overlay requires a graphical runtime and isn't available in a headless server. Use [LogService](/docs/services/LogService) when you need to consume logs from Luau rather than view them on screen.

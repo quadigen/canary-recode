@@ -1,0 +1,90 @@
+---
+title: Instance metadata and scene queries
+description: Read and write Instance attributes, manage tags, and inspect class methods, events, and descendants from C.
+---
+
+The unified native SDK exposes Roblox-style Instance attributes and tags, plus class and scene traversal APIs. These APIs work in standalone applications and borrowed plugin contexts.
+
+## Attributes
+
+**Kinemium_HandleSetAttribute** accepts a typed **Kinemium_Value**. The supported types are nil, boolean, number, string, and Vector3. Use a nil value or **Kinemium_HandleRemoveAttribute** to delete an attribute.
+
+~~~c
+Kinemium_Value health = {
+    .kind = KINEMIUM_VALUE_NUMBER,
+    .number = 100
+};
+bool set = Kinemium_HandleSetAttribute(ctx, part, "Health", &health);
+
+Kinemium_Value current = {0};
+bool queried = Kinemium_HandleGetAttribute(
+    ctx, part, "Health", &current, NULL, 0
+);
+if (queried && current.kind == KINEMIUM_VALUE_NUMBER) {
+    printf("Health: %.0f\n", current.number);
+}
+~~~
+
+The getter returns true for a successful query of a **missing** attribute, with a KINEMIUM_VALUE_NIL result. Use **Kinemium_HandleHasAttribute** to check existence.
+
+Attribute names must have 1–100 bytes, use valid characters, and cannot begin with RBX. String results are copied to the supplied buffer; current.text_length reports the full length.
+
+Enumerate attributes with **Kinemium_HandleGetAttributeCount** and **Kinemium_HandleCopyAttributeName**. The copy function returns the required byte length even if the buffer is too short, and -1 on invalid indices.
+
+## Tags
+
+~~~c
+Kinemium_HandleAddTag(ctx, part, "Enemy");
+Kinemium_HandleAddTag(ctx, part, "Damageable");
+
+bool enemy = Kinemium_HandleHasTag(ctx, part, "Enemy");
+uint64_t tag_count = Kinemium_HandleGetTagCount(ctx, part);
+
+Kinemium_HandleRemoveTag(ctx, part, "Damageable");
+~~~
+
+Adding an existing tag is idempotent. Enumerate tag names through **Kinemium_HandleCopyTagName**. The **Kinemium_HandleGetMetadataRevision** counter increases when attributes or tags change, allowing change detection without re-enumeration.
+
+## Discover descendants
+
+~~~c
+Kinemium_Handle enemy = Kinemium_HandleFindTaggedDescendant(
+    ctx, workspace, "Enemy"
+);
+
+Kinemium_Handle first_part = Kinemium_HandleFindDescendantOfClass(
+    ctx, workspace, "BasePart"
+);
+
+Kinemium_Handle named = Kinemium_HandleFindDescendant(
+    ctx, workspace, "TreasureChest"
+);
+
+uint64_t total = Kinemium_HandleGetDescendantCount(ctx, workspace);
+for (uint64_t i = 0; i < total; ++i) {
+    Kinemium_Handle item = Kinemium_HandleGetDescendantAt(ctx, workspace, i);
+}
+~~~
+
+Traversal uses breadth-first order and excludes the starting Instance. Searching for BasePart includes Part instances. **Kinemium_HandleCountTaggedDescendants** counts matching descendants under an ancestor.
+
+Returned handles belong to the SDK context, are validated on access, and become invalid when the Instance is destroyed.
+
+## Class and event reflection
+
+~~~c
+char parent_class[128] = {0};
+Kinemium_ClassCopyParentName(ctx, "Part", parent_class, sizeof(parent_class));
+
+bool derived = Kinemium_ClassIsA(ctx, "Part", "BasePart");
+bool touched = Kinemium_HandleHasEvent(ctx, part, "Touched");
+bool has_method = Kinemium_ClassHasMethod(ctx, "Part", "IsA");
+~~~
+
+Class-level methods and events can be enumerated with **Kinemium_ClassGetMethodCount**, **Kinemium_ClassCopyMethodName**, **Kinemium_ClassGetEventCount**, and **Kinemium_ClassCopyEventName**. Handle event functions operate on a live Instance.
+
+These APIs expose registered class metadata. They do not bypass Luau member-security checks or grant additional plugin capabilities.
+
+## Validation
+
+Validate type checking for attributes, inheritance, tags, revisions, event callbacks, and invalid handles against the classes you register.

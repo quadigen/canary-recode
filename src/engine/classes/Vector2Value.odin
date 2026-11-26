@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 Vector2Value_Class := Class_Info {
@@ -12,6 +13,7 @@ Vector2Value_Class := Class_Info {
 Vector2Value :: struct {
 	using object: Object,
 	value:        datatypes.Vector2,
+	changed:      ^signals.Signal,
 }
 
 Vector2Value_Init :: proc() -> Vector2Value {
@@ -26,6 +28,7 @@ Vector2Value_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -
 }
 
 Vector2Value_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^Vector2Value)object).changed)
 	Object_Destroy(object)
 	free(cast(^Vector2Value)object)
 }
@@ -40,6 +43,8 @@ Vector2Value_get :: proc(
 	val := cast(^Vector2Value)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		if datatype_registry == nil {return false}
 		datatypes.Push_Vector2(L, datatype_registry, val.value)
@@ -62,7 +67,13 @@ Vector2Value_set :: proc(
 	switch key {
 	case "Value":
 		if datatype_registry == nil {return false}
-		val.value = datatypes.Arg_Vector2(L, value_index, datatype_registry)
+		new_value := datatypes.Arg_Vector2(L, value_index, datatype_registry)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			datatypes.Push_Vector2(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

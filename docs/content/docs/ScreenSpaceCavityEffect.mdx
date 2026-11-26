@@ -1,0 +1,35 @@
+---
+title: ScreenSpaceCavityEffect
+description: Add fine-scale crevice and contact shading from the screen-space depth buffer.
+---
+
+`ScreenSpaceCavityEffect` darkens fine contacts and tight crevices reconstructed from the current frame's depth. It works alongside `SSAOEffect`, which is better suited to broader ambient occlusion. It has no effect on surfaces outside the camera view or pixels without geometry depth.
+
+The effect inherits `Enabled` from `LightingEffect` and must be parented to `Lighting`.
+
+## Example
+
+```lua
+local lighting = game:GetService("Lighting")
+local cavity = Instance.new("ScreenSpaceCavityEffect")
+cavity.Intensity = 1.2
+cavity.Radius = 0.35
+cavity.Bias = 0.02
+cavity.MaxDistance = 100
+cavity.Enabled = true
+cavity.Parent = lighting
+```
+
+## Properties
+
+| Property | Type | Default | Range | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | true | Not applicable | Enables or disables the effect. |
+| `Intensity` | number | 1 | 0–4 | Strength of local darkening. |
+| `Radius` | number | 0.3 | 0–5 | Approximate world-space contact search radius. |
+| `Bias` | number | 0.02 | 0–1 | Suppresses low-angle self-occlusion. |
+| `MaxDistance` | number | 100 | 0–2000 | Maximum camera distance where cavity shading is evaluated. |
+
+The effect checks the surrounding visible surface depth for nearby contacts. It is most visible on close-up intersecting and tightly joined surfaces. Increasing radius searches farther from each pixel; increasing intensity emphasizes darker contact areas.
+
+The fast editor viewport skips this effect, and it can't shade objects outside the camera's view.

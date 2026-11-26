@@ -201,7 +201,8 @@ custom_install_shader :: proc(
 			pName = "main",
 		},
 	}
-	if d.CreateComputePipelines(h, 0, 1, &info, nil, &candidate.pipeline) != .SUCCESS {
+	if d.CreateComputePipelines(h, device.pipeline_cache, 1, &info, nil, &candidate.pipeline) !=
+	   .SUCCESS {
 		return "could not create custom compute pipeline; check shader features and layout"
 	}
 	if output != nil {

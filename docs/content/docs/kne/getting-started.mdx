@@ -1,0 +1,68 @@
+---
+title: Getting started with KNE
+description: Build your first in-engine native extension using the bundled C SDK example.
+---
+
+## Requirements
+
+You need a C compiler or CMake, the Kinemium repository, and an engine build compatible with **KNE ABI 3.2**. KNE extensions are native dynamic libraries; compile them for the same operating system and architecture as the host.
+
+The SDK is shipped under `include/sdk/`. To author an extension, include `kne_plugin.h`; it provides helpers on top of the lower-level `kne.h` ABI.
+
+## Build the official C example
+
+From the repository root:
+
+```bash
+cmake -S include/sdk -B build/kne-examples
+cmake --build build/kne-examples
+```
+
+This builds the **Hello KNE (C)** shared library from `include/sdk/examples/c/hello_kne.c`. On Linux, the output is named `hello_kne.so` by the SDK CMake configuration.
+
+## Install it into the extension directory
+
+The engine discovers extension manifests under the `extensions` directory. Each extension needs an `extension.json` manifest and a loadable native library in its own directory.
+
+A Linux example layout:
+
+```text
+extensions/
+  hello-c/
+    extension.json
+    hello_kne.so
+```
+
+A matching manifest for the bundled C example:
+
+```json
+{
+  "id": "kne.hello.c",
+  "name": "Hello KNE (C)",
+  "version": "1.0.0",
+  "author": "Kinemium",
+  "api": 3,
+  "api_minor": 2,
+  "library": "hello_kne.so",
+  "entry": "kne_extension_entry",
+  "enabled": true,
+  "capabilities": []
+}
+```
+
+Adjust the `library` filename for macOS or Windows and for the actual compiler output.
+
+## Call your extension from Luau
+
+The bundled example registers a Luau library `HelloKNEC`, with `Calculate`, `Greeting`, and `ApplyCallback` functions. Once the extension is loaded:
+
+```lua
+print(HelloKNEC.Calculate(2, 3))
+print(HelloKNEC.Greeting("Kinemium"))
+```
+
+If the library is missing, inspect the extension manifest, loaded library path, ABI version, and native extension logs.
+
+## Next
+
+Read [Extension lifecycle](/docs/kne/lifecycle) to understand the entry point, [Host API modules](/docs/kne/host-api) for the API table, and [Luau interop](/docs/kne/luau-interop) to register your own functions.

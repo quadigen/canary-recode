@@ -12,13 +12,17 @@ material {
     instanced : true,
     parameters : [
         { type : float4[64], name : instanceColors },
-        { type : float,  name : depthBias }
+        { type : float,  name : depthBias },
+        { type : bool, name : useInstanceDepthBias },
+        { type : float[64], name : instanceDepthBias }
     ]
 }
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        material.worldPosition.xyz += normalize(material.worldNormal) * materialParams.depthBias;
+        float bias = materialParams.useInstanceDepthBias
+            ? materialParams.instanceDepthBias[getInstanceIndex()] : materialParams.depthBias;
+        material.worldPosition.xyz += normalize(material.worldNormal) * bias;
     }
 }
 

@@ -610,6 +610,7 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 	}
 
 	previous := self.parent
+	world_changed := render_3d_reparent_affects_world(self, previous, new_parent)
 
 	if previous != nil {
 		for child, i in previous.children {
@@ -664,7 +665,7 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 	Object_Fire_Ancestry_Changed(self, new_parent)
 
 
-	Render_3D_Mark_Dirty()
+	if world_changed {Render_3D_Mark_Dirty(.Hierarchy)}
 	Hierarchy_Touched()
 }
 
@@ -692,7 +693,7 @@ Destroy_Hierarchy :: proc(self: ^Object) {
 		editable_image_detach_consumers(cast(^EditableImage)self)
 	}
 
-	Render_3D_Mark_Dirty()
+	Render_3D_Mark_Object_Dirty(self)
 	Hierarchy_Touched()
 
 	registry := self.signal_registry
@@ -809,12 +810,19 @@ Object_Is_Accessible :: proc(L: ^vm.State, object: ^Object) -> bool {
 		return false
 	}
 
-	current := object
-	for current != nil {
-		if !vm.ThreadMeetsSecurityRequirement(L, current.security_requirement) {
+	capabilities: vm.Thread_Security_Capabilities
+	loaded := false
+	for current := object; current != nil; current = current.parent {
+		required := current.security_requirement.capabilities
+		if required.bits_low == 0 && required.bits_high == 0 {continue}
+		if !loaded {
+			capabilities = vm.GetThreadSecurityCapabilities(L)
+			loaded = true
+		}
+		if capabilities.bits_low & required.bits_low != required.bits_low ||
+		   capabilities.bits_high & required.bits_high != required.bits_high {
 			return false
 		}
-		current = current.parent
 	}
 
 	return true
@@ -997,7 +1005,61 @@ Object_Get_Property :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bo
 
 render_3d_revision: u64
 
-Render_3D_Mark_Dirty :: #force_inline proc "contextless" () {render_3d_revision += 1}
+Render_Dirty_Source :: enum {
+	Other,
+	Hierarchy,
+	Camera,
+	Part,
+	Object,
+}
+
+render_dirty_counts: [Render_Dirty_Source]u64
+
+Render_3D_Dirty_Counts :: proc "contextless" () -> [Render_Dirty_Source]u64 {
+	return render_dirty_counts
+}
+
+render_3d_viewport_ancestor :: proc(object: ^Object) -> bool {
+	for current := object; current != nil; current = current.parent {
+		if Is_A_Class(current, &ViewportFrame_Class) {return true}
+	}
+	return false
+}
+
+render_3d_contains_active_camera :: proc(object: ^Object) -> bool {
+	if object == nil ||
+	   object.signal_registry == nil ||
+	   object.signal_registry.renderer == nil {return false}
+	camera := cast(^Object)object.signal_registry.renderer.ActiveCamera
+	return camera != nil && (camera == object || Is_Descendant_Of(camera, object))
+}
+
+render_3d_reparent_affects_world :: proc(object, previous, next: ^Object) -> bool {
+	if render_3d_contains_active_camera(object) {return true}
+	if Is_A_Class(object, &ViewportFrame_Class) {return false}
+	old_preview := render_3d_viewport_ancestor(previous)
+	new_preview := render_3d_viewport_ancestor(next)
+	if old_preview || new_preview {
+		return (previous != nil && !old_preview) || (next != nil && !new_preview)
+	}
+	return true
+}
+
+Render_3D_Mark_Object_Dirty :: proc(object: ^Object) {
+	if !render_3d_viewport_ancestor(object) || render_3d_contains_active_camera(object) {
+		source := Render_Dirty_Source.Object
+		if Is_A_Class(
+			object,
+			&Camera_Class,
+		) {source = .Camera} else if Is_A_Class(object, &Part_Class) {source = .Part}
+		Render_3D_Mark_Dirty(source)
+	}
+}
+
+Render_3D_Mark_Dirty :: #force_inline proc "contextless" (source: Render_Dirty_Source = .Other) {
+	render_3d_revision += 1
+	render_dirty_counts[source] += 1
+}
 
 Render_3D_Revision :: #force_inline proc "contextless" () -> u64 {return render_3d_revision}
 
@@ -1404,6 +1466,12 @@ remap_cloned_instance_refs :: proc(
 			c := cast(^NoCollisionConstraint)copy
 			if endpoint := clones[c.part0]; endpoint != nil {c.part0 = endpoint}
 			if endpoint := clones[c.part1]; endpoint != nil {c.part1 = endpoint}
+		}
+		if Is_A_Class(original, &CharacterPhysicsSolver_Class) {
+			solver := cast(^CharacterPhysicsSolver)copy
+
+
+			solver.rig_mesh = clones[solver.rig_mesh]
 		}
 		if Is_A_Class(original, &WeldConstraint_Class) {
 			weld := cast(^WeldConstraint)copy

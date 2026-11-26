@@ -1,0 +1,41 @@
+---
+title: NetworkEmulator
+description: Simulate delayed, lost, and reordered messages in a local queue.
+---
+
+NetworkEmulator helps you test how a script reacts to delayed or dropped values without opening a network connection. Obtain one from ReplicatorService rather than Instance.new.
+
+```lua
+local emulator = game:GetService("ReplicatorService"):CreateNetworkEmulator({
+    latency = 0.1,
+    jitter = 0.02,
+    loss = 0.1,
+})
+
+if emulator then
+    emulator:Send("sample", false, 0)
+    for _, value in ipairs(emulator:Drain(1)) do
+        print(value)
+    end
+end
+```
+
+## Properties
+
+All four are read-only after creation and default to zero.
+
+| Property | Meaning |
+| --- | --- |
+| `Latency` | Base delay in seconds. |
+| `Jitter` | Random delay variation in seconds. |
+| `Loss` | Probability of dropping an unreliable value, between 0 and 1. |
+| `Reorder` | Probability of adding extra delay to an unreliable value, between 0 and 1. |
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `Send(value: any, reliable: boolean?, now: number?): boolean` | Queues a value or returns false if dropped. Reliable defaults to true; now defaults to wall-clock time in seconds. |
+| `Drain(now: number?): {any}` | Removes and returns values whose scheduled delivery time has arrived. |
+
+Use the same clock basis for Send and Drain. Values that are simultaneously due are drained in reverse queue order, so don't assume FIFO ordering even with reliable=true. This class stores local Luau values, not serialized network packets, and does not change a live connection's latency or loss.

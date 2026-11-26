@@ -37,7 +37,7 @@ main :: proc() {
 `
 	written, write_error := os.write(writer, transmute([]u8)output)
 	assert(write_error == nil && written == len(output))
-	client_output: string = "[WARN] particle warning\n"
+	client_output: string = "[WARN] particle warning\nKINE_FILAMENT_PASS frame=60 ns=123456 name=Color Pass\n"
 	_, write_error = os.write(client_writer, transmute([]u8)client_output)
 	assert(write_error == nil)
 
@@ -69,7 +69,7 @@ assert(received[6] == "[Playtest client] particle warning")
 	warning := service.server_output.warnings["particle warning"]
 	warning.last_emitted = time.tick_add(time.tick_now(), -services.PLAYTEST_WARNING_INTERVAL)
 	service.server_output.warnings["particle warning"] = warning
-	_, write_error = os.write(writer, transmute([]u8)client_output)
+	_, write_error = os.write(writer, transmute([]u8)string("[WARN] particle warning\n"))
 	assert(write_error == nil)
 	ok, err = vm.RunInternal(
 		&script_vm,

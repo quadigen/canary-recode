@@ -5,6 +5,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import guilib "../gui"
 import sdl3 "../platform"
+import profiling "../profiling"
 import signals "../signals"
 import tracy "../util/odin-tracy"
 import vm "../vm"
@@ -21,6 +22,9 @@ GuiObject :: struct {
 	bg_transparency:             f64,
 	bg_color:                    datatypes.Color3,
 	active:                      bool,
+	auto_localize:               bool,
+	localize:                    bool,
+	interactable:                bool,
 	border_mode:                 enums.BorderMode,
 	clips_descendants:           bool,
 	gui_state:                   enums.GuiState,
@@ -97,6 +101,9 @@ GuiObject_Init :: proc() -> GuiObject {
 		rotation = 0,
 		automatic_size = .None,
 		active = false,
+		auto_localize = true,
+		localize = true,
+		interactable = true,
 		selectable = false,
 		visible = true,
 		zindex = 0,
@@ -202,6 +209,8 @@ GuiObject_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 
 GuiObject_Free_Signals :: proc(gui: ^GuiObject) {
 	if gui == nil {return}
+
+	Gui_Layout_Mark_Dirty()
 	gui_object_untrack(gui)
 	gui_discard_picture(gui)
 	if gui.selection_gained !=
@@ -293,6 +302,12 @@ GuiObject_get :: proc(
 		vm.PushUserdataMethod(L, key)
 	case "Active":
 		vm.PushBoolean(L, gui.active)
+	case "AutoLocalize":
+		vm.PushBoolean(L, gui.auto_localize)
+	case "Localize":
+		vm.PushBoolean(L, gui.localize)
+	case "Interactable":
+		vm.PushBoolean(L, gui.interactable)
 
 	case "LayoutOrder":
 		vm.PushNumber(L, f64(gui.layout_order))
@@ -540,8 +555,9 @@ GuiObject_get_absolute_transform :: proc(
 
 	gui_cached := cast(^GuiObject)object
 	if ctx.gui_transform.object == nil &&
-	   !gui_layout_dirty &&
+	   !gui_layout_all_dirty &&
 	   !gui_layout_solving &&
+	   (!gui_layout_dirty || !gui_layout_tree_dirty(object)) &&
 	   gui_cached.base_solved &&
 	   gui_cached.resolved_size_valid &&
 	   ctx.viewport_width == gui_layout_last_width &&
@@ -563,6 +579,19 @@ GuiObject_get_absolute_transform :: proc(
 	)
 
 	gui := cast(^GuiObject)object
+	padding_x, padding_y: f32
+	if Is_A_Class(object.parent, &GuiObject_Class) {
+		parent_gui := cast(^GuiObject)object.parent
+		left, right, top, bottom, _ := gui_resolve_uipadding(
+			parent_gui,
+			nil,
+			parent_width,
+			parent_height,
+		)
+		padding_x, padding_y = left, top
+		parent_width = max(0, parent_width - left - right)
+		parent_height = max(0, parent_height - top - bottom)
+	}
 
 	if gui.layout_override_size_active {
 		width = gui.layout_override_size.X
@@ -582,16 +611,6 @@ GuiObject_get_absolute_transform :: proc(
 
 		y = parent_y + gui.layout_override_position.Y
 	} else {
-		padding_x: f32 = 0
-		padding_y: f32 = 0
-
-		if object.parent != nil && Is_A_Class(object.parent, &GuiObject_Class) {
-			parent_gui := cast(^GuiObject)object.parent
-
-			padding_x = parent_gui.content_offset.X
-			padding_y = parent_gui.content_offset.Y
-		}
-
 		x =
 			parent_x +
 			padding_x +
@@ -634,7 +653,19 @@ GuiObject_accepts_pointer :: proc(gui: ^GuiObject) -> bool {
 		return false
 	}
 
-	return gui.input_sink || gui.active || Is_A(&gui.object, "TextBox")
+	if !gui.interactable {return false}
+	if gui.input_sink ||
+	   gui.active ||
+	   Is_A_Class(&gui.object, &TextBox_Class) ||
+	   Is_A_Class(&gui.object, &GuiButton_Class) {return true}
+	for child in gui.object.children {
+		if child == nil || child.destroyed {continue}
+		if Is_A_Class(child, &UIDragDetector_Class) &&
+		   (cast(^UIDragDetector)child).enabled {return true}
+		if Is_A_Class(child, &UIScaleDetector_Class) &&
+		   (cast(^UIScaleDetector)child).enabled {return true}
+	}
+	return false
 }
 
 
@@ -788,7 +819,7 @@ Gui_Overlay_Needs_Backdrop :: proc(registry: ^Registry) -> bool {
 			}
 			switch object.class {
 			case &UIBackdrop_Class:
-				if !(cast(^UIBackdrop)object).enabled {continue}
+				if !UIBackdrop_Samples_Background(cast(^UIBackdrop)object) {continue}
 			case &UIMagnifier_Class:
 				effect := cast(^UIMagnifier)object
 				if !effect.enabled || effect.zoom <= 1 || effect.transparency >= 1 {continue}
@@ -891,7 +922,7 @@ gui_object_visit_surface_subtree :: proc(
 
 
 gui_object_point_in_own_rect :: proc(gui: ^GuiObject, x, y: f32) -> bool {
-	if gui == nil {return false}
+	if gui == nil || gui.absolute_size.X <= 0 || gui.absolute_size.Y <= 0 {return false}
 	px, py := GuiObject_screen_to_local(gui, x, y)
 	return GuiObject_point_in_rect(px, py, gui.absolute_position, gui.absolute_size)
 }
@@ -906,6 +937,32 @@ gui_object_point_in_child_area :: proc(gui: ^GuiObject, x, y: f32) -> bool {
 	return GuiObject_point_in_rect(px, py, gui.absolute_position, {width, height})
 }
 
+gui_child_zindex :: #force_inline proc(object: ^Object) -> i32 {
+	if object == nil || object.destroyed || !Is_A_Class(object, &GuiObject_Class) {return 0}
+	return (cast(^GuiObject)object).zindex
+}
+
+gui_children_in_draw_order :: proc(object: ^Object) -> (children: []^Object, allocated: bool) {
+	children = object.children[:]
+	for i in 1 ..< len(children) {
+		if gui_child_zindex(children[i - 1]) <= gui_child_zindex(children[i]) {continue}
+		ordered := make([]^Object, len(children))
+		copy(ordered, children)
+		for j in i ..< len(ordered) {
+			current := ordered[j]
+			z := gui_child_zindex(current)
+			k := j
+			for k > 0 && gui_child_zindex(ordered[k - 1]) > z {
+				ordered[k] = ordered[k - 1]
+				k -= 1
+			}
+			ordered[k] = current
+		}
+		return ordered, true
+	}
+	return
+}
+
 gui_object_hit_subtree_reverse :: proc(
 	object: ^Object,
 	x, y: f32,
@@ -913,10 +970,12 @@ gui_object_hit_subtree_reverse :: proc(
 ) -> ^GuiObject {
 	if object == nil {return nil}
 
-	index := len(object.children)
+	children, allocated := gui_children_in_draw_order(object)
+	defer if allocated {delete(children)}
+	index := len(children)
 	for index > 0 {
 		index -= 1
-		child := object.children[index]
+		child := children[index]
 		if child == nil || child.destroyed {continue}
 
 		if Is_A_Class(child, &ScreenGui_Class) || Is_A_Class(child, &SurfaceGui_Class) {
@@ -925,7 +984,10 @@ gui_object_hit_subtree_reverse :: proc(
 
 		if Is_A_Class(child, &GuiObject_Class) {
 			gui := cast(^GuiObject)child
-			if !gui.visible {continue}
+			if !gui.visible || !gui.interactable {continue}
+			if require_paint &&
+			   Is_A_Class(child, &CanvasGroup_Class) &&
+			   (cast(^CanvasGroup)child).group_transparency >= 1 {continue}
 
 			inside := gui_object_point_in_own_rect(gui, x, y) if gui.clips_descendants else false
 			if gui.clips_descendants && !inside {continue}
@@ -970,6 +1032,7 @@ GuiObject_find_topmost :: proc(
 	if registry == nil {return nil}
 	screen_descriptor := Find_Class(registry, "ScreenGui")
 	if screen_descriptor == nil {return nil}
+	Sort_ScreenGui_Instances(screen_descriptor)
 
 	index := len(screen_descriptor.instances)
 	for index > 0 {
@@ -1084,6 +1147,65 @@ gui_object_hit_chain_from_hit :: proc(hit: GuiObject_Hit) -> GuiObject_Hit_Chain
 	}
 
 	return result
+}
+
+GuiObject_cursor_for_hit :: proc(target: ^GuiObject) -> sdl3.SystemCursor {
+	kind: sdl3.SystemCursor = .DEFAULT
+	if target == nil {return kind}
+	for node := &target.object; node != nil; node = node.parent {
+		if !Is_A_Class(node, &GuiObject_Class) {continue}
+		gui := cast(^GuiObject)node
+		if gui.destroyed || !gui.visible || !gui.interactable {return .DEFAULT}
+		if kind != .DEFAULT {continue}
+		if Is_A_Class(node, &TextBox_Class) {
+			if gui.bg_transparency >= 1 {return .DEFAULT}
+			kind = .TEXT
+		} else if Is_A_Class(node, &GuiButton_Class) && gui.active {
+			if gui.bg_transparency >= 1 {return .DEFAULT}
+			kind = .POINTER
+		}
+	}
+	return kind
+}
+
+GuiObject_cursor_for_pointer :: proc(
+	registry: ^Registry,
+	hit: GuiObject_Hit,
+) -> sdl3.SystemCursor {
+	if descriptor := Find_Class(registry, "UIScaleDetector"); descriptor != nil {
+		for object in descriptor.instances {
+			if object == nil || object.destroyed {continue}
+			d := cast(^UIScaleDetector)object
+			if d.scaling &&
+			   d.enabled &&
+			   d.scale_parent != nil &&
+			   d.scale_parent == d.object.parent &&
+			   ui_detector_can_interact(cast(^GuiObject)d.scale_parent) {
+				return ui_scale_detector_cursor(
+					d.edge_left,
+					d.edge_right,
+					d.edge_top,
+					d.edge_bottom,
+				)
+			}
+		}
+	}
+
+	if hit.target != nil {
+		for node := &hit.target.object; node != nil; node = node.parent {
+			if !Is_A_Class(node, &GuiObject_Class) {continue}
+			gui := cast(^GuiObject)node
+			if !ui_detector_can_interact(gui) {break}
+			object := Find_First_Child_Of_Class(node, "UIScaleDetector")
+			if object == nil || object.destroyed {continue}
+			d := cast(^UIScaleDetector)object
+			if !d.enabled {continue}
+			left, right, top, bottom, ok := ui_scale_detector_zone(d, gui, hit.x, hit.y)
+			if ok {return ui_scale_detector_cursor(left, right, top, bottom)}
+		}
+	}
+
+	return GuiObject_cursor_for_hit(hit.target)
 }
 
 GuiObject_hit_chain_ex :: proc(
@@ -1231,8 +1353,10 @@ gui_object_hover_add :: proc(gui: ^GuiObject, epoch: u64, x, y: f32, in_chain: b
 
 gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
 	screen_x, screen_y := f32(event.motion.x), f32(event.motion.y)
-	result := GuiObject_hit_chain_ex(registry, screen_x, screen_y)
+	hit := GuiObject_hit_test(registry, screen_x, screen_y)
+	result := gui_object_hit_chain_from_hit(hit)
 	defer delete(result.chain)
+	sdl3.Set_GUI_Cursor(GuiObject_cursor_for_pointer(registry, hit))
 
 	gui_hover_epoch += 1
 	if gui_hover_epoch == 0 {gui_hover_epoch = 1}
@@ -1318,7 +1442,13 @@ gui_object_dispatch_motion :: proc(registry: ^Registry, L: ^vm.State, event: sdl
 	}
 }
 
-GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
+GuiObject_Handle_Event :: proc(
+	registry: ^Registry,
+	L: ^vm.State,
+	event: sdl3.Event,
+) -> (
+	scale_claimed: bool,
+) {
 	if registry == nil || L == nil {return}
 
 	if gui_event_depth == 0 {clear(&gui_event_invalidated)}
@@ -1328,13 +1458,21 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 		if gui_event_depth == 0 {clear(&gui_event_invalidated)}
 	}
 
-	if !UIScaleDetector_Handle_Event(registry, L, event) {
+	scale_claimed = UIScaleDetector_Handle_Event(registry, L, event)
+	if !scale_claimed {
 		UIDragDetector_Handle_Event(registry, L, event)
+	} else if event.type == .MOUSE_BUTTON_DOWN || event.type == .MOUSE_BUTTON_UP {
+		hit := GuiObject_hit_test(registry, f32(event.button.x), f32(event.button.y))
+		sdl3.Set_GUI_Cursor(GuiObject_cursor_for_pointer(registry, hit))
+		return
 	}
 
 	#partial switch event.type {
 	case .MOUSE_MOTION:
 		gui_object_dispatch_motion(registry, L, event)
+
+	case .WINDOW_MOUSE_LEAVE, .WINDOW_MINIMIZED:
+		sdl3.Set_GUI_Cursor(.DEFAULT)
 
 	case .MOUSE_BUTTON_DOWN:
 		index := gui_object_mouse_index(event.button.button)
@@ -1413,6 +1551,7 @@ GuiObject_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Ev
 			gui_object_fire_xy(L, gui.mouse_wheel_backward, hit.x, hit.y)
 		}
 	}
+	return
 }
 
 gui_parent_basis_size :: proc(gui: ^GuiObject, ctx: ^Class_Step_Context) -> (width, height: f32) {
@@ -1422,18 +1561,14 @@ gui_parent_basis_size :: proc(gui: ^GuiObject, ctx: ^Class_Step_Context) -> (wid
 		return f32(ctx.viewport_width), f32(ctx.viewport_height)
 	}
 
-	if Is_A(parent, "GuiObject") {
+	if Is_A_Class(parent, &GuiObject_Class) {
 		parent_gui := cast(^GuiObject)parent
 
-		if parent_gui.previous_size_valid {
-			return scrolling_frame_content_size(
-				parent,
-				parent_gui.previous_size.X,
-				parent_gui.previous_size.Y,
-			)
-		}
-
-		return scrolling_frame_content_size(parent, parent_gui.base_size.X, parent_gui.base_size.Y)
+		size :=
+			parent_gui.previous_size if parent_gui.previous_size_valid else parent_gui.base_size
+		width, height = scrolling_frame_content_size(parent, size.X, size.Y)
+		left, right, top, bottom, _ := gui_resolve_uipadding(parent_gui, nil, width, height)
+		return max(0, width - left - right), max(0, height - top - bottom)
 	}
 
 	_, _, width, height = GuiObject_get_absolute_transform(parent, ctx)
@@ -1490,7 +1625,7 @@ gui_automatic_size_limits :: proc(
 		return f32(ctx.viewport_width), f32(ctx.viewport_height), true, true
 	}
 
-	if Is_A(parent, "GuiObject") {
+	if Is_A_Class(parent, &GuiObject_Class) {
 		parent_gui := cast(^GuiObject)parent
 
 		parent_width := parent_gui.resolved_size.X
@@ -1567,6 +1702,17 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 		basis_height = gui.base_size.Y
 	}
 
+	left, right, top, bottom, found := gui_resolve_uipadding(
+		gui,
+		registry,
+		basis_width,
+		basis_height,
+	)
+	content_basis_width := max(0, basis_width - left - right)
+	content_basis_height := max(0, basis_height - top - bottom)
+	auto_x := gui.automatic_size == .X || gui.automatic_size == .XY
+	auto_y := gui.automatic_size == .Y || gui.automatic_size == .XY
+
 	text_content := datatypes.Vector2_Zero
 
 	switch {
@@ -1621,7 +1767,30 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 				continue
 			}
 
-			child_width, child_height := gui_effective_size(child, basis_width, basis_height)
+			child_width, child_height := gui_effective_size(
+				child,
+				content_basis_width,
+				content_basis_height,
+			)
+			if auto_x && child.size.X_Scale != 0 && !child.layout_override_size_active {
+				child_width = max(
+					0,
+					child.size.X_Scale * content_basis_width + child.size.X_Offset,
+				)
+				if child.automatic_size == .X || child.automatic_size == .XY {
+					child_width = max(child_width, child.content_size.X)
+				}
+			}
+			if auto_y && child.size.Y_Scale != 0 && !child.layout_override_size_active {
+				child_height = max(
+					0,
+					child.size.Y_Scale * content_basis_height + child.size.Y_Offset,
+				)
+				if child.automatic_size == .Y || child.automatic_size == .XY {
+					child_height = max(child_height, child.content_size.Y)
+				}
+			}
+			child_width, child_height = GuiObject_Constrain_Size(child, child_width, child_height)
 
 			child_left: f32
 			child_top: f32
@@ -1634,9 +1803,11 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 				y_udim := datatypes.UDim{child.position.Y_Scale, child.position.Y_Offset}
 
 				child_left =
-					gui_resolve_udim(x_udim, basis_width) - child.anchorpoint.X * child_width
+					gui_resolve_udim(x_udim, content_basis_width) -
+					child.anchorpoint.X * child_width
 				child_top =
-					gui_resolve_udim(y_udim, basis_height) - child.anchorpoint.Y * child_height
+					gui_resolve_udim(y_udim, content_basis_height) -
+					child.anchorpoint.Y * child_height
 			}
 
 			child_right := child_left + child_width
@@ -1657,13 +1828,6 @@ GuiObject_Measure_Content :: proc(gui: ^GuiObject, registry: ^Registry) -> datat
 		width = max(width, max_x - min_x)
 		height = max(height, max_y - min_y)
 	}
-
-	left, right, top, bottom, found := gui_resolve_uipadding(
-		gui,
-		registry,
-		basis_width,
-		basis_height,
-	)
 
 	if found {
 		width = max(width, 0) + left + right
@@ -1892,7 +2056,12 @@ gui_compute_transform :: proc(
 }
 
 
-Gui_Layout_Size_Changes :: map[^Object]datatypes.Vector2
+Gui_Layout_Change_Key :: struct {
+	object:   ^Object,
+	property: string,
+}
+
+Gui_Layout_Size_Changes :: map[Gui_Layout_Change_Key]datatypes.Vector2
 
 gui_track_size_change :: proc(
 	changes: ^Gui_Layout_Size_Changes,
@@ -1903,9 +2072,10 @@ gui_track_size_change :: proc(
 	if changes == nil {return}
 	if !Object_Has_Changed_Signal(object) &&
 	   Object_Find_Property_Signal(object, property) == nil {return}
-	if object in changes^ {return}
+	key := Gui_Layout_Change_Key{object, property}
+	if key in changes^ {return}
 	if changes^ == nil {changes^ = make(Gui_Layout_Size_Changes)}
-	changes^[object] = previous
+	changes^[key] = previous
 }
 
 gui_apply_transforms :: proc(
@@ -1913,9 +2083,15 @@ gui_apply_transforms :: proc(
 	px, py, pw, ph: f32,
 	size_changes: ^Gui_Layout_Size_Changes = nil,
 ) {
-	padding_x := parent.content_offset.X
-	padding_y := parent.content_offset.Y
 	content_width, content_height := scrolling_frame_content_size(&parent.object, pw, ph)
+	padding_x, padding_right, padding_y, padding_bottom, _ := gui_resolve_uipadding(
+		parent,
+		nil,
+		content_width,
+		content_height,
+	)
+	content_width = max(0, content_width - padding_x - padding_right)
+	content_height = max(0, content_height - padding_y - padding_bottom)
 
 	scroll_x: f32 = 0
 	scroll_y: f32 = 0
@@ -1962,11 +2138,44 @@ gui_set_layout_rect :: proc(
 	if gui.absolute_position != position || gui.absolute_size != size {
 		if gui.absolute_size != size {
 			gui_track_size_change(size_changes, &gui.object, "AbsoluteSize", gui.absolute_size)
+			if gui_layout_solving {gui_layout_changed = true}
+		}
+		if gui.absolute_position != position {
+			gui_track_size_change(
+				size_changes,
+				&gui.object,
+				"AbsolutePosition",
+				gui.absolute_position,
+			)
 		}
 		gui.absolute_position = position
 		gui.absolute_size = size
 		gui_invalidate_draw(&gui.object)
 	}
+}
+
+gui_layout_gather_tree :: proc(gui: ^GuiObject) {
+	append(&gui_layout_guis, gui)
+	for child in gui.object.children {
+		if child == nil || child.destroyed {continue}
+		if Is_A_Class(child, &GuiObject_Class) {
+			gui_layout_gather_tree(cast(^GuiObject)child)
+		} else if Is_A_Class(child, &UIListLayout_Class) ||
+		   Is_A_Class(child, &UIGridLayout_Class) {
+			append(&gui_layout_layouts, child)
+		}
+	}
+}
+
+gui_layout_apply_root :: proc(
+	root: ^GuiObject,
+	ctx: ^Class_Step_Context,
+	changes: ^Gui_Layout_Size_Changes,
+) {
+	px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, ctx)
+	x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
+	gui_set_layout_rect(root, x, y, w, h, changes)
+	gui_apply_transforms(root, x, y, w, h, changes)
 }
 
 Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f32 = 0) {
@@ -1992,15 +2201,23 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 	gui_layout_solving = true
 	defer {
 		gui_layout_solving = false
-		for object, previous in size_changes {
+		for key, previous in size_changes {
+			object := key.object
 			if object.destroyed {continue}
-			if Is_A_Class(object, &UIListLayout_Class) {
-				if (cast(^UIListLayout)object).absolute_content_size != previous {
-					Object_Fire_Property_Changed(object, "AbsoluteContentSize", L)
+			current: datatypes.Vector2
+			switch key.property {
+			case "AbsolutePosition":
+				current = (cast(^GuiObject)object).absolute_position
+			case "AbsoluteSize":
+				current = (cast(^GuiObject)object).absolute_size
+			case "AbsoluteContentSize":
+				if Is_A_Class(object, &UIListLayout_Class) {
+					current = (cast(^UIListLayout)object).absolute_content_size
+				} else {
+					current = (cast(^UIGridLayout)object).absolute_content_size
 				}
-			} else if (cast(^GuiObject)object).absolute_size != previous {
-				Object_Fire_Property_Changed(object, "AbsoluteSize", L)
 			}
+			if current != previous {Object_Fire_Property_Changed(object, key.property, L)}
 		}
 		delete(size_changes)
 	}
@@ -2012,173 +2229,115 @@ Update_GUI_Layout :: proc(registry: ^Registry, width, height: i32, delta_time: f
 		viewport_height = height,
 	}
 
-	if !resized && !gui_layout_full_dirty {
-		tracy.ZoneNC("GUI Transform-Only Layout", 0x56B6C2)
-		for root in gui_layout_roots {
-			if root == nil ||
-			   root.object.destroyed ||
-			   (!gui_layout_all_dirty && !root.layout_dirty) {continue}
-			px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
-			x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
-			gui_set_layout_rect(root, x, y, w, h, &size_changes)
-			gui_apply_transforms(root, x, y, w, h, &size_changes)
-			root.layout_dirty = false
-		}
-		gui_layout_dirty = false
-		gui_layout_all_dirty = false
-		return
-	}
 
-	gui_layout_animated = false
 	all_dirty := resized || gui_layout_all_dirty
+	full := resized || gui_layout_full_dirty
 	gui_layout_dirty = false
 	gui_layout_full_dirty = false
 	gui_layout_all_dirty = false
 
-
-	clear(&gui_layout_guis)
-	clear(&gui_layout_roots)
-	clear(&gui_layout_active_roots)
-	clear(&gui_layout_layouts)
-
-	{
-		tracy.ZoneNC("Layout Gather", 0x98C379)
-
-
+	if all_dirty {
+		zone := profiling.Begin("GUI Root Rebuild", 0x98C379)
+		clear(&gui_layout_roots)
 		for descriptor in registry.classes {
-			if descriptor == nil {
-				continue
-			}
-
-			info := descriptor.info
-			is_gui := Is_Class_A(info, &GuiObject_Class)
-			is_layout :=
-				Is_Class_A(info, &UIListLayout_Class) || Is_Class_A(info, &UIGridLayout_Class)
-
-			if !is_gui && !is_layout {
-				continue
-			}
-
+			if descriptor == nil || !Is_Class_A(descriptor.info, &GuiObject_Class) {continue}
 			for object in descriptor.instances {
-				if object == nil || object.destroyed {
-					continue
-				}
-
-				if is_gui {
-					gui := cast(^GuiObject)object
-					if gui_layout_root(gui) {
-						append(&gui_layout_roots, gui)
-						if all_dirty || gui.layout_dirty {
-							append(&gui_layout_active_roots, gui)
-						}
-					}
-					if all_dirty || gui_layout_tree_dirty(object) {
-						append(&gui_layout_guis, gui)
-					}
-				} else {
-					if !all_dirty && !gui_layout_tree_dirty(object.parent) {continue}
-					append(&gui_layout_layouts, object)
-				}
+				if object == nil || object.destroyed {continue}
+				gui := cast(^GuiObject)object
+				if gui_layout_root(gui) {append(&gui_layout_roots, gui)}
 			}
 		}
 	}
 
-	for root in gui_layout_active_roots {root.layout_dirty = false}
-	for _ in 0 ..< 8 {
-		for gui in gui_layout_guis {
-			gui.previous_size = gui.resolved_size
-			gui.previous_size_valid = gui.resolved_size_valid
 
-			gui.layout_override_active = false
-			gui.layout_override_position = {}
+	clear(&gui_layout_active_roots)
+	for root in gui_layout_roots {
+		if root == nil || root.object.destroyed || (!all_dirty && !root.layout_dirty) {continue}
+		root.layout_dirty = false
+		append(&gui_layout_active_roots, root)
+	}
 
-			gui.layout_override_size_active = false
-			gui.layout_override_size = {}
-
-			gui.base_solved = false
-			gui.auto_solved = false
-			gui.resolved_size_valid = false
+	for root in gui_layout_active_roots {
+		if root.object.destroyed {continue}
+		if !full {
+			zone := profiling.Begin("GUI Transform-Only Layout", 0x56B6C2)
+			gui_layout_apply_root(root, &ctx, &size_changes)
+			continue
 		}
 
-		gui_layout_changed = false
 
-		{
-			tracy.ZoneNC("Layout Measure Base", 0x61AFEF)
-
-			for gui in gui_layout_active_roots {
-				gui_measure_base(gui, registry, &ctx)
+		clear(&gui_layout_guis)
+		clear(&gui_layout_layouts)
+		gui_layout_gather_tree(root)
+		gui_layout_animated = false
+		for _ in 0 ..< 8 {
+			for gui in gui_layout_guis {
+				gui.previous_size =
+					gui.layout_override_size if gui.layout_override_size_active else gui.resolved_size
+				gui.previous_size_valid =
+					gui.layout_override_size_active || gui.resolved_size_valid
+				gui.layout_override_active = false
+				gui.layout_override_position = {}
+				gui.layout_override_size_active = false
+				gui.layout_override_size = {}
+				gui.base_solved = false
+				gui.auto_solved = false
+				gui.resolved_size_valid = false
 			}
-		}
-
-		{
-			tracy.ZoneNC("Layout Measure Auto", 0xC678DD)
-
-			for gui in gui_layout_active_roots {
-				gui_measure_auto(gui, registry, &ctx)
+			gui_layout_changed = false
+			{
+				zone := profiling.Begin("GUI Measure", 0x61AFEF)
+				gui_measure_base(root, registry, &ctx)
+				gui_measure_auto(root, registry, &ctx)
 			}
-		}
-
-		{
-			tracy.ZoneNC("Layout Apply Lists/Grids", 0xE06C75)
-
-
-			for object in gui_layout_layouts {
-				if object == nil || object.destroyed {
-					continue
-				}
-
-				if Is_A_Class(object, &UIListLayout_Class) {
-					layout := cast(^UIListLayout)object
-					previous := layout.absolute_content_size
-					UIListLayout_Apply(layout, registry, &ctx)
-					if layout.absolute_content_size != previous {
-						gui_track_size_change(
-							&size_changes,
-							object,
-							"AbsoluteContentSize",
-							previous,
-						)
+			{
+				zone := profiling.Begin("GUI Lists and Grids", 0xE06C75)
+				for object in gui_layout_layouts {
+					if object == nil || object.destroyed {continue}
+					if Is_A_Class(object, &UIListLayout_Class) {
+						layout := cast(^UIListLayout)object
+						previous := layout.absolute_content_size
+						UIListLayout_Apply(layout, registry, &ctx)
+						if layout.absolute_content_size != previous {
+							gui_track_size_change(
+								&size_changes,
+								object,
+								"AbsoluteContentSize",
+								previous,
+							)
+						}
+					} else if Is_A_Class(object, &UIGridLayout_Class) {
+						layout := cast(^UIGridLayout)object
+						previous := layout.absolute_content_size
+						UIGridLayout_Apply(layout, registry, &ctx)
+						if layout.absolute_content_size != previous {
+							gui_track_size_change(
+								&size_changes,
+								object,
+								"AbsoluteContentSize",
+								previous,
+							)
+						}
 					}
-				} else if Is_A_Class(object, &UIGridLayout_Class) {
-					UIGridLayout_Apply(cast(^UIGridLayout)object, registry, &ctx)
 				}
 			}
-		}
-
-		{
-			tracy.ZoneNC("Layout Transforms", 0xD19A66)
-
-			for root in gui_layout_active_roots {
-				if root.object.destroyed {
-					continue
-				}
-
-				px, py, pw, ph := GuiObject_get_absolute_transform(root.object.parent, &ctx)
-
-				x, y, w, h := gui_compute_transform(root, px, py, pw, ph, 0, 0, 0, 0)
-
-				gui_set_layout_rect(root, x, y, w, h, &size_changes)
-
-				gui_apply_transforms(root, x, y, w, h, &size_changes)
+			{
+				zone := profiling.Begin("GUI Transforms", 0xD19A66)
+				gui_layout_apply_root(root, &ctx, &size_changes)
 			}
+			if !gui_layout_changed {break}
 		}
-
-		if !gui_layout_changed {
-			break
+		if gui_layout_changed || gui_layout_animated {
+			root.layout_dirty = true
+			gui_layout_dirty = true
+			gui_layout_full_dirty = true
 		}
+		if gui_layout_changed {gui_render_revision += 1}
 	}
 
 	gui_layout_last_width = width
 	gui_layout_last_height = height
 	gui_layout_registry = registry
-	if gui_layout_changed || gui_layout_animated {
-		gui_layout_dirty = true
-		gui_layout_full_dirty = true
-		gui_layout_all_dirty = true
-	}
-	if gui_layout_changed {
-		gui_render_revision += 1
-	}
 }
 
 gui_layout_tree_dirty :: proc(object: ^Object) -> bool {
@@ -2457,22 +2616,9 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 	if backdrop_object != nil {
 		backdrop := cast(^UIBackdrop)backdrop_object
 
-		has_effect :=
-			backdrop.blur_radius > 0 ||
-			backdrop.brightness != 0 ||
-			backdrop.contrast != 1 ||
-			backdrop.saturation != 1 ||
-			backdrop.hue_shift != 0 ||
-			backdrop.morphology != 0 ||
-			backdrop.displacement > 0 ||
-			backdrop.pixelate > 0 ||
-			backdrop.zoom != 1 ||
-			backdrop.offset != (datatypes.UDim2{}) ||
-			backdrop.parallax != (datatypes.Vector2{})
-
-		if backdrop.enabled &&
-		   ((has_effect && backdrop.transparency < 1) || backdrop.tint_transparency < 0.999) {
-			ctx.gui_dynamic = true
+		samples_background := UIBackdrop_Samples_Background(backdrop)
+		if backdrop.enabled && (samples_background || backdrop.tint_transparency < 0.999) {
+			ctx.gui_dynamic = ctx.gui_dynamic || samples_background
 			backdrop_rect := rect
 			backdrop_rect.color = backdrop.tint_color
 			backdrop_rect.bgTransparency = f32(backdrop.tint_transparency)
@@ -2498,13 +2644,13 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 			}
 
 			params := guilib.BackdropParams {
-				transparency  = f32(backdrop.transparency) if has_effect else 1,
+				transparency  = f32(backdrop.transparency) if samples_background else 1,
 				cornerRadiusX = corner_radius,
 				cornerRadiusY = corner_radius,
 				exponent      = f32(backdrop.exponent),
 				offsetX       = offset_x,
 				offsetY       = offset_y,
-				blurSigma     = f32(backdrop.blur_radius),
+				blurSigma     = f32(backdrop.blur_radius) if samples_background else 0,
 				brightness    = f32(backdrop.brightness),
 				contrast      = f32(backdrop.contrast),
 				saturation    = f32(backdrop.saturation),
@@ -2515,6 +2661,7 @@ GuiObject_render :: proc(object: ^Object, ctx: ^Class_Step_Context, skip_shadow:
 				zoom          = f32(backdrop.zoom),
 			}
 
+			zone := profiling.Begin("GUI Backdrop Draw", 0x56B6C2)
 			guilib.drawBackdrop(ctx.renderer.SkiaSurface, backdrop_rect, params)
 		}
 	}
@@ -2663,6 +2810,15 @@ GuiObject_set :: proc(
 		if gui.active == value {return true}
 		gui.active = value
 		render_dirty = true
+	case "AutoLocalize":
+		gui.auto_localize = vm.ArgBoolean(L, value_index)
+	case "Localize":
+		gui.localize = vm.ArgBoolean(L, value_index)
+	case "Interactable":
+		value := vm.ArgBoolean(L, value_index)
+		if gui.interactable == value {return true}
+		gui.interactable = value
+		Gui_Render_Mark_Dirty()
 	case "LayoutOrder":
 		value := i32(vm.ArgNumber(L, value_index))
 		if gui.layout_order == value {return true}
@@ -2799,6 +2955,9 @@ GuiObject_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.bg_transparency = src.bg_transparency
 	dst.bg_color = src.bg_color
 	dst.active = src.active
+	dst.auto_localize = src.auto_localize
+	dst.localize = src.localize
+	dst.interactable = src.interactable
 	dst.border_mode = src.border_mode
 	dst.clips_descendants = src.clips_descendants
 	dst.input_sink = src.input_sink
@@ -2857,6 +3016,9 @@ Register_GuiObject :: proc(registry: ^Registry) {
 			"Selectable",
 			"SelectionOrder",
 			"Active",
+			"AutoLocalize",
+			"Localize",
+			"Interactable",
 			"GuiState",
 			"ClipsDescendants",
 			"Position",

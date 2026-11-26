@@ -256,11 +256,43 @@ runtime_global_settings :: proc "c" (L: ^vm.State) -> i32 {
 }
 
 
+runtime_user_feature_enabled :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	vm.PushBoolean(L, false)
+	return 1
+}
+
+runtime_user_settings :: proc "c" (L: ^vm.State) -> i32 {
+	context = tracy.DefaultContext()
+	vm.NewTable(L, 0, 2)
+	vm.NewTable(L, 0, 2)
+	if vm.GetGlobal(L, "Enum") == .Table {
+		if vm.GetField(L, -1, "ControlMode") != .Nil {
+			_ = vm.GetField(L, -1, "Classic")
+			vm.SetField(L, -4, "ControlMode")
+		}
+		vm.Pop(L)
+		if vm.GetField(L, -1, "ComputerMovementMode") != .Nil {
+			_ = vm.GetField(L, -1, "KeyboardMouse")
+			vm.SetField(L, -4, "ComputerMovementMode")
+		}
+		vm.Pop(L)
+	}
+	vm.Pop(L)
+	vm.SetField(L, -2, "GameSettings")
+	vm.PushFunction(L, "IsUserFeatureEnabled", runtime_user_feature_enabled, 0)
+	vm.SetField(L, -2, "IsUserFeatureEnabled")
+	return 1
+}
+
 runtime_install_time_global :: proc(vm_state: ^vm.VM) {
 	assert(vm_state != nil)
 	assert(vm_state.L != nil)
 
 	L := vm_state.L
+
+	vm.PushFunction(L, "UserSettings", runtime_user_settings, 0)
+	vm.SetGlobalFromStack(vm_state, "UserSettings")
 
 	vm.PushFunction(L, "tick", runtime_global_tick, 0)
 	vm.SetGlobalFromStack(vm_state, "tick")

@@ -267,6 +267,9 @@ export default function HomePage() {
             <Link href="/docs" className={buttonClass}>Get started <Arrow /></Link>
             <Link href="#overview" className={buttonClass}>How it works <Arrow /></Link>
           </div>
+          <p className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium">
+            <Link className="underline underline-offset-4 hover:text-orange-500" href="/docs/native-sdk">Kinemium Native SDK</Link>
+          </p>
         </div>
         <div className="pointer-events-none relative mt-8 border-b border-current/15 xl:-mt-12">
           <GeometricArtwork />

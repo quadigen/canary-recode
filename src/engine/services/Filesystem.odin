@@ -8,10 +8,12 @@ import datatypes "../datatypes"
 import enums "../enum"
 import fsutil "../fsutil"
 import vm "../vm"
+import "core:crypto/sha2"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:time"
 
 Filesystem_Class := classes.Class_Info {
 	name   = "Filesystem",
@@ -50,6 +52,8 @@ Filesystem_get :: proc(
 	     "MovePath",
 	     "CopyPath",
 	     "ReadFile",
+	     "GetFileVersion",
+	     "HashSource",
 	     "WriteFile",
 	     "WriteFileAtomic",
 	     "DeleteFile":
@@ -264,6 +268,55 @@ Filesystem_namecall :: proc(
 		}
 
 		vm.PushString(L, destination)
+		return 1, true
+	case "GetFileVersion":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Filesystem:GetFileVersion() requires Internals capability"),
+				true
+		}
+
+
+		path := vm.ArgString(L, 2)
+		info, err := os.stat(path, context.temp_allocator)
+		if err != nil {
+			vm.PushNil(L)
+			return 1, true
+		}
+		defer os.file_info_delete(info, context.temp_allocator)
+		if info.type != .Regular {
+			vm.PushNil(L)
+			return 1, true
+		}
+		vm.PushString(
+			L,
+			fmt.tprintf(
+				"%d:%d:%d:%d",
+				info.device,
+				info.inode,
+				info.size,
+				time.time_to_unix_nano(info.modification_time),
+			),
+		)
+		return 1, true
+	case "HashSource":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "Filesystem:HashSource() requires Internals capability"), true
+		}
+
+
+		data := vm.ArgString(L, 2)
+		ctx: sha2.Context_256
+		sha2.init_256(&ctx)
+		sha2.update(&ctx, transmute([]u8)data)
+		digest: [32]u8
+		sha2.final(&ctx, digest[:])
+		hex := "0123456789abcdef"
+		result: [64]u8
+		for b, i in digest {
+			result[i * 2] = hex[b >> 4]
+			result[i * 2 + 1] = hex[b & 15]
+		}
+		vm.PushString(L, string(result[:]))
 		return 1, true
 	case "ReadFile":
 		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {

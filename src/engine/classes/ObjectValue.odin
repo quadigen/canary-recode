@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 ObjectValue_Class := Class_Info {
@@ -12,6 +13,7 @@ ObjectValue_Class := Class_Info {
 ObjectValue :: struct {
 	using object: Object,
 	value:        ^Object,
+	changed:      ^signals.Signal,
 }
 
 ObjectValue_Init :: proc() -> ObjectValue {
@@ -26,6 +28,7 @@ ObjectValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 }
 
 ObjectValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^ObjectValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^ObjectValue)object)
 }
@@ -40,6 +43,8 @@ ObjectValue_get :: proc(
 	val := cast(^ObjectValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		Push_Object(L, val.value)
 	case:
@@ -60,18 +65,21 @@ ObjectValue_set :: proc(
 
 	switch key {
 	case "Value":
-		if vm.IsNoneOrNil(L, value_index) {
-			val.value = nil
-			return true
+		reference: ^Object
+		if !vm.IsNoneOrNil(L, value_index) {
+			reference = object_from_argument(L, value_index)
+			if reference == nil {
+				_ = vm.RaiseError(L, "ObjectValue Value must be an Instance or nil")
+				return true
+			}
 		}
 
-		reference := object_from_argument(L, value_index)
-		if reference == nil {
-			_ = vm.RaiseError(L, "ObjectValue Value must be an Instance or nil")
-			return true
-		}
-
+		if val.value == reference {return true}
 		val.value = reference
+		if val.changed != nil {
+			Push_Object(L, reference)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

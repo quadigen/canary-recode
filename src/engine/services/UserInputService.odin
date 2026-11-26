@@ -38,6 +38,8 @@ UserInputService :: struct {
 	input_began:             ^signals.Signal,
 	input_changed:           ^signals.Signal,
 	input_ended:             ^signals.Signal,
+	gamepad_connected:       ^signals.Signal,
+	gamepad_disconnected:    ^signals.Signal,
 	mouse:                   ^Mouse,
 	object_runtime:          ^classes.Registry,
 }
@@ -72,6 +74,14 @@ user_input_service_construct :: proc(
 				model.registry.vm_state.L,
 			)
 			service.input_ended = signals.Create(
+				model.registry.signal_registry,
+				model.registry.vm_state.L,
+			)
+			service.gamepad_connected = signals.Create(
+				model.registry.signal_registry,
+				model.registry.vm_state.L,
+			)
+			service.gamepad_disconnected = signals.Create(
 				model.registry.signal_registry,
 				model.registry.vm_state.L,
 			)
@@ -121,6 +131,10 @@ user_input_service_get :: proc(
 		signals.Push(L, service.input_changed)
 	case "InputEnded":
 		signals.Push(L, service.input_ended)
+	case "GamepadConnected":
+		signals.Push(L, service.gamepad_connected)
+	case "GamepadDisconnected":
+		signals.Push(L, service.gamepad_disconnected)
 	case "GetStringForKeyCode",
 	     "GetNavigationGamepads",
 	     "IsNavigationGamepad",

@@ -2,7 +2,6 @@
 
 package services
 
-// wire:service global="ExportService"
 
 import kineffi "../bindings"
 import classes "../classes"
@@ -41,17 +40,29 @@ ExportService :: struct {
 	last_error:    string,
 }
 
+export_job_update_progress :: proc(value: f32, userdata: rawptr) {
+	job := cast(^Export_Job)userdata
+	sync.mutex_lock(&job.mutex)
+	job.progress = value
+	sync.mutex_unlock(&job.mutex)
+}
+
 export_job_run :: proc(t: ^thread.Thread) {
 	when tracy.TRACY_ENABLE {
 		context.allocator = tracy.DefaultContext().allocator
 	}
 	job := cast(^Export_Job)t.data
-	value: f32
-	err := serializer.Write_File_Data_Progress(job.path, job.data, &value)
+	err := serializer.Write_File_Data_Progress(
+		job.path,
+		job.data,
+		nil,
+		export_job_update_progress,
+		job,
+	)
 	sync.mutex_lock(&job.mutex)
 	job.error = err
 	job.failed = !serializer.Error_Is_None(err)
-	job.progress = 1
+	if !job.failed {job.progress = 1}
 	job.done = true
 	sync.mutex_unlock(&job.mutex)
 }
@@ -161,8 +172,13 @@ export_datamodel_to_file_async :: proc(
 		delete(job.path)
 		delete(job.data)
 		free(job)
-		service.progress = 1
+		service.progress = 1 if serializer.Error_Is_None(fallback) else 0
 		service.finished = true
+		delete(service.last_error)
+		service.last_error = ""
+		if !serializer.Error_Is_None(
+			fallback,
+		) {service.last_error = serializer.Error_String(fallback)}
 		return fallback
 	}
 	worker.data = job
@@ -198,9 +214,7 @@ export_datamodel_snapshot :: proc(
 		)
 	}
 
-	// Terrain is a singleton service rather than an Instance, so the tree walk
-	// never reaches it. Its voxel grid travels in the format's own section
-	// instead, which is why a map edited with terrain still saves it.
+
 	terrain_table: serializer.Kine_Terrain
 	defer serializer.Kine_Terrain_Destroy(&terrain_table)
 	terrain_object := DataModel_Get_Service(model, "Terrain")
@@ -318,6 +332,12 @@ export_service_namecall :: proc(
 ) {
 	service := cast(^ExportService)object
 	switch method {
+	case "ExportToFile", "ExportToFileSync", "Export", "ImportFile":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "File import/export requires Internals capability"), true
+		}
+	}
+	switch method {
 	case "GetExportProgress":
 		export_service_collect(service)
 		progress := service.progress
@@ -325,8 +345,6 @@ export_service_namecall :: proc(
 			sync.mutex_lock(&job.mutex)
 			progress = job.progress
 			sync.mutex_unlock(&job.mutex)
-		} else if service.finished {
-			progress = 1
 		}
 		vm.PushNumber(L, f64(progress))
 		return 1, true
@@ -449,7 +467,7 @@ export_import_mesh_file :: proc(
 		part := cast(^classes.MeshPart)object
 		part.mesh_id = strings.clone(absolute)
 		part.mesh_index = u32(index)
-		// MeshPart renders with Size / 2 as its scale.
+
 		part.size = datatypes.Vector3{2, 2, 2}
 		mesh_name := string(kineffi.Kine_Filament_GetMeshListName(meshes, u32(index)))
 		if mesh_name == "" {

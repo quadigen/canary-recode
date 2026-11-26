@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 BrickColorValue_Class := Class_Info {
@@ -12,6 +13,7 @@ BrickColorValue_Class := Class_Info {
 BrickColorValue :: struct {
 	using object: Object,
 	value:        datatypes.BrickColor,
+	changed:      ^signals.Signal,
 }
 
 BrickColorValue_Init :: proc() -> BrickColorValue {
@@ -29,6 +31,7 @@ BrickColorValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr
 }
 
 BrickColorValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^BrickColorValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^BrickColorValue)object)
 }
@@ -43,6 +46,8 @@ BrickColorValue_get :: proc(
 	val := cast(^BrickColorValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		if datatype_registry == nil {return false}
 		datatypes.Push_BrickColor(L, datatype_registry, val.value)
@@ -65,7 +70,13 @@ BrickColorValue_set :: proc(
 	switch key {
 	case "Value":
 		if datatype_registry == nil {return false}
-		val.value = datatypes.Arg_BrickColor(L, value_index, datatype_registry)
+		new_value := datatypes.Arg_BrickColor(L, value_index, datatype_registry)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			datatypes.Push_BrickColor(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

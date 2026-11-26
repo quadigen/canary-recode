@@ -89,7 +89,7 @@ udim_equal :: proc(value, other, ctx: rawptr) -> bool {
 
 udim_string :: proc(value, ctx: rawptr) -> string {
 	udim := cast(^UDim)value
-	return fmt.tprintf("{%g, %g}", udim.Scale, udim.Offset)
+	return fmt.tprintf("{{%g, %g}}", udim.Scale, udim.Offset)
 }
 
 udim_destroy :: proc(value, ctx: rawptr) {

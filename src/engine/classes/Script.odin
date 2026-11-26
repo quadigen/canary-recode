@@ -31,8 +31,7 @@ Script_Init :: proc(class: ^Class_Info = nil, name: string = "Script") -> Script
 	}
 }
 
-// Script_Set_Source replaces a Script's source text, invalidating its module
-// cache and any running thread.
+
 Script_Set_Source :: proc(script: ^Script, source: string) {
 	if script == nil {
 		return
@@ -71,6 +70,13 @@ script_get :: proc(
 	script := cast(^Script)object
 	switch key {
 	case "Source":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_READ,
+		) {
+			_ = vm.RaiseError(L, "Script.Source requires trusted read permission")
+			return true
+		}
 		vm.PushString(L, script.source)
 	case "Enabled":
 		vm.PushBoolean(L, script.enabled)
@@ -95,13 +101,22 @@ script_set :: proc(
 	script := cast(^Script)object
 	switch key {
 	case "Source":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_SCRIPT_SOURCE_WRITE,
+		) {
+			_ = vm.RaiseError(L, "Script.Source requires trusted write permission")
+			return true
+		}
 		Script_Set_Source(script, vm.ArgString(L, value_index))
 	case "Enabled":
 		Script_Set_Enabled(script, vm.ArgBoolean(L, value_index))
 	case "Disabled":
 		Script_Set_Enabled(script, !vm.ArgBoolean(L, value_index))
 	case "RunContext":
-		run_context := enums.RunContext(enums.Arg_Item(L, value_index, enum_registry, "RunContext").value)
+		run_context := enums.RunContext(
+			enums.Arg_Item(L, value_index, enum_registry, "RunContext").value,
+		)
 		if script.run_context != run_context {
 			script.run_context = run_context
 			script.restart_requested = true

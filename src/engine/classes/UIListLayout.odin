@@ -427,12 +427,20 @@ ui_list_layout_item_cross_offset :: proc(
 	return 0
 }
 
-ui_list_layout_item_alignment :: proc(item: ^UIListLayout_Item, default: enums.ItemLineAlignment) -> enums.ItemLineAlignment {
-	if item.flex != nil && item.flex.item_line_alignment != .Automatic {return item.flex.item_line_alignment}
+ui_list_layout_item_alignment :: proc(
+	item: ^UIListLayout_Item,
+	default: enums.ItemLineAlignment,
+) -> enums.ItemLineAlignment {
+	if item.flex != nil &&
+	   item.flex.item_line_alignment != .Automatic {return item.flex.item_line_alignment}
 	return default
 }
 
-ui_list_layout_flex_weight :: proc(layout: ^UIListLayout, item: ^UIListLayout_Item, growing, fill: bool) -> f64 {
+ui_list_layout_flex_weight :: proc(
+	layout: ^UIListLayout,
+	item: ^UIListLayout_Item,
+	growing, fill: bool,
+) -> f64 {
 	if item.flex == nil {return 1 if growing && fill else 0}
 	mode := item.flex.flex_mode
 	if growing {
@@ -444,7 +452,12 @@ ui_list_layout_flex_weight :: proc(layout: ^UIListLayout, item: ^UIListLayout_It
 	return weight if mode == .Shrink || mode == .Fill else 0
 }
 
-ui_list_layout_distribute_flex :: proc(layout: ^UIListLayout, items: []UIListLayout_Item, free: f32, fill: bool) -> bool {
+ui_list_layout_distribute_flex :: proc(
+	layout: ^UIListLayout,
+	items: []UIListLayout_Item,
+	free: f32,
+	fill: bool,
+) -> bool {
 	remaining := f64(free)
 	growing := remaining > 0
 	changed := false
@@ -595,7 +608,11 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 	parent := cast(^GuiObject)layout.object.parent
 
 	_, _, parent_width, parent_height := GuiObject_get_absolute_transform(&parent.object, ctx)
-	parent_width, parent_height = scrolling_frame_content_size(&parent.object, parent_width, parent_height)
+	parent_width, parent_height = scrolling_frame_content_size(
+		&parent.object,
+		parent_width,
+		parent_height,
+	)
 
 	parent_width = max(f32(0), parent_width)
 	parent_height = max(f32(0), parent_height)
@@ -618,7 +635,7 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 	origin_x := uip_left + pad_left
 	origin_y := uip_top + pad_top
 
-	// Items and lines are local to this pass, including when Lua callbacks run.
+
 	scratch := runtime.default_temp_allocator_temp_begin()
 	defer runtime.default_temp_allocator_temp_end(scratch)
 	allocator := context.temp_allocator if scratch.arena != nil else context.allocator
@@ -707,7 +724,8 @@ UIListLayout_Apply :: proc(layout: ^UIListLayout, registry: ^Registry, ctx: ^Cla
 		max_main = max(max_main, line.main_size)
 	}
 
-	default_alignment := .Stretch if cross_flex == .Fill else ui_list_layout_cross_alignment(layout, cross_flex)
+	default_alignment :=
+		.Stretch if cross_flex == .Fill else ui_list_layout_cross_alignment(layout, cross_flex)
 
 	if layout.fill_direction == .Vertical {
 		layout.absolute_content_size = {
@@ -1037,8 +1055,6 @@ UIListLayout_set :: proc(
 ) -> bool {
 	layout := cast(^UIListLayout)object
 
-	Gui_Layout_Mark_Dirty()
-
 	switch key {
 	case "Enabled":
 		layout.enabled = vm.ArgBoolean(L, value_index)
@@ -1182,7 +1198,7 @@ UIListLayout_set :: proc(
 		return false
 	}
 
-	Gui_Layout_Mark_Dirty()
+	gui_mark_layout_for(object)
 
 	return true
 }

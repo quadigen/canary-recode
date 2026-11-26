@@ -57,6 +57,50 @@ assert(workspace.CurrentCamera == replacement)
 	assert(!services.replication_schema_has(schema, "ViewportSize"))
 	assert(!services.replication_schema_has(schema, "DiagonalFieldOfView"))
 
+	ok, err = vm.Run(
+		&script_vm,
+		`
+local worldCamera = workspace.CurrentCamera
+local viewport = Instance.new("ViewportFrame", game.CoreGui)
+local preview = Instance.new("Camera", viewport)
+viewport.CurrentCamera = preview
+cameraViewportEvents = 0
+cameraChangedEvents = 0
+worldCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+	cameraViewportEvents += 1
+end)
+worldCamera.Changed:Connect(function(property)
+	if property == "ViewportSize" then
+		cameraChangedEvents += 1
+		preview.CFrame = worldCamera.CFrame
+		preview.FieldOfView = worldCamera.FieldOfView
+		cameraPreviewParent = viewport
+	end
+end)
+`,
+		"viewport_camera_change_setup",
+	)
+	assert(ok, err)
+	renderer_object.HasViewportRect = true
+	renderer_object.ViewportRect = {0, 0, 800, 600}
+	ctx := classes.Class_Step_Context {
+		L        = script_vm.L,
+		renderer = &renderer_object,
+	}
+	classes.Camera_Step(&workspace.current_camera.object, &ctx)
+	classes.Camera_Step(&workspace.current_camera.object, &ctx)
+	ok, err = vm.Run(
+		&script_vm,
+		`
+assert(cameraViewportEvents == 1)
+assert(cameraChangedEvents == 1)
+assert(cameraPreviewParent ~= nil)
+assert(cameraPreviewParent.CurrentCamera.CFrame == workspace.CurrentCamera.CFrame)
+`,
+		"viewport_camera_change_result",
+	)
+	assert(ok, err)
+
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("CAMERA_VIEW_SMOKE_PASSED")

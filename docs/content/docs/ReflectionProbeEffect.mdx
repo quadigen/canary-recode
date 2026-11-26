@@ -53,6 +53,7 @@ A fixed probe is cheaper to reason about but becomes wrong when the reflective s
 
 - Only one reflection probe is used. The last `ReflectionProbeEffect` child of `Lighting` wins.
 - The probe is skipped in the editor's fast viewport.
+- The initial capture is immediate. Later refreshes honor the update interval and render one cubemap face per frame, keeping the previous completed reflection visible until all six faces have been captured.
 - Cloning copies every property above.
 
 ## See also

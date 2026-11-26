@@ -5,6 +5,8 @@ import classes "../classes"
 import datatypes "../datatypes"
 import debuglog "../debuglog"
 import enums "../enum"
+import native_api "../native_api"
+import renderer "../renderer"
 import services "../services"
 import signals "../signals"
 import vm "../vm"
@@ -42,49 +44,57 @@ Extension_State_Name :: proc(state: Extension_State) -> string {
 class_registrations: map[^classes.Class_Info]^Class_Registration
 
 Class_Registration :: struct {
-	extension:  ^Extension_Record,
-	info:       ^classes.Class_Info,
-	descriptor: ^classes.Class_Descriptor,
-	name:       string,
-	desc:       KNE_Class_Desc,
-	properties: [dynamic]string,
-	methods:    [dynamic]string,
-	events:     [dynamic]string,
-	registered: bool,
-	is_service: bool,
+	extension:     ^Extension_Record,
+	info:          ^classes.Class_Info,
+	descriptor:    ^classes.Class_Descriptor,
+	name:          string,
+	desc:          KNE_Class_Desc,
+	properties:    [dynamic]string,
+	methods:       [dynamic]string,
+	events:        [dynamic]string,
+	registered:    bool,
+	is_service:    bool,
+	step_snapshot: [dynamic]^classes.Object,
 }
 
 Extension_Record :: struct {
-	ctx:          ^Context,
-	manifest:     Manifest,
-	directory:    string,
-	library_path: string,
-	library:      Platform_Library,
-	desc:         ^KNE_Extension_Desc,
-	state:        Extension_State,
-	classes:      [dynamic]^Class_Registration,
-	closures:     [dynamic]^Native_Function_Closure,
-	globals:      [dynamic]string,
-	callbacks:    [dynamic]^Retained_Callback,
-	result_roots: [dynamic]i32,
-	connections:  [dynamic]^signals.KinemiumConnection,
-	bridges:      [dynamic]^Signal_Bridge,
-	datatypes:    [dynamic]^Extension_Datatype,
-	last_error:   string,
+	ctx:                ^Context,
+	manifest:           Manifest,
+	directory:          string,
+	library_path:       string,
+	library:            Platform_Library,
+	desc:               ^KNE_Extension_Desc,
+	native_desc:        ^native_api.Plugin_Descriptor,
+	native_view:        native_api.Context,
+	native_id:          u64,
+	native_load_called: bool,
+	state:              Extension_State,
+	classes:            [dynamic]^Class_Registration,
+	closures:           [dynamic]^Native_Function_Closure,
+	globals:            [dynamic]string,
+	callbacks:          [dynamic]^Retained_Callback,
+	result_roots:       [dynamic]i32,
+	connections:        [dynamic]^signals.KinemiumConnection,
+	bridges:            [dynamic]^Signal_Bridge,
+	datatypes:          [dynamic]^Extension_Datatype,
+	last_error:         string,
 }
 
 Context :: struct {
-	game: ^Game_Library,
-	class_registry:    ^classes.Registry,
-	service_registry:  ^services.Registry,
-	datatype_registry: ^datatypes.Registry,
-	enum_registry:     ^enums.Registry,
-	vm_state:          ^vm.VM,
-	records:           [dynamic]^Extension_Record,
-	host:              ^Host_State,
-	directory:         string,
-	last_error:        string,
-	instance_data:     map[^classes.Object]rawptr,
+	game:                                       ^Game_Library,
+	class_registry:                             ^classes.Registry,
+	service_registry:                           ^services.Registry,
+	datatype_registry:                          ^datatypes.Registry,
+	enum_registry:                              ^enums.Registry,
+	vm_state:                                   ^vm.VM,
+	records:                                    [dynamic]^Extension_Record,
+	host:                                       ^Host_State,
+	directory:                                  string,
+	last_error:                                 string,
+	step_calls, batch_calls, stepped_instances: u64,
+	instance_data:                              map[^classes.Object]rawptr,
+	next_native_id:                             u64,
+	native_context:                             native_api.Context,
 }
 
 
@@ -95,6 +105,7 @@ Context_Init :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	vm_state: ^vm.VM,
+	renderer_object: ^renderer.RendererObject = nil,
 ) {
 	assert(context_state != nil)
 	context_state.class_registry = class_registry
@@ -103,6 +114,20 @@ Context_Init :: proc(
 	context_state.enum_registry = enum_registry
 	context_state.vm_state = vm_state
 	context_state.instance_data = make(map[^classes.Object]rawptr)
+	native_api.Context_Init(
+		&context_state.native_context,
+		class_registry,
+		datatype_registry,
+		service_registry,
+		vm_state,
+		renderer_object,
+		.Standalone,
+	)
+	native_api.Plugin_Manager_Set(
+		&context_state.native_context,
+		context_state,
+		Native_Plugin_Hooks,
+	)
 	context_state.host = host_state_create(context_state)
 }
 
@@ -134,6 +159,7 @@ Context_Destroy :: proc(context_state: ^Context) {
 		host_state_destroy(context_state.host)
 		context_state.host = nil
 	}
+	native_api.Context_Destroy(&context_state.native_context)
 }
 
 @(private)
@@ -164,6 +190,7 @@ free_record :: proc(record: ^Extension_Record) {
 			free(registration.info)
 			registration.info = nil
 		}
+		delete(registration.step_snapshot)
 		free(registration)
 	}
 	delete(record.classes)
@@ -208,9 +235,6 @@ free_record :: proc(record: ^Extension_Record) {
 }
 
 
-
-
-
 Discover_Default :: proc(context_state: ^Context) -> (loaded: int, err: string) {
 	return Discover(context_state, DEFAULT_EXTENSION_DIRECTORY)
 }
@@ -241,6 +265,10 @@ load_record :: proc(
 	manifest^ = {}
 	record.directory = strings.clone(record.manifest.directory)
 	record.state = .Discovered
+
+	if record.manifest.api_major == native_api.ABI_MAJOR {
+		return native_plugin_load(context_state, record)
+	}
 
 	if record.manifest.api_major != KNE_ABI_MAJOR {
 		err = fmt.aprintf(
@@ -366,8 +394,6 @@ load_record :: proc(
 }
 
 
-
-
 Find :: proc(context_state: ^Context, id: string) -> ^Extension_Record {
 	if context_state == nil {
 		return nil
@@ -440,6 +466,9 @@ Unload_All :: proc(context_state: ^Context) {
 unload_record :: proc(context_state: ^Context, record: ^Extension_Record) -> string {
 	if record == nil || record.state == .Unloaded {
 		return ""
+	}
+	if record.native_desc != nil {
+		return native_plugin_unload_record(context_state, record)
 	}
 
 	desc := record.desc
@@ -560,33 +589,58 @@ destroy_extension_instances :: proc(context_state: ^Context, record: ^Extension_
 
 
 Step :: proc(context_state: ^Context, delta_time: f32) {
-	if context_state == nil {
-		return
-	}
+	if context_state == nil {return}
+	native_api.StepNativeClasses(&context_state.native_context, f64(delta_time))
+	context_state.step_calls = 0; context_state.batch_calls = 0; context_state.stepped_instances = 0
+	entries: [KNE_BATCH_MAX_INSTANCES]KNE_Batch_Instance
 	for record in context_state.records {
-		if record == nil || record.state != .Running || record.desc == nil {
+		if record == nil || record.state != .Running {continue}
+		if record.native_desc != nil {
+			if record.native_desc.on_update != nil {
+				record.native_desc.on_update(&record.native_view, f64(delta_time))
+			}
 			continue
 		}
+		if record.desc == nil {continue}
 		first_root := len(record.result_roots)
 		defer release_result_roots(record, first_root)
-		if record.desc.on_update != nil {
-			record.desc.on_update(rawptr(record), f64(delta_time))
-		}
+		if record.desc.on_update != nil {record.desc.on_update(rawptr(record), f64(delta_time))}
 		for registration in record.classes {
 			if registration == nil ||
 			   registration.descriptor == nil ||
-			   registration.desc.step == nil {
-				continue
-			}
-			instances := registration.descriptor.instances
-
-			snapshot := make([]^classes.Object, len(instances), context.temp_allocator)
-			copy(snapshot, instances[:])
-			for object in snapshot {
-				if object == nil || object.destroyed {
-					continue
+			   (registration.desc.step == nil && registration.desc.step_batch == nil) {continue}
+			clear(&registration.step_snapshot)
+			append(&registration.step_snapshot, ..registration.descriptor.instances[:])
+			count := 0
+			for object in registration.step_snapshot {
+				if object == nil || object.destroyed {continue}
+				if registration.desc.step_batch != nil {
+					entries[count] = {
+						rawptr(object),
+						context_state.instance_data[object],
+					}; count += 1
+					if count == len(entries) {
+						registration.desc.step_batch(
+							rawptr(record),
+							raw_data(entries[:]),
+							uintptr(count),
+							f64(delta_time),
+						)
+						context_state.batch_calls += 1; context_state.stepped_instances += u64(count); count = 0
+					}
+				} else {
+					registration.desc.step(rawptr(record), rawptr(object), f64(delta_time))
+					context_state.step_calls += 1; context_state.stepped_instances += 1
 				}
-				registration.desc.step(rawptr(record), rawptr(object), f64(delta_time))
+			}
+			if count > 0 {
+				registration.desc.step_batch(
+					rawptr(record),
+					raw_data(entries[:]),
+					uintptr(count),
+					f64(delta_time),
+				)
+				context_state.batch_calls += 1; context_state.stepped_instances += u64(count)
 			}
 		}
 	}

@@ -1,0 +1,40 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_cloud_noise.glsl"
+
+// Port of WickedEngine/shaders/volumetricCloud_detailnoiseCS.hlsl. The generator writes a
+// tileable 32x32x32 RGBA detail texture with three Worley octaves in RGB and alpha set to 1.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(set = 0, binding = 0, std140) uniform CloudNoiseParameters {
+    vec4 shapeParams;    // (perlinWorleyDifference, perlinDilateLow, perlinDilateHigh, totalSize)
+    vec4 worleyParams;   // (worleyDilateLow, worleyDilateHigh, totalWorleyLow, totalWorleyHigh)
+    vec4 shapeScales;    // (perlinScale, worleyDilateScale, worleyLargeScale, worleyMediumScale)
+    vec4 shapeSmall;     // (worleySmallScale, unused, unused, unused)
+    vec4 detailParams;   // (detailLarge, detailMedium, detailSmall, unused)
+    vec4 detailRemap;    // (detailLow, detailHigh, unused, unused)
+    vec4 curlParams;     // (totalCurlSize, curlLow, curlHigh, unused)
+    vec4 domainOffset;   // (x, y, z, unused)
+} params;
+
+layout(set = 0, binding = 1, rgba8) uniform image3D detailNoise;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+    ivec3 size = imageSize(detailNoise);
+    if (any(greaterThanEqual(coord, size))) {
+        return;
+    }
+
+    vec3 pos = vec3(coord) / vec3(size);
+
+    float worleyLarge = kineGetWorley3Octaves(pos, params.detailParams.x);
+    float worleyMedium = kineGetWorley3Octaves(pos, params.detailParams.y);
+    float worleySmall = kineGetWorley3Octaves(pos, params.detailParams.z);
+
+    worleyLarge = kineRemap01(worleyLarge, params.detailRemap.x, params.detailRemap.y);
+    worleyMedium = kineRemap01(worleyMedium, params.detailRemap.x, params.detailRemap.y);
+    worleySmall = kineRemap01(worleySmall, params.detailRemap.x, params.detailRemap.y);
+
+    imageStore(detailNoise, coord, vec4(worleyLarge, worleyMedium, worleySmall, 1.0));
+}

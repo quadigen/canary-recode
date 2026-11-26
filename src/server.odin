@@ -32,6 +32,7 @@ run_headless :: proc(options: Startup_Options) -> bool {
 		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
 		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
+	_ = services.Playtest_Debugger_Bootstrap(&script_vm, options.playtest_tree_dir)
 	if !load_game_map(&environment, &script_vm, options) {return false}
 	if options.singleplayer {
 		players := cast(^services.Players)services.Ensure_Service(&environment.services, "Players")

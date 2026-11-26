@@ -1,0 +1,14 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image3D aerialVolume;
+layout(set = 0, binding = 1, std430) buffer Readback { uint values[]; };
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+    ivec3 size = imageSize(aerialVolume);
+    if (any(greaterThanEqual(coord, size))) return;
+    uint i = uint(coord.x + size.x * (coord.y + size.y * coord.z)) * 2u;
+    vec4 value = imageLoad(aerialVolume, coord);
+    values[i] = packHalf2x16(value.rg);
+    values[i + 1u] = packHalf2x16(value.ba);
+}

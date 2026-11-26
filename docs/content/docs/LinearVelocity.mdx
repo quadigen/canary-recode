@@ -3,9 +3,11 @@ title: LinearVelocity
 description: Apply force to maintain a target velocity.
 ---
 
-Apply force to maintain a target velocity.
+Use `LinearVelocity` to keep a moving body close to a target speed, even when other forces act on it. The available modes control whether you target a vector, a line, or a plane.
 
 ## Getting started
+
+This example assumes `part` is an unanchored part in Workspace and `attachment` is an Attachment parented to it.
 
 ```lua
 local constraint = Instance.new("LinearVelocity", part)
@@ -16,8 +18,25 @@ constraint.MaxForce = 1500
 
 ## Properties
 
-VectorVelocity, LineVelocity, PlaneVelocity, VelocityConstraintMode, RelativeTo and force limits configure the feedback controller.
+All properties below are read/write. See [Constraint](/docs/Constraint) for the shared attachment and activation properties.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `VelocityConstraintMode` | `Enum.VelocityConstraintMode` | `Vector` | Selects vector, line, or plane motion. |
+| `VectorVelocity` | `Vector3` | Zero | Target velocity in vector mode. |
+| `LineDirection` | `Vector3` | `(1, 0, 0)` | Direction of the line. |
+| `LineVelocity` | `number` | `0` | Target speed along the line. |
+| `PlaneVelocity` | `Vector2` | Zero | Target speed along the two tangent axes. |
+| `PrimaryTangentAxis` | `Vector3` | `(1, 0, 0)` | First plane axis. |
+| `SecondaryTangentAxis` | `Vector3` | `(0, 1, 0)` | Second plane axis. |
+| `RelativeTo` | `Enum.ActuatorRelativeTo` | `World` | Reference frame for target directions. |
+| `ForceLimitsEnabled` | `boolean` | `true` | Enables force limits. |
+| `ForceLimitMode` | `Enum.ForceLimitMode` | `Magnitude` | Selects total or per-axis force limits. |
+| `MaxForce` | `number` | `1000` | Total force limit. |
+| `MaxAxesForce` | `Vector3` | `(1000, 1000, 1000)` | Per-axis force limits in vector mode. |
+| `MaxPlanarAxesForce` | `Vector2` | `(1000, 1000)` | Per-axis force limits in plane mode. |
+| `ReactionForceEnabled` | `boolean` | `false` | Allows a reaction force on the second attached body. |
 
 ## Notes
 
-The force-feedback implementation is not a byte-for-byte equivalent of Roblox's constraint solver.
+The target is a desired velocity, not an immediate velocity assignment. A force limit can prevent the body from reaching that target. The first attachment must belong to a simulated, unanchored body. In `Attachment1` mode the target is relative to the second body's motion. Line mode uses `MaxForce` even when `ForceLimitMode` is `PerAxis`.

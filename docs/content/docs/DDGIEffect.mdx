@@ -1,0 +1,59 @@
+---
+title: DDGIEffect
+description: Add approximate indirect lighting from nearby surfaces using world-space probes.
+---
+
+Use `DDGIEffect` to add diffuse light bouncing between nearby surfaces. It can pick up light from emissive objects and point or spot lights even when those sources are outside the camera's view.
+
+The effect follows the camera with a grid of lighting probes. You control how far apart the probes are, how often they update, and how strongly they affect the scene.
+
+## Example
+
+```lua
+local Lighting = game:GetService("Lighting")
+
+local gi = Instance.new("DDGIEffect")
+gi.Enabled = true
+gi.Intensity = 1
+gi.ProbeSpacing = 24
+gi.ProbeCountX = 5
+gi.ProbeCountY = 3
+gi.ProbeCountZ = 5
+gi.RaysPerProbe = 48
+gi.ProbesPerFrame = 6
+gi.Hysteresis = 0.85
+gi.MaxDistance = 100
+gi.Parent = Lighting
+```
+
+## Properties
+
+| Property | Default | Range | Description |
+| --- | --- | --- | --- |
+| `Enabled` | true | Boolean | Enables or disables the volume and its rendering. |
+| `Intensity` | 1 | 0–5 | Strength of diffuse irradiance. |
+| `ProbeSpacing` | 24 | 1–100 | Spacing between probe centers in world units. |
+| `ProbeCountX` | 5 | 2–9 | Number of probes on the world X axis. |
+| `ProbeCountY` | 3 | 2–7 | Number of probes on the world Y axis. |
+| `ProbeCountZ` | 5 | 2–9 | Number of probes on the world Z axis. |
+| `RaysPerProbe` | 48 | 4–128 | Rays traced for each probe update. |
+| `ProbesPerFrame` | 6 | 1–24 | Maximum probe updates per frame. |
+| `Hysteresis` | 0.85 | 0–0.99 | Weight of the previous probe lighting result. |
+| `MaxDistance` | 100 | 1–500 | Maximum trace distance of each probe ray. |
+
+Count and ray-budget properties are treated as integers. The default grid has 75 probes and updates at most six each frame. Uninitialized probes get priority when the grid changes.
+
+## How it behaves
+
+Each probe gathers lighting from nearby objects. When the camera moves, Kinemium keeps the results for probes that still overlap the scene and updates the newly exposed areas. Increasing the probe count or ray count can improve coverage, but also increases the work done per frame.
+
+`DDGIEffect` is separate from `SSGIEffect`: it can use sources outside the current view, while screen-space GI only uses what the camera can see.
+
+## Limitations
+
+- Lighting and occlusion are approximate. Thin walls, rotated objects, and hollow or complex shapes can produce light leaks or incorrect shading.
+- Newly exposed areas need several frames to receive updated lighting. Increase `ProbesPerFrame` for faster updates at a higher performance cost.
+- The effect doesn't produce accurate multi-bounce lighting or detailed shadows for every surface.
+- Transparent surfaces without usable scene depth may not receive its lighting. The fast editor viewport also skips the effect.
+
+Start with the default grid and adjust the probe count and update budget after testing your scene.

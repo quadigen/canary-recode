@@ -1,7 +1,6 @@
 #+build !js
 
 package services
-// wire:service
 
 
 import kineffi "../bindings"
@@ -100,6 +99,9 @@ ZipService_namecall :: proc(
 	service := cast(^ZipService)object
 	switch method {
 	case "GetZipContents":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "ZIP filesystem access requires Internals capability"), true
+		}
 		if datatype_registry == nil {return 0, false}
 		zip_path := vm.ArgString(L, 2)
 		entries := ZipService_get_entries(zip_path)
@@ -113,6 +115,9 @@ ZipService_namecall :: proc(
 
 		return 1, true
 	case "ExtractZip":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "ZIP filesystem access requires Internals capability"), true
+		}
 		zip_path := vm.ArgString(L, 2)
 		extract_to := vm.ArgString(L, 3)
 

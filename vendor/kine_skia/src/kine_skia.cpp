@@ -64,6 +64,10 @@
 #include "modules/skshaper/include/SkShaper.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
 #include "modules/skshaper/include/SkShaper_skunicode.h"
+#include "modules/skunicode/include/SkUnicode_icu.h"
+#include "src/core/SkUTF.h"
+#include <limits>
+#include <mutex>
 #include "modules/svg/include/SkSVGDOM.h"
 
 
@@ -83,10 +87,12 @@
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/vk/GrVkBackendSurface.h"
+#include "include/gpu/ganesh/vk/GrVkBackendSemaphore.h"
 #include "include/gpu/ganesh/vk/GrVkDirectContext.h"
 #include "include/gpu/ganesh/vk/GrVkTypes.h"
 #include "include/gpu/vk/VulkanBackendContext.h"
 #include "include/gpu/vk/VulkanTypes.h"
+#include "include/gpu/vk/VulkanMutableTextureState.h"
 #include "include/private/gpu/vk/SkiaVulkan.h"
 #include "src/gpu/GpuTypesPriv.h"
 #include "src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h"
@@ -125,25 +131,27 @@ struct KineSkiaUIShaderCapture {
     int initialSaveCount = 1;
 };
 
-/* Defined below; draw calls target the recording canvas while one is open. */
+
 static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface);
 
 struct KineSkiaSurface {
 	sk_sp<SkSurface> surface;
 	sk_sp<SkImage> backdrop;
-	/* When set, draw calls are recorded into this display list instead. */
+
+	sk_sp<SkSurface> gpuBackdropScratch;
+
 	std::unique_ptr<SkPictureRecorder> recorder;
-    // Nested UI shaders use the outer capture's picture and are supersampled
-    // when that outer picture is replayed. This also keeps save/restore intact.
+
+
     std::vector<KineSkiaUIShaderCapture> uiShaderCaptures;
 
-	/* Cached lens normal map for the liquid-glass backdrop displacement. */
+
 	sk_sp<SkImage> displacementMap;
 	int displacementMapW = 0;
 	int displacementMapH = 0;
 	float displacementMapRadius = -1.0f;
 
-	/* Number of canvas saves opened by BeginMotionBlur, closed by EndMotionBlur. */
+
 	int motionBlurSaves = 0;
 #if KINE_SKIA_BUILD_VULKAN
 	sk_sp<GrDirectContext> vulkanContext;
@@ -198,7 +206,6 @@ struct KineSkiaRuntimeShader {
 
 static thread_local std::string kine_skia_shader_error;
 
-/* ---------------- Paint helpers ---------------- */
 
 static SkPaint kine_skia_paint(uint8_t r, uint8_t g, uint8_t b, uint8_t a, float strokeWidth) {
 	SkPaint paint;
@@ -310,7 +317,7 @@ KINE_SKIA_API KineSkiaRuntimeShader *Kine_Skia_UIShader_Create(
 	return shader.release();
 }
 
-// The canvas has already been translated to the object's local origin.
+
 static void kine_skia_bind_ui_shader(
     KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
     float width, float height, const float *backgroundColor) {
@@ -322,8 +329,8 @@ static void kine_skia_bind_ui_shader(
         sk_sp<SkShader> backdrop;
         SkMatrix worldMatrix = kine_skia_canvas(surface)->getTotalMatrix();
         if (!surface->uiShaderCaptures.empty()) {
-            // Commands in the capture use coordinates relative to its parent.
-            // Backdrop sampling must still address the actual framebuffer.
+
+
             worldMatrix = SkMatrix::Concat(surface->uiShaderCaptures.back().parentMatrix, worldMatrix);
         }
         SkMatrix deviceToLocal;
@@ -387,9 +394,7 @@ KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShader(
 	return true;
 }
 
-// Supersampling is performed only when the destination is a real SkSurface.
-// A nested shader draws into its parent's SkPicture (which is supersampled
-// already). For regular SkPicture caches we preserve the original path.
+
 static bool kine_skia_can_supersample_ui_shader(
     KineSkiaSurface *surface, float x, float y, float width, float height,
     float requestedScale, KineSkiaUIShaderCapture *out) {
@@ -412,14 +417,14 @@ static bool kine_skia_can_supersample_ui_shader(
         !std::isfinite(bounds.right()) || !std::isfinite(bounds.bottom())) {
         return false;
     }
-    // Align to whole destination pixels so imageRect reconstruction does not
-    // shift the geometry by a fraction of a pixel.
+
+
     bounds = SkRect::MakeLTRB(std::floor(bounds.left()), std::floor(bounds.top()),
                               std::ceil(bounds.right()), std::ceil(bounds.bottom()));
     const float scale = std::clamp(requestedScale, 1.0f, 4.0f);
     const double pixelWidth = std::ceil(static_cast<double>(bounds.width()) * scale);
     const double pixelHeight = std::ceil(static_cast<double>(bounds.height()) * scale);
-    // Cap per-shader VRAM usage; oversized effects gracefully use the old path.
+
     if (pixelWidth < 1 || pixelHeight < 1 ||
         pixelWidth > 8192 || pixelHeight > 8192 ||
         pixelWidth * pixelHeight > 32000000.0) {
@@ -442,8 +447,7 @@ static bool kine_skia_begin_ui_shader_capture(
     return true;
 }
 
-// Finish only after the second regular Surface_Restore() in the content path.
-// This means no renderer-side EndUIShader API is required.
+
 static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
     if (!surface || surface->uiShaderCaptures.empty()) return;
     KineSkiaUIShaderCapture capture = std::move(surface->uiShaderCaptures.back());
@@ -451,7 +455,7 @@ static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
     auto picture = capture.recorder->finishRecordingAsPicture();
     if (!picture) return;
 
-    // With the capture popped, this is the original parent canvas.
+
     SkCanvas *parent = kine_skia_canvas(surface);
     if (!parent) return;
     const auto fallback = [&]() { parent->drawPicture(picture); };
@@ -460,7 +464,7 @@ static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
     const int targetHeight = static_cast<int>(std::ceil(
         static_cast<double>(capture.deviceBounds.height()) * capture.resolutionScale));
     const SkImageInfo info = SkImageInfo::MakeN32Premul(targetWidth, targetHeight);
-    // makeSurface() retains Ganesh GPU acceleration for Vulkan/GL parent targets.
+
     auto offscreen = surface->surface->makeSurface(info);
     if (!offscreen) {
         fallback();
@@ -472,8 +476,8 @@ static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
     target->scale(capture.resolutionScale, capture.resolutionScale);
     target->translate(-capture.deviceBounds.left(), -capture.deviceBounds.top());
     target->concat(capture.parentMatrix);
-    // The SkPicture contains the original saveLayer/runtime shader filter;
-    // replaying here evaluates the full effect at higher pixel density.
+
+
     target->drawPicture(picture);
     target->restore();
     auto image = offscreen->makeImageSnapshot();
@@ -482,8 +486,7 @@ static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
         return;
     }
 
-    // Composite exactly once at the original destination resolution. The
-    // parent clip remains in device space even with an identity matrix.
+
     SkAutoCanvasRestore restore(parent, true);
     parent->resetMatrix();
     parent->drawImageRect(image,
@@ -493,8 +496,7 @@ static void kine_skia_finish_ui_shader_capture(KineSkiaSurface *surface) {
         SkCanvas::kStrict_SrcRectConstraint);
 }
 
-// Keep the previous entrypoint for ABI compatibility. Call this new entrypoint
-// from Odin when ResolutionScale is available.
+
 KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShaderScaled(
     KineSkiaSurface *surface, KineSkiaRuntimeShader *shader,
     float x, float y, float width, float height, const float *backgroundColor,
@@ -508,7 +510,7 @@ KINE_SKIA_API bool Kine_Skia_Surface_BeginUIShaderScaled(
     }
     if (!Kine_Skia_Surface_BeginUIShader(surface, shader,
             x, y, width, height, backgroundColor, sampleRadius)) {
-        // A failed Begin does not leave a recorder attached.
+
         surface->uiShaderCaptures.pop_back();
         return false;
     }
@@ -553,8 +555,8 @@ static SkPath kine_skia_squircle_path_corners(
 		SkPath path;
 		bool valid = false;
 	};
-	// Fills, clips, and shadows repeatedly use the same geometry. A bounded
-	// cache keeps the path reusable even when paint or opacity changes.
+
+
 	static thread_local std::array<CachedSquircle, 512> cache;
 	const SquircleKey key{x, y, w, h, tl, tr, br, bl, n};
 	uint32_t hash = 0;
@@ -617,18 +619,13 @@ static SkPath kine_skia_squircle_path(
 		x, y, width, height, radius, radius, radius, radius, exponent);
 }
 
-/* ---------------- Font/typeface cache ---------------- */
 
 static std::unordered_map<std::string, sk_sp<SkTypeface>> &kine_skia_typeface_cache() {
 	static std::unordered_map<std::string, sk_sp<SkTypeface>> cache;
 	return cache;
 }
 
-/* In-memory font cache. Every load used to construct a fresh platform
- * font manager (a new DirectWrite factory on Windows); the manager and its
- * font collection retain OS-level state that is never fully released, so
- * each call leaked ~7MB of private memory. Fonts are keyed by content and
- * verified byte-for-byte on hit, so identical loads reuse one typeface. */
+
 struct KineSkiaMemoryTypefaceEntry {
 	std::vector<uint8_t> bytes;
 	sk_sp<SkTypeface> typeface;
@@ -647,6 +644,19 @@ static size_t kine_skia_font_hash(const uint8_t *data, size_t size) {
 	return hash;
 }
 
+static sk_sp<SkFontMgr> kine_skia_font_manager() {
+#if defined(_WIN32)
+	static sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__ANDROID__)
+	static sk_sp<SkFontMgr> mgr = SkFontMgr_New_AndroidNDK(false, SkFontScanner_Make_FreeType());
+#elif defined(__APPLE__)
+	static sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
+#else
+	static sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+	return mgr;
+}
+
 static sk_sp<SkTypeface> kine_skia_get_typeface(const char *fontPath) {
 	std::string key = (fontPath && fontPath[0] != '\0') ? fontPath : "__default__";
 
@@ -656,15 +666,7 @@ static sk_sp<SkTypeface> kine_skia_get_typeface(const char *fontPath) {
 		return it->second;
 	}
 
-#if defined(_WIN32)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
-#elif defined(__ANDROID__)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_AndroidNDK(false, SkFontScanner_Make_FreeType());
-#elif defined(__APPLE__)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
-#else
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+	auto mgr = kine_skia_font_manager();
 	sk_sp<SkTypeface> tf;
 
 	if (fontPath && fontPath[0] != '\0') {
@@ -719,7 +721,7 @@ static sk_sp<SkPicture> kine_skia_decode_svg(
 		*outHeight = height;
 	}
 
-	// Replay the vector drawing at the destination scale without walking the DOM again.
+
 	svg->setContainerSize(SkSize::Make(width, height));
 	SkPictureRecorder recorder;
 	svg->render(recorder.beginRecording(SkRect::MakeWH(width, height)));
@@ -752,14 +754,13 @@ static void kine_skia_draw_svg(
 
 	canvas->translate(x, y);
 
-	// Clip in destination coordinates.
+
 	canvas->clipRect(
 		SkRect::MakeWH(width, height),
 		SkClipOp::kIntersect,
 		true);
 
-	// pngtosvg emits fixed pixel coordinates without a viewBox,
-	// so explicitly scale the original SVG coordinate space.
+
 	canvas->scale(scaleX, scaleY);
 
 	if (alpha < 255) {
@@ -779,13 +780,11 @@ static void kine_skia_draw_svg(
 
 extern "C" {
 
-/* ---------------- Version ---------------- */
 
 KINE_SKIA_API const char *Kine_Skia_GetVersion(void) {
 	return "kine_skia 0.2.0";
 }
 
-/* ---------------- Vulkan GPU context ---------------- */
 
 KINE_SKIA_API KineSkiaVulkanContext *Kine_Skia_Vulkan_CreateContext(
 	const KineSkiaVulkanBackend *backend) {
@@ -837,8 +836,7 @@ KINE_SKIA_API KineSkiaVulkanContext *Kine_Skia_Vulkan_CreateContext(
 		return proc;
 	};
 
-	// Released Skia builds may expose the allocator's optional block-size
-	// argument while newer source builds provide the two-argument overload.
+
 	vkContext.fMemoryAllocator = []<typename Factory>(
 		Factory factory, const skgpu::VulkanBackendContext& context) {
 		if constexpr (std::is_invocable_v<Factory,
@@ -893,7 +891,6 @@ KINE_SKIA_API void Kine_Skia_Vulkan_PurgeResources(KineSkiaVulkanContext *contex
 #endif
 }
 
-/* ---------------- OpenGL GPU context ---------------- */
 
 KINE_SKIA_API KineSkiaGLContext *Kine_Skia_GL_CreateContext(
 	const KineSkiaGLBackend *backend) {
@@ -903,10 +900,8 @@ KINE_SKIA_API KineSkiaGLContext *Kine_Skia_GL_CreateContext(
 	sk_sp<const GrGLInterface> glInterface;
 	if (backend && backend->getProcAddr) {
 		auto getProc = reinterpret_cast<GrGLGetProc>(backend->getProcAddr);
-		// Pick the assembler that matches the standard Skia was built for. A
-		// GLES build (SK_ASSUME_GL_ES) compiles the desktop GL assembler out to
-		// a nullptr stub, so asking for it unconditionally fails on Android,
-		// while a desktop build auto-detects from the GL version string.
+
+
 		glInterface = GrGLMakeAssembledInterface(backend->getProcContext, getProc);
 	} else {
 		glInterface = GrGLMakeNativeInterface();
@@ -957,15 +952,14 @@ KINE_SKIA_API void Kine_Skia_GL_ResetContext(KineSkiaGLContext *context) {
 #endif
 }
 
-/* ---------------- Surface lifecycle ---------------- */
 
 extern "C++" {
 static SkCanvas *kine_skia_canvas(KineSkiaSurface *surface) {
 	if (!surface) {
 		return nullptr;
 	}
-    // A UIShader capture can contain ordinary cached pictures.
-    // Give an active BeginPicture recorder priority until EndPicture.
+
+
 	if (surface->recorder) {
 		return surface->recorder->getRecordingCanvas();
 	}
@@ -981,8 +975,8 @@ KINE_SKIA_API int Kine_Skia_Surface_BeginPicture(KineSkiaSurface *surface) {
 		return 0;
 	}
 	surface->recorder = std::make_unique<SkPictureRecorder>();
-	// The destination applies ancestor clips and transforms at replay. Local
-	// commands can extend outside the window before a parent rotates them.
+
+
 	constexpr SkScalar limit = 100000000;
 	surface->recorder->beginRecording(SkRect::MakeLTRB(-limit, -limit, limit, limit));
 	return 1;
@@ -1144,17 +1138,17 @@ KINE_SKIA_API KineSkiaSurface *Kine_Skia_Surface_CreateGLRenderTarget(
 		return nullptr;
 	}
 
-	GrGLenum glFormat = imageInfo->format ? imageInfo->format : 0x8058 /* GL_RGBA8 */;
+	GrGLenum glFormat = imageInfo->format ? imageInfo->format : 0x8058  ;
 
 	SkColorType colorType;
 	switch (glFormat) {
-	case 0x8058 /* GL_RGBA8 */:
+	case 0x8058  :
 		colorType = kRGBA_8888_SkColorType;
 		break;
-	case 0x93A1 /* GL_BGRA8 */:
+	case 0x93A1  :
 		colorType = kBGRA_8888_SkColorType;
 		break;
-	case 0x8C43 /* GL_SRGB8_ALPHA8 */:
+	case 0x8C43  :
 		colorType = kSRGBA_8888_SkColorType;
 		break;
 	default:
@@ -1259,9 +1253,8 @@ KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface *surface) {
 	}
 #if KINE_SKIA_BUILD_VULKAN
 	if (surface->vulkanContext) {
-		// FlushAndSubmit already flushes the context and submits its pending
-		// work; a second GrDirectContext::flushAndSubmit only adds an empty
-		// queue submission and fence per frame.
+
+
 		skgpu::ganesh::FlushAndSubmit(surface->surface.get());
 	}
 #endif
@@ -1271,7 +1264,31 @@ KINE_SKIA_API void Kine_Skia_Surface_Flush(KineSkiaSurface *surface) {
 		surface->glContext->flushAndSubmit();
 	}
 #endif
-	/* Raster surfaces are synchronous. */
+
+}
+
+KINE_SKIA_API int Kine_Skia_Surface_WaitVulkanSemaphore(KineSkiaSurface *surface, void *semaphore) {
+#if KINE_SKIA_BUILD_VULKAN
+    if (!surface || !surface->vulkanContext || !semaphore) return 0;
+    const auto backend = GrBackendSemaphores::MakeVk(reinterpret_cast<VkSemaphore>(semaphore));
+    return surface->vulkanContext->wait(1,&backend,false) ? 1 : 0;
+#else
+    (void)surface; (void)semaphore;
+    return 0;
+#endif
+}
+
+KINE_SKIA_API int Kine_Skia_Surface_FlushVulkanLayout(KineSkiaSurface *surface, uint32_t layout) {
+#if KINE_SKIA_BUILD_VULKAN
+    if (!surface || !surface->surface || !surface->vulkanContext) return 0;
+    const auto state = skgpu::MutableTextureStates::MakeVulkan(
+        static_cast<VkImageLayout>(layout), VK_QUEUE_FAMILY_IGNORED);
+    surface->vulkanContext->flush(surface->surface.get(),GrFlushInfo{},&state);
+    return surface->vulkanContext->submit() ? 1 : 0;
+#else
+    (void)surface; (void)layout;
+    return 0;
+#endif
 }
 
 KINE_SKIA_API int Kine_Skia_Surface_GetVulkanLayout(KineSkiaSurface *surface, uint32_t *layout) {
@@ -1303,8 +1320,28 @@ KINE_SKIA_API void Kine_Skia_Surface_SetBackdropFromSurface(
 	Kine_Skia_Surface_Flush(backdrop);
 #if KINE_SKIA_BUILD_VULKAN
 	if (surface == backdrop && backdrop->vulkanContext) {
+
+
+		const SkImageInfo info = backdrop->surface->imageInfo();
+		if (!surface->gpuBackdropScratch ||
+		    surface->gpuBackdropScratch->width() != info.width() ||
+		    surface->gpuBackdropScratch->height() != info.height()) {
+			surface->gpuBackdropScratch = backdrop->surface->makeSurface(info);
+		}
+		if (surface->gpuBackdropScratch) {
+			auto source = backdrop->surface->makeTemporaryImage();
+			if (source) {
+				SkCanvas* canvas = surface->gpuBackdropScratch->getCanvas();
+				canvas->clear(SK_ColorTRANSPARENT);
+				canvas->drawImage(source, 0, 0);
+				source.reset();
+				surface->backdrop = surface->gpuBackdropScratch->makeImageSnapshot();
+				if (surface->backdrop) return;
+			}
+		}
+
 		SkBitmap pixels;
-		if (!pixels.tryAllocPixels(backdrop->surface->imageInfo()) ||
+		if (!pixels.tryAllocPixels(info) ||
 		    !backdrop->surface->readPixels(pixels.pixmap(), 0, 0)) {
 			return;
 		}
@@ -1348,8 +1385,8 @@ KINE_SKIA_API void Kine_Skia_Surface_GetPixel(
 	if (surface->surface->peekPixels(&pixmap)) {
 		c = pixmap.getColor(x, y);
 	} else {
-		// Vulkan surfaces are not CPU-addressable. Read a single pixel back
-		// so this diagnostic API works for the actual compositor as well.
+
+
 		uint8_t rgba[4];
 		const auto info = SkImageInfo::Make(1, 1, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
 		if (!surface->surface->readPixels(info, rgba, sizeof(rgba), x, y))
@@ -1366,7 +1403,6 @@ KINE_SKIA_API void Kine_Skia_Surface_GetPixel(
 		*outA = SkColorGetA(c);
 }
 
-/* ---------------- Clear ---------------- */
 
 KINE_SKIA_API void Kine_Skia_Surface_Clear(
 	KineSkiaSurface *surface,
@@ -1377,7 +1413,6 @@ KINE_SKIA_API void Kine_Skia_Surface_Clear(
 	kine_skia_canvas(surface)->clear(SkColorSetARGB(a, r, g, b));
 }
 
-/* ---------------- Shapes ---------------- */
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawRect(
 	KineSkiaSurface *surface,
@@ -1477,8 +1512,8 @@ KINE_SKIA_API void Kine_Skia_Surface_EndEdgeFade(
 				  {x + width - w, y}, {x + width, y}, kSolid, kClear);
 	}
 
-	canvas->restore(); // saveLayer, composites the masked layer
-	canvas->restore(); // clip save
+	canvas->restore();
+	canvas->restore();
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawRoundRect(
@@ -1698,7 +1733,7 @@ static void kine_skia_draw_liquid_glass(
 	uint8_t alpha,
 	uint8_t tintR, uint8_t tintG, uint8_t tintB, uint8_t tintA);
 
-} // extern "C++"
+}
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawBackdropRect(
 	KineSkiaSurface *surface,
@@ -2332,7 +2367,6 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawPolygon(
 	kine_skia_canvas(surface)->drawPath(path, paint);
 }
 
-/* ---------------- Transform stack ---------------- */
 
 KINE_SKIA_API void Kine_Skia_Surface_Save(KineSkiaSurface *surface) {
 	if (!surface || !surface->surface)
@@ -2396,7 +2430,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipRoundRect(
 	SkRRect rrect = SkRRect::MakeRectXY(
 		SkRect::MakeXYWH(x, y, width, height), radiusX, radiusY);
 
-	kine_skia_canvas(surface)->clipRRect(rrect, /*doAntiAlias=*/true);
+	kine_skia_canvas(surface)->clipRRect(rrect,  true);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
@@ -2408,7 +2442,7 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipSquircle(
 
 	kine_skia_canvas(surface)->clipPath(
 		kine_skia_squircle_path(x, y, width, height, radius, exponent),
-		/*doAntiAlias=*/true);
+		 true);
 }
 
 KINE_SKIA_API void Kine_Skia_Surface_ClipSquircleCorners(
@@ -2422,10 +2456,162 @@ KINE_SKIA_API void Kine_Skia_Surface_ClipSquircleCorners(
 	kine_skia_canvas(surface)->clipPath(
 		kine_skia_squircle_path_corners(
 			x, y, width, height, radiusTL, radiusTR, radiusBR, radiusBL, exponent),
-		/*doAntiAlias=*/true);
+		 true);
 }
 
-/* ---------------- Text ---------------- */
+
+static std::mutex kine_skia_fallback_mutex;
+static sk_sp<SkTypeface> kine_skia_fallback_typeface;
+
+KINE_SKIA_API void Kine_Skia_Typeface_SetFallback(KineSkiaTypeface *typeface) {
+    std::lock_guard<std::mutex> lock(kine_skia_fallback_mutex);
+    kine_skia_fallback_typeface = typeface ? typeface->typeface : nullptr;
+}
+
+static bool kine_skia_simple_text(const char *text) {
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p) {
+        if (*p >= 0x80) return false;
+    }
+    return true;
+}
+
+static uint8_t kine_skia_base_level(SkUnicode &unicode, const char *text, size_t size) {
+    const char *end = text + size;
+    for (const char *p = text; p < end;) {
+        SkUnichar cp = SkUTF::NextUTF8(&p, end);
+        if (cp < 0) break;
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || cp == 0x200e) return 0;
+        if (cp == 0x200f || cp == 0x061c) return 1;
+        if (cp < 0x80 || unicode.isControl(cp) || unicode.isDefaultIgnorable(cp)) continue;
+        uint16_t probe[4] = {0x0627, 0, 0, 0};
+        size_t count = SkUTF::ToUTF16(cp, probe + 1);
+        probe[count + 1] = 0x0627;
+        auto rtl = unicode.makeBidiIterator(probe, static_cast<int>(count + 2), SkBidiIterator::kLTR);
+        if (rtl && rtl->getLevelAt(1) == 0) return 0;
+        probe[0] = probe[count + 1] = 'A';
+        auto ltr = unicode.makeBidiIterator(probe, static_cast<int>(count + 2), SkBidiIterator::kLTR);
+        if (ltr && ltr->getLevelAt(1) == 1) return 1;
+    }
+    return 0;
+}
+
+class KineSkiaFontRuns final : public SkShaper::FontRunIterator {
+public:
+    KineSkiaFontRuns(const char *text, size_t size, const SkFont &font, SkUnicode &unicode)
+        : begin(text), next(text), end(text + size), primary(font), current(font),
+          unicode(unicode), manager(kine_skia_font_manager()) {
+        std::lock_guard<std::mutex> lock(kine_skia_fallback_mutex);
+        bundled = kine_skia_fallback_typeface;
+    }
+
+    void consume() override {
+        auto face = select(next, current.refTypeface());
+        current.setTypeface(face);
+        while (next < end) {
+            const char *p = next;
+            auto candidate = select(p, face);
+            if (candidate != face) break;
+            next = p;
+        }
+    }
+
+    size_t endOfCurrentRun() const override { return next - begin; }
+    bool atEnd() const override { return next == end; }
+    const SkFont &currentFont() const override { return current; }
+
+private:
+    sk_sp<SkTypeface> select(const char *&p, const sk_sp<SkTypeface> &previous) {
+        SkUnichar cp = SkUTF::NextUTF8(&p, end);
+        if (cp < 0 || unicode.isDefaultIgnorable(cp)) return previous;
+        auto original = primary.refTypeface();
+        if (original->unicharToGlyph(cp)) return original;
+        if (bundled && bundled->unicharToGlyph(cp)) return bundled;
+        if (previous && previous->unicharToGlyph(cp)) return previous;
+        if (manager) {
+            auto candidate = manager->matchFamilyStyleCharacter(
+                nullptr, original->fontStyle(), nullptr, 0, cp);
+            if (candidate) return candidate;
+        }
+        return original;
+    }
+
+    const char *begin;
+    const char *next;
+    const char *end;
+    SkFont primary;
+    SkFont current;
+    SkUnicode &unicode;
+    sk_sp<SkFontMgr> manager;
+    sk_sp<SkTypeface> bundled;
+};
+
+class KineSkiaTextRuns final : public SkShaper::RunHandler {
+public:
+    void beginLine() override { position = SkPoint::Make(0, baseline); height = 0; }
+    void runInfo(const RunInfo &info) override {
+        SkFontMetrics metrics;
+        info.fFont.getMetrics(&metrics);
+        height = std::max(height, metrics.fDescent - metrics.fAscent + metrics.fLeading);
+    }
+    void commitRunInfo() override {}
+    Buffer runBuffer(const RunInfo &info) override {
+        if (!info.glyphCount) return {nullptr, nullptr, nullptr, nullptr, position};
+        const auto &run = builder.allocRunPos(info.fFont, static_cast<int>(info.glyphCount));
+        return {run.glyphs, run.points(), nullptr, nullptr, position};
+    }
+    void commitRunBuffer(const RunInfo &info) override { position += info.fAdvance; }
+    void commitLine() override {
+        width = std::max(width, position.x());
+        baseline += height;
+    }
+    SkTextBlobBuilder builder;
+    float width = 0;
+private:
+    SkPoint position = {0, 0};
+    float baseline = 0;
+    float height = 0;
+};
+
+struct KineSkiaShapedText {
+    sk_sp<SkTextBlob> blob;
+    float width = 0;
+};
+
+static KineSkiaShapedText kine_skia_shape_text(const char *text, const SkFont &font) {
+    const size_t size = strlen(text);
+    if (size == 0 || size > static_cast<size_t>(std::numeric_limits<int>::max())) return {};
+    thread_local auto unicode = SkUnicodes::ICU::Make();
+    if (!unicode || !font.getTypeface()) return {};
+    thread_local auto shaper = SkShapers::HB::ShaperDrivenWrapper(unicode, nullptr);
+    if (!shaper) return {};
+    auto bidi = SkShapers::unicode::BidiRunIterator(
+        unicode, text, size, kine_skia_base_level(*unicode, text, size));
+    auto script = SkShapers::HB::ScriptRunIterator(text, size);
+    if (!bidi || !script) return {};
+    KineSkiaFontRuns fonts(text, size, font, *unicode);
+    SkShaper::TrivialLanguageRunIterator language("und", size);
+    KineSkiaTextRuns runs;
+    shaper->shape(text, size, fonts, *bidi, *script, language, nullptr, 0,
+                  std::numeric_limits<float>::max(), &runs);
+    return {runs.builder.make(), runs.width};
+}
+
+static sk_sp<SkTextBlob> kine_skia_text_blob(const char *text, const SkFont &font) {
+    if (!kine_skia_simple_text(text)) {
+        auto shaped = kine_skia_shape_text(text, font);
+        if (shaped.blob) return shaped.blob;
+    }
+    return SkTextBlob::MakeFromText(text, strlen(text), font, SkTextEncoding::kUTF8);
+}
+
+static float kine_skia_text_width(const char *text, const SkFont &font) {
+    if (!kine_skia_simple_text(text)) {
+        auto shaped = kine_skia_shape_text(text, font);
+        if (shaped.blob) return shaped.width;
+    }
+    return font.measureText(text, strlen(text), SkTextEncoding::kUTF8);
+}
+
 
 KINE_SKIA_API void Kine_Skia_Surface_DrawText(
 	KineSkiaSurface *surface,
@@ -2446,8 +2632,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawText(
 	SkFont font(typeface, fontSize);
 	font.setEdging(SkFont::Edging::kAntiAlias);
 
-	sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
-		text, strlen(text), font, SkTextEncoding::kUTF8);
+	sk_sp<SkTextBlob> blob = kine_skia_text_blob(text, font);
 	if (!blob) {
 		return;
 	}
@@ -2489,11 +2674,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadow(
 	SkFont font(typeface, fontSize);
 	font.setEdging(SkFont::Edging::kAntiAlias);
 
-	sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
-		text,
-		strlen(text),
-		font,
-		SkTextEncoding::kUTF8);
+	sk_sp<SkTextBlob> blob = kine_skia_text_blob(text, font);
 
 	if (!blob) {
 		return;
@@ -2552,18 +2733,7 @@ KINE_SKIA_API KineSkiaTypeface *Kine_Skia_Typeface_LoadFromMemory(
 		}
 	}
 
-#if defined(_WIN32)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
-#elif defined(__ANDROID__)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_AndroidNDK(false, SkFontScanner_Make_FreeType());
-#elif defined(__APPLE__)
-	sk_sp<SkFontMgr> mgr = SkFontMgr_New_CoreText(nullptr);
-#else
-	sk_sp<SkFontMgr> mgr =
-		SkFontMgr_New_FontConfig(
-			nullptr,
-			SkFontScanner_Make_FreeType());
-#endif
+	auto mgr = kine_skia_font_manager();
 
 	if (!mgr) {
 		return nullptr;
@@ -2648,11 +2818,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextTypeface(
 		SkFont::Edging::kAntiAlias);
 
 	sk_sp<SkTextBlob> blob =
-		SkTextBlob::MakeFromText(
-			text,
-			strlen(text),
-			font,
-			SkTextEncoding::kUTF8);
+		kine_skia_text_blob(text, font);
 
 	if (!blob) {
 		return;
@@ -2709,11 +2875,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextShadowTypeface(
 		SkFont::Edging::kAntiAlias);
 
 	sk_sp<SkTextBlob> blob =
-		SkTextBlob::MakeFromText(
-			text,
-			strlen(text),
-			font,
-			SkTextEncoding::kUTF8);
+		kine_skia_text_blob(text, font);
 
 	if (!blob) {
 		return;
@@ -2768,10 +2930,7 @@ KINE_SKIA_API float Kine_Skia_Typeface_MeasureText(
 
 	SkFont font(typeface->typeface, fontSize);
 
-	return font.measureText(
-		text,
-		strlen(text),
-		SkTextEncoding::kUTF8);
+	return kine_skia_text_width(text, font);
 }
 
 KINE_SKIA_API float Kine_Skia_Typeface_GetLineHeight(
@@ -2820,7 +2979,7 @@ KINE_SKIA_API float Kine_Skia_Surface_MeasureText(
 
 	sk_sp<SkTypeface> tf = kine_skia_get_typeface(fontPath);
 	SkFont font(tf, fontSize);
-	return font.measureText(text, strlen(text), SkTextEncoding::kUTF8);
+	return kine_skia_text_width(text, font);
 }
 
 KINE_SKIA_API float Kine_Skia_Surface_GetFontLineHeight(
@@ -2839,7 +2998,6 @@ KINE_SKIA_API float Kine_Skia_Surface_GetFontLineHeight(
 	return (-metrics.fAscent) + metrics.fDescent + metrics.fLeading;
 }
 
-/* ---------------- Images ---------------- */
 
 static constexpr int kine_skia_min_frame_duration_ms = 10;
 
@@ -2860,11 +3018,7 @@ static int kine_skia_frame_duration(int durationMs) {
 		: kine_skia_min_frame_duration_ms;
 }
 
-/*
- * GIFs need SkAnimatedImage rather than a plain SkImage so that all of the
- * existing draw entry points keep working: the current frame is mirrored into
- * KineSkiaImage::image, and every draw call advances the animation first.
- */
+
 static KineSkiaImage *kine_skia_load_animated_gif(
 	const sk_sp<SkData> &data) {
 	if (!kine_skia_data_is_gif(data)) {
@@ -2918,10 +3072,7 @@ static void kine_skia_image_advance_animation(KineSkiaImage *image) {
 
 	const int minDuration = kine_skia_min_frame_duration_ms;
 
-	/*
-	 * Catch up after a stall without letting a very old image decode an
-	 * unbounded number of frames in a single draw.
-	 */
+
 	for (int step = 0; step < 120; step++) {
 		const int duration = kine_skia_frame_duration(
 			image->animationFrameDurationMs);
@@ -3350,7 +3501,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageShadow(
 
 	sk_sp<SkImageFilter> inputFilter = nullptr;
 
-	// Spread should expand the alpha silhouette, not resize the image.
+
 	if (spread > 0.0f) {
 		inputFilter = SkImageFilters::Dilate(
 			spread,
@@ -3371,7 +3522,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawImageShadow(
 	layerPaint.setAntiAlias(true);
 	layerPaint.setImageFilter(std::move(shadowFilter));
 
-	// Blur normally needs significantly more room than one sigma.
+
 	const float blurPadding =
 		std::max(0.0f, blurSigma) * 3.0f;
 
@@ -3455,11 +3606,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurred(
 	SkFont font(typeface, fontSize);
 	font.setEdging(SkFont::Edging::kAntiAlias);
 
-	sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
-		text,
-		strlen(text),
-		font,
-		SkTextEncoding::kUTF8);
+	sk_sp<SkTextBlob> blob = kine_skia_text_blob(text, font);
 
 	if (!blob) {
 		return;
@@ -3509,11 +3656,7 @@ KINE_SKIA_API void Kine_Skia_Surface_DrawTextBlurredTypeface(
 	SkFont font(typeface->typeface, fontSize);
 	font.setEdging(SkFont::Edging::kAntiAlias);
 
-	sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromText(
-		text,
-		strlen(text),
-		font,
-		SkTextEncoding::kUTF8);
+	sk_sp<SkTextBlob> blob = kine_skia_text_blob(text, font);
 
 	if (!blob) {
 		return;

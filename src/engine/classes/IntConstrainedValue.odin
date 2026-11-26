@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 IntConstrainedValue_Class := Class_Info {
@@ -12,6 +13,7 @@ IntConstrainedValue_Class := Class_Info {
 IntConstrainedValue :: struct {
 	using object: Object,
 	value:        i64,
+	changed:      ^signals.Signal,
 	min_value:    i64,
 	max_value:    i64,
 }
@@ -33,6 +35,7 @@ IntConstrainedValue_construct :: proc(renderer: ^Renderer_Object, data_model: ra
 }
 
 IntConstrainedValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^IntConstrainedValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^IntConstrainedValue)object)
 }
@@ -47,6 +50,8 @@ IntConstrainedValue_get :: proc(
 	val := cast(^IntConstrainedValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		vm.PushNumber(L, f64(val.value))
 	case "ConstrainedValue":
@@ -73,7 +78,13 @@ IntConstrainedValue_set :: proc(
 
 	switch key {
 	case "Value":
-		val.value = clamp(i64(vm.ArgNumber(L, value_index)), val.min_value, val.max_value)
+		new_value := clamp(i64(vm.ArgNumber(L, value_index)), val.min_value, val.max_value)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			vm.PushNumber(L, f64(val.value))
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case "MinValue":
 		val.min_value = i64(vm.ArgNumber(L, value_index))
 	case "MaxValue":

@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 NumberRangeValue_Class := Class_Info {
@@ -12,6 +13,7 @@ NumberRangeValue_Class := Class_Info {
 NumberRangeValue :: struct {
 	using object: Object,
 	value:        datatypes.NumberRange,
+	changed:      ^signals.Signal,
 }
 
 NumberRangeValue_Init :: proc() -> NumberRangeValue {
@@ -26,6 +28,7 @@ NumberRangeValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawpt
 }
 
 NumberRangeValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^NumberRangeValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^NumberRangeValue)object)
 }
@@ -40,6 +43,8 @@ NumberRangeValue_get :: proc(
 	val := cast(^NumberRangeValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		if datatype_registry == nil {return false}
 		datatypes.Push_NumberRange(L, datatype_registry, val.value)
@@ -62,7 +67,13 @@ NumberRangeValue_set :: proc(
 	switch key {
 	case "Value":
 		if datatype_registry == nil {return false}
-		val.value = datatypes.Arg_NumberRange(L, value_index, datatype_registry)
+		new_value := datatypes.Arg_NumberRange(L, value_index, datatype_registry)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			datatypes.Push_NumberRange(L, datatype_registry, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

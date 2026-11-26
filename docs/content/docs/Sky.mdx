@@ -1,9 +1,9 @@
 ---
 title: Sky
-description: Use six square texture faces as a native cubemap skybox.
+description: Set a custom skybox using six square images.
 ---
 
-Use six square texture faces as a native cubemap skybox.
+Use `Sky` to surround a 3D scene with a cubemap. Supply an image for each direction, such as six faces exported from an environment texture.
 
 ## Getting started
 
@@ -17,10 +17,32 @@ sky.SkyboxBk = "back.png"
 sky.SkyboxFt = "front.png"
 ```
 
+All six images must be available to the game, square, the same dimensions, and no larger than 4096 × 4096 pixels. If the cubemap cannot load, the scene falls back to the procedural sky. Web builds currently use that fallback.
+
 ## Properties
 
-SkyboxRt, SkyboxLf, SkyboxUp, SkyboxDn, SkyboxBk and SkyboxFt specify images. Each face must have the same square dimensions.
+All properties are read-write.
 
-## Notes
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `SkyboxRt` | string | "" | Right face image. |
+| `SkyboxLf` | string | "" | Left face image. |
+| `SkyboxUp` | string | "" | Top face image. |
+| `SkyboxDn` | string | "" | Bottom face image. |
+| `SkyboxBk` | string | "" | Back face image. |
+| `SkyboxFt` | string | "" | Front face image. |
+| `CelestialBodiesShown` | boolean | true | Controls whether celestial bodies are shown. |
+| `SunTextureId` | string | "" | Custom sun image reference. |
+| `MoonTextureId` | string | "" | Custom moon image reference. |
+| `SunAngularSize` | number | 21 | Sun angular size, clamped to 0–360. |
+| `MoonAngularSize` | number | 11 | Moon angular size, clamped to 0–360. |
+| `StarCount` | number | 3000 | Star count, clamped to 0–5000 and stored as an integer. |
+| `SkyboxOrientation` | Vector3 | (0, 0, 0) | Skybox orientation. |
 
-The native backend uploads CPU image data directly, with a procedural sky fallback. Modern Roblox Content properties are converted into legacy URI properties by the porter. Unembedded Roblox IDs require their actual image payloads before rendering; pass authorized asset credentials to the porter to embed images. SkyboxOrientation, custom sun and moon images, angular sizes and star count are preserved, but not fully rendered. Web cubemaps currently fall back to the procedural sky.
+The custom sun and moon images, angular sizes, star count and orientation can be stored, but their visual effects aren't fully supported yet. Don't depend on them to produce a specific appearance.
+
+## Procedural sky and distance fog
+
+When no valid custom skybox can be loaded, Kinemium draws a procedural sky with daylight colors, a horizon, and a nighttime appearance.
+
+The scene also supports distance fog that follows the sky and sunlight. If you've explicitly configured fog, those settings take priority. See [Lighting](/docs/services/Lighting) for the scene's time of day and lighting controls.

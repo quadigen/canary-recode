@@ -231,6 +231,14 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS {Register_PlaytestService_Class(registry.classes)}
 	when ODIN_OS != .JS {Register_Plugin_Class(registry.classes)}
 	when ODIN_OS != .JS {Register_PluginMarketplace_Class(registry.classes)}
+	when ODIN_OS != .JS {Register_PluginLoader_Class(registry.classes)}
+	when (ODIN_OS == .Linux ||
+		ODIN_OS == .Darwin ||
+		ODIN_OS == .Windows) && !#config(KINE_ANDROID, false) {
+		if registry.mode == .Editor &&
+		   target.IS_EDITOR {Register_TerminalService_Class(registry.classes)}
+	}
+	Register_ConsoleService_Class(registry.classes)
 	Register_ProfilerService_Class(registry.classes)
 	when ODIN_OS != .JS {Register_Project_Class(registry.classes)}
 	Register_ReflectionService_Class(registry.classes)
@@ -317,6 +325,24 @@ Register_Default_Services :: proc(registry: ^Registry) {
 	when ODIN_OS != .JS {Register_Service(registry, "PlaytestService", "PlaytestService")}
 	when ODIN_OS != .JS {Register_Service(registry, "Plugin", "Plugin", "plugin")}
 	when ODIN_OS != .JS {Register_Service(registry, "PluginMarketplace", "PluginMarketplace", "PluginMarketplace")}
+	when ODIN_OS != .JS {Register_Service(registry, "PluginLoader", "PluginLoader")}
+	when (ODIN_OS == .Linux ||
+		ODIN_OS == .Darwin ||
+		ODIN_OS == .Windows) && !#config(KINE_ANDROID, false) {
+		if registry.mode == .Editor && target.IS_EDITOR {
+			Register_Service(registry, "TerminalService", "TerminalService")
+			assert(
+				Set_Service_Security(
+					registry,
+					"TerminalService",
+					vm.SecurityRequirementFromValue(
+						datatypes.SECURITY_CAPABILITY_INTERNAL_TERMINAL,
+					),
+				),
+			)
+		}
+	}
+	Register_Service(registry, "ConsoleService", "ConsoleService")
 	Register_Service(registry, "ProfilerService", "ProfilerService")
 	when ODIN_OS != .JS {Register_Service(registry, "Project", "Project")}
 	Register_Service(registry, "ReflectionService", "ReflectionService", "ReflectionService")
@@ -402,6 +428,11 @@ Register_Default_Services :: proc(registry: ^Registry) {
 }
 
 Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
+	when (ODIN_OS == .Linux ||
+		ODIN_OS == .Darwin ||
+		ODIN_OS == .Windows) && !#config(KINE_ANDROID, false) {
+		if registry.mode == .Editor && target.IS_EDITOR {Terminal_Service_Step(registry)}
+	}
 	{
 		when ODIN_OS != .JS {
 			tracy.ZoneNC("Project Autosave", 0xD19A66)
@@ -513,6 +544,7 @@ Render_Step :: proc(registry: ^Registry, L: ^vm.State, delta_time: f32) {
 }
 
 Set_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Event) {
+	Console_Handle_Event(registry, event)
 	user_input_service := Find_Service(registry, "UserInputService")
 	if user_input_service != nil && user_input_service.object != nil {
 		user_input_service_step(cast(^UserInputService)user_input_service.object, L, event)
@@ -670,6 +702,7 @@ Install :: proc(registry: ^Registry, vm_state: ^vm.VM) {
 
 	profiling.install_thread_hooks(vm_state.L)
 	Register_ProfilerOverlay(registry, vm_state)
+	Register_ConsoleOverlay(registry, vm_state)
 }
 
 Registry_Destroy :: proc(registry: ^Registry) {

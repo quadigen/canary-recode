@@ -1,0 +1,14 @@
+{
+  "title": "Legacy KNE migration",
+  "description": "Archived KNE 3.x documentation and migration guidance.",
+  "pages": [
+    "index",
+    "getting-started",
+    "lifecycle",
+    "host-api",
+    "luau-interop",
+    "classes-and-datatypes",
+    "signals-and-callbacks",
+    "distribution"
+  ]
+}

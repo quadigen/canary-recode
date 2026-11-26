@@ -1,0 +1,83 @@
+---
+title: Native signals and Luau callbacks
+description: Connect native listeners to Instance signals and retain Luau functions.
+---
+
+## Native Instance signals
+
+Use `Kinemium_ConnectSignal` to subscribe to an Instance event:
+
+```c
+#include "kinemium_plugin.h"
+#include <stdio.h>
+
+static void on_child(Kinemium_Context *ctx, void *user_data,
+                     uint32_t count, const Kinemium_Value *args) {
+    (void)ctx;
+    (void)user_data;
+    if (count && args[0].kind == KINEMIUM_VALUE_INSTANCE) {
+        printf("Child handle: %llu", (unsigned long long)args[0].instance);
+    }
+}
+
+Kinemium_Handle workspace =
+    Kinemium_HandleService(ctx, "Workspace");
+Kinemium_Connection connection = Kinemium_ConnectSignal(
+    ctx, workspace, "ChildAdded", on_child, NULL, false
+);
+```
+
+`Kinemium_SignalConnected` checks a connection, and `Kinemium_DisconnectSignal` releases it. Set the final argument to true to connect once. `Kinemium_FireSignal` fires a signal using typed arguments.
+
+## C functions callable from Luau
+
+```c
+static bool native_add(void *user, uint32_t count,
+                       const Kinemium_Value *args, Kinemium_Value *output) {
+    (void)user;
+    if (count != 2) return false;
+    output->kind = KINEMIUM_VALUE_NUMBER;
+    output->number = args[0].number + args[1].number;
+    return true;
+}
+
+Kinemium_RegisterNativeFunction(ctx, "NativeAdd", native_add, NULL);
+```
+
+Then Luau can invoke `NativeAdd(4, 8)`.
+
+## Retain and call Luau functions
+
+```c
+Kinemium_Callback callback =
+    Kinemium_RetainGlobalFunction(ctx, "LuaCallback");
+
+Kinemium_Value argument = {
+    .kind = KINEMIUM_VALUE_NUMBER,
+    .number = 8
+};
+Kinemium_Value result = {0};
+
+Kinemium_CallLuauCallback(ctx, callback, &argument, 1,
+                         &result, NULL, 0);
+Kinemium_ReleaseLuauCallback(ctx, callback);
+```
+
+`Kinemium_RetainLuauCallback` retains an existing Luau function by stack index. Retained references remain valid until explicitly released or their owning plugin unloads. Avoid calling into the VM from another thread; borrowed callback argument buffers are valid only during the invocation.
+
+## Connect a retained Luau function to a signal
+
+When a Luau function has already been retained, use `Kinemium_ConnectLuauSignal` instead of creating an extra native C trampoline:
+
+```c
+Kinemium_Callback callback = Kinemium_RetainGlobalFunction(ctx, "OnChildAdded");
+Kinemium_Connection link = Kinemium_ConnectLuauSignal(ctx, workspace, "ChildAdded", callback, false);
+
+if (Kinemium_LuauCallbackIsValid(ctx, callback)) {
+    Kinemium_FireSignal(ctx, workspace, "ChildAdded", NULL, 0);
+}
+Kinemium_DisconnectSignal(ctx, link);
+Kinemium_ReleaseLuauCallback(ctx, callback);
+```
+
+Once the Luau callback has been released, any still-active connection skips it; it never calls an invalid reference. Use an owning engine thread, and do not call `Kinemium_Destroy` on a borrowed plugin context.

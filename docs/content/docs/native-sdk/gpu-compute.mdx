@@ -1,0 +1,127 @@
+---
+title: GPUCompute C SDK
+description: GPU-accelerated C and C++ rendering through Vulkan compute shaders, buffers, textures and MaterialVariant output.
+---
+
+The Kinemium C SDK provides GPUCompute for both standalone applications and native plugins. The interface supports GLSL 450 compute pipelines, storage buffers, texture bindings, asynchronous GPU tasks and **direct compute-generated Filament material textures**.
+
+The GPUCompute functions are available through ABI v2, including the runtime loader.
+
+## A GPU-powered image renderer in C
+
+The included C example renders a 64 × 64 gradient using a Vulkan compute shader, then optionally writes its pixels to a PPM file.
+
+~~~sh
+cmake -S examples/kinemium_sdk -B build/sdk-example
+cmake --build build/sdk-example --target kinemium_sdk_gpu_compute
+./build/sdk-example/kinemium_sdk_gpu_compute \
+  "$PWD/dist/kinemium/lib/libkinemium.so" /tmp/gpu-output.ppm
+~~~
+
+The executable does **not** link against libkinemium at build time; it uses the SDK runtime loader.
+
+## Open the GPU device
+
+~~~c
+Kinemium_Context *ctx = Kinemium_CreateWithMode(KINEMIUM_MODE_STANDALONE);
+if (!Kinemium_GPUComputeOpen(ctx)) {
+    // Use Kinemium_CopyLastError for diagnostics.
+}
+Kinemium_GPUComputeCapabilities caps = {0};
+Kinemium_GPUComputeGetCapabilities(ctx, &caps);
+printf("Compute GPU: %s\n", caps.name);
+~~~
+
+GPUCompute gets its own Vulkan compute device, owned by the SDK context. When the context is destroyed (or a native plugin unloads), the GPU device and its resources are released.
+
+## Allocate buffers and dispatch GLSL
+
+~~~c
+const char *shader =
+    "#version 450\n"
+    "layout(local_size_x=8,local_size_y=8,local_size_z=1) in;\n"
+    "layout(set=0,binding=0,std430) buffer Pixels {uint pixels[];} dst;\n"
+    "void main(){uint x=gl_GlobalInvocationID.x,y=gl_GlobalInvocationID.y;"
+    "if(x<64&&y<64)dst.pixels[y*64+x]=0xff00ffffu;}\n";
+
+uint32_t buffer_id = 0, pipeline_id = 0;
+uint32_t kinds[] = { KINEMIUM_GPU_BIND_STORAGE_BUFFER };
+
+Kinemium_GPUComputeCreateBuffer(ctx, 64 * 64 * 4, &buffer_id);
+Kinemium_GPUComputeCreatePipeline(ctx, shader, 1, kinds, &pipeline_id);
+Kinemium_GPUComputeUsePipeline(ctx, pipeline_id);
+Kinemium_GPUComputeBindBuffer(ctx, 0, buffer_id);
+Kinemium_GPUComputeDispatch(ctx, 8, 8, 1);
+
+bool completed = false;
+if (Kinemium_GPUComputePoll(ctx, &completed) && completed) {
+    uint32_t pixels[64 * 64];
+    Kinemium_GPUComputeReadBuffer(ctx, buffer_id, 0,
+        sizeof(pixels), pixels, sizeof(pixels));
+}
+~~~
+
+GPU dispatch is asynchronous. Do not read results until Poll reports completion. Clean up by calling GPUComputeDestroyPipeline, GPUComputeDestroyBuffer, GPUComputeClose, then Kinemium_Destroy.
+
+Other APIs support WriteBuffer, CopyBuffer, FillBuffer, BeginCommands, SubmitCommands, CancelCommands, Barrier, BeginTask, SubmitTask, SubmitTaskBatch, PollTask, GetTaskInfo, PendingTaskCount and SetPushConstants (at most 128 bytes, four-byte aligned).
+
+## Storage and sampled textures
+
+~~~c
+Kinemium_GPUComputeTextureDesc desc = {
+    .width = 256, .height = 256, .depth = 1, .layers = 1,
+    .format = KINEMIUM_GPU_TEXTURE_RGBA8,
+    .dimension = KINEMIUM_GPU_TEXTURE_2D,
+    .writable = true, .nearest = true, .clamp = true
+};
+
+uint32_t texture_id = 0;
+Kinemium_GPUComputeCreateTexture(ctx, &desc, NULL, 0, &texture_id);
+Kinemium_GPUComputeBindTexture(ctx, 0, texture_id);
+~~~
+
+The shader must declare the corresponding descriptor binding type, such as KINEMIUM_GPU_BIND_STORAGE_TEXTURE for a writable image. GetTextureInfo and DestroyTexture are provided.
+
+GPUCompute texture IDs are private to its Vulkan device and cannot be passed directly to Filament. Generic GPUCompute texture readback is not yet supported. Use a storage buffer for CPU-readable pixels, or the direct MaterialVariant path below to avoid readback entirely.
+
+## Direct GPU output to a Filament MaterialVariant
+
+The existing engine supports updating a live MaterialVariant sampler directly from a Vulkan compute shader, without CPU pixel readback or upload. Your material must declare a sampler2d parameter such as computedMap, and its source must finish compiling before dispatch.
+
+~~~c
+bool ok = Kinemium_GPUComputeDispatchMaterialTexture(
+    ctx,
+    material_variant_handle,
+    "computedMap",
+    "#version 450\n"
+    "layout(local_size_x=8,local_size_y=8,local_size_z=1) in;\n"
+    "layout(rgba8,set=0,binding=0) uniform writeonly image2D outputImage;\n"
+    "void main(){ivec2 p=ivec2(gl_GlobalInvocationID.xy);"
+    "if(all(lessThan(p,imageSize(outputImage))))"
+    "imageStore(outputImage,p,vec4(1,0,0,1));}\n",
+    256, 256
+);
+~~~
+
+This special path uses Filament's **shared Vulkan device**, not the private GPUCompute device. Supported shaders must write exactly one rgba8 image2D at descriptor set 0 binding 0 and use 8 × 8 × 1 local workgroups. Material output width/height are limited to 1–1024 pixels.
+
+Kinemium_GPUComputeGetRenderStats exposes direct texture dispatch and CPU readback/upload counters. See the C integration test in tests/sdk/gpu_compute_material.c.
+
+## Limits and safety
+
+GPUCompute reuses the engine's bounded Vulkan implementation: up to 64 buffers, 64 textures, 32 pipelines, 16 bindings, 64 MiB per buffer and 256 MiB overall persistent resource budget, subject to driver limits. GLSL source is limited to 1 MiB. All resource IDs are scoped to the current context.
+
+Do not close a context or its GPU device while callbacks, threads, or in-flight operations still use it. The APIs are not guaranteed safe for simultaneous calls from multiple threads. Native shaders and plugins run trusted in-process code; GPU hangs or driver failures remain possible.
+
+This is not a general-purpose Vulkan graphics pipeline, external-memory sharing API or a replacement for Filament's render graph. It enables procedural render textures, GPU simulations, image processing and compute-generated surfaces.
+
+## Verify a GPUCompute integration
+
+Build the SDK and run its offscreen GPUCompute example on a machine with the required Vulkan drivers:
+
+```sh
+python3 tools/build_kinemium_sdk.py
+dist/kinemium/bin/kinemium_sdk_gpu_compute   "$PWD/dist/kinemium/lib/libkinemium.so" /tmp/kinemium-gpu.ppm
+```
+
+The example writes a small test image. For an interactive renderer, build the windowed SDK example from the [getting-started guide](/docs/native-sdk/getting-started).

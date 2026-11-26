@@ -33,8 +33,7 @@ struct Kine_Luau_Lexer
     }
 };
 
-// AST locals already carry lexical identity. Only inspect statically known
-// call targets; never execute user code or index userdata during diagnostics.
+
 struct CallDefinitions : Luau::AstVisitor
 {
     std::unordered_set<std::string> globals;
@@ -68,7 +67,7 @@ struct CallDiagnostics : Luau::AstVisitor
             else return expr;
     }
 
-    // Leaves a value only when a target can be resolved without running code.
+
     bool resolve(Luau::AstExpr* expr, std::string& name)
     {
         expr = unwrap(expr);
@@ -85,7 +84,7 @@ struct CallDiagnostics : Luau::AstVisitor
             if (!resolve(index->expr, name)) return false;
             if (!lua_istable(L, -1))
             {
-                // Userdata members require engine reflection; leave them dynamic.
+
                 const bool dynamic = lua_isuserdata(L, -1);
                 lua_pop(L, 1);
                 if (dynamic) return false;
@@ -113,7 +112,7 @@ struct CallDiagnostics : Luau::AstVisitor
         std::string name;
         if (!resolve(expr, name)) return;
         const int type = lua_type(L, -1);
-        // Tables and userdata may implement __call; their callability is dynamic.
+
         if (type != LUA_TFUNCTION && type != LUA_TTABLE && type != LUA_TUSERDATA)
         {
             line = expr->location.begin.line + 1;
@@ -219,6 +218,7 @@ double kine_lua_tonumberx(lua_State* L, int index, int* isNumber) { return lua_t
 void kine_lua_createtable(lua_State* L, int arraySize, int hashSize) { lua_createtable(L, arraySize, hashSize); }
 void kine_lua_setreadonly(lua_State* L, int index, int enabled) { lua_setreadonly(L, index, enabled); }
 int kine_lua_getfield(lua_State* L, int index, const char* key) { return lua_getfield(L, index, key); }
+void kine_lua_rawset(lua_State* L, int index) { lua_rawset(L, index); }
 void kine_lua_rawseti(lua_State* L, int index, int arrayIndex) { lua_rawseti(L, index, arrayIndex); }
 int kine_lua_rawgeti(lua_State* L, int index, int arrayIndex) { return lua_rawgeti(L, index, arrayIndex); }
 int kine_lua_ref(lua_State* L, int index) { return lua_ref(L, index); }
@@ -258,9 +258,8 @@ int kine_lua_error(lua_State* L)
 }
 int kine_lua_userdatatag(lua_State* L, int index) { return lua_userdatatag(L, index); }
 void* kine_lua_touserdata(lua_State* L, int index) { return lua_touserdata(L, index); }
-// Views a Luau buffer's bytes, which is how raw font data handed over by script
-// reaches the engine. The returned pointer is owned by the buffer, so it stays
-// valid only while that buffer is reachable.
+
+
 void* kine_lua_tobuffer(lua_State* L, int index, size_t* size) { return lua_tobuffer(L, index, size); }
 const char* kine_lua_namecallatom(lua_State* L, int* atom) { return lua_namecallatom(L, atom); }
 void kine_lua_getuserdatametatable(lua_State* L, int tag) { lua_getuserdatametatable(L, tag); }
@@ -373,8 +372,7 @@ kine_luau_token kine_luau_lexer_next(void* handle)
 
     token.begin = cursor;
 
-    // next() consumes leading whitespace before producing a lexeme, so scan
-    // past it to find the token's first byte.
+
     while (token.begin < token.end && token.begin < lexer->size && Luau::isSpace(lexer->text[token.begin]))
         token.begin++;
 

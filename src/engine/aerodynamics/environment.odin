@@ -48,11 +48,35 @@ Wind_At :: proc(s: Settings, p: jolt.JPH_RVec3) -> (wind: Vec3) {
 	return
 }
 
-wave_coefficient :: proc(speed: f32, o: Body_Options) -> f32 {
-	if o.wave_drag == 0 {return 0}
+mach_at :: proc(speed: f32, o: Body_Options) -> f32 {
 	sound := o.sound_speed
 	if sound <= 0 {sound = 340.3}
-	mach := speed / sound
+	return speed / sound
+}
+
+
+compressibility_lift :: proc(mach: f32) -> f32 {
+	if mach <= 0.3 {return 1}
+	if mach < 0.7 {
+		x := (mach - 0.3) / 0.4
+		return 1 + 0.4 * x * x * (3 - 2 * x)
+	}
+	if mach < 1.3 {
+		x := (mach - 0.7) / 0.6
+		return(
+			1.4 +
+			(f32(2 / (3.14159265358979323846 * 0.8306623862918075)) - 1.4) * x * x * (3 - 2 * x) \
+		)
+	}
+	return 2 / (f32(PI) * math.sqrt(mach * mach - 1))
+}
+
+wave_coefficient_mach :: proc(mach, strength: f32) -> f32 {
+	if strength == 0 || mach <= 0.75 {return 0}
 	x := clamp((mach - 0.75) / 0.4, 0, 1)
-	return o.wave_drag * x * x * (3 - 2 * x)
+	return strength * x * x * (3 - 2 * x)
+}
+
+wave_coefficient :: proc(speed: f32, o: Body_Options) -> f32 {
+	return wave_coefficient_mach(mach_at(speed, o), o.wave_drag)
 }

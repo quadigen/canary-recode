@@ -77,6 +77,8 @@ foreign kine_skia {
 	Kine_Skia_Surface_CreateVulkanRenderTarget :: proc(_context: ^KineSkiaVulkanContext, width: i32, height: i32, imageInfo: ^KineSkiaVulkanImageInfo) -> ^KineSkiaSurface ---
 	Kine_Skia_Surface_CreateGLRenderTarget :: proc(_context: ^KineSkiaGLContext, width: i32, height: i32, imageInfo: ^KineSkiaGLImageInfo) -> ^KineSkiaSurface ---
 	Kine_Skia_Surface_Destroy :: proc(surface: ^KineSkiaSurface) ---
+	Kine_Skia_Surface_FlushVulkanLayout :: proc(surface: ^KineSkiaSurface, layout: u32) -> i32 ---
+	Kine_Skia_Surface_WaitVulkanSemaphore :: proc(surface: ^KineSkiaSurface, semaphore: rawptr) -> i32 ---
 	Kine_Skia_Surface_GetWidth :: proc(surface: ^KineSkiaSurface) -> i32 ---
 	Kine_Skia_Surface_GetHeight :: proc(surface: ^KineSkiaSurface) -> i32 ---
 	Kine_Skia_Surface_GetRowBytes :: proc(surface: ^KineSkiaSurface) -> u32 ---
@@ -183,4 +185,10 @@ foreign kine_skia {
 
 
 	Kine_Skia_Surface_DrawImageScaled :: proc(surface: ^KineSkiaSurface, image: ^KineSkiaImage, srcX: f32, srcY: f32, srcWidth: f32, srcHeight: f32, dstX: f32, dstY: f32, dstWidth: f32, dstHeight: f32, tileSizeX: f32, tileSizeY: f32, scaleType: i32, resample: i32, r: u8, g: u8, b: u8, colorA: u8, alpha: u8) ---
+}
+
+when ODIN_OS != .JS {
+	foreign kine_skia {
+		Kine_Skia_Typeface_SetFallback :: proc(typeface: ^KineSkiaTypeface) ---
+	}
 }

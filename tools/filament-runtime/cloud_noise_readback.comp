@@ -1,0 +1,36 @@
+#version 450
+
+// Packs the shape, detail and curl noise textures into one storage buffer for GPU readback.
+// Layout: shape texels, then detail texels, then curl texels, each packed with packUnorm4x8.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, rgba8) uniform image3D shapeNoise;
+layout(set = 0, binding = 1, rgba8) uniform image3D detailNoise;
+layout(set = 0, binding = 2, rgba8) uniform image2D curlNoise;
+layout(set = 0, binding = 3, std430) buffer Result { uint values[]; };
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+
+    ivec3 shapeSize = imageSize(shapeNoise);
+    ivec3 detailSize = imageSize(detailNoise);
+    ivec2 curlSize = imageSize(curlNoise);
+
+    uint shapeCount = uint(shapeSize.x * shapeSize.y * shapeSize.z);
+    uint detailCount = uint(detailSize.x * detailSize.y * detailSize.z);
+
+    if (all(lessThan(coord, shapeSize))) {
+        uint i = uint(coord.x + shapeSize.x * (coord.y + shapeSize.y * coord.z));
+        values[i] = packUnorm4x8(imageLoad(shapeNoise, coord));
+    }
+
+    if (all(lessThan(coord, detailSize))) {
+        uint i = uint(coord.x + detailSize.x * (coord.y + detailSize.y * coord.z));
+        values[shapeCount + i] = packUnorm4x8(imageLoad(detailNoise, coord));
+    }
+
+    if (coord.z == 0 && all(lessThan(coord.xy, curlSize))) {
+        uint i = uint(coord.x + curlSize.x * coord.y);
+        values[shapeCount + detailCount + i] = packUnorm4x8(imageLoad(curlNoise, coord.xy));
+    }
+}

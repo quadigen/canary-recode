@@ -1,0 +1,112 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_sky_atmosphere.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, std140) uniform AtmosphereParameters {
+    vec4 radii;
+    vec4 rayleigh;
+    vec4 mieScattering;
+    vec4 mieExtinction;
+    vec4 absorption;
+    vec4 absorptionTerms;
+    vec4 groundAlbedo;
+    vec4 lut;
+} atmosphere;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D transmittanceLut;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D multiScatteringLut;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D skyViewLut;
+
+vec3 sampleLut(bool multi, vec2 uv) {
+    ivec2 size = multi ? imageSize(multiScatteringLut) : imageSize(transmittanceLut);
+    vec2 pixel = clamp(uv, 0.0, 1.0) * vec2(size) - 0.5;
+    ivec2 base = ivec2(floor(pixel));
+    vec2 f = fract(pixel);
+    vec3 values[4];
+    for (int i = 0; i < 4; ++i) {
+        ivec2 p = clamp(base + ivec2(i & 1, i >> 1), ivec2(0), size - 1);
+        values[i] = multi ? imageLoad(multiScatteringLut, p).rgb :
+                imageLoad(transmittanceLut, p).rgb;
+    }
+    return mix(mix(values[0], values[1], f.x), mix(values[2], values[3], f.x), f.y);
+}
+
+vec3 integrateSky(KineAtmosphereParameters a, vec3 position, vec3 direction, vec3 sun) {
+    float height = length(position);
+    if (height > a.topRadius) {
+        float entry = kineRaySphereIntersectNearest(position, direction, a.topRadius);
+        if (entry < 0.0) return vec3(0.0);
+        position += direction * entry - position / height * KINE_PLANET_RADIUS_OFFSET;
+    }
+    if (length(position) <= a.bottomRadius) return vec3(0.0);
+    float top = kineRaySphereIntersectNearest(position, direction, a.topRadius);
+    float ground = kineRaySphereIntersectNearest(position, direction, a.bottomRadius);
+    if (top <= 0.0) return vec3(0.0);
+    float distance = ground >= 0.0 ? min(top, ground) : top;
+    float count = mix(4.0, 14.0, clamp(distance * 0.01, 0.0, 1.0));
+    float whole = floor(count);
+    float distanceWhole = distance * whole / count;
+    float cosTheta = clamp(dot(direction, sun), -1.0, 1.0);
+    float mie = kineCornetteShanksMiePhase(atmosphere.lut.w, cosTheta);
+    float rayleigh = kineRayleighPhase(cosTheta);
+    vec3 luminance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    for (float s = 0.0; s < count; s += 1.0) {
+        float begin = s / whole;
+        float end = (s + 1.0) / whole;
+        begin = distanceWhole * begin * begin;
+        end = end > 1.0 ? distance : distanceWhole * end * end;
+        float dt = max(0.0, end - begin);
+        vec3 p = position + direction * (begin + dt * 0.3);
+        float h = length(p);
+        float altitude = max(0.0, h - a.bottomRadius);
+        vec3 up = p / h;
+        float sunCos = clamp(dot(up, sun), -1.0, 1.0);
+        vec3 ray = exp(a.rayleighDensityExpScale * altitude) * a.rayleighScattering;
+        vec3 aerosol = exp(a.mieDensityExpScale * altitude) * a.mieScattering;
+        KineMediumSample medium = kineSampleMedium(a, p);
+        vec2 uv;
+        kineLutTransmittanceParamsToUv(a.bottomRadius, a.topRadius, h, sunCos, uv);
+        vec3 direct = sampleLut(false, uv);
+        float shadow = kineRaySphereIntersectNearest(p - up * KINE_PLANET_RADIUS_OFFSET,
+                sun, a.bottomRadius) >= 0.0 ? 0.0 : 1.0;
+        vec2 msUv = clamp(vec2(sunCos * 0.5 + 0.5, altitude / (a.topRadius - a.bottomRadius)), 0.0, 1.0);
+        vec2 msSize = vec2(imageSize(multiScatteringLut));
+        msUv = vec2(kineFromUnitToSubUvs(msUv.x, msSize.x), kineFromUnitToSubUvs(msUv.y, msSize.y));
+        vec3 source = atmosphere.groundAlbedo.w *
+                (shadow * direct * (ray * rayleigh + aerosol * mie) +
+                sampleLut(true, msUv) * medium.scattering);
+        vec3 transmission = exp(-medium.extinction * dt);
+        vec3 integral = (vec3(1.0) - transmission) / max(medium.extinction, vec3(1e-8));
+        integral = mix(vec3(dt), integral, greaterThan(medium.extinction, vec3(1e-8)));
+        luminance += throughput * source * integral;
+        throughput *= transmission;
+    }
+    return max(luminance, vec3(0.0));
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(skyViewLut);
+    if (any(greaterThanEqual(coord, size))) return;
+    KineAtmosphereParameters a = KineAtmosphereParameters(
+            atmosphere.radii.x, atmosphere.radii.y, atmosphere.radii.z, atmosphere.radii.w,
+            atmosphere.rayleigh.rgb, atmosphere.mieScattering.rgb, atmosphere.mieExtinction.rgb,
+            atmosphere.absorption.rgb, atmosphere.groundAlbedo.rgb, atmosphere.absorption.w,
+            atmosphere.absorptionTerms.x, atmosphere.absorptionTerms.y,
+            atmosphere.absorptionTerms.z, atmosphere.absorptionTerms.w);
+    float h = a.bottomRadius + max(atmosphere.lut.y, 0.002);
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    uv = clamp(vec2(kineFromSubUvsToUnit(uv.x, float(size.x)),
+            kineFromSubUvsToUnit(uv.y, float(size.y))), 0.0, 1.0);
+    float beta = acos(clamp(sqrt(max(0.0, h * h - a.bottomRadius * a.bottomRadius)) / h, 0.0, 1.0));
+    float horizon = KINE_PI - beta;
+    float q = uv.y < 0.5 ? 1.0 - 2.0 * uv.y : 2.0 * uv.y - 1.0;
+    float zenith = uv.y < 0.5 ? horizon * (1.0 - q * q) : horizon + beta * q * q;
+    float azimuthCos = 1.0 - 2.0 * uv.x * uv.x;
+    vec3 dir = vec3(sin(zenith) * azimuthCos,
+            sin(zenith) * sqrt(max(0.0, 1.0 - azimuthCos * azimuthCos)), cos(zenith));
+    float sunCos = clamp(atmosphere.lut.z, -1.0, 1.0);
+    vec3 sun = vec3(sqrt(max(0.0, 1.0 - sunCos * sunCos)), 0.0, sunCos);
+    imageStore(skyViewLut, coord, vec4(integrateSky(a, vec3(0.0, 0.0, h), dir, sun), 1.0));
+}

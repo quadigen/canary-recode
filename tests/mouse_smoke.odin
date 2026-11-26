@@ -1,19 +1,19 @@
 package main
 
-import "core:fmt"
-import "core:strings"
 import classes "../src/engine/classes"
-import engine_runtime "../src/engine/runtime"
 import renderer "../src/engine/renderer"
+import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:strings"
 import "vendor:sdl3"
 
 STEP_DT :: f32(1.0 / 60.0)
 VIEWPORT_WIDTH :: i32(800)
 VIEWPORT_HEIGHT :: i32(600)
 
-EVENT_NAMES := []string{
+EVENT_NAMES := []string {
 	"Button1Down",
 	"Button1Up",
 	"Button2Down",
@@ -54,11 +54,9 @@ expect_script_failure :: proc(script_vm: ^vm.VM, source, name: string) {
 }
 
 assert_counts :: proc(script_vm: ^vm.VM, expected: string, name: string) {
-	source := strings.concatenate({
-		"local c = counts\n",
-		expected,
-		"\nfor _, n in ipairs(eventNames) do c[n] = 0 end",
-	})
+	source := strings.concatenate(
+		{"local c = counts\n", expected, "\nfor _, n in ipairs(eventNames) do c[n] = 0 end"},
+	)
 	defer delete(source)
 	run_script(script_vm, source, name)
 }
@@ -77,8 +75,7 @@ main :: proc() {
 	view: renderer.RendererObject
 	engine_runtime.Environment_Init(&environment, &script_vm, &view)
 
-	// The desktop and web frame loops publish the viewport rect before the
-	// engine step, and the mouse cannot build a camera ray without it.
+
 	assert(!view.HasViewportRect, "a fresh renderer must start without a viewport rect")
 
 	{
@@ -97,7 +94,9 @@ main :: proc() {
 	assert(player != nil)
 	players.local_player = player
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local player = game:GetService("Players").LocalPlayer
 assert(player ~= nil, "no local player")
 
@@ -146,7 +145,9 @@ assert(mouse.Icon == "rbxasset://cursor/IBeamCursor.png", "Icon must follow Icon
 
 mouse.TargetFilter = nil
 assert(mouse.TargetFilter == nil, "TargetFilter should start nil")
-`, "mouse_setup")
+`,
+		"mouse_setup",
+	)
 
 	expect_script_failure(
 		&script_vm,
@@ -154,20 +155,28 @@ assert(mouse.TargetFilter == nil, "TargetFilter should start nil")
 		"mouse_get_mouse_must_need_internal_access",
 	)
 
-	run_script_internal(&script_vm, `
+	run_script_internal(
+		&script_vm,
+		`
 local mouse = game:GetService("UserInputService"):GetMouse()
 assert(mouse ~= nil, "internal GetMouse returned nil")
 assert(mouse == game:GetService("Players").LocalPlayer:GetMouse(), "the two accessors must share one Mouse")
-`, "mouse_get_mouse_internal")
+`,
+		"mouse_get_mouse_internal",
+	)
 
 	mouse := mouse_pointer(&environment)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.ViewSizeX == 0 and mouse.ViewSizeY == 0, "no frame has run yet")
 assert(mouse.X == 0 and mouse.Y == 0, "the pointer has not moved yet")
 assert(mouse.Target == nil and mouse.target == nil, "no target before the first frame")
-`, "mouse_initial_state")
+`,
+		"mouse_initial_state",
+	)
 
 	motion: sdl3.Event
 	motion.type = .MOUSE_MOTION
@@ -179,7 +188,9 @@ assert(mouse.Target == nil and mouse.target == nil, "no target before the first 
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(counts.Move == 1, "Move did not fire exactly once")
 assert(mouse.X == 400 and mouse.Y == 300, "pointer position did not track the event")
@@ -189,9 +200,13 @@ assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1), "centre of the viewport
 assert(mouse.Origin.Position == Vector3.zero, "Origin must mirror UnitRay.Origin")
 assert(mouse.Target == nil, "nothing is in the workspace yet")
 assert(mouse.TargetSurface == Enum.NormalId.Front, "a miss reports the default surface")
-`, "mouse_motion")
+`,
+		"mouse_motion",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local workspace = game:GetService("Workspace")
 workspace.CurrentCamera.CFrame = CFrame.new(0, 0, 20)
 
@@ -202,11 +217,15 @@ target.CFrame = CFrame.new(0, 0, 0)
 target.Anchored = true
 target.CanCollide = true
 target.CanQuery = true
-`, "mouse_scene_setup")
+`,
+		"mouse_scene_setup",
+	)
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(game:GetService("Physics").BodyCount == 1, "the part must have a physics body")
 
 local direct = game:GetService("Workspace"):Raycast(Vector3.new(0, 0, 20), Vector3.new(0, 0, -1000))
@@ -223,9 +242,13 @@ assert(mouse.TargetSurface == Enum.NormalId.Back, "a +Z surface is Back")
 assert(mouse.Hit.Position == Vector3.new(0, 0, 4), "hit position: " .. tostring(mouse.Hit.Position))
 assert(mouse.hit == mouse.Hit, "the lowercase alias must work")
 assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1), "the pointer is still centred")
-`, "mouse_hit")
+`,
+		"mouse_hit",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local folder = Instance.new("Folder")
 folder.Name = "Filtered"
 folder.Parent = target.Parent
@@ -234,21 +257,31 @@ target.Parent = folder
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 mouse.TargetFilter = folder
 assert(mouse.TargetFilter == folder, "TargetFilter round trip failed")
-`, "mouse_target_filter_setup")
+`,
+		"mouse_target_filter_setup",
+	)
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.Target == nil, "TargetFilter must exclude descendants")
 assert(mouse.Hit.Position == Vector3.new(0, 0, -980), "a filtered miss falls back to the far point: " .. tostring(mouse.Hit.Position))
-`, "mouse_target_filter")
+`,
+		"mouse_target_filter",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 mouse.TargetFilter = nil
 assert(mouse.TargetFilter == nil, "clearing TargetFilter failed")
-`, "mouse_target_filter_clear")
+`,
+		"mouse_target_filter_clear",
+	)
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
@@ -280,18 +313,26 @@ assert(mouse.TargetFilter == nil, "clearing TargetFilter failed")
 	button_two_up.button.y = 303
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, button_two_up)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.Button1Down == 1, "Button1Down did not fire")
 assert(counts.Button1Up == 1, "Button1Up did not fire")
 assert(counts.Button2Down == 1, "Button2Down did not fire")
 assert(counts.Button2Up == 1, "Button2Up did not fire")
 assert(counts.Move == 1, "buttons must not fire Move")
-`, "mouse_buttons")
+`,
+		"mouse_buttons",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.X == 403 and mouse.Y == 303, "buttons must move the pointer too")
-`, "mouse_button_position")
+`,
+		"mouse_button_position",
+	)
 
 	wheel_up: sdl3.Event
 	wheel_up.type = .MOUSE_WHEEL
@@ -309,10 +350,14 @@ assert(mouse.X == 403 and mouse.Y == 303, "buttons must move the pointer too")
 	wheel_down.wheel.mouse_y = 303
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, wheel_down)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.WheelForward == 1, "WheelForward did not fire")
 assert(counts.WheelBackward == 1, "WheelBackward did not fire")
-`, "mouse_wheel")
+`,
+		"mouse_wheel",
+	)
 
 	key_down: sdl3.Event
 	key_down.type = .KEY_DOWN
@@ -324,46 +369,72 @@ assert(counts.WheelBackward == 1, "WheelBackward did not fire")
 	key_up.key.scancode = .A
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, key_up)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.KeyDown == 1, "KeyDown did not fire")
 assert(counts.KeyUp == 1, "KeyUp did not fire")
-`, "mouse_keys")
+`,
+		"mouse_keys",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 seen = {}
 game:GetService("Players").LocalPlayer:GetMouse().KeyDown:Connect(function(key) table.insert(seen, key) end)
-`, "mouse_key_listener")
+`,
+		"mouse_key_listener",
+	)
 
 	shift_down: sdl3.Event
 	shift_down.type = .KEY_DOWN
 	shift_down.key.scancode = .LSHIFT
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, shift_down)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 assert(seen[1] == "LeftShift", "KeyDown must pass the enum item name: " .. tostring(seen[1]))
-`, "mouse_key_name")
+`,
+		"mouse_key_name",
+	)
 
 	services.Mouse_Begin_Frame(mouse, script_vm.L, 1.5)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.Idle == 1, "Idle did not fire after an idle second")
 assert(counts.KeyDown == 1, "the second KeyDown did not fire")
 assert(counts.Move == 0, "an idle frame must not report Move")
-`, "mouse_idle")
+`,
+		"mouse_idle",
+	)
 
 	services.Mouse_Begin_Frame(mouse, script_vm.L, 0.25)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.Idle == 0, "Idle must not fire again before another second")
-`, "mouse_idle_hold")
+`,
+		"mouse_idle_hold",
+	)
 
 	services.Mouse_Begin_Frame(mouse, script_vm.L, 1.5)
 
-	assert_counts(&script_vm, `
+	assert_counts(
+		&script_vm,
+		`
 assert(counts.Idle == 1, "Idle did not fire on the next interval")
-`, "mouse_idle_second")
+`,
+		"mouse_idle_second",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local reflection = game:GetService("ReflectionService")
 local class = reflection:GetClass("Mouse")
 assert(class ~= nil, "ReflectionService must know the Mouse class")
@@ -392,9 +463,13 @@ for _, name in ipairs({
 }) do
 	assert(event_names[name], "Mouse must reflect the event " .. name)
 end
-`, "mouse_reflection")
+`,
+		"mouse_reflection",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local reflection = game:GetService("ReflectionService")
 
 local function find_method(class_name, method_name)
@@ -411,23 +486,33 @@ assert(get_mouse.Permits.Call == nil, "an unprivileged script must not see a Cal
 local player_mouse = find_method("Player", "GetMouse")
 assert(player_mouse ~= nil, "Player must reflect GetMouse")
 assert(player_mouse.Permits.Call ~= nil, "Player:GetMouse must be callable without a capability")
-`, "mouse_reflection_security")
+`,
+		"mouse_reflection_security",
+	)
 
-	run_script_internal(&script_vm, `
+	run_script_internal(
+		&script_vm,
+		`
 local get_mouse
 for _, method in game:GetService("ReflectionService"):GetMethodsOfClass("UserInputService") do
 	if method.Name == "GetMouse" then get_mouse = method end
 end
 assert(get_mouse ~= nil, "UserInputService must reflect GetMouse")
 assert(get_mouse.Permits.Call ~= nil, "an internal script must see the Call permit for GetMouse")
-`, "mouse_reflection_security_internal")
+`,
+		"mouse_reflection_security_internal",
+	)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 mouse.Icon = ""
 assert(mouse.Icon == "", "clearing Icon failed")
 assert(mouse.IconContent == Content.fromUri(""), "clearing Icon must clear IconContent")
-`, "mouse_icon_clear")
+`,
+		"mouse_icon_clear",
+	)
 
 	view.MouseScale = {1.5, 1.5}
 	view.ViewportRect = {0, 0, 1200, 900}
@@ -444,7 +529,9 @@ assert(mouse.IconContent == Content.fromUri(""), "clearing Icon must clear IconC
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.ViewSizeX == 1200 and mouse.ViewSizeY == 900, "view size is still in pixels")
 
@@ -456,7 +543,9 @@ assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1),
 	"the logical centre must still cast down -Z, got " .. tostring(mouse.UnitRay.Direction))
 assert(mouse.Target ~= nil, "the ray must still reach the part on a scaled display")
 assert(mouse.Target == target, "Target must still be the part under the pointer")
-`, "mouse_scaled_density_centre")
+`,
+		"mouse_scaled_density_centre",
+	)
 
 	{
 		motion: sdl3.Event
@@ -471,7 +560,9 @@ assert(mouse.Target == target, "Target must still be the part under the pointer"
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.X == 0 and mouse.Y == 0,
 	"the logical origin must map to the pixel origin, got " .. mouse.X .. "," .. mouse.Y)
@@ -488,16 +579,11 @@ assert(
 	math.abs(direction.Y / -direction.Z - tangent) < 1.0e-4,
 	"the corner ray must land on the 60-degree frustum boundary, got " .. tostring(direction)
 )
-`, "mouse_scaled_density_corner")
+`,
+		"mouse_scaled_density_corner",
+	)
 
-	// The editor does not render into the whole window: the viewport is a panel
-	// at a non-zero offset, which is the case the full-window tests above can
-	// never catch. The cursor is still reported in window coordinates, so the
-	// viewport origin has to be removed before the position is normalized by the
-	// viewport size. Without that, normalized_x tracks the panel offset and every
-	// ray tilts toward the window's left edge regardless of where the pointer is.
-	// The density is reset so this isolates the origin correction; the two are
-	// independent and combining them here would hide which one regressed.
+
 	view.MouseScale = {1, 1}
 	view.ViewportRect = {300, 200, 900, 600}
 	{
@@ -513,7 +599,9 @@ assert(
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.ViewSizeX == 900 and mouse.ViewSizeY == 600,
 	"view size must stay the viewport size, got " .. mouse.ViewSizeX .. "," .. mouse.ViewSizeY)
@@ -525,9 +613,11 @@ assert(mouse.X == 450 and mouse.Y == 300,
 assert(mouse.UnitRay.Direction == Vector3.new(0, 0, -1),
 	"the viewport centre must cast down -Z, got " .. tostring(mouse.UnitRay.Direction))
 assert(mouse.Target == target, "Target must be the part under the pointer in a panel")
-`, "mouse_offset_viewport_centre")
+`,
+		"mouse_offset_viewport_centre",
+	)
 
-	// Top-left corner of the offset viewport: local (0,0), window (300,200).
+
 	{
 		motion: sdl3.Event
 		motion.type = .MOUSE_MOTION
@@ -541,7 +631,9 @@ assert(mouse.Target == target, "Target must be the part under the pointer in a p
 
 	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
 
-	run_script(&script_vm, `
+	run_script(
+		&script_vm,
+		`
 local mouse = game:GetService("Players").LocalPlayer:GetMouse()
 assert(mouse.X == 0 and mouse.Y == 0,
 	"the viewport origin must map to the local origin, got " .. mouse.X .. "," .. mouse.Y)
@@ -559,14 +651,60 @@ assert(
 	math.abs(direction.Y / -direction.Z - tangent) < 1.0e-4,
 	"the offset corner ray must land on the 60-degree frustum boundary, got " .. tostring(direction)
 )
-`, "mouse_offset_viewport_corner")
+`,
+		"mouse_offset_viewport_corner",
+	)
 
-	// Back to an unscaled display for anything that follows.
+
+	run_script(
+		&script_vm,
+		`
+workspace.CurrentCamera.FieldOfView = 90
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+mouse.Button1Down:Connect(function()
+	local direction = mouse.UnitRay.Direction
+	assert(math.abs(direction.X) < 1.0e-4 and math.abs(direction.Y) < 1.0e-4,
+		"click must refresh the ray at the new cursor position")
+	assert(mouse.Target == target, "click must pick the object at the new cursor position")
+end)
+`,
+		"mouse_click_ray_setup",
+	)
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, STEP_DT)
+	run_script(
+		&script_vm,
+		`
+local direction = game:GetService("Players").LocalPlayer:GetMouse().UnitRay.Direction
+assert(math.abs(direction.Y / -direction.Z - 1) < 1.0e-4,
+	"mouse ray must use the current camera field of view")
+`,
+		"mouse_camera_fov",
+	)
+	{
+		click: sdl3.Event
+		click.type = .MOUSE_BUTTON_DOWN
+		click.button.button = sdl3.BUTTON_LEFT
+		click.button.x = 750
+		click.button.y = 500
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, click)
+		click.type = .MOUSE_BUTTON_UP
+		engine_runtime.Environment_SetEvent(&environment, &script_vm, click)
+	}
+	run_script(
+		&script_vm,
+		`
+local mouse = game:GetService("Players").LocalPlayer:GetMouse()
+assert(mouse.Target == target, "mouse target must refresh before click dispatch")
+workspace.CurrentCamera.FieldOfView = 60
+`,
+		"mouse_click_ray_result",
+	)
+
+
 	view.MouseScale = {1, 1}
 	view.ViewportRect = {0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT}
 
 
-	// Destruction flushes before the next raycast can synchronize the scene.
 	run_script(&script_vm, "target:Destroy()", "mouse_remove_target")
 	classes.Flush_Pending_Destroy(&environment.classes)
 	physics_descriptor := services.Find_Service(&environment.services, "Physics")

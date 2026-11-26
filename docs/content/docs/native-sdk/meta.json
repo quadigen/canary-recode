@@ -1,0 +1,20 @@
+{
+  "title": "Kinemium Native SDK",
+  "description": "One Kinemium_* C API for embedding and native engine plugins.",
+  "root": true,
+  "pages": [
+    "index",
+    "getting-started",
+    "runtime-loading",
+    "plugin-authoring",
+    "classes-and-services",
+    "instance-metadata",
+    "networking-and-services",
+    "players-and-physics",
+    "gpu-compute",
+    "datatypes",
+    "signals-and-callbacks",
+    "migrating-from-kne",
+    "reference"
+  ]
+}

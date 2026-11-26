@@ -24,7 +24,7 @@ Aerodynamics.Density = 1.225
 | `Enabled` | `boolean` | `false` | Whether aerodynamic forces are applied. Alias: `Workspace.FluidForces`. |
 | `Atmosphere` | `Enum.AerodynamicsAtmosphere` | `Standard` | Density model. `Standard` uses a sea-level atmosphere; `Legacy` uses a constant density with an optional scale height. |
 | `Density` | `number` | `1.225` | Sea-level air density in kg/m³. |
-| `MetersPerUnit` | `number` | `1` | World units per meter. Must be greater than zero. |
+| `MetersPerUnit` | `number` | `1` | Meters per world unit. Must be greater than zero. |
 | `ReferenceHeight` | `number` | `0` | World-space height treated as sea level. |
 | `DensityScaleHeight` | `number` | `0` | Scale height used by `Legacy` density falloff. `0` keeps density constant. |
 | `Wind` | `Vector3` | `0, 0, 0` | Additional wind velocity. Added to `Workspace.GlobalWind`. |
@@ -33,7 +33,7 @@ Aerodynamics.Density = 1.225
 | `GustFrequency` | `number` | `0` | Gust oscillation frequency in Hz. |
 | `GustWavelength` | `number` | `0` | Spatial wavelength of the gust field in meters. `0` disables the spatial component. |
 | `MinSpeed` | `number` | `0.05` | Airspeed below which a sample produces no force. |
-| `MaxSpeed` | `number` | `200` | Airspeed cap. `0` means unlimited. |
+| `MaxSpeed` | `number` | `0` | Airspeed cap. `0` means unlimited. |
 | `ThinRatio` | `number` | `0.25` | Thin-body ratio used to classify automatic wings. |
 | `MinimumDimension` | `number` | `0.001` | Bodies thinner than this are ignored. |
 | `MaxForce` | `number` | `0` | Force limit in newtons. `0` means unlimited. |
@@ -50,9 +50,25 @@ Aerodynamics.Density = 1.225
 | `DirectionalDrag` | `Vector3` | `0, 0, 0` | Per-axis drag weights. `0, 0, 0` uses `1, 1, 1`. |
 | `PressureOffset` | `Vector3` | `0, 0, 0` | Shifts the center of pressure in body space. |
 | `IncidenceAngle` | `number` | `0` | Wing incidence in degrees. |
-| `WaveDrag` | `number` | `0` | Transonic wave-drag strength. |
+| `WaveDrag` | `number` | `0.15` | Transonic wave-drag strength; set to 0 to disable. |
 | `SoundSpeed` | `number` | `0` | Speed of sound in m/s. `0` samples it from the atmosphere. |
 | `WakeSleeping` | `boolean` | `true` | Whether sleeping bodies are woken to receive aerodynamic forces. |
+
+## High-speed vehicles
+
+The default airspeed cap is now disabled, so aerodynamic pressure continues to increase with speed rather than flattening at 200 m/s. Set `MaxSpeed = 200` to restore the old cap. The analytical wing model includes bounded Mach-dependent lift and a smooth wave-drag rise; custom airfoil coefficient curves retain their values. This is a real-time engineering approximation, not CFD or a certified transonic/supersonic flight model.
+
+Rigid bodies have a default speed limit of 500 world units/s. To permit faster aircraft, configure their enclosing PhysicsModel before creating its parts:
+
+```lua
+local aero = game:GetService("Aerodynamics")
+aero.Enabled = true
+aero.MaxSpeed = 0
+local aircraft = Instance.new("PhysicsModel", workspace)
+aircraft.MaxLinearVelocity = 1500
+```
+
+New collidable bodies under a model with a speed limit above 500 use continuous collision detection to reduce the chance of passing through obstacles at high speed. Set the model limit before creating the bodies to enable it. Existing bodies can update their velocity limit, but their collision quality is unchanged until recreated.
 
 ## Atmosphere and wind
 

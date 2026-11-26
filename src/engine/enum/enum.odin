@@ -2377,6 +2377,23 @@ LexemeType :: enum {
 	ReservedSpecial  = 18,
 }
 
+QualityPreset :: enum {
+	Custom = 0,
+	Low    = 1,
+	Medium = 2,
+	High   = 3,
+	Ultra  = 4,
+}
+
+
+ShadowType :: enum {
+	Auto = 0,
+	PCF  = 1,
+	DPCF = 2,
+	VSM  = 3,
+	PCSS = 4,
+}
+
 LightingStyle :: enum {
 	Realistic = 0,
 	Soft      = 1,

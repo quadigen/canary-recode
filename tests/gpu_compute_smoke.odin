@@ -80,6 +80,11 @@ main :: proc() {
 	defer engine_runtime.Environment_Destroy(&environment)
 	defer vm.Close(&script_vm)
 
+
+	previous := vm.GetThreadSecurityCapabilities(script_vm.L)
+	vm.SetThreadSecurityCapabilities(script_vm.L, vm.THREAD_SECURITY_ALL)
+	defer vm.SetThreadSecurityCapabilities(script_vm.L, previous)
+
 	run_script(
 		&script_vm,
 		`

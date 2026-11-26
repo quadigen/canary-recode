@@ -109,7 +109,7 @@ local waveTrack = controller:LoadAnimation(wave)
 waveTrack:Play(0.15)
 ```
 
-The file can be FBX, glTF/GLB, DAE, or another animated format the mesh importer reads. If the rig already has a clip with that name, the animator uses it and leaves the file alone. Otherwise it imports the file's clips, matching channels to rig bones by name. Channels for bones the rig doesn't have are skipped, and a clip with no matching channels can't be loaded.
+The file can be FBX, glTF/GLB, DAE, or another animated format the mesh importer reads. An explicit `AnimationId` selects from that file, even when the rig or another imported file has a clip with the same name. The animator imports the file's clips once per player, matching channels to rig bones by name. `ClipIndex` is zero-based within the selected file. Channels for bones the rig doesn't have are skipped, and a clip with no matching channels can't be loaded.
 
 This is the right place to share a library of animations across several rigs. Keep the skeleton and bone names consistent between the mesh and the animation file; matching is by name, not by hierarchy position.
 

@@ -197,6 +197,33 @@ if(KINE_WITH_FILAMENT)
 
     set(MAT_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
     file(MAKE_DIRECTORY ${MAT_GEN_DIR})
+    set(KINE_GPU_CLOUD_NOISE_AVAILABLE OFF)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        find_program(KINE_GLSLANG_VALIDATOR glslangValidator)
+        find_program(KINE_SPIRV_VALIDATOR spirv-val)
+        if(Python3_Interpreter_FOUND AND KINE_GLSLANG_VALIDATOR AND KINE_SPIRV_VALIDATOR)
+            set(KINE_GPU_CLOUD_NOISE_AVAILABLE ON)
+            set(KINE_GPU_CLOUD_NOISE_HEADER "${MAT_GEN_DIR}/kine_cloud_noise_spirv.h")
+            set(KINE_GPU_CLOUD_NOISE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/filament-runtime")
+            add_custom_command(
+                OUTPUT "${KINE_GPU_CLOUD_NOISE_HEADER}"
+                COMMAND "${Python3_EXECUTABLE}" "${KINE_GPU_CLOUD_NOISE_DIR}/embed_cloud_noise.py"
+                    --output "${KINE_GPU_CLOUD_NOISE_HEADER}"
+                    --shader-dir "${KINE_GPU_CLOUD_NOISE_DIR}"
+                    --include-dir "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                    --compiler "${KINE_GLSLANG_VALIDATOR}" --validator "${KINE_SPIRV_VALIDATOR}"
+                DEPENDS "${KINE_GPU_CLOUD_NOISE_DIR}/embed_cloud_noise.py"
+                    "${KINE_GPU_CLOUD_NOISE_DIR}/cloud_noise_shape.comp"
+                    "${KINE_GPU_CLOUD_NOISE_DIR}/cloud_noise_detail.comp"
+                    "${KINE_GPU_CLOUD_NOISE_DIR}/cloud_noise_curl.comp"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud_noise.glsl"
+                VERBATIM
+            )
+        else()
+            message(STATUS "Native Vulkan cloud noise shaders unavailable: CPU cloud noise fallback will be used")
+        endif()
+    endif()
 
     function(kine_add_material NAME)
         set(_src "${CMAKE_CURRENT_SOURCE_DIR}/src/${NAME}.mat")
@@ -238,9 +265,16 @@ if(KINE_WITH_FILAMENT)
     kine_add_material(kine_default)
     kine_add_material(kine_glass)
     kine_add_material(kine_neon)
-    kine_add_material(kine_water "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_water_waves.glsl")
+    kine_add_material(kine_water "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_water_waves.glsl" "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_water_wicked.glsl")
     kine_add_material(kine_forcefield)
-    kine_add_material(kine_cloud)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud.mat")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud.mat" _kine_cloud_source)
+    file(CONFIGURE OUTPUT "${MAT_GEN_DIR}/kine_cloud.mat" CONTENT "${_kine_cloud_source}" @ONLY)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud_phase.glsl" "${MAT_GEN_DIR}/kine_cloud_phase.glsl" COPYONLY)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud_volume.glsl" "${MAT_GEN_DIR}/kine_cloud_volume.glsl" COPYONLY)
+    kine_add_material(kine_cloud "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud_phase.glsl" "${CMAKE_CURRENT_SOURCE_DIR}/src/kine_cloud_volume.glsl")
+    kine_add_material(kine_cloud_composite)
     kine_add_material(kine_ssgi)
     kine_add_material(kine_decal)
     kine_add_material(kine_outline)
@@ -384,6 +418,7 @@ if(KINE_WITH_FILAMENT)
         ${kine_water_GEN_CPP}
         ${kine_forcefield_GEN_CPP}
         ${kine_cloud_GEN_CPP}
+        ${kine_cloud_composite_GEN_CPP}
         ${kine_ssgi_GEN_CPP}
         ${kine_decal_GEN_CPP}
         ${kine_outline_GEN_CPP}
@@ -406,6 +441,9 @@ if(KINE_WITH_FILAMENT)
         target_sources(kine_filament_shim PRIVATE src/kine_ray_shim.cpp)
     endif()
 
+    if(KINE_GPU_CLOUD_NOISE_AVAILABLE)
+        target_sources(kine_filament_shim PRIVATE "${KINE_GPU_CLOUD_NOISE_HEADER}")
+    endif()
     target_include_directories(kine_filament_shim
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -426,6 +464,7 @@ if(KINE_WITH_FILAMENT)
             $<$<BOOL:${KINE_FILAMENT_VULKAN_READBACK}>:KINE_FILAMENT_ENABLE_VULKAN_READBACK=1>
             $<$<BOOL:${KINE_ASSIMP_TARGET}>:KINE_WITH_ASSIMP=1>
             $<$<BOOL:${KINE_RAY_TARGET}>:KINE_WITH_RAY=1>
+            $<$<BOOL:${KINE_GPU_CLOUD_NOISE_AVAILABLE}>:KINE_GPU_CLOUD_NOISE_AVAILABLE=1>
     )
 
     if(WIN32)
@@ -579,7 +618,12 @@ endif()
 
 # Explicit GPU regression / stress target, excluded from normal builds.
 if(KINE_WITH_FILAMENT AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
+    add_executable(kine_frame_budget_smoke EXCLUDE_FROM_ALL test/frame_budget_smoke.cpp)
+    target_compile_features(kine_frame_budget_smoke PRIVATE cxx_std_17)
     add_executable(kine_viewport_smoke EXCLUDE_FROM_ALL test/viewport_gpu_smoke.cpp)
+    add_executable(kine_wicked_renderer_smoke EXCLUDE_FROM_ALL test/wicked_renderer_smoke.cpp)
+    target_include_directories(kine_wicked_renderer_smoke PRIVATE ${FILAMENT_DIR}/include)
+    target_link_libraries(kine_wicked_renderer_smoke PRIVATE kine_filament_shim ${KINE_SDL3_TARGET})
     target_include_directories(kine_viewport_smoke PRIVATE ${FILAMENT_DIR}/include ../kine_vulkan_compositor/include ../kine_skia/include)
     target_link_libraries(kine_viewport_smoke PRIVATE kine_filament_shim ${KINE_SDL3_TARGET})
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -592,7 +636,24 @@ if(KINE_WITH_FILAMENT AND KINE_FILAMENT_BACKEND_UPPER STREQUAL "VULKAN")
             target_link_libraries(kine_viewport_smoke PRIVATE
                 "-Wl,--no-as-needed" "${KINE_VIEWPORT_LIBCXX}"
                 "${KINE_VIEWPORT_LIBCXXABI}" "${KINE_VIEWPORT_FONTCONFIG}" "-Wl,--as-needed")
+            target_link_libraries(kine_wicked_renderer_smoke PRIVATE
+                "-Wl,--no-as-needed" "${KINE_VIEWPORT_LIBCXX}"
+                "${KINE_VIEWPORT_LIBCXXABI}" "${KINE_VIEWPORT_FONTCONFIG}" "-Wl,--as-needed")
         endif()
     endif()
     target_compile_features(kine_viewport_smoke PRIVATE cxx_std_20)
+
+    # Volumetric-cloud GPU cost probe, in the same rendering stack as the
+    # editor's Filament/Vulkan compositor. Run with clouds off/on in one process.
+    add_executable(kine_cloud_benchmark EXCLUDE_FROM_ALL test/cloud_gpu_benchmark.cpp)
+    target_include_directories(kine_cloud_benchmark PRIVATE
+        ${FILAMENT_DIR}/include ../kine_vulkan_compositor/include ../kine_skia/include)
+    target_link_libraries(kine_cloud_benchmark PRIVATE kine_filament_shim ${KINE_SDL3_TARGET})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND KINE_VIEWPORT_LIBCXX
+       AND KINE_VIEWPORT_LIBCXXABI AND KINE_VIEWPORT_FONTCONFIG)
+        target_link_libraries(kine_cloud_benchmark PRIVATE
+            "-Wl,--no-as-needed" "${KINE_VIEWPORT_LIBCXX}"
+            "${KINE_VIEWPORT_LIBCXXABI}" "${KINE_VIEWPORT_FONTCONFIG}" "-Wl,--as-needed")
+    endif()
+    target_compile_features(kine_cloud_benchmark PRIVATE cxx_std_20)
 endif()

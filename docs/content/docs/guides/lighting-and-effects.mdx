@@ -3,7 +3,7 @@ title: Lighting and post-processing
 description: Build a mood with time of day, sky settings, shadows, and a controlled stack of post-processing effects.
 ---
 
-Lighting in Kinemium comes from one service and a set of child effects. `Lighting` owns the sun, ambient light, and shadows. Everything that happens after the scene is drawn. bloom, color grading, blur, vignette are effect objects parented to the same service.
+Use `Lighting` to set the sun, ambient light, and shadows. Add effect objects to the service to adjust the finished image with bloom, color grading, blur, or a vignette.
 
 This guide builds two looks from scratch and explains the rules that decide which effects actually render.
 
@@ -38,7 +38,7 @@ Lighting.ShadowMapSize = 2048
 
 Two objects decide what you see above the horizon: `Atmosphere` and `Clouds`.
 
-`Atmosphere` sets four values that the current sky pass reads: `SkyColor`, `HorizonColor`, `GroundColor`, and `SunIntensity`. Other atmosphere properties are stored but don't change the image, so don't spend time tuning `Density` or `Haze` yet.
+`Atmosphere` currently changes the sky through four properties: `SkyColor`, `HorizonColor`, `GroundColor`, and `SunIntensity`. Other atmosphere properties are stored but don't change the image, so don't spend time tuning `Density` or `Haze` yet.
 
 ```lua
 local atmosphere = Lighting:FindFirstChild("Atmosphere")
@@ -229,3 +229,141 @@ Read the current value before changing it, or set every property you care about 
 - [Terrain and environment](/docs/guides/terrain-and-environment) for `Atmosphere`, `Clouds`, and generated landscapes.
 - `Lighting` for time of day, shadows, and the default effect children.
 - `PostProcess` and the individual effect classes for their properties.
+
+## Sky fill, split toning, and lens flare
+
+Parent these effects to `Lighting` to use them in the 3D view. A new instance starts enabled. The last child of each class supplies the settings, and removing it restores the regular lighting behavior.
+
+```lua
+local lighting = game:GetService("Lighting")
+
+local skyFill = Instance.new("SkyLightEffect")
+skyFill.Intensity = 0.45
+skyFill.Parent = lighting
+
+local grade = Instance.new("ColorGradingEffect")
+grade.Shadows = Color3.new(0.75, 0.86, 1)
+grade.Highlights = Color3.new(1, 0.95, 0.85)
+grade.Parent = lighting
+
+local bloom = lighting:FindFirstChildOfClass("BloomEffect") or Instance.new("BloomEffect", lighting)
+bloom.Enabled = true
+
+local flare = Instance.new("LensFlareEffect")
+flare.GhostCount = 3
+flare.Starburst = false
+flare.Parent = lighting
+```
+
+| Class | Properties and behavior |
+| --- | --- |
+| `SkyLightEffect` | `Intensity` multiplies diffuse sky fill, including when a reflection probe is active. The default is `1`, and the range is `0` to `4`. The visible sky, specular reflections, and direct sun use their existing settings. |
+| `ColorGradingEffect` | `Shadows`, `Midtones`, and `Highlights` are linear RGB multipliers. Each defaults to white and combines with `ColorCorrectionEffect` and `ToneMappingEffect`. |
+| `LensFlareEffect` | Uses the renderer's screen-space bloom pass. Enable `BloomEffect` and place a bright source in view. Set `Starburst`, `ChromaticAberration`, `GhostCount`, `GhostSpacing`, `GhostThreshold`, `HaloThickness`, `HaloRadius`, and `HaloThreshold` to shape the flare. |
+
+The fast editor viewport skips these effects. Check the look in a normal viewport or playtest.
+
+## Directional sun and detailed ambient occlusion
+
+```lua
+local lighting = game:GetService("Lighting")
+
+local sun = Instance.new("SunLightEffect")
+sun.Azimuth = 65
+sun.Elevation = 57
+sun.Color = Color3.fromRGB(255, 237, 215)
+sun.Parent = lighting
+
+local ssao = lighting:FindFirstChildOfClass("SSAOEffect") or Instance.new("SSAOEffect", lighting)
+ssao.Enabled = true
+
+local detail = Instance.new("AmbientOcclusionDetailEffect")
+detail.FullResolution = true
+detail.BentNormals = true
+detail.FilterQuality = 2
+detail.SliceCount = 6
+detail.StepsPerSlice = 5
+detail.VisibilityBitmasks = false
+detail.Parent = lighting
+```
+
+`SunLightEffect` takes angles in degrees. Azimuth starts at +X and increases toward +Z. Elevation runs from `-90` to `90`, with `0` at the horizon. The authored position drives the daylight profile and `Lighting:GetSunDirection()`. Disable or remove the effect to return to the `ClockTime` sun path. Set sun intensity with `Atmosphere.SunIntensity` and `Lighting.Brightness`.
+
+`AmbientOcclusionDetailEffect` refines the existing AO pass. `FullResolution` improves fine edges and uses more GPU time. `BentNormals` improves occlusion for indirect and specular lighting. `Bias` and `BilateralThreshold` are distances in studs for the self-occlusion offset and edge-aware filtering. SAO uses `Bias`. `FilterQuality` and `UpsamplingQuality` are integers from `0` to `3`. Upsampling applies at half resolution. `SliceCount` (1–16) and `StepsPerSlice` (1–8) adjust GTAO sampling. `VisibilityBitmasks` enables GTAO visibility-bitmask mode and disables incompatible bent normals. This can trigger a GPU shader recompilation.
+
+## Depth-based screen-space effects
+
+Kinemium offers additional screen-space effects alongside `SSAOEffect`, `SSGIEffect`, and screen-space reflections:
+
+```lua
+local lighting = game:GetService("Lighting")
+
+local cavity = Instance.new("ScreenSpaceCavityEffect")
+cavity.Intensity = 1
+cavity.Radius = 0.35
+cavity.Bias = 0.02
+cavity.Enabled = true
+cavity.Parent = lighting
+
+local outline = Instance.new("ScreenSpaceOutlineEffect")
+outline.Intensity = 0.8
+outline.Thickness = 1.5
+outline.DepthThreshold = 0.06
+outline.NormalThreshold = 0.3
+outline.Enabled = true
+outline.Parent = lighting
+```
+
+`ScreenSpaceCavityEffect` adds small-scale contact and crevice shading reconstructed from depth, complementing SSAO. `ScreenSpaceOutlineEffect` darkens silhouette and normal-discontinuity edges across visible geometry, independently of object selection. Both use the existing shared depth-aware screen-space pass instead of creating a second postprocess system. They are skipped in the fast viewport. These effects use depth-based approximations; neither recovers off-screen or fully transparent geometry.
+
+## Diffuse global illumination and light bouncing
+
+Kinemium includes two optional depth-aware indirect lighting effects:
+
+```lua
+local lighting = game:GetService("Lighting")
+
+local indirect = Instance.new("SSGIEffect")
+indirect.Intensity = 1
+indirect.Radius = 4
+indirect.SampleCount = 16
+indirect.ColorBleeding = 1
+indirect.VisibilitySteps = 3
+indirect.Enabled = true
+indirect.Parent = lighting
+
+local emissive = Instance.new("EmissiveGIEffect")
+emissive.Intensity = 1
+emissive.Radius = 8
+emissive.Threshold = 0.7
+emissive.Falloff = 2
+emissive.SampleCount = 16
+emissive.Enabled = true
+emissive.Parent = lighting
+```
+
+`SSGIEffect` transfers diffuse light between nearby visible surfaces. `EmissiveGIEffect` emphasizes bounce from bright visible source pixels. The effects can run together but both add GPU sampling work. Bright emitters must have usable opaque depth for the source location to be reconstructed; standalone additive neon with no depth backing is a known limitation.
+
+For large outdoor scenes, invisible or off-screen geometry, fully dynamic multi-bounce lighting, and reliable GI around corners, a separate probe or ray-traced global illumination implementation is required. These screen-space effects are not DDGI.
+
+## Experimental dynamic diffuse global illumination
+
+`DDGIEffect` uses persistent, camera-following **world-space irradiance probes** rather than sampling only pixels currently visible on screen. It can respond to nearby off-screen emissive surfaces and point/spot lights.
+
+```lua
+local lighting = game:GetService("Lighting")
+local gi = Instance.new("DDGIEffect")
+gi.Intensity = 1
+gi.ProbeSpacing = 24
+gi.ProbeCountX = 5
+gi.ProbeCountY = 3
+gi.ProbeCountZ = 5
+gi.RaysPerProbe = 48
+gi.ProbesPerFrame = 6
+gi.Hysteresis = 0.85
+gi.MaxDistance = 100
+gi.Enabled = true
+gi.Parent = lighting
+```
+
+DDGI can gather nearby light outside the current camera view, but its indirect lighting is approximate. Thin walls and complex geometry may show light leaks. Use conservative probe counts and update budgets until you've measured the performance in your scene.

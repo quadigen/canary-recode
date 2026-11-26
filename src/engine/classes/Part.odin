@@ -29,6 +29,7 @@ Part :: struct {
 	collision_group:   string,
 	shape:             enums.PartType,
 	material:          enums.Material,
+	surfaces:          [6]enums.SurfaceType,
 	material_variant:  string,
 	castshadow:        bool,
 	position:          datatypes.Vector3,
@@ -105,6 +106,10 @@ part_get :: proc(
 		vm.PushBoolean(L, part.can_touch)
 	case "CollisionGroup":
 		vm.PushString(L, part.collision_group)
+	case "RightSurface", "TopSurface", "BackSurface", "LeftSurface", "BottomSurface", "FrontSurface":
+		if enum_registry == nil {return false}
+		face, _ := Part_Surface_Face(key)
+		_ = enums.Push_Item_By_Value(L, enum_registry, "SurfaceType", i64(part.surfaces[int(face)]))
 	case "MaterialVariant", "MaterialVariantSerialized":
 		vm.PushString(L, part.material_variant)
 	case "Material":
@@ -199,6 +204,12 @@ part_set :: proc(
 		delete(part.collision_group)
 		part.collision_group = strings.clone(vm.ArgString(L, value_index))
 		Hierarchy_Touched()
+	case "RightSurface", "TopSurface", "BackSurface", "LeftSurface", "BottomSurface", "FrontSurface":
+		if enum_registry == nil {return false}
+		face, _ := Part_Surface_Face(key)
+		item := enums.Arg_Item(L, value_index, enum_registry, "SurfaceType")
+		if item == nil {return true}
+		part.surfaces[int(face)] = enums.SurfaceType(item.value)
 	case "Material":
 		if enum_registry == nil {return false}
 		item := enums.Arg_Item(L, value_index, enum_registry, "Material")
@@ -281,7 +292,7 @@ Part_Pivot_To :: proc(part: ^Part, target: datatypes.CFrame) {
 	part.cframe = datatypes.CFrame_Mul_CFrame(target, datatypes.CFrame_Inverse(part.pivot_offset))
 	part.position = datatypes.CFrame_Position(part.cframe)
 	Hierarchy_Touched()
-	Render_3D_Mark_Dirty()
+	Render_3D_Mark_Object_Dirty(&part.object)
 	Object_Fire_Property_Changed(&part.object, "CFrame")
 	if !part.destroyed {Object_Fire_Property_Changed(&part.object, "Position")}
 }
@@ -380,6 +391,7 @@ part_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.can_touch = src.can_touch
 	dst.shape = src.shape
 	dst.material = src.material
+	dst.surfaces = src.surfaces
 	delete(dst.material_variant)
 	dst.material_variant = strings.clone(src.material_variant)
 	dst.position = src.position
@@ -413,7 +425,13 @@ part_parallel_get :: proc(
 	     "Size",
 	     "CastShadow",
 	     "Position",
-	     "GetPivot":
+	     "GetPivot",
+	     "RightSurface",
+	     "TopSurface",
+	     "BackSurface",
+	     "LeftSurface",
+	     "BottomSurface",
+	     "FrontSurface":
 		return part_get(L, object, d, e, key)
 	}
 	return false
@@ -460,6 +478,12 @@ Register_Part :: proc(registry: ^Registry) {
 			"Size",
 			"Material",
 			"MaterialVariant",
+			"RightSurface",
+			"TopSurface",
+			"BackSurface",
+			"LeftSurface",
+			"BottomSurface",
+			"FrontSurface",
 			"AssemblyLinearVelocity",
 			"AssemblyAngularVelocity",
 		},
@@ -472,4 +496,22 @@ Register_Part :: proc(registry: ^Registry) {
 		},
 		events = []string{"Touched"},
 	)
+}
+
+Part_Surface_Face :: proc(key: string) -> (enums.NormalId, bool) {
+	switch key {
+	case "RightSurface":
+		return .Right, true
+	case "TopSurface":
+		return .Top, true
+	case "BackSurface":
+		return .Back, true
+	case "LeftSurface":
+		return .Left, true
+	case "BottomSurface":
+		return .Bottom, true
+	case "FrontSurface":
+		return .Front, true
+	}
+	return .Front, false
 }

@@ -2,7 +2,6 @@
 
 package services
 
-// wire:service global="ContentProvider"
 
 import "core:fmt"
 import "core:os"
@@ -134,6 +133,9 @@ content_provider_namecall :: proc(
 
 	switch method_name {
 	case "DownloadZip":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "ZIP download requires Internals capability"), true
+		}
 		url := vm.ArgString(L, 2)
 		location := vm.ArgString(L, 3)
 		strip_root := vm.ArgOptionalBoolean(L, 4, false)

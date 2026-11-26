@@ -21,6 +21,7 @@
     "input-and-ui",
     "teams-and-collision-groups",
     "http-and-external-apis",
-    "localization"
+    "localization",
+    "world-streaming"
   ]
 }

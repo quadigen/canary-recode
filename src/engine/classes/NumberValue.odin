@@ -2,6 +2,7 @@ package classes
 
 import datatypes "../datatypes"
 import enums "../enum"
+import signals "../signals"
 import vm "../vm"
 
 NumberValue_Class := Class_Info {
@@ -12,10 +13,11 @@ NumberValue_Class := Class_Info {
 NumberValue :: struct {
 	using object: Object,
 	value:        f64,
+	changed:      ^signals.Signal,
 }
 
 NumberValue_Init :: proc() -> NumberValue {
-	return NumberValue{object = Object_Init(&NumberValue_Class), value = 1}
+	return NumberValue{object = Object_Init(&NumberValue_Class), value = 0}
 }
 
 NumberValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {
@@ -26,6 +28,7 @@ NumberValue_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 }
 
 NumberValue_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
+	ValueBase_Destroy_Changed_Signal(&(cast(^NumberValue)object).changed)
 	Object_Destroy(object)
 	free(cast(^NumberValue)object)
 }
@@ -40,6 +43,8 @@ NumberValue_get :: proc(
 	val := cast(^NumberValue)object
 
 	switch key {
+	case "Changed":
+		return ValueBase_Changed_Signal(L, object, &val.changed)
 	case "Value":
 		vm.PushNumber(L, val.value)
 	case:
@@ -60,7 +65,13 @@ NumberValue_set :: proc(
 
 	switch key {
 	case "Value":
-		val.value = vm.ArgNumber(L, value_index)
+		new_value := vm.ArgNumber(L, value_index)
+		if val.value == new_value {return true}
+		val.value = new_value
+		if val.changed != nil {
+			vm.PushNumber(L, val.value)
+			ValueBase_Fire_Changed(L, val.changed)
+		}
 	case:
 		return false
 	}

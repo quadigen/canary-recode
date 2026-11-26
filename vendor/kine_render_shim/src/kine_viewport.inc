@@ -1,9 +1,11 @@
-// Included by kine_filament_shim.cpp: uses its mesh/material upload helpers.
+
 #include <array>
 
 namespace {
 constexpr int KINE_VP_ATLAS_SIZE = 2048;
-constexpr size_t KINE_VP_MAX_PAGES = 16; // 512 MiB colour+depth at the absolute peak.
+constexpr size_t KINE_VP_MAX_RENDERS_PER_FRAME = 4;
+constexpr uint64_t KINE_VP_MAX_PIXELS_PER_FRAME = 2 * 1024 * 1024;
+constexpr size_t KINE_VP_MAX_PAGES = 16;
 struct KineViewportPage {
     Texture *color = nullptr, *depth = nullptr;
     RenderTarget *target = nullptr;
@@ -26,6 +28,8 @@ struct KineViewportScratch {
     Texture *color = nullptr, *depth = nullptr;
     RenderTarget *target = nullptr;
     int cell = 0;
+    KineFilamentViewport *cachedSource = nullptr;
+    uint64_t cachedEffects = 0;
 };
 struct KineViewportChunk {
     KineMesh *mesh = nullptr;
@@ -59,6 +63,9 @@ struct KineFilamentViewport {
     std::vector<KineViewportChunk> chunks;
     KineViewportSettings settings{};
     uint64_t version = 0;
+    bool scratchReusable = false;
+    bool persistentScratch = false;
+    std::vector<KineFilamentDrawItem> scratchItems;
     int slot = -1;
     bool requested = false, dirty = true, ready = false, initialized = false;
 };
@@ -78,6 +85,9 @@ struct KineViewportPool {
     Entity cameraEntity;
     std::unordered_map<uint64_t, KineFilamentMesh *> meshes;
     uint64_t renders = 0;
+    uint64_t reusedRenders = 0;
+    uint64_t persistentReuses = 0;
+    size_t renderCursor = 0;
 };
 #if KINE_FILAMENT_USE_VULKAN
 namespace {
@@ -135,7 +145,7 @@ void kine_vp_free_page(KineFilamentContext *ctx, KineViewportPage &p) {
     if (p.color) ctx->engine->destroy(p.color);
     if (p.depth) ctx->engine->destroy(p.depth);
 #if KINE_FILAMENT_USE_VULKAN
-    // Only called after all front-end views are destroyed and GPU work is drained.
+
     ctx->engine->flushAndWait();
     p.external.clear();
     KineFilamentVulkanBackend b{};
@@ -158,9 +168,8 @@ bool kine_vp_init_pool(KineFilamentContext *ctx) {
     pool.environment=Texture::Builder().width(1).height(1).levels(1).sampler(Texture::Sampler::SAMPLER_CUBEMAP).format(Texture::InternalFormat::RGBA8).build(*ctx->engine);
     static const uint8_t environmentPixels[24]={255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
     pool.environment->setImage(*ctx->engine,0,0,0,0,1,1,6,Texture::PixelBufferDescriptor(environmentPixels,sizeof(environmentPixels),Texture::Format::RGBA,Texture::Type::UBYTE));
-    // Filament's directional shadow range uses caster bounds for its receiver
-    // depth range too. A shared degenerate triangle contributes only bounds:
-    // it writes no colour/depth, and lets receive-only parts keep their shadows.
+
+
     pool.shadowBoundsMesh=new KineMesh();
     pool.shadowBoundsMesh->vertices={ {0,0,0,0,1,0,0,0},{0,0,0,0,1,0,0,0},{0,0,0,0,1,0,0,0} };
     pool.shadowBoundsMesh->indices={0,1,2};pool.shadowBoundsMesh->indexCount=3;
@@ -180,8 +189,8 @@ bool kine_vp_init_pool(KineFilamentContext *ctx) {
     pool.view->setPostProcessingEnabled(false);
     pool.view->setShadowingEnabled(false);
     pool.view->setAntiAliasing(AntiAliasing::NONE);
-    // A zero-alpha draw into the normal target ensures Filament acquires and
-    // releases the shared swapchain even for a UI-only frame of offscreen views.
+
+
     pool.presentScene = ctx->engine->createScene();
     pool.presentEntity = EntityManager::get().create();
     pool.presentMaterial = ctx->gizmoMaterial->createInstance();
@@ -196,7 +205,7 @@ bool kine_vp_init_pool(KineFilamentContext *ctx) {
 KineViewportPage *kine_vp_get_page(KineFilamentContext *ctx, int cell) {
     auto &pool = *ctx->viewportPool;
     for (auto &p : pool.pages) if (p->cell == cell && std::find(p->occupied.begin(), p->occupied.end(), false) != p->occupied.end()) return p.get();
-    // Empty pages can change size buckets without reallocating GPU images.
+
     for (auto &p : pool.pages) if (std::find(p->occupied.begin(), p->occupied.end(), true) == p->occupied.end()) {
         p->cell = cell; p->occupied.assign((KINE_VP_ATLAS_SIZE/cell)*(KINE_VP_ATLAS_SIZE/cell),false);
         return p.get();
@@ -239,7 +248,12 @@ KineViewportScratch *kine_vp_scratch(KineFilamentContext *ctx, int width, int he
     p->clearScene->addEntity(p->clearEntity);
     auto *result = p.get(); pool.scratch.push_back(std::move(p)); return result;
 }
+static void kine_vp_invalidate_scratch(KineFilamentViewport *vp) {
+    if (vp->scratch && vp->scratch->cachedSource == vp) vp->scratch->cachedSource = nullptr;
+}
+
 void kine_vp_release_scene(KineFilamentViewport *vp) {
+    kine_vp_invalidate_scratch(vp);
     auto *ctx = vp->ctx;
     if (ctx->viewportPool->view) ctx->viewportPool->view->setColorGrading(nullptr);
     if (vp->historyView) {vp->historyView->setColorGrading(nullptr);ctx->engine->destroy(vp->historyView);vp->historyView=nullptr;}
@@ -289,7 +303,7 @@ void kine_vp_update_chunks(KineFilamentViewport *vp,const KineFilamentDrawItem *
             kine_bind_mesh_geometry(ctx,builder,g.key,base,c.material,c.extraMaterials,g.colors.data()+offset,g.uvs.data()+offset,n,false);
             builder.boundingBox(kine_compute_batch_bounds(mesh,g.transforms.data()+offset,n,g.key.shader,g.key.materialKind==KINE_MAT_WATER ? .65f*ctx->water.strength*ctx->water.height : 0.0f))
                 .instances(n,c.instances).culling(g.key.culling).castShadows(g.key.castShadow).receiveShadows(g.key.receiveShadow);
-            builder.layerMask(0xff, kine_scene_geometry_layer(g.key.materialKind));
+            builder.layerMask(0xff, kine_scene_geometry_layer(g.key.materialKind, g.key.castShadow));
             if(g.key.materialKind==KINE_MAT_GLASS)builder.channel(2);
             if(!mesh->bones.empty() && mesh->skinMatrices.size()==mesh->bones.size())builder.skinning(mesh->skinMatrices.size(),mesh->skinMatrices.data());
             builder.build(*ctx->engine,c.entity);vp->scene->addEntity(c.entity);vp->chunks.push_back(c);
@@ -317,6 +331,7 @@ static void kine_viewport_destroy_shader_batches(KineFilamentContext *ctx, KineF
         const bool usesShader = std::any_of(vp->chunks.begin(), vp->chunks.end(),
             [shader](const KineViewportChunk &chunk) { return chunk.key.shader == shader; });
         if (!usesShader) continue;
+        kine_vp_invalidate_scratch(vp);
         for (auto &chunk : vp->chunks) kine_vp_destroy_chunk(vp, chunk);
         vp->chunks.clear();
         vp->initialized = false;
@@ -346,6 +361,7 @@ static void kine_viewport_invalidate_batches(KineFilamentContext *ctx, const Kin
                 return (mesh && chunk.mesh==mesh) || (texture && chunk.texture==texture);
             });
         if (!matches) continue;
+        kine_vp_invalidate_scratch(vp);
         for (auto &chunk:vp->chunks) kine_vp_destroy_chunk(vp,chunk);
         vp->chunks.clear();vp->initialized=false;vp->ready=false;vp->dirty=true;
     }
@@ -425,6 +441,7 @@ KINE_API bool Kine_Filament_Viewport_Update(KineFilamentViewport *vp, const Kine
     int scratchWidth=32,scratchHeight=32;
     while(scratchWidth<adjusted.width)scratchWidth*=2;while(scratchHeight<adjusted.height)scratchHeight*=2;
     auto *scratch=kine_vp_scratch(ctx,scratchWidth,scratchHeight);
+    kine_vp_invalidate_scratch(vp);
     const bool scratchChanged=vp->scratch!=scratch;vp->scratch=scratch;
     if (!vp->scene) {
         vp->scene = ctx->engine->createScene(); vp->copyScene = ctx->engine->createScene();
@@ -456,6 +473,26 @@ KINE_API bool Kine_Filament_Viewport_Update(KineFilamentViewport *vp, const Kine
 #endif
     }
     const bool geometryChanged=!vp->initialized || version!=vp->version;
+    vp->scratchReusable = !adjusted.postProcessing && count <= 256;
+    for (uint32_t i = 0; vp->scratchReusable && i < count; ++i) {
+        const auto &item = items[i];
+        vp->scratchReusable = !item.shader &&
+            (item.materialKind == KINE_MAT_DEFAULT || item.materialKind == KINE_MAT_NEON ||
+             item.materialKind == KINE_MAT_FADE || item.materialKind == KINE_MAT_NEON_FADE);
+    }
+    vp->persistentScratch = vp->scratchReusable && !adjusted.shadows;
+    for (uint32_t i = 0; vp->persistentScratch && i < count; ++i) {
+        const auto &item = items[i];
+        const auto *mesh = reinterpret_cast<const KineMesh *>(item.mesh);
+        vp->persistentScratch = !item.tex && mesh && mesh->bones.empty() &&
+            !mesh->animator && mesh->materials.empty() && !mesh->ownedTex &&
+            !mesh->terrainField && std::any_of(ctx->viewportPool->meshes.begin(),
+                ctx->viewportPool->meshes.end(), [&](const auto &entry) {
+                    return (entry.first >> 63) && entry.second == item.mesh;
+                });
+    }
+    if (vp->scratchReusable && count) vp->scratchItems.assign(items, items + count);
+    else vp->scratchItems.clear();
     const bool settingsChanged=!vp->initialized || memcmp(&vp->settings,&adjusted,sizeof(adjusted))!=0;
     if (geometryChanged) {kine_vp_update_chunks(vp, items, count); vp->version = version; vp->dirty = true;vp->historyWarmup=0;}
     if (settingsChanged) {
@@ -510,7 +547,7 @@ KINE_API bool Kine_Filament_Viewport_Update(KineFilamentViewport *vp, const Kine
     kine_vp_prepare_copy_effects(vp);
     vp->initialized = true; return true;
 }
-// Hash values rather than option-struct padding, so static previews stay cached.
+
 static uint64_t kine_vp_global_effects_hash(KineFilamentContext *ctx) {
     uint64_t hash=14695981039346656037ull;
     auto add=[&](auto value) {const auto *p=reinterpret_cast<const uint8_t *>(&value);for(size_t i=0;i<sizeof(value);++i) hash=(hash^p[i])*1099511628211ull;};
@@ -521,7 +558,8 @@ static uint64_t kine_vp_global_effects_hash(KineFilamentContext *ctx) {
     auto r=ctx->view->getScreenSpaceReflectionsOptions();add(r.enabled);add(r.thickness);add(r.bias);add(r.maxDistance);add(r.stride);
     auto m=ctx->view->getMultiSampleAntiAliasingOptions();add(m.enabled);add(m.sampleCount);
     add(ctx->view->getAntiAliasing());add(ctx->view->getDithering());add(ctx->view->getRenderQuality().hdrColorBuffer);
-    add(ctx->view->getColorGrading());add(ctx->camera->getFocusDistance());
+    add(ctx->view->getColorGrading());
+    if (d.enabled) add(ctx->camera->getFocusDistance());
     return hash;
 }
 static View *kine_vp_configure_view(KineFilamentViewport *vp) {
@@ -529,8 +567,8 @@ static View *kine_vp_configure_view(KineFilamentViewport *vp) {
     const bool ssr=s.postProcessing && ((s.effectMask&32) ? s.reflections[0]>0 : ctx->view->getScreenSpaceReflectionsOptions().enabled);
     if(ssr && !vp->historyView) {vp->historyView=ctx->engine->createView();vp->historyView->setCamera(ctx->viewportPool->camera);vp->historyWarmup=0;}
     if(!ssr && vp->historyView) {vp->historyView->setColorGrading(nullptr);ctx->engine->destroy(vp->historyView);vp->historyView=nullptr;vp->historyWarmup=0;}
-    // SSR samples the preceding image. Only opt-in previews need a private
-    // lightweight View/history; they still share the same Engine and device.
+
+
     auto *view=vp->historyView ? vp->historyView : ctx->viewportPool->view;
     view->setVisibleLayers(0xff, 0xff);
     view->setPostProcessingEnabled(s.postProcessing!=0);view->setShadowingEnabled(s.shadows!=0 && vp->hasShadowCasters);
@@ -553,7 +591,7 @@ static View *kine_vp_configure_view(KineFilamentViewport *vp) {
     auto aa=ctx->view->getAntiAliasing();auto msaa=ctx->view->getMultiSampleAntiAliasingOptions();
     if(s.effectMask&64) {aa=s.antialiasing[3]>0 && s.antialiasing[0]>0 ? AntiAliasing::FXAA : AntiAliasing::NONE;msaa.enabled=s.antialiasing[3]>0 && s.antialiasing[1]>0;msaa.sampleCount=kine_clamp_u8(int(s.antialiasing[2]),1,8);}
     view->setAntiAliasing(aa);view->setMultiSampleAntiAliasingOptions(msaa);
-    // Shared views cannot share temporal history between independent cameras.
+
     TemporalAntiAliasingOptions temporal{};temporal.enabled=false;view->setTemporalAntiAliasingOptions(temporal);
     view->setDithering((s.effectMask&128) ? (s.dithering ? Dithering::TEMPORAL : Dithering::NONE) : ctx->view->getDithering());
     auto quality=ctx->view->getRenderQuality();if(s.effectMask&256) quality.hdrColorBuffer=kine_quality_from_int(s.quality);view->setRenderQuality(quality);
@@ -561,61 +599,126 @@ static View *kine_vp_configure_view(KineFilamentViewport *vp) {
     return view;
 }
 
+static bool kine_vp_same_scratch(const KineFilamentViewport *a, const KineFilamentViewport *b) {
+    if (!a || !b || !a->scratchReusable || !b->scratchReusable ||
+        a->scratch != b->scratch || a->version != b->version ||
+        a->scratchItems.size() != b->scratchItems.size() ||
+        memcmp(&a->settings, &b->settings, sizeof(a->settings)) != 0) return false;
+    for (size_t i = 0; i < a->scratchItems.size(); ++i) {
+        const auto &x = a->scratchItems[i];
+        const auto &y = b->scratchItems[i];
+        if (x.mesh != y.mesh || x.tex != y.tex || x.flags != y.flags ||
+            x.reserved != y.reserved || x.materialKind != y.materialKind ||
+            x.r != y.r || x.g != y.g || x.b != y.b || x.transmission != y.transmission ||
+            x.param1 != y.param1 || x.param2 != y.param2 || x.param3 != y.param3 ||
+            memcmp(x.transform, y.transform, sizeof(x.transform)) != 0 ||
+            memcmp(x.worldPosition, y.worldPosition, sizeof(x.worldPosition)) != 0) return false;
+    }
+    return true;
+}
+
 static void kine_viewport_render_queued(KineFilamentContext *ctx) {
     if (!ctx || !ctx->viewportPool || !ctx->viewportPool->view) return;
     auto &pool = *ctx->viewportPool;
-    for (auto *vp : pool.handles) {
+    const size_t count = pool.handles.size();
+    const size_t start = count ? pool.renderCursor % count : 0;
+    size_t rendered = 0;
+    uint64_t pixels = 0;
+    const auto effectsHash = kine_vp_global_effects_hash(ctx);
+    std::array<KineFilamentViewport *, KINE_VP_MAX_RENDERS_PER_FRAME> scratchSources{};
+    size_t sourceCount = 0;
+    for (size_t step = 0; step < count; ++step) {
+        const size_t index = (start + step) % count;
+        auto *vp = pool.handles[index];
         if (!vp->requested || !vp->dirty || !vp->page || !vp->scene) continue;
         auto &s = vp->settings;
-        pool.camera->setModelMatrix(math::mat4(kine_from_row_major(s.camera)));
-        pool.camera->setProjection(std::clamp(double(s.fieldOfView),1.0,120.0), double(s.width)/double(s.height), 0.05, vp->cameraFar);
-        pool.camera->setExposure(1.0f); // Unitless preview lighting, independent of the world exposure.
+        const uint64_t cost = uint64_t(vp->scratch->width) * uint64_t(vp->scratch->height);
+        if (rendered >= KINE_VP_MAX_RENDERS_PER_FRAME ||
+            (rendered && pixels + cost > KINE_VP_MAX_PIXELS_PER_FRAME)) break;
+        ++rendered;
+        pixels += cost;
+        pool.renderCursor = (index + 1) % count;
+        KineFilamentViewport *source = nullptr;
+        for (size_t i = 0; i < sourceCount; ++i) {
+            if (scratchSources[i]->scratch == vp->scratch) {source = scratchSources[i]; break;}
+        }
+        const bool persistentReuse = !source && vp->persistentScratch &&
+            vp->scratch->cachedSource && vp->scratch->cachedEffects == effectsHash &&
+            vp->scratch->cachedSource->persistentScratch &&
+            kine_vp_same_scratch(vp, vp->scratch->cachedSource);
+        const bool reuse = persistentReuse || kine_vp_same_scratch(vp, source);
         int columns = KINE_VP_ATLAS_SIZE/vp->page->cell;
         int x = (vp->slot%columns)*vp->page->cell, y = (vp->slot/columns)*vp->page->cell;
-        // A transparent final postprocess blit blends into its destination.
-        // Explicitly zero the scratch target before that blit, including when
-        // the scene becomes empty or the view shrinks within a size bucket.
-        pool.clearView->setBlendMode(View::BlendMode::OPAQUE);
-        pool.clearView->setScene(vp->scratch->clearScene);pool.clearView->setRenderTarget(vp->scratch->target);
-        pool.clearView->setViewport({0,0,uint32_t(vp->scratch->width),uint32_t(vp->scratch->height)});
-        Renderer::ClearOptions scratchClear{};scratchClear.clear=false;scratchClear.discard=false;
-        ctx->renderer->setClearOptions(scratchClear);ctx->renderer->render(pool.clearView);
-        auto *renderView=kine_vp_configure_view(vp);
-        renderView->setBlendMode(View::BlendMode::TRANSLUCENT);
-        renderView->setScene(vp->scene);renderView->setRenderTarget(vp->scratch->target);
-        // Cover the entire scratch attachment; subrect final blits sample outside
-        // their colour history on this backend. The camera keeps the UI aspect.
-        renderView->setViewport({0,0,uint32_t(vp->scratch->width),uint32_t(vp->scratch->height)});
-        if (ctx->water.foamAmount > 0.0f && std::any_of(vp->chunks.begin(), vp->chunks.end(),
-                [ctx](const auto &chunk) { return chunk.material->getMaterial() == ctx->waterMaterial; }))
-            kine_render_water_contact(ctx, renderView, pool.waterContact);
-        Renderer::ClearOptions clear{};clear.clear=false;clear.discard=false;clear.clearColor={0,0,0,0};
-        ctx->renderer->setClearOptions(clear);ctx->renderer->render(renderView);
-        // Effects run at the origin of a shared scratch target. An opaque GPU
-        // copy then replaces this atlas rectangle, including zero-alpha pixels.
-        // Full replacement prevents stale pixels without CPU copies or waits.
-        // Clear the complete reserved slot, including pixels left by a larger
-        // previous rectangle. Filtering must never find old object fragments.
-        pool.clearView->setBlendMode(View::BlendMode::OPAQUE);
-        pool.clearView->setScene(vp->scratch->clearScene);pool.clearView->setRenderTarget(vp->page->target);
-        pool.clearView->setViewport({x,y,uint32_t(vp->page->cell),uint32_t(vp->page->cell)});
-        Renderer::ClearOptions slotClear{};slotClear.clear=false;slotClear.discard=false;
-        ctx->renderer->setClearOptions(slotClear);ctx->renderer->render(pool.clearView);
+        Renderer::ClearOptions clear{};
+        if (!reuse) {
+            pool.camera->setModelMatrix(math::mat4(kine_from_row_major(s.camera)));
+            pool.camera->setProjection(std::clamp(double(s.fieldOfView),1.0,120.0), double(s.width)/double(s.height), 0.05, vp->cameraFar);
+            pool.camera->setExposure(1.0f);
+
+
+            pool.clearView->setBlendMode(View::BlendMode::OPAQUE);
+            pool.clearView->setScene(vp->scratch->clearScene);pool.clearView->setRenderTarget(vp->scratch->target);
+            pool.clearView->setViewport({0,0,uint32_t(vp->scratch->width),uint32_t(vp->scratch->height)});
+            Renderer::ClearOptions scratchClear{};scratchClear.clear=false;scratchClear.discard=false;
+            ++ctx->passStats.viewportClear;
+            ctx->renderer->setClearOptions(scratchClear);ctx->renderer->render(pool.clearView);
+            auto *renderView=kine_vp_configure_view(vp);
+            renderView->setBlendMode(View::BlendMode::TRANSLUCENT);
+            renderView->setScene(vp->scene);renderView->setRenderTarget(vp->scratch->target);
+
+
+            renderView->setViewport({0,0,uint32_t(vp->scratch->width),uint32_t(vp->scratch->height)});
+            if (ctx->water.foamAmount > 0.0f && std::any_of(vp->chunks.begin(), vp->chunks.end(),
+                    [ctx](const auto &chunk) { return chunk.material->getMaterial() == ctx->waterMaterial; }))
+                kine_render_water_contact(ctx, renderView, pool.waterContact);
+            clear.clear=false;clear.discard=false;clear.clearColor={0,0,0,0};
+            ++ctx->passStats.viewportScene;
+            if (s.shadows && vp->hasShadowCasters) ++ctx->passStats.viewportShadow;
+            ctx->renderer->setClearOptions(clear);ctx->renderer->render(renderView);
+            if (source) {
+                for (size_t i = 0; i < sourceCount; ++i) {
+                    if (scratchSources[i] == source) {scratchSources[i] = vp; break;}
+                }
+            } else {
+                scratchSources[sourceCount++] = vp;
+            }
+            vp->scratch->cachedSource = vp->persistentScratch ? vp : nullptr;
+            vp->scratch->cachedEffects = effectsHash;
+            ++pool.renders;
+        } else {
+            ++pool.reusedRenders;
+            if (persistentReuse) ++pool.persistentReuses;
+        }
+
+
+        const bool fillsSlot = s.width == vp->page->cell && s.height == vp->page->cell;
+        const bool coversPrevious = vp->ready &&
+                s.width >= vp->renderedWidth && s.height >= vp->renderedHeight;
+        if (!fillsSlot && !coversPrevious) {
+            pool.clearView->setBlendMode(View::BlendMode::OPAQUE);
+            pool.clearView->setScene(vp->scratch->clearScene);pool.clearView->setRenderTarget(vp->page->target);
+            pool.clearView->setViewport({x,y,uint32_t(vp->page->cell),uint32_t(vp->page->cell)});
+            Renderer::ClearOptions slotClear{};slotClear.clear=false;slotClear.discard=false;
+            ++ctx->passStats.viewportClear;
+            ctx->renderer->setClearOptions(slotClear);ctx->renderer->render(pool.clearView);
+        }
         pool.copyView->setBlendMode(View::BlendMode::OPAQUE);
         pool.copyView->setScene(vp->copyScene);pool.copyView->setRenderTarget(vp->page->target);
         pool.copyView->setViewport({x,y,uint32_t(s.width),uint32_t(s.height)});
         clear.clear=false;clear.discard=false;
+        ++ctx->passStats.viewportCopy;
         ctx->renderer->setClearOptions(clear);ctx->renderer->render(pool.copyView);
         vp->renderedWidth=s.width;vp->renderedHeight=s.height;
-        vp->effectsHash=kine_vp_global_effects_hash(ctx);
+        vp->effectsHash = effectsHash;
         if(vp->historyView && vp->historyWarmup<2) ++vp->historyWarmup;
-        vp->dirty=vp->historyView && vp->historyWarmup<2;vp->ready=true;++pool.renders;
+        vp->dirty=vp->historyView && vp->historyWarmup<2;vp->ready=true;
     }
     if (!ctx->renderWorld) {
         pool.clearView->setBlendMode(View::BlendMode::TRANSLUCENT);
         pool.clearView->setScene(pool.presentScene);pool.clearView->setRenderTarget(ctx->renderTarget);
         pool.clearView->setViewport({0,0,uint32_t(ctx->width),uint32_t(ctx->height)});
         Renderer::ClearOptions clear{};clear.clear=false;clear.discard=false;
+        ++ctx->passStats.viewportPresent;
         ctx->renderer->setClearOptions(clear);ctx->renderer->render(pool.clearView);
     }
 }
@@ -636,7 +739,7 @@ KINE_API bool Kine_Filament_Viewport_HasWork(KineFilamentContext *ctx) {
 KINE_API void Kine_Filament_Viewport_RenderFrameWithCpuWork(KineFilamentContext *ctx, float dt, bool world,
         KineFrameCpuWork work, void *user) {
     if (!ctx) { if (work) work(user); return; }
-    (void)Kine_Filament_Viewport_HasWork(ctx); // also refresh effects when a world frame already forces rendering.
+    (void)Kine_Filament_Viewport_HasWork(ctx);
     ctx->renderWorld = world; kine_render_frame(ctx, dt, work, user); ctx->renderWorld = true;
 }
 KINE_API void Kine_Filament_Viewport_RenderFrame(KineFilamentContext *ctx, float dt, bool world) {
@@ -661,7 +764,7 @@ KINE_API void Kine_Filament_Viewport_Draw(KineFilamentViewport *vp, KineSkiaSurf
     if (!p.image) return;
     int columns = KINE_VP_ATLAS_SIZE/p.cell;
     int sx = (vp->slot%columns)*p.cell, sy = (vp->slot/columns)*p.cell;
-    // Skia image source rectangles use top-left coordinates on both backends.
+
     sy = KINE_VP_ATLAS_SIZE - sy - vp->renderedHeight;
     Kine_Skia_Surface_DrawImageScaled(surface, p.image, float(sx),float(sy),float(vp->renderedWidth),float(vp->renderedHeight),
         x,y,w,h,0,0,0,0,uint8_t(std::clamp(r,0.0f,1.0f)*255),uint8_t(std::clamp(g,0.0f,1.0f)*255),uint8_t(std::clamp(b,0.0f,1.0f)*255),255,uint8_t(std::clamp(opacity,0.0f,1.0f)*255));
@@ -672,6 +775,12 @@ KINE_API void Kine_Filament_Viewport_Stats(KineFilamentContext *ctx, uint32_t *h
     if (pages) *pages = pool ? uint32_t(pool->pages.size()) : 0;
     if (renders) *renders = pool ? pool->renders : 0;
 }
+KINE_API uint64_t Kine_Filament_Viewport_PersistentReuses(KineFilamentContext *ctx) {
+    return ctx && ctx->viewportPool ? ctx->viewportPool->persistentReuses : 0;
+}
+KINE_API uint64_t Kine_Filament_Viewport_ReusedRenders(KineFilamentContext *ctx) {
+    return ctx && ctx->viewportPool ? ctx->viewportPool->reusedRenders : 0;
+}
 static void kine_viewport_shutdown(KineFilamentContext *ctx) {
     if (!ctx || !ctx->viewportPool) return;
     auto *pool = ctx->viewportPool;
@@ -681,7 +790,7 @@ static void kine_viewport_shutdown(KineFilamentContext *ctx) {
         vp->chunks.clear();
         kine_vp_release_scene(vp);
         vp->ctx = nullptr; vp->scene = nullptr; vp->page = nullptr; vp->ready = false;
-        pool->handles.pop_back(); // owner releases this CPU tombstone on Destroy.
+        pool->handles.pop_back();
     }
     for (auto &entry : pool->meshes) Kine_Filament_DestroyMesh(ctx, entry.second);
     if (pool->presentScene) {

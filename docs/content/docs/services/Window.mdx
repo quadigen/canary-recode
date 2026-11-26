@@ -1,0 +1,26 @@
+---
+title: Window
+description: Configure the editor window resolution and interface scale.
+---
+
+Window exposes internal editor window controls. All three methods require the Internals capability and an editor runtime; they aren't public gameplay display settings.
+
+For authorized editor tools:
+
+```lua
+local window = game:GetService("Window")
+local resolution = window:GetResolution()
+if resolution then
+    print(resolution.X, resolution.Y)
+end
+```
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `GetResolution(): Vector2, boolean, or nil` | Returns window width and height, false outside a supported editor context, or nil when the window or size is unavailable. |
+| `SetResolution(width: number, height: number): boolean?` | Requests a native window size. Valid ranges are 320–7680 wide and 240–4320 high; returns false for unsupported requests, nil without a window. Not supported on web. |
+| `SetUIScale(scale: number): boolean?` | Sets interface scale from 0.75 to 2 and requests a layout update; false for invalid context/range, nil without a window. |
+
+For ordinary scripts, use [GuiService](/docs/services/GuiService) for available display information.

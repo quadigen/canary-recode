@@ -658,3 +658,7 @@ Register_Decal :: proc(registry: ^Registry) {
 		_step_phase = .Render_3D,
 	)
 }
+
+Part_Surface_Transform :: proc(part: ^Part, face: enums.NormalId) -> [16]f64 {
+	return decal_transform(part_face_info(part, face, 0.001))
+}

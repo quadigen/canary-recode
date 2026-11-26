@@ -1,0 +1,57 @@
+---
+title: Signals and native callbacks
+description: Subscribe to Kinemium signals and retain Luau callbacks safely in a native extension.
+---
+
+KNE provides two related facilities: **signals** for engine events and **retained callbacks** for calling Luau functions from native code.
+
+## Connecting a native signal handler
+
+Retrieve an event from an Instance using `kne_get_signal`, then subscribe with `kne_connect`:
+
+```c
+static void KNE_CALL on_changed(kne_extension ext, kne_vm vm) {
+    (void)ext;
+    (void)vm;
+}
+
+kne_plugin plugin = kne_make_plugin(host, ext);
+kne_instance part = kne_find_child(plugin, kne_get_service(plugin, "Workspace"), "TargetPart");
+if (part) {
+    kne_signal changed = kne_get_signal(plugin, part, "Changed");
+    if (changed) {
+        kne_connection connection = kne_connect(plugin, changed, on_changed);
+        if (connection) {
+            kne_disconnect(plugin, connection);
+        }
+    }
+}
+```
+
+`kne_connect_once` subscribes for one invocation. Save a connection handle only while its extension and signal are valid, and disconnect during teardown if it remains active.
+
+## Retaining and calling a Luau function
+
+When a native VM function receives a Luau callback, retain it using `kne_retain_callback`, then invoke it through `kne_call_callback`:
+
+```c
+kne_plugin plugin = kne_make_plugin(host, ext);
+kne_callback callback = kne_retain_callback(plugin, vm, 1);
+
+if (callback) {
+    kne_value arg = kne_value_number(5.0);
+    kne_value result = kne_value_nil();
+    int32_t written = kne_call_callback(plugin, callback, &arg, 1, &result, 1);
+    kne_release_callback(plugin, callback);
+}
+```
+
+A retained `kne_callback` keeps the Luau function available until released. By contrast, ordinary `kne_value` references that point into the current VM stack are borrowed; do not keep them after the native callback returns.
+
+## API reference
+
+- `modules/signals.h`: `get`, `connect_native`, `connect_callback`, `once_native`, `once_callback`, `disconnect`, `fire`, `is_connected`.
+- `modules/callbacks.h`: `retain`, `release`, `is_valid`, `call`.
+- `kne_plugin.h`: `kne_get_signal`, `kne_connect`, `kne_connect_once`, `kne_disconnect`, `kne_retain_callback`, `kne_release_callback`, `kne_call_callback`.
+
+Signal and callback operations are bound to the engine's VM thread; they are not general-purpose cross-thread message queues.

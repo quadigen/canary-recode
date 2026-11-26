@@ -82,7 +82,18 @@ Physics_Apply_Aerodynamics :: proc(
 			body_options.wave_drag *= model.drag_multiplier
 			body_options.lift_multiplier *= model.lift_multiplier
 		}
-		aero.Apply_Body(service.system.handle, body.body_id, settings, body_options)
+		inverse_mass: f32
+		if body.motion_properties != nil {
+			inverse_mass = kineffi.JPH_MotionProperties_GetInverseMass(body.motion_properties)
+		}
+		aero.Apply_Body(
+			service.system.handle,
+			body.body_id,
+			settings,
+			body_options,
+			delta_time,
+			inverse_mass,
+		)
 	}
 }
 
@@ -113,6 +124,7 @@ physics_apply_part_gravity :: proc(service: ^Physics) {
 		   body.anchored ||
 		   body.remote ||
 		   body.body_id == kineffi.JPH_BODY_ID_INVALID {continue}
+		physics_update_body_speed_limit(&body)
 		gravity := physics_part_gravity(cast(^classes.Part)body.object)
 		factor := physics_part_gravity_factor(service, gravity)
 		if body.gravity_factor != factor {

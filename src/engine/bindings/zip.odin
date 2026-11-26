@@ -59,6 +59,39 @@ zip_safe_entry_path :: proc(name: string, strip_root: bool) -> (string, bool) {
 	return cleaned, true
 }
 
+zip_ensure_directory :: proc(path: string) -> bool {
+	info, err := os.lstat(path, context.temp_allocator)
+	if err == nil {
+		defer os.file_info_delete(info, context.temp_allocator)
+		return info.type == .Directory
+	}
+	if err != .Not_Exist {return false}
+	if fsutil.Make_Directory(path) != nil {return false}
+	return true
+}
+
+zip_safe_output_path :: proc(destination, relative: string, directory: bool) -> (string, bool) {
+	current := destination
+	parts := relative
+	for piece in strings.split_iterator(&parts, "/") {
+		next, err := filepath.join({current, piece}, context.temp_allocator)
+		if err != nil {return "", false}
+		current = next
+		if parts != "" || directory {
+			if !zip_ensure_directory(current) {return "", false}
+		} else {
+			info, stat_err := os.lstat(current, context.temp_allocator)
+			if stat_err == nil {
+				defer os.file_info_delete(info, context.temp_allocator)
+				if info.type != .Regular {return "", false}
+			} else if stat_err != .Not_Exist {
+				return "", false
+			}
+		}
+	}
+	return current, true
+}
+
 Zip_Extract_All :: proc(
 	handle: ^Zip_Handle,
 	destination: string,
@@ -71,6 +104,8 @@ Zip_Extract_All :: proc(
 	if err := fsutil.Make_Directory_All(destination); err != nil {
 		return false
 	}
+
+	if !zip_ensure_directory(destination) {return false}
 
 	file_count := zip.mz_zip_reader_get_num_files(&handle.archive)
 	if file_count > 100_000 {return false}
@@ -106,7 +141,7 @@ Zip_Extract_All :: proc(
 			return false
 		}
 
-		archive_path := string(filename_cstring)
+		archive_path := string(filename_buffer[:len(filename_buffer) - 1])
 
 		safe_path, safe := zip_safe_entry_path(archive_path, strip_root)
 
@@ -119,42 +154,32 @@ Zip_Extract_All :: proc(
 			continue
 		}
 
-		output_path, path_err := filepath.join(
-			[]string{destination, safe_path},
-			context.temp_allocator,
-		)
-
-		if path_err != nil {
-			return false
-		}
-
 		is_directory :=
 			zip.mz_zip_reader_is_file_a_directory(&handle.archive, index) != zip.MZ_FALSE
+		output_path, output_ok := zip_safe_output_path(destination, safe_path, is_directory)
+		if !output_ok {return false}
+		if is_directory {continue}
 
-		if is_directory {
-			if err := fsutil.Make_Directory_All(output_path); err != nil {
-				return false
-			}
-
-			continue
+		staging, staging_err := os.make_directory_temp(
+			os.dir(output_path),
+			"kinemium-zip-*",
+			context.allocator,
+		)
+		if staging_err != nil {return false}
+		defer {
+			_ = os.remove_all(staging)
+			delete(staging)
 		}
-
-		parent := os.dir(output_path)
-
-		if err := fsutil.Make_Directory_All(parent); err != nil {
-			return false
-		}
-
-		c_output, c_error := strings.clone_to_cstring(output_path)
-
-		if c_error != nil {
-			return false
-		}
-
+		staged_path, join_err := filepath.join({staging, "entry"}, context.temp_allocator)
+		if join_err != nil {return false}
+		c_output, c_error := strings.clone_to_cstring(staged_path)
+		if c_error != nil {return false}
 		extracted :=
 			zip.mz_zip_reader_extract_to_file(&handle.archive, index, c_output, 0) != zip.MZ_FALSE
-
 		delete(c_output)
+		if extracted {
+			extracted = os.rename(staged_path, output_path) == nil
+		}
 
 		if !extracted {
 			return false

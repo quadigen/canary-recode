@@ -1,0 +1,40 @@
+---
+title: TextChatService
+description: Query chat permissions and understand the available chat compatibility API.
+---
+
+TextChatService exposes chat permission queries. It requires a configured chat permission provider; acquiring the service alone doesn't configure one or create a working chat UI.
+
+```lua
+local chat = game:GetService("TextChatService")
+
+local ok, allowed = pcall(function()
+    return chat:CanUserChatAsync(123)
+end)
+
+print(ok and allowed == true)
+```
+
+## Properties
+
+All properties below are read-only.
+
+| Property | Type | Default |
+| --- | --- | --- |
+| `CreateDefaultCommands` | boolean | true |
+| `CreateDefaultTextChannels` | boolean | true |
+| `ChatTranslationEnabled` | boolean | false |
+
+The flags report stored settings; the Luau binding doesn't provide setters or guarantee that command, channel or translation functionality is available.
+
+## Methods
+
+| Member | Behavior |
+| --- | --- |
+| `CanUserChatAsync(userId: number): boolean` | Queries permission for a user. Raises an error if no provider is configured. |
+| `CanUsersChatAsync(senderId: number, recipientId: number): boolean` | Queries permission between two users. Raises an error if no provider is configured. |
+| `CanUsersDirectChatAsync` | Placeholder; raises an error. |
+| `DisplayBubble` | Placeholder; raises an error. |
+| `GetChatGroupsAsync` | Placeholder; raises an error. |
+
+There is no working Luau-facing channel send API in this service. Don't treat a failed permission query as permission to send a message.

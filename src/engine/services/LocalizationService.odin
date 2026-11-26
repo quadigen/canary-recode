@@ -10,6 +10,8 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
+LOCALIZATION_BUILTIN_FILES := #load_directory("../assets/translations")
+
 LocalizationService_Class := classes.Class_Info {
 	name   = "LocalizationService",
 	parent = &Service_Class,
@@ -20,6 +22,8 @@ LocalizationService :: struct {
 	roblox_locale_id: string,
 	system_locale_id: string,
 	dictionaries:     map[string]json.Object,
+	studio_locale_id: string,
+	studio_dictionaries: map[string]json.Object,
 }
 
 localization_service_construct :: proc(
@@ -33,6 +37,13 @@ localization_service_construct :: proc(
 	service.roblox_locale_id = strings.clone("en-us")
 	service.system_locale_id = strings.clone("en-us")
 	service.dictionaries = make(map[string]json.Object)
+	service.studio_locale_id = strings.clone("en-us")
+	service.studio_dictionaries = make(map[string]json.Object)
+	for file in LOCALIZATION_BUILTIN_FILES {
+		if !strings.has_suffix(file.name, ".json") {continue}
+		locale := file.name[:len(file.name) - len(".json")]
+		localization_load_dictionary(&service.studio_dictionaries, locale, string(file.data))
+	}
 
 	return &service.object
 }
@@ -53,7 +64,9 @@ localization_service_get :: proc(
 	case "SystemLocaleId":
 		vm.PushString(L, service.system_locale_id)
 
-	case "SetLocale", "LoadTranslations", "LoadTranslationFile", "Translate":
+	case "StudioLocaleId":
+		vm.PushString(L, service.studio_locale_id)
+	case "SetLocale", "LoadTranslations", "LoadTranslationFile", "Translate", "SetStudioLocale", "GetAvailableLocales", "TranslateStudio":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -76,6 +89,37 @@ localization_service_namecall :: proc(
 	service := cast(^LocalizationService)object
 
 	switch method {
+	case "GetAvailableLocales":
+		vm.NewTable(L, len(service.studio_dictionaries), 0)
+		index := 1
+		for locale in service.studio_dictionaries {
+			vm.PushString(L, locale)
+			vm.RawSetIndex(L, -2, index)
+			index += 1
+		}
+		return 1, true
+	case "SetStudioLocale":
+		if !vm.ThreadHasSecurityCapability(L, PROJECT_INTERNALS_CAPABILITY) {
+			return vm.RaiseError(L, "SetStudioLocale requires Internals capability"), true
+		}
+		locale := strings.to_lower(vm.ArgString(L, 2), context.allocator)
+		if _, found := service.studio_dictionaries[locale]; !found {
+			delete(locale)
+			vm.PushBoolean(L, false)
+			return 1, true
+		}
+		if locale != service.studio_locale_id {
+			delete(service.studio_locale_id)
+			service.studio_locale_id = locale
+			localization_changed(service)
+		} else {
+			delete(locale)
+		}
+		vm.PushBoolean(L, true)
+		return 1, true
+	case "TranslateStudio":
+		vm.PushString(L, localization_translate_studio(service, vm.ArgString(L, 2)))
+		return 1, true
 	case "SetLocale":
 		locale := vm.ArgString(L, 2)
 		if len(locale) == 0 {
@@ -119,6 +163,12 @@ localization_service_namecall :: proc(
 }
 
 localization_load :: proc(service: ^LocalizationService, locale, source: string) -> bool {
+	if !localization_load_dictionary(&service.dictionaries, locale, source) {return false}
+	localization_changed(service)
+	return true
+}
+
+localization_load_dictionary :: proc(dictionaries: ^map[string]json.Object, locale, source: string) -> bool {
 	if locale == "" {return false}
 	value, err := json.parse_string(source, allocator = context.allocator)
 	if err != nil {return false}
@@ -128,16 +178,15 @@ localization_load :: proc(service: ^LocalizationService, locale, source: string)
 		if _, valid := entry.(json.String); !valid {json.destroy_value(value); return false}
 	}
 	key := strings.to_lower(locale, context.allocator)
-	for old_key, old in service.dictionaries {
+	for old_key, old in dictionaries^ {
 		if old_key == key {
-			delete_key(&service.dictionaries, old_key)
+			delete_key(dictionaries, old_key)
 			json.destroy_value(json.Value(old))
 			delete(old_key)
 			break
 		}
 	}
-	service.dictionaries[key] = entries
-	localization_changed(service)
+	dictionaries^[key] = entries
 	return true
 }
 
@@ -172,6 +221,16 @@ localization_translate :: proc(
 	return source
 }
 
+localization_translate_studio :: proc(service: ^LocalizationService, source: string) -> string {
+	if dictionary, found := service.studio_dictionaries[service.studio_locale_id]; found {
+		if translated, ok := dictionary[source].(json.String); ok {return string(translated)}
+	}
+	if dictionary, found := service.studio_dictionaries["en-us"]; found {
+		if translated, ok := dictionary[source].(json.String); ok {return string(translated)}
+	}
+	return source
+}
+
 localization_render_text :: proc(
 	data_model: rawptr,
 	source: string,
@@ -181,7 +240,16 @@ localization_render_text :: proc(
 	if model == nil || model.registry == nil {return source}
 	descriptor := Find_Service(model.registry, "LocalizationService")
 	if descriptor == nil || descriptor.object == nil || descriptor.object.destroyed {return source}
-	return localization_translate(cast(^LocalizationService)descriptor.object, source, object)
+	if object != nil && classes.Is_A(object, "GuiObject") {
+		gui := cast(^classes.GuiObject)object
+		if !gui.auto_localize {return source}
+	}
+	service := cast(^LocalizationService)descriptor.object
+	core_gui := Find_Service(model.registry, "CoreGui")
+	if core_gui != nil && classes.Is_Descendant_Of(object, core_gui.object) {
+		return localization_translate_studio(service, source)
+	}
+	return localization_translate(service, source, object)
 }
 
 localization_changed :: proc(service: ^LocalizationService) {
@@ -199,6 +267,12 @@ localization_service_destroy :: proc(object: ^classes.Object, renderer: ^classes
 		delete(key)
 	}
 	delete(service.dictionaries)
+	delete(service.studio_locale_id)
+	for key, dictionary in service.studio_dictionaries {
+		json.destroy_value(json.Value(dictionary))
+		delete(key)
+	}
+	delete(service.studio_dictionaries)
 
 	classes.Object_Destroy(object)
 	free(service)

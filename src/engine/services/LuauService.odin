@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import "core:strings"
@@ -201,7 +200,7 @@ luau_service_get :: proc(
 	_ = enum_registry
 
 	switch key {
-	case "Tokenize", "TypeCheck", "GetExportedTypes", "GetLintRules":
+	case "Tokenize", "TypeCheck", "GetExportedTypes", "GetLintRules", "GetApiDefinitions":
 		vm.PushUserdataMethod(L, key)
 
 	case:
@@ -232,14 +231,22 @@ luau_service_namecall :: proc(
 			source := vm.ArgString(L, 2)
 			c_source := strings.clone_to_cstring(source)
 			defer delete(c_source)
-			count := method == "TypeCheck" ? luauh.luau_typecheck(L, c_source, uintptr(len(source)), 3) :
-				luauh.luau_exported_types(L, c_source, uintptr(len(source)))
+			count :=
+				method == "TypeCheck" ? luauh.luau_typecheck(L, c_source, uintptr(len(source)), 3) : luauh.luau_exported_types(L, c_source, uintptr(len(source)))
 			if count == 1 {
 				return 1, true
 			}
 		}
 		vm.PushNil(L)
 		return 1, true
+
+	case "GetApiDefinitions":
+		when luauh.TYPECHECK_AVAILABLE {
+			return luauh.luau_api_definitions(L), true
+		} else {
+			vm.PushNil(L)
+			return 1, true
+		}
 
 	case "GetLintRules":
 		when luauh.TYPECHECK_AVAILABLE {
@@ -347,5 +354,12 @@ Register_LuauService_Class :: proc(registry: ^classes.Registry) {
 		creatable = false,
 		get = luau_service_get,
 		namecall = luau_service_namecall,
+		methods = []string {
+			"Tokenize",
+			"TypeCheck",
+			"GetExportedTypes",
+			"GetLintRules",
+			"GetApiDefinitions",
+		},
 	)
 }

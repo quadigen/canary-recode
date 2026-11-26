@@ -1,0 +1,53 @@
+---
+title: KNE host API modules
+description: Explore the versioned module tables that the Kinemium host provides to native extensions.
+---
+
+The engine calls `kne_extension_entry(const kne_host *host)` with a host table. This table contains a version number and pointers to module APIs declared in `include/sdk/modules/`.
+
+Every host operation is scoped to the extension handle supplied to the current callback.
+
+## Host modules
+
+| Module pointer | Header | Main responsibilities |
+| --- | --- | --- |
+| `host->core` | `modules/core.h` | Logging, allocation, deallocation, last error, engine version. |
+| `host->services` | `modules/services.h` | Find services, check existence, enumerate registered names. |
+| `host->instances` | `modules/instances.h` | Create/destroy Instances, parents, children, names, properties, method invocation, userdata. |
+| `host->classes` | `modules/classes.h` | Register native instance classes and engine services. |
+| `host->vm` | `modules/vm.h` | Luau arguments, values, globals, native functions, synchronous script execution and buffers. |
+| `host->datatypes` | `modules/datatypes.h` | Read/push engine datatypes; register extension-defined datatypes. |
+| `host->callbacks` | `modules/callbacks.h` | Retain, call and release Luau functions. |
+| `host->signals` | `modules/signals.h` | Connect callbacks, create one-shot connections, disconnect, fire signals. |
+| `host->exports` | `modules/exports.h` | Enumerate and call exported engine methods. |
+
+## Authoring helpers
+
+Include `kne_plugin.h` to avoid repeatedly constructing `kne_string` and invoking raw module function pointers:
+
+```c
+kne_plugin plugin = kne_make_plugin(host, ext);
+
+kne_instance workspace = kne_get_service(plugin, "Workspace");
+kne_instance folder = kne_new_instance(plugin, "Folder");
+
+if (workspace && folder) {
+    kne_set_name(plugin, folder, "MyPluginFolder");
+    kne_set_parent(plugin, folder, workspace);
+}
+```
+
+For the low-level API, the equivalent operations are:
+
+```c
+kne_instance workspace = host->services->get(ext, kne_text("Workspace"));
+kne_instance folder = host->instances->create(ext, kne_text("Folder"));
+```
+
+## Feature detection
+
+Before accessing fields that require a particular KNE minor ABI, validate the host's `abi_minor` **and** the module's `size` before calling a function pointer. Unavailable optional functions must not be called.
+
+The module versions and full function pointer signatures are in `include/sdk/kne.h`, `kne_types.h`, and `modules/*.h`. These headers are the source of truth for your engine revision.
+
+For instance property values and Lua-facing functions, continue to [Luau interop](/docs/kne/luau-interop).

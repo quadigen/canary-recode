@@ -1,5 +1,5 @@
-/* Implementation deliberately lives in the shim translation unit so it can
- * reuse KineMesh, KineAnimation, interpolation and skin-upload helpers. */
+
+
 
 struct KineFilamentAnimationTrack {
     KineFilamentAnimator *animator = nullptr;
@@ -210,6 +210,10 @@ static bool kine_animator_apply_pose(KineFilamentAnimator *animator) {
     for (size_t b = 0; b < boneCount; ++b) {
         const KinePoseTRS &pose = animator->pose[b];
         animator->locals[b] = kine_compose_trs(pose.translation, pose.rotation, pose.scale);
+        if (mesh->proceduralMask.size() == boneCount &&
+            mesh->proceduralDelta.size() == boneCount && mesh->proceduralMask[b]) {
+            animator->locals[b] = animator->locals[b] * mesh->proceduralDelta[b];
+        }
         animator->states[b] = 0;
     }
     for (size_t b = 0; b < boneCount; ++b) {
@@ -223,7 +227,7 @@ static bool kine_animator_apply_pose(KineFilamentAnimator *animator) {
     animator->poseDirty = false;
     return true;
 }
-} // namespace
+}
 
 KINE_API KineFilamentAnimator *Kine_Filament_AnimatorCreate(
     KineFilamentContext *ctx, KineFilamentMesh *mesh) {
@@ -253,7 +257,7 @@ KINE_API void Kine_Filament_AnimatorDestroy(KineFilamentAnimator *animator) {
     }
     for (auto *track : animator->tracks) delete track;
     animator->tracks.clear();
-    /* Restore the bind pose if the mesh is still alive. */
+
     if (animator->mesh && animator->ctx && animator->ctx->engine)
         kine_animator_apply_pose(animator);
     delete animator;
@@ -337,7 +341,7 @@ KINE_API int Kine_Filament_MeshImportAnimations(
             channel.bone = targetBone;
             animation.channels.push_back(std::move(channel));
         }
-        // A clip whose bones do not exist on this rig cannot drive it.
+
         if (animation.channels.empty() || !std::isfinite(animation.duration) ||
             animation.duration <= 0.0f) continue;
         target->animations.push_back(std::move(animation));
@@ -371,13 +375,13 @@ KINE_API bool Kine_Filament_MeshAddAnimationPose(KineFilamentMesh *mesh, int cli
     KineAnimationChannel *channel=nullptr;
     for(auto &c:clip.channels) if(c.bone==bone){channel=&c;break;}
     if(!channel) { clip.channels.emplace_back(); channel=&clip.channels.back(); channel->bone=bone; }
-    // CFrame is an offset relative to the imported bone's local bind transform.
+
     const auto offset=math::float3{cf[0],cf[1],cf[2]};
     const KineQuat bindQ=bind.bindRotation;
     const KineQuat localQ=kine_quat_from_rotation(cf);
     const math::mat4f offsetMatrix=kine_compose_trs(offset,localQ,{1,1,1});
     const math::mat4f composed=bind.bindLocal * offsetMatrix;
-    // Translation of the product is in column three of the Filament column-major matrix.
+
     const math::float3 t={composed[3].x,composed[3].y,composed[3].z};
     channel->translations.push_back({time,kine_lerp(bind.bindTranslation,t,weight)});
     channel->rotations.push_back({time,kine_slerp(bindQ,kine_quat_multiply(bindQ,localQ),weight)});

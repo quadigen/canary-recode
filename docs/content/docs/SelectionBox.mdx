@@ -1,0 +1,28 @@
+---
+title: SelectionBox
+description: Highlight an object using selection-style outline and surface properties.
+---
+
+SelectionBox is a [Highlight](/docs/Highlight) with selection-style property aliases and a transparent fill by default. It uses the highlight appearance rather than a separate wireframe box renderer.
+
+```lua
+local part = workspace:WaitForChild("Target")
+local selection = Instance.new("SelectionBox")
+selection.Adornee = part
+selection.Color3 = Color3.fromRGB(0, 170, 255)
+selection.Parent = workspace
+```
+
+## Properties
+
+The aliases below read and write the corresponding Highlight property.
+
+| SelectionBox member | Highlight member |
+| --- | --- |
+| Transparency | OutlineTransparency |
+| SurfaceTransparency | FillTransparency |
+| Color3 | OutlineColor |
+| SurfaceColor3 | FillColor |
+| Visible | Enabled |
+
+Adornee, Enabled and DepthMode are also available. SurfaceTransparency starts at 1; other defaults follow Highlight. See [Highlight](/docs/Highlight) for supported targets, ranges and rendering limitations.

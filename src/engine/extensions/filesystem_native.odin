@@ -20,7 +20,14 @@ platform_library_candidates :: proc(directory: string) -> []string {
 			continue
 		}
 		path := platform_join(directory, entry.name)
-		if !os.is_file(path) {
+		info, stat_err := os.lstat(path, context.temp_allocator)
+		if stat_err != nil {
+			delete(path)
+			continue
+		}
+		regular := info.type == .Regular
+		os.file_info_delete(info, context.temp_allocator)
+		if !regular {
 			delete(path)
 			continue
 		}
@@ -43,12 +50,29 @@ platform_library_candidates :: proc(directory: string) -> []string {
 
 Manifest_Load :: proc(directory: string) -> (manifest: Manifest, err: string) {
 	path := platform_join(directory, MANIFEST_FILE)
-
-	data, read_err := os.read_entire_file(path, context.allocator)
-	if read_err != nil {
-		return {}, fmt.aprintf("cannot read %s", path)
+	defer delete(path)
+	file, open_err := os.open(path)
+	if open_err != nil {return {}, fmt.aprintf("cannot read %s", path)}
+	defer os.close(file)
+	info, stat_err := os.fstat(file, context.allocator)
+	if stat_err != nil {return {}, fmt.aprintf("cannot inspect %s", path)}
+	defer os.file_info_delete(info, context.allocator)
+	if info.type != .Regular || info.size < 0 || info.size > MAX_MANIFEST_BYTES {
+		return {}, fmt.aprintf("%s: invalid or oversized extension manifest", path)
 	}
-	defer delete(data, context.allocator)
+	data := make([]u8, int(info.size))
+	defer delete(data)
+	read := 0
+	for read < len(data) {
+		n, read_err := os.read(file, data[read:])
+		if read_err != nil || n <= 0 {return {}, fmt.aprintf("cannot read %s", path)}
+		read += n
+	}
+	probe: [1]u8
+	n, probe_err := os.read(file, probe[:])
+	if n != 0 || (probe_err != nil && probe_err != .EOF) {
+		return {}, fmt.aprintf("%s: extension manifest changed while reading", path)
+	}
 
 	value, parse_err := json.parse_string(
 		string(data),
@@ -237,15 +261,40 @@ Discover :: proc(context_state: ^Context, directory: string) -> (loaded: int, er
 	return loaded, err
 }
 
+
+@(private)
+library_stays_in_extension :: proc(directory, relative: string) -> bool {
+	if !manifest_library_name_valid(relative) {return false}
+	current := strings.clone(directory)
+	defer delete(current)
+	parts := relative
+	for part in strings.split_iterator(&parts, "/") {
+		path := platform_join(current, part)
+		info, stat_err := os.lstat(path, context.temp_allocator)
+		if stat_err != nil {delete(path); return false}
+		allowed := info.type == .Regular || info.type == .Directory
+		os.file_info_delete(info, context.temp_allocator)
+		if !allowed {delete(path); return false}
+		delete(current)
+		current = path
+	}
+	info, stat_err := os.lstat(current, context.temp_allocator)
+	if stat_err != nil {return false}
+	defer os.file_info_delete(info, context.temp_allocator)
+	return info.type == .Regular
+}
+
 @(private)
 resolve_library_path :: proc(manifest: ^Manifest) -> (string, string) {
 	if len(manifest.library) > 0 {
-		path := platform_join(manifest.directory, manifest.library)
-		if !os.is_file(path) {
-			delete(path)
-			return "", fmt.aprintf("%s: library %q is missing", manifest.id, manifest.library)
+		if !library_stays_in_extension(manifest.directory, manifest.library) {
+			return "", fmt.aprintf(
+				"%s: library %q is missing or escapes extension directory",
+				manifest.id,
+				manifest.library,
+			)
 		}
-		return path, ""
+		return platform_join(manifest.directory, manifest.library), ""
 	}
 
 	candidates := platform_library_candidates(manifest.directory)

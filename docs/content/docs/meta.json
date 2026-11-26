@@ -107,6 +107,11 @@
     "FilmGrainEffect",
     "ReflectionProbeEffect",
     "SSAOEffect",
+    "SSGIEffect",
+    "DDGIEffect",
+    "EmissiveGIEffect",
+    "ScreenSpaceCavityEffect",
+    "ScreenSpaceOutlineEffect",
     "ScreenSpaceReflectionsEffect",
     "SunRaysEffect",
     "ToneMappingEffect",
@@ -141,10 +146,19 @@
     "SpotLight",
     "SurfaceLight",
     "ParticleEmitter",
+    "NetworkEmulator",
+    "Texture",
+    "BoneAttachment",
+    "SelectionBox",
+    "Water",
     "test",
+    "!kne",
+    "...",
     "---Datatypes---",
     "datatypes",
     "---Services---",
-    "services"
+    "services",
+    "---Native development---",
+    "native-sdk"
   ]
 }

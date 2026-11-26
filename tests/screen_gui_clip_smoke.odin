@@ -2,10 +2,10 @@ package main
 
 import kineffi "../src/engine/bindings"
 import classes "../src/engine/classes"
+import sdl3 "../src/engine/platform"
 import renderer "../src/engine/renderer"
 import engine_runtime "../src/engine/runtime"
 import vm "../src/engine/vm"
-import sdl3 "../src/engine/platform"
 import "core:fmt"
 
 expect_pixel :: proc(surface: ^kineffi.KineSkiaSurface, x, y: i32, red, opaque: bool) {
@@ -79,23 +79,36 @@ frame.BackgroundTransparency = 0
 	expect_pixel(surface, 50, 120, false, false)
 	expect_pixel(surface, 200, 200, false, false)
 
-	ok, err = vm.Run(&script_vm, `
+	ok, err = vm.Run(
+		&script_vm,
+		`
 group.GroupTransparency = 0.5
 assert(group:Clone().GroupTransparency == 0.5)
 assert(group:ContainsPoint(60, 50))
 assert(not group:ContainsPoint(30, 50))
 assert(group.Frame:ContainsPoint(60, 50))
-`, "canvas_group_transparency")
+`,
+		"canvas_group_transparency",
+	)
 	assert(ok, err)
 	kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
-	engine_runtime.Environment_Render_Overlay(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
+	engine_runtime.Environment_Render_Overlay(
+		&environment,
+		&script_vm,
+		surface,
+		300,
+		300,
+		1.0 / 60.0,
+	)
 	kineffi.Kine_Skia_Surface_Flush(surface)
 	expect_pixel(surface, 60, 50, true, false)
 	r, g, b, a: u8
 	kineffi.Kine_Skia_Surface_GetPixel(surface, 60, 50, &r, &g, &b, &a)
 	assert(a == 127 || a == 128)
 
-	ok, err = vm.Run(&script_vm, `
+	ok, err = vm.Run(
+		&script_vm,
+		`
 local screen = Instance.new("ScreenGui", game.StarterGui)
 local moving = Instance.new("Frame", screen)
 local destination = Instance.new("Folder", screen)
@@ -128,10 +141,19 @@ hover.Visible = false
 assert(calls == 1)
 changed:Disconnect()
 hover.Visible = true
-`, "passive hover setup")
+`,
+		"passive hover setup",
+	)
 	assert(ok, err)
 	engine_runtime.Environment_Render_2D(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
-	engine_runtime.Environment_Render_Overlay(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
+	engine_runtime.Environment_Render_Overlay(
+		&environment,
+		&script_vm,
+		surface,
+		300,
+		300,
+		1.0 / 60.0,
+	)
 	event: sdl3.Event
 	event.type = .MOUSE_MOTION
 	event.motion.x, event.motion.y = 180, 20
@@ -145,10 +167,16 @@ hover.Visible = true
 	event.type = .MOUSE_MOTION
 	event.motion.x, event.motion.y = 290, 200
 	engine_runtime.Environment_SetEvent(&environment, &script_vm, event)
-	ok, err = vm.Run(&script_vm, `assert(enteredPassive and leftPassive and clickedUnderHover)`, "passive hover verify")
+	ok, err = vm.Run(
+		&script_vm,
+		`assert(enteredPassive and leftPassive and clickedUnderHover)`,
+		"passive hover verify",
+	)
 	assert(ok, err)
 
-	ok, err = vm.Run(&script_vm, `
+	ok, err = vm.Run(
+		&script_vm,
+		`
 local part = Instance.new("Part", workspace)
 local attachment = Instance.new("Attachment", part)
 local cached = {[part] = true, [attachment] = true}
@@ -175,10 +203,14 @@ assert(next(cached) == nil)
 assert(table.concat(order, ",") == "destroying,removed")
 assert(part.Parent == nil and attachment.Parent == nil)
 assert(not pcall(function() part.Parent = workspace end))
-`, "destroyed instance cleanup")
+`,
+		"destroyed instance cleanup",
+	)
 	assert(ok, err)
 
-	ok, err = vm.Run(&script_vm, `
+	ok, err = vm.Run(
+		&script_vm,
+		`
 local screen = Instance.new("ScreenGui", game.StarterGui)
 label = Instance.new("TextLabel", screen)
 button = Instance.new("TextButton", screen)
@@ -209,13 +241,31 @@ title.TextColor3 = Color3.new(1, 1, 1)
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Text = "Object Menu"
 title.TextSize = 19
-`, "text_cache_setup")
+`,
+		"text_cache_setup",
+	)
 	assert(ok, err)
 	for _ in 0 ..< 2 {
-		engine_runtime.Environment_Render_2D(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
-		engine_runtime.Environment_Render_Overlay(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
+		engine_runtime.Environment_Render_2D(
+			&environment,
+			&script_vm,
+			surface,
+			300,
+			300,
+			1.0 / 60.0,
+		)
+		engine_runtime.Environment_Render_Overlay(
+			&environment,
+			&script_vm,
+			surface,
+			300,
+			300,
+			1.0 / 60.0,
+		)
 	}
-	ok, err = vm.Run(&script_vm, `
+	ok, err = vm.Run(
+		&script_vm,
+		`
 labelWidth = label.TextBounds.X
 buttonWidth = button.TextBounds.X
 assert(labelWidth > 0 and buttonWidth > 0)
@@ -223,7 +273,9 @@ assert(category.AbsoluteSize.Y > 0 and category.Parent.AbsoluteSize.Y >= categor
 	tostring(category.AbsoluteSize) .. " inside " .. tostring(category.Parent.AbsoluteSize))
 label.Text = "i"
 button.Text = "i"
-`, "text_cache_update")
+`,
+		"text_cache_update",
+	)
 	assert(ok, err)
 	title_pixels := 0
 	for y in 193 ..< 221 {
@@ -233,11 +285,22 @@ button.Text = "i"
 		}
 	}
 	assert(title_pixels > 30, "single-line title should extend past its own width")
-	engine_runtime.Environment_Render_Overlay(&environment, &script_vm, surface, 300, 300, 1.0 / 60.0)
-	ok, err = vm.Run(&script_vm, `
+	engine_runtime.Environment_Render_Overlay(
+		&environment,
+		&script_vm,
+		surface,
+		300,
+		300,
+		1.0 / 60.0,
+	)
+	ok, err = vm.Run(
+		&script_vm,
+		`
 assert(label.TextBounds.X > 0 and label.TextBounds.X < labelWidth)
 assert(button.TextBounds.X > 0 and button.TextBounds.X < buttonWidth)
-`, "text_cache_bounds")
+`,
+		"text_cache_bounds",
+	)
 	assert(ok, err)
 
 	svg := "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
@@ -271,7 +334,9 @@ verify_panel_cache :: proc(
 	surface: ^kineffi.KineSkiaSurface,
 ) {
 	renderer_object.Cache2D = true
-	ok, err := vm.Run(script_vm, `
+	ok, err := vm.Run(
+		script_vm,
+		`
 local root = Instance.new("ScreenGui", game.StarterGui)
 root.DisplayOrder = 100000
 root.Size = Vector2.new(300, 300)
@@ -298,13 +363,26 @@ cacheRow.BackgroundColor3 = Color3.new(1, 0, 0)
 cacheLabel = Instance.new("TextLabel", root)
 cacheLabel.Position = UDim2.fromOffset(180, 25)
 cacheLabel.Text = "First"
-`, "panel_cache_setup")
+`,
+		"panel_cache_setup",
+	)
 	assert(ok, err)
 
-	paint :: proc(environment: ^engine_runtime.Environment, script_vm: ^vm.VM, surface: ^kineffi.KineSkiaSurface) {
+	paint :: proc(
+		environment: ^engine_runtime.Environment,
+		script_vm: ^vm.VM,
+		surface: ^kineffi.KineSkiaSurface,
+	) {
 		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
 		engine_runtime.Environment_Render_2D(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
-		engine_runtime.Environment_Render_Overlay(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+		engine_runtime.Environment_Render_Overlay(
+			environment,
+			script_vm,
+			surface,
+			300,
+			300,
+			1.0 / 60.0,
+		)
 	}
 	for _ in 0 ..< 4 {paint(environment, script_vm, surface)}
 
@@ -332,11 +410,15 @@ cacheLabel.Text = "First"
 	assert(r > idle_red, "hover did not redraw the cached button")
 
 	expect_pixel(surface, 130, 54, false, true)
-	ok, err = vm.Run(script_vm, `
+	ok, err = vm.Run(
+		script_vm,
+		`
 cacheScroll.CanvasPosition = Vector2.new(0, 40)
 cachePanel.Position = UDim2.fromOffset(135, 120)
 cacheButton.BackgroundColor3 = Color3.new(1, 0, 0)
-`, "panel_cache_move_scroll_edit")
+`,
+		"panel_cache_move_scroll_edit",
+	)
 	assert(ok, err)
 	paint(environment, script_vm, surface)
 	expect_pixel(surface, 130, 54, true, true)
@@ -350,7 +432,9 @@ verify_cached_text :: proc(
 	renderer_object: ^renderer.RendererObject,
 	surface: ^kineffi.KineSkiaSurface,
 ) {
-	ok, err := vm.Run(script_vm, `
+	ok, err := vm.Run(
+		script_vm,
+		`
 local screen = Instance.new("ScreenGui", game.StarterGui)
 screen.DisplayOrder = 100001
 screen.RenderOffset = Vector2.new(12, 228)
@@ -359,6 +443,7 @@ local group = Instance.new("CanvasGroup", screen)
 group.Size = UDim2.fromScale(1, 1)
 group.BackgroundColor3 = Color3.new(0, 0, 0)
 group.GroupTransparency = 0.25
+recordedGroup = group
 recordedText = Instance.new("TextLabel", group)
 recordedText.Position = UDim2.fromOffset(5, 5)
 recordedText.Size = UDim2.fromOffset(75, 50)
@@ -383,7 +468,9 @@ box.BackgroundTransparency = 1
 box.TextColor3 = Color3.new(1, 1, 1)
 box.TextSize = 20
 box.Text = "TextBox"
-`, "cached_text_setup")
+`,
+		"cached_text_setup",
+	)
 	assert(ok, err)
 
 	Text_Pixels :: [65][270][4]u8
@@ -394,12 +481,25 @@ box.Text = "TextBox"
 	) -> Text_Pixels {
 		kineffi.Kine_Skia_Surface_Clear(surface, 0, 0, 0, 0)
 		engine_runtime.Environment_Render_2D(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
-		engine_runtime.Environment_Render_Overlay(environment, script_vm, surface, 300, 300, 1.0 / 60.0)
+		engine_runtime.Environment_Render_Overlay(
+			environment,
+			script_vm,
+			surface,
+			300,
+			300,
+			1.0 / 60.0,
+		)
 		pixels: Text_Pixels
 		for &row, y in pixels {
 			for &rgba, x in row {
 				kineffi.Kine_Skia_Surface_GetPixel(
-					surface, i32(x) + 12, i32(y) + 228, &rgba[0], &rgba[1], &rgba[2], &rgba[3],
+					surface,
+					i32(x) + 12,
+					i32(y) + 228,
+					&rgba[0],
+					&rgba[1],
+					&rgba[2],
+					&rgba[3],
 				)
 			}
 		}
@@ -423,6 +523,24 @@ box.Text = "TextBox"
 	assert(updated != expected, "text update did not affect pixels")
 	renderer_object.Cache2D = true
 	for _ in 0 ..< 4 {
-		assert(capture(environment, script_vm, surface) == updated, "cached text update did not persist")
+		assert(
+			capture(environment, script_vm, surface) == updated,
+			"cached text update did not persist",
+		)
 	}
+
+	ok, err = vm.Run(script_vm, `recordedGroup.GroupTransparency = 0.8`, "cached_group_update")
+	assert(ok, err)
+	faded := capture(environment, script_vm, surface)
+	assert(faded != updated, "group opacity did not update cached pixels")
+	renderer_object.Cache2D = false
+	assert(capture(environment, script_vm, surface) == faded, "group opacity differs with caching")
+	renderer_object.Cache2D = true
+	ok, err = vm.Run(script_vm, `recordedGroup.GroupTransparency = 1`, "cached_group_hide")
+	assert(ok, err)
+	hidden := capture(environment, script_vm, surface)
+	assert(hidden != faded, "fully transparent group retained cached pixels")
+	renderer_object.Cache2D = false
+	assert(capture(environment, script_vm, surface) == hidden, "hidden group differs with caching")
+
 }

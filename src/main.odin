@@ -63,6 +63,15 @@ runtime_resize :: proc(user_data: rawptr, width, height: i32) {
 last_ui_width: i32 = -1
 last_ui_height: i32 = -1
 
+runtime_background_playtest :: proc(user_data: rawptr) -> bool {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil || ctx.environment == nil {return false}
+	descriptor := services.Find_Service(&ctx.environment.services, "PlaytestService")
+	if descriptor == nil || descriptor.object == nil {return false}
+	service := cast(^services.PlaytestService)descriptor.object
+	return service.running && service.client_process.pid != 0
+}
+
 runtime_render_3d_dirty :: proc(user_data: rawptr) -> bool {
 	ctx := cast(^Runtime_Render_Context)user_data
 	if ctx == nil {return true}
@@ -145,6 +154,13 @@ runtime_render_vr_ui :: proc(
 		panel_width,
 		panel_height,
 	)
+}
+
+runtime_frame_maintenance :: proc(user_data: rawptr, budget_ns: u64) {
+	ctx := cast(^Runtime_Render_Context)user_data
+	if ctx == nil || ctx.vm_state == nil || services.Log_Is_Playtest_Paused() {return}
+	z := profiling.Begin("Luau GC Maintenance", 0xB48EAD)
+	_ = vm.GC_Step_Budgeted(ctx.vm_state.L, budget_ns)
 }
 
 runtime_overlay_needs_backdrop :: proc(user_data: rawptr) -> bool {
@@ -241,7 +257,11 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	when !renderer.KINE_RENDERER_GL {
 		renderer_object.Cache2D = true
 		renderer_object.Render3DCheck = runtime_render_3d_dirty
+		renderer_object.BackgroundPlaytest = runtime_background_playtest
 		renderer_object.OverlayNeedsBackdrop = runtime_overlay_needs_backdrop
+		if !target.is_editor() && os.get_env("KINE_GC_PACING", context.temp_allocator) == "1" {
+			renderer_object.FrameMaintenance = runtime_frame_maintenance
+		}
 	}
 
 	target.set_playtest(options.playtest)
@@ -251,7 +271,10 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	vm.PushFunction(script_vm.L, "settings", runtime_global_settings, 1)
 	vm.SetGlobalFromStack(&script_vm, "settings")
 
-	fmt.eprintf("[Startup] VM and audio: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
+	fmt.eprintf(
+		"[Startup] VM and audio: %.1f ms\n",
+		time.duration_milliseconds(time.tick_since(startup_started)),
+	)
 	if options.standalone {
 		sandbox.init_runtime(
 			cast(^vm.VM)uintptr(&script_vm),
@@ -270,10 +293,14 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 		vm.AddGlobal_Boolean(&script_vm, "IsServer", true)
 		vm.AddGlobal_Boolean(&script_vm, "IsClient", true)
 	}
-	fmt.eprintf("[Startup] runtime and editor initialized: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
+	fmt.eprintf(
+		"[Startup] runtime and editor initialized: %.1f ms\n",
+		time.duration_milliseconds(time.tick_since(startup_started)),
+	)
 	environment.services.fast_editor_viewport = options.fast_viewport
 
-	{
+
+	if environment.mode != .Editor {
 		loaded, extension_error := extensions.Discover_Default(&environment.extensions)
 		if loaded > 0 {
 			fmt.printf("Loaded %d native KNE extension(s)\n", loaded)
@@ -292,6 +319,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	defer vm.Close(&script_vm)
 	defer extensions.Game_Unload(&environment.extensions)
 
+	_ = services.Playtest_Debugger_Bootstrap(&script_vm, options.playtest_tree_dir)
 	if target.is_server() || options.singleplayer {
 		if !load_game_map(&environment, &script_vm, options) {
 			return false
@@ -418,7 +446,10 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 			return false
 		}
 	}
-	fmt.eprintf("[Startup] entering renderer: %.1f ms\n", time.duration_milliseconds(time.tick_since(startup_started)))
+	fmt.eprintf(
+		"[Startup] entering renderer: %.1f ms\n",
+		time.duration_milliseconds(time.tick_since(startup_started)),
+	)
 	renderer.init(title, 800, 600, &renderer_object)
 
 	if !options.playtest {

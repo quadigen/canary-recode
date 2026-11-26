@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import "core:fmt"
@@ -154,6 +153,21 @@ log_service_write :: proc(service: ^LogService, message: string, log_type: strin
 	}
 }
 
+log_service_report_runtime_error :: proc(owner: ^Service, message: string) {
+	if owner != nil && owner.data_model != nil && owner.data_model.registry != nil {
+		service := cast(^LogService)Ensure_Service(owner.data_model.registry, "LogService")
+		if service != nil {
+			log_service_write(service, message, "Error")
+			return
+		}
+	}
+	if target.is_playtest() {
+		log_service_emit_tagged("ERROR", message)
+	} else {
+		fmt.eprintln(message)
+	}
+}
+
 log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 	registry := cast(^Registry)vm.UpvaluePointer(L)
@@ -172,7 +186,8 @@ log_service_luau_print :: proc "c" (L: ^vm.State) -> i32 {
 	for index := 1; index <= vm.StackTop(L); index += 1 {
 		append(&parts, vm.DisplayString(L, i32(index)))
 	}
-	message := strings.concatenate(parts[:])
+	message := strings.join(parts[:], "	")
+	defer delete(message)
 	delete(parts)
 	log_service_write(service, message, "Log")
 	return 0
@@ -192,7 +207,8 @@ log_service_luau_warn :: proc "c" (L: ^vm.State) -> i32 {
 	for index := 1; index <= vm.StackTop(L); index += 1 {
 		append(&parts, vm.DisplayString(L, i32(index)))
 	}
-	message := strings.concatenate(parts[:])
+	message := strings.join(parts[:], "	")
+	defer delete(message)
 	delete(parts)
 	log_service_write(service, message, "Warn")
 	return 0

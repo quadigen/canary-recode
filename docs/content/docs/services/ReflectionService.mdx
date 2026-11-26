@@ -1,0 +1,48 @@
+---
+title: ReflectionService
+description: Discover registered classes, properties, methods, events and enums.
+---
+
+ReflectionService gives tools access to the engine's class and member metadata. Use it to populate an object browser, inspect inheritance, or discover which members a class declares.
+
+```lua
+local reflection = game:GetService("ReflectionService")
+local info = reflection:GetClass("Part")
+
+if info then
+    print(info.Name, info.Superclass)
+    for _, property in ipairs(reflection:GetPropertiesOfClass("Part")) do
+        print(property.Name, property.Owner)
+    end
+end
+```
+
+## Methods
+
+| Signature | Result |
+| --- | --- |
+| `GetClass(className: string, filter: table?): table?` | Class metadata or nil if unknown, excluded by IsA, or not visible under the filter. |
+| `GetClasses(filter: table?): {table}` | Array of matching registered classes. |
+| `GetEnums(): {table}` | Enum records containing Name, DisplayName and Tags. |
+| `GetPropertiesOfClass(className: string, filter: table?): {table}?` | Property metadata, or nil for an unknown or inaccessible class. |
+| `GetMethodsOfClass(className: string, filter: table?): {table}?` | Method metadata, or nil for an unknown or inaccessible class. |
+| `GetEventsOfClass(className: string, filter: table?): {table}?` | Event metadata, or nil for an unknown or inaccessible class. |
+
+## Filters
+
+| Key | Type | Behavior |
+| --- | --- | --- |
+| Security | SecurityCapabilities | Capability set used to filter class visibility and reported permits; defaults to the calling thread's capabilities. |
+| IsA | string | Restricts GetClass and GetClasses to a class or its descendants. |
+| ExcludeDisplay | boolean | Omits Display metadata. Defaults to false. |
+| ExcludeInherited | boolean | Restricts member queries to members declared on that class. Defaults to false. |
+
+Changing a reflection filter does not grant permission to perform an operation.
+
+## Returned records
+
+Class records contain Name, Superclass (nil for a root class), Subclasses, Serialized, Permits and optional Display. Subclasses lists direct children. Permits can include New and GetService.
+
+Member records contain Name, Owner, Permits and optional Display. Properties also report Type, Serialized and ContentType; methods report Parameters, ReturnType and CanYield; events report Parameters.
+
+Reflection metadata is not a complete API signature database. Types and parameter descriptions are generic, CanYield is not derived from actual method behavior, and parallel permits do not prove that a member is parallel-safe. Use the individual API reference for real signatures, write access, yielding behavior and thread restrictions.

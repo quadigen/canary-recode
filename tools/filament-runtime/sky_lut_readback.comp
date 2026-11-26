@@ -1,0 +1,31 @@
+#version 450
+
+// Packs the RGBA16F transmittance and multi-scattering LUTs into one storage buffer as
+// two packed half pairs per texel: transmittance texels first, then multi-scattering texels.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D transmittanceLut;
+layout(set = 0, binding = 1, rgba16f) uniform image2D multiScatteringLut;
+layout(set = 0, binding = 2, std430) buffer Result { uint values[]; };
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+
+    ivec2 transmittanceSize = imageSize(transmittanceLut);
+    ivec2 multiScatteringSize = imageSize(multiScatteringLut);
+    uint transmittanceCount = uint(transmittanceSize.x * transmittanceSize.y);
+
+    if (all(lessThan(coord, transmittanceSize))) {
+        vec4 texel = imageLoad(transmittanceLut, coord);
+        uint index = uint(coord.x + transmittanceSize.x * coord.y);
+        values[2u * index] = packHalf2x16(texel.rg);
+        values[2u * index + 1u] = packHalf2x16(texel.ba);
+    }
+
+    if (all(lessThan(coord, multiScatteringSize))) {
+        vec4 texel = imageLoad(multiScatteringLut, coord);
+        uint index = uint(coord.x + multiScatteringSize.x * coord.y);
+        values[2u * (transmittanceCount + index)] = packHalf2x16(texel.rg);
+        values[2u * (transmittanceCount + index) + 1u] = packHalf2x16(texel.ba);
+    }
+}

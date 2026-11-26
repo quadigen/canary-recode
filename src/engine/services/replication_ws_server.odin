@@ -7,8 +7,12 @@ import "core:net"
 import "core:strings"
 
 WS_HANDSHAKE_MAGIC :: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-WS_MAX_MESSAGE :: 4 * 1024 * 1024
+WS_MAX_MESSAGE :: 1024 * 1024 + 5
+WS_MAX_SEND_QUEUE :: 8 * 1024 * 1024
 WS_MAX_HANDSHAKE :: 16 * 1024
+WS_MAX_CONNECTIONS :: 128
+WS_HANDSHAKE_TIMEOUT_MS :: 5000
+WS_MAX_FRAME_BUFFER :: WS_MAX_MESSAGE + 14
 WS_OP_CONTINUATION :: 0x0
 WS_OP_TEXT :: 0x1
 WS_OP_BINARY :: 0x2
@@ -52,8 +56,14 @@ replication_ws_pump :: proc(host: ^Replication_Transport_Host) {
 				}
 				break
 			}
+			if len(host.ws_connections) >= WS_MAX_CONNECTIONS {
+				net.close(client)
+				continue
+			}
 			net.set_blocking(client, false)
 			conn := new(Replication_Ws_Connection)
+			conn.host = host
+			conn.connected_at_ms = transport_time_get()
 			conn.socket = client
 			peer := new(Replication_Transport_Peer)
 			peer.kind = .WebSocket
@@ -62,8 +72,14 @@ replication_ws_pump :: proc(host: ^Replication_Transport_Host) {
 			append(&host.ws_connections, conn)
 		}
 	}
+	now_ms := transport_time_get()
 	for conn in host.ws_connections {
 		if conn.closing {continue}
+		if !conn.handshake_done &&
+		   transmute(i32)(now_ms - conn.connected_at_ms) >= WS_HANDSHAKE_TIMEOUT_MS {
+			replication_ws_begin_close(host, conn)
+			continue
+		}
 		replication_ws_read(host, conn)
 	}
 }
@@ -77,6 +93,7 @@ replication_ws_reap :: proc(host: ^Replication_Transport_Host) {
 		free(conn.peer)
 		delete(conn.read_buffer)
 		delete(conn.write_buffer)
+		delete(conn.fragment)
 		free(conn)
 		ordered_remove(&host.ws_connections, index)
 	}
@@ -86,7 +103,18 @@ replication_ws_read :: proc(host: ^Replication_Transport_Host, conn: ^Replicatio
 	buffer: [8192]u8
 	for {
 		count, err := net.recv_tcp(conn.socket, buffer[:])
-		if count > 0 {append(&conn.read_buffer, ..buffer[:count])}
+		if count > 0 {
+			limit := WS_MAX_FRAME_BUFFER if conn.handshake_done else WS_MAX_HANDSHAKE
+			if count > limit - len(conn.read_buffer) {
+				replication_ws_begin_close(host, conn)
+				return
+			}
+			append(&conn.read_buffer, ..buffer[:count])
+			if !conn.handshake_done {replication_ws_try_handshake(host, conn)}
+			if conn.closing {return}
+			if conn.handshake_done {replication_ws_process_frames(host, conn)}
+			if conn.closing {return}
+		}
 		if err != nil {
 			if err == .Would_Block {return}
 			replication_ws_begin_close(host, conn)
@@ -98,11 +126,6 @@ replication_ws_read :: proc(host: ^Replication_Transport_Host, conn: ^Replicatio
 		}
 		if count < len(buffer) {break}
 	}
-	if !conn.handshake_done {
-		replication_ws_try_handshake(host, conn)
-		return
-	}
-	replication_ws_process_frames(host, conn)
 }
 
 replication_ws_try_handshake :: proc(
@@ -116,6 +139,13 @@ replication_ws_try_handshake :: proc(
 			fmt.eprintln("[WebSocket] closing a connection whose handshake never completed")
 			replication_ws_begin_close(host, conn)
 		}
+		return
+	}
+	if header_end + 4 > WS_MAX_HANDSHAKE ||
+	   !strings.has_prefix(text, "GET ") ||
+	   !strings.equal_fold(replication_ws_header_value(text, "upgrade"), "websocket") ||
+	   replication_ws_header_value(text, "sec-websocket-version") != "13" {
+		replication_ws_begin_close(host, conn)
 		return
 	}
 	key := replication_ws_header_value(text, "sec-websocket-key")
@@ -223,16 +253,39 @@ replication_ws_process_frames :: proc(
 			replication_ws_begin_close(host, conn)
 			return
 		case WS_OP_PING:
+			if len(payload) + 14 > WS_MAX_SEND_QUEUE - len(conn.write_buffer) {
+				replication_ws_begin_close(host, conn)
+				return
+			}
 			replication_ws_enqueue(conn, WS_OP_PONG, payload)
 		case WS_OP_PONG:
 
-		case WS_OP_TEXT, WS_OP_BINARY, WS_OP_CONTINUATION:
-			if opcode != WS_OP_CONTINUATION {conn.fragment_opcode = opcode}
+		case WS_OP_BINARY:
+			if conn.fragment_opcode != 0 {
+				replication_ws_begin_close(host, conn)
+				return
+			}
+			if fin {
+				replication_ws_deliver(host, conn, payload)
+			} else {
+				conn.fragment_opcode = WS_OP_BINARY
+				append(&conn.fragment, ..payload)
+			}
+		case WS_OP_CONTINUATION:
+			if conn.fragment_opcode != WS_OP_BINARY ||
+			   !replication_ws_fragment_fits(len(conn.fragment), len(payload)) {
+				replication_ws_begin_close(host, conn)
+				return
+			}
 			append(&conn.fragment, ..payload)
 			if fin {
 				replication_ws_deliver(host, conn, conn.fragment[:])
 				clear(&conn.fragment)
+				conn.fragment_opcode = 0
 			}
+		case WS_OP_TEXT:
+			replication_ws_begin_close(host, conn)
+			return
 		case:
 			replication_ws_consume(conn, total)
 			fmt.eprintln("[WebSocket] closing a connection that sent an unknown opcode")
@@ -241,6 +294,15 @@ replication_ws_process_frames :: proc(
 		}
 		replication_ws_consume(conn, total)
 	}
+}
+
+replication_ws_fragment_fits :: proc(current, added: int) -> bool {
+	return(
+		current >= 0 &&
+		added >= 0 &&
+		current <= WS_MAX_MESSAGE &&
+		added <= WS_MAX_MESSAGE - current \
+	)
 }
 
 replication_ws_consume :: proc(conn: ^Replication_Ws_Connection, total: int) {
@@ -282,6 +344,7 @@ replication_ws_parse_frame :: proc(
 	fin = (b0 & 0x80) != 0
 	opcode = b0 & 0x0F
 	masked := (b1 & 0x80) != 0
+	if !masked || (b0 & 0x70) != 0 {return 0, false, nil, 0, .Error}
 	length := u64(b1 & 0x7F)
 	offset := 2
 
@@ -296,7 +359,9 @@ replication_ws_parse_frame :: proc(
 		for i in 0 ..< 8 {length = (length << 8) | u64(data[offset + i])}
 		offset += 8
 	}
-	if length > WS_MAX_MESSAGE {return 0, false, nil, 0, .Error}
+	if length > WS_MAX_MESSAGE || (opcode & 0x08) != 0 && (!fin || length > 125) {
+		return 0, false, nil, 0, .Error
+	}
 
 	mask: [4]u8
 	if masked {
@@ -333,18 +398,18 @@ replication_ws_enqueue :: proc(conn: ^Replication_Ws_Connection, opcode: u8, pay
 }
 
 replication_ws_send :: proc(peer: ^Replication_Transport_Peer, data: []u8) -> bool {
-	if peer == nil || peer.ws == nil {return false}
-	if peer.ws.closing {return false}
+	if peer == nil ||
+	   peer.ws == nil ||
+	   peer.ws.closing ||
+	   len(data) > WS_MAX_MESSAGE ||
+	   len(data) + 14 > WS_MAX_SEND_QUEUE - len(peer.ws.write_buffer) {return false}
 	replication_ws_enqueue(peer.ws, WS_OP_BINARY, data)
 	return true
 }
 
 replication_ws_close :: proc(peer: ^Replication_Transport_Peer) {
-	if peer == nil || peer.ws == nil {return}
-	if peer.ws.closing {return}
-	peer.ws.closing = true
-	replication_ws_enqueue(peer.ws, WS_OP_CLOSE, nil)
-	replication_ws_flush_connection(peer.ws)
+	if peer == nil || peer.ws == nil || peer.ws.host == nil {return}
+	replication_ws_begin_close(peer.ws.host, peer.ws)
 }
 
 replication_ws_flush :: proc(host: ^Replication_Transport_Host) {

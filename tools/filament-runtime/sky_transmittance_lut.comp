@@ -1,0 +1,57 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_sky_atmosphere.glsl"
+
+// Port of the transmittance LUT generation from WickedEngine/shaders/skyAtmosphere_transmittanceLutCS.hlsl.
+// One texel stores exp(-opticalDepth) for a view height and view zenith angle pair.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, std140) uniform AtmosphereParameters {
+    vec4 radii;            // (bottomRadius, topRadius, rayleighDensityExpScale, mieDensityExpScale)
+    vec4 rayleigh;         // (rayleighScattering rgb, unused)
+    vec4 mieScattering;    // (mieScattering rgb, unused)
+    vec4 mieExtinction;    // (mieExtinction rgb, unused)
+    vec4 absorption;       // (absorptionExtinction rgb, absorptionDensity0LayerWidth)
+    vec4 absorptionTerms;  // (layer0 constant, layer0 linear, layer1 constant, layer1 linear)
+    vec4 groundAlbedo;     // unused here, shared layout with the multi-scattering generator
+    vec4 lut;              // (sampleCount, unused, unused, unused)
+} atmosphere;
+
+layout(set = 0, binding = 1, rgba16f) uniform image2D transmittanceLut;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(transmittanceLut);
+    if (any(greaterThanEqual(coord, size))) {
+        return;
+    }
+
+    KineAtmosphereParameters parameters = KineAtmosphereParameters(
+            atmosphere.radii.x, atmosphere.radii.y, atmosphere.radii.z, atmosphere.radii.w,
+            atmosphere.rayleigh.rgb, atmosphere.mieScattering.rgb, atmosphere.mieExtinction.rgb,
+            atmosphere.absorption.rgb, vec3(0.0), atmosphere.absorption.w,
+            atmosphere.absorptionTerms.x, atmosphere.absorptionTerms.y,
+            atmosphere.absorptionTerms.z, atmosphere.absorptionTerms.w);
+
+    // Wicked samples the LUT at pixel centres.
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+    float viewHeight;
+    float viewZenithCosAngle;
+    kineUvToLutTransmittanceParams(parameters.bottomRadius, parameters.topRadius, uv, viewHeight,
+            viewZenithCosAngle);
+
+    vec3 worldPosition = vec3(0.0, 0.0, viewHeight);
+    vec3 worldDirection = vec3(0.0, sqrt(max(0.0, 1.0 - viewZenithCosAngle * viewZenithCosAngle)),
+            viewZenithCosAngle);
+
+    float tMax = kineRaySphereFar(worldPosition, worldDirection, parameters.topRadius);
+    const float tGround = kineRaySphereNearest(worldPosition, worldDirection,
+            parameters.bottomRadius);
+    if (tGround > 0.0) {
+        tMax = min(tMax, tGround);
+    }
+
+    const vec3 opticalDepth = kineAtmosphereOpticalDepth(parameters, worldPosition, worldDirection,
+            tMax, atmosphere.lut.x);
+    imageStore(transmittanceLut, coord, vec4(exp(-opticalDepth), 1.0));
+}

@@ -60,13 +60,33 @@ mesh_part_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^
 	return &mesh_part.object
 }
 
+MeshPart_Release_Native_Mesh :: proc(part: ^MeshPart) {
+	if part == nil {return}
+	if part.native_mesh != nil && part.native_context != nil {
+		CharacterAnimator_Invalidate_Mesh(part)
+		if part.signal_registry != nil {
+			if descriptor := Find_Class(part.signal_registry, "Animator"); descriptor != nil {
+				for o in descriptor.instances {
+					a := cast(^Animator)o
+					if a.native_mesh == part.native_mesh &&
+					   a.native_context == part.native_context {
+						Animation_Animator_Release(a)
+					}
+				}
+			}
+		}
+		Shared_Mesh_Destroy(part.native_context, part.native_mesh)
+	}
+	part.native_mesh = nil
+	part.native_context = nil
+	part.native_is_editable = false
+	MeshPart_Reset_Bone_Transforms(part)
+}
+
 mesh_part_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	mesh_part := cast(^MeshPart)object
 
-	MeshPart_Reset_Bone_Transforms(mesh_part)
-	if mesh_part.native_mesh != nil && mesh_part.native_context != nil {
-		_ = kineffi.Kine_Filament_DestroyMesh(mesh_part.native_context, mesh_part.native_mesh)
-	}
+	MeshPart_Release_Native_Mesh(mesh_part)
 	delete(mesh_part.mesh_id)
 	delete(mesh_part.native_mesh_id)
 	delete(mesh_part.texture_id)
@@ -145,8 +165,10 @@ mesh_part_set :: proc(
 		mesh_part.use_part_color = vm.ArgBoolean(L, value_index)
 
 	case "MeshId":
+		mesh_id := strings.clone(vm.ArgString(L, value_index))
+		MeshPart_Release_Native_Mesh(mesh_part)
 		delete(mesh_part.mesh_id)
-		mesh_part.mesh_id = strings.clone(vm.ArgString(L, value_index))
+		mesh_part.mesh_id = mesh_id
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = datatypes.Content{}
 		mesh_part.editable_mesh_id = 0
@@ -157,8 +179,8 @@ mesh_part_set :: proc(
 	case "MeshIndex":
 		index := vm.ArgNumber(L, value_index)
 		if index >= 0 && index <= f64(max(u32)) && mesh_part.mesh_index != u32(index) {
+			MeshPart_Release_Native_Mesh(mesh_part)
 			mesh_part.mesh_index = u32(index)
-			MeshPart_Reset_Bone_Transforms(mesh_part)
 			Hierarchy_Touched()
 		}
 
@@ -166,6 +188,7 @@ mesh_part_set :: proc(
 		content := datatypes.Content_Clone(
 			datatypes.Arg_Content(L, value_index, datatype_registry),
 		)
+		MeshPart_Release_Native_Mesh(mesh_part)
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = content
 		if content.object_kind == 1 {
@@ -178,8 +201,9 @@ mesh_part_set :: proc(
 		Hierarchy_Touched()
 
 	case "TextureId", "TextureID":
+		texture_id := strings.clone(vm.ArgString(L, value_index))
 		delete(mesh_part.texture_id)
-		mesh_part.texture_id = strings.clone(vm.ArgString(L, value_index))
+		mesh_part.texture_id = texture_id
 
 	case "CollisionFidelity":
 		if enum_registry == nil {return false}
@@ -219,6 +243,7 @@ mesh_part_namecall :: proc(
 		return 1, true
 	case "SetMeshContent":
 		content := datatypes.Content_Clone(datatypes.Arg_Content(L, 2, datatype_registry))
+		MeshPart_Release_Native_Mesh(mesh_part)
 		delete(mesh_part.mesh_content.uri)
 		mesh_part.mesh_content = content
 		if content.object_kind == 1 {

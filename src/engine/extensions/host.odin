@@ -607,11 +607,11 @@ register_class :: proc(record: ^Extension_Record, desc: ^KNE_Class_Desc) -> stri
 	if desc == nil {
 		return strings.clone("null class description")
 	}
-	if desc.size < u32(size_of(KNE_Class_Desc)) {
+	if desc.size < u32(offset_of(KNE_Class_Desc, step_batch)) {
 		return fmt.aprintf(
 			"kne_class_desc.size is %d bytes, this engine needs at least %d",
 			desc.size,
-			size_of(KNE_Class_Desc),
+			offset_of(KNE_Class_Desc, step_batch),
 		)
 	}
 
@@ -652,7 +652,9 @@ register_class :: proc(record: ^Extension_Record, desc: ^KNE_Class_Desc) -> stri
 	registration := new(Class_Registration)
 	registration.extension = record
 	registration.name = strings.clone(name)
-	registration.desc = desc^
+	extension_minor: u32
+	if record.desc != nil {extension_minor = record.desc.abi_minor}
+	registration.desc = kne_class_desc_copy(desc, extension_minor)
 	registration.is_service = is_service
 	registration.properties = parse_member_list(desc.properties)
 	registration.methods = parse_member_list(desc.methods)
@@ -1467,4 +1469,14 @@ kne_datatypes_get_color3 :: proc "c" (ext: KNE_Extension, L: KNE_VM, index: i32)
 	}
 	color := datatypes.Arg_Color3(state, int(index), registry)
 	return KNE_Color3{color.R, color.G, color.B}
+}
+
+@(private)
+kne_class_desc_copy :: proc(desc: ^KNE_Class_Desc, extension_minor: u32) -> KNE_Class_Desc {
+	result: KNE_Class_Desc
+	if desc == nil || desc.size < u32(offset_of(KNE_Class_Desc, step_batch)) {return result}
+	mem.copy_non_overlapping(&result, desc, int(offset_of(KNE_Class_Desc, step_batch)))
+	if desc.size >= u32(size_of(KNE_Class_Desc)) &&
+	   extension_minor >= 2 {result.step_batch = desc.step_batch}
+	return result
 }

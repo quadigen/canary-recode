@@ -1,0 +1,70 @@
+---
+title: ProfilerService
+description: Measure frame timing, rendering workload, Luau execution and garbage collection.
+---
+
+ProfilerService provides measurements from the local engine runtime. Use it to diagnose frame-time spikes and script workload rather than guessing which subsystem is slow.
+
+```lua
+local profiler = game:GetService("ProfilerService")
+local stats = profiler:GetFrameStats(false)
+
+print(stats.fps, stats.frameMs)
+if stats.gpuFrameValid then
+    print(stats.gpuFrameMs)
+end
+```
+
+The graphical profiler overlay is available by pressing F2 in a graphical runtime. Measurements apply to the process running the script, not every connected client or server.
+
+## Properties
+
+All are read-only.
+
+| Property | Type | Meaning |
+| --- | --- | --- |
+| Enabled | boolean | Profiler enabled state. |
+| Paused | boolean | Capture paused state. |
+| CollectionEnabled | boolean | Frame collection enabled state. |
+| TrackingEnabled | boolean | Luau thread tracking enabled state. |
+| FrameCount | number | Number of retained frames. |
+| FrameTime | number | Frame duration in milliseconds. |
+| FPS | number | Frames per second derived from average frame duration. |
+
+## Measurements
+
+| Signature | Result |
+| --- | --- |
+| `GetFrameStats(includeHistory: boolean?): table` | Frame, GPU and renderer metrics. Includes history by default and enables collection when history is requested. |
+| `GetFrameTimes(count: number?): {number}` | Recent frame durations in milliseconds, oldest to newest. |
+| `GetFrameRecord(index: number?): table?` | A recorded frame, or nil if unavailable. Index 1 is the most recent. |
+| `GetZoneHistory(name: string, count: number?): {number}` | Total time spent in the named zone per frame, oldest to newest. |
+| `GetZoneStats(name: string): table` | Aggregate statistics for a named zone. |
+| `GetObjectStats(): table` | Object count and per-class breakdown. |
+| `GetGCStats(): table` | Last garbage collection measurements. |
+| `GetThreads(): {table}` | Tracked threads associated with the caller's runtime. |
+| `GetThreadStats(): table` | Aggregate Luau thread and allocation metrics. |
+| `GetThreadHistory(index: number?): table?` | Historical thread data; index 1 is the most recent. |
+| `GetScripts(): {table}` | Script-level CPU and allocation measurements. |
+
+The history queries enable frame collection. Record indices default to 1 and out-of-range indices return nil. History counts default to 120 and are clamped to 1–512 frames.
+
+Frame stats include frameMs, fps, gpuFrameValid, gpuFrameMs, displayRefreshHz, renderScale, effectiveShadowMapSize, viewportRenders and worldRenderFrames. Renderer-specific renderPasses and renderBatches tables may be absent. If history is requested, history and zones are present.
+
+A frame record contains index, frameMs, fps, gcMs, gcMaxStepMs, gcSteps and zones. Each zone includes name, color, ms and startMs. Zone statistics contain name, count, frames, totalMs, lastMs, minMs, maxMs and avgMs. GetObjectStats returns total and classes, an array of name/count records. GetGCStats returns enabled, totalMs, maxStepMs and steps.
+
+Thread rows report Id, Name, Status, CpuMs, TotalCpuMs, Resumes, AllocatedBytes, FreedBytes, LiveBytes and frame-specific counters. Script rows aggregate these measurements by script name. Tracking and frame history can add overhead; avoid repeatedly requesting large tables in performance-sensitive loops.
+
+## Capture controls
+
+| Signature | Behavior |
+| --- | --- |
+| `SetPaused(paused: boolean): ()` | Pauses or resumes capture. |
+| `Pause(): ()` | Pauses capture. |
+| `Resume(): ()` | Resumes capture. |
+| `SetTrackingEnabled(enabled: boolean): ()` | Toggles thread tracking. |
+| `SetGCProfilingEnabled(enabled: boolean): boolean` | Returns whether the GC profiling operation succeeds. |
+| `SetEnabled(enabled: boolean): ()` | Toggles profiler; requires Internals. |
+| `SetCollectionEnabled(enabled: boolean): ()` | Controls frame collection; requires Internals. Collection remains active when the profiler is enabled. |
+
+GetService and FindService also expose service lookup by name. Prefer the DataModel's service lookup in ordinary scripts.

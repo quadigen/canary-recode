@@ -1,0 +1,81 @@
+---
+title: CharacterPhysicsSolver
+description: Add procedural foot placement, balance and contact reactions to a rigged character.
+---
+
+`CharacterPhysicsSolver` is an experimental component of [CharacterController](/docs/CharacterController). Use it to make a character's feet follow uneven ground, swing its arms as it walks and react to nearby surfaces or impacts.
+
+The controller still handles movement and collisions. The solver adjusts the visual skeleton and can add corrections on top of an animation played by an Animator.
+
+## Getting started
+
+Start with a character that has a skinned `MeshPart` welded to its root part. The example assumes the rig is named XBot and runs from a character script.
+
+```lua
+local character = script.Parent
+local controller = character:WaitForChild("CharacterController")
+local solver = controller:WaitForChild("CharacterPhysicsSolver")
+
+solver.RigMeshName = "XBot"
+solver.PoseBlend = 1
+solver.FootIKEnabled = true
+solver.Enabled = true
+```
+
+The controller creates the solver disabled by default. Use `RigMeshName` to select a rig by name or assign a MeshPart directly to `RigMesh`. A rig needs recognizable leg and foot bones; a missing leg skeleton reports `MissingLegBones`.
+
+## Properties
+
+All properties in this table are read-write.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Enabled` | boolean | false | Enables procedural posing. |
+| `RigMeshName` | string | "" | Saved name of the rig to use. Changing it clears the previous rig selection. |
+| `RigMesh` | MeshPart? | nil | Selected mesh, or nil. Assigning a mesh also updates its name; other object types raise an error. |
+| `FootIKEnabled` | boolean | true | Adjusts foot placement to the ground. |
+| `HandIKEnabled` | boolean | true | Allows hands to brace against nearby surfaces. |
+| `ArmSwingEnabled` | boolean | true | Adds arm swing during locomotion. |
+| `BalanceEnabled` | boolean | true | Adjusts body posture for support and movement. |
+| `HeadStabilizationEnabled` | boolean | true | Compensates for torso lean at the neck and head. |
+| `PoseBlend` | number | 1 | Weight of procedural corrections (0–1). |
+| `StrideLength` | number | 1.6 | Step threshold scale (0.1–12), adapted to the rig. |
+| `FootLift` | number | 0.5 | Height of the swinging foot (0–4). |
+| `StepDuration` | number | 0.26 | Reference step duration in seconds (0.08–2). |
+| `BalanceStrength` | number | 0.65 | Strength of balance corrections (0–1). |
+| `ContactReach` | number | 1.3 | Reach for hand contact (0–5). |
+| `ReactionStrength` | number | 0.65 | Strength of impact reactions (0–2). |
+
+Numeric settings are bounded to the ranges shown. Step timing adapts to movement speed and leg length, so `StepDuration` isn't a fixed duration at every speed.
+
+## Read-only diagnostics
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `Status` | string | Current solver status. |
+| `IsReady` | boolean | Whether the rig is ready to pose. |
+| `IsGrounded` | boolean | Whether the character is grounded. |
+| `GroundNormal` | Vector3 | Normal of the ground contact. |
+| `HorizontalSpeed` | number | Horizontal travel speed. |
+| `SolveCount` | number | Number of pose solves. |
+| `LeftFootTarget` | Vector3 | Current left foot target. |
+| `RightFootTarget` | Vector3 | Current right foot target. |
+| `LeftHandTarget` | Vector3 | Current left hand target. |
+| `RightHandTarget` | Vector3 | Current right hand target. |
+| `HandContactCount` | number | Number of active hand contacts. |
+| `CenterOfMass` | Vector3 | Estimated center of mass. |
+| `SupportCenter` | Vector3 | Center of the current support region. |
+| `HasSupport` | boolean | Whether the solver has support. |
+| `ImpactCompression` | number | Current landing or impact compression. |
+
+If your character doesn't pose, inspect `Status` and `IsReady`. Check that the selected mesh has loaded and that its skeleton contains the expected leg bones.
+
+## Using animations and accessories
+
+You can lower `PoseBlend` to blend procedural corrections with authored animation. Set it to zero to remove the procedural influence.
+
+For a weapon or accessory that should follow a moving bone, use a `BoneAttachment` under the rig. Its `WorldCFrame` follows the named bone, but you'll still need to position or constrain the accessory to that frame.
+
+## Limitations
+
+The solver provides visual foot placement and balance, not a physically articulated ragdoll. Individual bones don't collide with the world as separate bodies. Climbing, vaulting, crouch locomotion and automatic ragdoll recovery aren't provided.

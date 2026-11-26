@@ -9,30 +9,49 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
-#include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <vector>
 
 struct KineVulkanFrameSlot {
-    // acquire: PRESENT -> COLOR_ATTACHMENT transition for one frame
-    // handoff: Skia -> Filament memory barrier
-    // present: COLOR_ATTACHMENT -> PRESENT transition and final submission
+
+
     VkCommandBuffer acquire = VK_NULL_HANDLE;
     VkCommandBuffer handoff = VK_NULL_HANDLE;
     VkCommandBuffer present = VK_NULL_HANDLE;
+    VkCommandBuffer overlayTiming = VK_NULL_HANDLE;
+    VkCommandBuffer renderComplete = VK_NULL_HANDLE;
     VkFence finished = VK_NULL_HANDLE;
+    VkSemaphore lateAcquire = VK_NULL_HANDLE;
+    VkSemaphore copyReady = VK_NULL_HANDLE;
+    VkSemaphore copyReturned = VK_NULL_HANDLE;
+    bool copyReturnPending = false;
+    VkFence lateAcquireFence = VK_NULL_HANDLE;
+    bool lateAcquirePending = false;
+    bool inFlight = false;
+    VkQueryPool timing = VK_NULL_HANDLE;
+    uint64_t timingSerial = 0;
+    bool timingHandoff = false;
+    bool timingOverlay = false;
+    VkImageLayout acquireRecordedLayout = VK_IMAGE_LAYOUT_MAX_ENUM;
+    bool presentRecorded = false;
+};
+
+struct KineVulkanAcquireSlot {
+
+
+    VkSemaphore ready = VK_NULL_HANDLE;
+    VkFence consumed = VK_NULL_HANDLE;
+    VkFence prefetched = VK_NULL_HANDLE;
+    bool prefetchPending = false;
     bool inFlight = false;
 };
 
 struct KineVulkanFrame {
-    // Two submission slots per swapchain image. While the GPU still executes a
-    // slot's commands, the CPU records the next frame into the other slot
-    // instead of blocking in BeginFrame.
+
+
     static constexpr uint32_t SlotCount = 2;
     KineVulkanFrameSlot slots[SlotCount];
     uint32_t nextSlot = 0;
@@ -40,15 +59,40 @@ struct KineVulkanFrame {
     KineSkiaSurface* overlay = nullptr;
 };
 
+struct KinePresentJob {
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkSemaphore semaphore = VK_NULL_HANDLE;
+    uint32_t image = UINT32_MAX;
+};
+
 struct KineVulkanCompositor {
     PFN_vkGetInstanceProcAddr getInstanceProcAddr = nullptr;
     PFN_vkGetDeviceProcAddr getDeviceProcAddr = nullptr;
 
+    SDL_WindowID windowId = 0;
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkQueue graphicsQueue = VK_NULL_HANDLE;
+    VkQueue presentQueue = VK_NULL_HANDLE;
+    bool sameFamilyCopyQueue = false;
+    KineVulkanWsiBackend wsiBackend{};
+    KineVulkanSwapchainBackend swapchainBackend{};
+    bool nativeSwapchain = false;
+    bool offscreen = false;
+    uint32_t nextRenderImage = 0;
+    std::vector<VkImage> renderImages;
+    std::vector<VkDeviceMemory> renderMemory;
+    std::vector<VkImageLayout> renderLayouts;
+    bool prefetchEnabled = false;
+    bool overlapPresent = false;
+    uint32_t minimumImageCount = UINT32_MAX;
+    uint32_t prefetchedImage = UINT32_MAX;
+    uint32_t prefetchedSlot = UINT32_MAX;
+    uint64_t prefetchHits = 0;
+    uint64_t prefetchMisses = 0;
+    uint64_t presentWaitNs = 0;
     uint32_t graphicsQueueFamilyIndex = UINT32_MAX;
     uint32_t graphicsQueueCount = 0;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -57,28 +101,36 @@ struct KineVulkanCompositor {
     VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
     VkExtent2D swapchainExtent = {};
     std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainImageViews;
     std::vector<VkImageLayout> swapchainImageLayouts;
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkFence acquireFence = VK_NULL_HANDLE;
+    std::vector<KineVulkanAcquireSlot> acquireSlots;
+    uint32_t nextAcquireSlot = 0;
+    bool gpuAcquire = true;
     std::vector<KineVulkanFrame> frames;
     KineVulkanFrameSlot* activeSlot = nullptr;
+    uint32_t timestampBits = 0;
+    double timestampPeriod = 0;
+    uint64_t timingSerial = 0;
+    uint64_t latestTimingSerial = 0;
+    uint64_t latestTimingNs = 0;
+    uint64_t latestBaseNs = 0;
+    uint64_t latestRenderNs = 0;
+    bool latestStageValid = false;
+    bool detailedTiming = false;
+    bool latestOverlayValid = false;
+    uint64_t latestFilamentNs = 0;
+    uint64_t latestOverlayNs = 0;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     uint32_t currentImageIndex = UINT32_MAX;
     KineSkiaSurface* currentSkiaSurface = nullptr;
     KineSkiaSurface* overlaySkiaSurface = nullptr;
-    bool frameActive = false;
+    void* nativeProvider = nullptr;
     bool needsResize = false;
-    bool filamentPrepared = false;
-    bool filamentPresented = false;
-    bool overlayActive = false;
     bool device_lost = false;
-    VkSemaphore filamentFinishedSemaphore = VK_NULL_HANDLE;
-    std::mutex filamentMutex;
-    std::condition_variable filamentCondition;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t apiVersion = VK_API_VERSION_1_0;
@@ -88,7 +140,55 @@ struct KineVulkanCompositor {
     std::string lastError;
     bool ownsInstance = true;
     bool ownsDevice = true;
+    KineVulkanCompositorProfileCallback frameProfile = nullptr;
+    void* frameProfileUser = nullptr;
 };
+
+static int32_t kine_vk_provider_action(KineVulkanCompositor* c, KineProviderAction action,
+    uint32_t image = UINT32_MAX, VkSemaphore semaphore = VK_NULL_HANDLE,
+    uint32_t* outImage = nullptr, uint64_t* outSemaphore = nullptr)
+{
+    if (!c || !c->nativeProvider || !c->swapchainBackend.providerAction) return 0;
+    return c->swapchainBackend.providerAction(c->nativeProvider,
+        uint32_t(action), image, (uint64_t)semaphore, outImage, outSemaphore);
+}
+
+static bool kine_vk_frame_active(KineVulkanCompositor* c)
+{
+    return kine_vk_provider_action(c, KINE_PROVIDER_ACTIVE) == 1;
+}
+
+static KineVulkanSwapchainBackend kine_vk_window_swapchain_backend(uint32_t windowId)
+{
+    KineVulkanSwapchainBackend backend{};
+    Kine_OdinCompositor_CopySwapchainBackend(windowId, &backend);
+    return backend;
+}
+
+KINE_VULKAN_COMPOSITOR_API void Kine_VulkanCompositor_SetFrameProfileCallback(
+    KineVulkanCompositor* c, KineVulkanCompositorProfileCallback callback, void* user)
+{
+    if (!c) return;
+    c->frameProfile = callback;
+    c->frameProfileUser = user;
+}
+
+struct KineVkProfileScope {
+    KineVulkanCompositorProfileCallback callback;
+    void* user;
+    const char* phase;
+    KineVkProfileScope(KineVulkanCompositor* c, const char* name)
+        : callback(c->frameProfile), user(c->frameProfileUser), phase(name) {
+        if (callback) callback(user, phase, true);
+    }
+    ~KineVkProfileScope() { if (callback) callback(user, phase, false); }
+};
+
+template<class F>
+static auto kine_vk_profile_call(KineVulkanCompositor* c, const char* phase, F&& f) -> decltype(f()) {
+    KineVkProfileScope scope(c, phase);
+    return f();
+}
 
 static bool kine_vk_has_extension(
     const std::vector<const char*>& extensions,
@@ -165,6 +265,49 @@ static T kine_vk_device_proc(KineVulkanCompositor* compositor, const char* name)
     return nullptr;
 }
 
+static bool kine_vk_handle_present_result(KineVulkanCompositor* c, VkResult result)
+{
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) return true;
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        c->needsResize = true;
+        return true;
+    }
+    if (result == VK_ERROR_DEVICE_LOST) {
+        c->device_lost = true;
+        kine_vk_set_error(c, "vkQueuePresentKHR failed: device lost");
+        return false;
+    }
+    kine_vk_set_error(c,"vkQueuePresentKHR failed");
+    return false;
+}
+
+static VkResult kine_vk_present_job(PFN_vkQueuePresentKHR present, VkQueue queue, const KinePresentJob& job)
+{
+    VkPresentInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    info.swapchainCount = 1;
+    info.pSwapchains = &job.swapchain;
+    info.pImageIndices = &job.image;
+    if (job.semaphore) {
+        info.waitSemaphoreCount = 1;
+        info.pWaitSemaphores = &job.semaphore;
+    }
+    return present(queue,&info);
+}
+
+static bool kine_vk_drain_present(KineVulkanCompositor* c)
+{
+    c->presentWaitNs = 0;
+    if (c->wsiBackend.drain) {
+        const auto result = kine_vk_profile_call(c, "Vulkan Odin Present Drain", [&] {
+            return static_cast<VkResult>(c->wsiBackend.drain(
+                c->wsiBackend.user, &c->presentWaitNs));
+        });
+        return kine_vk_handle_present_result(c, result);
+    }
+    return true;
+}
+
 static bool kine_vk_create_instance(KineVulkanCompositor* compositor)
 {
     compositor->getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
@@ -236,6 +379,16 @@ static bool kine_vk_create_instance(KineVulkanCompositor* compositor)
 
 static bool kine_vk_create_surface(KineVulkanCompositor* compositor, void* sdlWindow)
 {
+    if (compositor->swapchainBackend.createSurface) {
+        uint64_t surface = 0;
+        auto result = compositor->swapchainBackend.createSurface(sdlWindow, compositor->instance, &surface);
+        if (result != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "Odin SDL surface creation failed");
+            return false;
+        }
+        compositor->surface = (VkSurfaceKHR)surface;
+        return true;
+    }
     if (!SDL_Vulkan_CreateSurface(
             reinterpret_cast<SDL_Window*>(sdlWindow),
             compositor->instance,
@@ -258,45 +411,6 @@ static const char* kine_vk_gpu_preference_name()
     return nullptr;
 }
 
-// Optional present-mode override. FIFO (vsync) is the default; MAILBOX and
-// IMMEDIATE trade tearing/power for latency and let the engine exceed the
-// display refresh rate.
-static VkPresentModeKHR kine_vk_requested_present_mode()
-{
-    const char* value = std::getenv("KINE_VULKAN_PRESENT");
-    if (!value || value[0] == '\0') {
-        return VK_PRESENT_MODE_FIFO_KHR;
-    }
-    if (std::strcmp(value, "fifo") == 0 || std::strcmp(value, "vsync") == 0 ||
-        std::strcmp(value, "on") == 0) {
-        return VK_PRESENT_MODE_FIFO_KHR;
-    }
-    if (std::strcmp(value, "mailbox") == 0 || std::strcmp(value, "triple") == 0) {
-        return VK_PRESENT_MODE_MAILBOX_KHR;
-    }
-    if (std::strcmp(value, "immediate") == 0 || std::strcmp(value, "off") == 0 ||
-        std::strcmp(value, "nosync") == 0) {
-        return VK_PRESENT_MODE_IMMEDIATE_KHR;
-    }
-    if (std::strcmp(value, "relaxed") == 0 || std::strcmp(value, "fifo-relaxed") == 0) {
-        return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-    }
-    // "auto" picks the best supported vsync mode during swapchain creation.
-    if (std::strcmp(value, "auto") == 0) {
-        return VK_PRESENT_MODE_FIFO_KHR;
-    }
-    fprintf(stderr,
-        "[Kine] ignoring invalid KINE_VULKAN_PRESENT='%s' "
-        "(expected fifo, mailbox, immediate, fifo-relaxed, or auto)\n",
-        value);
-    return VK_PRESENT_MODE_FIFO_KHR;
-}
-
-static bool kine_vk_present_mode_auto()
-{
-    const char* value = std::getenv("KINE_VULKAN_PRESENT");
-    return value && std::strcmp(value, "auto") == 0;
-}
 
 static const char* kine_vk_present_mode_name(VkPresentModeKHR mode)
 {
@@ -557,11 +671,7 @@ static bool kine_vk_create_device(KineVulkanCompositor* compositor)
         extensions.push_back(portabilitySubset);
     }
 
-    // Ray, the path tracer embedded in kine_filament_shim, builds descriptor set
-    // layouts with VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT on whatever device
-    // it is handed, so this device has to enable descriptor indexing for it.
-    // Filament and Skia do not use these features; they are only enabled when
-    // the physical device advertises them.
+
     VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
     bool enableDescriptorIndexing = false;
     constexpr const char* descriptorIndexing = "VK_EXT_descriptor_indexing";
@@ -620,8 +730,25 @@ static bool kine_vk_create_device(KineVulkanCompositor* compositor)
     return true;
 }
 
+static KineVulkanFrameDispatch kine_vk_frame_dispatch(KineVulkanCompositor* c);
+
 static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
 {
+    if (compositor->swapchainBackend.createRoot) {
+        auto d = kine_vk_frame_dispatch(compositor);
+        uint64_t pool = 0, fence = 0;
+        auto result = compositor->swapchainBackend.createRoot(&d, compositor->graphicsQueueFamilyIndex, &pool, &fence);
+        if (result != VK_SUCCESS) {
+            if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            kine_vk_set_error(compositor, "Odin root resources failed");
+            return false;
+        }
+        compositor->commandPool = (VkCommandPool)pool;
+        compositor->acquireFence = (VkFence)fence;
+        const char* override = std::getenv("KINE_VULKAN_ACQUIRE");
+        compositor->gpuAcquire = !override || std::strcmp(override, "cpu") != 0;
+        return true;
+    }
     auto vkCreateCommandPool = kine_vk_device_proc<PFN_vkCreateCommandPool>(
         compositor, "vkCreateCommandPool");
     auto vkCreateFence = kine_vk_device_proc<PFN_vkCreateFence>(
@@ -647,10 +774,162 @@ static bool kine_vk_create_frame_resources(KineVulkanCompositor* compositor)
         return false;
     }
 
+    const char* acquireOverride = std::getenv("KINE_VULKAN_ACQUIRE");
+    compositor->gpuAcquire = !acquireOverride ||
+        std::strcmp(acquireOverride, "cpu") != 0;
     return true;
 }
 
-static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command);
+static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command, VkQueryPool timing);
+
+static void kine_vk_init_timing(KineVulkanCompositor* c)
+{
+    c->timestampBits = 0;
+    c->latestTimingSerial = 0;
+    c->latestTimingNs = 0;
+    c->latestStageValid = false;
+    c->latestOverlayValid = false;
+    const char* detail = std::getenv("KINE_VULKAN_GPU_TIMING_DETAIL");
+    c->detailedTiming = detail && std::strcmp(detail, "1") == 0;
+    const char* enabled = std::getenv("KINE_VULKAN_GPU_TIMING");
+#if defined(__ANDROID__)
+    if (!enabled || std::strcmp(enabled, "1") != 0) return;
+#else
+    if (enabled && std::strcmp(enabled, "0") == 0) return;
+#endif
+    auto getFamilies = kine_vk_instance_proc<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(c,"vkGetPhysicalDeviceQueueFamilyProperties");
+    auto getProperties = kine_vk_instance_proc<PFN_vkGetPhysicalDeviceProperties>(c,"vkGetPhysicalDeviceProperties");
+    if (!getFamilies || !getProperties) return;
+    uint32_t count = 0;
+    getFamilies(c->physicalDevice,&count,nullptr);
+    if (c->graphicsQueueFamilyIndex >= count) return;
+    std::vector<VkQueueFamilyProperties> families(count);
+    getFamilies(c->physicalDevice,&count,families.data());
+    VkPhysicalDeviceProperties properties{};
+    getProperties(c->physicalDevice,&properties);
+    c->timestampBits = families[c->graphicsQueueFamilyIndex].timestampValidBits;
+    c->timestampPeriod = properties.limits.timestampPeriod;
+}
+
+static void kine_vk_collect_timing(KineVulkanCompositor* c, KineVulkanFrameSlot& slot)
+{
+    if (!slot.timing || !slot.timingSerial || slot.timingSerial <= c->latestTimingSerial) return;
+    auto getResults = kine_vk_device_proc<PFN_vkGetQueryPoolResults>(c,"vkGetQueryPoolResults");
+    if (!getResults) return;
+    uint64_t values[2]{};
+    if (getResults(c->device,slot.timing,0,2,sizeof(values),values,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) return;
+    uint64_t ticks = values[1]-values[0];
+    if (c->timestampBits < 64) ticks &= (uint64_t(1)<<c->timestampBits)-1;
+    c->latestTimingSerial = slot.timingSerial;
+    c->latestTimingNs = uint64_t(double(ticks)*c->timestampPeriod);
+    c->latestStageValid = false;
+    c->latestOverlayValid = false;
+    uint64_t middle = 0;
+    if (slot.timingHandoff && getResults(c->device, slot.timing, 2, 1, sizeof(middle),
+            &middle, sizeof(middle), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+        uint64_t baseTicks = middle - values[0];
+        if (c->timestampBits < 64) baseTicks &= (uint64_t(1)<<c->timestampBits)-1;
+        if (baseTicks <= ticks) {
+            c->latestBaseNs = uint64_t(double(baseTicks)*c->timestampPeriod);
+            c->latestRenderNs = uint64_t(double(ticks-baseTicks)*c->timestampPeriod);
+            c->latestStageValid = true;
+            uint64_t overlay = 0;
+            if (slot.timingOverlay && getResults(c->device, slot.timing, 3, 1,
+                    sizeof(overlay), &overlay, sizeof(overlay), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                uint64_t overlayTicks = overlay - values[0];
+                if (c->timestampBits < 64) overlayTicks &= (uint64_t(1)<<c->timestampBits)-1;
+                if (overlayTicks >= baseTicks && overlayTicks <= ticks) {
+                    c->latestFilamentNs = uint64_t(double(overlayTicks-baseTicks)*c->timestampPeriod);
+                    c->latestOverlayNs = uint64_t(double(ticks-overlayTicks)*c->timestampPeriod);
+                    c->latestOverlayValid = true;
+                }
+            }
+        }
+    }
+}
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_GetLatestQueueDetail(
+    KineVulkanCompositor* c, uint64_t* serial, uint64_t* filament, uint64_t* overlay)
+{
+    if (!c || !serial || !filament || !overlay || !c->latestOverlayValid) return 0;
+    *serial = c->latestTimingSerial;
+    *filament = c->latestFilamentNs;
+    *overlay = c->latestOverlayNs;
+    return 1;
+}
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_GetLatestQueueStages(
+    KineVulkanCompositor* c, uint64_t* serial, uint64_t* base, uint64_t* render)
+{
+    if (!c || !serial || !base || !render || !c->latestStageValid) return 0;
+    *serial = c->latestTimingSerial;
+    *base = c->latestBaseNs;
+    *render = c->latestRenderNs;
+    return 1;
+}
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_GetLatestQueueTiming(KineVulkanCompositor* c, uint64_t* serial, uint64_t* ns)
+{
+    if (!c || !serial || !ns || !c->timestampBits || !c->latestTimingSerial) return 0;
+    *serial = c->latestTimingSerial;
+    *ns = c->latestTimingNs;
+    return 1;
+}
+
+static KineVulkanFrameDispatch kine_vk_frame_dispatch(KineVulkanCompositor* c)
+{
+    return {c->device, reinterpret_cast<void*>(c->getDeviceProcAddr), (uint64_t)c->commandPool,
+        uint32_t(c->timestampBits != 0), uint32_t(c->detailedTiming), uint32_t(c->offscreen)};
+}
+
+static VkResult kine_vk_retire_fence(KineVulkanCompositor* c, VkFence fence, bool wait)
+{
+    if (c->swapchainBackend.retireFence) {
+        auto d = kine_vk_frame_dispatch(c);
+        return static_cast<VkResult>(c->swapchainBackend.retireFence(&d, (uint64_t)fence, uint32_t(wait)));
+    }
+    if (wait) {
+        auto proc = kine_vk_device_proc<PFN_vkWaitForFences>(c, "vkWaitForFences");
+        return proc ? proc(c->device, 1, &fence, VK_TRUE, UINT64_MAX) : VK_ERROR_INITIALIZATION_FAILED;
+    }
+    auto proc = kine_vk_device_proc<PFN_vkGetFenceStatus>(c, "vkGetFenceStatus");
+    return proc ? proc(c->device, fence) : VK_ERROR_INITIALIZATION_FAILED;
+}
+
+static VkResult kine_vk_submit(KineVulkanCompositor* c, VkCommandBuffer command,
+    VkSemaphore wait, VkSemaphore signal, VkFence fence)
+{
+    if (c->swapchainBackend.submit) {
+        auto dispatch = kine_vk_frame_dispatch(c);
+        return static_cast<VkResult>(c->swapchainBackend.submit(&dispatch, c->graphicsQueue,
+            command, (uint64_t)wait, (uint64_t)signal, (uint64_t)fence));
+    }
+    auto submit = kine_vk_device_proc<PFN_vkQueueSubmit>(c, "vkQueueSubmit");
+    if (!submit) return VK_ERROR_INITIALIZATION_FAILED;
+    VkSubmitInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    if (wait) { info.waitSemaphoreCount = 1; info.pWaitSemaphores = &wait; info.pWaitDstStageMask = &stage; }
+    if (signal) { info.signalSemaphoreCount = 1; info.pSignalSemaphores = &signal; }
+    if (command) { info.commandBufferCount = 1; info.pCommandBuffers = &command; }
+    return submit(c->graphicsQueue, 1, &info, fence);
+}
+
+static const std::vector<VkImage>& kine_vk_render_images(const KineVulkanCompositor* c)
+{
+    return c->offscreen ? c->renderImages : c->swapchainImages;
+}
+
+static std::vector<VkImageLayout>& kine_vk_render_layouts(KineVulkanCompositor* c)
+{
+    return c->offscreen ? c->renderLayouts : c->swapchainImageLayouts;
+}
+
+static VkImageUsageFlags kine_vk_render_usage(const KineVulkanCompositor* c)
+{
+    return c->offscreen ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT : c->swapchainUsage;
+}
 
 static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
 {
@@ -666,10 +945,50 @@ static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
+    kine_vk_init_timing(compositor);
+    auto createQueryPool = kine_vk_device_proc<PFN_vkCreateQueryPool>(compositor,"vkCreateQueryPool");
     compositor->frames.clear();
-    compositor->frames.resize(compositor->swapchainImages.size());
+    compositor->frames.resize(kine_vk_render_images(compositor).size());
     for (auto& frame : compositor->frames) {
         for (auto& slot : frame.slots) {
+            if (compositor->offscreen && &slot != &frame.slots[0]) continue;
+            if (compositor->swapchainBackend.createFrame) {
+                auto dispatch = kine_vk_frame_dispatch(compositor);
+                KineVulkanFrameResources resources{};
+                auto result = compositor->swapchainBackend.createFrame(&dispatch, &resources);
+                if (result != VK_SUCCESS) {
+                    if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                    kine_vk_set_error(compositor, "Odin frame resource allocation failed");
+                    return false;
+                }
+                slot.acquire = (VkCommandBuffer)resources.commands[0];
+                slot.handoff = (VkCommandBuffer)resources.commands[1];
+                slot.present = (VkCommandBuffer)resources.commands[2];
+                slot.overlayTiming = (VkCommandBuffer)resources.commands[3];
+                slot.renderComplete = (VkCommandBuffer)resources.commands[4];
+                slot.finished = (VkFence)resources.fence;
+                slot.timing = (VkQueryPool)resources.query;
+                if (compositor->offscreen) {
+                    uint64_t semaphore = 0, fence = 0;
+                    if (compositor->swapchainBackend.createSync(&dispatch, &semaphore, &fence, nullptr) != VK_SUCCESS) {
+                        kine_vk_set_error(compositor, "Odin late acquire semaphore allocation failed");
+                        return false;
+                    }
+                    slot.lateAcquire = (VkSemaphore)semaphore;
+                    slot.lateAcquireFence = (VkFence)fence;
+                    uint64_t ready = 0, returned = 0;
+                    auto syncResult = compositor->swapchainBackend.createSync(&dispatch, &ready, nullptr, nullptr);
+                    slot.copyReady = (VkSemaphore)ready;
+                    if (syncResult == VK_SUCCESS) syncResult = compositor->swapchainBackend.createSync(&dispatch, &returned, nullptr, nullptr);
+                    slot.copyReturned = (VkSemaphore)returned;
+                    if (syncResult != VK_SUCCESS) {
+                        if (syncResult == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                        kine_vk_set_error(compositor, "Odin copy queue synchronization allocation failed");
+                        return false;
+                    }
+                }
+                continue;
+            }
             VkCommandBuffer buffers[3] = {};
             VkCommandBufferAllocateInfo bufferInfo{};
             bufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -683,10 +1002,32 @@ static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
             slot.acquire = buffers[0];
             slot.handoff = buffers[1];
             slot.present = buffers[2];
-            // This memory barrier has no image- or frame-dependent operands.
-            // Record once per slot; its final fence gates reuse.
+            if (compositor->timestampBits && createQueryPool) {
+                VkQueryPoolCreateInfo queryInfo{};
+                queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+                queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+                queryInfo.queryCount = 4;
+                if (createQueryPool(compositor->device,&queryInfo,nullptr,&slot.timing) != VK_SUCCESS)
+                    slot.timing = VK_NULL_HANDLE;
+            }
+
+            if (slot.timing && compositor->detailedTiming) {
+                auto begin = kine_vk_device_proc<PFN_vkBeginCommandBuffer>(compositor, "vkBeginCommandBuffer");
+                auto end = kine_vk_device_proc<PFN_vkEndCommandBuffer>(compositor, "vkEndCommandBuffer");
+                auto stamp = kine_vk_device_proc<PFN_vkCmdWriteTimestamp>(compositor, "vkCmdWriteTimestamp");
+                bufferInfo.commandBufferCount = 1;
+                if (!begin || !end || !stamp ||
+                    vkAllocateCommandBuffers(compositor->device, &bufferInfo, &slot.overlayTiming) != VK_SUCCESS) return false;
+                VkCommandBufferBeginInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                if (begin(slot.overlayTiming, &info) != VK_SUCCESS) return false;
+                stamp(slot.overlayTiming, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, slot.timing, 3);
+                if (end(slot.overlayTiming) != VK_SUCCESS) return false;
+            }
+
+
             if (vkCreateFence(compositor->device, &fenceInfo, nullptr, &slot.finished) != VK_SUCCESS ||
-                !kine_vk_record_skia_handoff(compositor, slot.handoff)) {
+                !kine_vk_record_skia_handoff(compositor, slot.handoff, slot.timing)) {
                 kine_vk_set_error(compositor, "failed creating swapchain image frame resources");
                 return false;
             }
@@ -695,14 +1036,28 @@ static bool kine_vk_create_image_frames(KineVulkanCompositor* compositor)
     return true;
 }
 
-static void kine_vk_release_frame_surfaces(KineVulkanFrame& frame)
+static bool kine_vk_flush_surface(KineVulkanCompositor* c, KineSkiaSurface* surface)
+{
+    if (c->swapchainBackend.flushSurface) return c->swapchainBackend.flushSurface(surface) != 0;
+    return Kine_Skia_Surface_FlushVulkanLayout(surface, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) != 0;
+}
+
+static bool kine_vk_wait_surface(KineVulkanCompositor* c, KineSkiaSurface* surface, VkSemaphore semaphore)
+{
+    if (c->swapchainBackend.waitSurface) return c->swapchainBackend.waitSurface(surface, semaphore) != 0;
+    return Kine_Skia_Surface_WaitVulkanSemaphore(surface, semaphore) != 0;
+}
+
+static void kine_vk_release_frame_surfaces(KineVulkanCompositor* c, KineVulkanFrame& frame)
 {
     if (frame.base) {
-        Kine_Skia_Surface_Destroy(frame.base);
+        if (c->swapchainBackend.releaseSurface) c->swapchainBackend.releaseSurface(frame.base);
+        else Kine_Skia_Surface_Destroy(frame.base);
         frame.base = nullptr;
     }
     if (frame.overlay) {
-        Kine_Skia_Surface_Destroy(frame.overlay);
+        if (c->swapchainBackend.releaseSurface) c->swapchainBackend.releaseSurface(frame.overlay);
+        else Kine_Skia_Surface_Destroy(frame.overlay);
         frame.overlay = nullptr;
     }
 }
@@ -757,6 +1112,14 @@ static bool kine_vk_choose_depth_format(KineVulkanCompositor* compositor, VkForm
 
 static void kine_vk_destroy_depth_attachment(KineVulkanCompositor* compositor)
 {
+    if (compositor->swapchainBackend.destroyColor) {
+        auto d = kine_vk_frame_dispatch(compositor);
+        compositor->swapchainBackend.destroyColor(&d, (uint64_t)compositor->depthImage, (uint64_t)compositor->depthImageMemory);
+        compositor->depthImage = VK_NULL_HANDLE;
+        compositor->depthImageMemory = VK_NULL_HANDLE;
+        compositor->depthFormat = VK_FORMAT_UNDEFINED;
+        return;
+    }
     if (compositor->depthImage) {
         if (auto vkDestroyImage = kine_vk_device_proc<PFN_vkDestroyImage>(
                 compositor, "vkDestroyImage")) {
@@ -776,6 +1139,23 @@ static void kine_vk_destroy_depth_attachment(KineVulkanCompositor* compositor)
 
 static bool kine_vk_create_depth_attachment(KineVulkanCompositor* compositor)
 {
+    if (compositor->swapchainBackend.createDepth) {
+        auto d = kine_vk_frame_dispatch(compositor);
+        uint64_t image = 0, memory = 0;
+        uint32_t format = 0;
+        auto result = compositor->swapchainBackend.createDepth(&d, compositor->instance,
+            compositor->physicalDevice, reinterpret_cast<void*>(compositor->getInstanceProcAddr),
+            compositor->width, compositor->height, &image, &memory, &format);
+        if (result != VK_SUCCESS) {
+            if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            kine_vk_set_error(compositor, "Odin depth attachment allocation failed");
+            return false;
+        }
+        compositor->depthImage = (VkImage)image;
+        compositor->depthImageMemory = (VkDeviceMemory)memory;
+        compositor->depthFormat = (VkFormat)format;
+        return true;
+    }
     auto vkCreateImage = kine_vk_device_proc<PFN_vkCreateImage>(
         compositor, "vkCreateImage");
     auto vkGetImageMemoryRequirements = kine_vk_device_proc<PFN_vkGetImageMemoryRequirements>(
@@ -887,189 +1267,69 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
         compositor, "vkCreateSwapchainKHR");
     auto vkGetSwapchainImagesKHR = kine_vk_device_proc<PFN_vkGetSwapchainImagesKHR>(
         compositor, "vkGetSwapchainImagesKHR");
-    auto vkCreateImageView = kine_vk_device_proc<PFN_vkCreateImageView>(
-        compositor, "vkCreateImageView");
     auto vkCreateSemaphore = kine_vk_device_proc<PFN_vkCreateSemaphore>(
         compositor, "vkCreateSemaphore");
+    auto vkCreateFence = kine_vk_device_proc<PFN_vkCreateFence>(
+        compositor, "vkCreateFence");
     if (!vkGetPhysicalDeviceSurfaceCapabilitiesKHR || !vkGetPhysicalDeviceSurfaceFormatsKHR ||
         !vkGetPhysicalDeviceSurfacePresentModesKHR || !vkCreateSwapchainKHR ||
-        !vkGetSwapchainImagesKHR || !vkCreateImageView || !vkCreateSemaphore) {
+        !vkGetSwapchainImagesKHR || !vkCreateSemaphore ||
+        !vkCreateFence) {
         kine_vk_set_error(compositor, "required swapchain Vulkan procs unavailable");
         return false;
     }
 
-    VkSurfaceCapabilitiesKHR capabilities{};
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-            compositor->physicalDevice, compositor->surface, &capabilities) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed");
-        return false;
-    }
-
-    uint32_t formatCount = 0;
-    if (vkGetPhysicalDeviceSurfaceFormatsKHR(
-            compositor->physicalDevice, compositor->surface, &formatCount, nullptr) != VK_SUCCESS ||
-        formatCount == 0) {
-        kine_vk_set_error(compositor, "no Vulkan surface formats found");
-        return false;
-    }
-
-    std::vector<VkSurfaceFormatKHR> formats(formatCount);
-    if (vkGetPhysicalDeviceSurfaceFormatsKHR(
-            compositor->physicalDevice, compositor->surface, &formatCount, formats.data()) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkGetPhysicalDeviceSurfaceFormatsKHR failed");
-        return false;
-    }
-
-    // Ganesh does not support VK_FORMAT_B8G8R8A8_SRGB as a render target.
-    // Prefer the usual BGRA UNORM surface, regardless of the driver's order.
-    const VkFormat supportedFormats[] = {
-        VK_FORMAT_B8G8R8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_SRGB,
-    };
     VkSurfaceFormatKHR chosenFormat{};
-    bool foundFormat = false;
-    for (VkFormat supportedFormat : supportedFormats) {
-        for (const VkSurfaceFormatKHR& format : formats) {
-            if (format.format == supportedFormat &&
-                format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                chosenFormat = format;
-                foundFormat = true;
-                break;
+    VkExtent2D extent{};
+    uint32_t imageCount = 0;
+    VkImageUsageFlags swapchainUsage = 0;
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    compositor->nativeSwapchain = false;
+    if (compositor->swapchainBackend.create && compositor->swapchainBackend.destroy) {
+        auto destroy = kine_vk_device_proc<PFN_vkDestroySwapchainKHR>(compositor, "vkDestroySwapchainKHR");
+        if (destroy) {
+            const KineVulkanSwapchainDispatch dispatch{
+                compositor->physicalDevice, compositor->device,
+                reinterpret_cast<void*>(vkGetPhysicalDeviceSurfaceCapabilitiesKHR),
+                reinterpret_cast<void*>(vkGetPhysicalDeviceSurfaceFormatsKHR),
+                reinterpret_cast<void*>(vkGetPhysicalDeviceSurfacePresentModesKHR),
+                reinterpret_cast<void*>(vkCreateSwapchainKHR),
+                (uint64_t)compositor->surface, compositor->width, compositor->height,
+                compositor->swapchainBackend.modePolicy, compositor->swapchainBackend.imageOverride,
+            };
+            KineVulkanSwapchainResult native{};
+            const auto status = static_cast<VkResult>(compositor->swapchainBackend.create(&dispatch, &native));
+            if (status == VK_SUCCESS && native.swapchain) {
+                compositor->swapchain = (VkSwapchainKHR)native.swapchain;
+                extent = {native.width, native.height};
+                chosenFormat = {static_cast<VkFormat>(native.format), static_cast<VkColorSpaceKHR>(native.colorSpace)};
+                swapchainUsage = native.usage;
+                presentMode = static_cast<VkPresentModeKHR>(native.presentMode);
+                imageCount = native.requestedImages;
+                compositor->nativeSwapchain = true;
+                fprintf(stderr, "[Kine] Odin swapchain created\n");
+                fprintf(stderr, "[Kine] selected Skia-compatible swapchain format=%u\n", native.format);
+                fprintf(stderr, "[Kine] swapchain present mode=%s (images=%u)\n",
+                    kine_vk_present_mode_name(presentMode), imageCount);
+            } else {
+                if (native.swapchain) {
+                    compositor->swapchainBackend.destroy(compositor->device,
+                        reinterpret_cast<void*>(destroy), native.swapchain);
+                }
+                kine_vk_set_error(compositor, "Odin Vulkan swapchain creation failed");
+                return false;
             }
-        }
-        if (foundFormat) {
-            break;
+        } else {
+            kine_vk_set_error(compositor, "Vulkan swapchain destruction unavailable");
+            return false;
         }
     }
-    if (!foundFormat) {
-        kine_vk_set_error(compositor, "no Skia-renderable Vulkan surface format found");
-        for (const VkSurfaceFormatKHR& format : formats) {
-            fprintf(stderr, "[Kine] unsupported surface format=%u colorSpace=%u\n",
-                static_cast<unsigned>(format.format),
-                static_cast<unsigned>(format.colorSpace));
-        }
+
+    if (!compositor->nativeSwapchain) {
+        kine_vk_set_error(compositor, "Odin compositor swapchain backend unavailable");
         return false;
-    }
-    fprintf(stderr, "[Kine] selected Skia-compatible swapchain format=%u\n",
-        static_cast<unsigned>(chosenFormat.format));
-
-    VkExtent2D extent = capabilities.currentExtent;
-    if (extent.width == UINT32_MAX) {
-        extent.width = std::clamp(
-            compositor->width,
-            capabilities.minImageExtent.width,
-            capabilities.maxImageExtent.width);
-        extent.height = std::clamp(
-            compositor->height,
-            capabilities.minImageExtent.height,
-            capabilities.maxImageExtent.height);
-    }
-
-    if (extent.width == 0 || extent.height == 0) {
-        kine_vk_set_error(compositor, "swapchain surface has no drawable extent");
-        return false;
-    }
-
-    uint32_t imageCount = capabilities.minImageCount + 1;
-    if (capabilities.maxImageCount > 0) {
-        imageCount = std::min(imageCount, capabilities.maxImageCount);
-    }
-
-    VkImageUsageFlags swapchainUsage =
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-        VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    swapchainUsage &= capabilities.supportedUsageFlags;
-    if ((swapchainUsage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
-        kine_vk_set_error(compositor, "surface does not support color-attachment swapchain images");
-        return false;
-    }
-
-    const VkCompositeAlphaFlagBitsKHR compositeAlphaCandidates[] = {
-        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
-        VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
-    };
-    VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    for (VkCompositeAlphaFlagBitsKHR candidate : compositeAlphaCandidates) {
-        if (capabilities.supportedCompositeAlpha & candidate) {
-            compositeAlpha = candidate;
-            break;
-        }
-    }
-
-    VkPresentModeKHR presentMode = kine_vk_requested_present_mode();
-    const bool autoPresent = kine_vk_present_mode_auto();
-    if (presentMode != VK_PRESENT_MODE_FIFO_KHR || autoPresent) {
-        uint32_t presentModeCount = 0;
-        std::vector<VkPresentModeKHR> presentModes;
-        if (vkGetPhysicalDeviceSurfacePresentModesKHR(
-                compositor->physicalDevice,
-                compositor->surface,
-                &presentModeCount,
-                nullptr) == VK_SUCCESS &&
-            presentModeCount > 0) {
-            presentModes.resize(presentModeCount);
-            if (vkGetPhysicalDeviceSurfacePresentModesKHR(
-                    compositor->physicalDevice,
-                    compositor->surface,
-                    &presentModeCount,
-                    presentModes.data()) != VK_SUCCESS) {
-                presentModes.clear();
-            }
-        }
-        auto supported = [&presentModes](VkPresentModeKHR mode) {
-            return std::find(presentModes.begin(), presentModes.end(), mode) !=
-                presentModes.end();
-        };
-        if (autoPresent) {
-            // Keep vsync (no tearing) but prefer mailbox when the driver has
-            // it: mailbox removes the wait-for-vblank stall without tearing.
-            presentMode = supported(VK_PRESENT_MODE_MAILBOX_KHR)
-                ? VK_PRESENT_MODE_MAILBOX_KHR
-                : VK_PRESENT_MODE_FIFO_KHR;
-        } else if (!supported(presentMode)) {
-            fprintf(stderr,
-                "[Kine] present mode '%s' is unavailable; falling back to fifo (vsync). "
-                "Supported modes:",
-                kine_vk_present_mode_name(presentMode));
-            for (VkPresentModeKHR mode : presentModes) {
-                fprintf(stderr, " %s", kine_vk_present_mode_name(mode));
-            }
-            fprintf(stderr, "\n");
-            presentMode = VK_PRESENT_MODE_FIFO_KHR;
-        }
     }
     compositor->presentMode = presentMode;
-
-    VkSwapchainCreateInfoKHR createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    createInfo.surface = compositor->surface;
-    createInfo.minImageCount = imageCount;
-    createInfo.imageFormat = chosenFormat.format;
-    createInfo.imageColorSpace = chosenFormat.colorSpace;
-    createInfo.imageExtent = extent;
-    createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = swapchainUsage;
-    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    createInfo.preTransform = capabilities.currentTransform;
-    createInfo.compositeAlpha = compositeAlpha;
-    createInfo.presentMode = presentMode;
-    createInfo.clipped = VK_TRUE;
-    createInfo.oldSwapchain = VK_NULL_HANDLE;
-
-    fprintf(stderr,
-        "[Kine] swapchain present mode=%s (images=%u)\n",
-        kine_vk_present_mode_name(presentMode),
-        static_cast<unsigned>(imageCount));
-
-    VkResult result = vkCreateSwapchainKHR(compositor->device, &createInfo, nullptr, &compositor->swapchain);
-    if (result != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkCreateSwapchainKHR failed");
-        return false;
-    }
 
     uint32_t swapchainImageCount = 0;
     if (vkGetSwapchainImagesKHR(
@@ -1089,6 +1349,12 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
         return false;
     }
 
+    VkSurfaceCapabilitiesKHR prefetchCapabilities{};
+    compositor->minimumImageCount = UINT32_MAX;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(compositor->physicalDevice,
+            compositor->surface, &prefetchCapabilities) == VK_SUCCESS) {
+        compositor->minimumImageCount = prefetchCapabilities.minImageCount;
+    }
     compositor->swapchainFormat = chosenFormat.format;
     compositor->swapchainUsage = swapchainUsage;
     compositor->swapchainExtent = extent;
@@ -1098,46 +1364,150 @@ static bool kine_vk_create_swapchain(KineVulkanCompositor* compositor)
         compositor->swapchainImages.size(),
         VK_IMAGE_LAYOUT_UNDEFINED);
 
-    // One presentation semaphore per swapchain image: reusing the semaphore
-    // for image N is only valid after image N has been re-acquired, which
-    // implies the previous present (and its wait) completed.
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
     compositor->renderFinishedSemaphores.assign(swapchainImageCount, VK_NULL_HANDLE);
     for (VkSemaphore& semaphore : compositor->renderFinishedSemaphores) {
-        if (vkCreateSemaphore(
-                compositor->device, &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS) {
-            kine_vk_set_error(compositor, "vkCreateSemaphore present failed");
+        auto dispatch = kine_vk_frame_dispatch(compositor);
+        uint64_t nativeSemaphore = 0;
+        if (compositor->swapchainBackend.createSync(&dispatch, &nativeSemaphore, nullptr, nullptr) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "Odin present synchronization allocation failed");
             return false;
         }
+        semaphore = (VkSemaphore)nativeSemaphore;
     }
 
-    compositor->swapchainImageViews.reserve(compositor->swapchainImages.size());
-    for (VkImage image : compositor->swapchainImages) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = compositor->swapchainFormat;
-        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        VkImageView imageView = VK_NULL_HANDLE;
-        if (vkCreateImageView(compositor->device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
-            kine_vk_set_error(compositor, "vkCreateImageView failed");
+    compositor->acquireSlots.resize(swapchainImageCount + 1);
+    compositor->nextAcquireSlot = 0;
+    for (auto& sync : compositor->acquireSlots) {
+        auto dispatch = kine_vk_frame_dispatch(compositor);
+        uint64_t ready = 0, consumed = 0, prefetched = 0;
+        if (compositor->swapchainBackend.createSync(&dispatch, &ready, &consumed, &prefetched) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "Odin acquire synchronization allocation failed");
             return false;
         }
-        compositor->swapchainImageViews.push_back(imageView);
+        sync.ready = (VkSemaphore)ready;
+        sync.consumed = (VkFence)consumed;
+        sync.prefetched = (VkFence)prefetched;
     }
 
-    return kine_vk_create_image_frames(compositor);
+    compositor->offscreen = compositor->swapchainBackend.offscreen &&
+        (compositor->swapchainUsage & VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    if (compositor->offscreen) {
+        auto d = kine_vk_frame_dispatch(compositor);
+        for (uint32_t i = 0; i < 3; ++i) {
+            uint64_t image = 0, memory = 0;
+            auto result = compositor->swapchainBackend.createColor(&d, compositor->instance,
+                compositor->physicalDevice, reinterpret_cast<void*>(compositor->getInstanceProcAddr),
+                compositor->width, compositor->height, uint32_t(compositor->swapchainFormat), &image, &memory);
+            if (result != VK_SUCCESS) {
+                for (size_t j = 0; j < compositor->renderImages.size(); ++j)
+                    compositor->swapchainBackend.destroyColor(&d, (uint64_t)compositor->renderImages[j], (uint64_t)compositor->renderMemory[j]);
+                compositor->renderImages.clear();
+                compositor->renderMemory.clear();
+                compositor->offscreen = false;
+                if (result == VK_ERROR_DEVICE_LOST) {compositor->device_lost = true; return false;}
+                fprintf(stderr, "[Kine] Odin offscreen allocation unavailable; using direct rendering\n");
+                break;
+            }
+            compositor->renderImages.push_back((VkImage)image);
+            compositor->renderMemory.push_back((VkDeviceMemory)memory);
+        }
+    }
+    compositor->renderLayouts.assign(compositor->renderImages.size(), VK_IMAGE_LAYOUT_UNDEFINED);
+    compositor->nextRenderImage = 0;
+    if (compositor->offscreen) fprintf(stderr, "[Kine] Odin offscreen presentation active (3 render images)\n");
+    if (!kine_vk_create_image_frames(compositor)) return false;
+    auto getProperties = kine_vk_instance_proc<PFN_vkGetPhysicalDeviceProperties>(
+        compositor, "vkGetPhysicalDeviceProperties");
+    if (getProperties) {
+        VkPhysicalDeviceProperties properties{};
+        getProperties(compositor->physicalDevice, &properties);
+        fprintf(stderr, "[Kine] active swapchain extent=%ux%u present=%s vendor=%04x device=%04x gpu=%s\n",
+            extent.width, extent.height, kine_vk_present_mode_name(presentMode),
+            properties.vendorID, properties.deviceID, properties.deviceName);
+    }
+    return true;
+}
+
+static bool kine_vk_finish_prefetch(KineVulkanCompositor* c)
+{
+    c->prefetchedImage = UINT32_MAX;
+    c->prefetchedSlot = UINT32_MAX;
+    if (c->device_lost) return false;
+    auto wait = kine_vk_device_proc<PFN_vkWaitForFences>(c, "vkWaitForFences");
+    if (!wait) return false;
+    for (auto& frame : c->frames) {
+        for (auto& slot : frame.slots) {
+            if (!slot.lateAcquirePending) continue;
+            auto status = wait(c->device, 1, &slot.lateAcquireFence, VK_TRUE, UINT64_MAX);
+            if (status == VK_ERROR_DEVICE_LOST) c->device_lost = true;
+            if (status != VK_SUCCESS) return false;
+            slot.lateAcquirePending = false;
+        }
+    }
+    for (auto& slot : c->acquireSlots) {
+        if (!slot.prefetchPending) continue;
+        const auto status = wait(c->device, 1, &slot.prefetched, VK_TRUE, UINT64_MAX);
+        if (status == VK_ERROR_DEVICE_LOST) c->device_lost = true;
+        if (status != VK_SUCCESS) return false;
+        slot.prefetchPending = false;
+    }
+    return true;
+}
+
+static void kine_vk_prefetch_next(KineVulkanCompositor* c)
+{
+    if (c->offscreen || !c->prefetchEnabled || !c->wsiBackend.asynchronous || !c->gpuAcquire ||
+        c->needsResize || c->prefetchedImage != UINT32_MAX ||
+        c->swapchainImages.size() <= c->minimumImageCount || c->acquireSlots.empty()) return;
+
+    auto getStatus = kine_vk_device_proc<PFN_vkGetFenceStatus>(c, "vkGetFenceStatus");
+    auto reset = kine_vk_device_proc<PFN_vkResetFences>(c, "vkResetFences");
+    if (!getStatus || !reset) {
+        c->prefetchEnabled = false;
+        return;
+    }
+
+    uint32_t selected = UINT32_MAX;
+    for (uint32_t i = 0; i < c->acquireSlots.size(); ++i) {
+        const uint32_t index = (c->nextAcquireSlot + i) % c->acquireSlots.size();
+        auto& slot = c->acquireSlots[index];
+        if (slot.inFlight && getStatus(c->device, slot.consumed) != VK_SUCCESS) continue;
+        if (slot.prefetchPending && getStatus(c->device, slot.prefetched) != VK_SUCCESS) continue;
+        if (reset(c->device, 1, &slot.consumed) != VK_SUCCESS ||
+            reset(c->device, 1, &slot.prefetched) != VK_SUCCESS) {
+            c->prefetchEnabled = false;
+            return;
+        }
+        slot.inFlight = false;
+        slot.prefetchPending = false;
+        selected = index;
+        break;
+    }
+    if (selected == UINT32_MAX) {
+        ++c->prefetchMisses;
+        return;
+    }
+
+    auto& slot = c->acquireSlots[selected];
+    uint32_t image = UINT32_MAX;
+    const auto status = kine_vk_profile_call(c, "Vulkan WSI Prefetch", [&] {
+        return static_cast<VkResult>(c->wsiBackend.acquire(c->wsiBackend.user,
+            (uint64_t)c->swapchain, 0, (uint64_t)slot.ready, (uint64_t)slot.prefetched, &image));
+    });
+    if (status == VK_SUCCESS || status == VK_SUBOPTIMAL_KHR) {
+        slot.prefetchPending = true;
+        c->prefetchedImage = image;
+        c->prefetchedSlot = selected;
+        c->nextAcquireSlot = (selected + 1) % c->acquireSlots.size();
+        ++c->prefetchHits;
+    } else {
+        ++c->prefetchMisses;
+        if (status == VK_ERROR_OUT_OF_DATE_KHR) c->needsResize = true;
+        if (status == VK_ERROR_DEVICE_LOST) c->device_lost = true;
+        if (status != VK_NOT_READY && status != VK_TIMEOUT &&
+            status != VK_ERROR_OUT_OF_DATE_KHR) c->prefetchEnabled = false;
+    }
 }
 
 static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* compositor)
@@ -1149,9 +1519,23 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(compositor, "vkDestroyFence");
     auto vkFreeCommandBuffers = kine_vk_device_proc<PFN_vkFreeCommandBuffers>(
         compositor, "vkFreeCommandBuffers");
+    auto destroyQueryPool = kine_vk_device_proc<PFN_vkDestroyQueryPool>(compositor,"vkDestroyQueryPool");
     for (auto& frame : compositor->frames) {
-        kine_vk_release_frame_surfaces(frame);
+        kine_vk_release_frame_surfaces(compositor, frame);
         for (auto& slot : frame.slots) {
+            if (compositor->swapchainBackend.destroyFrame) {
+                auto dispatch = kine_vk_frame_dispatch(compositor);
+                KineVulkanFrameResources resources{{slot.acquire, slot.handoff, slot.present, slot.overlayTiming, slot.renderComplete},
+                    (uint64_t)slot.finished, (uint64_t)slot.timing};
+                if (slot.lateAcquire) compositor->swapchainBackend.destroySync(&dispatch, (uint64_t)slot.lateAcquire, (uint64_t)slot.lateAcquireFence, 0);
+                if (slot.copyReady) compositor->swapchainBackend.destroySync(&dispatch, (uint64_t)slot.copyReady, 0, 0);
+                if (slot.copyReturned) compositor->swapchainBackend.destroySync(&dispatch, (uint64_t)slot.copyReturned, 0, 0);
+                compositor->swapchainBackend.destroyFrame(&dispatch, &resources);
+                slot = {};
+                continue;
+            }
+            if (slot.timing && destroyQueryPool) destroyQueryPool(compositor->device,slot.timing,nullptr);
+            slot.timing = VK_NULL_HANDLE;
             if (slot.finished && vkDestroyFence) {
                 vkDestroyFence(compositor->device, slot.finished, nullptr);
                 slot.finished = VK_NULL_HANDLE;
@@ -1160,6 +1544,9 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
             if (buffers[0] && vkFreeCommandBuffers) {
                 vkFreeCommandBuffers(compositor->device, compositor->commandPool, 3, buffers);
             }
+            if (slot.overlayTiming && vkFreeCommandBuffers)
+                vkFreeCommandBuffers(compositor->device, compositor->commandPool, 1, &slot.overlayTiming);
+            slot.overlayTiming = VK_NULL_HANDLE;
             slot.acquire = VK_NULL_HANDLE;
             slot.handoff = VK_NULL_HANDLE;
             slot.present = VK_NULL_HANDLE;
@@ -1169,26 +1556,54 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     compositor->activeSlot = nullptr;
     Kine_Skia_Vulkan_PurgeResources(compositor->skiaContext);
 
-    if (auto vkDestroyImageView = kine_vk_device_proc<PFN_vkDestroyImageView>(
-            compositor, "vkDestroyImageView")) {
-        for (VkImageView imageView : compositor->swapchainImageViews) {
-            if (imageView) {
-                vkDestroyImageView(compositor->device, imageView, nullptr);
-            }
-        }
+    if (compositor->swapchainBackend.destroyColor) {
+        auto dispatch = kine_vk_frame_dispatch(compositor);
+        for (size_t i = 0; i < compositor->renderImages.size(); ++i)
+            compositor->swapchainBackend.destroyColor(&dispatch, (uint64_t)compositor->renderImages[i], (uint64_t)compositor->renderMemory[i]);
     }
-    compositor->swapchainImageViews.clear();
+    compositor->renderImages.clear();
+    compositor->renderMemory.clear();
+    compositor->renderLayouts.clear();
+    compositor->offscreen = false;
     compositor->swapchainImages.clear();
     compositor->swapchainImageLayouts.clear();
 
     kine_vk_destroy_depth_attachment(compositor);
+
+    if (!compositor->acquireSlots.empty()) {
+        auto vkDestroySemaphore = kine_vk_device_proc<PFN_vkDestroySemaphore>(
+            compositor, "vkDestroySemaphore");
+        auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(
+            compositor, "vkDestroyFence");
+        for (auto& sync : compositor->acquireSlots) {
+            if (compositor->swapchainBackend.destroySync) {
+                auto dispatch = kine_vk_frame_dispatch(compositor);
+                compositor->swapchainBackend.destroySync(&dispatch, (uint64_t)sync.ready, (uint64_t)sync.consumed, (uint64_t)sync.prefetched);
+                continue;
+            }
+            if (sync.ready && vkDestroySemaphore) {
+                vkDestroySemaphore(compositor->device, sync.ready, nullptr);
+            }
+            if (sync.consumed && vkDestroyFence) {
+                vkDestroyFence(compositor->device, sync.consumed, nullptr);
+            }
+            if (sync.prefetched && vkDestroyFence) {
+                vkDestroyFence(compositor->device, sync.prefetched, nullptr);
+            }
+        }
+        compositor->acquireSlots.clear();
+        compositor->nextAcquireSlot = 0;
+    }
 
     if (!compositor->renderFinishedSemaphores.empty()) {
         if (auto vkDestroySemaphore = kine_vk_device_proc<PFN_vkDestroySemaphore>(
                 compositor, "vkDestroySemaphore")) {
             for (VkSemaphore semaphore : compositor->renderFinishedSemaphores) {
                 if (semaphore) {
-                    vkDestroySemaphore(compositor->device, semaphore, nullptr);
+                    if (compositor->swapchainBackend.destroySync) {
+                        auto dispatch = kine_vk_frame_dispatch(compositor);
+                        compositor->swapchainBackend.destroySync(&dispatch, (uint64_t)semaphore, 0, 0);
+                    } else vkDestroySemaphore(compositor->device, semaphore, nullptr);
                 }
             }
         }
@@ -1198,9 +1613,15 @@ static void kine_vk_destroy_swapchain_attachments(KineVulkanCompositor* composit
     if (compositor->swapchain) {
         if (auto vkDestroySwapchainKHR = kine_vk_device_proc<PFN_vkDestroySwapchainKHR>(
                 compositor, "vkDestroySwapchainKHR")) {
-            vkDestroySwapchainKHR(compositor->device, compositor->swapchain, nullptr);
+            if (compositor->nativeSwapchain && compositor->swapchainBackend.destroy) {
+                compositor->swapchainBackend.destroy(compositor->device,
+                    reinterpret_cast<void*>(vkDestroySwapchainKHR), (uint64_t)compositor->swapchain);
+            } else {
+                vkDestroySwapchainKHR(compositor->device, compositor->swapchain, nullptr);
+            }
         }
         compositor->swapchain = VK_NULL_HANDLE;
+        compositor->nativeSwapchain = false;
     }
     compositor->swapchainFormat = VK_FORMAT_UNDEFINED;
     compositor->swapchainUsage = 0;
@@ -1216,30 +1637,14 @@ static bool kine_vk_transition_current_image(
     VkSemaphore signalSemaphore = VK_NULL_HANDLE,
     VkFence fence = VK_NULL_HANDLE)
 {
-    if (oldLayout == newLayout) {
-        // Callers reset the fence before asking for a transition. If no
-        // transition is needed, still signal it so the next frame cannot wait
-        // on a fence that will never be submitted.
-        if (fence != VK_NULL_HANDLE || signalSemaphore != VK_NULL_HANDLE) {
-            auto vkQueueSubmit = kine_vk_device_proc<PFN_vkQueueSubmit>(
-                compositor, "vkQueueSubmit");
-            if (!vkQueueSubmit) {
-                kine_vk_set_error(compositor, "vkQueueSubmit unavailable");
-                return false;
-            }
-            VkSubmitInfo submitInfo{};
-            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-            if (waitSemaphore) {
-                submitInfo.waitSemaphoreCount = 1;
-                submitInfo.pWaitSemaphores = &waitSemaphore;
-                submitInfo.pWaitDstStageMask = &waitStage;
-            }
-            if (signalSemaphore) {
-                submitInfo.signalSemaphoreCount = 1;
-                submitInfo.pSignalSemaphores = &signalSemaphore;
-            }
-            if (vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, fence) != VK_SUCCESS) {
+    const bool timed = compositor->activeSlot && compositor->activeSlot->timing;
+    if (oldLayout == newLayout && !timed) {
+
+
+        if (fence != VK_NULL_HANDLE || signalSemaphore != VK_NULL_HANDLE || waitSemaphore != VK_NULL_HANDLE) {
+            auto result = kine_vk_submit(compositor, VK_NULL_HANDLE, waitSemaphore, signalSemaphore, fence);
+            if (result != VK_SUCCESS) {
+                if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
                 kine_vk_set_error(compositor, "vkQueueSubmit failed");
                 return false;
             }
@@ -1259,98 +1664,123 @@ static bool kine_vk_transition_current_image(
         compositor, "vkQueueSubmit");
     if (!vkResetCommandBuffer || !vkBeginCommandBuffer || !vkCmdPipelineBarrier ||
         !vkEndCommandBuffer || !vkQueueSubmit ||
-        !commandBuffer || compositor->currentImageIndex >= compositor->swapchainImages.size()) {
+        !commandBuffer || compositor->currentImageIndex >= kine_vk_render_images(compositor).size()) {
         kine_vk_set_error(compositor, "required image-transition Vulkan procs unavailable");
         return false;
     }
 
-    if (vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkResetCommandBuffer failed");
-        return false;
+    auto* slot = compositor->activeSlot;
+    const bool isPresent = newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    const bool reusable = slot && (isPresent ?
+        (commandBuffer == slot->present && oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) :
+        (commandBuffer == slot->acquire && newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+    const bool recorded = reusable && (isPresent ? slot->presentRecorded : slot->acquireRecordedLayout == oldLayout);
+    if (!recorded && compositor->swapchainBackend.recordTransition) {
+        auto dispatch = kine_vk_frame_dispatch(compositor);
+        KineVulkanTransition transition{commandBuffer,
+            (uint64_t)kine_vk_render_images(compositor)[compositor->currentImageIndex],
+            timed ? (uint64_t)slot->timing : 0, uint32_t(oldLayout), uint32_t(newLayout), uint32_t(reusable)};
+        auto result = compositor->swapchainBackend.recordTransition(&dispatch, &transition);
+        if (result != VK_SUCCESS) {
+            if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            kine_vk_set_error(compositor, "Odin image transition recording failed");
+            return false;
+        }
+        if (reusable) {
+            if (isPresent) slot->presentRecorded = true;
+            else slot->acquireRecordedLayout = oldLayout;
+        }
+    } else if (!recorded) {
+        if (vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "vkResetCommandBuffer failed");
+            return false;
+        }
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = reusable ? 0 : VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "vkBeginCommandBuffer failed");
+            return false;
+        }
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = oldLayout;
+        barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = kine_vk_render_images(compositor)[compositor->currentImageIndex];
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
+        if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
+            barrier.srcAccessMask = 0;
+            srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+
+
+            barrier.srcAccessMask =
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+            srcStage =
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+            barrier.srcAccessMask = 0;
+            srcStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        }
+
+        if (newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+            barrier.dstAccessMask = 0;
+            dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        } else if (newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
+
+        if (oldLayout != newLayout) vkCmdPipelineBarrier(
+            commandBuffer,
+            srcStage,
+            dstStage,
+            0,
+            0,
+            nullptr,
+            0,
+            nullptr,
+            1,
+            &barrier);
+
+        if (timed) {
+            auto writeTimestamp = kine_vk_device_proc<PFN_vkCmdWriteTimestamp>(compositor,"vkCmdWriteTimestamp");
+            auto resetQueries = kine_vk_device_proc<PFN_vkCmdResetQueryPool>(compositor,"vkCmdResetQueryPool");
+            auto pool = compositor->activeSlot->timing;
+            if (writeTimestamp && resetQueries) {
+                if (newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+                    writeTimestamp(commandBuffer,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,pool,1);
+                } else {
+                    resetQueries(commandBuffer,pool,0,4);
+                    writeTimestamp(commandBuffer,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,pool,0);
+                }
+            }
+        }
+
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            kine_vk_set_error(compositor, "vkEndCommandBuffer failed");
+            return false;
+        }
+
+        if (reusable) {
+            if (isPresent) slot->presentRecorded = true;
+            else slot->acquireRecordedLayout = oldLayout;
+        }
     }
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkBeginCommandBuffer failed");
-        return false;
-    }
-
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = oldLayout;
-    barrier.newLayout = newLayout;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = compositor->swapchainImages[compositor->currentImageIndex];
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-
-    VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
-        barrier.srcAccessMask = 0;
-        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-        // Skia may copy the swapchain image (for example when a snapshot is
-        // taken), which reads it at the COPY stage. The transition must wait
-        // for that read before it can rewrite the image (SYNC-HAZARD).
-        barrier.srcAccessMask =
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-        srcStage =
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
-    } else if (oldLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
-        barrier.srcAccessMask = 0;
-        srcStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    }
-
-    if (newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
-        barrier.dstAccessMask = 0;
-        dstStage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    } else if (newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    }
-
-    vkCmdPipelineBarrier(
-        commandBuffer,
-        srcStage,
-        dstStage,
-        0,
-        0,
-        nullptr,
-        0,
-        nullptr,
-        1,
-        &barrier);
-
-    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkEndCommandBuffer failed");
-        return false;
-    }
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    // With no overlay pass, this also orders the next Skia pass after any
-    // Filament writes to textures shared between frames.
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    if (waitSemaphore) {
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &waitSemaphore;
-        submitInfo.pWaitDstStageMask = &waitStage;
-    }
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-    if (signalSemaphore) {
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &signalSemaphore;
-    }
-    VkResult submit_result = vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, fence);
+    VkResult submit_result = kine_vk_submit(compositor, commandBuffer, waitSemaphore, signalSemaphore, fence);
     if (submit_result != VK_SUCCESS) {
         if (submit_result == VK_ERROR_DEVICE_LOST) {
             compositor->device_lost = true;
@@ -1361,7 +1791,7 @@ static bool kine_vk_transition_current_image(
         return false;
     }
 
-    compositor->swapchainImageLayouts[compositor->currentImageIndex] = newLayout;
+    kine_vk_render_layouts(compositor)[compositor->currentImageIndex] = newLayout;
     return true;
 }
 
@@ -1373,32 +1803,20 @@ static bool kine_vk_wait_for_filament(
         return true;
     }
 
-    // Enqueue an empty submission whose only job is to wait for Filament.
-    // Queue submissions execute in order, so every later Skia/transition
-    // submission on this queue is automatically ordered after Filament's work.
-    // This avoids stalling the CPU with vkQueueWaitIdle.
-    auto vkQueueSubmit = kine_vk_device_proc<PFN_vkQueueSubmit>(
-        compositor, "vkQueueSubmit");
-    if (!vkQueueSubmit) {
-        kine_vk_set_error(compositor, "vkQueueSubmit unavailable for overlay");
-        return false;
-    }
 
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &semaphore;
-    submitInfo.pWaitDstStageMask = &waitStage;
-    if (vkQueueSubmit(compositor->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS) {
+    auto* slot = compositor->activeSlot;
+    const auto result = kine_vk_submit(compositor, slot ? slot->overlayTiming : VK_NULL_HANDLE, semaphore, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    if (result != VK_SUCCESS) {
+        if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
         kine_vk_set_error(compositor,
             "failed submitting Filament-to-overlay synchronization");
         return false;
     }
+    if (slot && slot->overlayTiming) slot->timingOverlay = true;
     return true;
 }
 
-static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
+static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command, VkQueryPool timing)
 {
     auto begin = kine_vk_device_proc<PFN_vkBeginCommandBuffer>(compositor, "vkBeginCommandBuffer");
     auto barrier = kine_vk_device_proc<PFN_vkCmdPipelineBarrier>(compositor, "vkCmdPipelineBarrier");
@@ -1406,7 +1824,7 @@ static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkComm
     if (!begin || !barrier || !end) return false;
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    // Reusable recording; not ONE_TIME_SUBMIT. Slot fence prevents overlap.
+
     if (begin(command, &beginInfo) != VK_SUCCESS) return false;
     VkMemoryBarrier memory{};
     memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -1414,33 +1832,39 @@ static bool kine_vk_record_skia_handoff(KineVulkanCompositor* compositor, VkComm
     memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
         0, 1, &memory, 0, nullptr, 0, nullptr);
+    if (timing) {
+        auto timestamp = kine_vk_device_proc<PFN_vkCmdWriteTimestamp>(compositor, "vkCmdWriteTimestamp");
+        if (!timestamp) return false;
+        timestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timing, 2);
+    }
     return end(command) == VK_SUCCESS;
 }
 
 static bool kine_vk_submit_skia_handoff(KineVulkanCompositor* compositor, VkCommandBuffer command)
 {
-    auto submit = kine_vk_device_proc<PFN_vkQueueSubmit>(compositor, "vkQueueSubmit");
-    if (!submit) return false;
-    VkSubmitInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    info.commandBufferCount = 1;
-    info.pCommandBuffers = &command;
-    return submit(compositor->graphicsQueue, 1, &info, VK_NULL_HANDLE) == VK_SUCCESS;
+    const auto result = kine_vk_submit(compositor, command, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+    return result == VK_SUCCESS;
 }
 
 static KineSkiaSurface* kine_vk_create_current_skia_surface(KineVulkanCompositor* compositor)
 {
     if (!compositor || !compositor->skiaContext ||
-        compositor->currentImageIndex >= compositor->swapchainImages.size()) {
+        compositor->currentImageIndex >= kine_vk_render_images(compositor).size()) {
         return nullptr;
     }
 
+    if (compositor->swapchainBackend.wrapSurface) {
+        return static_cast<KineSkiaSurface*>(compositor->swapchainBackend.wrapSurface(
+            compositor->skiaContext, kine_vk_render_images(compositor)[compositor->currentImageIndex],
+            compositor->width, compositor->height, uint32_t(compositor->swapchainFormat), kine_vk_render_usage(compositor)));
+    }
     KineSkiaVulkanImageInfo imageInfo{};
-    imageInfo.image = compositor->swapchainImages[compositor->currentImageIndex];
+    imageInfo.image = kine_vk_render_images(compositor)[compositor->currentImageIndex];
     imageInfo.format = compositor->swapchainFormat;
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     imageInfo.imageTiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.imageUsageFlags = compositor->swapchainUsage;
+    imageInfo.imageUsageFlags = kine_vk_render_usage(compositor);
     imageInfo.sampleCount = 1;
     imageInfo.levelCount = 1;
     imageInfo.currentQueueFamily = VK_QUEUE_FAMILY_IGNORED;
@@ -1454,6 +1878,76 @@ static KineSkiaSurface* kine_vk_create_current_skia_surface(KineVulkanCompositor
 
 extern "C" {
 
+KINE_VULKAN_COMPOSITOR_API void Kine_VulkanCompositor_SetPresentQueue(KineVulkanCompositor* c, void* queue)
+{
+    if (!c || kine_vk_frame_active(c) || !queue || c->wsiBackend.present) return;
+    c->presentQueue = reinterpret_cast<VkQueue>(queue);
+    if (c->presentQueue != c->graphicsQueue) {
+        fprintf(stderr,"[Kine] dedicated Vulkan presentation queue enabled\n");
+    }
+}
+
+KINE_VULKAN_COMPOSITOR_API void Kine_VulkanCompositor_EnableCopyQueue(KineVulkanCompositor* c, uint32_t family)
+{
+    if (!c || kine_vk_frame_active(c) || c->wsiBackend.present) return;
+    c->sameFamilyCopyQueue = c->presentQueue && c->presentQueue != c->graphicsQueue && family == c->graphicsQueueFamilyIndex;
+}
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_IsOffscreen(const KineVulkanCompositor* c) { return c && c->offscreen; }
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_GetWsiDispatch(
+    KineVulkanCompositor* c, KineVulkanWsiDispatch* out)
+{
+    if (!c || !out || !c->device || kine_vk_frame_active(c)) return 0;
+    const auto acquire = kine_vk_device_proc<PFN_vkAcquireNextImageKHR>(c, "vkAcquireNextImageKHR");
+    const auto present = kine_vk_device_proc<PFN_vkQueuePresentKHR>(c, "vkQueuePresentKHR");
+    if (!acquire || !present) return 0;
+    const auto queue = c->presentQueue ? c->presentQueue : c->graphicsQueue;
+    if (!queue) return 0;
+    *out = {c->device, queue, reinterpret_cast<void*>(acquire),
+        reinterpret_cast<void*>(present), uint32_t(queue != c->graphicsQueue)};
+    return 1;
+}
+
+KINE_VULKAN_COMPOSITOR_API int Kine_VulkanCompositor_SetWsiBackend(
+    KineVulkanCompositor* c, const KineVulkanWsiBackend* backend)
+{
+    if (!c) return 0;
+    if (!backend) {
+        if (c->wsiBackend.drain) kine_vk_drain_present(c);
+        c->prefetchEnabled = false;
+        c->wsiBackend = {};
+        return 1;
+    }
+    if (kine_vk_frame_active(c) || c->wsiBackend.present ||
+        !backend->acquire || !backend->present || !backend->drain ||
+        (backend->asynchronous && (!c->presentQueue || c->presentQueue == c->graphicsQueue))) return 0;
+    c->wsiBackend = *backend;
+    c->prefetchEnabled = !c->offscreen && backend->asynchronous && c->gpuAcquire;
+    if (c->prefetchEnabled) fprintf(stderr, "[Kine] Odin WSI pre-acquisition enabled\n");
+    if (c->offscreen && c->sameFamilyCopyQueue && backend->asynchronous)
+        fprintf(stderr, "[Kine] Odin offscreen separate final-copy queue enabled\n");
+    return 1;
+}
+
+KINE_VULKAN_COMPOSITOR_API void Kine_VulkanCompositor_GetPrefetchStats(
+    const KineVulkanCompositor* c, uint64_t* hits, uint64_t* misses)
+{
+    if (hits) *hits = c ? c->prefetchHits : 0;
+    if (misses) *misses = c ? c->prefetchMisses : 0;
+}
+
+KINE_VULKAN_COMPOSITOR_API uint64_t Kine_VulkanCompositor_GetPresentWaitNs(const KineVulkanCompositor* c)
+{
+    return c ? c->presentWaitNs : 0;
+}
+
+KINE_VULKAN_COMPOSITOR_API uint32_t
+Kine_VulkanCompositor_GetSDLWindowId(const KineVulkanCompositor* compositor)
+{
+    return compositor ? compositor->windowId : 0;
+}
+
 KINE_VULKAN_COMPOSITOR_API KineVulkanCompositor*
 Kine_VulkanCompositor_CreateForSDLWindow(void* sdlWindow, int width, int height)
 {
@@ -1462,6 +1956,11 @@ Kine_VulkanCompositor_CreateForSDLWindow(void* sdlWindow, int width, int height)
     }
 
     auto* compositor = new KineVulkanCompositor();
+    compositor->windowId = SDL_GetWindowID(static_cast<SDL_Window*>(sdlWindow));
+    compositor->swapchainBackend = kine_vk_window_swapchain_backend(compositor->windowId);
+    if (!compositor->swapchainBackend.createProvider) {delete compositor; return nullptr;}
+    compositor->nativeProvider = compositor->swapchainBackend.createProvider();
+    if (!compositor->nativeProvider) {delete compositor; return nullptr;}
     compositor->width = static_cast<uint32_t>(width);
     compositor->height = static_cast<uint32_t>(height);
     compositor->ownsInstance = true;
@@ -1480,6 +1979,7 @@ Kine_VulkanCompositor_CreateForSDLWindow(void* sdlWindow, int width, int height)
         fprintf(stderr, "kine_vulkan_compositor: depth attachment unavailable, continuing without swapchain depth: %s\n",
             compositor->lastError.c_str());
         kine_vk_destroy_depth_attachment(compositor);
+        if (compositor->device_lost) return compositor;
         compositor->lastError.clear();
     }
 
@@ -1505,6 +2005,11 @@ Kine_VulkanCompositor_CreateForSDLWindowWithBackend(
     }
 
     auto* compositor = new KineVulkanCompositor();
+    compositor->windowId = SDL_GetWindowID(static_cast<SDL_Window*>(sdlWindow));
+    compositor->swapchainBackend = kine_vk_window_swapchain_backend(compositor->windowId);
+    if (!compositor->swapchainBackend.createProvider) {delete compositor; return nullptr;}
+    compositor->nativeProvider = compositor->swapchainBackend.createProvider();
+    if (!compositor->nativeProvider) {delete compositor; return nullptr;}
     compositor->width = static_cast<uint32_t>(width);
     compositor->height = static_cast<uint32_t>(height);
     compositor->ownsInstance = false;
@@ -1543,6 +2048,7 @@ Kine_VulkanCompositor_CreateForSDLWindowWithBackend(
         fprintf(stderr, "kine_vulkan_compositor: depth attachment unavailable, continuing without swapchain depth: %s\n",
             compositor->lastError.c_str());
         kine_vk_destroy_depth_attachment(compositor);
+        if (compositor->device_lost) return compositor;
         compositor->lastError.clear();
     }
 
@@ -1561,13 +2067,19 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
         return;
     }
 
+    if (compositor->wsiBackend.drain) kine_vk_drain_present(compositor);
+    if (compositor->prefetchHits || compositor->prefetchMisses) {
+        fprintf(stderr, "[Kine] Odin WSI pre-acquisition hits=%llu misses=%llu\n",
+            (unsigned long long)compositor->prefetchHits, (unsigned long long)compositor->prefetchMisses);
+    }
+    if (compositor->device) kine_vk_finish_prefetch(compositor);
     if (compositor->device) {
         if (auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(compositor, "vkDeviceWaitIdle")) {
             vkDeviceWaitIdle(compositor->device);
         }
     }
 
-    // These are aliases. The frames own their Skia surfaces.
+
     compositor->currentSkiaSurface = nullptr;
     compositor->overlaySkiaSurface = nullptr;
 
@@ -1576,7 +2088,7 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
             Kine_TerrainMc_Destroy(compositor->terrainMc);
             compositor->terrainMc = nullptr;
         }
-        if (compositor->acquireFence) {
+        if (compositor->acquireFence && !compositor->swapchainBackend.destroyRoot) {
             if (auto vkDestroyFence = kine_vk_device_proc<PFN_vkDestroyFence>(
                     compositor, "vkDestroyFence")) {
                 vkDestroyFence(compositor->device, compositor->acquireFence, nullptr);
@@ -1584,13 +2096,19 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
             compositor->acquireFence = VK_NULL_HANDLE;
         }
         for (auto& frame : compositor->frames) {
-            kine_vk_release_frame_surfaces(frame);
+            kine_vk_release_frame_surfaces(compositor, frame);
         }
         if (compositor->skiaContext) {
             Kine_Skia_Vulkan_DestroyContext(compositor->skiaContext);
             compositor->skiaContext = nullptr;
         }
         kine_vk_destroy_swapchain_attachments(compositor);
+        if (compositor->swapchainBackend.destroyRoot) {
+            auto dispatch = kine_vk_frame_dispatch(compositor);
+            compositor->swapchainBackend.destroyRoot(&dispatch, (uint64_t)compositor->commandPool, (uint64_t)compositor->acquireFence);
+            compositor->commandPool = VK_NULL_HANDLE;
+            compositor->acquireFence = VK_NULL_HANDLE;
+        }
         if (compositor->commandPool) {
             if (auto vkDestroyCommandPool = kine_vk_device_proc<PFN_vkDestroyCommandPool>(
                     compositor, "vkDestroyCommandPool")) {
@@ -1599,7 +2117,10 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
             compositor->commandPool = VK_NULL_HANDLE;
         }
         if (compositor->ownsDevice) {
-            if (auto vkDestroyDevice = kine_vk_device_proc<PFN_vkDestroyDevice>(compositor, "vkDestroyDevice")) {
+            if (compositor->swapchainBackend.destroyDevice) {
+                auto d = kine_vk_frame_dispatch(compositor);
+                compositor->swapchainBackend.destroyDevice(&d);
+            } else if (auto vkDestroyDevice = kine_vk_device_proc<PFN_vkDestroyDevice>(compositor, "vkDestroyDevice")) {
                 vkDestroyDevice(compositor->device, nullptr);
             }
         }
@@ -1607,7 +2128,9 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
     }
 
     if (compositor->surface && compositor->instance) {
-        if (auto vkDestroySurfaceKHR = kine_vk_instance_proc<PFN_vkDestroySurfaceKHR>(
+        if (compositor->swapchainBackend.destroySurface) {
+            compositor->swapchainBackend.destroySurface(compositor->instance, (uint64_t)compositor->surface);
+        } else if (auto vkDestroySurfaceKHR = kine_vk_instance_proc<PFN_vkDestroySurfaceKHR>(
                 compositor, "vkDestroySurfaceKHR")) {
             vkDestroySurfaceKHR(compositor->instance, compositor->surface, nullptr);
         }
@@ -1615,13 +2138,16 @@ Kine_VulkanCompositor_Destroy(KineVulkanCompositor* compositor)
     }
 
     if (compositor->instance && compositor->ownsInstance) {
-        if (auto vkDestroyInstance = kine_vk_instance_proc<PFN_vkDestroyInstance>(
+        if (compositor->swapchainBackend.destroyInstance) {
+            compositor->swapchainBackend.destroyInstance(compositor->instance, reinterpret_cast<void*>(compositor->getInstanceProcAddr));
+        } else if (auto vkDestroyInstance = kine_vk_instance_proc<PFN_vkDestroyInstance>(
                 compositor, "vkDestroyInstance")) {
             vkDestroyInstance(compositor->instance, nullptr);
         }
     }
     compositor->instance = VK_NULL_HANDLE;
 
+    if (compositor->nativeProvider) compositor->swapchainBackend.destroyProvider(compositor->nativeProvider);
     delete compositor;
 }
 
@@ -1631,9 +2157,10 @@ Kine_VulkanCompositor_Resize(
     int width,
     int height)
 {
-    if (!compositor || !compositor->device || width <= 0 || height <= 0) {
+    if (!compositor || !compositor->device || compositor->device_lost || width <= 0 || height <= 0) {
         return 0;
     }
+    if (!kine_vk_drain_present(compositor)) return 0;
     if (compositor->width == static_cast<uint32_t>(width) &&
         compositor->height == static_cast<uint32_t>(height) &&
         compositor->swapchain && !compositor->needsResize) {
@@ -1641,18 +2168,24 @@ Kine_VulkanCompositor_Resize(
     }
 
     compositor->needsResize = true;
+    if (!kine_vk_finish_prefetch(compositor)) {
+        kine_vk_set_error(compositor, "failed waiting for prefetched image during resize");
+        return 0;
+    }
+    compositor->overlapPresent = false;
     auto vkDeviceWaitIdle = kine_vk_device_proc<PFN_vkDeviceWaitIdle>(
         compositor, "vkDeviceWaitIdle");
-    if (!vkDeviceWaitIdle || vkDeviceWaitIdle(compositor->device) != VK_SUCCESS) {
+    const auto idle = vkDeviceWaitIdle ? vkDeviceWaitIdle(compositor->device) : VK_ERROR_INITIALIZATION_FAILED;
+    if (idle != VK_SUCCESS) {
+        if (idle == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
         kine_vk_set_error(compositor, "vkDeviceWaitIdle failed during compositor resize");
         return 0;
     }
 
-    // These are aliases. The frames own their Skia surfaces.
+
     compositor->currentSkiaSurface = nullptr;
     compositor->overlaySkiaSurface = nullptr;
-    compositor->frameActive = false;
-    compositor->overlayActive = false;
+    kine_vk_provider_action(compositor, KINE_PROVIDER_RESET);
     compositor->currentImageIndex = UINT32_MAX;
     kine_vk_destroy_swapchain_attachments(compositor);
 
@@ -1677,13 +2210,26 @@ Kine_VulkanCompositor_Resize(
 KINE_VULKAN_COMPOSITOR_API int
 Kine_VulkanCompositor_IsReady(const KineVulkanCompositor* compositor)
 {
-    return compositor && compositor->instance && compositor->surface &&
+    return compositor && !compositor->device_lost && compositor->instance && compositor->surface &&
         compositor->physicalDevice && compositor->device &&
         compositor->graphicsQueue && compositor->swapchain &&
         !compositor->swapchainImages.empty() && compositor->commandPool &&
-        compositor->frames.size() == compositor->swapchainImages.size() &&
+        compositor->frames.size() == kine_vk_render_images(compositor).size() &&
         compositor->acquireFence && compositor->skiaContext &&
         compositor->lastError.empty();
+}
+
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_UsesOdinBackend(const KineVulkanCompositor* compositor)
+{
+    return compositor && compositor->nativeSwapchain && compositor->nativeProvider &&
+        compositor->swapchainBackend.frameFlow ? 1 : 0;
+}
+
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_IsDeviceLost(const KineVulkanCompositor* compositor)
+{
+    return compositor && compositor->device_lost;
 }
 
 KINE_VULKAN_COMPOSITOR_API int
@@ -1806,18 +2352,14 @@ Kine_VulkanCompositor_GetXRPanelSource(KineVulkanCompositor* compositor, void** 
     uint32_t* width, uint32_t* height, uint32_t* format)
 {
     if (!compositor || !image || !width || !height || !format) return 0;
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        if (!compositor->frameActive ||
-            (compositor->filamentPrepared && !compositor->overlayActive) ||
-            compositor->currentImageIndex >= compositor->swapchainImages.size() ||
-            !(compositor->swapchainUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return 0;
-    }
+    if (!kine_vk_provider_action(compositor, KINE_PROVIDER_XR_READY) ||
+        compositor->currentImageIndex >= kine_vk_render_images(compositor).size() ||
+        !(kine_vk_render_usage(compositor) & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) return 0;
     auto* surface = compositor->overlaySkiaSurface ?
         compositor->overlaySkiaSurface : compositor->currentSkiaSurface;
     if (!surface) return 0;
-    Kine_Skia_Surface_Flush(surface);
-    *image = compositor->swapchainImages[compositor->currentImageIndex];
+    if (!kine_vk_flush_surface(compositor,surface)) return 0;
+    *image = kine_vk_render_images(compositor)[compositor->currentImageIndex];
     *width = compositor->width;
     *height = compositor->height;
     *format = static_cast<uint32_t>(compositor->swapchainFormat);
@@ -1834,11 +2376,11 @@ Kine_VulkanCompositor_GetSwapchainImages(
         return 0;
     }
 
-    uint32_t count = static_cast<uint32_t>(compositor->swapchainImages.size());
+    uint32_t count = static_cast<uint32_t>(kine_vk_render_images(compositor).size());
     if (outImages && maxImages > 0) {
         uint32_t n = std::min(count, maxImages);
         for (uint32_t i = 0; i < n; ++i) {
-            outImages[i] = compositor->swapchainImages[i];
+            outImages[i] = kine_vk_render_images(compositor)[i];
         }
     }
     return count;
@@ -1874,9 +2416,11 @@ Kine_VulkanCompositor_WaitForQueueIdle(KineVulkanCompositor* compositor)
     if (!compositor) {
         return 0;
     }
+    if (!kine_vk_drain_present(compositor)) return 0;
     auto vkQueueWaitIdle = kine_vk_device_proc<PFN_vkQueueWaitIdle>(
         compositor, "vkQueueWaitIdle");
-    return vkQueueWaitIdle && vkQueueWaitIdle(compositor->graphicsQueue) == VK_SUCCESS;
+    return vkQueueWaitIdle && vkQueueWaitIdle(compositor->graphicsQueue) == VK_SUCCESS &&
+        (!compositor->presentQueue || compositor->presentQueue == compositor->graphicsQueue || vkQueueWaitIdle(compositor->presentQueue) == VK_SUCCESS);
 }
 
 KINE_VULKAN_COMPOSITOR_API int
@@ -1885,40 +2429,34 @@ Kine_VulkanCompositor_PrepareFilament(KineVulkanCompositor* compositor)
     if (!compositor) {
         return 0;
     }
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        if (!compositor->frameActive ||
-            compositor->currentImageIndex >= compositor->swapchainImages.size()) {
-            kine_vk_set_error(compositor, "Filament preparation requires an active compositor frame");
+    const auto preparation = kine_vk_provider_action(compositor, KINE_PROVIDER_CHECK_PREPARE);
+    if (!preparation || compositor->currentImageIndex >= kine_vk_render_images(compositor).size()) {
+        kine_vk_set_error(compositor, "Filament preparation requires an active compositor frame");
+        return 0;
+    }
+    if (preparation == 2) return 1;
+
+
+    if (compositor->currentSkiaSurface) {
+        if (!kine_vk_profile_call(compositor,"Vulkan Skia Flush",[&] {
+                return kine_vk_flush_surface(compositor,compositor->currentSkiaSurface);
+            })) {
+            kine_vk_set_error(compositor,"failed restoring Skia base image layout");
             return 0;
         }
-        if (compositor->filamentPrepared) {
-            return 1;
-        }
-    }
-
-    // Skia contexts are thread-affine. This function is called by the render
-    // thread before Filament dispatches acquire() to its backend thread.
-    if (compositor->currentSkiaSurface) {
-        Kine_Skia_Surface_Flush(compositor->currentSkiaSurface);
         if (!compositor->activeSlot ||
-            !kine_vk_submit_skia_handoff(compositor, compositor->activeSlot->handoff)) {
+            !kine_vk_profile_call(compositor, "Vulkan Skia Handoff Submit", [&] { return kine_vk_submit_skia_handoff(compositor, compositor->activeSlot->handoff); })) {
             kine_vk_set_error(compositor, "failed submitting Skia-to-Filament synchronization");
             return 0;
         }
-        // The frame retains ownership of the surface so it can be reused for
-        // the next frame on this swapchain image.
+        compositor->activeSlot->timingHandoff = true;
+
+
         compositor->currentSkiaSurface = nullptr;
     }
 
-    // BeginFrame waits for WSI acquisition. The queued barrier orders the
-    // Skia writes before Filament's submissions without a second semaphore.
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        compositor->filamentPrepared = true;
-        compositor->filamentPresented = false;
-        compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
-    }
+
+    if (!kine_vk_provider_action(compositor, KINE_PROVIDER_PREPARE)) return 0;
     compositor->lastError.clear();
     return 1;
 }
@@ -1936,20 +2474,8 @@ Kine_VulkanCompositor_FilamentAcquire(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
 
-    std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-    if (!compositor->frameActive || !compositor->filamentPrepared ||
-        compositor->currentImageIndex >= compositor->swapchainImages.size()) {
-        kine_vk_set_error(compositor, "Filament acquire requires a prepared compositor frame");
-        return VK_ERROR_OUT_OF_DATE_KHR;
-    }
-
-    if (outImageIndex) {
-        *outImageIndex = compositor->currentImageIndex;
-    }
-    if (outImageReadySemaphore) {
-        *outImageReadySemaphore = nullptr;
-    }
-    return VK_SUCCESS;
+    return kine_vk_provider_action(compositor, KINE_PROVIDER_ACQUIRE, UINT32_MAX,
+        VK_NULL_HANDLE, outImageIndex) ? VK_SUCCESS : VK_ERROR_OUT_OF_DATE_KHR;
 }
 
 KINE_VULKAN_COMPOSITOR_API uint32_t
@@ -1962,108 +2488,252 @@ Kine_VulkanCompositor_FilamentPresent(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
 
-    std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-    if (!compositor->frameActive || !compositor->filamentPrepared ||
-        imageIndex != compositor->currentImageIndex) {
-        kine_vk_set_error(compositor, "Filament present received an invalid compositor image");
-        return VK_ERROR_OUT_OF_DATE_KHR;
-    }
-
-    // Filament invokes this callback after enqueuing its rendering work. The
-    // compositor consumes this semaphore in EndFrame's transition submission;
-    // no Vulkan queue calls are made from Filament's backend thread.
-    compositor->filamentFinishedSemaphore =
-        reinterpret_cast<VkSemaphore>(finishedDrawingSemaphore);
-    compositor->filamentPresented = true;
-    compositor->filamentCondition.notify_one();
-    return VK_SUCCESS;
+    return kine_vk_provider_action(compositor, KINE_PROVIDER_PRESENT, imageIndex,
+        reinterpret_cast<VkSemaphore>(finishedDrawingSemaphore)) ? VK_SUCCESS : VK_ERROR_OUT_OF_DATE_KHR;
 }
 
-KINE_VULKAN_COMPOSITOR_API void*
-Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
-{
-    if (!Kine_VulkanCompositor_IsReady(compositor)) {
-        return nullptr;
-    }
-    if (compositor->frameActive) {
-        return compositor->currentSkiaSurface;
-    }
+struct KineFrameFlow {
+    KineVulkanCompositor* compositor;
+    KineVulkanAcquireSlot* acquireSlot = nullptr;
+    VkSemaphore filamentFinished = VK_NULL_HANDLE;
+    VkSemaphore renderFinished = VK_NULL_HANDLE;
+    uint32_t presentImage = UINT32_MAX;
+};
 
-    auto vkAcquireNextImageKHR = kine_vk_device_proc<PFN_vkAcquireNextImageKHR>(
-        compositor, "vkAcquireNextImageKHR");
+static int32_t kine_vk_end_step(KineFrameFlow& flow, uint32_t step);
+
+static int32_t kine_vk_begin_acquire(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    const bool prefetched = compositor->prefetchedImage != UINT32_MAX;
+    compositor->overlapPresent = prefetched && compositor->wsiBackend.asynchronous;
+    compositor->presentWaitNs = 0;
+    if ((!compositor->offscreen && !compositor->overlapPresent && !kine_vk_drain_present(compositor)) ||
+        compositor->needsResize) return 0;
+
+    auto vkAcquireNextImageKHR = compositor->wsiBackend.acquire ? nullptr :
+        kine_vk_device_proc<PFN_vkAcquireNextImageKHR>(compositor, "vkAcquireNextImageKHR");
     auto vkWaitForFences = kine_vk_device_proc<PFN_vkWaitForFences>(
         compositor, "vkWaitForFences");
     auto vkResetFences = kine_vk_device_proc<PFN_vkResetFences>(
         compositor, "vkResetFences");
     auto vkGetFenceStatus = kine_vk_device_proc<PFN_vkGetFenceStatus>(
         compositor, "vkGetFenceStatus");
-    if (!vkAcquireNextImageKHR || !vkWaitForFences || !vkResetFences || !vkGetFenceStatus) {
+    if ((!compositor->wsiBackend.acquire && !vkAcquireNextImageKHR) || !vkWaitForFences || !vkResetFences || !vkGetFenceStatus) {
         kine_vk_set_error(compositor, "required acquire Vulkan procs unavailable");
-        return nullptr;
+        return 0;
+    }
+
+
+    auto*& acquireSlot = flow.acquireSlot;
+    if (!compositor->offscreen && !prefetched && compositor->gpuAcquire && !compositor->acquireSlots.empty()) {
+        acquireSlot = &compositor->acquireSlots[
+            compositor->nextAcquireSlot++ % compositor->acquireSlots.size()];
+        if (acquireSlot->inFlight) {
+            VkResult status = kine_vk_retire_fence(compositor, acquireSlot->consumed, false);
+            if (status == VK_NOT_READY) {
+                status = kine_vk_profile_call(compositor, "Vulkan Fence Wait", [&] { return kine_vk_retire_fence(compositor, acquireSlot->consumed, true); });
+            }
+            if (status != VK_SUCCESS) {
+                if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                kine_vk_set_error(compositor, "vkWaitForFences async acquire reuse failed");
+                return 0;
+            }
+            acquireSlot->inFlight = false;
+        }
+        if (acquireSlot->prefetchPending) {
+            auto status = kine_vk_retire_fence(compositor, acquireSlot->prefetched, true);
+            if (status != VK_SUCCESS) {
+                if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                compositor->needsResize = true;
+                kine_vk_set_error(compositor, "prefetched acquire fence retirement failed");
+                return 0;
+            }
+            acquireSlot->prefetchPending = false;
+        }
+        const auto reset = vkResetFences(compositor->device, 1, &acquireSlot->consumed);
+        if (reset != VK_SUCCESS) {
+            if (reset == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            kine_vk_set_error(compositor, "vkResetFences async acquire failed");
+            return 0;
+        }
     }
 
     compositor->currentImageIndex = UINT32_MAX;
-    VkResult acquired = vkAcquireNextImageKHR(
-        compositor->device,
-        compositor->swapchain,
-        UINT64_MAX,
-        VK_NULL_HANDLE,
-        compositor->acquireFence,
-        &compositor->currentImageIndex);
-    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
-        if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
-            compositor->needsResize = true;
-            return nullptr;
+    if (compositor->offscreen) {
+        uint32_t readyMask = 0;
+        for (uint32_t step = 0; step < compositor->frames.size(); ++step) {
+            uint32_t index = (compositor->nextRenderImage + step) % compositor->frames.size();
+            auto& candidate = compositor->frames[index].slots[0];
+            if (candidate.inFlight) {
+                auto result = kine_vk_retire_fence(compositor, candidate.finished, false);
+                if (result == VK_ERROR_DEVICE_LOST) {
+                    compositor->device_lost = true;
+                    return 0;
+                }
+                if (result == VK_NOT_READY) continue;
+                if (result != VK_SUCCESS) {
+                    kine_vk_set_error(compositor, "offscreen fence status failed");
+                    return 0;
+                }
+                kine_vk_collect_timing(compositor, candidate);
+                candidate.inFlight = false;
+            }
+            readyMask |= 1u << index;
         }
-        kine_vk_set_error(compositor, "vkAcquireNextImageKHR failed");
-        return nullptr;
-    }
+        compositor->currentImageIndex = compositor->swapchainBackend.selectReady(
+            compositor->nextRenderImage, uint32_t(compositor->frames.size()), readyMask, &compositor->nextRenderImage);
+    } else if (prefetched) {
+        if (compositor->prefetchedSlot >= compositor->acquireSlots.size()) {
+            kine_vk_set_error(compositor, "invalid prefetched acquire slot");
+            compositor->needsResize = true;
+            return 0;
+        }
+        acquireSlot = &compositor->acquireSlots[compositor->prefetchedSlot];
+        compositor->currentImageIndex = compositor->prefetchedImage;
+        compositor->prefetchedImage = UINT32_MAX;
+        compositor->prefetchedSlot = UINT32_MAX;
+    } else {
+        VkResult acquired = kine_vk_profile_call(compositor, "Vulkan WSI Acquire", [&] {
+            const auto semaphore = acquireSlot ? acquireSlot->ready : VK_NULL_HANDLE;
+            const auto fence = acquireSlot ? VK_NULL_HANDLE : compositor->acquireFence;
+            if (compositor->wsiBackend.acquire) {
+                return static_cast<VkResult>(compositor->wsiBackend.acquire(
+                    compositor->wsiBackend.user, (uint64_t)compositor->swapchain,
+                    UINT64_MAX, (uint64_t)semaphore, (uint64_t)fence, &compositor->currentImageIndex));
+            }
+            return vkAcquireNextImageKHR(compositor->device, compositor->swapchain,
+                UINT64_MAX, semaphore, fence, &compositor->currentImageIndex);
+        });
+        if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+            if (acquired == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+                compositor->needsResize = true;
+                return 0;
+            }
+            kine_vk_set_error(compositor, "vkAcquireNextImageKHR failed");
+            return 0;
+        }
 
-    if (vkWaitForFences(
-            compositor->device,
-            1,
-            &compositor->acquireFence,
-            VK_TRUE,
-            UINT64_MAX) != VK_SUCCESS) {
-        kine_vk_set_error(compositor, "vkWaitForFences failed");
-        return nullptr;
+        if (!acquireSlot) {
+            const auto status = kine_vk_profile_call(compositor, "Vulkan Fence Wait", [&] {
+                return vkWaitForFences(compositor->device, 1, &compositor->acquireFence, VK_TRUE, UINT64_MAX);
+            });
+            if (status != VK_SUCCESS) {
+                if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                kine_vk_set_error(compositor, "vkWaitForFences failed");
+                return 0;
+            }
+            const auto reset = vkResetFences(compositor->device, 1, &compositor->acquireFence);
+            if (reset != VK_SUCCESS) {
+                if (reset == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                kine_vk_set_error(compositor, "vkResetFences acquire failed");
+                return 0;
+            }
+        }
+
     }
-    vkResetFences(compositor->device, 1, &compositor->acquireFence);
 
     if (compositor->currentImageIndex >= compositor->frames.size()) {
         kine_vk_set_error(compositor, "vkAcquireNextImageKHR returned an invalid image index");
-        return nullptr;
+        return 0;
     }
 
+    return 1;
+}
+
+static int32_t kine_vk_begin_claim(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    auto vkResetFences = kine_vk_device_proc<PFN_vkResetFences>(compositor, "vkResetFences");
+    if (!vkResetFences) return 0;
     auto& frame = compositor->frames[compositor->currentImageIndex];
-    auto& slot = frame.slots[frame.nextSlot];
-    frame.nextSlot = (frame.nextSlot + 1) % KineVulkanFrame::SlotCount;
-    // The slot fence signals when the present transition of the earlier frame
-    // that used this slot completed. Waiting is only needed to recycle the
-    // slot's command buffers, never before drawing into the acquired image:
-    // submissions on this queue execute in order.
-    if (slot.inFlight) {
-        if (vkGetFenceStatus(compositor->device, slot.finished) == VK_NOT_READY &&
-            vkWaitForFences(compositor->device, 1, &slot.finished, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
-            kine_vk_set_error(compositor, "vkWaitForFences image frame failed");
-            return nullptr;
+    uint32_t selectedSlot = frame.nextSlot;
+    if (compositor->offscreen) {
+        selectedSlot = 0;
+    } else if (compositor->swapchainBackend.selectReady) {
+        uint32_t ready = 0;
+        for (uint32_t i = 0; i < KineVulkanFrame::SlotCount; ++i) {
+            auto& candidate = frame.slots[i];
+            if (candidate.inFlight) {
+                auto status = kine_vk_retire_fence(compositor, candidate.finished, false);
+                if (status == VK_NOT_READY) continue;
+                if (status != VK_SUCCESS) {
+                    if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                    compositor->needsResize = true;
+                    kine_vk_set_error(compositor, "frame fence status failed");
+                    return 0;
+                }
+                kine_vk_collect_timing(compositor, candidate);
+                candidate.inFlight = false;
+            }
+            ready |= 1u << i;
         }
+        selectedSlot = compositor->swapchainBackend.selectReady(frame.nextSlot, KineVulkanFrame::SlotCount, ready, &frame.nextSlot);
+    } else {
+        frame.nextSlot = (frame.nextSlot + 1) % KineVulkanFrame::SlotCount;
+    }
+    if (selectedSlot >= KineVulkanFrame::SlotCount) {
+        kine_vk_set_error(compositor, "invalid frame submission slot");
+        compositor->needsResize = true;
+        return 0;
+    }
+    auto& slot = frame.slots[selectedSlot];
+
+
+    if (slot.inFlight) {
+        auto status = kine_vk_retire_fence(compositor, slot.finished, false);
+        if (status == VK_NOT_READY) {
+            status = kine_vk_profile_call(compositor, "Vulkan Fence Wait", [&] {
+                return kine_vk_retire_fence(compositor, slot.finished, true);
+            });
+        }
+        if (status != VK_SUCCESS) {
+            if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            kine_vk_set_error(compositor, "vkWaitForFences image frame failed");
+            compositor->needsResize = true;
+            return 0;
+        }
+        kine_vk_collect_timing(compositor,slot);
         slot.inFlight = false;
     }
-    if (vkResetFences(compositor->device, 1, &slot.finished) != VK_SUCCESS) {
+    const auto reset = vkResetFences(compositor->device, 1, &slot.finished);
+    if (reset != VK_SUCCESS) {
+        if (reset == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
         kine_vk_set_error(compositor, "vkResetFences image frame failed");
-        return nullptr;
+        compositor->needsResize = true;
+        return 0;
     }
     compositor->activeSlot = &slot;
+    slot.timingSerial = ++compositor->timingSerial;
+    slot.timingHandoff = false;
+    slot.timingOverlay = false;
 
-    VkImageLayout currentLayout = compositor->swapchainImageLayouts[compositor->currentImageIndex];
-    if (!kine_vk_transition_current_image(
+    return 1;
+}
+
+static int32_t kine_vk_begin_canvas(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    auto& frame = compositor->frames[compositor->currentImageIndex];
+    auto& slot = *compositor->activeSlot;
+    auto* acquireSlot = flow.acquireSlot;
+    VkImageLayout currentLayout = kine_vk_render_layouts(compositor)[compositor->currentImageIndex];
+    if (!kine_vk_profile_call(compositor, "Vulkan Transition Submit", [&] { return kine_vk_transition_current_image(
             compositor,
             slot.acquire,
             currentLayout,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)) {
-        return nullptr;
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            acquireSlot ? acquireSlot->ready : (slot.copyReturnPending ? slot.copyReturned : VK_NULL_HANDLE),
+            VK_NULL_HANDLE,
+            acquireSlot ? acquireSlot->consumed : VK_NULL_HANDLE); })) {
+
+
+        if (acquireSlot) compositor->needsResize = true;
+        return 0;
     }
+    if (acquireSlot) acquireSlot->inFlight = true;
+    slot.copyReturnPending = false;
 
     if (!frame.base) {
         frame.base = kine_vk_create_current_skia_surface(compositor);
@@ -2071,18 +2741,54 @@ Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
     compositor->currentSkiaSurface = frame.base;
     if (!compositor->currentSkiaSurface) {
         kine_vk_set_error(compositor, "Kine_Skia_Surface_CreateVulkanRenderTarget failed");
-        return nullptr;
+        compositor->needsResize = true;
+        return 0;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        compositor->frameActive = true;
-        compositor->filamentPrepared = false;
-        compositor->filamentPresented = false;
-        compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
-        compositor->overlayActive = false;
+    return 1;
+}
+
+static int32_t kine_vk_begin_publish(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    if (!kine_vk_provider_action(compositor, KINE_PROVIDER_BEGIN, compositor->currentImageIndex)) {
+        compositor->needsResize = true;
+        return 0;
     }
     compositor->lastError.clear();
+    return 1;
+}
+
+static int32_t kine_vk_frame_step(void* user, uint32_t step)
+{
+    if (!user) return 0;
+    auto& flow = *static_cast<KineFrameFlow*>(user);
+    switch (step) {
+    case KINE_FRAME_ACQUIRE: return kine_vk_begin_acquire(flow);
+    case KINE_FRAME_CLAIM: return kine_vk_begin_claim(flow);
+    case KINE_FRAME_CANVAS: return kine_vk_begin_canvas(flow);
+    case KINE_FRAME_PUBLISH: return kine_vk_begin_publish(flow);
+    default: return kine_vk_end_step(flow, step);
+    }
+}
+
+static bool kine_vk_run_frame_flow(KineFrameFlow& flow, bool ending)
+{
+    auto* c = flow.compositor;
+    return c->nativeProvider && c->swapchainBackend.frameFlow &&
+        c->swapchainBackend.frameFlow(&flow, kine_vk_frame_step, uint32_t(ending)) != 0;
+}
+
+KINE_VULKAN_COMPOSITOR_API void*
+Kine_VulkanCompositor_BeginFrame(KineVulkanCompositor* compositor)
+{
+    if (!Kine_VulkanCompositor_IsReady(compositor)) return nullptr;
+    if (kine_vk_frame_active(compositor)) return compositor->currentSkiaSurface;
+    KineFrameFlow flow{compositor};
+    if (!kine_vk_run_frame_flow(flow, false)) {
+        compositor->needsResize = true;
+        return nullptr;
+    }
     return compositor->currentSkiaSurface;
 }
 
@@ -2096,36 +2802,20 @@ Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
         return compositor->overlaySkiaSurface;
     }
 
-    VkSemaphore filamentFinished = VK_NULL_HANDLE;
-    {
-        std::unique_lock<std::mutex> lock(compositor->filamentMutex);
-        if (!compositor->frameActive) {
-            kine_vk_set_error(compositor, "overlay requires an active compositor frame");
-            return nullptr;
-        }
-
-        // A 2D-only renderer has no Filament pass between the base canvas and
-        // its above-canvas widgets. Keep drawing into the already acquired
-        // Skia surface instead of requiring a Filament present callback.
-        if (!compositor->filamentPrepared) {
-            compositor->overlayActive = true;
-            compositor->lastError.clear();
-            return compositor->currentSkiaSurface;
-        }
-        constexpr auto kFilamentTimeout = std::chrono::seconds(5);
-        if (!compositor->filamentCondition.wait_for(
-                lock,
-                kFilamentTimeout,
-                [compositor] { return compositor->filamentPresented; })) {
-            kine_vk_set_error(compositor, "timed out waiting for Filament before overlay");
-            return nullptr;
-        }
-        filamentFinished = compositor->filamentFinishedSemaphore;
-    }
-
-    if (!kine_vk_wait_for_filament(compositor, filamentFinished)) {
+    uint64_t finished = 0;
+    const auto status = kine_vk_profile_call(compositor, "Vulkan Filament Callback Wait", [&] {
+        return kine_vk_provider_action(compositor, KINE_PROVIDER_WAIT_OVERLAY, UINT32_MAX, VK_NULL_HANDLE, nullptr, &finished);
+    });
+    if (status <= 0) {
+        kine_vk_set_error(compositor, status < 0 ? "timed out waiting for Filament before overlay" : "overlay requires an active compositor frame");
         return nullptr;
     }
+    if (status == 2) {
+        if (!kine_vk_provider_action(compositor, KINE_PROVIDER_OVERLAY)) return nullptr;
+        compositor->lastError.clear();
+        return compositor->currentSkiaSurface;
+    }
+    VkSemaphore filamentFinished = (VkSemaphore)finished;
 
     if (compositor->currentImageIndex < compositor->frames.size()) {
         auto& frame = compositor->frames[compositor->currentImageIndex];
@@ -2134,14 +2824,20 @@ Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
         }
         compositor->overlaySkiaSurface = frame.overlay;
     }
-    // Do not snapshot this surface onto itself: it wraps the same swapchain
-    // image that was just rendered to, so a backdrop snapshot would force a
-    // copy-on-write of the image mid-frame and desynchronize Vulkan layouts.
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        compositor->overlayActive = true;
-        compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
+    if (!compositor->overlaySkiaSurface) {
+        kine_vk_set_error(compositor,"failed to create post-Filament Skia overlay surface");
+        return nullptr;
     }
+    if (filamentFinished && !kine_vk_profile_call(compositor,"Vulkan Overlay Handoff",[&] {
+        const char* legacy = std::getenv("KINE_VULKAN_LEGACY_OVERLAY_SUBMIT");
+        if (!(compositor->activeSlot && compositor->activeSlot->overlayTiming) &&
+            !(legacy && std::strcmp(legacy,"1")==0) &&
+            kine_vk_wait_surface(compositor,compositor->overlaySkiaSurface,filamentFinished)) return true;
+        return kine_vk_wait_for_filament(compositor,filamentFinished);
+    })) return nullptr;
+
+
+    if (!kine_vk_provider_action(compositor, KINE_PROVIDER_OVERLAY)) return nullptr;
     if (!compositor->overlaySkiaSurface) {
         kine_vk_set_error(compositor, "failed to create post-Filament Skia overlay surface");
         return nullptr;
@@ -2150,107 +2846,225 @@ Kine_VulkanCompositor_BeginOverlay(KineVulkanCompositor* compositor)
     return compositor->overlaySkiaSurface;
 }
 
-KINE_VULKAN_COMPOSITOR_API int
-Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
+static int32_t kine_vk_end_flush(KineFrameFlow& flow)
 {
-    if (!compositor) {
+    auto* compositor = flow.compositor;
+    uint64_t finished = 0;
+    const auto status = kine_vk_profile_call(compositor, "Vulkan Filament Callback Wait", [&] {
+        return kine_vk_provider_action(compositor, KINE_PROVIDER_WAIT_END, UINT32_MAX, VK_NULL_HANDLE, nullptr, &finished);
+    });
+    if (status <= 0) {
+        if (status < 0) kine_vk_set_error(compositor, "timed out waiting for Filament present callback");
         return 0;
     }
+    flow.filamentFinished = (VkSemaphore)finished;
 
-    VkSemaphore filamentFinished = VK_NULL_HANDLE;
-    {
-        std::unique_lock<std::mutex> lock(compositor->filamentMutex);
-        if (!compositor->frameActive) {
-            return 0;
-        }
-        if (compositor->filamentPrepared && !compositor->overlayActive) {
-            constexpr auto kFilamentTimeout = std::chrono::seconds(5);
-            if (!compositor->filamentCondition.wait_for(
-                    lock,
-                    kFilamentTimeout,
-                    [compositor] { return compositor->filamentPresented; })) {
-                kine_vk_set_error(compositor, "timed out waiting for Filament present callback");
-                return 0;
-            }
-            filamentFinished = compositor->filamentFinishedSemaphore;
-        }
-    }
-
-    auto vkQueuePresentKHR = kine_vk_device_proc<PFN_vkQueuePresentKHR>(
-        compositor, "vkQueuePresentKHR");
-    if (!vkQueuePresentKHR) {
+    auto vkQueuePresentKHR = compositor->wsiBackend.present ? nullptr :
+        kine_vk_device_proc<PFN_vkQueuePresentKHR>(compositor, "vkQueuePresentKHR");
+    if (!compositor->wsiBackend.present && !vkQueuePresentKHR) {
         kine_vk_set_error(compositor, "vkQueuePresentKHR unavailable");
         return 0;
     }
 
     if (compositor->currentSkiaSurface) {
-        Kine_Skia_Surface_Flush(compositor->currentSkiaSurface);
+        if (!kine_vk_profile_call(compositor,"Vulkan Skia Flush",[&] {
+                return kine_vk_flush_surface(compositor,compositor->currentSkiaSurface);
+            })) {
+            kine_vk_set_error(compositor,"failed restoring Skia base image layout");
+            return 0;
+        }
     }
     if (compositor->overlaySkiaSurface) {
-        Kine_Skia_Surface_Flush(compositor->overlaySkiaSurface);
+        if (!kine_vk_profile_call(compositor,"Vulkan Skia Overlay Flush",[&] {
+                return kine_vk_flush_surface(compositor,compositor->overlaySkiaSurface);
+            })) {
+            kine_vk_set_error(compositor,"failed restoring Skia overlay image layout");
+            return 0;
+        }
     }
 
-    VkSemaphore renderFinished = VK_NULL_HANDLE;
-    if (compositor->currentImageIndex < compositor->renderFinishedSemaphores.size()) {
-        renderFinished = compositor->renderFinishedSemaphores[compositor->currentImageIndex];
-    }
+    return 1;
+}
 
+static int32_t kine_vk_end_acquire(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    auto& presentImage = flow.presentImage;
+    presentImage = compositor->currentImageIndex;
     auto* slot = compositor->activeSlot;
     if (!slot) {
         kine_vk_set_error(compositor, "compositor frame is missing its submission slot");
         return 0;
     }
-
-    // The slot fence was reset when this slot was claimed in BeginFrame.
-    if (!kine_vk_transition_current_image(
-            compositor,
-            slot->present,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            filamentFinished,
-            renderFinished,
-            slot->finished)) {
-        return 0;
+    if (compositor->offscreen) {
+        if (flow.filamentFinished && !kine_vk_wait_for_filament(compositor, flow.filamentFinished)) {
+            compositor->needsResize = true;
+            return 0;
+        }
+        if (!kine_vk_drain_present(compositor) || compositor->needsResize) {
+            compositor->needsResize = true;
+            return 0;
+        }
+        auto acquire = kine_vk_device_proc<PFN_vkAcquireNextImageKHR>(compositor, "vkAcquireNextImageKHR");
+        auto wait = kine_vk_device_proc<PFN_vkWaitForFences>(compositor, "vkWaitForFences");
+        auto reset = kine_vk_device_proc<PFN_vkResetFences>(compositor, "vkResetFences");
+        if (!wait || !reset) {compositor->needsResize = true; return 0;}
+        if (slot->lateAcquirePending) {
+            auto status = wait(compositor->device, 1, &slot->lateAcquireFence, VK_TRUE, UINT64_MAX);
+            if (status != VK_SUCCESS) {
+                if (status == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+                compositor->needsResize = true;
+                return 0;
+            }
+            slot->lateAcquirePending = false;
+        }
+        auto resetResult = reset(compositor->device, 1, &slot->lateAcquireFence);
+        if (resetResult != VK_SUCCESS) {
+            if (resetResult == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            compositor->needsResize = true;
+            return 0;
+        }
+        VkResult result = kine_vk_profile_call(compositor, "Vulkan Late WSI Acquire", [&] {
+            if (compositor->wsiBackend.acquire) return static_cast<VkResult>(compositor->wsiBackend.acquire(
+                compositor->wsiBackend.user, (uint64_t)compositor->swapchain, UINT64_MAX,
+                (uint64_t)slot->lateAcquire, (uint64_t)slot->lateAcquireFence, &presentImage));
+            return acquire ? acquire(compositor->device, compositor->swapchain, UINT64_MAX, slot->lateAcquire, slot->lateAcquireFence, &presentImage) : VK_ERROR_INITIALIZATION_FAILED;
+        });
+        slot->lateAcquirePending = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+        if (!slot->lateAcquirePending || presentImage >= compositor->swapchainImages.size()) {
+            if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            compositor->needsResize = true;
+            kine_vk_set_error(compositor, "late WSI acquisition failed");
+            return 0;
+        }
     }
 
+    return 1;
+}
+
+static int32_t kine_vk_end_submit(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    auto* slot = compositor->activeSlot;
+    auto presentImage = flow.presentImage;
+    auto filamentFinished = flow.filamentFinished;
+    auto& renderFinished = flow.renderFinished;
+    if (presentImage < compositor->renderFinishedSemaphores.size()) {
+        renderFinished = compositor->renderFinishedSemaphores[presentImage];
+    }
+
+    if (compositor->offscreen) {
+        auto d = kine_vk_frame_dispatch(compositor);
+        const bool separateCopy = compositor->sameFamilyCopyQueue && compositor->wsiBackend.asynchronous;
+        auto result = kine_vk_profile_call(compositor, "Vulkan Offscreen Copy", [&] {
+            return static_cast<VkResult>(compositor->swapchainBackend.copyColor(&d, slot->present,
+                (uint64_t)compositor->renderImages[compositor->currentImageIndex],
+                (uint64_t)compositor->swapchainImages[presentImage], compositor->width, compositor->height,
+                uint32_t(compositor->swapchainFormat), uint32_t(compositor->swapchainImageLayouts[presentImage]), separateCopy ? 0 : (uint64_t)slot->timing));
+        });
+        if (result == VK_SUCCESS) {
+            if (separateCopy) {
+                result = static_cast<VkResult>(compositor->swapchainBackend.submitCopy(&d, compositor->graphicsQueue,
+                    compositor->presentQueue, slot->renderComplete, slot->present, (uint64_t)slot->copyReady,
+                    (uint64_t)slot->lateAcquire, (uint64_t)renderFinished, (uint64_t)slot->copyReturned, (uint64_t)slot->finished));
+                slot->copyReturnPending = result == VK_SUCCESS;
+            } else {
+                result = kine_vk_submit(compositor, slot->present, slot->lateAcquire, renderFinished, slot->finished);
+            }
+        }
+        if (result != VK_SUCCESS) {
+            if (result == VK_ERROR_DEVICE_LOST) compositor->device_lost = true;
+            compositor->needsResize = true;
+            kine_vk_set_error(compositor, "Odin offscreen copy failed");
+            return 0;
+        }
+        compositor->swapchainImageLayouts[presentImage] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    } else {
+
+        if (!kine_vk_profile_call(compositor, "Vulkan Transition Submit", [&] { return kine_vk_transition_current_image(
+                compositor,
+                slot->present,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                filamentFinished,
+                renderFinished,
+                slot->finished); })) {
+            return 0;
+        }
+
+    }
     slot->inFlight = true;
-    // Retained per-image Skia surfaces stay owned by the frame.
+
     compositor->currentSkiaSurface = nullptr;
     compositor->overlaySkiaSurface = nullptr;
 
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = &compositor->swapchain;
-    presentInfo.pImageIndices = &compositor->currentImageIndex;
-    if (renderFinished) {
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &renderFinished;
-    }
+    return 1;
+}
 
-    VkResult presented = vkQueuePresentKHR(compositor->graphicsQueue, &presentInfo);
-
-    {
-        std::lock_guard<std::mutex> lock(compositor->filamentMutex);
-        compositor->currentImageIndex = UINT32_MAX;
-        compositor->frameActive = false;
-        compositor->filamentPrepared = false;
-        compositor->filamentPresented = false;
-        compositor->filamentFinishedSemaphore = VK_NULL_HANDLE;
-        compositor->overlayActive = false;
-        compositor->activeSlot = nullptr;
-    }
-
-    if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) {
-        if (presented == VK_ERROR_OUT_OF_DATE_KHR) {
+static int32_t kine_vk_end_present(KineFrameFlow& flow)
+{
+    auto* compositor = flow.compositor;
+    auto presentImage = flow.presentImage;
+    auto renderFinished = flow.renderFinished;
+    auto vkQueuePresentKHR = compositor->wsiBackend.present ? nullptr :
+        kine_vk_device_proc<PFN_vkQueuePresentKHR>(compositor, "vkQueuePresentKHR");
+    const KinePresentJob job{compositor->swapchain,renderFinished,presentImage};
+    VkResult presented = VK_SUCCESS;
+    if (compositor->wsiBackend.present) {
+        if (compositor->overlapPresent && !kine_vk_drain_present(compositor)) {
+            presented = compositor->device_lost ? VK_ERROR_DEVICE_LOST : VK_ERROR_UNKNOWN;
             compositor->needsResize = true;
-            return 1;
+        } else if (compositor->needsResize || compositor->device_lost) {
+            presented = compositor->device_lost ? VK_ERROR_DEVICE_LOST : VK_ERROR_OUT_OF_DATE_KHR;
+        } else {
+            kine_vk_prefetch_next(compositor);
+            if (compositor->device_lost) {
+                presented = VK_ERROR_DEVICE_LOST;
+            } else {
+                presented = kine_vk_profile_call(compositor,
+                    compositor->wsiBackend.asynchronous ? "Vulkan Odin Present Enqueue" : "Vulkan WSI Present", [&] {
+                        return static_cast<VkResult>(compositor->wsiBackend.present(compositor->wsiBackend.user,
+                            (uint64_t)job.swapchain, (uint64_t)job.semaphore, job.image));
+                    });
+            }
         }
-        kine_vk_set_error(compositor, "vkQueuePresentKHR failed");
-        return 0;
+    } else {
+        presented = kine_vk_profile_call(compositor,"Vulkan WSI Present",[&] {
+            return kine_vk_present_job(vkQueuePresentKHR,compositor->presentQueue ? compositor->presentQueue : compositor->graphicsQueue,job);
+        });
     }
+
+    kine_vk_provider_action(compositor, KINE_PROVIDER_RESET);
+    compositor->currentImageIndex = UINT32_MAX;
+    compositor->activeSlot = nullptr;
+    compositor->overlapPresent = false;
+
+    if (!kine_vk_handle_present_result(compositor,presented)) return 0;
 
     compositor->lastError.clear();
+    return 1;
+}
+
+static int32_t kine_vk_end_step(KineFrameFlow& flow, uint32_t step)
+{
+    switch (step) {
+    case KINE_FRAME_FLUSH: return kine_vk_end_flush(flow);
+    case KINE_FRAME_LATE_ACQUIRE: return kine_vk_end_acquire(flow);
+    case KINE_FRAME_SUBMIT: return kine_vk_end_submit(flow);
+    case KINE_FRAME_PRESENT: return kine_vk_end_present(flow);
+    default: return 0;
+    }
+}
+
+KINE_VULKAN_COMPOSITOR_API int
+Kine_VulkanCompositor_EndFrame(KineVulkanCompositor* compositor)
+{
+    if (!compositor || !kine_vk_frame_active(compositor)) return 0;
+    KineFrameFlow flow{compositor};
+    if (!kine_vk_run_frame_flow(flow, true)) {
+        compositor->needsResize = true;
+        return 0;
+    }
     return 1;
 }
 

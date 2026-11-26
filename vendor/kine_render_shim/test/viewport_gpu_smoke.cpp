@@ -1,3 +1,4 @@
+#include <cstring>
 #include "kine_filament_shim.h"
 #include "kine_skia.h"
 #include "kine_vulkan_compositor.h"
@@ -25,6 +26,23 @@ int main() {
     auto *engine=static_cast<filament::Engine *>(Kine_Filament_GetEngine(ctx));
     auto *compositor=static_cast<KineVulkanCompositor *>(Kine_Filament_GetVulkanCompositor(ctx));
     check(compositor,"shared compositor");
+    Kine_Filament_SetSunShadowOptions(ctx,2048,2,100,0.5f,160,true,false);
+    Kine_Filament_SetAdaptiveShadowResolution(ctx,true);
+    Kine_Filament_SetDynamicResolution(ctx,true,0.5f,1.0f,0,0);
+    const float hz=Kine_Filament_GetDisplayRefreshRate(ctx);
+    if (hz>=20) {
+        for(int i=0;i<120;++i) Kine_Filament_ReportFrameTiming(ctx,2.0f/hz,1.0f/hz);
+        check(Kine_Filament_GetEffectiveShadowMapSize(ctx)==1024,"shadow atlas follows dynamic resolution budget");
+        Kine_Filament_SetAdaptiveShadowResolution(ctx,false);
+        check(Kine_Filament_GetEffectiveShadowMapSize(ctx)==2048,"manual shadow quality restored");
+        Kine_Filament_SetAdaptiveShadowResolution(ctx,true);
+        check(Kine_Filament_GetEffectiveShadowMapSize(ctx)==1024,"adaptive shadow quality restored");
+    }
+    Kine_Filament_SetDynamicResolution(ctx,false,0.5f,1.0f,0,0);
+    check(Kine_Filament_GetEffectiveShadowMapSize(ctx)==2048,"disabling dynamic resolution restores shadow quality");
+    Kine_Filament_SetAdaptiveShadowResolution(ctx,false);
+    std::puts("ADAPTIVE_SHADOW_REGRESSION_PASSED");
+
     size_t baseViews=engine->getViewCount();
     std::vector<KineFilamentViewport *> handles;
     for(int i=0;i<1000;++i) handles.push_back(Kine_Filament_Viewport_Create(ctx));
@@ -35,8 +53,8 @@ int main() {
     auto *mesh=Kine_Filament_CreateMesh(ctx,1);
     KineFilamentDrawItem item{}; item.mesh=mesh; item.r=1;item.g=0.05f;item.b=0.05f;item.transmission=1;
     item.transform[0]=item.transform[5]=item.transform[10]=item.transform[15]=1;
-    // A retained stream can disappear and return with the same version.
-    // Both one-frame detachment and eviction must honor the unchanged data.
+
+
     auto *scene=static_cast<filament::Scene *>(Kine_Filament_GetScene(ctx));
     check(scene,"world scene");
     const auto worldCount=scene->getRenderableCount();
@@ -64,13 +82,123 @@ int main() {
     check(scene->getRenderableCount()==worldCount,"omitted retained keys detach");
     worldFrame(true,diverse.data(),uint32_t(diverse.size()),1);
     check(scene->getRenderableCount()==worldCount+diverse.size(),"unchanged retained keys reattach");
-    for(int i=0;i<4;++i) worldFrame(false,nullptr,0,1);
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,1);
     check(scene->getRenderableCount()==worldCount,"omitted retained keys stay absent after eviction");
     worldFrame(true,diverse.data(),uint32_t(diverse.size()),1);
     check(scene->getRenderableCount()==worldCount+diverse.size(),"evicted stream rebuilds on unchanged version");
     worldFrame(true,nullptr,0,2);
     check(scene->getRenderableCount()==worldCount,"empty retained stream clears geometry");
     std::puts("RETAINED_BATCH_REGRESSION_PASSED");
+
+
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,2);
+    const size_t chunkSize=std::min<size_t>(64,std::max<size_t>(1,engine->getMaxAutomaticInstances()));
+    std::vector<KineFilamentDrawItem> growing(chunkSize*2+1,item);
+    for(size_t i=0;i<growing.size();++i) growing[i].transform[3]=float(i);
+    KineFilamentBatchStats stats{};
+    worldFrame(true,growing.data(),uint32_t(chunkSize*2),10);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==2 && stats.createdChunks==2,"two initial chunks");
+    worldFrame(true,growing.data(),uint32_t(growing.size()),11);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==3 && stats.createdChunks==1 && stats.destroyedChunks==0 &&
+        stats.transformUploads==1 && stats.colorUploads==1,"grow only the tail");
+    growing[0].r=0.1f;
+    worldFrame(true,growing.data(),uint32_t(growing.size()),12);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.colorUploads==1 && stats.transformUploads==0 && stats.createdChunks==0,"one changed color chunk");
+    growing.back().transform[7]=5;
+    worldFrame(true,growing.data(),uint32_t(growing.size()),13);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.transformUploads==1 && stats.colorUploads==0 && stats.boundsUpdates==1,"one changed transform chunk");
+    worldFrame(true,growing.data(),uint32_t(chunkSize*2),14);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==2 && stats.createdChunks==0 && stats.destroyedChunks==1 &&
+        stats.transformUploads==0 && stats.colorUploads==0,"shrink only the tail");
+    worldFrame(false,nullptr,0,14);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==0 && stats.retainedChunks>=2 && scene->getRenderableCount()==worldCount,"cached chunks detach");
+    worldFrame(true,growing.data(),uint32_t(chunkSize*2),14);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==2 && stats.createdChunks==0 && stats.transformUploads==0,"reuse detached chunks");
+    worldFrame(true,nullptr,0,15);
+    check(scene->getRenderableCount()==worldCount,"incremental stream cleared");
+    std::puts("INCREMENTAL_BATCH_REGRESSION_PASSED");
+
+
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,15);
+    std::vector<KineFilamentDrawItem> regionA(300,item), regionB(300,item);
+    for(size_t i=0;i<regionA.size();++i) {
+        regionA[i].materialKind=regionB[i].materialKind=KINE_MAT_GLASS;
+        regionA[i].transmission=float(i+1)/601;
+        regionB[i].transmission=float(i+301)/601;
+        regionA[i].transform[3]=regionB[i].transform[3]=float(i%20)*2;
+        regionA[i].transform[7]=regionB[i].transform[7]=float(i/20)*2;
+    }
+    worldFrame(true,regionA.data(),uint32_t(regionA.size()),21);
+    worldFrame(true,regionB.data(),uint32_t(regionB.size()),22);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.retainedChunks==300 && stats.activeChunks==300,"adaptive cache retains complete region");
+    for(int i=0;i<8;++i) {
+        auto &region=i%2?regionB:regionA;
+        worldFrame(true,region.data(),uint32_t(region.size()),23+i);
+        Kine_Filament_GetBatchStats(ctx,&stats);
+        check(stats.createdChunks==0 && stats.destroyedChunks==0 && stats.activeChunks==300 &&
+            scene->getRenderableCount()==worldCount+300,"alternating regions never rebuild or draw inactive chunks");
+    }
+    worldFrame(true,nullptr,0,32);
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,32);
+    std::puts("ADAPTIVE_BATCH_CACHE_REGRESSION_PASSED");
+
+
+    std::vector<KineFilamentParticleItem> particles(chunkSize*2);
+    for(size_t i=0;i<particles.size();++i) {
+        auto &p=particles[i];p.transform[0]=p.transform[5]=p.transform[10]=p.transform[15]=1;
+        p.worldPosition[0]=double(i%16);p.worldPosition[1]=double(i/16);
+        p.r=255;p.g=100;p.b=50;p.a=uint8_t(i%254+1);
+    }
+    auto particleFrame=[&] {
+        auto *surface=static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
+        check(surface,"begin particle frame");
+        Kine_Skia_Surface_Clear(surface,20,30,40,255);
+        Kine_Filament_Viewport_Begin(ctx);
+        Kine_Filament_DrawParticles(ctx,nullptr,particles.data(),uint32_t(particles.size()),1,1,0,0,false,false);
+        Kine_Filament_Viewport_RenderFrame(ctx,1.0f/60.0f,true);
+        check(Kine_VulkanCompositor_BeginOverlay(compositor),"particle overlay");
+        check(Kine_VulkanCompositor_EndFrame(compositor)!=0,"present particle frame");
+    };
+    particleFrame();
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeBatches==1 && stats.activeChunks==2 && stats.createdChunks==2,"varying alpha shares one material batch");
+    for(auto &p:particles)p.a=uint8_t(255-p.a);
+    particleFrame();
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.createdChunks==0 && stats.destroyedChunks==0 && stats.colorUploads==2 &&
+        stats.transformUploads==0,"fade updates colors only");
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,32);
+    std::puts("PARTICLE_ALPHA_BATCH_REGRESSION_PASSED");
+
+
+    std::vector<KineFilamentDrawItem> highlightItems(chunkSize*2,item);
+    for (size_t i=0;i<highlightItems.size();++i) {
+        auto &h=highlightItems[i];
+        h.materialKind=KINE_MAT_HIGHLIGHT_FILL_TOP;
+        h.param1=0.001f+float(i)*0.0001f;
+        h.transmission=float(i+1)/float(highlightItems.size()+1);
+        h.transform[3]=float(i%16); h.transform[7]=float(i/16);
+    }
+    worldFrame(true,highlightItems.data(),uint32_t(highlightItems.size()),40);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeBatches==1 && stats.activeChunks==2 && stats.createdChunks==2,"highlight bias shares a single batch");
+    for(auto &h:highlightItems)h.param1+=0.00017f;
+    worldFrame(true,highlightItems.data(),uint32_t(highlightItems.size()),41);
+    Kine_Filament_GetBatchStats(ctx,&stats);
+    check(stats.activeChunks==2 && stats.createdChunks==0 && stats.destroyedChunks==0 &&
+        stats.uvUploads==2 && stats.colorUploads==0 && stats.transformUploads==0,"camera changes update only highlight biases");
+    worldFrame(true,nullptr,0,42);
+    for(int i=0;i<26;++i) worldFrame(false,nullptr,0,42);
+    std::puts("HIGHLIGHT_DEPTH_BIAS_BATCH_REGRESSION_PASSED");
+
 
     const float terrainVertices[] = {
         -4, 0, -4, 0, 1, 0, 0, 0,
@@ -139,7 +267,7 @@ int main() {
     Kine_Filament_Viewport_Stats(ctx,&alive,&pages,&renders);check(renders==128,"unchanged previews do not re-render");
     frame(false,true,true);
     Kine_Filament_Viewport_Stats(ctx,&alive,&pages,&renders);check(renders==129,"animation redraws only one tile");
-    // Two different camera updates in one batch must keep independent uniforms.
+
     auto *base=static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
     check(base,"begin camera frame"); Kine_Skia_Surface_Clear(base,20,30,40,255);
     Kine_Filament_Viewport_Begin(ctx);
@@ -162,7 +290,7 @@ int main() {
         check(base,"begin resized/effects frame");Kine_Skia_Surface_Clear(base,20,30,40,255);
         Kine_Filament_Viewport_Begin(ctx);
         check(Kine_Filament_Viewport_Update(handles[0],&configuration,draws,count,version),"update resized/effects preview");
-        // The GUI base pass can still use the previously published image here.
+
         Kine_Filament_Viewport_Draw(handles[0],base,0,0,256,256,1,1,1,1);
         if(configuration.width==60 && configuration.camera[3]==0) {
             auto cached=pixel(base,128,128);check(cached[1]>cached[0]+40,"resize retains the old published image coordinates until redraw");
@@ -192,7 +320,7 @@ int main() {
     auto dark=inspectPreview(effectSettings,&green,1,2,false);
     std::printf("colour grading: green %u -> %u\n",bright[0][1],dark[0][1]);
     check(dark[0][1]+40<bright[0][1],"local postprocessing changes the rendered pixels");
-    // A directional light must cast a real geometric shadow onto another part.
+
     KineFilamentDrawItem shadowItems[2]={item,item};
     shadowItems[0].r=0.8f;shadowItems[0].g=shadowItems[0].b=0.05f;
     shadowItems[0].transform[0]=shadowItems[0].transform[5]=shadowItems[0].transform[10]=2;shadowItems[0].transform[7]=2;shadowItems[0].flags=KINE_FILAMENT_DRAW_CAST_SHADOWS|KINE_FILAMENT_DRAW_RECEIVE_SHADOWS;
@@ -244,7 +372,7 @@ int main() {
     Kine_Filament_Viewport_Stats(ctx,&alive,&pages,&renders);check(renders==settled,"static SSR previews cache after warming their own history");
     inspectPreview(effectSettings,&green,1,24,false);
     check(engine->getViewCount()==baseViews+3,"disabling SSR releases private history");
-    // Global Lighting changes also invalidate an otherwise unchanged image.
+
     Kine_Filament_SetColorGrading(ctx,-8,1,1,0,0,0);
     auto inherited=inspectPreview(effectSettings,&green,1,24,false);
     check(inherited[0][1]+40<opaque[0][1],"inherited Lighting grading invalidates a cached preview");
@@ -264,7 +392,7 @@ int main() {
     Kine_Filament_Viewport_Destroy(resized);
     Kine_Filament_DestroyMesh(ctx,mesh);
 
-    // Submit without pixel readbacks so previous frames can still be in flight.
+
     for (int i = 0; i < 12; ++i) {
         auto *surface = static_cast<KineSkiaSurface *>(Kine_VulkanCompositor_BeginFrame(compositor));
         check(surface, "begin in-flight frame");
@@ -286,6 +414,18 @@ int main() {
     check(resizedSurface, "begin frame after swapchain resize");
     Kine_Skia_Surface_Clear(resizedSurface, 20, 30, 40, 255);
     check(Kine_VulkanCompositor_EndFrame(compositor), "present after swapchain resize");
+    if (const char* timing=std::getenv("KINE_VULKAN_GPU_TIMING");timing && std::strcmp(timing,"1")==0) {
+        uint64_t serial=0,ns=0;
+        for(int i=0;i<12;++i) {
+            auto *surface=static_cast<KineSkiaSurface*>(Kine_VulkanCompositor_BeginFrame(compositor));
+            check(surface,"begin timestamp frame");
+            Kine_Skia_Surface_Clear(surface,20,30,40,255);
+            check(Kine_VulkanCompositor_EndFrame(compositor),"present timestamp frame");
+        }
+        check(Kine_VulkanCompositor_GetLatestQueueTiming(compositor,&serial,&ns) && serial>0 && ns>0,"asynchronous Vulkan queue timestamp");
+        std::printf("VULKAN_QUEUE_TIMING_PASSED serial=%llu duration=%llu ns\n",(unsigned long long)serial,(unsigned long long)ns);
+    }
+
 
     double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     std::printf("VIEWPORT_GPU_SMOKE_PASSED 1000 handles, 128 visible, one page; setup+checks %.2f ms\n",ms);

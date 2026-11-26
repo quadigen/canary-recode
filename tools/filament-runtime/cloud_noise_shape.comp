@@ -1,0 +1,49 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kine_cloud_noise.glsl"
+
+// Port of WickedEngine/shaders/volumetricCloud_shapenoiseCS.hlsl. The generator writes a
+// tileable 64x64x64 RGBA shape texture: R is dilated Perlin-Worley, GBA are Worley octaves.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(set = 0, binding = 0, std140) uniform CloudNoiseParameters {
+    vec4 shapeParams;    // (perlinWorleyDifference, perlinDilateLow, perlinDilateHigh, totalSize)
+    vec4 worleyParams;   // (worleyDilateLow, worleyDilateHigh, totalWorleyLow, totalWorleyHigh)
+    vec4 shapeScales;    // (perlinScale, worleyDilateScale, worleyLargeScale, worleyMediumScale)
+    vec4 shapeSmall;     // (worleySmallScale, unused, unused, unused)
+    vec4 detailParams;   // (detailLarge, detailMedium, detailSmall, unused)
+    vec4 detailRemap;    // (detailLow, detailHigh, unused, unused)
+    vec4 curlParams;     // (totalCurlSize, curlLow, curlHigh, unused)
+    vec4 domainOffset;   // (x, y, z, unused)
+} params;
+
+layout(set = 0, binding = 1, rgba8) uniform image3D shapeNoise;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID);
+    ivec3 size = imageSize(shapeNoise);
+    if (any(greaterThanEqual(coord, size))) {
+        return;
+    }
+
+    float totalSize = params.shapeParams.w;
+    vec3 pos = vec3(coord) / vec3(size);
+
+    float perlinDilate = kineGetPerlin7Octaves(pos, params.shapeScales.x * totalSize, true);
+    float worleyDilate = kineGetWorley3Octaves(pos, params.shapeScales.y * totalSize);
+    float worleyLarge = kineGetWorley3Octaves(pos, params.shapeScales.z * totalSize);
+    float worleyMedium = kineGetWorley3Octaves(pos, params.shapeScales.w * totalSize);
+    float worleySmall = kineGetWorley3Octaves(pos, params.shapeSmall.x * totalSize);
+
+    perlinDilate = kineRemap01(perlinDilate, params.shapeParams.y, params.shapeParams.z);
+    worleyDilate = kineRemap01(worleyDilate, params.worleyParams.x, params.worleyParams.y);
+
+    worleyLarge = kineRemap01(worleyLarge, params.worleyParams.z, params.worleyParams.w);
+    worleyMedium = kineRemap01(worleyMedium, params.worleyParams.z, params.worleyParams.w);
+    worleySmall = kineRemap01(worleySmall, params.worleyParams.z, params.worleyParams.w);
+
+    float perlinWorley = kineDilatePerlinWorley(perlinDilate, worleyDilate,
+            params.shapeParams.x);
+
+    imageStore(shapeNoise, coord, vec4(perlinWorley, worleyLarge, worleyMedium, worleySmall));
+}

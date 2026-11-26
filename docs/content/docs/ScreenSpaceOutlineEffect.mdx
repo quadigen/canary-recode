@@ -1,0 +1,35 @@
+---
+title: ScreenSpaceOutlineEffect
+description: Draw stylized geometry outlines from screen-space depth and normal discontinuities.
+---
+
+`ScreenSpaceOutlineEffect` adds dark silhouettes and creases based on discontinuities in the camera's depth buffer and reconstructed surface normals. Unlike object-specific selection highlights, it works on visible scene geometry without selecting objects.
+
+The effect inherits `Enabled` from `LightingEffect` and must be parented to `Lighting`.
+
+## Example
+
+```lua
+local lighting = game:GetService("Lighting")
+local outline = Instance.new("ScreenSpaceOutlineEffect")
+outline.Intensity = 0.8
+outline.Thickness = 1.5
+outline.DepthThreshold = 0.06
+outline.NormalThreshold = 0.3
+outline.Enabled = true
+outline.Parent = lighting
+```
+
+## Properties
+
+| Property | Type | Default | Range | Description |
+| --- | --- | --- | --- | --- |
+| `Enabled` | boolean | true | Not applicable | Enables or disables outlines. |
+| `Intensity` | number | 0.75 | 0–1 | Darkness of the generated outlines. |
+| `Thickness` | number | 1.5 | 0–5 | Radius in screen pixels used for edge detection. |
+| `DepthThreshold` | number | 0.06 | 0–1 | Minimum relative view-depth change for a depth outline. |
+| `NormalThreshold` | number | 0.30 | 0–1 | Minimum reconstructed normal change for a crease outline. |
+
+The effect checks depth and surface changes near each visible pixel. Lower thresholds produce more lines, including fine geometry changes; higher thresholds restrict the effect to major silhouette boundaries. Because it uses existing screen data, off-screen geometry and transparency without usable depth cannot produce accurate outlines.
+
+Unlike selection outlines, this effect works across the visible scene without requiring selected objects. It doesn't run in the fast editor viewport.

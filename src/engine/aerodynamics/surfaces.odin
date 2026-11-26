@@ -95,10 +95,13 @@ surface_coefficients :: proc(
 	cl, cd, cm: f32,
 ) {
 	o := surface.options
-	cl, cd = wing_coefficients(alpha, aspect, o)
 	cm = surface.moment_coefficient
 	p, ok := Sample_Polar(surface.polar, polar_angle + o.incidence_deg)
-	if ok {cl = p.cl * o.lift_multiplier; cd = p.cd; cm = p.cm}
+	if ok {
+		cl = p.cl * o.lift_multiplier; cd = p.cd; cm = p.cm
+	} else {
+		cl, cd = wing_coefficients(alpha, aspect, o, mach)
+	}
 
 
 	if surface.clearance > 0 {
@@ -106,9 +109,7 @@ surface_coefficients :: proc(
 		induced := cl * cl / (f32(PI) * o.efficiency * aspect)
 		cd -= min(max(cd - o.profile_drag, 0), induced / (1 + r * r))
 	}
-	sound := o.sound_speed
-	if sound <= 0 {sound = 340.3}
-	cd += wave_coefficient(mach * sound, o)
+	cd += wave_coefficient_mach(mach, o.wave_drag)
 	return
 }
 
@@ -128,7 +129,14 @@ surface_sample :: proc(
 	m := settings.meters_per_unit
 	o := surface.options
 	if !finite(speed) || !finite(side) {return}
-	if settings.max_speed > 0 {side = clamp(side, -settings.max_speed / m, settings.max_speed / m)}
+
+	full_speed := math.sqrt(speed * speed + side * side)
+	if !finite(full_speed) || full_speed * m < settings.min_speed {return}
+	if settings.max_speed > 0 && full_speed * m > settings.max_speed {
+		scale := settings.max_speed / (full_speed * m)
+		side *= scale
+	}
+	if abs(side) * m < settings.min_speed {side = 0}
 	side_area := surface.chord * surface.thickness
 	f =
 		-span *
@@ -149,10 +157,10 @@ surface_sample :: proc(
 	alpha_deg = alpha * f32(180 / PI)
 
 	analytic_alpha := math.asin(clamp(-dot(dir, normal), -1, 1))
-	if settings.max_speed > 0 {speed = min(speed, settings.max_speed / m)}
-	sound := o.sound_speed
-	if sound <= 0 {sound = 340.3}
-	mach = speed * m / sound
+	if settings.max_speed > 0 && full_speed * m > settings.max_speed {
+		speed *= settings.max_speed / (full_speed * m)
+	}
+	mach = mach_at(speed * m, o)
 	aspect := clamp(surface.span / surface.chord, 0.25, 20)
 	cm: f32
 	cl, cd, cm = surface_coefficients(surface, analytic_alpha, alpha_deg, aspect, mach)
@@ -160,8 +168,13 @@ surface_sample :: proc(
 	scale := q * surface.span * surface.chord * m * weight * o.area_multiplier
 	edge := surface.thickness / surface.chord * abs(dot(dir, chord)) * o.drag_coefficient
 	f += -dir * (scale * (cd + edge))
-	lift_dir := unit(normal - dir * dot(normal, dir))
-	f += lift_dir * (scale * cl)
+
+
+	chord_dot := dot(dir, chord)
+	if abs(chord_dot) > 1e-6 {
+		lift_dir := (normal * chord_dot - chord * dot(dir, normal)) * (chord_dot < 0 ? -1 : 1)
+		f += lift_dir * (scale * cl)
+	}
 	moment = span * (scale * surface.chord * cm)
 	return
 }
@@ -201,7 +214,8 @@ Evaluate_Surface :: proc(
 	center := surface.center + o.pressure_offset
 	v := relative_v - surface.extra_wind
 
-	_, _, result.alpha_deg, result.cl, result.cd, result.mach, result.dynamic_pressure =
+	center_force, center_moment: Vec3
+	center_force, center_moment, result.alpha_deg, result.cl, result.cd, result.mach, result.dynamic_pressure =
 		surface_sample(
 			surface,
 			chord,
@@ -213,6 +227,15 @@ Evaluate_Surface :: proc(
 			settings,
 		)
 	result.load.wing = true
+	if angular_v == (Vec3{}) {
+		if !finite3(center_force) || !finite3(center_moment) {return Surface_Result{}}
+		result.load.force = center_force
+		result.load.torque = cross(center, center_force) + center_moment
+		result.load.sample_load = length3(center_force)
+		result.load.samples = 4
+		result.load = limit_load(result.load, settings)
+		return
+	}
 	for i in 0 ..< 4 {
 		a: f32 = i % 2 == 0 ? -0.25 : 0.25
 		b: f32 = i / 2 == 0 ? -0.25 : 0.25

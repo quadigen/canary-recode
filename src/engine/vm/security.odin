@@ -25,7 +25,8 @@ SecurityRequirementFromCapabilities :: proc(
 SecurityRequirementFromValue :: proc(capability: i64) -> Security_Requirement {
 	result := SECURITY_REQUIREMENT_NONE
 	if capability < 0 || capability > 127 {
-		return result
+
+		return Security_Requirement{capabilities = THREAD_SECURITY_ALL}
 	}
 	if capability < 64 {
 		result.capabilities.bits_low = u64(1) << u64(capability)

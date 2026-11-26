@@ -29,6 +29,25 @@ UIBackdrop :: struct {
 	parallax:          datatypes.Vector2,
 }
 
+UIBackdrop_Samples_Background :: proc(backdrop: ^UIBackdrop) -> bool {
+	return(
+		backdrop != nil &&
+		backdrop.enabled &&
+		backdrop.transparency < 1 &&
+		(backdrop.blur_radius > 0 ||
+				backdrop.brightness != 0 ||
+				backdrop.contrast != 1 ||
+				backdrop.saturation != 1 ||
+				backdrop.hue_shift != 0 ||
+				backdrop.morphology != 0 ||
+				backdrop.displacement > 0 ||
+				backdrop.pixelate > 0 ||
+				backdrop.zoom != 1 ||
+				backdrop.offset != (datatypes.UDim2{}) ||
+				backdrop.parallax != (datatypes.Vector2{})) \
+	)
+}
+
 UIBackdrop_Init :: proc() -> UIBackdrop {
 	return UIBackdrop {
 		object = Object_Init(&UIBackdrop_Class),

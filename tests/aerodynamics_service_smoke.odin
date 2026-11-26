@@ -25,6 +25,7 @@ local aero = game:GetService("Aerodynamics")
 assert(aero:IsA("Service"))
 assert(aero.Name == "Aerodynamics")
 assert(aero.Enabled == false)
+assert(aero.MaxSpeed == 0 and math.abs(aero.WaveDrag - 0.15) < 1e-5)
 assert(workspace.FluidForces == false)
 
 aero.Enabled = true
@@ -139,6 +140,45 @@ assert(game:GetService("Physics").BodyCount >= 1)
 		"aerodynamics_step",
 	)
 
+	run_script(
+		&script_vm,
+		`
+local aero = game:GetService("Aerodynamics")
+aero.Enabled = false
+local aircraft = Instance.new("PhysicsModel", workspace)
+aircraft.Name = "FastAircraft"
+aircraft.GravityScale = 0
+aircraft.MaxLinearVelocity = 1800
+local hull = Instance.new("Part", aircraft)
+hull.Name = "Hull"
+hull.Size = Vector3.new(4, 2, 2)
+hull.Position = Vector3.new(0, 1000, 0)
+hull.Anchored = false
+`,
+		"high_speed_setup",
+	)
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
+	run_script(
+		&script_vm,
+		`
+local p = workspace.FastAircraft.Hull
+p.AssemblyLinearVelocity = Vector3.new(1200, 0, 0)
+assert(p.AssemblyLinearVelocity.X > 1000, tostring(p.AssemblyLinearVelocity))
+`,
+		"high_speed_velocity",
+	)
+	engine_runtime.Environment_Update_Step(&environment, &script_vm, 1.0 / 60.0)
+	run_script(
+		&script_vm,
+		`
+local model = workspace.FastAircraft
+assert(model.Hull.AssemblyLinearVelocity.X > 1000)
+model.MaxLinearVelocity = 700
+model.Hull.AssemblyLinearVelocity = Vector3.new(1200, 0, 0)
+assert(model.Hull.AssemblyLinearVelocity.X <= 701)
+`,
+		"high_speed_live_limit",
+	)
 	vm.Close(&script_vm)
 	engine_runtime.Environment_Destroy(&environment)
 	fmt.println("AERODYNAMICS_SERVICE_SMOKE_PASSED")

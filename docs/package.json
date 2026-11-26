@@ -6,7 +6,12 @@
     "build": "next build",
     "dev": "next dev",
     "start": "serve out",
-    "types:check": "next typegen && tsc --noEmit"
+    "types:check": "next typegen && tsc --noEmit",
+    "docs:sync-sdk": "node scripts/sync-sdk-docs.mjs",
+    "prebuild": "node scripts/sync-sdk-docs.mjs",
+    "predev": "node scripts/sync-sdk-docs.mjs",
+    "postbuild": "node scripts/verify-docs.mjs",
+    "docs:verify": "node scripts/verify-docs.mjs"
   },
   "dependencies": {
     "cn": "^0.5.2",

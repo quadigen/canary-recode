@@ -166,12 +166,24 @@ update_service_namecall :: proc(
 		update_service_push_available(L, service)
 		return 1, true
 	case "ApplyUpdate":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Engine update requires Studio capability"), true
+		}
 		vm.PushBoolean(L, update_service_apply_now(service))
 		return 1, true
 	case "GetUpdateProgress":
 		update_service_push_progress(L, service)
 		return 1, true
 	case "FinishUpdateRestart":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Engine update requires Studio capability"), true
+		}
 		return update_service_finish_restart(L, service)
 	}
 	return 0, false

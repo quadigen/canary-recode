@@ -40,6 +40,17 @@ KINE_RENDER_MODE_RAY :: 2
 
 KineFilamentContext :: struct {}
 
+KineFilamentPassStats :: struct {
+	world, clouds, waterDepth, sharedDepth, customDepth, screenEffects:          u32,
+	customPost, outlineMask, outlineComposite, reflectionFaces:                  u32,
+	viewportScene, viewportClear, viewportCopy, viewportShadow, viewportPresent: u32,
+}
+
+KineFilamentBatchStats :: struct {
+	activeBatches, activeChunks, retainedChunks, createdChunks, destroyedChunks: u32,
+	unchangedBatches, transformUploads, colorUploads, uvUploads, boundsUpdates:  u32,
+}
+
 KineXRControllerState :: struct {
 	trigger, grip, stick_x, stick_y: f32,
 	active_mask:                     u32,
@@ -356,6 +367,11 @@ foreign kine_filament {
 
 
 	Kine_Filament_GetVulkanCompositor :: proc(ctx: ^KineFilamentContext) -> rawptr ---
+	Kine_Filament_GetDisplayRefreshRate :: proc(ctx: ^KineFilamentContext) -> f32 ---
+	Kine_Filament_GetResolutionScale :: proc(ctx: ^KineFilamentContext) -> f32 ---
+	Kine_Filament_SetAdaptiveShadowResolution :: proc(ctx: ^KineFilamentContext, enabled: bool) ---
+	Kine_Filament_GetEffectiveShadowMapSize :: proc(ctx: ^KineFilamentContext) -> u32 ---
+	Kine_Filament_ReportFrameTiming :: proc(ctx: ^KineFilamentContext, seconds: f32, presentSeconds: f32) ---
 
 
 	Kine_Filament_GetColorTextureId :: proc(ctx: ^KineFilamentContext) -> i32 ---
@@ -445,6 +461,8 @@ foreign kine_filament {
 
 
 	Kine_Filament_Shader_CompileRelease :: proc(job: ^KineFilamentShaderCompile) ---
+	Kine_Filament_Shader_DispatchTexture :: proc(shader: ^KineFilamentShader, name: cstring, words: ^u32, bytes: uint, width, height: u32) -> bool ---
+	Kine_Filament_ComputeTextureStats :: proc(out: ^u64) ---
 
 
 	Kine_Filament_Shader_ResolveFade :: proc(shader: ^KineFilamentShader) -> ^KineFilamentShader ---
@@ -534,6 +552,13 @@ foreign kine_filament {
 	Kine_Filament_SetSunShadowOptions :: proc(ctx: ^KineFilamentContext, mapSize: i32, cascades: i32, shadowFar: f32, shadowNearHint: f32, shadowFarHint: f32, stable: bool, contactShadows: bool) -> i32 ---
 
 
+	Kine_Filament_SetShadowViewQuality :: proc(ctx: ^KineFilamentContext, penumbraScale: f32, penumbraRatioScale: f32, vsmHighPrecision: bool, vsmBleedReduction: f32) ---
+
+	Kine_Filament_SetShadowExtraOptions :: proc(ctx: ^KineFilamentContext, maxPenumbraRatio: f32, maxSearchRadius: f32, vsmAnisotropy: i32, vsmMipmapping: bool, vsmMSAASamples: i32, sunAngularRadius: f32, sunHaloSize: f32, sunHaloFalloff: f32) ---
+
+	Kine_Filament_SetSunShadowOptionsAdvanced :: proc(ctx: ^KineFilamentContext, mapSize: i32, cascades: i32, shadowFar: f32, shadowNearHint: f32, shadowFarHint: f32, stable: bool, lispsm: bool, cascadeLambda: f32, contactShadows: bool, contactSteps: i32, contactDistance: f32, constantBias: f32, normalBias: f32, polygonOffsetConstant: f32, polygonOffsetSlope: f32, bulbRadius: f32, vsmBlur: f32, vsmELVSM: bool) ---
+
+
 	Kine_Filament_SetSunRays :: proc(ctx: ^KineFilamentContext, enabled: bool, distance: f32, cutOffDistance: f32, maximumOpacity: f32, height: f32, heightFalloff: f32, density: f32, inScatteringStart: f32, inScatteringSize: f32, r: f32, g: f32, b: f32, fogColorFromIbl: bool) -> i32 ---
 
 
@@ -576,6 +601,8 @@ foreign kine_filament {
 	Kine_Filament_GetReflectionProbeCaptureCount :: proc(ctx: ^KineFilamentContext) -> u64 ---
 
 
+	Kine_Filament_SetCloudResolutionScale :: proc(ctx: ^KineFilamentContext, scale: f32) ---
+	Kine_Filament_SetCloudShadowOptions :: proc(ctx: ^KineFilamentContext, cast_shadows: bool, intensity: f32, scale: f32, speed: f32, softness: f32, max_distance: f32) ---
 	Kine_Filament_SetClouds :: proc(ctx: ^KineFilamentContext, enabled: bool, cover: f32, density: f32, height: f32, thickness: f32, r: f32, g: f32, b: f32) ---
 
 
@@ -625,6 +652,9 @@ foreign kine_filament {
 
 	Kine_Filament_SetMeshBoneTransforms :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, boneTransforms16: ^f32, boneCount: i32) -> bool ---
 
+
+	Kine_Filament_SetMeshProceduralLocalPose :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh, localTransforms16: ^f32, mask: ^u8, boneCount: i32) -> bool ---
+	Kine_Filament_ClearMeshProceduralPose :: proc(ctx: ^KineFilamentContext, mesh: ^KineFilamentMesh) -> bool ---
 
 	Kine_Filament_GetMeshAnimationCount :: proc(mesh: ^KineFilamentMesh) -> i32 ---
 
@@ -906,6 +936,9 @@ foreign kine_filament {
 
 
 	Kine_Filament_SetFrameProfileCallback :: proc(ctx: ^KineFilamentContext, callback: proc "c" (user: rawptr, phase: cstring, begin: bool), user: rawptr) ---
+	Kine_Filament_GetLatestGpuFrameTime :: proc(ctx: ^KineFilamentContext, frameId: ^u32, durationNs: ^u64) -> bool ---
+	Kine_Filament_GetPassStats :: proc(ctx: ^KineFilamentContext, out: ^KineFilamentPassStats) ---
+	Kine_Filament_GetBatchStats :: proc(ctx: ^KineFilamentContext, out: ^KineFilamentBatchStats) ---
 
 
 	Kine_Filament_Viewport_Primitive :: proc(ctx: ^KineFilamentContext, shape: i32) -> ^KineFilamentMesh ---
@@ -914,6 +947,8 @@ foreign kine_filament {
 	Kine_Filament_Viewport_Mesh :: proc(ctx: ^KineFilamentContext, key: u64, data: rawptr, size: uintptr, hint: cstring) -> ^KineFilamentMesh ---
 
 
+	Kine_Filament_Viewport_PersistentReuses :: proc(ctx: ^KineFilamentContext) -> u64 ---
+	Kine_Filament_Viewport_ReusedRenders :: proc(ctx: ^KineFilamentContext) -> u64 ---
 	Kine_Filament_Viewport_Stats :: proc(ctx: ^KineFilamentContext, handles, pages: ^u32, renders: ^u64) ---
 
 

@@ -4,6 +4,8 @@
 #endif
 #include "kine_filament_shim.h"
 #include "kine_animation_track.h"
+#include "../../kine_shader_compiler/shader_cache.h"
+#include "../../kine_shader_compiler/shader_compiler.h"
 
 #include "kine_default_package.h"
 #include "kine_default_fade_package.h"
@@ -67,7 +69,7 @@
 
 #endif
 
-// Optional Linux OpenXR loader. No runtime or SDK is required for desktop builds.
+
 #if KINE_FILAMENT_USE_VULKAN && defined(__linux__) && !defined(__ANDROID__) && __has_include(<openxr/openxr.h>) && __has_include(<openxr/openxr_platform.h>)
 #define KINE_XR_COMPILED 1
 #define XR_USE_GRAPHICS_API_VULKAN
@@ -79,6 +81,7 @@
 #define KINE_XR_COMPILED 0
 #endif
 #include "kine_cloud_package.h"
+#include "kine_cloud_composite_package.h"
 #include "kine_decal_package.h"
 #include "kine_gizmo_package.h"
 #include "kine_glass_package.h"
@@ -98,8 +101,8 @@
 #include "kine_forcefield_package.h"
 
 #if KINE_WITH_RAY
-// Ray runs on this context's Vulkan device; the bridge header keeps Ray's own
-// Vulkan declarations out of this translation unit.
+
+
 #include "kine_ray.h"
 #endif
 #include <SDL3/SDL_properties.h>
@@ -138,6 +141,8 @@ struct VkQueue_T;
 #endif
 
 #include <algorithm>
+#include <array>
+#include "kine_frame_budget.h"
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -348,7 +353,7 @@ static KineFilamentWaterParams kine_default_water_params() {
 	return p;
 }
 
-// Power-of-two grid resolutions, from 2 to 256 subdivisions per axis.
+
 static constexpr int KINE_WATER_GRID_LEVELS = 8;
 
 struct KineBone {
@@ -429,6 +434,9 @@ struct KineMesh {
 	bool useImportedMaterials = true;
 	std::vector<KineBone> bones;
 	std::vector<math::mat4f> skinMatrices;
+
+	std::vector<math::mat4f> proceduralDelta;
+	std::vector<uint8_t> proceduralMask;
 	std::vector<KineAnimation> animations;
 	Box localBounds;
 
@@ -456,17 +464,15 @@ struct KineTexHandle {
 	Texture *heightTex = nullptr;
 	float heightScale = 0.0f;
 	size_t references = 1;
-	// RGBA8 mirror of the base colour and normal map. Ray samples textures from
-	// system memory and cannot read Filament's GPU upload, so the paths that
-	// start from pixels keep one around for it. Textures imported from an
-	// existing GL id have no pixels to mirror.
+
+
 	std::vector<uint8_t> cpuPixels;
 	int cpuWidth = 0;
 	int cpuHeight = 0;
 	std::vector<uint8_t> cpuNormalPixels;
 	int cpuNormalWidth = 0;
 	int cpuNormalHeight = 0;
-	// A terrain set retains its layer handles, including their CPU mirrors for Ray.
+
 	KineTexHandle *terrainLayerSources[6] = {};
 
 	Texture *terrainLayer(size_t index) const {
@@ -477,7 +483,7 @@ struct KineTexHandle {
 
 constexpr size_t KINE_MAX_INSTANCE_COLORS = 64;
 
-// Keep GPU instance matrices small. Material batches never cross a spatial cell.
+
 static constexpr double KINE_RENDER_CELL_SIZE = 1024.0;
 static double kine_render_cell(double value) {
  return std::floor(value / KINE_RENDER_CELL_SIZE) * KINE_RENDER_CELL_SIZE;
@@ -535,9 +541,8 @@ struct KineBatchKeyHash {
 };
 
 #if KINE_WITH_RAY
-// A mesh draw captured while the frame is being queued, replayed into Ray when
-// render mode 2 is active. Mirrors what Filament renders, minus the materials
-// Ray has no equivalent for.
+
+
 struct KineRayQueuedDraw {
 	math::double3 worldPosition{};
 	KineMesh *mesh = nullptr;
@@ -547,8 +552,8 @@ struct KineRayQueuedDraw {
 	float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 	float color[3] = {1.0f, 1.0f, 1.0f};
 	int materialKind = 0;
-	// The batch key's material parameters, carried so Ray can build the surface
-	// kine_apply_material_params() gives the raster pass.
+
+
 	float param1 = 0.0f;
 	float param2 = 0.0f;
 	float param3 = 0.0f;
@@ -568,14 +573,12 @@ struct KinePendingBatch {
 	uint64_t lastQueuedFrame = 0;
 	uint64_t lastRetainedListSerial = 0;
 
-	// Tracked separately so a colour-only change does not force a transform
-	// re-upload and vice versa.
+
 	uint64_t transformHash = 1469598103934665603ULL;
 	uint64_t colorHash = 1469598103934665603ULL;
 	uint64_t uvHash = 1469598103934665603ULL;
 
-	// Per-instance transform hashes, parallel to `transforms`. Lets the update
-	// path upload only the instances that actually moved.
+
 	std::vector<uint64_t> instanceTransformHashes;
 };
 
@@ -586,6 +589,8 @@ struct KineBuiltBatch {
 	size_t instanceCount = 0;
 	std::vector<uint64_t> instanceTransformHashes;
 	std::vector<MaterialInstance *> extraMaterials;
+    std::vector<math::float4> cachedColors;
+    std::vector<float> cachedUvs;
 };
 
 struct KinePersistentBatch {
@@ -594,8 +599,8 @@ struct KinePersistentBatch {
 	uint64_t transformHash = 0;
 	uint64_t colorHash = 0;
 	uint64_t uvHash = 0;
-	// A retained batch keeps its GPU objects but is detached from the scene so
-	// it does not draw while unused.
+
+
 	bool detached = false;
 };
 
@@ -620,15 +625,12 @@ struct KineRetainedListState {
 	uint64_t version = 0;
 	bool initialized = false;
 	std::vector<KineBatchKey> keys;
-    // Cache terrain transforms so camera-dependent grass can stream in and out
-    // even while the normal terrain draw list remains version-retained.
+
+
     std::vector<KineRetainedTerrainGrassDraw> terrainGrassDraws;
 #if KINE_WITH_RAY
-	// Ray rebuilds its draw list from scratch on every frame, while a retained
-	// stream only re-queues when its version changes. Keeping the last queued
-	// draws here lets them be replayed on unchanged frames -- without it a scene
-	// that stops changing starves Ray into rebuilding an empty scene, which
-	// presents as plain sky over the viewport.
+
+
 	std::vector<KineRayQueuedDraw> rayDraws;
 #endif
 };
@@ -639,11 +641,13 @@ struct KineDecalResource {
 	KineMesh *mesh = nullptr;
 };
 
+namespace { struct KineComputeTexture; }
 struct KineFilamentShader {
 	KineFilamentContext *ctx = nullptr;
 	Material *material = nullptr;
 	std::unordered_map<std::string, std::vector<float>> uniforms;
 	std::unordered_map<std::string, Texture *> textures;
+    std::unordered_map<std::string, std::shared_ptr<KineComputeTexture>> computeTextures;
 	int subdivisionLevel = 0;
 	float boundsPadding = 0.0f;
 	std::string source;
@@ -656,6 +660,7 @@ struct KineFilamentShader {
 struct KineViewportPool;
 struct KineReflectionProbeState;
 struct KineSsgiState;
+struct KineDdgiState;
 struct KineWaterContactDepth {
 	View *view = nullptr;
 	RenderTarget *target = nullptr;
@@ -677,9 +682,12 @@ struct KineFilamentContext {
 	bool xrAttempted = false;
 	std::vector<KineFilamentAnimator *> animationAnimators;
 	bool animationAutoStep = true;
-	KineAdvancedEffectState advancedEffects[10];
+	KineAdvancedEffectState advancedEffects[20];
+	math::float3 skyIrradiance = {};
+	KineFilamentPassStats passStats{};
 	KineReflectionProbeState *reflectionProbe=nullptr;
 	KineSsgiState *ssgi=nullptr;
+	KineDdgiState *ddgi=nullptr;
 	KineWaterContactDepth waterContact;
 	float gradingInputs[6]={0,1,1,1,0,0};
 	int toneMappingMode=4;
@@ -691,6 +699,9 @@ struct KineFilamentContext {
 	Engine *engine = nullptr;
 	SwapChain *swapChain = nullptr;
 	Renderer *renderer = nullptr;
+    SDL_WindowID displayWindowId = 0;
+    float displayRefreshHz = -1.0f;
+    std::chrono::steady_clock::time_point nextDisplayRefreshCheck{};
 	Scene *scene = nullptr;
 	View *view = nullptr;
 	Camera *camera = nullptr;
@@ -708,6 +719,15 @@ struct KineFilamentContext {
 	void *nativeWindow = nullptr;
 	bool renderToSwapChain = false;
 	bool useFilamentOwnedCompositor = false;
+    KineFrameBudget frameBudget;
+    float backendPressureSeconds = 0.0f;
+    DynamicResolutionOptions authoredResolution{};
+    bool adaptiveResolutionApplied = false;
+    float cloudBudgetScale = 1.0f;
+    bool adaptiveShadowResolution = false;
+    bool authoredShadowsValid = false;
+    LightManager::ShadowOptions authoredShadows{};
+    uint32_t effectiveShadowSize = 0;
 	bool loggedFirstFrame = false;
 #if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
 	bool readbackReady = false;
@@ -733,21 +753,39 @@ struct KineFilamentContext {
 	Material *forceFieldMaterial = nullptr;
 	KineFilamentWaterParams water = kine_default_water_params();
 	Material *cloudMaterial = nullptr;
-	// Scratch storage reused across frames so per-frame submission does not
-	// allocate a fresh key set and batch list every frame.
-	// Monotonic submission stamp: the pending map is also the deduplication
-	// index for retained draw lists, avoiding a second heap-backed hash set.
+
+
 	uint64_t retainedListSerial = 0;
 	std::vector<std::pair<KineBatchKey, KinePendingBatch *>> pendingSortScratch;
-	// Sun direction in world space, kept for materials that light themselves
-	// (the cloud volume raymarches towards it instead of using scene lights).
+
+
 	math::float3 sunDirection{0.0f, 1.0f, 0.0f};
 	float sunIntensity = 100000.0f;
 
-	// Sky cloud layer: an infinite slab drawn as a far-plane quad with the cloud
-	// material. Owned by Lighting, one per context.
+
 	Entity cloudEntity;
 	MaterialInstance *cloudMI = nullptr;
+    float cloudResolutionScale = 0.5f;
+    Material *cloudCompositeMaterial = nullptr;
+    Texture* cloudVolumeTextures[3]{};
+    int cloudNoiseSource = 0;
+    bool aerialFogAuthored = false;
+    MaterialInstance *cloudCompositeMI = nullptr;
+    bool cloudCompositeActive = false;
+    math::mat4 cloudLowLastModel{}, cloudLowLastProjection{};
+    float cloudLowLastTime = -1;
+    float cloudLowLastInputs[7]{};
+    math::float3 cloudLowLastSun{}, cloudLowLastColor{};
+    bool cloudLowValid = false;
+    View *cloudLowView = nullptr;
+    Scene *cloudLowScene = nullptr;
+    Entity cloudLowEntity;
+    MaterialInstance *cloudLowMI = nullptr;
+    Texture *cloudLowColor = nullptr;
+    Texture *cloudLowDepth = nullptr;
+    RenderTarget *cloudLowTarget = nullptr;
+    uint32_t cloudLowWidth = 0, cloudLowHeight = 0;
+
 	KineMesh *cloudMesh = nullptr;
 	bool cloudEnabled = false;
 	bool cloudInScene = false;
@@ -756,6 +794,12 @@ struct KineFilamentContext {
 	float cloudHeight = 700.0f;
 	float cloudThickness = 220.0f;
 	math::float3 cloudColor{1.0f, 1.0f, 1.0f};
+	bool cloudCastShadows = false;
+	float cloudShadowIntensity = 0.75f;
+	float cloudShadowScale = 1.0f;
+	float cloudShadowSpeed = 1.0f;
+	float cloudShadowSoftness = 1.0f;
+	float cloudShadowMaxDistance = 1500.0f;
 	Material *decalMaterial = nullptr;
 	Material *outlineMaterial = nullptr;
 	Material *gizmoMaterial = nullptr;
@@ -840,6 +884,13 @@ struct KineFilamentContext {
 	std::unordered_map<KineBatchKey, KinePersistentBatch, KineBatchKeyHash> builtBatches;
 	std::unordered_map<uint64_t, KineRetainedListState> retainedLists;
 	uint64_t batchFrame = 1;
+    KineFilamentBatchStats batchStats{};
+
+    std::vector<std::pair<KineBatchKey,uint64_t>> inactiveBatchScratch;
+    uint32_t batchCreatesByKind[16]{}, batchDestroysByKind[16]{};
+    uint32_t batchCacheBudget = 256;
+    uint32_t batchCacheReattachments = 0;
+    uint32_t batchCacheEvictions = 0;
 	std::vector<KineDecalResource> decals;
 	std::vector<Entity> lights;
 #if KINE_FILAMENT_USE_VULKAN && KINE_FILAMENT_ENABLE_VULKAN_READBACK
@@ -848,16 +899,16 @@ struct KineFilamentContext {
 
 	int renderMode = KINE_RENDER_MODE_FILAMENT;
 #if KINE_WITH_RAY
-	// Ray path tracer (render mode 2). The path tracer itself lives in
-	// kine_ray_shim.cpp; everything here is the Filament side of the bridge.
+
+
 	void *rayState = nullptr;
-	// Kept here as well so settings survive a NewRay/DestroyRay cycle and can be
-	// set before the path tracer exists.
+
+
 	KineRayProperties rayProperties = kine_ray_default_properties();
 	std::vector<KineRayQueuedDraw> rayDraws;
 	std::vector<KineRayDraw> rayFrameDraws;
-	// KineMesh stores 16-bit indices; Ray needs 32-bit. Converting once per mesh
-	// keeps per-frame cost independent of the instance count.
+
+
 	std::unordered_map<KineMesh *, std::vector<uint32_t>> rayIndexCache;
 	Texture *rayTexture = nullptr;
 	Material *rayMaterial = nullptr;
@@ -877,8 +928,6 @@ struct KineFilamentContext {
 struct KineFilamentCompositorSwapChain : backend::Platform::SwapChain {};
 
 
-// Non-owning external image import: the atlas pool owns the allocation, while
-// Filament and Skia only keep GPU views of it. No pixel copies or new devices.
 struct KineViewportExternalImage : backend::Platform::ExternalImage {
     VkImage image = VK_NULL_HANDLE;
     uint32_t size = 0, width = 0, height = 0;
@@ -887,12 +936,7 @@ struct KineViewportExternalImage : backend::Platform::ExternalImage {
 
 using KineFilamentVulkanPlatformBase = backend::VulkanPlatform;
 
-// Optional GPU override, shared with the standalone compositor:
-//   KINE_VULKAN_GPU=<substring of VkPhysicalDeviceProperties.deviceName>
-//   KINE_VULKAN_GPU_INDEX=<index in vkEnumeratePhysicalDevices order>
-// KINE_GPU and KINE_GPU_INDEX are accepted as shorter aliases. With neither
-// variable set, Filament's built-in preference is used, which already ranks a
-// discrete GPU above an integrated one.
+
 static const char *kine_vulkan_gpu_preference_name() noexcept {
 	for (const char *variable : {"KINE_VULKAN_GPU", "KINE_GPU"}) {
 		const char *value = std::getenv(variable);
@@ -922,8 +966,7 @@ static int kine_vulkan_gpu_preference_index() noexcept {
 	return -1;
 }
 
-// Filament's device-name preference is not reliable across SDK builds, so
-// translate a name match into the device index that its selector does honor.
+
 static int kine_vulkan_gpu_match_index(VkInstance instance, const char *name) noexcept {
 	if (!instance || !name || name[0] == '\0' ||
 		!vkEnumeratePhysicalDevices || !vkGetPhysicalDeviceProperties) {
@@ -947,8 +990,7 @@ static int kine_vulkan_gpu_match_index(VkInstance instance, const char *name) no
 	return -1;
 }
 
-// Queries the loader for instance extensions before the instance exists, which
-// is the only moment they can be added.
+
 static bool kine_instance_extension_available(const char *name) {
 	auto getInstanceProcAddr =
 			reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
@@ -972,8 +1014,8 @@ static bool kine_instance_extension_available(const char *name) {
 }
 
 #if KINE_XR_COMPILED
-// XR_KHR_vulkan_enable requires the runtime's Vulkan extensions to be
-// enabled at device creation, before a graphics-bound session can be made.
+
+
 static bool kine_xr_required_extensions(std::vector<std::string> &instanceNames,
                                         std::vector<std::string> &deviceNames) {
     const char *enable=std::getenv("KINE_VR");
@@ -1071,7 +1113,7 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
         out.filamentFormat = backend::TextureFormat::RGBA8;
         out.filamentUsage = backend::TextureUsage::COLOR_ATTACHMENT | backend::TextureUsage::SAMPLEABLE;
         out.width = image->width ? image->width : image->size;
-        out.height = image->height ? image->height : image->size; out.layers = 1;
+        out.height = image->height ? image->height : image->size; out.layers = 1; out.mipLevels = 1;
         out.samples = VK_SAMPLE_COUNT_1_BIT; out.format = VK_FORMAT_R8G8B8A8_UNORM;
         out.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         return out;
@@ -1079,7 +1121,7 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
     ImageData createVkImageFromExternal(ExternalImageHandleRef handle, uint32_t, uint32_t) const override {
         ImageData out{};
         out.internal.image = static_cast<const KineViewportExternalImage *>(handle.get())->image;
-        // A null memory handle leaves ownership with the atlas pool.
+
         return out;
     }
 
@@ -1274,6 +1316,16 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 				mWidth,
 				mHeight,
 				&backend);
+            if (mCompositor && mPresentQueueIndex != UINT32_MAX &&
+                mPresentQueueFamily == this->getGraphicsQueueFamilyIndex() && getDeviceProcAddr) {
+                auto getQueue = reinterpret_cast<PFN_vkGetDeviceQueue>(getDeviceProcAddr(this->getDevice(),"vkGetDeviceQueue"));
+                VkQueue presentQueue = VK_NULL_HANDLE;
+                if (getQueue) getQueue(this->getDevice(),mPresentQueueFamily,mPresentQueueIndex,&presentQueue);
+                if (presentQueue && presentQueue != this->getGraphicsQueue()) {
+                    Kine_VulkanCompositor_SetPresentQueue(mCompositor,presentQueue);
+                    Kine_VulkanCompositor_EnableCopyQueue(mCompositor,mPresentQueueFamily);
+                }
+            }
 			if (!Kine_VulkanCompositor_IsReady(mCompositor)) {
 				const char *error = Kine_VulkanCompositor_GetLastError(mCompositor);
 				fprintf(stderr,
@@ -1302,8 +1354,8 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 	ExtensionSet getSwapchainInstanceExtensions() const override {
 		uint32_t count = 0;
 		char const *const *required = SDL_Vulkan_GetInstanceExtensions(&count);
-		// Filament 1.81 uses a fixed-capacity vector of immutable strings.
-		// Allow one additional slot for the macOS portability extension.
+
+
 		auto extensions = ExtensionSet::with_capacity(count + 1);
 		if (required) {
 			for (uint32_t i = 0; i < count; ++i) {
@@ -1344,19 +1396,13 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 		}
 #endif
 
-		// Ray loads the VK_EXT_debug_report and VK_EXT_debug_utils entry points
-		// unconditionally when it initializes against this instance, and
-		// vkGetInstanceProcAddr only returns them for an instance that enabled the
-		// extensions. Filament never asks for either, so they are added here when
-		// the loader knows them.
+
 		{
 			constexpr const char *rayInstanceExtensions[] = {
 					"VK_EXT_debug_report",
 					"VK_EXT_debug_utils",
-					// Owns vkGetPhysicalDeviceProperties2KHR/Features2KHR, which are
-					// instance commands: the loader only hands their KHR aliases out
-					// when this extension is enabled, even on a Vulkan 1.x instance
-					// where the unsuffixed forms are already core.
+
+
 					"VK_KHR_get_physical_device_properties2",
 			};
 			for (const char *required : rayInstanceExtensions) {
@@ -1437,15 +1483,7 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 		}
 #endif
 
-		// Ray, the path tracer embedded in this shim, runs on this device and needs
-		// features Filament never asks for:
-		//   - descriptor indexing, because every descriptor set layout it builds
-		//     carries VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-		//   - shaderFloat16 + 16-bit storage, because it selects its precompiled
-		//     fp16 filter kernels whenever the physical device advertises
-		//     shaderFloat16, and those kernels declare float16_t storage buffers.
-		// Filament and Skia use none of them, so each is only enabled when the
-		// physical device supports it.
+
 		VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
 		VkPhysicalDevice16BitStorageFeatures storage16Features{};
 		VkPhysicalDeviceShaderFloat16Int8Features fp16Features{};
@@ -1467,8 +1505,8 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 							? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
 									  getInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"))
 							: nullptr;
-			// The 16-bit and float16 structs are core in Vulkan 1.1/1.2, so they can
-			// only be chained onto a device created at those API versions.
+
+
 			uint32_t apiVersion = VK_API_VERSION_1_0;
 			if (getPhysicalDeviceProperties && physicalDevice) {
 				VkPhysicalDeviceProperties properties{};
@@ -1525,38 +1563,116 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 		compositorCreateInfo.enabledExtensionCount =
 			static_cast<uint32_t>(extensions.size());
 		compositorCreateInfo.ppEnabledExtensionNames = extensions.data();
-		if (enableDescriptorIndexing) {
-			// pEnabledFeatures may stay set: only VkPhysicalDeviceFeatures2 in the
-			// chain is mutually exclusive with it.
-			void *chain = const_cast<void *>(compositorCreateInfo.pNext);
-			indexingFeatures.sType =
-					VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
-			indexingFeatures.pNext = chain;
-			chain = &indexingFeatures;
-			if (enableStorage16) {
-				storage16Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
-				storage16Features.pNext = chain;
-				chain = &storage16Features;
-			}
-			if (enableShaderFloat16) {
-				fp16Features.sType =
-						VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
-				fp16Features.pNext = chain;
-				chain = &fp16Features;
-			}
-			compositorCreateInfo.pNext = chain;
-			fprintf(stderr,
-					"[Kine] Filament Vulkan: enabled descriptor indexing for Ray "
-					"(16-bit storage %s, shaderFloat16 %s)\n",
-					enableStorage16 ? "on" : "off",
-					enableShaderFloat16 ? "on" : "off");
-		}
+        struct FeatureRestore {
+            VkBool32* field;
+            VkBool32 original;
+        };
+        std::vector<FeatureRestore> restore;
+        auto findFeature = [&](VkStructureType type) -> VkBaseOutStructure* {
+            auto* node = reinterpret_cast<const VkBaseInStructure*>(createInfo.pNext);
+            while (node) {
+                if (node->sType == type)
+                    return reinterpret_cast<VkBaseOutStructure*>(const_cast<VkBaseInStructure*>(node));
+                node = node->pNext;
+            }
+            return nullptr;
+        };
+        auto enableField = [&](VkBool32& field) {
+            if (field == VK_TRUE) return;
+            restore.push_back({&field,field});
+            field = VK_TRUE;
+        };
+        void* chain = const_cast<void*>(compositorCreateInfo.pNext);
+        if (enableDescriptorIndexing) {
+            auto* vk11 = reinterpret_cast<VkPhysicalDeviceVulkan11Features*>(
+                findFeature(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES));
+            auto* vk12 = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(
+                findFeature(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES));
+            auto* indexing = reinterpret_cast<VkPhysicalDeviceDescriptorIndexingFeatures*>(
+                findFeature(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES));
+            auto* storage = reinterpret_cast<VkPhysicalDevice16BitStorageFeatures*>(
+                findFeature(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES));
+            auto* fp16 = reinterpret_cast<VkPhysicalDeviceShaderFloat16Int8Features*>(
+                findFeature(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES));
+            const auto supportedIndexing = indexingFeatures;
+            if (vk12) {
+                enableField(vk12->descriptorIndexing);
+                enableField(vk12->descriptorBindingPartiallyBound);
+                if (supportedIndexing.shaderSampledImageArrayNonUniformIndexing) enableField(vk12->shaderSampledImageArrayNonUniformIndexing);
+                if (supportedIndexing.runtimeDescriptorArray) enableField(vk12->runtimeDescriptorArray);
+            } else if (indexing) {
+                enableField(indexing->descriptorBindingPartiallyBound);
+                if (supportedIndexing.shaderSampledImageArrayNonUniformIndexing) enableField(indexing->shaderSampledImageArrayNonUniformIndexing);
+                if (supportedIndexing.runtimeDescriptorArray) enableField(indexing->runtimeDescriptorArray);
+            } else {
+                indexingFeatures = {};
+                indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+                indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+                indexingFeatures.shaderSampledImageArrayNonUniformIndexing = supportedIndexing.shaderSampledImageArrayNonUniformIndexing;
+                indexingFeatures.runtimeDescriptorArray = supportedIndexing.runtimeDescriptorArray;
+                indexingFeatures.pNext = chain;
+                chain = &indexingFeatures;
+            }
+            if (enableStorage16) {
+                if (vk11) enableField(vk11->storageBuffer16BitAccess);
+                else if (storage) enableField(storage->storageBuffer16BitAccess);
+                else {
+                    storage16Features = {};
+                    storage16Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+                    storage16Features.storageBuffer16BitAccess = VK_TRUE;
+                    storage16Features.pNext = chain;
+                    chain = &storage16Features;
+                }
+            }
+            if (enableShaderFloat16) {
+                if (vk12) enableField(vk12->shaderFloat16);
+                else if (fp16) enableField(fp16->shaderFloat16);
+                else {
+                    fp16Features = {};
+                    fp16Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+                    fp16Features.shaderFloat16 = VK_TRUE;
+                    fp16Features.pNext = chain;
+                    chain = &fp16Features;
+                }
+            }
+            compositorCreateInfo.pNext = chain;
+        }
 
 		fprintf(stderr,
 				"[Kine] Filament Vulkan creating device with %u extensions and %u queue groups\n",
 				compositorCreateInfo.enabledExtensionCount,
 				compositorCreateInfo.queueCreateInfoCount);
+        std::vector<VkDeviceQueueCreateInfo> queues;
+        std::vector<float> presentPriorities;
+        mPresentQueueIndex = mPresentQueueFamily = UINT32_MAX;
+#if !defined(__ANDROID__)
+        if (createInfo.queueCreateInfoCount == 1 && createInfo.pQueueCreateInfos) {
+            const auto& original = createInfo.pQueueCreateInfos[0];
+            auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+            auto getFamilies = getInstanceProcAddr ? reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
+                getInstanceProcAddr(this->getInstance(),"vkGetPhysicalDeviceQueueFamilyProperties")) : nullptr;
+            if (getFamilies && this->getPhysicalDevice() && original.flags == 0 && original.pQueuePriorities) {
+                uint32_t count = 0;
+                getFamilies(this->getPhysicalDevice(),&count,nullptr);
+                std::vector<VkQueueFamilyProperties> families(count);
+                getFamilies(this->getPhysicalDevice(),&count,families.data());
+                const auto family = original.queueFamilyIndex;
+                if (family < count && (families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+                    original.queueCount < families[family].queueCount) {
+                    queues.assign(createInfo.pQueueCreateInfos,createInfo.pQueueCreateInfos+createInfo.queueCreateInfoCount);
+                    presentPriorities.assign(original.pQueuePriorities,original.pQueuePriorities+original.queueCount);
+                    presentPriorities.push_back(1.0f);
+                    mPresentQueueFamily = family;
+                    mPresentQueueIndex = original.queueCount;
+                    queues[0].queueCount += 1;
+                    queues[0].pQueuePriorities = presentPriorities.data();
+                    compositorCreateInfo.pQueueCreateInfos = queues.data();
+                }
+            }
+        }
+#endif
 		VkDevice device = KineFilamentVulkanPlatformBase::createVkDevice(compositorCreateInfo);
+        for (const auto& saved : restore) *saved.field = saved.original;
 		fprintf(stderr, "[Kine] Filament Vulkan device created: %p\n",
 				static_cast<void *>(device));
 		return device;
@@ -1568,6 +1684,8 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
     uint32_t mXrVulkanApiVersion=VK_API_VERSION_1_0;
     std::vector<std::string> mXrInstanceExtensions,mXrDeviceExtensions;
 #endif
+    uint32_t mPresentQueueIndex = UINT32_MAX;
+    uint32_t mPresentQueueFamily = UINT32_MAX;
 	KineVulkanCompositor *mCompositor = nullptr;
 	void *mSdlWindow = nullptr;
 	int mWidth = 0;
@@ -2233,9 +2351,7 @@ static void appendQuad(
 	m->indices.push_back(base + 3);
 }
 
-// Blender-style gizmo pieces. The gizmo material is unlit with culling and the
-// depth test off, so these only need a clean silhouette: round shafts and cone
-// tips read far better than the old square bars at a constant screen size.
+
 static void appendCylinderAxis(KineMesh *m, int axis, float from, float to, float radius, int segments) {
 	if (to < from) {
 		const float t = from;
@@ -2289,7 +2405,7 @@ static void appendCylinderAxis(KineMesh *m, int axis, float from, float to, floa
 		m->indices.push_back(a + 3);
 	}
 
-	// End caps so the tube is closed when seen straight down its axis.
+
 	for (int end = 0; end < 2; ++end) {
 		const float along = end == 0 ? from : to;
 		const uint32_t center = (uint32_t)m->vertices.size();
@@ -2369,7 +2485,7 @@ static void appendCone(KineMesh *m, int axis, float base, float tip, float radiu
 		m->indices.push_back(ring + (uint32_t)(i + 1));
 	}
 
-	// Base disc, visible from behind since culling is off.
+
 	const uint32_t center = (uint32_t)m->vertices.size();
 	float cp[3] = {0, 0, 0};
 	cp[axis] = base;
@@ -2454,7 +2570,7 @@ struct KineGizmoAxisMeshes {
 	KineMesh *planes[3] = {nullptr, nullptr, nullptr};
 };
 
-} // namespace
+}
 
 struct KineFilamentGizmo {
 	int type = KINE_GIZMO_MOVE;
@@ -2467,8 +2583,8 @@ static const float KINE_GIZMO_PLANE_OFFSET = 0.72f;
 static const float KINE_GIZMO_PLANE_HALF = 0.13f;
 
 static void buildPlaneHandles(KineGizmoAxisMeshes &g) {
-	// Thin flat plates instead of single quads, so they read as solid squares (and
-	// stay visible from any side) now that all three are always drawn.
+
+
 	const float o = KINE_GIZMO_PLANE_OFFSET;
 	const float size = KINE_GIZMO_PLANE_HALF * 2.0f;
 	const float thickness = KINE_GIZMO_PLANE_HALF * 0.18f;
@@ -3184,7 +3300,7 @@ static KineMesh *buildMeshFromAssimpScene(
 			}
 			kine_load_assimp_texture(scene,src,baseDir,dst.baseColorImage,{aiTextureType_BASE_COLOR,aiTextureType_DIFFUSE});
 			kine_load_assimp_texture(scene,src,baseDir,dst.normalImage,{aiTextureType_NORMALS});
-			// glTF packs roughness and metalness in G/B. The red channel is not AO.
+
 			if (kine_load_assimp_texture(scene,src,baseDir,dst.ormImage,{aiTextureType_UNKNOWN})) {
 				for (size_t p = 0; p < dst.ormImage.rgba.size(); p += 4) dst.ormImage.rgba[p] = 255;
 			}
@@ -3548,6 +3664,7 @@ static void kine_apply_material_params(KineFilamentContext *ctx, MaterialInstanc
 	} else if (key.materialKind == KINE_MAT_HIGHLIGHT_FILL ||
 			   key.materialKind == KINE_MAT_HIGHLIGHT_FILL_TOP) {
 		mi->setParameter("depthBias", key.param1);
+        mi->setParameter("useInstanceDepthBias",false);
 	} else if (key.materialKind == KINE_MAT_OUTLINE_MASK) {
 
 		mi->setParameter("maskValue", key.param1 > 0.0f ? key.param1 : 1.0f);
@@ -3701,9 +3818,7 @@ static bool kine_material_is_outline_mask(int materialKind) {
 	return materialKind == KINE_MAT_OUTLINE_MASK;
 }
 
-// Materials the path tracer can represent. Water, clouds, decals, particles and
-// gizmos are screen-space or editor effects with no Ray scene equivalent, and
-// the Highlight kinds paint into a private mask instead of the scene.
+
 static bool kine_material_is_path_traced(int materialKind) {
 	return materialKind == KINE_MAT_DEFAULT ||
 		   materialKind == KINE_MAT_FADE ||
@@ -3837,6 +3952,23 @@ static void kine_set_chunk_uvs(
 	mi->setParameter("instanceUvScale", scales, count);
 }
 
+static bool kine_instance_highlight_bias(const KineFilamentContext *ctx,const KineBatchKey &key) {
+    return !key.shader && !ctx->globalShader &&
+        (key.materialKind==KINE_MAT_HIGHLIGHT_FILL || key.materialKind==KINE_MAT_HIGHLIGHT_FILL_TOP);
+}
+
+
+static void kine_set_batch_scalars(KineFilamentContext *ctx,const KineBatchKey &key,
+    MaterialInstance *mi,const float *values,size_t count) {
+    if (kine_instance_highlight_bias(ctx,key)) {
+        if (!mi || !values || !count) return;
+        mi->setParameter("instanceDepthBias",values,std::min(count,KINE_MAX_INSTANCE_COLORS));
+        mi->setParameter("useInstanceDepthBias",true);
+    } else {
+        kine_set_chunk_uvs(mi,values,count);
+    }
+}
+
 static const KineMesh *kine_render_geometry(
 	const KineFilamentContext *ctx, const KineMesh *mesh, const Material *material) {
 	if (mesh->terrainField && material == ctx->terrainRaymarchMaterial)
@@ -3926,7 +4058,8 @@ static bool kine_rebuild_instance_batch(KineFilamentInstanceBatch *batch) {
 		renderableBuilder.boundingBox(bounds)
 			.culling(batch->key.culling)
 			.receiveShadows(batch->key.receiveShadow)
-			.layerMask(0xff,kine_scene_geometry_layer(batch->key.materialKind))
+			.screenSpaceContactShadows(batch->key.receiveShadow)
+			.layerMask(0xff,kine_scene_geometry_layer(batch->key.materialKind, batch->key.castShadow))
 			.castShadows(batch->key.castShadow)
 			.instances(count, instanceBuffer);
 		if (!mesh->bones.empty() && mesh->skinMatrices.size() == mesh->bones.size()) {
@@ -4153,8 +4286,8 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 						   TextureSampler::WrapMode::CLAMP_TO_EDGE);
 	ctx->postMaterialInstance->setParameter("inputTexture", ctx->postSceneColor, sampler);
 	if (std::any_of(parameters.begin(),parameters.end(),[](const auto &p){return strcmp(p.name,"depthTexture")==0 && p.isSampler && p.samplerType==Material::SamplerType::SAMPLER_2D;})) {
-		// Post-processing does not export Filament's internal depth. Capture
-		// the matching opaque scene in an independent, non-postprocessed view.
+
+
 		ctx->postSampleDepth = Texture::Builder().width(viewportWidth).height(viewportHeight).levels(1)
 			.format(Texture::InternalFormat::DEPTH32F)
 			.usage(Texture::Usage::DEPTH_ATTACHMENT | Texture::Usage::SAMPLEABLE).build(*ctx->engine);
@@ -4173,7 +4306,7 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 		TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
 		ctx->postMaterialInstance->setParameter("depthTexture",ctx->postSampleDepth,nearest);
 	}
-	kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
+    kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
 	if (ctx->postSceneUniformTypes.count("intensity") && ctx->postSceneUniformTypes.at("intensity") == Material::ParameterType::FLOAT &&
 		ctx->postProcessShader->uniforms.find("intensity") == ctx->postProcessShader->uniforms.end()) {
 		ctx->postMaterialInstance->setParameter("intensity", 1.0f);
@@ -4334,8 +4467,8 @@ static bool kine_build_outline_pipeline(KineFilamentContext *ctx) {
 	ctx->outlineMaskView->setCamera(ctx->camera);
 	ctx->outlineMaskView->setRenderTarget(ctx->outlineMaskTarget);
 	ctx->outlineMaskView->setViewport({0, 0, uint32_t(viewportWidth), uint32_t(viewportHeight)});
-	// Preserve mask alpha, including the zero-alpha background, through any
-	// intermediate buffers used by Filament.
+
+
 	ctx->outlineMaskView->setBlendMode(View::BlendMode::TRANSLUCENT);
 	ctx->outlineMaskView->setPostProcessingEnabled(false);
 	ctx->outlineMaskView->setShadowingEnabled(false);
@@ -4383,27 +4516,29 @@ static bool kine_ensure_outline_pipeline(KineFilamentContext *ctx) {
 	return kine_build_outline_pipeline(ctx);
 }
 
+static void kine_destroy_batch_tail(
+    KineFilamentContext *ctx, const KineBatchKey &key,
+    KinePersistentBatch &batch, size_t keep) {
+    Scene *scene = kine_scene_for_kind(ctx, key.materialKind);
+    for (size_t i = keep; i < batch.chunks.size(); ++i) {
+        auto &chunk = batch.chunks[i];
+        if (!chunk.entity.isNull()) {
+            if (scene) scene->remove(chunk.entity);
+            ctx->engine->destroy(chunk.entity);
+            EntityManager::get().destroy(chunk.entity);
+        }
+        if (chunk.instanceBuffer) ctx->engine->destroy(chunk.instanceBuffer);
+        if (chunk.materialInstance) ctx->engine->destroy(chunk.materialInstance);
+        kine_destroy_extra_materials(ctx, chunk.extraMaterials);
+        ++ctx->batchStats.destroyedChunks;
+        if (key.materialKind>=0 && key.materialKind<16) ++ctx->batchDestroysByKind[key.materialKind];
+    }
+    batch.chunks.resize(keep);
+}
+
 static void kine_destroy_batch_chunks(
-	KineFilamentContext *ctx,
-	const KineBatchKey &key,
-	KinePersistentBatch &batch) {
-	Scene *scene = kine_scene_for_kind(ctx, key.materialKind);
-	for (KineBuiltBatch &chunk : batch.chunks) {
-		if (!chunk.entity.isNull()) {
-			if (scene)
-				scene->remove(chunk.entity);
-			ctx->engine->destroy(chunk.entity);
-			EntityManager::get().destroy(chunk.entity);
-		}
-		if (chunk.instanceBuffer) {
-			ctx->engine->destroy(chunk.instanceBuffer);
-		}
-		if (chunk.materialInstance) {
-			ctx->engine->destroy(chunk.materialInstance);
-		}
-		kine_destroy_extra_materials(ctx,chunk.extraMaterials);
-	}
-	batch.chunks.clear();
+    KineFilamentContext *ctx, const KineBatchKey &key, KinePersistentBatch &batch) {
+    kine_destroy_batch_tail(ctx,key,batch,0);
 }
 
 static void kine_destroy_persistent_batch(
@@ -4414,7 +4549,10 @@ static void kine_destroy_persistent_batch(
 }
 
 static void kine_update_batches(KineFilamentContext *ctx) {
-	size_t maxInstances = kine_max_chunk_instances(ctx);
+	ctx->batchStats = {};
+    std::fill_n(ctx->batchCreatesByKind,16,0u);
+    std::fill_n(ctx->batchDestroysByKind,16,0u);
+    size_t maxInstances = kine_max_chunk_instances(ctx);
 
 	std::vector<std::pair<KineBatchKey, KinePendingBatch *>> &sortedBatches =
 		ctx->pendingSortScratch;
@@ -4462,28 +4600,18 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 		std::vector<math::float4> &colors = pending->colors;
 		std::vector<float> &uvScales = pending->uvScales;
 		const size_t requiredChunks = (transforms.size() + maxInstances - 1) / maxInstances;
-		bool rebuildChunks = batch.chunks.size() != requiredChunks;
-		if (!rebuildChunks) {
-			for (size_t chunkIndex = 0; chunkIndex < requiredChunks; chunkIndex++) {
-				const size_t offset = chunkIndex * maxInstances;
-				const size_t count = std::min(maxInstances, transforms.size() - offset);
-				if (batch.chunks[chunkIndex].instanceCount != count) {
-					rebuildChunks = true;
-					break;
-				}
-			}
-		}
 
-		if (rebuildChunks) {
-			kine_destroy_batch_chunks(ctx, key, batch);
-		}
-		const bool transformsChanged = rebuildChunks || batch.transformHash != pending->transformHash;
-		const bool colorsChanged = rebuildChunks || batch.colorHash != pending->colorHash;
-		const bool uvsChanged = rebuildChunks || batch.uvHash != pending->uvHash;
 
-		// A batch retained (and detached) on a previous frame is being used
-		// again: hook its entities back into the scene.
-		if (!rebuildChunks && batch.detached) {
+		const size_t previousChunks = batch.chunks.size();
+        if (previousChunks > requiredChunks) kine_destroy_batch_tail(ctx,key,batch,requiredChunks);
+        if (batch.chunks.capacity() < requiredChunks) batch.chunks.reserve(requiredChunks);
+        const bool transformsChanged = batch.transformHash != pending->transformHash;
+        const bool colorsChanged = batch.colorHash != pending->colorHash;
+        const bool uvsChanged = batch.uvHash != pending->uvHash;
+        const bool imported = kine_uses_imported_materials(ctx,key);
+
+
+		if (batch.detached) {
 			Scene *reattachScene = kine_scene_for_kind(ctx, key.materialKind);
 			if (reattachScene) {
 				for (KineBuiltBatch &chunk : batch.chunks) {
@@ -4492,7 +4620,14 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 				}
 			}
 			batch.detached = false;
+            ctx->batchCacheReattachments += uint32_t(batch.chunks.size());
 		}
+
+        if (previousChunks == requiredChunks && !transformsChanged && !colorsChanged && !uvsChanged &&
+            !batch.chunks.empty() && batch.chunks.back().instanceCount == transforms.size() - (requiredChunks-1)*maxInstances) {
+            ++ctx->batchStats.unchangedBatches;
+            continue;
+        }
 
 		size_t offset = 0;
 		size_t chunkIndex = 0;
@@ -4503,16 +4638,15 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 			const float *chunkUvs = uvScales.size() == transforms.size()
 										? uvScales.data() + offset
 										: nullptr;
-			if (rebuildChunks) {
+			if (chunkIndex >= batch.chunks.size()) {
 				const Box bounds = kine_compute_batch_bounds(kine_render_geometry(ctx, m, base),
 					chunkTransforms, count, key.shader,
 					key.materialKind == KINE_MAT_WATER ? 0.65f*ctx->water.strength*ctx->water.height : 0.0f);
 				MaterialInstance *mi = base->createInstance();
 				kine_apply_material_params(ctx, mi, key);
-				kine_set_chunk_colors(mi, chunkColors, count);
-				kine_set_chunk_uvs(mi, chunkUvs, count);
+				if (!imported) {kine_set_chunk_colors(mi, chunkColors, count); kine_set_batch_scalars(ctx,key,mi,chunkUvs,count);}
 
-				InstanceBuffer *instanceBuffer = InstanceBuffer::Builder(count).build(*ctx->engine);
+				InstanceBuffer *instanceBuffer = InstanceBuffer::Builder(maxInstances).build(*ctx->engine);
 				instanceBuffer->setLocalTransforms(chunkTransforms, count, 0);
 
 				Entity entity = EntityManager::get().create();
@@ -4522,7 +4656,8 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 				renderableBuilder.boundingBox(bounds)
 					.culling(key.culling)
 					.receiveShadows(key.receiveShadow)
-					.layerMask(0xff,kine_scene_geometry_layer(key.materialKind))
+					.screenSpaceContactShadows(key.receiveShadow)
+					.layerMask(0xff,kine_scene_geometry_layer(key.materialKind, key.castShadow))
 					.castShadows(key.castShadow)
 					.instances(count, instanceBuffer);
 				if (!m->bones.empty() && m->skinMatrices.size() == m->bones.size()) {
@@ -4546,15 +4681,29 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 				targetScene->addEntity(entity);
 				batch.chunks.push_back({entity, instanceBuffer, mi, count});
 				batch.chunks.back().extraMaterials=std::move(extraMaterials);
+                batch.chunks.back().cachedColors.assign(chunkColors,chunkColors+count);
+                if (chunkUvs && !imported) batch.chunks.back().cachedUvs.assign(chunkUvs,chunkUvs+count);
+                ++ctx->batchStats.createdChunks;
+                if(key.materialKind>=0 && key.materialKind<16) ++ctx->batchCreatesByKind[key.materialKind];
+                ++ctx->batchStats.transformUploads;
+                ++ctx->batchStats.colorUploads;
+                ++ctx->batchStats.boundsUpdates;
+                if (chunkUvs && !imported) ++ctx->batchStats.uvUploads;
 				batch.chunks.back().instanceTransformHashes.assign(
 					pending->instanceTransformHashes.begin() + offset,
 					pending->instanceTransformHashes.begin() + offset + count);
-			} else if (transformsChanged || colorsChanged || uvsChanged) {
+			} else {
 				KineBuiltBatch &chunk = batch.chunks[chunkIndex];
-				if (transformsChanged) {
-					// Upload only the instances whose transform actually moved.
-					// The bounds are still a union over the whole chunk, so they
-					// are recomputed whenever anything in it changed.
+				const bool countChanged = chunk.instanceCount != count;
+				if (countChanged) {
+					RenderableManager &rm = ctx->engine->getRenderableManager();
+					const RenderableManager::Instance renderable = rm.getInstance(chunk.entity);
+					if (renderable.isValid()) rm.setInstanceCount(renderable, count);
+					chunk.instanceCount = count;
+				}
+				if (transformsChanged || countChanged) {
+
+
 					const bool hashSizeMismatch = chunk.instanceTransformHashes.size() != count;
 					size_t firstDirty = count;
 					size_t lastDirty = 0;
@@ -4570,6 +4719,8 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 					if (firstDirty < count) {
 						const Box bounds = kine_compute_batch_bounds(kine_render_geometry(ctx, m, base), chunkTransforms, count, key.shader,
 							key.materialKind == KINE_MAT_WATER ? 0.65f*ctx->water.strength*ctx->water.height : 0.0f);
+						++ctx->batchStats.transformUploads;
+                        ++ctx->batchStats.boundsUpdates;
 						chunk.instanceBuffer->setLocalTransforms(
 							chunkTransforms + firstDirty, lastDirty - firstDirty + 1, firstDirty);
 						RenderableManager &rm = ctx->engine->getRenderableManager();
@@ -4582,13 +4733,28 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 						pending->instanceTransformHashes.begin() + offset,
 						pending->instanceTransformHashes.begin() + offset + count);
 				}
-				if (colorsChanged) {
-					kine_set_chunk_colors(chunk.materialInstance, chunkColors, count);
-					for (auto *mi : chunk.extraMaterials) kine_set_chunk_colors(mi,chunkColors,count);
-				}
-				if (uvsChanged) {
-					if (!kine_uses_imported_materials(ctx,key)) kine_set_chunk_uvs(chunk.materialInstance, chunkUvs, count);
-				}
+				if ((colorsChanged || countChanged) &&
+                    (chunk.cachedColors.size() != count ||
+                     std::memcmp(chunk.cachedColors.data(),chunkColors,count*sizeof(*chunkColors)) != 0)) {
+                    kine_set_chunk_colors(chunk.materialInstance, chunkColors, count);
+                    for (auto *mi : chunk.extraMaterials) kine_set_chunk_colors(mi,chunkColors,count);
+                    chunk.cachedColors.assign(chunkColors,chunkColors+count);
+                    ++ctx->batchStats.colorUploads;
+                }
+                if (imported && countChanged) {
+                    std::array<float,KINE_MAX_INSTANCE_COLORS> units;
+                    units.fill(1.0f);
+                    kine_set_chunk_uvs(chunk.materialInstance,units.data(),count);
+                    for (auto *mi:chunk.extraMaterials) kine_set_chunk_uvs(mi,units.data(),count);
+                    ++ctx->batchStats.uvUploads;
+                }
+                if (!imported && chunkUvs && (uvsChanged || countChanged) &&
+                    (chunk.cachedUvs.size() != count ||
+                     std::memcmp(chunk.cachedUvs.data(),chunkUvs,count*sizeof(*chunkUvs)) != 0)) {
+                    kine_set_batch_scalars(ctx,key,chunk.materialInstance,chunkUvs,count);
+                    chunk.cachedUvs.assign(chunkUvs,chunkUvs+count);
+                    ++ctx->batchStats.uvUploads;
+                }
 			}
 
 			offset += count;
@@ -4610,34 +4776,77 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 		}
 	}
 
-	// Keep a batch's GPU objects for a couple of frames after it stops being
-	// drawn, but detach it immediately so it does not render stale geometry.
-	// Frustum culling can drop a batch for a single frame at an edge; rebuilding
-	// the entity, instance buffer and material instance for that is pure churn.
-	constexpr uint64_t KINE_BATCH_RETENTION_FRAMES = 2;
-	for (auto it = ctx->builtBatches.begin(); it != ctx->builtBatches.end();) {
-		KinePersistentBatch &batch = it->second;
-		if (batch.lastUsedFrame == ctx->batchFrame) {
-			++it;
-			continue;
-		}
-		if (ctx->batchFrame - batch.lastUsedFrame <= KINE_BATCH_RETENTION_FRAMES) {
-			if (!batch.detached) {
-				Scene *scene = kine_scene_for_kind(ctx, it->first.materialKind);
-				if (scene) {
-					for (KineBuiltBatch &chunk : batch.chunks) {
-						if (!chunk.entity.isNull())
-							scene->remove(chunk.entity);
-					}
-				}
-				batch.detached = true;
-			}
-			++it;
-			continue;
-		}
-		kine_destroy_persistent_batch(ctx, it->first, it->second);
-		it = ctx->builtBatches.erase(it);
-	}
+
+    constexpr uint64_t retentionFrames = 24;
+    auto &inactive = ctx->inactiveBatchScratch;
+    inactive.clear();
+    size_t retainedChunks = 0;
+    for (auto it=ctx->builtBatches.begin();it!=ctx->builtBatches.end();) {
+        auto &batch=it->second;
+        if (batch.lastUsedFrame==ctx->batchFrame) {
+            ++ctx->batchStats.activeBatches;
+            ctx->batchStats.activeChunks+=uint32_t(batch.chunks.size());
+            ++it;continue;
+        }
+        if (!batch.detached) {
+            if (Scene *scene=kine_scene_for_kind(ctx,it->first.materialKind)) {
+                for (const auto &chunk:batch.chunks)
+                    if (!chunk.entity.isNull()) scene->remove(chunk.entity);
+            }
+            batch.detached=true;
+        }
+        if (ctx->batchFrame-batch.lastUsedFrame>retentionFrames || batch.chunks.empty()) {
+            ctx->batchCacheEvictions+=uint32_t(batch.chunks.size());
+            kine_destroy_persistent_batch(ctx,it->first,batch);
+            it=ctx->builtBatches.erase(it);continue;
+        }
+        retainedChunks+=batch.chunks.size();
+        inactive.emplace_back(it->first,batch.lastUsedFrame);
+        ++it;
+    }
+
+
+    ctx->batchCacheBudget=std::clamp(ctx->batchStats.activeChunks*2u,256u,2048u);
+    if (retainedChunks>ctx->batchCacheBudget) {
+        std::sort(inactive.begin(),inactive.end(),[](const auto&a,const auto&b){return a.second<b.second;});
+        for (const auto &entry:inactive) {
+            if (retainedChunks<=ctx->batchCacheBudget) break;
+            auto it=ctx->builtBatches.find(entry.first);
+            if (it==ctx->builtBatches.end()) continue;
+            const size_t n=it->second.chunks.size();
+            retainedChunks-=n;
+            ctx->batchCacheEvictions+=uint32_t(n);
+            kine_destroy_persistent_batch(ctx,it->first,it->second);
+            ctx->builtBatches.erase(it);
+        }
+    }
+    ctx->batchStats.retainedChunks=uint32_t(retainedChunks);
+
+
+    static const bool trace = std::getenv("KINE_BATCH_DIAGNOSTICS")!=nullptr;
+    if (trace && ctx->batchFrame%120==0) {
+        fprintf(stderr,"[BatchDiag] frame=%llu active=%u retained=%u budget=%u creates=%u destroys=%u reattached=%u evicted=%u",
+            (unsigned long long)ctx->batchFrame,ctx->batchStats.activeChunks,ctx->batchStats.retainedChunks,
+            ctx->batchCacheBudget,ctx->batchStats.createdChunks,ctx->batchStats.destroyedChunks,
+            ctx->batchCacheReattachments,ctx->batchCacheEvictions);
+        for (int i=0;i<16;++i) if(ctx->batchCreatesByKind[i]||ctx->batchDestroysByKind[i])
+            fprintf(stderr," kind%d=%u/%u",i,ctx->batchCreatesByKind[i],ctx->batchDestroysByKind[i]);
+        fputc(10,stderr);
+        if(ctx->batchStats.createdChunks>0) {
+            unsigned int shown=0;
+            for(const auto &entry:ctx->builtBatches) {
+                if(shown>=12)break;
+                if(entry.second.lastUsedFrame!=ctx->batchFrame)continue;
+                const auto &k=entry.first;
+                fprintf(stderr,"[BatchKey] stream=%llu kind=%d mesh=%p tex=%p origin=%.0f,%.0f,%.0f params=%g,%g,%g,%g chunks=%zu",
+                    (unsigned long long)k.streamId,k.materialKind,(void*)k.mesh,(void*)k.texture,
+                    k.originX,k.originY,k.originZ,k.param1,k.param2,k.param3,k.transmission,entry.second.chunks.size());
+                fputc(10,stderr);++shown;
+            }
+        }
+    }
+    ctx->batchCacheReattachments=0;
+    ctx->batchCacheEvictions=0;
 }
 
 static void kine_finish_batch_frame(KineFilamentContext *ctx) {
@@ -4645,9 +4854,13 @@ static void kine_finish_batch_frame(KineFilamentContext *ctx) {
 
 	ctx->outlineQueued = false;
 	for (auto it = ctx->pendingBatches.begin(); it != ctx->pendingBatches.end();) {
-		if (ctx->batchFrame - it->second.lastQueuedFrame > 120) {
-			it = ctx->pendingBatches.erase(it);
-		} else {
+        const auto built = ctx->builtBatches.find(it->first);
+        const bool active = built != ctx->builtBatches.end() &&
+                !built->second.detached &&
+                built->second.lastUsedFrame + 1 >= ctx->batchFrame;
+        if (ctx->batchFrame - it->second.lastQueuedFrame > 120 && !active) {
+            it = ctx->pendingBatches.erase(it);
+        } else {
 			++it;
 		}
 	}
@@ -4746,7 +4959,7 @@ static void kine_destroy_decal(KineFilamentContext *ctx, KineDecalResource &deca
 	}
 }
 
-} // namespace
+}
 
 static Material *buildDefaultMaterial(Engine *engine) {
 	return Material::Builder()
@@ -4770,6 +4983,7 @@ static void kine_destroy_water_contact(Engine *engine, KineWaterContactDepth &co
 
 static void kine_render_water_contact(KineFilamentContext *ctx, View *mainView, KineWaterContactDepth &contact) {
 	if (!contact.depth) return;
+	++ctx->passStats.waterDepth;
 	contact.view->setScene(mainView->getScene());
 	contact.view->setCamera(&mainView->getCamera());
 	Renderer::ClearOptions clear{};
@@ -4781,8 +4995,8 @@ static void kine_render_water_contact(KineFilamentContext *ctx, View *mainView, 
 
 static Texture *kine_prepare_water_contact(KineFilamentContext *ctx, KineWaterContactDepth &contact) {
 	if (!contact.depth) {
-		// The same camera projection maps to normalized UVs at any resolution.
-		// Keep the texture stable so retained materials can share it across resizes.
+
+
 		constexpr uint32_t size = 768;
 		contact.depth = Texture::Builder().width(size).height(size).levels(1)
 			.format(Texture::InternalFormat::DEPTH32F)
@@ -4837,14 +5051,11 @@ static Material *buildCloudMaterial(Engine *engine) {
 		.build(*engine);
 }
 
-// ---------------------------------------------------------------------------
-// Sky cloud layer
-//
-// An infinite horizontal slab raymarched by kine_cloud. The only geometry is a
-// quad parked on the far plane, so the layer has no horizontal edge and is
-// depth-tested against the scene; Lighting drives it through
-// Kine_Filament_SetClouds and the shim owns the entity.
-// ---------------------------------------------------------------------------
+
+#if defined(KINE_GPU_CLOUD_NOISE_AVAILABLE)
+#include "kine_cloud_gpu.inc"
+#endif
+#include "kine_cloud_volume.inc"
 
 static bool kine_ensure_cloud_layer(KineFilamentContext *ctx) {
 	if (ctx->cloudMI)
@@ -4853,7 +5064,7 @@ static bool kine_ensure_cloud_layer(KineFilamentContext *ctx) {
 		return false;
 
 	if (!ctx->cloudMesh) {
-		// Unit quad in the XY plane, sized into the far plane by the transform.
+
 		auto *mesh = new KineMesh();
 		mesh->vertices = {
 			{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f},
@@ -4874,6 +5085,12 @@ static bool kine_ensure_cloud_layer(KineFilamentContext *ctx) {
 	ctx->cloudMI = ctx->cloudMaterial->createInstance();
 	if (!ctx->cloudMI)
 		return false;
+    if (!kine_cloud_prepare_luts(ctx)) {
+        ctx->engine->destroy(ctx->cloudMI);
+        ctx->cloudMI = nullptr;
+        return false;
+    }
+    kine_cloud_bind_luts(ctx, ctx->cloudMI);
 
 	ctx->cloudEntity = EntityManager::get().create();
 	RenderableManager::Builder(1)
@@ -4893,8 +5110,7 @@ static void kine_update_cloud_for_camera(KineFilamentContext *ctx, Camera *camer
 	if (!ctx || !camera || !mi || entity.isNull()) return;
 	const float thickness = std::max(ctx->cloudThickness, 1.0f);
 
-	// Independent eye projections are asymmetric. Fit the cloud proxy to
-	// each actual frustum, including the offset of its optical centre.
+
 	const math::mat4 modelD = camera->getModelMatrix();
 	const math::mat4 projD = camera->getProjectionMatrix();
 
@@ -4903,14 +5119,14 @@ static void kine_update_cloud_for_camera(KineFilamentContext *ctx, Camera *camer
 	const math::float3 up{(float)modelD[1].x, (float)modelD[1].y, (float)modelD[1].z};
 	const math::float3 forward{-(float)modelD[2].x, -(float)modelD[2].y, -(float)modelD[2].z};
 
-	const double focalX = projD[0].x; // column-major: x focal
-	const double focalY = projD[1].y; // y focal
+	const double focalX = projD[0].x;
+	const double focalY = projD[1].y;
 	if (!(focalX > 1e-6) || !(focalY > 1e-6))
 		return;
 
 	const float distance = (float)camera->getCullingFar() * 0.98f;
-	// In a perspective matrix, clip.w = -view.z. The centre of NDC is
-	// therefore at x = distance * P[2][0] / P[0][0] (likewise for y).
+
+
 	const float halfWidth = (float)(distance / focalX) * 1.08f;
 	const float halfHeight = (float)(distance / focalY) * 1.08f;
 	const float shiftX = (float)(distance * projD[2].x / focalX);
@@ -4936,9 +5152,9 @@ static void kine_update_cloud_for_camera(KineFilamentContext *ctx, Camera *camer
 	mi->setParameter("cover", ctx->cloudCover);
 	mi->setParameter("density", ctx->cloudDensity);
 	mi->setParameter("detail", 1.0f);
-	mi->setParameter("noiseScale", std::max(thickness * 1.6f, 40.0f));
+	mi->setParameter("noiseScale", std::max(thickness * 4.0f, 240.0f));
 	mi->setParameter("absorption", 1.4f);
-	mi->setParameter("slabCentre", math::float3{0.0f, ctx->cloudHeight - eye.y, 0.0f});
+	mi->setParameter("slabCentre", math::float3{0.0f, ctx->cloudHeight, 0.0f});
 	mi->setParameter("halfThickness", thickness * 0.5f);
 	mi->setParameter("cameraPosition", eye);
 	mi->setParameter("scattering", 1.1f);
@@ -4946,6 +5162,7 @@ static void kine_update_cloud_for_camera(KineFilamentContext *ctx, Camera *camer
 	mi->setParameter("sunDirection", ctx->sunDirection);
 	mi->setParameter("sunColor", math::float3{1.0f, 0.97f, 0.92f});
 	mi->setParameter("cloudColor", ctx->cloudColor);
+
 }
 
 static void kine_update_cloud_layer(KineFilamentContext *ctx) {
@@ -4954,7 +5171,167 @@ static void kine_update_cloud_layer(KineFilamentContext *ctx) {
 		ctx->scene->addEntity(ctx->cloudEntity);
 		ctx->cloudInScene = true;
 	}
+    if (ctx->cloudCompositeActive) {
+        auto &rm=ctx->engine->getRenderableManager();
+        if (auto r=rm.getInstance(ctx->cloudEntity);r.isValid()) rm.setMaterialInstanceAt(r,0,ctx->cloudMI);
+        ctx->cloudCompositeActive=false;
+    }
 	kine_update_cloud_for_camera(ctx, ctx->camera, ctx->cloudEntity, ctx->cloudMI);
+}
+
+
+static void kine_destroy_cloud_low_target(KineFilamentContext *ctx) {
+    if (ctx->cloudCompositeActive) {
+        auto &rm=ctx->engine->getRenderableManager();
+        if (auto r=rm.getInstance(ctx->cloudEntity);r.isValid()) rm.setMaterialInstanceAt(r,0,ctx->cloudMI);
+        ctx->cloudCompositeActive=false;
+    }
+    if (ctx->cloudCompositeMI) {
+        ctx->engine->destroy(ctx->cloudCompositeMI);
+        ctx->cloudCompositeMI=nullptr;
+    }
+    ctx->cloudLowValid=false;
+    if (ctx->cloudLowView) ctx->cloudLowView->setRenderTarget(nullptr);
+    if (ctx->cloudLowTarget) ctx->engine->destroy(ctx->cloudLowTarget);
+    if (ctx->cloudLowColor) ctx->engine->destroy(ctx->cloudLowColor);
+    if (ctx->cloudLowDepth) ctx->engine->destroy(ctx->cloudLowDepth);
+    ctx->cloudLowTarget=nullptr;ctx->cloudLowColor=nullptr;ctx->cloudLowDepth=nullptr;
+    ctx->cloudLowWidth=ctx->cloudLowHeight=0;
+}
+
+static void kine_destroy_cloud_low_pass(KineFilamentContext *ctx) {
+    kine_destroy_cloud_low_target(ctx);
+    if (!ctx->cloudLowEntity.isNull()) {
+        if (ctx->cloudLowScene) ctx->cloudLowScene->remove(ctx->cloudLowEntity);
+        ctx->engine->destroy(ctx->cloudLowEntity);
+        EntityManager::get().destroy(ctx->cloudLowEntity);
+        ctx->cloudLowEntity={};
+    }
+    if (ctx->cloudLowMI) ctx->engine->destroy(ctx->cloudLowMI);
+    if (ctx->cloudLowView) ctx->engine->destroy(ctx->cloudLowView);
+    if (ctx->cloudLowScene) ctx->engine->destroy(ctx->cloudLowScene);
+    ctx->cloudLowMI=nullptr;ctx->cloudLowView=nullptr;ctx->cloudLowScene=nullptr;
+    if (ctx->cloudCompositeMaterial) ctx->engine->destroy(ctx->cloudCompositeMaterial);
+    ctx->cloudCompositeMaterial=nullptr;
+}
+
+static bool kine_prepare_cloud_low_pass(KineFilamentContext *ctx) {
+    if (!ctx->cloudEnabled || !ctx->cloudMI || !ctx->cloudMesh || ctx->cloudResolutionScale>=1.0f ||
+        !ctx->renderWorld || !ctx->renderToSwapChain || !ctx->whiteTex) return false;
+    const auto vp=ctx->view->getViewport();
+    if (vp.width<128 || vp.height<128) return false;
+
+
+    if (ctx->cloudCover<=0.0f || ctx->cloudDensity<=0.0f) return false;
+    const float worldScale = ctx->adaptiveResolutionApplied ? std::min(1.0f,ctx->frameBudget.scale) : 1.0f;
+    const float requestedScale = worldScale <= 0.55f ? 0.5f : worldScale <= 0.80f ? 0.75f : 1.0f;
+    if (requestedScale < ctx->cloudBudgetScale ||
+        (ctx->cloudBudgetScale == 0.5f && worldScale > 0.65f) ||
+        (ctx->cloudBudgetScale == 0.75f && worldScale > 0.90f) ||
+        !ctx->adaptiveResolutionApplied) ctx->cloudBudgetScale = requestedScale;
+    const float scale = ctx->cloudResolutionScale * ctx->cloudBudgetScale;
+    const uint32_t w=std::max(1u,uint32_t(std::ceil(vp.width*scale)));
+    const uint32_t h=std::max(1u,uint32_t(std::ceil(vp.height*scale)));
+    if (!ctx->cloudLowView) {
+        ctx->cloudLowScene=ctx->engine->createScene();
+        ctx->cloudLowView=ctx->engine->createView();
+        ctx->cloudLowMI=ctx->cloudMaterial->createInstance();
+        if (ctx->cloudLowMI && kine_cloud_prepare_luts(ctx))
+            kine_cloud_bind_luts(ctx, ctx->cloudLowMI);
+        else { kine_destroy_cloud_low_pass(ctx); return false; }
+        if (!ctx->cloudLowScene || !ctx->cloudLowView || !ctx->cloudLowMI) {
+            kine_destroy_cloud_low_pass(ctx);return false;
+        }
+        ctx->cloudLowEntity=EntityManager::get().create();
+        RenderableManager::Builder(1)
+            .boundingBox({{-1,-1,-1},{1,1,1}}).material(0,ctx->cloudLowMI)
+            .geometry(0,RenderableManager::PrimitiveType::TRIANGLES,ctx->cloudMesh->vb,ctx->cloudMesh->ib)
+            .culling(false).castShadows(false).receiveShadows(false)
+            .build(*ctx->engine,ctx->cloudLowEntity);
+        ctx->cloudLowScene->addEntity(ctx->cloudLowEntity);
+        ctx->cloudLowView->setScene(ctx->cloudLowScene);
+        ctx->cloudLowView->setBlendMode(View::BlendMode::TRANSLUCENT);
+        ctx->cloudLowView->setPostProcessingEnabled(false);
+        ctx->cloudLowView->setShadowingEnabled(false);
+    }
+    if (!ctx->cloudLowTarget || w!=ctx->cloudLowWidth || h!=ctx->cloudLowHeight) {
+        kine_destroy_cloud_low_target(ctx);
+        const auto format=Texture::isTextureFormatSupported(*ctx->engine,Texture::InternalFormat::RGBA16F)
+            ? Texture::InternalFormat::RGBA16F : Texture::InternalFormat::RGBA8;
+        ctx->cloudLowColor=Texture::Builder().width(w).height(h).levels(1).format(format)
+            .usage(Texture::Usage::COLOR_ATTACHMENT|Texture::Usage::SAMPLEABLE).build(*ctx->engine);
+        ctx->cloudLowDepth=Texture::Builder().width(w).height(h).levels(1).format(Texture::InternalFormat::DEPTH24)
+            .usage(Texture::Usage::DEPTH_ATTACHMENT).build(*ctx->engine);
+        if (ctx->cloudLowColor && ctx->cloudLowDepth) {
+            ctx->cloudLowTarget=RenderTarget::Builder().texture(RenderTarget::AttachmentPoint::COLOR,ctx->cloudLowColor)
+                .texture(RenderTarget::AttachmentPoint::DEPTH,ctx->cloudLowDepth).build(*ctx->engine);
+        }
+        if (!ctx->cloudLowTarget) {kine_destroy_cloud_low_target(ctx);return false;}
+        ctx->cloudLowWidth=w;ctx->cloudLowHeight=h;
+        if (!ctx->cloudCompositeMaterial) ctx->cloudCompositeMaterial=Material::Builder()
+            .package(KINE_CLOUD_COMPOSITE_PACKAGE_KINE_CLOUD_COMPOSITE_DATA,KINE_CLOUD_COMPOSITE_PACKAGE_KINE_CLOUD_COMPOSITE_SIZE)
+            .build(*ctx->engine);
+        if (!ctx->cloudCompositeMaterial) {kine_destroy_cloud_low_target(ctx);return false;}
+        ctx->cloudCompositeMI=ctx->cloudCompositeMaterial->createInstance();
+        if (!ctx->cloudCompositeMI) {kine_destroy_cloud_low_target(ctx);return false;}
+        TextureSampler sampler(TextureSampler::MinFilter::LINEAR,TextureSampler::MagFilter::LINEAR,
+            TextureSampler::WrapMode::CLAMP_TO_EDGE);
+        ctx->cloudCompositeMI->setParameter("cloudImage",ctx->cloudLowColor,sampler);
+        ctx->cloudLowView->setRenderTarget(ctx->cloudLowTarget);
+        ctx->cloudLowView->setViewport({0,0,w,h});
+    }
+    const auto model=ctx->camera->getModelMatrix();
+    const auto projection=ctx->camera->getProjectionMatrix();
+    const float inputs[]={ctx->cloudCover,ctx->cloudDensity,ctx->cloudHeight,ctx->cloudThickness,
+        ctx->camera->getAperture(),ctx->camera->getShutterSpeed(),ctx->camera->getSensitivity()};
+
+
+    const bool refresh=!ctx->cloudLowValid || model!=ctx->cloudLowLastModel ||
+        projection!=ctx->cloudLowLastProjection || ctx->cloudLowLastSun!=ctx->sunDirection ||
+        ctx->cloudLowLastColor!=ctx->cloudColor ||
+        !std::equal(std::begin(inputs),std::end(inputs),ctx->cloudLowLastInputs) ||
+        ctx->time-ctx->cloudLowLastTime>=1.0f/60.0f;
+    if (refresh) {
+        ctx->cloudLowValid=false;
+        ctx->cloudLowView->setCamera(ctx->camera);
+        kine_update_cloud_for_camera(ctx,ctx->camera,ctx->cloudLowEntity,ctx->cloudLowMI);
+        ctx->cloudLowLastModel=model;ctx->cloudLowLastProjection=projection;
+        ctx->cloudLowLastSun=ctx->sunDirection;ctx->cloudLowLastColor=ctx->cloudColor;
+        std::copy(std::begin(inputs),std::end(inputs),ctx->cloudLowLastInputs);
+        ctx->cloudLowLastTime=ctx->time;
+    }
+    auto &rm=ctx->engine->getRenderableManager();
+    if (auto r=rm.getInstance(ctx->cloudEntity);r.isValid()) {
+        rm.setMaterialInstanceAt(r,0,ctx->cloudCompositeMI);
+        ctx->cloudCompositeActive=true;
+    }
+    return refresh;
+}
+
+KINE_API int Kine_Filament_GetCloudNoiseSource(KineFilamentContext *ctx) {
+    return ctx ? ctx->cloudNoiseSource : 0;
+}
+
+KINE_API void Kine_Filament_SetCloudResolutionScale(KineFilamentContext *ctx,float scale) {
+    if (!ctx || !std::isfinite(scale)) return;
+    const float next=std::clamp(scale,0.25f,1.0f);
+    if (ctx->cloudResolutionScale==next) return;
+    ctx->cloudResolutionScale=next;
+    if (next>=1.0f && ctx->cloudLowView) kine_destroy_cloud_low_pass(ctx);
+}
+
+KINE_API void Kine_Filament_SetCloudShadowOptions(
+        KineFilamentContext* ctx, bool castShadows, float intensity,
+        float scale, float speed, float softness, float maxDistance) {
+    if (!ctx || !std::isfinite(intensity) || !std::isfinite(scale) ||
+            !std::isfinite(speed) || !std::isfinite(softness) ||
+            !std::isfinite(maxDistance)) return;
+    ctx->cloudCastShadows = castShadows;
+    ctx->cloudShadowIntensity = std::clamp(intensity, 0.0f, 1.0f);
+    ctx->cloudShadowScale = std::clamp(scale, 0.1f, 8.0f);
+    ctx->cloudShadowSpeed = std::clamp(speed, 0.0f, 5.0f);
+    ctx->cloudShadowSoftness = std::clamp(softness, 0.0f, 4.0f);
+    ctx->cloudShadowMaxDistance = std::clamp(maxDistance, 1.0f, 10000.0f);
 }
 
 KINE_API void Kine_Filament_SetClouds(
@@ -4967,9 +5344,15 @@ KINE_API void Kine_Filament_SetClouds(
 	float r, float g, float b) {
 	if (!ctx || !ctx->engine || !ctx->scene)
 		return;
-	if(ctx->cloudEnabled!=enabled || ctx->cloudCover!=cover || ctx->cloudDensity!=density ||
-	   ctx->cloudHeight!=height || ctx->cloudThickness!=thickness ||
-	   ctx->cloudColor!=math::float3{r,g,b})ctx->reflectionDirty=true;
+	cover = std::clamp(cover, 0.0f, 1.0f);
+    density = std::clamp(density, 0.0f, 1.0f);
+    thickness = std::max(thickness, 1.0f);
+    const math::float3 color{std::max(r, 0.0f), std::max(g, 0.0f), std::max(b, 0.0f)};
+    if (ctx->cloudEnabled == enabled && ctx->cloudCover == cover &&
+        ctx->cloudDensity == density && ctx->cloudHeight == height &&
+        ctx->cloudThickness == thickness && ctx->cloudColor == color &&
+        (!enabled || ctx->cloudInScene)) return;
+    ctx->reflectionDirty = true;
 
 	ctx->cloudEnabled = enabled;
 	ctx->cloudCover = std::clamp(cover, 0.0f, 1.0f);
@@ -4979,6 +5362,8 @@ KINE_API void Kine_Filament_SetClouds(
 	ctx->cloudColor = math::float3{std::max(r, 0.0f), std::max(g, 0.0f), std::max(b, 0.0f)};
 
 	if (!enabled) {
+        if (ctx->cloudLowView) kine_destroy_cloud_low_pass(ctx);
+        ctx->cloudLowValid=false;
 		if (ctx->cloudInScene) {
 			ctx->scene->remove(ctx->cloudEntity);
 			ctx->cloudInScene = false;
@@ -5118,9 +5503,7 @@ static Material *buildOutlineCompositeMaterial(Engine *engine) {
 		.build(*engine);
 }
 
-// Ray samples textures from system memory and cannot read Filament's GPU
-// upload, so every path that starts from pixels keeps an RGBA8 mirror for it.
-// rowBytes may exceed width*4, so rows are copied individually.
+
 static void kine_keep_cpu_copy(
 	std::vector<uint8_t> &out,
 	int &outWidth,
@@ -5205,7 +5588,7 @@ static void kine_attach_mesh_texture(KineFilamentContext *ctx, KineMesh *m) {
     if (!m->materials.empty()) {
         const auto first=m->primitives.empty() ? 0 : m->primitives[0].material;
         if (first<m->materials.size()) m->ownedTex=m->materials[first].texture;
-        m->ownsTexture=false; // The material palette owns these textures.
+        m->ownsTexture=false;
     }
 }
 
@@ -5277,8 +5660,8 @@ static LightManager::ShadowOptions kine_make_sun_shadow_options(
 extern "C" {
 
 #if KINE_WITH_RAY
-// Defined next to Kine_Filament_RenderFrame, but also used by the teardown and
-// resize paths below it.
+
+
 static void kine_ray_display_destroy(KineFilamentContext *ctx);
 #endif
 
@@ -5288,18 +5671,52 @@ static Engine::Config kine_engine_config() {
 	return config;
 }
 
+
+static void kine_update_display_refresh(KineFilamentContext *ctx, bool force = false) {
+    if (!ctx || !ctx->renderer) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now < ctx->nextDisplayRefreshCheck) return;
+    ctx->nextDisplayRefreshCheck = now + std::chrono::milliseconds(500);
+    float hz = 0.0f;
+    if (ctx->displayWindowId) {
+        hz = ctx->displayRefreshHz > 0.0f ? ctx->displayRefreshHz : 60.0f;
+        if (auto *window = SDL_GetWindowFromID(ctx->displayWindowId)) {
+            const SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+            if (const SDL_DisplayMode *mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr) {
+                const float detected = mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0
+                    ? float(mode->refresh_rate_numerator) / float(mode->refresh_rate_denominator)
+                    : mode->refresh_rate;
+                if (std::isfinite(detected) && detected > 0.0f) hz = detected;
+            }
+        }
+    } else if (ctx->renderToSwapChain) {
+        hz = 60.0f;
+    }
+    if (hz == ctx->displayRefreshHz) return;
+    Renderer::DisplayInfo info{};
+    info.refreshRate = hz;
+    ctx->renderer->setDisplayInfo(info);
+    ctx->displayRefreshHz = hz;
+    fprintf(stderr, "[Kine] Filament display refresh target: %.3f Hz\n", hz);
+}
+
+KINE_API float Kine_Filament_GetDisplayRefreshRate(KineFilamentContext *ctx) {
+    return ctx ? std::max(0.0f, ctx->displayRefreshHz) : 0.0f;
+}
+
 static KineFilamentContext *Kine_Filament_CreateInternal(
 	int width,
 	int height,
 	void *nativeWindow,
 	void *vulkanCompositor = nullptr,
-	bool useFilamentOwnedCompositor = false) {
+	bool useFilamentOwnedCompositor = false, SDL_WindowID displayWindowId = 0) {
 	setvbuf(stderr, nullptr, _IONBF, 0);
 	if (width <= 0 || height <= 0)
 		return nullptr;
 
 	auto *ctx = new KineFilamentContext();
 	ctx->nativeWindow = nativeWindow;
+	ctx->displayWindowId = displayWindowId;
 	ctx->useFilamentOwnedCompositor = useFilamentOwnedCompositor;
 	ctx->renderToSwapChain = nativeWindow != nullptr || vulkanCompositor != nullptr ||
 							 useFilamentOwnedCompositor;
@@ -5378,7 +5795,7 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 	kine_init_gl_ext();
 #endif
 
-	// Keep entity translations accurate before any scene entities are created.
+
 	ctx->engine->enableAccurateTranslations();
 
 	if (ctx->useFilamentOwnedCompositor) {
@@ -5409,6 +5826,7 @@ static KineFilamentContext *Kine_Filament_CreateInternal(
 		return nullptr;
 	}
 	ctx->renderer = ctx->engine->createRenderer();
+	kine_update_display_refresh(ctx, true);
 	ctx->scene = ctx->engine->createScene();
 	ctx->view = ctx->engine->createView();
 
@@ -5538,10 +5956,9 @@ KINE_API KineFilamentContext *Kine_Filament_CreateForSDLWindow(void *sdlWindow, 
 		fprintf(stderr, "[Kine] failed to resolve SDL native window for Filament Vulkan swapchain\n");
 		return nullptr;
 	}
-	return Kine_Filament_CreateInternal(width, height, nativeWindow);
+	return Kine_Filament_CreateInternal(width, height, nativeWindow, nullptr, false, SDL_GetWindowID(static_cast<SDL_Window*>(sdlWindow)));
 #else
-	(void)sdlWindow;
-	return Kine_Filament_CreateInternal(width, height, nullptr);
+	return Kine_Filament_CreateInternal(width, height, nullptr, nullptr, false, sdlWindow ? SDL_GetWindowID(static_cast<SDL_Window*>(sdlWindow)) : 0);
 #endif
 }
 
@@ -5553,7 +5970,7 @@ KINE_API KineFilamentContext *Kine_Filament_CreateForVulkanCompositor(
 	if (!vulkanCompositor) {
 		return nullptr;
 	}
-	return Kine_Filament_CreateInternal(width, height, nullptr, vulkanCompositor);
+	return Kine_Filament_CreateInternal(width, height, nullptr, vulkanCompositor, false, Kine_VulkanCompositor_GetSDLWindowId(static_cast<KineVulkanCompositor*>(vulkanCompositor)));
 #else
 	(void)vulkanCompositor;
 	(void)width;
@@ -5570,7 +5987,7 @@ KINE_API KineFilamentContext *Kine_Filament_CreateForVulkanCompositorWindow(
 	if (!sdlWindow) {
 		return nullptr;
 	}
-	return Kine_Filament_CreateInternal(width, height, sdlWindow, nullptr, true);
+	return Kine_Filament_CreateInternal(width, height, sdlWindow, nullptr, true, SDL_GetWindowID(static_cast<SDL_Window*>(sdlWindow)));
 #else
 	(void)sdlWindow;
 	(void)width;
@@ -5609,10 +6026,10 @@ KINE_API bool Kine_Filament_GetVulkanBackend(KineFilamentContext *ctx, KineFilam
 	}
 
 	auto *vulkanPlatform = reinterpret_cast<backend::VulkanPlatform *>(platform);
-	void *getInstanceProcAddr = (void *)SDL_Vulkan_GetVkGetInstanceProcAddr();
-	if (!getInstanceProcAddr) {
-		return false;
-	}
+    void *getInstanceProcAddr = (void *)SDL_Vulkan_GetVkGetInstanceProcAddr();
+    if (!getInstanceProcAddr)
+        getInstanceProcAddr = reinterpret_cast<void*>(vkGetInstanceProcAddr);
+    if (!getInstanceProcAddr) return false;
 
 	outBackend->instance = vulkanPlatform->getInstance();
 	outBackend->physicalDevice = vulkanPlatform->getPhysicalDevice();
@@ -5709,27 +6126,71 @@ KINE_API void Kine_Filament_SetAntiAliasing(
 	ctx->view->setMultiSampleAntiAliasingOptions(msaaOptions);
 }
 
+static bool kine_uses_frame_budget(KineFilamentContext *ctx) {
+    return ctx && ctx->useFilamentOwnedCompositor && ctx->displayRefreshHz >= 20.0f &&
+        ctx->renderWorld && !ctx->xr && ctx->frameBudget.enabled;
+}
+
+static void kine_apply_shadow_budget(KineFilamentContext *ctx, bool force = false) {
+    if (!ctx->authoredShadowsValid || ctx->sunLight.isNull()) return;
+    auto &lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(ctx->sunLight);
+    if (!instance.isValid()) return;
+    auto options = ctx->authoredShadows;
+    options.mapSize = kine_budget_shadow_size(options.mapSize, ctx->effectiveShadowSize,
+        ctx->frameBudget.scale, ctx->adaptiveShadowResolution && kine_uses_frame_budget(ctx));
+    if (force || options.mapSize != ctx->effectiveShadowSize) {
+        lm.setShadowOptions(instance, options);
+        ctx->effectiveShadowSize = options.mapSize;
+    }
+}
+
+KINE_API void Kine_Filament_SetAdaptiveShadowResolution(KineFilamentContext *ctx, bool enabled) {
+    if (!ctx || ctx->adaptiveShadowResolution == enabled) return;
+    ctx->adaptiveShadowResolution = enabled;
+    kine_apply_shadow_budget(ctx);
+}
+
+KINE_API uint32_t Kine_Filament_GetEffectiveShadowMapSize(KineFilamentContext *ctx) {
+    return ctx ? ctx->effectiveShadowSize : 0;
+}
+
+static void kine_apply_frame_budget(KineFilamentContext *ctx) {
+    auto options = ctx->authoredResolution;
+    const bool useBudget = kine_uses_frame_budget(ctx);
+    if (useBudget) {
+        options.minScale = options.maxScale = {ctx->frameBudget.scale,ctx->frameBudget.scale};
+    }
+    ctx->view->setDynamicResolutionOptions(options);
+    ctx->adaptiveResolutionApplied = useBudget;
+    kine_apply_shadow_budget(ctx);
+}
+
 KINE_API void Kine_Filament_SetDynamicResolution(
-	KineFilamentContext *ctx,
-	bool enabled,
-	float minScale,
-	float maxScale,
-	int quality,
-	float sharpness) {
-	if (!ctx || !ctx->view)
-		return;
+    KineFilamentContext *ctx, bool enabled, float minScale, float maxScale, int quality, float sharpness) {
+    if (!ctx || !ctx->view) return;
+    minScale = std::clamp(minScale,0.1f,1.0f);
+    maxScale = std::clamp(maxScale,minScale,2.0f);
+    auto &options = ctx->authoredResolution;
+    options.enabled = enabled;
+    options.minScale = {minScale,minScale};
+    options.maxScale = {maxScale,maxScale};
+    options.quality = kine_quality_from_int(quality);
+    options.sharpness = std::clamp(sharpness,0.0f,1.0f);
+    options.homogeneousScaling = true;
+    ctx->frameBudget.configure(enabled,minScale,maxScale);
+    kine_apply_frame_budget(ctx);
+}
 
-	minScale = std::clamp(minScale, 0.1f, 1.0f);
-	maxScale = std::clamp(maxScale, minScale, 2.0f);
+KINE_API void Kine_Filament_ReportFrameTiming(KineFilamentContext *ctx, float seconds, float presentSeconds) {
+    if (!ctx || !ctx->view) return;
+    const bool active = kine_uses_frame_budget(ctx);
+    const bool changed = active && ctx->frameBudget.update(seconds,presentSeconds+ctx->backendPressureSeconds,ctx->displayRefreshHz);
+    if (changed || active != ctx->adaptiveResolutionApplied) kine_apply_frame_budget(ctx);
+}
 
-	DynamicResolutionOptions options = ctx->view->getDynamicResolutionOptions();
-	options.enabled = enabled;
-	options.minScale = {minScale, minScale};
-	options.maxScale = {maxScale, maxScale};
-	options.quality = kine_quality_from_int(quality);
-	options.sharpness = std::clamp(sharpness, 0.0f, 1.0f);
-	options.homogeneousScaling = true;
-	ctx->view->setDynamicResolutionOptions(options);
+KINE_API float Kine_Filament_GetResolutionScale(KineFilamentContext *ctx) {
+    return ctx && ctx->view ? ctx->view->getLastDynamicResolutionScale().x : 1.0f;
 }
 
 KINE_API void Kine_Filament_SetDepthOfField(
@@ -5826,14 +6287,22 @@ KINE_API void Kine_Filament_SetColorGrading(
 	case 1: mapper=std::make_unique<FilmicToneMapper>();break;
 	default: mapper=std::make_unique<ACESLegacyToneMapper>();break;
 	}
-	ColorGrading *grading = ColorGrading::Builder()
+	auto builder = ColorGrading::Builder{};
+	builder
 								.toneMapper(mapper.get())
 								.exposure(exposure+ctx->advancedExposure)
 								.contrast(std::max(contrast, 0.001f))
 								.saturation(std::max(saturation, 0.0f))
 								.vibrance(std::max(vibrance, 0.0f))
-								.whiteBalance(temperature+ctx->advancedTemperature, tint+ctx->advancedTint)
-								.build(*ctx->engine);
+								.whiteBalance(temperature+ctx->advancedTemperature, tint+ctx->advancedTint);
+	const auto& splitTone = ctx->advancedEffects[12];
+	if (splitTone.enabled) {
+		const float* rgb = splitTone.values;
+		builder.shadowsMidtonesHighlights(
+			{rgb[0], rgb[1], rgb[2], 0}, {rgb[3], rgb[4], rgb[5], 0},
+			{rgb[6], rgb[7], rgb[8], 0}, {0, 0.333f, 0.55f, 1});
+	}
+	ColorGrading *grading = builder.build(*ctx->engine);
 
 	if (!grading)
 		return;
@@ -5851,7 +6320,7 @@ KINE_API void Kine_Filament_ClearColorGrading(KineFilamentContext *ctx) {
 		return;
 	const float neutral[]={0,1,1,1,0,0};
 	std::copy(std::begin(neutral),std::end(neutral),ctx->gradingInputs);
-	if(ctx->toneMappingMode!=4 || ctx->advancedExposure!=0 || ctx->advancedTemperature!=0 || ctx->advancedTint!=0) {
+	if(ctx->toneMappingMode!=4 || ctx->advancedExposure!=0 || ctx->advancedTemperature!=0 || ctx->advancedTint!=0 || ctx->advancedEffects[12].enabled) {
 		Kine_Filament_SetColorGrading(ctx,0,1,1,1,0,0);
 		return;
 	}
@@ -5960,16 +6429,116 @@ KINE_API void Kine_Filament_SetSunShadowOptions(
 	if (!inst.isValid())
 		return;
 
-	lm.setShadowOptions(
-		inst,
-		kine_make_sun_shadow_options(
-			mapSize,
-			cascades,
-			shadowFar,
-			shadowNearHint,
-			shadowFarHint,
-			stable,
-			contactShadows));
+    ctx->authoredShadows = kine_make_sun_shadow_options(
+        mapSize, cascades, shadowFar, shadowNearHint, shadowFarHint, stable, contactShadows);
+    ctx->authoredShadowsValid = true;
+    kine_apply_shadow_budget(ctx, true);
+}
+
+KINE_API void Kine_Filament_SetShadowViewQuality(
+	KineFilamentContext *ctx,
+	float penumbraScale,
+	float penumbraRatioScale,
+	bool vsmHighPrecision,
+	float vsmBleedReduction) {
+	if (!ctx || !ctx->view)
+		return;
+
+	auto soft = ctx->view->getSoftShadowOptions();
+	soft.penumbraScale = std::clamp(penumbraScale, 0.0f, 20.0f);
+	soft.penumbraRatioScale = std::clamp(penumbraRatioScale, 0.0f, 20.0f);
+	ctx->view->setSoftShadowOptions(soft);
+
+	auto vsm = ctx->view->getVsmShadowOptions();
+	vsm.highPrecision = vsmHighPrecision;
+	vsm.lightBleedReduction = std::clamp(vsmBleedReduction, 0.0f, 1.0f);
+	ctx->view->setVsmShadowOptions(vsm);
+}
+
+KINE_API void Kine_Filament_SetShadowExtraOptions(
+    KineFilamentContext *ctx,
+    float maxPenumbraRatio, float maxSearchRadius,
+    int vsmAnisotropy, bool vsmMipmapping, int vsmMSAASamples,
+    float sunAngularRadius, float sunHaloSize, float sunHaloFalloff) {
+    if (!ctx || !ctx->view || !ctx->engine)
+        return;
+    auto soft = ctx->view->getSoftShadowOptions();
+    soft.maxPenumbraRatio = std::clamp(maxPenumbraRatio, 0.01f, 100.0f);
+    soft.maxSearchRadius = std::clamp(maxSearchRadius, 0.001f, 100.0f);
+    ctx->view->setSoftShadowOptions(soft);
+
+    auto vsm = ctx->view->getVsmShadowOptions();
+    vsm.anisotropy = static_cast<uint8_t>(std::clamp(vsmAnisotropy, 0, 4));
+    vsm.mipmapping = vsmMipmapping;
+
+    vsm.msaaSamples = static_cast<uint8_t>(
+        vsmMSAASamples == 2 || vsmMSAASamples == 4 || vsmMSAASamples == 8
+            ? vsmMSAASamples : 1);
+    ctx->view->setVsmShadowOptions(vsm);
+
+    if (ctx->sunLight.isNull())
+        return;
+    auto &lm = ctx->engine->getLightManager();
+    auto instance = lm.getInstance(ctx->sunLight);
+    if (!instance.isValid())
+        return;
+    lm.setSunAngularRadius(instance, std::clamp(sunAngularRadius, 0.0f, 10.0f));
+    lm.setSunHaloSize(instance, std::clamp(sunHaloSize, 0.0f, 100.0f));
+    lm.setSunHaloFalloff(instance, std::clamp(sunHaloFalloff, 0.0f, 1000.0f));
+}
+
+KINE_API void Kine_Filament_SetSunShadowOptionsAdvanced(
+	KineFilamentContext *ctx,
+	int mapSize,
+	int cascades,
+	float shadowFar,
+	float shadowNearHint,
+	float shadowFarHint,
+	bool stable,
+	bool lispsm,
+	float cascadeLambda,
+	bool contactShadows,
+	int contactSteps,
+	float contactDistance,
+	float constantBias,
+	float normalBias,
+	float polygonOffsetConstant,
+	float polygonOffsetSlope,
+	float bulbRadius,
+	float vsmBlur,
+	bool vsmELVSM) {
+	if (!ctx || !ctx->engine || ctx->sunLight.isNull())
+		return;
+	auto &lm = ctx->engine->getLightManager();
+	auto instance = lm.getInstance(ctx->sunLight);
+	if (!instance.isValid())
+		return;
+
+
+	auto options = kine_make_sun_shadow_options(mapSize, cascades,
+		shadowFar, shadowNearHint, shadowFarHint, stable, contactShadows);
+	options.lispsm = !stable && lispsm;
+
+
+	const float nearPlane = std::max(1.0f, options.shadowNearHint);
+	const float farPlane = std::max(nearPlane + 0.001f,
+		options.shadowFar > 0.0f ? options.shadowFar : options.shadowFarHint);
+	LightManager::ShadowCascades::computePracticalSplits(
+		options.cascadeSplitPositions, options.shadowCascades,
+		nearPlane, farPlane, std::clamp(cascadeLambda, 0.0f, 1.0f));
+
+	options.stepCount = kine_clamp_u8(contactSteps, 1, 64);
+	options.maxShadowDistance = std::clamp(contactDistance, 0.0f, 100.0f);
+	options.constantBias = std::clamp(constantBias, 0.0f, 1.0f);
+	options.normalBias = std::clamp(normalBias, 0.0f, 16.0f);
+	options.polygonOffsetConstant = std::clamp(polygonOffsetConstant, 0.0f, 16.0f);
+	options.polygonOffsetSlope = std::clamp(polygonOffsetSlope, 0.0f, 16.0f);
+	options.shadowBulbRadius = std::clamp(bulbRadius, -1.0f, 100.0f);
+	options.vsm.blurWidth = std::clamp(vsmBlur, 0.0f, 125.0f);
+	options.vsm.elvsm = vsmELVSM;
+	ctx->authoredShadows = options;
+    ctx->authoredShadowsValid = true;
+    kine_apply_shadow_budget(ctx, true);
 }
 
 KINE_API void Kine_Filament_SetSunRays(
@@ -6008,11 +6577,24 @@ KINE_API void Kine_Filament_SetSunRays(
 		std::max(b, 0.0f),
 	};
 	options.fogColorFromIbl = fogColorFromIbl;
+    ctx->aerialFogAuthored = true;
 	ctx->view->setFogOptions(options);
 }
 
+static float kine_skylight_multiplier(const KineFilamentContext* ctx) {
+	const auto& skylight = ctx->advancedEffects[10];
+	return skylight.enabled ? std::clamp(skylight.values[0], 0.0f, 4.0f) : 1.0f;
+}
+
+static IndirectLight* kine_build_environment_light(KineFilamentContext* ctx,
+		Texture* reflections, math::float3 irradiance, float intensity) {
+	const math::float3 sh[] = {irradiance * kine_skylight_multiplier(ctx)};
+	return IndirectLight::Builder().reflections(reflections).irradiance(1, sh)
+		.intensity(intensity).build(*ctx->engine);
+}
+
 static void kine_destroy_sky_resources(KineFilamentContext *ctx) {
-	// The scene's skybox and indirect light both sample the sky cubemap.
+
 	ctx->scene->setSkybox(nullptr);
 	ctx->scene->setIndirectLight(nullptr);
 	if (ctx->skybox) {
@@ -6029,6 +6611,8 @@ static void kine_destroy_sky_resources(KineFilamentContext *ctx) {
 	}
 	ctx->skyInputsValid = false;
 }
+
+#include "kine_sky_wicked.inc"
 
 KINE_API void Kine_Filament_SetSkyAtmosphere(
 	KineFilamentContext *ctx,
@@ -6098,33 +6682,13 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 																: v; };
 	ctx->skyColor = {clamp01(fr), clamp01(fg), clamp01(fb), 1.0f};
 
-	const uint32_t faceSize = 32;
+    const uint32_t faceSize = 64;
 	const size_t faceBytes = faceSize * faceSize * 4;
 	const size_t totalBytes = 6 * faceBytes;
 
 	uint8_t *pixels = (uint8_t *)malloc(totalBytes);
 	if (!pixels)
 		return;
-
-	auto evalSky = [&](float dy) {
-		float r, g, b;
-		if (dy >= 0.0f) {
-			float t = std::pow(std::clamp(dy, 0.0f, 1.0f), 0.45f);
-			r = horizonR + t * (skyR - horizonR);
-			g = horizonG + t * (skyG - horizonG);
-			b = horizonB + t * (skyB - horizonB);
-		} else if (dy >= -0.10f) {
-			float t = (dy + 0.10f) / 0.10f;
-			r = groundR + t * (horizonR - groundR);
-			g = groundG + t * (horizonG - groundG);
-			b = groundB + t * (horizonB - groundB);
-		} else {
-			r = groundR;
-			g = groundG;
-			b = groundB;
-		}
-		return std::make_tuple(clamp01(r), clamp01(g), clamp01(b));
-	};
 
 	for (int face = 0; face < 6; ++face) {
 		uint8_t *facePixels = pixels + face * faceBytes;
@@ -6169,10 +6733,15 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 					break;
 				}
 
-				float dlen = sqrtf(dx * dx + dy * dy + dz * dz);
-				dy /= dlen;
+                float dlen = sqrtf(dx * dx + dy * dy + dz * dz);
+                dx /= dlen;
+                dy /= dlen;
+                dz /= dlen;
 
-				auto [pr, pg, pb] = evalSky(dy);
+                auto [pr, pg, pb] = kine_sky_wicked_color(dx, dy, dz,
+                        sunDirX, sunDirY, sunDirZ, sunIntensity,
+                        skyR, skyG, skyB, horizonR, horizonG, horizonB,
+                        groundR, groundG, groundB);
 
 				size_t idx = (y * faceSize + x) * 4;
 				facePixels[idx + 0] = (uint8_t)(pr * 255.0f);
@@ -6219,20 +6788,35 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 		ctx->indirectLight = nullptr;
 	}
 
-	math::float3 sh[9] = {};
-	sh[0] = {ctx->skyColor.r, ctx->skyColor.g, ctx->skyColor.b};
+	ctx->skyIrradiance = {ctx->skyColor.r, ctx->skyColor.g, ctx->skyColor.b};
+	ctx->indirectLight = kine_build_environment_light(ctx, ctx->skyTexture, ctx->skyIrradiance, 15000.0f);
 
-	ctx->indirectLight = IndirectLight::Builder()
-							 .reflections(ctx->skyTexture)
-							 .irradiance(1, sh)
-							 .intensity(15000.0f)
-							 .build(*ctx->engine);
-
+    if (ctx->view && !ctx->aerialFogAuthored) {
+        FogOptions fog = ctx->view->getFogOptions();
+        const float daylight = std::clamp((sunDirY + 0.14f) / 0.28f, 0.0f, 1.0f);
+        const float atmosphere = std::clamp(sunIntensity / 100000.0f, 0.0f, 2.0f);
+        fog.enabled = true;
+        fog.distance = 70.0f;
+        fog.cutOffDistance = 2200.0f;
+        fog.maximumOpacity = 0.48f;
+        fog.height = 0.0f;
+        fog.heightFalloff = 1.0f / 1800.0f;
+        fog.density = 0.000095f + 0.000035f * daylight;
+        fog.inScatteringStart = 50.0f;
+        fog.inScatteringSize = 16.0f + 20.0f * daylight;
+        fog.color = {
+            std::clamp(0.45f * horizonR + 0.55f * skyR, 0.02f, 1.0f),
+            std::clamp(0.45f * horizonG + 0.55f * skyG, 0.02f, 1.0f),
+            std::clamp(0.45f * horizonB + 0.55f * skyB, 0.02f, 1.0f)
+        };
+        fog.fogColorFromIbl = true;
+        fog.density *= std::clamp(0.35f + 0.65f * atmosphere, 0.35f, 1.65f);
+        ctx->view->setFogOptions(fog);
+    }
 	ctx->scene->setIndirectLight(ctx->indirectLight);
 }
 
-// Six consecutive RGBA8 faces in +X,-X,+Y,-Y,+Z,-Z order.
-// Upload CPU pixels directly so the cubemap works with native Vulkan as well.
+
 KINE_API int32_t Kine_Filament_CreateSkyboxPixels(KineFilamentContext *ctx, int32_t size, const uint8_t *rgba, bool showSun) {
 	if (!ctx || !ctx->engine || !rgba || size <= 0 || size > 4096) return 0;
 	const size_t bytes = size_t(size)*size*4*6;
@@ -6250,9 +6834,8 @@ KINE_API int32_t Kine_Filament_CreateSkyboxPixels(KineFilamentContext *ctx, int3
 	ctx->skyTexture = texture;
 	ctx->skybox = Skybox::Builder().environment(texture).showSun(showSun).build(*ctx->engine);
 	ctx->scene->setSkybox(ctx->skybox);
-	math::float3 sh[9] = {};
-	sh[0] = {0.5f,0.5f,0.5f};
-	ctx->indirectLight = IndirectLight::Builder().reflections(texture).irradiance(1,sh).intensity(15000.0f).build(*ctx->engine);
+	ctx->skyIrradiance = {0.5f, 0.5f, 0.5f};
+	ctx->indirectLight = kine_build_environment_light(ctx, texture, ctx->skyIrradiance, 15000.0f);
 	ctx->scene->setIndirectLight(ctx->indirectLight);
 	ctx->reflectionDirty = true;
 	return 1;
@@ -6374,6 +6957,7 @@ KINE_API void Kine_Filament_SetSun(
 	}
 }
 
+#include "kine_ddgi.inc"
 #include "kine_advanced_lighting.inc"
 #include "kine_openxr.inc"
 
@@ -6381,7 +6965,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 	if (!ctx)
 		return;
 	kine_xr_destroy(ctx);
-	/* Destroy track handles before meshes or engine resources. */
+
 	while (!ctx->animationAnimators.empty())
 		Kine_Filament_AnimatorDestroy(ctx->animationAnimators.back());
 	if (ctx->engine) kine_viewport_shutdown(ctx);
@@ -6392,9 +6976,10 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 
 	if (ctx->engine) {
         kine_destroy_ssgi(ctx);
+        kine_destroy_ddgi(ctx);
         kine_destroy_reflection_probe(ctx);
 #if KINE_WITH_RAY
-		// Ray has to go before the engine tears the device down.
+
 		kine_ray_display_destroy(ctx);
 		if (ctx->rayState) {
 			kine_ray_destroy((KineRayState *)ctx->rayState);
@@ -6408,8 +6993,8 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 			ctx->rayMaterial = nullptr;
 		}
 #endif
-		kine_destroy_post_process_pipeline(ctx);
-		ctx->postProcessShader = nullptr;
+        kine_destroy_post_process_pipeline(ctx);
+        ctx->postProcessShader = nullptr;
 		kine_destroy_outline_pipeline(ctx);
 		kine_grass_release_all(ctx);
 		kine_destroy_built_batches(ctx);
@@ -6447,6 +7032,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 				ctx->engine->destroy(shader->material);
 			for (const auto &[name, texture] : shader->textures) ctx->engine->destroy(texture);
 			shader->textures.clear();
+            shader->computeTextures.clear();
 			shader->material = nullptr;
 			shader->ctx = nullptr;
 		}
@@ -6486,6 +7072,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 			ctx->engine->destroy(ctx->colorTarget);
 		if (ctx->depthTarget)
 			ctx->engine->destroy(ctx->depthTarget);
+		kine_destroy_cloud_low_pass(ctx);
 		if (ctx->whiteTex)
 			ctx->engine->destroy(ctx->whiteTex);
 		if (ctx->particleQuadMesh) {
@@ -6550,6 +7137,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 			delete ctx->cloudMesh;
 			ctx->cloudMesh = nullptr;
 		}
+        kine_cloud_release_luts(ctx);
 		if (ctx->cloudMaterial)
 			ctx->engine->destroy(ctx->cloudMaterial);
 		if (ctx->decalMaterial)
@@ -6596,7 +7184,7 @@ KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx) {
 		if (ctx->swapChain) {
 #if KINE_FILAMENT_USE_VULKAN
 			if (ctx->useFilamentOwnedCompositor && ctx->vulkanCompositor) {
-				// The compositor may still be consuming Filament's present semaphore.
+
 				ctx->engine->flushAndWait();
 				Kine_VulkanCompositor_WaitForQueueIdle(
 					static_cast<KineVulkanCompositor *>(ctx->vulkanCompositor));
@@ -6653,14 +7241,7 @@ KINE_API void Kine_Filament_DebugPrintPixel(KineFilamentContext *ctx) {
 }
 
 #if KINE_WITH_RAY
-// ---------------------------------------------------------------------------
-// Ray path tracer presentation
-//
-// Ray renders into its own VkImage on the shared device and hands back the
-// tonemapped pixels; those are uploaded into a Filament texture and drawn over
-// the frame by a dedicated fullscreen view. The zero-copy variant would live in
-// kine_vulkan_compositor, where Ray's raw image can be sampled directly.
-// ---------------------------------------------------------------------------
+
 
 static const char *kine_ray_error(void) {
 	return kine_ray_last_error();
@@ -6735,8 +7316,7 @@ static bool kine_ray_display_ensure(KineFilamentContext *ctx) {
 		return false;
 	}
 
-	// Ray's pixels are already tonemapped and sRGB encoded, so the view must not
-	// tone map them a second time.
+
 	ctx->rayColorGrading = ColorGrading::Builder()
 							   .toneMapping(ColorGrading::ToneMapping::LINEAR)
 							   .build(*ctx->engine);
@@ -6782,8 +7362,8 @@ static bool kine_ray_upload(KineFilamentContext *ctx, int width, int height) {
 			ctx->engine->destroy(ctx->rayTexture);
 			ctx->rayTexture = nullptr;
 		}
-		// SRGB8_A8 makes the sampler hand the material linear values, so the
-		// sRGB target writes back the exact bytes Ray produced.
+
+
 		ctx->rayTexture = Texture::Builder()
 							  .width(uint32_t(width))
 							  .height(uint32_t(height))
@@ -6811,19 +7391,15 @@ static bool kine_ray_upload(KineFilamentContext *ctx, int width, int height) {
 	return true;
 }
 
-// Builds the Ray frame description from the draws queued for this frame plus
-// the context camera, sun and sky.
-// Filament owns the light components, so Ray reads them back the same way the
-// raster pass does: one snapshot per frame, in creation order so the resulting
-// light hash is stable from frame to frame.
+
 static void kine_collect_ray_lights(KineFilamentContext *ctx, std::vector<KineRayLight> &out, const math::double3 &origin) {
 	if (!ctx || !ctx->engine || !ctx->scene)
 		return;
 
 	LightManager &lm = ctx->engine->getLightManager();
 	for (Entity entity : ctx->lights) {
-		// SetEnabledLight() detaches disabled lights from the scene; they must not
-		// light the path-traced image either.
+
+
 		if (!ctx->scene->hasEntity(entity))
 			continue;
 		const LightManager::Instance instance = lm.getInstance(entity);
@@ -6851,7 +7427,7 @@ static void kine_collect_ray_lights(KineFilamentContext *ctx, std::vector<KineRa
 		light.color[0] = color.x;
 		light.color[1] = color.y;
 		light.color[2] = color.z;
-		// LightManager reports candela here, the same quantity its shading uses.
+
 		light.intensity = lm.getIntensity(instance);
 		light.castShadow = lm.isShadowCaster(instance);
 		if (light.type == 1) {
@@ -6867,7 +7443,7 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 	ctx->rayFrameDraws.reserve(ctx->rayDraws.size());
 
 	const math::double3 origin{kine_render_cell(ctx->cameraEye.x), kine_render_cell(ctx->cameraEye.y), kine_render_cell(ctx->cameraEye.z)};
-    // deque keeps pointers valid while adding retained streams and imported sections.
+
     std::deque<std::array<float, 16>> localTransforms;
     auto appendQueued = [ctx, &localTransforms, &origin](const KineRayQueuedDraw &queued) {
 		KineMesh *mesh = queued.mesh;
@@ -6884,8 +7460,8 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 		KineRayDraw draw{};
 		draw.meshKey = mesh;
 		draw.shaderKey = queued.shader;
-		// Skinned meshes are traced in their rest pose: Ray has no skinning and
-		// baking the pose per frame is not worth it for a preview render.
+
+
 		draw.vertexData = &mesh->vertices[0].px;
 		draw.vertexStrideFloats = (int)(sizeof(KineVertex) / sizeof(float));
 		draw.vertexCount = (int)mesh->vertices.size();
@@ -6912,8 +7488,8 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
             for (auto &primitive : mesh->primitives) {
                 auto section=draw;
                 section.meshKey=&primitive;
-                // Share the source vertex slice rather than replicating the
-                // entire scene's vertices for every traced material section.
+
+
                 if (primitive.rayIndices.size()!=primitive.count) {
                     primitive.rayIndices.resize(primitive.count);
                     for (size_t i=0;i<primitive.count;++i)
@@ -6941,11 +7517,7 @@ static bool kine_ray_run(KineFilamentContext *ctx) {
 		appendQueued(queued);
 	}
 
-	// Retained streams only re-queue when their version changes, so replay what
-	// they queued last time. Skipping this would hand Ray an empty frame on any
-	// frame where the scene did not change, and an empty scene traces to plain
-	// sky. Stream ids are walked in ascending order so the resulting draw order
-	// -- and therefore the structure hash -- stays identical frame to frame.
+
 	std::vector<uint64_t> streamIds;
 	streamIds.reserve(ctx->retainedLists.size());
 	for (const auto &entry : ctx->retainedLists) {
@@ -7024,6 +7596,29 @@ KINE_API void Kine_Filament_SetFrameProfileCallback(
 	ctx->frameProfileUser = user;
 }
 
+KINE_API void Kine_Filament_GetBatchStats(KineFilamentContext *ctx, KineFilamentBatchStats *out) {
+    if (out) *out = ctx ? ctx->batchStats : KineFilamentBatchStats{};
+}
+
+KINE_API bool Kine_Filament_GetLatestGpuFrameTime(KineFilamentContext *ctx, uint32_t *frameId, uint64_t *durationNs) {
+    if (!ctx || !ctx->renderer || !frameId || !durationNs) return false;
+    const auto history=ctx->renderer->getFrameInfoHistory(8);
+    bool found=false;
+    for (const auto& frame : history) {
+        if (frame.gpuFrameDuration<=0) continue;
+        if (!found || static_cast<int32_t>(frame.frameId-*frameId)>0) {
+            *frameId=frame.frameId;
+            *durationNs=static_cast<uint64_t>(frame.gpuFrameDuration);
+            found=true;
+        }
+    }
+    return found;
+}
+
+KINE_API void Kine_Filament_GetPassStats(KineFilamentContext *ctx, KineFilamentPassStats *out) {
+    if (out) *out = ctx ? ctx->passStats : KineFilamentPassStats{};
+}
+
 struct KineFrameProfileScope {
 	KineFilamentContext *ctx;
 	const char *phase;
@@ -7034,6 +7629,55 @@ struct KineFrameProfileScope {
 		if (ctx->frameProfile) ctx->frameProfile(ctx->frameProfileUser, phase, false);
 	}
 };
+
+static void kine_prepare_custom_post(KineFilamentContext *ctx, float deltaTime, bool sharedDepth) {
+	kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
+	auto *mi=ctx->postMaterialInstance;
+	if(ctx->postDepthView) {
+		TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
+		mi->setParameter("depthTexture",sharedDepth?ctx->ssgi->depth:ctx->postSampleDepth,nearest);
+	}
+	const float w=float(ctx->viewportWidth>0?ctx->viewportWidth:ctx->width);
+	const float h=float(ctx->viewportHeight>0?ctx->viewportHeight:ctx->height);
+	const auto model=ctx->camera->getModelMatrix();
+	const auto projection=ctx->camera->getProjectionMatrix();
+
+	const auto matches=[&](const char *name,Material::ParameterType type){
+		const auto it=ctx->postSceneUniformTypes.find(name);
+		return it!=ctx->postSceneUniformTypes.end() && it->second==type;
+	};
+	const auto setFloat=[&](const char *name,float v){if(matches(name,Material::ParameterType::FLOAT))mi->setParameter(name,v);};
+	const auto set2=[&](const char *name,math::float2 v){if(matches(name,Material::ParameterType::FLOAT2))mi->setParameter(name,v);};
+	const auto set3=[&](const char *name,math::float3 v){if(matches(name,Material::ParameterType::FLOAT3))mi->setParameter(name,v);};
+	const auto setMatrix=[&](const char *name,const math::mat4 &v){
+		if(matches(name,Material::ParameterType::MAT4))mi->setParameter(name,math::mat4f(v));
+	};
+	const auto view=ctx->camera->getViewMatrix();
+	setMatrix("viewMatrix",view);setMatrix("projectionMatrix",projection);
+	setMatrix("inverseViewMatrix",model);
+	if(matches("inverseProjectionMatrix",Material::ParameterType::MAT4))setMatrix("inverseProjectionMatrix",inverse(projection));
+	setMatrix("viewProjectionMatrix",projection*view);
+	if(matches("inverseViewProjectionMatrix",Material::ParameterType::MAT4))setMatrix("inverseViewProjectionMatrix",model*inverse(projection));
+	setFloat("time",ctx->time);setFloat("deltaTime",deltaTime);
+	set2("resolution",{w,h});set2("texelSize",{1.0f/w,1.0f/h});
+	set2("viewportOrigin",{float(ctx->viewportX),float(ctx->viewportY)});
+	set2("focal",{float(projection[0].x),float(projection[1].y)});
+	setFloat("nearPlane",float(ctx->camera->getNear()));setFloat("farPlane",float(ctx->camera->getCullingFar()));
+	set3("cameraPosition",math::float3(model[3].xyz));
+	set3("cameraRight",math::float3(model[0].xyz));set3("cameraUp",math::float3(model[1].xyz));
+	set3("cameraForward",-math::float3(model[2].xyz));
+	set3("sunDirection",ctx->sunDirection);setFloat("sunIntensity",ctx->sunIntensity);
+	set3("skyColor",ctx->skyColor.rgb);
+	math::float3 sunColor{1.0f,0.98f,0.95f};
+	float effectiveIntensity=ctx->sunIntensity;
+	if(!ctx->sunLight.isNull()) {
+		auto &lights=ctx->engine->getLightManager();
+		auto sun=lights.getInstance(ctx->sunLight);
+		if(sun.isValid()) {sunColor=lights.getColor(sun);effectiveIntensity=lights.getIntensity(sun);}
+	}
+	set3("sunColor",sunColor);setFloat("sunLightIntensity",effectiveIntensity);
+
+}
 
 static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
     KineFrameCpuWork cpuWork, void *cpuUser) {
@@ -7047,6 +7691,10 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 		runCpuWork();
 		return;
 	}
+	ctx->passStats = {};
+	kine_update_display_refresh(ctx);
+    if (kine_uses_frame_budget(ctx) != ctx->adaptiveResolutionApplied) kine_apply_frame_budget(ctx);
+    ctx->backendPressureSeconds = 0.0f;
 	bool finishedCpuFrame = false;
 	if (ctx->animationAutoStep)
 		Kine_Filament_StepAnimations(ctx, deltaTime);
@@ -7055,7 +7703,7 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 		ctx->engine->pumpMessageQueues();
 #endif
 	ctx->time += deltaTime;
-	// Retained static geometry still needs its animated ForceField uniforms.
+
 	for (auto &[key,batch] : ctx->builtBatches) {
 		if (key.materialKind != KINE_MAT_FORCEFIELD) continue;
 		for (auto &chunk : batch.chunks) if (chunk.materialInstance) chunk.materialInstance->setParameter("time",ctx->time);
@@ -7064,7 +7712,7 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 		if (!batch || batch->key.materialKind != KINE_MAT_FORCEFIELD) continue;
 		for (auto &chunk : batch->chunks) if (chunk.materialInstance) chunk.materialInstance->setParameter("time",ctx->time);
 	}
-	kine_update_cloud_layer(ctx);
+	if (ctx->renderWorld) kine_update_cloud_layer(ctx);
 
 #if !KINE_FILAMENT_USE_VULKAN
 	glEnable(GL_DEPTH_TEST);
@@ -7096,9 +7744,35 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 		kine_capture_reflection_probe(ctx);
 	}
 	{
-		KineFrameProfileScope profile(ctx, "Filament Prepare SSGI");
-		kine_prepare_ssgi(ctx);
+		KineFrameProfileScope profile(ctx, "Filament Update DDGI Probes");
+		kine_update_ddgi(ctx);
 	}
+	{
+		KineFrameProfileScope profile(ctx, "Filament Prepare SSGI");
+		if (ctx->renderWorld) kine_prepare_ssgi(ctx);
+	}
+
+    const bool refreshClouds = kine_prepare_cloud_low_pass(ctx);
+    const bool outlineActive = ctx->renderWorld && ctx->outlineQueued && ctx->outlineMaskView && ctx->outlineView;
+    const bool hasPostProcess = ctx->renderWorld && ctx->postProcessShader && ctx->postView && ctx->postMaterialInstance;
+    const bool cloudShadowActive = ctx->cloudCastShadows &&
+            ctx->cloudShadowIntensity > 0.0f && ctx->cloudEnabled &&
+            ctx->cloudCover > 0.0f && ctx->cloudDensity > 0.0f &&
+            ctx->sunDirection.y > 0.08f;
+    const bool sharedDepth = ctx->renderWorld && ctx->ssgi &&
+        ((ctx->advancedEffects[1].enabled && ctx->advancedEffects[1].values[0] > 0.0f) ||
+         (ctx->advancedEffects[7].enabled && ctx->advancedEffects[7].values[0] > 0.0f) ||
+         ctx->ssgi->sunView ||
+         (ctx->advancedEffects[16].enabled && ctx->advancedEffects[16].values[0] > 0.0f) ||
+         (ctx->advancedEffects[17].enabled && ctx->advancedEffects[17].values[0] > 0.0f) ||
+         (ctx->advancedEffects[18].enabled && ctx->advancedEffects[18].values[0] > 0.0f) ||
+         (ctx->advancedEffects[19].enabled && ctx->advancedEffects[19].values[0] > 0.0f) ||
+         cloudShadowActive ||
+         (hasPostProcess && ctx->postDepthView));
+    if (hasPostProcess) kine_prepare_custom_post(ctx,deltaTime,sharedDepth);
+    if (outlineActive && ctx->outlineCompositeMI && ctx->outlineCompositeMaterial->hasParameter("width")) {
+        ctx->outlineCompositeMI->setParameter("width",ctx->outlineWidthPixels>0.0f?ctx->outlineWidthPixels:1.0f);
+    }
 
 	kine_xr_begin(ctx);
 	bool beganFrame;
@@ -7108,8 +7782,8 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 	}
 	if (!beganFrame && ctx->useFilamentOwnedCompositor) {
 		KineFrameProfileScope profile(ctx, "Filament Pacing Override");
-		// Skia already drew into the acquired image. Filament allows rendering
-		// past its pacing hint, so finish the 3D pass before presenting it.
+
+
 		beganFrame = true;
 	}
 	if (beganFrame) {
@@ -7121,109 +7795,66 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 			ctx->loggedFirstFrame = true;
 		}
 
-		const bool outlineActive = ctx->renderWorld && ctx->outlineQueued && ctx->outlineMaskView && ctx->outlineView;
+        if (refreshClouds) {
+            KineFrameProfileScope profile(ctx,"Filament Clouds Low Resolution CPU");
+            Renderer::ClearOptions clear{};clear.clear=true;clear.discard=true;clear.clearColor={0,0,0,0};
+            ctx->renderer->setClearOptions(clear);
+            ++ctx->passStats.clouds;
+            ctx->renderer->render(ctx->cloudLowView);
+            ctx->cloudLowValid=true;
+        }
 		Renderer::ClearOptions clearOptions;
-		if (ctx->renderWorld) kine_render_world_water_contact(ctx);
+		{ KineFrameProfileScope profile(ctx, "Filament Water Contact CPU"); if (ctx->renderWorld) kine_render_world_water_contact(ctx); }
 
 		if (outlineActive) {
 			clearOptions.clearColor = {0, 0, 0, 0};
 			clearOptions.clear = true;
 			clearOptions.discard = true;
 			ctx->renderer->setClearOptions(clearOptions);
-			ctx->renderer->render(ctx->outlineMaskView);
+			{ KineFrameProfileScope profile(ctx, "Filament Outline Mask CPU"); ++ctx->passStats.outlineMask; ctx->renderer->render(ctx->outlineMaskView); }
 		}
 
 		clearOptions.clearColor = ctx->skyColor;
-		const bool hasPostProcess =
-			ctx->renderWorld && ctx->postProcessShader && ctx->postView && ctx->postMaterialInstance;
 
 		clearOptions.clear = hasPostProcess || (ctx->renderWorld && ctx->ssgi) || !ctx->useFilamentOwnedCompositor;
 		clearOptions.discard = clearOptions.clear;
 		ctx->renderer->setClearOptions(clearOptions);
 
-		const bool sharedDepth=ctx->renderWorld && ctx->ssgi &&
-			(ctx->advancedEffects[1].enabled || ctx->advancedEffects[7].enabled || (hasPostProcess && ctx->postDepthView));
+		if (ctx->renderWorld && ctx->ssgi && ctx->ssgi->sunView) {
+			KineFrameProfileScope profile(ctx, "Filament Sun Rays Occluders CPU");
+			ctx->renderer->render(ctx->ssgi->sunView);
+		}
 		if (sharedDepth) {
 			ctx->ssgi->depthView->setCamera(ctx->camera);
-			ctx->renderer->render(ctx->ssgi->depthView);
+			{ KineFrameProfileScope profile(ctx, "Filament Shared Depth CPU"); ++ctx->passStats.sharedDepth; ctx->renderer->render(ctx->ssgi->depthView); }
 		}
 		if (hasPostProcess && ctx->postDepthView && !sharedDepth) {
 			ctx->postDepthView->setCamera(ctx->camera);
-			ctx->renderer->render(ctx->postDepthView);
+			{ KineFrameProfileScope profile(ctx, "Filament Post Depth CPU"); ++ctx->passStats.customDepth; ctx->renderer->render(ctx->postDepthView); }
 		}
-		if (ctx->renderWorld) ctx->renderer->render(ctx->view);
+		{ KineFrameProfileScope profile(ctx, "Filament Main View CPU"); if (ctx->renderWorld) { ++ctx->passStats.world; ctx->renderer->render(ctx->view); } }
         if (ctx->renderWorld && ctx->ssgi) {
             clearOptions.clear=false;clearOptions.discard=false;ctx->renderer->setClearOptions(clearOptions);
-            ctx->renderer->render(ctx->ssgi->view);
+            { KineFrameProfileScope profile(ctx, "Filament SSGI Composite CPU"); ++ctx->passStats.screenEffects; ctx->renderer->render(ctx->ssgi->view); }
         }
 		if (hasPostProcess) {
-			kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
-			auto *mi=ctx->postMaterialInstance;
-			if(ctx->postDepthView) {
-				TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
-				mi->setParameter("depthTexture",sharedDepth?ctx->ssgi->depth:ctx->postSampleDepth,nearest);
-			}
-			const float w=float(ctx->viewportWidth>0?ctx->viewportWidth:ctx->width);
-			const float h=float(ctx->viewportHeight>0?ctx->viewportHeight:ctx->height);
-			const auto model=ctx->camera->getModelMatrix();
-			const auto projection=ctx->camera->getProjectionMatrix();
-			// Reserved scene uniforms are refreshed after user uniforms.
-			const auto matches=[&](const char *name,Material::ParameterType type){
-				const auto it=ctx->postSceneUniformTypes.find(name);
-				return it!=ctx->postSceneUniformTypes.end() && it->second==type;
-			};
-			const auto setFloat=[&](const char *name,float v){if(matches(name,Material::ParameterType::FLOAT))mi->setParameter(name,v);};
-			const auto set2=[&](const char *name,math::float2 v){if(matches(name,Material::ParameterType::FLOAT2))mi->setParameter(name,v);};
-			const auto set3=[&](const char *name,math::float3 v){if(matches(name,Material::ParameterType::FLOAT3))mi->setParameter(name,v);};
-			const auto setMatrix=[&](const char *name,const math::mat4 &v){
-				if(matches(name,Material::ParameterType::MAT4))mi->setParameter(name,math::mat4f(v));
-			};
-			const auto view=ctx->camera->getViewMatrix();
-			setMatrix("viewMatrix",view);setMatrix("projectionMatrix",projection);
-			setMatrix("inverseViewMatrix",model);
-			if(matches("inverseProjectionMatrix",Material::ParameterType::MAT4))setMatrix("inverseProjectionMatrix",inverse(projection));
-			setMatrix("viewProjectionMatrix",projection*view);
-			if(matches("inverseViewProjectionMatrix",Material::ParameterType::MAT4))setMatrix("inverseViewProjectionMatrix",model*inverse(projection));
-			setFloat("time",ctx->time);setFloat("deltaTime",deltaTime);
-			set2("resolution",{w,h});set2("texelSize",{1.0f/w,1.0f/h});
-			set2("viewportOrigin",{float(ctx->viewportX),float(ctx->viewportY)});
-			set2("focal",{float(projection[0].x),float(projection[1].y)});
-			setFloat("nearPlane",float(ctx->camera->getNear()));setFloat("farPlane",float(ctx->camera->getCullingFar()));
-			set3("cameraPosition",math::float3(model[3].xyz));
-			set3("cameraRight",math::float3(model[0].xyz));set3("cameraUp",math::float3(model[1].xyz));
-			set3("cameraForward",-math::float3(model[2].xyz));
-			set3("sunDirection",ctx->sunDirection);setFloat("sunIntensity",ctx->sunIntensity);
-			set3("skyColor",ctx->skyColor.rgb);
-			math::float3 sunColor{1.0f,0.98f,0.95f};
-			float effectiveIntensity=ctx->sunIntensity;
-			if(!ctx->sunLight.isNull()) {
-				auto &lights=ctx->engine->getLightManager();
-				auto sun=lights.getInstance(ctx->sunLight);
-				if(sun.isValid()) {sunColor=lights.getColor(sun);effectiveIntensity=lights.getIntensity(sun);}
-			}
-			set3("sunColor",sunColor);setFloat("sunLightIntensity",effectiveIntensity);
-
 			clearOptions.clear = false;
 			clearOptions.discard = false;
 			ctx->renderer->setClearOptions(clearOptions);
-			ctx->renderer->render(ctx->postView);
+			{ KineFrameProfileScope profile(ctx, "Filament Custom Post CPU"); ++ctx->passStats.customPost; ctx->renderer->render(ctx->postView); }
 		}
 
 		if (outlineActive && ctx->outlineCompositeMI) {
-			if (ctx->outlineCompositeMaterial->hasParameter("width")) {
-				const float ringWidth = ctx->outlineWidthPixels > 0.0f ? ctx->outlineWidthPixels : 1.0f;
-				ctx->outlineCompositeMI->setParameter("width", ringWidth);
-			}
 			clearOptions.clear = false;
 			clearOptions.discard = false;
 			ctx->renderer->setClearOptions(clearOptions);
-			ctx->renderer->render(ctx->outlineView);
+			{ KineFrameProfileScope profile(ctx, "Filament Outline Composite CPU"); ++ctx->passStats.outlineComposite; ctx->renderer->render(ctx->outlineView); }
 		}
 
-		kine_viewport_render_queued(ctx);
+		{ KineFrameProfileScope profile(ctx, "Filament Viewport CPU"); kine_viewport_render_queued(ctx); }
 
 #if KINE_WITH_RAY
-		// Render mode 2: trace one Ray sample and paint it over the frame.
+
 		if (ctx->renderWorld && ctx->renderMode == KINE_RENDER_MODE_RAY && ctx->rayState) {
 			if (kine_ray_run(ctx) && kine_ray_display_ensure(ctx) && ctx->rayTexture) {
 				TextureSampler sampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR,
@@ -7262,11 +7893,8 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 		ctx->renderer->endFrame();
 #if KINE_FILAMENT_USE_VULKAN
 		if (ctx->useFilamentOwnedCompositor) {
-			// In Filament 1.81 this Fence is a CPU command-stream marker, not
-			// a GPU fence. The shared VkQueue requires external host
-			// synchronization; the compositor's semaphore orders GPU work.
-			// Never replace this with a wait for just the present callback:
-			// Filament's endFrame/tick can still submit after that callback.
+
+
 			if (cpuWork && !ctx->xr) {
 				Fence *fence;
 				{
@@ -7276,8 +7904,8 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 				}
 				{
 					KineFrameProfileScope overlap(ctx, "Filament Overlapped CPU Work");
-					// These containers belong to the frontend; the driver has
-					// copied the commands it needs before endFrame returned.
+
+
 					kine_finish_batch_frame(ctx);
 #if KINE_WITH_RAY
 					ctx->rayDraws.clear();
@@ -7287,26 +7915,30 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
 				}
 				{
 					KineFrameProfileScope profile(ctx, "Filament Backend Handoff");
+                    const auto waitStarted = std::chrono::steady_clock::now();
 					const auto status = fence->wait(Fence::Mode::DONT_FLUSH);
 					ctx->engine->destroy(fence);
 					if (status != Fence::FenceStatus::CONDITION_SATISFIED)
 						ctx->engine->flushAndWait();
 					ctx->engine->pumpMessageQueues();
+                    ctx->backendPressureSeconds = std::chrono::duration<float>(std::chrono::steady_clock::now()-waitStarted).count();
 				}
 			} else {
-				// Preserve the legacy path and XR's synchronous queue handoff.
+
 				KineFrameProfileScope profile(ctx, "Filament Backend Handoff");
+                const auto waitStarted = std::chrono::steady_clock::now();
 				if (Fence::waitAndDestroy(ctx->engine->createFence()) !=
 						Fence::FenceStatus::CONDITION_SATISFIED)
 					ctx->engine->flushAndWait();
 				ctx->engine->pumpMessageQueues();
+                ctx->backendPressureSeconds = std::chrono::duration<float>(std::chrono::steady_clock::now()-waitStarted).count();
 			}
 		}
 #endif
 	} else {
 		fprintf(stderr, "[Kine] beginFrame FAILED this frame\n");
 	}
-	// With the optional XR desktop panel, finish after Skia draws its overlay.
+
 	if (!kine_xr_defer_end(ctx)) kine_xr_end(ctx);
 
 	if (!finishedCpuFrame) {
@@ -7351,8 +7983,8 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 #endif
 
 #if KINE_FILAMENT_USE_VULKAN
-	// Temporal history and transient render targets are tied to the previous
-	// viewport. Drain the texture cache before allocating at the new size.
+
+
 	ctx->view->clearFrameHistory(*ctx->engine);
 	ctx->renderer->skipFrame();
 #endif
@@ -7374,9 +8006,8 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 				width, height);
 		auto *platform = static_cast<KineFilamentCompositorVulkanPlatform *>(ctx->vulkanPlatform.get());
 		auto *compositor = platform->compositor();
-		// Release Filament's references to the old images before the compositor
-		// destroys them. Resize here so a temporary Vulkan failure can be retried
-		// instead of returning a null swapchain to Filament's backend.
+
+
 		ctx->engine->flushAndWait();
 		if (!Kine_VulkanCompositor_Resize(compositor, width, height)) {
 			return;
@@ -7414,8 +8045,8 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 
 #if KINE_WITH_RAY
 	if (ctx->rayState) {
-		// Ray sizes its buffers when it renders. An idle Ray renderer cannot
-		// retire the old buffers, so resizing it here accumulates VRAM.
+
+
 		kine_ray_display_destroy(ctx);
 	}
 #endif
@@ -7458,7 +8089,7 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext *ctx, int x, int y, 
 
 #if KINE_WITH_RAY
 	if (viewportChanged && ctx->rayState) {
-		// The presentation quad is sized from the viewport extent.
+
 		kine_ray_display_destroy(ctx);
 	}
 #endif
@@ -7697,6 +8328,7 @@ static int kine_create_decal(
 		.culling(culling)
 		.castShadows(castShadows)
 		.receiveShadows(receiveShadows)
+		.screenSpaceContactShadows(receiveShadows)
 		.build(*ctx->engine, entity) != RenderableManager::Builder::Success) {
 		ctx->engine->destroy(material);
 		EntityManager::get().destroy(entity);
@@ -8278,7 +8910,7 @@ KINE_API void Kine_Filament_SetTerrainGrassOptions(
     if (kine_grass_debug_enabled())
         fprintf(stderr, "[Kine Grass] options: enabled=%d density=%.2f height=%.2f distance=%.1f wind=%.2f layerMask=0x%02x\n",
             int(enabled), density, height, visibleDistance, windStrength, unsigned(materialLayerMask));
-	// Release the cached geometry and invalidate its retained draw-list keys.
+
 	kine_grass_release_all(ctx);
 	if (ctx->grassShader) {
 		ctx->grassShader->boundsPadding = windStrength + 0.2f;
@@ -8457,8 +9089,7 @@ bool Kine_Filament_UpdateCustomMesh(
 	memcpy(m->vertices.data(), vertexData, m->vertices.size() * sizeof(KineVertex));
 	if (!kine_upload_updated_vertices(ctx, m)) return false;
 
-	// Material displacement can use a cached subdivision of this mesh. Replay
-	// its midpoint edges in creation order to keep the same buffers and topology.
+
 	for (auto &entry : m->refinedMeshes) {
 		KineMesh *refined = entry.second;
 		if (refined == m) continue;
@@ -8582,7 +9213,7 @@ KINE_API KineFilamentMesh *Kine_Filament_GetWaterGrid(
 	if (!ctx || !ctx->engine)
 		return nullptr;
 
-	// Aim for one vertex per stud, matching terrain at its default resolution.
+
 	auto levelForExtent = [](float extent) {
 		int level = 0;
 		while (level + 1 < KINE_WATER_GRID_LEVELS && extent > (2 << level))
@@ -8768,7 +9399,7 @@ KINE_API bool Kine_Filament_CopyMeshBoneGlobalTransform(
 		m->skinMatrices.size() != m->bones.size())
 		return false;
 	const size_t index = size_t(boneIndex);
-	// Undo the skinning offset to get the joint transform in the rendered pose.
+
 	kine_to_row_major(m->skinMatrices[index] * inverse(m->bones[index].inverseBind), outTransform16);
 	return true;
 }
@@ -8786,6 +9417,66 @@ KINE_API bool Kine_Filament_SetMeshBoneTransforms(
 	}
 	kine_upload_skin_pose(ctx, m);
 	return true;
+}
+
+
+KINE_API bool Kine_Filament_SetMeshProceduralLocalPose(
+    KineFilamentContext *ctx, KineFilamentMesh *mesh,
+    const float *localTransforms16, const uint8_t *mask, int boneCount) {
+    auto *m = reinterpret_cast<KineMesh *>(mesh);
+    if (!ctx || !m || !localTransforms16 || !mask || boneCount <= 0 ||
+        size_t(boneCount) != m->bones.size()) return false;
+    const size_t count = size_t(boneCount);
+    std::vector<math::mat4f> offsets(count);
+    std::vector<uint8_t> applied(count, 0);
+    for (size_t i=0; i<count; ++i) {
+        if (!mask[i]) continue;
+        for (size_t c=0; c<16; ++c) {
+            if (!std::isfinite(localTransforms16[i*16+c])) return false;
+        }
+        const auto local = kine_from_row_major(localTransforms16+i*16);
+        offsets[i] = inverse(m->bones[i].bindLocal) * local;
+        applied[i] = 1;
+    }
+    m->proceduralDelta = std::move(offsets);
+    m->proceduralMask = std::move(applied);
+    if (m->animator) return kine_animator_apply_pose(m->animator);
+    std::vector<math::mat4f> locals(count), globals(count);
+    std::vector<uint8_t> states(count,0);
+    for (size_t i=0; i<count; ++i) {
+        locals[i] = m->bones[i].bindLocal;
+        if (m->proceduralMask[i]) locals[i] = locals[i] * m->proceduralDelta[i];
+    }
+    for (size_t i=0; i<count; ++i) {
+        if (!kine_eval_bone_global(i,m,locals,globals,states)) return false;
+    }
+    m->skinMatrices.resize(count);
+    for (size_t i=0; i<count; ++i)
+        m->skinMatrices[i] = globals[i] * m->bones[i].inverseBind;
+    kine_upload_skin_pose(ctx,m);
+    return true;
+}
+
+KINE_API bool Kine_Filament_ClearMeshProceduralPose(
+    KineFilamentContext *ctx, KineFilamentMesh *mesh) {
+    auto *m = reinterpret_cast<KineMesh *>(mesh);
+    if (!ctx || !m) return false;
+    m->proceduralDelta.clear();
+    m->proceduralMask.clear();
+    if (m->animator) return kine_animator_apply_pose(m->animator);
+    if (m->bones.empty()) return true;
+    std::vector<math::mat4f> globals(m->bones.size());
+    std::vector<math::mat4f> locals(m->bones.size());
+    std::vector<uint8_t> states(m->bones.size(),0);
+    for (size_t i=0; i<m->bones.size(); ++i) locals[i] = m->bones[i].bindLocal;
+    for (size_t i=0; i<m->bones.size(); ++i) {
+        if (!kine_eval_bone_global(i,m,locals,globals,states)) return false;
+    }
+    m->skinMatrices.resize(m->bones.size());
+    for (size_t i=0; i<m->bones.size(); ++i)
+        m->skinMatrices[i] = globals[i] * m->bones[i].inverseBind;
+    kine_upload_skin_pose(ctx,m);
+    return true;
 }
 
 KINE_API int Kine_Filament_GetMeshAnimationCount(const KineFilamentMesh *mesh) {
@@ -9173,15 +9864,20 @@ static void kine_queue_mesh(
 	key.originX = kine_render_cell(worldX);
 	key.originY = kine_render_cell(worldY);
 	key.originZ = kine_render_cell(worldZ);
-	// Subtract in double precision before converting to GPU precision.
+
 	const float localX = float(worldX - key.originX);
 	const float localY = float(worldY - key.originY);
 	const float localZ = float(worldZ - key.originZ);
 	key.materialKind = materialKind;
-	key.param1 = param1;
+	const bool perInstanceBias = kine_instance_highlight_bias(ctx,key);
+    key.param1 = perInstanceBias ? 0.0f : param1;
 	key.param2 = param2;
 	key.param3 = perInstanceUv ? 0.0f : param3;
-	key.transmission = transmission;
+	const bool instanceAlpha = kine_material_uses_instance_alpha(materialKind) &&
+        !(key.shader && key.shader->opacitySource);
+    const bool builtinAlpha = instanceAlpha && !key.shader &&
+        (!ctx->globalShader || materialKind==KINE_MAT_FADE || materialKind==KINE_MAT_NEON_FADE);
+    key.transmission = builtinAlpha ? 0.0f : transmission;
 	key.particleUvOffsetY = particleUvOffsetY;
 	key.castShadow = castShadow;
 	key.receiveShadow = receiveShadow;
@@ -9195,9 +9891,8 @@ static void kine_queue_mesh(
 	}
 
 #if KINE_WITH_RAY
-	// Record the draw for the path tracer while the transform is still ours to
-	// copy. Overlays (gizmos, highlights, decals, water, clouds, particles) have
-	// no Ray equivalent and stay out of the ray scene.
+
+
 	if (ctx->rayState && kine_material_is_path_traced(materialKind) && shader != ctx->grassShader) {
 		KineRayQueuedDraw queued;
 		queued.mesh = keyMesh;
@@ -9209,14 +9904,14 @@ static void kine_queue_mesh(
 		queued.color[1] = g;
 		queued.color[2] = b;
 		queued.materialKind = materialKind;
-		// Same factor Filament feeds to instanceUvScale (see kine_default.mat):
-		// only the default material retiles, by its stud-scale parameter.
+
+
 		queued.uvScale = perInstanceUv ? (param3 != 0.0f ? param3 : 1.0f) : 1.0f;
 		queued.param1 = param1;
 		queued.param2 = param2;
 		queued.param3 = param3;
 		queued.transmission = transmission;
-		// Layer 0 supplies the base color for Ray's terrain material.
+
 		queued.texture = key.texture;
 		const KineTexHandle *source = key.texture;
 		if (source && materialKind == KINE_MAT_TERRAIN && source->terrainLayerSources[0])
@@ -9231,8 +9926,8 @@ static void kine_queue_mesh(
 			queued.normalMap.width = source->cpuNormalWidth;
 			queued.normalMap.height = source->cpuNormalHeight;
 		}
-		// A retained stream owns its draws across frames, so they live with the
-		// stream's other retained state instead of in the per-frame queue.
+
+
 		if (streamId != 0) {
 			ctx->retainedLists[streamId].rayDraws.push_back(queued);
 		} else {
@@ -9255,9 +9950,8 @@ static void kine_queue_mesh(
 		pending.transformHash = 1469598103934665603ULL;
 		pending.colorHash = 1469598103934665603ULL;
 		pending.uvHash = 1469598103934665603ULL;
-		// Keep existing capacity for active batches. Let new batches grow
-		// geometrically rather than reserving 16 instances for every unique
-		// material/mesh key (most sparse batches contain a single instance).
+
+
 	}
 	uint64_t instanceTransformHash = 1469598103934665603ULL;
 	for (size_t offset = 0; offset < 16; ++offset) {
@@ -9276,8 +9970,7 @@ static void kine_queue_mesh(
 		math::float4{localX, localY, localZ, mat4[15]});
 	pending.instanceTransformHashes.emplace_back(instanceTransformHash);
 
-	const bool useAlpha = kine_material_uses_instance_alpha(materialKind) && !(key.shader && key.shader->opacitySource);
-	const math::float4 color{r, g, b, opacity * (useAlpha ? transmission : 1.0f)};
+	const math::float4 color{r, g, b, opacity * (instanceAlpha ? transmission : 1.0f)};
 	for (size_t offset = 0; offset < 4; ++offset) {
 		uint32_t bits = 0;
 		memcpy(&bits, &color[offset], sizeof(bits));
@@ -9286,7 +9979,7 @@ static void kine_queue_mesh(
 	}
 	pending.colors.emplace_back(color);
 
-	const float uvScale = perInstanceUv
+	const float uvScale = perInstanceBias ? param1 : perInstanceUv
 							  ? (param3 != 0.0f ? param3 : 1.0f)
 							  : 1.0f;
 	{
@@ -9418,8 +10111,7 @@ KINE_API void Kine_Filament_DrawParticles(
 	}
 }
 
-// A retained terrain stream must continue to react to camera movement.
-// Only grass batches are activated/deactivated here; terrain geometry stays cached.
+
 static void kine_update_retained_grass_stream(KineFilamentContext *ctx,
                                                KineRetainedListState &state,
                                                uint64_t streamId) {
@@ -9460,7 +10152,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 
 	KineRetainedListState &state = ctx->retainedLists[streamId];
 	if (state.initialized && state.version == version) {
-		// Check before refreshing grass, which may queue a new batch.
+
 		bool missing = false;
 		for (const KineBatchKey &key : state.keys) {
 			if (ctx->builtBatches.find(key) == ctx->builtBatches.end()) {
@@ -9484,6 +10176,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 							for (const KineBuiltBatch &chunk : batch.chunks)
 								if (!chunk.entity.isNull()) scene->addEntity(chunk.entity);
 							batch.detached = false;
+                            ctx->batchCacheReattachments += uint32_t(batch.chunks.size());
 						}
 					}
 					if (kine_material_is_outline_mask(key.materialKind)) {
@@ -9495,8 +10188,8 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			}
 			return;
 		}
-		// The stream was absent long enough for its GPU batches to be evicted.
-		// Requeue the caller's unchanged data rather than silently dropping it.
+
+
 	}
 
 	state.initialized = true;
@@ -9509,9 +10202,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 	if (!items || itemCount == 0)
 		return;
 
-	// Reuse the pending batch lookup already performed by kine_queue_mesh.
-	// The serial is per submission, not per frame, so different versions of
-	// the same list in a frame still have independent key membership.
+
 	if (++ctx->retainedListSerial == 0) {
 		for (auto &entry : ctx->pendingBatches) entry.second.lastRetainedListSerial = 0;
 		++ctx->retainedListSerial;
@@ -9536,7 +10227,7 @@ KINE_API void Kine_Filament_DrawMeshListVersioned(
 			&key, kine_draw_opacity(item.reserved),
             (item.flags & KINE_FILAMENT_DRAW_WORLD_POSITION) ? item.worldPosition : nullptr,
             listSerial, &firstInList);
-        // Invalid/empty draws never enter the pending map.
+
         if (!key.mesh) continue;
         if (item.materialKind == KINE_MAT_TERRAIN && item.mesh) {
             KineRetainedTerrainGrassDraw draw;
@@ -9841,9 +10532,8 @@ static double kine_gizmo_view_scale(KineFilamentContext *ctx, double distance) {
 		return 1.0;
 
 	const math::mat4 projection = ctx->camera->getProjectionMatrix();
-	// Filament stores mat4 column-major, so column 1 is (0, focalY, 0, 0): the
-	// vertical focal length is its y component, not its x component (which is 0
-	// and would make this whole scale collapse to 1.0).
+
+
 	const double focal = projection[1].y;
 	if (!(focal > 1e-6))
 		return 1.0;
@@ -9866,10 +10556,8 @@ struct KineGizmoFrame {
 };
 
 static void kine_gizmo_scaled_matrix(const double *mat4, double scale, double *out) {
-	// The caller hands us a row-major rigid matrix, so the three basis vectors
-	// live in the top-left 3x3 (indices 0,1,2 / 4,5,6 / 8,9,10). Scale only
-	// those: the translation (indices 3,7,11) is the gizmo origin and must stay
-	// put, otherwise the hover boost would fling the gizmo off the object.
+
+
 	for (int i = 0; i < 16; ++i)
 		out[i] = mat4[i];
 	for (int row = 0; row < 3; ++row)
@@ -9962,11 +10650,7 @@ static bool kine_gizmo_point_in_quad(
 	return outside == 0 || outside == 4;
 }
 
-// kine_gizmo_rotate_delta turns the mouse sweep around the projected gizmo origin
-// into a signed rotation angle in radians, so a grabbed ring point stays under
-// the cursor. The ring is a circle around that origin, so the angle the cursor
-// sweeps is the angle the object turns; its sign flips depending on whether the
-// ring's world axis points toward or away from the camera.
+
 static float kine_gizmo_rotate_delta(
 	KineFilamentContext *ctx,
 	const double *mat4,
@@ -9988,12 +10672,10 @@ static float kine_gizmo_rotate_delta(
 	if (std::hypot(v1x, v1y) < 1.0 || std::hypot(v2x, v2y) < 1.0)
 		return 0.0f;
 
-	// Screen Y points down, so a positive sweep is clockwise on screen.
+
 	const double screenAngle = std::atan2(v1x * v2y - v1y * v2x, v1x * v2x + v1y * v2y);
 
-	// Recover the eye from the view matrix (as kine_gizmo_frame does) and test
-	// whether the ring's world axis faces the camera: rotating about an axis
-	// pointing at the viewer reads the opposite way on screen.
+
 	const math::mat4 view = ctx->camera->getViewMatrix();
 	const double t[3] = {view[3].x, view[3].y, view[3].z};
 	const double eye[3] = {
@@ -10010,12 +10692,6 @@ static float kine_gizmo_rotate_delta(
 	return (float)(screenAngle * (facing > 0.0 ? -1.0 : 1.0));
 }
 
-// ---------------------------------------------------------------------------
-// Immediate-mode debug shapes (NOT the interactive transform gizmo).
-// Call every frame before Kine_Filament_RenderFrame. Matrices are row-major
-// float[16] (translation at 3/7/11) like the rest of this API; null = identity.
-// Shapes reuse KINE_MAT_GIZMO, so they are unlit and batched into instances.
-// ---------------------------------------------------------------------------
 
 static const double KINE_IDENTITY_4X4[16] = {
 	1, 0, 0, 0,
@@ -10093,7 +10769,7 @@ static math::double3 kine_dbg_normalize(const math::double3 &v) {
 	return l > 1e-12f ? math::double3{v.x / l, v.y / l, v.z / l} : math::double3{0, 1, 0};
 }
 
-// One world-space segment, drawn as a stretched thin cylinder.
+
 static void kine_dbg_line(
 	KineFilamentContext *ctx,
 	const math::double3 &a, const math::double3 &b,
@@ -10110,7 +10786,7 @@ static void kine_dbg_line(
 	const math::double3 mid = a + (b - a) * 0.5;
 	const float t = thickness > 0.0f ? thickness : KINE_DEFAULT_WIRE_THICKNESS;
 
-	// The unit cylinder runs along Y (height 1) with diameter 1.
+
 	const double m[16] = {
 		x.x * double(t), y.x * len, z.x * double(t), mid.x,
 		x.y * double(t), y.y * len, z.y * double(t), mid.y,
@@ -10119,8 +10795,7 @@ static void kine_dbg_line(
 	kine_dbg_queue(ctx, kine_dbg_prim(ctx, 3), m, r, g, bl);
 }
 
-// Circle perpendicular to local axis `normalAxis` (0=X,1=Y,2=Z), shifted
-// `offset` along that axis, then transformed by m.
+
 static void kine_dbg_wire_circle(
 	KineFilamentContext *ctx, const double *m,
 	int normalAxis, float offset, float radius, int segments,
@@ -10151,7 +10826,7 @@ static void kine_dbg_wire_mesh(
 	if (!mesh || mesh->indices.size() < 3 || mesh->vertices.empty())
 		return;
 
-	// Weld vertices by quantized position (1/1000 unit).
+
 	std::unordered_map<uint64_t, uint32_t> weld;
 	std::vector<math::double3> pos;
 	std::vector<uint32_t> remap(mesh->vertices.size());
@@ -10232,7 +10907,7 @@ KINE_API void Kine_Filament_DrawGizmoLine(
 	kine_dbg_line(ctx, {ax, ay, az}, {bx, by, bz}, thickness, r, g, b);
 }
 
-// points: 6 floats per segment (ax ay az bx by bz).
+
 KINE_API void Kine_Filament_DrawGizmoLines(
 	KineFilamentContext *ctx,
 	const double *points,
@@ -10247,8 +10922,7 @@ KINE_API void Kine_Filament_DrawGizmoLines(
 	}
 }
 
-// Unit cube (edge length 1, centered at origin) transformed by mat4. Put the
-// size in the matrix scale. wire=false draws a solid cube.
+
 KINE_API void Kine_Filament_DrawGizmoCube(
 	KineFilamentContext *ctx,
 	const double *mat4,
@@ -10296,7 +10970,7 @@ KINE_API void Kine_Filament_DrawGizmoSphere(
 		kine_dbg_wire_circle(ctx, m, axis, 0.0f, radius, s, thickness, r, g, b);
 }
 
-// Unit cylinder (diameter 1, height 1 along local Y, centered) transformed by mat4.
+
 KINE_API void Kine_Filament_DrawGizmoCylinder(
 	KineFilamentContext *ctx,
 	const double *mat4,
@@ -10323,8 +10997,7 @@ KINE_API void Kine_Filament_DrawGizmoCylinder(
 	}
 }
 
-// Any mesh from CreateMesh / CreateCustomMesh / CreateMeshFromPath, drawn solid
-// and unlit in a single flat color.
+
 KINE_API void Kine_Filament_DrawGizmoMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
@@ -10338,8 +11011,7 @@ KINE_API void Kine_Filament_DrawGizmoMesh(
 	kine_dbg_queue(ctx, m, mat4, r, g, b);
 }
 
-// Any mesh drawn as a wireframe (unique triangle edges, capped at 16384 per
-// call). Skinned meshes are drawn in their bind pose.
+
 KINE_API void Kine_Filament_DrawGizmoWireMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
@@ -10353,7 +11025,7 @@ KINE_API void Kine_Filament_DrawGizmoWireMesh(
 					   thickness, r, g, b, featureAngleDeg);
 }
 
-} // extern "C"
+}
 
 extern "C" {
 
@@ -10444,9 +11116,7 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
 	if (axis == KINE_GIZMO_AXIS_CENTER || kine_gizmo_plane(axis))
 		return ((currentX - startX) - (currentY - startY)) * 0.01f;
 
-	// Project through the unscaled model: one world unit then maps to its true
-	// on-screen length, so the handle tracks the cursor 1:1 at any distance
-	// instead of lagging behind once the constant-screen-size scale grows.
+
 	const math::mat4 model = kine_gizmo_model_matrix(mat4);
 	const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
 	const KineGizmoScreenPoint endpoint = kine_gizmo_project(
@@ -10488,7 +11158,7 @@ KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 	if (gizmo->type == KINE_GIZMO_ROTATE)
 		return 0;
 
-	// Unscaled model again, so plane drags also track the cursor 1:1.
+
 	const math::mat4 model = kine_gizmo_model_matrix(mat4);
 	const KineGizmoScreenPoint origin = kine_gizmo_project(ctx, model, {0.0, 0.0, 0.0});
 	const KineGizmoScreenPoint first = kine_gizmo_project(
@@ -10618,6 +11288,16 @@ static thread_local std::string kine_filament_shader_error;
 extern "C++" {
 static filamat::Package kine_compile_shader(
 	utils::JobSystem &jobs, const char *materialSource, std::string &error, bool fade = false) {
+    const auto cacheKey = kine_shader_cache::key(
+#if KINE_FILAMENT_USE_VULKAN
+        fade ? "filamat-vulkan-desktop-performance-fade" : "filamat-vulkan-desktop-performance",
+#else
+        fade ? "filamat-opengl-desktop-performance-fade" : "filamat-opengl-desktop-performance",
+#endif
+        materialSource);
+    std::vector<uint8_t> cached;
+    if (kine_shader_cache::read(cacheKey, cached) && !cached.empty()) return filamat::Package(cached.data(), cached.size());
+    kine_shader_cache::Timer timer;
 	static std::once_flag filamatInit;
 	std::call_once(filamatInit, [] { filamat::MaterialBuilder::init(); });
 
@@ -10657,6 +11337,7 @@ static filamat::Package kine_compile_shader(
 		return filamat::Package::invalidPackage();
 	}
 
+	kine_shader_cache::write(cacheKey, package.getData(), package.getSize());
 	return package;
 }
 
@@ -10715,7 +11396,7 @@ class KineShaderCompiler {
 			if (!state) continue;
 			try {
 				if (!compiler) {
-					// No render context or GPU resources are shared with the frame thread.
+
 					Engine::Config config{};
 					config.jobSystemThreadCount = 2;
 					compiler = Engine::create(backend::Backend::NOOP, nullptr, nullptr, &config);
@@ -10748,6 +11429,10 @@ public:
 		{
 			std::lock_guard lock(mutex);
 			std::erase_if(requests, [](const Request &request) { return request.state.expired(); });
+        if (requests.size() >= 32) {
+            state->error = "Material compile queue is full (32 pending); retry after pending jobs finish";
+            state->ready.store(true, std::memory_order_release); return;
+        }
 		requests.push_back({state, source, fade});
 		}
 		wake.notify_one();
@@ -10781,8 +11466,8 @@ static KineFilamentShaderCompile *kine_shader_compile_start(const char *source, 
 	(void)source;
 	return nullptr;
 #else
-	if (!source || !*source) {
-		kine_filament_shader_error = "Filament material source is empty";
+	if (!source || !*source || std::strlen(source) > 1024*1024) {
+		kine_filament_shader_error = "Filament material source must be between 1 byte and 1 MiB";
 		return nullptr;
 	}
 	try {
@@ -10833,8 +11518,8 @@ KINE_API void Kine_Filament_Shader_CompileRelease(KineFilamentShaderCompile *job
 }
 
 extern "C++" {
-// Wrap the fragment entry point so custom MaterialVariants retain their
-// original lighting and maps while receiving the SoftBody's opacity.
+
+
 static std::string kine_shader_fade_source(const std::string &source) {
 	size_t fragment = 0;
 	while ((fragment = source.find("fragment", fragment)) != std::string::npos) {
@@ -10910,7 +11595,7 @@ KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader) {
 			batch->key.shader = nullptr;
 			kine_rebuild_instance_batch(batch);
 		}
-		ctx->runtimeShaders.erase(shader);
+        ctx->runtimeShaders.erase(shader);
 		if (shader->material) {
 			ctx->engine->flushAndWait();
 			ctx->engine->destroy(shader->material);
@@ -10990,6 +11675,7 @@ KINE_API bool Kine_Filament_Shader_SetTextureFromPixels(
 	if (!texture) return false;
 	auto previous = shader->textures.find(name);
 	Texture *old = previous == shader->textures.end() ? nullptr : previous->second;
+	shader->computeTextures.erase(name);
 	shader->textures[name] = texture;
 	kine_refresh_shader_instances(shader);
 	if (old) shader->ctx->engine->destroy(old);
@@ -11003,8 +11689,8 @@ KINE_API bool Kine_Filament_Shader_SetGeometryOptions(KineFilamentShader *shader
 	shader->subdivisionLevel=subdivisions;
 	shader->boundsPadding=boundsPadding;
 	auto *ctx=shader->ctx;
-	// Geometry and bounds are retained along with material instances. Rebuild
-	// them on an option change even when all authored transforms stay still.
+
+
 	kine_destroy_built_batches(ctx);
 	ctx->retainedLists.clear();
 	kine_viewport_destroy_shader_batches(ctx,shader);
@@ -11020,6 +11706,10 @@ KINE_API void Kine_Filament_Shader_TransferTextures(KineFilamentShader *source,K
 			return p.isSampler && p.samplerType==Material::SamplerType::SAMPLER_2D && it->first==p.name;
 		});
 		if (accepts && destination->textures.find(it->first)==destination->textures.end()) {
+            if (auto computed=source->computeTextures.find(it->first);computed!=source->computeTextures.end()) {
+                destination->computeTextures.emplace(computed->first,computed->second);
+                source->computeTextures.erase(computed);
+            }
 			destination->textures.emplace(it->first,it->second);
 			it=source->textures.erase(it);
 		} else ++it;
@@ -11036,10 +11726,10 @@ KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext *ctx, KineF
 		kine_filament_shader_error = "Post-process material belongs to a different Filament context";
 		return false;
 	}
-	kine_destroy_post_process_pipeline(ctx);
-	ctx->postProcessShader = shader;
-	if (!shader)
-		return true;
+    kine_destroy_post_process_pipeline(ctx);
+    ctx->postProcessShader = shader;
+    if (!shader)
+        return true;
 	if (!shader->material || !shader->material->isSampler("inputTexture")) {
 		ctx->postProcessShader = nullptr;
 		kine_filament_shader_error = "Post-process material must declare sampler2d inputTexture";
@@ -11057,17 +11747,11 @@ KINE_API const char *Kine_Filament_Shader_GetLastError(void) {
 	return kine_filament_shader_error.c_str();
 }
 
-// ---------------------------------------------------------------------------
-// Ray path tracer toggle (render mode 1 = Filament, 2 = Ray)
-// ---------------------------------------------------------------------------
 
 #if KINE_WITH_RAY
 static std::string kine_ray_error_text;
 
-// Ray neither creates an instance nor selects a queue family when it is handed
-// an external device: it uses the first family that supports graphics and
-// compute, and queue index 0 of it. Report what that resolves to so a mismatch
-// with the family Filament enabled queues for is visible instead of silent.
+
 static void kine_ray_report_queues(
 	const KineFilamentVulkanBackend &backend, KineRayDevice &device) {
 #if KINE_FILAMENT_USE_VULKAN
@@ -11205,7 +11889,7 @@ KINE_API bool Kine_Filament_SetRenderMode(KineFilamentContext *ctx, int mode) {
 	}
 	ctx->renderMode = mode;
 #if KINE_WITH_RAY
-	// The path tracer accumulates samples; coming back to Ray must start over.
+
 	if (mode == KINE_RENDER_MODE_RAY) {
 		kine_ray_error_text.clear();
 	}
@@ -11269,3 +11953,4 @@ KINE_API const char *Kine_Filament_GetRayError(void) {
 }
 
 #include "kine_viewport.inc"
+#include "kine_compute_texture.inc"

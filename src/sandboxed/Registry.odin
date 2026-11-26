@@ -146,24 +146,25 @@ register_embedded_editor_modules :: proc() {
 	}
 }
 
+editor_available_for :: proc(mode: target.Mode, playtest, legacy_tools: bool) -> bool {
+	return mode == .Editor || (playtest && legacy_tools)
+}
+
 editor_available :: proc() -> bool {
 	when CONFIG_NOEDITOR {
 		return false
 	}
-
-	if ODIN_OS == .JS {
-
-
+	when ODIN_OS == .JS {
 		return target.is_editor()
+	} else {
+		return editor_available_for(
+			target.current_mode,
+			target.is_playtest(),
+			playtest_editor_tools_enabled(),
+		)
 	}
-
-	if target.is_editor() {
-		return true
-	}
-
-
-	return target.is_playtest()
 }
+
 
 init :: proc(
 	vm_state: ^vm.VM,

@@ -1,10 +1,10 @@
 package classes
 
-import "core:strings"
+import datatypes "../datatypes"
 import enums "../enum"
 import signals "../signals"
-import datatypes "../datatypes"
 import vm "../vm"
+import "core:strings"
 
 StateMachine_Class := Class_Info {
 	name   = "StateMachine",
@@ -12,8 +12,7 @@ StateMachine_Class := Class_Info {
 }
 
 StateMachine :: struct {
-	using object: Object,
-
+	using object:  Object,
 	state:         string,
 	state_alloc:   bool,
 	state_changed: ^signals.Signal,
@@ -33,15 +32,30 @@ state_machine_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 		signals.Destroy(sm.state_changed)
 		sm.state_changed = nil
 	}
-	if sm.state_alloc { delete(sm.state) }
+	if sm.state_alloc {delete(sm.state)}
 	Object_Destroy(object)
 	free(sm)
 }
 
-// StateMachine_Set_State transitions to `next`, firing StateChanged(old, new)
-// when the state actually changes. Returns whether the state changed.
+
 StateMachine_Set_State :: proc(sm: ^StateMachine, L: ^vm.State, next: string) -> bool {
-	if sm == nil || sm.destroyed || sm.state == next { return false }
+	if sm == nil || sm.destroyed || sm.state == next {return false}
+
+
+	if sm.parent != nil && Is_A(sm.parent, "CharacterController") {
+		cc := cast(^CharacterController)sm.parent
+		if cc.parent != nil {
+			for child in cc.parent.children {
+				if child == nil || child.destroyed || !Is_A(child, "Humanoid") {continue}
+				h := cast(^Humanoid)child
+
+
+				if !(next == "Dead" && h.health <= 0) &&
+				   !Humanoid_State_Enabled_Name(h, next) {return false}
+				break
+			}
+		}
+	}
 	old := sm.state
 	sm.state = strings.clone(next)
 	sm.state_alloc = true
@@ -70,7 +84,7 @@ state_machine_get :: proc(
 		   sm.object.signal_registry.signal_registry != nil {
 			sm.state_changed = signals.Create(sm.object.signal_registry.signal_registry)
 		}
-		if sm.state_changed == nil { return false }
+		if sm.state_changed == nil {return false}
 		signals.Push(L, sm.state_changed)
 	case:
 		return false
@@ -84,7 +98,10 @@ state_machine_namecall :: proc(
 	_: ^datatypes.Registry,
 	_: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	sm := cast(^StateMachine)object
 	switch method {
 	case "GetState":

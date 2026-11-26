@@ -1,0 +1,29 @@
+---
+title: SerializationService
+description: Save instance hierarchies into buffers and reconstruct them.
+---
+
+SerializationService converts instances and their descendants into a binary buffer. Use it for transferring authored object trees or storing reusable scene fragments.
+
+## Round trip
+
+```lua
+local serialization = game:GetService("SerializationService")
+local folder = Instance.new("Folder")
+folder.Name = "Example"
+
+local data = serialization:SerializeInstancesAsync({folder})
+local copies = serialization:DeserializeInstancesAsync(data, true)
+
+copies[1].Parent = workspace
+folder:Destroy()
+```
+
+## Methods
+
+| Signature | Behavior |
+| --- | --- |
+| `SerializeInstancesAsync(instances: {Instance}): buffer` | Serializes an array of live roots and their hierarchies. Invalid arguments or serialization errors raise an error. |
+| `DeserializeInstancesAsync(data: buffer, freshUniqueIds: boolean?): {Instance}` | Reconstructs roots as a one-based array. Roots are unparented. The optional flag defaults to false; true requests fresh unique IDs. Invalid data raises an error. |
+
+Despite the Async names, these calls perform the work before returning. Large hierarchies can take time to process. Use trusted data and don't rely on serialization to preserve live script threads, event connections, or other runtime-only behavior.

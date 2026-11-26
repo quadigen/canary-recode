@@ -74,6 +74,34 @@ remote_encode_args :: proc(
 	return true
 }
 
+
+remote_can_send_to_peer :: proc(
+	service: ^ReplicatorService,
+	peer: ^Replication_Transport_Peer,
+	entity_id: u32,
+) -> bool {
+	if service == nil || peer == nil || entity_id == 0 {return false}
+	switch service.mode {
+	case .Client:
+		return service.handshake_complete && service.remote == peer
+	case .Server:
+		connection := replication_peer_of(service, peer)
+		entity := replication_entity_by_id(service, entity_id)
+		return(
+			connection != nil &&
+			connection.handshake_complete &&
+			connection.known[entity_id] != 0 &&
+			entity != nil &&
+			entity.object != nil &&
+			!entity.object.destroyed &&
+			replication_visible(service, connection, entity.object) \
+		)
+	case .Stopped:
+		return false
+	}
+	return false
+}
+
 remote_send_fire :: proc(
 	service: ^ReplicatorService,
 	peer: ^Replication_Transport_Peer,
@@ -81,24 +109,12 @@ remote_send_fire :: proc(
 	args: []u8,
 	unreliable: bool = false,
 ) -> bool {
+	if !remote_can_send_to_peer(service, peer, entity_id) {return false}
 	if unreliable {
-		if peer == nil ||
-		   entity_id == 0 ||
-		   len(args) > UNRELIABLE_REMOTE_MAX_PAYLOAD {return false}
+		if len(args) > UNRELIABLE_REMOTE_MAX_PAYLOAD {return false}
 		if (remote_common_capabilities(service, peer) &
 			   Replication_Capability_Unreliable_Remote) ==
 		   0 {return false}
-		if service.mode == .Client {
-			if !service.handshake_complete {return false}
-		} else {
-			connection := replication_peer_of(service, peer)
-			entity := replication_entity_by_id(service, entity_id)
-			if connection == nil ||
-			   !connection.handshake_complete ||
-			   connection.known[entity_id] == 0 ||
-			   entity == nil ||
-			   !replication_visible(service, connection, entity.object) {return false}
-		}
 	}
 	bytes: [dynamic]u8
 	defer delete(bytes)
@@ -115,6 +131,7 @@ remote_send_invoke_request :: proc(
 	invoke_id: u32,
 	args: []u8,
 ) -> bool {
+	if !remote_can_send_to_peer(service, peer, entity_id) {return false}
 	bytes: [dynamic]u8
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
@@ -651,6 +668,7 @@ remote_receive_invoke_response :: proc(
 				connection := replication_peer_of(service, peer)
 				entity := replication_entity_by_id(service, entity_id)
 				if connection == nil ||
+				   !connection.handshake_complete ||
 				   connection.player == nil ||
 				   (pending.request_user_id != 0 &&
 						   pending.request_user_id != connection.player.user_id) ||

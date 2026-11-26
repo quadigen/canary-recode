@@ -107,6 +107,9 @@
     }
     events.push({type:11,...p,dx,dy,buttons:mouse.buttons});
   }, true);
+  addEventListener("pointerout", e => {
+    if (e.isPrimary && !e.relatedTarget) events.push({type:19});
+  }, true);
   function pressPointer(e) {
     if (!e.isPrimary) return;
     const p=updatePointer(e), button=mouseButton(e.button);
@@ -134,10 +137,12 @@
     mouse.focused = false; keys.clear();
     for(const pointerId of [...pointerButtons.keys()]) releasePointer({pointerId},true);
     mouse.buttons=0; mouse.dx=mouse.dy=0; lastClicks.clear();
-    events.push({type:5});
+    events.push({type:19}, {type:5});
   });
   addEventListener("resize", () => events.push({ type: 7 }));
 
+  let cursorVisible = true, cursorShape = "default";
+  const applyCursor = () => { document.body.style.cursor = cursorVisible ? cursorShape : "none"; };
   const platform = {
     host_width: width, host_height: height, host_dpi_scale: dpr,
     host_mouse_x: () => mouse.x, host_mouse_y: () => mouse.y,
@@ -158,9 +163,9 @@
     host_copy_event_text: (ptr, cap) => copyString(currentEvent.text || "", ptr, cap),
     host_system_theme: () => matchMedia("(prefers-color-scheme: dark)").matches ? 2 : 1,
     host_set_relative: on => { if (on) worldEl.requestPointerLock?.(); else document.exitPointerLock?.(); },
-    host_show_cursor: visible => document.body.style.cursor = visible ? "default" : "none",
+    host_show_cursor: visible => { cursorVisible = !!visible; applyCursor(); },
     host_warp_mouse: () => { }, host_text_input: () => { },
-    host_set_cursor: kind => { document.body.style.cursor = ["default", "text", "wait", "crosshair", "progress", "nwse-resize", "nesw-resize", "ew-resize", "ns-resize", "move", "not-allowed", "pointer"][kind] || "default"; },
+    host_set_cursor: kind => { cursorShape = ["default", "text", "wait", "crosshair", "progress", "nwse-resize", "nesw-resize", "ew-resize", "ns-resize", "move", "not-allowed", "pointer"][kind] || "default"; applyCursor(); },
     host_set_clipboard: ptr => { navigator.clipboard?.writeText(cstr(ptr)); return 1; },
     host_copy_clipboard: () => 0
     , host_debug_phase: code => {stats.startup["native-"+code]=Math.round(performance.now()-bootStart);console.info("[Kinemium native]",code);}

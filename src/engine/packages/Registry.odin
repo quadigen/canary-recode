@@ -1,5 +1,6 @@
 package packages
 import kineffi "../bindings"
+import datatypes "../datatypes"
 import sdl3 "../platform"
 import renderer "../renderer"
 import target "../target"
@@ -286,6 +287,13 @@ Resolve :: proc(L: ^vm.State, path: string, raw_registry: rawptr) -> bool {
 		return false
 	}
 	if strings.has_prefix(path, "@internal/") || strings.has_prefix(path, "internal/") {
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			_ = vm.RaiseError(L, "require: internal modules require trusted editor permissions")
+			return true
+		}
 		name := path
 		if strings.has_prefix(name, "@internal/") {
 			name = name[len("@internal/"):]
@@ -303,6 +311,13 @@ Resolve :: proc(L: ^vm.State, path: string, raw_registry: rawptr) -> bool {
 		}
 	}
 	if strings.has_prefix(path, "./") {
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			_ = vm.RaiseError(L, "require: internal modules require trusted editor permissions")
+			return true
+		}
 		name := path[len("./"):]
 		if found, ok := resolve_embedded_module(
 			registry,
@@ -315,6 +330,13 @@ Resolve :: proc(L: ^vm.State, path: string, raw_registry: rawptr) -> bool {
 		}
 	}
 	if strings.has_prefix(path, "@startup/") || strings.has_prefix(path, "startup/") {
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			_ = vm.RaiseError(L, "require: startup modules require trusted editor permissions")
+			return true
+		}
 		name := path
 		if strings.has_prefix(name, "@startup/") {
 			name = name[len("@startup/"):]

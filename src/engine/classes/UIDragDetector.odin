@@ -26,6 +26,7 @@ UIDragDetector :: struct {
 	drag_continue:        ^signals.Signal,
 	drag_end:             ^signals.Signal,
 	dragging:             bool,
+	drag_parent:          ^Object,
 	start_pointer:        datatypes.Vector2,
 	start_position:       datatypes.UDim2,
 	start_rotation:       f64,
@@ -100,8 +101,11 @@ ui_drag_detector_basis :: proc(gui: ^GuiObject) -> (w, h: f32) {
 	if parent != nil {
 		if Is_A(parent, "GuiObject") {
 			parent_gui := cast(^GuiObject)parent
-			w = parent_gui.absolute_size.X
-			h = parent_gui.absolute_size.Y
+			w, h = scrolling_frame_content_size(
+				parent,
+				parent_gui.absolute_size.X,
+				parent_gui.absolute_size.Y,
+			)
 		} else if Is_A(parent, "ScreenGui") {
 			screen := cast(^ScreenGui)parent
 			w = screen.size.X
@@ -117,6 +121,22 @@ ui_drag_detector_basis :: proc(gui: ^GuiObject) -> (w, h: f32) {
 	if h <= 0 {h = f32(gui_layout_last_height)}
 
 	return
+}
+
+ui_detector_can_interact :: proc(gui: ^GuiObject) -> bool {
+	if !GuiObject_effectively_visible(gui) {return false}
+	for node := &gui.object; node != nil; node = node.parent {
+		if Is_A_Class(node, &GuiObject_Class) &&
+		   !(cast(^GuiObject)node).interactable {return false}
+	}
+	return true
+}
+
+ui_detector_parent_point :: proc(gui: ^GuiObject, x, y: f32) -> (f32, f32) {
+	if Is_A_Class(gui.object.parent, &GuiObject_Class) {
+		return GuiObject_screen_to_local(cast(^GuiObject)gui.object.parent, x, y)
+	}
+	return x, y
 }
 
 ui_drag_detector_translation_constrained :: proc(d: ^UIDragDetector) -> bool {
@@ -158,7 +178,9 @@ ui_drag_detector_begin :: proc(
 	basis_w, basis_h := ui_drag_detector_basis(gui)
 
 	d.dragging = true
-	d.start_pointer = {x, y}
+	d.drag_parent = &gui.object
+	px, py := ui_detector_parent_point(gui, x, y)
+	d.start_pointer = {px, py}
 	d.start_position = gui.position
 	d.start_rotation = gui.rotation
 	d.basis = {basis_w, basis_h}
@@ -167,7 +189,7 @@ ui_drag_detector_begin :: proc(
 		gui.absolute_position.X + gui.absolute_size.X * 0.5,
 		gui.absolute_position.Y + gui.absolute_size.Y * 0.5,
 	}
-	d.last_angle = math.to_degrees(math.atan2(y - d.pivot.Y, x - d.pivot.X))
+	d.last_angle = math.to_degrees(math.atan2(py - d.pivot.Y, px - d.pivot.X))
 	d.total_angle = 0
 
 	UIDragDetector_ensure_signals(d)
@@ -175,6 +197,9 @@ ui_drag_detector_begin :: proc(
 }
 
 ui_drag_detector_update :: proc(d: ^UIDragDetector, gui: ^GuiObject, x, y: f32) {
+	x, y := ui_detector_parent_point(gui, x, y)
+	old_position, old_rotation := gui.position, gui.rotation
+	if d.response_style == .CustomOffset || d.response_style == .CustomScale {return}
 	switch d.drag_style {
 	case .Scriptable:
 		return
@@ -250,9 +275,10 @@ ui_drag_detector_update :: proc(d: ^UIDragDetector, gui: ^GuiObject, x, y: f32) 
 		gui.position = pos
 	}
 
-	Gui_Layout_Mark_Dirty()
-	gui_invalidate_draw(&gui.object)
-	surfacegui_mark_dirty_for(&gui.object)
+	if gui.position != old_position || gui.rotation != old_rotation {
+		gui_mark_layout_for(&gui.object, gui_object_position_affects_content(gui))
+		surfacegui_mark_dirty_for(&gui.object)
+	}
 }
 
 ui_drag_detector_end :: proc(
@@ -266,6 +292,7 @@ ui_drag_detector_end :: proc(
 	}
 
 	d.dragging = false
+	d.drag_parent = nil
 	UIDragDetector_ensure_signals(d)
 	ui_drag_detector_fire(L, registry, d.drag_end, position)
 }
@@ -295,32 +322,21 @@ UIDragDetector_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sd
 		}
 
 		for object in descriptor.instances {
-			if object == nil || object.destroyed {
-				continue
-			}
-
-			d := cast(^UIDragDetector)object
-
-			if !d.enabled || d.dragging {
-				continue
-			}
-
-			if d.object.parent == nil || !Is_A(d.object.parent, "GuiObject") {
-				continue
-			}
-
-			gui := cast(^GuiObject)d.object.parent
-
-			in_chain := false
-			for candidate in result.chain {
-				if candidate == gui {
-					in_chain = true
-					break
-				}
-			}
-
-			if in_chain {
+			if object != nil &&
+			   !object.destroyed &&
+			   (cast(^UIDragDetector)object).dragging {return}
+		}
+		for gui in result.chain {
+			if !ui_detector_can_interact(gui) ||
+			   !GuiObject_contains_point(gui, result.x, result.y) {continue}
+			for child in gui.object.children {
+				if child == nil ||
+				   child.destroyed ||
+				   !Is_A_Class(child, &UIDragDetector_Class) {continue}
+				d := cast(^UIDragDetector)child
+				if !d.enabled {continue}
 				ui_drag_detector_begin(d, gui, registry, L, result.x, result.y)
+				return
 			}
 		}
 
@@ -336,9 +352,14 @@ UIDragDetector_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sd
 				continue
 			}
 
-			if d.object.parent == nil || !Is_A(d.object.parent, "GuiObject") {
+			if !d.enabled ||
+			   d.object.parent != d.drag_parent ||
+			   d.drag_parent == nil ||
+			   !Is_A_Class(d.object.parent, &GuiObject_Class) ||
+			   !ui_detector_can_interact(cast(^GuiObject)d.object.parent) {
 				d.dragging = false
-				continue
+				d.drag_parent = nil
+				return
 			}
 
 			gui := cast(^GuiObject)d.object.parent
@@ -354,6 +375,7 @@ UIDragDetector_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sd
 
 			UIDragDetector_ensure_signals(d)
 			ui_drag_detector_fire(L, registry, d.drag_continue, {x, y})
+			return
 		}
 
 	case .MOUSE_BUTTON_UP:
@@ -379,6 +401,14 @@ UIDragDetector_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sd
 			}
 
 			ui_drag_detector_end(d, registry, L, {x, y})
+			return
+		}
+	case .WINDOW_MINIMIZED:
+		for object in descriptor.instances {
+			if object == nil || object.destroyed {continue}
+			d := cast(^UIDragDetector)object
+			d.dragging = false
+			d.drag_parent = nil
 		}
 	}
 }
@@ -467,7 +497,9 @@ UIDragDetector_set :: proc(
 		d.enabled = vm.ArgBoolean(L, value_index)
 		if !d.enabled {
 			d.dragging = false
+			d.drag_parent = nil
 		}
+		Gui_Render_Mark_Dirty()
 
 	case "DragStyle":
 		if enum_registry == nil {return false}
@@ -520,6 +552,7 @@ UIDragDetector_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.max_drag_angle = src.max_drag_angle
 
 	dst.dragging = false
+	dst.drag_parent = nil
 }
 
 Register_UIDragDetector :: proc(registry: ^Registry) {

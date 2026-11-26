@@ -1,5 +1,4 @@
 package services
-// wire:service
 
 
 import "core:fmt"
@@ -29,6 +28,7 @@ PathfindingService :: struct {
 	agent_can_jump:    bool,
 	agent_can_climb:   bool,
 	waypoint_spacing:  f32,
+	max_slope:         f32,
 	built_fingerprint: u64,
 	rebuild_interval:  time.Duration,
 	last_rebuild:      time.Time,
@@ -154,6 +154,22 @@ pathfinding_append_part_geometry :: proc(
 }
 
 
+pathfinding_navigation_excluded :: proc(object: ^classes.Object) -> bool {
+	for node := object; node != nil; node = node.parent {
+		if node.signal_registry == nil || node.signal_registry.vm_state == nil {continue}
+		L := node.signal_registry.vm_state.L
+		if L == nil {continue}
+		for attribute in node.attributes {
+			if attribute.name != "NavigationExcluded" {continue}
+			vm.PushRegistryReference(L, attribute.value_ref)
+			excluded := vm.IsBoolean(L, -1) && vm.ArgBoolean(L, -1)
+			vm.Pop(L)
+			if excluded {return true}
+		}
+	}
+	return false
+}
+
 pathfinding_walk_parts :: proc(
 	object: ^classes.Object,
 	physics: ^Physics,
@@ -173,7 +189,7 @@ pathfinding_walk_parts :: proc(
 			part := cast(^classes.Part)child
 
 
-			if part.can_collide && part.can_query {
+			if part.can_collide && part.can_query && !pathfinding_navigation_excluded(child) {
 				pathfinding_append_part_geometry(physics, part, input)
 			}
 		}
@@ -296,7 +312,7 @@ pathfinding_fingerprint_geometry :: proc(object: ^classes.Object, hash: ^Pathfin
 
 		if classes.Is_A(child, "Part") || classes.Is_A(child, "MeshPart") {
 			part := cast(^classes.Part)child
-			if part.can_collide && part.can_query {
+			if part.can_collide && part.can_query && !pathfinding_navigation_excluded(child) {
 				pathfinding_hash_part(hash, part)
 			}
 		}
@@ -379,7 +395,7 @@ pathfinding_rebuild_navigation :: proc(
 	config.agentMaxClimb = agent_can_jump ? 7.0 : 0.0
 	config.cellSize = 1.0
 	config.cellHeight = 1.0
-	config.agentMaxSlope = 60.0
+	config.agentMaxSlope = service.max_slope
 
 	nav_mesh: kineffi.RCN_NavMeshRef
 	build := kineffi.RCN_BuildNavMesh(
@@ -1085,6 +1101,7 @@ pathfinding_service_construct :: proc(
 ) -> ^classes.Object {
 	service := new(PathfindingService)
 	service.service = Service_Init(&PathfindingService_Class, "PathfindingService", data_model)
+	service.max_slope = 60
 	return &service.object
 }
 
@@ -1099,7 +1116,13 @@ pathfinding_service_get :: proc(
 	switch key {
 	case "EmptyCutoff":
 		vm.PushNumber(L, 0.16)
-	case "CreatePath", "FindPathAsync", "ComputeRawPathAsync", "ComputeSmoothPathAsync":
+	case "MaxSlope":
+		vm.PushNumber(L, f64((cast(^PathfindingService)object).max_slope))
+	case "CreatePath",
+	     "FindPathAsync",
+	     "ComputeRawPathAsync",
+	     "ComputeSmoothPathAsync",
+	     "InvalidateNavigation":
 		vm.PushUserdataMethod(L, key)
 	case:
 		return false
@@ -1108,6 +1131,28 @@ pathfinding_service_get :: proc(
 	return true
 }
 
+
+pathfinding_service_set :: proc(
+	L: ^vm.State,
+	object: ^classes.Object,
+	datatype_registry: ^datatypes.Registry,
+	enum_registry: ^enums.Registry,
+	key: string,
+	index: int,
+) -> bool {
+	if key != "MaxSlope" {return false}
+	value := vm.ArgNumber(L, index)
+	if value != value || value < 0 || value > 89 {
+		_ = vm.RaiseError(L, "MaxSlope must be finite and between 0 and 89 degrees")
+		return true
+	}
+	service := cast(^PathfindingService)object
+	if service.max_slope != f32(value) {
+		service.max_slope = f32(value)
+		service.built = false
+	}
+	return true
+}
 
 pathfinding_service_namecall :: proc(
 	L: ^vm.State,
@@ -1122,6 +1167,9 @@ pathfinding_service_namecall :: proc(
 	service := cast(^PathfindingService)object
 
 	switch method {
+	case "InvalidateNavigation":
+		service.built = false
+		return 0, true
 	case "CreatePath":
 		path, ok := pathfinding_create_path(service, L, 2)
 		if !ok {
@@ -1193,13 +1241,15 @@ Register_PathfindingService_Class :: proc(registry: ^classes.Registry) {
 		pathfinding_service_destroy,
 		creatable = false,
 		get = pathfinding_service_get,
+		set = pathfinding_service_set,
 		namecall = pathfinding_service_namecall,
-		properties = []string{"EmptyCutoff"},
+		properties = []string{"EmptyCutoff", "MaxSlope"},
 		methods = []string {
 			"CreatePath",
 			"FindPathAsync",
 			"ComputeRawPathAsync",
 			"ComputeSmoothPathAsync",
+			"InvalidateNavigation",
 		},
 	)
 }

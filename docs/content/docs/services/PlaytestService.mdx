@@ -5,6 +5,8 @@ description: Internal editor APIs for launching and inspecting local playtest pr
 
 PlaytestService runs local desktop playtests. The editor and each playtest process own separate DataModels. Use tree inspection to read and edit the running game without changing your original map.
 
+Playtest processes do not start editor modules or downloaded editor plugins by default. Live tree inspection, remote debugging and log forwarding use the native playtest transport and remain available. For compatibility with workflows that explicitly need the full editor tools inside a playtest process, set the environment variable `KINE_PLAYTEST_EDITOR_TOOLS=1` before launching Kinemium.
+
 These methods require the Internals capability, in addition to the existing Studio access restriction. They are not game script APIs.
 
 ## Launching and stopping playtests

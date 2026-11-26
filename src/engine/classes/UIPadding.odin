@@ -69,19 +69,19 @@ ui_padding_set :: proc(
 	switch key {
 	case "PaddingLeft":
 		padding.padding_left = datatypes.Arg_UDim(L, value_index, datatype_registry)
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 		return true
 	case "PaddingRight":
 		padding.padding_right = datatypes.Arg_UDim(L, value_index, datatype_registry)
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 		return true
 	case "PaddingTop":
 		padding.padding_top = datatypes.Arg_UDim(L, value_index, datatype_registry)
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 		return true
 	case "PaddingBottom":
 		padding.padding_bottom = datatypes.Arg_UDim(L, value_index, datatype_registry)
-		Gui_Layout_Mark_Dirty()
+		gui_mark_layout_for(object)
 		return true
 	}
 

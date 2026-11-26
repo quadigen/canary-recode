@@ -1,61 +1,44 @@
-// assetstore owns the bytes of assets that travel inside a .kine file.
-//
-// The serializer rewrites asset-bearing property values to
-// "kineasset://<content-id>" and appends the file bytes to the stream's asset
-// table. Deserialization publishes that table here *before* any property setter
-// runs, so by the time an ImageLabel or MeshPart decodes its reference the blob
-// is already addressable. Consumers ask this package to turn a property value
-// back into something they can hand to a decoder.
-//
-// The store is process-global and content-addressed, which is what makes it
-// safe to share across maps: identical bytes written by two exports collapse to
-// one entry, and re-exporting a loaded map re-embeds the same ids.
+
+
+
 package assetstore
 
 import "core:fmt"
 import "core:strings"
 
-// KINE_ASSET_SCHEME marks a property value that points at bytes embedded in the
-// .kine stream rather than at a file on disk.
+
 KINE_ASSET_SCHEME :: "kineasset://"
 PROJECT_ASSET_SCHEME :: "project://"
 
-// ASSET_CACHE_SUBDIR keeps extracted blobs out of the user's home directory and
-// gives them a stable, wipeable home.
+
 ASSET_CACHE_SUBDIR :: "kinemium-assets"
 
-// MAX_ASSET_BYTES bounds a single embedded asset. Meshes are the big case;
-// anything larger is a packaging mistake rather than a place file.
+
 MAX_ASSET_BYTES :: 256 * 1024 * 1024
 
-// MAX_ASSET_COUNT bounds the asset table so a corrupt length cannot make the
-// reader reserve an unreasonable amount of memory up front.
+
 MAX_ASSET_COUNT :: 1 << 16
 
-// MAX_ASSET_TOTAL_BYTES bounds the sum of every embedded asset in one map.
+
 MAX_ASSET_TOTAL_BYTES :: 512 * 1024 * 1024
 
-// Asset_Kind is advisory metadata. Consumers pick a decoder from the file
-// extension carried alongside the bytes, so appending kinds never invalidates
-// files written by older builds.
+
 Asset_Kind :: enum u8 {
 	Unknown   = 0,
 	Mesh      = 1,
 	Texture   = 2,
 	Audio     = 3,
 	Data      = 4,
-	Path_File = 5, // An embedded file addressable by its authored path.
-	Animation = 6, // A clip source applied to a rig by bone name.
+	Path_File = 5,
+	Animation = 6,
 }
 
-// Asset is one embedded blob. Bytes are owned by the store.
+
 Asset :: struct {
 	id:     string,
-	path:   string, // path as authored; kept so an editor round-trip can show it
+	path:   string,
 	kind:   Asset_Kind,
 	bytes:  []u8,
-	// cached is the on-disk copy written by Materialize, so repeated loads of
-	// the same content do not re-extract it.
 	cached: string,
 }
 
@@ -63,17 +46,14 @@ assets: [dynamic]Asset
 index: map[string]int
 path_files: map[string]int
 project_root: string
-// missing_reported deduplicates the "the map says this is embedded but it
-// is not here" diagnostic, which would otherwise repeat per instance per frame.
+
+
 missing_reported: map[string]bool
 
 FNV_OFFSET: u64 : 14695981039346656037
 FNV_PRIME: u64 : 1099511628211
 
-// Content_Id derives the dedup key for a blob. FNV-1a is what the rest of the
-// engine uses for content hashing. It is an identity key rather than a
-// checksum: Register also compares the bytes it already holds under a key, so a
-// collision resolves to a distinct id instead of aliasing two assets.
+
 Content_Id :: proc(data: []u8, path := "") -> string {
 	hash := FNV_OFFSET
 	for byte in data {
@@ -104,9 +84,7 @@ Count :: proc() -> int {
 	return len(assets)
 }
 
-// At returns the entry published at an index, in registration order. The pointer
-// borrows from the store and is invalidated by the next Register or Clear. The
-// serializer uses this to write the asset table back out.
+
 At :: proc(index: int) -> (^Asset, bool) {
 	if index < 0 || index >= len(assets) {
 		return nil, false
@@ -114,9 +92,7 @@ At :: proc(index: int) -> (^Asset, bool) {
 	return &assets[index], true
 }
 
-// owned_tprintf formats into an owned string. fmt.tprintf allocates from
-// context.temp_allocator, whose results must not be freed, so every string this
-// package hands back to a caller is built through here instead.
+
 owned_tprintf :: proc(format: string, args: ..any) -> string {
 	return strings.clone(fmt.tprintf(format, ..args))
 }
@@ -133,8 +109,7 @@ bytes_equal :: proc(a, b: []u8) -> bool {
 	return true
 }
 
-// candidate_id renders the bare hash for attempt 0 and "<hash>-<n>" after that.
-// The result is owned by the caller.
+
 candidate_id :: proc(base: string, attempt: int) -> string {
 	if attempt == 0 {
 		return strings.clone(base)
@@ -142,15 +117,9 @@ candidate_id :: proc(base: string, attempt: int) -> string {
 	return owned_tprintf("%s-%d", base, attempt)
 }
 
-// Id_Is_Valid reports whether id has the shape this store produces: 16 lowercase
-// hex digits, optionally followed by "-<n>" for a collision attempt.
-//
-// A .kine is untrusted input and supplies its own ids, and an id is used as a
-// cache file name. Without this check a stream could use "../" or a drive
-// letter to make Materialize write outside the cache directory, so every id read
-// from a stream is validated before it is stored or turned into a path.
+
 Id_Is_Valid :: proc(id: string) -> bool {
-	// Exactly 16 lowercase hex digits make up the hash.
+
 	index := 0
 	for index < 16 && index < len(id) {
 		c := id[index]
@@ -167,7 +136,7 @@ Id_Is_Valid :: proc(id: string) -> bool {
 	if index == len(id) {
 		return true
 	}
-	// Only the collision suffix "-<n>" is allowed past the hash.
+
 	if id[index] != '-' {
 		return false
 	}
@@ -185,10 +154,7 @@ Id_Is_Valid :: proc(id: string) -> bool {
 	return true
 }
 
-// Register stores a blob under a key derived from its contents and returns that
-// key. The blob is always consumed: on rejection the bytes are freed, so callers
-// must not delete them afterwards. The returned key is an independent copy the
-// caller owns; the store keeps its own.
+
 Register :: proc(data: []u8, path: string, kind: Asset_Kind) -> string {
 	base := Content_Id(data, kind == .Path_File ? path : "")
 	defer delete(base)
@@ -208,23 +174,20 @@ Register :: proc(data: []u8, path: string, kind: Asset_Kind) -> string {
 		}
 		delete(id)
 		if same {
-			// The published key belongs to the store, so hand back a copy.
+
 			return strings.clone(existing.id)
 		}
 	}
 
-	// Nine collisions on a 64-bit content hash is not a reachable case. Refuse
-	// rather than risk aliasing an asset that is already published.
+
 	delete(data)
 	return ""
 }
 
-// Register_As publishes a blob under a key taken from the file being read. The
-// writer already deduplicated, so the key is trusted verbatim; disagreeing with
-// an entry that is already published means the stream is corrupt.
+
 Register_As :: proc(id: string, data: []u8, path: string, kind: Asset_Kind) -> bool {
-	// The id comes from an untrusted file and ends up in a cache file name, so
-	// it has to look like something this store would have produced.
+
+
 	if !Id_Is_Valid(id) {
 		delete(data)
 		return false
@@ -233,12 +196,9 @@ Register_As :: proc(id: string, data: []u8, path: string, kind: Asset_Kind) -> b
 		same := bytes_equal(existing.bytes, data)
 		delete(data)
 		if kind != .Path_File {return same}
-		if !same || existing.kind != kind || existing.path != path {return false}
-		path_files[existing.path] = index[existing.id]
-		return true
+		return same && existing.kind == kind && existing.path == path
 	}
 	store(id, path, kind, data)
-	if kind == .Path_File {path_files[assets[index[id]].path] = index[id]}
 	return true
 }
 
@@ -246,18 +206,23 @@ store :: proc(id, path: string, kind: Asset_Kind, data: []u8) {
 	if index == nil {
 		index = make(map[string]int)
 	}
-	// Every string is copied so the store owns its metadata outright. A caller
-	// that frees its own id or path cannot leave a dangling key behind.
+
+
 	append(
 		&assets,
 		Asset{id = strings.clone(id), path = strings.clone(path), kind = kind, bytes = data},
 	)
 	position := len(assets) - 1
 	index[assets[position].id] = position
+	if kind == .Path_File {
+		if path_files == nil {
+			path_files = make(map[string]int)
+		}
+		path_files[assets[position].path] = position
+	}
 }
 
-// Clear drops every entry. Materialized cache files stay on disk: they are
-// content-addressed, so a later load of the same bytes reuses them safely.
+
 Clear :: proc() {
 	for &entry in assets {
 		delete(entry.id)
@@ -265,30 +230,24 @@ Clear :: proc() {
 		delete(entry.cached)
 		delete(entry.bytes)
 	}
-	// delete releases the backing memory but leaves the header pointing at it, so
-	// a second Clear would walk freed memory and free every string twice. Reset
-	// the headers instead; store() rebuilds the map and Count() reads len(assets).
+
+
 	delete(assets)
 	assets = nil
 	delete(index)
 	index = nil
 	delete(path_files)
 	path_files = nil
-	// The next map's bad references have not been reported yet.
+
 	Clear_Missing_Asset_Reports()
 }
 
-// ---------------------------------------------------------------------------
-// Property value resolution
-// ---------------------------------------------------------------------------
 
-// Make_Uri builds the property value that stands in for an embedded asset. The
-// result is owned by the caller.
 Make_Uri :: proc(id: string) -> string {
 	return owned_tprintf("%s%s", KINE_ASSET_SCHEME, id)
 }
 
-// Parse_Uri splits "kineasset://<id>" into its key. The key borrows from uri.
+
 Parse_Uri :: proc(uri: string) -> (id: string, found: bool) {
 	if !strings.has_prefix(uri, KINE_ASSET_SCHEME) {
 		return "", false
@@ -297,7 +256,7 @@ Parse_Uri :: proc(uri: string) -> (id: string, found: bool) {
 	return id, id != ""
 }
 
-// Is_Uri reports whether a property value refers to an embedded asset.
+
 Is_Uri :: proc(uri: string) -> bool {
 	_, found := Parse_Uri(uri)
 	return found
@@ -324,7 +283,13 @@ Project_Asset_Path :: proc(uri: string) -> (string, bool) {
 	   strings.contains_any(path, "\\:\x00") {return "", false}
 	pieces := path
 	for piece in strings.split_iterator(&pieces, "/") {
-		if piece == "" || piece == "." || piece == ".." {return "", false}
+
+
+		if piece == "" ||
+		   piece == "." ||
+		   piece == ".." ||
+		   strings.has_suffix(piece, ".") ||
+		   strings.has_suffix(piece, " ") {return "", false}
 	}
 	return path, true
 }
@@ -336,10 +301,7 @@ resolve_embedded_id :: proc(value: string) -> (string, bool) {
 	return "", false
 }
 
-// Resolve_Bytes returns the embedded bytes for a "kineasset://" value. The slice
-// borrows from the store and stays valid for the process lifetime. Any other
-// value (a plain path, "builtin://", "memory://") reports false so callers fall
-// through to their normal handling.
+
 Resolve_Bytes :: proc(uri: string) -> (data: []u8, found: bool) {
 	id, embedded := resolve_embedded_id(uri)
 	if !embedded {
@@ -352,10 +314,7 @@ Resolve_Bytes :: proc(uri: string) -> (data: []u8, found: bool) {
 	return entry.bytes, true
 }
 
-// Resolve_Path turns a property value into a filesystem path. Plain paths pass
-// through with any "file://" prefix removed; embedded assets are extracted to
-// the cache directory first. The result is owned by the caller, and an empty
-// string means the value could not be resolved.
+
 Resolve_Path :: proc(uri: string) -> string {
 	if id, embedded := resolve_embedded_id(uri); embedded {
 		path, extracted := Materialize(id)
@@ -368,9 +327,7 @@ Resolve_Path :: proc(uri: string) -> string {
 	return strip_file_scheme(uri)
 }
 
-// Resolve_C_Path is Resolve_Path for the many C APIs that want a cstring. It
-// returns nil when the value cannot be resolved; otherwise the caller owns the
-// result and must delete it.
+
 Resolve_C_Path :: proc(uri: string) -> cstring {
 	path := Resolve_Path(uri)
 	if path == "" {
@@ -412,7 +369,8 @@ Report_Missing_Asset :: proc(uri, subject: string) {
 		missing_reported = make(map[string]bool)
 	}
 	if uri in missing_reported {return}
-	missing_reported[uri] = true
+
+	missing_reported[strings.clone(uri)] = true
 	fmt.eprintf(
 		"[Assets] %s could not resolve %s. The map says it is embedded, so it is missing rather than absent. If this is a network client, the server may not have sent its asset table.\n",
 		subject,
@@ -420,21 +378,17 @@ Report_Missing_Asset :: proc(uri, subject: string) {
 	)
 }
 
-// Clear_Missing_Asset_Reports forgets what has already been reported. Loading a
-// map replaces the store wholesale, so the next map starts with a clean slate
-// rather than staying quiet about its own bad references.
+
 Clear_Missing_Asset_Reports :: proc() {
 	if missing_reported == nil {return}
 	for key in missing_reported {
 		delete(key)
 	}
 	delete(missing_reported)
+	missing_reported = nil
 }
 
-// Format_Hint is the extension Assimp uses to pick an importer for in-memory
-// bytes. It returns a lowercase extension with no dot ("fbx"), or an empty
-// string when the authoring path carried none. The result is owned by the
-// caller.
+
 Format_Hint :: proc(uri: string) -> string {
 	path := uri
 	if id, embedded := resolve_embedded_id(uri); embedded {
@@ -503,8 +457,8 @@ Is_Ugc_File_Path :: proc(path: string) -> bool {
 }
 
 extension_of :: proc(path: string) -> string {
-	// The extension is the last dot after the final separator. A dot that opens
-	// a component marks a hidden file, not an extension, so ".fbx" has none.
+
+
 	dot := -1
 	component_start := 0
 	for i in 0 ..< len(path) {

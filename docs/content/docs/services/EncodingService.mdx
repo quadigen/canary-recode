@@ -1,0 +1,32 @@
+---
+title: EncodingService
+description: Encode binary data, calculate hashes, and compress buffers.
+---
+
+Use EncodingService to convert between binary data and text, compare content hashes, and compress buffers for storage.
+
+```lua
+local encoding = game:GetService("EncodingService")
+local text = "Kinemium"
+local encoded = encoding:EncodeBase64(text)
+print(encoding:DecodeBase64(encoded))
+print(encoding:ComputeStringHash(text, Enum.HashAlgorithm.Sha256))
+```
+
+## Methods
+
+| Signature | Result |
+| --- | --- |
+| `EncodeBase64(value: string): string` | Base64 text. |
+| `DecodeBase64(value: string): string` | Decoded bytes as a string; invalid Base64 raises an error. |
+| `Base64Encode(value: buffer): buffer` | Base64 bytes in a buffer. |
+| `Base64Decode(value: buffer): buffer` | Decoded buffer; invalid Base64 raises an error. |
+| `ComputeStringHash(value: string, algorithm: Enum.HashAlgorithm): string` | Lowercase hexadecimal digest. |
+| `ComputeBufferHash(value: buffer, algorithm: Enum.HashAlgorithm): buffer` | Raw digest bytes. |
+| `CompressBuffer(value: buffer, algorithm: Enum.CompressionAlgorithm, level: number?): buffer` | Compressed buffer; level defaults to 1. |
+| `DecompressBuffer(value: buffer, algorithm: Enum.CompressionAlgorithm): buffer` | Decompressed buffer. |
+| `GetDecompressedBufferSize(value: buffer, algorithm: Enum.CompressionAlgorithm): number?` | Declared decoded size, or nil if unknown or invalid. |
+
+Supported hash algorithms are Blake2b, Md5, Sha1 and Sha256. MD5 and SHA-1 are unsuitable for security-sensitive integrity checks. Base64 is encoding, not encryption.
+
+Compression supports `Enum.CompressionAlgorithm.Zstd` only. Compression and decompression are limited to 256 MiB of uncompressed data; invalid frames and unsupported algorithms raise errors. Compression is unavailable on web builds. These methods are available in parallel Luau.

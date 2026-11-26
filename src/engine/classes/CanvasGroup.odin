@@ -59,9 +59,12 @@ CanvasGroup_set :: proc(
 	value_index: int,
 ) -> bool {
 	if key == "GroupTransparency" {
-		(cast(^CanvasGroup)object).group_transparency = f32(
-			clamp(vm.ArgNumber(L, value_index), 0, 1),
-		)
+		group := cast(^CanvasGroup)object
+		value := f32(clamp(vm.ArgNumber(L, value_index), 0, 1))
+		if group.group_transparency == value {return true}
+		group.group_transparency = value
+		gui_invalidate_draw(object)
+		surfacegui_mark_dirty_for(object)
 		Gui_Render_Mark_Dirty()
 		return true
 	}
@@ -71,6 +74,7 @@ CanvasGroup_set :: proc(
 CanvasGroup_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	group := cast(^CanvasGroup)object
 	alpha := 1 - group.group_transparency
+	if alpha <= 0 {return}
 	surface := ctx.renderer.SkiaSurface
 	if alpha < 1 {kineffi.Kine_Skia_Surface_SaveLayerAlpha(surface, alpha)}
 	defer if alpha < 1 {kineffi.Kine_Skia_Surface_Restore(surface)}

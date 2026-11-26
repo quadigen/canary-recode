@@ -41,6 +41,31 @@ Sound :: struct {
 	editable_revision:        u64,
 	editable_sample_rate:     int,
 	ended:                    ^signals.Signal,
+	loaded_event:             ^signals.Signal,
+	played_event:             ^signals.Signal,
+	paused_event:             ^signals.Signal,
+	resumed_event:            ^signals.Signal,
+	stopped_event:            ^signals.Signal,
+	did_loop_event:           ^signals.Signal,
+	has_started:              bool,
+	last_cursor_frames:       u64,
+	cursor_valid:             bool,
+}
+
+
+Sound_Fire_Event :: proc(sound: ^Sound, signal: ^signals.Signal) {
+	if signal == nil ||
+	   sound.object.signal_registry == nil ||
+	   sound.object.signal_registry.signal_registry == nil {
+		return
+	}
+	L := sound.object.signal_registry.signal_registry.L
+	if L != nil {signals.Fire(L, signal, 0)}
+}
+
+Sound_Push_Event :: proc(L: ^vm.State, object: ^Object, slot: ^^signals.Signal) {
+	if slot^ == nil {slot^ = Object_Create_Hierarchy_Signal(object)}
+	signals.Push(L, slot^)
 }
 
 Sound_Init :: proc() -> Sound {
@@ -79,8 +104,25 @@ Sound_get :: proc(
 
 	switch key {
 	case "Ended":
-		if sound.ended == nil {sound.ended = Object_Create_Hierarchy_Signal(object)}
-		signals.Push(L, sound.ended)
+		Sound_Push_Event(L, object, &sound.ended)
+		return true
+	case "Loaded":
+		Sound_Push_Event(L, object, &sound.loaded_event)
+		return true
+	case "Played":
+		Sound_Push_Event(L, object, &sound.played_event)
+		return true
+	case "Paused":
+		Sound_Push_Event(L, object, &sound.paused_event)
+		return true
+	case "Resumed":
+		Sound_Push_Event(L, object, &sound.resumed_event)
+		return true
+	case "Stopped":
+		Sound_Push_Event(L, object, &sound.stopped_event)
+		return true
+	case "DidLoop":
+		Sound_Push_Event(L, object, &sound.did_loop_event)
 		return true
 
 	case "EditableSound":
@@ -170,14 +212,27 @@ Sound_update :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		sound.time_position =
 			f64(audio.get_cursor_frames(&sound.sound)) / f64(sound.editable_sample_rate)
 	}
+	if sound.looped && sound.is_playing && audio.is_loaded(&sound.sound) {
+		cursor := audio.get_cursor_frames(&sound.sound)
+		if sound.cursor_valid && cursor < sound.last_cursor_frames {
+			Sound_Fire_Event(sound, sound.did_loop_event)
+		}
+		sound.last_cursor_frames = cursor
+		sound.cursor_valid = true
+	} else {
+		sound.cursor_valid = false
+	}
 	if sound.is_playing && !sound.looped && audio.at_end(&sound.sound) {
 		sound.is_playing = false
 		sound.playing = false
+		sound.has_started = false
+		sound.cursor_valid = false
 		if sound.ended != nil {signals.Fire(ctx.L, sound.ended)}
 	}
 }
 
 Sound_Play :: proc(sound: ^Sound) -> bool {
+	was_playing := sound.is_playing && audio.is_playing(&sound.sound)
 	if sound.content.object_kind == 2 &&
 	   sound.sound_path == "" &&
 	   !audio.is_playing(&sound.sound) {
@@ -206,6 +261,11 @@ Sound_Play :: proc(sound: ^Sound) -> bool {
 	sound.is_playing = true
 	sound.is_paused = false
 	sound.playing = true
+	sound.has_started = true
+	if !was_playing {
+		sound.cursor_valid = false
+		Sound_Fire_Event(sound, sound.played_event)
+	}
 	return true
 }
 
@@ -218,6 +278,8 @@ Sound_Pause :: proc(sound: ^Sound) {
 	sound.is_playing = false
 	sound.is_paused = true
 	sound.playing = false
+	sound.cursor_valid = false
+	Sound_Fire_Event(sound, sound.paused_event)
 }
 
 Sound_Resume :: proc(sound: ^Sound) {
@@ -229,9 +291,13 @@ Sound_Resume :: proc(sound: ^Sound) {
 	sound.is_playing = true
 	sound.is_paused = false
 	sound.playing = true
+	sound.has_started = true
+	sound.cursor_valid = false
+	Sound_Fire_Event(sound, sound.resumed_event)
 }
 
 Sound_Stop :: proc(sound: ^Sound) {
+	was_started := sound.has_started
 	if audio.is_loaded(&sound.sound) {
 		audio.stop_sound(&sound.sound)
 	}
@@ -240,6 +306,9 @@ Sound_Stop :: proc(sound: ^Sound) {
 	sound.is_paused = true
 	sound.playing = false
 	sound.time_position = 0
+	sound.cursor_valid = false
+	sound.has_started = false
+	if was_started {Sound_Fire_Event(sound, sound.stopped_event)}
 }
 
 Sound_namecall :: proc(
@@ -298,6 +367,7 @@ Sound_Load_Source :: proc(sound: ^Sound) -> bool {
 		audio.set_volume(&sound.sound, f32(sound.volume))
 		audio.set_pitch(&sound.sound, f32(sound.playback_speed))
 		audio.set_looping(&sound.sound, b32(sound.looped))
+		Sound_Fire_Event(sound, sound.loaded_event)
 		return true
 	}
 
@@ -318,6 +388,7 @@ Sound_Load_Source :: proc(sound: ^Sound) -> bool {
 	audio.set_volume(&sound.sound, f32(sound.volume))
 	audio.set_pitch(&sound.sound, f32(sound.playback_speed))
 	audio.set_looping(&sound.sound, b32(sound.looped))
+	Sound_Fire_Event(sound, sound.loaded_event)
 	return true
 }
 
@@ -326,6 +397,8 @@ Sound_Reload :: proc(sound: ^Sound) {
 		audio.unload_sound(&sound.sound)
 	}
 	sound.is_loaded = false
+	sound.cursor_valid = false
+	sound.has_started = false
 	sound.editable_revision = 0
 	sound.editable_sample_rate = 0
 	sound.is_playing = false
@@ -449,6 +522,7 @@ Sound_set :: proc(
 		position := vm.ArgNumber(L, value_index)
 		if math.is_nan(position) || math.is_inf(position) {return true}
 		sound.time_position = max(0, position)
+		sound.cursor_valid = false
 		if sound.editable_sample_rate > 0 && audio.is_loaded(&sound.sound) {
 			sound.time_position = clamp(sound.time_position, 0, sound.length)
 			_ = audio.seek_frames(
@@ -459,21 +533,11 @@ Sound_set :: proc(
 		return true
 
 	case "Playing":
-		sound.playing = vm.ArgBoolean(L, value_index)
-
-		if sound.playing {
+		if vm.ArgBoolean(L, value_index) {
 			_ = Sound_Play(sound)
-			return true
 		} else {
-			if audio.is_loaded(&sound.sound) {
-				audio.stop_sound(&sound.sound)
-			}
-
-			sound.is_playing = false
-			sound.is_paused = true
-			sound.time_position = 0
+			Sound_Stop(sound)
 		}
-
 		return true
 	}
 
@@ -500,6 +564,12 @@ Sound_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	delete(sound.sound_path)
 	delete(sound.content.uri)
 	if sound.ended != nil {signals.Destroy(sound.ended)}
+	if sound.loaded_event != nil {signals.Destroy(sound.loaded_event)}
+	if sound.played_event != nil {signals.Destroy(sound.played_event)}
+	if sound.paused_event != nil {signals.Destroy(sound.paused_event)}
+	if sound.resumed_event != nil {signals.Destroy(sound.resumed_event)}
+	if sound.stopped_event != nil {signals.Destroy(sound.stopped_event)}
+	if sound.did_loop_event != nil {signals.Destroy(sound.did_loop_event)}
 	Object_Destroy(object)
 	free(sound)
 }

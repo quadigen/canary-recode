@@ -1,0 +1,51 @@
+---
+title: Distribution, manifests, and safety
+description: Package KNE extensions for supported platforms while keeping ABI and lifetime constraints explicit.
+---
+
+KNE native extensions are shared libraries loaded by the host at runtime. The extension discovery directory defaults to `extensions`, with one `extension.json` per extension folder.
+
+## Extension manifest
+
+```json
+{
+  "id": "org.example.extension",
+  "name": "Example Extension",
+  "version": "1.0.0",
+  "author": "Example",
+  "description": "An engine extension",
+  "api": 3,
+  "api_minor": 2,
+  "library": "example_extension.so",
+  "entry": "kne_extension_entry",
+  "enabled": true,
+  "dependencies": [],
+  "capabilities": []
+}
+```
+
+The `id` must be nonempty and use characters accepted by the loader. `api` selects the major ABI; `api_minor` selects the minimum host minor ABI required by this extension. The KNE header declares ABI **3.2**. The `library` filename and platform loading rules must match your compiled library.
+
+The loader verifies that the binary exports the entry symbol and returns a valid `kne_extension_desc` with a compatible ABI. The manifest's `enabled`, `dependencies`, and `capabilities` fields participate in extension discovery and policy.
+
+## Build and test
+
+Compile the official C example:
+
+```bash
+cmake -S include/sdk -B build/kne-examples
+cmake --build build/kne-examples
+```
+
+Package the resulting binary and an `extension.json` in the same extension directory. Libraries are not portable between Linux, macOS and Windows: ship the correct binary per OS/architecture.
+
+## Keep extensions safe
+
+- Only call the host API while the extension handle and callback context are valid.
+- Validate `abi_major`, `abi_minor`, and versioned module structure sizes before accessing optional fields.
+- Use the engine's API tables rather than assuming internal Odin structure layouts.
+- Release your own allocations, callbacks and signal connections when the extension stops or unloads.
+- Keep callback-borrowed VM references and strings within their documented lifetimes.
+- Treat native libraries as trusted code. A malfunctioning extension can crash the host process.
+
+For an alternative architecture where **your executable embeds and controls Kinemium**, use [the native C SDK](/docs/native-sdk).

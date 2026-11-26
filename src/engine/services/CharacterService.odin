@@ -1,5 +1,5 @@
 package services
-// wire:service
+
 
 import classes "../classes"
 import datatypes "../datatypes"
@@ -42,6 +42,8 @@ character_service_construct :: proc(
 	service := new(CharacterService)
 	service.service = Service_Init(&CharacterService_Class, "CharacterService", data_model)
 	service.respawn_time = 5
+	service.native_input_enabled = true
+	service.native_input_overridden = false
 	service.character_auto_loads = true
 	return &service.object
 }
@@ -236,6 +238,29 @@ character_service_is_template :: proc(object: ^classes.Object) -> bool {
 	)
 }
 
+
+character_service_install_starter_character_scripts :: proc(
+	data_model: ^DataModel,
+	model: ^classes.CharacterModel,
+) {
+	if data_model == nil ||
+	   model == nil ||
+	   data_model.registry == nil ||
+	   data_model.registry.vm_state == nil {return}
+	starter := DataModel_Get_Service(data_model, "StarterPlayer")
+	if starter == nil {return}
+	scripts := classes.Find_First_Child(starter, "StarterCharacterScripts")
+	if scripts == nil ||
+	   scripts.destroyed ||
+	   !classes.Is_A(scripts, "StarterCharacterScripts") {return}
+	_ = client_scripts_sync_template(
+		data_model.registry.vm_state.L,
+		data_model.registry.classes,
+		scripts,
+		&model.object,
+	)
+}
+
 CharacterService_Load :: proc(
 	service: ^CharacterService,
 	player: ^Player,
@@ -322,6 +347,8 @@ CharacterService_Load :: proc(
 		)
 	}
 
+
+	character_service_install_starter_character_scripts(service.data_model, model)
 	classes.Set_Parent(object, workspace)
 	vm.Pop(service.data_model.registry.vm_state.L)
 	Player_Set_Character(player, service.data_model.registry.vm_state.L, model)
@@ -335,7 +362,8 @@ CharacterService_Load :: proc(
 		if root != nil {
 			id := replication_register(replicator, &root.object)
 			entity := replication_entity_by_id(replicator, id)
-			if entity != nil {entity.owner_id = player.user_id}
+			if entity !=
+			   nil {replication_set_ownership(replicator, entity, player.user_id, false, false)}
 		}
 	} else {
 
@@ -422,13 +450,21 @@ character_service_bind_ready :: proc(
 		if service != nil {
 			clear(&service.predictions)
 			service.last_ack = 0
-			service.authoritative_received = false
+			replicator := cast(^ReplicatorService)DataModel_Get_Service(
+				data_model,
+				"ReplicatorService",
+			)
+			root_entity := replication_entity(replicator, root)
+			service.authoritative_received = root_entity != nil && root_entity.has_transform
 		}
 	}
 	when !#config(FORCE_LEGACY_CHARACTERS, false) {
+		had_controller := classes.CharacterController_From_Model(model) != nil
 		classes.CharacterController_Build(data_model.registry.classes, L, model)
-		controller := classes.CharacterController_From_Model(model)
-		StarterPlayer_Apply_Character(data_model, controller)
+		if !had_controller {
+			controller := classes.CharacterController_From_Model(model)
+			StarterPlayer_Apply_Character(data_model, controller)
+		}
 	}
 }
 

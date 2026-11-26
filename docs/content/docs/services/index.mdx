@@ -75,40 +75,58 @@ These are currently placeholders, so don't treat them as unique identifiers for 
 | `Aerodynamics` | Configure atmosphere, wind, and aerodynamic body coefficients. |
 | `AsepriteService` | Convert Aseprite sprites and animation frames into ImageLabels. |
 | `AssetService` | Create editable images, blank or loaded from an asset. |
+| [ChangeHistoryService](/docs/services/ChangeHistoryService) | Manage editor undo and redo waypoints. |
+| [CharacterService](/docs/services/CharacterService) | Spawn, unload and control player characters. |
 | `CollectionService` | Tag instances and subscribe to tag changes. |
+| [ConsoleService](/docs/services/ConsoleService) | Inspect runtime logs in the console overlay. |
 | `ContentProvider` | Download ZIP archives and prepare content. |
 | `ContextActionService` | Bind named actions to inputs with priorities. |
 | `DataStoreService` | Save persistent key-value data on the server. |
 | `Debris` | Destroy instances automatically after a delay. |
+| [EncodingService](/docs/services/EncodingService) | Encode, hash and compress data. |
 | `GuiService` | Read platform inset and window details. |
 | `HttpService` | Make HTTP requests and encode or decode JSON. |
 | `InsertService` | Create a `MeshPart` from a locally resolvable mesh. |
 | `Lighting` | Set the time of day, ambient light, shadows, and default effects. |
+| [LuauService](/docs/services/LuauService) | Analyze Luau source and API definitions. |
 | `LocalizationService` | Read and set the locale identifiers the game reports. |
 | `LogService` | Write structured log messages and read the history back. |
+| [MaterialService](/docs/services/MaterialService) | Material container; no material-specific API. |
 | `PathfindingService` | Build navigation paths and return waypoints. |
+| [Pathtracer](/docs/services/Pathtracer) | Configure path-traced rendering. |
 | `Physics` | Tune gravity, substeps, and sleep behavior. |
 | `PhysicsService` | Register collision-group names and query the list. |
-| `PlaytestService` | Launch local playtests and inspect or edit their live game trees (internal). |
 | `Players` | Work with player objects, characters, and player events. |
+| `PlaytestService` | Launch local playtests and inspect or edit their live game trees (internal). |
+| [ProfilerService](/docs/services/ProfilerService) | Measure frame, rendering, script and memory workload. |
+| [ReflectionService](/docs/services/ReflectionService) | Inspect class and member metadata. |
 | `ReplicatedFirst` | Hold content clients need early in startup. |
 | `ReplicatedStorage` | Hold content both sides can access. |
+| [ReplicatorService](/docs/services/ReplicatorService) | Manage replication, visibility, network ownership and diagnostics. |
 | `RunService` | Query the runtime mode and run code on frame and simulation steps. |
+| [Selection](/docs/services/Selection) | Read and modify the editor selection. |
+| [SerializationService](/docs/services/SerializationService) | Serialize and restore instance hierarchies. |
 | `ServerScriptService` | Hold server-side scripts. |
 | `ServerStorage` | Hold server-only content. |
+| [SoundService](/docs/services/SoundService) | Play local sounds. |
 | `StarterGui` | Hold screen interface templates. |
+| [StarterPack](/docs/services/StarterPack) | Replicated equipment template container. |
 | `StarterPlayer` | Set defaults for newly spawned characters. |
 | `Stats` | Read Luau heap memory usage. |
+| [TaskScheduler](/docs/services/TaskScheduler) | Inspect pending scheduled tasks. |
 | `Team` | Describe a team's color and stored assignment flags. |
 | `Teams` | List and look up `Team` objects. |
+| [TeleportService](/docs/services/TeleportService) | Teleport compatibility placeholders. |
 | `Terrain` | Generate, carve, and edit voxel terrain. |
+| [TextChatService](/docs/services/TextChatService) | Query chat permissions; partial compatibility API. |
 | `TextService` | Measure text with the engine's fonts. |
 | `TweenService` | Animate numeric, `UDim2`, and `Color3` properties over time. |
 | `UserInputService` | Read keyboard, mouse, and touch state and listen for input. |
+| [Window](/docs/services/Window) | Internal editor resolution and scale controls. |
 | `Workspace` | Manage the 3D world, physics settings, camera, and raycasts. |
 | `Workspace2D` | Manage the separate 2D physics world for `Part2D` bodies. |
 
-More services will appear here as their Luau APIs are verified. In the meantime, `GetService()` works with any name the engine registers.
+This reference covers the documented service APIs. Registration alone does not imply that a service is available to ordinary game scripts or fully implemented.
 
 ## See also
 

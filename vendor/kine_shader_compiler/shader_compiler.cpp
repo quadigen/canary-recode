@@ -1,8 +1,9 @@
 #include "shader_compiler.h"
+#include "shader_cache.h"
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Include/PoolAlloc.h>
 #include <SPIRV/GlslangToSpv.h>
-#include "builtinResource.h" // Exact Filament SDK source release; no new glslang library.
+#include "builtinResource.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -19,12 +20,12 @@ void message(char* dst, size_t capacity, const char* text) noexcept {
     std::memcpy(dst, text, n);
     dst[n] = '\0';
 }
-// Filament's pinned glslang revision shares a process reference count.
+
 struct CompilerReference {
     bool active = glslang::InitializeProcess();
     ~CompilerReference() { if (active) glslang::FinalizeProcess(); }
 };
-// Restore TLS before the shader and program pools are destroyed.
+
 struct RestorePool {
     glslang::TPoolAllocator* previous = &glslang::GetThreadPoolAllocator();
     ~RestorePool() { glslang::SetThreadPoolAllocator(previous); }
@@ -41,14 +42,21 @@ extern "C" int32_t Kine_Shader_Compile(const char* source, size_t length,
         message(error, error_capacity, "Invalid GPUCompute shader input");
         return 0;
     }
+    const auto cacheKey = kine_shader_cache::key("glslang-vulkan1.0-spirv1.0-compute", {source, length});
+    std::vector<uint8_t> cached;
+    if (kine_shader_cache::read(cacheKey, cached) && cached.size() >= 20 && cached.size() % 4 == 0) {
+        auto* data = static_cast<uint32_t*>(std::malloc(cached.size()));
+        if (data) { std::memcpy(data, cached.data(), cached.size()); *words = data; *word_count = cached.size()/4; return 1; }
+    }
     try {
+        kine_shader_cache::Timer timer;
         CompilerReference compiler;
         if (!compiler.active) {
             message(error, error_capacity, "Could not initialize Filament glslang");
             return 0;
         }
         glslang::TShader shader(EShLangCompute);
-        // Program is destroyed before its attached shader.
+
         glslang::TProgram program;
         RestorePool restore;
         const int n = static_cast<int>(length);
@@ -59,7 +67,7 @@ extern "C" int32_t Kine_Shader_Compile(const char* source, size_t length,
         shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
         const auto flags = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-        // The simple parse overload uses ForbidIncluder; no filesystem includes.
+
         if (!shader.parse(&DefaultTBuiltInResource, 450, false, flags)) {
             message(error, error_capacity, shader.getInfoLog());
             return 0;
@@ -89,6 +97,7 @@ extern "C" int32_t Kine_Shader_Compile(const char* source, size_t length,
             return 0;
         }
         std::memcpy(data, result.data(), result.size() * sizeof(uint32_t));
+        kine_shader_cache::write(cacheKey, data, result.size()*sizeof(uint32_t));
         *words = data;
         *word_count = result.size();
         return 1;
@@ -100,3 +109,20 @@ extern "C" int32_t Kine_Shader_Compile(const char* source, size_t length,
     return 0;
 }
 extern "C" void Kine_Shader_Free(uint32_t* words) { std::free(words); }
+extern "C" size_t Kine_Shader_CacheRead(const char* identity, void** bytes) {
+    if (!bytes || !identity) return 0;
+    *bytes = nullptr;
+    std::vector<uint8_t> data;
+    if (!kine_shader_cache::read(kine_shader_cache::key("vulkan-driver-pipeline", identity), data)) return 0;
+    *bytes = std::malloc(data.size());
+    if (!*bytes) return 0;
+    std::memcpy(*bytes, data.data(), data.size()); return data.size();
+}
+extern "C" void Kine_Shader_CacheWrite(const char* identity, const void* bytes, size_t size) {
+    if (identity) kine_shader_cache::write(kine_shader_cache::key("vulkan-driver-pipeline", identity), bytes, size);
+}
+extern "C" void Kine_Shader_CacheStats(uint64_t* out) {
+    if (!out) return;
+    out[0]=kine_shader_cache::hits; out[1]=kine_shader_cache::misses; out[2]=kine_shader_cache::writes;
+    out[3]=kine_shader_cache::corrupt; out[4]=kine_shader_cache::compile_ns;
+}

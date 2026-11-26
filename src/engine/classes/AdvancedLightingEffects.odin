@@ -47,6 +47,8 @@ SSGIEffect :: struct {
 	bias:         f64,
 	sample_count: f64,
 	max_distance: f64,
+	color_bleeding: f64,
+	visibility_steps: f64,
 }
 SSGIEffect_Init :: proc() -> SSGIEffect {return SSGIEffect {
 		effect = lighting_effect_init(&SSGIEffect_Class, "SSGIEffect"),
@@ -55,6 +57,8 @@ SSGIEffect_Init :: proc() -> SSGIEffect {return SSGIEffect {
 		bias = 0.05,
 		sample_count = 16,
 		max_distance = 100,
+		color_bleeding = 1,
+		visibility_steps = 3,
 	}}
 SSGIEffect_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) -> ^Object {value :=
 		new(SSGIEffect)
@@ -244,6 +248,10 @@ advanced_lighting_get :: proc(
 			vm.PushNumber(L, value.sample_count)
 		case "MaxDistance":
 			vm.PushNumber(L, value.max_distance)
+		case "ColorBleeding":
+			vm.PushNumber(L, value.color_bleeding)
+		case "VisibilitySteps":
+			vm.PushNumber(L, value.visibility_steps)
 		case:
 			return false
 		}
@@ -376,6 +384,10 @@ advanced_lighting_set :: proc(
 			value.sample_count = clamp(vm.ArgNumber(L, index), 4, 64)
 		case "MaxDistance":
 			value.max_distance = clamp(vm.ArgNumber(L, index), 1, 1000)
+		case "ColorBleeding":
+			value.color_bleeding = clamp(vm.ArgNumber(L, index), 0, 2)
+		case "VisibilitySteps":
+			value.visibility_steps = clamp(vm.ArgNumber(L, index), 1, 6)
 		case:
 			return false
 		}
@@ -537,6 +549,8 @@ Register_Advanced_Lighting_Effects :: proc(registry: ^Registry) {
 			"Bias",
 			"SampleCount",
 			"MaxDistance",
+			"ColorBleeding",
+			"VisibilitySteps",
 		},
 	)
 	Register_Class(

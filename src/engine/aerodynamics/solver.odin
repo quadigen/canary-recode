@@ -45,7 +45,7 @@ DEFAULT_SETTINGS :: Settings {
 	density         = 1.225,
 	meters_per_unit = 1,
 	min_speed       = 0.05,
-	max_speed       = 200,
+	max_speed       = 0,
 	thin_ratio      = 0.25,
 	min_dimension   = 0.001,
 }
@@ -79,6 +79,7 @@ DEFAULT_BODY_OPTIONS :: Body_Options {
 	max_lift         = 1.35,
 	area_multiplier  = 1,
 	wake_sleeping    = true,
+	wave_drag        = 0.15,
 }
 
 Geometry :: struct {
@@ -201,17 +202,22 @@ wing_axis :: proc(g: Geometry, o: Body_Options) -> int {
 }
 
 
-wing_coefficients :: proc(alpha, aspect: f32, o: Body_Options) -> (cl, cd: f32) {
+wing_coefficients :: proc(alpha, aspect: f32, o: Body_Options, mach: f32 = 0) -> (cl, cd: f32) {
 	a := clamp(alpha + o.incidence_deg * f32(PI / 180), -f32(PI / 2), f32(PI / 2))
-	slope := f32(2 * PI) * aspect / (aspect + 2)
+	slope := f32(2 * PI) * aspect / (aspect + 2) * compressibility_lift(mach)
 	attached := clamp(slope * a, -o.max_lift, o.max_lift)
 	stall := o.stall_angle_deg * f32(PI / 180)
 	blend := clamp((abs(a) - stall) / f32(20 * PI / 180), 0, 1)
 	blend = blend * blend * (3 - 2 * blend)
-	separated := f32(1.1) * math.sin(2 * a)
+	if blend == 0 {
+		cl = attached * o.lift_multiplier
+		cd = o.profile_drag + cl * cl / (f32(PI) * o.efficiency * aspect)
+		return
+	}
+	sine := math.sin(a)
+	separated := f32(2.2) * sine * math.cos(a)
 	cl = (attached * (1 - blend) + separated * blend) * o.lift_multiplier
 	induced := (1 - blend) * cl * cl / (f32(PI) * o.efficiency * aspect)
-	sine := math.sin(a)
 	cd = o.profile_drag + induced + 1.8 * sine * sine * blend
 	return
 }
@@ -226,14 +232,17 @@ sample_force :: proc(
 	o: Body_Options,
 	weight: f32,
 ) -> Vec3 {
-	speed := length3(v)
-	if !finite(speed) || speed <= 1e-6 || speed * s.meters_per_unit < s.min_speed {return Vec3{}}
-	dir := v / speed
-	if s.max_speed > 0 {speed = min(speed, s.max_speed / s.meters_per_unit)}
-
+	speed2 := dot(v, v)
+	if !finite(speed2) || speed2 <= 1e-12 {return Vec3{}}
+	speed := math.sqrt(speed2)
 	m := s.meters_per_unit
-	q := 0.5 * density * speed * speed * m * m * m * weight * o.area_multiplier
-	wave := wave_coefficient(speed * m, o)
+	physical_speed := speed * m
+	if physical_speed < s.min_speed {return Vec3{}}
+	dir := v / speed
+	if s.max_speed > 0 {physical_speed = min(physical_speed, s.max_speed)}
+	q := 0.5 * density * physical_speed * physical_speed * m * weight * o.area_multiplier
+	mach := mach_at(physical_speed, o)
+	wave := wave_coefficient_mach(mach, o.wave_drag)
 	if !wing {
 		d := o.directional_drag
 		if dot(d, d) == 0 {d = {1, 1, 1}}
@@ -260,7 +269,7 @@ sample_force :: proc(
 		span_b := g.size[b] * dir[a] / plane_speed
 		aspect = clamp((span_a * span_a + span_b * span_b) / area, 0.25, 20)
 	}
-	cl, cd := wing_coefficients(alpha, aspect, o)
+	cl, cd := wing_coefficients(alpha, aspect, o, mach)
 	edge_area := g.size[axis] * (g.size[a] * abs(dir[b]) + g.size[b] * abs(dir[a]))
 	force := -dir * (q * (area * (cd + wave) + edge_area * o.drag_coefficient))
 
@@ -318,6 +327,13 @@ Evaluate :: proc(
 		options.mode == .Wing ||
 		(options.mode == .Auto && g.size[axis] <= settings.thin_ratio * min(g.size[a], g.size[b]))
 	center := g.center + options.pressure_offset
+
+
+	if angular_v == (Vec3{}) {
+		accumulate(&out, g, center, relative_v, angular_v, density, axis, settings, options, 1)
+		if out.samples != 0 {out.samples = out.wing ? 4 : 8}
+		return limit_load(out, settings)
+	}
 	if out.wing {
 
 		for i in 0 ..< 4 {
@@ -349,14 +365,16 @@ limit_load :: proc(input: Load, settings: Settings) -> (out: Load) {
 			settings.max_force_newtons / (settings.meters_per_unit * out.sample_load),
 		)
 	}
-	torque_length := length3(out.torque)
-	if !finite(torque_length) {return Load{}}
-	if settings.max_torque_nm > 0 && torque_length > 0 {
-		scale = min(
-			scale,
-			settings.max_torque_nm /
-			(settings.meters_per_unit * settings.meters_per_unit * torque_length),
-		)
+	if settings.max_torque_nm > 0 {
+		torque_length := length3(out.torque)
+		if !finite(torque_length) {return Load{}}
+		if torque_length > 0 {
+			scale = min(
+				scale,
+				settings.max_torque_nm /
+				(settings.meters_per_unit * settings.meters_per_unit * torque_length),
+			)
+		}
 	}
 	out.force *= scale
 	out.torque *= scale
@@ -373,4 +391,22 @@ Density_At :: proc(settings: Settings, height: f64) -> f32 {
 
 	exponent := clamp(-altitude / f64(settings.density_scale_height), -50.0, 2.0)
 	return settings.density * f32(math.exp(exponent))
+}
+
+
+stabilize_translation :: proc(load: Load, v, center: Vec3, dt, inverse_mass: f32) -> (out: Load) {
+	out = load
+	if dt <= 0 || inverse_mass <= 0 || !finite(dt) || !finite(inverse_mass) {return}
+	speed2 := dot(v, v)
+	if speed2 <= 1e-12 || !finite(speed2) {return}
+	parallel := dot(load.force, v) / speed2
+	if parallel >= 0 || !finite(parallel) {return}
+	x := -parallel * dt * inverse_mass
+	if !finite(x) {return}
+	drag := v * parallel
+	out.force = (load.force - drag) + drag / (1 + x)
+	correction := out.force - load.force
+	out.torque += cross(center, correction)
+	out.sample_load = min(load.sample_load, length3(out.force))
+	return
 }

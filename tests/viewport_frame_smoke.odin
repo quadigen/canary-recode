@@ -30,6 +30,23 @@ frame.ImageColor3 = Color3.new(0.7,0.8,0.9)
 frame.ImageTransparency = 0.25
 frame.ResolutionScale = 0.5
 frame.UpdateRate = 30
+-- Reject nonfinite values before coercing to f32 or scheduling work.
+for _, name in { "ImageTransparency", "ResolutionScale", "UpdateRate" } do
+    local original = frame[name]
+    assert(not pcall(function() frame[name] = 0/0 end), name .. " accepted NaN")
+    assert(not pcall(function() frame[name] = math.huge end), name .. " accepted infinity")
+    assert(not pcall(function() frame[name] = -math.huge end), name .. " accepted -infinity")
+    assert(frame[name] == original, name .. " changed after invalid input")
+end
+frame.ImageTransparency = 2
+assert(frame.ImageTransparency == 1)
+frame.ImageTransparency = 0.25
+frame.ResolutionScale = 1e100
+assert(frame.ResolutionScale == 2)
+frame.ResolutionScale = 0.5
+frame.UpdateRate = 999999
+assert(frame.UpdateRate == 240)
+frame.UpdateRate = 30
 local camera = Instance.new("Camera", frame)
 camera.Name = "PreviewCamera"
 camera.FieldOfView = 45

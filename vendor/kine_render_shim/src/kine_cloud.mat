@@ -35,17 +35,20 @@ material {
         { type : float3, name : cameraPosition },
         { type : float3, name : sunDirection },
         { type : float3, name : sunColor },
-        { type : float3, name : cloudColor }
+        { type : float3, name : cloudColor },
+        { type : sampler3d, name : shapeNoise, precision : high },
+        { type : sampler3d, name : detailNoise, precision : high },
+        { type : sampler2d, name : curlNoise, precision : high }
     ]
 }
 
 fragment {
-    #define CLOUD_MAX_STEPS 32
-    // Geometric march: fine steps near the eye, coarse far away, so an
-    // unbounded layer still resolves detail overhead and stays cheap at the
-    // horizon.
-    #define CLOUD_STEP_BASE 6.0
-    #define CLOUD_STEP_GROWTH 1.12
+    #include "kine_cloud_phase.glsl"
+    #include "kine_cloud_volume.glsl"
+    // A fixed number of samples covers the actual slab intersection, rather
+    // than spending 32 samples in near-empty air before the cloud layer.
+    // Keeping all density octaves preserves the visible cloud silhouette.
+    #define CLOUD_MAX_STEPS 24
     #define CLOUD_MAX_DISTANCE 9000.0
 
     float cloudHash(vec3 p) {
@@ -70,32 +73,44 @@ fragment {
             f.z);
     }
 
+    // Four-corner 2D value noise for the fine cloud octaves. The base layer
+    // still uses full 3D noise so clouds retain volume; fine detail is cheaper
+    // in the horizontal plane where most cloud structure is visible.
+    float cloudHash2(vec2 p) {
+        p = fract(p * 0.3183099 + vec2(0.1));
+        p *= 17.0;
+        return fract(p.x * p.y * (p.x + p.y));
+    }
+
+    float cloudNoise2D(vec2 x) {
+        vec2 i = floor(x);
+        vec2 f = fract(x);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+            mix(cloudHash2(i), cloudHash2(i + vec2(1.0, 0.0)), f.x),
+            mix(cloudHash2(i + vec2(0.0, 1.0)), cloudHash2(i + vec2(1.0, 1.0)), f.x),
+            f.y);
+    }
+
     // 0..1 density at a camera-relative world position.
-    float slabDensity(vec3 p) {
+    float slabDensity(vec3 p, vec3 q, float threshold, float detailWeight, float invHalfThickness) {
         // Reject samples outside the slab before evaluating the noise octaves.
-        float local = abs(p.y - materialParams.slabCentre.y) / max(materialParams.halfThickness, 0.001);
+        float local = abs(p.y - materialParams.slabCentre.y) * invHalfThickness;
         if (local >= 1.0) return 0.0;
         float vertical = 1.0 - smoothstep(0.88, 1.0, local);
-        float scale = max(materialParams.noiseScale, 1.0);
-        float t = materialParams.time * max(materialParams.windSpeed, 0.0);
+        // Noise outputs are bounded by [0,1]. A sample below the
+        // threshold even with maximal detail cannot contribute opacity.
+        // Reject it before evaluating the expensive high-frequency octaves.
+        float f = 0.5 * cloudNoise(q);
+        float fineWeight = 0.125 * detailWeight;
+        if (f + 0.25 + fineWeight <= threshold) return 0.0;
+        q = q * 2.03 + vec3(1.7, 9.2, 3.1);
+        f += 0.25 * cloudNoise2D(q.xz);
+        if (f + fineWeight <= threshold) return 0.0;
+        if (f >= threshold + 0.32) return vertical;
+        q = q * 2.03 + vec3(1.7, 9.2, 3.1);
+        f += fineWeight * cloudNoise2D(q.xz);
 
-        // Sampling in world space keeps the pattern still while the proxy
-        // quad slides with the camera.
-        vec3 world = p + materialParams.cameraPosition;
-        vec3 q = world / scale + vec3(t * 0.030, t * 0.006, -t * 0.014);
-
-        float f = 0.0;
-        float amp = 0.5;
-        for (int i = 0; i < 3; i++) {
-            float weight = i < 2 ? 1.0 : mix(0.25, 1.0, clamp(materialParams.detail, 0.0, 1.0));
-            f += amp * weight * cloudNoise(q);
-            q = q * 2.03 + vec3(1.7, 9.2, 3.1);
-            amp *= 0.5;
-        }
-
-        // Cover moves the threshold, so more cover means fewer holes. The ramp
-        // is wide: a hard threshold reads as a flat cut-out instead of a volume.
-        float threshold = mix(0.70, 0.26, clamp(materialParams.cover, 0.0, 1.0));
         float d = smoothstep(threshold, threshold + 0.32, f);
 
         return d * vertical;
@@ -129,6 +144,7 @@ fragment {
             }
         }
 
+
         tEnter = max(tEnter, 0.0);
         tExit = min(tExit, CLOUD_MAX_DISTANCE);
         if (tExit <= tEnter) {
@@ -138,48 +154,71 @@ fragment {
 
         vec3 cloudColor = materialParams.cloudColor;
         vec3 shadowColor = cloudColor * vec3(0.52, 0.59, 0.75);
+        vec3 sunlitColor = cloudColor * materialParams.sunColor;
         vec3 sun = normalize(materialParams.sunDirection);
-        vec3 sunColor = materialParams.sunColor;
+        float directionalPhase = kineCloudPhase(dot(rayDir, sun));
+        if (materialParams.scattering == 0.0) {
+            material.baseColor = vec4(0.0);
+            return;
+        }
 
-        float sigmaScale =
-                mix(0.4, 6.0, clamp(materialParams.density, 0.0, 1.0)) /
+        float sigmaScale = mix(0.3, 3.0, clamp(materialParams.density, 0.0, 1.0)) /
                 max(materialParams.halfThickness * 2.0, 1.0);
         float lightStep = max(materialParams.halfThickness * 0.6, 1.0);
 
         // Dither the first sample so the fixed step count does not stamp rings.
-        float jitter = cloudHash(vec3(gl_FragCoord.xy, fract(materialParams.time) * 97.0));
+        float jitter = fract(gl_FragCoord.x * 0.754877666 + gl_FragCoord.y * 0.569840296);
 
         float transmittance = 1.0;
         vec3 accum = vec3(0.0);
-        float t = tEnter + CLOUD_STEP_BASE * jitter;
-        float stepLen = CLOUD_STEP_BASE;
+        float stepLen = (tExit - tEnter) / float(CLOUD_MAX_STEPS);
+        float t = tEnter + jitter * stepLen;
+        float scale = max(materialParams.noiseScale, 1.0);
+        float windTime = materialParams.time * max(materialParams.windSpeed, 0.0);
+        vec3 wind = vec3(windTime * 0.030, windTime * 0.006, -windTime * 0.014);
+
+        float threshold = mix(0.72, 0.47, clamp(materialParams.cover, 0.0, 1.0));
+        float detailWeight = mix(0.25, 1.0, clamp(materialParams.detail, 0.0, 1.0));
+        float invHalfThickness = 1.0 / max(materialParams.halfThickness, 0.001);
+        // Precompute world-space noise coordinates once per ray. Incrementing
+        // them along the ray eliminates repeated uniform math per step.
+        vec3 p = rayOrigin + rayDir * t;
+        vec3 q = p / scale + wind;
+        vec3 deltaP = rayDir * stepLen;
+        vec3 deltaQ = deltaP / scale;
+        vec2 shadowOffset = sun.xz * (lightStep / scale);
+        float opticalScale = 2.0 * lightStep * sigmaScale;
+        float extinctionScale = sigmaScale * materialParams.scattering * stepLen;
+        float noiseMip = clamp(log2(max(stepLen / scale * 14.0, 1.0)), 0.0, 4.0);
 
         for (int i = 0; i < CLOUD_MAX_STEPS; i++) {
-            if (transmittance < 0.02 || t > tExit) {
-                break;
-            }
+            if (transmittance < 0.02) break;
 
-            vec3 p = rayOrigin + rayDir * t;
-            float localDensity = slabDensity(p);
+            float localDensity = kineCloudVolumeDensity(
+                    p, q, threshold, detailWeight, invHalfThickness, noiseMip);
             if (localDensity > 0.0) {
-                // Midpoint sample over the short sunward segment.
-                float opticalDepth = slabDensity(p + sun * lightStep) * (2.0 * lightStep);
-                float sunTransmit = exp(-opticalDepth * sigmaScale * materialParams.absorption);
-                float powder = 1.0 - exp(-opticalDepth * sigmaScale * 2.0);
+                // A single low-frequency sunward sample retains cloud shadow
+                // directionality, without doing another 3-octave FBM volume
+                // evaluation at every ray step.
+                float sunTransmit = 1.0 - kineCloudVolumeShadow(
+                        p, q, sun, threshold, detailWeight, invHalfThickness, noiseMip);
+                float opticalDepth = -log(max(sunTransmit, 0.001));
+                float powder = 1.0 - exp(-opticalDepth * 2.0);
 
-                vec3 lit = mix(shadowColor, cloudColor * sunColor, sunTransmit);
+                vec3 lit = mix(shadowColor, sunlitColor * directionalPhase, sunTransmit);
                 lit *= mix(0.65, 1.0, powder);
+                lit *= mix(0.02, 1.0, smoothstep(-0.12, 0.20, sun.y));
 
-                float sigma = localDensity * sigmaScale * materialParams.scattering;
-                float extinction = exp(-sigma * stepLen);
+                float extinction = exp(-localDensity * extinctionScale);
                 accum += transmittance * (1.0 - extinction) * lit;
                 transmittance *= extinction;
             }
 
-            t += stepLen;
-            stepLen *= CLOUD_STEP_GROWTH;
+            p += deltaP;
+            q += deltaQ;
         }
 
-        material.baseColor = vec4(accum, 1.0 - transmittance);
+        float horizonFade = smoothstep(0.012, 0.11, rayDir.y);
+        material.baseColor = vec4(accum * horizonFade, (1.0 - transmittance) * horizonFade);
     }
 }

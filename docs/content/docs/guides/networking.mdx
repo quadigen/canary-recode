@@ -1,173 +1,238 @@
 ---
 title: Networking
-description: Build a server-authoritative game with remote events, remote functions, and validated client messages.
+description: Understand how Kinemium connects clients, replicates the world, distributes physics simulation, and manages network traffic.
 ---
 
-Kinemium games run as a server and one or more clients. The server owns the world state, and clients send requests and receive updates. The bridge between them is a pair of remote objects: `RemoteEvent` for one-way messages and `RemoteFunction` for calls that need an answer.
+Kinemium handles multiplayer through its replication system. A server runs the game world, while each connected client receives the instances and state it needs to play. The engine handles joining, transferring scene data, synchronizing changes, and distributing physics simulation between machines.
 
-This guide covers the pattern, the exact methods, and the mistakes that cause most networking bugs.
+You don't need to write a networking layer to make a multiplayer game. Use the normal instance hierarchy and Luau APIs, then configure replication where your game needs different behavior.
 
-## The shape of a networked game
+## Runtime modes
 
-Keep these rules in mind and most designs fall into place:
+| Mode | How it works |
+| --- | --- |
+| Server | Runs server scripts, manages players, and distributes world state to connected clients. |
+| Client | Connects to a server, receives replicated state, runs client scripts, and renders the game. |
+| Singleplayer | Runs server and client logic in one process without a network connection. |
+| Editor | Lets you author the game and launch separate playtest processes. |
 
-- The server decides what's true: health, scores, inventory, spawns, and anything another player could cheat at.
-- Clients ask for things and render what they're told. They don't decide outcomes.
-- Shared objects live in `ReplicatedStorage`, so both sides can find them by name.
-- Server-only code and secrets live in `ServerScriptService` or `ServerStorage`.
-
-A typical flow is: client sends an intent, server validates it, server changes the world, server tells clients what changed.
-
-## Setting up a remote event
-
-Create the remote once, on the server, and parent it to `ReplicatedStorage`:
+Use [RunService](/docs/services/RunService) to determine which side a script is running on:
 
 ```lua
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 
-local requestSpawn = Instance.new("RemoteEvent")
-requestSpawn.Name = "RequestSpawn"
-requestSpawn.Parent = ReplicatedStorage
-
-requestSpawn.OnServerEvent:Connect(function(player, kind)
-    if kind ~= "crate" then
-        return
-    end
-
-    local crate = Instance.new("Part")
-    crate.Size = Vector3.new(2, 2, 2)
-    crate.Position = Vector3.new(0, 8, 0)
-    crate.Anchored = false
-    crate.Parent = workspace
-end)
+print("Server", runService:IsServer())
+print("Client", runService:IsClient())
 ```
 
-On a client, wait for the remote and fire it:
+Both checks can return true in singleplayer and standalone sessions. Don't use an exclusive server-or-client check when both sides of your code need to run locally.
 
-```lua
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local requestSpawn = ReplicatedStorage:WaitForChild("RequestSpawn")
+## Connecting to a server
 
-requestSpawn:FireServer("crate")
-```
+The engine starts replication automatically when launched as a networked server or client. You can run a local server and connect a client from the editor, or launch separate engine processes with the same port.
 
-`OnServerEvent` always receives the sending `Player` first. Everything after that is what the client passed to `FireServer()`.
-
-## Server to client
-
-The server can target one player or everyone:
-
-```lua
--- One player.
-requestSpawn:FireClient(player, "spawned", 1)
-
--- Every connected client.
-requestSpawn:FireAllClients("roundStarted", 3)
-```
-
-`FireClient()` raises an error if the first argument isn't a `Player`. On a client, `FireClient()` and `FireAllClients()` do nothing; on the server, `FireServer()` does nothing. Getting the direction wrong usually looks like a silent no-op, so check which side your script is on first.
-
-The receiving client listens on `OnClientEvent`:
-
-```lua
-local remote = game:GetService("ReplicatedStorage"):WaitForChild("RequestSpawn")
-
-remote.OnClientEvent:Connect(function(message, value)
-    print(message, value)
-end)
-```
-
-## Remote functions
-
-When the caller needs a result, use `RemoteFunction`. The server assigns `OnServerInvoke`:
-
-```lua
-local getBalance = Instance.new("RemoteFunction")
-getBalance.Name = "GetBalance"
-getBalance.Parent = game:GetService("ReplicatedStorage")
-
-getBalance.OnServerInvoke = function(player, itemId)
-    if type(itemId) ~= "string" then
-        return false, "invalid item"
-    end
-
-    return true, 120
-end
-```
-
-The client invokes it and yields until the handler returns:
-
-```lua
-local remote = game:GetService("ReplicatedStorage"):WaitForChild("GetBalance")
-local ok, value = remote:InvokeServer("sword")
-
-if not ok then
-    warn("lookup failed:", value)
-else
-    print("balance", value)
-end
-```
-
-The caller gets the handler's return values. If the handler errors, has no handler assigned, or doesn't answer within about 10 seconds, the call comes back as `nil` plus a message instead of raising. Always check the first return value.
-
-The server can also call a client with `InvokeClient(player, ...)` or `InvokeClients(...)`, and a client handles it with `OnClientInvoke`. Those calls only work from the server and also yield until the client responds.
-
-## Validate everything a client sends
-
-`OnServerEvent` arguments are whatever that client chose to send. Treat them as untrusted input:
-
-```lua
-requestSpawn.OnServerEvent:Connect(function(player, kind, amount)
-    if type(kind) ~= "string" or type(amount) ~= "number" then
-        return
-    end
-
-    if amount ~= math.floor(amount) or amount < 1 or amount > 5 then
-        return
-    end
-
-    if player.Character == nil then
-        return
-    end
-
-    -- Only now act on the request.
-end)
-```
-
-A practical checklist:
-
-- Check types before using a value. Luau is dynamically typed, and a client can send a table where you expected a number.
-- Clamp or reject ranges, including negative and fractional values.
-- Check that the player is allowed to do this now: alive, in range, holding the item, on cooldown.
-- Never trust a position, direction, or hit result from a client. Recompute it on the server when it matters.
-- Rate-limit expensive actions per player. A remote can be fired every frame.
-- Keep secrets out of `ReplicatedStorage`. Clients can read everything there.
-
-## Testing two sides
-
-The engine can run separate processes:
+For example, from a directory containing the engine executable and a saved map:
 
 ```bash
-./kinemium --server --port 7777 --address 0.0.0.0 --map MyGame.KINE
-./kinemium --client --port 7777 --address 127.0.0.1 --username Tester
+./kinemium --server --address 127.0.0.1 --port 7777 --map MyGame.kine
+./kinemium --client --address 127.0.0.1 --port 7777 --username Tester
 ```
 
-For quick iteration, a standalone session runs both sides in one process, and remotes loop back locally. That's useful for testing the handler logic, but it won't reproduce latency, disconnects, or a client seeing stale replicated content.
+Use the server's reachable address when connecting from another computer. The default port is 1234. A server can listen on `0.0.0.0` to accept connections through its network interfaces; that isn't a destination address for clients.
 
-## Common failures
+Desktop connections use SteamNetworkingSockets. Browser clients use WebSocket connections, so their message delivery characteristics differ from desktop clients.
 
-| Symptom | Likely cause |
+## Joining and receiving the world
+
+A connection doesn't mean the entire scene is available. Kinemium checks network compatibility, establishes the player's session, and transfers the initial world data in stages. The player's character and nearby spawn objects receive priority so the client can prepare the character without waiting for every object.
+
+Read the replication state through `ReplicatorService`:
+
+```lua
+local replicator = game:GetService("ReplicatorService")
+local stats = replicator:GetStats()
+
+print("Connected", replicator.Connected)
+print("Scene ready", replicator.SceneReady)
+print("Initial replication finished", stats.replicationFinished)
+```
+
+These values represent different stages of a networked client joining:
+
+| State | Meaning |
 | --- | --- |
-| Handler never runs | The remote wasn't replicated yet; use `WaitForChild()`. |
-| `FireClient` errors | First argument isn't a `Player`. |
-| Call returns `nil` and a message | No handler, handler error, or the 10 second timeout. |
-| Client can see server data it shouldn't | The object was parented to a replicated container. |
-| Event fires twice | The handler was connected twice, or both sides registered one. |
+| `Connected` | The client has established its session. |
+| `SceneReady` | The initial character and spawn preparation can proceed. |
+| `replicationFinished` | The server has signaled completion of the initial replication pass. |
 
-## Next steps
+[Workspace](/docs/services/Workspace) also exposes the `FinishedReplicating` event. If you need a particular instance, use `WaitForChild()` on its parent instead of assuming it's present when the connection opens.
 
-- [Network ownership](/docs/guides/network-ownership) for letting a client simulate parts while the server mirrors them.
-- [Saving player data](/docs/guides/saving-player-data) and [teams](/docs/guides/teams-and-collision-groups) for server-owned state you'll usually send over remotes.
-- `RemoteEvent` and `RemoteFunction` for the full member reference.
-- `ReplicatedStorage` and `ServerScriptService` for where content belongs.
-- [Physics](/docs/guides/physics) and [3D](/docs/guides/3d) for what the server is usually simulating.
+Initial replication completion doesn't mean every object in the map is visible to the client. Visibility rules and distance-based replication continue to apply throughout the session.
+
+## What the engine replicates
+
+The server distributes supported instance creation, removal, hierarchy changes, properties, attributes, tags, and physics state. The game also has dedicated replication for character state, terrain, and embedded assets.
+
+Not every property or instance type is eligible for replication. Where you parent an instance determines whether it belongs to a replicated part of the game.
+
+| Container | Replication behavior |
+| --- | --- |
+| `Workspace` | World objects, subject to visibility and distance rules. |
+| `ReplicatedStorage` and `ReplicatedFirst` | Shared game objects and content. |
+| `Lighting` and `SoundService` | Supported environment and audio objects. |
+| `StarterGui`, `StarterPack`, and `StarterPlayer` | Supported templates and player configuration. |
+| `PlayerGui` | Server-authored descendants are sent to their owning player when supported by the connection. |
+| `ServerStorage` and `ServerScriptService` | Server-only objects and code. |
+
+A server-side change to a replicated object can reach eligible clients without a remote event. For example, a server script can create a part:
+
+```lua
+local part = Instance.new("Part")
+part.Name = "Platform"
+part.Anchored = true
+part.Size = Vector3.new(8, 1, 8)
+part.Position = Vector3.new(0, 4, 0)
+part.Parent = workspace
+```
+
+Clients receive their own representation of the part. Creating or editing an ordinary instance on a client doesn't automatically make that change authoritative on the server.
+
+## Control replication visibility
+
+Every [Instance](/docs/Instance) has replication settings. Configure them on the server before parenting an object into a replicated container if it should have restricted visibility.
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `CanReplicate` | `true` | Allows the instance to participate in replication. |
+| `ReplicationMode` | `Enum.ReplicationMode.Automatic` | Determines which clients are eligible to receive the instance. |
+| `ReplicationGroup` | `""` | Restricts visibility to members of a named group when nonempty. |
+
+The replication modes are:
+
+| Mode | Behavior |
+| --- | --- |
+| `Automatic` | Uses normal replication eligibility and distance rules. |
+| `ServerOnly` | Keeps the instance on the server. |
+| `Never` | Excludes the instance from replication. |
+| `OwnerOnly` | Restricts replication to the assigned network owner. |
+| `Manual` | Requires the server to explicitly select recipients. |
+
+For example, a server-only folder inside Workspace:
+
+```lua
+local folder = Instance.new("Folder")
+folder.Name = "ServerObjects"
+folder.ReplicationMode = Enum.ReplicationMode.ServerOnly
+folder.Parent = workspace
+```
+
+The visibility settings of ancestors apply to their descendants too. Setting a child to Automatic doesn't bypass a restriction on its parent. For sensitive information, prefer server-only containers rather than changing the visibility of something already sent to clients.
+
+### Replication groups
+
+Use groups when a set of objects should be visible to a selected set of players. The following function runs on the server and takes an existing connected Player and an instance in a replicated container:
+
+```lua
+local replicator = game:GetService("ReplicatorService")
+
+local function showToSpectator(player, object)
+    object.ReplicationGroup = "Spectators"
+    return replicator:AddPlayerToGroup(player, "Spectators")
+end
+```
+
+Use `RemovePlayerFromGroup(player, name)` to remove membership and `IsPlayerInGroup(player, name)` to check it. Group membership doesn't override other replication restrictions.
+
+For individual recipients, use Manual mode with `ReplicateTo(instance, player)` and `StopReplicatingTo(instance, player)`. These methods require a server session and an instance registered for replication.
+
+## Physics and network ownership
+
+The server doesn't have to simulate every moving part itself. Kinemium can transfer responsibility for a physical object to a connected client's simulation, then synchronize the object's motion to other machines.
+
+The engine assigns ownership automatically based on player proximity. Connected constraint assemblies can transfer as a group, and character parts normally belong to their corresponding player. Explicit server assignments override automatic ownership.
+
+Use the server to keep important physical objects under server control:
+
+```lua
+local platform = workspace:WaitForChild("MovingPlatform")
+platform:SetNetworkOwner(nil)
+```
+
+The example assumes MovingPlatform is an unanchored Part and replication is running. To restore automatic assignment, call `platform:SetNetworkOwnershipAuto()`.
+
+Client-initiated ownership requests are disabled by default. They can be enabled by the server through `ReplicatorService.AllowClientOwnershipRequests`.
+
+Read the [Network ownership guide](/docs/guides/network-ownership) for ownership distances, group behavior, handoffs, and client request restrictions.
+
+## Snapshots, interpolation, and network traffic
+
+Kinemium sends snapshots of changing physical state rather than transmitting every rendered frame. The client uses received samples to interpolate motion between updates. Large position corrections can snap instead of interpolating across the entire distance.
+
+The engine also prioritizes objects by distance from the player's replication focus. Nearby objects receive more frequent updates, while distant objects can receive fewer updates or fall outside the replication range entirely.
+
+Use these `ReplicatorService` properties to tune the behavior:
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `SnapshotRate` | 30 | Target snapshot rate in updates per second (1–120). |
+| `BandwidthBudget` | 49152 | Per-client budget for budgeted replication traffic, in bytes per snapshot; subject to adaptive scaling. |
+| `SendRate` | 4194304 | Transport send-rate setting in bytes per second; integer range 16384–67108864. |
+| `InterpolationDelayTicks` | 2 | Number of snapshot intervals used as interpolation delay (0–8). |
+| `TeleportThreshold` | 12 | Position correction threshold in world units. |
+| `RelevancyDistance` | 1024 | Distance limit for relevant parts, in world units. |
+| `LODNearFraction` | 0.5 | Fraction of the squared relevancy distance defining the near-update tier. |
+| `LODFarInterval` | 4 | Number of snapshot ticks between far-tier updates (1–64). |
+
+Snapshot rate is not rendering frame rate. Increasing it can improve update frequency, but it also increases network traffic. Increasing the interpolation delay can make motion smoother over uneven connections at the cost of additional visual delay.
+
+Tune settings using separate clients and a representative scene rather than assuming that more bandwidth or a higher snapshot rate is always better.
+
+## Messages between scripts
+
+Replication carries world state; remote objects carry gameplay messages and requests.
+
+| Class | Use |
+| --- | --- |
+| [RemoteEvent](/docs/RemoteEvent) | Reliable one-way messages between server and clients. |
+| [RemoteFunction](/docs/RemoteFunction) | Requests that yield until a response arrives. |
+| [UnreliableRemoteEvent](/docs/UnreliableRemoteEvent) | Disposable messages such as transient input or effects. |
+
+Create remotes in an eligible shared container such as ReplicatedStorage. The receiving side must know the remote before it can receive messages through it.
+
+On desktop connections, unreliable events may be lost or arrive out of order. On browser connections, sent WebSocket messages are ordered and reliable, but disposable messages may be dropped under send pressure. Don't use unreliable events as the only record of an important gameplay change.
+
+The server should validate client requests and decide gameplay outcomes. Network ownership of a part isn't permission to modify unrelated gameplay state.
+
+## Inspect a network session
+
+Use `GetStats()` to inspect a running server or client:
+
+```lua
+local replicator = game:GetService("ReplicatorService")
+local stats = replicator:GetStats()
+
+print("Peers", stats.peers)
+print("Entities", stats.replicatedEntities)
+print("Sent bytes", stats.bytesSent)
+print("Received bytes", stats.bytesReceived)
+print("Bandwidth drops", stats.bandwidthDrops)
+print("Effective snapshot rate", stats.effectiveSnapshotRate)
+```
+
+The byte counters are cumulative. Compare two samples over a measured interval if you want a throughput estimate. The effective snapshot rate reports the rate used by the local replicator. The engine adapts its bandwidth budget under traffic pressure.
+
+When diagnosing a missing object, check its parent, replication settings, recipient group, distance from the player, and connection state. When diagnosing uneven physics, check ownership and snapshot timing before increasing bandwidth.
+
+Use a real server/client playtest to test these behaviors. Singleplayer can exercise gameplay logic, but it doesn't reproduce network delay, packet loss, or separate replicated worlds.
+
+## See also
+
+- [ReplicatorService](/docs/services/ReplicatorService)
+- [World cell streaming](/docs/guides/world-streaming)
+- [NetworkEmulator](/docs/NetworkEmulator)
+
+- [Network ownership](/docs/guides/network-ownership)
+- [Workspace](/docs/services/Workspace)
+- [RunService](/docs/services/RunService)
+- [ReplicatedStorage](/docs/services/ReplicatedStorage)
+- [UnreliableRemoteEvent](/docs/UnreliableRemoteEvent)

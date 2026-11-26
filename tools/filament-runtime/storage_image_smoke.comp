@@ -1,0 +1,21 @@
+#version 450
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, rgba8) uniform image2D image2;
+layout(set = 0, binding = 1, rgba8) uniform image3D image3;
+layout(set = 0, binding = 2, std430) buffer Result { uint values[]; };
+void main() {
+    ivec3 p = ivec3(gl_GlobalInvocationID);
+    ivec3 size = imageSize(image3);
+    if (any(greaterThanEqual(p, size))) return;
+    uint i = uint(p.x + size.x * (p.y + size.y * p.z));
+#if defined(INCREMENT_IMAGES)
+    imageStore(image3, p, imageLoad(image3, p) + vec4(1.0 / 255.0, 0, 0, 0));
+    if (p.z == 0) imageStore(image2, p.xy, imageLoad(image2, p.xy) + vec4(1.0 / 255.0, 0, 0, 0));
+#elif defined(READ_IMAGES)
+    values[i] = packUnorm4x8(imageLoad(image3, p));
+    if (p.z == 0) values[size.x * size.y * size.z + i] = packUnorm4x8(imageLoad(image2, p.xy));
+#else
+    imageStore(image3, p, vec4(p.x, p.y, p.z, 255) / 255.0);
+    if (p.z == 0) imageStore(image2, p.xy, vec4(p.x, p.y, 127, 255) / 255.0);
+#endif
+}

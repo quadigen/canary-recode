@@ -1,0 +1,43 @@
+---
+title: Kinemium Native Extensions (KNE)
+description: Extend a running Kinemium engine with C, C++, Odin, Rust, or Zig native plugins.
+---
+
+
+> Legacy API: KNE ABI 3.x is supported for existing plugins. To author plugins using the unified `Kinemium_*` interface, see the [Native SDK plugin authoring guide](/docs/native-sdk/plugin-authoring), [classes and services](/docs/native-sdk/classes-and-services), and [datatypes](/docs/native-sdk/datatypes). The pages below are retained for migration and existing plugin support.
+
+
+**KNE** is the plugin SDK for adding functionality **inside a Kinemium runtime**. Kinemium loads a native shared library, calls its `kne_extension_entry` export, and provides a versioned `kne_host` API.
+
+KNE ABI **3.2** is defined in `include/sdk/kne.h`. The C authoring helpers are in `include/sdk/kne_plugin.h`, and Odin bindings are under `include/sdk/bindings/odin`.
+
+## Documentation
+
+| Topic | Learn |
+| --- | --- |
+| [Getting started](/docs/kne/getting-started) | Compile and install a native C extension. |
+| [Extension lifecycle](/docs/kne/lifecycle) | Entry point, descriptor, manifest, host callbacks, ABI negotiation. |
+| [Host API modules](/docs/kne/host-api) | Engine APIs for services, instances, classes, VM, datatypes, and exports. |
+| [Luau interop](/docs/kne/luau-interop) | Register Luau functions and pass native values to scripts. |
+| [Custom classes and datatypes](/docs/kne/classes-and-datatypes) | Create extension-defined classes, services, and datatypes. |
+| [Signals and callbacks](/docs/kne/signals-and-callbacks) | Listen to engine events and retain Luau functions. |
+| [Distribution and safety](/docs/kne/distribution) | Manifests, dependency management, ABI compatibility, and ownership. |
+
+## Migrating KNE 3.x plugins to the unified SDK
+
+The separate KNE interface is **legacy**. Plugins using the unified SDK share the public API with standalone embedding applications; only the **entry point** differs.
+
+| Capability | Legacy KNE 3.x | Unified Native SDK 2.0 |
+| --- | --- | --- |
+| Plugin entry point | `kne_extension_entry` | `Kinemium_PluginEntry` |
+| Public headers | `include/sdk/kne.h` | `include/kinemium.h`, `include/kinemium_plugin.h` |
+| Engine context | KNE host API tables | Borrowed `Kinemium_Context*` |
+| Instances and services | KNE modules | `Kinemium_Handle*` and `Kinemium_RegisterService` |
+| Classes | KNE class descriptors | `Kinemium_RegisterClass` |
+| Datatypes | KNE datatype descriptors | `Kinemium_RegisterDatatype` |
+| Signals/callbacks | KNE callback tables | `Kinemium_ConnectSignal`, `Kinemium_RetainLuauCallback` |
+| Runtime lifetime | Engine-owned | Engine-owned for plugins, application-owned for embedding |
+
+Read [Native SDK plugin authoring](/docs/native-sdk/plugin-authoring) and the [complete unified reference](/docs/native-sdk/reference) for the unified SDK interface.
+
+Use the legacy loader for plugins that require KNE ABI 3.x. Rebuild and test a plugin when migrating it to the unified SDK.

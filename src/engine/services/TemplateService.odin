@@ -674,14 +674,32 @@ template_service_namecall :: proc(
 	service := cast(^TemplateService)object
 	switch method {
 	case "ExportServerExe":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Executable export requires Studio capability"), true
+		}
 		template_service_export_luau(L, Template_Kind.Server, target.Mode.Server)
 
 		return 1, true
 	case "ExportClientExe":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Executable export requires Studio capability"), true
+		}
 		template_service_export_luau(L, Template_Kind.Client, target.Mode.Client)
 
 		return 1, true
 	case "ExportSinglePlayerExe":
+		if !vm.ThreadHasSecurityCapability(
+			L,
+			datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS,
+		) {
+			return vm.RaiseError(L, "Executable export requires Studio capability"), true
+		}
 		template_service_export_luau(L, Template_Kind.Client, target.Mode.Singleplayer)
 
 		return 1, true

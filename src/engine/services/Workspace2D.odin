@@ -20,6 +20,13 @@ Workspace2D_Class := classes.Class_Info {
 
 WORLD2D_PIXELS_PER_METER :: classes.Query2D_PIXELS_PER_METER
 WORLD2D_STEP :: f32(1.0 / 60.0)
+
+
+WORLD2D_MAX_POSITION_PIXELS :: f32(10_000_000)
+WORLD2D_MAX_SIZE_PIXELS :: f32(100_000)
+WORLD2D_MAX_SPEED_PIXELS :: f32(1_000_000)
+WORLD2D_MAX_ANGULAR_SPEED_DEGREES :: f32(100_000)
+WORLD2D_MAX_MATERIAL_VALUE :: f32(100_000)
 World2D_Body :: struct {
 	id:           box2d.BodyId,
 	shape:        box2d.ShapeId,
@@ -107,7 +114,8 @@ workspace2d_collect :: proc(
 		classes.Query2D_Set_World(child, ws.world, ws.width, ws.height)
 		if classes.Is_A_Class(child, &classes.Sprite2D_Class) {classes.Sprite2D_Update(child, dt)}
 		group := group_index
-		if group == 0 && classes.Is_A_Class(child, &classes.RigidBody2D_Class) {
+
+		if classes.Is_A_Class(child, &classes.RigidBody2D_Class) {
 			append(&ws.groups, cast(^classes.RigidBody2D)child)
 			append(&ws.group_roots, nil)
 			group = -i32(len(ws.group_roots))
@@ -125,6 +133,10 @@ workspace2d_collect :: proc(
 
 world2d_finite :: proc(n: f32) -> bool {
 	return !math.is_nan(n) && !math.is_inf(n)
+}
+
+world2d_bounded :: proc(value, max_abs: f32) -> bool {
+	return world2d_finite(value) && abs(value) <= max_abs
 }
 
 workspace2d_shape :: proc(part: ^classes.Part2D, body: ^World2D_Body) {
@@ -157,12 +169,18 @@ workspace2d_sync :: proc(
 	group_index: i32,
 ) {
 	center, size, angle := classes.Part2D_Resolve_Transform(part, ctx)
-	if !world2d_finite(center[0]) ||
-	   !world2d_finite(center[1]) ||
-	   !world2d_finite(size[0]) ||
-	   !world2d_finite(size[1]) ||
-	   !world2d_finite(angle) ||
-	   min(size[0], size[1]) < 0.1 {
+	if !world2d_bounded(center[0], WORLD2D_MAX_POSITION_PIXELS) ||
+	   !world2d_bounded(center[1], WORLD2D_MAX_POSITION_PIXELS) ||
+	   !world2d_bounded(size[0], WORLD2D_MAX_SIZE_PIXELS) ||
+	   !world2d_bounded(size[1], WORLD2D_MAX_SIZE_PIXELS) ||
+	   !world2d_bounded(angle, f32(1_000_000)) ||
+	   min(size[0], size[1]) < 0.1 ||
+	   !world2d_bounded(part.density, WORLD2D_MAX_MATERIAL_VALUE) ||
+	   !world2d_bounded(part.friction, WORLD2D_MAX_MATERIAL_VALUE) ||
+	   !world2d_bounded(part.elasticity, f32(1)) ||
+	   !world2d_bounded(part.velocity[0], WORLD2D_MAX_SPEED_PIXELS) ||
+	   !world2d_bounded(part.velocity[1], WORLD2D_MAX_SPEED_PIXELS) ||
+	   !world2d_bounded(part.angular_velocity, WORLD2D_MAX_ANGULAR_SPEED_DEGREES) {
 		if part.physics_owner == ws {workspace2d_release(ws, part)}
 		return
 	}
@@ -397,7 +415,7 @@ workspace2d_find_camera :: proc(parent: ^classes.Object, camera: ^^classes.Camer
 		   classes.Is_A_Class(child, &classes.SurfaceGui_Class) {continue}
 		if classes.Is_A_Class(child, &classes.Camera2D_Class) {
 			candidate := cast(^classes.Camera2D)child
-			// Studio scene helpers take precedence over saved scene cameras.
+
 			if candidate.enabled &&
 			   (camera^ == nil ||
 					   (candidate.editor_scene_helper && !camera^.editor_scene_helper)) {

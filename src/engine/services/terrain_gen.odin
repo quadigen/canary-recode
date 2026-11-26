@@ -283,6 +283,7 @@ terrain_gen_fill_chunk :: proc(
 	cols: ^Terrain_Gen_Columns,
 	max_h: f32,
 	key: Terrain_Chunk_Key,
+	cancel: ^int = nil,
 ) -> ^Terrain_Chunk_Data {
 	S :: TERRAIN_CHUNK_SIZE
 	vs := o.voxel_size
@@ -297,6 +298,7 @@ terrain_gen_fill_chunk :: proc(
 	caves := o.caves && scale <= 2.5
 	data := new(Terrain_Chunk_Data)
 	for lx in 0 ..< S {
+		if cancel != nil && sync.atomic_load(cancel) != 0 {free(data); return nil}
 		for lz in 0 ..< S {
 			col := cols[(lx + 1) * TERRAIN_GEN_COLUMN_DIM + lz + 1]
 			wx, wz := x0 + lx, z0 + lz
@@ -394,7 +396,11 @@ terrain_gen_height :: proc(cols: ^Terrain_Gen_Columns, i, j: int) -> f32 {
 	return cols[i * TERRAIN_GEN_COLUMN_DIM + j].height
 }
 
-terrain_gen_run_column :: proc(o: ^Terrain_Chunk_Gen_Options, job: ^Terrain_Gen_Column_Job) {
+terrain_gen_run_column :: proc(
+	o: ^Terrain_Chunk_Gen_Options,
+	job: ^Terrain_Gen_Column_Job,
+	cancel: ^int = nil,
+) {
 	S :: TERRAIN_CHUNK_SIZE
 	DIM :: TERRAIN_GEN_COLUMN_DIM
 	vs := o.voxel_size
@@ -403,6 +409,7 @@ terrain_gen_run_column :: proc(o: ^Terrain_Chunk_Gen_Options, job: ^Terrain_Gen_
 
 	cols: Terrain_Gen_Columns
 	for i in 0 ..< DIM {
+		if cancel != nil && sync.atomic_load(cancel) != 0 {return}
 		for j in 0 ..< DIM {
 			cols[i * DIM + j] = terrain_gen_sample_column(
 				o,
@@ -452,9 +459,10 @@ terrain_gen_run_column :: proc(o: ^Terrain_Chunk_Gen_Options, job: ^Terrain_Gen_
 	count := o.max_chunk_y - o.min_chunk_y + 1
 	job.chunks = make([dynamic]^Terrain_Chunk_Data, 0, count)
 	for cy in o.min_chunk_y ..= o.max_chunk_y {
+		if cancel != nil && sync.atomic_load(cancel) != 0 {return}
 		append(
 			&job.chunks,
-			terrain_gen_fill_chunk(o, &cols, max_h, Terrain_Chunk_Key{job.cx, cy, job.cz}),
+			terrain_gen_fill_chunk(o, &cols, max_h, Terrain_Chunk_Key{job.cx, cy, job.cz}, cancel),
 		)
 	}
 }
@@ -469,7 +477,7 @@ terrain_chunk_gen_worker :: proc(t: ^thread.Thread) {
 		if sync.atomic_load(&gen.cancel) != 0 {break}
 		i := sync.atomic_add(&gen.next_job, 1)
 		if i >= len(gen.jobs) {break}
-		terrain_gen_run_column(&gen.options, &gen.jobs[i])
+		terrain_gen_run_column(&gen.options, &gen.jobs[i], &gen.cancel)
 		sync.atomic_store(&gen.jobs[i].ready, 1)
 	}
 }
@@ -599,10 +607,10 @@ terrain_poll_chunk_generation :: proc(service: ^Terrain) -> bool {
 
 	budget := TERRAIN_GEN_COMMIT_PER_FRAME
 	committed := false
-	for gen.commit_job < len(gen.jobs) && budget > 0 {
+	for gen.commit_job < len(gen.jobs) && budget > 0 && terrain_frame_has_budget(service) {
 		job := &gen.jobs[gen.commit_job]
 		if sync.atomic_load(&job.ready) == 0 {break}
-		for gen.commit_chunk < len(job.chunks) && budget > 0 {
+		for gen.commit_chunk < len(job.chunks) && budget > 0 && terrain_frame_has_budget(service) {
 			cy := gen.options.min_chunk_y + gen.commit_chunk
 			terrain_commit_gen_chunk(
 				service,

@@ -45,6 +45,21 @@ main :: proc() {
 	delete(copy_dest)
 
 
+	large_source := join(ROOT, "large-source.bin")
+	large_destination := join(ROOT, "large-copy.bin")
+	large, large_err := os.create(large_source)
+	expect(large_err == nil, "create large asset")
+	if large_err != nil {return}
+	expect(os.truncate(large, 16 * 1024 * 1024) == nil, "create sparse 16 MiB asset")
+	os.close(large)
+	expect(services.Project_Copy_File_Bytes(large_source, large_destination), "copy large asset")
+	info, info_err := os.stat(large_destination, context.allocator)
+	expect(info_err == nil, "stat copied asset")
+	if info_err == nil {
+		expect(info.size == 16 * 1024 * 1024, "full asset copied")
+		os.file_info_delete(info, context.allocator)
+	}
+
 	next_dest, next_ok := services.Project_Unique_Child_Path(ROOT, "file.txt")
 	expect(next_ok, "third unique child path should resolve")
 	expect(

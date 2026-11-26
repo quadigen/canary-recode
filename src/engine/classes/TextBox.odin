@@ -10,6 +10,7 @@ import enums "../enum"
 import guilib "../gui"
 import signals "../signals"
 import vm "../vm"
+import "core:math"
 import "core:strconv"
 
 TEXTBOX_IS_USED := false
@@ -36,6 +37,12 @@ Undo_Entry :: struct {
 	delete_text: string,
 	insert_text: string,
 	epoch:       int,
+}
+
+text_box_localized_placeholder :: proc(box: ^TextBox) -> string {
+	registry := box.object.signal_registry
+	if registry == nil || registry.localize_text == nil {return box.placeholder_text}
+	return registry.localize_text(registry.data_model, box.placeholder_text, &box.object)
 }
 
 TextBox :: struct {
@@ -136,6 +143,12 @@ TextBox :: struct {
 	key_handled:                   bool,
 	key_down:                      ^signals.Signal,
 	caret_color3:                  datatypes.Color3,
+	smooth_caret:                  bool,
+	block_caret:                   bool,
+	text_padding:                  f32,
+	focus_indicator_visible:       bool,
+	caret_visual_width:            f32,
+	caret_visual_valid:            bool,
 	selection_color3:              datatypes.Color3,
 	selection_transparency:        f32,
 	focus_color3:                  datatypes.Color3,
@@ -243,6 +256,8 @@ TextBox_Init :: proc() -> TextBox {
 		key_handled = false,
 		key_down = nil,
 		caret_color3 = datatypes.Color3{0.25, 0.5, 1.0},
+		text_padding = 6,
+		focus_indicator_visible = true,
 		selection_color3 = datatypes.Color3{0.25, 0.5, 1.0},
 		selection_transparency = 0.65,
 		focus_color3 = datatypes.Color3{0.25, 0.5, 1.0},
@@ -2003,7 +2018,7 @@ text_box_render_code_editor :: proc(
 		guilib.restore(surface)
 	}
 	if len(box.text) == 0 && len(box.placeholder_text) > 0 {
-		placeholder := strings.clone_to_cstring(box.placeholder_text)
+		placeholder := strings.clone_to_cstring(text_box_localized_placeholder(box))
 		guilib.drawText(
 			surface,
 			placeholder,
@@ -3523,7 +3538,7 @@ text_box_fire_focused :: proc(box: ^TextBox) {
 }
 
 TextBox_focus :: proc(box: ^TextBox, notify := true) {
-	if box == nil {
+	if box == nil || box.destroyed {
 		return
 	}
 
@@ -3535,10 +3550,14 @@ TextBox_focus :: proc(box: ^TextBox, notify := true) {
 
 	if text_box_focused != nil {
 		TextBox_blur(text_box_focused)
+		if box.destroyed {return}
+		if text_box_focused != nil && text_box_focused != box {return}
+		if text_box_focused == box {return}
 	}
 
 	text_box_focused = box
 	box.focused = true
+	box.caret_visual_valid = false
 	box.drag_selecting = false
 
 	if box.clear_text_on_focus && box.text_editable {
@@ -3574,9 +3593,21 @@ TextBox_blur :: proc(box: ^TextBox, enter_pressed: bool = false) {
 
 	was_focused := box.focused
 	box.focused = false
+	box.caret_visual_valid = false
 	gui_invalidate_draw(&box.object)
 	box.drag_selecting = false
 	box.caret_timer = 0
+	if text_box_focused == box {
+		text_box_focused = nil
+
+		window := sdl3.GetKeyboardFocus()
+
+		if window != nil {
+			_ = sdl3.StopTextInput(window)
+		}
+		TEXTBOX_IS_USED = false
+	}
+
 	if was_focused &&
 	   box.object.signal_registry != nil &&
 	   box.object.signal_registry.signal_registry != nil {
@@ -3587,17 +3618,6 @@ TextBox_blur :: proc(box: ^TextBox, enter_pressed: bool = false) {
 		vm.PushBoolean(vm_state, enter_pressed)
 		signals.Fire(vm_state, box.focus_lost, 1)
 		vm.Pop(vm_state, 1)
-	}
-
-	if text_box_focused == box {
-		text_box_focused = nil
-
-		window := sdl3.GetKeyboardFocus()
-
-		if window != nil {
-			_ = sdl3.StopTextInput(window)
-			TEXTBOX_IS_USED = false
-		}
 	}
 }
 
@@ -3684,7 +3704,7 @@ text_box_horizontal_offset :: proc(box: ^TextBox, width, text_width: f32) -> f32
 
 text_box_cursor_from_x :: proc(box: ^TextBox, mouse_x: f32) -> int {
 	if box == nil || len(box.text) == 0 {return 0}
-	padding: f32 = 6
+	padding := box.text_padding
 	offset: f32
 	if box.text_x_alignment != .Left {
 		offset = text_box_horizontal_offset(
@@ -4107,6 +4127,19 @@ TextBox_get :: proc(
 
 	case "MaxLength":
 		vm.PushNumber(L, f64(box.max_length))
+		return true
+
+	case "SmoothCaret":
+		vm.PushBoolean(L, box.smooth_caret)
+		return true
+	case "BlockCaret":
+		vm.PushBoolean(L, box.block_caret)
+		return true
+	case "TextPadding":
+		vm.PushNumber(L, f64(box.text_padding))
+		return true
+	case "FocusIndicatorVisible":
+		vm.PushBoolean(L, box.focus_indicator_visible)
 		return true
 
 	case "CaretColor3":
@@ -4585,6 +4618,24 @@ TextBox_set :: proc(
 
 		return true
 
+	case "SmoothCaret":
+		box.smooth_caret = vm.ArgBoolean(L, value_index)
+		box.caret_visual_valid = false
+		Gui_Render_Mark_Dirty()
+		return true
+	case "BlockCaret":
+		box.block_caret = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "TextPadding":
+		box.text_padding = clamp(f32(vm.ArgNumber(L, value_index)), 0, 256)
+		Gui_Render_Mark_Dirty()
+		return true
+	case "FocusIndicatorVisible":
+		box.focus_indicator_visible = vm.ArgBoolean(L, value_index)
+		Gui_Render_Mark_Dirty()
+		return true
+
 	case "CaretColor3":
 		if datatype_registry == nil {
 			return false
@@ -4672,7 +4723,7 @@ TextBox_namecall :: proc(
 		return 0, true
 
 	case "ReleaseFocus":
-		TextBox_blur(box)
+		TextBox_blur(box, vm.StackTop(L) >= 2 && vm.ArgBoolean(L, 2))
 		return 0, true
 
 	case "IsFocused":
@@ -4887,7 +4938,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 	surface := ctx.renderer.SkiaSurface
 
-	padding: f32 = 6
+	padding := box.text_padding
 
 	dt := clamp(f32(ctx.delta_time), f32(0), f32(0.1))
 
@@ -4922,7 +4973,7 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	display_color := box.text_color3
 
 	if len(box.text) == 0 && len(box.placeholder_text) > 0 {
-		display_text = box.placeholder_text
+		display_text = text_box_localized_placeholder(box)
 
 		display_color = box.placeholder_color3
 	}
@@ -5083,6 +5134,16 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 
 	if box.focused {
+		if !box.smooth_caret || !box.caret_visual_valid {
+			box.caret_visual_width = caret_width
+			box.caret_visual_valid = true
+		} else {
+			box.caret_visual_width +=
+				(caret_width - box.caret_visual_width) * (1 - math.exp(-dt * 28))
+			if abs(caret_width - box.caret_visual_width) < 0.1 {
+				box.caret_visual_width = caret_width
+			}
+		}
 		caret_alpha: f32 = 1
 		t := box.caret_timer
 
@@ -5098,26 +5159,42 @@ TextBox_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 
 		caret_alpha = clamp(caret_alpha, f32(0), f32(1))
 
-		caret_x := text_x + caret_width - box.scroll_x
+		caret_x := text_x + box.caret_visual_width - box.scroll_x
+		box.caret_screen_position = {caret_x, rect.y}
 
 		vertical_padding := min(f32(4), rect.height * 0.2)
 
 		caret_transparency := 1 - (1 - box.text_transparency) * caret_alpha
 
-		guilib.drawLine(
-			surface,
-			caret_x,
-			rect.y + vertical_padding,
-			caret_x,
-			rect.y + rect.height - vertical_padding,
-			1.5,
-			box.caret_color3,
-			caret_transparency,
-		)
+		if box.block_caret {
+			width := max(text_box_measure_text(box, "M"), f32(2))
+			guilib.drawRect(
+				surface,
+				guilib.Rect {
+					x = caret_x,
+					y = rect.y + vertical_padding,
+					width = width,
+					height = max(rect.height - 2 * vertical_padding, 0),
+					color = box.caret_color3,
+					bgTransparency = 1 - (1 - caret_transparency) * 0.65,
+				},
+			)
+		} else {
+			guilib.drawLine(
+				surface,
+				caret_x,
+				rect.y + vertical_padding,
+				caret_x,
+				rect.y + rect.height - vertical_padding,
+				1.5,
+				box.caret_color3,
+				caret_transparency,
+			)
+		}
 	}
 
 
-	if box.focus_animation > 0.001 {
+	if box.focus_indicator_visible && box.focus_animation > 0.001 {
 		focus_width := rect.width * box.focus_animation
 
 		focus_x := rect.x + (rect.width - focus_width) * 0.5
@@ -5187,6 +5264,11 @@ TextBox_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.max_length = src.max_length
 
 	dst.caret_color3 = src.caret_color3
+	dst.smooth_caret = src.smooth_caret
+	dst.block_caret = src.block_caret
+	dst.text_padding = src.text_padding
+	dst.focus_indicator_visible = src.focus_indicator_visible
+	dst.caret_visual_valid = false
 
 	dst.selection_color3 = src.selection_color3
 
@@ -5314,10 +5396,6 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 		}
 
 		was_focused := clicked.focused
-
-		if text_box_focused != nil && text_box_focused != clicked {
-			TextBox_blur(text_box_focused)
-		}
 
 		TextBox_focus(clicked, notify = false)
 		defer if !was_focused &&
@@ -5526,7 +5604,7 @@ TextBox_Handle_Event :: proc(registry: ^Registry, L: ^vm.State, event: sdl3.Even
 
 		text_box_fire_key_down(box, registry, event.key.scancode)
 
-		if box.key_handled {return}
+		if box.destroyed || text_box_focused != box || !box.focused || box.key_handled {return}
 
 		modifiers := event.key.mod
 
@@ -5906,6 +5984,10 @@ Register_TextBox :: proc(registry: ^Registry) {
 			"SelectAllOnFocus",
 			"MaxLength",
 			"CaretColor3",
+			"SmoothCaret",
+			"BlockCaret",
+			"TextPadding",
+			"FocusIndicatorVisible",
 			"SelectionColor3",
 			"SelectionTransparency",
 			"FocusColor3",

@@ -1,6 +1,7 @@
 #+build !js
 package services
 
+import serializer "../serializer"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:bytes"
@@ -77,15 +78,97 @@ project_backup_names :: proc(path: string) -> [dynamic]string {
 	return names
 }
 
+
+project_read_chunk :: proc(file: ^os.File, buf: []u8) -> bool {
+	offset := 0
+	for offset < len(buf) {
+		n, err := os.read(file, buf[offset:])
+		if err != nil || n <= 0 {return false}
+		offset += n
+	}
+	return true
+}
+
+project_files_equal :: proc(left, right: string) -> (equal, ok: bool) {
+	a, a_err := os.open(left)
+	if a_err != nil {return false, false}
+	defer os.close(a)
+	b, b_err := os.open(right)
+	if b_err != nil {return false, false}
+	defer os.close(b)
+	a_info, ai_err := os.fstat(a, context.allocator)
+	if ai_err != nil {return false, false}
+	defer os.file_info_delete(a_info, context.allocator)
+	b_info, bi_err := os.fstat(b, context.allocator)
+	if bi_err != nil {return false, false}
+	defer os.file_info_delete(b_info, context.allocator)
+	if a_info.type != .Regular ||
+	   b_info.type != .Regular ||
+	   a_info.size < 0 ||
+	   b_info.size < 0 ||
+	   u64(a_info.size) > u64(serializer.KINE_MAX_STREAM_BYTES) ||
+	   u64(b_info.size) > u64(serializer.KINE_MAX_STREAM_BYTES) {return false, false}
+	if a_info.size != b_info.size {return false, true}
+	left_buf, right_buf: [64 * 1024]u8
+	remaining := a_info.size
+	for remaining > 0 {
+		n := int(min(i64(len(left_buf)), remaining))
+		if !project_read_chunk(a, left_buf[:n]) || !project_read_chunk(b, right_buf[:n]) {
+			return false, false
+		}
+		if !bytes.equal(left_buf[:n], right_buf[:n]) {return false, true}
+		remaining -= i64(n)
+	}
+
+	probe: [1]u8
+	n_a, end_a := os.read(a, probe[:])
+	n_b, end_b := os.read(b, probe[:])
+	if n_a != 0 ||
+	   n_b != 0 ||
+	   (end_a != nil && end_a != .EOF) ||
+	   (end_b != nil && end_b != .EOF) {return false, false}
+	return true, true
+}
+
+
+project_sync_file :: proc(path: string) -> bool {
+	file, open_err := os.open(path)
+	if open_err != nil {return false}
+	sync_err := os.sync(file)
+	close_err := os.close(file)
+	return sync_err == nil && close_err == nil
+}
+
+project_sync_directory :: proc(path: string) -> bool {
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+		directory, open_err := os.open(path)
+		if open_err != nil {return false}
+		sync_err := os.sync(directory)
+		close_err := os.close(directory)
+		return sync_err == nil && close_err == nil
+	}
+	return true
+}
+
+
+project_backup_copy_atomic :: proc(source, destination: string) -> bool {
+	directory, ok := Project_Entry_Parent(destination)
+	if !ok {return false}
+	stage, stage_err := os.make_directory_temp(directory, ".project-backup-*", context.allocator)
+	if stage_err != nil {return false}
+	defer delete(stage)
+	defer os.remove_all(stage)
+	pending := fmt.tprintf("%s/pending.kine", stage)
+	if os.copy_file(pending, source) != nil || !project_sync_file(pending) {return false}
+	if os.rename(pending, destination) != nil {return false}
+	return project_sync_directory(directory)
+}
+
 project_backup_previous :: proc(project_path, snapshot, pending: string) -> (ok, unchanged: bool) {
 	if !os.exists(snapshot) {return true, false}
-	previous, read_err := os.read_entire_file(snapshot, context.allocator)
-	if read_err != nil {return false, false}
-	defer delete(previous)
-	next, next_err := os.read_entire_file(pending, context.allocator)
-	if next_err != nil {return false, false}
-	defer delete(next)
-	if bytes.equal(previous, next) {return true, true}
+	identical, compared := project_files_equal(snapshot, pending)
+	if !compared {return false, false}
+	if identical {return true, true}
 
 	directory := project_backup_directory(project_path)
 	if err := os.make_directory(directory); err != nil && err != .Exist {return false, false}
@@ -95,7 +178,7 @@ project_backup_previous :: proc(project_path, snapshot, pending: string) -> (ok,
 	if info.type != .Directory {return false, false}
 
 	name := fmt.tprintf("%019d.kine", time.to_unix_nanoseconds(time.now()))
-	if !project_write_atomic(fmt.tprintf("%s/%s", directory, name), string(previous)) {
+	if !project_backup_copy_atomic(snapshot, fmt.tprintf("%s/%s", directory, name)) {
 		return false, false
 	}
 	names := project_backup_names(project_path)
@@ -139,7 +222,8 @@ project_restore_backup :: proc(service: ^ProjectService, L: ^vm.State, name: str
 	info, stat_err := os.lstat(path, context.allocator)
 	if stat_err != nil {return false}
 	defer os.file_info_delete(info, context.allocator)
-	if info.type != .Regular {return false}
+	if info.type != .Regular ||
+	   !project_file_size_bounded(path, serializer.KINE_MAX_STREAM_BYTES) {return false}
 	data, read_err := os.read_entire_file(path, context.allocator)
 	if read_err != nil {return false}
 	defer delete(data)

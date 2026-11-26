@@ -165,6 +165,13 @@ CharacterController_Build :: proc(registry: ^Registry, L: ^vm.State, model: ^Cha
 	_ = character_controller_ensure_child(registry, L, &controller.object, "RotationController")
 	_ = character_controller_ensure_child(registry, L, &controller.object, "StateMachine")
 	_ = character_controller_ensure_child(registry, L, &controller.object, "CollisionController")
+
+	_ = character_controller_ensure_child(
+		registry,
+		L,
+		&controller.object,
+		"CharacterPhysicsSolver",
+	)
 	if Find_Child(&model.object, "Humanoid") == nil {
 		_ = Add_Child(registry, L, &model.object, "Humanoid")
 	}
@@ -280,6 +287,16 @@ character_controller_namecall :: proc(
 		MovementController_Queue_Jump(movement)
 		vm.PushBoolean(L, true)
 		return 1, true
+	case "ApplyImpulse":
+		impulse := datatypes.Arg_Vector3(L, 2)
+		for value in ([3]f64{impulse.x, impulse.y, impulse.z}) {
+			if math.is_nan(value) || math.is_inf(value) || math.abs(value) > 100000 {
+				return vm.RaiseError(L, "character impulse components must be finite and bounded"),
+					true
+			}
+		}
+		vm.PushBoolean(L, CharacterController_Apply_Impulse(cc, impulse))
+		return 1, true
 	}
 	return 0, false
 }
@@ -307,7 +324,7 @@ Register_CharacterController :: proc(registry: ^Registry) {
 			"VerticalSpeed",
 			"JumpEnabled",
 		},
-		methods = []string{"Move", "Jump"},
+		methods = []string{"Move", "Jump", "ApplyImpulse"},
 	)
 }
 

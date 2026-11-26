@@ -3,9 +3,20 @@ title: Actor
 description: Groups scripts into a Parallel Luau execution domain and provides asynchronous message passing.
 ---
 
-Inherits [Model](/docs/Model).
+Use an `Actor` to group scripts that calculate results separately from updates to the world. Actors inherit from [Model](/docs/Model).
 
-An Actor is a container for scripts that participate in Parallel Luau execution phases. See the [Parallel Luau guide](/docs/guides/parallel-luau) for a working example and current limitations.
+## Getting started
+
+Place a Script inside an Actor. In that script, bind a topic before another script sends a message:
+
+```lua
+local actor = script:GetActor()
+actor:BindToMessage("Update", function(value)
+    actor:SetAttribute("Result", value * 2)
+end)
+```
+
+From another script, call `actor:SendMessage("Update", 21)` with a reference to that Actor. The result is written asynchronously. See the [Parallel Luau guide](/docs/guides/parallel-luau) for execution phase restrictions.
 
 ## Methods
 
@@ -31,4 +42,4 @@ Connects a message handler that starts in the serial phase. Must be called in se
 BindToMessageParallel(topic: string, callback: (...any) -> ()): KinemiumConnection
 ```
 
-Like BindToMessage, but callbacks begin in the parallel phase. Use task.synchronize() before changing ordinary Instance properties.
+Works like `BindToMessage()`, but callbacks begin in the parallel phase. Call `task.synchronize()` before changing ordinary instance properties.

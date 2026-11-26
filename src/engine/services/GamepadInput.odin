@@ -3,6 +3,7 @@ package services
 import classes "../classes"
 import enums "../enum"
 import sdl3 "../platform"
+import signals "../signals"
 import vm "../vm"
 
 when ODIN_OS != .JS {
@@ -60,11 +61,37 @@ when ODIN_OS != .JS {
 		registry := service.signal_registry
 		#partial switch event.type {
 		case .GAMEPAD_ADDED:
-			_ = gamepad_slot(service, u32(event.gdevice.which), true)
+			slot := gamepad_slot(service, u32(event.gdevice.which), true)
+			if slot >= 0 &&
+			   service.gamepad_connected != nil &&
+			   registry != nil &&
+			   registry.enums != nil {
+				_ = enums.Push_Item_By_Value(
+					L,
+					registry.enums,
+					"UserInputType",
+					i64(enums.UserInputType.Gamepad1) + i64(slot),
+				)
+				signals.Fire(L, service.gamepad_connected, 1)
+				vm.Pop(L)
+			}
 			return true
 		case .GAMEPAD_REMOVED:
 			id := u32(event.gdevice.which)
 			slot := gamepad_slot(service, id)
+			if slot >= 0 &&
+			   service.gamepad_disconnected != nil &&
+			   registry != nil &&
+			   registry.enums != nil {
+				_ = enums.Push_Item_By_Value(
+					L,
+					registry.enums,
+					"UserInputType",
+					i64(enums.UserInputType.Gamepad1) + i64(slot),
+				)
+				signals.Fire(L, service.gamepad_disconnected, 1)
+				vm.Pop(L)
+			}
 			if slot >= 0 {
 				service.gamepad_ids[slot] = 0
 				service.gamepad_axes[slot] = {}

@@ -3,7 +3,9 @@ title: BillboardGui
 description: Draw camera-facing GUI children relative to a part or attachment.
 ---
 
-Draw camera-facing GUI children relative to a part or attachment.
+Use `BillboardGui` for name tags, health bars, and labels that follow a world object and face the camera.
+
+The example assumes `part` is a part in the scene.
 
 ## Getting started
 
@@ -19,8 +21,31 @@ text.Text = "Hello"
 
 ## Properties
 
-Adornee, Size, SizeOffset, StudsOffset, StudsOffsetWorldSpace, ExtentsOffset, ExtentsOffsetWorldSpace, Enabled and MaxDistance configure projection.
+All properties are read/write except `CurrentDistance`.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Adornee` | `Instance?` | `nil` | Target part or attachment in Workspace; falls back to the parent when unset. |
+| `Enabled` | `boolean` | `true` | Enables display. |
+| `Size` | `UDim2` | `UDim2.fromOffset(200, 50)` | Scale components measure world units; offsets measure pixels. |
+| `SizeOffset` | `Vector2` | Zero | Shifts the label by fractions of its projected size. |
+| `StudsOffset` | `Vector3` | Zero | Offset relative to the camera's axes. |
+| `StudsOffsetWorldSpace` | `Vector3` | Zero | Offset along world axes. |
+| `ExtentsOffset` | `Vector3` | Zero | Camera-relative offset scaled by the target's half-size. |
+| `ExtentsOffsetWorldSpace` | `Vector3` | Zero | World-relative offset scaled by the target's half-size. |
+| `MaxDistance` | `number` | Approximately 3.4e38 | Hides the label beyond this distance. |
+| `DistanceLowerLimit` | `number` | `0` | Minimum distance used for sizing. |
+| `DistanceUpperLimit` | `number` | Approximately 3.4e38 | Maximum distance used for sizing when positive. |
+| `CurrentDistance` | `number` | `0` | Last calculated camera distance. Read-only. |
+| `AlwaysOnTop` | `boolean` | `false` | Ignores world occlusion when enabled. |
+| `RenderOnTop` | `boolean` | `false` | Alias for `AlwaysOnTop`. |
+| `ClipsDescendants` | `boolean` | `true` | Clips children to the projected rectangle. |
+| `Active` | `boolean` | `true` | Stored input setting; world-space interaction isn't implemented. |
+| `PlayerToHideFrom` | `Instance?` | `nil` | Stored player reference; player-specific hiding isn't implemented. |
+| `Brightness` | `number` | `1` | Stored brightness setting. |
+| `LightInfluence` | `number` | `0` | Stored lighting setting; doesn't affect the display yet. |
+| `DistanceStep` | `number` | `0` | Stored distance step; doesn't affect sizing yet. |
 
 ## Notes
 
-AlwaysOnTop and its Kinemium alias RenderOnTop control occlusion. When disabled, a center ray against opaque rigid-body colliders hides the whole label if blocked. This is an approximation; per-pixel depth occlusion, world-space interaction, player-specific hiding and lighting influence are not implemented.
+When `AlwaysOnTop` is off, an opaque body between the camera and the label's center can hide the entire label. Partial occlusion isn't supported. `Brightness` and `LightInfluence` don't change its appearance yet.

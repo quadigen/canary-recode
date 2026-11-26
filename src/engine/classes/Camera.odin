@@ -449,9 +449,26 @@ Camera_Update_World_To_View :: proc(camera: ^Camera, renderer: ^Renderer_Object)
 	}
 }
 
-camera_mark_moved :: proc(camera: ^Camera, previous: datatypes.CFrame) {
-	if camera != nil && camera.CFrame != previous {
-		Render_3D_Mark_Dirty()
+camera_notify_step_changes :: proc(
+	camera: ^Camera,
+	previous_cframe, previous_focus: datatypes.CFrame,
+	previous_viewport: datatypes.Vector2,
+	L: ^vm.State,
+) {
+	if camera == nil || camera.destroyed {return}
+	cframe_changed := camera.CFrame != previous_cframe
+	focus_changed := camera.Focus != previous_focus
+	viewport_changed :=
+		previous_viewport != (datatypes.Vector2{camera.viewport_width, camera.viewport_height})
+	if cframe_changed {
+		Render_3D_Mark_Object_Dirty(&camera.object)
+		Object_Fire_Property_Changed(&camera.object, "CFrame", L)
+	}
+	if focus_changed && !camera.destroyed {
+		Object_Fire_Property_Changed(&camera.object, "Focus", L)
+	}
+	if viewport_changed && !camera.destroyed {
+		Object_Fire_Property_Changed(&camera.object, "ViewportSize", L)
 	}
 }
 
@@ -463,7 +480,15 @@ Camera_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 	}
 
 	previous_cframe := camera.CFrame
-	defer camera_mark_moved(camera, previous_cframe)
+	previous_focus := camera.Focus
+	previous_viewport := datatypes.Vector2{camera.viewport_width, camera.viewport_height}
+	defer camera_notify_step_changes(
+		camera,
+		previous_cframe,
+		previous_focus,
+		previous_viewport,
+		ctx.L,
+	)
 
 	Camera_Sync_Viewport(camera, ctx.renderer)
 

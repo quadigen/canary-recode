@@ -28,7 +28,8 @@ udim2_new :: proc "c" (L: ^vm.State) -> i32 {
 	context = tracy.DefaultContext()
 	binding := binding_from_upvalue(L)
 	registry := registry_from_binding(binding)
-	if vm.StackTop(L) == 2 && (vm.IsUserdataType(L, 1, &registry.u_dim) || vm.TypeOf(L, 1) == .Table) {
+	if vm.StackTop(L) == 2 &&
+	   (vm.IsUserdataType(L, 1, &registry.u_dim) || vm.TypeOf(L, 1) == .Table) {
 		x, y := udim2_arg_component(L, 1, registry), udim2_arg_component(L, 2, registry)
 		push_udim2(L, binding, UDim2_New(x.Scale, x.Offset, y.Scale, y.Offset))
 		return 1
@@ -48,7 +49,6 @@ udim2_new :: proc "c" (L: ^vm.State) -> i32 {
 
 udim2_arg_component :: proc(L: ^vm.State, index: int, registry: ^Registry) -> UDim {
 	if vm.TypeOf(L, index) != .Table {return Arg_UDim(L, index, registry)}
-	// UDim2 components were exposed as tables in earlier builds.
 	vm.GetField(L, index, "Scale")
 	vm.GetField(L, index, "Offset")
 	value := UDim_New(f32(vm.ArgNumber(L, -2)), f32(vm.ArgNumber(L, -1)))
@@ -80,9 +80,17 @@ udim2_get :: proc(L: ^vm.State, value, ctx: rawptr, key: string) -> bool {
 	udim := cast(^UDim2)value
 	switch key {
 	case "X", "Width":
-		Push_UDim(L, registry_from_binding(cast(^vm.Userdata_Binding)ctx), UDim_New(udim.X_Scale, udim.X_Offset))
+		Push_UDim(
+			L,
+			registry_from_binding(cast(^vm.Userdata_Binding)ctx),
+			UDim_New(udim.X_Scale, udim.X_Offset),
+		)
 	case "Y", "Height":
-		Push_UDim(L, registry_from_binding(cast(^vm.Userdata_Binding)ctx), UDim_New(udim.Y_Scale, udim.Y_Offset))
+		Push_UDim(
+			L,
+			registry_from_binding(cast(^vm.Userdata_Binding)ctx),
+			UDim_New(udim.Y_Scale, udim.Y_Offset),
+		)
 	case "XScale":
 		vm.PushNumber(L, f64(udim.X_Scale))
 	case "XOffset":
@@ -144,7 +152,7 @@ udim2_equal :: proc(value, other, ctx: rawptr) -> bool {
 udim2_string :: proc(value, ctx: rawptr) -> string {
 	udim := cast(^UDim2)value
 	return fmt.tprintf(
-		"{%g, %g}, {%g, %g}",
+		"{{%g, %g}}, {{%g, %g}}",
 		udim.X_Scale,
 		udim.X_Offset,
 		udim.Y_Scale,

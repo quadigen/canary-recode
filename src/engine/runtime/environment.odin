@@ -36,6 +36,9 @@ Environment :: struct {
 	vr_pointer_latched:         bool,
 	vr_pointer_hand:            i32,
 	vr_pointer_x, vr_pointer_y: f32,
+	gui_cursor_valid:           bool,
+	gui_cursor_revision:        u64,
+	gui_cursor_x, gui_cursor_y: f32,
 }
 
 
@@ -54,6 +57,12 @@ Environment_3D_Dirty :: proc(environment: ^Environment) -> bool {
 		environment.render_3d_drawn = true
 		environment.render_3d_revision_drawn = revision
 		environment.render_3d_viewport = viewport
+	}
+	lighting := services.Find_Service(&environment.services, "Lighting")
+	if lighting != nil &&
+	   lighting.object != nil &&
+	   (cast(^services.Lighting)lighting.object).sun_rays_animated {
+		return true
 	}
 	return changed
 }
@@ -133,7 +142,10 @@ Environment_Init :: proc(
 		&environment.datatypes,
 		&environment.enums,
 		vm_state,
+		renderer_object,
 	)
+	environment.extensions.native_context.mode = mode
+	when ODIN_OS != .JS {Native_Plugin_Bridge_Install(environment)}
 	extensions.Install_Luau_Api(&environment.extensions, vm_state)
 }
 
@@ -145,12 +157,17 @@ Environment_Set_Mode :: proc(environment: ^Environment, mode: target.Mode) {
 	environment.mode = mode
 	environment.services.mode = mode
 	classes.Set_Mode(&environment.classes, mode)
+	when ODIN_OS != .JS {
+		if mode != .Editor {services.PluginLoader_Set_Backend({})}
+	}
 }
 
 Environment_Destroy :: proc(environment: ^Environment) {
 	if environment == nil {
 		return
 	}
+	if environment.gui_cursor_valid {sdl3.Set_GUI_Cursor(.DEFAULT)}
+	when ODIN_OS != .JS {services.PluginLoader_Set_Backend({})}
 	extensions.Context_Destroy(&environment.extensions)
 	packages.Destroy(&environment.packages)
 	vm.Environment_Destroy(&environment.modules)
@@ -298,13 +315,21 @@ Environment_SetEvent :: proc(environment: ^Environment, vm_state: ^vm.VM, event:
 
 	packages.Set_Event(&environment.packages, event)
 
-	classes.GuiObject_Handle_Event(&environment.classes, vm_state.L, event)
+	#partial switch event.type {
+	case .MOUSE_MOTION:
+		environment.gui_cursor_valid = true
+		environment.gui_cursor_x = event.motion.x
+		environment.gui_cursor_y = event.motion.y
+		environment.gui_cursor_revision = classes.Gui_Render_Revision()
+	case .WINDOW_MOUSE_LEAVE, .WINDOW_MINIMIZED:
+		environment.gui_cursor_valid = false
+	}
 
-	classes.GuiButton_Handle_Event(&environment.classes, vm_state.L, event)
-
-	classes.TextBox_Handle_Event(&environment.classes, vm_state.L, event)
-
-	classes.ScrollingFrame_Handle_Event(&environment.classes, event)
+	if !classes.GuiObject_Handle_Event(&environment.classes, vm_state.L, event) {
+		classes.GuiButton_Handle_Event(&environment.classes, vm_state.L, event)
+		classes.TextBox_Handle_Event(&environment.classes, vm_state.L, event)
+		classes.ScrollingFrame_Handle_Event(&environment.classes, event)
+	}
 
 	services.Set_Event(&environment.services, vm_state.L, event)
 
@@ -415,6 +440,21 @@ Environment_Render_2D :: proc(
 		tracy.ZoneNC("GUI Layout", 0x56B6C2)
 		z := profiling.Begin("GUI Layout", 0x56B6C2)
 		classes.Update_GUI_Layout(&environment.classes, virtual_width, virtual_height, delta_time)
+	}
+
+	if environment.gui_cursor_valid &&
+	   environment.renderer.Window != nil &&
+	   sdl3.GetMouseFocus() == environment.renderer.Window {
+		revision := classes.Gui_Render_Revision()
+		if environment.gui_cursor_revision != revision {
+			environment.gui_cursor_revision = revision
+			hit := classes.GuiObject_hit_test(
+				&environment.classes,
+				environment.gui_cursor_x,
+				environment.gui_cursor_y,
+			)
+			sdl3.Set_GUI_Cursor(classes.GuiObject_cursor_for_pointer(&environment.classes, hit))
+		}
 	}
 
 

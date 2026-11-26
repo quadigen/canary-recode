@@ -3,9 +3,11 @@ title: NoCollisionConstraint
 description: Disable collisions between two specific parts.
 ---
 
-Disable collisions between two specific parts.
+Use `NoCollisionConstraint` when two parts should pass through each other while still colliding with the rest of the world.
 
 ## Getting started
+
+This example assumes `partA` and `partB` are existing parts in Workspace.
 
 ```lua
 local constraint = Instance.new("NoCollisionConstraint", partA)
@@ -16,8 +18,13 @@ constraint.Enabled = true
 
 ## Properties
 
-Part0 and Part1 reference the two parts. Enabled toggles the exclusion; Active indicates whether it is applied to two simulated bodies.
+| Property | Type | Access | Default | Description |
+| --- | --- | --- | --- | --- |
+| `Part0` | `Part?` | Read/write | `nil` | First part to exclude from the pair. |
+| `Part1` | `Part?` | Read/write | `nil` | Second part to exclude from the pair. |
+| `Enabled` | `boolean` | Read/write | `true` | Enables the collision exclusion. |
+| `Active` | `boolean` | Read-only | `false` | Whether the exclusion is currently applied to two simulated bodies. |
 
 ## Notes
 
-The exclusion affects Jolt rigid-body contacts, not raycasts or character-controller queries.
+The exclusion affects physical contacts between the two bodies, not raycasts or character-controller queries.

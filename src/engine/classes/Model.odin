@@ -213,7 +213,7 @@ Model_Scale_To :: proc(model: ^Model, scale: f32) -> bool {
 	defer delete(changed)
 	model_scale_children(&model.object, {pivot.x, pivot.y, pivot.z}, ratio, &changed)
 	Hierarchy_Touched()
-	Render_3D_Mark_Dirty()
+	Render_3D_Mark_Object_Dirty(&model.object)
 	for child in changed {
 		if child.destroyed {continue}
 		if Is_A_Class(child, &Part_Class) {

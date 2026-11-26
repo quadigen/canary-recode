@@ -1,4 +1,3 @@
--- Run in an empty place to build the slate and ochre terrain preview.
 local terrain = game:GetService("Terrain")
 local lighting = game:GetService("Lighting")
 local camera = workspace.CurrentCamera
@@ -52,12 +51,27 @@ local function addCrystal(x, z, halfSize, rise, pitch, yaw, roll, isBox)
 	local _, _, _, xx, xy, xz, yx, yy, yz, zx, zy, zz = angles:GetComponents()
 	local hx, hy, hz = halfSize.X, halfSize.Y, halfSize.Z
 	table.insert(crystals, {
-		x = x, y = bedHeight(x, z) + rise, z = z, isBox = isBox,
-		hx = hx, hy = hy, hz = hz,
-		invX = 1 / hx, invY = 1 / hy, invZ = 1 / hz,
+		x = x,
+		y = bedHeight(x, z) + rise,
+		z = z,
+		isBox = isBox,
+		hx = hx,
+		hy = hy,
+		hz = hz,
+		invX = 1 / hx,
+		invY = 1 / hy,
+		invZ = 1 / hz,
 		planeScale = 1 / math.sqrt(hx ^ -2 + hy ^ -2 + hz ^ -2),
 		reach = if isBox then halfSize.Magnitude else math.max(hx, hy, hz),
-		xx = xx, xy = xy, xz = xz, yx = yx, yy = yy, yz = yz, zx = zx, zy = zy, zz = zz,
+		xx = xx,
+		xy = xy,
+		xz = xz,
+		yx = yx,
+		yy = yy,
+		yz = yz,
+		zx = zx,
+		zy = zy,
+		zz = zz,
 	})
 end
 
@@ -96,10 +110,18 @@ for row = -4, 4 do
 				end
 			end
 			if room then
-				local halfSize = Vector3.new(size, size * random:NextNumber(0.78, 1.2), size * random:NextNumber(0.83, 1.13))
-				addCrystal(x, z, halfSize, size * random:NextNumber(0.14, 0.46),
-					random:NextNumber(-0.34, 0.35), random:NextNumber(0, 2 * math.pi),
-					random:NextNumber(-0.41, 0.41), false)
+				local halfSize =
+					Vector3.new(size, size * random:NextNumber(0.78, 1.2), size * random:NextNumber(0.83, 1.13))
+				addCrystal(
+					x,
+					z,
+					halfSize,
+					size * random:NextNumber(0.14, 0.46),
+					random:NextNumber(-0.34, 0.35),
+					random:NextNumber(0, 2 * math.pi),
+					random:NextNumber(-0.41, 0.41),
+					false
+				)
 			end
 		end
 	end
@@ -165,7 +187,12 @@ for ix = 1, countX do
 	end
 end
 
-terrain:WriteVoxels(Region3.new(
-	Vector3.new(minX * voxel, minY * voxel, minZ * voxel),
-	Vector3.new(maxX * voxel, maxY * voxel, maxZ * voxel)
-), voxel, materials, occupancies)
+terrain:WriteVoxels(
+	Region3.new(
+		Vector3.new(minX * voxel, minY * voxel, minZ * voxel),
+		Vector3.new(maxX * voxel, maxY * voxel, maxZ * voxel)
+	),
+	voxel,
+	materials,
+	occupancies
+)

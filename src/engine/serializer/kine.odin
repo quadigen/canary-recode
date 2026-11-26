@@ -18,8 +18,6 @@ import "core:strings"
 KINE_MAGIC :: "KINE"
 
 
-// Version 11 interns repeated instance metadata (class/property/attribute names).
-// Version 10 files remain readable, and asset/value/terrain records are unchanged.
 KINE_VERSION :: 11
 KINE_SYMBOL_VERSION :: 11
 KINE_TERRAIN_RAYMARCH_VERSION :: 10
@@ -46,10 +44,10 @@ KINE_LEGACY_VERSION :: 2
 KINE_MAX_FONT_BYTES :: 32 * 1024 * 1024
 
 KINE_MAX_STRING_LENGTH :: 64 * 1024 * 1024
-// Untrusted files cannot force an unbounded symbol dictionary allocation.
+
 KINE_MAX_SYMBOL_COUNT :: 1 << 20
-// Bounded separately from the embedded asset budget; large worlds must not
-// become unloadable just because their instance tree exceeds 64 MiB.
+
+
 KINE_MAX_TREE_BYTES :: 512 * 1024 * 1024
 KINE_MAX_STREAM_BYTES :: assetstore.MAX_ASSET_TOTAL_BYTES + KINE_MAX_TREE_BYTES
 
@@ -60,6 +58,7 @@ READ_ONLY_PROPERTIES := [?]string {
 	"AbsolutePosition",
 	"AbsoluteSize",
 	"TextBounds",
+	"ContentText",
 	"AbsoluteContentSize",
 	"AbsoluteCanvasSize",
 	"AbsoluteWindowSize",
@@ -180,7 +179,6 @@ Writer :: struct {
 	used_ids:           [dynamic]string,
 	used_seen:          map[string]bool,
 	class_properties:   map[^classes.Class_Info][dynamic]string,
-	// Only metadata is interned. Script sources and asset contents remain raw.
 	symbol_indices:     map[string]u32,
 	symbols:            [dynamic]string,
 	embed_assets:       bool,
@@ -292,9 +290,7 @@ write_string :: proc(w: ^Writer, value: string) {
 	append(&w.data, ..transmute([]u8)value)
 }
 
-// Version 11 metadata symbols are self-describing: an even varuint is a
-// literal byte length followed by those bytes; an odd varuint references an
-// earlier symbol index. This avoids a separate prepass over the instance tree.
+
 write_symbol :: proc(w: ^Writer, value: string) {
 	if w.version < KINE_SYMBOL_VERSION {
 		write_string(w, value)
@@ -305,8 +301,8 @@ write_symbol :: proc(w: ^Writer, value: string) {
 		return
 	}
 	if len(w.symbols) >= KINE_MAX_SYMBOL_COUNT {
-		// Explicit escape for additional unique names: store them without
-		// growing the dictionary or creating unreadable future references.
+
+
 		write_var_u32(w, max(u32))
 		write_string(w, value)
 		return
@@ -318,9 +314,7 @@ write_symbol :: proc(w: ^Writer, value: string) {
 	append(&w.symbols, owned)
 }
 
-// A property or child can be skipped after writing its key. Removing the
-// corresponding symbols is essential; otherwise later records could reference
-// a symbol whose first definition was discarded.
+
 rollback_symbols :: proc(w: ^Writer, data_offset, symbol_count: int) {
 	resize(&w.data, data_offset)
 	for len(w.symbols) > symbol_count {
@@ -485,8 +479,7 @@ read_string :: proc(r: ^Reader) -> (string, bool) {
 	return strings.clone(string(bytes)), true
 }
 
-// Metadata symbols are resolved independently of value strings and the asset
-// table, which retain the original encoding for compatibility.
+
 read_symbol :: proc(r: ^Reader) -> (string, bool) {
 	if r.version < KINE_SYMBOL_VERSION {return read_string(r)}
 	start := r.pos
@@ -498,20 +491,35 @@ read_symbol :: proc(r: ^Reader) -> (string, bool) {
 	if code & 1 != 0 {
 		index := int(code >> 1)
 		if index >= len(r.symbols) {
-			return "", reader_fail_at(r, .Malformed_Record, start,
+			return "", reader_fail_at(
+				r,
+				.Malformed_Record,
+				start,
 				"metadata symbol index %d is undefined (only %d symbols precede it)",
-				index, len(r.symbols))
+				index,
+				len(r.symbols),
+			)
 		}
 		return strings.clone(r.symbols[index]), true
 	}
 	length := int(code >> 1)
 	if length > KINE_MAX_STRING_LENGTH {
-		return "", reader_fail_at(r, .Malformed_Record, start,
-			"metadata symbol exceeds the %d byte string limit", KINE_MAX_STRING_LENGTH)
+		return "", reader_fail_at(
+			r,
+			.Malformed_Record,
+			start,
+			"metadata symbol exceeds the %d byte string limit",
+			KINE_MAX_STRING_LENGTH,
+		)
 	}
 	if len(r.symbols) >= KINE_MAX_SYMBOL_COUNT {
-		return "", reader_fail_at(r, .Malformed_Record, start,
-			"metadata symbol dictionary exceeds %d entries", KINE_MAX_SYMBOL_COUNT)
+		return "", reader_fail_at(
+			r,
+			.Malformed_Record,
+			start,
+			"metadata symbol dictionary exceeds %d entries",
+			KINE_MAX_SYMBOL_COUNT,
+		)
 	}
 	bytes, valid := read_bytes(r, length)
 	if !valid {return "", false}
@@ -1990,6 +1998,33 @@ write_instance :: proc(
 			continue
 		}
 
+
+		if object.class == &classes.CharacterAnimator_Class &&
+		   (property == "Status" ||
+				   property == "State" ||
+				   property == "HorizontalSpeed") {continue}
+		if object.class == &classes.CharacterPhysicsSolver_Class {
+			switch property {
+			case "RigMesh",
+			     "Status",
+			     "IsReady",
+			     "IsGrounded",
+			     "GroundNormal",
+			     "HorizontalSpeed",
+			     "SolveCount",
+			     "LeftFootTarget",
+			     "RightFootTarget",
+			     "LeftHandTarget",
+			     "RightHandTarget",
+			     "HandContactCount",
+			     "CenterOfMass",
+			     "SupportCenter",
+			     "HasSupport",
+			     "ImpactCompression":
+				continue
+			}
+		}
+
 		if classes.Is_A_Class(object, &classes.Sprite2D_Class) &&
 		   property == "ImageContent" {continue}
 		if object.class.name == "Workspace2D" &&
@@ -2012,7 +2047,7 @@ write_instance :: proc(
 		   (property == "CurrentCamera" || property == "FinishedReplicating") {
 			continue
 		}
-		if object.class == &classes.Attachment_Class && property == "CFrame" {
+		if classes.Is_A_Class(object, &classes.Attachment_Class) && property == "CFrame" {
 
 			continue
 		}
@@ -2986,9 +3021,14 @@ Serialize :: proc(
 	Error,
 ) {
 	if format_version < KINE_LEGACY_VERSION || format_version > KINE_VERSION {
-		return nil, Error_Make(.Unsupported_Version, -1,
+		return nil, Error_Make(
+			.Unsupported_Version,
+			-1,
 			"cannot save KINE version %d (supported versions %d through %d)",
-			format_version, KINE_LEGACY_VERSION, KINE_VERSION)
+			format_version,
+			KINE_LEGACY_VERSION,
+			KINE_VERSION,
+		)
 	}
 	return serialize(
 		registry,
@@ -3112,8 +3152,7 @@ serialize :: proc(
 		patch_u32(&tree, patch.offset, tree.instance_indices[patch.target])
 	}
 
-	// The asset table and tree are built separately. Do not allocate a second
-	// tree-sized buffer merely to prepend the header and asset table.
+
 	writer := Writer {
 		data    = make([dynamic]u8, 0, 1024),
 		version = version,
@@ -3145,9 +3184,7 @@ serialize :: proc(
 		}
 	}
 
-	// Terrain is the last section. Encoding it in a small separate buffer
-	// lets us allocate the final file exactly once and avoid a redundant
-	// full-file clone (important for hundreds of MiB of scene data).
+
 	terrain_writer := Writer {
 		data    = make([dynamic]u8, 0, 256),
 		version = version,
@@ -3156,15 +3193,23 @@ serialize :: proc(
 	if version >= KINE_TERRAIN_VERSION {
 		tracy.ZoneNC("KINE Encode Terrain Table", 0xD19A66)
 		if !write_terrain_table(&terrain_writer, terrain) {
-			return nil, writer_error(&terrain_writer, .Internal, "could not write the terrain table")
+			return nil, writer_error(
+				&terrain_writer,
+				.Internal,
+				"could not write the terrain table",
+			)
 		}
 	}
 
 	total_size := len(writer.data) + len(tree.data) + len(terrain_writer.data)
 	if total_size > KINE_MAX_STREAM_BYTES {
-		return nil, Error_Make(.Stream_Too_Large, 0,
+		return nil, Error_Make(
+			.Stream_Too_Large,
+			0,
 			"serialized KINE is %d bytes, over the %d byte limit",
-			total_size, KINE_MAX_STREAM_BYTES)
+			total_size,
+			KINE_MAX_STREAM_BYTES,
+		)
 	}
 	result := make([]u8, total_size)
 	asset_end := len(writer.data)
@@ -3259,9 +3304,13 @@ Deserialize :: proc(
 		return nil, Error_Make(.Invalid_Argument, -1, "the stream is nil")
 	}
 	if len(data) > KINE_MAX_STREAM_BYTES {
-		return nil, Error_Make(.Stream_Too_Large, 0,
+		return nil, Error_Make(
+			.Stream_Too_Large,
+			0,
 			"the KINE stream is %d bytes, over the %d byte limit",
-			len(data), KINE_MAX_STREAM_BYTES)
+			len(data),
+			KINE_MAX_STREAM_BYTES,
+		)
 	}
 
 	base := vm.StackTop(L)

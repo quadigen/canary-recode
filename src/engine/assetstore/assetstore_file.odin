@@ -14,18 +14,31 @@ Read_Asset_File :: proc(authored: string) -> ([]u8, bool) {
 	path := strip_file_scheme(authored)
 	defer delete(path)
 
-	status, stat_err := os.stat(path, context.allocator)
+
+	file, open_err := os.open(path)
+	if open_err != nil {return nil, false}
+	defer os.close(file)
+	status, stat_err := os.fstat(file, context.allocator)
 	if stat_err != nil {return nil, false}
 	defer os.file_info_delete(status, context.allocator)
 	if status.type != .Regular || status.size < 0 || status.size > i64(MAX_ASSET_BYTES) {
 		return nil, false
 	}
 
-	data, read_err := os.read_entire_file(path, context.allocator)
-	if read_err != nil {
-		return nil, false
+	data := make([]u8, int(status.size))
+	read := 0
+	for read < len(data) {
+		n, read_err := os.read(file, data[read:])
+		if read_err != nil || n <= 0 {
+			delete(data)
+			return nil, false
+		}
+		read += n
 	}
-	if len(data) > MAX_ASSET_BYTES {
+
+	probe: [1]u8
+	n, read_err := os.read(file, probe[:])
+	if n != 0 || (read_err != nil && read_err != .EOF) {
 		delete(data)
 		return nil, false
 	}
@@ -41,7 +54,10 @@ resolve_project_path :: proc(uri: string) -> string {
 		joined, join_err := filepath.join({current, piece}, context.temp_allocator)
 		if join_err != nil {return ""}
 		info, stat_err := os.lstat(joined, context.temp_allocator)
-		if stat_err != nil || info.type == .Symlink {return ""}
+		if stat_err != nil {return ""}
+		link := info.type == .Symlink
+		os.file_info_delete(info, context.temp_allocator)
+		if link {return ""}
 		current = joined
 	}
 	return strings.clone(current)
@@ -53,7 +69,7 @@ Materialize :: proc(id: string) -> (string, bool) {
 		return "", false
 	}
 	if len(entry.cached) > 0 {
-		if os.exists(entry.cached) {
+		if cached_file_matches(entry.cached, entry.bytes) {
 			return strings.clone(entry.cached), true
 		}
 		delete(entry.cached)
@@ -86,12 +102,78 @@ Materialize :: proc(id: string) -> (string, bool) {
 		return "", false
 	}
 
-	if !os.exists(path) && os.write_entire_file(path, entry.bytes) != nil {
-		return "", false
+	if !cached_file_matches(path, entry.bytes) {
+		if !write_cache_atomically(directory, path, entry.bytes) {
+			return "", false
+		}
 	}
 
 	entry.cached = strings.clone(path)
 	return strings.clone(path), true
+}
+
+
+cached_file_matches :: proc(path: string, expected: []u8) -> bool {
+	info, stat_err := os.lstat(path, context.temp_allocator)
+	if stat_err != nil {return false}
+	defer os.file_info_delete(info, context.temp_allocator)
+	if info.type != .Regular || info.size != i64(len(expected)) {return false}
+
+	file, open_err := os.open(path)
+	if open_err != nil {return false}
+	defer os.close(file)
+	opened, opened_err := os.fstat(file, context.temp_allocator)
+	if opened_err != nil {return false}
+	defer os.file_info_delete(opened, context.temp_allocator)
+	if opened.type != .Regular || opened.size != i64(len(expected)) {return false}
+
+	if info.inode != 0 &&
+	   opened.inode != 0 &&
+	   (info.inode != opened.inode || info.device != opened.device) {return false}
+
+	buffer: [64 * 1024]u8
+	offset := 0
+	for offset < len(expected) {
+		chunk := min(len(buffer), len(expected) - offset)
+		n, read_err := os.read(file, buffer[:chunk])
+		if read_err != nil || n <= 0 || !bytes_equal(buffer[:n], expected[offset:offset + n]) {
+			return false
+		}
+		offset += n
+	}
+
+	probe: [1]u8
+	n, read_err := os.read(file, probe[:])
+	return n == 0 && (read_err == nil || read_err == .EOF)
+}
+
+
+write_cache_atomically :: proc(directory, destination: string, data: []u8) -> bool {
+	file, create_err := os.create_temp_file(directory, "asset-*.tmp")
+	if create_err != nil {return false}
+	temporary := strings.clone(os.name(file))
+	defer delete(temporary)
+	defer os.remove(temporary)
+	_ = os.fchmod(file, os.perm(0o600))
+
+	written := 0
+	for written < len(data) {
+		n, write_err := os.write(file, data[written:])
+		if write_err != nil || n <= 0 {
+			os.close(file)
+			return false
+		}
+		written += n
+	}
+	if os.close(file) != nil {return false}
+	if os.rename(temporary, destination) != nil {
+
+
+		if os.remove(destination) != nil || os.rename(temporary, destination) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 Purge_Cache :: proc() -> bool {
@@ -124,7 +206,10 @@ make_directories :: proc(path: string) -> bool {
 		return false
 	}
 	if os.exists(path) {
-		return true
+		info, stat_err := os.lstat(path, context.temp_allocator)
+		if stat_err != nil {return false}
+		defer os.file_info_delete(info, context.temp_allocator)
+		return info.type == .Directory
 	}
 	parent := filepath.dir(path)
 	if parent != path && parent != "" && !make_directories(parent) {
@@ -133,5 +218,8 @@ make_directories :: proc(path: string) -> bool {
 	if os.make_directory(path) == nil {
 		return true
 	}
-	return os.exists(path)
+	info, stat_err := os.lstat(path, context.temp_allocator)
+	if stat_err != nil {return false}
+	defer os.file_info_delete(info, context.temp_allocator)
+	return info.type == .Directory
 }

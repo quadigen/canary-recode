@@ -43,7 +43,7 @@ The fog stops marching at visible depth-writing geometry or MaxDistance, whichev
 
 Increase StepCount if long rays produce visible sampling artifacts; reduce it for performance. The effect uses a full-resolution screen pass and a depth capture. Keep ordinary FogEffect and SunRaysEffect disabled when you don't want their fog to combine with this one.
 
-Only the last instance of this class in Lighting is used. The effect is disabled in fast viewport mode. Native Filament is the supported renderer; web and raytracing behavior are not verified.
+Only the last instance of this class in Lighting is used. The effect is disabled in fast viewport mode. The effect is supported in the desktop rasterized 3D view. Web and raytraced rendering aren't verified.
 
 ## See also
 

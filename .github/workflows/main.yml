@@ -149,7 +149,9 @@ jobs:
             glslc \
             llvm \
             libegl1-mesa-dev \
-            libenet-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            libssl-dev \
             libfontconfig1-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev \
@@ -178,7 +180,7 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install cmake enet ninja llvm openssl@3
+        run: brew install cmake ninja llvm openssl@3 protobuf
       - name: Restore Filament SDK (macOS Intel)
         if: runner.os == 'macOS' && runner.arch == 'X64' && steps.native-cache.outputs.cache-hit != 'true'
         id: filament-intel
@@ -248,6 +250,26 @@ jobs:
           key: sccache-desktop-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.dependency-hash.outputs.native }}-${{ steps.skia.outputs.cache-key }}
           restore-keys: |
             sccache-desktop-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Prepare standalone SteamNetworkingSockets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) { $vcpkgRoot = 'C:/vcpkg' }
+          $vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
+          if (!(Test-Path -LiteralPath $vcpkg)) {
+            throw "vcpkg executable not found at $vcpkg"
+          }
+          $installed = Join-Path $PWD 'build/vcpkg-gns-installed'
+          & $vcpkg install 'gamenetworkingsockets[core,openssl]:x64-windows' "--x-install-root=$installed"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force 'vendor/build/lib' | Out-Null
+          $gnsImport = Join-Path $installed 'x64-windows/lib/GameNetworkingSockets.lib'
+          if (!(Test-Path -LiteralPath $gnsImport)) { throw "Missing GameNetworkingSockets.lib" }
+          Copy-Item -LiteralPath $gnsImport -Destination 'vendor/build/lib/GameNetworkingSockets.lib'
+          "KINE_GNS_VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+          "KINE_GNS_INSTALLED=$installed" >> $env:GITHUB_ENV
+
       - name: Configure and build native dependencies (Windows)
         if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -257,7 +279,7 @@ jobs:
           if (!$vs) { throw "Visual Studio C++ toolchain was not found" }
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -DKINE_MSVC_DISABLE_COMPILER_CACHE=ON -C '${{ steps.skia.outputs.cmake }}'
+          cmake -S . -B vendor/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPORTABLE=ON -DKINE_MSVC_DISABLE_COMPILER_CACHE=ON "-DCMAKE_TOOLCHAIN_FILE=$env:KINE_GNS_VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" "-DVCPKG_INSTALLED_DIR=$env:KINE_GNS_INSTALLED" -C '${{ steps.skia.outputs.cmake }}'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/check_msvc_debug_information.py vendor/build/compile_commands.json --no-compiler-cache
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -430,13 +452,10 @@ jobs:
             ${{ steps.odin-vendor-paths.outputs.root }}/vendor/stb/lib
             ${{ steps.odin-vendor-paths.outputs.root }}/vendor/box2d/lib
           key: ${{ steps.odin-vendor-cache.outputs.cache-primary-key }}
-      - name: Stage static ENet and OpenSSL libraries (macOS)
+      - name: Stage static OpenSSL libraries (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          enet_archive="$(brew --prefix enet)/lib/libenet.a"
-          test -s "$enet_archive"
-          cp "$enet_archive" vendor/build/lib/libenet.a
           openssl_lib="$(brew --prefix openssl@3)/lib"
           # odin-http links -lssl.3 and -lcrypto.3 on macOS.
           for library in ssl crypto; do
@@ -476,6 +495,8 @@ jobs:
             throw "SDL3.dll was not found next to the Odin SDK: $sdl3Dll"
           }
           Copy-Item -LiteralPath $sdl3Dll -Destination "dist/${{ matrix.folder }}/SDL3.dll"
+          # Ship GameNetworkingSockets and all of its vcpkg runtime dependencies.
+          Copy-Item -Path (Join-Path $env:KINE_GNS_INSTALLED 'x64-windows/bin/*.dll') -Destination "dist/${{ matrix.folder }}/" -Force
           $flavor_ext = "${{ matrix.template_ext }}"
           foreach ($flavor in @('server', 'client')) {
             & odin build src `
@@ -514,7 +535,7 @@ jobs:
             -define:RUNTIME_GIT_COMMIT=$env:GITHUB_SHA `
             -define:RUNTIME_GIT_BRANCH=$env:GITHUB_REF_NAME
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item -LiteralPath "dist/${{ matrix.folder }}/SDL3.dll" -Destination "dist-debug/${{ matrix.folder }}/SDL3.dll"
+          Copy-Item -Path "dist/${{ matrix.folder }}/*.dll" -Destination "dist-debug/${{ matrix.folder }}/" -Force
           Get-ChildItem -LiteralPath "dist-debug/${{ matrix.folder }}"
       - name: Build Kinemium (Linux)
         if: runner.os == 'Linux'
@@ -536,7 +557,8 @@ jobs:
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL $webview_link_flags"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* "dist/${{ matrix.folder }}/"
-          for soname in libenet.so.7 libvulkan.so.1 libc++.so.1 libc++abi.so.1 libunwind.so.1; do
+          cp -a vendor/build/lib/libGameNetworkingSockets.so* "dist/${{ matrix.folder }}/"
+          for soname in libvulkan.so.1 libc++.so.1 libc++abi.so.1 libunwind.so.1; do
             source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
             test -n "$source_path" && test -f "$source_path" || {
               echo "Missing Linux runtime library: $soname" >&2
@@ -603,6 +625,7 @@ jobs:
             -define:RUNTIME_GIT_BRANCH="$GITHUB_REF_NAME" \
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -L${VULKAN_SDK}/lib -Wl,-rpath,@loader_path"
           cp -a vendor/build/_deps/sdl3-build/libSDL3*.dylib "dist/${{ matrix.folder }}/"
+          cp -a vendor/build/lib/libGameNetworkingSockets*.dylib "dist/${{ matrix.folder }}/"
           cp -a "${VULKAN_SDK}"/lib/libvulkan*.dylib "dist/${{ matrix.folder }}/"
           ext="${{ matrix.template_ext }}"
           for flavor in server client; do
@@ -1042,11 +1065,11 @@ jobs:
             mkdir -p "$stage/kinemium"
             cp "$src/$exe" "$stage/kinemium/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "$stage/kinemium/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+              windows) cp "$src"/*.dll "$stage/kinemium/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
                        "$stage/kinemium/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium/$exe"; fi
             (cd "$stage/kinemium" && zip -r "../../archives/kinemium-${os}-${arch}.zip" .)
@@ -1054,11 +1077,11 @@ jobs:
             mkdir -p "$stage/kinemium-server"
             cp "$src/$server" "$stage/kinemium-server/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "$stage/kinemium-server/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+              windows) cp "$src"/*.dll "$stage/kinemium-server/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
                        "$stage/kinemium-server/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-server/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-server/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-server/$server"; fi
             (cd "$stage/kinemium-server" && zip -r "../../archives/kinemium-server-${os}-${arch}${ext}.zip" .)
@@ -1066,11 +1089,11 @@ jobs:
             mkdir -p "$stage/kinemium-client"
             cp "$src/$client" "$stage/kinemium-client/"
             case "$os" in
-              windows) cp "$src/SDL3.dll" "$stage/kinemium-client/" ;;
-              linux) cp "$src"/libSDL3.so* "$src"/libenet.so* "$src"/libvulkan.so* \
+              windows) cp "$src"/*.dll "$stage/kinemium-client/" ;;
+              linux) cp "$src"/libSDL3.so* "$src"/libGameNetworkingSockets.so* "$src"/libvulkan.so* \
                        "$src"/libc++.so.1 "$src"/libc++abi.so.1 "$src"/libunwind.so.1 \
                        "$stage/kinemium-client/" ;;
-              macos) cp "$src"/libSDL3*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-client/" ;;
+              macos) cp "$src"/libSDL3*.dylib "$src"/libGameNetworkingSockets*.dylib "$src"/libvulkan*.dylib "$stage/kinemium-client/" ;;
             esac
             if [[ "$os" != "windows" ]]; then chmod +x "$stage/kinemium-client/$client"; fi
             (cd "$stage/kinemium-client" && zip -r "../../archives/kinemium-client-${os}-${arch}${ext}.zip" .)

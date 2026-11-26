@@ -8,6 +8,7 @@ import gui "../gui"
 import signals "../signals"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 THEME_BASE_COLOR := Studio_Theme_Color{15, 15, 15, 255}
 THEME_BACKGROUND_COLOR := Studio_Theme_Color{35, 35, 35, 255}
@@ -1186,6 +1187,9 @@ studio_theme_service_get :: proc(
 	     "LoadThemeJson",
 	     "DockWindow",
 	     "GetWindowDock",
+	     "ResizeDockWindow",
+	     "GetDockResizeState",
+	     "SetDockResizeState",
 	     "UndockWindow",
 	     "SetDockWindowVisible",
 	     "ResetDocking":
@@ -1389,6 +1393,93 @@ studio_theme_service_namecall :: proc(
 
 		return 0, true
 
+	case "ResizeDockWindow":
+		name := vm.ArgString(L, 2)
+		panel, ok := studio_theme_dock_target(name)
+		if !ok {panel, ok = gui.dock_find_named(&service.dock, name)}
+		if !ok {vm.PushBoolean(L, false); return 1, true}
+
+		values: [4]f32
+		for &value, i in values {
+			v := vm.ArgNumber(L, i + 3)
+			if math.is_nan(v) || abs(v) > 1000000 {vm.PushBoolean(L, false); return 1, true}
+			value = f32(v)
+		}
+		edges := int(clamp(vm.ArgOptionalNumber(L, 7), 0, 15))
+		config := gui.Editor_Layout_Default_Config()
+		config.P = f32(service.padding)
+		config.TopH = f32(service.header_height)
+
+		changed := gui.dock_resize_panel(
+			&service.dock,
+			&config,
+			panel,
+			service.layout_width,
+			service.layout_height,
+			values[0],
+			values[1],
+			values[2],
+			values[3],
+			edges,
+		)
+		if changed {
+			studio_theme_ensure_initialized(L, service, datatype_registry)
+			vm.PushRegistryReference(L, service.selected_theme_ref)
+			studio_theme_set_coordinates(L, service, datatype_registry)
+			vm.Pop(L)
+		}
+		vm.PushBoolean(L, changed)
+		return 1, true
+
+	case "GetDockResizeState":
+		vm.NewTable(L, 0, 12)
+		for col in gui.Dock_Column {
+			vm.PushNumber(L, f64(service.dock.column_weight[col]))
+			vm.SetField(L, -2, fmt.tprintf("column.%v", col))
+		}
+		for row in gui.Dock_Row {
+			vm.PushNumber(L, f64(service.dock.band_size[row]))
+			vm.SetField(L, -2, fmt.tprintf("band.%v", row))
+		}
+		for panel in gui.Dock_Panel {
+			name := gui.dock_panel_id(&service.dock, panel)
+			if name == "" {continue}
+			vm.PushNumber(L, f64(service.dock.slots[panel].weight))
+			vm.SetField(L, -2, fmt.tprintf("window.%s", name))
+		}
+		return 1, true
+
+	case "SetDockResizeState":
+		if vm.TypeOf(L, 2) != .Table {return 0, true}
+		for col in gui.Dock_Column {
+			if vm.GetField(L, 2, fmt.tprintf("column.%v", col)) == .Number {
+				value := vm.ArgNumber(L, -1)
+				if value > 0 && value <= 100 {service.dock.column_weight[col] = f32(value)}
+			}
+			vm.Pop(L)
+		}
+		for row in gui.Dock_Row {
+			if vm.GetField(L, 2, fmt.tprintf("band.%v", row)) == .Number {
+				value := vm.ArgNumber(L, -1)
+				if value >= 0 && value <= 1 {service.dock.band_size[row] = f32(value)}
+			}
+			vm.Pop(L)
+		}
+		for panel in gui.Dock_Panel {
+			name := gui.dock_panel_id(&service.dock, panel)
+			if name == "" {continue}
+			if vm.GetField(L, 2, fmt.tprintf("window.%s", name)) == .Number {
+				value := vm.ArgNumber(L, -1)
+				if value > 0 && value <= 100 {service.dock.slots[panel].weight = f32(value)}
+			}
+			vm.Pop(L)
+		}
+		studio_theme_ensure_initialized(L, service, datatype_registry)
+		vm.PushRegistryReference(L, service.selected_theme_ref)
+		studio_theme_set_coordinates(L, service, datatype_registry)
+		vm.Pop(L)
+		return 0, true
+
 	case "GetWindowDock":
 		name := vm.ArgString(L, 2)
 		panel, ok := studio_theme_dock_target(name)
@@ -1400,12 +1491,15 @@ studio_theme_service_namecall :: proc(
 		return 1, true
 
 	case "UndockWindow", "SetDockWindowVisible":
-		panel, ok := gui.dock_find_named(&service.dock, vm.ArgString(L, 2))
+		name := vm.ArgString(L, 2)
+		panel, ok := gui.dock_find_named(&service.dock, name)
+		if !ok && method == "SetDockWindowVisible" {panel, ok = studio_theme_dock_target(name)}
 		if !ok {return 0, true}
 		if method == "UndockWindow" {
 			gui.dock_remove_named(&service.dock, panel)
 		} else {
 			visible := vm.ArgBoolean(L, 3)
+			if panel == .Output {service.show_output = visible}
 			if service.dock.slots[panel].visible == visible {return 0, true}
 			gui.dock_set_visible(&service.dock, panel, visible)
 		}

@@ -436,3 +436,110 @@ clear_drops_every_entry :: proc(t: ^testing.T) {
 fmt_hint_message :: proc(path, want, got: string) -> string {
 	return fmt.tprintf("Format_Hint(%q) = %q, want %q", path, got, want)
 }
+
+@(test)
+path_file_registration_indexes_lookup :: proc(t: ^testing.T) {
+	hold_store()
+	defer release_store()
+	Clear()
+	defer Clear()
+
+	testing.expect(
+		t,
+		Register_As("0123456789abcdef", blob('p'), "nested/a.txt", .Path_File),
+		"path asset accepted",
+	)
+	file, found := Find_Path_File("file://nested/a.txt")
+	testing.expect(t, found && file.kind == .Path_File, "stream path asset is indexed")
+	testing.expect(
+		t,
+		Register_As("0123456789abcdef", blob('p'), "nested/a.txt", .Path_File),
+		"same path asset accepted twice",
+	)
+	id := Register(blob('q'), "nested/b.txt", .Path_File)
+	defer delete(id)
+	_, found2 := Find_Path_File("nested/b.txt")
+	testing.expect(t, found2, "local path asset is indexed")
+}
+
+@(test)
+materialize_rejects_poisoned_cache_and_symlink :: proc(t: ^testing.T) {
+	hold_store()
+	defer release_store()
+	Clear()
+	defer Clear()
+
+	id := Register(blob('s', 'a', 'f', 'e'), "security-test.png", .Texture)
+	defer delete(id)
+	path, ok := Materialize(id)
+	testing.expect(t, ok, "initial cache extraction succeeds")
+	if !ok {return}
+	defer delete(path)
+	defer os.remove(path)
+	_ = os.write_entire_file(path, []u8{'b', 'a', 'd', '!'})
+	repaired, repaired_ok := Materialize(id)
+	defer delete(repaired)
+	testing.expect(t, repaired_ok, "poisoned cache repaired")
+	if !repaired_ok {return}
+	data, err := os.read_entire_file(repaired, context.allocator)
+	defer delete(data)
+	testing.expect(
+		t,
+		err == nil && bytes_equal(data, []u8{'s', 'a', 'f', 'e'}),
+		"cached bytes still authentic",
+	)
+
+	when ODIN_OS != .Windows {
+		canary, tmp_err := os.create_temp_file(cache_directory(), "assetstore-canary-*.tmp")
+		testing.expect(t, tmp_err == nil, "create canary")
+		if tmp_err != nil {return}
+		canary_path := strings.clone(os.name(canary))
+		defer delete(canary_path)
+		defer os.remove(canary_path)
+		_ = os.close(canary)
+		_ = os.write_entire_file(canary_path, []u8{'n', 'o', 't', 'm', 'e'})
+		_ = os.remove(path)
+		link_err := os.symlink(canary_path, path)
+		testing.expect(t, link_err == nil, "cache symlink planted")
+		if link_err != nil {return}
+		link_repaired, link_ok := Materialize(id)
+		defer delete(link_repaired)
+		testing.expect(t, link_ok, "cache symlink repaired")
+		outside, outside_err := os.read_entire_file(canary_path, context.allocator)
+		defer delete(outside)
+		testing.expect(
+			t,
+			outside_err == nil && bytes_equal(outside, []u8{'n', 'o', 't', 'm', 'e'}),
+			"symlink target not overwritten",
+		)
+	}
+}
+
+@(test)
+project_asset_paths_reject_windows_normalized_traversal :: proc(t: ^testing.T) {
+	path, accepted := Project_Asset_Path("project://images/icon.png")
+	testing.expect(
+		t,
+		accepted && path == "images/icon.png",
+		"normal project-relative path accepted",
+	)
+	for hostile in ([]string{"project://../secret.png", "project://images/.. /secret.png", "project://images/.../secret.png", "project://images/abc./secret.png", "project://images/abc /secret.png", "project://images/./icon.png", "project://images//icon.png", "project://C:/secret.png", `project://images\..\secret.png`}) {
+		_, ok := Project_Asset_Path(hostile)
+		testing.expect(t, !ok, fmt.tprintf("unsafe project URI rejected: %q", hostile))
+	}
+}
+
+@(test)
+missing_asset_reports_own_keys_and_reset_map :: proc(t: ^testing.T) {
+	hold_store()
+	defer release_store()
+	Clear_Missing_Asset_Reports()
+	defer Clear_Missing_Asset_Reports()
+	for i in 0 ..< 3 {
+		uri := Make_Uri(fmt.tprintf("missing-id-%d", i))
+		Report_Missing_Asset(uri, "security test")
+		delete(uri)
+		Clear_Missing_Asset_Reports()
+		testing.expect(t, missing_reported == nil, "report map reset after freeing owned keys")
+	}
+}

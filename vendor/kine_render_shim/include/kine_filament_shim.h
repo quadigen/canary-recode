@@ -37,7 +37,7 @@ KINE_API void Kine_Filament_SetWaterParams(KineFilamentContext *ctx, const KineF
 KINE_API void Kine_Filament_SetWaterTime(KineFilamentContext *ctx, float time);
 KINE_API bool Kine_Filament_GetWaterParams(KineFilamentContext *ctx, KineFilamentWaterParams *out);
 
-/* Runtime Filamat surface materials. Source is a complete .mat material definition. */
+
 KINE_API KineFilamentShader *Kine_Filament_Shader_Create(KineFilamentContext *ctx, const char *materialSource);
 KINE_API KineFilamentShaderCompile *Kine_Filament_Shader_CompileStart(const char *source);
 KINE_API bool Kine_Filament_Shader_CompilePoll(KineFilamentContext *ctx, KineFilamentShaderCompile *job, KineFilamentShader **shader);
@@ -46,7 +46,7 @@ KINE_API KineFilamentShader *Kine_Filament_Shader_ResolveFade(KineFilamentShader
 KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader);
 KINE_API bool Kine_Filament_Shader_SetUniform(
 	KineFilamentShader *shader, const char *name, const float *values, int valueCount);
-/* Uploads an owned, repeating sampler2d. Color maps use sRGB; data maps use linear RGBA8. */
+
 KINE_API bool Kine_Filament_Shader_SetTextureFromPixels(
 	KineFilamentShader *shader, const char *name, int width, int height,
 	int rowBytes, const void *pixelsRGBA8, bool srgb);
@@ -54,18 +54,23 @@ KINE_API bool Kine_Filament_Shader_SetGeometryOptions(KineFilamentShader *shader
 KINE_API void Kine_Filament_Shader_TransferTextures(KineFilamentShader *source, KineFilamentShader *destination);
 KINE_API bool Kine_Filament_Shader_HasTexture(KineFilamentShader *shader, const char *name);
 KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext *ctx, KineFilamentShader *shader);
-/* Applies a surface-domain Filamat material as a fullscreen pass. The material
-   must declare a sampler2d parameter named inputTexture. */
+
+
 KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext *ctx, KineFilamentShader *shader);
 KINE_API const char *Kine_Filament_Shader_GetLastError(void);
+
+
+KINE_API bool Kine_Filament_Shader_DispatchTexture(KineFilamentShader *shader, const char *name,
+    const uint32_t *words, size_t bytes, uint32_t width, uint32_t height);
+
+KINE_API void Kine_Filament_ComputeTextureStats(uint64_t *out);
 
 #define KINE_FILAMENT_DRAW_CAST_SHADOWS (1u << 0)
 #define KINE_FILAMENT_DRAW_RECEIVE_SHADOWS (1u << 1)
 #define KINE_FILAMENT_DRAW_CULLING (1u << 2)
 #define KINE_FILAMENT_DRAW_WORLD_POSITION (1u << 3)
 
-/* Packed frame-submission item used by Kine_Filament_DrawMeshList.
-   Keep this layout in sync with filament/structs.luau. */
+
 typedef struct KineFilamentDrawItem {
 	KineFilamentMesh *mesh;
 	KineFilamentTex *tex;
@@ -79,9 +84,9 @@ typedef struct KineFilamentDrawItem {
 	float transmission;
 	int32_t materialKind;
 	uint32_t flags;
-	uint32_t reserved; // Optional opacity encoded as float bits for Water and ForceField. Zero uses the default.
+	uint32_t reserved;
 	KineFilamentShader *shader;
-	double worldPosition[3]; // valid only with KINE_FILAMENT_DRAW_WORLD_POSITION
+	double worldPosition[3];
 } KineFilamentDrawItem;
 
 typedef struct KineFilamentParticleItem {
@@ -102,20 +107,17 @@ typedef struct KineGLTextureInfo {
 } KineGLTextureInfo;
 
 typedef struct KineFilamentVulkanBackend {
-	void *instance;		  /* VkInstance */
-	void *physicalDevice; /* VkPhysicalDevice */
-	void *device;		  /* VkDevice */
-	void *queue;		  /* VkQueue */
+	void *instance;
+	void *physicalDevice;
+	void *device;
+	void *queue;
 	uint32_t graphicsQueueFamilyIndex;
-	uint32_t maxApiVersion;	   /* 0 = let Skia infer/default */
-	void *getInstanceProcAddr; /* PFN_vkGetInstanceProcAddr */
-	void *getDeviceProcAddr;   /* PFN_vkGetDeviceProcAddr */
+	uint32_t maxApiVersion;
+	void *getInstanceProcAddr;
+	void *getDeviceProcAddr;
 } KineFilamentVulkanBackend;
 
-// ---------------------------------------------------------------------------
-// Material kinds for Kine_Filament_DrawMeshEx's materialKind parameter.
-// Keep in sync with the KineMaterialKind enum in kine_filament_shim.cpp.
-// ---------------------------------------------------------------------------
+
 #define KINE_MAT_DEFAULT 0
 #define KINE_MAT_GLASS 1
 #define KINE_MAT_NEON 2
@@ -125,44 +127,32 @@ typedef struct KineFilamentVulkanBackend {
 #define KINE_MAT_PARTICLE 6
 #define KINE_MAT_TERRAIN 7
 
-// Highlight fill and outline. Each comes in a depth-tested and an
-// AlwaysOnTop variant because Filament bakes depthCulling into the material,
-// so DepthMode.AlwaysOnTop needs a separate material rather than a flag.
-// Order matters: kine_update_batches sorts by materialKind, and the outline
-// shell must be queued before the fill that covers its interior.
+
 #define KINE_MAT_HIGHLIGHT_OUTLINE 8
 #define KINE_MAT_HIGHLIGHT_FILL 9
 #define KINE_MAT_HIGHLIGHT_OUTLINE_TOP 10
 #define KINE_MAT_HIGHLIGHT_FILL_TOP 11
 
-// Selected geometry for the screen-space Highlight outline. Mask draws render
-// into a private offscreen target (flat per-instance color+alpha) instead of
-// the main scene; a fullscreen composite pass dilates that mask into the
-// visible outline ring, giving a constant pixel width on any topology.
-// param1 = maskValue (1.0 = selected), param2 = outline width in pixels,
-// color/alpha (w) ride along as per-instance data like other instanced kinds.
+
 #define KINE_MAT_OUTLINE_MASK 12
 #define KINE_MAT_FORCEFIELD 13
 #define KINE_MAT_FADE 14
 #define KINE_MAT_NEON_FADE 15
 
-// Which arm/handle of a gizmo is being interacted with.
+
 #define KINE_GIZMO_AXIS_NONE 0
 #define KINE_GIZMO_AXIS_X 1
 #define KINE_GIZMO_AXIS_Y 2
 #define KINE_GIZMO_AXIS_Z 3
 #define KINE_GIZMO_AXIS_CENTER 4
 
-// Plane handles. An axis arrow foreshortens into an unusable dot once the camera
-// looks down it, so the plane perpendicular to that axis takes over. Each one is
-// named for the two axes it drags, and is colored with the color of the axis it
-// replaces.
+
 #define KINE_GIZMO_AXIS_XY 5
 #define KINE_GIZMO_AXIS_YZ 6
 #define KINE_GIZMO_AXIS_XZ 7
 #define KINE_GIZMO_AXIS_COUNT 8
 
-// Gizmo type, matches the existing shape codes used by Kine_Filament_CreateMesh.
+
 #define KINE_GIZMO_MOVE 10
 #define KINE_GIZMO_ROTATE 11
 #define KINE_GIZMO_SCALE 12
@@ -180,19 +170,17 @@ KINE_API KineFilamentContext *Kine_Filament_CreateForVulkanCompositorWindow(
 	int width,
 	int height);
 KINE_API void *Kine_Filament_GetVulkanCompositor(KineFilamentContext *ctx);
+
+KINE_API float Kine_Filament_GetDisplayRefreshRate(KineFilamentContext *ctx);
+KINE_API float Kine_Filament_GetResolutionScale(KineFilamentContext *ctx);
+KINE_API void Kine_Filament_SetAdaptiveShadowResolution(KineFilamentContext *ctx, bool enabled);
+KINE_API uint32_t Kine_Filament_GetEffectiveShadowMapSize(KineFilamentContext *ctx);
+KINE_API void Kine_Filament_ReportFrameTiming(KineFilamentContext *ctx, float seconds, float presentSeconds);
 KINE_API unsigned int Kine_Filament_GetColorTextureId(KineFilamentContext *ctx);
 KINE_API bool Kine_Filament_GetVulkanBackend(KineFilamentContext *ctx, KineFilamentVulkanBackend *outBackend);
 KINE_API void Kine_Filament_Destroy(KineFilamentContext *ctx);
 
-// ---------------------------------------------------------------------------
-// Render mode: 1 = Filament (default), 2 = Ray path tracer.
-//
-// Ray is an optional feature that traces on the Vulkan device Filament already
-// owns (the same one Skia renders on), so it only exists in Vulkan builds.
-// Kine_Filament_NewRay creates it at the requested trace resolution; it does
-// not switch modes. Both calls are safe to repeat, and the path tracer can be
-// created lazily the first time the user actually asks for mode 2.
-// ---------------------------------------------------------------------------
+
 #define KINE_RENDER_MODE_FILAMENT 1
 #define KINE_RENDER_MODE_RAY 2
 
@@ -203,42 +191,38 @@ KINE_API int Kine_Filament_GetRenderMode(KineFilamentContext *ctx);
 KINE_API bool Kine_Filament_HasRay(KineFilamentContext *ctx);
 KINE_API const char *Kine_Filament_GetRayError(void);
 
-/* Path tracer settings. Every field is clamped when applied: out-of-range values
-   are pinned to the documented range instead of being rejected, and a change
-   restarts sample accumulation. Get fills in the defaults when called before
-   Set. */
+
 typedef struct KineRayProperties {
-	int maxTotalDepth;		/* total bounces ("steps"), 1..32, default 8 */
-	int maxDiffuseDepth;	 /* diffuse bounces, 0..32, default 4 */
-	int maxSpecularDepth;	 /* glossy bounces, 0..32, default 8 */
-	int maxRefractionDepth; /* transmission bounces, 0..32, default 8 */
-	int samplesPerFrame;	 /* traces per rendered frame, 1..64, default 1 */
-	int minSamples;		 /* adaptive-sampling floor, 0..4096, default 128 */
-	float varianceThreshold; /* early-out below this variance, 0 = never, default 0 */
-	float exposure;		 /* stops applied by Ray's tonemapper, default 0 */
-	float clampDirect;	 /* firefly clamp on direct light, 0 = off, default 0 */
-	float clampIndirect;	 /* firefly clamp on indirect light, 0 = off, default 0 */
+	int maxTotalDepth;
+	int maxDiffuseDepth;
+	int maxSpecularDepth;
+	int maxRefractionDepth;
+	int samplesPerFrame;
+	int minSamples;
+	float varianceThreshold;
+	float exposure;
+	float clampDirect;
+	float clampIndirect;
 } KineRayProperties;
 
-/* properties == NULL restores the defaults. Also accepted before NewRay, in
-   which case the values are kept for the renderer created afterwards. */
+
 KINE_API bool Kine_Ray_SetProperties(KineFilamentContext *ctx, const KineRayProperties *properties);
 KINE_API bool Kine_Ray_GetProperties(KineFilamentContext *ctx, KineRayProperties *outProperties);
 
-// deltaTime (seconds) drives ctx->time, used to animate the water material.
+
 KINE_API void Kine_Filament_RenderFrame(KineFilamentContext *ctx, float deltaTime);
-/* Optional OpenXR support. Pose output is position followed by row-major 3x3 rotation. */
+
 KINE_API void Kine_Filament_XR_Poll(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_XR_IdleFrame(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_XR_FinishFrame(KineFilamentContext *ctx);
 KINE_API bool Kine_Filament_XR_GetUIPointer(KineFilamentContext *ctx, int hand, float *u, float *v, float *trigger);
 typedef struct KineSkiaSurface KineSkiaSurface;
-/* Borrowed Skia surface; valid only until XR_FinishFrame. */
+
 KINE_API KineSkiaSurface *Kine_Filament_XR_BeginUI(KineFilamentContext *ctx, int width, int height, int *outWidth, int *outHeight);
 KINE_API bool Kine_Filament_XR_Active(KineFilamentContext *ctx);
 KINE_API bool Kine_Filament_XR_Available(KineFilamentContext *ctx);
 KINE_API bool Kine_Filament_XR_GetPose(KineFilamentContext *ctx, int index, float *out);
-/* hand: 0 left, 1 right. active_mask: trigger=1, grip=2, stick=4. */
+
 typedef struct KineXRControllerState {
     float trigger, grip, stick_x, stick_y;
     uint32_t active_mask;
@@ -246,7 +230,7 @@ typedef struct KineXRControllerState {
 KINE_API bool Kine_Filament_XR_GetControllerState(KineFilamentContext *ctx, int hand, KineXRControllerState *out);
 KINE_API bool Kine_Filament_XR_SetHaptic(KineFilamentContext *ctx, int hand, float amplitude, float seconds, float frequency);
 
-// Lightweight isolated previews. All handles share ctx's Engine and atlas pool.
+
 typedef struct KineFilamentViewport KineFilamentViewport;
 typedef struct KineViewportSettings {
     float camera[16];
@@ -277,7 +261,21 @@ KINE_API void Kine_Filament_Viewport_RenderFrameWithCpuWork(KineFilamentContext 
     float dt, bool renderWorld, KineFrameCpuWork work, void *user);
 typedef void (*KineFrameProfileCallback)(void *user, const char *phase, bool begin);
 KINE_API void Kine_Filament_SetFrameProfileCallback(KineFilamentContext *ctx, KineFrameProfileCallback callback, void *user);
-// Diagnostics for stress / resource-lifetime tests, not a script property.
+KINE_API bool Kine_Filament_GetLatestGpuFrameTime(KineFilamentContext *ctx, uint32_t *frameId, uint64_t *durationNs);
+typedef struct KineFilamentPassStats {
+    uint32_t world, clouds, waterDepth, sharedDepth, customDepth, screenEffects;
+    uint32_t customPost, outlineMask, outlineComposite, reflectionFaces;
+    uint32_t viewportScene, viewportClear, viewportCopy, viewportShadow, viewportPresent;
+} KineFilamentPassStats;
+KINE_API void Kine_Filament_GetPassStats(KineFilamentContext *ctx, KineFilamentPassStats *out);
+typedef struct KineFilamentBatchStats {
+    uint32_t activeBatches, activeChunks, retainedChunks, createdChunks, destroyedChunks;
+    uint32_t unchangedBatches, transformUploads, colorUploads, uvUploads, boundsUpdates;
+} KineFilamentBatchStats;
+KINE_API void Kine_Filament_GetBatchStats(KineFilamentContext *ctx, KineFilamentBatchStats *out);
+
+KINE_API uint64_t Kine_Filament_Viewport_PersistentReuses(KineFilamentContext *ctx);
+KINE_API uint64_t Kine_Filament_Viewport_ReusedRenders(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_Viewport_Stats(KineFilamentContext *ctx,
     uint32_t *handles, uint32_t *pages, uint64_t *renders);
 
@@ -363,14 +361,31 @@ KINE_API void Kine_Filament_SetSunShadowOptions(
 	float shadowFarHint,
 	bool stable,
 	bool contactShadows);
-// Sky cloud layer, driven by the Lighting.Clouds instance.
-//
-//   cover     : 0..1 sky coverage; higher leaves fewer gaps
-//   density   : 0..1 thickness; higher absorbs more light through the layer
-//   height    : world Y of the layer centre
-//   thickness : world Y extent of the layer
-// The layer follows the camera horizontally and is sized inside the far plane,
-// so setting these every frame is cheap and idempotent.
+
+KINE_API void Kine_Filament_SetShadowViewQuality(
+    KineFilamentContext *ctx,
+    float penumbraScale,
+    float penumbraRatioScale,
+    bool vsmHighPrecision,
+    float vsmBleedReduction);
+
+KINE_API void Kine_Filament_SetShadowExtraOptions(
+    KineFilamentContext *ctx,
+    float maxPenumbraRatio, float maxSearchRadius,
+    int vsmAnisotropy, bool vsmMipmapping, int vsmMSAASamples,
+    float sunAngularRadius, float sunHaloSize, float sunHaloFalloff);
+
+KINE_API void Kine_Filament_SetSunShadowOptionsAdvanced(
+    KineFilamentContext *ctx,
+    int mapSize, int cascades,
+    float shadowFar, float shadowNearHint, float shadowFarHint,
+    bool stable, bool lispsm, float cascadeLambda,
+    bool contactShadows, int contactSteps, float contactDistance,
+    float constantBias, float normalBias,
+    float polygonOffsetConstant, float polygonOffsetSlope,
+    float bulbRadius, float vsmBlur, bool vsmELVSM);
+
+
 typedef enum KineAdvancedEffect {
     KINE_EFFECT_REFLECTION_PROBE = 0,
     KINE_EFFECT_SSGI = 1,
@@ -386,8 +401,15 @@ typedef enum KineAdvancedEffect {
 } KineAdvancedEffect;
 KINE_API void Kine_Filament_SetAdvancedEffect(KineFilamentContext *ctx, int effect, bool enabled, const float *values, int count);
 KINE_API bool Kine_Filament_GetAdvancedEffect(KineFilamentContext *ctx, int effect, bool *enabled, float *values, int capacity);
+KINE_API bool Kine_Filament_GetDDGIStats(KineFilamentContext *ctx,
+        uint32_t *total, uint32_t *initialized, uint64_t *updated);
 KINE_API bool Kine_Filament_GetReflectionProbeRegion(KineFilamentContext *ctx, float *center, float *radius);
 KINE_API uint64_t Kine_Filament_GetReflectionProbeCaptureCount(KineFilamentContext *ctx);
+KINE_API void Kine_Filament_SetCloudResolutionScale(KineFilamentContext *ctx, float scale);
+KINE_API void Kine_Filament_SetCloudShadowOptions(
+        KineFilamentContext* ctx, bool castShadows, float intensity,
+        float scale, float speed, float softness, float maxDistance);
+KINE_API int Kine_Filament_GetCloudNoiseSource(KineFilamentContext *ctx);
 KINE_API void Kine_Filament_SetClouds(
 	KineFilamentContext *ctx,
 	bool enabled,
@@ -438,7 +460,7 @@ KINE_API KineFilamentTex *Kine_Filament_CreatePbrTexFromPixels(
 	int heightRowBytes,
 	const void *heightRGBA8,
 	float heightScale);
-// A texture set retains each supplied layer until the set is destroyed.
+
 KINE_API KineFilamentTex *Kine_Filament_CreateTerrainTextureSet(
 	KineFilamentContext *ctx,
 	KineFilamentTex *layer0,
@@ -458,7 +480,7 @@ KINE_API void Kine_Filament_SetCameraLookAt(
 	float targetX, float targetY, float targetZ,
 	float upX, float upY, float upZ);
 
-// Double-precision camera position and direction (not an absolute target).
+
 KINE_API void Kine_Filament_SetCameraPose(
  KineFilamentContext *ctx, double x, double y, double z,
  double dx, double dy, double dz, double ux, double uy, double uz);
@@ -471,13 +493,12 @@ KINE_API void Kine_Filament_SetCameraPerspective(
 KINE_API void Kine_Filament_SetCameraPosition(KineFilamentContext *ctx, float x, float y, float z);
 KINE_API void Kine_Filament_SetCameraDirection(KineFilamentContext *ctx, float dx, float dy, float dz);
 
-// shape: 1 = cube, 2 = sphere, 3 = pyramid, 4 = quad, 6 = cylinder,
-//        10 = move gizmo, 11 = rotate gizmo, 12 = scale gizmo
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateMesh(KineFilamentContext *ctx, int shape);
-// Shared water mesh owned by the renderer context.
+
 KINE_API KineFilamentMesh *Kine_Filament_GetWaterGrid(
 	KineFilamentContext *ctx, float width, float depth);
-// Mesh indices follow scene traversal order. Zero loads the complete model.
+
 typedef struct KineFilamentMeshList KineFilamentMeshList;
 KINE_API KineFilamentMeshList *Kine_Filament_ListMeshes(const char *path);
 KINE_API int Kine_Filament_GetMeshListCount(const KineFilamentMeshList *list);
@@ -505,13 +526,12 @@ KINE_API bool Kine_Filament_SetDecalColor(
 	float b,
 	float a);
 KINE_API void Kine_Filament_DestroyMesh(KineFilamentContext *ctx, KineFilamentMesh *mesh);
-/* Imported skeletal data. Bind transforms and caller-provided bone transforms
-   are row-major affine float[16] matrices in mesh-local space. Bone transforms
-   are converted to final skin matrices with the imported inverse bind pose. */
+
+
 KINE_API int Kine_Filament_GetMeshBoneCount(const KineFilamentMesh *mesh);
-// Local-space bounds of the actual uploaded geometry, before Part transforms.
+
 KINE_API bool Kine_Filament_GetMeshBounds(const KineFilamentMesh *mesh, float *center, float *halfExtent);
-// Built-in Part shapes import geometry only; their appearance comes from Part.Material.
+
 KINE_API void Kine_Filament_SetUseImportedMaterials(KineFilamentContext *ctx, KineFilamentMesh *mesh, bool enabled);
 KINE_API int Kine_Filament_GetMeshMaterialCount(const KineFilamentMesh *mesh);
 KINE_API KineFilamentTex *Kine_Filament_GetMeshMaterialTexture(const KineFilamentMesh *mesh, int index);
@@ -524,6 +544,11 @@ KINE_API bool Kine_Filament_CopyMeshBoneGlobalTransform(
 KINE_API bool Kine_Filament_SetMeshBoneTransforms(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh,
 	const float *boneTransforms16, int boneCount);
+KINE_API bool Kine_Filament_SetMeshProceduralLocalPose(
+    KineFilamentContext *ctx, KineFilamentMesh *mesh,
+    const float *localTransforms16, const uint8_t *mask, int boneCount);
+KINE_API bool Kine_Filament_ClearMeshProceduralPose(
+    KineFilamentContext *ctx, KineFilamentMesh *mesh);
 KINE_API int Kine_Filament_GetMeshAnimationCount(const KineFilamentMesh *mesh);
 KINE_API const char *Kine_Filament_GetMeshAnimationName(
 	const KineFilamentMesh *mesh, int animationIndex);
@@ -532,8 +557,8 @@ KINE_API float Kine_Filament_GetMeshAnimationDuration(
 KINE_API bool Kine_Filament_ApplyMeshAnimation(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh,
 	int animationIndex, float timeSeconds, bool loop);
-/* CPU-only import used by headless/server collision generation. Positions are
-   returned as tightly packed xyz floats and indices are zero-based uint32s. */
+
+
 KINE_API KineFilamentMeshData *Kine_Filament_LoadMeshDataFromPath(const char *path);
 KINE_API int Kine_Filament_GetMeshDataVertexCount(const KineFilamentMeshData *meshData);
 KINE_API int Kine_Filament_GetMeshDataIndexCount(const KineFilamentMeshData *meshData);
@@ -551,18 +576,6 @@ KINE_API void Kine_Filament_DestroyGizmo(KineFilamentContext *ctx, KineFilamentG
 KINE_API KineFilamentTex *Kine_Filament_CreateTex(KineFilamentContext *ctx, const KineGLTextureInfo *texture);
 KINE_API void Kine_Filament_DestroyTex(KineFilamentContext *ctx, KineFilamentTex *tex);
 
-// ---------------------------------------------------------------------------
-// DrawMeshEx -- queues a mesh to be drawn this frame with a chosen material.
-//
-//   materialKind : one of the KINE_MAT_* constants above
-//   r,g,b        : base/emissive color [0..1]
-//   param1       : roughness (default/glass/water) or intensity (neon)
-//   param2       : metallic (default) or ior (glass/water) -- unused for neon
-//   param3       : uv tile scale (default/terrain), unused (neon), or thickness (glass/water)
-//   transmission : unused (default/neon) or transmission (glass/water)
-//   mat4         : row-major float[16] world transform; converted to Filament columns by the shim
-//   tex          : optional KineFilamentTex* (from Kine_Filament_CreateTex), nil for no texture
-// ---------------------------------------------------------------------------
 
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh(
 	KineFilamentContext *ctx,
@@ -570,16 +583,15 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh(
 	int vertexCount,
 	const uint16_t *indices,
 	int indexCount);
-// 32-bit indices for large meshes. Counts are vertices and indices, not bytes.
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMesh32(
 	KineFilamentContext *ctx,
 	const float *vertexData,
 	int vertexCount,
 	const uint32_t *indices,
 	int indexCount);
-// Variant that also uploads per-vertex colors (one float4 r,g,b,a per vertex).
-// colorData may be null for no colors. Bound as VertexAttribute::COLOR so
-// materials declaring `requires: [ color ]` read them via getColor().
+
+
 KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMeshEx(
 	KineFilamentContext *ctx,
 	const float *vertexData,
@@ -597,13 +609,12 @@ KINE_API KineFilamentMesh *Kine_Filament_CreateCustomMeshEx32(
 KINE_API KineFilamentMesh *Kine_Filament_CreateTerrainMesh(
 	KineFilamentContext *ctx,
 	const float *vertexData,
-	const float *materialWeights, // 8 floats/vertex; first 6 are material weights
+	const float *materialWeights,
 	int vertexCount,
 	const uint16_t *indices,
 	int indexCount);
-// Samples are RGBA floats in x-fastest order: occupancy and occupancy-weighted
-// linear RGB. The brick bounds and sample origin are relative to the mesh
-// origin, in voxel units. The mesh owns the uploaded field.
+
+
 KINE_API bool Kine_Filament_UploadTerrainField(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
@@ -619,9 +630,8 @@ KINE_API bool Kine_Filament_UpdateCustomMesh(
 	KineFilamentMesh *mesh,
 	const float *vertexData,
 	int vertexCount);
-// Returns the base colour texture the model file carried (GLB/gltf embedded
-// image, or an external file next to the model), or NULL when the mesh was
-// built without one. Owned by the mesh; do not destroy it.
+
+
 KINE_API KineFilamentTex *Kine_Filament_GetMeshTexture(const KineFilamentMesh *mesh);
 
 KINE_API void Kine_Filament_DrawMeshEx(
@@ -644,8 +654,7 @@ KINE_API void Kine_Filament_DrawMeshList(
 	const KineFilamentDrawItem *items,
 	uint32_t itemCount);
 
-/* Retained draw stream. Reusing the same streamId/version keeps the existing
-   GPU instance buffers without resubmitting the item array. */
+
 KINE_API void Kine_Filament_DrawMeshListVersioned(
 	KineFilamentContext *ctx,
 	const KineFilamentDrawItem *items,
@@ -708,9 +717,7 @@ KINE_API float Kine_Filament_GetGizmoDragDelta(
 	float currentX,
 	float currentY);
 
-// Solves a plane-handle drag. Returns 1 and writes one delta per axis the plane
-// spans (XY writes X then Y, YZ writes Y then Z, XZ writes X then Z), in the same
-// local units a single-axis drag reports. Returns 0 for any other axis.
+
 KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 	KineFilamentContext *ctx,
 	KineFilamentGizmo *gizmo,
@@ -723,28 +730,12 @@ KINE_API int Kine_Filament_GetGizmoPlaneDragDelta(
 	float *outFirst,
 	float *outSecond);
 
-// OpenGL path reads the offscreen GL color target. Vulkan builds intentionally
-// keep this disabled unless KINE_FILAMENT_VULKAN_READBACK=ON is set, because a
-// per-frame GPU readback is a debugging path, not the high-performance compositor path.
+
 KINE_API void Kine_Filament_ReadPixels(KineFilamentContext *ctx, void *outPixels);
 KINE_API int Kine_Filament_GetWidth(KineFilamentContext *ctx);
 KINE_API int Kine_Filament_GetHeight(KineFilamentContext *ctx);
 
-// ---------------------------------------------------------------------------
-// Atmospheric sky.
-//
-// Drives the procedural sky appearance each frame.  All colour components are
-// linear [0..1].
-//
-//   sunDirX/Y/Z   : normalised world-space direction *toward* the sun.
-//                   Y > 0 = above horizon, Y < 0 = below horizon.
-//   skyR/G/B      : zenith (overhead) sky colour.
-//   horizonR/G/B  : horizon band colour (blended in at low sun elevation).
-//   groundR/G/B   : ground-fill colour visible when sun is below horizon.
-//   sunIntensity  : sun light intensity in lux (e.g. 100 000 for full day,
-//                   0 for night).  Controls both the sun-light entity and
-//                   the brightness of the blended clear colour.
-// ---------------------------------------------------------------------------
+
 KINE_API void Kine_Filament_SetSkyAtmosphere(
 	KineFilamentContext *ctx,
 	float sunDirX, float sunDirY, float sunDirZ,
@@ -753,11 +744,7 @@ KINE_API void Kine_Filament_SetSkyAtmosphere(
 	float groundR, float groundG, float groundB,
 	float sunIntensity);
 
-// ---------------------------------------------------------------------------
-// Custom Texture Cubemap Skybox
-// Takes 6 OpenGL texture descriptors and builds a cubemap skybox from them.
-// Faces must all be square and have identical dimensions.
-// ---------------------------------------------------------------------------
+
 KINE_API int32_t Kine_Filament_CreateSkyboxPixels(KineFilamentContext *ctx, int32_t size, const uint8_t *rgba, bool showSun);
 KINE_API void Kine_Filament_CreateSkyboxCubemap(
 	KineFilamentContext *ctx,
@@ -765,18 +752,13 @@ KINE_API void Kine_Filament_CreateSkyboxCubemap(
 	const KineGLTextureInfo *texPosY, const KineGLTextureInfo *texNegY,
 	const KineGLTextureInfo *texPosZ, const KineGLTextureInfo *texNegZ);
 
-// ---------------------------------------------------------------------------
-// Set the built-in sun light direction and intensity independently of the sky.
-// ---------------------------------------------------------------------------
+
 KINE_API void Kine_Filament_SetSun(
 	KineFilamentContext *ctx,
 	float sunDirX, float sunDirY, float sunDirZ,
 	float sunIntensity);
 
-// ---------------------------------------------------------------------------
-// Point / spot light management.
-// Returns an opaque integer light ID, or -1 on failure.
-// ---------------------------------------------------------------------------
+
 KINE_API int Kine_Filament_CreateLight(
 	KineFilamentContext *ctx,
 	double px, double py, double pz,
@@ -810,12 +792,7 @@ KINE_API void Kine_Filament_SetEnabledLight(
 	KineFilamentContext *ctx, int light, bool enabled);
 KINE_API void Kine_Filament_RemoveLight(KineFilamentContext *ctx, int light);
 
-// ---------------------------------------------------------------------------
-// Immediate-mode debug shapes (not the interactive transform gizmo).
-// Submit every frame before Kine_Filament_RenderFrame. mat4 is a row-major
-// float[16] and may be NULL for identity. thickness <= 0 uses the default
-// (0.02 world units). segments <= 0 uses 32. Colors are [0..1].
-// ---------------------------------------------------------------------------
+
 KINE_API void Kine_Filament_DrawGizmoLine(
 	KineFilamentContext *ctx,
 	double ax, double ay, double az,
@@ -823,7 +800,7 @@ KINE_API void Kine_Filament_DrawGizmoLine(
 	float r, float g, float b,
 	float thickness);
 
-/* points: 6 floats per segment (ax ay az bx by bz). */
+
 KINE_API void Kine_Filament_DrawGizmoLines(
 	KineFilamentContext *ctx,
 	const double *points,
@@ -831,7 +808,7 @@ KINE_API void Kine_Filament_DrawGizmoLines(
 	float r, float g, float b,
 	float thickness);
 
-/* Unit cube (edge 1, centered) transformed by mat4; put the size in the scale. */
+
 KINE_API void Kine_Filament_DrawGizmoCube(
 	KineFilamentContext *ctx,
 	const double *mat4,
@@ -848,7 +825,7 @@ KINE_API void Kine_Filament_DrawGizmoSphere(
 	float thickness,
 	int segments);
 
-/* Unit cylinder (diameter 1, height 1 along local Y, centered) transformed by mat4. */
+
 KINE_API void Kine_Filament_DrawGizmoCylinder(
 	KineFilamentContext *ctx,
 	const double *mat4,
@@ -857,26 +834,23 @@ KINE_API void Kine_Filament_DrawGizmoCylinder(
 	float thickness,
 	int segments);
 
-/* Any mesh, solid and unlit in one flat color. */
+
 KINE_API void Kine_Filament_DrawGizmoMesh(
 	KineFilamentContext *ctx,
 	KineFilamentMesh *mesh,
 	const double *mat4,
 	float r, float g, float b);
 
-/* Any mesh as a wireframe of unique triangle edges (capped at 16384 per call). */
+
 KINE_API void Kine_Filament_DrawGizmoWireMesh(
     KineFilamentContext* ctx,
     KineFilamentMesh* mesh,
     const double* mat4,
     float r, float g, float b,
     float thickness,
-    float featureAngleDeg);   /* 0 = every edge; ~30 = outline-style */
+    float featureAngleDeg);
 
-// ---------------------------------------------------------------------------
-// Screen-space decal management.
-// Returns an opaque integer decal ID, or -1 on failure.
-// ---------------------------------------------------------------------------
+
 KINE_API int Kine_Filament_CreateDecal(
 	KineFilamentContext *ctx,
 	float width, float height,
@@ -885,7 +859,7 @@ KINE_API int Kine_Filament_CreateDecal(
 	float studsPerTileU, float studsPerTileV,
 	bool culling, bool castShadows, bool receiveShadows);
 
-// The decal owns the mesh after a successful creation.
+
 KINE_API int Kine_Filament_CreateMeshDecal(
 	KineFilamentContext *ctx, KineFilamentMesh *mesh, KineFilamentTex *texture);
 KINE_API bool Kine_Filament_EditMeshDecal(

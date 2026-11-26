@@ -3,9 +3,11 @@ title: PlaneConstraint
 description: Constrain relative translation to the plane of an attachment.
 ---
 
-Constrain relative translation to the plane of an attachment.
+Use `PlaneConstraint` to keep one attachment on a plane defined by another, while allowing the connected objects to rotate.
 
 ## Getting started
+
+This example assumes `partA` and `partB` are existing parts in Workspace, with `attachmentA` and `attachmentB` parented to them respectively.
 
 ```lua
 local constraint = Instance.new("PlaneConstraint", partA)
@@ -15,8 +17,8 @@ constraint.Attachment1 = attachmentB
 
 ## Properties
 
-Attachment0, Attachment1, Enabled and Active are inherited from Constraint.
+This class adds no properties of its own. See [Constraint](/docs/Constraint) for `Attachment0`, `Attachment1`, `Enabled` and `Active`.
 
 ## Notes
 
-The first attachment axis defines the plane normal. The solver leaves the other translation axes and rotations free.
+The first attachment's axis defines the plane normal. Movement within the plane and rotation remain free.

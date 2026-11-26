@@ -93,7 +93,7 @@ Terrain.GrassLength = 3.5
 
 -- A solid block plus a single water cell, so the saved grid has to carry both an
 -- occupancy and a water channel as well as a material.
-Terrain:FillBlock(CFrame.new(0, 8, 0), Vector3.new(12, 4, 12), Enum.Material.Grass)
+Terrain:FillBlock(CFrame.new(0, 8, 0), Vector3.new(12, 12, 12), Enum.Material.Grass)
 -- The block fills voxels x=-2..1, y=1..2, z=-2..1, so this water cell sits
 -- outside it and has no solid occupancy of its own.
 Terrain:SetWaterCell(3, 1, 3)

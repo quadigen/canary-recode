@@ -96,6 +96,9 @@ SunRaysEffect :: struct {
 	using effect: LightingEffect,
 	intensity:    f64,
 	spread:       f64,
+	dust_amount:  f64,
+	max_distance: f64,
+	sample_count: i64,
 }
 
 SSAOEffect :: struct {
@@ -113,13 +116,20 @@ Clouds_Class := Class_Info {
 }
 
 Clouds :: struct {
-	using object: Object,
-	enabled:      bool,
-	cover:        f32,
-	density:      f32,
-	height:       f32,
-	thickness:    f32,
-	color:        datatypes.Color3,
+	using object:     Object,
+	enabled:          bool,
+	cover:            f32,
+	density:          f32,
+	height:           f32,
+	thickness:        f32,
+	resolution_scale: f32,
+	color:            datatypes.Color3,
+	cast_shadows:     bool,
+	shadow_intensity: f32,
+	shadow_scale:     f32,
+	shadow_speed:     f32,
+	shadow_softness:  f32,
+	shadow_distance:  f32,
 }
 
 Atmosphere :: struct {
@@ -226,6 +236,9 @@ SunRaysEffect_Init :: proc() -> SunRaysEffect {
 		effect = lighting_effect_init(&SunRaysEffect_Class, "SunRaysEffect"),
 		intensity = 0.1,
 		spread = 1,
+		dust_amount = 0.35,
+		max_distance = 48,
+		sample_count = 24,
 	}
 }
 
@@ -293,8 +306,15 @@ Clouds_Init :: proc() -> Clouds {
 		cover = 0.5,
 		density = 0.01,
 		thickness = 240,
+		resolution_scale = 0.5,
 		height = 700,
 		color = datatypes.Color3{1, 1, 1},
+		cast_shadows = false,
+		shadow_intensity = 0.75,
+		shadow_scale = 1,
+		shadow_speed = 1,
+		shadow_softness = 1,
+		shadow_distance = 1500,
 	}
 }
 
@@ -441,10 +461,21 @@ lighting_effect_get :: proc(
 			return false}; return true
 	case "SunRaysEffect":
 		value := cast(^SunRaysEffect)object
-		switch key {case "Intensity":
-			vm.PushNumber(L, value.intensity); case "Spread":
-			vm.PushNumber(L, value.spread); case:
-			return false}; return true
+		switch key {
+		case "Intensity":
+			vm.PushNumber(L, value.intensity)
+		case "Spread":
+			vm.PushNumber(L, value.spread)
+		case "DustAmount":
+			vm.PushNumber(L, value.dust_amount)
+		case "MaxDistance":
+			vm.PushNumber(L, value.max_distance)
+		case "SampleCount":
+			vm.PushNumber(L, f64(value.sample_count))
+		case:
+			return false
+		}
+		return true
 	case "SSAOEffect":
 		value := cast(^SSAOEffect)object
 		switch key {case "Radius":
@@ -465,10 +496,24 @@ lighting_effect_get :: proc(
 			vm.PushNumber(L, f64(value.density))
 		case "Color":
 			datatypes.Push_Color3(L, dr, value.color)
+		case "ResolutionScale":
+			vm.PushNumber(L, f64(value.resolution_scale))
 		case "Thickness":
 			vm.PushNumber(L, f64(value.thickness))
 		case "Height":
 			vm.PushNumber(L, f64(value.height))
+		case "CastShadows":
+			vm.PushBoolean(L, value.cast_shadows)
+		case "ShadowIntensity":
+			vm.PushNumber(L, f64(value.shadow_intensity))
+		case "ShadowScale":
+			vm.PushNumber(L, f64(value.shadow_scale))
+		case "ShadowSpeed":
+			vm.PushNumber(L, f64(value.shadow_speed))
+		case "ShadowSoftness":
+			vm.PushNumber(L, f64(value.shadow_softness))
+		case "ShadowMaxDistance":
+			vm.PushNumber(L, f64(value.shadow_distance))
 		case:
 			return false
 		}; return true
@@ -606,10 +651,27 @@ lighting_effect_set :: proc(
 			value.near_intensity = clamp(vm.ArgNumber(L, index), 0, 1); case:
 			return false}; return true
 	case "SunRaysEffect":
-		value := cast(^SunRaysEffect)object; switch key {case "Intensity":
-			value.intensity = clamp(vm.ArgNumber(L, index), 0, 1); case "Spread":
-			value.spread = clamp(vm.ArgNumber(L, index), 0, 1); case:
-			return false}; return true
+		value := cast(^SunRaysEffect)object
+		switch key {
+		case "Intensity", "Spread", "DustAmount", "MaxDistance", "SampleCount":
+			number := vm.ArgNumber(L, index)
+			if !scene_lighting_finite(L, number) {return true}
+			switch key {
+			case "Intensity":
+				value.intensity = clamp(number, 0, 1)
+			case "Spread":
+				value.spread = clamp(number, 0, 1)
+			case "DustAmount":
+				value.dust_amount = clamp(number, 0, 1)
+			case "MaxDistance":
+				value.max_distance = clamp(number, 4, 128)
+			case "SampleCount":
+				value.sample_count = i64(clamp(number, 8, 48))
+			}
+			return true
+		case:
+			return false
+		}
 	case "SSAOEffect":
 		value := cast(^SSAOEffect)object; switch key {case "Radius":
 			value.radius = max(0, vm.ArgNumber(L, index)); case "Power":
@@ -619,19 +681,43 @@ lighting_effect_set :: proc(
 			value.ao_type = lighting_effect_integer_option(L, index, 1); case:
 			return false}; return true
 	case "Clouds":
-		value := cast(^Clouds)object; switch key {case "Enabled":
+		value := cast(^Clouds)object
+		switch key {
+		case "Enabled":
 			value.enabled = vm.ArgBoolean(L, index)
 		case "Cover":
-			value.cover = f32(vm.ArgNumber(L, index))
+			value.cover = f32(clamp(vm.ArgNumber(L, index), 0, 1))
 		case "Density":
-			value.density = f32(vm.ArgNumber(L, index))
+			value.density = f32(clamp(vm.ArgNumber(L, index), 0, 1))
+		case "ResolutionScale":
+			value.resolution_scale = f32(clamp(vm.ArgNumber(L, index), 0.25, 1))
 		case "Thickness":
 			value.thickness = f32(vm.ArgNumber(L, index))
 		case "Height":
 			value.height = f32(vm.ArgNumber(L, index))
 		case "Color":
-			value.color = datatypes.Arg_Color3(L, index, dr); case:
-			return false}; return true
+			value.color = datatypes.Arg_Color3(L, index, dr)
+		case "CastShadows":
+			value.cast_shadows = vm.ArgBoolean(L, index)
+		case "ShadowIntensity", "ShadowScale", "ShadowSpeed", "ShadowSoftness", "ShadowMaxDistance":
+			number := vm.ArgNumber(L, index)
+			if !scene_lighting_finite(L, number) {return true}
+			switch key {
+			case "ShadowIntensity":
+				value.shadow_intensity = f32(clamp(number, 0, 1))
+			case "ShadowScale":
+				value.shadow_scale = f32(clamp(number, 0.1, 8))
+			case "ShadowSpeed":
+				value.shadow_speed = f32(clamp(number, 0, 5))
+			case "ShadowSoftness":
+				value.shadow_softness = f32(clamp(number, 0, 4))
+			case "ShadowMaxDistance":
+				value.shadow_distance = f32(clamp(number, 1, 10000))
+			}
+		case:
+			return false
+		}
+		return true
 	case "Atmosphere":
 		value := cast(^Atmosphere)object; switch key {case "Density":
 			value.density = clamp(vm.ArgNumber(L, index), 0, 1); case "Offset":
@@ -706,6 +792,8 @@ lighting_effect_clone :: proc(source: ^Object, destination: ^Object) {
 	case "SunRaysEffect":
 		src, dst := cast(^SunRaysEffect)source, cast(^SunRaysEffect)destination
 		dst.enabled, dst.intensity, dst.spread = src.enabled, src.intensity, src.spread
+		dst.dust_amount, dst.max_distance, dst.sample_count =
+			src.dust_amount, src.max_distance, src.sample_count
 	case "SSAOEffect":
 		src, dst := cast(^SSAOEffect)source, cast(^SSAOEffect)destination
 		dst.enabled, dst.radius, dst.power, dst.intensity, dst.quality, dst.ao_type =
@@ -713,7 +801,14 @@ lighting_effect_clone :: proc(source: ^Object, destination: ^Object) {
 	case "Clouds":
 		src, dst := cast(^Clouds)source, cast(^Clouds)destination
 		dst.enabled, dst.cover, dst.density, dst.color, dst.height, dst.thickness =
-			src.enabled, src.cover, src.density, src.color, src.height, dst.thickness
+			src.enabled, src.cover, src.density, src.color, src.height, src.thickness
+		dst.resolution_scale = src.resolution_scale
+		dst.cast_shadows = src.cast_shadows
+		dst.shadow_intensity = src.shadow_intensity
+		dst.shadow_scale = src.shadow_scale
+		dst.shadow_speed = src.shadow_speed
+		dst.shadow_softness = src.shadow_softness
+		dst.shadow_distance = src.shadow_distance
 	case "Atmosphere":
 		src, dst := cast(^Atmosphere)source, cast(^Atmosphere)destination
 		dst.enabled, dst.density, dst.offset = src.enabled, src.density, src.offset
@@ -814,7 +909,14 @@ Register_Lighting_Effect :: proc(registry: ^Registry) {
 		get = lighting_effect_get,
 		set = lighting_effect_set,
 		clone = lighting_effect_clone,
-		properties = []string{"Enabled", "Intensity", "Spread"},
+		properties = []string {
+			"Enabled",
+			"Intensity",
+			"Spread",
+			"DustAmount",
+			"MaxDistance",
+			"SampleCount",
+		},
 	)
 	Register_Class(
 		registry,
@@ -834,7 +936,21 @@ Register_Lighting_Effect :: proc(registry: ^Registry) {
 		get = lighting_effect_get,
 		set = lighting_effect_set,
 		clone = lighting_effect_clone,
-		properties = []string{"Enabled", "Cover", "Density", "Color", "Thickness", "Height"},
+		properties = []string {
+			"Enabled",
+			"Cover",
+			"Density",
+			"Color",
+			"Thickness",
+			"Height",
+			"ResolutionScale",
+			"CastShadows",
+			"ShadowIntensity",
+			"ShadowScale",
+			"ShadowSpeed",
+			"ShadowSoftness",
+			"ShadowMaxDistance",
+		},
 	)
 	Register_Class(
 		registry,

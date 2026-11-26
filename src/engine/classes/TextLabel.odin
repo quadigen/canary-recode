@@ -1,6 +1,7 @@
 package classes
 
 import "core:strings"
+import "core:sync"
 
 import assetstore "../assetstore"
 import kineffi "../bindings"
@@ -29,9 +30,12 @@ TextLabel_Class := Class_Info {
 }
 
 Text_Line :: struct {
-	text:      string,
-	width:     f32,
-	draw_text: cstring,
+	text:           string,
+	width:          f32,
+	draw_text:      cstring,
+	rich_runs:      [dynamic]Rich_Text_Run,
+	rich_faces:     [dynamic]^kineffi.KineSkiaTypeface,
+	ascent, height: f32,
 }
 
 Text_Measure_Cache :: struct {
@@ -95,7 +99,24 @@ TextLabel_Resolve_Font_Memory :: proc(family: string) -> (data: []u8, ok: bool) 
 	return TextLabel_Find_Builtin_Font(name)
 }
 
+when ODIN_OS != .JS {
+	text_label_fallback_once: sync.Once
+
+	text_label_register_fallback :: proc() {
+		data, ok := TextLabel_Find_Builtin_Font("NotoNaskhArabicUI-Regular.ttf")
+		if !ok || len(data) == 0 {
+			return
+		}
+		face := kineffi.Kine_Skia_Typeface_LoadFromMemory(raw_data(data), uintptr(len(data)))
+		if face != nil {
+			kineffi.Kine_Skia_Typeface_SetFallback(face)
+			kineffi.Kine_Skia_Typeface_Destroy(face)
+		}
+	}
+}
+
 TextLabel_Load_Typeface_From_Family :: proc(family: string) -> ^kineffi.KineSkiaTypeface {
+	when ODIN_OS != .JS {sync.once_do(&text_label_fallback_once, text_label_register_fallback)}
 	resolved_family := family
 
 	if len(resolved_family) == 0 {
@@ -140,6 +161,7 @@ TextLabel_Load_Typeface_From_Family :: proc(family: string) -> ^kineffi.KineSkia
 }
 
 TextLabel_Load_Typeface_From_Font :: proc(font: datatypes.Font) -> ^kineffi.KineSkiaTypeface {
+	when ODIN_OS != .JS {sync.once_do(&text_label_fallback_once, text_label_register_fallback)}
 	if datatypes.Font_Has_Memory(font) {
 		return kineffi.Kine_Skia_Typeface_LoadFromMemory(&font.Data[0], uintptr(len(font.Data)))
 	}
@@ -880,6 +902,7 @@ TextLabel_Build_Lines :: proc(
 	lines := make([dynamic]Text_Line)
 
 	text := localized_text(label)
+	if label.rich_text {delete(lines); return rich_text_build_lines(label, text, max_width, font_size, wrapped)}
 
 
 	if len(text) == 0 {
@@ -937,7 +960,8 @@ TextLabel_Get_Bounds :: proc(
 
 	line_height := TextLabel_Get_Base_Line_Height(label, font_size) * label.line_height
 
-	height := line_height * f32(len(lines))
+	height: f32
+	for line in lines {height += line.height * label.line_height if line.height > 0 else line_height}
 
 	return datatypes.Vector2{width, height}
 }
@@ -969,7 +993,7 @@ TextLabel_Measure_Content :: proc(
 	   cache.font_size != font_size ||
 	   cache.line_height != label.line_height {
 		lines := TextLabel_Build_Lines(label, width, font_size, width > 0)
-		defer delete(lines)
+		defer TextLabel_Free_Lines(&lines)
 		cache^ = {
 			valid       = true,
 			width       = width,
@@ -991,7 +1015,7 @@ TextLabel_Fits_Size :: proc(
 ) -> bool {
 	lines := TextLabel_Build_Lines(label, max_width, font_size, label.text_wrapped)
 
-	defer delete(lines)
+	defer TextLabel_Free_Lines(&lines)
 
 	bounds := TextLabel_Get_Bounds(label, lines[:], font_size)
 
@@ -1121,6 +1145,12 @@ TextLabel_get :: proc(
 
 	case "Text":
 		vm.PushString(L, label.text)
+	case "ContentText":
+		if label.rich_text {
+			content := Rich_Text_Content(label.text)
+			defer delete(content)
+			vm.PushString(L, content)
+		} else {vm.PushString(L, label.text)}
 
 	case "Font":
 		if datatypes.Font_Has_Memory(label.font_face) {
@@ -1338,6 +1368,7 @@ TextLabel_set :: proc(
 
 	case "RichText":
 		label.rich_text = vm.ArgBoolean(L, value_index)
+		text_render_layout_clear(&label.render_layout)
 
 	case "TruncateAtEnd":
 		label.truncate_at_end = vm.ArgBoolean(L, value_index)
@@ -1430,8 +1461,8 @@ TextLabel_set :: proc(
 		label.text_padding = max(f32(vm.ArgNumber(L, value_index)), 0)
 
 
-	case "TextBounds":
-		_ = vm.RaiseError(L, "TextBounds is read-only")
+	case "ContentText", "TextBounds":
+		_ = vm.RaiseError(L, "property is read-only")
 
 		return true
 
@@ -1450,10 +1481,7 @@ TextLabel_render :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 }
 
 text_render_layout_free_lines :: proc(layout: ^Text_Render_Layout) {
-	for line in layout.lines {
-		delete(line.draw_text, layout.lines.allocator)
-	}
-	delete(layout.lines)
+	TextLabel_Free_Lines(&layout.lines)
 }
 
 text_render_layout_clear :: proc(layout: ^Text_Render_Layout) {
@@ -1518,6 +1546,7 @@ text_label_render :: proc(
 			label.text_wrapped,
 		)
 		for &line in layout.lines {
+			if label.rich_text {continue}
 			line.draw_text = strings.clone_to_cstring(line.text, layout.lines.allocator)
 			line.text = ""
 		}
@@ -1556,12 +1585,12 @@ text_label_render :: proc(
 	}
 
 
-	for line, index in layout.lines {
+	line_top := block_y
+	for line in layout.lines {
 		line_x := TextLabel_Get_Line_X(label, content_x, content_width, line.width)
 
-		line_top := block_y + f32(index) * layout.line_height
-
-		baseline := line_top + layout.ascent
+		baseline := line_top + (line.ascent if line.ascent > 0 else layout.ascent)
+		line_top += line.height * label.line_height if line.height > 0 else layout.line_height
 
 		ctext := line.draw_text
 
@@ -1576,48 +1605,94 @@ text_label_render :: proc(
 		}
 
 
-		if shadow != nil && shadow.enabled && shadow.showfortext {
+		run_x := line_x
+		run_count := len(line.rich_runs) if label.rich_text else 1
+		for i in 0 ..< run_count {
+			params := text_params
+			draw := ctext
+			if label.rich_text {
+				run := line.rich_runs[i]
+				draw = run.text
+				params.x = run_x
+				params.TextSize = run.size
+				params.typeface = run.typeface
+				params.y += run.shift
+				if run.style.has_color {params.color = run.style.color}
+				if run.style.has_transparency {params.transparency = 1 - (1 - params.transparency) * (1 - run.style.transparency)}
+				run_x += run.width
+				if run.style.has_mark {
+					guilib.drawRect(
+						ctx.renderer.SkiaSurface,
+						guilib.Rect {
+							x = params.x,
+							y = params.y - run.size,
+							width = run.width,
+							height = run.size * 1.2,
+							color = run.style.mark_color,
+							bgTransparency = 1 -
+							(1 - label.text_transparency) * (1 - run.style.mark_transparency),
+						},
+					)
+				}
+			}
+			if shadow != nil && shadow.enabled && shadow.showfortext {
 
-			short_edge := min(rect.width, rect.height)
+				short_edge := min(rect.width, rect.height)
 
-			offset_x := shadow.offset.X_Scale * rect.width + shadow.offset.X_Offset
+				offset_x := shadow.offset.X_Scale * rect.width + shadow.offset.X_Offset
 
-			offset_y := shadow.offset.Y_Scale * rect.height + shadow.offset.Y_Offset
+				offset_y := shadow.offset.Y_Scale * rect.height + shadow.offset.Y_Offset
 
-			spread_x := shadow.spread.X_Scale * rect.width + shadow.spread.X_Offset
+				spread_x := shadow.spread.X_Scale * rect.width + shadow.spread.X_Offset
 
-			spread_y := shadow.spread.Y_Scale * rect.height + shadow.spread.Y_Offset
+				spread_y := shadow.spread.Y_Scale * rect.height + shadow.spread.Y_Offset
 
-			shadow_params := guilib.ShadowParams {
-				offsetX   = offset_x,
-				offsetY   = offset_y,
-				blurSigma = max(f32(0), gui_resolve_udim(shadow.blur_radius, short_edge)),
-				spread    = max(f32(0), (spread_x + spread_y) * 0.5),
-				color     = shadow.color,
-				alpha     = 1 - f32(shadow.transparency),
+				shadow_params := guilib.ShadowParams {
+					offsetX   = offset_x,
+					offsetY   = offset_y,
+					blurSigma = max(f32(0), gui_resolve_udim(shadow.blur_radius, short_edge)),
+					spread    = max(f32(0), (spread_x + spread_y) * 0.5),
+					color     = shadow.color,
+					alpha     = 1 - f32(shadow.transparency),
+				}
+
+				guilib.drawTextShadow(ctx.renderer.SkiaSurface, draw, params, shadow_params)
 			}
 
-			guilib.drawTextShadow(ctx.renderer.SkiaSurface, ctext, text_params, shadow_params)
-		}
 
+			stroke_color := label.text_stroke_color3
+			stroke_thickness := label.text_stroke_thickness
+			stroke_transparency := label.text_stroke_transparency
+			if label.rich_text && line.rich_runs[i].style.has_stroke {
+				style := line.rich_runs[i].style
+				stroke_color = style.stroke_color
+				stroke_thickness = style.stroke_thickness
+				stroke_transparency =
+					1 - (1 - style.stroke_transparency) * (1 - params.transparency)
+			}
+			if stroke_transparency < 1 && stroke_thickness > 0 {
 
-		if label.text_stroke_transparency < 1 && label.text_stroke_thickness > 0 {
+				stroke_params := guilib.ShadowParams {
+					offsetX   = 0,
+					offsetY   = 0,
+					blurSigma = 0,
+					spread    = stroke_thickness,
+					color     = stroke_color,
+					alpha     = 1 - stroke_transparency,
+				}
 
-			stroke_params := guilib.ShadowParams {
-				offsetX   = 0,
-				offsetY   = 0,
-				blurSigma = 0,
-				spread    = label.text_stroke_thickness,
-				color     = label.text_stroke_color3,
-				alpha     = 1 - label.text_stroke_transparency,
+				guilib.drawTextShadow(ctx.renderer.SkiaSurface, draw, params, stroke_params)
 			}
 
-			guilib.drawTextShadow(ctx.renderer.SkiaSurface, ctext, text_params, stroke_params)
+
+			guilib.drawText(ctx.renderer.SkiaSurface, draw, params)
+			if label.rich_text {
+				run := line.rich_runs[i]
+				thickness := max(1, run.size * 0.06)
+				if run.style.underline {guilib.drawLine(ctx.renderer.SkiaSurface, params.x, params.y + thickness, params.x + run.width, params.y + thickness, thickness, params.color, params.transparency)}
+				if run.style.strike {guilib.drawLine(ctx.renderer.SkiaSurface, params.x, params.y - run.size * 0.3, params.x + run.width, params.y - run.size * 0.3, thickness, params.color, params.transparency)}
+			}
 		}
-
-
-		guilib.drawText(ctx.renderer.SkiaSurface, ctext, text_params)
-
 	}
 }
 
@@ -1672,6 +1747,8 @@ TextLabel_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.text_padding = src.text_padding
 
 	dst.text_bounds = src.text_bounds
+	dst.rich_text = src.rich_text
+	dst.truncate_at_end = src.truncate_at_end
 }
 
 
@@ -1692,6 +1769,7 @@ Register_TextLabel :: proc(registry: ^Registry) {
 			"TextColor3",
 			"TextTransparency",
 			"RichText",
+			"ContentText",
 			"TruncateAtEnd",
 			"TextStrokeColor3",
 			"TextStrokeTransparency",

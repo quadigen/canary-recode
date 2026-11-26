@@ -71,6 +71,7 @@ vertex {
 
 fragment {
     #include "kine_water_waves.glsl"
+    #include "kine_water_wicked.glsl"
 
     mat2 waterPixelFootprint(vec3 position) {
         // Project a pixel onto the level water plane. Derivatives of the
@@ -109,6 +110,7 @@ fragment {
             waterWave(i, warped, time, scale, d, k, amplitude, horizontal, phase);
             vec2 phaseGradient = (gradient * d) * k;
             float weight = waterWaveVisibility(footprint, phaseGradient);
+            if (weight <= 0.0) continue;
             float waveHeight = sin(phase) * weight;
             float slope = amplitude * cos(phase) * weight;
             vec2 horizontalSlope = -d * horizontal * waveHeight;
@@ -165,6 +167,7 @@ fragment {
             vec4 world = worldFromClip * vec4(ndc, depth, 1.0);
             vec3 separation = world.xyz / world.w - position;
             nearest = min(nearest, length(separation * vec3(1.0, 1.7, 1.0)));
+            if (nearest <= 0.25) return 1.0;
         }
         return 1.0 - smoothstep(0.25, 1.35, nearest);
     }
@@ -188,6 +191,10 @@ fragment {
         vec3 waveNormal = waterSurfaceNormal(wavePosition, time, scale, footprint, crest);
         float rippleStrength = min(materialParams.strength * materialParams.height, 2.0);
         vec3 N = normalize(waveNormal + vec3(-detail.x, 0.0, -detail.y) * rippleStrength);
+        vec4 wicked = wickedWaterSurface(wavePosition, time, scale, footprint,
+                length(position - getWorldCameraPosition()));
+        vec3 wickedNormal = normalize(vec3(-wicked.x, 1.7, -wicked.y));
+        N = normalize(mix(N, wickedNormal, 0.36 * (1.0 - wicked.w)));
         // Filament consumes normal in prepareMaterial, so assign it first.
         material.normal = transpose(getWorldTangentFrame())*N;
         material.clearCoatNormal = material.normal;
@@ -198,8 +205,12 @@ fragment {
         float foam = smoothstep(0.19, 0.58, crest + (variation - 0.5) * 0.30);
         foam *= smoothstep(0.35, 0.72, foamPatches) * materialParams.foamAmount;
         float contact = waterContactFoam(getWorldPosition());
-        float bubbles = mix(0.45, 1.0, smoothstep(0.28, 0.73, waterNoise(p * 1.35 + vec2(time * 0.22, -time * 0.16)).x));
-        foam = max(foam, contact * bubbles * materialParams.foamAmount);
+        float foldingFoam = wickedWaterFoam(wicked.z, contact, foamPatches, wicked.w);
+        foam = max(foam, foldingFoam * materialParams.foamAmount);
+        if (contact * materialParams.foamAmount > foam) {
+            float bubbles = mix(0.45, 1.0, smoothstep(0.28, 0.73, waterNoise(p * 1.35 + vec2(time * 0.22, -time * 0.16)).x));
+            foam = max(foam, contact * bubbles * materialParams.foamAmount);
+        }
 
         vec4 instanceColor = materialParams.instanceColors[getInstanceIndex()];
         vec3 tint = saturate(instanceColor.rgb);
@@ -220,7 +231,8 @@ fragment {
         vec3 skySheen = materialParams.skyTint * (0.14 + grazing * horizon * mix(0.55, 2.2, crestLight));
         material.emissive = vec4(skySheen * (1.0 - foam), 0.0);
 
-        material.roughness = clamp(materialParams.roughness + foam * 0.32, 0.045, 1.0);
+        material.roughness = clamp(wickedWaterAngularRoughness(N, view, materialParams.roughness) +
+                foam * 0.32, 0.025, 1.0);
         material.ior = materialParams.ior;
         material.thickness = materialParams.thickness*2.2;
         material.transmission = materialParams.transmission * 0.56 * (1.0 - foam * 0.9);

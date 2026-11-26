@@ -10,8 +10,13 @@ Animator_Class := Class_Info {
 	name   = "Animator",
 	parent = &Instance_Class,
 }
+Animation_Import_Range :: struct {
+	first, count: i32,
+}
+
 Animator :: struct {
 	using object:       Object,
+	imported_sources:   map[string]Animation_Import_Range,
 	mesh_part:          ^Object,
 	native_animator:    ^kineffi.KineFilamentAnimator,
 	native_mesh:        ^kineffi.KineFilamentMesh,
@@ -113,7 +118,7 @@ Animation_Load_Track :: proc(L: ^vm.State, a: ^Animator, source: ^Object) -> (i3
 			true
 	}
 	anim := cast(^Animation)source
-	clip_index := Animation_Resolve_Clip(a.native_mesh, a.native_context, anim)
+	clip_index := Animation_Resolve_Clip(a, anim)
 	if clip_index < 0 {
 		return vm.RaiseError(L, "animation clip not found or source KeyframeSequence is empty"),
 			true
