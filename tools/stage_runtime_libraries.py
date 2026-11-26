@@ -37,6 +37,11 @@ def is_elf(path: Path) -> bool:
         return stream.read(4) == b"\x7fELF"
 
 
+def linux_needed(path: Path) -> set[str]:
+    output = run("readelf", "-d", str(path))
+    return set(re.findall(r"\(NEEDED\)\s+Shared library: \[([^\]]+)\]", output))
+
+
 def linux_dependencies(path: Path, folder: Path, discover: bool = True) -> list[tuple[str, Path]]:
     env = os.environ.copy()
     if discover:
@@ -69,8 +74,9 @@ def stage_linux(folder: Path) -> None:
         if binary in visited:
             continue
         visited.add(binary)
+        needed = linux_needed(binary)
         for name, source in linux_dependencies(binary, folder):
-            if not name.startswith(LINUX_BUNDLED_PREFIXES):
+            if name not in needed or not name.startswith(LINUX_BUNDLED_PREFIXES):
                 continue
             target = folder / name
             if not target.exists():
@@ -88,8 +94,9 @@ def stage_linux(folder: Path) -> None:
     for binary in sorted(folder.iterdir()):
         if not binary.is_file() or not is_elf(binary):
             continue
+        needed = linux_needed(binary)
         for name, resolved in linux_dependencies(binary, folder, discover=False):
-            if name.startswith(LINUX_BUNDLED_PREFIXES) or (folder / name).exists():
+            if name in needed and (name.startswith(LINUX_BUNDLED_PREFIXES) or (folder / name).exists()):
                 if resolved.resolve() != (folder / name).resolve():
                     raise RuntimeError(f"{binary.name}: {name} loaded outside artifact: {resolved}")
     print(f"Linux runtime closure verified in {folder}")
