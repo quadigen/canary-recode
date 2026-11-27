@@ -72,7 +72,9 @@ run_code :: proc(source: string, name: string, internal_editor: bool = false) {
 	if !success {
 		fmt.eprintf("Luau startup failed in %s: %s\n", name, error)
 		if internal_editor {
-			services.Telemetry_Record_Native_Line("[EditorStartup] internal editor Luau module failed to initialize")
+			services.Telemetry_Record_Native_Line(
+				"[EditorStartup] internal editor Luau module failed to initialize",
+			)
 			services.Telemetry_Editor_Luau_Failure(name, error)
 		}
 		delete(error)
@@ -267,9 +269,6 @@ init_scripts :: proc() {
 		len(environment.packages.internal_modules),
 	)
 	run_modules(environment.packages.internal_modules[:])
-	if len(environment.packages.internal_modules) > 0 {
-		run_code(#load("cloth_editor.luau", string), "cloth_editor", internal_editor = true)
-	}
 
 	when ODIN_OS != .JS {
 		if packages_object := services.Ensure_Service(&environment.services, "Packages");
