@@ -6,7 +6,7 @@ set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 git_commit := `git rev-parse --short HEAD`
 git_branch := `git rev-parse --abbrev-ref HEAD`
 
-version := "1.19.3"
+version := "1.19.5-dev"
 
 exe     := if os() == "windows" { ".exe" } else { "" }
 dll_ext := if os() == "windows" { "dll" } else { "so" }
@@ -131,11 +131,16 @@ tests_services := '''
     roblox_parity_smoke
     luau_typecheck_smoke
     reported_regressions
+    update_version_smoke
+    security_sandbox_vm
+    task_scheduler_sleep_perf_smoke
     parallel_luau_smoke
     character_controller_smoke
     character_tuning_smoke
     character_cancollide_smoke
     cloth_collision_smoke
+    cloth_pins_smoke
+    cloth_config_smoke
     cloth_rigid_collision_smoke
     softbody_smoke
     softbody_collision_smoke
@@ -180,6 +185,7 @@ tests_gui := '''
 
 tests_serializer := '''
     serializer_smoke
+    serializer_depth_smoke
     kine_format_scale_smoke
     asset_portability_smoke
     part_operation_smoke
@@ -193,9 +199,12 @@ tests_replication := '''
     replication_constraint_smoke
     replicator_multi_peer_smoke
     replication_remote_smoke
+    replication_remote_concurrent_smoke
+    replication_remote_zstd_smoke
     replication_compact_codec_smoke
     replication_unreliable_remote_smoke
     replication_breadth_smoke
+    cloth_replication_smoke
     character_replication_smoke
     physics_model_smoke
     editor_pivot_smoke
@@ -284,10 +293,14 @@ test-services: (_run-tests "service" tests_services)
 test-gui: (_run-tests "gui" tests_gui)
 
 # Native visual regressions require a Vulkan-capable display/device.
-test-imported-visuals: (_run-tests "imported visuals" "sky_render_smoke billboard_gui_render_smoke special_mesh_render_smoke part_surface_render_smoke")
+test-imported-visuals: (_run-tests "imported visuals" "sky_render_smoke billboard_gui_render_smoke special_mesh_render_smoke part_surface_render_smoke cloth_render_smoke")
 
 # Effects require a native Vulkan-capable display/device.
 test-lighting-effects: (_run-tests "lighting effects" "volumetric_lighting_smoke advanced_lighting_smoke material_shader_render_smoke")
+
+[linux]
+test-postprocess-chain-headless:
+    LD_LIBRARY_PATH="${PWD}/vendor/build/lib:${LD_LIBRARY_PATH:-}" odin run tests/postprocess_chain_headless_smoke.odin -file {{gns_linker}}
 
 [linux]
 test-odin-compositor:

@@ -68,6 +68,16 @@ remote:FireServer("interact", doorId)
 
 When the game isn't running as a networked session, events loop back locally: `FireServer()` fires `OnServerEvent` with `nil` as the player argument, and `FireClient()` fires `OnClientEvent` on the same runtime.
 
+## Network payload limits
+
+A networked event supports up to 256 arguments, with tables nested no deeper than eight levels. The serialized payload is limited to 1 MiB, and the native transport packet is slightly below 512 KiB. An event larger than the native transport limit can be delivered when it compresses sufficiently and both peers support remote Zstd compression. Otherwise, sending it raises an error instead of silently discarding it.
+
+Reliable RemoteEvents automatically use Zstd level 1 when both peers advertise support and a payload of at least 384 bytes saves at least 64 bytes and 12.5% after framing. Small or incompressible events remain uncompressed, and unreliable events are never compressed. Compression is negotiated per connection, including mixed-version servers; no script changes are needed.
+
+The client currently permits at most 200 outgoing RPC packets, 1.5 MiB of actual wire traffic, and 1.5 MiB of expanded remote payload per second. The expanded limit prevents highly compressed floods from exceeding the server's inbound decoding budget. The server also enforces inbound limits. Sending a burst above those limits raises an error on the client; events are not automatically queued for later delivery. Pace high-frequency events, send fewer messages, or split large payloads into application-managed chunks.
+
+Use `ReplicatorService:GetStats()` to inspect `remoteZstdSent`, `remoteZstdReceived`, and `remoteZstdBytesSaved`. The savings counter measures payload bytes avoided by successfully transmitted compressed packets.
+
 ## Notes
 
 - `OnServerEvent` arguments are whatever the client chose to send. Validate types, ranges, and permissions before acting on them.

@@ -68,6 +68,11 @@ replication_forget_peer_entity :: proc(connection: ^Replication_Peer, id: u32) {
 	delete_key(&connection.acked_property, id)
 	delete_key(&connection.acked_extra, id)
 	delete_key(&connection.deformable, id)
+	delete_key(&connection.cloth_states, id)
+	if id in connection.attachment_generations {
+		delete_key(&connection.attachment_generations, id)
+		connection.attachment_generation += 1
+	}
 	delete_key(&connection.script_sources, id)
 	if connection.script_send.id == id {replication_clear_script_send(&connection.script_send)}
 	delete_key(&connection.metadata_revisions, u64(id))
@@ -246,6 +251,7 @@ replication_schema :: proc(
 	schema.class_name = strings.clone(class_name)
 	descriptor := classes.Find_Class(service.data_model.registry.classes, class_name)
 	for property in properties {
+		if property == "Mass" && descriptor != nil && classes.Is_Class_A(descriptor.info, &classes.BasePart_Class) {continue}
 
 		if class_name == "Camera" &&
 		   (property == "ViewportSize" || property == "DiagonalFieldOfView") {continue}
@@ -253,7 +259,8 @@ replication_schema :: proc(
 		   (property == "Pivot" || property == "WorldPivot") {continue}
 
 
-		if (class_name == "Attachment" || class_name == "BoneAttachment") &&
+		if (class_name == "Attachment" ||
+		class_name == "BoneAttachment" || class_name == "BoneAttachment") &&
 		   (property == "CFrame" ||
 				   property == "WorldCFrame" ||
 				   property == "WorldPosition" ||
@@ -337,6 +344,8 @@ replication_builtin_class :: proc(class_name: string) -> bool {
 		class_name == "Model" ||
 		class_name == "CharacterModel" ||
 		class_name == "Folder" ||
+		class_name == "Cloth" ||
+		class_name == "Attachment" ||
 		class_name == "PlayerScripts" ||
 		class_name == "PlayerGui" ||
 		class_name == "StarterCharacterScripts" ||
@@ -384,7 +393,9 @@ character_subtree_class :: proc(class_name: string) -> bool {
 replication_builtin_property :: proc(object: ^classes.Object, property: string) -> bool {
 	return(
 		object != nil &&
-		((classes.Is_A_Class(object, &classes.Part_Class) &&
+		((classes.Is_A_Class(object, &classes.Attachment_Class) && property == "CFrame") ||
+		 (object.class == &classes.BoneAttachment_Class && property == "BoneName") ||
+		 (classes.Is_A_Class(object, &classes.Part_Class) &&
 					(property == "CanTouch" || property == "Gravity" ||
 						property == "TopSurface" || property == "BottomSurface" ||
 						property == "FrontSurface" || property == "BackSurface" ||
@@ -1276,6 +1287,10 @@ replication_spawn_entity :: proc(
 	}
 	replication_forget_peer_entity(connection, item.id)
 	connection.known[item.id] = parent_key
+	if classes.Is_A_Class(object, &classes.Attachment_Class) {
+		connection.attachment_generation += 1
+		connection.attachment_generations[item.id] = connection.attachment_generation
+	}
 	return true
 }
 
@@ -1399,6 +1414,9 @@ replication_initialise_entity :: proc(
 		connection.property_hashes[item.id] = property_token
 	}
 
+	if item.object.class == &classes.Cloth_Class {
+		sent = sent && replication_send_cloth_config(service, connection, item, cast(^classes.Cloth)item.object)
+	}
 	extra_sent := replication_send_extra_properties(service, connection, item, true)
 	sent = sent && extra_sent
 	if sent && script != nil {
@@ -1958,33 +1976,20 @@ REPLICATION_MAX_DEFORMABLES_PER_TICK :: 8
 
 replication_send_deformables :: proc(service: ^ReplicatorService, connection: ^Replication_Peer) {
 	if service == nil || connection == nil {return}
+	count := len(service.entity_list)
+	if count == 0 {return}
 	sent := 0
-	for item in service.entity_list {
+	for _ in 0..<count {
 		if sent >= REPLICATION_MAX_DEFORMABLES_PER_TICK {break}
+		index := connection.deformable_cursor % count
+		connection.deformable_cursor = index + 1
+		item := service.entity_list[index]
 		object := item.object
 		if object == nil || object.destroyed {continue}
 		if connection.known[item.id] == 0 || !connection.initialized[item.id] {continue}
 		if service.suppressed[object] {continue}
 		if classes.Is_A(object, "Cloth") {
-			cloth := cast(^classes.Cloth)object
-			if !cloth.enabled || !cloth.initialized {continue}
-			if connection.deformable[item.id] == cloth.revision {continue}
-			bytes: [dynamic]u8
-			replication_put_u32(&bytes, item.id)
-			append(&bytes, Replication_Deformable_Cloth)
-			replication_put_f64(&bytes, cloth.simulation_origin.x)
-			replication_put_f64(&bytes, cloth.simulation_origin.y)
-			replication_put_f64(&bytes, cloth.simulation_origin.z)
-			for particle in cloth.particles {
-				replication_put_f32(&bytes, particle.position.x)
-				replication_put_f32(&bytes, particle.position.y)
-				replication_put_f32(&bytes, particle.position.z)
-			}
-			if replication_send(service, connection.peer, Replication_Kind_Deformable, bytes[:]) {
-				connection.deformable[item.id] = cloth.revision
-				sent += 1
-			}
-			delete(bytes)
+			if replication_send_cloth(service, connection, item) {sent += 1}
 		} else if classes.Is_A(object, "SoftBody") {
 			body := cast(^classes.SoftBody)object
 			if !body.enabled || len(body.positions) == 0 {continue}
@@ -2021,6 +2026,8 @@ replication_send_extra_properties :: proc(
 	sendable: [dynamic]string
 	script := replication_peer_script(service, connection, item.object)
 	defer delete(sendable)
+	if classes.Is_A_Class(item.object, &classes.Attachment_Class) {append(&sendable, "CFrame")}
+	if item.object.class == &classes.BoneAttachment_Class {append(&sendable, "BoneName")}
 	if replication_builtin_property(item.object, "CanTouch") {
 		append(&sendable, "CanTouch", "Gravity", "TopSurface", "BottomSurface", "FrontSurface", "BackSurface", "LeftSurface", "RightSurface")
 	}

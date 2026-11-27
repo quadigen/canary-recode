@@ -200,6 +200,8 @@ Runtime_Shader_Namecall :: proc(
 	result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method, allow_matrices = true)
 	if method == "SetUniform" {
 		shader.uniforms_dirty = true
+	} else if method == "RemoveUniform" && result == 1 && vm.ArgBoolean(L, -1) {
+		shader.dirty = true
 	}
 	return result, handled
 }
@@ -248,6 +250,32 @@ Shader_Uniform_Namecall :: proc(
 		uniform.name = strings.clone(name)
 		append(uniforms, uniform)
 		return 0, true
+	case "GetUniforms":
+		vm.NewTable(L, 0, len(uniforms^))
+		for uniform in uniforms^ {
+			if uniform.count == 1 {
+				vm.PushNumber(L, f64(uniform.values[0]))
+			} else {
+				vm.NewTable(L, int(uniform.count), 0)
+				for i in 0 ..< int(uniform.count) {
+					vm.PushNumber(L, f64(uniform.values[i]))
+					vm.RawSetIndex(L, -2, i + 1)
+				}
+			}
+			vm.SetField(L, -2, uniform.name)
+		}
+		return 1, true
+	case "RemoveUniform":
+		name := vm.ArgString(L, 2)
+		for uniform, index in uniforms^ {
+			if uniform.name != name {continue}
+			delete(uniforms^[index].name)
+			ordered_remove(uniforms, index)
+			vm.PushBoolean(L, true)
+			return 1, true
+		}
+		vm.PushBoolean(L, false)
+		return 1, true
 	case "GetUniform":
 		name := vm.ArgString(L, 2)
 		for uniform in uniforms^ {

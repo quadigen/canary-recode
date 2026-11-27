@@ -40,7 +40,7 @@ remote:FireServer(1, 0.5)
 
 ## Delivery
 
-- The serialized arguments may total at most 1,000 bytes, excluding protocol headers; oversized messages are discarded. Encoding overhead counts toward the limit.
+- The serialized arguments may total at most 1,000 bytes, excluding protocol headers; oversized messages raise an error when sent through the networked remote. Encoding overhead counts toward the limit.
 - Events before replication/handshake completion may be discarded; the remote must already exist on the receiving side.
 - Browser WebSocket connections use TCP, so they remain ordered and reliable once sent. Disposable events are dropped instead of being queued when the local WebSocket send backlog exceeds 16 KiB.
 - Offline runtimes use the normal local loopback behavior, without network serialization.

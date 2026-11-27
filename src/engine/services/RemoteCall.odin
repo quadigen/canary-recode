@@ -8,6 +8,9 @@ import "core:fmt"
 
 REMOTE_FUNCTION_TIMEOUT_MS :: 10_000
 REMOTE_MAX_ARGS :: 256
+REMOTE_CLIENT_RPC_LIMIT :: 200
+REMOTE_CLIENT_RPC_BYTES :: 1536 * 1024
+REMOTE_CLIENT_RPC_EXPANDED_BYTES :: 1536 * 1024
 UNRELIABLE_REMOTE_MAX_PAYLOAD :: 1000
 
 Remote_Invoke_Pending :: struct {
@@ -102,6 +105,27 @@ remote_can_send_to_peer :: proc(
 	return false
 }
 
+remote_client_send_permitted :: proc(service: ^ReplicatorService, wire_size, expanded_size: int) -> bool {
+	if service.mode != .Client {return true}
+	now := transport_time_get()
+	if now - service.client_remote_window_ms >= 1000 {
+		service.client_remote_window_ms = now
+		service.client_remote_window_count = 0
+		service.client_remote_window_bytes = 0
+		service.client_remote_window_expanded_bytes = 0
+	}
+	return service.client_remote_window_count < REMOTE_CLIENT_RPC_LIMIT &&
+	       wire_size <= REMOTE_CLIENT_RPC_BYTES - int(service.client_remote_window_bytes) &&
+	       expanded_size <= REMOTE_CLIENT_RPC_EXPANDED_BYTES - int(service.client_remote_window_expanded_bytes)
+}
+
+remote_client_record_send :: proc(service: ^ReplicatorService, wire_size, expanded_size: int) {
+	if service.mode != .Client {return}
+	service.client_remote_window_count += 1
+	service.client_remote_window_bytes += u32(wire_size)
+	service.client_remote_window_expanded_bytes += u32(expanded_size)
+}
+
 remote_send_fire :: proc(
 	service: ^ReplicatorService,
 	peer: ^Replication_Transport_Peer,
@@ -110,13 +134,14 @@ remote_send_fire :: proc(
 	unreliable: bool = false,
 ) -> bool {
 	if !remote_can_send_to_peer(service, peer, entity_id) {return false}
+	if len(args) > REPLICATION_REMOTE_ZSTD_MAX_EXPANDED - 4 {return false}
 	if unreliable {
 		if len(args) > UNRELIABLE_REMOTE_MAX_PAYLOAD {return false}
 		if (remote_common_capabilities(service, peer) &
 			   Replication_Capability_Unreliable_Remote) ==
 		   0 {return false}
 	}
-	bytes: [dynamic]u8
+	bytes := make([dynamic]u8, 0, 4 + len(args))
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
 	append(&bytes, ..args)
@@ -132,7 +157,7 @@ remote_send_invoke_request :: proc(
 	args: []u8,
 ) -> bool {
 	if !remote_can_send_to_peer(service, peer, entity_id) {return false}
-	bytes: [dynamic]u8
+	bytes := make([dynamic]u8, 0, 8 + len(args))
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
 	replication_put_u32(&bytes, invoke_id)
@@ -147,7 +172,7 @@ remote_send_invoke_result :: proc(
 	invoke_id: u32,
 	results: []u8,
 ) -> bool {
-	bytes: [dynamic]u8
+	bytes := make([dynamic]u8, 0, 9 + len(results))
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
 	replication_put_u32(&bytes, invoke_id)
@@ -163,7 +188,7 @@ remote_send_invoke_error :: proc(
 	invoke_id: u32,
 	message: string,
 ) -> bool {
-	bytes: [dynamic]u8
+	bytes := make([dynamic]u8, 0, 13 + len(message))
 	defer delete(bytes)
 	replication_put_u32(&bytes, entity_id)
 	replication_put_u32(&bytes, invoke_id)
@@ -234,15 +259,20 @@ remote_call_dispatch :: proc(
 					&bytes,
 					remote_common_capabilities(replicator, replicator.remote),
 				) {
-					return 0, true
+					return vm.RaiseError(L, "FireServer arguments cannot be serialized (maximum nesting depth 8, 256 arguments, 1 MiB serialized payload)"), true
 				}
-				_ = remote_send_fire(
+				if unreliable && len(bytes) > UNRELIABLE_REMOTE_MAX_PAYLOAD {
+					return vm.RaiseError(L, "UnreliableRemoteEvent serialized arguments exceed 1000 bytes"), true
+				}
+				if !remote_send_fire(
 					replicator,
 					replicator.remote,
 					replication_entity_id(replicator, instance),
 					bytes[:],
 					unreliable,
-				)
+				) {
+					return vm.RaiseError(L, "FireServer rejected: remote is not ready, payload is too large, transport is congested, or the 200 RPC/s client limit was reached"), true
+				}
 			case .Server:
 
 			case .Stopped:
@@ -279,24 +309,31 @@ remote_call_dispatch :: proc(
 					&bytes,
 					remote_common_capabilities(replicator, peer),
 				) {
-					return 0, true
+					return vm.RaiseError(L, "RemoteEvent arguments cannot be serialized (maximum nesting depth 8, 256 arguments, 1 MiB serialized payload)"), true
+				}
+				if unreliable && len(bytes) > UNRELIABLE_REMOTE_MAX_PAYLOAD {
+					return vm.RaiseError(L, "UnreliableRemoteEvent serialized arguments exceed 1000 bytes"), true
 				}
 				entity_id := replication_entity_id(replicator, instance)
 				if method == "FireClient" {
-					if peer != nil {
-						_ = remote_send_fire(replicator, peer, entity_id, bytes[:], unreliable)
+					if peer == nil || !remote_send_fire(replicator, peer, entity_id, bytes[:], unreliable) {
+						return vm.RaiseError(L, "FireClient rejected: remote unavailable, payload too large, transport congested, or 200 RPC/s limit reached"), true
 					}
 				} else {
+					failed := false
 					for &connection in replicator.peers {
 						if connection.peer != nil {
-							_ = remote_send_fire(
+							if !remote_send_fire(
 								replicator,
 								connection.peer,
 								entity_id,
 								bytes[:],
 								unreliable,
-							)
+							) {failed = true}
 						}
+					}
+					if failed {
+						return vm.RaiseError(L, "FireAllClients rejected by one or more clients: payload too large or transport congested"), true
 					}
 				}
 			case .Client:
@@ -321,7 +358,7 @@ remote_call_dispatch :: proc(
 					&bytes,
 					remote_common_capabilities(replicator, replicator.remote),
 				) {
-					return 0, true
+					return vm.RaiseError(L, "InvokeServer arguments cannot be serialized (maximum nesting depth 8, 256 arguments, 1 MiB serialized payload)"), true
 				}
 				invoke_id := replicator.next_invoke_id
 				entity_id := replication_entity_id(replicator, instance)
@@ -366,7 +403,7 @@ remote_call_dispatch :: proc(
 					&bytes,
 					remote_common_capabilities(replicator, peer),
 				) {
-					return 0, true
+					return vm.RaiseError(L, "RemoteFunction arguments cannot be serialized (maximum nesting depth 8, 256 arguments, 1 MiB serialized payload)"), true
 				}
 				invoke_id := replicator.next_invoke_id
 				entity_id := replication_entity_id(replicator, instance)
@@ -637,10 +674,18 @@ remote_run_invoke :: proc(
 		&results,
 		remote_common_capabilities(service, request_peer),
 	) {
-		_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, nil)
+		_ = remote_send_invoke_error(service, request_peer, entity_id, invoke_id, "RemoteFunction result cannot be serialized")
 		return
 	}
-	_ = remote_send_invoke_result(service, request_peer, entity_id, invoke_id, results[:])
+	if !remote_send_invoke_result(service, request_peer, entity_id, invoke_id, results[:]) {
+		_ = remote_send_invoke_error(
+			service,
+			request_peer,
+			entity_id,
+			invoke_id,
+			"RemoteFunction result could not be sent or exceeded the transport limit",
+		)
+	}
 }
 
 remote_receive_invoke_response :: proc(

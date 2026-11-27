@@ -202,6 +202,12 @@ MaterialVariant_namecall :: proc(
 	bool,
 ) {
 	variant := cast(^MaterialVariant)object
+	if method == "RemoveUniform" {
+		name := vm.ArgString(L, 2)
+		if name == "baseColor" || name == "roughness" || name == "metallic" {
+			return vm.RaiseError(L, "Built-in material uniforms cannot be removed"), true
+		}
+	}
 	if method == "ResetShader" {
 		delete(variant.vertex_source); variant.vertex_source = ""
 		delete(variant.fragment_source); variant.fragment_source = ""
@@ -575,6 +581,6 @@ Register_MaterialVariant :: proc(registry: ^Registry) {
 			"VertexSource",
 			"FragmentSource",
 		},
-		methods = {"SetUniform", "GetUniform", "ResetShader"},
+		methods = {"SetUniform", "GetUniform", "GetUniforms", "RemoveUniform", "ResetShader"},
 	)
 }

@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:os"
 import "core:time"
 import audio "engine/audio"
+import globals "engine/global"
 import classes "engine/classes"
 import extensions "engine/extensions"
 import sdl3 "engine/platform"
@@ -188,6 +189,9 @@ runtime_input_event :: proc(user_data: rawptr, event: sdl3.Event) {
 }
 
 run_desktop :: proc(options: Startup_Options) -> bool {
+	defer services.Telemetry_Shutdown()
+	services.Telemetry_Bootstrap_Consent()
+	if target.is_editor() && !options.playtest {services.Telemetry_Incident_Bootstrap()}
 	tracy.SetThreadName("Main")
 	startup_started := time.tick_now()
 	if target.is_client() && !options.standalone {
@@ -322,10 +326,12 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 	_ = services.Playtest_Debugger_Bootstrap(&script_vm, options.playtest_tree_dir)
 	if target.is_server() || options.singleplayer {
 		if !load_game_map(&environment, &script_vm, options) {
+			services.Telemetry_Report("loader", "MAP_LOAD_FAILED")
 			return false
 		}
 	} else if options.playtest || options.standalone {
 		if !load_game_map(&environment, &script_vm, options) {
+			services.Telemetry_Report("loader", "MAP_LOAD_FAILED")
 			return false
 		}
 	} else if target.is_client() && !load_client_asset_bundle() {
@@ -396,6 +402,7 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 					   .Client,
 				   ) {
 				fmt.eprintf("Could not connect to %s:%d\n", options.address, options.port)
+				services.Telemetry_Report("network", "REPLICATION_START_FAILED")
 				return false
 			}
 			fmt.printf("Kinemium client connecting to %s:%d...\n", options.address, options.port)
@@ -459,6 +466,12 @@ run_desktop :: proc(options: Startup_Options) -> bool {
 }
 
 main :: proc() {
+	for arg in os.args[1:] {
+		if arg == "--version" {
+			fmt.println(globals.RUNTIME_VERSION_DISPLAY)
+			return
+		}
+	}
 
 	when tracy.TRACY_ENABLE {
 		context.allocator = tracy.InitDefaultAllocator(

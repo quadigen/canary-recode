@@ -108,6 +108,7 @@ JPH_RayFilterMode :: enum i32 {
 	None    = 0,
 	Exclude = 1,
 	Include = 2,
+	Include_Sorted = 3,
 }
 
 

@@ -66,6 +66,10 @@ if ok == nil then
 end
 ```
 
+Argument serialization failures and client-side RPC rate-limit failures raise errors immediately, rather than returning `nil`. The same 256-argument, eight-level table nesting, 1-MiB serialized payload and slightly-under-512-KiB native packet, and 200-client-RPC-packets-per-second limits apply to networked invocations and other remotes. Use `pcall` if the caller must recover from sending failures.
+
+Successful networked RemoteFunction requests and responses may be compressed with Zstd level 1 when both peers support it. Small or incompressible responses stay uncompressed. See [RemoteEvent](/docs/RemoteEvent) for compression thresholds and the `GetStats()` counters.
+
 Calls time out after about 10 seconds. Build your protocol so a slow handler doesn't leave the caller hanging.
 
 ## Which side can call

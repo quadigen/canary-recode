@@ -183,6 +183,29 @@ fragment { void material(inout MaterialInputs material) {
 ]]
 `,
 	)
+	run(&script_vm, `
+local postUniforms = Instance.new("PostProcess")
+postUniforms:SetUniform("edgeThreshold", {0.125, 0.25})
+assert(#postUniforms:GetUniforms().edgeThreshold == 2)
+assert(postUniforms:GetUniforms().edgeThreshold[1] > 0.12)
+assert(postUniforms:RemoveUniform("edgeThreshold"))
+assert(postUniforms:GetUniform("edgeThreshold") == nil)
+assert(not postUniforms:RemoveUniform("edgeThreshold"))
+postUniforms:Destroy()
+local uiUniforms = Instance.new("UIShader")
+uiUniforms:SetUniform("threshold", 0.5)
+assert(uiUniforms:GetUniforms().threshold == 0.5)
+assert(uiUniforms:RemoveUniform("threshold"))
+assert(uiUniforms:GetUniforms().threshold == nil)
+uiUniforms:Destroy()
+local materialUniforms = Instance.new("MaterialVariant")
+assert(#materialUniforms:GetUniforms().baseColor == 4)
+assert(not pcall(function() materialUniforms:RemoveUniform("baseColor") end))
+materialUniforms:SetUniform("customStrength", 0.5)
+assert(materialUniforms:GetUniforms().customStrength == 0.5)
+assert(materialUniforms:RemoveUniform("customStrength"))
+materialUniforms:Destroy()
+`)
 	inverted := capture(&env, &script_vm)
 	assert(
 		inverted[0] > inverted[1] + 50 && inverted[2] > inverted[1] + 50,
@@ -218,6 +241,18 @@ inactive:Destroy()
 	run(&script_vm, `effect.Enabled = true`)
 	inverted = capture(&env, &script_vm)
 	assert(inverted[0] > inverted[1] + 50)
+	run(&script_vm, `
+effect.Priority = 10
+second = effect:Clone()
+second.Priority = 20
+second.Parent = workspace
+assert(second.Priority == 20)
+`)
+	green = capture(&env, &script_vm)
+	assert(green[1] > green[0] + 50, "two chained inversions must restore scene color")
+	run(&script_vm, `second:Destroy()`)
+	inverted = capture(&env, &script_vm)
+	assert(inverted[0] > inverted[1] + 50, "destroying a chained pass must restore remaining pass")
 	run(&script_vm, `effect:Destroy(); variant:Destroy()`)
 	capture(&env, &script_vm)
 	assert(terrain.draw_items[0].shader == nil, "destroyed variant must restore terrain material")

@@ -167,7 +167,23 @@ The special `guiTransform` uniform accepts exactly four finite numbers in a Luau
 GetUniform(name: string)
 ```
 
-Reads a uniform through the shader's uniform API. For `guiTransform`, it returns a four-element `{number}` array. The shared getter's exact return shape and missing-name behavior for regular uniforms are not specified here.
+Reads a stored uniform value. Returns a number, a component array, or `nil` if it has not been set. For `guiTransform`, it returns a four-element array.
+
+### GetUniforms
+
+```lua
+GetUniforms(): {[string]: number | {number}}
+```
+
+Returns a snapshot of explicitly configured uniforms. Values are independent of the returned table, so use `SetUniform` to update the shader. Automatic GUI inputs aren't included.
+
+### RemoveUniform
+
+```lua
+RemoveUniform(name: string): boolean
+```
+
+Removes an explicitly configured uniform and returns whether it existed. The shader is recompiled so that removed values no longer affect drawing. The automatic `guiTransform` input cannot be removed.
 
 ## Debugging
 

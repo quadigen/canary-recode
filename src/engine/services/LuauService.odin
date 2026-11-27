@@ -140,6 +140,8 @@ luau_service_diagnose :: proc(source: string) -> Luau_Diagnostic {
 	bytecode := luauh.luau_compile(c_source, uintptr(len(source)), &options, &out_size)
 
 	if bytecode == nil {
+		Telemetry_Record_Native_Line("[Luau] internal diagnostic compiler initialization failed")
+		Telemetry_Editor_Luau_Failure("LuauService", "Luau compiler returned null bytecode")
 		return Luau_Diagnostic {
 			ok = false,
 			line = 0,
@@ -152,6 +154,8 @@ luau_service_diagnose :: proc(source: string) -> Luau_Diagnostic {
 	state := luauh.luaL_newstate()
 
 	if state == nil {
+		Telemetry_Record_Native_Line("[Luau] internal diagnostic VM initialization failed")
+		Telemetry_Editor_Luau_Failure("LuauService", "Could not allocate an internal Luau VM state")
 		return Luau_Diagnostic {
 			ok = false,
 			line = 0,

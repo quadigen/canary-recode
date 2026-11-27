@@ -22,6 +22,15 @@ main :: proc() {
 	)
 	top := vm.StackTop(v.L)
 	run(&v, `
+assert(not pcall(function() task.wait(0/0) end))
+assert(not pcall(function() task.wait(math.huge) end))
+assert(not pcall(function() task.wait(-math.huge) end))
+assert(not pcall(function() task.delay(0/0, function() end) end))
+assert(not pcall(function() task.delay(math.huge, function() end) end))
+assert(not pcall(function() task.delay(-math.huge, function() end) end))
+`)
+	assert(len(scheduler.tasks) == 0)
+	run(&v, `
 local function noop() end
 for i=1,12000 do task.delay(3600, noop) end
 `)

@@ -167,6 +167,7 @@ Register_Default_Enums :: proc(registry: ^Registry) {
 	Register_Reflected_Enum(registry, "ChatVersion", ChatVersion)
 	Register_Reflected_Enum(registry, "ClientAnimatorThrottlingMode", ClientAnimatorThrottlingMode)
 	Register_Reflected_Enum(registry, "CloseReason", CloseReason)
+	Register_Reflected_Enum(registry, "ClothType", ClothType)
 	Register_Reflected_Enum(registry, "CollaboratorStatus", CollaboratorStatus)
 	Register_Reflected_Enum(registry, "CollisionFidelity", CollisionFidelity)
 	Register_Reflected_Enum(registry, "CommandPermission", CommandPermission)

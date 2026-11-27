@@ -73,6 +73,10 @@ Physics :: struct {
 	sync_bumped:                  bool,
 	body_ids:                     [dynamic]kineffi.JPH_BodyID,
 	initialized:                  bool,
+	cloth_candidates: [dynamic]kineffi.JPH_BodyID,
+	cloth_collision_shape: kineffi.JPH_ShapeRef,
+	cloth_jobs: [dynamic]Cloth_Physics_Job,
+	cloth_workers: Cloth_Physics_Workers,
 }
 
 MAX_COLLISION_SUBSTEPS :: 8
@@ -170,6 +174,10 @@ physics_construct :: proc(
 physics_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	service := cast(^Physics)object
 	physics_release_softbodies(service)
+	physics_stop_cloth_workers(service)
+	if service.cloth_collision_shape != nil {kineffi.JPH_Shape_Destroy(service.cloth_collision_shape)}
+	delete(service.cloth_candidates)
+	delete(service.cloth_jobs)
 
 	for body in service.bodies {physics_destroy_body(service, body, false)}
 

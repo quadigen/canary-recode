@@ -6,7 +6,7 @@ import vm "../vm"
 import "core:time"
 
 RUNTIME_NAME :: "kinemium"
-RUNTIME_VERSION_DISPLAY := string(#config(RUNTIME_VERSION_DISPLAY, "1.19.0-dev"))
+RUNTIME_VERSION_DISPLAY := string(#config(RUNTIME_VERSION_DISPLAY, "1.19.5-dev"))
 RUNTIME_URL := string(#config(RUNTIME_URL, "https://github.com/quadigen/canary-recode"))
 
 RUNTIME_UPDATE_URL := string(
@@ -19,7 +19,7 @@ RUNTIME_UPDATE_URL := string(
 RUNTIME_SEMANTIC_ENABLED := bool(#config(RUNTIME_SEMANTIC_ENABLED, true))
 RUNTIME_SEMANTIC_MAJOR := int(#config(RUNTIME_SEMANTIC_MAJOR, 1))
 RUNTIME_SEMANTIC_MINOR := int(#config(RUNTIME_SEMANTIC_MINOR, 19))
-RUNTIME_SEMANTIC_PATCH := int(#config(RUNTIME_SEMANTIC_PATCH, 0))
+RUNTIME_SEMANTIC_PATCH := int(#config(RUNTIME_SEMANTIC_PATCH, 5))
 RUNTIME_SEMANTIC_PRERELEASE := string(#config(RUNTIME_SEMANTIC_PRERELEASE, "dev"))
 RUNTIME_SEMANTIC_BUILD := string(#config(RUNTIME_SEMANTIC_BUILD, ""))
 
@@ -204,22 +204,29 @@ runtime_global_date :: proc "c" (L: ^vm.State) -> i32 {
 	second := remainder % 60
 	year, month, day := runtime_civil_from_days(days)
 
+	month_starts := [12]i64{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334}
+	yday := month_starts[month - 1] + day
+	if month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
+		yday += 1
+	}
+	wday := ((days + 4) % 7 + 7) % 7 + 1
+
 	vm.NewTable(L, 0, 9)
-	vm.PushInteger(L, year)
+	vm.PushNumber(L, f64(year))
 	vm.SetField(L, -2, "year")
-	vm.PushInteger(L, month)
+	vm.PushNumber(L, f64(month))
 	vm.SetField(L, -2, "month")
-	vm.PushInteger(L, day)
+	vm.PushNumber(L, f64(day))
 	vm.SetField(L, -2, "day")
-	vm.PushInteger(L, hour)
+	vm.PushNumber(L, f64(hour))
 	vm.SetField(L, -2, "hour")
-	vm.PushInteger(L, minute)
+	vm.PushNumber(L, f64(minute))
 	vm.SetField(L, -2, "min")
-	vm.PushInteger(L, second)
+	vm.PushNumber(L, f64(second))
 	vm.SetField(L, -2, "sec")
-	vm.PushInteger(L, (days + 4) % 7 + 1)
+	vm.PushNumber(L, f64(wday))
 	vm.SetField(L, -2, "wday")
-	vm.PushInteger(L, 0)
+	vm.PushNumber(L, f64(yday))
 	vm.SetField(L, -2, "yday")
 	vm.PushBoolean(L, false)
 	vm.SetField(L, -2, "isdst")

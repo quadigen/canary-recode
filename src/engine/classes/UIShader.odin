@@ -177,17 +177,34 @@ UIShader_namecall :: proc(
 		}
 		return 0, true
 	}
+	if method == "RemoveUniform" {
+		name := vm.ArgString(L, 2)
+		if name == "guiTransform" {
+			return vm.RaiseError(L, "guiTransform is an automatic shader uniform"), true
+		}
+		result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method, allow_matrices = true)
+		if result == 1 && vm.ArgBoolean(L, -1) {
+			if shader.compiled != nil {
+				kineffi.Kine_Skia_RuntimeShader_Destroy(shader.compiled)
+				shader.compiled = nil
+			}
+			shader.source_dirty = true
+			shader.uniforms_dirty = true
+			surfacegui_mark_dirty_for(object)
+		}
+		return result, handled
+	}
 	if method == "SetUniform" {
 		name := vm.ArgString(L, 2)
 		if name == "size" || name == "backgroundColor" || strings.contains(name, "\x00") {
 			return vm.RaiseError(L, "Invalid or reserved UIShader uniform name"), true
 		}
-		result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method)
+		result, handled := Shader_Uniform_Namecall(L, &shader.uniforms, method, allow_matrices = true)
 		shader.uniforms_dirty = true
 		surfacegui_mark_dirty_for(object)
 		return result, handled
 	}
-	return Shader_Uniform_Namecall(L, &shader.uniforms, method)
+	return Shader_Uniform_Namecall(L, &shader.uniforms, method, allow_matrices = true)
 }
 UIShader_clone :: proc(source, destination: ^Object) {
 	src, dst := cast(^UIShader)source, cast(^UIShader)destination
@@ -348,6 +365,6 @@ Register_UIShader :: proc(registry: ^Registry) {
 			"Compiled",
 			"LastError",
 		},
-		methods = []string{"SetUniform", "GetUniform"},
+		methods = []string{"SetUniform", "GetUniform", "GetUniforms", "RemoveUniform"},
 	)
 }

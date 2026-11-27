@@ -439,6 +439,7 @@ struct KineMesh {
 	std::vector<uint8_t> proceduralMask;
 	std::vector<KineAnimation> animations;
 	Box localBounds;
+	uint64_t boundsRevision = 0;
 
 	bool doubleSided = false;
 	bool waterGrid = false;
@@ -599,7 +600,7 @@ struct KinePersistentBatch {
 	uint64_t transformHash = 0;
 	uint64_t colorHash = 0;
 	uint64_t uvHash = 0;
-
+	uint64_t boundsRevision = 0;
 
 	bool detached = false;
 };
@@ -822,6 +823,20 @@ struct KineFilamentContext {
 	Material *outlineCompositeMaterial = nullptr;
 	KineFilamentShader *globalShader = nullptr;
 	KineFilamentShader *postProcessShader = nullptr;
+    struct PostPass {
+        KineFilamentShader *shader = nullptr;
+        Texture *color = nullptr;
+        RenderTarget *target = nullptr;
+        Scene *scene = nullptr;
+        View *view = nullptr;
+        Entity quad;
+        MaterialInstance *mi = nullptr;
+        std::unordered_map<std::string, Material::ParameterType> uniforms;
+    };
+    std::vector<KineFilamentShader *> postShaders;
+    std::vector<PostPass> postPasses;
+    Camera *postIntermediateCamera = nullptr;
+    Entity postIntermediateCameraEntity;
 	std::unordered_set<KineFilamentShader *> runtimeShaders;
 	std::unordered_set<KineFilamentInstanceBatch *> instanceBatches;
 	KineMesh *particleQuadMesh = nullptr;
@@ -4129,7 +4144,28 @@ static void kine_destroy_post_process_pipeline(KineFilamentContext *ctx) {
 		ctx->view->setViewport({int32_t(ctx->viewportX), int32_t(filamentY),
 								uint32_t(viewportWidth), uint32_t(viewportHeight)});
 	}
-	if (ctx->postScene && !ctx->postQuadEntity.isNull()) {
+	for (auto &pass : ctx->postPasses) {
+        if (pass.view) ctx->engine->destroy(pass.view);
+        if (!pass.quad.isNull()) {
+            if (pass.scene) pass.scene->remove(pass.quad);
+            ctx->engine->destroy(pass.quad);
+            EntityManager::get().destroy(pass.quad);
+        }
+        if (pass.scene) ctx->engine->destroy(pass.scene);
+        if (pass.mi) ctx->engine->destroy(pass.mi);
+    }
+    for (auto &pass : ctx->postPasses) {
+        if (pass.target) ctx->engine->destroy(pass.target);
+        if (pass.color) ctx->engine->destroy(pass.color);
+    }
+    ctx->postPasses.clear();
+    if (!ctx->postIntermediateCameraEntity.isNull()) {
+        ctx->engine->destroyCameraComponent(ctx->postIntermediateCameraEntity);
+        EntityManager::get().destroy(ctx->postIntermediateCameraEntity);
+        ctx->postIntermediateCameraEntity.clear();
+        ctx->postIntermediateCamera = nullptr;
+    }
+    if (ctx->postScene && !ctx->postQuadEntity.isNull()) {
 		ctx->postScene->remove(ctx->postQuadEntity);
 	}
 	if (!ctx->postQuadEntity.isNull()) {
@@ -4285,7 +4321,9 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 	TextureSampler sampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR,
 						   TextureSampler::WrapMode::CLAMP_TO_EDGE);
 	ctx->postMaterialInstance->setParameter("inputTexture", ctx->postSceneColor, sampler);
-	if (std::any_of(parameters.begin(),parameters.end(),[](const auto &p){return strcmp(p.name,"depthTexture")==0 && p.isSampler && p.samplerType==Material::SamplerType::SAMPLER_2D;})) {
+	if (std::any_of(ctx->postShaders.begin(), ctx->postShaders.end(), [](auto *shader) {
+        return shader->material->isSampler("depthTexture");
+    })) {
 
 
 		ctx->postSampleDepth = Texture::Builder().width(viewportWidth).height(viewportHeight).levels(1)
@@ -4304,7 +4342,7 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 		ctx->postDepthView->setRenderTarget(ctx->postDepthTarget);
 		ctx->postDepthView->setPostProcessingEnabled(false);ctx->postDepthView->setShadowingEnabled(false);
 		TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
-		ctx->postMaterialInstance->setParameter("depthTexture",ctx->postSampleDepth,nearest);
+		if (material->isSampler("depthTexture")) ctx->postMaterialInstance->setParameter("depthTexture",ctx->postSampleDepth,nearest);
 	}
     kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
 	if (ctx->postSceneUniformTypes.count("intensity") && ctx->postSceneUniformTypes.at("intensity") == Material::ParameterType::FLOAT &&
@@ -4334,7 +4372,57 @@ static bool kine_build_post_process_pipeline(KineFilamentContext *ctx) {
 								uint32_t(ctx->width > 0 ? ctx->width : 1),
 								uint32_t(ctx->height > 0 ? ctx->height : 1)});
 	ctx->postView->setPostProcessingEnabled(false);
-	ctx->view->setRenderTarget(ctx->postSceneTarget);
+    const auto bindInputs = [&](MaterialInstance *mi, Material *mat, size_t index) {
+        mi->setParameter("inputTexture", index ? ctx->postPasses[index-1].color : ctx->postSceneColor, sampler);
+        if (mat->isSampler("sceneTexture")) mi->setParameter("sceneTexture", ctx->postSceneColor, sampler);
+        for (size_t i = 0; i < index; ++i) {
+            const auto name = "pass" + std::to_string(i) + "Texture";
+            if (mat->isSampler(name.c_str())) mi->setParameter(name.c_str(), ctx->postPasses[i].color, sampler);
+        }
+    };
+    if (ctx->postShaders.size() > 1) {
+        ctx->postIntermediateCameraEntity = EntityManager::get().create();
+        ctx->postIntermediateCamera = ctx->engine->createCamera(ctx->postIntermediateCameraEntity);
+        if (!ctx->postIntermediateCamera) { kine_destroy_post_process_pipeline(ctx); return false; }
+        ctx->postIntermediateCamera->setProjection(Camera::Projection::ORTHO,-0.5,0.5,-0.5,0.5,0.1,10.0);
+        ctx->postIntermediateCamera->lookAt({0,0,1},{0,0,0},{0,1,0});
+    }
+    for (size_t i = 0; i + 1 < ctx->postShaders.size(); ++i) {
+        auto &pass = ctx->postPasses.emplace_back();
+        pass.shader = ctx->postShaders[i];
+        auto *mat = pass.shader->material;
+        pass.color = Texture::Builder().width(viewportWidth).height(viewportHeight).levels(1)
+            .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+            .format(Texture::InternalFormat::RGBA8).build(*ctx->engine);
+        if (!pass.color) { kine_destroy_post_process_pipeline(ctx); return false; }
+        pass.target = RenderTarget::Builder().texture(RenderTarget::AttachmentPoint::COLOR,pass.color).build(*ctx->engine);
+        pass.scene = ctx->engine->createScene();
+        pass.view = ctx->engine->createView();
+        pass.mi = mat->createInstance();
+        if (!pass.target || !pass.scene || !pass.view || !pass.mi) { kine_destroy_post_process_pipeline(ctx); return false; }
+        std::vector<Material::ParameterInfo> params(mat->getParameterCount());
+        mat->getParameters(params.data(),params.size());
+        for (const auto &param : params) if (!param.isSampler && !param.isSubpass && param.count == 1)
+            pass.uniforms.emplace(param.name,param.type);
+        kine_apply_shader_uniforms(pass.mi,pass.shader);
+        bindInputs(pass.mi,mat,i);
+        if (pass.uniforms.count("intensity") && pass.uniforms.at("intensity") == Material::ParameterType::FLOAT &&
+            !pass.shader->uniforms.count("intensity")) pass.mi->setParameter("intensity",1.0f);
+        pass.quad = EntityManager::get().create();
+        RenderableManager::Builder(1).boundingBox({{0,0,0},{1,1,0.1f}})
+            .material(0,pass.mi).geometry(0,RenderableManager::PrimitiveType::TRIANGLES,
+                ctx->postProcessQuadMesh->vb,ctx->postProcessQuadMesh->ib,0,ctx->postProcessQuadMesh->indexCount)
+            .culling(false).castShadows(false).receiveShadows(false).build(*ctx->engine,pass.quad);
+        pass.scene->addEntity(pass.quad);
+        pass.view->setScene(pass.scene);
+        pass.view->setCamera(ctx->postIntermediateCamera);
+        pass.view->setRenderTarget(pass.target);
+        pass.view->setViewport({0,0,uint32_t(viewportWidth),uint32_t(viewportHeight)});
+        pass.view->setPostProcessingEnabled(false);
+        pass.view->setShadowingEnabled(false);
+    }
+    bindInputs(ctx->postMaterialInstance,material,ctx->postPasses.size());
+    ctx->view->setRenderTarget(ctx->postSceneTarget);
 	ctx->view->setViewport({0, 0, uint32_t(viewportWidth), uint32_t(viewportHeight)});
 	return true;
 }
@@ -4606,6 +4694,8 @@ static void kine_update_batches(KineFilamentContext *ctx) {
         if (previousChunks > requiredChunks) kine_destroy_batch_tail(ctx,key,batch,requiredChunks);
         if (batch.chunks.capacity() < requiredChunks) batch.chunks.reserve(requiredChunks);
         const bool transformsChanged = batch.transformHash != pending->transformHash;
+        const KineMesh *geometry = kine_render_geometry(ctx, m, base);
+        const bool boundsChanged = batch.boundsRevision != geometry->boundsRevision;
         const bool colorsChanged = batch.colorHash != pending->colorHash;
         const bool uvsChanged = batch.uvHash != pending->uvHash;
         const bool imported = kine_uses_imported_materials(ctx,key);
@@ -4623,7 +4713,7 @@ static void kine_update_batches(KineFilamentContext *ctx) {
             ctx->batchCacheReattachments += uint32_t(batch.chunks.size());
 		}
 
-        if (previousChunks == requiredChunks && !transformsChanged && !colorsChanged && !uvsChanged &&
+        if (previousChunks == requiredChunks && !transformsChanged && !colorsChanged && !uvsChanged && !boundsChanged &&
             !batch.chunks.empty() && batch.chunks.back().instanceCount == transforms.size() - (requiredChunks-1)*maxInstances) {
             ++ctx->batchStats.unchangedBatches;
             continue;
@@ -4701,6 +4791,7 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 					if (renderable.isValid()) rm.setInstanceCount(renderable, count);
 					chunk.instanceCount = count;
 				}
+				bool boundsUpdated = false;
 				if (transformsChanged || countChanged) {
 
 
@@ -4717,7 +4808,7 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 						}
 					}
 					if (firstDirty < count) {
-						const Box bounds = kine_compute_batch_bounds(kine_render_geometry(ctx, m, base), chunkTransforms, count, key.shader,
+						const Box bounds = kine_compute_batch_bounds(geometry, chunkTransforms, count, key.shader,
 							key.materialKind == KINE_MAT_WATER ? 0.65f*ctx->water.strength*ctx->water.height : 0.0f);
 						++ctx->batchStats.transformUploads;
                         ++ctx->batchStats.boundsUpdates;
@@ -4727,11 +4818,22 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 						RenderableManager::Instance renderable = rm.getInstance(chunk.entity);
 						if (renderable.isValid()) {
 							rm.setAxisAlignedBoundingBox(renderable, bounds);
+							boundsUpdated = true;
 						}
 					}
 					chunk.instanceTransformHashes.assign(
 						pending->instanceTransformHashes.begin() + offset,
 						pending->instanceTransformHashes.begin() + offset + count);
+				}
+				if (boundsChanged && !boundsUpdated) {
+					auto &rm = ctx->engine->getRenderableManager();
+					auto renderable = rm.getInstance(chunk.entity);
+					if (renderable.isValid()) {
+						rm.setAxisAlignedBoundingBox(renderable, kine_compute_batch_bounds(
+							geometry, chunkTransforms, count, key.shader,
+							key.materialKind == KINE_MAT_WATER ? 0.65f*ctx->water.strength*ctx->water.height : 0.0f));
+						++ctx->batchStats.boundsUpdates;
+					}
 				}
 				if ((colorsChanged || countChanged) &&
                     (chunk.cachedColors.size() != count ||
@@ -4763,6 +4865,7 @@ static void kine_update_batches(KineFilamentContext *ctx) {
 		batch.transformHash = pending->transformHash;
 		batch.colorHash = pending->colorHash;
 		batch.uvHash = pending->uvHash;
+		batch.boundsRevision = geometry->boundsRevision;
 	}
 
 	for (auto &[key, batch] : ctx->builtBatches) {
@@ -7630,10 +7733,11 @@ struct KineFrameProfileScope {
 	}
 };
 
-static void kine_prepare_custom_post(KineFilamentContext *ctx, float deltaTime, bool sharedDepth) {
-	kine_apply_shader_uniforms(ctx->postMaterialInstance, ctx->postProcessShader);
-	auto *mi=ctx->postMaterialInstance;
-	if(ctx->postDepthView) {
+static void kine_prepare_custom_post(KineFilamentContext *ctx, float deltaTime, bool sharedDepth,
+    KineFilamentShader *shader, MaterialInstance *mi,
+    const std::unordered_map<std::string, Material::ParameterType> &uniformTypes) {
+    kine_apply_shader_uniforms(mi, shader);
+    if(ctx->postDepthView && shader->material->isSampler("depthTexture")) {
 		TextureSampler nearest(TextureSampler::MinFilter::NEAREST,TextureSampler::MagFilter::NEAREST,TextureSampler::WrapMode::CLAMP_TO_EDGE);
 		mi->setParameter("depthTexture",sharedDepth?ctx->ssgi->depth:ctx->postSampleDepth,nearest);
 	}
@@ -7643,8 +7747,8 @@ static void kine_prepare_custom_post(KineFilamentContext *ctx, float deltaTime, 
 	const auto projection=ctx->camera->getProjectionMatrix();
 
 	const auto matches=[&](const char *name,Material::ParameterType type){
-		const auto it=ctx->postSceneUniformTypes.find(name);
-		return it!=ctx->postSceneUniformTypes.end() && it->second==type;
+		const auto it=uniformTypes.find(name);
+		return it!=uniformTypes.end() && it->second==type;
 	};
 	const auto setFloat=[&](const char *name,float v){if(matches(name,Material::ParameterType::FLOAT))mi->setParameter(name,v);};
 	const auto set2=[&](const char *name,math::float2 v){if(matches(name,Material::ParameterType::FLOAT2))mi->setParameter(name,v);};
@@ -7769,7 +7873,11 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
          (ctx->advancedEffects[19].enabled && ctx->advancedEffects[19].values[0] > 0.0f) ||
          cloudShadowActive ||
          (hasPostProcess && ctx->postDepthView));
-    if (hasPostProcess) kine_prepare_custom_post(ctx,deltaTime,sharedDepth);
+    if (hasPostProcess) {
+        for (auto &pass : ctx->postPasses)
+            kine_prepare_custom_post(ctx,deltaTime,sharedDepth,pass.shader,pass.mi,pass.uniforms);
+        kine_prepare_custom_post(ctx,deltaTime,sharedDepth,ctx->postProcessShader,ctx->postMaterialInstance,ctx->postSceneUniformTypes);
+    }
     if (outlineActive && ctx->outlineCompositeMI && ctx->outlineCompositeMaterial->hasParameter("width")) {
         ctx->outlineCompositeMI->setParameter("width",ctx->outlineWidthPixels>0.0f?ctx->outlineWidthPixels:1.0f);
     }
@@ -7838,6 +7946,15 @@ static void kine_render_frame(KineFilamentContext *ctx, float deltaTime,
             { KineFrameProfileScope profile(ctx, "Filament SSGI Composite CPU"); ++ctx->passStats.screenEffects; ctx->renderer->render(ctx->ssgi->view); }
         }
 		if (hasPostProcess) {
+            clearOptions.clear = true;
+            clearOptions.discard = true;
+            clearOptions.clearColor = {0,0,0,0};
+            ctx->renderer->setClearOptions(clearOptions);
+            for (auto &pass : ctx->postPasses) {
+                KineFrameProfileScope profile(ctx,"Filament Custom Post Intermediate CPU");
+                ++ctx->passStats.customPost;
+                ctx->renderer->render(pass.view);
+            }
 			clearOptions.clear = false;
 			clearOptions.discard = false;
 			ctx->renderer->setClearOptions(clearOptions);
@@ -8037,6 +8154,7 @@ KINE_API void Kine_Filament_Resize(KineFilamentContext *ctx, int width, int heig
 	if (ctx->postProcessShader && !kine_build_post_process_pipeline(ctx)) {
 		fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline after resize\n");
 		ctx->postProcessShader = nullptr;
+        ctx->postShaders.clear();
 	}
 
 	if ((ctx->outlineView || ctx->outlineQueued) && !kine_build_outline_pipeline(ctx)) {
@@ -8098,6 +8216,7 @@ KINE_API void Kine_Filament_SetViewport(KineFilamentContext *ctx, int x, int y, 
 		if (viewportChanged && !kine_build_post_process_pipeline(ctx)) {
 			fprintf(stderr, "[Kine] failed to rebuild custom post-process pipeline for viewport\n");
 			ctx->postProcessShader = nullptr;
+            ctx->postShaders.clear();
 		}
 		return;
 	}
@@ -9037,6 +9156,7 @@ static bool kine_upload_updated_vertices(KineFilamentContext *ctx, KineMesh *m) 
 		uvs[i] = {vertex.u, vertex.v};
 	}
 	m->localBounds.set(boundsMin, boundsMax);
+	++m->boundsRevision;
 
 	std::vector<math::short4> quats(m->vertices.size());
 	auto orientation = SurfaceOrientation::Builder()
@@ -11580,9 +11700,10 @@ KINE_API void Kine_Filament_Shader_Destroy(KineFilamentShader *shader) {
 		if (ctx->globalShader == shader) {
 			kine_switch_global_shader(ctx, nullptr);
 		}
-		if (ctx->postProcessShader == shader) {
-			kine_destroy_post_process_pipeline(ctx);
-			ctx->postProcessShader = nullptr;
+		if (std::find(ctx->postShaders.begin(),ctx->postShaders.end(),shader) != ctx->postShaders.end()) {
+            kine_destroy_post_process_pipeline(ctx);
+            ctx->postShaders.clear();
+            ctx->postProcessShader = nullptr;
 		}
 
 		kine_destroy_built_batches(ctx);
@@ -11720,27 +11841,49 @@ KINE_API bool Kine_Filament_Shader_HasTexture(KineFilamentShader *shader,const c
 	return shader && name && shader->textures.find(name)!=shader->textures.end();
 }
 
-KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext *ctx, KineFilamentShader *shader) {
-	kine_filament_shader_error.clear();
-	if (!ctx || (shader && shader->ctx != ctx)) {
-		kine_filament_shader_error = "Post-process material belongs to a different Filament context";
-		return false;
-	}
+KINE_API bool Kine_Filament_SetPostProcessChain(KineFilamentContext *ctx, KineFilamentShader *const *shaders, int count) {
+    kine_filament_shader_error.clear();
+    if (!ctx || count < 0 || count > 8 || (count && !shaders)) return false;
+    std::vector<KineFilamentShader *> next;
+    for (int i = 0; i < count; ++i) {
+        auto *shader = shaders[i];
+        if (!shader || shader->ctx != ctx || !shader->material || !shader->material->isSampler("inputTexture")) {
+            kine_filament_shader_error = "Post-process pass must belong to this context and declare sampler2d inputTexture";
+            return false;
+        }
+        std::vector<Material::ParameterInfo> params(shader->material->getParameterCount());
+        shader->material->getParameters(params.data(),params.size());
+        for (const auto &param : params) {
+            const std::string name(param.name);
+            if (!param.isSampler) continue;
+            if (name == "inputTexture" || name == "sceneTexture" || name == "depthTexture" ||
+                (name.size() == 12 && name.compare(0,4,"pass") == 0 && name.compare(5,7,"Texture") == 0)) {
+                if (param.samplerType != Material::SamplerType::SAMPLER_2D ||
+                    (name.size() == 12 && name.compare(0,4,"pass") == 0 &&
+                     (name[4] < '0' || name[4] >= '0' + i))) {
+                    kine_filament_shader_error = "Invalid post-process scene sampler or forward pass reference";
+                    return false;
+                }
+            }
+        }
+        next.push_back(shader);
+    }
+    if (ctx->postShaders == next && (!count || ctx->postView)) return true;
     kine_destroy_post_process_pipeline(ctx);
-    ctx->postProcessShader = shader;
-    if (!shader)
-        return true;
-	if (!shader->material || !shader->material->isSampler("inputTexture")) {
-		ctx->postProcessShader = nullptr;
-		kine_filament_shader_error = "Post-process material must declare sampler2d inputTexture";
-		return false;
-	}
-	if (!kine_build_post_process_pipeline(ctx)) {
-		ctx->postProcessShader = nullptr;
-		kine_filament_shader_error = "Could not create the fullscreen Filament post-process pass";
-		return false;
-	}
-	return true;
+    ctx->postShaders = std::move(next);
+    ctx->postProcessShader = count ? ctx->postShaders.back() : nullptr;
+    if (!count) return true;
+    if (!kine_build_post_process_pipeline(ctx)) {
+        ctx->postShaders.clear();
+        ctx->postProcessShader = nullptr;
+        kine_filament_shader_error = "Could not create fullscreen post-process chain";
+        return false;
+    }
+    return true;
+}
+
+KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext *ctx, KineFilamentShader *shader) {
+    return Kine_Filament_SetPostProcessChain(ctx,shader ? &shader : nullptr,shader ? 1 : 0);
 }
 
 KINE_API const char *Kine_Filament_Shader_GetLastError(void) {

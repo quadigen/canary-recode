@@ -1,7 +1,6 @@
 package services
 
 
-import "core:fmt"
 import "core:strings"
 
 import classes "../classes"
@@ -86,8 +85,9 @@ log_service_fire_message_out :: proc(service: ^LogService, message: string) {
 log_service_emit_tagged :: proc(tag, message: string) {
 	if tag == "ERROR" && playtest_pause_on_error && !playtest_paused {
 		playtest_paused = true
-		fmt.eprintln(
-			"[WARN] Paused on error. Press F6 in the playtest window to resume, or stop the playtest.",
+		Telemetry_LogService_Output(
+			"WARN",
+			"Paused on error. Press F6 in the playtest window to resume, or stop the playtest.",
 		)
 	}
 	line_start := 0
@@ -101,7 +101,7 @@ log_service_emit_tagged :: proc(tag, message: string) {
 			line = line[:len(line) - 1]
 		}
 
-		fmt.eprintf("[%s] %s\n", tag, line)
+		Telemetry_LogService_Output(tag, line)
 		line_start = index + 1
 	}
 }
@@ -141,15 +141,13 @@ log_service_write :: proc(service: ^LogService, message: string, log_type: strin
 	}
 	switch log_type {
 	case "Info":
-		fmt.printf("[INFO] %s\n", message)
+		Telemetry_LogService_Output("INFO", message)
 	case "Warn":
-		fmt.eprintf("[WARN] %s\n", message)
+		Telemetry_LogService_Output("WARN", message)
 	case "Error":
-		fmt.eprintf("[ERROR] %s\n", message)
-	case "Log":
-		fmt.println(message)
+		Telemetry_LogService_Output("ERROR", message)
 	case:
-		fmt.println(message)
+		Telemetry_LogService_Output("", message)
 	}
 }
 
@@ -164,7 +162,7 @@ log_service_report_runtime_error :: proc(owner: ^Service, message: string) {
 	if target.is_playtest() {
 		log_service_emit_tagged("ERROR", message)
 	} else {
-		fmt.eprintln(message)
+		Telemetry_LogService_Output("ERROR", message)
 	}
 }
 

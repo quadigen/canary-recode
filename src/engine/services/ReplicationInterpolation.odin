@@ -40,9 +40,12 @@ replication_render_interpolated :: proc(service: ^ReplicatorService, delta_time:
 	CORRECTION_DECAY_RATE :: f32(8.0)
 
 	for entity in service.entity_list {
-		if entity.object == nil ||
-		   entity.object.destroyed ||
-		   !classes.Is_A(entity.object, "Part") {continue}
+		if entity.object == nil || entity.object.destroyed {continue}
+		if entity.object.class == &classes.Cloth_Class {
+			if replication_interpolate_cloth(cast(^classes.Cloth)entity.object, delta_time) {changed = true}
+			continue
+		}
+		if !classes.Is_A(entity.object, "Part") {continue}
 
 
 		if players != nil && players.local_player != nil {

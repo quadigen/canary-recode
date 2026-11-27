@@ -1628,7 +1628,7 @@ def import_csg_mesh(inst, opts):
         inst.props.pop(prop, None)
     if not payload:
         if inst.cls != "NegateOperation":
-            raise ValueError(f"{inst.name!r}: union has no embedded mesh")
+            print(f"warning: {inst.name!r}: union has no embedded mesh", file=sys.stderr)
         return
     if opts.kine_version < 3:
         raise ValueError("importing unions requires KINE version 3 or newer")

@@ -23,6 +23,10 @@ Load_Map :: proc(environment: ^Environment, script_vm: ^vm.VM, path: string) -> 
 		return false
 	}
 	defer delete(data)
+	if len(data) < 5 {
+		fmt.eprintf("Empty or invalid .kine map %s: expected a KINE header, received %d bytes\n", path, len(data))
+		return false
+	}
 	return Load_Map_From_Data(environment, script_vm, data, path)
 }
 
@@ -34,7 +38,11 @@ Load_Map_From_Data :: proc(
 	data: []u8,
 	name: string,
 ) -> bool {
-	if environment == nil || script_vm == nil || script_vm.L == nil || data == nil {return false}
+	if environment == nil || script_vm == nil || script_vm.L == nil {return false}
+	if len(data) < 5 {
+		fmt.eprintf("Empty or invalid .kine map %s: expected a KINE header, received %d bytes\n", name, len(data))
+		return false
+	}
 
 	return services.Restore_Map(&environment.services, script_vm.L, data, name)
 }

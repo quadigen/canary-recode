@@ -1446,6 +1446,7 @@ remap_cloned_instance_refs :: proc(
 			if endpoint := clones[cloth.attachment]; endpoint != nil {cloth.attachment = endpoint}
 			if endpoint := clones[cloth.attachment1];
 			   endpoint != nil {cloth.attachment1 = endpoint}
+			for &pin in cloth.pin_attachments {if endpoint := clones[pin]; endpoint != nil {pin = endpoint}}
 		}
 		if Is_A_Class(original, &Constraint_Class) {
 			constraint := cast(^Constraint)copy
@@ -1604,6 +1605,9 @@ Object_Namecall :: proc(L: ^vm.State, value, ctx: rawptr, method: string) -> (i3
 		}
 		return 0, true
 	case "FindFirstChild":
+		if vm.TypeOf(L, 2) != .String {
+			return vm.RaiseError(L, "FindFirstChild expects a string name"), true
+		}
 		name := vm.ArgString(L, 2)
 		recursive := vm.ArgOptionalBoolean(L, 3, false)
 		child := Find_First_Child(object, name)

@@ -227,6 +227,22 @@ GetUniform(name: string)
 
 Reads a shader parameter through the uniform API. Returns the stored number or component array, or `nil` for an unset name.
 
+### GetUniforms
+
+```lua
+GetUniforms(): {[string]: number | {number}}
+```
+
+Returns all stored uniform values, including the default `baseColor`, `roughness`, and `metallic` parameters.
+
+### RemoveUniform
+
+```lua
+RemoveUniform(name: string): boolean
+```
+
+Removes a custom uniform override and recompiles the shader to discard its previous value. The three built-in material uniforms cannot be removed.
+
 ### ResetShader
 
 ```lua

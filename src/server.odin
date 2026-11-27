@@ -13,6 +13,8 @@ import tracy "engine/util/odin-tracy"
 import vm "engine/vm"
 
 run_headless :: proc(options: Startup_Options) -> bool {
+	defer services.Telemetry_Shutdown()
+	services.Telemetry_Bootstrap_Consent()
 	tracy.SetThreadName("Main/Headless")
 	services.Log_Pause_On_Playtest_Error(options.playtest && options.pause_on_error)
 	script_vm := vm.New()

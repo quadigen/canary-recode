@@ -223,7 +223,16 @@ part_set :: proc(
 		item := enums.Arg_Item(L, value_index, enum_registry, "PartType")
 		part.shape = enums.PartType(item.value)
 	case "Transparency":
-		part.transparency = vm.ArgNumber(L, value_index)
+		if vm.TypeOf(L, value_index) != .Number && vm.TypeOf(L, value_index) != .Integer {
+			_ = vm.RaiseError(L, "Transparency expects a number between 0 and 1")
+			return true
+		}
+		value := vm.ArgNumber(L, value_index)
+		if !(value >= 0 && value <= 1) {
+			_ = vm.RaiseError(L, "Transparency must be between 0 and 1")
+			return true
+		}
+		part.transparency = value
 	case "CFrame":
 		if datatype_registry == nil {return false}
 		part.cframe = datatypes.Arg_CFrame(L, value_index, datatype_registry)

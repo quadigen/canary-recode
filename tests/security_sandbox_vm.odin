@@ -47,6 +47,12 @@ main :: proc() {
                "coroutines within a script must retain its globals")
         local ok = pcall(function() math.sqrt = function() return -1 end end)
         assert(not ok, "builtin math library must not be mutable")
+        assert(type(getfenv) == "function" and type(setfenv) == "function")
+        local scoped = function() return sandbox_marker end
+        local newEnvironment = setmetatable({sandbox_marker = 12345}, {__index = _G})
+        assert(setfenv(scoped, newEnvironment) == scoped)
+        assert(getfenv(scoped) == newEnvironment)
+        assert(scoped() == 12345)
         getfenv(print).native_environment_marker = "POISONED"
         getfenv(math.sqrt).builtin_environment_marker = "POISONED"
         local strmt = getmetatable("")

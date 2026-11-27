@@ -47,27 +47,27 @@ workspace_cloth_mesh :: proc(
 	cloth: ^classes.Cloth,
 	ctx: ^kineffi.KineFilamentContext,
 ) -> ^kineffi.KineFilamentMesh {
-	if cloth.mesh_context != ctx && cloth.mesh != nil {
+	classes.Cloth_Build_Surface(cloth)
+	if cloth.mesh != nil && (cloth.mesh_context != ctx || cloth.mesh_topology_revision != cloth.topology_revision) {
 		kineffi.Kine_Filament_DestroyMesh(cloth.mesh_context, cloth.mesh)
 		cloth.mesh = nil
 	}
 	if cloth.mesh != nil && cloth.mesh_revision == cloth.revision {return cloth.mesh}
 
-	count :: classes.CLOTH_VERTEX_COUNT
-	indices: classes.Cloth_Indices
-	vertices: classes.Cloth_Vertices
-	classes.Cloth_Build_Surface(cloth, &vertices, &indices)
+	vertices, indices := cloth.surface_vertices, cloth.surface_indices
+	count := i32(len(vertices))
 	if cloth.mesh == nil {
 		cloth.mesh = kineffi.Kine_Filament_CreateCustomMesh32(
 			ctx,
 			&vertices[0][0],
 			count,
 			&indices[0],
-			len(indices),
+			i32(len(indices)),
 		)
 		if cloth.mesh == nil {return nil}
 		kineffi.Kine_Filament_SetMeshDoubleSided(cloth.mesh)
 		cloth.mesh_context = ctx
+		cloth.mesh_topology_revision = cloth.topology_revision
 	} else if !kineffi.Kine_Filament_UpdateCustomMesh(ctx, cloth.mesh, &vertices[0][0], count) {
 		return nil
 	}

@@ -2,6 +2,7 @@ package luau
 
 import tracy "../util/odin-tracy"
 import "core:strings"
+import "core:unicode/utf8"
 
 import luauh "luauh"
 
@@ -118,6 +119,7 @@ New :: proc(open_libraries := true) -> VM {
 
 		luauh.luaL_openlibs(L)
 		install_debug_compatibility(L)
+		install_utf8_compatibility(L)
 
 
 		luauh.lua_pushnil(L)
@@ -163,6 +165,46 @@ New :: proc(open_libraries := true) -> VM {
 			vector_precision = 1,
 		},
 	}
+}
+
+install_utf8_compatibility :: proc(L: ^State) {
+	if GetGlobal(L, "utf8") == .Table {
+		PushFunction(L, "graphemes", utf8_graphemes, 0)
+		SetField(L, -2, "graphemes")
+	}
+	Pop(L)
+}
+
+utf8_graphemes :: proc "c" (L: ^State) -> i32 {
+	context = tracy.DefaultContext()
+	value, ok := ToString(L, 1)
+	if !ok {return RaiseError(L, "utf8.graphemes expects a string")}
+	if !utf8.valid_string(value) {return RaiseError(L, "invalid UTF-8 code")}
+	PushValue(L, 1)
+	NewTable(L, 1, 0)
+	PushInteger(L, 1)
+	RawSetIndex(L, -2, 1)
+	PushFunction(L, "graphemeIterator", utf8_graphemes_next, 2)
+	return 1
+}
+
+utf8_graphemes_next :: proc "c" (L: ^State) -> i32 {
+	context = tracy.DefaultContext()
+	value, ok := ToString(L, int(UpvalueIndex(1)))
+	if !ok {return 0}
+	RawGetIndex(L, int(UpvalueIndex(2)), 1)
+	start := int(ArgInteger(L, -1))
+	Pop(L)
+	if start <= 0 || start > len(value) {return 0}
+	iterator := utf8.decode_grapheme_iterator_make(value[start - 1:])
+	grapheme, _, valid := utf8.decode_grapheme_iterate(&iterator)
+	if !valid || len(grapheme) == 0 {return 0}
+	last := start + len(grapheme) - 1
+	PushInteger(L, i64(last + 1))
+	RawSetIndex(L, int(UpvalueIndex(2)), 1)
+	PushNumber(L, f64(start))
+	PushNumber(L, f64(last))
+	return 2
 }
 
 install_debug_compatibility :: proc(L: ^State) {

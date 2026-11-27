@@ -121,7 +121,9 @@ typedef int32_t JPH_RayFilterMode;
 enum {
 	JPH_RayFilterMode_None = 0,
 	JPH_RayFilterMode_Exclude = 1,
-	JPH_RayFilterMode_Include = 2
+	JPH_RayFilterMode_Include = 2,
+	/* bodyIDs are sorted in ascending order for repeated queries. */
+	JPH_RayFilterMode_IncludeSorted = 3
 };
 
 typedef struct JPH_SpringSettings {

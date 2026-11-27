@@ -126,9 +126,11 @@ void TraceJolt(const char *format, ...) {
 
 class BodyIDFilter final : public JPH::BodyFilter {
   public:
-	BodyIDFilter(const JPH_BodyID *bodyIDs, uint32_t count, bool include)
-		: mBodyIDs(bodyIDs), mCount(count), mInclude(include) {
-		if (count > kLinearScanLimit)
+	BodyIDFilter(const JPH_BodyID *bodyIDs, uint32_t count, JPH_RayFilterMode mode)
+		: mBodyIDs(bodyIDs), mCount(count),
+		  mInclude(mode == JPH_RayFilterMode_Include || mode == JPH_RayFilterMode_IncludeSorted),
+		  mSorted(mode == JPH_RayFilterMode_IncludeSorted) {
+		if (!mSorted && count > kLinearScanLimit)
 			Build();
 	}
 
@@ -179,6 +181,9 @@ class BodyIDFilter final : public JPH::BodyFilter {
 			return false;
 		}
 
+		if (mSorted)
+			return std::binary_search(mBodyIDs, mBodyIDs + mCount, packedID);
+
 		const uint32_t mask = static_cast<uint32_t>(sSlots.size()) - 1;
 		uint32_t slot = Hash(packedID) & mask;
 		for (;;) {
@@ -194,6 +199,7 @@ class BodyIDFilter final : public JPH::BodyFilter {
 	const JPH_BodyID *mBodyIDs;
 	uint32_t mCount;
 	bool mInclude;
+	bool mSorted;
 };
 
 thread_local std::vector<JPH_BodyID> BodyIDFilter::sSlots;
@@ -1477,7 +1483,7 @@ int32_t JPH_PhysicsSystem_CastRay(
 	JPH::PhysicsSystem *physicsSystem = ToPhysicsSystem(system);
 	const JPH::RRayCast ray(ToJPH(*origin), ToJPH(*direction));
 	JPH::RayCastResult hit;
-	const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode == 2);
+	const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode);
 
 	const bool didHit = filterMode == 0
 							? physicsSystem->GetNarrowPhaseQuery().CastRay(ray, hit)
@@ -1539,7 +1545,7 @@ int32_t JPH_PhysicsSystem_CastShapeDetailed(
 		return 0;
 
 	JPH::PhysicsSystem *physicsSystem = ToPhysicsSystem(system);
-	const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode == 2);
+	const BodyIDFilter bodyFilter(bodyIDs, bodyIDCount, filterMode);
 	JPH::Shape *shapePtr = static_cast<JPH::Shape *>(shape);
 	JPH::RShapeCast shapeCast(shapePtr, JPH::Vec3::sReplicate(1.0f), JPH::RMat44::sTranslation(ToJPH(*origin)), ToJPH(*displacement));
 	JPH::ShapeCastSettings settings;
@@ -2904,7 +2910,7 @@ uint32_t JPH_PhysicsSystem_CastRayAll(
 	const JPH::RRayCast ray(ToJPH(*origin), ToJPH(*direction));
 
 	const bool filtering = filterMode != 0 && bodyIDs != nullptr;
-	const BodyIDFilter bodyFilter(filtering ? bodyIDs : nullptr, filtering ? bodyIDCount : 0, filterMode == 2);
+	const BodyIDFilter bodyFilter(filtering ? bodyIDs : nullptr, filtering ? bodyIDCount : 0, filterMode);
 
 	JPH::RayCastSettings settings;
 	JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
@@ -2976,7 +2982,7 @@ uint32_t JPH_PhysicsSystem_OverlapShapeEx(
 		jphRotation, basePosition + jphRotation * jphShape->GetCenterOfMass());
 
 	const bool filtering = filterMode != 0 && bodyIDs != nullptr;
-	const BodyIDFilter bodyFilter(filtering ? bodyIDs : nullptr, filtering ? bodyIDCount : 0, filterMode == 2);
+	const BodyIDFilter bodyFilter(filtering ? bodyIDs : nullptr, filtering ? bodyIDCount : 0, filterMode);
 
 	JPH::CollideShapeSettings settings;
 	settings.mMaxSeparationDistance = maxSeparationDistance;

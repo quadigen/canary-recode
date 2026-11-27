@@ -142,6 +142,7 @@ foreign kine_filament {
 
 
 	Kine_Filament_SetPostProcessShader :: proc(ctx: ^KineFilamentContext, shader: ^KineFilamentShader) -> bool ---
+	Kine_Filament_SetPostProcessChain :: proc(ctx: ^KineFilamentContext, shaders: ^^KineFilamentShader, count: i32) -> bool ---
 
 
 	Kine_Filament_Shader_GetLastError :: proc() -> cstring ---

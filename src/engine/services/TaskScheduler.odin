@@ -8,6 +8,7 @@ import profiling "../profiling"
 import tracy "../util/odin-tracy"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 
 TaskScheduler_Class := classes.Class_Info {
 	name   = "TaskScheduler",
@@ -172,6 +173,9 @@ queue_function :: proc(
 	if scheduler == nil || scheduler.destroyed {
 		return vm.RaiseError(L, "TaskScheduler is unavailable")
 	}
+	if math.is_nan(delay) || math.is_inf(delay) {
+		return vm.RaiseError(L, "task delay must be a finite number")
+	}
 
 	is_function := vm.IsFunction(L, function_index)
 	is_thread := vm.IsThread(L, function_index)
@@ -281,7 +285,11 @@ task_wait :: proc "c" (L: ^vm.State) -> i32 {
 	   scheduler.destroyed {return vm.RaiseError(L, "TaskScheduler is unavailable")}
 
 
-	delay := max(vm.ArgOptionalNumber(L, 1, 0), 0)
+	delay := vm.ArgOptionalNumber(L, 1, 0)
+	if math.is_nan(delay) || math.is_inf(delay) {
+		return vm.RaiseError(L, "task.wait duration must be a finite number")
+	}
+	delay = max(delay, 0)
 	vm.PushCurrentThread(L)
 	thread_ref := vm.RetainValue(L)
 	vm.Pop(L)
@@ -503,6 +511,10 @@ task_resume :: proc(scheduler: ^TaskScheduler, task: Scheduled_Task, from: ^vm.S
 		detail := err
 		if len(traceback) > 0 {
 			detail = traceback
+		}
+		if len(describe) == 0 &&
+		   vm.ThreadHasSecurityCapability(task.thread, datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS) {
+			Telemetry_Editor_Luau_Failure("editor_async_task", detail)
 		}
 		if len(describe) > 0 {
 			log_service_report_runtime_error(

@@ -48,6 +48,7 @@ KINE_MAX_STRING_LENGTH :: 64 * 1024 * 1024
 KINE_MAX_SYMBOL_COUNT :: 1 << 20
 
 
+KINE_MAX_INSTANCE_DEPTH :: 256
 KINE_MAX_TREE_BYTES :: 512 * 1024 * 1024
 KINE_MAX_STREAM_BYTES :: assetstore.MAX_ASSET_TOTAL_BYTES + KINE_MAX_TREE_BYTES
 
@@ -1886,6 +1887,9 @@ read_class_property :: proc(
 
 property_is_instance_reference :: proc(object: ^classes.Object, property: string) -> bool {
 	if object.class == &classes.ObjectValue_Class && property == "Value" {return true}
+	if object.class == &classes.Cloth_Class {
+		if _, kind, ok := classes.Cloth_Pin_Property(property); ok && kind == .Attachment {return true}
+	}
 	if object.class == &classes.BillboardGui_Class &&
 	   (property == "Adornee" || property == "PlayerToHideFrom") {return true}
 	if property == "PrimaryPart" &&
@@ -2081,6 +2085,23 @@ write_instance :: proc(
 		}
 		writer_skip_context(w, "%s", instance_label(object))
 		report_skip(w, object, "property")
+	}
+	if object.class == &classes.Cloth_Class {
+		cloth := cast(^classes.Cloth)object
+		for pin, i in cloth.pin_attachments {
+			if pin == nil {continue}
+			names := [3]string{
+				fmt.tprintf("PinAttachment%d", i + 1),
+				"", "",
+			}
+			if cloth.pin_offsets[i] != {} {names[1] = fmt.tprintf("PinOffset%d", i + 1)}
+			if cloth.pin_weights[i] != 1 {names[2] = fmt.tprintf("PinWeight%d", i + 1)}
+			for property in names {
+				if property == "" {continue}
+				if read_class_property(w, L, registry, object, descriptor, object.class.name, property) {property_count += 1}
+				else {report_skip(w, object, "property %q", property)}
+			}
+		}
 	}
 	patch_u32(w, property_count_offset, property_count)
 
@@ -2283,12 +2304,17 @@ read_instance :: proc(
 	L: ^vm.State,
 	registry: ^classes.Registry,
 	parent: ^classes.Object,
+	depth: int = 1,
 ) -> (
 	^classes.Object,
 	bool,
 ) {
 	if r == nil || L == nil || registry == nil {
 		return nil, reader_fail(r, .Invalid_Argument, "a nil reader, VM, or class registry")
+	}
+
+	if depth > KINE_MAX_INSTANCE_DEPTH {
+		return nil, reader_fail(r, .Malformed_Record, "instance hierarchy exceeds maximum depth of %d", KINE_MAX_INSTANCE_DEPTH)
 	}
 
 	class_name, ok := read_symbol(r)
@@ -2535,7 +2561,7 @@ read_instance :: proc(
 		return nil, reader_context(r, "while reading the child count of %s", label)
 	}
 	for i in 0 ..< child_count {
-		child, ok := read_instance(r, L, registry, object)
+		child, ok := read_instance(r, L, registry, object, depth + 1)
 		if !ok {
 			classes.Destroy_Hierarchy(object)
 			return nil, reader_context(r, "while reading child %d of %s", i, label)

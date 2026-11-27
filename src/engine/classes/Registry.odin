@@ -291,7 +291,6 @@ Part_Apply_Impulse_At_Position :: proc(
 }
 
 Registry :: struct {
-	active_post_process:     ^Object,
 	gui_selected:            ^GuiObject,
 	input_modifiers:         bit_set[enums.ModifierKey],
 	gui_gamepad_pressed:     ^GuiObject,
@@ -1308,6 +1307,7 @@ Step :: proc(
 			batch._step(object, &step_context)
 		}
 	}
+	if phase == .Render_3D {PostProcess_Update_Chain(registry, &step_context)}
 }
 
 Object_From_Argument :: proc "c" (L: ^vm.State, index: int) -> ^Object {

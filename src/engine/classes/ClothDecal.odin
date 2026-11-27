@@ -28,7 +28,9 @@ decal_step_cloth :: proc(decal: ^Decal, renderer: ^Renderer_Object) {
 		return
 	}
 
-	if decal.cloth_parent != &cloth.object || decal.cloth_face != decal.face {
+	Cloth_Build_Surface(cloth)
+	if decal.cloth_parent != &cloth.object || decal.cloth_face != decal.face ||
+	   decal.cloth_topology_revision != cloth.topology_revision {
 		decal_destroy_renderable(decal, renderer)
 	}
 	if decal.cloth_mesh == nil ||
@@ -61,16 +63,11 @@ decal_update_cloth_mesh :: proc(
 	cloth: ^Cloth,
 	ctx: ^kineffi.KineFilamentContext,
 ) -> bool {
-	vertices: Cloth_Vertices
-	indices: Cloth_Indices
-	Cloth_Build_Surface(cloth, &vertices, &indices)
+	vertices := cloth.decal_vertices
+	copy(vertices, cloth.surface_vertices)
+	indices := cloth.surface_indices
 	front := decal.face == .Front
-	if front {
-		// The base sheet's winding faces +Z, opposite the Roblox Front face.
-		for i := 0; i < len(indices); i += 3 {
-			indices[i + 1], indices[i + 2] = indices[i + 2], indices[i + 1]
-		}
-	}
+	if front {indices = cloth.surface_back_indices}
 	for &vertex in vertices {
 		if front {
 			vertex[3], vertex[4], vertex[5] = -vertex[3], -vertex[4], -vertex[5]
@@ -86,9 +83,9 @@ decal_update_cloth_mesh :: proc(
 		mesh := kineffi.Kine_Filament_CreateCustomMesh32(
 			ctx,
 			&vertices[0][0],
-			len(vertices),
+			i32(len(vertices)),
 			&indices[0],
-			len(indices),
+			i32(len(indices)),
 		)
 		if mesh == nil {return false}
 		decal.native_decal = kineffi.Kine_Filament_CreateMeshDecal(ctx, mesh, decal.native_texture)
@@ -99,12 +96,13 @@ decal_update_cloth_mesh :: proc(
 		decal.cloth_mesh = mesh
 		decal.cloth_parent = &cloth.object
 		decal.cloth_face = decal.face
+		decal.cloth_topology_revision = cloth.topology_revision
 		decal.color_dirty = true
 	} else if !kineffi.Kine_Filament_UpdateCustomMesh(
 		ctx,
 		decal.cloth_mesh,
 		&vertices[0][0],
-		len(vertices),
+		i32(len(vertices)),
 	) {
 		return false
 	}

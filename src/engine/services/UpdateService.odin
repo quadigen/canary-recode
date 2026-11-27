@@ -107,11 +107,12 @@ GitHub_Asset :: struct {
 }
 
 GitHub_Release :: struct {
-	tag_name:     string,
-	html_url:     string,
-	published_at: string,
-	body:         string,
-	assets:       []GitHub_Asset,
+	tag_name:         string,
+	target_commitish: string,
+	html_url:         string,
+	published_at:     string,
+	body:             string,
+	assets:           []GitHub_Asset,
 }
 
 update_service_construct :: proc(
@@ -246,6 +247,7 @@ update_release_destroy :: proc(release: ^GitHub_Release) {
 	}
 	delete(release.assets)
 	delete(release.tag_name)
+	delete(release.target_commitish)
 	delete(release.html_url)
 	delete(release.published_at)
 	delete(release.body)
@@ -284,6 +286,13 @@ update_strip_v :: proc(version: string) -> string {
 		return strings.clone(version[1:])
 	}
 	return strings.clone(version)
+}
+
+Update_Release_Is_Newer :: proc(latest_version, current_version, release_commit, current_commit: string) -> bool {
+	if len(release_commit) >= 40 && release_commit == current_commit {
+		return false
+	}
+	return Update_Version_Compare(latest_version, current_version) > 0
 }
 
 Update_Version_Compare :: proc(a, b: string) -> int {
@@ -384,6 +393,7 @@ update_http_get :: proc(url: string) -> (body: string, status: int, ok: bool) {
 
 	response, request_error := http_client.request(&req, url)
 	if request_error != nil {
+		Telemetry_Report("update", "UPDATE_CHECK_FAILED", "warning")
 		return "", 0, false
 	}
 	defer http_client.response_destroy(&response)
@@ -1193,7 +1203,12 @@ update_fetch_report :: proc() -> (UpdateReport, bool) {
 		return report, false
 	}
 
-	if Update_Version_Compare(report.latest_version, globals.RUNTIME_VERSION_DISPLAY) > 0 {
+	if Update_Release_Is_Newer(
+		report.latest_version,
+		globals.RUNTIME_VERSION_DISPLAY,
+		release.target_commitish,
+		globals.RUNTIME_GIT_COMMIT,
+	) {
 		report.status = .Update_Available
 		report.available = true
 	} else {

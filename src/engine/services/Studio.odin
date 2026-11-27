@@ -295,6 +295,9 @@ studio_construct :: proc(
 	}
 
 	studio_load_settings(service)
+	if setting, ok := service.settings["telemetryEnabled"]; ok && setting.kind == .Boolean {
+		Telemetry_Set_Enabled(setting.boolean)
+	}
 
 	return &service.object
 
@@ -666,15 +669,33 @@ studio_namecall :: proc(
 
 		Studio_Send_Through_Pipe(service, "NewTheme", ref)
 
+	case "ReportInternalEditorError":
+		if !vm.ThreadHasSecurityCapability(L, datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS) {
+			return vm.RaiseError(L, "Internal editor error reporting requires trusted Studio permissions"), true
+		}
+		detail := "Trusted Studio component reported an internal error"
+		if vm.TypeOf(L, 2) == .String {detail = vm.ArgString(L, 2)}
+		Telemetry_Editor_Luau_Failure("Studio", detail)
+		return 0, true
+
 	case "SetSetting":
 		key := vm.ArgString(L, 2)
+		if key == "telemetryEnabled" && !vm.ThreadHasSecurityCapability(L, datatypes.SECURITY_CAPABILITY_INTERNAL_STUDIO_ACCESS) {
+			return vm.RaiseError(L, "Telemetry consent requires trusted Studio permissions"), true
+		}
 
 		vt := vm.TypeOf(L, 3)
+		if key == "telemetryEnabled" && vt != .Boolean {
+			return vm.RaiseError(L, "Telemetry consent must be a boolean"), true
+		}
 
 		#partial switch vt {
 
 		case .Boolean:
 			v := vm.ArgBoolean(L, 3)
+			if key == "telemetryEnabled" {
+				Telemetry_Set_Enabled(v)
+			}
 
 			if existing, ok := service.settings[key]; ok {
 

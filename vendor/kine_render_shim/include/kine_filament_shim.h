@@ -57,6 +57,7 @@ KINE_API bool Kine_Filament_SetGlobalShader(KineFilamentContext *ctx, KineFilame
 
 
 KINE_API bool Kine_Filament_SetPostProcessShader(KineFilamentContext *ctx, KineFilamentShader *shader);
+KINE_API bool Kine_Filament_SetPostProcessChain(KineFilamentContext *ctx, KineFilamentShader *const *shaders, int count);
 KINE_API const char *Kine_Filament_Shader_GetLastError(void);
 
 

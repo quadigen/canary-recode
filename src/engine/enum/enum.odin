@@ -1085,6 +1085,15 @@ CloseReason :: enum {
 	OutOfMemory       = 5,
 }
 
+ClothType :: enum {
+	Flat,
+	Curtain,
+	Flag,
+	Hammock,
+	Cape,
+	Custom,
+}
+
 CollaboratorStatus :: enum {
 	None             = 0,
 	Editing3D        = 1,

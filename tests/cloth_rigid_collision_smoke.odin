@@ -36,6 +36,11 @@ Shelf = Instance.new("Part", workspace)
 Shelf.Size = Vector3.new(12, 1, 12)
 Shelf.Position = Vector3.new(0, 4, 0)
 Shelf.Anchored = true
+for i = 1, 32 do
+	local distant = Instance.new("Part", workspace)
+	distant.Anchored = true
+	distant.Position = Vector3.new(i * 5, 100, 0)
+end
 ClothHits, ShelfHits = 0, 0
 Curtain.Touched:Connect(function(body)
 	if body == Shelf then ClothHits += 1 end
@@ -66,6 +71,14 @@ Shelf.Position += Vector3.new(0, 0.4, 0)
 	run(&script_vm, `Shelf.CanCollide = false; game:GetService("Physics").Gravity = 80`, "cloth_rigid_disable_shelf")
 	for _ in 0 ..< 35 {services.Physics_Step(physics, 1.0 / 60.0)}
 	assert(lowest(cloth) < 4.4, "cloth should pass through a noncollidable shelf")
+	run(&script_vm, `
+Curtain.SegmentsX = 24
+Curtain.SegmentsY = 24
+Shelf.Anchored = true
+Shelf.CanCollide = true
+`, "cloth_rigid_resize")
+	for _ in 0 ..< 35 {services.Physics_Step(physics, 1.0 / 60.0)}
+	assert(len(cloth.particles) == 625 && lowest(cloth) >= 4.9)
 	fmt.println("CLOTH_RIGID_COLLISION_SMOKE_PASSED")
 }
 

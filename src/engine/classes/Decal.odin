@@ -36,6 +36,7 @@ Decal :: struct {
 	cloth_mesh:       ^kineffi.KineFilamentMesh,
 	cloth_parent:     ^Object,
 	cloth_revision:   u64,
+	cloth_topology_revision: u64,
 	cloth_face:       enums.NormalId,
 	cloth_z_offset:   f32,
 	texture_dirty:    bool,

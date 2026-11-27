@@ -93,7 +93,11 @@ rs.Transient.OnClientEvent:Connect(function(value) table.insert(seen, value) end
 local rs = game:GetService("ReplicatedStorage")
 rs.Transient:FireServer("input", Vector3.new(2,3,4), 9)
 rs.Reliable:FireServer("reliable")
-rs.Transient:FireServer(string.rep("x", 1000))
+local ok, err = pcall(function() rs.Transient:FireServer(string.rep("x", 1000)) end)
+assert(not ok and type(err) == "string" and string.find(err, "1000 bytes", 1, true))
+local hugeArgs = table.create(257, true)
+ok, err = pcall(function() rs.Transient:FireServer(table.unpack(hugeArgs)) end)
+assert(not ok and type(err) == "string" and string.find(err, "256 arguments", 1, true))
 `,
 		"client_fire",
 	)
@@ -105,7 +109,8 @@ assert(receiveCount == 1 and latestValue == "input" and reliableValue == "reliab
 local u = game:GetService("ReplicatedStorage").Transient
 u:FireClient(latestPlayer, "target")
 u:FireAllClients("broadcast")
-u:FireAllClients(string.rep("x", 1000))
+local ok, err = pcall(function() u:FireAllClients(string.rep("x", 1000)) end)
+assert(not ok and type(err) == "string" and string.find(err, "1000 bytes", 1, true))
 `,
 		"server_fire",
 	)

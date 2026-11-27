@@ -9,7 +9,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 
-TeleportService_Class := classes.Class_Info{
+TeleportService_Class := classes.Class_Info {
 	name   = "TeleportService",
 	parent = &Service_Class,
 }
@@ -23,11 +23,7 @@ teleport_service_construct :: proc(
 	data_model: rawptr,
 ) -> ^classes.Object {
 	service := new(TeleportService)
-	service.service = Service_Init(
-		&TeleportService_Class,
-		"TeleportService",
-		data_model,
-	)
+	service.service = Service_Init(&TeleportService_Class, "TeleportService", data_model)
 	return &service.object
 }
 
@@ -52,7 +48,10 @@ teleport_service_namecall :: proc(
 	datatype_registry: ^datatypes.Registry,
 	enum_registry: ^enums.Registry,
 	method: string,
-) -> (i32, bool) {
+) -> (
+	i32,
+	bool,
+) {
 	switch method {
 	case "TeleportAsync", "Teleport", "TeleportToPlaceInstance":
 		return 0, true
@@ -63,10 +62,7 @@ teleport_service_namecall :: proc(
 	return 0, false
 }
 
-teleport_service_destroy :: proc(
-	object: ^classes.Object,
-	renderer: ^classes.Renderer_Object,
-) {
+teleport_service_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
 	classes.Object_Destroy(object)
 	free(cast(^TeleportService)object)
 }
@@ -78,7 +74,7 @@ Register_TeleportService_Class :: proc(registry: ^classes.Registry) {
 		teleport_service_construct,
 		teleport_service_destroy,
 		creatable = false,
-		get       = teleport_service_get,
-		namecall  = teleport_service_namecall,
+		get = teleport_service_get,
+		namecall = teleport_service_namecall,
 	)
 }

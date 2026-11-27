@@ -50,6 +50,27 @@ local child = Instance.new("Folder")
 child.Name = key
 child.Parent = folder
 assert(child.Name == key and folder:FindFirstChild(key) == child)
+assert(not pcall(function() folder:FindFirstChild(42) end))
+local part = Instance.new("Part")
+assert(not pcall(function() part.Transparency = 2 end))
+assert(not pcall(function() part.Transparency = -1 end))
+assert(not pcall(function() part.Transparency = 0/0 end))
+part.Transparency = 0.6
+assert(part.Transparency == 0.6)
+assert(type(os) == "table" and type(os.time) == "function" and type(os.date) == "function")
+assert(type(os.time()) == "number" and os.time() > 1.6e9)
+assert(type(os.clock()) == "number")
+assert(type(os.date("*t")) == "table" and os.date("*t").year >= 2020)
+assert(os.execute == nil and os.getenv == nil)
+assert(utf8.char(0x1F600) == "😀")
+local ranges = {}
+for first, last in utf8.graphemes("á🇺🇸b") do
+    table.insert(ranges, {first, last})
+end
+assert(#ranges == 3 and ranges[1][1] == 1 and ranges[1][2] == 3)
+assert(ranges[2][1] == 4 and ranges[2][2] == 11)
+assert(ranges[3][1] == 12 and ranges[3][2] == 12)
+assert(not pcall(function() utf8.graphemes(string.char(255)) end))
 local log = game:GetService("LogService")
 print("A", "B", 1)
 warn("A", "B", 1)

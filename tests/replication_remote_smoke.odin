@@ -255,6 +255,43 @@ assert(stats.malformedPackets == 0, "malformed=" .. tostring(stats.malformedPack
 		"remote_client_packet_health",
 	)
 
+	run_script(&client_vm, `
+local ping = game:GetService("ReplicatedStorage"):FindFirstChild("Ping")
+local ok, err = pcall(function() ping:FireServer(string.rep("A", 1024 * 1024)) end)
+assert(not ok and type(err) == "string" and #err > 0)
+local nested = {}
+local node = nested
+for _ = 1, 500 do
+    node.value = {}
+    node = node.value
+end
+ok, err = pcall(function() ping:FireServer(nested) end)
+assert(not ok and type(err) == "string" and #err > 0)
+local accepted, rejected = 0, 0
+for i = 1, 300 do
+    if pcall(function() ping:FireServer("flood", i) end) then
+        accepted += 1
+    else
+        rejected += 1
+    end
+end
+assert(accepted > 0 and rejected > 0, "accepted=" .. accepted .. " rejected=" .. rejected)
+`, "remote_reject_oversized_and_flood")
+	for _ in 0..<7 {
+		step_network(&client, &client_vm)
+		step_network(&server, &server_vm)
+	}
+	time.sleep(1100 * time.Millisecond)
+	run_script(&client_vm, `
+local ping = game:GetService("ReplicatedStorage"):FindFirstChild("Ping")
+ping:FireServer("after-limit", 42)
+`, "remote_after_limit")
+	for _ in 0..<7 {
+		step_network(&client, &client_vm)
+		step_network(&server, &server_vm)
+	}
+	run_script(&server_vm, `assert(serverEventSeen == "Player:after-limit:42")`, "remote_after_limit_verify")
+
 	run_script(&client_vm, `game:GetService("ReplicatorService"):Stop()`, "remote_client_stop")
 	run_script(&server_vm, `game:GetService("ReplicatorService"):Stop()`, "remote_server_stop")
 

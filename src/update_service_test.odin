@@ -20,6 +20,30 @@ update_version_compare_test :: proc(t: ^testing.T) {
 	expect(t, compare("1.3.0", "1.2.10") > 0, "minor beats patch")
 	expect(t, compare("2.0.0", "1.9.9") > 0, "major beats minor")
 	expect(t, compare("v1.2.3", "1.2.3") == 0, "leading v is ignored")
+	expect(t, compare("v1.19.4", "1.19.4") == 0, "published 1.19.4 matches installed version")
+	expect(t, compare("v1.19.4", "1.19.0-dev") > 0, "mislabeled release binary compares as outdated")
+
+	commit := "35e150cda4dba6279f7815338be0a4e7d570688b"
+	expect(
+		t,
+		!services.Update_Release_Is_Newer("1.19.4", "1.19.0-dev", commit, commit),
+		"matching release commit must suppress the false update prompt",
+	)
+	expect(
+		t,
+		services.Update_Release_Is_Newer("1.19.4", "1.19.0-dev", commit, "some-other-commit"),
+		"real newer release must remain available",
+	)
+	expect(
+		t,
+		services.Update_Release_Is_Newer("1.19.4", "1.19.0-dev", "master", "master"),
+		"branch names are not immutable release identities",
+	)
+	expect(
+		t,
+		!services.Update_Release_Is_Newer("1.19.4", "1.19.4", "", ""),
+		"equal semantic versions must not prompt",
+	)
 
 	expect(t, compare("1.2.3", "1.2.3-dev") > 0, "release beats prerelease")
 	expect(t, compare("1.2.3-dev", "1.2.3") < 0, "prerelease loses to release")

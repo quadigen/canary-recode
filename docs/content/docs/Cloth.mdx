@@ -1,180 +1,143 @@
 ---
 title: Cloth
-description: Create hanging fabric, curtains, and other deformable surfaces that respond to forces and impulses.
+description: Simulate curtains, flags, capes, and other deformable fabric with configurable meshes and attachment points.
 ---
 
-`Cloth` is a 3D object for creating fabric that can move and deform rather than staying rigid. You can suspend it from one or two attachments, control its appearance, and use forces or impulses to make it move.
+`Cloth` is a Workspace instance that deforms under gravity, wind, and forces. Its simulation grid supports independent attachment constraints. Cloth uses a double-sided Filament mesh with smooth normals, shadows, material variants, and deforming front and back decals.
 
-Cloth inherits from `Instance`, so you can organize it in your hierarchy, clone it, and use inherited properties such as `Name` and `Parent`.
+## Make a folded curtain
 
-## Getting started
-
-A cloth needs at least one `Attachment` to define where it hangs. The attachment must belong directly to a `Part` in the Workspace hierarchy.
-
-The following example assumes you already have a `Cloth` and two attachments on a rail in your scene:
+Create three `Attachment` instances named `Left`, `Center`, and `Right` under a rail in Workspace. Space the outer attachments about 7.8 studs apart for the dimensions below. The curtain uses folded rest geometry, including structural, shear, and bending constraints at the folds.
 
 ```lua
-local function setupCurtain(cloth: Cloth, left: Attachment, right: Attachment)
-    cloth.Attachment0 = left
-    cloth.Attachment1 = right
+local rail = workspace.Rail
+local cloth = Instance.new("Cloth")
 
-    cloth.Size = Vector2.new(6, 4)
-    cloth.Color = Color3.fromRGB(220, 210, 195)
-    cloth.Mass = 1
-    cloth.Damping = 2
-    cloth.CanCollide = true
-    cloth.Enabled = true
-end
+cloth.ClothType = Enum.ClothType.Curtain
+cloth.Size = Vector2.new(12, 8)
+cloth.SegmentsX = 48
+cloth.SegmentsY = 24
+cloth.FoldCount = 8
+cloth.FoldDepth = 0.35
+cloth.FoldStiffness = 0.7
+cloth.GatherRatio = 0.65
+cloth.Color = Color3.fromRGB(145, 15, 25)
+cloth.MaterialVariant = "Velvet"
+cloth.Mass = 2
+cloth.Damping = 3
+cloth.CanCollide = true
+cloth.SelfCollision = true
+
+cloth:ClearPins()
+cloth:PinPoint(Vector2.new(0, 0), rail.Left)
+cloth:PinPoint(Vector2.new(0.5, 0), rail.Center)
+cloth:PinPoint(Vector2.new(1, 0), rail.Right)
+cloth.Parent = workspace
 ```
 
-The two attachments hold the upper corners of the curtain. The rest of the fabric extends down from them.
+Set `MaterialVariant` to the name of a variant in your project. To hold the entire folded top edge, leave `CustomPins` off and assign the rail ends to `Attachment0` and `Attachment1`. Increase `SegmentsX` for more detail across the folds. The rest profile uses roughly three or more segments per fold on grids with at least three columns.
 
-## Attaching cloth
+## Presets
 
-### One attachment
+| `Enum.ClothType` | Starting shape and attachment layout |
+| --- | --- |
+| `Flat` | Rectangular sheet. One attachment holds the top center and two attachments hold the upper corners. |
+| `Curtain` | Gathered sheet with vertical folds. The preset holds the folded top edge. |
+| `Flag` | Sheet pinned along the left edge. Two attachments define the top and bottom of that edge. |
+| `Hammock` | Horizontal spans with a sag in the middle and pins along the two short edges. |
+| `Cape` | Sheet pinned across the shoulders along its top edge. |
+| `Custom` | Rectangular sheet with an open attachment layout. |
 
-With a single attachment, the cloth hangs from the center of its upper edge. Its initial width and height come from `Size`, and the attachment's orientation determines the initial direction of the fabric.
+Preset anchors use `Attachment0` and `Attachment1`. On a two-anchor Flat cloth, the distance between the attachments sets the width. Coincident endpoints fall back to `Size.X`. If `Attachment1` is unset and `Attachment0` has exactly one usable sibling attachment, Cloth can use that sibling as the second anchor. A Flat cloth starts once an anchor is present or custom pin mode is enabled. Other presets can start at the world origin before you assign their mounts.
+
+## Attach and release fabric
+
+Vertices use one-based row-major indices. The top left is vertex 1, the top right is `SegmentsX + 1`, and the bottom right is `GetVertexCount()`. UVs run from `(0, 0)` at the top left to `(1, 1)` at the bottom right.
+
+Calling a pin or unpin method enables `CustomPins` and gives control of the attachment layout to that pin map. Set `CustomPins = false` to use the preset layout again. Pins follow their attachments as they move. Destroying an attachment releases its pins. Runtime pin edits preserve the live simulation pose, and removing the final pin lets the sheet fall freely.
 
 ```lua
-local function setupHangingFabric(cloth: Cloth, attachment: Attachment)
-    cloth.Attachment0 = attachment
-    cloth.Attachment1 = nil
-    cloth.Size = Vector2.new(3, 5)
-    cloth.Enabled = true
-end
+-- Bind a top-edge band to a single moving attachment.
+cloth:PinRegion(Vector2.new(0.2, 0), Vector2.new(0.8, 0), workspace.Rail.Center)
+
+-- Release the nearest vertex at the center of that band.
+cloth:UnpinPoint(Vector2.new(0.5, 0))
 ```
 
-For a truly single-point setup, make sure the attachment doesn't have exactly one other `Attachment` sibling that can serve as a second anchor.
-
-### Two attachments
-
-Use two attachments for curtains, banners, or fabric stretched across a rail.
-
-```lua
-cloth.Attachment0 = leftAttachment
-cloth.Attachment1 = rightAttachment
-cloth.Size = Vector2.new(6, 4)
-```
-
-When the two attachment positions are more than 0.001 studs apart, their distance determines the cloth's width instead of `Size.X`. `Size.Y` still determines its height. If they are nearly coincident, the cloth uses the configured width as a fallback.
-
-If you leave `Attachment1` unset and `Attachment0` has exactly one other non-destroyed `Attachment` sibling, Cloth can automatically use that sibling as the second anchor. When several candidates exist, explicitly assign the attachment you want.
-
-`Attachment0` must be valid before the cloth can be displayed. If `Attachment1` is invalid, the cloth falls back to a single anchor.
-
-## Making cloth move
-
-### Continuous force
-
-Use `Force` for a sustained effect, such as wind pushing a curtain. The value is a three-dimensional vector, not a target position.
-
-```lua
--- Push the fabric along the positive X axis.
-cloth.Force = Vector3.new(8, 0, 0)
-
--- Remove the applied force.
-cloth.Force = Vector3.new(0, 0, 0)
-```
-
-Assigning zero removes the configured force; it doesn't reset the cloth's pose.
-
-### One-time impulse
-
-Use `ApplyImpulse()` for a brief push, such as fabric reacting to a nearby impact.
-
-```lua
-cloth:ApplyImpulse(Vector3.new(0, 0, 12))
-```
-
-You can leave `Force` at zero while applying impulses. Use `Mass` and `Damping` to tune the response. The exact movement depends on the physics simulation.
+A region keeps its vertices at distinct offsets in the attachment's coordinate frame. Moving or rotating the attachment carries the whole patch. Use individual `PinPoint` or `PinVertex` calls to bring specific vertices to anchor positions.
 
 ## Properties
 
-All properties in this table are readable and writable.
-
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `Attachment0` | `Attachment?` | `nil` | Primary anchor. Required for the cloth to appear. |
-| `Attachment1` | `Attachment?` | `nil` | Optional second anchor for the opposite upper corner. |
-| `Size` | `Vector2` | `Vector2.new(6, 4)` | Configured width and height in studs. Each dimension must be between 0.1 and 1024. |
-| `Color` | `Color3` | `Color3.new(0.85, 0.85, 0.85)` | Base color of the fabric. |
-| `MaterialVariant` | `string` | `""` | Name of the material variant intended for the cloth. |
-| `Enabled` | `boolean` | `true` | Whether cloth is enabled. Disabling it resets its simulated state and clears pending impulses. |
-| `CanCollide` | `boolean` | `true` | Controls whether collision is enabled for the cloth. |
-| `Mass` | `number` | `1` | Mass used for the cloth simulation. Must be finite and at least 0.001. |
-| `Damping` | `number` | `2` | Controls how quickly movement is damped. Must be finite and nonnegative. |
-| `Force` | `Vector3` | `Vector3.new(0, 0, 0)` | Continuous applied force. All components must be finite. |
+| `ClothType` | `Enum.ClothType` | `Flat` | Selects the rest shape and preset pin layout. |
+| `Attachment0`, `Attachment1` | `Attachment?` | `nil` | Optional preset mounts in Workspace. |
+| `CustomPins` | `boolean` | `false` | Uses the explicit per-vertex pin map. |
+| `Size` | `Vector2` | `Vector2.new(6, 4)` | Width and height in studs, from 0.1 to 1024 per axis. |
+| `SegmentsX`, `SegmentsY` | `number` | `10` | Integer simulation grid dimensions from 1 to 64 per axis. A 10×10 grid has 121 particles, 24×24 has 625, and 48×48 has 2401. |
+| `RenderSegmentsX`, `RenderSegmentsY` | `number` | `0` | Render grid dimensions from 0 to 128 per axis. Zero follows the simulation grid on that axis. Extra samples refine rendering between simulation vertices. |
+| `Color` | `Color3` | `Color3.new(0.85, 0.85, 0.85)` | Base fabric color. |
+| `MaterialVariant` | `string` | `""` | Name of the fabric's material variant. |
+| `Enabled` | `boolean` | `true` | Enables simulation and rendering. Disabling clears the simulated pose and pending impulses. |
+| `CanCollide` | `boolean` | `true` | Enables collision against eligible rigid parts, terrain, and character colliders. |
+| `SelfCollision` | `boolean` | `false` | Separates nearby nonadjacent particles of this cloth. Higher resolution improves coverage of thin folds. |
+| `Mass` | `number` | `1` | Controls response to force, impulse, and compliant constraints. Must be finite and at least 0.001. |
+| `Damping` | `number` | `2` | Rate of velocity damping. Must be finite and nonnegative. |
+| `Force` | `Vector3` | `Vector3.zero` | Continuous force on the free fabric. Cloth also responds to `Workspace.GlobalWind`. |
+| `SolverIterations` | `number` | `8` | Number of XPBD constraint iterations per substep, from 1 to 32. Distant local cloth without rigid collisions can use fewer iterations. |
+| `StretchStiffness` | `number` | `1` | Strength of the horizontal and vertical structural constraints, from 0 to 1. |
+| `ShearStiffness` | `number` | `1` | Strength of the diagonal constraints, from 0 to 1. |
+| `BendStiffness` | `number` | `0.15` | Strength of bending constraints along the height of a fold and across flat cloth, from 0 to 1. |
+| `FoldCount` | `number` | `6` for Curtain, `0` for Flat | Number of corrugations, from 0 to 32. The simulation grid limits the effective count. |
+| `FoldDepth` | `number` | `0.25` for Curtain, `0` for Flat | Fold amplitude in studs, from 0 to 1024. |
+| `FoldStiffness` | `number` | `0.6` | Strength of bending constraints across folds, from 0 to 1. |
+| `GatherRatio` | `number` | `0.65` for Curtain, `0` for Flat | For Curtain, the fraction of width retained when the span comes from `Size.X`. Zero uses the full width. Legacy Flat cloth interprets the value as the fraction removed. |
 
-### Changing the shape
-
-Changing `Size` or either attachment resets the cloth's initialized pose. Changing an attachment also clears any pending impulse, so set up anchors before applying a push.
-
-### Appearance
-
-You can change the color or select a named material variant without changing the cloth's dimensions.
-
-```lua
-cloth.Color = Color3.fromRGB(110, 35, 45)
-cloth.MaterialVariant = "Velvet"
-```
-
-`"Velvet"` is an example name; use a material variant that exists in your project. Texture and material rendering behavior depends on the material configuration.
-
-### Resetting the cloth
-
-To discard its current pose and pending impulses, disable and re-enable the cloth:
-
-```lua
-cloth.Enabled = false
-cloth.Enabled = true
-```
-
-It can initialize again from its current attachments when they are valid. This does not clear `Force` or reset the other configuration properties.
+Choose a preset before setting its fold properties. Changing the simulation dimensions, size, or rest shape rebuilds the pose. Existing custom pins remap by normalized coordinates when the simulation grid changes.
 
 ## Methods
 
-### ApplyImpulse
+| Method | Description |
+| --- | --- |
+| `PinVertex(index, attachment)` | Moves a vertex to an attachment and keeps it pinned there. |
+| `PinPoint(uv, attachment)` | Pins the closest simulation vertex to a UV coordinate. |
+| `PinRegion(minUV, maxUV, attachment)` | Pins vertices within inclusive UV bounds to attachment-relative offsets. Equal bounds on an axis select its closest row or column. |
+| `UnpinVertex(index)`, `UnpinPoint(uv)` | Removes a pin by index or by nearest UV. |
+| `ClearPins()` | Clears the pin map and enables custom pin mode. |
+| `GetPins()` | Returns a sparse table of custom attachments keyed by vertex index. |
+| `GetVertexCount()` | Returns `(SegmentsX + 1) * (SegmentsY + 1)`. |
+| `GetVertexPosition(index)` | Returns a vertex's current world position. The cloth needs an initialized pose in Workspace. |
+| `SetPinWeight(index, attachment, weight)` | Sets a pin's strength from 0 to 1. A new assignment preserves the initialized vertex's offset relative to the attachment. Zero removes the pin. |
+| `GetPinWeight(index)` | Returns the custom pin weight, or zero for a vertex without a custom pin. |
+| `ResetSimulation()` | Rebuilds the rest pose on the next update and clears pending impulses. Keeps the configuration and pin map. |
+| `ApplyImpulse(impulse)` | Queues a one-time push from a finite `Vector3`. Multiple impulses before a step accumulate. |
+
+### Contact and forces
+
+`Touched` fires when a touch-enabled rigid part or character root begins contact with the cloth. For continuous motion, set `Force` or `Workspace.GlobalWind`. Set `Force` back to `Vector3.zero` to stop applying it.
 
 ```lua
-ApplyImpulse(impulse: Vector3): ()
-```
-
-Applies a one-time impulse to the cloth.
-
-The method accepts a `Vector3` and returns no values. Multiple impulses submitted before they are processed accumulate. An impulse is only queued when the cloth is enabled and `Attachment0` is assigned. Non-finite accumulated impulses raise an error.
-
-```lua
-local function pushFabric(cloth: Cloth)
-    if cloth.Enabled and cloth.Attachment0 then
+cloth.Touched:Connect(function(part)
+    if part.Name == "CurtainMover" then
         cloth:ApplyImpulse(Vector3.new(0, 3, 10))
     end
-end
-```
-
-## Events
-
-### Touched
-
-`Touched` is the cloth's contact event.
-
-```lua
-cloth.Touched:Connect(function(...)
-    print("Cloth contact", ...)
 end)
 ```
 
-The current class API exposes this event, but its callback arguments and exact firing conditions are not specified by the available class definition. Don't rely on a particular argument type or collision notification frequency without verifying the physics behavior.
+## Editor
 
-## Cloning
+Select a Cloth in Explorer and click **Edit pins** in the viewport panel. Select an Attachment alongside the Cloth to assign it as the brush target. **Select** picks a vertex, and **Apply weight** assigns the entered weight to it. **Paint** applies the weight while dragging, and **Erase** releases pins within the brush radius. Press **Escape** or **Done** to leave the mode.
 
-A cloned cloth copies its attachment references, size, appearance, enabled state, collision setting, mass, damping, and continuous force. It does not copy its live deformed pose or pending impulses. If you want the copy to hang elsewhere, assign new attachments to it before use.
+Set `ClothType` to `Curtain` and use the Inspector to change fold properties. **Preview / Reset** rebuilds the current rest shape so you can see the effect and start a new simulation.
 
-## Troubleshooting
+## Saving and multiplayer
 
-- **The cloth is missing:** Check that `Enabled` is true and `Attachment0` belongs to a `Part` under Workspace.
-- **The width doesn't match `Size.X`:** With two valid, separated anchors, their distance sets the width.
-- **A second corner appears pinned unexpectedly:** Check for an additional `Attachment` sibling of `Attachment0`.
-- **An impulse has no effect:** Make sure the cloth is enabled, has a valid primary attachment, and is able to simulate.
-- **Changing an anchor resets the fabric:** This is expected when the cloth needs to initialize a new pose.
+Projects save the cloth configuration, attachment references, and any offsets and weights. Clones start from their configured rest shape and remap pin references to matching attachments inside the cloned hierarchy. Live deformations and pending impulses are transient.
 
-The public API does not currently expose controls for individual cloth points, cloth subdivision, or collision filtering specific to Cloth. Use the properties and methods above to control the fabric.
+The server runs the solver and reliably sends the configuration. Clients interpolate quantized particle snapshots. Periodic reliable keyframes deliver the final pose when cloth stops moving. The transport uses Zstandard where both peers support it and compression saves enough bandwidth.
+
+## Simulation cost
+
+Rigid collisions add work per particle and self-collision adds neighbour queries. Start with a 24×24 cloth and increase resolution where the silhouette or folds need it. The independent render grid can add tessellation while keeping the physics grid smaller. Cloth uses a CPU solver with preallocated constraint buffers, distance-based iteration limits for local noncolliding cloth, and sleeping for settled cloth without active rigid queries.
+
+The Vulkan GPUCompute service can batch kernels and read back buffers. Moving this solver to GPUCompute would also require a way to feed CPU-side rigid collisions and authoritative snapshots without adding a synchronous readback to each substep.

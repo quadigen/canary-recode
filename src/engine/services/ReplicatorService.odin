@@ -114,6 +114,10 @@ Replication_Peer :: struct {
 	acked_property:            map[u32]u32,
 	acked_extra:               map[u32]u32,
 	deformable:                map[u32]u64,
+	cloth_states:             map[u32]Replication_Cloth_Send_State,
+	attachment_generations:   map[u32]u64,
+	attachment_generation:    u64,
+	deformable_cursor:        int,
 	bytes_this_tick:           u32,
 	join_batch:                [dynamic]u8,
 	join_batch_enabled:        bool,
@@ -153,9 +157,10 @@ Replication_Peer :: struct {
 	focus_z:                   f64,
 	focus_ok:                  bool,
 	client_capabilities:       u32,
-	rpc_rate_window:           f32,
+	rpc_rate_window:           u32,
 	rpc_rate_count:            u32,
 	rpc_rate_bytes:            u32,
+	rpc_rate_warning_sent:     bool,
 	ownership_rate_count:      u32,
 	snapshot_clock_rate:       f32,
 	client_nonce:              u32,
@@ -203,6 +208,8 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	delete(connection.acked_property)
 	delete(connection.acked_extra)
 	delete(connection.deformable)
+	delete(connection.cloth_states)
+	delete(connection.attachment_generations)
 	connection.known = nil
 	connection.initialized = nil
 	connection.part_states = nil
@@ -212,6 +219,8 @@ Replication_Peer_Dispose :: proc(connection: ^Replication_Peer) {
 	connection.acked_property = nil
 	connection.acked_extra = nil
 	connection.deformable = nil
+	connection.cloth_states = nil
+	connection.attachment_generations = nil
 }
 
 Replication_Schema :: struct {
@@ -269,6 +278,9 @@ ReplicatorService :: struct {
 	client_event_policy:                    map[string]bool,
 	group_members:                          [dynamic]Replication_Group_Member,
 	schemas:                                [dynamic]Replication_Schema,
+	remote_zstd_sent:                      u64,
+	remote_zstd_received:                  u64,
+	remote_zstd_bytes_saved:               u64,
 	packets_sent:                           u64,
 	bytes_sent:                             u64,
 	packets_received:                       u64,
@@ -312,11 +324,15 @@ ReplicatorService :: struct {
 	terrain_sync_due:                       bool,
 	ack_elapsed:                            f32,
 	ack_full_elapsed:                       f32,
-	diag_kind_counts:                       [36]u64,
-	diag_kind_bytes:                        [36]u64,
-	diag_subtype_counts:                    [16][36]u64,
+	diag_kind_counts:                       [38]u64,
+	diag_kind_bytes:                        [38]u64,
+	diag_subtype_counts:                    [16][38]u64,
 	invoke_pending:                         [dynamic]Remote_Invoke_Pending,
 	next_invoke_id:                         u32,
+	client_remote_window_ms:                u32,
+	client_remote_window_count:             u32,
+	client_remote_window_bytes:             u32,
+	client_remote_window_expanded_bytes:    u32,
 	drops_window:                           u64,
 	drop_pressure:                          f32,
 	adaptive_scale:                         f32,
@@ -1020,6 +1036,9 @@ replication_namecall :: proc(
 		); vm.SetField(L, -2, "terrainTableComplete")
 
 
+		vm.PushNumber(L, f64(service.remote_zstd_sent)); vm.SetField(L, -2, "remoteZstdSent")
+		vm.PushNumber(L, f64(service.remote_zstd_received)); vm.SetField(L, -2, "remoteZstdReceived")
+		vm.PushNumber(L, f64(service.remote_zstd_bytes_saved)); vm.SetField(L, -2, "remoteZstdBytesSaved")
 		vm.PushNumber(L, f64(service.rejected_packets)); vm.SetField(L, -2, "rejectedPackets")
 		vm.PushNumber(L, f64(service.version_mismatches)); vm.SetField(L, -2, "versionMismatches")
 		vm.PushNumber(L, f64(service.schema_mismatches)); vm.SetField(L, -2, "schemaMismatches")

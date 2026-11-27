@@ -5,6 +5,7 @@ import datatypes "../datatypes"
 import enums "../enum"
 import vm "../vm"
 import "core:fmt"
+import "core:math"
 import "core:strings"
 
 PostProcess_Class := Class_Info {
@@ -21,6 +22,15 @@ PostProcess_Texture :: struct {
 
 POST_PROCESS_SCENE_UNIFORMS :: [?]string {
 	"inputTexture",
+	"sceneTexture",
+	"pass0Texture",
+	"pass1Texture",
+	"pass2Texture",
+	"pass3Texture",
+	"pass4Texture",
+	"pass5Texture",
+	"pass6Texture",
+	"pass7Texture",
 	"depthTexture",
 	"time",
 	"deltaTime",
@@ -57,6 +67,7 @@ PostProcess :: struct {
 	using object:       Object,
 	using shader_state: Runtime_Shader,
 	enabled:            bool,
+	priority:           i32,
 	textures:           [dynamic]PostProcess_Texture,
 }
 
@@ -72,9 +83,6 @@ PostProcess_construct :: proc(renderer: ^Renderer_Object, data_model: rawptr) ->
 
 PostProcess_destroy :: proc(object: ^Object, renderer: ^Renderer_Object) {
 	process := cast(^PostProcess)object
-	if object.signal_registry != nil && object.signal_registry.active_post_process == object {
-		object.signal_registry.active_post_process = nil
-	}
 
 	for texture in process.textures {delete(texture.name); delete(texture.pixels)}
 	delete(process.textures)
@@ -92,6 +100,7 @@ PostProcess_get :: proc(
 ) -> bool {
 	process := cast(^PostProcess)object
 	if key == "Enabled" {vm.PushBoolean(L, process.enabled); return true}
+	if key == "Priority" {vm.PushNumber(L, f64(process.priority)); return true}
 	return Runtime_Shader_Get(L, &process.shader_state, key)
 }
 
@@ -105,6 +114,16 @@ PostProcess_set :: proc(
 ) -> bool {
 	process := cast(^PostProcess)object
 	if key == "Enabled" {process.enabled = vm.ArgBoolean(L, index); return true}
+	if key == "Priority" {
+		value := vm.ArgNumber(L, index)
+		if math.is_nan(value) || math.is_inf(value) || value != math.floor(value) ||
+		   value < -2147483648 || value > 2147483647 {
+			_ = vm.RaiseError(L, "Priority must be a 32-bit integer")
+			return true
+		}
+		process.priority = i32(value)
+		return true
+	}
 	return Runtime_Shader_Set(L, &process.shader_state, key, index)
 }
 
@@ -188,6 +207,7 @@ PostProcess_namecall :: proc(
 PostProcess_clone :: proc(source: ^Object, destination: ^Object) {
 	src, dst := cast(^PostProcess)source, cast(^PostProcess)destination
 	dst.enabled = src.enabled
+	dst.priority = src.priority
 	Runtime_Shader_Clone(&src.shader_state, &dst.shader_state)
 	for texture in src.textures {
 		pixels := make([]u8, len(texture.pixels))
@@ -206,33 +226,7 @@ PostProcess_clone :: proc(source: ^Object, destination: ^Object) {
 	}
 }
 
-PostProcess_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
-	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
-	registry := object.signal_registry
-	if registry == nil {return}
-
-
-	selected: ^Object
-	descriptor := Find_Class(registry, "PostProcess")
-	for candidate in descriptor.instances {
-		if candidate == nil || candidate.destroyed || candidate.parent == nil {continue}
-		process := cast(^PostProcess)candidate
-		if process.enabled && len(process.source) > 0 {selected = candidate; break}
-	}
-	filament := ctx.renderer.Filament
-	if selected == nil {
-		if registry.active_post_process != nil {
-			kineffi.Kine_Filament_SetPostProcessShader(filament, nil)
-			registry.active_post_process = nil
-		}
-		return
-	}
-	if selected != object {return}
-	if registry.active_post_process != nil && registry.active_post_process != object {
-		kineffi.Kine_Filament_SetPostProcessShader(filament, nil)
-		registry.active_post_process = nil
-	}
-	process := cast(^PostProcess)object
+PostProcess_Prepare :: proc(process: ^PostProcess, filament: ^kineffi.KineFilamentContext) {
 	changed := Runtime_Shader_Prepare(&process.shader_state, filament)
 	if process.filament_shader == nil {return}
 	for &texture in process.textures {
@@ -256,17 +250,44 @@ PostProcess_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 			)
 		}
 	}
-	if registry.active_post_process != object || changed {
-		if kineffi.Kine_Filament_SetPostProcessShader(filament, process.filament_shader) {
-			registry.active_post_process = object
-		} else {
-			Runtime_Shader_Error(
-				&process.shader_state,
-				string(kineffi.Kine_Filament_Shader_GetLastError()),
-			)
-			registry.active_post_process = nil
-			process.enabled = false
+}
+
+PostProcess_Update_Chain :: proc(registry: ^Registry, ctx: ^Class_Step_Context) {
+	if ctx == nil || ctx.renderer == nil || ctx.renderer.Filament == nil {return}
+	descriptor := Find_Class(registry, "PostProcess")
+	if descriptor == nil {return}
+	filament := ctx.renderer.Filament
+	passes: [8]^PostProcess
+	count := 0
+	for candidate in descriptor.instances {
+		if candidate == nil || candidate.destroyed || candidate.parent == nil {continue}
+		process := cast(^PostProcess)candidate
+		if !process.enabled || len(process.source) == 0 {continue}
+		position := count
+		for position > 0 && passes[position - 1].priority > process.priority {position -= 1}
+		if position >= len(passes) {continue}
+		if count < len(passes) {count += 1}
+		for i := count - 1; i > position; i -= 1 {passes[i] = passes[i - 1]}
+		passes[position] = process
+	}
+	shaders: [8]^kineffi.KineFilamentShader
+	ready := true
+	for i in 0 ..< count {
+		process := passes[i]
+		PostProcess_Prepare(process, filament)
+		shaders[i] = process.filament_shader
+		if shaders[i] == nil {ready = false}
+	}
+	if !ready {
+		kineffi.Kine_Filament_SetPostProcessChain(filament, nil, 0)
+		return
+	}
+	if !kineffi.Kine_Filament_SetPostProcessChain(filament, &shaders[0], i32(count)) {
+		message := string(kineffi.Kine_Filament_Shader_GetLastError())
+		for i in 0 ..< count {
+			if passes[i].last_error != message {Runtime_Shader_Error(&passes[i].shader_state, message)}
 		}
+		kineffi.Kine_Filament_SetPostProcessChain(filament, nil, 0)
 	}
 }
 
@@ -280,9 +301,7 @@ Register_PostProcess :: proc(registry: ^Registry) {
 		set = PostProcess_set,
 		clone = PostProcess_clone,
 		namecall = PostProcess_namecall,
-		_step = PostProcess_Step,
-		_step_phase = .Render_3D,
-		properties = {"Source", "Enabled", "LastError", "Compiled"},
-		methods = {"SetUniform", "GetUniform", "SetTexture"},
+		properties = {"Source", "Enabled", "Priority", "LastError", "Compiled"},
+		methods = {"SetUniform", "GetUniform", "GetUniforms", "RemoveUniform", "SetTexture"},
 	)
 }

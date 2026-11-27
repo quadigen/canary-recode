@@ -55,6 +55,7 @@ main :: proc() {
 	client_vm := vm.New()
 	client: engine_runtime.Environment
 	engine_runtime.Environment_Init(&client, &client_vm)
+	assert(!engine_runtime.Load_Map_From_Data(&client, &client_vm, nil, "empty.kine"))
 	assert(engine_runtime.Load_Map(&client, &client_vm, "build/kine-map-smoke.kine"))
 	workspace := services.Ensure_Service(&client.services, "Workspace")
 	loaded_model := classes.Find_First_Child(workspace, "KineMapSmoke")

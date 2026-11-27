@@ -31,7 +31,9 @@ Declare any of these parameters with the exact type shown. The engine fills them
 
 | Name | Shader type | Meaning |
 | --- | --- | --- |
-| `inputTexture` | sampler2d | Rendered scene color, including built-in screen effects. |
+| `inputTexture` | sampler2d | Previous pass output, or rendered scene color for the first pass. |
+| `sceneTexture` | sampler2d | Original rendered scene color. |
+| `pass0Texture` through `pass6Texture` | sampler2d | Earlier pass outputs, indexed from zero. |
 | `depthTexture` | sampler2d | Reversed-Z depth of depth-writing scene geometry. |
 | `time` | float | Elapsed renderer time in seconds. |
 | `deltaTime` | float | Render-frame time step in seconds. |
@@ -118,7 +120,7 @@ This shader integrates an animated, height-dependent density along each camera r
 
 ## Switching effects
 
-Only one `PostProcess` can be selected at a time. When several parented instances are enabled and have a non-empty source, the first eligible instance is selected. There is no exposed priority or stacking property.
+Up to eight enabled, parented instances with non-empty sources form a chain. Lower `Priority` values execute first; ties follow instance registry order. Each pass renders at viewport resolution into an RGBA8 target, except the final pass which renders to the scene output. The engine waits until every selected pass has a compiled shader. Declare earlier pass samplers only when their index precedes the current pass. The original scene is always available as `sceneTexture`. Keep priorities distinct to make ordering explicit.
 
 If you want to switch between effects, disable the old one before enabling the new one:
 
@@ -155,7 +157,8 @@ If the effect cannot be applied to the scene, it may be disabled automatically a
 | Property | Type | Default | Access | Description |
 | --- | --- | --- | --- | --- |
 | `Source` | `string` | `""` | Read/write | Shader source code. An empty source makes the instance ineligible for selection. |
-| `Enabled` | `boolean` | `true` | Read/write | Whether this effect can be selected. |
+| `Enabled` | `boolean` | `true` | Read/write | Whether this effect participates in the chain. |
+| `Priority` | `number` | `0` | Read/write | Signed integer controlling pass order, lowest first. |
 | `Compiled` | `boolean` | Not compiled initially | Status | Reports whether the shader is compiled. |
 | `LastError` | `string` | `""` | Status | Reports the latest shader error. |
 
@@ -180,6 +183,22 @@ GetUniform(name: string): number | {number} | nil
 ```
 
 Returns the last value supplied with SetUniform, or nil if no value was set. It does not read back automatic scene uniforms.
+
+### GetUniforms
+
+```lua
+GetUniforms(): {[string]: number | {number}}
+```
+
+Returns a table of configured custom uniforms. The scene-provided values, including `inputTexture`, are excluded.
+
+### RemoveUniform
+
+```lua
+RemoveUniform(name: string): boolean
+```
+
+Removes a stored custom uniform, returning `true` if it existed. Removing a value triggers shader recompilation, restoring the declared uniform's default value.
 
 ### SetTexture
 
@@ -210,8 +229,8 @@ Call the method again to upload a changed image. The shader owns a snapshot, so 
 ## Things to keep in mind
 
 - Keep an effect parented and enabled while you want it to participate in rendering.
-- Multiple instances do not form a chain of effects. Combine effects in one shader if you need them together.
+- Intermediate textures stay on the GPU. Each additional pass uses a full-resolution color target; keep the chain short.
 - Use uniforms for changing parameters rather than assigning a new shader source every frame.
-- Check `LastError` if the effect doesn't appear, and make sure another eligible `PostProcess` is not taking its place.
+- Check `LastError` if the effect doesn't appear, and check that all referenced pass indices exist and precede the current pass.
 - Screen-space effects change the rendered image, not the underlying geometry or physics of objects.
 - Depth is captured from depth-writing geometry; transparent surfaces may be absent. Native Filament support is provided; the web and raytracing paths are not verified.

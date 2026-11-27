@@ -13,7 +13,7 @@ import "core:sort"
 import "core:strings"
 
 
-Replication_Protocol_Version: u32 = 13
+Replication_Protocol_Version: u32 = 14
 
 
 Replication_Max_Frame_Payload: u32 = 1048576
@@ -25,6 +25,8 @@ Replication_Max_Native_Send_Payload: u32 = 512 * 1024 - 6
 Replication_Minimum_Framing_Version: u32 = 5
 
 REPLICATION_MAX_CLIENT_PACKETS_PER_SECOND :: 480
+REPLICATION_MAX_RPC_PACKETS_PER_SECOND :: 240
+REPLICATION_MAX_RPC_BYTES_PER_SECOND :: 2 * 1024 * 1024
 REPLICATION_MAX_CLIENT_BYTES_PER_SECOND :: 4 * 1024 * 1024
 REPLICATION_HANDSHAKE_TIMEOUT_MS :: 10000
 
@@ -61,6 +63,7 @@ Replication_Capability_Ownership_Policy :: u32(1 << 21)
 Replication_Capability_Compact_Values :: u32(1 << 22)
 Replication_Capability_Compact_Physics :: u32(1 << 23)
 Replication_Capability_Character_Pose :: u32(1 << 24)
+Replication_Capability_Remote_Zstd :: u32(1 << 25)
 REPLICATION_SNAPSHOT_CLOCK_RATE :: 120
 
 
@@ -89,7 +92,8 @@ Replication_Local_Capabilities: u32 =
 	Replication_Capability_Ownership_Policy |
 	Replication_Capability_Compact_Values |
 	Replication_Capability_Compact_Physics |
-	Replication_Capability_Character_Pose
+	Replication_Capability_Character_Pose |
+	Replication_Capability_Remote_Zstd
 
 Replication_Handshake_Ok: u8 = 0
 Replication_Handshake_Version_Mismatch: u8 = 1
@@ -120,6 +124,7 @@ Replication_Kind_Character_Settings :: u8(32)
 Replication_Kind_Unreliable_Remote :: u8(33)
 Replication_Kind_Ownership_Policy :: u8(34)
 Replication_Kind_Character_Pose :: u8(35)
+Replication_Kind_Remote_Zstd :: u8(36)
 
 Replication_Deformable_Cloth :: u8(0)
 Replication_Deformable_SoftBody :: u8(1)
@@ -736,6 +741,7 @@ replication_budgeted :: proc(service: ^ReplicatorService, kind: u8) -> bool {
 		kind != 10 &&
 		kind != 20 &&
 		kind != Replication_Kind_Asset &&
+		kind != Replication_Kind_Cloth_Config &&
 		kind != Replication_Kind_Terrain &&
 		kind != Replication_Kind_Model_Pivot &&
 		kind != Replication_Kind_Group_Ownership &&
@@ -773,12 +779,23 @@ replication_send :: proc(
 	payload: []u8,
 	reliable: bool = true,
 ) -> bool {
-	if peer == nil ||
-	   service.host == nil ||
-	   len(payload) > int(Replication_Max_Native_Send_Payload) {return false}
+	if peer == nil || service.host == nil {return false}
+	client_rpc := kind == 12 || kind == 16 || kind == 17 || kind == 18 ||
+	              kind == Replication_Kind_Unreliable_Remote
+	if client_rpc && !remote_client_send_permitted(service, 0, 0) {return false}
+	capabilities := remote_common_capabilities(service, peer)
+	compressed_payload, compressed := replication_remote_zstd_compress(
+		kind,
+		payload,
+		(capabilities & Replication_Capability_Remote_Zstd) != 0,
+	)
+	defer if compressed_payload != nil {delete(compressed_payload)}
+	wire_kind := Replication_Kind_Remote_Zstd if compressed else kind
+	wire_payload := compressed_payload if compressed else payload
+	if len(wire_payload) > int(Replication_Max_Native_Send_Payload) {return false}
 	if int(kind) < len(service.diag_kind_counts) {
 		service.diag_kind_counts[int(kind)] += 1
-		service.diag_kind_bytes[int(kind)] += u64(len(payload))
+		service.diag_kind_bytes[int(kind)] += u64(len(wire_payload))
 
 
 		if len(payload) > 0 && int(payload[0]) < 16 {
@@ -791,7 +808,8 @@ replication_send :: proc(
 			if candidate.peer == peer {connection = &candidate; break}
 		}
 	}
-	wire_size := len(payload) + 5
+	wire_size := len(wire_payload) + 5
+	if client_rpc && !remote_client_send_permitted(service, wire_size, len(payload) + 5) {return false}
 	budgeted := connection != nil && replication_budgeted(service, kind)
 	if budgeted &&
 	   u64(connection.bytes_this_tick) + u64(wire_size) >
@@ -810,8 +828,8 @@ replication_send :: proc(
 			if len(batch^) + wire_size + 4 > REPLICATION_JOIN_BATCH_MAX &&
 			   !replication_flush_join_batch(service, connection) {return false}
 			replication_put_u32(batch, u32(wire_size))
-			append(batch, 'K', 'R', 'P', u8(Replication_Protocol_Version), kind)
-			append(batch, ..payload)
+			append(batch, 'K', 'R', 'P', u8(Replication_Protocol_Version), wire_kind)
+			append(batch, ..wire_payload)
 			if budgeted {connection.bytes_this_tick += u32(wire_size)}
 			return true
 		}
@@ -820,8 +838,8 @@ replication_send :: proc(
 
 	bytes := make([dynamic]u8, 0, wire_size)
 	defer delete(bytes)
-	append(&bytes, 'K', 'R', 'P', u8(Replication_Protocol_Version), kind)
-	append(&bytes, ..payload)
+	append(&bytes, 'K', 'R', 'P', u8(Replication_Protocol_Version), wire_kind)
+	append(&bytes, ..wire_payload)
 	channel :=
 		reliable ? Replication_Transport_Channel_Reliable : Replication_Transport_Channel_Unreliable
 	if !transport_peer_send(
@@ -833,6 +851,11 @@ replication_send :: proc(
 	) {return false}
 	service.packets_sent += 1
 	service.bytes_sent += u64(len(bytes))
+	if client_rpc {remote_client_record_send(service, wire_size, len(payload) + 5)}
+	if compressed {
+		service.remote_zstd_sent += 1
+		service.remote_zstd_bytes_saved += u64(len(payload) - len(wire_payload))
+	}
 	if budgeted {connection.bytes_this_tick += u32(wire_size)}
 	return true
 }
@@ -1183,35 +1206,7 @@ replication_receive_deformable :: proc(
 	switch kind {
 	case Replication_Deformable_Cloth:
 		if !classes.Is_A(object, "Cloth") {reader.valid = false; return}
-		cloth := cast(^classes.Cloth)object
-		new_origin := datatypes.Vector3 {
-			replication_read_f64(reader),
-			replication_read_f64(reader),
-			replication_read_f64(reader),
-		}
-		if !reader.valid || !replication_vector3_finite(new_origin) {reader.valid = false; return}
-		cloth.simulation_origin = new_origin
-		for &particle in cloth.particles {
-			particle.position.x = replication_read_f32(reader)
-			particle.position.y = replication_read_f32(reader)
-			particle.position.z = replication_read_f32(reader)
-			particle.velocity = {}
-		}
-		if !reader.valid {return}
-		cloth.force = {}
-		cloth.width = cloth.size.X
-		if workspace := DataModel_Get_Service(service.data_model, "Workspace"); workspace != nil {
-			_, pin_count := classes.Cloth_Anchors(cloth, workspace)
-			if pin_count == 2 {
-				cloth.width = classes.Cloth_Width(
-					cloth,
-					cloth.particles[classes.CLOTH_SEGMENTS].position - cloth.particles[0].position,
-				)
-			}
-		}
-		cloth.pose_source = .Replication
-		cloth.initialized = true
-		cloth.revision += 1
+		replication_receive_cloth_pose(cast(^classes.Cloth)object, reader)
 	case Replication_Deformable_SoftBody:
 		if !classes.Is_A(object, "SoftBody") {reader.valid = false; return}
 		body := cast(^classes.SoftBody)object
@@ -1623,12 +1618,25 @@ replication_receive_asset :: proc(
 	replication_asset_commit(service, id, path, kind, data)
 }
 
+replication_warn_rpc_limit :: proc(connection: ^Replication_Peer) {
+	if connection == nil || connection.rpc_rate_warning_sent {return}
+	connection.rpc_rate_warning_sent = true
+	user_id := connection.player.user_id if connection.player != nil else u32(0)
+	fmt.eprintf(
+		"[Replication] rejecting RPCs from user %d: limit %d calls or %d bytes per second; further warnings suppressed for this window\n",
+		user_id,
+		REPLICATION_MAX_RPC_PACKETS_PER_SECOND,
+		REPLICATION_MAX_RPC_BYTES_PER_SECOND,
+	)
+}
+
 replication_receive :: proc(
 	service: ^ReplicatorService,
 	L: ^vm.State,
 	peer: ^Replication_Transport_Peer,
-	data: []u8,
+	packet: []u8,
 ) {
+	data := packet
 	if len(data) < 5 ||
 	   len(data) > int(Replication_Max_Frame_Payload) + 5 ||
 	   data[0] != 'K' ||
@@ -1639,15 +1647,52 @@ replication_receive :: proc(
 		return
 	}
 
+	expanded_frame: []u8
+	defer if expanded_frame != nil {delete(expanded_frame)}
+	if data[4] == Replication_Kind_Remote_Zstd {
+		if (remote_common_capabilities(service, peer) & Replication_Capability_Remote_Zstd) == 0 ||
+		   (service.mode == .Client && !service.handshake_complete) {
+			service.rejected_packets += 1
+			return
+		}
+		if service.mode == .Server {
+			connection := replication_peer_of(service, peer)
+			if len(data) <= 5 || data[5] == Replication_Kind_Cloth_Config || data[5] == Replication_Kind_Deformable ||
+			   connection == nil || !connection.handshake_complete {
+				service.rejected_packets += 1
+				return
+			}
+			now := transport_time_get()
+			if now - connection.rpc_rate_window < 1000 &&
+			   (connection.rpc_rate_count >= REPLICATION_MAX_RPC_PACKETS_PER_SECOND ||
+				connection.receive_rate_count >= REPLICATION_MAX_CLIENT_PACKETS_PER_SECOND) {
+				if connection.rpc_rate_count >= REPLICATION_MAX_RPC_PACKETS_PER_SECOND {
+					replication_warn_rpc_limit(connection)
+				}
+				service.rejected_packets += 1
+				return
+			}
+		}
+		decoded, ok := replication_remote_zstd_decompress(data)
+		if !ok {
+			service.malformed_packets += 1
+			return
+		}
+		expanded_frame = decoded
+		data = expanded_frame
+	}
+
 	if service.mode == .Server {
 		connection := replication_peer_of(service, peer)
 		if connection == nil ||
 		   (!connection.handshake_complete && data[4] != 1) {service.rejected_packets += 1; return}
 
-		if service.clock - connection.rpc_rate_window >= 1 {
-			connection.rpc_rate_window = service.clock
+		current_ms := transport_time_get()
+		if current_ms - connection.rpc_rate_window >= 1000 {
+			connection.rpc_rate_window = current_ms
 			connection.rpc_rate_count = 0
 			connection.rpc_rate_bytes = 0
+			connection.rpc_rate_warning_sent = false
 			connection.ownership_rate_count = 0
 			connection.receive_rate_count = 0
 			connection.receive_rate_bytes = 0
@@ -1662,8 +1707,9 @@ replication_receive :: proc(
 		connection.receive_rate_bytes += u32(len(data))
 		switch data[4] {
 		case 12, 16, 17, 18, Replication_Kind_Unreliable_Remote:
-			if connection.rpc_rate_count >= 240 ||
-			   u32(len(data)) > 2 * 1024 * 1024 - connection.rpc_rate_bytes {
+			if connection.rpc_rate_count >= REPLICATION_MAX_RPC_PACKETS_PER_SECOND ||
+			   u32(len(data)) > REPLICATION_MAX_RPC_BYTES_PER_SECOND - connection.rpc_rate_bytes {
+				replication_warn_rpc_limit(connection)
 				service.rejected_packets += 1
 				return
 			}
@@ -1678,6 +1724,7 @@ replication_receive :: proc(
 		   peer != service.remote ||
 		   (!service.handshake_complete && data[4] != 3) {service.rejected_packets += 1; return}
 	} else {return}
+	if expanded_frame != nil {service.remote_zstd_received += 1}
 	reader := Replication_Reader {
 		capabilities = remote_common_capabilities(service, peer),
 		peer         = peer,
@@ -1706,6 +1753,8 @@ replication_receive :: proc(
 		replication_receive_terrain(service, peer, &reader)
 	case Replication_Kind_Character_Pose:
 		replication_receive_character_pose(service, peer, &reader)
+	case Replication_Kind_Cloth_Config:
+		replication_receive_cloth_config(service, peer, &reader)
 	case Replication_Kind_Deformable:
 		replication_receive_deformable(service, peer, &reader)
 	case Replication_Kind_Script_Source:
@@ -2578,6 +2627,8 @@ Replication_Step :: proc(service: ^ReplicatorService, L: ^vm.State, delta_time: 
 						acked_property = make(map[u32]u32),
 						acked_extra = make(map[u32]u32),
 						deformable = make(map[u32]u64),
+						cloth_states = make(map[u32]Replication_Cloth_Send_State),
+						attachment_generations = make(map[u32]u64),
 					},
 				)
 			} else if event.peer == service.remote {
