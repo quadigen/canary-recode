@@ -166,6 +166,7 @@ tests_services := '''
     messaging_service_smoke
     memory_store_smoke
     plugin_api_smoke
+    plugin_marketplace_smoke
     marketplace_plugin_smoke
 '''
 

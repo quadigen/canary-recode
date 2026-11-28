@@ -9,6 +9,7 @@ import enums "../enum"
 import vm "../vm"
 import "core:encoding/json"
 import "core:fmt"
+import "core:time"
 
 PLUGIN_MARKETPLACE_BASE_URL :: "https://kinemiumplugins.quadigen.com/"
 
@@ -21,8 +22,11 @@ PluginMarketplace_Class := classes.Class_Info {
 }
 
 PluginMarketplace :: struct {
-	using service: Service,
-	call_count:    i64,
+	using service:       Service,
+	call_count:          i64,
+	registry_body:       string,
+	last_registry_fetch: i64,
+	registry_attempted:  bool,
 }
 
 PluginMarketplace_Load_Image :: proc(
@@ -285,42 +289,46 @@ plugin_marketplace_namecall :: proc(
 				true
 		}
 
-		http_service_obj := Service_Get_Service(&service.service, "HttpService")
-		if http_service_obj == nil {
-			return vm.RaiseError(L, "PluginMarketplace:GetPlugins(): HttpService is unavailable"),
-				true
+		now := time.to_unix_seconds(time.now())
+		if len(service.registry_body) == 0 &&
+		   (!service.registry_attempted || now - service.last_registry_fetch >= 60) {
+			service.registry_attempted = true
+			service.last_registry_fetch = now
+			http_service_obj := Service_Get_Service(&service.service, "HttpService")
+			if http_service_obj != nil {
+				http_service := cast(^HttpService)(http_service_obj)
+				body, ok := HttpService_GetAsync(http_service, PLUGIN_MARKETPLACE_REGISTRY_URL)
+				if ok {
+					service.registry_body = body
+				} else {
+					if len(body) > 0 {delete(body)}
+					fmt.eprintln("[PluginMarketplace] registry unavailable; continuing with an empty plugin list")
+				}
+			} else {
+				fmt.eprintln("[PluginMarketplace] HttpService unavailable; continuing with an empty plugin list")
+			}
 		}
 
-		http_service := cast(^HttpService)(http_service_obj)
-
-		link := PLUGIN_MARKETPLACE_REGISTRY_URL
-
-		fmt.println("Fetching plugin registry: ", link)
-
-		body, ok := HttpService_GetAsync(http_service, link, context.allocator)
-
-		if !ok {
-			fmt.println("Plugin registry HTTP request failed")
-
-			return vm.RaiseError(L, "PluginMarketplace:GetPlugins(): HTTP request failed"), true
+		if len(service.registry_body) == 0 {
+			vm.NewTable(L, 0)
+			return 1, true
 		}
-
-		defer delete(body)
-
-		fmt.println("Plugin registry response bytes: ", len(body))
 
 		list: Plugin_List
-
-		err := json.unmarshal_string(body, &list)
-		if err != nil {
-			fmt.println("Plugin registry JSON decode failed: ", err)
-
-			return vm.RaiseError(L, "PluginMarketplace:GetPlugins(): invalid registry JSON"), true
+		if err := json.unmarshal_string(service.registry_body, &list, allocator = context.temp_allocator); err != nil {
+			fmt.eprintf("[PluginMarketplace] invalid registry JSON: %v\n", err)
+			delete(service.registry_body)
+			service.registry_body = ""
+			vm.NewTable(L, 0)
+			return 1, true
 		}
 
-		fmt.println("Loaded plugins: ", len(list.plugins))
-
-		PluginMarketplace_push_plugins(L, list.plugins, http_service)
+		http_service_obj := Service_Get_Service(&service.service, "HttpService")
+		if http_service_obj == nil {
+			vm.NewTable(L, 0)
+			return 1, true
+		}
+		PluginMarketplace_push_plugins(L, list.plugins, cast(^HttpService)(http_service_obj))
 
 		return 1, true
 	}
@@ -328,6 +336,8 @@ plugin_marketplace_namecall :: proc(
 }
 
 plugin_marketplace_destroy :: proc(object: ^classes.Object, renderer: ^classes.Renderer_Object) {
+	service := cast(^PluginMarketplace)object
+	if len(service.registry_body) > 0 {delete(service.registry_body)}
 	classes.Object_Destroy(object)
 	free(cast(^PluginMarketplace)object)
 }

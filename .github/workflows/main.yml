@@ -63,9 +63,6 @@ jobs:
       - name: Verify submodules
         shell: bash
         run: git submodule status --recursive
-      - name: Patch odin-http for current Odin
-        shell: bash
-        run: git -C src/engine/util/odin-http apply "$GITHUB_WORKSPACE/tools/patches/odin-http-odin-latest.patch"
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:
@@ -875,12 +872,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
-      - name: Patch odin-http for current Odin
-        shell: pwsh
-        run: |
-          $patch = Join-Path $env:GITHUB_WORKSPACE 'tools/patches/odin-http-odin-latest.patch'
-          git -C src/engine/util/odin-http apply $patch
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Setup Odin
         uses: laytan/setup-odin@v2
         with:

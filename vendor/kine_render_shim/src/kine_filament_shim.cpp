@@ -1527,6 +1527,11 @@ class KineFilamentCompositorVulkanPlatform final : public KineFilamentVulkanPlat
 				VkPhysicalDeviceProperties properties{};
 				getPhysicalDeviceProperties(physicalDevice, &properties);
 				apiVersion = properties.apiVersion;
+				if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+					fprintf(stderr,
+						"[Kine] WARNING: Vulkan selected a software CPU device (%s). Hardware acceleration is unavailable through the current Vulkan loader. Check installed GPU drivers and Vulkan ICD files with vulkaninfo.\n",
+						properties.deviceName);
+				}
 			}
 			if (getPhysicalDeviceFeatures2 && physicalDevice) {
 				indexingFeatures.sType =

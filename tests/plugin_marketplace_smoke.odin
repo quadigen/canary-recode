@@ -1,9 +1,10 @@
 package main
 
-import "core:fmt"
 import engine_runtime "../src/engine/runtime"
 import services "../src/engine/services"
 import vm "../src/engine/vm"
+import "core:fmt"
+import "core:strings"
 
 run_user_script :: proc(script_vm: ^vm.VM, source, name: string) {
 	ok, err := vm.Run(script_vm, source, name)
@@ -36,7 +37,9 @@ main :: proc() {
 
 	// Normal scripts must NOT be able to see or call GetPlugins: the method is
 	// gated behind the Internals security capability.
-	run_user_script(&script_vm, `
+	run_user_script(
+		&script_vm,
+		`
 local marketplace = game:GetService("PluginMarketplace")
 assert(marketplace ~= nil)
 assert(marketplace.ClassName == "PluginMarketplace")
@@ -51,34 +54,76 @@ assert(callErr ~= nil)
 
 -- The gated member must stay hidden even after an internal script runs.
 assert(marketplace.GetPlugins == nil)
-`, "plugin_marketplace_user")
+`,
+		"plugin_marketplace_user",
+	)
 
 	// Internal execution holds the Internals capability, so GetPlugins is a
 	// callable member. We only index it (never invoke it: that would perform a
 	// real network fetch of the registry and make the test nondeterministic).
-	run_internal_script(&script_vm, `
+	run_internal_script(
+		&script_vm,
+		`
 local marketplace = game:GetService("PluginMarketplace")
 assert(marketplace ~= nil)
 assert(marketplace.GetPlugins ~= nil)
-`, "plugin_marketplace_internal")
+`,
+		"plugin_marketplace_internal",
+	)
 
 	// The gate is per-thread: GetPlugins is nil again on the user level after
 	// the internal run.
-	run_user_script(&script_vm, `
+	run_user_script(
+		&script_vm,
+		`
 assert(game:GetService("PluginMarketplace").GetPlugins == nil)
-`, "plugin_marketplace_restored")
+`,
+		"plugin_marketplace_restored",
+	)
 
 	marketplace_descriptor := services.Find_Service(&environment.services, "PluginMarketplace")
-	expect(marketplace_descriptor != nil && marketplace_descriptor.object != nil, "PluginMarketplace descriptor missing")
+	expect(
+		marketplace_descriptor != nil && marketplace_descriptor.object != nil,
+		"PluginMarketplace descriptor missing",
+	)
 
 	http_descriptor := services.Find_Service(&environment.services, "HttpService")
-	expect(http_descriptor != nil && http_descriptor.object != nil, "HttpService descriptor missing")
+	expect(
+		http_descriptor != nil && http_descriptor.object != nil,
+		"HttpService descriptor missing",
+	)
 	http_service := cast(^services.HttpService)http_descriptor.object
+	http_service.http_enabled = false
+	run_internal_script(
+		&script_vm,
+		`
+local plugins = game:GetService("PluginMarketplace"):GetPlugins()
+assert(type(plugins) == "table" and #plugins == 0)
+`,
+		"plugin_marketplace_offline",
+	)
+	marketplace := cast(^services.PluginMarketplace)marketplace_descriptor.object
+	marketplace.registry_body = strings.clone(`{"plugins":[]}`)
+	run_internal_script(
+		&script_vm,
+		`
+local plugins = game:GetService("PluginMarketplace"):GetPlugins()
+assert(type(plugins) == "table" and #plugins == 0)
+`,
+		"plugin_marketplace_cached",
+	)
+	delete(marketplace.registry_body)
+	marketplace.registry_body = strings.clone(`{"plugins":invalid}`)
+	run_internal_script(
+		&script_vm,
+		`
+local plugins = game:GetService("PluginMarketplace"):GetPlugins()
+assert(type(plugins) == "table" and #plugins == 0)
+`,
+		"plugin_marketplace_invalid_registry",
+	)
+	http_service.http_enabled = true
 
-	// An empty relative URL is rejected without any network activity. The
-	// non-empty path would hit the network (PluginMarketplace_Load_Image builds
-	// a URL under PLUGIN_MARKETPLACE_BASE_URL), so it is intentionally not
-	// exercised here to keep the test deterministic and offline.
 	empty_icon := services.PluginMarketplace_Load_Image(http_service, "my-plugin", "icon", "")
 	expect(empty_icon == "", "PluginMarketplace_Load_Image must short-circuit on an empty URL")
 	delete(empty_icon)
