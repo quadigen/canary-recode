@@ -10,7 +10,7 @@ import subprocess
 LINUX_BUNDLED_PREFIXES = (
     "libprotobuf.so", "libabsl_", "libutf8_", "libcrypto.so",
     "libssl.so", "libsodium.so", "libzstd.so", "libbrotli",
-    "libcares.so", "libidn2.so", "libnghttp2.so",
+    "libcares.so", "libidn2.so", "libnghttp2.so", "libatomic.so",
 )
 
 

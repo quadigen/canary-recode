@@ -461,6 +461,10 @@ jobs:
             test -s "$archive"
             cp "$archive" "vendor/build/lib/lib$library.3.a"
           done
+      - name: Build Linux C++ runtimes with GCC unwinder
+        if: runner.os == 'Linux'
+        shell: bash
+        run: python3 tools/build_linux_cxx_runtime.py --output-dir vendor/build/lib
       - name: Check Odin source
         run: odin check src
       - name: Build Kinemium (Windows)
@@ -562,7 +566,11 @@ jobs:
             -extra-linker-flags:"-L${PWD}/vendor/build/lib -L${PWD}/vendor/build/_deps/sdl3-build -Wl,-rpath,\$ORIGIN -Wl,-z,noexecstack -lstdc++ -lc++ -lc++abi -lfontconfig -lfreetype -lEGL $webview_link_flags"
           cp -a vendor/build/_deps/sdl3-build/libSDL3.so* "dist/${{ matrix.folder }}/"
           cp -a vendor/build/lib/libGameNetworkingSockets.so* "dist/${{ matrix.folder }}/"
-          for soname in libvulkan.so.1 libc++.so.1 libc++abi.so.1 libunwind.so.1; do
+          for soname in libc++.so.1 libc++abi.so.1; do
+            test -s "vendor/build/lib/$soname"
+            cp -L "vendor/build/lib/$soname" "dist/${{ matrix.folder }}/$soname"
+          done
+          for soname in libvulkan.so.1; do
             source_path="$(ldconfig -p | awk -v name="$soname" '$1 == name && !path { path = $NF } END { print path }')"
             test -n "$source_path" && test -f "$source_path" || {
               echo "Missing Linux runtime library: $soname" >&2
@@ -708,6 +716,10 @@ jobs:
           file "dist/${{ matrix.folder }}/${{ matrix.executable }}"
           ldd "dist/${{ matrix.folder }}/${{ matrix.executable }}"
           ! ldd "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep -q 'not found'
+          if ldd "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep -Fq 'libunwind.so.1'; then
+            echo 'LLVM libunwind.so.1 is still present in the Linux runtime closure' >&2
+            exit 1
+          fi
           readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" | grep GNU_STACK
           ! readelf -W -l "dist/${{ matrix.folder }}/${{ matrix.executable }}" \
             | grep GNU_STACK | grep -q RWE
