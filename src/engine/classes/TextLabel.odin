@@ -162,11 +162,16 @@ TextLabel_Load_Typeface_From_Family :: proc(family: string) -> ^kineffi.KineSkia
 
 TextLabel_Load_Typeface_From_Font :: proc(font: datatypes.Font) -> ^kineffi.KineSkiaTypeface {
 	when ODIN_OS != .JS {sync.once_do(&text_label_fallback_once, text_label_register_fallback)}
+	face: ^kineffi.KineSkiaTypeface
 	if datatypes.Font_Has_Memory(font) {
-		return kineffi.Kine_Skia_Typeface_LoadFromMemory(&font.Data[0], uintptr(len(font.Data)))
+		face = kineffi.Kine_Skia_Typeface_LoadFromMemory(&font.Data[0], uintptr(len(font.Data)))
+	} else {
+		face = TextLabel_Load_Typeface_From_Family(font.Family)
 	}
-
-	return TextLabel_Load_Typeface_From_Family(font.Family)
+	if face == nil && font.Family != DEFAULT_FONT {
+		face = TextLabel_Load_Typeface_From_Family(DEFAULT_FONT)
+	}
+	return face
 }
 
 text_label_font_size_enum :: proc(pixels: f32) -> enums.FontSize {
@@ -880,6 +885,7 @@ Invalidate_Localized_Text :: proc(registry: ^Registry) {
 			if object == nil || object.destroyed {continue}
 			gui := cast(^GuiObject)object
 			gui.draw_revision += 1
+			surfacegui_mark_dirty_for(object)
 			if Is_A(
 				object,
 				"TextLabel",

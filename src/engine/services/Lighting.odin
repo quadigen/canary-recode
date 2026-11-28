@@ -92,15 +92,15 @@ Lighting_Default_Effects :: []struct {
 	{"BloomEffect", "BloomEffect", true},
 	{"ColorCorrectionEffect", "ColorCorrectionEffect", true},
 	{"DepthOfFieldEffect", "DepthOfFieldEffect", false},
-	{"SunRaysEffect", "SunRaysEffect", true},
+	{"SunRaysEffect", "SunRaysEffect", false},
 	{"SSAOEffect", "SSAOEffect", true},
 	{"BlurEffect", "BlurEffect", false},
 	{"AntiAliasingEffect", "AntiAliasingEffect", false},
 	{"DitheringEffect", "DitheringEffect", false},
 	{"RenderQualityEffect", "RenderQualityEffect", false},
 	{"VignetteEffect", "VignetteEffect", false},
-	{"ScreenSpaceReflectionsEffect", "ScreenSpaceReflectionsEffect", true},
-	{"ReflectionProbeEffect", "ReflectionProbeEffect", true},
+	{"ScreenSpaceReflectionsEffect", "ScreenSpaceReflectionsEffect", false},
+	{"ReflectionProbeEffect", "ReflectionProbeEffect", false},
 	{"SSGIEffect", "SSGIEffect", false},
 	{"FogEffect", "FogEffect", false},
 	{"VolumetricFogEffect", "VolumetricFogEffect", false},
@@ -658,7 +658,7 @@ Lighting_Apply :: proc(
 	preset := Lighting_Get_Quality_Settings(service)
 	custom := service.quality_preset == .Custom
 
-	if clouds := effects.clouds; !fast_viewport && clouds != nil && clouds.enabled {
+	if clouds := effects.clouds; !fast_viewport && service.quality_preset != .Low && clouds != nil && clouds.enabled {
 		when ODIN_OS != .JS {kineffi.Kine_Filament_SetCloudResolutionScale(filament, custom ? clouds.resolution_scale : preset.cloud_scale)}
 		kineffi.Kine_Filament_SetCloudShadowOptions(
 			filament,
@@ -773,7 +773,7 @@ Lighting_Apply :: proc(
 
 	_ = kineffi.Kine_Filament_SetShadowOptions(
 		filament,
-		service.global_shadows && !fast_viewport,
+		service.global_shadows && !fast_viewport && service.quality_preset != .Low,
 		preset.shadow_filter,
 	)
 	kineffi.Kine_Filament_SetShadowViewQuality(
@@ -857,7 +857,7 @@ Lighting_Apply :: proc(
 	if ao != nil {
 		_ = kineffi.Kine_Filament_SetAmbientOcclusion(
 			filament,
-			ao.enabled && !fast_viewport,
+			ao.enabled && !fast_viewport && service.quality_preset != .Low,
 			f32(ao.radius),
 			f32(ao.power),
 			f32(ao.intensity),
@@ -918,7 +918,8 @@ Lighting_Apply :: proc(
 		sun_rays.intensity > 0 &&
 		profile.direction.y > 0 &&
 		profile.intensity > 0 &&
-		!fast_viewport
+		!fast_viewport &&
+		service.quality_preset != .Low
 	service.sun_rays_distance = 0
 	service.sun_rays_animated = false
 	if rays_enabled {
@@ -967,7 +968,7 @@ Lighting_Apply :: proc(
 
 
 	if reflections := effects.reflections;
-	   reflections != nil && reflections.enabled && !fast_viewport {
+	   reflections != nil && reflections.enabled && !fast_viewport && service.quality_preset != .Low {
 		_ = kineffi.Kine_Filament_SetScreenSpaceReflections(
 			filament,
 			true,

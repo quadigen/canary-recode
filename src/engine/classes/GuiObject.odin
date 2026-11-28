@@ -271,6 +271,7 @@ gui_invalidate_draw :: proc(object: ^Object) {
 gui_mark_layout_for :: proc(object: ^Object, full := true) {
 	gui_layout_dirty = true
 	gui_render_revision += 1
+	surfacegui_mark_dirty_for(object)
 	root: ^GuiObject
 	for current := object; current != nil; current = current.parent {
 		if Is_A_Class(current, &GuiObject_Class) {

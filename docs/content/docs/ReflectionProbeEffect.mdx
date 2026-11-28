@@ -9,7 +9,7 @@ description: Capture reflections from a point in the world for reflective surfac
 
 ## Getting started
 
-`Lighting` creates a reflection probe by default. Configure the existing one rather than adding a second:
+`Lighting` creates a reflection probe by default, but leaves it disabled to avoid recurring six-face captures. Configure and enable the existing one rather than adding a second:
 
 ```lua
 local Lighting = game:GetService("Lighting")

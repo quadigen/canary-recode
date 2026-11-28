@@ -17,6 +17,7 @@ import "core:time"
 DEFAULT_APP_ID :: "1495125520445210877"
 MIN_UPDATE_INTERVAL :: 4 * time.Second
 RECONNECT_INTERVAL :: 5 * time.Second
+NOT_RUNNING_RECONNECT_INTERVAL :: 30 * time.Second
 
 DiscordRPC_Class := classes.Class_Info {
 	name   = "DiscordRPC",
@@ -162,6 +163,8 @@ worker_proc :: proc(data: rawptr) {
 	have_sent := false
 	last_attempt: time.Tick
 	attempted := false
+	retry_interval := RECONNECT_INTERVAL
+	missing_discord_reported := false
 
 	for {
 		gen, quit := peek(sh)
@@ -175,7 +178,7 @@ worker_proc :: proc(data: rawptr) {
 
 
 		if !client.connected {
-			if attempted && time.tick_since(last_attempt) < RECONNECT_INTERVAL {
+			if attempted && time.tick_since(last_attempt) < retry_interval {
 				time.sleep(100 * time.Millisecond)
 				continue
 			}
@@ -189,8 +192,18 @@ worker_proc :: proc(data: rawptr) {
 				connected_id = snap.app_id
 				snap.app_id = ""
 				applied_gen = 0
+				retry_interval = RECONNECT_INTERVAL
+				missing_discord_reported = false
 				fmt.printfln("[DiscordRPC] connected as %s", client.user.username)
+			} else if connect_err == .Not_Running {
+				retry_interval = NOT_RUNNING_RECONNECT_INTERVAL
+				if !missing_discord_reported {
+					fmt.eprintln("[DiscordRPC] Discord is not running; retrying every 30 seconds")
+					missing_discord_reported = true
+				}
 			} else {
+				retry_interval = RECONNECT_INTERVAL
+				missing_discord_reported = false
 				fmt.eprintfln(
 					"[DiscordRPC] connection failed: %v (%d: %s)",
 					connect_err,

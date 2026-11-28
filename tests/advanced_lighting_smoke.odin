@@ -88,6 +88,9 @@ main :: proc() {
 		&v,
 		`
 local lighting=game:GetService("Lighting")
+assert(not lighting.SunRaysEffect.Enabled)
+assert(not lighting.ScreenSpaceReflectionsEffect.Enabled)
+assert(not lighting.ReflectionProbeEffect.Enabled)
 lighting.SSAOEffect.Quality=2;assert(type(lighting.SSAOEffect.Quality)=="number" and lighting.SSAOEffect.Quality==2)
 lighting.SSAOEffect.AOType=1;assert(lighting.SSAOEffect.AOType==1)
 for _,name in {"SSGIEffect","ReflectionProbeEffect","FogEffect","ScreenSpaceConeTracingEffect","TemporalAntiAliasingEffect","DynamicResolutionEffect","ToneMappingEffect"} do

@@ -148,7 +148,7 @@ lighting_apply_advanced :: proc(
 		k.Kine_Filament_SetAdvancedEffect(
 			ctx,
 			0,
-			value.enabled && !fast_viewport,
+			value.enabled && !fast_viewport && service.quality_preset != .Low,
 			&values[0],
 			i32(len(values)),
 		)

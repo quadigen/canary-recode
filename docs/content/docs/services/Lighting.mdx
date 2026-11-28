@@ -49,12 +49,12 @@ Lighting.QualityPreset = Enum.QualityPreset.Ultra
 | Preset | Scene resolution | Shadow map / cascades | Shadow filter | Cloud resolution | HDR / SSAO quality |
 | --- | --- | --- | --- | --- | --- |
 | Custom (default) | Authored | Authored | Authored | Authored | Authored |
-| Low | Adaptive, 50–100% | 512 / 1, adaptive | PCF | 25% | Low |
+| Low | Adaptive, 50–100% | Shadows disabled | None | Clouds disabled | Low HDR, SSAO disabled |
 | Medium | Adaptive, 75–100% | 1024 / 2, adaptive | PCF | 50% | Medium |
 | High | Native, fixed | 2048 / 3, fixed | DPCF | 75% | High |
 | Ultra | Native, fixed | 4096 / 4, fixed | PCSS | 100% | Ultra |
 
-Presets are applied to the renderer without modifying authored properties. Switching back to `Custom` restores the manual Lighting and effect settings. The individual property getters still return authored values. A named preset takes precedence over `DynamicResolutionEffect` and `RenderQualityEffect` while active. It does not enable effects that were disabled, change artistic lighting settings, or override the editor's explicit fast viewport mode. Adaptive quality depends on the backend; a higher preset does not guarantee a particular frame rate.
+Presets are applied to the renderer without modifying authored properties. Switching back to `Custom` restores the manual Lighting and effect settings. The individual property getters still return authored values. A named preset takes precedence over `DynamicResolutionEffect` and `RenderQualityEffect` while active. It does not enable effects that were disabled, change artistic lighting settings, or override the editor's explicit fast viewport mode. The `Low` preset disables shadows, clouds, SSAO, sun rays, screen-space reflections, and reflection probes during rendering, without changing their saved `Enabled` properties. Adaptive quality depends on the backend; a higher preset does not guarantee a particular frame rate.
 
 ### TimeOfDay
 
@@ -82,7 +82,7 @@ local sunDirection = Lighting:GetSunDirection()
 
 ## Default effects
 
-When `Lighting` is created, it adds effect objects as children, including `Clouds`, `Atmosphere`, `BloomEffect`, `ColorCorrectionEffect`, `SunRaysEffect`, `SSAOEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect`. Optional indirect-lighting classes include `SSGIEffect`, `EmissiveGIEffect` and the experimental `DDGIEffect`. Several more exist but start disabled.
+When `Lighting` is created, it adds effect objects as children, including `Clouds`, `Atmosphere`, `BloomEffect`, `ColorCorrectionEffect`, `SunRaysEffect`, `SSAOEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect`. Optional indirect-lighting classes include `SSGIEffect`, `EmissiveGIEffect` and the experimental `DDGIEffect`. Several more exist but start disabled. Sun rays, screen-space reflections, and reflection probes start disabled because they add costly GPU passes. Enable them for scenes that need them. The `Low` quality preset skips shadows, clouds, sun rays, screen-space reflections, reflection probes, and SSAO, even when their `Enabled` properties are true, to keep older integrated GPUs responsive.
 
 ```lua
 local bloom = Lighting:FindFirstChild("BloomEffect")

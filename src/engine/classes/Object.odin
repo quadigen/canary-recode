@@ -622,6 +622,9 @@ Set_Parent :: proc(self: ^Object, new_parent: ^Object) {
 	}
 
 	self.parent = new_parent
+	if Is_A_Class(self, &SurfaceGui_Class) && self.signal_registry != nil {
+		surfacegui_destroy_renderable(cast(^SurfaceGui)self, self.signal_registry.renderer)
+	}
 	Hierarchy_Structure_Touched()
 
 	if new_parent != nil {

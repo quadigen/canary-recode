@@ -5,7 +5,7 @@ description: Render volumetric sunlight shafts and drifting dust.
 
 `SunRaysEffect` renders sunlight scattered by the air between the camera and the surfaces it sees. Opaque shadow-casting geometry shapes the shafts, so a window, arch, or skylight can carve a beam into the room. Dust motes drift through the scene and are visible where sunlight reaches them.
 
-Parent the effect to `Lighting`. The beam follows the sun direction from `ClockTime` or an authored `SunLightEffect` and fades with daylight.
+Parent the effect to `Lighting`. The default Lighting child starts disabled to avoid a costly full-screen raymarch and a separate shadow-depth pass. Enable it only for scenes that need sunlight shafts. The beam follows the sun direction from `ClockTime` or an authored `SunLightEffect` and fades with daylight.
 
 ```lua
 local lighting = game:GetService("Lighting")

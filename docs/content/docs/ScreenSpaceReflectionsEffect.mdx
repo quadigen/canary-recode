@@ -5,7 +5,7 @@ description: Reflect nearby geometry using information from the current frame.
 
 `ScreenSpaceReflectionsEffect` adds reflections based on what's already visible on screen. It works well on wet floors, polished metal, and other smooth surfaces, and it doesn't need a reflection probe to produce local detail.
 
-`ScreenSpaceReflectionsEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`.
+`ScreenSpaceReflectionsEffect` inherits from `LightingEffect`, so it has `Enabled`. It must be a child of `Lighting`. The default Lighting child starts disabled for performance; enable it for reflective surfaces.
 
 ## Getting started
 

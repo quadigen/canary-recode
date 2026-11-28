@@ -74,7 +74,7 @@ clouds.Color = Color3.fromRGB(245, 230, 220)
 
 ## Understand the effect stack
 
-`Lighting` already has effect children when the game starts. You can tune them in place, replace them, or add your own. Two rules decide which effects are active:
+`Lighting` already has effect children when the game starts. You can tune them in place, replace them, or add your own. `SunRaysEffect`, `ScreenSpaceReflectionsEffect`, and `ReflectionProbeEffect` are created disabled by default to avoid expensive full-screen and cubemap passes. The `Low` quality preset also skips these effects, SSAO, clouds, and shadows, including if an existing project has them enabled. Two rules decide which effects are active:
 
 1. **Last child wins.** For each effect class, only the last matching child of `Lighting` is applied. Adding a second `BloomEffect` silently disables the first.
 2. **Most effects are exclusive.** `ColorCorrectionEffect`, `BloomEffect`, `SunRaysEffect`, `SSAOEffect`, `DepthOfFieldEffect`, `VignetteEffect`, and `ScreenSpaceReflectionsEffect` each apply at most one instance.

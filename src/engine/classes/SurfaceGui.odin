@@ -30,7 +30,6 @@ SurfaceGui :: struct {
 	pixels_per_stud:             f32,
 	shape:                       enums.SurfaceGuiShape,
 	sizing_mode:                 enums.SurfaceGuiSizingMode,
-	rendered_revision:           u64,
 	z_offset:                    f32,
 	enabled:                     bool,
 	tool_punch_through_distance: f32,
@@ -711,10 +710,8 @@ SurfaceGui_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 		return
 	}
 
-	revision := gui_render_revision
 	needs_render :=
 		gui.render_dirty ||
-		gui.rendered_revision != revision ||
 		gui.surface == nil ||
 		gui.native_texture == nil ||
 		size.width != gui.surface_width ||
@@ -736,7 +733,6 @@ SurfaceGui_Step :: proc(object: ^Object, ctx: ^Class_Step_Context) {
 			return
 		}
 
-		gui.rendered_revision = revision
 		gui.render_dirty = false
 	}
 
@@ -944,6 +940,9 @@ SurfaceGui_Set :: proc(
 
 	case "Enabled":
 		gui.enabled = vm.ArgBoolean(L, value_index)
+		if !gui.enabled && gui.signal_registry != nil {
+			surfacegui_destroy_renderable(gui, gui.signal_registry.renderer)
+		}
 
 	case "Adornee":
 		if vm.IsNil(L, value_index) {
@@ -1002,7 +1001,6 @@ SurfaceGui_clone :: proc(source: ^Object, destination: ^Object) {
 	dst.pointer_y = 0
 	dst.pointer_valid = false
 
-	dst.rendered_revision = 0
 	dst.render_dirty = true
 }
 
